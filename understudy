@@ -1,9 +1,9 @@
-#!/usr/bin/env python3
-"""Run from a checkout without installation or third-party packages."""
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
-from understudy.cli import main
-
-raise SystemExit(main())
+#!/bin/sh
+# Checkout convenience; installed builds run the Rust executable directly.
+set -eu
+understudy_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ ! -x "$understudy_root/target/debug/understudy" ]; then
+    printf '%s\n' 'Build first with: cargo build' >&2
+    exit 1
+fi
+exec "$understudy_root/target/debug/understudy" "$@"

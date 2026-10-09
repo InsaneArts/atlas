@@ -1,5 +1,7 @@
 {
   "helper_uid": 502,
   "socket_path": "/tmp/atlas-live-502/502.sock",
-  "output_dir": "runs"
+  "output_dir": "runs",
+  "identity_probe": "/Users/Shared/Understudy/understudy",
+  "input_socket": "/tmp/understudy-input-502/input.sock"
 }

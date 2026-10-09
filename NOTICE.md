@@ -1,12 +1,32 @@
 # Attribution
 
-Understudy is an InsaneArts project containing a Python session client and the
-native desktop investigation harness developed for Atlas.
+Understudy is an InsaneArts project. Its capture/command adapter connects to a
+separately installed Offstage daemon by Viraat Das, originally tested at
+[commit 38a2372](https://github.com/viraatdas/offstage/commit/38a2372b27add177b6768693270af78e4d07cefe)
+(0.3.15). No upstream repository is vendored.
 
-The native capture/input daemon is **Offstage**, copyright (c) 2026 Viraat Das,
-licensed under the MIT License. It is included as the `offstage/` Git submodule,
-pinned to commit `38a2372b27add177b6768693270af78e4d07cefe` (0.3.15).
-Its source, copyright and license remain intact. See [Offstage's license](offstage/LICENSE).
-Understudy does not claim authorship of that daemon.
+The Rust input implementation uses the same macOS virtual-key mappings and
+protocol conventions. The upstream notice is retained below. No project-wide
+license for Understudy's own code has been selected.
 
-No project-wide license for Understudy's own code has been selected yet.
+MIT License
+
+Copyright (c) 2026 Viraat Das
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
