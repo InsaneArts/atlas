@@ -1,6 +1,38 @@
 import AppKit
 import CoreGraphics
 
+struct Rectangle: Encodable {
+    let x: Double
+    let y: Double
+    let width: Double
+    let height: Double
+
+    init(_ value: CGRect) {
+        x = value.minX
+        y = value.minY
+        width = value.width
+        height = value.height
+    }
+}
+
+struct ScreenGeometry: Encodable {
+    let displayID: UInt32
+    let frame: Rectangle
+    let visibleFrame: Rectangle
+    let cgBounds: Rectangle
+    let backingScale: Double
+
+    init(_ screen: NSScreen) {
+        displayID =
+            (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?
+            .uint32Value ?? 0
+        frame = Rectangle(screen.frame)
+        visibleFrame = Rectangle(screen.visibleFrame)
+        cgBounds = Rectangle(CGDisplayBounds(displayID))
+        backingScale = screen.backingScaleFactor
+    }
+}
+
 struct FixtureState: Encodable {
     let uid = getuid()
     var clicks = 0
@@ -16,6 +48,9 @@ struct FixtureState: Encodable {
     var windowY = 0.0
     var windowWidth = 0.0
     var windowHeight = 0.0
+    var titlebarHeight = 0.0
+    var screen: ScreenGeometry?
+    var centerCount = 0
     var dotX = 80.0
     var dotY = 100.0
     var scrollX = 0.0
@@ -241,9 +276,15 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate
         let save = section("File").addItem(
             withTitle: "Save…", action: #selector(saveText), keyEquivalent: "s")
         save.target = self
-        let increment = section("Test").addItem(
+        let test = section("Test")
+        let increment = test.addItem(
             withTitle: "Increment Menu Counter", action: #selector(menuAction), keyEquivalent: "m")
         increment.target = self
+        let center = test.addItem(
+            withTitle: "Center Window for Native Test", action: #selector(centerForNativeTest),
+            keyEquivalent: "0")
+        center.keyEquivalentModifierMask = [.command, .control]
+        center.target = self
         let edit = section("Edit")
         edit.addItem(
             withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
@@ -267,6 +308,9 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate
         recorder.state.windowY = window.frame.minY
         recorder.state.windowWidth = window.frame.width
         recorder.state.windowHeight = window.frame.height
+        recorder.state.titlebarHeight =
+            window.frame.height - window.contentRect(forFrameRect: window.frame).height
+        recorder.state.screen = window.screen.map(ScreenGeometry.init)
         recorder.record(event)
     }
 
@@ -275,6 +319,19 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate
     }
 
     func windowDidResize(_ notification: Notification) { recordWindow("windowResized") }
+
+    func windowDidChangeScreen(_ notification: Notification) { recordWindow("screenChanged") }
+
+    @objc func centerForNativeTest() {
+        guard let screen = window.screen else { return }
+        let visible = screen.visibleFrame
+        window.setFrameOrigin(
+            NSPoint(
+                x: visible.midX - window.frame.width / 2,
+                y: visible.midY - window.frame.height / 2))
+        recorder.state.centerCount += 1
+        recordWindow("centeredForNativeTest")
+    }
 
     @objc func menuAction() {
         recorder.state.menuCount += 1

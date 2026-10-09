@@ -7,10 +7,11 @@ account. Mouse events stream during a gesture; keyboard input supports Unicode
 and shortcuts. Input stops when the helper becomes visible, the viewer loses
 focus, or its control lease expires. This shares the host OS and audio output.
 
-**Experimental.** Ordinary input and native alert dialogs work in live tests.
-Hidden-session Save panels remain disabled, and native window dragging misses
-requested endpoints in the current trials. This architecture is unsuitable for
-general unattended desktop work. Audio also shares the host output.
+**Experimental.** Live tests verify ordinary input, native alerts, and horizontal
+and vertical edge resizing. Titlebar drags move before mouse-up, but exact
+endpoints differ; OS window alignment remains a possible confounder. Hidden-session
+Save panels remain disabled. This architecture is unsuitable for general
+unattended desktop work. Audio also shares the host output.
 
 ## Run
 
@@ -78,8 +79,11 @@ native cancellation and crash recovery. Both send real input to the disposable
 AppKit fixture while keeping the host display free.
 
 `node scripts/check-control.mjs` additionally opens a real Chrome window to test
-OS focus and tab visibility. `node scripts/check-native.mjs` measures native
-window movement and Save behavior; its current failures are retained as evidence.
+OS focus and tab visibility. `node scripts/check-native.mjs` runs headlessly and
+measures native titlebar movement, edge resizing and Save behavior. It centers
+the disposable fixture before each gesture and records screen bounds, transmitted
+coordinates and window positions before mouse-up. Strict endpoint and Save
+failures remain in its output; screen-edge constraints are checked separately.
 The fixture currently requires a 2560 × 1440 helper display at scale 1.
 
 Configuration, screenshots, measurements and research remain local in ignored
