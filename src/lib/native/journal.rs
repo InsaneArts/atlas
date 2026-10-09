@@ -1,0 +1,171 @@
+//! Only held input is journaled, never text or screenshots. A new service can
+//! release an interrupted press before accepting another controller.
+use crate::{
+    actions::Button,
+    control::write_private,
+    error::{Error, Result},
+    session::InputEpoch,
+};
+use serde::{Deserialize, Serialize};
+use std::{
+    fs,
+    io::Read,
+    os::unix::fs::MetadataExt,
+    path::{Path, PathBuf},
+};
+
+#[derive(Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Held {
+    pub epoch: InputEpoch,
+    pub button: Option<Button>,
+    pub keys: Vec<u16>,
+    pub x: f64,
+    pub y: f64,
+    pub count: u8,
+    pub flags: u64,
+}
+
+/// The last successful replacement is cached only to avoid writing an unchanged
+/// record twice. A failed write invalidates the cache so cleanup always retries.
+pub struct Journal {
+    path: PathBuf,
+    saved: Option<Held>,
+}
+impl Journal {
+    pub fn new(path: PathBuf) -> Self {
+        Self { path, saved: None }
+    }
+
+    pub fn write(&mut self, held: Held) -> Result<()> {
+        if self.saved.as_ref() == Some(&held) {
+            return Ok(());
+        }
+        self.saved = None;
+        store(&self.path, &held)?;
+        self.saved = Some(held);
+        Ok(())
+    }
+}
+pub fn load(path: &Path, epoch: &InputEpoch) -> Result<Option<Held>> {
+    let mut file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if fs::symlink_metadata(path)?.file_type().is_symlink() || file.metadata()?.uid() != epoch.uid {
+        return Err(Error::new(
+            "identity",
+            "Held-input journal must belong to the helper",
+        ));
+    }
+    let mut bytes = Vec::new();
+    (&mut file).take(4097).read_to_end(&mut bytes)?;
+    if bytes.len() > 4096 {
+        return Err(Error::new("native", "Held-input journal is invalid"));
+    }
+    let held: Held = serde_json::from_slice(&bytes)?;
+    if held.epoch.uid != epoch.uid
+        || !held.x.is_finite()
+        || !held.y.is_finite()
+        || held.keys.len() > 16
+        || held.keys.iter().any(|key| *key > 127)
+        || !(1..=5).contains(&held.count)
+    {
+        return Err(Error::new(
+            "identity",
+            "Held-input journal belongs to a different login or is invalid",
+        ));
+    }
+    if held.epoch.security_session_id != epoch.security_session_id {
+        if held.button.is_none() && held.keys.is_empty() && held.flags == 0 {
+            return Ok(None);
+        }
+        return Err(Error::new(
+            "identity",
+            "Held input belongs to an earlier login. Archive its journal after inspecting \
+             that session; it will not be replayed into this login.",
+        ));
+    }
+    Ok(Some(held))
+}
+pub fn store(path: &Path, held: &Held) -> Result<()> {
+    let temporary = path.with_extension("pending");
+    write_private(&temporary, &serde_json::to_vec(held)?)?;
+    fs::rename(temporary, path)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn clean_journals_survive_login_changes_but_held_input_does_not_cross() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("held.json");
+        let mut epoch = InputEpoch {
+            uid: unsafe { libc::getuid() },
+            security_session_id: 10,
+            display_id: 1,
+            width: 1600.0,
+            height: 900.0,
+            process_id: 1,
+        };
+        let mut held = Held {
+            epoch: epoch.clone(),
+            button: None,
+            keys: Vec::new(),
+            x: 10.0,
+            y: 10.0,
+            count: 1,
+            flags: 0,
+        };
+        store(&path, &held).unwrap();
+        epoch.security_session_id = 20;
+        assert!(load(&path, &epoch).unwrap().is_none());
+        held.button = Some(Button::Left);
+        store(&path, &held).unwrap();
+        assert!(load(&path, &epoch).is_err());
+    }
+
+    #[test]
+    fn failed_clean_commit_is_retried_without_losing_the_held_record() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("held.json");
+        let epoch = InputEpoch {
+            uid: unsafe { libc::getuid() },
+            security_session_id: 10,
+            display_id: 1,
+            width: 1600.0,
+            height: 900.0,
+            process_id: 1,
+        };
+        let mut held = Held {
+            epoch: epoch.clone(),
+            button: None,
+            keys: vec![0],
+            x: 10.0,
+            y: 10.0,
+            count: 1,
+            flags: 1 << 20,
+        };
+        let mut journal = Journal::new(path.clone());
+        journal.write(held.clone()).unwrap();
+        held.keys.clear();
+        held.flags = 0;
+
+        // A failed replacement must preserve the old recoverable record and
+        // must not convince the cache that cleanup was durably committed.
+        let pending = path.with_extension("pending");
+        fs::create_dir(&pending).unwrap();
+        assert!(journal.write(held.clone()).is_err());
+        let interrupted = load(&path, &epoch).unwrap().unwrap();
+        assert_eq!(interrupted.keys, vec![0]);
+        assert_eq!(interrupted.flags, 1 << 20);
+        fs::remove_dir(pending).unwrap();
+        journal.write(held).unwrap();
+        let clean = load(&path, &epoch).unwrap().unwrap();
+        assert!(clean.keys.is_empty());
+        assert_eq!(clean.flags, 0);
+    }
+}
