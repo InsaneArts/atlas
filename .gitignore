@@ -1,0 +1,16 @@
+# Machine-local configuration and original investigation archive
+/understudy.local.json
+/migration.local.json
+/LIVE-TEST-HANDOFF.md
+/evidence/
+/bin/
+/runs/
+/local/
+/build/
+/dist/
+/.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.DS_Store
+*.log

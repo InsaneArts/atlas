@@ -1,0 +1,1 @@
+do shell script "/bin/launchctl asuser 502 /usr/bin/sudo -u atlastest /usr/bin/env ATLAS_SKIP_PERMISSION_REQUEST=1 /bin/bash /Users/Shared/AtlasLiveTest/Start-Atlas-Helper.command" with administrator privileges with prompt "Start the Atlas test helper in the already logged-in Atlas Test account. This installs its LaunchAgent; it does not change privacy permissions."
