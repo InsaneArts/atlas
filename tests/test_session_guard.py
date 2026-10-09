@@ -12,7 +12,7 @@ class SessionGuardTests(unittest.TestCase):
     def setUp(self):
         self.status = {"ok": True, "user": {"uid": 502},
                        "session": {"onConsole": False, "managerName": "Aqua"},
-                       "display": {"width": 2560, "height": 1440}}
+                       "display": {"width": 2560, "height": 1440, "scale": 1}}
 
     def test_known_hidden_identity_is_accepted(self):
         self.assertIs(require_hidden_session(self.status, 502), self.status)

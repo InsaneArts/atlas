@@ -4,8 +4,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const runDir = path.join(root, 'runs');
-const { url } = JSON.parse(fs.readFileSync(path.join(runDir, 'monitor.json'), 'utf8'));
+const recordPath = path.resolve(process.argv[2] || path.join(root, 'runs', 'monitor.json'));
+const runDir = path.dirname(recordPath);
+const { url } = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
 const browser = await chromium.launch({ headless: true, executablePath: process.env.UNDERSTUDY_CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' });
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1100 }, deviceScaleFactor: 1 });
@@ -26,8 +27,8 @@ try {
   await page.waitForFunction(() => document.querySelector('#state').textContent.startsWith('Live'));
   if (frames <= beforePause) throw new Error('Viewer did not resume');
   await page.screenshot({ path: path.join(runDir, 'monitor-ui-verification.png'), fullPage: true });
-  const result = { actualHelperFrames: true, firstStatus: first, dimensions, pauseResumePassed: true, frameRequests: frames, consoleErrors: errors };
-  fs.writeFileSync(path.join(runDir, 'monitor-ui-verification.json'), JSON.stringify(result, null, 2) + '\n');
   if (errors.length) throw new Error(errors.join('\n'));
+  const result = { passed: true, actualHelperFrames: true, firstStatus: first, dimensions, pauseResumePassed: true, frameRequests: frames, consoleErrors: errors };
+  fs.writeFileSync(path.join(runDir, 'monitor-ui-verification.json'), JSON.stringify(result, null, 2) + '\n');
   console.log(JSON.stringify(result, null, 2));
 } finally { await browser.close(); }

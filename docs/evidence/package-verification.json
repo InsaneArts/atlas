@@ -1,0 +1,38 @@
+{
+  "passed": true,
+  "outsideCheckout": true,
+  "assets": {
+    "index.html": {
+      "status": 200,
+      "bytes": 4989
+    },
+    "styles.css": {
+      "status": 200,
+      "bytes": 10407
+    },
+    "app.js": {
+      "status": 200,
+      "bytes": 13746
+    },
+    "input.js": {
+      "status": 200,
+      "bytes": 2090
+    },
+    "preview.js": {
+      "status": 200,
+      "bytes": 1420
+    },
+    "favicon.svg": {
+      "status": 200,
+      "bytes": 272
+    },
+    "status.json": {
+      "status": 200,
+      "bytes": 717
+    },
+    "frame.png": {
+      "status": 200,
+      "bytes": 1864516
+    }
+  }
+}

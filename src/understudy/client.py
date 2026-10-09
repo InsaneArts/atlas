@@ -1,158 +1,163 @@
-"""Real JSONL Unix-socket client. No host UI or input fallback."""
+"""Guarded operations composed from transport, policy, ownership and artifacts."""
 import base64
-import datetime
-import fcntl
-import hashlib
-import json
-import math
-import os
+from contextlib import nullcontext
+from dataclasses import dataclass
 from pathlib import Path
-import re
-import socket
+import struct
 import time
 
-
-class SessionError(RuntimeError):
-    pass
-
-
-def validate_helper_uid(uid):
-    # Preserve the conservative UID boundary used in the live investigation.
-    if type(uid) is not int or uid <= 501 or uid == os.getuid():
-        raise SessionError("Target must be a distinct helper account with UID >= 502")
+from .actions import validate_actions
+from .artifacts import Artifacts
+from .control import ControllerLock
+from .errors import SessionError, UnderstudyError
+from .session import epoch, require_hidden_session, validate_helper_uid
+from .transport import Transport
 
 
-def require_hidden_session(status, uid):
-    """Fail closed on missing identity, console state, Aqua context or geometry."""
-    validate_helper_uid(uid)
-    if not isinstance(status, dict) or status.get("ok") is not True:
-        raise SessionError("Helper is unavailable: " + json.dumps(status))
-    user = status.get("user") or {}
-    session = status.get("session") or {}
-    display = status.get("display") or {}
-    if not all(isinstance(value, dict) for value in (user, session, display)):
-        raise SessionError("Malformed session identity")
-    geometry = [display.get("width"), display.get("height")]
-    if (
-        type(user.get("uid")) is not int
-        or user.get("uid") != uid
-        or session.get("onConsole") is not False
-        or session.get("managerName") != "Aqua"
-        or not all(type(v) in (int, float) and math.isfinite(v) and v > 0 for v in geometry)
-    ):
-        raise SessionError("Expected the configured helper in a hidden Aqua desktop: " + json.dumps(status))
-    return status
+@dataclass(frozen=True)
+class Frame:
+    png: bytes
+    width: int
+    height: int
+    display: dict
+    identity: tuple
+    captured_at: float
 
 
 class Client:
     def __init__(self, uid, socket_path, output_dir):
         validate_helper_uid(uid)
         self.uid = uid
-        self.socket_path = str(Path(socket_path).expanduser())
-        self.output_dir = Path(output_dir).expanduser()
-        self.output_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        lock_dir = Path.home() / "Library/Caches/Understudy"
-        lock_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        key = hashlib.sha256(self.socket_path.encode()).hexdigest()[:24]
-        self.lock_path = lock_dir / (key + ".lock")
+        self.socket_path = Path(socket_path).expanduser().resolve()
+        self.artifacts = Artifacts(output_dir)
+        self.output_dir = self.artifacts.directory
+        self.transport = Transport(self.socket_path)
+        self.controller = ControllerLock(uid, self.socket_path)
 
-    def _rpc(self, request, label, timeout=45, persist_png=True):
-        started = time.perf_counter_ns()
-        timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        events = []
-        final = None
+    def _call(self, request, authorization=None):
+        started = time.monotonic()
+        mutation = request["op"] in {"input", "run", "restart"}
+        # Persist before dispatch: interruption/SIGKILL cannot make an unfinished
+        # native action appear idle merely because this process lost its flock.
+        if mutation:
+            self.controller.quarantine()
         try:
-            payload = (json.dumps(request) + "\n").encode()
-            if len(payload) > 1024 * 1024:
-                raise ValueError("Request exceeds daemon's 1 MiB limit")
-            with socket.socket(socket.AF_UNIX) as connection:
-                connection.settimeout(timeout)
-                connection.connect(self.socket_path)
-                connection.sendall(payload)
-                with connection.makefile("rb") as stream:
-                    for line in stream:
-                        row = json.loads(line)
-                        if "ok" in row:
-                            final = row
-                            break
-                        events.append(row)
-            if final is None:
-                raise ConnectionError("Connection ended without a final response")
-        except (OSError, ValueError) as exc:
-            final = {"ok": False, "code": "transport", "error": str(exc),
-                     "delivery": "unknown; observe state before retrying an action"}
-
-        elapsed = (time.perf_counter_ns() - started) / 1e6
-        frame = None
-        if "png" in final:
-            png = final.pop("png")
-            safe_label = re.sub(r"[^a-zA-Z0-9_-]", "-", label)[:64]
-            path = self.output_dir / (str(time.time_ns()) + "-" + safe_label + ".png")
+            result = self.transport.call(request, authorization=authorization)
+        except UnderstudyError as exc:
+            result = exc.as_dict()
+            if mutation and request["op"] != "restart" and not exc.uncertain:
+                self.controller.clear_quarantine()
+            self._record(request, result, started)
+            raise
+        except ValueError:
+            if mutation and request["op"] != "restart":
+                self.controller.clear_quarantine()
+            raise
+        if request["op"] == "input" and result.get("ok") is True and (
+                type(result.get("performed")) is not int or result["performed"] != len(request["actions"])):
+            raise UnderstudyError("Helper did not confirm the input count", "protocol", uncertain=True)
+        if request["op"] == "run" and result.get("ok") is True and (
+                type(result.get("timedOut")) is not bool or "exitCode" not in result
+                or (result["exitCode"] is not None and type(result["exitCode"]) is not int)
+                or (result["exitCode"] is None and not result["timedOut"] and type(result.get("signal")) is not int)):
+            raise UnderstudyError("Helper did not confirm command completion", "protocol", uncertain=True)
+        if mutation and request["op"] != "restart":
             try:
-                frame = base64.b64decode(png, validate=True)
-                if persist_png:
-                    path.write_bytes(frame)
-                    final["path"] = str(path.resolve())
-            except (OSError, ValueError) as exc:
-                final = {"ok": False, "code": "capture-output", "error": str(exc)}
-        log = {"timestamp": timestamp, "label": label, "socket": self.socket_path,
-               "request": request, "elapsedMs": elapsed, "response": dict(final), "events": events}
-        with (self.output_dir / "rpc.jsonl").open("a") as stream:
-            stream.write(json.dumps(log) + "\n")
-        final["elapsedMs"] = elapsed
-        if events:
-            final["events"] = events
-        if frame is not None and not persist_png:
-            final["_frame"] = frame
-        return final
+                self.controller.clear_quarantine()
+            except OSError:
+                result.setdefault("warnings", []).append("Operation completed, but its pending marker could not be cleared")
+        self._record(request, result, started)
+        return result
+
+    def _record(self, request, result, started):
+        try:
+            self.artifacts.record(request["op"], result, (time.monotonic() - started) * 1000,
+                                  len(request["actions"]) if "actions" in request else None)
+        except OSError:
+            result.setdefault("warnings", []).append("Local metadata could not be recorded; the operation result remains valid")
 
     def status(self):
-        return self._rpc({"op": "hello"}, "status")
+        try:
+            return self._call({"op": "hello"})
+        except UnderstudyError as exc:
+            return exc.as_dict()
 
     def identity(self):
         return require_hidden_session(self.status(), self.uid)
 
-    def capture(self, maximum=None):
-        self.identity()
+    def frame(self, maximum=1600):
+        if maximum is not None and (type(maximum) is not int or not 1 <= maximum <= 8192):
+            raise ValueError("max-dimension must be an integer from 1 to 8192")
+        before = self.identity()
         request = {"op": "screenshot"}
         if maximum is not None:
-            if maximum <= 0:
-                raise ValueError("max-dimension must be positive")
             request["maxDimension"] = maximum
-        return self._rpc(request, "capture")
+        reply = self._call(request)
+        captured_at = time.monotonic()
+        if reply.get("ok") is not True:
+            raise SessionError(reply.get("error", "Capture failed"), reply.get("code", "capture"))
+        try:
+            encoded = reply.get("png")
+            if not isinstance(encoded, str):
+                raise ValueError("Missing PNG payload")
+            png = base64.b64decode(encoded, validate=True)
+            if len(png) < 33 or png[:16] != b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR":
+                raise ValueError("Invalid PNG header")
+            width, height = struct.unpack(">II", png[16:24])
+            if not (0 < width <= 32768 and 0 < height <= 32768) or (width, height) != (reply.get("width"), reply.get("height")):
+                raise ValueError("PNG dimensions do not match the reply")
+        except (ValueError, TypeError) as exc:
+            raise SessionError("Helper returned an invalid image: " + str(exc), "capture") from exc
+        after = self.identity()
+        if epoch(before) != epoch(after):
+            raise SessionError("Session changed during capture; observe again", "session-changed")
+        return Frame(png, width, height, dict(after["display"]), epoch(after), captured_at)
 
-    def frame(self, maximum=1600):
-        """Observe without accumulating image files. Metadata remains logged."""
-        self.identity()
-        result = self._rpc({"op": "screenshot", "maxDimension": maximum},
-                           "monitor-frame", persist_png=False)
-        image = result.pop("_frame", None)
-        if result.get("ok") is not True or image is None:
-            raise SessionError(result.get("error", "Helper did not return a frame"))
-        return result, image
+    def capture(self, maximum=None):
+        frame = self.frame(maximum)
+        path = self.artifacts.capture(frame.png)
+        return {"ok": True, "path": str(path), "width": frame.width, "height": frame.height,
+                "display": frame.display}
 
-    def input(self, actions):
-        if not isinstance(actions, list):
-            raise ValueError("Input must be a JSON array of actions")
-        # Cooperative client lock only; other callers can still reach the daemon.
-        with self.lock_path.open("a") as lock:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
-                raise SessionError("Another Understudy client owns this input batch") from exc
-            self.identity()
-            return self._rpc({"op": "input", "actions": actions}, "input")
+    def input(self, actions, lease=None, expected_epoch=None, authorization=None):
+        ownership = self.controller.held() if lease is None else nullcontext(lease)
+        with ownership:
+            self.controller.require_known_delivery()
+            state = self.identity()
+            if expected_epoch is not None and epoch(state) != expected_epoch:
+                raise SessionError("Session changed since this frame; observe again", "session-changed")
+            permissions = state.get("permissions")
+            if not isinstance(permissions, dict) or permissions.get("accessibility") is not True:
+                raise SessionError("The helper needs Accessibility permission", "permission")
+            validate_actions(actions, state["display"])
+            return self._call({"op": "input", "actions": actions}, authorization=authorization)
 
     def run(self, argv):
-        if not argv:
-            raise ValueError("Provide a command after run --")
-        self.identity()
-        return self._rpc({"op": "run", "argv": argv, "timeoutMs": 20000}, "run")
+        if not isinstance(argv, list) or not argv or any(not isinstance(a, str) or "\0" in a for a in argv) or not argv[0]:
+            raise ValueError("Provide a command and string arguments after run --")
+        with self.controller.held():
+            self.identity()
+            return self._call({"op": "run", "argv": argv, "timeoutMs": 20000})
 
     def apps(self):
         self.identity()
-        return self._rpc({"op": "apps"}, "apps")
+        return self._call({"op": "apps"})
 
     def restart(self):
-        self.identity()
-        return self._rpc({"op": "restart"}, "restart")
+        with self.controller.held(recovery=True):
+            previous = epoch(self.identity())
+            reply = self._call({"op": "restart"})
+            if reply.get("ok") is not True:
+                return reply
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                time.sleep(0.15)
+                try:
+                    state = self.identity()
+                    if epoch(state)[1] != previous[1]:
+                        self.controller.clear_quarantine()
+                        return {"ok": True, "restarted": True, "session": state}
+                except SessionError:
+                    continue
+            self.controller.quarantine()
+            raise UnderstudyError("Restart was acknowledged but a new helper was not confirmed", "restart", uncertain=True)

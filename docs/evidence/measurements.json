@@ -106,6 +106,25 @@
   },
   "selectedImageHashes": {
     "textedit-save-disabled.png": "989345927953b62e30399996835e0b641264716922e7d9c150237961899862d3",
-    "calculator-56.png": "6855be00df8cd9768c615a5b4c4f8c7c28591205c7f2a7b1b72b1477da37fccd"
+    "calculator-56.png": "6855be00df8cd9768c615a5b4c4f8c7c28591205c7f2a7b1b72b1477da37fccd",
+    "viewer-control.png": "3615688c2c2d13173bb5879a7a97decdefa3fede765a383ac3964a6dc139cfc4",
+    "viewer-narrow.png": "bcfd367b5f89b9d49766dc9e4b551be2b5eafee58b62159711df0e0e9578d706"
+  },
+  "projectVerification": {
+    "recordedAtUTC": "2026-10-09T20:40:38.320Z",
+    "pythonRegressionTests": 32,
+    "browserUnitTests": 4,
+    "liveViewerChecks": 18,
+    "liveViewerPassed": true,
+    "browserFocusEmulation": false,
+    "helperRestartReadyMs": 483.75058299999995,
+    "actualPostRestartClickAndCapture": true,
+    "installedPackageVerified": true,
+    "scope": "New Python client and interactive viewer. Separate from the original 30-minute experiment; unit checks are not desktop evidence."
+  },
+  "rewriteArtifactHashes": {
+    "viewer-control-results.json": "467a746bad3a84e1ededa3700cd667857dc76b0082897fa0d5db693db4c03c72",
+    "rewrite-recovery.json": "9a97970ce9870e4015f351c92ac7238752f67b0af285bc60d3cb6ef195506427",
+    "package-verification.json": "4419650627bbe95a8da72e7df16588dab80dbb012f83c78631aa10b62f93be01"
   }
 }

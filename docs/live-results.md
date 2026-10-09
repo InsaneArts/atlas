@@ -68,6 +68,44 @@ relocation. Its viewer uses real helper frames, refreshed in memory. The unit
 guard tests and headless browser UI checks are kept distinct from the original
 30-minute desktop trial. [Measurement packet and provenance](evidence/measurements.json).
 
+## Rewritten client and interactive viewer — October 10 local time
+
+The redesigned application passed **18 live viewer checks** in a separate real
+Chrome window connected to the actual hidden account. Native AppKit state
+confirmed click, double-click, right-click, hover, vertical/horizontal/continuous
+scroll, a completed drag with the requested fixture endpoint, exact Georgian,
+Japanese, emoji and combining text, Cmd+A replacement, normal typing and
+Backspace. Observation alone sent no input. See the
+[actual control results](evidence/viewer-control-results.json).
+
+A second viewer and CLI input, launch and restart were all refused while the
+first viewer owned control. Pause released ownership and a following actual CLI
+input succeeded. Switching a real browser tab released control. The 390-pixel
+layout had no horizontal overflow. Wrong-origin requests, invalid coordinates
+and another tab's invalid lease were refused. Browser console errors: zero.
+
+The test browser's default focus emulation initially masked real tab switching.
+The final run used a separate native Chrome profile with those overrides disabled;
+actual `document.hidden`/focus state changed. Initial harness attempts and the
+short scroll probe remain in the local run archive. No failed attempt is counted
+as a pass. Continuous scrolling was verified while a sustained wheel stream was
+still running, not just after its last event.
+
+The rewritten restart command also restarted the actual helper, confirmed a new
+hidden PID in **483.8 ms**, retained both permissions, and then verified a native
+click and fresh PNG. [Recovery record](evidence/rewrite-recovery.json).
+
+Separately, **32 Python regressions and 4 browser-module regressions passed**,
+including interruption markers, cancellation during preflight, lease expiry,
+malformed protocol/configuration, HTTP boundaries, mapping and polling races.
+A wheel installed in an isolated environment served all assets and a real helper
+frame from outside the checkout. [Package check](evidence/package-verification.json).
+These checks do not extend the original hardware/lifecycle qualification.
+
+![The real interactive viewer](evidence/viewer-control.png)
+
+[Narrow viewer screenshot](evidence/viewer-narrow.png).
+
 Raw RPCs, screenshots, fixture events and all original measurements remain in
 the local, Git-ignored `evidence/` archive. The Desktop compatibility symlink
 preserves the original report's links. The selected packet includes hashes of

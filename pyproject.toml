@@ -14,3 +14,6 @@ understudy = "understudy.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+understudy = ["web/*.html", "web/*.css", "web/*.js", "web/*.svg"]
