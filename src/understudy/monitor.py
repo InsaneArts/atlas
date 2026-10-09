@@ -1,123 +1,230 @@
-"""Read-only loopback viewer. Captures on demand; no input or launch endpoint."""
-import datetime
+"""Loopback HTTP boundary for observation and explicit, leased input."""
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib.resources import files
 import json
 import os
 import secrets
+import socket
 import threading
 import time
 from urllib.parse import urlsplit
 
-from .client import SessionError
-from .doctor import diagnose
+from .control import ControlLease
+from .errors import UnderstudyError
+from .session import diagnose, epoch
+from .transport import decode_json
+
+ASSETS = {"": ("index.html", "text/html; charset=utf-8"),
+          "app.js": ("app.js", "text/javascript; charset=utf-8"),
+          "input.js": ("input.js", "text/javascript; charset=utf-8"),
+          "preview.js": ("preview.js", "text/javascript; charset=utf-8"),
+          "styles.css": ("styles.css", "text/css; charset=utf-8"),
+          "favicon.svg": ("favicon.svg", "image/svg+xml")}
+FRAME_LIFETIME = 8
 
 
-PAGE = """<!doctype html>
-<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Understudy — live desktop</title>
-<style>
-:root{font:15px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#272720;background:#f4f3ed;color-scheme:light}
-*{box-sizing:border-box}body{margin:0;padding:28px;max-width:1680px;margin-inline:auto}header,.toolbar,footer{display:flex;align-items:center;justify-content:space-between;gap:16px}
-h1{font-size:28px;letter-spacing:-1px;margin:0}p{color:#66665d;line-height:1.5;margin:8px 0 0}.tag{background:#e6eadb;border-radius:30px;padding:8px 13px;font-size:12px}
-.toolbar{margin:25px 0 14px;flex-wrap:wrap}button,select{font:inherit;background:#fffefa;border:1px solid #cecec2;border-radius:8px;padding:8px 12px;color:inherit}button{cursor:pointer}button:focus-visible,select:focus-visible{outline:3px solid #66884b;outline-offset:3px}
-.controls{display:flex;align-items:center;gap:10px}.stage{position:relative;background:#181a18;border-radius:12px;overflow:hidden;min-height:300px;aspect-ratio:16/9;display:grid;place-items:center}.stage img{display:block;width:100%;height:100%;object-fit:contain}.stage img[hidden]{display:none}.empty{color:#e8e8dc;padding:40px;text-align:center;max-width:650px;line-height:1.6}.empty[hidden]{display:none}
-footer{font-size:12px;color:#67685f;margin-top:12px;flex-wrap:wrap}.status{display:flex;gap:8px;align-items:center}.dot{height:8px;width:8px;border-radius:50%;background:#999}.dot.live{background:#567640}#checks{margin-top:24px;border-top:1px solid #d8d8cd;padding-top:16px;display:flex;gap:20px;flex-wrap:wrap}.check{font-size:13px}.check b{display:block;margin-bottom:5px}.check span{color:#686a60}.check.bad span{color:#9a4435}@media(max-width:650px){body{padding:16px}header{align-items:flex-start}.tag{white-space:nowrap}.stage{min-height:200px}footer{align-items:flex-start}}
-</style>
-<header><div><h1>Understudy</h1><p>A live view of the other desktop, while you stay here.</p></div><span class="tag">Observation only</span></header>
-<div class="toolbar"><div class="status"><i class="dot" id="dot"></i><span id="state" role="status">Connecting…</span></div><div class="controls"><label for="rate">Refresh</label><select id="rate"><option value="1000">Every second</option><option value="2000" selected>Every 2 seconds</option><option value="5000">Every 5 seconds</option></select><button id="pause">Pause view</button></div></div>
-<main class="stage"><img id="screen" alt="Live screen from the helper account" hidden><div class="empty" id="empty">Waiting for the helper desktop…</div></main>
-<footer><span id="detail">No screen images are saved by this viewer.</span><span id="updated">Waiting for first frame</span></footer>
-<section id="checks" aria-label="Session readiness"></section>
-<script src="app.js"></script></html>"""
+class Viewer:
+    def __init__(self, client):
+        self.client = client
+        self.lease = ControlLease(client.controller)
+        self.lease_identity = None
+        self.frames = {}
+        self.frame_lock = threading.Lock()
+        self.capture_lock = threading.Lock()
 
-SCRIPT = """const el=id=>document.getElementById(id);let paused=false,timer,currentURL;
-async function update(){if(paused||document.hidden)return;
- try{
-  const response=await fetch('status.json',{cache:'no-store'});const info=await response.json();
-  const box=el('checks');box.replaceChildren();
-  for(const c of info.checks||[]){const item=document.createElement('div');item.className='check'+(c.ok?'':' bad');const title=document.createElement('b');title.textContent=c.name;const note=document.createElement('span');note.textContent=c.ok?'Ready':c.nextStep;item.append(title,note);box.append(item)}
-  if(!info.canObserve)throw new Error((info.nextSteps||['Session unavailable']).join(' '));
-  const frame=await fetch('frame.png',{cache:'no-store'});if(!frame.ok){const problem=await frame.json();throw new Error(problem.error||'Capture unavailable')}
-  const next=URL.createObjectURL(await frame.blob());const picture=new Image();picture.src=next;await picture.decode();
-  if(paused||document.hidden){URL.revokeObjectURL(next);return}
-  const previous=currentURL;currentURL=next;el('screen').src=next;if(previous)URL.revokeObjectURL(previous);
-  el('screen').hidden=false;el('empty').hidden=true;el('dot').className='dot live';el('state').textContent='Live · '+info.session.user.name;
-  el('detail').textContent=picture.naturalWidth+' × '+picture.naturalHeight+' preview · no images saved';el('updated').textContent='Updated '+new Date().toLocaleTimeString();
- }catch(error){el('dot').className='dot';el('state').textContent='Waiting for helper';el('screen').hidden=true;el('empty').hidden=false;el('empty').textContent=error.message;el('updated').textContent='No current frame'}
- finally{clearTimeout(timer);if(!paused&&!document.hidden)timer=setTimeout(update,Number(el('rate').value))}
-}
-el('pause').onclick=()=>{paused=!paused;el('pause').textContent=paused?'Resume view':'Pause view';clearTimeout(timer);if(paused){el('state').textContent='View paused · agent continues';el('dot').className='dot'}else update()};
-document.addEventListener('visibilitychange',()=>{clearTimeout(timer);if(!document.hidden&&!paused)update()});
-update();"""
+    def status(self):
+        info = diagnose(self.client.status(), self.client.uid)
+        if not info["ready"]:
+            self.lease.release(force=True)
+        info["controlActive"] = self.lease.active()
+        return info
+
+    def frame(self):
+        # Serialize capture, but do not make input wait for PNG encoding.
+        with self.capture_lock:
+            current = epoch(self.client.identity())
+            now = time.monotonic()
+            with self.frame_lock:
+                self.frames = {key: frame for key, frame in self.frames.items()
+                               if now - frame.captured_at < FRAME_LIFETIME and frame.identity == current}
+                if self.frames:
+                    key = next(reversed(self.frames))
+                    frame = self.frames[key]
+                    if now - frame.captured_at < 0.4:
+                        return key, frame
+            frame = self.client.frame()
+            if time.monotonic() - frame.captured_at >= FRAME_LIFETIME:
+                raise UnderstudyError("Capture became stale while checking the session", "stale-frame")
+            key = secrets.token_urlsafe(12)
+            with self.frame_lock:
+                self.frames[key] = frame
+                while len(self.frames) > 24:
+                    del self.frames[next(iter(self.frames))]
+            return key, frame
+
+    def observed_frame(self, key):
+        with self.frame_lock:
+            frame = self.frames.get(key) if isinstance(key, str) else None
+        if frame is None or time.monotonic() - frame.captured_at >= FRAME_LIFETIME:
+            raise UnderstudyError("The preview is stale. Wait for a fresh frame before controlling it.", "stale-frame")
+        if frame.identity != epoch(self.client.identity()):
+            raise UnderstudyError("The helper changed. Wait for a fresh frame and take control again.", "session-changed")
+        return frame
+
+    def control(self, route, body):
+        if route == "control/release":
+            return self.lease.release(body.get("lease"))
+        if route != "control/acquire":
+            with self.lease.mutex:
+                self.lease.require(body.get("lease"))
+        frame = self.observed_frame(body.get("frame"))
+        if route == "control/acquire":
+            state = diagnose(self.client.status(), self.client.uid)
+            if not state["ready"]:
+                raise UnderstudyError("Mouse and keyboard are not ready; check Session details", "permission")
+            with self.lease.mutex:
+                result = self.lease.acquire()
+                self.lease_identity = frame.identity
+                return result
+        if frame.identity != self.lease_identity:
+            raise UnderstudyError("The controlled session changed. Take control again.", "session-changed")
+        if route == "control/renew":
+            return self.lease.renew(body.get("lease"))
+        if route == "input":
+            with self.lease.action(body.get("lease")) as descriptor:
+                result = self.client.input(body.get("actions"), lease=descriptor, expected_epoch=frame.identity,
+                                           authorization=self.lease.dispatch(body.get("lease")))
+                if result.get("ok") is not True:
+                    self.lease.release(force=True)
+                return result
+        raise ValueError("Unknown operation")
+
+
+class ViewerServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def service_actions(self):
+        self.viewer.lease.expire()
+
+
+def create_server(client, port=8765):
+    if type(port) is not int or not 0 <= port <= 65535:
+        raise ValueError("Port must be an integer from 0 to 65535")
+    viewer = Viewer(client)
+    prefix = "/" + secrets.token_urlsafe(24) + "/"
+
+    class Handler(BaseHTTPRequestHandler):
+        def setup(self):
+            super().setup()
+            self.connection.settimeout(5)
+
+        def log_message(self, *args):
+            pass  # Capability URLs and input never enter an access log.
+
+        def respond(self, code, content_type, body, headers=None):
+            try:
+                self.send_response(code)
+                for name, value in {
+                    "Content-Type": content_type, "Content-Length": str(len(body)),
+                    "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+                    "X-Content-Type-Options": "nosniff",
+                    "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+                    **(headers or {}),
+                }.items():
+                    self.send_header(name, value)
+                self.end_headers()
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError, socket.timeout):
+                pass
+
+        def json(self, code, value):
+            self.respond(code, "application/json", json.dumps(value).encode())
+
+        def route(self, mutation=False):
+            authority = "127.0.0.1:" + str(self.server.server_port)
+            origin = "http://" + authority
+            valid_origin = self.headers.get("Origin") == origin if mutation else self.headers.get("Origin") in (None, origin)
+            if self.headers.get("Host") != authority or not valid_origin:
+                self.json(403, {"ok": False, "error": "Local same-origin access only"})
+                return None
+            path = urlsplit(self.path).path
+            if not path.startswith(prefix):
+                self.json(404, {"ok": False, "error": "Use the viewer URL printed by Understudy"})
+                return None
+            return path[len(prefix):]
+
+        def do_GET(self):
+            route = self.route()
+            if route is None:
+                return
+            try:
+                if route in ASSETS:
+                    filename, mime = ASSETS[route]
+                    self.respond(200, mime, files("understudy").joinpath("web").joinpath(filename).read_bytes())
+                elif route == "status.json":
+                    self.json(200, viewer.status())
+                elif route == "frame.png":
+                    key, frame = viewer.frame()
+                    self.respond(200, "image/png", frame.png, {
+                        "X-Frame-Id": key, "X-Display-Width": str(frame.display["width"]),
+                        "X-Display-Height": str(frame.display["height"]),
+                        "X-Session-Revision": ":".join(str(v) for v in frame.identity),
+                    })
+                else:
+                    self.json(404, {"ok": False, "error": "Unknown view"})
+            except (UnderstudyError, OSError, ValueError) as exc:
+                viewer.lease.release(force=True)
+                self.json(503, {"ok": False, "error": str(exc)})
+
+        def do_POST(self):
+            body = {}
+            route = self.route(mutation=True)
+            if route is None:
+                return
+            if route not in {"control/acquire", "control/renew", "control/release", "input"}:
+                self.json(404, {"ok": False, "error": "Unknown operation"})
+                return
+            try:
+                if self.headers.get("Transfer-Encoding") or self.headers.get_content_type() != "application/json":
+                    raise ValueError("Send a JSON request with Content-Length")
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= 32768:
+                    raise ValueError("Request body must contain 1–32768 bytes")
+                raw = self.rfile.read(length)
+                if len(raw) != length:
+                    raise ValueError("Incomplete request body")
+                body = decode_json(raw)
+                if not isinstance(body, dict):
+                    raise ValueError("Request must be a JSON object")
+                result = viewer.control(route, body)
+                self.json(200 if result.get("ok") is True else 409, result)
+            except UnderstudyError as exc:
+                if exc.code not in {"busy", "lease-lost"}:
+                    viewer.lease.release_if_owner(body.get("lease"))
+                self.json(409, exc.as_dict())
+            except (ValueError, OSError) as exc:
+                self.json(400, {"ok": False, "error": str(exc)})
+
+    server = ViewerServer(("127.0.0.1", port), Handler)
+    server.viewer = viewer
+    server.url = "http://127.0.0.1:" + str(server.server_port) + prefix
+    return server
 
 
 def serve(client, port=8765):
-    token = secrets.token_urlsafe(24)
-    prefix = "/" + token + "/"
-    frame_lock = threading.Lock()
-    cached = {"time": 0, "frame": None}
-
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, *args):
-            pass  # Do not put the capability URL into an access log.
-
-        def respond(self, code, content_type, body):
-            self.send_response(code)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Referrer-Policy", "no-referrer")
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
-            self.end_headers()
-            try:
-                self.wfile.write(body)
-            except (BrokenPipeError, ConnectionResetError):
-                pass
-
-        def do_GET(self):
-            authority = "127.0.0.1:" + str(self.server.server_port)
-            if self.headers.get("Host") != authority or self.headers.get("Origin") not in (None, "http://" + authority):
-                self.respond(403, "text/plain", b"Local access only")
-                return
-            path = urlsplit(self.path).path
-            if not path.startswith(prefix):
-                self.respond(404, "text/plain", b"Use the monitor URL printed by Understudy")
-                return
-            route = path[len(prefix):]
-            try:
-                if route == "":
-                    self.respond(200, "text/html; charset=utf-8", PAGE.encode())
-                elif route == "app.js":
-                    self.respond(200, "application/javascript", SCRIPT.encode())
-                elif route == "status.json":
-                    result = diagnose(client.status(), client.uid)
-                    self.respond(200, "application/json", json.dumps(result).encode())
-                elif route == "frame.png":
-                    with frame_lock:
-                        # A fresh identity check remains mandatory even for cached pixels.
-                        client.identity()
-                        if time.monotonic() - cached["time"] > 0.75:
-                            _, cached["frame"] = client.frame()
-                            cached["time"] = time.monotonic()
-                        frame = cached["frame"]
-                    self.respond(200, "image/png", frame)
-                else:
-                    self.respond(404, "text/plain", b"Unknown view")
-            except (SessionError, OSError, ValueError) as exc:
-                self.respond(503, "application/json", json.dumps({"error": str(exc)}).encode())
-
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    url = "http://127.0.0.1:" + str(server.server_port) + prefix
-    record = {"url": url, "pid": os.getpid(), "readOnly": True,
-              "startedAt": datetime.datetime.now(datetime.timezone.utc).isoformat()}
-    (client.output_dir / "monitor.json").write_text(json.dumps(record, indent=2) + "\n")
+    server = create_server(client, port)
+    record = {"url": server.url, "pid": os.getpid(), "control": "explicit lease",
+              "startedAt": datetime.now(timezone.utc).isoformat()}
+    client.artifacts.write("monitor.json", (json.dumps(record, indent=2) + "\n").encode())
     print(json.dumps(record, indent=2), flush=True)
-    print("Open this URL in your main browser. Ctrl+C stops the viewer server.", flush=True)
+    print("Open this URL in your browser. Ctrl+C stops the viewer.", flush=True)
     try:
-        server.serve_forever()
+        server.serve_forever(poll_interval=0.25)
     except KeyboardInterrupt:
         pass
     finally:
+        viewer = server.viewer
+        viewer.lease.release(force=True)
         server.server_close()
     return 0

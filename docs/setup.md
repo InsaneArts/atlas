@@ -12,12 +12,12 @@ existing signature/path and normal permissions are preserved.
 | First graphical login | User logs into the account and completes macOS setup | Guide one first-login pass; don't confuse changing a process UID with creating an Aqua desktop |
 | Privacy consent | Normal Screen Recording and Accessibility consent | Show exact outstanding permissions, preserve signed identity across updates, avoid repeated prompts |
 | Readiness | `understudy doctor` works now | Integrate the same state into an onboarding UI |
-| Watching work | `understudy monitor` works now | Optional menu-bar viewer using the same capture path |
+| Watching and controlling work | `understudy monitor` provides a live preview and explicit mouse/keyboard control | Optional menu-bar viewer using the same capture path |
 | New task | Reuse the account and serialize its UI work | Separate task folders/profiles; don't create a macOS account per job |
 | Reboot/logout | Not qualified; graphical login must be restored | Explicitly test and design session provisioning before promising zero-touch startup |
 
 The installer and menu-bar app in this table are proposed work, not shipped
-features. The command-line client, readiness check and browser viewer are implemented.
+features. The command-line client, readiness check and interactive browser viewer are implemented.
 
 Apple supports multiple simultaneously logged-in users through
 [Fast User Switching](https://support.apple.com/guide/mac-help/switch-quickly-between-users-mchlp2439/mac).
@@ -33,4 +33,5 @@ in the main account does not provide the session separation measured here.
 
 One account has one UI focus. Queue its control work until service-enforced
 ownership is implemented; the current Python lock coordinates only cooperating
-Understudy clients. A monitor can observe concurrently because it sends no input.
+Understudy clients. Observation can run concurrently; the viewer's explicit
+control mode holds the same lock as CLI mutations.

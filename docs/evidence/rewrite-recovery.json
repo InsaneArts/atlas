@@ -1,0 +1,24 @@
+{
+  "passed": true,
+  "actualHelperRestart": true,
+  "oldPID": 72059,
+  "newPID": 30790,
+  "restartReadyMs": 483.75058299999995,
+  "hiddenAfterRestart": true,
+  "postRestartClickVerified": true,
+  "postRestartCapture": {
+    "ok": true,
+    "path": "runs/1791578595582850000-capture.png",
+    "width": 1600,
+    "height": 900,
+    "display": {
+      "height": 1440,
+      "scale": 1,
+      "width": 2560
+    }
+  },
+  "permissions": {
+    "screenCapture": true,
+    "accessibility": true
+  }
+}
