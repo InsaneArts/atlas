@@ -50,6 +50,10 @@ pub struct Plan {
     pub config_path: PathBuf,
     pub old_config: String,
     pub new_config: String,
+    /// A first setup (by `understudy init`): no earlier capture job, so
+    /// nothing is moved or retired and there is nothing to roll back to.
+    #[serde(default)]
+    pub fresh: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -464,7 +468,36 @@ impl Migration {
         Ok(helper_result(&reply)?["jobs"].clone())
     }
 
+    /// A first setup: the managed daemon is already running (init started
+    /// it); prepare and install idempotently through it, verify it and the
+    /// input service, and record the result.
+    async fn apply_fresh(&mut self) -> Result<()> {
+        let plan = self.log.plan.clone();
+        let uid = plan.uid;
+        let controller = plan.controller.clone();
+        self.helper(Endpoint::New, Request::Prepare { uid, controller })
+            .await?;
+        if signed_daemon(&plan.program)? != plan.cdhash {
+            return Err(problem(
+                "Understudy.app changed since setup was planned; run understudy init again",
+            ));
+        }
+        let agent = self.agent();
+        self.helper(Endpoint::New, Request::Install { agent })
+            .await?;
+        self.verify_new().await?;
+        if !self.input_ready(Endpoint::New).await {
+            return Err(problem("Input is not ready; run understudy start-input"));
+        }
+        self.settle_all()?;
+        self.log.state = State::Applied;
+        save_log(&self.path, &self.log)
+    }
+
     async fn apply(&mut self) -> Result<()> {
+        if self.log.plan.fresh {
+            return self.apply_fresh().await;
+        }
         let plan = self.log.plan.clone();
         let uid = plan.uid;
         let via = self
@@ -584,6 +617,82 @@ fn daemon_program() -> Result<PathBuf> {
         })
 }
 
+/// Plan a first setup of the configuration at `config_path`, whose helper
+/// already runs the managed daemon (started by `understudy init`).
+async fn plan_fresh(config_path: &Path) -> Result<Plan> {
+    let config_path = fs::canonicalize(config_path)?;
+    let config = Config::load(&config_path)?;
+    let text = fs::read_to_string(&config_path)?;
+    let account = account_with_uid(config.helper_uid)?
+        .ok_or_else(|| problem("The configured helper account does not exist"))?;
+    let controller = account_with_uid(nix::unistd::getuid().as_raw())?
+        .ok_or_else(|| problem("The controller account cannot be resolved"))?;
+    let layout = Layout {
+        uid: config.helper_uid,
+        home: account.home.clone(),
+    };
+    if config.socket_path != layout.socket() {
+        return Err(problem(
+            "The configuration does not use the managed private layout",
+        ));
+    }
+    let status = Client::new(config.clone())?.status().await;
+    require_hidden(&status, config.helper_uid)
+        .map_err(|_| problem("The helper daemon does not answer in a hidden helper session"))?;
+    let program = daemon_program()?;
+    let cdhash = signed_daemon(&program)?;
+    Ok(Plan {
+        uid: config.helper_uid,
+        controller: controller.name,
+        home: account.home,
+        old_label: String::new(),
+        old_plist_sha256: String::new(),
+        label: LABEL.to_owned(),
+        controller_uid: controller.uid,
+        program,
+        cdhash,
+        config_path,
+        old_config: text.clone(),
+        new_config: text,
+        fresh: true,
+    })
+}
+
+/// Record and verify a first setup (see [`plan_fresh`]). Re-running on an
+/// applied setup re-verifies it, like [`apply`].
+pub async fn apply_fresh(config_path: &Path, _ownership: &Ownership) -> Result<Value> {
+    let uid = Config::load(config_path)?.helper_uid;
+    let path = log_path(uid)?;
+    let log = match load_log(&path)? {
+        Some(log) if !log.plan.label.is_empty() => log,
+        previous => {
+            if let Some(previous) = previous {
+                let archive = path.with_extension(format!("{}.json", timestamp()));
+                save_log(&archive, &previous)?;
+            }
+            Log {
+                version: 1,
+                plan: plan_fresh(config_path).await?,
+                state: State::Applying,
+                pending: Vec::new(),
+                history: Vec::new(),
+            }
+        }
+    };
+    let (old, new) = clients(&log.plan)?;
+    let mut migration = Migration {
+        path,
+        log,
+        old,
+        new,
+    };
+    migration.require_owned_pending()?;
+    migration.log.state = State::Applying;
+    save_log(&migration.path, &migration.log)?;
+    let outcome = migration.apply().await;
+    Ok(report(&migration.log, &migration.path, outcome))
+}
+
 fn clients(plan: &Plan) -> Result<(Client, Client)> {
     let old = Config::parse(plan.old_config.as_bytes(), &plan.config_path)?;
     let new = Config::parse(plan.new_config.as_bytes(), &plan.config_path)?;
@@ -679,6 +788,7 @@ async fn plan(config_path: &Path) -> Result<Plan> {
         config_path,
         new_config: target.to_toml()?,
         old_config,
+        fresh: false,
     })
 }
 
@@ -775,6 +885,11 @@ pub async fn rollback(config_path: &Path, _ownership: &Ownership) -> Result<Valu
             "This setup was recorded by an older Understudy; roll it back with that version",
         ));
     }
+    if log.plan.fresh {
+        return Err(problem(
+            "This was a first setup: there is nothing earlier to roll back to",
+        ));
+    }
     let (old, new) = clients(&log.plan)?;
     let mut migration = Migration {
         path,
@@ -815,6 +930,7 @@ mod tests {
             config_path,
             old_config: text.into(),
             new_config: text.into(),
+            fresh: false,
         }
     }
 
