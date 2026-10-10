@@ -413,8 +413,19 @@ pub async fn run(config_path: &Path) -> Result<Value> {
             "Setup finished but doctor does not report ready; run understudy doctor",
         ));
     }
-    say("\nUnderstudy is ready. Try: understudy screenshot");
     done.push(json!({"step": "verified"}));
+
+    step("Menu bar");
+    if yes("  Keep Understudy in the menu bar (open at login)?")? {
+        let login = crate::menubar::login("on")?;
+        say(if login["enabled"] == true {
+            "  It opens at login and is running now."
+        } else {
+            "  macOS did not enable it; turn it on in the menu bar later."
+        });
+        done.push(json!({"step": "menubar", "login": login}));
+    }
+    say("\nUnderstudy is ready. Try: understudy screenshot");
     Ok(json!({"ok": true, "ready": true, "steps": done, "config": config_path}))
 }
 
