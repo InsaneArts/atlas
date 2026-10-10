@@ -4,6 +4,7 @@ use std::{io::Read, path::PathBuf, process::ExitCode};
 use understudy::{
     client::Client,
     config::Config,
+    environment,
     error::{Error, Result},
     session::diagnose,
     viewer,
@@ -24,6 +25,26 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Discover and provision selected parts of the helper environment.
+    #[command(
+        args_conflicts_with_subcommands = true,
+        long_about = "Preview an explicit one-way snapshot into an existing hidden login. The JSON manifest contains a files array: source (absolute or relative to the manifest), target (ASCII relative path inside the helper home), and optional executable. Stop applications that write these selected settings before applying. Existing untracked differences and helper-side edits are conflicts; managed updates keep backups. This does not create accounts, copy logins, or synchronize running application databases."
+    )]
+    Environment {
+        /// JSON file listing only the files to provision.
+        manifest: Option<PathBuf>,
+        /// Apply the previewed changes; otherwise inspect without changing selected files.
+        #[arg(long)]
+        apply: bool,
+        #[command(subcommand)]
+        command: Option<EnvironmentCommand>,
+    },
+    #[command(hide = true)]
+    EnvironmentWorker {
+        packet: PathBuf,
+        #[arg(long)]
+        apply: bool,
+    },
     #[command(hide = true)]
     SessionInfo,
     #[command(hide = true)]
@@ -66,6 +87,42 @@ enum Command {
     Restart,
 }
 
+#[derive(Subcommand)]
+enum EnvironmentCommand {
+    /// Freeze selected files, exported variables and readiness requirements.
+    Profile {
+        profile: PathBuf,
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Run a command with the selected helper environment and helper tool paths.
+    Run {
+        #[arg(last = true, required = true)]
+        argv: Vec<String>,
+    },
+    /// Apply or resume an immutable environment plan returned by preview.
+    Apply { plan_id: String },
+    /// Preview rollback, or restore matching managed state with --apply.
+    Rollback {
+        transaction_id: String,
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Inspect selected tools, apps, variables and reference paths without launching them.
+    Discover {
+        #[arg(long = "tool")]
+        tools: Vec<String>,
+        #[arg(long = "app")]
+        apps: Vec<String>,
+        /// Report only whether the named variable is defined, never its value.
+        #[arg(long = "env")]
+        environment: Vec<String>,
+        /// Check existing access without changing permissions.
+        #[arg(long = "reference")]
+        references: Vec<PathBuf>,
+    },
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = if matches!(cli.command, Command::SessionInfo) {
@@ -103,6 +160,9 @@ fn main() -> ExitCode {
     }
 }
 async fn execute(cli: Cli) -> Result<Value> {
+    if let Command::EnvironmentWorker { packet, apply } = &cli.command {
+        return environment::worker(packet, *apply);
+    }
     if matches!(cli.command, Command::SessionInfo) {
         return understudy::native::session_info();
     }
@@ -118,11 +178,46 @@ async fn execute(cli: Cli) -> Result<Value> {
     }
     let client = Client::new(Config::load(&cli.config)?)?;
     match cli.command {
-        Command::InputService { .. } | Command::SessionInfo => {
+        Command::InputService { .. } | Command::SessionInfo | Command::EnvironmentWorker { .. } => {
             unreachable!("handled before configuration")
         }
         Command::Status => Ok(client.status().await),
         Command::Doctor => Ok(diagnose(client.status().await, client.config.helper_uid)),
+        Command::Environment {
+            manifest,
+            apply,
+            command,
+        } => match command {
+            Some(EnvironmentCommand::Profile { profile, apply }) => {
+                environment::profile::sync(&client, &profile, apply).await
+            }
+            Some(EnvironmentCommand::Run { argv }) => environment::run(&client, argv).await,
+            Some(EnvironmentCommand::Apply { plan_id }) => {
+                environment::apply(&client, &plan_id).await
+            }
+            Some(EnvironmentCommand::Rollback {
+                transaction_id,
+                apply,
+            }) => environment::rollback(&client, &transaction_id, apply).await,
+            Some(EnvironmentCommand::Discover {
+                tools,
+                apps,
+                environment,
+                references,
+            }) => {
+                environment::discovery::discover(&client, &tools, &apps, &environment, &references)
+                    .await
+            }
+            None => {
+                let manifest = manifest.ok_or_else(|| {
+                    Error::new(
+                        "usage",
+                        "Provide a manifest or use environment discover; see environment --help",
+                    )
+                })?;
+                environment::sync(&client, &manifest, apply).await
+            }
+        },
         Command::Install => client.install(),
         Command::StartInput => client.start_input().await,
         Command::Monitor { port } => {

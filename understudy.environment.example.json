@@ -1,0 +1,13 @@
+{
+  "files": [
+    {
+      "source": "/absolute/path/to/tool",
+      "target": ".local/bin/tool",
+      "executable": true
+    },
+    {
+      "source": "/absolute/path/to/tool-settings.toml",
+      "target": ".config/tool-settings.toml"
+    }
+  ]
+}
