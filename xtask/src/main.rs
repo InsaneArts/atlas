@@ -14,11 +14,13 @@ const IDENTIFIER: &str = "com.insanearts.understudy";
 const COMPANION: &str = "UnderstudyBar";
 /// The oldest macOS the app runs on, for every slice and the Info.plist.
 const MINIMUM_MACOS: &str = "14.0";
-/// Rust triple, Swift target and lipo architecture for one universal build.
-const TARGETS: [(&str, &str, &str); 2] = [
-    ("aarch64-apple-darwin", "arm64-apple-macos14", "arm64"),
-    ("x86_64-apple-darwin", "x86_64-apple-macos14", "x86_64"),
+/// Rust triple and architecture for one universal build.
+const TARGETS: [(&str, &str); 2] = [
+    ("aarch64-apple-darwin", "arm64"),
+    ("x86_64-apple-darwin", "x86_64"),
 ];
+/// The menu bar's login agent, bundled in the app.
+const MENUBAR: &str = "com.insanearts.understudy.menubar";
 /// Beside an app this tool published, so it never replaces anything else.
 const MARKER: &str = ".understudy-dist";
 const USAGE: &str = "usage: cargo xtask dist --sign IDENTITY [--notarize PROFILE] [--out DIR]
@@ -158,7 +160,7 @@ fn info_plist(version: &str) -> String {
 
 /// No slice of `binary` may require a newer macOS than the advertised one.
 fn check_minimum(binary: &Path) -> Result<()> {
-    for (_, _, arch) in TARGETS {
+    for (_, arch) in TARGETS {
         let build = output(
             "/usr/bin/xcrun",
             &["vtool", "-arch", arch, "-show-build", text(binary)?],
@@ -191,6 +193,38 @@ fn version(text: &str) -> Vec<u32> {
         .collect()
 }
 
+/// The menu bar's LaunchAgent: `understudy menubar` from inside the app,
+/// started at login once the person turns on "Open at Login". Quitting it
+/// keeps it quit until the next login.
+fn menubar_agent() -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>{MENUBAR}</string>
+	<key>BundleProgram</key>
+	<string>Contents/MacOS/understudy</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>understudy</string>
+		<string>menubar</string>
+	</array>
+	<key>AssociatedBundleIdentifiers</key>
+	<string>{IDENTIFIER}</string>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>LimitLoadToSessionType</key>
+	<string>Aqua</string>
+	<key>ProcessType</key>
+	<string>Interactive</string>
+</dict>
+</plist>
+"#
+    )
+}
+
 /// Merge per-architecture builds of one executable into a universal one.
 fn universal(parts: &[PathBuf], output: &Path) -> Result<()> {
     let mut args = vec!["-create", "-output", text(output)?];
@@ -198,6 +232,11 @@ fn universal(parts: &[PathBuf], output: &Path) -> Result<()> {
         args.push(text(part)?);
     }
     exec("/usr/bin/lipo", &args)?;
+    check_universal(output)
+}
+
+/// `output` holds every architecture and requires no newer macOS than advertised.
+fn check_universal(output: &Path) -> Result<()> {
     let archs = self::output("/usr/bin/lipo", &["-archs", text(output)?])?;
     let found: Vec<&str> = archs.split_whitespace().collect();
     if !(found.contains(&"arm64") && found.contains(&"x86_64")) {
@@ -268,8 +307,7 @@ fn dist(options: &Options) -> Result<()> {
     let manifest = root.join("Cargo.toml");
     let target_dir = root.join("target/xtask");
     let mut cli = Vec::new();
-    let mut companion = Vec::new();
-    for (rust, swift, _) in TARGETS {
+    for (rust, _) in TARGETS {
         exec(
             &cargo,
             &[
@@ -289,22 +327,22 @@ fn dist(options: &Options) -> Result<()> {
             ],
         )?;
         cli.push(target_dir.join(format!("{rust}/release/understudy")));
-        let built = stage.join(format!("{COMPANION}-{rust}"));
-        exec(
-            "/usr/bin/swiftc",
-            &[
-                "-O",
-                "-target",
-                swift,
-                "-framework",
-                "AppKit",
-                text(&root.join("menubar/UnderstudyBar.swift"))?,
-                "-o",
-                text(&built)?,
-            ],
-        )?;
-        companion.push(built);
     }
+    // The menu bar package, for both architectures in one build.
+    let package = root.join("menubar");
+    let mut swift = vec!["build", "-c", "release", "--package-path", text(&package)?];
+    for (_, arch) in TARGETS {
+        swift.extend(["--arch", arch]);
+    }
+    exec(
+        "/usr/bin/swift",
+        &[swift.as_slice(), &["--product", COMPANION]].concat(),
+    )?;
+    let bin = output(
+        "/usr/bin/swift",
+        &[swift.as_slice(), &["--show-bin-path"]].concat(),
+    )?;
+    let companion = PathBuf::from(bin.trim()).join(COMPANION);
     let app = stage.join("Understudy.app");
     let macos = app.join("Contents/MacOS");
     fs::create_dir_all(&macos).map_err(|error| error.to_string())?;
@@ -312,7 +350,13 @@ fn dist(options: &Options) -> Result<()> {
     fs::write(app.join("Contents/Info.plist"), info_plist(version))
         .map_err(|error| error.to_string())?;
     universal(&cli, &macos.join("understudy"))?;
-    universal(&companion, &macos.join(COMPANION))?;
+    fs::copy(&companion, macos.join(COMPANION)).map_err(|error| error.to_string())?;
+    check_universal(&macos.join(COMPANION))?;
+    // "Open at login": the menu bar registers this agent with SMAppService.
+    let agents = app.join("Contents/Library/LaunchAgents");
+    fs::create_dir_all(&agents).map_err(|error| error.to_string())?;
+    fs::write(agents.join(format!("{MENUBAR}.plist")), menubar_agent())
+        .map_err(|error| error.to_string())?;
 
     // Inside out: the companion carries its own identifier, then the app
     // (whose main executable is the consented `understudy`) seals it.
@@ -449,6 +493,29 @@ mod tests {
         let app = publish(&again, &dir).unwrap();
         assert!(app.join("newer").exists() && !app.join("new").exists());
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_login_agent_runs_the_menu_bar_from_inside_the_app() {
+        let dir = std::env::temp_dir().join(format!("xtask-agent-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("agent.plist");
+        fs::write(&path, menubar_agent()).unwrap();
+        let json = output(
+            "/usr/bin/plutil",
+            &["-convert", "json", "-o", "-", path.to_str().unwrap()],
+        )
+        .unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        for expected in [
+            r#""Label":"com.insanearts.understudy.menubar""#,
+            r#""BundleProgram":"Contents\/MacOS\/understudy""#,
+            r#""ProgramArguments":["understudy","menubar"]"#,
+            r#""RunAtLoad":true"#,
+        ] {
+            assert!(json.contains(expected), "{expected} in {json}");
+        }
+        assert!(!json.contains("KeepAlive"), "quitting keeps it quit");
     }
 
     #[test]

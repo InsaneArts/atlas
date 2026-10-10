@@ -26,5 +26,7 @@ jobs:
       - run: npm test
       - name: Compile the native fixture (desktop qualification is manual)
         run: swiftc tests/live/DesktopFixture.swift -o /tmp/UnderstudyFixture -framework AppKit -framework CoreGraphics
-      - name: Compile the menu bar companion
-        run: swiftc -O -framework AppKit menubar/UnderstudyBar.swift -o /tmp/UnderstudyBar
+      - name: Build and test the menu bar package
+        run: |
+          swift build -c release --package-path menubar
+          swift test --package-path menubar
