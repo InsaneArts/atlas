@@ -38,7 +38,7 @@ try {
   await page.waitForTimeout(2500);
   if (frames !== beforePause) throw new Error('Paused viewer continued requesting frames');
   await page.getByRole('button', { name: 'Resume view', exact: true }).click();
-  await page.waitForFunction(() => document.querySelector('#state').textContent.startsWith('Live'));
+  await page.waitForFunction(() => document.querySelector('#updated').textContent === 'Live');
   if (frames <= beforePause) throw new Error('Viewer did not resume');
   await page.screenshot({ path: path.join(runDir, 'monitor-ui-verification.png'), fullPage: true });
   if (errors.length) throw new Error(errors.join('\n'));

@@ -1,5 +1,20 @@
-import { desktopPoint, keyAction, modifiers, WheelAccumulator } from './input.js';
-import { PreviewLoop } from './preview.js';
+import {
+  desktopPoint,
+  isPasteGesture,
+  keyAction,
+  modifiers,
+  textChunks,
+  WheelAccumulator,
+} from './input.js';
+import {
+  activityItems,
+  controlBlockedBy,
+  facts,
+  freshness,
+  modeView,
+  recoveryView,
+} from './overview.js';
+import { PreviewLoop, unlessSuperseded } from './preview.js';
 import { InputQueue } from './queue.js';
 import { PointerGesture } from './pointer.js';
 import { statusRows } from './status.js';
@@ -12,6 +27,12 @@ let paused = false,
   ready = false,
   frame = null,
   imageURL = null;
+// Status replies are numbered as requested so an older one never replaces
+// a newer one, whichever reader asked.
+let status = null,
+  statusSequence = 0,
+  overview = null,
+  recovering = false;
 let lease = null,
   acquiring = false,
   controlGeneration = 0,
@@ -32,16 +53,71 @@ function notice(message = '') {
   el('notice').textContent = message;
 }
 
+function setPill(tone, label) {
+  el('pill').dataset.tone = tone;
+  el('state').textContent = label;
+}
+
+function renderFreshness() {
+  el('updated').textContent = paused
+    ? 'Viewing paused'
+    : freshness(frame ? performance.now() - frame.at : NaN);
+}
+
+/** Render everything that depends on the last status and local state. */
+function renderOverview() {
+  if (!status) return renderControl();
+  overview = status.overview || null;
+  const view = modeView(overview, Boolean(lease));
+  if (!paused) setPill(view.tone, view.label);
+  el('reason').textContent = view.reason;
+  el('facts').replaceChildren(
+    ...facts(status).flatMap(([name, value]) => {
+      const term = document.createElement('dt');
+      term.textContent = name;
+      const detail = document.createElement('dd');
+      detail.textContent = value;
+      return [term, detail];
+    }),
+  );
+  const items = activityItems(overview);
+  el('activity').replaceChildren(
+    ...items.map(({ who, text, when, ok }) => {
+      const item = document.createElement('li');
+      item.className = ok ? 'ok' : 'failed';
+      const actor = document.createElement('b');
+      actor.textContent = who;
+      const operation = document.createElement('span');
+      operation.textContent = ok ? text : `${text} · failed`;
+      const time = document.createElement('time');
+      time.textContent = when;
+      item.append(actor, operation, time);
+      return item;
+    }),
+  );
+  el('activity-empty').hidden = items.length > 0;
+  el('agent-banner').hidden = overview?.mode !== 'agent' || Boolean(lease);
+  const recovery = recoveryView(overview, { hasLease: Boolean(lease), recovering });
+  el('recovery').hidden = recovery.hidden;
+  el('recover-reason').textContent = recovery.reason;
+  el('recover').disabled = recovery.busy;
+  el('recover').textContent = recovery.busy ? 'Recovering…' : 'Recover';
+  if (overview?.mode === 'blocked') el('details').open = true;
+  renderControl();
+}
+
 function renderControl() {
   const active = Boolean(lease);
+  const blocked = active ? null : controlBlockedBy(overview, false);
   el('control').textContent = active
     ? 'Release control'
     : acquiring
       ? 'Connecting…'
       : 'Take control';
-  el('control').disabled = acquiring || (!active && (!ready || paused || !frame));
+  el('control').disabled =
+    acquiring || (!active && (!ready || paused || !frame || Boolean(blocked) || recovering));
   el('control').setAttribute('aria-pressed', String(active));
-  el('mode').textContent = active ? 'You have control' : 'Observing';
+  el('mode').textContent = active ? 'You have control' : blocked ? 'Watching' : 'Observing';
   stage.classList.toggle('is-controlling', active);
   for (const id of ['keyboard', 'send-escape', 'shortcut', 'send-shortcut'])
     el(id).disabled = !active;
@@ -51,12 +127,14 @@ function renderControl() {
       : 'Click the desktop to connect your keyboard'
     : paused
       ? 'Viewing paused · work on the helper can continue'
-      : 'Take control to use your mouse and keyboard.';
+      : blocked
+        ? `${blocked}.`
+        : 'Take control to use your mouse and keyboard.';
 }
 
-async function post(route, body, options = {}) {
+async function post(route, body, options = {}, limit = 8000) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
+  const timeout = setTimeout(() => controller.abort(), limit);
   try {
     const response = await fetch(route, {
       method: 'POST',
@@ -97,7 +175,7 @@ function releaseControl(message = '') {
   acquiring = false;
   clearInterval(heartbeat);
   clearPendingInput();
-  renderControl();
+  renderOverview();
   if (previous)
     post('control/release', { lease: previous }, { keepalive: true }).catch((error) => {
       if (!lease && generation === controlGeneration) notice(error.message);
@@ -135,7 +213,7 @@ async function takeControl() {
     if (generation === controlGeneration) notice(error.message);
   } finally {
     if (generation === controlGeneration) acquiring = false;
-    renderControl();
+    renderOverview();
   }
 }
 
@@ -143,8 +221,7 @@ function unavailable(error) {
   ready = false;
   frame = null;
   releaseControl();
-  el('state').textContent = 'Reconnecting';
-  el('dot').className = 'dot';
+  if (!overview || modeView(overview).tone !== 'warning') setPill('off', 'Reconnecting');
   el('updated').textContent = 'No current frame';
   screen.hidden = true;
   if (imageURL) URL.revokeObjectURL(imageURL);
@@ -155,12 +232,22 @@ function unavailable(error) {
   el('details').open = true;
 }
 
-async function poll(signal, current) {
+// A superseded poll has no effects at all, failures included: a newer
+// status reading has already applied.
+function poll(signal, current) {
+  const sequence = ++statusSequence;
+  const latest = () => current() && sequence === statusSequence;
+  return unlessSuperseded(() => observe(signal, latest), latest);
+}
+
+async function observe(signal, latest) {
   const response = await fetch('status.json', { signal, cache: 'no-store' });
-  const status = await response.json();
-  if (!current()) return;
+  const reply = await response.json();
+  if (!latest()) return;
+  status = reply;
+  renderOverview();
   el('checks').replaceChildren(
-    ...statusRows(status).map(({ name, state, text }) => {
+    ...statusRows(reply).map(({ name, state, text }) => {
       const row = document.createElement('div');
       row.className = 'check ' + state;
       const label = document.createElement('b');
@@ -171,21 +258,21 @@ async function poll(signal, current) {
       return row;
     }),
   );
-  if (!response.ok || !status.canObserve)
-    throw new Error((status.nextSteps || [status.error || 'Helper unavailable']).join(' '));
+  if (!response.ok || !reply.canObserve)
+    throw new Error((reply.nextSteps || [reply.error || 'Helper unavailable']).join(' '));
   const capture = await fetch('frame.png', { signal, cache: 'no-store' });
   if (!capture.ok) {
     const error = await capture.json();
     throw new Error(error.error || 'Capture failed');
   }
   const blob = await capture.blob();
-  if (!current()) return;
+  if (!latest()) return;
   let nextURL = URL.createObjectURL(blob);
   try {
     const picture = new Image();
     picture.src = nextURL;
     await picture.decode();
-    if (!current()) return;
+    if (!latest()) return;
     const next = {
       id: capture.headers.get('X-Frame-Id'),
       revision: capture.headers.get('X-Session-Revision'),
@@ -205,7 +292,7 @@ async function poll(signal, current) {
       throw new Error('Frame geometry is unavailable');
     if (frame && frame.revision !== next.revision)
       releaseControl('The helper changed. Take control again when ready.');
-    if (!status.ready && lease) releaseControl('Mouse and keyboard permission is unavailable.');
+    if (!reply.ready && lease) releaseControl('Mouse and keyboard permission is unavailable.');
     frame = next;
     const previousURL = imageURL;
     imageURL = nextURL;
@@ -215,13 +302,9 @@ async function poll(signal, current) {
     screen.hidden = false;
     el('empty').hidden = true;
     stage.style.aspectRatio = `${frame.imageWidth} / ${frame.imageHeight}`;
-    ready = status.ready;
-    el('account').textContent = status.session?.user?.name || 'Helper account';
-    el('state').textContent = 'Live';
-    el('dot').className = 'dot live';
-    el('updated').textContent =
-      'Updated ' +
-      new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    ready = reply.ready;
+    el('account').textContent = reply.session?.user?.name || 'Helper account';
+    renderFreshness();
     el('detail').textContent =
       `${frame.imageWidth} × ${frame.imageHeight} preview · images stay in memory`;
     renderControl();
@@ -323,9 +406,12 @@ function sendText(text) {
     notice('Paste is limited to 2,048 characters at a time.');
     return;
   }
-  const points = Array.from(text);
-  for (let offset = 0; offset < points.length; offset += 128)
-    enqueue([{ type: 'type', text: points.slice(offset, offset + 128).join('') }]);
+  const chunks = textChunks(text);
+  if (chunks.some((chunk) => Array.from(chunk).length > 256)) {
+    notice('This text contains a character sequence too long to type.');
+    return;
+  }
+  for (const chunk of chunks) enqueue([{ type: 'type', text: chunk }]);
 }
 
 keyboard.addEventListener('keydown', (event) => {
@@ -335,10 +421,9 @@ keyboard.addEventListener('keydown', (event) => {
     releaseControl();
     return;
   }
-  // A native paste event is an explicit request to send local text. Shortcut
-  // buttons, by contrast, send Cmd+V to the helper's own clipboard.
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'v' && !event.shiftKey)
-    return;
+  // Command+V's native paste event is an explicit request to send local
+  // text. Control+V and the shortcut buttons go to the helper as keys.
+  if (isPasteGesture(event)) return;
   const action = keyAction(event);
   if (action) {
     event.preventDefault();
@@ -371,6 +456,35 @@ keyboard.addEventListener('focus', renderControl);
 keyboard.addEventListener('blur', renderControl);
 
 el('control').onclick = () => (lease ? releaseControl() : takeControl());
+el('recover').onclick = async () => {
+  if (recovering || lease) return;
+  recovering = true;
+  renderOverview();
+  try {
+    const result = await post('recover', {}, {}, 20000);
+    notice(
+      result.restarted
+        ? 'The helper was recovered. Take control again when ready.'
+        : 'The helper input service is ready.',
+    );
+  } catch (error) {
+    notice(error.message);
+  } finally {
+    recovering = false;
+    // Read the outcome directly: a paused preview makes no requests, and
+    // this never resumes capture or control.
+    try {
+      const sequence = ++statusSequence;
+      const response = await fetch('status.json', { cache: 'no-store' });
+      const reply = await response.json();
+      if (sequence === statusSequence) status = reply;
+    } catch {
+      // The next poll reports the helper; the notice already has the outcome.
+    }
+    renderOverview();
+    preview.refresh();
+  }
+};
 el('send-escape').onclick = () => {
   enqueue([{ type: 'key', key: 'escape' }]);
   keyboard.focus({ preventScroll: true });
@@ -385,14 +499,14 @@ el('pause').onclick = () => {
   el('pause').textContent = paused ? 'Resume view' : 'Pause view';
   preview.setActive(!paused && !document.hidden);
   if (paused) {
-    el('state').textContent = 'Paused';
-    el('dot').className = 'dot';
+    setPill('off', 'Paused');
   } else {
     ready = false;
     frame = null;
-    el('state').textContent = 'Connecting';
+    setPill('off', 'Connecting');
   }
   renderControl();
+  renderFreshness();
 };
 el('rate').onchange = () => preview.refresh();
 window.addEventListener('blur', () => releaseControl());
@@ -405,4 +519,5 @@ window.addEventListener('pagehide', () => {
   preview.setActive(false);
   if (imageURL) URL.revokeObjectURL(imageURL);
 });
+setInterval(renderFreshness, 1000);
 preview.setActive(!document.hidden);

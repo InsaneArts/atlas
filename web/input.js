@@ -98,3 +98,40 @@ export class WheelAccumulator {
     return { dx: dx || 0, dy: dy || 0 };
   }
 }
+
+const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
+/**
+ * Split committed text into type actions of at most `size` code points
+ * without ever separating a grapheme (an emoji sequence, a base letter and
+ * its combining marks). A lone grapheme longer than `size` becomes its own
+ * chunk; callers refuse chunks the helper would not accept.
+ */
+export function textChunks(text, size = 128) {
+  const chunks = [];
+  let current = '',
+    length = 0;
+  for (const { segment } of graphemes.segment(text)) {
+    const points = Array.from(segment).length;
+    if (current && length + points > size) {
+      chunks.push(current);
+      current = '';
+      length = 0;
+    }
+    current += segment;
+    length += points;
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+/** Only Command+V is the paste gesture; Control+V is a key for the helper. */
+export function isPasteGesture(event) {
+  return (
+    event.metaKey === true &&
+    !event.ctrlKey &&
+    !event.shiftKey &&
+    !event.altKey &&
+    event.key.toLowerCase() === 'v'
+  );
+}

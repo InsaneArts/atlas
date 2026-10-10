@@ -30,11 +30,28 @@ pub struct Frame {
 /// Identity (device, inode, size, mtime) of the installed executable and its hash.
 type BuildCache = Arc<std::sync::Mutex<Option<((u64, u64, u64, i64, i64), Option<String>)>>>;
 
+/// Who recorded mutations are attributed to in the activity log.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Actor {
+    Agent,
+    Viewer,
+}
+
+impl Actor {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Actor::Agent => "agent",
+            Actor::Viewer => "viewer",
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Client {
     pub config: Config,
     pub transport: Transport,
     pub controller: Controller,
+    pub actor: Actor,
     installed: BuildCache,
 }
 
@@ -89,6 +106,7 @@ impl Client {
                 peer_uid: config.helper_uid,
             },
             installed: BuildCache::default(),
+            actor: Actor::Agent,
             config,
         })
     }
@@ -780,6 +798,7 @@ impl Client {
             "ok": reply["ok"],
             "elapsedMs": elapsed.as_secs_f64() * 1000.0,
             "actionCount": request["actions"].as_array().map(Vec::len),
+            "actor": self.actor.as_str(),
         });
         writeln!(file, "{row}")?;
         Ok(())
@@ -838,12 +857,42 @@ fn process_exists(pid: u32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::process_exists;
+    use super::*;
 
     #[test]
     fn process_existence_ignores_ownership() {
         assert!(process_exists(std::process::id()));
         assert!(process_exists(1), "launchd exists though owned by root");
         assert!(!process_exists(u32::MAX));
+    }
+
+    #[test]
+    fn recorded_rows_name_the_actor_and_carry_no_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = "helper_uid = 60001\nsocket_path = \"c.sock\"\noutput_dir = \"out\"\n\
+                    identity_probe = \"probe\"\ninput_socket = \"i.sock\"\n";
+        let config = Config::parse(text.as_bytes(), &dir.path().join("u.toml")).unwrap();
+        let mut client = Client::new(config).unwrap();
+        let typed = json!({"op": "input", "actions": [{"type": "type", "text": "secret"}]});
+        let ok = json!({"ok": true});
+        client
+            .record(&typed, &ok, Duration::from_millis(5))
+            .unwrap();
+        client.actor = Actor::Viewer;
+        client
+            .record(&json!({"op": "restart"}), &ok, Duration::ZERO)
+            .unwrap();
+        let directory = client.output_dir().unwrap();
+        let rows = crate::overview::activity(directory, 5);
+        assert_eq!(
+            (&rows[0]["actor"], &rows[0]["operation"]),
+            (&json!("viewer"), &json!("restart"))
+        );
+        assert_eq!(
+            (&rows[1]["actor"], &rows[1]["actionCount"]),
+            (&json!("agent"), &json!(1))
+        );
+        let log = fs::read_to_string(directory.join("metadata.jsonl")).unwrap();
+        assert!(!log.contains("secret"), "no typed text is recorded");
     }
 }
