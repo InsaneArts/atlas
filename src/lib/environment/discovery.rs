@@ -1,0 +1,315 @@
+//! Read-only inspection of explicit selections; never executes a selected tool
+//! or sources a shell startup file. Presence is not application compatibility.
+use crate::{
+    client::Client,
+    error::{Error, Result},
+    session::require_hidden,
+};
+use base64::{Engine, engine::general_purpose::STANDARD};
+use serde::Serialize;
+use serde_json::{Value, json};
+use std::{
+    ffi::CString,
+    fs,
+    os::unix::ffi::OsStrExt,
+    path::{Component, Path, PathBuf},
+};
+
+const SHARED_BIN: &[&str] = &[
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+];
+// Every path is a separate positional argument. No selected name, path or
+// environment value is interpreted as shell syntax or emitted by this probe.
+const PATH_PROBE: &str = r#"
+for item do
+    flags=''
+    if [ -f "$item" ]; then flags="${flags}f"; fi
+    if [ -d "$item" ]; then flags="${flags}d"; fi
+    if [ -r "$item" ]; then flags="${flags}r"; fi
+    if [ -w "$item" ]; then flags="${flags}w"; fi
+    if [ -x "$item" ]; then flags="${flags}x"; fi
+    printf '%s\n' "-$flags"
+done
+"#;
+const ENV_PROBE: &str = r#"
+for item do
+    if /usr/bin/printenv "$item" >/dev/null 2>&1; then
+        printf 'defined\n'
+    else
+        printf 'undefined\n'
+    fi
+done
+"#;
+
+fn invalid() -> Error {
+    Error::new(
+        "environment",
+        "Invalid discovery selection; use at most 16 tools, apps, variable names and absolute reference paths each",
+    )
+}
+fn component(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 128
+        && !name.chars().any(char::is_control)
+        && Path::new(name).components().count() == 1
+        && matches!(
+            Path::new(name).components().next(),
+            Some(Component::Normal(_))
+        )
+}
+fn variable(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    matches!(bytes.next(), Some(c) if c.is_ascii_alphabetic() || c == b'_')
+        && name.len() <= 128
+        && bytes.all(|c| c.is_ascii_alphanumeric() || c == b'_')
+}
+
+#[derive(Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Access {
+    file: bool,
+    directory: bool,
+    readable: bool,
+    writable: bool,
+    executable: bool,
+}
+impl Access {
+    fn from_flags(flags: &str) -> Result<Self> {
+        if !flags.starts_with('-') || flags.bytes().skip(1).any(|c| !b"fdrwx".contains(&c)) {
+            return Err(Error::new(
+                "environment",
+                "Invalid discovery probe response",
+            ));
+        }
+        Ok(Self {
+            file: flags.contains('f'),
+            directory: flags.contains('d'),
+            readable: flags.contains('r'),
+            writable: flags.contains('w'),
+            executable: flags.contains('x'),
+        })
+    }
+}
+fn access(path: &Path) -> Access {
+    let Ok(name) = CString::new(path.as_os_str().as_bytes()) else {
+        return Access::default();
+    };
+    let metadata = fs::metadata(path).ok();
+    // SAFETY: access receives a live NUL-terminated path; it only checks access.
+    let permits = |mode| unsafe { libc::access(name.as_ptr(), mode) == 0 };
+    Access {
+        file: metadata.as_ref().is_some_and(|m| m.is_file()),
+        directory: metadata.as_ref().is_some_and(|m| m.is_dir()),
+        readable: permits(libc::R_OK),
+        writable: permits(libc::W_OK),
+        executable: permits(libc::X_OK),
+    }
+}
+
+async fn probe(client: &Client, script: &str, args: &[String]) -> Result<Vec<String>> {
+    if args.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut argv = vec!["/bin/sh".into(), "-c".into(), script.into(), "sh".into()];
+    argv.extend_from_slice(args);
+    let reply = client.run(argv).await?;
+    if reply["exitCode"] != 0 || reply["timedOut"] == true || !reply["signal"].is_null() {
+        return Err(Error::new(
+            "environment",
+            "Helper discovery did not complete",
+        ));
+    }
+    let mut output = Vec::new();
+    for event in reply["events"].as_array().into_iter().flatten() {
+        if event["event"] == "output" {
+            let bytes = event["data"].as_str().ok_or_else(invalid)?;
+            output.extend(STANDARD.decode(bytes).map_err(|_| invalid())?);
+            if output.len() > 16384 {
+                return Err(Error::new(
+                    "environment",
+                    "Discovery output exceeded its limit",
+                ));
+            }
+        }
+    }
+    let lines = String::from_utf8(output)
+        .map_err(|_| invalid())?
+        .lines()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if lines.len() != args.len() {
+        return Err(Error::new(
+            "environment",
+            "Incomplete discovery probe response",
+        ));
+    }
+    Ok(lines)
+}
+
+/// Inspect selected names and paths without installing, launching or signing in.
+pub async fn discover(
+    client: &Client,
+    tools: &[String],
+    apps: &[String],
+    environment: &[String],
+    references: &[PathBuf],
+) -> Result<Value> {
+    if [tools.len(), apps.len(), environment.len(), references.len()]
+        .into_iter()
+        .any(|len| len > 16)
+        || tools.len() + apps.len() + environment.len() + references.len() == 0
+        || tools.iter().chain(apps).any(|name| !component(name))
+        || environment.iter().any(|name| !variable(name))
+        || references.iter().any(|path| {
+            !path.is_absolute()
+                || path
+                    .to_str()
+                    .is_none_or(|p| p.len() > 4096 || p.contains('\0'))
+                || path.components().any(|c| matches!(c, Component::ParentDir))
+        })
+    {
+        return Err(invalid());
+    }
+    let status = client.status().await;
+    let session = require_hidden(&status, client.config.helper_uid)?;
+    let helper_home = PathBuf::from(status["user"]["home"].as_str().ok_or_else(invalid)?);
+    if !helper_home.is_absolute() {
+        return Err(invalid());
+    }
+    let home = crate::config::home()?;
+    let mut host_bins = std::env::var_os("PATH")
+        .map(|value| {
+            std::env::split_paths(&value)
+                .filter(|p| p.is_absolute())
+                .take(32)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    host_bins.extend([home.join(".local/bin"), home.join(".cargo/bin")]);
+    host_bins.extend(SHARED_BIN.iter().map(PathBuf::from));
+    let mut helper_bins = vec![
+        helper_home.join(".local/bin"),
+        helper_home.join(".cargo/bin"),
+    ];
+    helper_bins.extend(SHARED_BIN.iter().map(PathBuf::from));
+    let mut paths = Vec::<PathBuf>::new();
+    let mut reports = Vec::new();
+    for name in tools {
+        let host = host_bins.iter().map(|dir| dir.join(name)).find(|path| {
+            let metadata = access(path);
+            metadata.file && metadata.executable
+        });
+        let start = paths.len();
+        paths.extend(helper_bins.iter().map(|dir| dir.join(name)));
+        reports.push(json!({"kind":"tool", "name":name, "host":host,
+            "helperCandidateRange":[start,paths.len()], "executed":false}));
+    }
+    for name in apps {
+        let bundle = if name.ends_with(".app") {
+            name.clone()
+        } else {
+            format!("{name}.app")
+        };
+        let host = [
+            PathBuf::from("/Applications"),
+            PathBuf::from("/System/Applications"),
+            home.join("Applications"),
+        ]
+        .iter()
+        .map(|dir| dir.join(&bundle))
+        .find(|path| path.is_dir());
+        let start = paths.len();
+        paths.extend([
+            PathBuf::from("/Applications").join(&bundle),
+            PathBuf::from("/System/Applications").join(&bundle),
+            helper_home.join("Applications").join(&bundle),
+        ]);
+        reports.push(json!({"kind":"application", "name":name, "host":host,
+            "helperCandidateRange":[start,paths.len()], "launched":false,
+            "accountData":"separate", "signIn":"not checked"}));
+    }
+    let reference_start = paths.len();
+    paths.extend_from_slice(references);
+    let args = paths
+        .iter()
+        .map(|p| p.to_str().map(str::to_owned).ok_or_else(invalid))
+        .collect::<Result<Vec<_>>>()?;
+    let observed = probe(client, PATH_PROBE, &args)
+        .await?
+        .iter()
+        .map(|s| Access::from_flags(s))
+        .collect::<Result<Vec<_>>>()?;
+    for report in &mut reports {
+        let range = report
+            .as_object_mut()
+            .unwrap()
+            .remove("helperCandidateRange")
+            .unwrap();
+        let start = range[0].as_u64().unwrap() as usize;
+        let end = range[1].as_u64().unwrap() as usize;
+        report["helperCandidates"] = json!(
+            (start..end)
+                .map(|i| json!({"path":paths[i],"access":observed[i]}))
+                .collect::<Vec<_>>()
+        );
+        report["available"] = json!((start..end).any(|i| {
+            if report["kind"] == "tool" {
+                observed[i].file && observed[i].executable
+            } else {
+                observed[i].directory && observed[i].readable && observed[i].executable
+            }
+        }));
+    }
+    let defined = probe(client, ENV_PROBE, environment).await?;
+    if defined.iter().any(|s| s != "defined" && s != "undefined") {
+        return Err(invalid());
+    }
+    if client.identity().await?.epoch != session.epoch {
+        return Err(Error::new(
+            "identity",
+            "Helper changed during discovery; repeat the inspection",
+        ));
+    }
+    Ok(json!({
+        "ok":true, "readOnly":true, "helperUID":session.epoch.uid,
+        "selections":reports,
+        "environment":environment.iter().zip(defined).map(|(name, value)| json!({"name":name,"hostDefined":std::env::var_os(name).is_some(),"helperInheritedDefined":value=="defined"})).collect::<Vec<_>>(),
+        "references":references.iter().enumerate().map(|(i,path)|json!({"path":path,"host":access(path),"helper":observed[reference_start+i]})).collect::<Vec<_>>(),
+        "scope":"Selected executable/app presence and access only. Shell startup files were not loaded; inherited variables may differ from Terminal. Dependencies, app data and sign-ins require separate live verification. No selected program was executed and no file contents or variable values were read into the report."
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn inspection_does_not_execute_a_selected_program() {
+        let directory = tempfile::tempdir().unwrap();
+        let tool = directory.path().join("tool with spaces");
+        fs::write(&tool, b"#!/bin/sh\nexit 127\n").unwrap();
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o700)).unwrap();
+        let result = access(&tool);
+        assert!(result.file && result.executable);
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(!access(&tool).executable);
+    }
+
+    #[test]
+    fn selections_and_probe_results_are_bounded() {
+        assert!(component("Google Chrome"));
+        assert!(!component("../other"));
+        assert!(!component("tool\nname"));
+        assert!(!variable("KEY=value"));
+        assert!(!variable("-PATH"));
+        assert!(variable("OLLAMA_MODELS"));
+        assert!(Access::from_flags("-frx").unwrap().executable);
+        assert!(Access::from_flags("unexpected content").is_err());
+    }
+}
