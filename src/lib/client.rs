@@ -64,9 +64,14 @@ pub fn timestamp() -> u128 {
 
 impl Client {
     pub fn install(&self) -> Result<Value> {
-        let _ownership = self.controller.acquire(false)?;
         let source = fs::canonicalize(std::env::current_exe()?)?;
         let target = &self.config.identity_probe;
+        // Finding it current changes nothing, so it needs no exclusion and
+        // works while an earlier action still awaits recovery.
+        if fs::canonicalize(target).ok().as_ref() == Some(&source) {
+            return Ok(json!({ "ok": true, "path": target, "alreadyInstalled": true }));
+        }
+        let _ownership = self.controller.acquire(false)?;
         if fs::canonicalize(target).ok().as_ref() == Some(&source) {
             return Ok(json!({ "ok": true, "path": target, "alreadyInstalled": true }));
         }
@@ -511,6 +516,9 @@ impl Client {
             }
             return Ok((session.epoch.input_pid, "recovered"));
         }
+        // Without Accessibility a new service can never become ready, and a
+        // start that cannot be confirmed would stay pending; refuse plainly.
+        require_accessibility(status)?;
         let generation = self.controller.quarantine()?;
         match self.spawn_input().await {
             Ok(pid) => {
@@ -678,6 +686,12 @@ impl Client {
     pub async fn restart(&self) -> Result<Value> {
         let _ownership = self.controller.acquire(true)?;
         let before = self.identity().await?;
+        // Recovery goes through the input service; with none running and no
+        // Accessibility to start one, it cannot finish, so nothing is marked.
+        let current = self.status().await;
+        if current["inputService"]["ok"] != true {
+            require_accessibility(&current)?;
+        }
         // Held through verification, so the restart reads as in progress.
         let _recovery = self.controller.quarantine()?;
         // Input has its own process. Clear held state there before restarting
@@ -894,6 +908,20 @@ fn process_exists(pid: u32) -> bool {
         nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None),
         Ok(()) | Err(nix::errno::Errno::EPERM)
     )
+}
+
+/// Refuse input work while the helper's Understudy lacks Accessibility; an
+/// unknown answer is not a refusal.
+fn require_accessibility(status: &Value) -> Result<()> {
+    if status["permissions"]["accessibility"] == false {
+        return Err(Error::new(
+            "permission",
+            "The helper does not allow Understudy Accessibility yet, which input needs. In the \
+             helper's System Settings › Privacy & Security › Accessibility, turn Understudy on \
+             (understudy init guides this).",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

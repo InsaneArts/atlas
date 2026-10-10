@@ -416,10 +416,18 @@ pub async fn run(config_path: &Path) -> Result<Value> {
         say("  Set aside a setup record left by an earlier account with the same ID.");
     }
     let client = Client::new(config.clone())?;
-    // An earlier action of unknown outcome is recovered before anything else.
-    if !client.controller.pending()?.is_empty() {
-        step("Recovering an unfinished action");
-        client.restart().await?;
+    // An earlier action of unknown outcome is recovered before anything else
+    // when it can be; recovery needs Accessibility, so without it recovery
+    // waits until the person has allowed it below.
+    let recover = async || -> Result<()> {
+        if !client.controller.pending()?.is_empty() {
+            step("Recovering an unfinished action");
+            client.restart().await?;
+        }
+        Ok(())
+    };
+    if client.status().await["permissions"]["accessibility"] != false {
+        recover().await?;
     }
     if crate::capability::doctor(client.status().await, config.helper_uid)["ready"] == true
         && setup::migrate::settled(config.helper_uid)
@@ -517,47 +525,17 @@ pub async fn run(config_path: &Path) -> Result<Value> {
     // The session checks below run this executable in the helper.
     client.install()?;
 
-    let granted = |status: &Value| {
-        status["permissions"]["screenCapture"] == true
-            && status["permissions"]["accessibility"] == true
+    let missing = |status: &Value| -> Vec<&'static str> {
+        [
+            ("screenCapture", "Screen & System Audio Recording"),
+            ("accessibility", "Accessibility"),
+        ]
+        .into_iter()
+        .filter(|(key, _)| status["permissions"][*key] != true)
+        .map(|(_, pane)| pane)
+        .collect()
     };
-    if !granted(&client.status().await) {
-        step("Permissions in the helper session");
-        say(&format!(
-            "  Understudy is asking for Screen Recording and Accessibility in {name}'s session.\n  \
-             Go there, click Allow (or Open System Settings and turn Understudy on) for both,\n  \
-             then switch back to your own account.",
-            name = helper.name
-        ));
-        // Already back in this account: offer the way over.
-        if crate::session::require_hidden(&client.status().await, config.helper_uid).is_ok()
-            && yes(&format!(
-                "  Lock the screen now so you can switch to {}?",
-                helper.name
-            ))?
-        {
-            match crate::switch::lock_screen() {
-                Ok(_) => say(&format!(
-                    "  Locked. Click Switch User, choose {}, allow both, then switch back.",
-                    helper.name
-                )),
-                Err(error) => say(&format!("  {}", error.error)),
-            }
-        }
-        say("  Waiting for you to allow both and come back…");
-        // Done once the helper has been on screen and is hidden again (or
-        // everything is already granted).
-        let mut visited = false;
-        wait_for("you to allow both and switch back", async || {
-            let status = client.status().await;
-            if status["session"]["onConsole"] == true {
-                visited = true;
-            }
-            let back = crate::session::require_hidden(&status, config.helper_uid).is_ok();
-            (granted(&status) || (visited && back)).then_some(())
-        })
-        .await?;
-    } else {
+    if missing(&client.status().await).is_empty() {
         step("Switch back to your own account");
         say("  Understudy works while the helper runs in the background. Waiting for you…");
         wait_for("you to switch back", async || {
@@ -566,32 +544,70 @@ pub async fn run(config_path: &Path) -> Result<Value> {
                 .then_some(())
         })
         .await?;
+    } else {
+        step("Permissions in the helper session");
+        say(&format!(
+            "  Understudy asks for Screen Recording and Accessibility in {name}'s session,
+               one request after the other. Go there, click Allow (or Open System Settings and
+               turn Understudy on) for each, then switch back to your own account.",
+            name = helper.name
+        ));
+        loop {
+            // Already back in this account: offer the way over.
+            if crate::session::require_hidden(&client.status().await, config.helper_uid).is_ok()
+                && yes(&format!(
+                    "  Lock the screen now so you can switch to {}?",
+                    helper.name
+                ))?
+            {
+                match crate::switch::lock_screen() {
+                    Ok(_) => say(&format!(
+                        "  Locked. Click Switch User, choose {}, allow, then switch back.",
+                        helper.name
+                    )),
+                    Err(error) => say(&format!("  {}", error.error)),
+                }
+            }
+            say("  Waiting for you to allow and come back…");
+            // Done once the helper has been on screen and is hidden again (or
+            // everything is already granted).
+            let mut visited = false;
+            wait_for("you to allow and switch back", async || {
+                let status = client.status().await;
+                if status["session"]["onConsole"] == true {
+                    visited = true;
+                }
+                let back = crate::session::require_hidden(&status, config.helper_uid).is_ok();
+                (missing(&status).is_empty() || (visited && back)).then_some(())
+            })
+            .await?;
+            // macOS applies a new Screen Recording grant to new processes
+            // only, so the daemon restarts to pick up what the person allowed.
+            if !missing(&client.status().await).is_empty() {
+                restart_daemon(&client, &config).await?;
+            }
+            let lacking = missing(&client.status().await);
+            if lacking.is_empty() {
+                break;
+            }
+            let panes = lacking.join(" and ");
+            say(&format!(
+                "\n  Understudy is still off for {panes}. In {name}'s session, open\n  \
+                 System Settings › Privacy & Security › {panes} and turn Understudy on.",
+                name = helper.name
+            ));
+            if !yes("  Try again?")? {
+                return Err(problem(format!(
+                    "Understudy still lacks {panes} in {name}. Switch to {name}, open System \
+                     Settings › Privacy & Security › {panes}, turn Understudy on, switch back \
+                     and run understudy init again.",
+                    name = helper.name
+                )));
+            }
+        }
     }
 
-    // macOS applies a new Screen Recording grant to new processes only, so
-    // the daemon restarts once to pick up what the person allowed.
-    if !granted(&client.status().await) {
-        restart_daemon(&client, &config).await?;
-    }
-    let status = client.status().await;
-    if !granted(&status) {
-        let missing: Vec<&str> = [
-            ("screenCapture", "Screen Recording"),
-            ("accessibility", "Accessibility"),
-        ]
-        .into_iter()
-        .filter(|(key, _)| status["permissions"][*key] != true)
-        .map(|(_, name)| name)
-        .collect();
-        return Err(problem(format!(
-            "Understudy still lacks {} in {}. Switch to {}, open System Settings › Privacy & \
-             Security, turn Understudy on there, switch back and run understudy init again.",
-            missing.join(" and "),
-            helper.name,
-            helper.name
-        )));
-    }
-
+    recover().await?;
     step("Input and verification");
     client.start_input().await?;
     let ownership = client.controller.acquire(true)?;

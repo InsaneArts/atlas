@@ -374,17 +374,30 @@ stage.addEventListener('pointermove', (event) => {
   }
 });
 stage.addEventListener('pointerup', (event) => {
-  const location = point(event, true);
+  // Where the button came up, or where the gesture last was if the browser
+  // cannot place it.
+  const location = point(event, true) || gesture.active?.last;
   const movement = gesture.move(event, location, modifiers(event));
   const action = gesture.finish(event, location, modifiers(event));
   if (stage.hasPointerCapture(event.pointerId)) stage.releasePointerCapture(event.pointerId);
   if (action && canInput()) enqueue([movement, action].filter(Boolean));
 });
-function cancelGesture() {
-  if (gesture.active) releaseControl('Mouse gesture cancelled. Choose Control again when ready.');
+// The browser can take the pointer for itself mid-gesture. The gesture still
+// ends in the helper: the button comes up where it last was, and control
+// stays with the person.
+function cancelGesture(event) {
+  const last = gesture.active?.last;
+  const action = last && gesture.finish(event, last, modifiers(event));
+  if (action && canInput()) enqueue([action]);
 }
 stage.addEventListener('pointercancel', cancelGesture);
 stage.addEventListener('lostpointercapture', cancelGesture);
+// Over the desktop the mouse belongs to the helper, never to the browser's
+// own text selection or drag, which would cut the gesture short.
+for (const type of ['dragstart', 'selectstart'])
+  stage.addEventListener(type, (event) => {
+    if (lease) event.preventDefault();
+  });
 stage.addEventListener('contextmenu', (event) => {
   if (lease) event.preventDefault();
 });

@@ -392,6 +392,9 @@ fn main() -> ExitCode {
             }
         };
     }
+    // A refusing environment worker exits distinctly, so its caller can tell
+    // the refusal from the command it would have run.
+    let worker = matches!(cli.command, Command::EnvironmentWorker { .. });
     let result = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -418,7 +421,11 @@ fn main() -> ExitCode {
         }
         Err(error) => {
             eprintln!("{}", json!(error));
-            ExitCode::FAILURE
+            if worker {
+                ExitCode::from(understudy::environment::WORKER_REFUSED)
+            } else {
+                ExitCode::FAILURE
+            }
         }
     }
 }

@@ -9,6 +9,7 @@ use objc2_core_graphics::{
     CGDisplayBounds, CGDisplayCopyDisplayMode, CGDisplayMode, CGMainDisplayID,
 };
 use serde_json::{Value, json};
+use std::time::Duration;
 
 /// Whether this process may use Accessibility.
 #[allow(unsafe_code)] // FFI: Accessibility trust query.
@@ -20,11 +21,16 @@ fn accessibility() -> bool {
 /// Ask macOS for whatever consent the daemon still lacks — Screen Recording
 /// and Accessibility — so it is listed in System Settings with a prompt in
 /// the helper's session. Nothing is granted here; the person decides.
-#[allow(unsafe_code)] // FFI: the consent prompt takes an options dictionary.
 pub fn request_consent() {
     if !capture::permitted() {
         capture::request();
     }
+    request_accessibility();
+}
+
+/// Ask for Accessibility with the system prompt, unless it is allowed.
+#[allow(unsafe_code)] // FFI: the consent prompt takes an options dictionary.
+fn request_accessibility() {
     if accessibility() {
         return;
     }
@@ -34,6 +40,32 @@ pub fn request_consent() {
     // SAFETY: the options dictionary holds the documented string key with a
     // boolean value.
     unsafe { AXIsProcessTrustedWithOptions(Some(options.as_opaque())) };
+}
+
+/// Ask again for missing consent each time the helper comes on screen. A
+/// prompt raised while the session is in the background can be lost, and
+/// two raised together may show only one; on arrival they come one by one.
+pub async fn request_consent_on_arrival() {
+    let mut present = console_state() == Some(true);
+    loop {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let shown = || console_state() == Some(true);
+        let now = shown();
+        if now && !present {
+            // Let the desktop settle after the switch before asking, and ask
+            // only while the helper is still on screen.
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            if shown() {
+                request_accessibility();
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            if shown() && !capture::permitted() {
+                capture::request();
+            }
+        }
+        // Leaving during the pause counts as never having arrived.
+        present = now && shown();
+    }
 }
 
 /// This process's account: name, home and UID.
