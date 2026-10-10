@@ -15,6 +15,7 @@ pub mod overview;
 pub mod readiness;
 pub mod session;
 pub mod setup;
+pub mod switch;
 pub mod transport;
 pub mod update;
 pub mod viewer;
