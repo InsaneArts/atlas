@@ -233,8 +233,8 @@ async fn await_endpoint(client: &Client) -> Result<()> {
     while !reachable(client).await {
         if Instant::now() >= deadline {
             return Err(problem(format!(
-                "No verified capture daemon answered at {}",
-                client.config.socket_path.display()
+                "The helper did not answer in time ({}). Run understudy doctor.",
+                crate::ui::text::tilde(&client.config.socket_path)
             )));
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -363,8 +363,8 @@ impl Migration {
             }
         }
         Err(problem(
-            "Neither capture daemon answers in a hidden helper session; log in to the helper \
-             once, switch back, then run setup again",
+            "The helper is not running in the background. Sign in to the helper account \
+             once, switch back, then run understudy init again.",
         ))
     }
     /// The managed endpoint is private, captures, and runs the planned binary.
@@ -382,7 +382,9 @@ impl Migration {
         let pid = status["daemon"]["pid"]
             .as_u64()
             .and_then(|pid| u32::try_from(pid).ok())
-            .ok_or_else(|| problem("The managed helper daemon reported no PID"))?;
+            .ok_or_else(|| {
+                problem("The helper did not say which process it is. Run understudy restart.")
+            })?;
         // The file it runs must be the planned build, and its loaded code
         // must be valid, Understudy's, and still that file.
         let installed = executable_of(pid)
@@ -390,13 +392,14 @@ impl Migration {
             .and_then(|signature| signature.cdhash);
         if installed.as_deref() != Some(self.log.plan.cdhash.as_str()) {
             return Err(problem(
-                "The managed helper daemon is not the signed binary that was planned",
+                "The helper is not running the signed Understudy build that was expected. Run \
+                 understudy restart.",
             ));
         }
         if !running_developer_id(pid) {
             return Err(problem(
-                "The helper daemon still runs a previous build; run understudy restart, then \
-                 setup --apply again",
+                "The helper still runs an older build. Run understudy restart, then \
+                 understudy setup --apply.",
             ));
         }
         let controller = nix::unistd::getuid().as_raw();
@@ -625,7 +628,7 @@ fn signed_daemon(program: &Path) -> Result<String> {
     }
     signature(program)
         .and_then(|signature| signature.cdhash)
-        .ok_or_else(|| problem("The helper daemon's signature could not be read"))
+        .ok_or_else(|| problem("The helper app's signature could not be read"))
 }
 
 /// The signed Understudy executable the helper daemon runs: this one when it
@@ -640,7 +643,7 @@ fn daemon_program() -> Result<PathBuf> {
         })
         .or_else(|| Some(PathBuf::from(INSTALLED)).filter(|path| path.is_file()))
         .ok_or_else(|| {
-            problem("Install Understudy.app first; setup runs the helper daemon from it")
+            problem("Install Understudy.app in /Applications first; the helper runs it from there")
         })
 }
 
@@ -664,8 +667,12 @@ async fn plan_fresh(config_path: &Path) -> Result<Plan> {
         ));
     }
     let status = Client::new(config.clone())?.status().await;
-    require_hidden(&status, config.helper_uid)
-        .map_err(|_| problem("The helper daemon does not answer in a hidden helper session"))?;
+    require_hidden(&status, config.helper_uid).map_err(|_| {
+        problem(
+            "The helper is not running in the background. Switch back to your own account, then \
+             run understudy doctor.",
+        )
+    })?;
     let program = daemon_program()?;
     let cdhash = signed_daemon(&program)?;
     Ok(Plan {
@@ -774,12 +781,17 @@ async fn plan(config_path: &Path) -> Result<Plan> {
     }
     let status = client.status().await;
     require_hidden(&status, config.helper_uid).map_err(|_| {
-        problem("Setup needs the current capture daemon reachable in a hidden helper session")
+        problem(
+            "The helper is not running in the background. Switch back to your own account, then \
+             run understudy doctor.",
+        )
     })?;
     let pid = status["daemon"]["pid"]
         .as_u64()
         .and_then(|pid| u32::try_from(pid).ok())
-        .ok_or_else(|| problem("The capture daemon reported no PID"))?;
+        .ok_or_else(|| {
+            problem("The helper did not say which process it is. Run understudy restart.")
+        })?;
     let program = daemon_program()?;
     let cdhash = signed_daemon(&program)?;
     let old_label = helper_job(&client, pid).await["label"]

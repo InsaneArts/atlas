@@ -13,7 +13,12 @@ use crate::{
     transport::run_output,
 };
 use serde_json::{Value, json};
-use std::time::{Duration, Instant};
+use std::{
+    fs,
+    os::unix::fs::PermissionsExt,
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
+};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// The working contract printed by `understudy agent-guide`.
@@ -222,29 +227,216 @@ pub async fn list(client: &Client, filter: &WindowFilter) -> Result<Value> {
 }
 
 /// `open` inside the helper session: an app by name, files or URLs, or both.
-pub async fn open(client: &Client, app: Option<&str>, targets: &[String]) -> Result<Value> {
+pub async fn open(
+    client: &Client,
+    app: Option<&str>,
+    targets: &[String],
+    environment: &[String],
+) -> Result<Value> {
     if app.is_none() && targets.is_empty() {
         return Err(Error::new(
             "input",
             "Name an app with --app, a target, or both",
         ));
     }
+    let helper = client.config.helper_uid;
+    let mut copied = Vec::new();
     let mut argv = vec!["/usr/bin/open".to_owned()];
+    for variable in environment {
+        if variable
+            .split_once('=')
+            .is_none_or(|(name, _)| name.is_empty())
+        {
+            return Err(Error::new(
+                "usage",
+                format!("--env takes NAME=VALUE, not {variable}"),
+            ));
+        }
+        argv.extend(["--env".to_owned(), variable.clone()]);
+    }
     if let Some(app) = app {
-        argv.extend(["-a".to_owned(), app.to_owned()]);
+        // A name is the helper's to look up; a path is this side's file.
+        let app = if app.contains('/') {
+            hand_over(app, helper, &mut copied)?
+        } else {
+            app.to_owned()
+        };
+        argv.extend(["-a".to_owned(), app]);
     }
     if !targets.is_empty() {
         argv.push("--".to_owned());
-        argv.extend(targets.iter().cloned());
+        for target in targets {
+            argv.push(hand_over(target, helper, &mut copied)?);
+        }
     }
     let reply = client.run(argv).await?;
     let opened = reply["exitCode"] == 0;
     let mut value = json!({ "ok": opened, "opened": opened });
+    if !copied.is_empty() {
+        value["copied"] = json!(copied);
+    }
     if !opened {
         let output = run_output(&reply, 4096).unwrap_or_default();
         value["error"] = json!(String::from_utf8_lossy(&output).trim());
     }
     Ok(value)
+}
+
+/// Quit `app` in the helper (every process of that name), wait until it is
+/// gone, then remove the copy `open` made of it, if there is one.
+pub async fn close(client: &Client, app: &str) -> Result<Value> {
+    let pids = |apps: &Value| -> Vec<u64> {
+        apps["apps"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|running| running["name"] == app)
+            .filter_map(|running| running["pid"].as_u64())
+            .collect()
+    };
+    let running = pids(&client.apps().await?);
+    if !running.is_empty() {
+        let mut argv = vec!["/bin/kill".to_owned()];
+        argv.extend(running.iter().map(u64::to_string));
+        client.run(argv).await?;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !pids(&client.apps().await?).is_empty() {
+            if Instant::now() >= deadline {
+                return Err(Error::new(
+                    "input",
+                    format!("{app} did not quit within 10 seconds"),
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
+    let removed: Vec<String> = copies_of(app)
+        .into_iter()
+        .filter(|copy| fs::remove_dir_all(copy).is_ok())
+        .map(|copy| copy.to_string_lossy().into_owned())
+        .collect();
+    Ok(json!({
+        "ok": true,
+        "app": app,
+        "closed": !running.is_empty(),
+        "removed": removed,
+    }))
+}
+
+/// The apps in HANDOFF that are `app`: named so, or whose bundle calls itself so.
+fn copies_of(app: &str) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(HANDOFF) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "app"))
+        .filter(|path| {
+            path.file_stem().is_some_and(|stem| stem == app)
+                || ["CFBundleDisplayName", "CFBundleName", "CFBundleExecutable"]
+                    .iter()
+                    .any(|key| bundle_value(path, key).as_deref() == Some(app))
+        })
+        .collect()
+}
+
+/// One string from a bundle's Info.plist.
+fn bundle_value(bundle: &Path, key: &str) -> Option<String> {
+    let output = std::process::Command::new("/usr/libexec/PlistBuddy")
+        .arg("-c")
+        .arg(format!("Print :{key}"))
+        .arg(bundle.join("Contents/Info.plist"))
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+/// Where `open` copies an app or file the helper cannot read, such as a
+/// build in a private folder. Only the helper account is let in.
+pub const HANDOFF: &str = "/Users/Shared/Understudy/Open";
+
+/// `target` as the helper can open it. URLs and names pass through; a path
+/// here becomes absolute (the helper has its own working directory), and
+/// one the helper cannot read is copied into HANDOFF first.
+fn hand_over(target: &str, helper: u32, copied: &mut Vec<Value>) -> Result<String> {
+    let Ok(path) = fs::canonicalize(target) else {
+        return Ok(target.to_owned());
+    };
+    if readable_by_others(&path) {
+        return Ok(path.to_string_lossy().into_owned());
+    }
+    let name = path
+        .file_name()
+        .ok_or_else(|| Error::new("input", format!("Cannot open {target}")))?;
+    let handoff = handoff(helper)?;
+    let copy = handoff.join(name);
+    match fs::symlink_metadata(&copy) {
+        Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(&copy)?,
+        Ok(_) => fs::remove_file(&copy)?,
+        Err(_) => {}
+    }
+    let status = std::process::Command::new("/usr/bin/ditto")
+        .arg("--noacl")
+        .arg(&path)
+        .arg(&copy)
+        .stdin(std::process::Stdio::null())
+        .status()?;
+    if !status.success() {
+        return Err(Error::new(
+            "io",
+            format!("Could not copy {} for the helper", path.display()),
+        ));
+    }
+    copied.push(json!({"from": path, "to": copy}));
+    Ok(copy.to_string_lossy().into_owned())
+}
+
+/// Whether accounts other than this one may read `path`: it is readable
+/// (and, for a folder, enterable) by others, and so is every folder above.
+fn readable_by_others(path: &Path) -> bool {
+    let mode = |path: &Path| fs::metadata(path).map(|metadata| metadata.permissions().mode());
+    let own = if path.is_dir() { 0o005 } else { 0o004 };
+    mode(path).is_ok_and(|mode| mode & own == own)
+        && path
+            .ancestors()
+            .skip(1)
+            .all(|folder| mode(folder).is_ok_and(|mode| mode & 0o001 != 0))
+}
+
+/// HANDOFF, private to this account apart from an inherited read-only
+/// grant to the helper.
+fn handoff(helper: u32) -> Result<PathBuf> {
+    let folder = PathBuf::from(HANDOFF);
+    fs::create_dir_all(&folder)?;
+    fs::set_permissions(&folder, fs::Permissions::from_mode(0o700))?;
+    let account = nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(helper))
+        .ok()
+        .flatten()
+        .ok_or_else(|| Error::new("identity", "The helper account was not found"))?;
+    let grant = format!(
+        "{} allow list,search,readattr,readextattr,readsecurity,read,execute,file_inherit,directory_inherit",
+        account.name
+    );
+    for args in [vec!["-N"], vec!["+a", grant.as_str()]] {
+        let status = std::process::Command::new("/bin/chmod")
+            .args(&args)
+            .arg(&folder)
+            .stdin(std::process::Stdio::null())
+            .status()?;
+        if !status.success() {
+            return Err(Error::new(
+                "io",
+                format!("Could not let the helper into {HANDOFF}"),
+            ));
+        }
+    }
+    Ok(folder)
 }
 
 /// Poll the window list until a matching window appears (or, with `gone`,
@@ -481,10 +673,15 @@ pub async fn click_element(
     let [element] = matching.as_slice() else {
         return Err(Error::new(
             "elements",
-            format!(
-                "Expected exactly one matching element with a frame, found {}",
-                matching.len()
-            ),
+            match matching.len() {
+                0 => "No visible element matches. Run understudy elements --app NAME to see \
+                      what is there."
+                    .to_owned(),
+                count => format!(
+                    "{count} elements match. Run understudy elements with the same --name to \
+                     tell them apart, then add --role."
+                ),
+            },
         ));
     };
     // An element whose selector attributes could not be read may be a

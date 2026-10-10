@@ -26,6 +26,57 @@ impl Error {
     }
 }
 
+/// Every failure code Understudy reports. Agents act on these (see the
+/// plugin's troubleshooting.md, which a test keeps in step).
+pub const CODES: &[&str] = &[
+    "agents",
+    "apps",
+    "bad-request",
+    "busy",
+    "cancelled",
+    "capture",
+    "config",
+    "config-invalid",
+    "daemon",
+    "elements",
+    "environment",
+    "identity",
+    "init",
+    "input",
+    "install",
+    "invalid-json",
+    "io",
+    "lease-lost",
+    "menubar",
+    "native",
+    "on-console",
+    "permission",
+    "platform",
+    "port-in-use",
+    "protocol",
+    "restart",
+    "session-changed",
+    "setup",
+    "spawn-failed",
+    "stale-frame",
+    "startup",
+    "state",
+    "switch",
+    "terminal",
+    "transport",
+    "uncertain",
+    "uninstall",
+    "update",
+    "usage",
+    "wait-failed",
+    "windows",
+];
+
+/// The code another Understudy process reported, if it is one of ours.
+pub fn code(name: &str) -> Option<&'static str> {
+    CODES.iter().copied().find(|code| *code == name)
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.error)
@@ -40,5 +91,28 @@ impl From<std::io::Error> for Error {
 impl From<serde_json::Error> for Error {
     fn from(value: serde_json::Error) -> Self {
         Self::new("invalid-json", value.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Agents learn every code from the plugin's table, and only those.
+    #[test]
+    fn the_codes_are_the_documented_ones() {
+        let table =
+            include_str!("../../agents/understudy/skills/understudy/references/troubleshooting.md");
+        let documented: Vec<&str> = table
+            .lines()
+            .filter_map(|line| line.strip_prefix("| `"))
+            .filter_map(|rest| rest.split('`').next())
+            .collect();
+        assert_eq!(
+            documented, CODES,
+            "keep CODES and troubleshooting.md in step"
+        );
+        assert_eq!(code("busy"), Some("busy"));
+        assert_eq!(code("made-up"), None);
     }
 }

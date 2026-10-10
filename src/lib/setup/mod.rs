@@ -560,16 +560,12 @@ fn next_steps(report: &Value) -> Vec<String> {
     }
     if report["session"]["reachable"] != true {
         steps.push(
-            "The capture service is unreachable. Log in to the helper account once so its \
-             LaunchAgent starts, then switch back without logging out."
+            "The helper is not running. Sign in to the helper account once, then switch back \
+             without logging it out."
                 .to_owned(),
         );
     } else if report["session"]["hidden"] != true {
-        steps.push(
-            "The helper is on the console or unverified. Switch back to your account without \
-             logging the helper out."
-                .to_owned(),
-        );
+        steps.push("Switch back to your own account without logging the helper out.".to_owned());
     }
     if report["capture"]["endpoint"]["private"] == false {
         steps.push(
@@ -580,7 +576,9 @@ fn next_steps(report: &Value) -> Vec<String> {
     }
     if report["capture"]["daemon"]["screenRecording"] == false {
         steps.push(
-            "Grant Screen Recording to the capture helper inside the helper account.".to_owned(),
+            "In the helper's System Settings › Privacy & Security › Screen & System Audio Recording, \
+             turn Understudy on."
+                .to_owned(),
         );
     }
     if report["input"]["service"]["accessibility"] == false {

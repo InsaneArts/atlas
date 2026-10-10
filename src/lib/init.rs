@@ -1,7 +1,7 @@
-//! `understudy init`: a guided first setup, plain text, safe to run again.
-//! Each step checks before it acts and is skipped when already done. It
-//! never types or stores a password and never touches privacy settings: the
-//! person signs in and clicks Allow themselves; Understudy waits and checks.
+//! `understudy init`: a guided first setup, safe to run again. Each step
+//! checks before it acts and is skipped when already done. It never types or
+//! stores a password and never touches privacy settings: the person signs in
+//! and clicks Allow themselves; Understudy waits and checks.
 use crate::{
     client::Client,
     config::{self, Config},
@@ -10,11 +10,16 @@ use crate::{
         self,
         helper::{Agent, LABEL, Layout, Request},
     },
+    ui::{
+        self,
+        progress::{Spinner, done, heading, say, skipped},
+        prompt, style, text,
+    },
 };
 use serde_json::{Value, json};
 use std::{
     fs,
-    io::{BufRead, IsTerminal, Write},
+    io::Write,
     os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
     process::Command,
@@ -28,31 +33,9 @@ fn problem(message: impl Into<String>) -> Error {
     Error::new("init", message)
 }
 
-fn say(text: &str) {
-    eprintln!("{text}");
-}
-
-fn step(text: &str) {
-    eprintln!("\n• {text}");
-}
-
-fn ask(question: &str) -> Result<String> {
-    eprint!("{question} ");
-    std::io::stderr().flush()?;
-    let mut answer = String::new();
-    std::io::stdin().lock().read_line(&mut answer)?;
-    Ok(answer.trim().to_owned())
-}
-
-fn yes(question: &str) -> Result<bool> {
-    Ok(matches!(
-        ask(&format!("{question} [Y/n]"))?.as_str(),
-        "" | "y" | "Y" | "yes"
-    ))
-}
-
-/// A command that must succeed; its output goes to the person.
-fn interactive(program: &str, args: &[&str], why: &str) -> Result<()> {
+/// A command that must succeed and talks to the person itself (sudo and
+/// sysadminctl ask for passwords in their own words).
+fn attended(program: &str, args: &[&str], why: &str) -> Result<()> {
     let status = Command::new(program).args(args).status()?;
     status
         .success()
@@ -102,30 +85,19 @@ fn admin(name: &str) -> bool {
         .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).starts_with("yes"))
 }
 
-/// What the person answered to "which account?".
-#[derive(Debug, PartialEq, Eq)]
-enum Choice {
-    Existing(usize),
-    Create,
-    Unknown,
-}
-
-/// Read an answer as a listed number or an account's short name; the number
-/// after the list means "create a new account".
-fn parse_choice(answer: &str, names: &[String]) -> Choice {
-    let answer = answer.trim();
-    if let Ok(number) = answer.parse::<usize>() {
-        return match number {
-            0 => Choice::Unknown,
-            number if number <= names.len() => Choice::Existing(number - 1),
-            number if number == names.len() + 1 => Choice::Create,
-            _ => Choice::Unknown,
-        };
+/// Whether `name` can be a new account's short name.
+fn valid_account_name(name: &str) -> std::result::Result<(), String> {
+    if name.is_empty() || name.len() > 31 {
+        return Err("Use 1 to 31 characters.".into());
     }
-    names
-        .iter()
-        .position(|name| name == answer)
-        .map_or(Choice::Unknown, Choice::Existing)
+    if !name
+        .bytes()
+        .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
+        || name.starts_with(['.', '-'])
+    {
+        return Err("Use letters, digits, '.', '_' and '-'.".into());
+    }
+    Ok(())
 }
 
 /// Choose an existing standard account, or (only when asked for, and
@@ -135,59 +107,49 @@ fn choose_helper() -> Result<setup::Account> {
         .into_iter()
         .filter(|account| !admin(&account.name))
         .collect();
-    let names: Vec<String> = candidates
+    let mut items: Vec<String> = candidates
         .iter()
-        .map(|account| account.name.clone())
+        .map(|account| match &account.real_name {
+            Some(real) if real != &account.name => format!("{real} ({})", account.name),
+            _ => account.name.clone(),
+        })
         .collect();
-    loop {
-        say("Standard accounts on this Mac:");
-        for (index, account) in candidates.iter().enumerate() {
-            let label = account.real_name.as_deref().unwrap_or(&account.name);
-            say(&format!("  {}. {label} — {}", index + 1, account.name));
-        }
-        say(&format!(
-            "  {}. Create a new helper account",
-            names.len() + 1
-        ));
-        match parse_choice(
-            &ask("Which account should be the helper? (number or name)")?,
-            &names,
-        ) {
-            Choice::Existing(index) => {
-                return setup::account_named(&names[index])?
-                    .ok_or_else(|| problem("That account disappeared"));
-            }
-            Choice::Create => break,
-            Choice::Unknown => say("  Please type one of the numbers or account names above."),
-        }
-    }
-    let name = match ask("Short name for the new helper account [understudy]:")? {
-        empty if empty.is_empty() => "understudy".to_owned(),
-        name => name,
+    items.push("Create a new account…".to_owned());
+    let choice = if candidates.is_empty() {
+        say("There is no other standard account yet, so Understudy will make one.");
+        items.len() - 1
+    } else {
+        prompt::select("Which account should be the helper?", &items, 0, "")?
     };
-    if !name
-        .bytes()
-        .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
-    {
-        return Err(problem(
-            "Account names use letters, digits, '.', '_' and '-'",
-        ));
+    if let Some(account) = candidates.get(choice) {
+        return setup::account_named(&account.name)?
+            .ok_or_else(|| problem("That account disappeared"));
     }
-    if setup::account_named(&name)?.is_some() {
-        return Err(problem(format!(
-            "An account named {name} already exists; choose it instead"
-        )));
-    }
-    let answer = ask(&format!(
-        "Create a new standard account named {name}? [y/N]"
-    ))?;
-    if !matches!(answer.as_str(), "y" | "Y" | "yes") {
+    let name = prompt::input(
+        "Short name for the new account",
+        "understudy",
+        |name| {
+            valid_account_name(name)?;
+            match setup::account_named(name) {
+                Ok(Some(_)) => Err(format!(
+                    "{name} already exists; choose it from the list instead."
+                )),
+                _ => Ok(()),
+            }
+        },
+        "",
+    )?;
+    if !prompt::confirm(
+        &format!("Create a standard account named {name}?"),
+        true,
+        "",
+    )? {
         return Err(problem(
             "No account was created; run understudy init again to choose",
         ));
     }
-    say("macOS will ask for your administrator password, then a password for the helper.");
-    interactive(
+    say("macOS asks for your administrator password, then a password for the new account.");
+    attended(
         "/usr/bin/sudo",
         &[
             "/usr/sbin/sysadminctl",
@@ -294,25 +256,30 @@ fn as_helper(executable: &Path, helper: &setup::Account, request: &Request) -> R
 }
 
 /// Restart the helper daemon (launchd starts a fresh process) and wait for
-/// the new one to answer.
+/// the new one to answer. No other controller may act meanwhile, and the
+/// restart stays pending until a new daemon is seen; if that never happens
+/// it is left for recovery, like any action of unknown outcome.
 async fn restart_daemon(client: &Client, config: &Config) -> Result<()> {
+    let _exclusion = client.controller.acquire(true)?;
     let before = client.status().await["daemon"]["pid"].clone();
     let transport = crate::transport::Transport {
         path: config.socket_path.clone(),
         timeout: Duration::from_secs(10),
         peer_uid: config.helper_uid,
     };
+    let pending = client.controller.quarantine()?;
     transport.call(&json!({"op": "restart"})).await?;
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         tokio::time::sleep(Duration::from_millis(500)).await;
         let pid = client.status().await["daemon"]["pid"].clone();
         if pid.is_number() && pid != before {
+            client.controller.clear_if(&pending)?;
             return Ok(());
         }
         if Instant::now() >= deadline {
             return Err(problem(
-                "The helper daemon did not come back after a restart",
+                "The helper did not start again after a restart. Run understudy doctor.",
             ));
         }
     }
@@ -334,22 +301,22 @@ async fn wait_for<T>(what: &str, mut ready: impl AsyncFnMut() -> Option<T>) -> R
     }
 }
 
-/// The optional finishing touches, offered only when not already in place:
-/// the menu bar at login, and teaching the installed agents.
-fn finish(done: &mut Vec<Value>) -> Result<()> {
-    // The menu bar is part of Understudy: on at login unless turned off
-    // (understudy menubar --login off).
+/// The finishing touches, offered only when not already in place: the menu
+/// bar at login, and teaching the installed agents.
+fn finish(done_steps: &mut Vec<Value>) -> Result<()> {
+    // The menu bar is part of Understudy: on at login unless turned off.
     let login = crate::menubar::login("status").unwrap_or_default();
     if login["available"] == true && login["enabled"] != true {
-        step("Menu bar");
         let login = crate::menubar::login("on")?;
-        say(if login["enabled"] == true {
-            "  Understudy is in the menu bar and opens at login \
-             (understudy menubar --login off turns that off)."
+        if login["enabled"] == true {
+            done(
+                "Menu bar",
+                "opens at login (understudy menubar --login off turns it off)",
+            );
         } else {
-            "  macOS did not enable it; turn on Open at Login from the menu bar later."
-        });
-        done.push(json!({"step": "menubar", "login": login}));
+            skipped("Menu bar", "turn on Open at Login from its menu later");
+        }
+        done_steps.push(json!({"step": "menubar", "login": login}));
     }
     let agents = crate::agents::status();
     let found: Vec<&str> = agents["agents"]
@@ -357,40 +324,106 @@ fn finish(done: &mut Vec<Value>) -> Result<()> {
         .into_iter()
         .flatten()
         .filter(|agent| agent["installed"] == true && agent["connected"] != true)
-        .filter_map(|agent| agent["agent"].as_str())
+        .filter_map(|agent| {
+            agent["agent"]
+                .as_str()
+                .and_then(crate::agents::Agent::named)
+        })
+        .map(crate::agents::Agent::display_name)
         .collect();
-    if !found.is_empty() {
-        step("Agents");
-        if yes(&format!(
-            "  Teach {} to use Understudy (adds its plugin)?",
-            found.join(" and ")
-        ))? {
-            let connected = crate::agents::change(&[], false)?;
-            say(if connected["ok"] == true {
-                "  Connected. New agent sessions know how to use Understudy."
-            } else {
-                "  Not every agent connected; run understudy agents install later."
-            });
-            done.push(json!({"step": "agents", "result": connected}));
+    if !found.is_empty()
+        && prompt::confirm(
+            &format!(
+                "Teach {} to use Understudy? (adds a plugin)",
+                found.join(" and ")
+            ),
+            true,
+            "run understudy agents install later",
+        )?
+    {
+        let connected = {
+            let _spinner = Spinner::new("Connecting…");
+            crate::agents::change(&[], false)?
+        };
+        if connected["ok"] == true {
+            done("Agents", &format!("{} connected", found.join(" and ")));
+        } else {
+            skipped(
+                "Agents",
+                "not every agent connected; run understudy agents install later",
+            );
         }
+        done_steps.push(json!({"step": "agents", "result": connected}));
     }
     Ok(())
 }
 
+/// The closing lines: ready, and what to try.
+fn ready() {
+    say(&format!("\n{}", style::bold("Understudy is ready.")));
+    for line in ui::suggestions() {
+        say(&line);
+    }
+}
+
+/// Lock the screen for the person, if they want, so they can switch to
+/// `name`; otherwise say how.
+fn offer_lock(name: &str) -> Result<()> {
+    if prompt::confirm(
+        &format!("Lock the screen now so you can switch to {name}?"),
+        true,
+        "switch accounts yourself",
+    )? {
+        match crate::switch::lock_screen() {
+            Ok(_) => done(
+                "Screen locked",
+                &format!("click Switch User and choose {name}"),
+            ),
+            Err(error) => skipped("Screen not locked", &error.error),
+        }
+    } else {
+        say(&format!(
+            "  To switch: Apple menu › Lock Screen, then Switch User and choose {name}."
+        ));
+    }
+    Ok(())
+}
+
+/// The permissions the helper still lacks, by their System Settings names.
+fn missing(status: &Value) -> Vec<&'static str> {
+    [
+        ("screenCapture", "Screen & System Audio Recording"),
+        ("accessibility", "Accessibility"),
+    ]
+    .into_iter()
+    .filter(|(key, _)| status["permissions"][*key] != true)
+    .map(|(_, pane)| pane)
+    .collect()
+}
+
 /// Guide the person from an installed app to a ready helper.
 pub async fn run(config_path: &Path) -> Result<Value> {
-    if !std::io::stdin().is_terminal() {
+    if !ui::interactive() {
         return Err(problem("init is a guided setup; run it in a terminal"));
     }
-    let mut done = Vec::new();
+    let mut done_steps = Vec::new();
+    say(&format!(
+        "{}\n{}",
+        style::bold("Understudy setup"),
+        style::dim(
+            "A hidden second desktop for your agents. About five minutes; safe to run again."
+        )
+    ));
+    say("");
 
-    step("Understudy.app");
     let executable = app_executable()?;
     let linked = link_command(&executable)?;
-    say(&format!("  Ready at {}", executable.display()));
-    done.push(json!({"step": "app", "command": linked}));
+    done(
+        "Understudy.app",
+        &text::tilde(crate::update::installed_app()?),
+    );
+    done_steps.push(json!({"step": "app", "command": linked}));
 
-    step("Configuration and helper account");
     // The path is the one the command line resolved (the installed one by
     // default); a configuration is created only where none exists, and an
     // existing one that does not load is reported, never replaced.
@@ -403,15 +436,17 @@ pub async fn run(config_path: &Path) -> Result<Value> {
         let helper = choose_helper()?;
         let config = proposed(&helper)?;
         write_config(&config_path, &config)?;
-        say(&format!("  Wrote {}", config_path.display()));
         config
     } else {
-        let config = Config::load(&config_path)?;
-        say(&format!("  Using {}", config_path.display()));
-        config
+        Config::load(&config_path)?
     };
     let helper = setup::account_with_uid(config.helper_uid)?
         .ok_or_else(|| problem("The configured helper account does not exist"))?;
+    let name = helper.name.clone();
+    done(
+        "Helper account",
+        &format!("{name} · settings in {}", text::tilde(&config_path)),
+    );
     if setup::migrate::archive_foreign(helper.uid, &helper.home)? {
         say("  Set aside a setup record left by an earlier account with the same ID.");
     }
@@ -421,24 +456,30 @@ pub async fn run(config_path: &Path) -> Result<Value> {
     // waits until the person has allowed it below.
     let recover = async || -> Result<()> {
         if !client.controller.pending()?.is_empty() {
-            step("Recovering an unfinished action");
+            let _spinner = Spinner::new("Recovering an unfinished action…");
             client.restart().await?;
+            done("Recovered an unfinished action", "");
         }
         Ok(())
     };
-    if client.status().await["permissions"]["accessibility"] != false {
+    // Only a helper that answers in the background with Accessibility can
+    // be recovered now; otherwise the steps below start it first.
+    let status = client.status().await;
+    if crate::session::require_hidden(&status, config.helper_uid).is_ok()
+        && status["permissions"]["accessibility"] != false
+    {
         recover().await?;
     }
     if crate::capability::doctor(client.status().await, config.helper_uid)["ready"] == true
         && setup::migrate::settled(config.helper_uid)
     {
-        say("  The helper is already set up and ready.");
-        let mut done = vec![json!({"step": "verified"})];
-        finish(&mut done)?;
-        say("\nUnderstudy is ready. Try: understudy screenshot");
-        return Ok(json!({"ok": true, "ready": true, "alreadySetUp": true, "steps": done}));
+        done("Already set up", "everything checks out");
+        done_steps.push(json!({"step": "verified"}));
+        finish(&mut done_steps)?;
+        ready();
+        return Ok(json!({"ok": true, "ready": true, "alreadySetUp": true, "steps": done_steps}));
     }
-    done.push(json!({"step": "config", "path": config_path, "helper": helper.name}));
+    done_steps.push(json!({"step": "config", "path": config_path, "helper": name}));
 
     let daemon_answers = || async {
         let status = client.status().await;
@@ -446,52 +487,36 @@ pub async fn run(config_path: &Path) -> Result<Value> {
             || status["daemon"]["pid"].is_number()
     };
     if !daemon_answers().await {
-        step("Administrator rights (once)");
-        say("  Understudy needs your administrator password once, to install its helper job.");
-        interactive(
+        heading("Administrator rights");
+        say("  macOS asks for your password once, to install the helper's background job.");
+        attended(
             "/usr/bin/sudo",
             &["-v"],
             "Administrator rights were not granted",
         )?;
         keep_sudo_alive();
+        done("Administrator rights", "");
 
-        step(&format!("Sign in to {} once", helper.name));
         if !helper_logged_in(helper.uid) {
+            heading(&format!("Sign in to {name} once"));
             say(&format!(
-                "  Switch to {name}, sign in (finish any setup questions), and stay there:\n  \
-                 Understudy will ask for two permissions in that session.",
-                name = helper.name
+                "  Switch to {name}, sign in and finish any setup questions. Stay there:\n  \
+                 Understudy asks for two permissions next."
             ));
-            let manual = format!(
-                "  To switch: click your name (or the people icon) in the menu bar and choose\n  \
-                 {name}, or use Apple menu › Lock Screen, click Switch User and pick {name}.",
-                name = helper.name
-            );
-            if yes(&format!(
-                "  Lock the screen now so you can switch to {}?",
-                helper.name
-            ))? {
-                match crate::switch::lock_screen() {
-                    Ok(_) => say(&format!(
-                        "  Locked. On the lock screen, click Switch User, choose {} and sign in.",
-                        helper.name
-                    )),
-                    Err(error) => say(&format!("  {} \n{manual}", error.error)),
-                }
-            } else {
-                say(&manual);
+            offer_lock(&name)?;
+            {
+                let _spinner = Spinner::new(format!(
+                    "Waiting for {name} to sign in… (Ctrl-C to stop; run understudy init again later)"
+                ));
+                wait_for("the helper to sign in", async || {
+                    helper_logged_in(helper.uid).then_some(())
+                })
+                .await?;
             }
-            say(&format!(
-                "\n  Waiting for {} to sign in… (Ctrl-C stops; running init again resumes.)",
-                helper.name
-            ));
-            wait_for("the helper to sign in", async || {
-                helper_logged_in(helper.uid).then_some(())
-            })
-            .await?;
+            done(&format!("{name} signed in"), "");
         }
 
-        step("Helper job");
+        let spinner = Spinner::new("Installing the helper's background job…");
         let controller = setup::account_with_uid(nix::unistd::getuid().as_raw())?
             .ok_or_else(|| problem("This account cannot be resolved"))?;
         let layout = Layout {
@@ -519,117 +544,113 @@ pub async fn run(config_path: &Path) -> Result<Value> {
                 },
             },
         )?;
-        done.push(json!({"step": "daemon", "label": LABEL}));
+        drop(spinner);
+        done("Helper job", "installed");
+        done_steps.push(json!({"step": "daemon", "label": LABEL}));
     }
 
     // The session checks below run this executable in the helper.
     client.install()?;
 
-    let missing = |status: &Value| -> Vec<&'static str> {
-        [
-            ("screenCapture", "Screen & System Audio Recording"),
-            ("accessibility", "Accessibility"),
-        ]
-        .into_iter()
-        .filter(|(key, _)| status["permissions"][*key] != true)
-        .map(|(_, pane)| pane)
-        .collect()
-    };
-    if missing(&client.status().await).is_empty() {
-        step("Switch back to your own account");
-        say("  Understudy works while the helper runs in the background. Waiting for you…");
-        wait_for("you to switch back", async || {
-            crate::session::require_hidden(&client.status().await, config.helper_uid)
-                .is_ok()
-                .then_some(())
-        })
-        .await?;
+    let status = client.status().await;
+    if missing(&status).is_empty() {
+        if crate::session::require_hidden(&status, config.helper_uid).is_err() {
+            let _spinner = Spinner::new("Waiting for you to switch back to your own account…");
+            wait_for("you to switch back", async || {
+                crate::session::require_hidden(&client.status().await, config.helper_uid)
+                    .is_ok()
+                    .then_some(())
+            })
+            .await?;
+        }
     } else {
-        step("Permissions in the helper session");
+        heading("Two permissions");
         say(&format!(
-            "  Understudy asks for Screen Recording and Accessibility in {name}'s session,
-               one request after the other. Go there, click Allow (or Open System Settings and
-               turn Understudy on) for each, then switch back to your own account.",
-            name = helper.name
+            "  In {name}'s session, Understudy asks for Screen Recording and Accessibility,\n  \
+             one after the other. Click Allow (or Open System Settings and turn Understudy on)\n  \
+             for each, then switch back here."
         ));
         loop {
             // Already back in this account: offer the way over.
-            if crate::session::require_hidden(&client.status().await, config.helper_uid).is_ok()
-                && yes(&format!(
-                    "  Lock the screen now so you can switch to {}?",
-                    helper.name
-                ))?
-            {
-                match crate::switch::lock_screen() {
-                    Ok(_) => say(&format!(
-                        "  Locked. Click Switch User, choose {}, allow, then switch back.",
-                        helper.name
-                    )),
-                    Err(error) => say(&format!("  {}", error.error)),
-                }
+            if crate::session::require_hidden(&client.status().await, config.helper_uid).is_ok() {
+                offer_lock(&name)?;
             }
-            say("  Waiting for you to allow and come back…");
             // Done once the helper has been on screen and is hidden again (or
             // everything is already granted).
-            let mut visited = false;
-            wait_for("you to allow and switch back", async || {
-                let status = client.status().await;
-                if status["session"]["onConsole"] == true {
-                    visited = true;
-                }
-                let back = crate::session::require_hidden(&status, config.helper_uid).is_ok();
-                (missing(&status).is_empty() || (visited && back)).then_some(())
-            })
-            .await?;
+            {
+                let spinner = Spinner::new("Waiting for you to allow and come back…");
+                let mut visited = false;
+                wait_for("you to allow and switch back", async || {
+                    let status = client.status().await;
+                    if status["session"]["onConsole"] == true {
+                        visited = true;
+                    }
+                    let mark = |key: &str| style::mark(status["permissions"][key].as_bool());
+                    spinner.set(format!(
+                        "Waiting for you to allow and come back…  Screen Recording {}  Accessibility {}",
+                        mark("screenCapture"),
+                        mark("accessibility")
+                    ));
+                    let back = crate::session::require_hidden(&status, config.helper_uid).is_ok();
+                    (missing(&status).is_empty() || (visited && back)).then_some(())
+                })
+                .await?;
+            }
             // macOS applies a new Screen Recording grant to new processes
-            // only, so the daemon restarts to pick up what the person allowed.
+            // only, so the helper restarts to pick up what the person allowed.
             if !missing(&client.status().await).is_empty() {
+                let _spinner = Spinner::new("Restarting the helper to pick up the permissions…");
                 restart_daemon(&client, &config).await?;
             }
             let lacking = missing(&client.status().await);
             if lacking.is_empty() {
                 break;
             }
-            let panes = lacking.join(" and ");
             say(&format!(
-                "\n  Understudy is still off for {panes}. In {name}'s session, open\n  \
-                 System Settings › Privacy & Security › {panes} and turn Understudy on.",
-                name = helper.name
+                "{} Understudy is still off. In {name}'s session, open System Settings ›\n  \
+                 Privacy & Security and turn Understudy on in:",
+                style::fail()
             ));
-            if !yes("  Try again?")? {
+            for pane in &lacking {
+                say(&format!("    · {pane}"));
+            }
+            if !prompt::confirm("Go back and turn it on now?", true, "")? {
                 return Err(problem(format!(
-                    "Understudy still lacks {panes} in {name}. Switch to {name}, open System \
-                     Settings › Privacy & Security › {panes}, turn Understudy on, switch back \
+                    "Understudy is still off in {name}'s {}. Turn it on there, switch back \
                      and run understudy init again.",
-                    name = helper.name
+                    lacking.join(" and ")
                 )));
             }
         }
+        done("Permissions", "Screen Recording · Accessibility");
     }
 
     recover().await?;
-    step("Input and verification");
-    client.start_input().await?;
-    let ownership = client.controller.acquire(true)?;
-    let recorded = setup::migrate::apply_fresh(&config_path, &ownership).await?;
-    if recorded["ok"] != true {
-        return Err(problem(format!(
-            "Setup could not be verified: {}",
-            recorded["error"].as_str().unwrap_or("unknown")
-        )));
+    {
+        let _spinner = Spinner::new("Starting input and checking everything…");
+        client.start_input().await?;
+        let ownership = client.controller.acquire(true)?;
+        let recorded = setup::migrate::apply_fresh(&config_path, &ownership).await?;
+        if recorded["ok"] != true {
+            return Err(problem(format!(
+                "Setup could not be verified: {}",
+                recorded["error"].as_str().unwrap_or("unknown")
+            )));
+        }
+        drop(ownership);
+        let doctor = crate::capability::doctor(client.status().await, config.helper_uid);
+        if doctor["ready"] != true {
+            return Err(problem(
+                "Setup finished but is not ready; run understudy doctor to see why",
+            ));
+        }
     }
-    drop(ownership);
-    let doctor = crate::capability::doctor(client.status().await, config.helper_uid);
-    if doctor["ready"] != true {
-        return Err(problem(
-            "Setup finished but doctor does not report ready; run understudy doctor",
-        ));
-    }
-    done.push(json!({"step": "verified"}));
+    done("Checked", "the helper works");
+    done_steps.push(json!({"step": "verified"}));
 
-    finish(&mut done)?;
-    say("\nUnderstudy is ready. Try: understudy screenshot");
-    Ok(json!({"ok": true, "ready": true, "steps": done, "config": config_path}))
+    finish(&mut done_steps)?;
+    ready();
+    Ok(json!({"ok": true, "ready": true, "steps": done_steps, "config": config_path}))
 }
 
 #[cfg(test)]
@@ -664,16 +685,13 @@ mod tests {
     }
 
     #[test]
-    fn answers_name_an_account_by_number_or_name_and_never_guess() {
-        let names = vec!["atlastest".to_owned(), "other".to_owned()];
-        assert_eq!(parse_choice("1", &names), Choice::Existing(0));
-        assert_eq!(parse_choice("atlastest", &names), Choice::Existing(0));
-        assert_eq!(parse_choice(" other ", &names), Choice::Existing(1));
-        assert_eq!(parse_choice("3", &names), Choice::Create);
-        assert_eq!(parse_choice("0", &names), Choice::Unknown);
-        assert_eq!(parse_choice("4", &names), Choice::Unknown);
-        assert_eq!(parse_choice("Atlas Test", &names), Choice::Unknown);
-        assert_eq!(parse_choice("", &names), Choice::Unknown);
+    fn new_account_names_are_short_and_plain() {
+        assert!(valid_account_name("understudy").is_ok());
+        assert!(valid_account_name("qa_helper-2").is_ok());
+        assert!(valid_account_name("").is_err());
+        assert!(valid_account_name("has space").is_err());
+        assert!(valid_account_name("-dash").is_err());
+        assert!(valid_account_name(&"x".repeat(32)).is_err());
     }
 
     /// A new configuration points everything at the helper's private layout.

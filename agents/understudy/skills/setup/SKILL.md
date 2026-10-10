@@ -18,7 +18,7 @@ understudy doctor
 ```
 
 - Not found: go to step 2.
-- `doctor` prints `"ready": true`: it is set up; go back to the task.
+- `doctor` reports `"ready": true`: it is set up; go back to the task.
 - Otherwise: go to step 3 (read its `nextSteps` to the person).
 
 ## 2. Install (with the person's approval)
@@ -35,16 +35,16 @@ run it themselves if they prefer.
 
 ## 3. Guided setup (the person runs it)
 
-`understudy init` asks for their administrator password once and has them sign
-in to the helper account and click Allow twice, so it must run in their own
-terminal, not yours. Ask them to run:
+`understudy init` asks questions, asks for their administrator password once,
+and has them sign in to the helper account and click Allow twice. It needs a
+real terminal, so ask them to open Terminal and run:
 
 ```sh
 understudy init
 ```
 
-(In Claude Code they can type `! understudy init` in the prompt; in Codex, run it
-in Terminal.) It is safe to run again, and it says what it is waiting for.
+It is safe to run again, and it shows what it is waiting for. Wait for them to
+say it finished.
 
 ## 4. Confirm
 

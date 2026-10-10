@@ -104,10 +104,42 @@ pub(crate) fn validate_target_uid(uid: u32, controller_uid: u32) -> Result<()> {
 
 pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
     validate_uid(uid)?;
+    // The common cases in plain words; anything else is one unverified state.
+    if value["ok"] != true {
+        // A socket served by the wrong account stays an identity violation.
+        if value["code"] == "identity" {
+            return Err(Error::new(
+                "identity",
+                value["error"]
+                    .as_str()
+                    .unwrap_or("The helper socket belongs to another account"),
+            ));
+        }
+        return Err(Error::new(
+            "transport",
+            "The helper is not answering. Run understudy doctor.",
+        ));
+    }
+    if value["user"]["uid"]
+        .as_u64()
+        .is_some_and(|other| other != u64::from(uid))
+    {
+        return Err(Error::new(
+            "identity",
+            "A different account answered than the configured helper. Run understudy doctor.",
+        ));
+    }
+    if value["session"]["onConsole"] == true || value["sessionProof"]["onConsole"] == true {
+        return Err(Error::new(
+            "on-console",
+            "The helper is on screen right now. Understudy works only while it is in the \
+             background: switch back to your own account.",
+        ));
+    }
     let invalid = || {
         Error::new(
             "identity",
-            "Expected the configured helper in a hidden graphical session with a valid display",
+            "The helper's session could not be verified. Run understudy doctor.",
         )
     };
     let pid = value["daemon"]["pid"]
@@ -213,67 +245,70 @@ pub fn diagnose(value: Value, uid: u32) -> Value {
     // The input service is only queried once the capture side proves a hidden
     // helper; an unqueried service is unknown, not failed.
     let queried = reachable && !native.is_null();
-    let not_queried = "Unknown until the helper is hidden and its input service can be queried.";
+    let not_queried = "Unknown until the helper runs in the background.";
     let known = |fact: bool, ok: bool| fact.then_some(ok);
-    let unknown = "Unknown until the helper connection works.";
+    let unknown = "Unknown until the helper is running.";
     let connection = if value["code"] == "identity" {
         value["error"]
             .as_str()
             .unwrap_or("The socket belongs to another account")
     } else {
-        "Start the configured helper in its logged-in account."
+        "Start the helper: run understudy init (safe to run again)."
     };
     let hidden_guidance = if value["user"]["uid"]
         .as_u64()
         .is_some_and(|v| v != u64::from(uid))
     {
-        "The capture service belongs to a different account than the configured helper."
-    } else if value["session"]["onConsole"] == true {
-        "The helper is on the console. Switch back to your account without logging it out."
+        "A different account answered than the configured helper; run understudy init."
+    } else if value["session"]["onConsole"] == true || value["sessionProof"]["onConsole"] == true {
+        "Switch back to your own account without logging the helper out."
     } else {
+        // The session check's own reason, when it gave one, says what to fix.
         value["sessionProof"]["error"].as_str().unwrap_or(
-            "The graphical-session proof must match this hidden helper. \
-             Switch back without logging it out, then refresh.",
+            "The helper could not be checked. Run understudy restart; if that does not help, \
+             run understudy init.",
         )
     };
     let checks = [
         Check {
-            name: "Helper connection",
+            name: "Helper running",
             ok: Some(reachable),
             next_step: connection.into(),
         },
         Check {
-            name: "Hidden desktop",
+            name: "Helper in the background",
             ok: known(reachable, session.is_some()),
             next_step: if reachable { hidden_guidance } else { unknown }.into(),
         },
         Check {
-            name: "Screen recording",
+            name: "Screen Recording allowed",
             ok: known(reachable, value["permissions"]["screenCapture"] == true),
             next_step: if reachable {
-                "Enable Screen & System Audio Recording for the capture helper in its account."
+                "In the helper's System Settings › Privacy & Security › Screen & System Audio \
+                 Recording, turn Understudy on."
             } else {
                 unknown
             }
             .into(),
         },
         Check {
-            name: "Input permission",
+            name: "Accessibility allowed",
             ok: known(native_reachable, native["accessibility"] == true),
             next_step: if native_reachable {
-                "Enable Accessibility for the input service in the helper account."
+                "In the helper's System Settings › Privacy & Security › Accessibility, turn \
+                 Understudy on."
             } else if queried {
-                "Unknown until the input service answers; run understudy start-input."
+                "Run understudy start-input."
             } else {
                 not_queried
             }
             .into(),
         },
         Check {
-            name: "Native input service",
+            name: "Input service ready",
             ok: known(queried, session.as_ref().is_some_and(|s| s.input)),
             next_step: if queried {
-                "Run understudy start-input to start or reset the input service inside the helper."
+                "Run understudy start-input."
             } else if reachable {
                 not_queried
             } else {
@@ -285,8 +320,7 @@ pub fn diagnose(value: Value, uid: u32) -> Value {
     let mut warnings = Vec::new();
     if native_reachable && !input_build_current(&value) {
         warnings.push(
-            "The input service runs a different build than the installed executable; \
-             run understudy start-input to replace it."
+            "The input service is from an older build; understudy start-input replaces it."
                 .to_owned(),
         );
     }

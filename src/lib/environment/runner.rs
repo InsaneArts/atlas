@@ -25,8 +25,12 @@ pub(super) fn validate_argv(argv: &[String]) -> Result<()> {
 
 fn load(home: &Path) -> Result<BTreeMap<String, String>> {
     let path = home.join(".config/understudy/environment.json");
-    let file = open_regular(&path, false)?
-        .ok_or_else(|| problem("No helper environment profile is installed"))?;
+    let file = open_regular(&path, false)?.ok_or_else(|| {
+        problem(
+            "No helper environment profile is installed. Use understudy run instead, or run \
+             understudy environment profile to set one up.",
+        )
+    })?;
     validate_private(&file, false)?;
     let environment: Environment = decode(&read_file(file, 65536)?)?;
     if environment.version != 1 || environment.variables.len() > 64 {
