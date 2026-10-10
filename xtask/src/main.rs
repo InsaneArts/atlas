@@ -140,6 +140,8 @@ fn info_plist(version: &str) -> String {
 	<string>Understudy</string>
 	<key>CFBundleExecutable</key>
 	<string>understudy</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -352,6 +354,12 @@ fn dist(options: &Options) -> Result<()> {
     universal(&cli, &macos.join("understudy"))?;
     fs::copy(&companion, macos.join(COMPANION)).map_err(|error| error.to_string())?;
     check_universal(&macos.join(COMPANION))?;
+    // The app icon, drawn by menubar/Resources/AppIcon.swift.
+    fs::copy(
+        package.join("Resources/AppIcon.icns"),
+        app.join("Contents/Resources/AppIcon.icns"),
+    )
+    .map_err(|error| error.to_string())?;
     // The agent plugin (Claude Code and Codex), matching this CLI's version.
     exec(
         "/usr/bin/ditto",
@@ -538,9 +546,14 @@ mod tests {
         )
         .unwrap();
         fs::remove_dir_all(&dir).unwrap();
+        assert!(
+            root().join("menubar/Resources/AppIcon.icns").is_file(),
+            "the icon the plist names is checked in"
+        );
         for expected in [
             r#""CFBundleIdentifier":"com.insanearts.understudy""#,
             r#""CFBundleExecutable":"understudy""#,
+            r#""CFBundleIconFile":"AppIcon""#,
             r#""CFBundleShortVersionString":"1.2.3""#,
             r#""LSUIElement":true"#,
             r#""LSMinimumSystemVersion":"14.0""#,

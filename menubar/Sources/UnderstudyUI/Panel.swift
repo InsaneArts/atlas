@@ -8,22 +8,39 @@ public final class PanelController: NSViewController {
     let commands: Commands?
     let loginItem: LoginItem?
     /// The helper's short name, once `understudy switch --list` reports it.
-    public var helper: String? { didSet { switchButton.isEnabled = helper != nil } }
+    public var helper: String? {
+        didSet {
+            switchButton.isEnabled = helper != nil
+            switchButton.detail = helper ?? ""
+            if isViewLoaded { fit() }
+        }
+    }
+    /// Render-only: show every action as it looks when it is available.
+    var previewing = false
+
+    static let width: CGFloat = 340
+    static let inset: CGFloat = 14
+    /// The rows reach closer to the edge than the text, as in system menus.
+    static let edge: CGFloat = 6
+    static var content: CGFloat { width - 2 * inset }
 
     let dot = DotView()
-    let state = label("", size: 12, color: .secondaryLabelColor)
+    let state = label("", size: 12, weight: .medium, color: .secondaryLabelColor)
+    let reason = label("", size: 11, color: .secondaryLabelColor)
     public let thumbnail = ThumbnailView()
     let account = label("")
     let display = label("")
     let last = label("")
-    let when = label("")
     let message = label("", size: 11, color: .secondaryLabelColor)
-    let open = NSButton(title: "Open Viewer", target: nil, action: nil)
-    let release = NSButton(title: "Release Control", target: nil, action: nil)
-    lazy var switchButton = menuButton("Switch to Helper…", target: self, action: #selector(switchToHelper))
-    lazy var recover = menuButton("Recover", target: self, action: #selector(recoverHelper))
-    lazy var atLogin = NSButton(
-        checkboxWithTitle: "Open at Login", target: self, action: #selector(toggleLogin))
+    let spinner = NSProgressIndicator()
+    lazy var feedback = NSStackView(views: [spinner, message])
+    let open = RowButton("Open Viewer", symbol: "eye")
+    let release = RowButton("Release Control", symbol: "hand.raised")
+    let switchButton = RowButton("Switch to Helper…", symbol: "person.2")
+    let recover = RowButton("Recover", symbol: "arrow.clockwise")
+    let atLogin = NSSwitch()
+    lazy var loginRow = NSStackView(views: [label("Open at Login"), NSView(), atLogin])
+    let quit = RowButton("Quit Understudy", detail: "⌘Q")
 
     public init(viewer: Viewer?, commands: Commands?, loginItem: LoginItem?) {
         self.viewer = viewer
@@ -35,16 +52,27 @@ public final class PanelController: NSViewController {
     required init?(coder: NSCoder) { nil }
 
     public override func loadView() {
-        let title = label("Understudy")
-        title.font = .systemFont(ofSize: 13, weight: .semibold)
+        let width = Self.content
+        // Header: the app, its state in a word and a dot, and why.
+        let title = label("Understudy", weight: .semibold)
         let status = NSStackView(views: [dot, state])
-        status.spacing = 6
-        let header = NSStackView(views: [title, NSView(), status])
-        header.edgeInsets = NSEdgeInsets(top: 0, left: 2, bottom: 0, right: 2)
+        status.spacing = 5
+        let top = NSStackView(views: [title, NSView(), status])
+        reason.maximumNumberOfLines = 2
+        reason.lineBreakMode = .byWordWrapping
+        reason.preferredMaxLayoutWidth = width
+        let header = NSStackView(views: [top, reason])
+        header.orientation = .vertical
+        header.alignment = .leading
+        header.spacing = 2
+        top.widthAnchor.constraint(equalTo: header.widthAnchor).isActive = true
 
-        let separator = NSBox()
-        separator.boxType = .separator
-        let facts = NSStackView(views: [row(account, display), separator, row(last, when)])
+        // Facts: a System Settings style inset group.
+        let rows: [NSView] = [
+            infoRow("Account", account), Hairline(), infoRow("Display", display), Hairline(),
+            infoRow("Last action", last),
+        ]
+        let facts = NSStackView(views: rows)
         facts.orientation = .vertical
         facts.spacing = 0
         let group = GroupView()
@@ -55,61 +83,88 @@ public final class PanelController: NSViewController {
             facts.trailingAnchor.constraint(equalTo: group.trailingAnchor),
             facts.topAnchor.constraint(equalTo: group.topAnchor),
             facts.bottomAnchor.constraint(equalTo: group.bottomAnchor),
-            separator.leadingAnchor.constraint(equalTo: facts.leadingAnchor, constant: 12),
-            separator.trailingAnchor.constraint(equalTo: facts.trailingAnchor, constant: -12),
         ])
-
-        for button in [open, release] {
-            button.bezelStyle = .push
-            button.controlSize = .large
-            button.target = self
+        for view in rows {
+            if view is Hairline {
+                view.leadingAnchor.constraint(equalTo: facts.leadingAnchor, constant: 12).isActive =
+                    true
+                view.trailingAnchor.constraint(equalTo: facts.trailingAnchor, constant: -12)
+                    .isActive = true
+            } else {
+                view.widthAnchor.constraint(equalTo: facts.widthAnchor).isActive = true
+            }
         }
+
+        // Actions: Control Center style rows, the viewer first.
+        open.press = { [weak self] in self?.openViewer() }
+        open.isEmphasized = true
         open.keyEquivalent = "\r"
-        open.action = #selector(openViewer)
-        release.action = #selector(releaseControl)
-        let actions = NSStackView(views: [open, release])
+        release.press = { [weak self] in self?.releaseControl() }
+        release.isEmphasized = true
+        release.isHidden = true
+        switchButton.press = { [weak self] in self?.switchToHelper() }
+        // The helper may be known before the panel is first drawn.
+        switchButton.isEnabled = helper != nil
+        switchButton.detail = helper ?? ""
+        recover.press = { [weak self] in self?.recoverHelper() }
+        let actions = NSStackView(views: [open, release, switchButton, recover])
         actions.orientation = .vertical
-        actions.spacing = 6
+        actions.spacing = 0
 
-        switchButton.isEnabled = false
-        let more = NSStackView(views: [switchButton, recover])
-        more.orientation = .vertical
-        more.alignment = .leading
-        more.spacing = 4
-        more.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 0, right: 8)
+        // What the last action said, only while there is something to say.
+        spinner.style = .spinning
+        spinner.controlSize = .small
+        spinner.isDisplayedWhenStopped = false
+        spinner.isHidden = true
+        message.maximumNumberOfLines = 3
+        message.lineBreakMode = .byWordWrapping
+        message.preferredMaxLayoutWidth = width - 22
+        feedback.spacing = 6
+        feedback.alignment = .centerY
+        feedback.isHidden = true
 
-        let divider = NSBox()
-        divider.boxType = .separator
-        atLogin.isHidden = loginItem?.available != true
+        // Footer: the login switch and Quit, as in the system's own menus.
+        atLogin.controlSize = .mini
+        atLogin.target = self
+        atLogin.action = #selector(toggleLogin)
         atLogin.state = loginItem?.enabled == true ? .on : .off
-        let loginRow = NSStackView(views: [atLogin])
-        loginRow.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 0, right: 8)
-        let quit = menuButton(
-            "Quit Understudy", target: NSApp, action: #selector(NSApplication.terminate(_:)))
+        loginRow.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 0, right: 10)
+        loginRow.heightAnchor.constraint(equalToConstant: 26).isActive = true
+        loginRow.isHidden = loginItem?.available != true
         quit.keyEquivalent = "q"
         quit.keyEquivalentModifierMask = .command
-        let shortcut = label("⌘Q", color: .secondaryLabelColor)
-        let quitRow = NSStackView(views: [quit, NSView(), shortcut])
-        quitRow.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 0, right: 8)
+        quit.press = { NSApp.terminate(nil) }
 
-        message.isHidden = true
-        message.maximumNumberOfLines = 3
+        let divider = Hairline()
         let stack = NSStackView(views: [
-            header, thumbnail, group, actions, more, message, divider, loginRow, quitRow,
+            header, thumbnail, group, actions, feedback, divider, loginRow, quit,
         ])
         stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 10
-        stack.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 10, right: 12)
-        for view in [header, thumbnail, group, actions, more, divider, loginRow, quitRow, open, release]
-        {
+        stack.alignment = .centerX
+        stack.spacing = 0
+        stack.edgeInsets = NSEdgeInsets(
+            top: Self.inset, left: Self.edge, bottom: Self.edge, right: Self.edge)
+        stack.setCustomSpacing(12, after: header)
+        stack.setCustomSpacing(10, after: thumbnail)
+        stack.setCustomSpacing(8, after: group)
+        stack.setCustomSpacing(6, after: actions)
+        stack.setCustomSpacing(8, after: feedback)
+        stack.setCustomSpacing(6, after: divider)
+        for view in [header, thumbnail, group, feedback, divider] {
             view.translatesAutoresizingMaskIntoConstraints = false
-            view.widthAnchor.constraint(equalToConstant: 316).isActive = true
+            view.widthAnchor.constraint(equalToConstant: width).isActive = true
         }
-        message.preferredMaxLayoutWidth = 316
+        for view in [actions, loginRow, quit] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            view.widthAnchor.constraint(equalToConstant: width + 2 * (Self.inset - Self.edge)).isActive =
+                true
+        }
+        for view in [open, release, switchButton, recover] {
+            view.widthAnchor.constraint(equalTo: actions.widthAnchor).isActive = true
+        }
         thumbnail.heightAnchor.constraint(equalTo: thumbnail.widthAnchor, multiplier: 9.0 / 16.0)
             .isActive = true
-        stack.widthAnchor.constraint(equalToConstant: 340).isActive = true
+        stack.widthAnchor.constraint(equalToConstant: Self.width).isActive = true
         view = stack
         show(Snapshot())
     }
@@ -118,44 +173,71 @@ public final class PanelController: NSViewController {
         let mode = Mode.of(snapshot.mode)
         dot.color = mode.tone.color
         state.stringValue = mode.label
+        reason.stringValue = snapshot.reason
+        reason.isHidden = snapshot.reason.isEmpty
         account.stringValue = snapshot.account
-        display.stringValue = snapshot.display
-        last.stringValue = snapshot.last
-        when.stringValue = snapshot.when
+        display.stringValue = snapshot.display.isEmpty ? "—" : snapshot.display
+        last.stringValue = [snapshot.last, snapshot.when].filter { !$0.isEmpty }
+            .joined(separator: " · ")
+        last.toolTip = last.stringValue
+        // Releasing is offered only while the viewer holds control.
+        release.isHidden = !snapshot.controlling
         release.isEnabled = snapshot.controlling
-        recover.isEnabled = commands != nil
+        recover.isEnabled = commands != nil || previewing
+        recover.isEmphasized = snapshot.mode == "recovering"
+        fit()
     }
 
-    func say(_ text: String) {
+    /// The popover follows the content as rows and messages come and go, so
+    /// nothing is squeezed to make room.
+    func fit() {
+        view.layoutSubtreeIfNeeded()
+        let size = view.fittingSize
+        if preferredContentSize != size { preferredContentSize = size }
+    }
+
+    func say(_ text: String, working: Bool = false) {
         message.stringValue = text
-        message.isHidden = false
+        spinner.isHidden = !working
+        if working { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
+        feedback.isHidden = false
+        fit()
+    }
+
+    /// Render-only: every action available, as on a set-up Mac.
+    func preview() {
+        previewing = true
+        helper = helper ?? "helper"
+        loginRow.isHidden = false
+        recover.isEnabled = true
+        fit()
     }
 
     func perform(_ action: Action, working: String, done: String) {
         guard let commands else { return }
-        say(working)
+        say(working, working: true)
         commands.run(action.arguments) { [weak self] outcome in
             self?.say(outcome.ok ? done : outcome.message)
         }
     }
 
-    @objc func openViewer() {
+    func openViewer() {
         if let url = viewer?.base { NSWorkspace.shared.open(url) }
     }
 
-    @objc func releaseControl() {
+    func releaseControl() {
         release.isEnabled = false
         viewer?.revoke { [weak self] failure in
-            self?.say(failure ?? "Control released. Nothing was resumed.")
+            self?.say(failure ?? "Control released.")
         }
     }
 
-    @objc func switchToHelper() {
+    func switchToHelper() {
         guard let helper else { return }
         perform(.switchToHelper(helper), working: "Switching…", done: "Switched")
     }
 
-    @objc func recoverHelper() {
+    func recoverHelper() {
         perform(.recover, working: "Recovering the helper…", done: "The helper is ready again")
     }
 

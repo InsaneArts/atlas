@@ -2,8 +2,12 @@ import AppKit
 import UnderstudyKit
 
 /// Draw the panel and its menu bar glyph, as a person would see them, to a
-/// PNG. Used for visual checks without capturing the host screen.
+/// PNG at Retina scale. Used for visual checks without capturing the host
+/// screen. For design checks, `UNDERSTUDY_RENDER_PREVIEW=1` shows every
+/// action as on a set-up Mac, `UNDERSTUDY_RENDER_MODE` overrides the mode
+/// and `UNDERSTUDY_RENDER_MESSAGE` shows a feedback line.
 public func render(viewer: Viewer, to path: String, appearance name: NSAppearance.Name) {
+    let environment = ProcessInfo.processInfo.environment
     let panel = PanelController(viewer: viewer, commands: nil, loginItem: nil)
     nonisolated(unsafe) var status: [String: Any]?
     nonisolated(unsafe) var frame: Data?
@@ -20,10 +24,17 @@ public func render(viewer: Viewer, to path: String, appearance name: NSAppearanc
     }
     group.notify(queue: .main) {
         let appearance = NSAppearance(named: name)!
-        let snapshot = status.map(Snapshot.init(status:)) ?? Snapshot()
+        var snapshot = status.map(Snapshot.init(status:)) ?? Snapshot()
+        if let mode = environment["UNDERSTUDY_RENDER_MODE"], !mode.isEmpty {
+            snapshot.mode = mode
+        }
         let content = panel.view
         content.appearance = appearance
+        if environment["UNDERSTUDY_RENDER_PREVIEW"] == "1" { panel.preview() }
         panel.show(snapshot)
+        if let message = environment["UNDERSTUDY_RENDER_MESSAGE"], !message.isEmpty {
+            panel.say(message)
+        }
         panel.thumbnail.image = frame.flatMap(NSImage.init(data:))
         content.layoutSubtreeIfNeeded()
         let size = content.fittingSize
@@ -41,15 +52,27 @@ public func render(viewer: Viewer, to path: String, appearance name: NSAppearanc
         strip.borderWidth = 0
         strip.fillColor = .underPageBackgroundColor
         canvas.addSubview(strip)
-        let glyph = NSImageView(image: statusImage(Mode.of(snapshot.mode)))
-        glyph.frame = NSRect(x: size.width - 40, y: size.height + 14, width: 22, height: 16)
+        // The glyph at its own size, centred in the strip as the menu bar does.
+        let image = statusImage(Mode.of(snapshot.mode))
+        let glyph = NSImageView(image: image)
+        glyph.imageScaling = .scaleNone
+        glyph.frame = NSRect(
+            x: (size.width - 40).rounded(),
+            y: (size.height + 8 + (bar - image.size.height) / 2).rounded(.down),
+            width: image.size.width, height: image.size.height)
         canvas.addSubview(glyph)
         content.frame = NSRect(origin: .zero, size: size)
         canvas.addSubview(content)
         canvas.layoutSubtreeIfNeeded()
-        guard let bitmap = canvas.bitmapImageRepForCachingDisplay(in: canvas.bounds) else {
-            exit(3)
-        }
+        let scale = 2
+        guard
+            let bitmap = NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: Int(canvas.bounds.width) * scale,
+                pixelsHigh: Int(canvas.bounds.height) * scale, bitsPerSample: 8,
+                samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                bytesPerRow: 0, bitsPerPixel: 0)
+        else { exit(3) }
+        bitmap.size = canvas.bounds.size
         appearance.performAsCurrentDrawingAppearance {
             canvas.cacheDisplay(in: canvas.bounds, to: bitmap)
         }
