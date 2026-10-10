@@ -6,7 +6,6 @@ use super::{
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use sha2::{Digest, Sha256};
-#[cfg(target_os = "macos")]
 use std::os::macos::fs::MetadataExt as _;
 use std::{
     fs,
@@ -87,10 +86,7 @@ pub(super) fn snapshot(path: &Path) -> Result<Option<(Fingerprint, Vec<u8>)>> {
     let metadata = file.metadata()?;
     let acl = descriptor_acl(&file)?;
     let xattrs = attributes(&file)?;
-    #[cfg(target_os = "macos")]
     let flags = metadata.st_flags();
-    #[cfg(not(target_os = "macos"))]
-    let flags = 0;
     // Replacing these files could silently discard information or affect aliases.
     if metadata.uid() != unsafe { libc::getuid() }
         || metadata.nlink() != 1
@@ -150,14 +146,7 @@ fn component(name: &std::ffi::OsStr) -> Result<std::ffi::CString> {
 
 fn attributes(file: &fs::File) -> Result<std::collections::BTreeMap<String, String>> {
     const LIMIT: usize = 16384;
-    #[cfg(target_os = "macos")]
     let size = unsafe { libc::flistxattr(file.as_raw_fd(), std::ptr::null_mut(), 0, 0) };
-    #[cfg(target_os = "linux")]
-    let size = unsafe { libc::flistxattr(file.as_raw_fd(), std::ptr::null_mut(), 0) };
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    return Err(problem(
-        "Environment metadata validation is unsupported on this platform",
-    ));
     if size < 0 {
         return Err(std::io::Error::last_os_error().into());
     }
@@ -168,13 +157,9 @@ fn attributes(file: &fs::File) -> Result<std::collections::BTreeMap<String, Stri
     }
     let mut names = vec![0_u8; size as usize];
     if size > 0 {
-        #[cfg(target_os = "macos")]
         let read = unsafe {
             libc::flistxattr(file.as_raw_fd(), names.as_mut_ptr().cast(), names.len(), 0)
         };
-        #[cfg(target_os = "linux")]
-        let read =
-            unsafe { libc::flistxattr(file.as_raw_fd(), names.as_mut_ptr().cast(), names.len()) };
         if read != size {
             return Err(problem("Extended attributes changed while being read"));
         }
@@ -188,7 +173,6 @@ fn attributes(file: &fs::File) -> Result<std::collections::BTreeMap<String, Stri
         let text = std::str::from_utf8(name)
             .map_err(|_| problem("Unsupported attribute name encoding"))?;
         let name = std::ffi::CString::new(name).unwrap();
-        #[cfg(target_os = "macos")]
         let size = unsafe {
             libc::fgetxattr(
                 file.as_raw_fd(),
@@ -199,9 +183,6 @@ fn attributes(file: &fs::File) -> Result<std::collections::BTreeMap<String, Stri
                 0,
             )
         };
-        #[cfg(target_os = "linux")]
-        let size =
-            unsafe { libc::fgetxattr(file.as_raw_fd(), name.as_ptr(), std::ptr::null_mut(), 0) };
         if size < 0 {
             return Err(std::io::Error::last_os_error().into());
         }
@@ -212,7 +193,6 @@ fn attributes(file: &fs::File) -> Result<std::collections::BTreeMap<String, Stri
             ));
         }
         let mut value = vec![0_u8; size as usize];
-        #[cfg(target_os = "macos")]
         let read = unsafe {
             libc::fgetxattr(
                 file.as_raw_fd(),
@@ -221,15 +201,6 @@ fn attributes(file: &fs::File) -> Result<std::collections::BTreeMap<String, Stri
                 value.len(),
                 0,
                 0,
-            )
-        };
-        #[cfg(target_os = "linux")]
-        let read = unsafe {
-            libc::fgetxattr(
-                file.as_raw_fd(),
-                name.as_ptr(),
-                value.as_mut_ptr().cast(),
-                value.len(),
             )
         };
         if read != size {
@@ -249,10 +220,7 @@ pub(super) fn restore_attributes(
     for key in current.keys().filter(|key| !expected.contains_key(*key)) {
         let name = std::ffi::CString::new(key.as_bytes())
             .map_err(|_| problem("Invalid attribute name"))?;
-        #[cfg(target_os = "macos")]
         let status = unsafe { libc::fremovexattr(file.as_raw_fd(), name.as_ptr(), 0) };
-        #[cfg(target_os = "linux")]
-        let status = unsafe { libc::fremovexattr(file.as_raw_fd(), name.as_ptr()) };
         if status != 0 {
             return Err(problem(
                 "Cannot restore an extended attribute; destination was preserved",
@@ -273,7 +241,6 @@ pub(super) fn restore_attributes(
         if current.get(key) == expected.get(key) {
             continue;
         }
-        #[cfg(target_os = "macos")]
         let status = unsafe {
             libc::fsetxattr(
                 file.as_raw_fd(),
@@ -281,16 +248,6 @@ pub(super) fn restore_attributes(
                 value.as_ptr().cast(),
                 value.len(),
                 0,
-                0,
-            )
-        };
-        #[cfg(target_os = "linux")]
-        let status = unsafe {
-            libc::fsetxattr(
-                file.as_raw_fd(),
-                name.as_ptr(),
-                value.as_ptr().cast(),
-                value.len(),
                 0,
             )
         };
@@ -363,52 +320,14 @@ pub(super) fn unique_targets<'a>(targets: impl Iterator<Item = &'a Path>) -> Res
     }
     Ok(())
 }
-#[cfg(target_os = "macos")]
 pub(super) fn has_acl(path: &Path) -> Result<bool> {
-    use std::{
-        ffi::{CString, c_void},
-        os::unix::ffi::OsStrExt,
-    };
-    unsafe extern "C" {
-        fn acl_get_file(path: *const libc::c_char, kind: libc::c_int) -> *mut c_void;
-        fn acl_get_entry(
-            acl: *mut c_void,
-            index: libc::c_int,
-            entry: *mut *mut c_void,
-        ) -> libc::c_int;
-        fn acl_valid(acl: *mut c_void) -> libc::c_int;
-        fn acl_free(acl: *mut c_void) -> libc::c_int;
-    }
-    let path =
-        CString::new(path.as_os_str().as_bytes()).map_err(|_| problem("Invalid ACL path"))?;
-    // SAFETY: NUL-terminated path, documented ACL_TYPE_EXTENDED and FIRST_ENTRY.
-    unsafe {
-        let acl = acl_get_file(path.as_ptr(), 0x100);
-        if acl.is_null() {
-            let error = std::io::Error::last_os_error();
-            // macOS reports ENOENT for an existing file with no extended ACL.
-            if error.raw_os_error() == Some(libc::ENOENT) {
-                return Ok(false);
-            }
-            return Err(error.into());
-        }
-        let valid = acl_valid(acl) == 0;
-        let mut entry = std::ptr::null_mut();
-        let found = acl_get_entry(acl, 0, &mut entry) == 0;
-        acl_free(acl);
-        if !valid {
-            return Err(problem("Invalid filesystem ACL"));
-        }
-        Ok(found)
-    }
-}
-#[cfg(not(target_os = "macos"))]
-pub(super) fn has_acl(_: &Path) -> Result<bool> {
-    Ok(false)
+    crate::acl::present(path).map_err(|error| match error.kind() {
+        std::io::ErrorKind::InvalidData => problem("Invalid filesystem ACL"),
+        _ => error.into(),
+    })
 }
 
 pub(super) fn remove_inherited_acl(path: &Path) -> Result<()> {
-    #[cfg(target_os = "macos")]
     if !Command::new("/bin/chmod")
         .arg("-N")
         .arg(path)
@@ -609,7 +528,6 @@ pub(super) fn install_prepared(source: &Path, target: &Path, create_only: bool) 
     installation_parent(&parent)?;
     let source = component(source.file_name().unwrap())?;
     let target = component(target.file_name().unwrap())?;
-    #[cfg(target_os = "macos")]
     let status = unsafe {
         unsafe extern "C" {
             fn renameatx_np(
@@ -628,24 +546,6 @@ pub(super) fn install_prepared(source: &Path, target: &Path, create_only: bool) 
             if create_only { libc::RENAME_EXCL } else { 0 },
         )
     };
-    #[cfg(target_os = "linux")]
-    let status = unsafe {
-        libc::renameat2(
-            parent.as_raw_fd(),
-            source.as_ptr(),
-            parent.as_raw_fd(),
-            target.as_ptr(),
-            if create_only {
-                libc::RENAME_NOREPLACE
-            } else {
-                0
-            },
-        )
-    };
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    return Err(problem(
-        "Atomic environment installation is unsupported on this platform",
-    ));
     if status != 0 {
         return Err(std::io::Error::last_os_error().into());
     }
@@ -750,59 +650,14 @@ pub(super) fn installation_parent(directory: &fs::File) -> Result<()> {
 /// Only called for an inode this operation just created. Existing selected
 /// files with ACLs are refused; private files never inherit broader access.
 fn clear_acl(file: &fs::File) -> Result<()> {
-    #[cfg(target_os = "macos")]
-    unsafe {
-        unsafe extern "C" {
-            fn acl_init(count: libc::c_int) -> *mut libc::c_void;
-            fn acl_set_fd(fd: libc::c_int, acl: *mut libc::c_void) -> libc::c_int;
-            fn acl_free(acl: *mut libc::c_void) -> libc::c_int;
-        }
-        let acl = acl_init(0);
-        if acl.is_null() {
-            return Err(std::io::Error::last_os_error().into());
-        }
-        let status = acl_set_fd(file.as_raw_fd(), acl);
-        let error = std::io::Error::last_os_error();
-        acl_free(acl);
-        if status != 0 {
-            return Err(error.into());
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    let _ = file;
-    Ok(())
+    Ok(crate::acl::clear(file)?)
 }
 
 fn descriptor_acl(file: &fs::File) -> Result<bool> {
-    #[cfg(target_os = "macos")]
-    unsafe {
-        unsafe extern "C" {
-            fn acl_get_fd(fd: libc::c_int) -> *mut libc::c_void;
-            fn acl_get_entry(
-                acl: *mut libc::c_void,
-                index: libc::c_int,
-                entry: *mut *mut libc::c_void,
-            ) -> libc::c_int;
-            fn acl_free(acl: *mut libc::c_void) -> libc::c_int;
-        }
-        let acl = acl_get_fd(file.as_raw_fd());
-        if acl.is_null() {
-            let error = std::io::Error::last_os_error();
-            if error.raw_os_error() == Some(libc::ENOENT) {
-                return Ok(false);
-            }
-            return Err(error.into());
-        }
-        let mut entry = std::ptr::null_mut();
-        let found = acl_get_entry(acl, 0, &mut entry) == 0;
-        acl_free(acl);
-        Ok(found)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = file;
-        Ok(false)
-    }
+    Ok(crate::acl::Acl::of_file(file)?
+        .map(|acl| acl.entries())
+        .transpose()?
+        .is_some_and(|entries| !entries.is_empty()))
 }
 pub(super) fn allow_helper(path: &Path, uid: u32, executable: bool) -> Result<()> {
     let identity = Command::new("/usr/bin/id")
@@ -835,65 +690,12 @@ pub(super) fn allow_helper(path: &Path, uid: u32, executable: bool) -> Result<()
 }
 
 fn writable_acl(directory: &fs::File) -> Result<bool> {
-    #[cfg(target_os = "macos")]
-    {
-        use std::{ffi::c_void, os::fd::AsRawFd};
-        unsafe extern "C" {
-            fn acl_get_fd(fd: libc::c_int) -> *mut c_void;
-            fn acl_get_entry(
-                acl: *mut c_void,
-                index: libc::c_int,
-                entry: *mut *mut c_void,
-            ) -> libc::c_int;
-            fn acl_get_tag_type(entry: *mut c_void, tag: *mut libc::c_int) -> libc::c_int;
-            fn acl_get_permset_mask_np(entry: *mut c_void, mask: *mut u64) -> libc::c_int;
-            fn acl_free(acl: *mut c_void) -> libc::c_int;
-        }
-        // Darwin sys/acl.h: data, append, delete, attributes, ACL and ownership writes.
-        const WRITES: u64 = (1 << 2)
-            | (1 << 4)
-            | (1 << 5)
-            | (1 << 6)
-            | (1 << 8)
-            | (1 << 10)
-            | (1 << 12)
-            | (1 << 13);
-        // SAFETY: live descriptor, library-owned ACL, and valid output pointers.
-        unsafe {
-            let acl = acl_get_fd(directory.as_raw_fd());
-            if acl.is_null() {
-                let e = std::io::Error::last_os_error();
-                return if e.raw_os_error() == Some(libc::ENOENT) {
-                    Ok(false)
-                } else {
-                    Err(e.into())
-                };
-            }
-            let result = (|| -> Result<bool> {
-                let mut index = 0;
-                let mut entry = std::ptr::null_mut();
-                while acl_get_entry(acl, index, &mut entry) == 0 {
-                    index = -1;
-                    let mut tag = 0;
-                    let mut mask = 0;
-                    if acl_get_tag_type(entry, &mut tag) != 0
-                        || acl_get_permset_mask_np(entry, &mut mask) != 0
-                    {
-                        return Err(std::io::Error::last_os_error().into());
-                    }
-                    if tag == 1 && mask & WRITES != 0 {
-                        return Ok(true);
-                    }
-                }
-                Ok(false)
-            })();
-            acl_free(acl);
-            result
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = directory;
-        Ok(false)
-    }
+    Ok(crate::acl::Acl::of_file(directory)?
+        .map(|acl| acl.entries())
+        .transpose()?
+        .is_some_and(|entries| {
+            entries
+                .iter()
+                .any(|entry| entry.allow && entry.mask & crate::acl::WRITE_RIGHTS != 0)
+        }))
 }

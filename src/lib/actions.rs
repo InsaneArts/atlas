@@ -88,6 +88,11 @@ fn modifier(value: &str) -> bool {
     )
 }
 
+// Five distinct modifier keys exist; longer lists only inflate requests.
+fn modifiers_valid(modifiers: &[String]) -> bool {
+    modifiers.len() <= 5 && modifiers.iter().all(|m| modifier(m))
+}
+
 pub fn valid_key(value: &str) -> bool {
     if value.is_empty() || value.len() > 80 {
         return false;
@@ -158,7 +163,7 @@ pub fn validate(value: &Value, display: &Display) -> Result<()> {
                 modifiers,
                 ..
             } => (
-                point(x, y) && (1..=5).contains(&count) && modifiers.iter().all(|m| modifier(m)),
+                point(x, y) && (1..=5).contains(&count) && modifiers_valid(&modifiers),
                 1,
             ),
             Action::Move { x, y } => (point(x, y), 0),
@@ -169,7 +174,7 @@ pub fn validate(value: &Value, display: &Display) -> Result<()> {
                 modifiers,
                 ..
             } => (
-                point(x, y) && (1..=5).contains(&count) && modifiers.iter().all(|m| modifier(m)),
+                point(x, y) && (1..=5).contains(&count) && modifiers_valid(&modifiers),
                 u32::from(count) * 70,
             ),
             Action::Drag {

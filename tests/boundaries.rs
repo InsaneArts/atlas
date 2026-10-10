@@ -75,6 +75,7 @@ fn unsafe_actions_and_whole_batches_are_rejected() {
         json!({"type":"wait","ms":251}),
         json!({"type":"type","text":"x".repeat(257)}),
         json!({"type":"click","x":1,"y":2,"modifiers":["unknown"]}),
+        json!({"type":"click","x":1,"y":2,"modifiers":vec!["cmd"; 6]}),
         json!({"type":"move","x":1,"y":2,"secret":true}),
     ] {
         assert!(actions::validate(&json!([action]), &display()).is_err());
@@ -220,6 +221,7 @@ fn async_transport_futures_do_not_embed_large_receive_buffers() {
     let transport = Transport {
         path: "/tmp/unused-understudy-test".into(),
         timeout: Duration::from_secs(1),
+        peer_uid: 502,
     };
     let request = json!({"op":"hello"});
     let future = transport.call(&request);
@@ -292,6 +294,7 @@ async fn exchange(
     let result = Transport {
         path: socket,
         timeout,
+        peer_uid: current_uid(),
     }
     .call(&json!({"op":"input","actions":[]}))
     .await;
@@ -354,4 +357,79 @@ fn capture_rejects_non_png_and_extreme_dimensions() {
     header.extend_from_slice(&900u32.to_be_bytes());
     header.extend_from_slice(&[0; 9]);
     assert!(png_dimensions(&header).is_err());
+}
+
+fn current_uid() -> u32 {
+    // SAFETY: getuid has no pointer arguments or preconditions.
+    unsafe { libc::getuid() }
+}
+
+#[tokio::test]
+async fn transport_refuses_a_socket_served_by_another_account_before_writing() {
+    let dir = tempfile::Builder::new()
+        .prefix("ust-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let socket = dir.path().join("s");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let server = tokio::spawn(async move {
+        let (mut peer, _) = listener.accept().await.unwrap();
+        let mut received = Vec::new();
+        peer.read_to_end(&mut received).await.unwrap();
+        received
+    });
+    let error = Transport {
+        path: socket,
+        timeout: Duration::from_secs(1),
+        peer_uid: current_uid() + 1,
+    }
+    .call(&json!({"op":"input","actions":[]}))
+    .await
+    .unwrap_err();
+    assert_eq!(error.code, "identity");
+    assert!(!error.uncertain, "nothing was dispatched");
+    assert!(server.await.unwrap().is_empty());
+}
+
+fn config(dir: &std::path::Path) -> Config {
+    Config {
+        helper_uid: current_uid() + 1,
+        socket_path: dir.join("sock"),
+        identity_probe: dir.join("probe"),
+        input_socket: dir.join("input"),
+        output_dir: dir.join("out"),
+    }
+}
+
+#[test]
+fn constructing_a_client_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    Client::new(config(dir.path())).unwrap();
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    let state = dir.path().join("state");
+    Controller::at(502, &dir.path().join("sock"), &state).unwrap();
+    assert!(!state.exists());
+}
+
+#[test]
+fn output_directory_is_created_private_and_never_repermissioned() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let client = Client::new(config(dir.path())).unwrap();
+    let output = client.output_dir().unwrap().to_owned();
+    let mode = |path: &std::path::Path| std::fs::metadata(path).unwrap().permissions().mode();
+    assert_eq!(mode(&output) & 0o777, 0o700);
+    std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(client.output_dir().unwrap_err().code, "config");
+    assert_eq!(mode(&output) & 0o777, 0o755);
+
+    let mut nested = config(dir.path());
+    nested.output_dir = dir.path().join("artifacts/runs");
+    let output = Client::new(nested)
+        .unwrap()
+        .output_dir()
+        .unwrap()
+        .to_owned();
+    assert_eq!(mode(&output) & 0o777, 0o700);
+    assert_eq!(mode(output.parent().unwrap()) & 0o777, 0o700);
 }

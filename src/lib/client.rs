@@ -4,7 +4,7 @@ use crate::{
     control::{Controller, SharedLease, write_private},
     error::{Error, Result},
     session::{Display, Epoch, Session, require_hidden},
-    transport::Transport,
+    transport::{Transport, run_output},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use fs2::FileExt;
@@ -12,7 +12,8 @@ use serde_json::{Value, json};
 use std::{
     fs::{self, OpenOptions},
     io::Write,
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
+    path::Path,
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -72,18 +73,45 @@ impl Client {
         result?;
         Ok(json!({ "ok": true, "path": target }))
     }
+    /// Construction only validates; reads such as status and doctor never write.
     pub fn new(config: Config) -> Result<Self> {
         crate::session::validate_uid(config.helper_uid)?;
-        fs::create_dir_all(&config.output_dir)?;
-        fs::set_permissions(&config.output_dir, fs::Permissions::from_mode(0o700))?;
         Ok(Self {
             controller: Controller::new(config.helper_uid, &config.socket_path)?,
             transport: Transport {
                 path: config.socket_path.clone(),
                 timeout: Duration::from_secs(30),
+                peer_uid: config.helper_uid,
             },
             config,
         })
+    }
+    /// The private output directory, created 0700 (with any missing parents)
+    /// on first use. An existing directory must already be private; it is
+    /// never re-permissioned. The umask can only remove mode bits.
+    pub fn output_dir(&self) -> Result<&Path> {
+        let path = &self.config.output_dir;
+        if !path.exists() {
+            fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(path)?;
+        }
+        let metadata = fs::symlink_metadata(path)?;
+        // SAFETY: getuid has no pointer arguments or preconditions.
+        if !metadata.is_dir()
+            || metadata.uid() != unsafe { libc::getuid() }
+            || metadata.mode() & 0o077 != 0
+        {
+            return Err(Error::new(
+                "config",
+                format!(
+                    "Output directory {} must be a private (0700) directory you own",
+                    path.display()
+                ),
+            ));
+        }
+        Ok(path)
     }
     pub async fn status(&self) -> Value {
         self.verified_status().await.unwrap_or_else(|e| json!(e))
@@ -125,22 +153,8 @@ impl Client {
                 ),
             ));
         }
-        let mut output = Vec::new();
-        for event in reply["events"].as_array().into_iter().flatten() {
-            if event["event"] == "output" {
-                let data = event["data"]
-                    .as_str()
-                    .ok_or_else(|| Error::new("identity", "Malformed identity output"))?;
-                output.extend(
-                    STANDARD
-                        .decode(data)
-                        .map_err(|_| Error::new("identity", "Invalid identity output"))?,
-                );
-                if output.len() > 4096 {
-                    return Err(Error::new("identity", "Identity output exceeds its limit"));
-                }
-            }
-        }
+        let output = run_output(&reply, 4096)
+            .map_err(|_| Error::new("identity", "Malformed or oversized identity output"))?;
         Ok(serde_json::from_slice(&output)?)
     }
     pub async fn identity(&self) -> Result<Session> {
@@ -197,8 +211,7 @@ impl Client {
     pub async fn capture(&self, maximum: Option<u32>) -> Result<Value> {
         let frame = self.frame(maximum).await?;
         let path = self
-            .config
-            .output_dir
+            .output_dir()?
             .join(format!("{}-capture.png", timestamp()));
         write_private(&path, &frame.png)?;
         Ok(json!({
@@ -213,6 +226,7 @@ impl Client {
         Transport {
             path: self.config.input_socket.clone(),
             timeout: Duration::from_secs(5),
+            peer_uid: self.config.helper_uid,
         }
     }
     pub async fn native_control(&self, operation: &str, owner: &str) -> Result<Value> {
@@ -515,7 +529,7 @@ impl Client {
         Ok(reply)
     }
     fn record(&self, request: &Value, reply: &Value, elapsed: Duration) -> Result<()> {
-        let directory = &self.config.output_dir;
+        let directory = self.output_dir()?;
         let lock = OpenOptions::new()
             .create(true)
             .truncate(false)

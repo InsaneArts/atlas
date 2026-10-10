@@ -733,19 +733,30 @@ fn cleanup_directories(
     transaction: &Transaction,
     guard: &impl Fn() -> Result<()>,
 ) -> Result<Vec<PathBuf>> {
-    let mut retained = Vec::new();
-    for record in transaction.directories.iter().rev() {
+    // Files are already restored. A directory that cannot be proven to be our
+    // unchanged, empty creation is kept and reported; an inspection error must
+    // not wedge the transaction in RollingBack forever.
+    // None: already absent. Some(removable) otherwise.
+    let inspect = |record: &Directory| -> Result<Option<(PathBuf, bool)>> {
         let path = directory_destination(home, &record.target)?;
         let Some(dir) = directory(&path, false)? else {
-            continue;
+            return Ok(None);
         };
-        if validate_private(&dir, true).is_err()
-            || record.node.as_ref() != Some(&node(&dir.metadata()?))
-            || fs::read_dir(&path)?.next().is_some()
-        {
-            retained.push(record.target.clone());
-            continue;
-        }
+        let removable = validate_private(&dir, true).is_ok()
+            && record.node.as_ref() == Some(&node(&dir.metadata()?))
+            && fs::read_dir(&path)?.next().is_none();
+        Ok(Some((path, removable)))
+    };
+    let mut retained = Vec::new();
+    for record in transaction.directories.iter().rev() {
+        let path = match inspect(record) {
+            Ok(None) => continue,
+            Ok(Some((path, true))) => path,
+            Ok(Some((_, false))) | Err(_) => {
+                retained.push(record.target.clone());
+                continue;
+            }
+        };
         guard()?;
         if unlink(&path, true).is_err() {
             retained.push(record.target.clone());

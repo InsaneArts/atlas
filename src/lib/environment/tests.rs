@@ -1,4 +1,5 @@
 use super::*;
+use base64::{Engine, engine::general_purpose::STANDARD};
 use std::{
     cell::Cell,
     os::unix::fs::{PermissionsExt, symlink},
@@ -238,6 +239,49 @@ fn malformed_or_interrupted_mutation_replies_remain_uncertain() {
     ] {
         assert!(decode_reply(&reply, true).unwrap_err().uncertain);
     }
+}
+
+#[test]
+fn rollback_retains_a_created_directory_it_cannot_inspect() {
+    let applied = || {
+        let sandbox = Sandbox::new();
+        let plan = sandbox.plan(vec![sandbox.payload("a/b/file", b"bytes")]);
+        assert_eq!(sandbox.apply(&plan)["ok"], true);
+        (sandbox, plan)
+    };
+    // On an identical rollback, the last guard call made while a/b still exists
+    // is the one authorizing its removal.
+    let (twin, twin_plan) = applied();
+    let (calls, swap_at) = (Cell::new(0), Cell::new(0));
+    worker::rollback(&twin.home, &twin_plan.id, true, &|| {
+        calls.set(calls.get() + 1);
+        if twin.home.join("a/b").is_dir() {
+            swap_at.set(calls.get());
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert!(!twin.home.join("a").exists());
+    let swap_at = swap_at.get();
+    let (sandbox, plan) = applied();
+    let (home, seen) = (sandbox.home.clone(), Cell::new(0));
+    // Before removing a/b, replace a with a symlink. Removing a/b through it
+    // and inspecting a then fail (O_NOFOLLOW) instead of proving ownership.
+    let guard = || {
+        seen.set(seen.get() + 1);
+        if seen.get() == swap_at {
+            fs::rename(home.join("a"), home.join("moved")).unwrap();
+            symlink(home.join("moved"), home.join("a")).unwrap();
+        }
+        Ok(())
+    };
+    let result = worker::rollback(&sandbox.home, &plan.id, true, &guard).unwrap();
+    assert_eq!(result["ok"], true, "{result}");
+    assert_eq!(result["rolledBack"], true);
+    assert_eq!(result["retainedDirectories"], json!(["a/b", "a"]));
+    assert!(sandbox.home.join("moved/b").is_dir());
+    let next = sandbox.plan(vec![sandbox.payload("next", b"next")]);
+    assert_eq!(sandbox.apply(&next)["ok"], true);
 }
 
 #[test]

@@ -224,7 +224,7 @@ pub async fn serve(client: Client, port: u16) -> Result<()> {
         "startedAt": crate::client::timestamp().to_string(),
     });
     control::write_private(
-        &viewer.client.config.output_dir.join("monitor.json"),
+        &viewer.client.output_dir()?.join("monitor.json"),
         &serde_json::to_vec_pretty(&record)?,
     )?;
     println!("{}", serde_json::to_string_pretty(&record)?);
@@ -258,7 +258,18 @@ fn header<'a>(headers: &'a HeaderMap, key: &str) -> Option<&'a str> {
     headers.get(key)?.to_str().ok()
 }
 
+// A browser can abort any request. Axum drops the handler future when that
+// happens, which could stop between a quarantine or lease change and its
+// matching cleanup. Each request therefore runs to completion in its own task.
 async fn handle(State(viewer): State<Arc<Viewer>>, request: Request) -> Response {
+    tokio::spawn(respond(viewer, request))
+        .await
+        .unwrap_or_else(|_| {
+            json_response(500, json!({"ok": false, "error": "Viewer request failed"}))
+        })
+}
+
+async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
     let Ok(_slot) = viewer.requests.try_acquire() else {
         return json_response(503, json!({"ok": false, "error": "Viewer is busy"}));
     };
