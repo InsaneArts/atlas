@@ -227,6 +227,8 @@ impl Client {
             "width": frame.width,
             "height": frame.height,
             "display": frame.display,
+            // Input coordinates are display points: multiply image pixels by this.
+            "pointsPerPixel": frame.display.width / f64::from(frame.width),
         }))
     }
     pub fn input_transport(&self) -> Transport {
@@ -377,6 +379,12 @@ impl Client {
             None,
         )
         .await
+    }
+    /// Run a fixed, read-only inspection command (such as the window list) in
+    /// the verified hidden helper. It records no pending mutation, so callers
+    /// must only pass commands that cannot change the helper.
+    pub(crate) async fn inspect(&self, argv: Vec<String>) -> Result<Value> {
+        self.run_pending(argv, Duration::from_secs(5)).await
     }
     /// Execute argv in the verified hidden helper as part of a mutation the
     /// caller holds ownership for and has already recorded as pending. The
