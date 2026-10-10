@@ -183,13 +183,19 @@ struct Check {
 /// Separate observation, input and native-dialog capability. `ready` keeps its
 /// established meaning (transport, identity, permissions, input service); it
 /// never implies that native Save/Open dialogs work.
-/// Whether `status` shows input service `pid` ready in the hidden helper, running
-/// the installed build, with no controller and nothing held.
-pub fn input_current(status: &Value, uid: u32, pid: u32) -> bool {
+/// Whether `status` shows input service `pid` ready in the hidden helper with
+/// no controller and nothing held.
+pub fn input_settled(status: &Value, uid: u32, pid: u32) -> bool {
     let native = &status["inputService"];
     require_hidden(status, uid).is_ok_and(|session| session.input && session.epoch.input_pid == pid)
         && native["controlActive"] == false
         && native["heldInput"] == false
+}
+
+/// [`input_settled`], and running the installed build.
+pub fn input_current(status: &Value, uid: u32, pid: u32) -> bool {
+    let native = &status["inputService"];
+    input_settled(status, uid, pid)
         && native["build"].is_string()
         && native["build"] == status["installedBuild"]
 }

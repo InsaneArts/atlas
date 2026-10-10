@@ -10,7 +10,7 @@ use understudy::{
     client::{Client, png_dimensions, validate_completion},
     config::Config,
     control::{ActionPermit, Controller, Lease},
-    session::{Display, diagnose, input_current, require_hidden},
+    session::{Display, diagnose, input_current, input_settled, require_hidden},
     transport::Transport,
 };
 
@@ -692,4 +692,19 @@ fn an_unreadable_installed_build_is_retried_not_cached() {
         client.installed_build().as_deref(),
         Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
     );
+}
+
+#[test]
+fn a_settled_service_need_not_be_current_but_a_current_one_must_be_settled() {
+    let mut state = ready_status();
+    state["inputService"]["controlActive"] = json!(false);
+    state["inputService"]["heldInput"] = json!(false);
+    state["inputService"]["build"] = json!("old");
+    state["installedBuild"] = json!("new");
+    assert!(input_settled(&state, 502, 77));
+    assert!(!input_current(&state, 502, 77));
+    state["inputService"]["heldInput"] = json!(true);
+    assert!(!input_settled(&state, 502, 77));
+    state["inputService"]["heldInput"] = json!(false);
+    assert!(!input_settled(&state, 502, 76), "another PID");
 }
