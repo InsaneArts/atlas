@@ -53,7 +53,6 @@ unsafe extern "C" {
 }
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {
-    fn CFStringCreateWithCString(allocator: CfRef, text: *const c_char, encoding: u32) -> CfRef;
     fn CFStringCreateWithSubstring(allocator: CfRef, string: CfRef, range: Range) -> CfRef;
     fn CFStringGetLength(string: CfRef) -> isize;
     fn CFStringGetRangeOfComposedCharactersAtIndex(string: CfRef, index: isize) -> Range;
@@ -69,7 +68,6 @@ unsafe extern "C" {
     fn CFBooleanGetTypeID() -> usize;
     fn CFNumberGetTypeID() -> usize;
     fn CFRetain(value: CfRef) -> CfRef;
-    fn CFRelease(value: CfRef);
 }
 
 const UTF8: u32 = 0x0800_0100;
@@ -89,28 +87,7 @@ const ABSENT: [i32; 3] = [-25212, -25205, -25208];
 /// fails to read (other than being absent) may be an unseen match.
 const SELECTORS: [&CStr; 4] = [c"AXRole", c"AXTitle", c"AXDescription", c"AXIdentifier"];
 
-/// An owned CoreFoundation reference, released once. Never wraps null.
-struct Owned(CfRef);
-impl Drop for Owned {
-    fn drop(&mut self) {
-        // SAFETY: only non-null references from Create/Copy/Retain are wrapped.
-        unsafe { CFRelease(self.0) };
-    }
-}
-impl Owned {
-    fn new(value: CfRef) -> Option<Self> {
-        if value.is_null() {
-            None
-        } else {
-            Some(Self(value))
-        }
-    }
-}
-
-fn cf_string(text: &CStr) -> Option<Owned> {
-    // SAFETY: NUL-terminated static text and the default allocator.
-    Owned::new(unsafe { CFStringCreateWithCString(std::ptr::null(), text.as_ptr(), UTF8) })
-}
+use crate::native::cf::{Owned, string as cf_string};
 
 /// At most the first `TEXT_LIMIT` UTF-16 units of a CFString, converted
 /// without copying the rest and cut only between composed characters, so a
@@ -131,10 +108,10 @@ unsafe fn bounded_string(value: CfRef) -> Option<(String, bool)> {
             location: 0,
             length,
         };
-        let part = Owned::new(CFStringCreateWithSubstring(std::ptr::null(), value, range))?;
+        let part = Owned::adopt(CFStringCreateWithSubstring(std::ptr::null(), value, range))?;
         let size = CFStringGetMaximumSizeForEncoding(length, UTF8) + 1;
         let mut buffer = vec![0 as c_char; usize::try_from(size).ok()?];
-        CFStringGetCString(part.0, buffer.as_mut_ptr(), size, UTF8).then(|| {
+        CFStringGetCString(part.get(), buffer.as_mut_ptr(), size, UTF8).then(|| {
             let text = CStr::from_ptr(buffer.as_ptr()).to_string_lossy();
             (text.into_owned(), truncated)
         })
@@ -179,9 +156,10 @@ impl Scan {
         let name = cf_string(attribute)?;
         let mut value = std::ptr::null();
         // SAFETY: live element and attribute; Copy transfers ownership on success.
-        let status = unsafe { AXUIElementCopyAttributeValue(element, name.0, &mut value) };
+        let status = unsafe { AXUIElementCopyAttributeValue(element, name.get(), &mut value) };
         if status == 0 {
-            return Owned::new(value);
+            // SAFETY: a successful Copy hands over one owned reference.
+            return unsafe { Owned::adopt(value) };
         }
         self.failed(status, attribute);
         None
@@ -190,7 +168,7 @@ impl Scan {
         let value = self.attribute(element, name)?;
         // SAFETY: type-checked before reading.
         let text = unsafe {
-            (CFGetTypeID(value.0) == CFStringGetTypeID()).then(|| bounded_string(value.0))
+            (CFGetTypeID(value.get()) == CFStringGetTypeID()).then(|| bounded_string(value.get()))
         }
         .flatten();
         self.bounded(text, name)
@@ -207,7 +185,8 @@ impl Scan {
         let value = self.attribute(element, name)?;
         // SAFETY: type-checked before reading.
         unsafe {
-            (CFGetTypeID(value.0) == CFBooleanGetTypeID()).then(|| CFBooleanGetValue(value.0))
+            (CFGetTypeID(value.get()) == CFBooleanGetTypeID())
+                .then(|| CFBooleanGetValue(value.get()))
         }
     }
     /// The element's value as text: strings bounded, numbers and booleans rendered.
@@ -215,16 +194,16 @@ impl Scan {
         let value = self.attribute(element, c"AXValue")?;
         // SAFETY: each branch checks the CF type before reading.
         unsafe {
-            let kind = CFGetTypeID(value.0);
+            let kind = CFGetTypeID(value.get());
             if kind == CFStringGetTypeID() {
-                let text = bounded_string(value.0);
+                let text = bounded_string(value.get());
                 self.bounded(text, c"AXValue")
             } else if kind == CFNumberGetTypeID() {
                 let mut number = 0f64;
-                CFNumberGetValue(value.0, FLOAT64, (&mut number as *mut f64).cast())
+                CFNumberGetValue(value.get(), FLOAT64, (&mut number as *mut f64).cast())
                     .then(|| number.to_string())
             } else if kind == CFBooleanGetTypeID() {
-                Some(CFBooleanGetValue(value.0).to_string())
+                Some(CFBooleanGetValue(value.get()).to_string())
             } else {
                 None
             }
@@ -236,10 +215,10 @@ impl Scan {
         let (mut point, mut extent) = (Point::default(), Size::default());
         // SAFETY: both are type-checked AXValues read into matching structs.
         unsafe {
-            (CFGetTypeID(position.0) == AXValueGetTypeID()
-                && CFGetTypeID(size.0) == AXValueGetTypeID()
-                && AXValueGetValue(position.0, POINT, (&mut point as *mut Point).cast())
-                && AXValueGetValue(size.0, SIZE, (&mut extent as *mut Size).cast()))
+            (CFGetTypeID(position.get()) == AXValueGetTypeID()
+                && CFGetTypeID(size.get()) == AXValueGetTypeID()
+                && AXValueGetValue(position.get(), POINT, (&mut point as *mut Point).cast())
+                && AXValueGetValue(size.get(), SIZE, (&mut extent as *mut Size).cast()))
             .then_some(Frame {
                 x: point.x,
                 y: point.y,
@@ -261,7 +240,7 @@ impl Scan {
         };
         let mut count = 0isize;
         // SAFETY: live element and attribute with a valid output pointer.
-        let status = unsafe { AXUIElementGetAttributeValueCount(element, name.0, &mut count) };
+        let status = unsafe { AXUIElementGetAttributeValueCount(element, name.get(), &mut count) };
         if status != 0 {
             self.failed(status, attribute);
             if !ABSENT.contains(&status) {
@@ -280,18 +259,20 @@ impl Scan {
         // SAFETY: live element and attribute; the range copy returns an owned
         // array whose elements are retained before it is released.
         unsafe {
-            let status = AXUIElementCopyAttributeValues(element, name.0, 0, wanted, &mut array);
-            let Some(array) = (status == 0).then(|| Owned::new(array)).flatten() else {
+            let status = AXUIElementCopyAttributeValues(element, name.get(), 0, wanted, &mut array);
+            let Some(array) = (status == 0).then(|| Owned::adopt(array)).flatten() else {
                 self.failed(status, attribute);
                 self.incomplete = true;
                 return Vec::new();
             };
-            if CFGetTypeID(array.0) != CFArrayGetTypeID() {
+            if CFGetTypeID(array.get()) != CFArrayGetTypeID() {
                 self.incomplete = true;
                 return Vec::new();
             }
-            (0..CFArrayGetCount(array.0))
-                .filter_map(|index| Owned::new(CFRetain(CFArrayGetValueAtIndex(array.0, index))))
+            (0..CFArrayGetCount(array.get()))
+                .filter_map(|index| {
+                    Owned::adopt(CFRetain(CFArrayGetValueAtIndex(array.get(), index)))
+                })
                 .collect()
         }
     }
@@ -372,11 +353,11 @@ impl Default for Limits {
 pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
     // SAFETY: the system-wide element sets this process's global messaging
     // timeout, which covers every element read below.
-    if let Some(system) = Owned::new(unsafe { AXUIElementCreateSystemWide() }) {
-        unsafe { AXUIElementSetMessagingTimeout(system.0, 1.0) };
+    if let Some(system) = unsafe { Owned::adopt(AXUIElementCreateSystemWide()) } {
+        unsafe { AXUIElementSetMessagingTimeout(system.get(), 1.0) };
     }
     // SAFETY: Create returns an owned element (or null) for any PID.
-    let app = Owned::new(unsafe { AXUIElementCreateApplication(pid) })
+    let app = unsafe { Owned::adopt(AXUIElementCreateApplication(pid)) }
         .ok_or_else(|| Error::new("elements", "No accessibility element for that process"))?;
     let mut scan = Scan {
         deadline: Instant::now() + limits.time,
@@ -385,10 +366,10 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
         truncated: Vec::new(),
         errors: Default::default(),
     };
-    let windows = scan.children(app.0, c"AXWindows", limits.count);
+    let windows = scan.children(app.get(), c"AXWindows", limits.count);
     // An app that answers nothing at all, not even its role, is unreachable
     // (no Accessibility trust, or not a GUI process); report it, not "empty".
-    if windows.is_empty() && scan.text(app.0, c"AXRole").is_none() {
+    if windows.is_empty() && scan.text(app.get(), c"AXRole").is_none() {
         return Err(Error::new(
             "permission",
             "The app's accessibility tree is unavailable; check Accessibility for the helper",
@@ -397,7 +378,7 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
     let mut found = Vec::new();
     let mut stack: Vec<(Owned, usize, Option<Frame>)> = Vec::new();
     for window in windows.into_iter().rev() {
-        let frame = scan.frame(window.0);
+        let frame = scan.frame(window.get());
         stack.push((window, 0, frame));
     }
     while let Some((element, depth, window)) = stack.pop() {
@@ -405,7 +386,7 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
             scan.incomplete = true;
             break;
         }
-        let item = element.0;
+        let item = element.get();
         scan.unreadable.clear();
         scan.truncated.clear();
         let mut element = Element {
@@ -463,17 +444,15 @@ mod tests {
 
     #[test]
     fn null_references_are_never_owned() {
-        assert!(Owned::new(std::ptr::null()).is_none());
+        // SAFETY: null is never adopted.
+        assert!(unsafe { Owned::adopt(std::ptr::null()) }.is_none());
     }
 
     /// Bound `text` as a CFString would be.
     fn bound(text: &str) -> (String, bool) {
-        let text = std::ffi::CString::new(text).unwrap();
-        // SAFETY: owned CFString from a NUL-terminated buffer.
-        let string =
-            Owned::new(unsafe { CFStringCreateWithCString(std::ptr::null(), text.as_ptr(), UTF8) })
-                .unwrap();
-        unsafe { bounded_string(string.0) }.unwrap()
+        let string = cf_string(&std::ffi::CString::new(text).unwrap()).unwrap();
+        // SAFETY: a live CFString.
+        unsafe { bounded_string(string.get()) }.unwrap()
     }
 
     #[test]

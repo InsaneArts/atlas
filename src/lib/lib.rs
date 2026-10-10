@@ -5,6 +5,7 @@ pub mod capability;
 pub mod client;
 pub mod config;
 pub mod control;
+pub mod daemon;
 pub mod digest;
 pub mod environment;
 pub mod error;

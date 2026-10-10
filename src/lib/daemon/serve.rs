@@ -1,0 +1,520 @@
+//! The helper daemon's socket: one request per connection, answered with
+//! protocol v1 replies.
+use crate::{
+    daemon::{
+        facts,
+        protocol::{self, MAX_REQUEST, Request, failure},
+        run,
+    },
+    error::{Error, Result},
+    native::{apps, capture, endpoint, windows},
+    session::validate_target_uid,
+};
+use base64::{Engine, engine::general_purpose::STANDARD};
+use serde_json::{Value, json};
+use std::{path::PathBuf, sync::Arc, time::Duration};
+use tokio::{
+    io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    net::UnixStream,
+    sync::{Notify, Semaphore, mpsc, watch},
+    task::JoinSet,
+};
+
+/// Connections served at once.
+const CONNECTIONS: usize = 32;
+/// Longest a single reply write may take; a client that stops reading is
+/// dropped rather than holding a connection slot.
+const WRITE: Duration = Duration::from_secs(10);
+
+/// Longest the daemon waits for running commands to end when it stops.
+const STOP: Duration = Duration::from_secs(6);
+
+/// Takes a screenshot: the real display in the daemon, a synthetic image in
+/// tests, so ordinary tests never capture the desktop they run on.
+type Capture = fn(Option<u32>) -> Result<capture::Shot>;
+
+struct Daemon {
+    /// launchd's session type, read once at start.
+    manager: String,
+    capture: Capture,
+    /// Whether the helper's session is on the console right now.
+    on_console: fn() -> bool,
+    restarting: Notify,
+    /// Set when the daemon stops, so running commands are ended first.
+    stopping: watch::Sender<bool>,
+}
+
+impl Daemon {
+    fn new(manager: String, capture: Capture, on_console: fn() -> bool) -> Self {
+        Self {
+            manager,
+            capture,
+            on_console,
+            restarting: Notify::new(),
+            stopping: watch::Sender::new(false),
+        }
+    }
+
+    /// Completes once the daemon has begun to stop.
+    async fn stopped(&self) {
+        let _ = self
+            .stopping
+            .subscribe()
+            .wait_for(|stopping| *stopping)
+            .await;
+    }
+}
+
+/// Refuse to start outside the helper's own logged-in graphical session.
+fn require_graphical_session(uid: u32, manager: &str) -> Result<()> {
+    let proof = crate::native::session_info()?;
+    let refused = |why: &str| {
+        Error::new(
+            "identity",
+            format!("The helper daemon must run in the helper's graphical login: {why}"),
+        )
+    };
+    if manager != "Aqua" {
+        return Err(refused(&format!("launchd session type is {manager}")));
+    }
+    match facts::session_owner() {
+        Some((owner, true)) if owner == i64::from(uid) => {}
+        Some((_, true)) => return Err(refused("the session belongs to another user")),
+        Some((_, false)) => return Err(refused("the login has not finished")),
+        None => return Err(refused("the session's owner is unknown")),
+    }
+    if proof["hasGraphicAccess"] != true {
+        return Err(refused("the session has no graphics access"));
+    }
+    Ok(())
+}
+
+/// Serve protocol v1 on `socket` as the helper `uid`, for the controller
+/// `controller_uid`. Returns when stopped; a `restart` request ends it with
+/// an error so launchd starts a fresh daemon.
+pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()> {
+    validate_target_uid(uid, controller_uid)?;
+    // SAFETY: getuid has no preconditions.
+    if unsafe { libc::getuid() } != uid {
+        return Err(Error::new(
+            "identity",
+            "The helper daemon must run as the configured helper account",
+        ));
+    }
+    let manager = facts::manager_name();
+    require_graphical_session(uid, &manager)?;
+    facts::request_consent();
+    let daemon = Arc::new(Daemon::new(
+        manager,
+        capture::main_display,
+        facts::on_console,
+    ));
+    let (listener, _endpoint) = endpoint::bind(
+        &socket,
+        uid,
+        "helper daemon",
+        endpoint::Directory::Private {
+            controller: controller_uid,
+        },
+    )
+    .await?;
+    let slots = Arc::new(Semaphore::new(CONNECTIONS));
+    let mut tasks = JoinSet::new();
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let outcome = loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => break Ok(()),
+            _ = terminate.recv() => break Ok(()),
+            () = daemon.restarting.notified() => {
+                break Err(Error::new("restart", "Restarting at the controller's request"));
+            }
+            Some(_) = tasks.join_next(), if !tasks.is_empty() => {}
+            accepted = listener.accept() => {
+                let Ok((stream, _)) = accepted else {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    continue;
+                };
+                let Ok(peer) = stream.peer_cred() else {
+                    continue;
+                };
+                if peer.uid() != controller_uid && peer.uid() != uid {
+                    continue;
+                }
+                let Ok(slot) = slots.clone().try_acquire_owned() else {
+                    continue;
+                };
+                let daemon = daemon.clone();
+                tasks.spawn(async move {
+                    let _slot = slot;
+                    let _ = handle(stream, daemon).await;
+                });
+            }
+        }
+    };
+    // Running commands are ended (TERM, then KILL) before the daemon exits,
+    // so a restart never leaves one unsupervised.
+    daemon.stopping.send_replace(true);
+    let drained =
+        tokio::time::timeout(STOP, async { while tasks.join_next().await.is_some() {} }).await;
+    if drained.is_err() {
+        tasks.abort_all();
+        while tasks.join_next().await.is_some() {}
+    }
+    outcome
+}
+
+/// Serve on a Tokio runtime in a worker thread while this (main) thread runs
+/// the Core Foundation run loop, which AppKit needs to keep its view of
+/// running applications current.
+pub fn serve_blocking(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()> {
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFRunLoopRunInMode(mode: crate::native::cf::CfRef, seconds: f64, once: u8) -> i32;
+        static kCFRunLoopDefaultMode: crate::native::cf::CfRef;
+    }
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+    let worker = std::thread::spawn(move || runtime.block_on(serve(uid, controller_uid, socket)));
+    while !worker.is_finished() {
+        // SAFETY: runs this thread's run loop for a quarter second at a time.
+        unsafe { CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.25, 0) };
+    }
+    worker
+        .join()
+        .map_err(|_| Error::new("daemon", "The helper daemon stopped unexpectedly"))?
+}
+
+/// Write one reply line, bounded in time.
+async fn write<W: AsyncWrite + Unpin>(stream: &mut W, reply: &Value) -> Result<()> {
+    let mut line = serde_json::to_vec(reply)?;
+    line.push(b'\n');
+    tokio::time::timeout(WRITE, async {
+        stream.write_all(&line).await?;
+        stream.flush().await
+    })
+    .await
+    .map_err(|_| Error::new("transport", "The client stopped reading"))??;
+    Ok(())
+}
+
+/// An error as a protocol reply.
+fn refused(error: Error) -> Value {
+    failure(error.code, error.error)
+}
+
+/// Whether `request` may run in the session's current state: commands and
+/// captures never run while the helper is on the console, where they would
+/// act on a desktop a person is using.
+fn allowed(request: &Request, on_console: bool) -> Option<Value> {
+    let acts = matches!(request, Request::Run { .. } | Request::Screenshot { .. });
+    (acts && on_console).then(|| {
+        failure(
+            "on-console",
+            "The helper is on the screen; switch back to your own account first",
+        )
+    })
+}
+
+/// Windows that lie entirely outside the main display.
+fn off_display_windows() -> Vec<Value> {
+    let (x, y, width, height) = facts::display_bounds();
+    windows::windows()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|window| window.layer == 0)
+        .filter(|window| {
+            let b = &window.bounds;
+            b.x + b.width <= x || b.y + b.height <= y || b.x >= x + width || b.y >= y + height
+        })
+        .map(
+            |window| json!({"number": window.number, "owner": window.owner, "title": window.title}),
+        )
+        .collect()
+}
+
+async fn screenshot(daemon: &Daemon, max_dimension: Option<u32>) -> Value {
+    let capture = daemon.capture;
+    let taken = tokio::task::spawn_blocking(move || {
+        capture(max_dimension).map(|shot| (shot, off_display_windows()))
+    })
+    .await;
+    match taken {
+        Ok(Ok((shot, off_display))) => json!({
+            "ok": true,
+            "png": STANDARD.encode(&shot.png),
+            "width": shot.width,
+            "height": shot.height,
+            "scale": shot.scale,
+            "offDisplayWindows": off_display,
+        }),
+        Ok(Err(error)) => refused(error),
+        Err(_) => failure("capture", "The capture failed"),
+    }
+}
+
+async fn handle(stream: UnixStream, daemon: Arc<Daemon>) -> Result<()> {
+    let (mut reader, mut writer) = stream.into_split();
+    let request = match endpoint::read_line(&mut reader, MAX_REQUEST).await {
+        Ok(line) => protocol::parse(&line),
+        Err(error) => Err(refused(error)),
+    };
+    let request = request.and_then(|request| match allowed(&request, (daemon.on_console)()) {
+        Some(refusal) => Err(refusal),
+        None => Ok(request),
+    });
+    let reply = match request {
+        Err(reply) => reply,
+        Ok(Request::Hello) => facts::hello(&daemon.manager),
+        Ok(Request::Apps) => match tokio::task::spawn_blocking(apps::running).await {
+            Ok(apps) => json!({"ok": true, "apps": apps}),
+            Err(_) => failure("apps", "Running applications could not be listed"),
+        },
+        Ok(Request::Screenshot { max_dimension }) => screenshot(&daemon, max_dimension).await,
+        Ok(Request::Run { argv, timeout }) => {
+            // Events reach the client through their own writer, so a slow
+            // client never stalls supervision of the command.
+            let (events, mut queue) = mpsc::channel(run::EVENTS);
+            let delivery = tokio::spawn(async move {
+                while let Some(event) = queue.recv().await {
+                    write(&mut writer, &event).await?;
+                }
+                Ok::<_, Error>(writer)
+            });
+            // The client never sends after its request, so any read result
+            // means it left.
+            let cancel = async {
+                let mut byte = [0; 1];
+                tokio::select! {
+                    _ = reader.read(&mut byte) => {}
+                    () = daemon.stopped() => {}
+                }
+            };
+            let reply = run::run(&argv, timeout, events, cancel).await;
+            let mut writer = delivery
+                .await
+                .map_err(|_| Error::new("transport", "The event writer failed"))??;
+            return write(&mut writer, &reply).await;
+        }
+        Ok(Request::Restart) => {
+            let written = write(&mut writer, &json!({"ok": true, "op": "restart"})).await;
+            daemon.restarting.notify_one();
+            return written;
+        }
+    };
+    write(&mut writer, &reply).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transport::{Transport, run_output};
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    fn synthetic(_: Option<u32>) -> Result<capture::Shot> {
+        Ok(capture::Shot {
+            png: b"\x89PNG synthetic".to_vec(),
+            width: 64,
+            height: 36,
+            scale: 1.0,
+        })
+    }
+
+    fn daemon(on_console: bool) -> Arc<Daemon> {
+        Arc::new(Daemon::new(
+            "Aqua".into(),
+            synthetic,
+            if on_console { || true } else { || false },
+        ))
+    }
+
+    /// Send one request line over a socket pair and collect every reply line.
+    async fn exchange(daemon: Arc<Daemon>, request: &str) -> Vec<Value> {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let served = tokio::spawn(handle(server, daemon));
+        client
+            .write_all(format!("{request}\n").as_bytes())
+            .await
+            .unwrap();
+        let mut lines = BufReader::new(client).lines();
+        let mut replies = Vec::new();
+        while let Some(line) = lines.next_line().await.unwrap() {
+            let value: Value = serde_json::from_str(&line).unwrap();
+            let last = value.get("ok").is_some();
+            replies.push(value);
+            if last {
+                break;
+            }
+        }
+        served.await.unwrap().unwrap();
+        replies
+    }
+
+    #[tokio::test]
+    async fn requests_are_answered_on_the_wire() {
+        let hello = exchange(daemon(false), r#"{"op":"hello"}"#).await;
+        assert_eq!(hello[0]["op"], "hello");
+        assert_eq!(hello[0]["session"]["managerName"], "Aqua");
+        let refused = exchange(daemon(false), r#"{"op":"nope"}"#).await;
+        assert_eq!(refused[0]["error"], "unknown op 'nope'");
+        let ran = exchange(
+            daemon(false),
+            r#"{"op":"run","argv":["/bin/echo","hi"],"timeoutMs":3000}"#,
+        )
+        .await;
+        assert_eq!(ran[0]["event"], "started");
+        assert_eq!(ran[1], json!({"event": "output", "data": "aGkK"}));
+        assert_eq!(ran[2]["exitCode"], 0);
+        let shot = exchange(daemon(false), r#"{"op":"screenshot","maxDimension":64}"#).await;
+        assert_eq!(
+            (&shot[0]["width"], &shot[0]["height"]),
+            (&json!(64), &json!(36))
+        );
+        assert!(shot[0]["offDisplayWindows"].is_array());
+        let apps = exchange(daemon(false), r#"{"op":"apps"}"#).await;
+        assert!(
+            apps[0]["apps"]
+                .as_array()
+                .is_some_and(|apps| !apps.is_empty())
+        );
+    }
+
+    #[tokio::test]
+    async fn nothing_acts_while_the_helper_is_on_screen() {
+        for request in [
+            r#"{"op":"run","argv":["/bin/echo","hi"]}"#,
+            r#"{"op":"screenshot"}"#,
+        ] {
+            let reply = exchange(daemon(true), request).await;
+            assert_eq!(reply.len(), 1, "{request}");
+            assert_eq!(reply[0]["code"], "on-console", "{request}");
+        }
+        let hello = exchange(daemon(true), r#"{"op":"hello"}"#).await;
+        assert_eq!(hello[0]["ok"], true, "facts stay available");
+    }
+
+    /// Reply shapes match the daemon Understudy used before (recorded).
+    #[tokio::test]
+    async fn replies_keep_the_recorded_shapes() {
+        let keys = |value: &Value| {
+            let mut keys: Vec<_> = value.as_object().unwrap().keys().cloned().collect();
+            keys.sort();
+            keys
+        };
+        let hello = &exchange(daemon(false), r#"{"op":"hello"}"#).await[0];
+        assert_eq!(
+            keys(hello),
+            [
+                "daemon",
+                "display",
+                "ok",
+                "op",
+                "permissions",
+                "session",
+                "user"
+            ]
+        );
+        assert_eq!(keys(&hello["daemon"]), ["pid", "protocol", "version"]);
+        assert_eq!(keys(&hello["display"]), ["height", "scale", "width"]);
+        assert_eq!(keys(&hello["user"]), ["home", "name", "uid"]);
+        let shot = &exchange(daemon(false), r#"{"op":"screenshot"}"#).await[0];
+        assert_eq!(
+            keys(shot),
+            ["height", "offDisplayWindows", "ok", "png", "scale", "width"]
+        );
+        let ran = exchange(daemon(false), r#"{"op":"run","argv":["/bin/echo"]}"#).await;
+        assert_eq!(keys(&ran[0]), ["event", "pid"]);
+        assert_eq!(
+            keys(ran.last().unwrap()),
+            ["durationMs", "exitCode", "ok", "signal", "timedOut"]
+        );
+        let refusal = &exchange(daemon(false), r#"{"op":"run","argv":[]}"#).await[0];
+        assert_eq!(keys(refusal), ["code", "error", "ok"]);
+        let apps = &exchange(daemon(false), r#"{"op":"apps"}"#).await[0];
+        assert_eq!(
+            keys(&apps["apps"][0]),
+            ["active", "bundleId", "hidden", "name", "pid", "policy"]
+        );
+    }
+
+    #[tokio::test]
+    async fn restart_answers_then_asks_the_daemon_to_exit() {
+        let daemon = daemon(false);
+        let notified = daemon.clone();
+        let waiting = tokio::spawn(async move { notified.restarting.notified().await });
+        tokio::task::yield_now().await;
+        let reply = exchange(daemon, r#"{"op":"restart"}"#).await;
+        assert_eq!(reply[0], json!({"ok": true, "op": "restart"}));
+        tokio::time::timeout(Duration::from_secs(2), waiting)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    /// A client that hangs up ends its quiet command; so does a stopping
+    /// daemon.
+    #[tokio::test]
+    async fn quiet_commands_end_when_the_client_or_daemon_leaves() {
+        for leave in ["client", "daemon"] {
+            let daemon = daemon(false);
+            let (mut client, server) = UnixStream::pair().unwrap();
+            let served = tokio::spawn(handle(server, daemon.clone()));
+            client
+                .write_all(
+                    b"{\"op\":\"run\",\"argv\":[\"/bin/sleep\",\"30\"],\"timeoutMs\":60000}\n",
+                )
+                .await
+                .unwrap();
+            let mut lines = BufReader::new(client).lines();
+            let started: Value =
+                serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+            let group = started["pid"].as_i64().unwrap() as i32;
+            match leave {
+                "client" => drop(lines),
+                _ => {
+                    daemon.stopping.send_replace(true);
+                }
+            }
+            tokio::time::timeout(Duration::from_secs(8), served)
+                .await
+                .expect(leave)
+                .unwrap()
+                .ok();
+            // SAFETY: probing the test's own process group.
+            assert_ne!(unsafe { libc::kill(-group, 0) }, 0, "{leave}");
+        }
+    }
+
+    /// The client's own transport reads this daemon's replies.
+    #[tokio::test]
+    async fn the_client_transport_understands_the_daemon() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("d.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let daemon = daemon(false);
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                tokio::spawn(handle(stream, daemon.clone()));
+            }
+        });
+        let transport = Transport {
+            path: socket,
+            timeout: Duration::from_secs(10),
+            // SAFETY: getuid has no preconditions.
+            peer_uid: unsafe { libc::getuid() },
+        };
+        let reply = transport
+            .call(&json!({"op": "run", "argv": ["/bin/sh", "-c", "printf ok; exit 4"], "timeoutMs": 3000}))
+            .await
+            .unwrap();
+        assert_eq!(run_output(&reply, 64).unwrap(), b"ok");
+        assert_eq!(
+            (&reply["exitCode"], &reply["timedOut"]),
+            (&json!(4), &json!(false))
+        );
+        crate::client::validate_completion(&json!({"op": "run"}), &reply).unwrap();
+        let hello = transport.call(&json!({"op": "hello"})).await.unwrap();
+        assert_eq!(hello["daemon"]["pid"], std::process::id());
+    }
+}

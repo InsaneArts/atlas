@@ -6,18 +6,15 @@ use crate::{
     error::{Error, Result},
     session::{Display, InputEpoch},
 };
-use fs2::FileExt;
 use serde_json::{Value, json};
 use std::{
-    fs::{self, File, OpenOptions},
-    os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt},
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{Arc, RwLock},
     time::Duration,
 };
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
-    net::{UnixListener, UnixStream},
+    net::UnixStream,
     sync::{Mutex, Semaphore},
     task::JoinSet,
 };
@@ -199,82 +196,6 @@ impl Service {
     }
 }
 
-// The helper-owned directory and an exclusive lifetime flock make stale socket
-// removal safe without taking over another running input service.
-struct Endpoint {
-    socket: PathBuf,
-    inode: u64,
-    _lock: File,
-}
-impl Drop for Endpoint {
-    fn drop(&mut self) {
-        if fs::symlink_metadata(&self.socket)
-            .is_ok_and(|m| m.ino() == self.inode && m.file_type().is_socket())
-        {
-            let _ = fs::remove_file(&self.socket);
-        }
-    }
-}
-async fn bind(socket: &Path, uid: u32) -> Result<(UnixListener, Endpoint)> {
-    let parent = socket
-        .parent()
-        .ok_or_else(|| Error::new("config", "Socket needs a parent directory"))?;
-    match fs::create_dir(parent) {
-        Ok(()) => fs::set_permissions(parent, fs::Permissions::from_mode(0o755))?,
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(error) => return Err(error.into()),
-    }
-    let metadata = fs::symlink_metadata(parent)?;
-    if !metadata.is_dir() || metadata.uid() != uid || metadata.mode() & 0o022 != 0 {
-        return Err(Error::new(
-            "identity",
-            "Input socket directory must belong to the helper and deny writes by others",
-        ));
-    }
-    let lock = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(parent.join("service.lock"))?;
-    FileExt::try_lock_exclusive(&lock)
-        .map_err(|_| Error::new("busy", "An input service already owns this directory"))?;
-    if let Ok(metadata) = fs::symlink_metadata(socket) {
-        if metadata.uid() != uid || !metadata.file_type().is_socket() {
-            return Err(Error::new(
-                "identity",
-                "Existing input endpoint is not a helper-owned socket",
-            ));
-        }
-        match tokio::time::timeout(Duration::from_millis(250), UnixStream::connect(socket)).await {
-            Ok(Err(error))
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
-                ) =>
-            {
-                fs::remove_file(socket)?
-            }
-            _ => {
-                return Err(Error::new(
-                    "busy",
-                    "Existing input endpoint is reachable or cannot be verified stale",
-                ));
-            }
-        }
-    }
-    let listener = UnixListener::bind(socket)?;
-    fs::set_permissions(socket, fs::Permissions::from_mode(0o666))?;
-    let endpoint = Endpoint {
-        socket: socket.to_owned(),
-        inode: fs::symlink_metadata(socket)?.ino(),
-        _lock: lock,
-    };
-    Ok((listener, endpoint))
-}
-
 pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()> {
     let build = std::env::current_exe()
         .ok()
@@ -287,7 +208,13 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
         ));
     }
     let mut engine = Engine::new(uid)?;
-    let (listener, _endpoint) = bind(&socket, uid).await?;
+    let (listener, _endpoint) = super::endpoint::bind(
+        &socket,
+        uid,
+        "input service",
+        super::endpoint::Directory::Shared(0o755),
+    )
+    .await?;
     engine.recover(socket.with_extension("held.json"))?;
     let service = Arc::new(Service {
         build,
@@ -352,33 +279,10 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     let cleanup = service.cleanup().await;
     outcome.and(closed).and(cleanup)
 }
-/// One newline-terminated JSON request of at most `MAX_REQUEST` bytes, however
-/// the peer fragments it. Only newly received bytes are scanned.
+/// One JSON request of at most `MAX_REQUEST` bytes.
 async fn read_request<R: AsyncRead + Unpin>(stream: &mut R) -> Result<Value> {
-    tokio::time::timeout(Duration::from_secs(3), async {
-        let mut body = Vec::new();
-        let mut buffer = [0; 4096];
-        loop {
-            let n = stream.read(&mut buffer).await?;
-            if n == 0 {
-                return Err(Error::new("protocol", "Incomplete request"));
-            }
-            let scanned = body.len();
-            body.extend_from_slice(&buffer[..n]);
-            let end = body[scanned..]
-                .iter()
-                .position(|b| *b == b'\n')
-                .map(|offset| scanned + offset);
-            if end.unwrap_or(body.len()) > MAX_REQUEST {
-                return Err(Error::new("protocol", "Native request exceeds 64 KiB"));
-            }
-            if let Some(end) = end {
-                return Ok(serde_json::from_slice::<Value>(&body[..end])?);
-            }
-        }
-    })
-    .await
-    .map_err(|_| Error::new("transport", "Native request timed out"))?
+    let line = super::endpoint::read_line(stream, MAX_REQUEST).await?;
+    Ok(serde_json::from_slice(&line)?)
 }
 
 async fn handle(mut stream: UnixStream, service: Arc<Service>) -> Result<()> {
