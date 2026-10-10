@@ -354,17 +354,23 @@ impl Client {
         )
         .await
     }
-    /// Execute argv in the verified hidden helper as a pending mutation. The
-    /// caller must already hold controller ownership.
-    pub async fn run_owned(&self, argv: Vec<String>, timeout: Duration) -> Result<Value> {
+    /// Execute argv in the verified hidden helper as part of a mutation the
+    /// caller holds ownership for and has already recorded as pending. The
+    /// caller settles that record once the outcome is established.
+    pub async fn run_pending(&self, argv: Vec<String>, timeout: Duration) -> Result<Value> {
         self.identity().await?;
         let timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
-        self.mutate(
-            json!({"op": "run", "argv": argv, "timeoutMs": timeout_ms}),
-            None,
-            None,
-        )
-        .await
+        let request = json!({"op": "run", "argv": argv, "timeoutMs": timeout_ms});
+        let reply = self
+            .transport
+            .connect()
+            .await?
+            .dispatch(&request)
+            .await?
+            .finish()
+            .await?;
+        validate_completion(&request, &reply)?;
+        Ok(reply)
     }
     pub async fn apps(&self) -> Result<Value> {
         self.identity().await?;
@@ -432,7 +438,19 @@ impl Client {
             }
             return Ok((session.epoch.input_pid, "recovered"));
         }
-        Ok((self.spawn_input().await?, "started"))
+        let generation = self.controller.quarantine()?;
+        match self.spawn_input().await {
+            Ok(pid) => {
+                self.controller.clear_if(&generation)?;
+                Ok((pid, "started"))
+            }
+            Err(error) => {
+                if !error.uncertain {
+                    self.controller.clear_if(&generation)?;
+                }
+                Err(error)
+            }
+        }
     }
     /// Replace a running service whose build differs from the installed
     /// executable through its authenticated shutdown. The replacement stays
@@ -530,8 +548,8 @@ impl Client {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
-    /// Start the installed executable as the helper's input service. Launching
-    /// is a pending mutation until a ready service answers.
+    /// Start the installed executable as the helper's input service. The caller
+    /// records the launch as a pending mutation and settles it on success.
     pub async fn spawn_input(&self) -> Result<u32> {
         // Arguments stay separate from shell syntax, including configured paths.
         let script = concat!(
@@ -551,7 +569,6 @@ impl Client {
             ],
             "timeoutMs": 3000,
         });
-        let generation = self.controller.quarantine()?;
         let reply = self.transport.call(&request).await?;
         // The launch prints the child PID; only that process may satisfy readiness.
         let child = (reply["ok"] == true && reply["exitCode"] == 0)
@@ -573,7 +590,6 @@ impl Client {
             if require_hidden(&state, self.config.helper_uid)
                 .is_ok_and(|session| session.input && session.epoch.input_pid == child)
             {
-                self.controller.clear_if(&generation)?;
                 return Ok(child);
             }
             if Instant::now() >= deadline {
