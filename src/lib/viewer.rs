@@ -14,12 +14,7 @@ use axum::{
     routing::any,
 };
 use serde_json::{Value, json};
-use std::{
-    collections::VecDeque,
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::VecDeque, path::Path, sync::Arc, time::Duration};
 use tokio::{
     net::TcpListener,
     sync::{Mutex, Semaphore},
@@ -266,7 +261,11 @@ pub async fn bind(mut client: Client, port: u16) -> Result<(TcpListener, Arc<Vie
 
 /// Serve the viewer until interrupted, or until the person quits the menu
 /// bar companion when one is given.
-pub async fn serve(client: Client, port: u16, companion: Option<PathBuf>) -> Result<()> {
+pub async fn serve(
+    client: Client,
+    port: u16,
+    companion: Option<crate::menubar::Program>,
+) -> Result<()> {
     let (listener, viewer, router) = bind(client, port).await?;
     let record = json!({
         "url": viewer.url,
@@ -286,7 +285,7 @@ pub async fn serve(client: Client, port: u16, companion: Option<PathBuf>) -> Res
     }
     println!("{}", serde_json::to_string_pretty(&shown)?);
     let mut companion = match companion {
-        Some(executable) => Some(Companion::launch(&executable, &viewer.url).await?),
+        Some(program) => Some(Companion::launch(&program, &viewer.url).await?),
         None => None,
     };
     let timer_view = viewer.clone();
@@ -326,14 +325,18 @@ pub async fn serve(client: Client, port: u16, companion: Option<PathBuf>) -> Res
 
 /// Render the menu bar panel, fed by a private viewer on a free port, in the
 /// light and dark appearances. For visual checks; it never takes control.
-pub async fn render_menubar(client: Client, executable: &Path, directory: &Path) -> Result<Value> {
+pub async fn render_menubar(
+    client: Client,
+    program: &crate::menubar::Program,
+    directory: &Path,
+) -> Result<Value> {
     let (listener, viewer, router) = bind(client, 0).await?;
     let server = tokio::spawn(async move { axum::serve(listener, router).await });
     let mut paths = Vec::new();
     let mut outcome = Ok(());
     for (name, dark) in [("light", false), ("dark", true)] {
         let path = directory.join(format!("menubar-{name}.png"));
-        outcome = crate::menubar::render(executable, &viewer.url, &path, dark).await;
+        outcome = crate::menubar::render(program, &viewer.url, &path, dark).await;
         if outcome.is_err() {
             break;
         }

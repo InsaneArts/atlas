@@ -173,15 +173,31 @@ fn proposed(helper: &setup::Account) -> Result<Config> {
     })
 }
 
+/// Write a new configuration atomically, readable only by this account.
 fn write_config(path: &Path, config: &Config) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(parent)?;
-    }
-    fs::write(path, config.to_toml()?)?;
-    Ok(())
+    use std::os::unix::fs::OpenOptionsExt;
+    let parent = path
+        .parent()
+        .ok_or_else(|| problem("The configuration needs a directory"))?;
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(parent)?;
+    let temporary = parent.join(format!(".understudy.toml.{}", crate::control::token()));
+    let written = (|| -> Result<()> {
+        let mut file = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(&temporary)?;
+        file.write_all(config.to_toml()?.as_bytes())?;
+        file.sync_all()?;
+        // Never replaces a configuration that appeared meanwhile.
+        fs::hard_link(&temporary, path)?;
+        Ok(())
+    })();
+    let _ = fs::remove_file(&temporary);
+    written
 }
 
 /// Whether the helper's graphical session exists (it has logged in).
@@ -248,29 +264,35 @@ pub async fn run(config_path: &Path) -> Result<Value> {
     done.push(json!({"step": "app", "command": linked}));
 
     step("Configuration and helper account");
-    let config_path = if config_path.exists() {
-        config_path.to_owned()
+    // The path is the one the command line resolved (the installed one by
+    // default); a configuration is created only where none exists, and an
+    // existing one that does not load is reported, never replaced.
+    let config_path = config_path.to_owned();
+    let absent = matches!(
+        fs::symlink_metadata(&config_path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    );
+    let config = if absent {
+        let helper = choose_helper()?;
+        let config = proposed(&helper)?;
+        write_config(&config_path, &config)?;
+        say(&format!("  Wrote {}", config_path.display()));
+        config
     } else {
-        config::installed_path()?
-    };
-    let config = match Config::load(&config_path) {
-        Ok(config) => {
-            say(&format!("  Using {}", config_path.display()));
-            config
-        }
-        Err(_) => {
-            let helper = choose_helper()?;
-            let config = proposed(&helper)?;
-            write_config(&config_path, &config)?;
-            say(&format!("  Wrote {}", config_path.display()));
-            config
-        }
+        let config = Config::load(&config_path)?;
+        say(&format!("  Using {}", config_path.display()));
+        config
     };
     let helper = setup::account_with_uid(config.helper_uid)?
         .ok_or_else(|| problem("The configured helper account does not exist"))?;
     let client = Client::new(config.clone())?;
+    // An earlier action of unknown outcome is recovered before anything else.
+    if !client.controller.pending()?.is_empty() {
+        step("Recovering an unfinished action");
+        client.restart().await?;
+    }
     if crate::capability::doctor(client.status().await, config.helper_uid)["ready"] == true
-        && setup::migrate::recorded(config.helper_uid)
+        && setup::migrate::settled(config.helper_uid)
     {
         say("\nUnderstudy is already set up and ready.");
         return Ok(json!({"ok": true, "ready": true, "alreadySetUp": true}));
@@ -362,6 +384,9 @@ pub async fn run(config_path: &Path) -> Result<Value> {
     })
     .await?;
 
+    // The session check below runs this executable in the helper.
+    client.install()?;
+
     step("Switch back to your own account");
     say("  Understudy works while the helper runs in the background.");
     wait_for("you to switch back", async || {
@@ -372,7 +397,6 @@ pub async fn run(config_path: &Path) -> Result<Value> {
     .await?;
 
     step("Input and verification");
-    client.install()?;
     client.start_input().await?;
     let ownership = client.controller.acquire(true)?;
     let recorded = setup::migrate::apply_fresh(&config_path, &ownership).await?;
@@ -397,6 +421,33 @@ pub async fn run(config_path: &Path) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A configuration is written once, privately, and never over another.
+    #[test]
+    fn a_configuration_is_never_written_over_another() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Understudy/understudy.toml");
+        let helper = setup::Account {
+            name: "understudy".into(),
+            uid: 503,
+            home: "/Users/understudy".into(),
+        };
+        let config = proposed(&helper).unwrap();
+        write_config(&path, &config).unwrap();
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let before = fs::read(&path).unwrap();
+        assert!(
+            write_config(&path, &config).is_err(),
+            "an existing file stays"
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+        let leftovers = fs::read_dir(path.parent().unwrap()).unwrap().count();
+        assert_eq!(leftovers, 1, "no temporary file is left behind");
+    }
 
     /// A new configuration points everything at the helper's private layout.
     #[test]

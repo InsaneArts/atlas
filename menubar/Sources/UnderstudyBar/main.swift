@@ -97,6 +97,26 @@ func watchParent() {
     }
 }
 
+// `--login on|off|status`: manage "Open at Login" for the CLI, then exit.
+if let index = CommandLine.arguments.firstIndex(of: "--login"),
+    index + 1 < CommandLine.arguments.count
+{
+    let item = LoginItem()
+    do {
+        switch CommandLine.arguments[index + 1] {
+        case "on": try item.set(true)
+        case "off": try item.set(false)
+        default: break
+        }
+        print("{\"ok\": true, \"enabled\": \(item.enabled), \"available\": \(item.available)}")
+        exit(0)
+    } catch {
+        let message = error.localizedDescription.replacingOccurrences(of: "\"", with: "'")
+        print("{\"ok\": false, \"error\": \"\(message)\"}")
+        exit(1)
+    }
+}
+
 guard let line = readLine(), let viewer = Viewer(line) else {
     FileHandle.standardError.write(Data("Expected the viewer URL on stdin\n".utf8))
     exit(2)
@@ -111,7 +131,7 @@ if let index = arguments.firstIndex(of: "--render"), index + 1 < arguments.count
     app.run()
 } else {
     let executable = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
-    let companion = Companion(viewer: viewer, commands: .beside(executable))
+    let companion = Companion(viewer: viewer, commands: .parent(fallback: executable))
     app.delegate = companion
     watchParent()
     app.run()

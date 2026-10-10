@@ -17,7 +17,9 @@ pub fn installed_path() -> Result<PathBuf> {
 /// absent from the working directory (as for the login item, which runs in
 /// `/`), falls back to the installed configuration.
 pub fn effective(path: PathBuf) -> PathBuf {
-    if path == Path::new(DEFAULT_PATH) && !path.exists() {
+    // A legacy JSON twin keeps the local name, so loading reports it.
+    let legacy = path.with_extension("json").exists();
+    if path == Path::new(DEFAULT_PATH) && !path.exists() && !legacy {
         return installed_path().unwrap_or(path);
     }
     path

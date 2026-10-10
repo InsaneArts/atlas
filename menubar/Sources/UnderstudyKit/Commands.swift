@@ -46,6 +46,16 @@ public struct Commands: Sendable {
         Commands(executable: executable.deletingLastPathComponent().appendingPathComponent("understudy"))
     }
 
+    /// The `understudy` that started this app (`UNDERSTUDY_CLI`), else the
+    /// one beside it. Its configuration arrives as `UNDERSTUDY_CONFIG`, which
+    /// every command inherits.
+    public static func parent(fallback executable: URL) -> Commands {
+        if let path = ProcessInfo.processInfo.environment["UNDERSTUDY_CLI"], !path.isEmpty {
+            return Commands(executable: URL(fileURLWithPath: path))
+        }
+        return beside(executable)
+    }
+
     /// Run `understudy arguments…` off the main thread; the outcome arrives
     /// on the main queue.
     public func run(_ arguments: [String], _ done: @escaping @MainActor @Sendable (Outcome) -> Void) {

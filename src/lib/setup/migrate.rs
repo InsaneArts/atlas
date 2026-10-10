@@ -126,6 +126,15 @@ pub fn recorded(uid: u32) -> bool {
     log_path(uid).is_ok_and(|path| path.exists())
 }
 
+/// Whether helper `uid`'s setup is recorded as applied with nothing it
+/// owns still pending.
+pub fn settled(uid: u32) -> bool {
+    log_path(uid)
+        .ok()
+        .and_then(|path| load_log(&path).ok().flatten())
+        .is_some_and(|log| log.state == State::Applied && log.pending.is_empty())
+}
+
 fn load_log(path: &Path) -> Result<Option<Log>> {
     match fs::read(path) {
         Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
@@ -660,11 +669,27 @@ async fn plan_fresh(config_path: &Path) -> Result<Plan> {
 
 /// Record and verify a first setup (see [`plan_fresh`]). Re-running on an
 /// applied setup re-verifies it, like [`apply`].
-pub async fn apply_fresh(config_path: &Path, _ownership: &Ownership) -> Result<Value> {
+pub async fn apply_fresh(config_path: &Path, ownership: &Ownership) -> Result<Value> {
     let uid = Config::load(config_path)?.helper_uid;
     let path = log_path(uid)?;
     let log = match load_log(&path)? {
-        Some(log) if !log.plan.label.is_empty() => log,
+        Some(log) if log.version != 1 => {
+            return Err(problem(format!(
+                "The setup record has an unknown version ({})",
+                path.display()
+            )));
+        }
+        Some(log) if log.state == State::RollingBack => {
+            return Err(problem(format!(
+                "A rollback is unfinished; run setup --rollback to complete it ({})",
+                path.display()
+            )));
+        }
+        // A migrated (not fresh) setup re-verifies the way it was made.
+        Some(log) if !log.plan.label.is_empty() && !log.plan.fresh => {
+            return apply(config_path, ownership).await;
+        }
+        Some(log) if log.plan.fresh => log,
         previous => {
             if let Some(previous) = previous {
                 let archive = path.with_extension(format!("{}.json", timestamp()));
