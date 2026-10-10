@@ -6,7 +6,6 @@ use understudy::{
     config::Config,
     environment,
     error::{Error, Result},
-    session::diagnose,
     viewer,
 };
 
@@ -48,6 +47,8 @@ enum Command {
     #[command(hide = true)]
     SessionInfo,
     #[command(hide = true)]
+    WindowsInfo,
+    #[command(hide = true)]
     InputService {
         #[arg(long)]
         uid: u32,
@@ -79,6 +80,12 @@ enum Command {
     Status,
     /// Report readiness and only the missing setup steps.
     Doctor,
+    /// Exercise real native Save/Open dialogs with the AppKit fixture and record the outcome.
+    VerifyNative {
+        /// Compiled tests/live/DesktopFixture.swift inside a helper-readable path.
+        #[arg(long, default_value = understudy::capability::FIXTURE)]
+        fixture: PathBuf,
+    },
     /// Atomically install this Rust executable at the configured shared path.
     Install,
     /// Start the Rust input service inside the prepared helper login.
@@ -176,6 +183,15 @@ fn main() -> ExitCode {
     }
 }
 #[cfg(target_os = "macos")]
+fn windows_info() -> Result<Value> {
+    Ok(json!({ "ok": true, "windows": understudy::native::windows::windows()? }))
+}
+#[cfg(not(target_os = "macos"))]
+fn windows_info() -> Result<Value> {
+    Err(Error::new("platform", "Window listing requires macOS"))
+}
+
+#[cfg(target_os = "macos")]
 async fn input_service(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<Value> {
     understudy::native::service::serve(uid, controller_uid, socket).await?;
     Ok(Value::Null)
@@ -193,6 +209,7 @@ async fn execute(cli: Cli) -> Result<Value> {
             return environment::worker(&packet, apply);
         }
         Command::SessionInfo => return understudy::native::session_info(),
+        Command::WindowsInfo => return windows_info(),
         Command::InputService {
             uid,
             controller_uid,
@@ -210,6 +227,7 @@ async fn execute(cli: Cli) -> Result<Value> {
     match command {
         Command::InputService { .. }
         | Command::SessionInfo
+        | Command::WindowsInfo
         | Command::EnvironmentWorker { .. }
         | Command::SetupHelper { .. } => {
             unreachable!("helper-side commands return above")
@@ -226,7 +244,13 @@ async fn execute(cli: Cli) -> Result<Value> {
         }
         Command::Config => Ok(json!({ "ok": true, "config": client.config })),
         Command::Status => Ok(client.status().await),
-        Command::Doctor => Ok(diagnose(client.status().await, client.config.helper_uid)),
+        Command::Doctor => Ok(understudy::capability::doctor(
+            client.status().await,
+            client.config.helper_uid,
+        )),
+        Command::VerifyNative { fixture } => {
+            understudy::capability::verify(&client, &fixture).await
+        }
         Command::Environment {
             manifest,
             apply,

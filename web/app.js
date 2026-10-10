@@ -2,6 +2,7 @@ import { desktopPoint, keyAction, modifiers, WheelAccumulator } from './input.js
 import { PreviewLoop } from './preview.js';
 import { InputQueue } from './queue.js';
 import { PointerGesture } from './pointer.js';
+import { statusRows } from './status.js';
 
 const el = (id) => document.getElementById(id);
 const screen = el('screen'),
@@ -159,21 +160,14 @@ async function poll(signal, current) {
   const status = await response.json();
   if (!current()) return;
   el('checks').replaceChildren(
-    ...(status.checks || []).map((check) => {
+    ...statusRows(status).map(({ name, state, text }) => {
       const row = document.createElement('div');
-      // null means the fact cannot be observed yet; it is not a failure.
-      const state = check.ok === true ? 'ready' : check.ok === null ? 'unknown' : 'bad';
       row.className = 'check ' + state;
-      const name = document.createElement('b');
-      name.textContent = check.name;
+      const label = document.createElement('b');
+      label.textContent = name;
       const result = document.createElement('span');
-      result.textContent =
-        state === 'ready'
-          ? 'Ready'
-          : state === 'unknown'
-            ? 'Unknown. ' + check.nextStep
-            : check.nextStep;
-      row.append(name, result);
+      result.textContent = text;
+      row.append(label, result);
       return row;
     }),
   );
