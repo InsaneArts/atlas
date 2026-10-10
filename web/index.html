@@ -22,82 +22,111 @@
           <p>Your other desktop</p>
         </div>
         <div class="connection">
-          <div class="connection-status">
+          <div class="pill" id="pill" data-tone="off">
             <span class="dot" id="dot" aria-hidden="true"></span
             ><span id="state" role="status" aria-live="polite">Connecting</span>
           </div>
+          <span class="reason" id="reason">Connecting to the helper</span>
           <span class="updated" id="updated">Waiting for the first frame</span>
         </div>
       </header>
 
-      <main id="workspace">
-        <section class="workspace" aria-label="Helper desktop">
-          <div class="toolbar">
-            <div class="session-identity">
-              <span class="account" id="account">Helper account</span>
-              <span class="mode" id="mode">Observing</span>
-            </div>
-            <div class="toolbar-controls" aria-label="Desktop controls">
-              <div class="refresh-control">
-                <label for="rate">Refresh</label>
-                <select id="rate" aria-label="Preview refresh interval">
-                  <option value="1000">1 second</option>
-                  <option value="2000" selected>2 seconds</option>
-                  <option value="5000">5 seconds</option>
-                </select>
+      <div class="layout">
+        <main id="workspace" class="primary">
+          <section class="workspace" aria-label="Helper desktop">
+            <div class="toolbar">
+              <div class="session-identity">
+                <span class="account" id="account">Helper account</span>
+                <span class="mode" id="mode">Observing</span>
               </div>
-              <button class="button button-quiet" id="pause" type="button">Pause view</button>
-              <span class="control-divider" aria-hidden="true"></span>
-              <button
-                class="button button-key"
-                id="send-escape"
-                type="button"
-                title="Send Escape to the helper desktop"
-                disabled
-              >
-                Esc
-              </button>
-              <button
-                class="button button-primary"
-                id="control"
-                type="button"
-                aria-pressed="false"
-                disabled
-              >
-                Take control
-              </button>
+              <div class="toolbar-controls" aria-label="Desktop controls">
+                <div class="refresh-control">
+                  <label for="rate">Refresh</label>
+                  <select id="rate" aria-label="Preview refresh interval">
+                    <option value="1000">1 second</option>
+                    <option value="2000" selected>2 seconds</option>
+                    <option value="5000">5 seconds</option>
+                  </select>
+                </div>
+                <button class="button button-quiet" id="pause" type="button">Pause view</button>
+                <span class="control-divider" aria-hidden="true"></span>
+                <button
+                  class="button button-key"
+                  id="send-escape"
+                  type="button"
+                  title="Send Escape to the helper desktop"
+                  disabled
+                >
+                  Esc
+                </button>
+                <button
+                  class="button button-primary"
+                  id="control"
+                  type="button"
+                  aria-pressed="false"
+                  disabled
+                >
+                  Take control
+                </button>
+              </div>
             </div>
-          </div>
 
-          <div class="stage" id="stage" aria-label="Remote desktop preview">
-            <img id="screen" alt="Current screen of the helper account" draggable="false" hidden />
-            <div class="empty" id="empty" role="status">Waiting for the helper desktop…</div>
-            <textarea
-              id="keyboard"
-              class="keyboard-proxy"
-              aria-label="Remote desktop keyboard"
-              aria-describedby="hint"
-              autocomplete="off"
-              autocorrect="off"
-              autocapitalize="off"
-              spellcheck="false"
-              rows="1"
-              disabled
-            ></textarea>
-          </div>
+            <div class="stage" id="stage" aria-label="Remote desktop preview">
+              <img
+                id="screen"
+                alt="Current screen of the helper account"
+                draggable="false"
+                hidden
+              />
+              <div class="empty" id="empty" role="status">Waiting for the helper desktop…</div>
+              <div class="agent-banner" id="agent-banner" role="status" hidden>
+                <span class="agent-mark" aria-hidden="true"></span>An agent is working here — you
+                are watching
+              </div>
+              <textarea
+                id="keyboard"
+                class="keyboard-proxy"
+                aria-label="Remote desktop keyboard"
+                aria-describedby="hint"
+                autocomplete="off"
+                autocorrect="off"
+                autocapitalize="off"
+                spellcheck="false"
+                rows="1"
+                disabled
+              ></textarea>
+            </div>
 
-          <div class="workspace-footer">
-            <span id="detail">Preview images stay in memory</span>
-            <span id="hint">Take control to use your mouse and keyboard.</span>
-          </div>
-        </section>
+            <div class="workspace-footer">
+              <span id="detail">Preview images stay in memory</span>
+              <span id="hint">Take control to use your mouse and keyboard.</span>
+            </div>
+          </section>
 
-        <div class="notice" id="notice" role="status" aria-live="polite" hidden></div>
+          <div class="notice" id="notice" role="status" aria-live="polite" hidden></div>
+        </main>
 
-        <div class="supporting-controls">
+        <aside class="panel" aria-label="Session">
+          <section class="panel-section">
+            <h2>Session</h2>
+            <dl class="facts" id="facts"></dl>
+          </section>
+
+          <section class="panel-section recovery" id="recovery" hidden>
+            <h2>Recovery</h2>
+            <p id="recover-reason">The helper needs attention before anyone takes control.</p>
+            <button class="button button-secondary" id="recover" type="button">Recover</button>
+          </section>
+
+          <section class="panel-section">
+            <h2>Activity</h2>
+            <ol class="activity" id="activity" aria-label="Recent actions in the helper"></ol>
+            <p class="activity-empty" id="activity-empty">No recent actions.</p>
+          </section>
+
           <details class="disclosure session-details" id="details">
             <summary>
-              <span>Session details</span><span class="disclosure-mark" aria-hidden="true"></span>
+              <span>Readiness</span><span class="disclosure-mark" aria-hidden="true"></span>
             </summary>
             <div class="checks" id="checks" aria-label="Session readiness"></div>
           </details>
@@ -129,8 +158,8 @@
               </p>
             </div>
           </details>
-        </div>
-      </main>
+        </aside>
+      </div>
       <footer class="page-footer">
         <span>One desktop for you. One for the work.</span><span>Local connection</span>
       </footer>

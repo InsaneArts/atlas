@@ -1,7 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { desktopPoint, keyAction, WheelAccumulator } from '../web/input.js';
-import { PreviewLoop } from '../web/preview.js';
+import {
+  desktopPoint,
+  isPasteGesture,
+  keyAction,
+  textChunks,
+  WheelAccumulator,
+} from '../web/input.js';
+import { PreviewLoop, unlessSuperseded } from '../web/preview.js';
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -219,4 +225,141 @@ test('status rows keep unknown distinct and show native dialogs separately', () 
     'unknown',
   );
   assert.equal(statusRows({ checks: [] }).length, 0);
+});
+
+import {
+  activityItems,
+  ago,
+  canRecover,
+  controlBlockedBy,
+  facts,
+  freshness,
+  modeView,
+  recoveryView,
+} from '../web/overview.js';
+
+test('overview turns modes, facts and activity into display rows', () => {
+  assert.equal(modeView({ mode: 'agent', reason: 'An agent is acting' }).tone, 'agent');
+  assert.equal(modeView(undefined).label, 'Unavailable');
+  assert.equal(modeView({ mode: 'invented' }).label, 'Unavailable');
+  assert.equal(freshness(1000), 'Live');
+  assert.equal(freshness(5000), 'Updated 5 s ago');
+  assert.equal(freshness(20000), 'Preview is stale');
+  assert.equal(ago(2), 'just now');
+  assert.equal(ago(120), '2 min ago');
+  const rows = facts({
+    overview: {
+      account: 'atlastest',
+      display: { width: 2560, height: 1440 },
+      nativeDialogs: 'failed',
+    },
+    session: { inputService: { ok: true, ready: true, pid: 42 } },
+  });
+  assert.deepEqual(rows, [
+    ['Account', 'atlastest'],
+    ['Display', '2560 × 1440'],
+    ['Input', 'Ready · PID 42'],
+    ['Native dialogs', 'Save and Open failing'],
+  ]);
+  const items = activityItems({
+    activity: [
+      { operation: 'input', ok: true, actionCount: 1, ageSeconds: 3 },
+      { operation: 'run', ok: false, actionCount: null, ageSeconds: 70, actor: 'viewer' },
+    ],
+  });
+  assert.deepEqual(items, [
+    { who: 'Agent', text: 'input · 1 action', when: 'just now', ok: true },
+    { who: 'You', text: 'run', when: '70 s ago', ok: false },
+  ]);
+  assert.equal(canRecover({ mode: 'recovering' }, false), true);
+  assert.equal(canRecover({ mode: 'recovering' }, true), false, 'never while holding control');
+  assert.equal(canRecover({ mode: 'observing' }, false), false);
+  assert.equal(controlBlockedBy({ mode: 'agent' }), 'An agent is acting in the helper');
+  assert.equal(controlBlockedBy({ mode: 'observing' }), null);
+});
+
+test('typed text is chunked without splitting graphemes', () => {
+  const family = '\u{1F468}‍\u{1F469}‍\u{1F467}';
+  const accent = 'é';
+  assert.deepEqual(textChunks('abcdef', 4), ['abcd', 'ef']);
+  assert.deepEqual(textChunks(`ab${family}`, 4), ['ab', family]);
+  assert.deepEqual(textChunks(`abc${accent}d`, 4), ['abc', `${accent}d`]);
+  for (const chunk of textChunks(`${accent}${family}`.repeat(40), 128)) {
+    assert.ok(Array.from(chunk).length <= 128);
+    assert.ok(!chunk.startsWith('́') && !chunk.startsWith('‍'));
+  }
+  assert.equal(
+    textChunks(`${accent}${family}`.repeat(40), 128).join(''),
+    `${accent}${family}`.repeat(40),
+  );
+  assert.deepEqual(textChunks(family, 2), [family], 'an oversized grapheme stays whole');
+  assert.deepEqual(textChunks(''), []);
+});
+
+test('only Command+V is the local paste gesture', () => {
+  assert.equal(isPasteGesture({ key: 'v', metaKey: true }), true);
+  assert.equal(isPasteGesture({ key: 'V', metaKey: true }), true);
+  assert.equal(isPasteGesture({ key: 'v', ctrlKey: true }), false);
+  assert.equal(isPasteGesture({ key: 'v', metaKey: true, shiftKey: true }), false);
+  assert.equal(isPasteGesture({ key: 'v', metaKey: true, altKey: true }), false);
+  assert.deepEqual(keyAction({ key: 'v', code: 'KeyV', ctrlKey: true }), {
+    type: 'key',
+    key: 'ctrl+v',
+  });
+});
+
+test('control held by another viewer is never shown as yours', () => {
+  const held = { mode: 'controlling', reason: 'A viewer has mouse and keyboard control' };
+  assert.equal(modeView(held, true).label, 'You have control');
+  assert.equal(modeView(held, false).label, 'Viewer in control');
+  assert.equal(modeView(held, false).reason, 'Another viewer window has control');
+  assert.equal(controlBlockedBy(held, false), 'Another viewer window has control');
+  assert.equal(controlBlockedBy(held, true), null);
+  assert.equal(controlBlockedBy({ mode: 'observing' }), null);
+});
+
+test('the recovery card follows recovery, not a stale status', () => {
+  const needs = { mode: 'recovering', reason: 'An outcome is unknown' };
+  assert.deepEqual(recoveryView(needs), {
+    hidden: false,
+    busy: false,
+    reason: 'An outcome is unknown',
+  });
+  assert.equal(recoveryView(needs, { recovering: true }).busy, true);
+  assert.equal(recoveryView({ mode: 'observing' }, { recovering: true }).hidden, false);
+  assert.deepEqual(
+    recoveryView({ mode: 'observing' }),
+    { hidden: true, busy: false, reason: '' },
+    'an observing status after recovery hides the card',
+  );
+  assert.equal(recoveryView(needs, { hasLease: true }).hidden, true);
+});
+
+test('a superseded poll fails silently; a current one still fails', async () => {
+  let latest = true;
+  const late = unlessSuperseded(
+    async () => {
+      await wait(5);
+      throw new Error('old capture failed');
+    },
+    () => latest,
+  );
+  latest = false;
+  assert.equal(await late, undefined, 'a newer reading already applied');
+  await assert.rejects(
+    unlessSuperseded(
+      async () => {
+        throw new Error('current failure');
+      },
+      () => true,
+    ),
+    /current failure/,
+  );
+  assert.equal(
+    await unlessSuperseded(
+      async () => 7,
+      () => false,
+    ),
+    7,
+  );
 });

@@ -51,3 +51,12 @@ export class PreviewLoop {
     }
   }
 }
+
+/** Run `work`; its failure counts only while `isLatest()` still holds. */
+export async function unlessSuperseded(work, isLatest) {
+  try {
+    return await work();
+  } catch (error) {
+    if (isLatest()) throw error;
+  }
+}

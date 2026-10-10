@@ -120,8 +120,41 @@ impl Viewer {
         if status["ready"] != true {
             let _ = self.release(None).await;
         }
-        status["controlActive"] = json!(self.lease.lock().await.active());
+        let active = self.lease.lock().await.active();
+        status["controlActive"] = json!(active);
+        // An unreadable marker is unknown, so it counts as unresolved.
+        let controller = &self.client.controller;
+        let total = controller.pending().map_or(1, |pending| pending.len());
+        let unresolved = controller.unresolved().map_or(1, |pending| pending.len());
+        let pending = crate::overview::Pending {
+            unresolved,
+            in_flight: total.saturating_sub(unresolved),
+        };
+        let activity = self
+            .client
+            .output_dir()
+            .map(|directory| crate::overview::activity(directory, 12))
+            .unwrap_or_default();
+        status["overview"] = crate::overview::overview(
+            &status,
+            active,
+            pending,
+            &activity,
+            crate::client::timestamp(),
+        );
         status
+    }
+    /// Explicit, person-initiated recovery: the verified restart when an
+    /// outcome is unknown, otherwise starting, resetting or upgrading input.
+    /// It never takes control or resumes input.
+    async fn recover(&self) -> Result<Value> {
+        if self.lease.lock().await.active() {
+            return Err(Error::new("busy", "Release control before recovering"));
+        }
+        if !self.client.controller.pending()?.is_empty() {
+            return self.client.restart().await;
+        }
+        self.client.start_input().await
     }
     async fn control(&self, route: &str, body: &Value) -> Result<Value> {
         let owner = body["lease"].as_str().unwrap_or_default();
@@ -195,7 +228,9 @@ impl Viewer {
     }
 }
 
-pub async fn bind(client: Client, port: u16) -> Result<(TcpListener, Arc<Viewer>, Router)> {
+pub async fn bind(mut client: Client, port: u16) -> Result<(TcpListener, Arc<Viewer>, Router)> {
+    // Everything this viewer does in the helper is the person's doing.
+    client.actor = crate::client::Actor::Viewer;
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).await?;
     let authority = listener.local_addr()?.to_string();
     let prefix = format!("/{}/", control::token());
@@ -339,7 +374,7 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
     if method != Method::POST
         || !matches!(
             route.as_str(),
-            "input" | "control/acquire" | "control/renew" | "control/release"
+            "input" | "control/acquire" | "control/renew" | "control/release" | "recover"
         )
     {
         return json_response(404, json!({"ok": false, "error": "Unknown operation"}));
@@ -383,7 +418,12 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
             );
         }
     };
-    match viewer.control(&route, &body).await {
+    let outcome = if route == "recover" {
+        viewer.recover().await
+    } else {
+        viewer.control(&route, &body).await
+    };
+    match outcome {
         Ok(result) => {
             if result["ok"] != true {
                 let _ = viewer.release(body["lease"].as_str()).await;
@@ -438,6 +478,10 @@ fn asset(route: &str) -> Option<(&'static str, &'static [u8])> {
             "text/javascript; charset=utf-8",
             include_bytes!("../../web/status.js"),
         ),
+        "overview.js" => (
+            "text/javascript; charset=utf-8",
+            include_bytes!("../../web/overview.js"),
+        ),
         "styles.css" => (
             "text/css; charset=utf-8",
             include_bytes!("../../web/styles.css"),
@@ -488,4 +532,84 @@ fn response(code: u16, mime: &str, body: Vec<u8>, headers: &[(&str, String)]) ->
         }
     }
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A viewer whose helper is unreachable and whose controller state is
+    /// private to the test.
+    async fn unreachable(dir: &std::path::Path) -> Arc<Viewer> {
+        let text = "helper_uid = 60001\nsocket_path = \"c.sock\"\noutput_dir = \"out\"\n\
+                    identity_probe = \"probe\"\ninput_socket = \"i.sock\"\n";
+        let config = crate::config::Config::parse(text.as_bytes(), &dir.join("u.toml")).unwrap();
+        let mut client = Client::new(config).unwrap();
+        client.controller = control::Controller::at(60001, &dir.join("state"));
+        bind(client, 0).await.unwrap().1
+    }
+
+    #[tokio::test]
+    async fn recovery_is_refused_while_control_is_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let viewer = unreachable(dir.path()).await;
+        let controller = viewer.client.controller.clone();
+        viewer.lease.lock().await.acquire(&controller).unwrap();
+        let refused = viewer.recover().await.unwrap_err();
+        assert_eq!(refused.code, "busy");
+        assert!(controller.pending().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn failed_recovery_keeps_unknown_outcomes_pending() {
+        let dir = tempfile::tempdir().unwrap();
+        let viewer = unreachable(dir.path()).await;
+        let controller = viewer.client.controller.clone();
+        // Without a pending outcome recovery only starts input, adding nothing.
+        assert!(viewer.recover().await.is_err());
+        assert!(controller.pending().unwrap().is_empty());
+        drop(controller.quarantine().unwrap());
+        // With one it takes the verified restart, which cannot confirm an
+        // unreachable helper, so the outcome stays unknown.
+        assert!(viewer.recover().await.is_err());
+        assert_eq!(controller.unresolved().unwrap().len(), 1);
+        assert_eq!(controller.require_known().unwrap_err().code, "uncertain");
+        let status = viewer.status().await;
+        assert_eq!(status["overview"]["mode"], "unavailable");
+        assert_eq!(status["overview"]["pending"], 1);
+    }
+
+    /// Every module the page loads, and every module those import, is served.
+    #[test]
+    fn served_scripts_resolve_every_import() {
+        let page = std::str::from_utf8(asset("").unwrap().1).unwrap();
+        let mut pending: Vec<String> = page
+            .split("src=\"")
+            .skip(1)
+            .filter_map(|rest| rest.split('"').next())
+            .map(str::to_owned)
+            .collect();
+        let mut seen = Vec::new();
+        while let Some(route) = pending.pop() {
+            if seen.contains(&route) {
+                continue;
+            }
+            let (mime, bytes) = asset(&route).unwrap_or_else(|| panic!("{route} is not served"));
+            assert!(mime.starts_with("text/javascript"), "{route}: {mime}");
+            let source = std::str::from_utf8(bytes).unwrap();
+            pending.extend(
+                source
+                    .split("from './")
+                    .skip(1)
+                    .filter_map(|rest| rest.split('\'').next())
+                    .map(str::to_owned),
+            );
+            seen.push(route);
+        }
+        assert!(seen.contains(&"overview.js".to_owned()), "{seen:?}");
+        for route in ["styles.css", "favicon.svg"] {
+            assert!(asset(route).is_some(), "{route}");
+        }
+        assert!(asset("../Cargo.toml").is_none());
+    }
 }
