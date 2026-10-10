@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File, OpenOptions},
     io::Write,
-    os::unix::fs::OpenOptionsExt,
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
@@ -45,6 +45,42 @@ fn open_lock(path: &Path) -> Result<File> {
         .open(path)?)
 }
 
+/// A mutation still being carried out. For its lifetime it holds an
+/// exclusive lock on a file named for its generation, so any process can tell
+/// work in progress from an outcome nothing will settle. Its marker entry
+/// outlives it until the outcome is acknowledged.
+#[must_use = "dropping it at once reports the mutation as abandoned"]
+#[derive(Debug)]
+pub struct Pending {
+    generation: String,
+    live: PathBuf,
+    _lock: File,
+}
+impl std::ops::Deref for Pending {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.generation
+    }
+}
+impl Pending {
+    /// Whether the claim path still names the file this claim locked.
+    fn names_own_file(&self) -> bool {
+        let (named, held) = (fs::symlink_metadata(&self.live), self._lock.metadata());
+        matches!((named, held), (Ok(a), Ok(b)) if (a.dev(), a.ino()) == (b.dev(), b.ino()))
+    }
+}
+impl Drop for Pending {
+    fn drop(&mut self) {
+        // Only an unlocked claim file is ever removed by others, and a
+        // replacement can only appear once this one is gone, so a path that
+        // still names the locked file stays ours until it is removed here.
+        // The lock goes with the descriptor.
+        if self.names_own_file() {
+            let _ = fs::remove_file(&self.live);
+        }
+    }
+}
+
 /// Exclusive control of one helper, held until dropped.
 #[derive(Debug)]
 pub struct Ownership {
@@ -60,6 +96,7 @@ pub struct Controller {
     lock: PathBuf,
     marker: PathBuf,
     marker_lock: PathBuf,
+    name: String,
 }
 impl Controller {
     pub fn new(uid: u32) -> Result<Self> {
@@ -74,6 +111,7 @@ impl Controller {
             lock: directory.join(format!("{name}.lock")),
             marker: directory.join(format!("{name}.uncertain.json")),
             marker_lock: directory.join(format!("{name}.state.lock")),
+            name: name.to_owned(),
         }
     }
     pub fn acquire(&self, recovery: bool) -> Result<Ownership> {
@@ -110,25 +148,83 @@ impl Controller {
         let _lock = self.lock_marker()?;
         pending(&self.marker)
     }
-    /// Record a pending mutation and return its generation.
-    pub fn quarantine(&self) -> Result<String> {
-        let generation = token();
-        self.quarantine_as(&generation)?;
-        Ok(generation)
+    /// Generations no mutation in progress will settle: their writer
+    /// dropped or lost its claim (an uncertain failure or a crash), or the
+    /// entry is not one of ours. For display only; every pending generation
+    /// still blocks control until verified recovery.
+    pub fn unresolved(&self) -> Result<Vec<String>> {
+        // Under the marker lock a finishing mutation cannot clear its entry
+        // between reading the marker and probing its claim.
+        let _lock = self.lock_marker()?;
+        Ok(pending(&self.marker)?
+            .into_iter()
+            .filter(|generation| !self.in_progress(generation))
+            .collect())
+    }
+    /// The claim file for a generation; only plain tokens name one.
+    fn live(&self, generation: &str) -> Option<PathBuf> {
+        (!generation.is_empty() && generation.bytes().all(|b| b.is_ascii_hexdigit())).then(|| {
+            self.directory
+                .join(format!("{}.{generation}.live", self.name))
+        })
+    }
+    /// Whether some live mutation, in any process, still holds the claim.
+    fn in_progress(&self, generation: &str) -> bool {
+        let Some(live) = self.live(generation) else {
+            return false;
+        };
+        OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(live)
+            .is_ok_and(|file| FileExt::try_lock_shared(&file).is_err())
+    }
+    /// Record a pending mutation this process is carrying out.
+    pub fn quarantine(&self) -> Result<Pending> {
+        self.quarantine_as(&token())
     }
     /// Record a pending mutation under a generation the caller chose, so it
-    /// can persist its own claim on that generation first.
-    pub fn quarantine_as(&self, generation: &str) -> Result<()> {
+    /// can persist its own claim on that generation first. The claim is
+    /// taken before the marker is written, so a marked generation is never
+    /// briefly mistaken for an abandoned one.
+    pub fn quarantine_as(&self, generation: &str) -> Result<Pending> {
+        let live = self
+            .live(generation)
+            .ok_or_else(|| Error::new("state", "Pending generations are hexadecimal tokens"))?;
+        fs::create_dir_all(&self.directory)?;
+        let file = open_lock(&live)?;
+        FileExt::try_lock_exclusive(&file)
+            .map_err(|_| Error::new("busy", "That generation is already being carried out"))?;
+        let claim = Pending {
+            generation: generation.to_owned(),
+            live,
+            _lock: file,
+        };
         let _lock = self.lock_marker()?;
+        // Claim files are only unlinked under the marker lock or by their
+        // holder, so if the path still names the locked file here, it will
+        // until the claim is dropped.
+        if !claim.names_own_file() {
+            return Err(Error::new(
+                "busy",
+                "That generation's claim changed while it was taken",
+            ));
+        }
         let mut pending = pending(&self.marker)?;
         if !pending.iter().any(|entry| entry == generation) {
             pending.push(generation.to_owned());
         }
-        write_private(&self.marker, &serde_json::to_vec(&pending)?)
+        write_private(&self.marker, &serde_json::to_vec(&pending)?)?;
+        Ok(claim)
     }
     /// Settle one acknowledged mutation; others stay pending.
     pub fn clear_if(&self, generation: &str) -> Result<()> {
         let _lock = self.lock_marker()?;
+        if let Some(live) = self.live(generation)
+            && !self.in_progress(generation)
+        {
+            let _ = fs::remove_file(live);
+        }
         let mut pending = pending(&self.marker)?;
         pending.retain(|entry| entry != generation);
         if pending.is_empty() {
@@ -137,9 +233,23 @@ impl Controller {
             write_private(&self.marker, &serde_json::to_vec(&pending)?)
         }
     }
-    /// Verified recovery settles every pending mutation.
+    /// Verified recovery settles every pending mutation and removes every
+    /// claim file no live mutation holds, listed or not.
     pub fn clear(&self) -> Result<()> {
         let _lock = self.lock_marker()?;
+        let prefix = format!("{}.", self.name);
+        for entry in fs::read_dir(&self.directory)?.flatten() {
+            let name = entry.file_name();
+            let generation = name
+                .to_str()
+                .and_then(|name| name.strip_prefix(&prefix)?.strip_suffix(".live"));
+            if let Some(generation) = generation
+                && self.live(generation).is_some()
+                && !self.in_progress(generation)
+            {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
         remove_marker(&self.marker)
     }
 }

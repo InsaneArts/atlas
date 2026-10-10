@@ -234,12 +234,12 @@ impl Migration {
     }
     /// Claim a generation in the log, then record the pending mutation under
     /// it. A crash between the two leaves only a harmless log-only claim.
-    fn begin(&mut self) -> Result<String> {
+    /// The claim is held while the step runs.
+    fn begin(&mut self) -> Result<crate::control::Pending> {
         let generation = crate::control::token();
         self.log.pending.push(generation.clone());
         save_log(&self.path, &self.log)?;
-        self.old.controller.quarantine_as(&generation)?;
-        Ok(generation)
+        self.old.controller.quarantine_as(&generation)
     }
     fn settle(&mut self, generation: &str) -> Result<()> {
         self.old.controller.clear_if(generation)?;

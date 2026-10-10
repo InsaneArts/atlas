@@ -215,7 +215,7 @@ fn controllers_for_one_helper_share_the_lock_and_pending_marker() {
     let second = Controller::at(502, dir.path());
     let held = first.acquire(false).unwrap();
     assert_eq!(second.acquire(false).unwrap_err().code, "busy");
-    first.quarantine().unwrap();
+    drop(first.quarantine().unwrap());
     drop(held);
     assert_eq!(second.acquire(false).unwrap_err().code, "uncertain");
     let recovery = second.acquire(true).unwrap();
@@ -573,7 +573,7 @@ fn exclusion_is_per_helper_account() {
     let held = first.acquire(false).unwrap();
     assert_eq!(moved.acquire(false).unwrap_err().code, "busy");
     drop(other.acquire(false).unwrap());
-    first.quarantine().unwrap();
+    drop(first.quarantine().unwrap());
     drop(held);
     assert_eq!(moved.acquire(false).unwrap_err().code, "uncertain");
 }
@@ -660,8 +660,100 @@ fn pending_generations_are_listed_until_settled() {
     let second = controller.quarantine().unwrap();
     assert_eq!(
         controller.pending().unwrap(),
-        vec![first.clone(), second.clone()]
+        vec![first.to_string(), second.to_string()]
     );
     controller.clear_if(&first).unwrap();
-    assert_eq!(controller.pending().unwrap(), vec![second]);
+    assert_eq!(controller.pending().unwrap(), vec![second.to_string()]);
+}
+
+#[test]
+fn only_generations_nothing_will_settle_are_unresolved() {
+    let dir = tempfile::tempdir().unwrap();
+    let controller = Controller::at(502, dir.path());
+    // Another controller instance stands in for another process: claims are
+    // file locks, so it sees exactly what a separate process would.
+    let observer = Controller::at(502, dir.path());
+    let working = controller.quarantine().unwrap();
+    assert_eq!(observer.pending().unwrap().len(), 1);
+    assert!(
+        observer.unresolved().unwrap().is_empty(),
+        "work in progress is not an unknown outcome"
+    );
+    let abandoned = controller.quarantine().unwrap();
+    let lost = abandoned.to_string();
+    drop(abandoned);
+    assert_eq!(
+        observer.unresolved().unwrap(),
+        vec![lost.clone()],
+        "an uncertain failure leaves an entry nothing will settle"
+    );
+    assert_eq!(
+        controller.quarantine_as(&working).unwrap_err().code,
+        "busy",
+        "a generation is claimed once"
+    );
+    controller.clear_if(&working).unwrap();
+    drop(working);
+    // A crashed writer leaves its claim file behind, unlocked.
+    let crashed = understudy::control::token();
+    let claim = controller.quarantine_as(&crashed).unwrap();
+    let find = |suffix: &str| {
+        std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.to_string_lossy().ends_with(suffix))
+            .unwrap()
+    };
+    let live = find(&format!(".{crashed}.live"));
+    std::fs::hard_link(&live, dir.path().join("kept")).unwrap();
+    drop(claim);
+    std::fs::rename(dir.path().join("kept"), &live).unwrap();
+    // An entry this version did not write is never taken as in progress.
+    let marker = find(".uncertain.json");
+    let mut entries: Vec<String> =
+        serde_json::from_slice(&std::fs::read(&marker).unwrap()).unwrap();
+    entries.push("1234.legacy".into());
+    std::fs::write(&marker, serde_json::to_vec(&entries).unwrap()).unwrap();
+    assert_eq!(
+        observer.unresolved().unwrap(),
+        vec![lost, crashed.clone(), "1234.legacy".to_owned()]
+    );
+    assert_eq!(
+        controller.quarantine_as("not/a token").unwrap_err().code,
+        "state"
+    );
+    // Settling one generation removes its abandoned claim file too.
+    controller.clear_if(&crashed).unwrap();
+    assert!(!live.exists(), "settling removes an abandoned claim file");
+    // A writer that crashed before publishing leaves an unlisted claim file;
+    // recovery sweeps it but never a claim a live mutation holds.
+    let name = marker
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .replace(".uncertain.json", "");
+    let orphan = dir
+        .path()
+        .join(format!("{name}.{}.live", understudy::control::token()));
+    std::fs::write(&orphan, b"").unwrap();
+    let held = controller.quarantine().unwrap();
+    controller.clear().unwrap();
+    assert!(controller.pending().unwrap().is_empty());
+    assert!(
+        !orphan.exists(),
+        "recovery sweeps unlisted abandoned claims"
+    );
+    assert!(
+        find(&format!(".{}.live", &*held)).exists(),
+        "a held claim is never swept"
+    );
+    // A claim whose file was replaced never removes the replacement.
+    let path = find(&format!(".{}.live", &*held));
+    std::fs::remove_file(&path).unwrap();
+    let replacement = controller.quarantine_as(&held).unwrap();
+    drop(held);
+    assert!(path.exists(), "the replacement claim survives");
+    assert!(observer.unresolved().unwrap().is_empty());
+    drop(replacement);
+    assert!(!path.exists());
 }
