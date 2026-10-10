@@ -56,12 +56,23 @@ enum Command {
         #[arg(long)]
         socket: PathBuf,
     },
-    /// Inspect the helper account, configuration, endpoints and services; changes nothing.
+    /// Inspect the helper setup, or migrate capture to the private managed layout.
+    #[command(
+        long_about = "Without flags, report the helper account, configuration, endpoints and services without changing anything. --apply runs the unchanged capture daemon as a managed LaunchAgent on a private socket directory beside the existing job, moves input and the configuration over, then retires the old job, recording every step so an interruption resumes. --rollback restores the previous job and configuration."
+    )]
     Setup {
         /// Helper account short name. Defaults to the configured helper.
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["apply", "rollback"])]
         helper: Option<String>,
+        /// Migrate (or resume migrating) to the managed private layout.
+        #[arg(long, conflicts_with = "rollback")]
+        apply: bool,
+        /// Undo an applied or interrupted migration.
+        #[arg(long)]
+        rollback: bool,
     },
+    #[command(hide = true)]
+    SetupHelper { request: String },
     /// Print the resolved configuration (absolute paths) as JSON.
     Config,
     /// Read session identity and permissions without prompting.
@@ -187,9 +198,12 @@ async fn execute(cli: Cli) -> Result<Value> {
             controller_uid,
             socket,
         } => return input_service(uid, controller_uid, socket).await,
-        Command::Setup { helper } => {
-            return understudy::setup::preview(&cli.config, helper.as_deref()).await;
-        }
+        Command::SetupHelper { request } => return understudy::setup::helper::run(&request),
+        Command::Setup {
+            helper,
+            apply: false,
+            rollback: false,
+        } => return understudy::setup::preview(&cli.config, helper.as_deref()).await,
         command => command,
     };
     let client = Client::new(Config::load(&cli.config)?)?;
@@ -197,8 +211,18 @@ async fn execute(cli: Cli) -> Result<Value> {
         Command::InputService { .. }
         | Command::SessionInfo
         | Command::EnvironmentWorker { .. }
-        | Command::Setup { .. } => {
+        | Command::SetupHelper { .. } => {
             unreachable!("helper-side commands return above")
+        }
+        Command::Setup { apply, .. } => {
+            // Recovery ownership: the migration settles only the pending
+            // mutations its own log records and refuses any other.
+            let ownership = client.controller.acquire(true)?;
+            if apply {
+                understudy::setup::migrate::apply(&cli.config, &ownership).await
+            } else {
+                understudy::setup::migrate::rollback(&cli.config, &ownership).await
+            }
         }
         Command::Config => Ok(json!({ "ok": true, "config": client.config })),
         Command::Status => Ok(client.status().await),
