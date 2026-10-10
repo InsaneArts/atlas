@@ -2,6 +2,9 @@
 
 - Use the Rust library/CLI layout and fmt, clippy and test checks used by the
   neighboring markdown2pdf project. No Python runtime and no TUI.
+- unsafe code is denied crate-wide. Prefer safe crates (nix, objc2 bindings);
+  FFI that has none lives in a module or function marked
+  allow(unsafe_code) with its reason, and every unsafe block has a SAFETY note.
 - All controlled applications, screenshots and injected events belong to the
   configured hidden helper login. The browser viewer may run on the main desktop.
 - Keep UID, graphical-session, off-console and exact display-epoch guards.

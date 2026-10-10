@@ -37,7 +37,10 @@ enum Lookup {
     Uid(u32),
 }
 
+// FFI: getpw*_r, whose ERANGE nix misreads on macOS.
+#[allow(unsafe_code)]
 fn lookup(key: Lookup) -> Result<Option<Account>> {
+    // SAFETY: passwd is plain C data for which all-zero is a valid value.
     let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
     let mut found = std::ptr::null_mut();
     let mut buffer = Vec::new();
@@ -78,6 +81,7 @@ fn lookup(key: Lookup) -> Result<Option<Account>> {
     }
     // SAFETY: getpw*_r succeeded, so both fields are NUL-terminated strings.
     let text = |field| {
+        // SAFETY: see above.
         unsafe { CStr::from_ptr(field) }
             .to_string_lossy()
             .into_owned()
@@ -189,6 +193,8 @@ fn running_developer_id(pid: u32) -> bool {
     satisfies_developer_id(pid.to_string().as_ref())
 }
 
+// FFI: proc_pidpath has no safe binding.
+#[allow(unsafe_code)]
 fn executable_of(pid: u32) -> Option<PathBuf> {
     let mut buffer = vec![0_u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
     // SAFETY: the buffer is writable for the length passed.

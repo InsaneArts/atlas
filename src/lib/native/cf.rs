@@ -1,4 +1,6 @@
 //! Typed access to the dictionaries CoreGraphics returns.
+// FFI boundary: documented casts of CoreGraphics dictionaries and arrays.
+#![allow(unsafe_code)]
 pub use objc2_core_foundation::{
     CFArray, CFBoolean, CFDictionary, CFNumber, CFRetained, CFString, CFType, Type,
 };

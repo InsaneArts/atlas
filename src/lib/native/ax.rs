@@ -3,6 +3,8 @@
 //! keep an unresponsive app from hanging the probe; depth, count, children
 //! fetched and string lengths are capped before anything is copied. A scan
 //! that hit a limit or a communication failure reports itself incomplete.
+// FFI boundary: Accessibility reads return values through out-pointers.
+#![allow(unsafe_code)]
 use crate::error::{Error, Result};
 use objc2_application_services::{AXError, AXUIElement, AXValue, AXValueType};
 use objc2_core_foundation::{

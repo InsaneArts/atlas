@@ -1,4 +1,6 @@
 //! Darwin extended ACLs (sys/acl.h) behind one owned, freed-on-drop handle.
+// FFI boundary: macOS ACL functions have no safe binding.
+#![allow(unsafe_code)]
 use std::{
     ffi::{CStr, CString, c_char, c_int, c_void},
     fs::File,
@@ -81,7 +83,10 @@ impl Acl {
         while unsafe { acl_get_entry(self.0, index, &mut entry) } == 0 {
             index = ACL_NEXT_ENTRY;
             let (mut tag, mut mask) = (0, 0);
+            // SAFETY: `entry` was just returned for this live ACL; both
+            // outputs are valid for writes.
             if unsafe { acl_get_tag_type(entry, &mut tag) } != 0
+                // SAFETY: as above.
                 || unsafe { acl_get_permset_mask_np(entry, &mut mask) } != 0
             {
                 return Err(io::Error::last_os_error());
@@ -100,9 +105,11 @@ impl Acl {
         if text.is_null() {
             return Err(io::Error::last_os_error());
         }
+        // SAFETY: acl_to_text returned a NUL-terminated string (checked non-null).
         let owned = unsafe { CStr::from_ptr(text) }
             .to_string_lossy()
             .into_owned();
+        // SAFETY: frees the string acl_to_text allocated, once, after its last use.
         unsafe { acl_free(text.cast()) };
         Ok(owned)
     }

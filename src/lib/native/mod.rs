@@ -3,7 +3,9 @@
 use crate::error::{Error, Result};
 use serde_json::Value;
 
+// FFI: SessionGetInfo reports through out-pointers.
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 pub fn session_info() -> Result<Value> {
     use objc2_core_graphics::{CGDisplayBounds, CGMainDisplayID, CGSessionCopyCurrentDictionary};
     use objc2_security::{SessionAttributeBits, SessionGetInfo, callerSecuritySession};

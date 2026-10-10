@@ -1,4 +1,6 @@
 //! CoreGraphics input belongs to one private event source in the helper session.
+// FFI boundary: event engine Send, Accessibility trust and UTF-16 key text.
+#![allow(unsafe_code)]
 use super::{
     journal::{self, Held, Journal},
     lease::Grant,

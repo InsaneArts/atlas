@@ -3,6 +3,8 @@
 //! Without Screen Recording consent CoreGraphics still returns an image — of
 //! the wallpaper alone — so consent is checked first and an unconsented
 //! capture is refused rather than returned.
+// FFI boundary: bitmap context and ImageIO encoding.
+#![allow(unsafe_code)]
 use crate::error::{Error, Result};
 use objc2_core_foundation::{CFMutableData, CFRetained, CFString, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{
