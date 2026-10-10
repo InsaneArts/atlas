@@ -47,6 +47,11 @@ final class Companion: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             popover.performClose(nil)
         } else {
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            // No row is focused until the person presses Tab, as in menus;
+            // again once the popover has become key and picked its own.
+            let window = popover.contentViewController?.view.window
+            window?.makeFirstResponder(nil)
+            DispatchQueue.main.async { window?.makeFirstResponder(nil) }
             schedule(open: true)
         }
     }
@@ -82,7 +87,7 @@ final class Companion: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 guard let self else { return }
                 framePending = false
                 // A failed capture never leaves an old desktop on show.
-                panel.thumbnail.placeholder = "The helper desktop is unavailable"
+                panel.thumbnail.placeholder = "The helper’s screen is not available"
                 panel.thumbnail.image = frame.flatMap(NSImage.init(data:))
             }
         }

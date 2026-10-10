@@ -78,7 +78,7 @@ final class CommandTests: XCTestCase {
         let ok = try fake("echo '{\"ok\": true, \"args\": \"'\"$*\"'\"}'")
         let reply = outcome(ok, ["switch", "--list"])
         XCTAssertTrue(reply.ok)
-        XCTAssertEqual(reply.reply["args"] as? String, "switch --list")
+        XCTAssertEqual(reply.reply["args"] as? String, "--json switch --list")
         let refused = try fake("echo '{\"ok\": false, \"error\": \"busy\"}' >&2; exit 1")
         let failure = outcome(refused, ["restart"])
         XCTAssertFalse(failure.ok)

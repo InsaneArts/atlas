@@ -63,7 +63,8 @@ public struct Commands: Sendable {
         DispatchQueue.global(qos: .userInitiated).async {
             let process = Process()
             process.executableURL = executable
-            process.arguments = arguments
+            // Replies are always JSON, whatever the outputs are attached to.
+            process.arguments = ["--json"] + arguments
             let stdout = Pipe()
             let stderr = Pipe()
             process.standardOutput = stdout

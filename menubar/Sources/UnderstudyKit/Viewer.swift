@@ -56,7 +56,8 @@ public final class Viewer: @unchecked Sendable {
             let reply = object as? [String: Any]
             let failure =
                 reply?["ok"] as? Bool == true
-                ? nil : (reply?["error"] as? String ?? error?.localizedDescription ?? "Failed")
+                ? nil
+                : (reply?["error"] as? String ?? error?.localizedDescription ?? "It did not work")
             Task { @MainActor in done(failure) }
         }.resume()
     }
