@@ -1,7 +1,7 @@
 use crate::{
     actions,
     config::Config,
-    control::{Controller, SharedLease, write_private},
+    control::{Controller, Ownership, SharedLease, write_private},
     digest::file_sha256,
     error::{Error, Result},
     session::{Display, Epoch, Session, input_current, input_settled, require_hidden},
@@ -284,6 +284,25 @@ impl Client {
         } else {
             None
         };
+        self.input_inner(actions, expected, lease).await
+    }
+    /// Send one validated batch under controller ownership the caller already
+    /// holds, refusing unless the helper still has exactly `epoch`.
+    pub async fn input_owned(
+        &self,
+        _ownership: &Ownership,
+        actions: &Value,
+        epoch: &Epoch,
+    ) -> Result<Value> {
+        self.input_inner(actions, Some((epoch, Instant::now())), None)
+            .await
+    }
+    async fn input_inner(
+        &self,
+        actions: &Value,
+        expected: Option<(&Epoch, Instant)>,
+        lease: Option<(&SharedLease, &str)>,
+    ) -> Result<Value> {
         self.controller.require_known()?;
         // A viewer's fresh observation is already tied to its acquired lease.
         // The native process validates that exact epoch again before every event.
@@ -339,13 +358,18 @@ impl Client {
         result
     }
     pub async fn run(&self, argv: Vec<String>) -> Result<Value> {
+        let ownership = self.controller.acquire(false)?;
+        self.run_owned(&ownership, argv).await
+    }
+    /// Execute argv in the verified hidden helper as a recorded mutation under
+    /// controller ownership the caller already holds.
+    pub async fn run_owned(&self, _ownership: &Ownership, argv: Vec<String>) -> Result<Value> {
         if argv.is_empty() || argv[0].is_empty() || argv.iter().any(|a| a.contains('\0')) {
             return Err(Error::new(
                 "input",
                 "Provide a command and arguments after run --",
             ));
         }
-        let _ownership = self.controller.acquire(false)?;
         self.identity().await?;
         self.mutate(
             json!({"op": "run", "argv": argv, "timeoutMs": 20000}),
