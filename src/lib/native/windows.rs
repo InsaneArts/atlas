@@ -1,63 +1,12 @@
 //! On-screen windows of the current graphical session, front to back, read
 //! inside the helper login through CGWindowList. Read-only; titles appear only
 //! where the session's capture permission allows them.
-use crate::error::{Error, Result};
+use crate::{
+    error::{Error, Result},
+    native::cf,
+};
+use objc2_core_graphics::{CGWindowListCopyWindowInfo, CGWindowListOption};
 use serde::{Deserialize, Serialize};
-use std::ffi::{c_char, c_void};
-
-type CfRef = *const c_void;
-
-#[repr(C)]
-#[derive(Default)]
-struct Point {
-    x: f64,
-    y: f64,
-}
-#[repr(C)]
-#[derive(Default)]
-struct Size {
-    width: f64,
-    height: f64,
-}
-#[repr(C)]
-#[derive(Default)]
-struct Rect {
-    origin: Point,
-    size: Size,
-}
-
-#[link(name = "CoreGraphics", kind = "framework")]
-unsafe extern "C" {
-    fn CGWindowListCopyWindowInfo(option: u32, relative_to: u32) -> CfRef;
-    fn CGRectMakeWithDictionaryRepresentation(dictionary: CfRef, rect: *mut Rect) -> bool;
-    static kCGWindowNumber: CfRef;
-    static kCGWindowOwnerPID: CfRef;
-    static kCGWindowOwnerName: CfRef;
-    static kCGWindowName: CfRef;
-    static kCGWindowLayer: CfRef;
-    static kCGWindowAlpha: CfRef;
-    static kCGWindowBounds: CfRef;
-}
-#[link(name = "CoreFoundation", kind = "framework")]
-unsafe extern "C" {
-    fn CFArrayGetCount(array: CfRef) -> isize;
-    fn CFArrayGetValueAtIndex(array: CfRef, index: isize) -> CfRef;
-    fn CFDictionaryGetValue(dictionary: CfRef, key: CfRef) -> CfRef;
-    fn CFNumberGetValue(number: CfRef, kind: isize, value: *mut c_void) -> bool;
-    fn CFStringGetLength(string: CfRef) -> isize;
-    fn CFStringGetMaximumSizeForEncoding(length: isize, encoding: u32) -> isize;
-    fn CFStringGetCString(string: CfRef, buffer: *mut c_char, size: isize, encoding: u32) -> bool;
-    fn CFGetTypeID(value: CfRef) -> usize;
-    fn CFNumberGetTypeID() -> usize;
-    fn CFStringGetTypeID() -> usize;
-    fn CFRelease(value: CfRef);
-}
-
-const ON_SCREEN_ONLY: u32 = 1 << 0;
-const EXCLUDE_DESKTOP: u32 = 1 << 4;
-const SINT64: isize = 4;
-const FLOAT64: isize = 13;
-const UTF8: u32 = 0x0800_0100;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -91,88 +40,37 @@ pub struct Window {
     pub bounds: Bounds,
 }
 
-/// SAFETY: `dictionary` must be a live CFDictionary and `key` a CFString.
-unsafe fn cf_number(dictionary: CfRef, key: CfRef, kind: isize) -> Option<f64> {
-    // SAFETY: per the function contract; the value is borrowed and type-checked.
-    unsafe {
-        let value = CFDictionaryGetValue(dictionary, key);
-        if value.is_null() || CFGetTypeID(value) != CFNumberGetTypeID() {
-            return None;
-        }
-        if kind == FLOAT64 {
-            let mut out = 0f64;
-            CFNumberGetValue(value, FLOAT64, (&mut out as *mut f64).cast()).then_some(out)
-        } else {
-            let mut out = 0i64;
-            CFNumberGetValue(value, SINT64, (&mut out as *mut i64).cast()).then_some(out as f64)
-        }
-    }
-}
-
-/// SAFETY: `dictionary` must be a live CFDictionary and `key` a CFString.
-unsafe fn cf_string(dictionary: CfRef, key: CfRef) -> Option<String> {
-    // SAFETY: per the function contract; the buffer is sized for the encoding.
-    unsafe {
-        let value = CFDictionaryGetValue(dictionary, key);
-        if value.is_null() || CFGetTypeID(value) != CFStringGetTypeID() {
-            return None;
-        }
-        let size = CFStringGetMaximumSizeForEncoding(CFStringGetLength(value), UTF8) + 1;
-        let mut buffer = vec![0 as c_char; usize::try_from(size).ok()?];
-        if !CFStringGetCString(value, buffer.as_mut_ptr(), size, UTF8) {
-            return None;
-        }
-        Some(
-            std::ffi::CStr::from_ptr(buffer.as_ptr())
-                .to_string_lossy()
-                .into_owned(),
-        )
-    }
+/// One window-list entry, if it carries the fields every window has.
+fn read_window(entry: &cf::Record) -> Option<Window> {
+    // The bounds dictionary holds X, Y, Width and Height as numbers.
+    let bounds = cf::nested(entry, "kCGWindowBounds")?;
+    let side = |key| cf::float(&bounds, key);
+    Some(Window {
+        number: cf::integer(entry, "kCGWindowNumber")?,
+        pid: cf::integer(entry, "kCGWindowOwnerPID")?,
+        owner: cf::text(entry, "kCGWindowOwnerName"),
+        title: cf::text(entry, "kCGWindowName"),
+        layer: cf::integer(entry, "kCGWindowLayer")?,
+        alpha: cf::float(entry, "kCGWindowAlpha").unwrap_or(1.0),
+        bounds: Bounds {
+            x: side("X")?,
+            y: side("Y")?,
+            width: side("Width")?,
+            height: side("Height")?,
+        },
+    })
 }
 
 /// On-screen windows in front-to-back order.
 pub fn windows() -> Result<Vec<Window>> {
-    // SAFETY: Copy returns an owned CFArray (or null), released below; every
-    // element is a borrowed CFDictionary valid while the array lives.
-    unsafe {
-        let array = CGWindowListCopyWindowInfo(ON_SCREEN_ONLY | EXCLUDE_DESKTOP, 0);
-        if array.is_null() {
-            return Err(Error::new("windows", "The window list is unavailable"));
-        }
-        let mut windows = Vec::new();
-        for index in 0..CFArrayGetCount(array) {
-            let entry = CFArrayGetValueAtIndex(array, index);
-            let mut rect = Rect::default();
-            let bounds = CFDictionaryGetValue(entry, kCGWindowBounds);
-            if bounds.is_null() || !CGRectMakeWithDictionaryRepresentation(bounds, &mut rect) {
-                continue;
-            }
-            let field = |key| cf_number(entry, key, SINT64).map(|value| value as i64);
-            let (Some(number), Some(pid), Some(layer)) = (
-                field(kCGWindowNumber),
-                field(kCGWindowOwnerPID),
-                field(kCGWindowLayer),
-            ) else {
-                continue;
-            };
-            windows.push(Window {
-                number,
-                pid,
-                owner: cf_string(entry, kCGWindowOwnerName),
-                title: cf_string(entry, kCGWindowName),
-                layer,
-                alpha: cf_number(entry, kCGWindowAlpha, FLOAT64).unwrap_or(1.0),
-                bounds: Bounds {
-                    x: rect.origin.x,
-                    y: rect.origin.y,
-                    width: rect.size.width,
-                    height: rect.size.height,
-                },
-            });
-        }
-        CFRelease(array);
-        Ok(windows)
-    }
+    let options =
+        CGWindowListOption::OptionOnScreenOnly | CGWindowListOption::ExcludeDesktopElements;
+    let list = CGWindowListCopyWindowInfo(options, 0)
+        .ok_or_else(|| Error::new("windows", "The window list is unavailable"))?;
+    Ok(cf::records(list)
+        .iter()
+        .filter_map(|entry| read_window(&entry))
+        .collect())
 }
 
 /// Whether the point lies inside window `target` with nothing in front of it
@@ -230,6 +128,39 @@ pub fn frontmost_pid(windows: &[Window]) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The literal keys read here are the framework's exported constants.
+    #[test]
+    fn window_keys_match_the_framework_constants() {
+        use objc2_core_graphics::{
+            kCGWindowAlpha, kCGWindowBounds, kCGWindowLayer, kCGWindowName, kCGWindowNumber,
+            kCGWindowOwnerName, kCGWindowOwnerPID,
+        };
+        // SAFETY: reading immutable framework constants in a test.
+        let constants = unsafe {
+            [
+                kCGWindowNumber,
+                kCGWindowOwnerPID,
+                kCGWindowOwnerName,
+                kCGWindowName,
+                kCGWindowLayer,
+                kCGWindowAlpha,
+                kCGWindowBounds,
+            ]
+        };
+        let names = [
+            "kCGWindowNumber",
+            "kCGWindowOwnerPID",
+            "kCGWindowOwnerName",
+            "kCGWindowName",
+            "kCGWindowLayer",
+            "kCGWindowAlpha",
+            "kCGWindowBounds",
+        ];
+        for (constant, name) in constants.into_iter().zip(names) {
+            assert_eq!(constant.to_string(), name);
+        }
+    }
 
     fn window(number: i64, x: f64, y: f64, width: f64, height: f64) -> Window {
         Window {
@@ -321,6 +252,58 @@ mod tests {
         );
         assert_eq!(frontmost_pid(&windows), Some(2));
         assert_eq!(frontmost_pid(&windows[..1]), None);
+    }
+
+    /// Window dictionaries are read through the same keys CoreGraphics uses.
+    #[test]
+    fn window_entries_read_through_typed_keys() {
+        use crate::native::cf::{CFDictionary, CFNumber, CFString, CFType};
+        let number = |value: f64| CFNumber::new_f64(value);
+        let keys = ["X", "Y", "Width", "Height"].map(CFString::from_static_str);
+        let sides = [number(1.0), number(2.0), number(30.0), number(40.0)];
+        let bounds = CFDictionary::<CFString, CFNumber>::from_slices(
+            &keys.iter().map(|key| &**key).collect::<Vec<_>>(),
+            &sides.iter().map(|side| &**side).collect::<Vec<_>>(),
+        );
+        let names = [
+            "kCGWindowNumber",
+            "kCGWindowOwnerPID",
+            "kCGWindowLayer",
+            "kCGWindowOwnerName",
+            "kCGWindowBounds",
+        ]
+        .map(CFString::from_static_str);
+        let (seven, pid, layer) = (
+            CFNumber::new_i64(7),
+            CFNumber::new_i64(99),
+            CFNumber::new_i64(0),
+        );
+        let owner = CFString::from_static_str("Finder");
+        let values: [&CFType; 5] = [
+            seven.as_ref(),
+            pid.as_ref(),
+            layer.as_ref(),
+            owner.as_ref(),
+            bounds.as_opaque().as_ref(),
+        ];
+        let entry = CFDictionary::<CFString, CFType>::from_slices(
+            &names.iter().map(|name| &**name).collect::<Vec<_>>(),
+            &values,
+        );
+        let read = read_window(&entry).unwrap();
+        assert_eq!((read.number, read.pid, read.layer), (7, 99, 0));
+        assert_eq!(read.owner.as_deref(), Some("Finder"));
+        assert_eq!(read.title, None);
+        assert_eq!(read.alpha, 1.0);
+        assert_eq!(
+            read.bounds,
+            Bounds {
+                x: 1.0,
+                y: 2.0,
+                width: 30.0,
+                height: 40.0
+            }
+        );
     }
 
     #[test]

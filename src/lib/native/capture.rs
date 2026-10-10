@@ -3,74 +3,17 @@
 //! Without Screen Recording consent CoreGraphics still returns an image — of
 //! the wallpaper alone — so consent is checked first and an unconsented
 //! capture is refused rather than returned.
-use crate::{
-    error::{Error, Result},
-    native::cf::{self, CfRef, Owned},
+use crate::error::{Error, Result};
+use objc2_core_foundation::{CFMutableData, CFRetained, CFString, CGPoint, CGRect, CGSize};
+use objc2_core_graphics::{
+    CGBitmapContextCreate, CGBitmapContextCreateImage, CGColorSpace, CGContext, CGDisplayBounds,
+    CGImage, CGInterpolationQuality, CGMainDisplayID, CGPreflightScreenCaptureAccess,
+    CGRequestScreenCaptureAccess,
 };
-use std::ffi::c_void;
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct Point {
-    x: f64,
-    y: f64,
-}
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct Size {
-    width: f64,
-    height: f64,
-}
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct Rect {
-    origin: Point,
-    size: Size,
-}
-
-#[link(name = "CoreGraphics", kind = "framework")]
-unsafe extern "C" {
-    fn CGPreflightScreenCaptureAccess() -> bool;
-    fn CGRequestScreenCaptureAccess() -> bool;
-    fn CGMainDisplayID() -> u32;
-    fn CGDisplayBounds(display: u32) -> Rect;
-    fn CGDisplayCreateImage(display: u32) -> CfRef;
-    fn CGImageGetWidth(image: CfRef) -> usize;
-    fn CGImageGetHeight(image: CfRef) -> usize;
-    fn CGColorSpaceCreateWithName(name: CfRef) -> CfRef;
-    fn CGBitmapContextCreate(
-        data: *mut c_void,
-        width: usize,
-        height: usize,
-        bits_per_component: usize,
-        bytes_per_row: usize,
-        space: CfRef,
-        bitmap_info: u32,
-    ) -> CfRef;
-    fn CGContextSetInterpolationQuality(context: CfRef, quality: i32);
-    fn CGContextDrawImage(context: CfRef, rect: Rect, image: CfRef);
-    fn CGBitmapContextCreateImage(context: CfRef) -> CfRef;
-    static kCGColorSpaceSRGB: CfRef;
-}
-#[link(name = "ImageIO", kind = "framework")]
-unsafe extern "C" {
-    fn CGImageDestinationCreateWithData(
-        data: CfRef,
-        kind: CfRef,
-        count: usize,
-        options: CfRef,
-    ) -> CfRef;
-    fn CGImageDestinationAddImage(destination: CfRef, image: CfRef, properties: CfRef);
-    fn CGImageDestinationFinalize(destination: CfRef) -> bool;
-}
-#[link(name = "CoreFoundation", kind = "framework")]
-unsafe extern "C" {
-    fn CFDataCreateMutable(allocator: CfRef, capacity: isize) -> CfRef;
-}
+use objc2_image_io::CGImageDestination;
 
 /// premultipliedFirst | byteOrder32Little: the native BGRA layout.
 const BGRA: u32 = 2 | (2 << 12);
-const HIGH_QUALITY: i32 = 3;
 
 /// One encoded screenshot.
 pub struct Shot {
@@ -83,16 +26,14 @@ pub struct Shot {
 
 /// Whether this process may record the screen.
 pub fn permitted() -> bool {
-    // SAFETY: no arguments; only reads this process's consent.
-    unsafe { CGPreflightScreenCaptureAccess() }
+    CGPreflightScreenCaptureAccess()
 }
 
 /// Ask macOS for Screen Recording, so Understudy appears in System Settings
 /// with a prompt in the helper's session. Returns whether it is allowed now;
 /// a grant takes effect for the next process.
 pub fn request() -> bool {
-    // SAFETY: no arguments; shows the system prompt at most once.
-    unsafe { CGRequestScreenCaptureAccess() }
+    CGRequestScreenCaptureAccess()
 }
 
 /// The size `width`×`height` scales to so that neither side exceeds `limit`,
@@ -110,58 +51,56 @@ pub fn fit(width: usize, height: usize, limit: Option<u32>) -> (usize, usize) {
     (side(width), side(height))
 }
 
-/// Draw `image` into a new `width`×`height` sRGB bitmap.
-fn scaled(image: &Owned, width: usize, height: usize) -> Result<Owned> {
-    let failed = || Error::new("capture", "The screenshot could not be scaled");
-    // SAFETY: every reference is checked non-null and owned; the rectangle
-    // covers exactly the new bitmap.
+/// The sRGB color space, by its documented name.
+fn srgb() -> Option<CFRetained<CGColorSpace>> {
+    CGColorSpace::with_name(Some(&CFString::from_static_str("kCGColorSpaceSRGB")))
+}
+
+/// An empty `width`×`height` BGRA sRGB bitmap context.
+fn bitmap(width: usize, height: usize) -> Option<CFRetained<CGContext>> {
+    let space = srgb()?;
+    // SAFETY: a null data pointer asks CoreGraphics to allocate and own the
+    // pixel buffer; the other arguments describe a standard BGRA layout.
     unsafe {
-        let space =
-            Owned::adopt(CGColorSpaceCreateWithName(kCGColorSpaceSRGB)).ok_or_else(failed)?;
-        let context = Owned::adopt(CGBitmapContextCreate(
+        CGBitmapContextCreate(
             std::ptr::null_mut(),
             width,
             height,
             8,
             0,
-            space.get(),
+            Some(&space),
             BGRA,
-        ))
-        .ok_or_else(failed)?;
-        CGContextSetInterpolationQuality(context.get(), HIGH_QUALITY);
-        let rect = Rect {
-            origin: Point { x: 0.0, y: 0.0 },
-            size: Size {
-                width: width as f64,
-                height: height as f64,
-            },
-        };
-        CGContextDrawImage(context.get(), rect, image.get());
-        Owned::adopt(CGBitmapContextCreateImage(context.get())).ok_or_else(failed)
+        )
     }
 }
 
+/// Draw `image` into a new `width`×`height` sRGB bitmap.
+fn scaled(image: &CGImage, width: usize, height: usize) -> Result<CFRetained<CGImage>> {
+    let failed = || Error::new("capture", "The screenshot could not be scaled");
+    let context = bitmap(width, height).ok_or_else(failed)?;
+    CGContext::set_interpolation_quality(Some(&context), CGInterpolationQuality::High);
+    let rect = CGRect::new(CGPoint::ZERO, CGSize::new(width as f64, height as f64));
+    CGContext::draw_image(Some(&context), rect, Some(image));
+    CGBitmapContextCreateImage(Some(&context)).ok_or_else(failed)
+}
+
 /// `image` encoded as PNG.
-fn png(image: &Owned) -> Result<Vec<u8>> {
+fn png(image: &CGImage) -> Result<Vec<u8>> {
     let failed = || Error::new("capture", "The screenshot could not be encoded");
-    // SAFETY: references are checked non-null and owned; the destination is
-    // finalized before its data is read.
-    unsafe {
-        let data = Owned::adopt(CFDataCreateMutable(std::ptr::null(), 0)).ok_or_else(failed)?;
-        let kind = cf::string(c"public.png").ok_or_else(failed)?;
-        let destination = Owned::adopt(CGImageDestinationCreateWithData(
-            data.get(),
-            kind.get(),
-            1,
-            std::ptr::null(),
-        ))
-        .ok_or_else(failed)?;
-        CGImageDestinationAddImage(destination.get(), image.get(), std::ptr::null());
-        if !CGImageDestinationFinalize(destination.get()) {
-            return Err(failed());
-        }
-        Ok(cf::bytes(data.get()))
+    let data = CFMutableData::new(None, 0).ok_or_else(failed)?;
+    let kind = CFString::from_static_str("public.png");
+    // SAFETY: a live mutable data and type identifier, one image, and no
+    // options or properties dictionaries.
+    let finished = unsafe {
+        let destination =
+            CGImageDestination::with_data(&data, &kind, 1, None).ok_or_else(failed)?;
+        destination.add_image(image, None);
+        destination.finalize()
+    };
+    if !finished {
+        return Err(failed());
     }
+    Ok(data.to_vec())
 }
 
 /// The main display, at most `limit` pixels on its longest side.
@@ -172,18 +111,14 @@ pub fn main_display(limit: Option<u32>) -> Result<Shot> {
             "Screen Recording is not allowed for Understudy in the helper account",
         ));
     }
-    // SAFETY: the display ID comes from the system; Create returns an owned
-    // image or null.
-    let (image, points) = unsafe {
-        let display = CGMainDisplayID();
-        (
-            Owned::adopt(CGDisplayCreateImage(display)),
-            CGDisplayBounds(display).size,
-        )
-    };
-    let image = image.ok_or_else(|| Error::new("capture", "The display could not be captured"))?;
-    // SAFETY: a live image.
-    let (width, height) = unsafe { (CGImageGetWidth(image.get()), CGImageGetHeight(image.get())) };
+    let display = CGMainDisplayID();
+    let points = CGDisplayBounds(display).size;
+    // Deprecated for ScreenCaptureKit, but still a synchronous, consent-gated
+    // capture of exactly this display on current macOS (qualified live).
+    #[allow(deprecated)]
+    let image = objc2_core_graphics::CGDisplayCreateImage(display)
+        .ok_or_else(|| Error::new("capture", "The display could not be captured"))?;
+    let (width, height) = (CGImage::width(Some(&image)), CGImage::height(Some(&image)));
     let scale = if points.width > 0.0 {
         width as f64 / points.width
     } else {
@@ -195,11 +130,12 @@ pub fn main_display(limit: Option<u32>) -> Result<Shot> {
     } else {
         scaled(&image, target_width, target_height)?
     };
+    let size =
+        |side: usize| u32::try_from(side).map_err(|_| Error::new("capture", "Image too large"));
     Ok(Shot {
         png: png(&image)?,
-        width: u32::try_from(target_width).map_err(|_| Error::new("capture", "Image too large"))?,
-        height: u32::try_from(target_height)
-            .map_err(|_| Error::new("capture", "Image too large"))?,
+        width: size(target_width)?,
+        height: size(target_height)?,
         scale,
     })
 }
@@ -219,24 +155,13 @@ mod tests {
 
     #[test]
     fn a_bitmap_scales_and_encodes_as_png() {
+        assert!(srgb().is_some(), "the sRGB name resolves");
         // A real image from a bitmap context stands in for a display capture.
-        unsafe {
-            let space = Owned::adopt(CGColorSpaceCreateWithName(kCGColorSpaceSRGB)).unwrap();
-            let context = Owned::adopt(CGBitmapContextCreate(
-                std::ptr::null_mut(),
-                64,
-                36,
-                8,
-                0,
-                space.get(),
-                BGRA,
-            ))
-            .unwrap();
-            let image = Owned::adopt(CGBitmapContextCreateImage(context.get())).unwrap();
-            let small = scaled(&image, 32, 18).unwrap();
-            let encoded = png(&small).unwrap();
-            let (width, height) = crate::client::png_dimensions(&encoded).unwrap();
-            assert_eq!((width, height), (32, 18));
-        }
+        let context = bitmap(64, 36).unwrap();
+        let image = CGBitmapContextCreateImage(Some(&context)).unwrap();
+        let small = scaled(&image, 32, 18).unwrap();
+        let encoded = png(&small).unwrap();
+        let (width, height) = crate::client::png_dimensions(&encoded).unwrap();
+        assert_eq!((width, height), (32, 18));
     }
 }
