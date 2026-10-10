@@ -72,6 +72,8 @@ pub struct Engine {
     held_keys: Vec<u16>,
     position: Point,
     click_count: u8,
+    mouse_number: i64,
+    drag_started: bool,
     flags: u64,
 }
 // SAFETY: Engine is exclusively accessed under the service mutex; no event or
@@ -91,6 +93,8 @@ impl Engine {
             held_keys: Vec::new(),
             position: Point { x: 0.0, y: 0.0 },
             click_count: 1,
+            mouse_number: 0,
+            drag_started: false,
             flags: 0,
         };
         if engine.epoch.uid != uid {
@@ -127,6 +131,7 @@ impl Engine {
             self.held_keys = held.keys;
             self.flags = held.flags;
             self.click_count = held.count;
+            self.mouse_number = held.mouse_number;
             self.position = Point {
                 x: held.x.clamp(0.0, self.epoch.width - 1.0),
                 y: held.y.clamp(0.0, self.epoch.height - 1.0),
@@ -157,6 +162,7 @@ impl Engine {
                 x: point.x,
                 y: point.y,
                 count: self.click_count,
+                mouse_number: self.mouse_number,
                 flags,
             })?;
         }
@@ -199,6 +205,8 @@ impl Engine {
             CGEventCreateMouseEvent(self.source.0, kind, point, button.number())
         })?;
         unsafe {
+            // A press, its drag events, and its release share one event number.
+            CGEventSetIntegerValueField(event.0, 0, self.mouse_number); // mouseEventNumber
             CGEventSetIntegerValueField(event.0, 1, count.into()); // mouseEventClickState
             CGEventSetIntegerValueField(
                 event.0,
@@ -225,6 +233,7 @@ impl Engine {
         if let Some(button) = self.held {
             self.mouse(button.up(), self.position, button, self.click_count, 0)?;
             self.held = None;
+            self.drag_started = false;
         }
         while let Some(&code) = self.held_keys.last() {
             self.key_event(code, false, 0, None)?;
@@ -236,7 +245,7 @@ impl Engine {
     pub fn held_input(&self) -> bool {
         self.held.is_some() || !self.held_keys.is_empty() || self.flags != 0
     }
-    fn pointer(
+    async fn pointer(
         &mut self,
         phase: PointerPhase,
         point: Point,
@@ -253,11 +262,34 @@ impl Engine {
                 self.mouse(5, point, button, count, flags)?;
                 self.position = point;
                 self.held = Some(button);
+                self.mouse_number = self.mouse_number.checked_add(1).unwrap_or(1);
+                self.drag_started = false;
                 self.click_count = count;
                 self.mouse(button.down(), point, button, count, flags)?;
             }
             PointerPhase::Move => {
                 let active = self.held.unwrap_or(button);
+                if self.held.is_some()
+                    && !self.drag_started
+                    && (point.x != self.position.x || point.y != self.position.y)
+                {
+                    // AppKit establishes native window tracking at the first
+                    // dragged location. Bound that initial step to one point
+                    // so a sparse viewer stream does not lose its first jump.
+                    // A stationary click never enters this path.
+                    let anchor = Point {
+                        x: self.position.x + (point.x - self.position.x).clamp(-1.0, 1.0),
+                        y: self.position.y + (point.y - self.position.y).clamp(-1.0, 1.0),
+                    };
+                    self.mouse(active.dragged(), anchor, active, self.click_count, flags)?;
+                    self.position = anchor;
+                    self.drag_started = true;
+                    self.commit()?;
+                    if anchor.x == point.x && anchor.y == point.y {
+                        return Ok(());
+                    }
+                    self.delay(Duration::from_millis(10)).await?;
+                }
                 self.mouse(
                     if self.held.is_some() {
                         active.dragged()
@@ -283,6 +315,7 @@ impl Engine {
                 }
                 self.mouse(button.up(), point, button, self.click_count, flags)?;
                 self.held = None;
+                self.drag_started = false;
                 self.position = point;
                 self.release_modifiers()?;
             }
@@ -339,9 +372,13 @@ impl Engine {
                 button,
                 modifiers,
                 count,
-            } => self.pointer(phase, Point { x, y }, button, &modifiers, count)?,
+            } => {
+                self.pointer(phase, Point { x, y }, button, &modifiers, count)
+                    .await?
+            }
             Action::Move { x, y } => {
-                self.pointer(PointerPhase::Move, Point { x, y }, Button::Left, &[], 1)?
+                self.pointer(PointerPhase::Move, Point { x, y }, Button::Left, &[], 1)
+                    .await?
             }
             Action::Click {
                 x,
@@ -357,8 +394,10 @@ impl Engine {
                         button,
                         &modifiers,
                         click,
-                    )?;
-                    self.pointer(PointerPhase::Up, Point { x, y }, button, &modifiers, click)?;
+                    )
+                    .await?;
+                    self.pointer(PointerPhase::Up, Point { x, y }, button, &modifiers, click)
+                        .await?;
                     if click < count {
                         self.delay(Duration::from_millis(60)).await?;
                     }
@@ -380,7 +419,8 @@ impl Engine {
                     button,
                     &[],
                     1,
-                )?;
+                )
+                .await?;
                 self.delay(Duration::from_millis(80)).await?;
                 for step in 1..=24 {
                     let t = f64::from(step) / 24.0;
@@ -393,13 +433,16 @@ impl Engine {
                         button,
                         &[],
                         1,
-                    )?;
+                    )
+                    .await?;
                     self.delay(Duration::from_millis(16)).await?;
                 }
-                self.pointer(PointerPhase::Up, Point { x: to_x, y: to_y }, button, &[], 1)?;
+                self.pointer(PointerPhase::Up, Point { x: to_x, y: to_y }, button, &[], 1)
+                    .await?;
             }
             Action::Scroll { x, y, dx, dy } => {
-                self.pointer(PointerPhase::Move, Point { x, y }, Button::Left, &[], 1)?;
+                self.pointer(PointerPhase::Move, Point { x, y }, Button::Left, &[], 1)
+                    .await?;
                 let event = Owned::new(unsafe {
                     CGEventCreateScrollWheelEvent2(self.source.0, 1, 2, dy, dx, 0)
                 })?;

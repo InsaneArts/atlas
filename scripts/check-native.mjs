@@ -27,6 +27,46 @@ const browser = await chromium.launch({
     process.env.UNDERSTUDY_CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
 });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
+let acquiredLease = null;
+let pendingAcquire = null;
+
+async function readStatus() {
+  const response = await fetch(url + 'status.json', { signal: AbortSignal.timeout(5000) });
+  assert.equal(response.status, 200, 'Viewer status request failed');
+  return response.json();
+}
+function sessionEpoch(status) {
+  assert.equal(status.ready, true, 'Hidden session is not ready');
+  const session = status.session;
+  assert.equal(session.user.uid, setup.session.user.uid, 'Helper UID changed');
+  assert.equal(session.session.onConsole, false);
+  assert.equal(session.sessionProof.onConsole, false);
+  assert.equal(session.inputService.session.onConsole, false);
+  return {
+    uid: session.user.uid,
+    securitySessionID: session.sessionProof.securitySessionID,
+    displayID: session.sessionProof.displayID,
+    display: session.display,
+    capturePID: session.daemon.pid,
+    inputPID: session.inputService.pid,
+  };
+}
+function sameExistingPath(left, right) {
+  return typeof left === 'string' && fs.realpathSync(left) === fs.realpathSync(right);
+}
+async function closeBrowser() {
+  let timer;
+  try {
+    await Promise.race([
+      browser.close(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Browser did not close within 5 seconds')), 5000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function windowRect(value) {
   return {
@@ -143,81 +183,317 @@ function tracking(before, from, samples) {
     maximumTrackingErrorAfterActivation: Math.max(...errors),
   };
 }
-function saveEvents() {
+function panelEvents(attemptID) {
   return fs
     .readFileSync(path.join(setup.logDirectory, 'events.jsonl'), 'utf8')
-    .trim()
     .split('\n')
+    .slice(0, -1)
     .map(JSON.parse)
-    .filter((event) => event.event.startsWith('save'));
+    .filter((event) => event.attemptID === attemptID);
 }
 async function until(predicate, message) {
   const deadline = Date.now() + 4000;
   while (Date.now() < deadline) {
-    if (predicate()) return;
+    const value = predicate();
+    if (value) return value;
     await wait(30);
   }
   throw new Error(message);
 }
-async function checkSave() {
-  const initial = await center();
-  const expectedPath = path.join(setup.logDirectory, 'understudy-fixture.txt');
-  const expectedText = 'Understudy native Save — ქართული 日本語 🧑🏽‍💻 é';
+function currentPanel(attemptID) {
+  const panel = state().panel;
+  assert.equal(panel?.attemptID, attemptID, 'Native panel attempt changed');
+  return panel;
+}
+function completion(attemptID, kind) {
+  return panelEvents(attemptID).find((event) => event.event === kind + 'Closed');
+}
+function observerSnapshot() {
+  try {
+    return JSON.parse(
+      fs.readFileSync(path.join(setup.logDirectory, 'panel-observer.json'), 'utf8'),
+    );
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+function observedPanel(attemptID, after = 0) {
+  const observed = observerSnapshot();
+  if (!observed) return null;
+  const fixture = state();
   assert.equal(
-    fs.existsSync(expectedPath),
-    false,
-    'Prepare a fresh fixture; output already exists',
+    observed.scanScope,
+    'dialog-controls-without-file-list-contents',
+    'Rebuild the fixture with bounded dialog-control observation',
   );
-  const text = {
-    x: initial.windowX + 100,
-    y: setup.session.display.height - initial.windowY - 520,
-  };
-  await pointer('hover', text);
-  await pointer('down', text);
-  await pointer('up', text);
-  await page.keyboard.press('Meta+A');
-  await page.keyboard.insertText(expectedText);
-  await until(() => state().text === expectedText, 'Fixture text did not arrive');
-  const previousEvents = saveEvents().length;
-  await page.keyboard.press('Meta+s');
-  await until(() => saveEvents().length > previousEvents, 'Save panel did not open');
-  await until(() => state().modifierFlags === 0, 'Save shortcut left modifiers held');
-  const status = await (await page.request.get(url + 'status.json')).json();
-  assert.equal(status.session.inputService.heldInput, false);
-  assert.equal(status.session.inputService.session.onConsole, false);
-  await wait(200);
-  await capture('native-save-before.png');
-  await page.keyboard.press('Enter');
-  await wait(1000);
-  const fileExists = fs.existsSync(expectedPath);
-  const contents = fileExists ? fs.readFileSync(expectedPath, 'utf8') : null;
-  const after = state();
-  await capture('native-save-after.png');
+  assert.equal(observed.parentPID, setup.fixturePID, 'Observer target changed');
+  assert.equal(observed.uid, setup.session.user.uid, 'Observer UID changed');
+  assert.equal(observed.fixtureID, fixture.fixtureID, 'Observer fixture instance changed');
+  assert.equal(observed.observerPID, fixture.observerPID, 'Observer process changed');
+  const now = Date.now();
+  if (
+    observed.attemptID !== attemptID ||
+    !observed.trusted ||
+    observed.startedAt < after ||
+    observed.startedAt > now ||
+    observed.finishedAt < observed.startedAt ||
+    now - observed.finishedAt > 1500 ||
+    observed.finishedAt - observed.startedAt > 1700
+  )
+    return null;
+  return observed;
+}
+function panelButton(observed, title) {
+  const matches = observed.controls.filter(
+    (control) => control.role === 'AXButton' && control.title === title,
+  );
+  return matches.length === 1 ? matches[0] : null;
+}
+function sheetCount(observed) {
+  return observed.controls.filter((control) => control.role === 'AXSheet').length;
+}
+async function closePanel(attemptID, kind) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const panel = currentPanel(attemptID);
+    const after = Date.now();
+    if (panel.response == null) await page.keyboard.press('Escape');
+    try {
+      await until(() => {
+        const observed = observedPanel(attemptID, after);
+        return (
+          completion(attemptID, kind) &&
+          !currentPanel(attemptID).presented &&
+          observed?.scanComplete &&
+          observed.ownerWindowPresent &&
+          !observed.panelExists
+        );
+      }, 'Current panel did not complete and disappear from both AppKit and AX');
+      return;
+    } catch (error) {
+      // The first Escape may close a nested Go to Folder sheet. Never treat
+      // its disappearance, or another attempt's callback, as panel completion.
+      if (attempt === 1 || currentPanel(attemptID).response != null) throw error;
+    }
+  }
+}
+async function checkPanel(kind) {
+  const initial = await center();
+  assert.equal(initial.panelInstrumentationVersion, 2, 'Rebuild the native panel fixture');
+  const directory = fs.realpathSync(setup.logDirectory);
+  const expectedPath = path.join(
+    directory,
+    kind === 'save' ? 'understudy-fixture.txt' : 'understudy-open-fixture.txt',
+  );
+  const expectedText =
+    kind === 'save'
+      ? 'Understudy native Save — ქართული 日本語 🧑🏽‍💻 é'
+      : 'Understudy native Open — ქართული 日本語 🧑🏽‍💻 é\n';
   const result = {
+    kind,
     expectedPath,
     expectedText,
-    fileExists,
-    contents,
-    state: after,
-    modifiersAfterShortcut: 0,
-    nativeHeldAfterShortcut: false,
-    events: saveEvents(),
-    passed: fileExists && contents === expectedText && after.savedPath === expectedPath,
+    passed: false,
+    panelClosed: false,
   };
-  if (!result.events.some((event) => event.event === 'saveClosed')) {
-    await page.keyboard.press('Escape');
-    await until(
-      () => saveEvents().some((event) => event.event === 'saveClosed'),
-      'Save panel cleanup failed',
+  try {
+    if (kind === 'save') {
+      assert.equal(fs.existsSync(expectedPath), false, 'Save output already exists');
+      const text = {
+        x: initial.windowX + 100,
+        y: setup.session.display.height - initial.windowY - 520,
+      };
+      await pointer('hover', text);
+      await pointer('down', text);
+      await pointer('up', text);
+      await page.keyboard.press('Meta+A');
+      await page.keyboard.insertText(expectedText);
+      await until(() => state().text === expectedText, 'Fixture text did not arrive');
+    } else {
+      assert.equal(fs.readFileSync(expectedPath, 'utf8'), expectedText);
+      assert.equal(fs.realpathSync(initial.openFixturePath), expectedPath);
+    }
+    const previousID = state().panel?.attemptID;
+    await page.keyboard.press(kind === 'save' ? 'Meta+s' : 'Meta+o');
+    const panel = await until(() => {
+      const current = state().panel;
+      return current?.kind === kind && current.attemptID !== previousID && current;
+    }, 'No new native panel attempt was observed');
+    result.attemptID = panel.attemptID;
+    await until(() => {
+      const current = currentPanel(result.attemptID);
+      return (
+        current.presented &&
+        (current.visible || current.attachedSheet != null) &&
+        sameExistingPath(current.directory, directory) &&
+        (kind !== 'save' || current.filename === path.basename(expectedPath))
+      );
+    }, 'Panel presentation, filename, or directory was not observed');
+    result.observerBefore = await until(() => {
+      const observed = observedPanel(result.attemptID);
+      if (!observed?.scanComplete || !observed.panelExists || !observed.focusInPanel) return null;
+      const confirm = panelButton(observed, kind === 'save' ? 'Save' : 'Open');
+      if (panelButton(observed, 'Cancel')?.enabled !== true) return null;
+      if (kind === 'open') return typeof confirm?.enabled === 'boolean' && observed;
+      return (
+        confirm?.enabled === true &&
+        observed.controls.some(
+          (control) =>
+            control.role === 'AXTextField' &&
+            control.enabled === true &&
+            control.value === path.basename(expectedPath),
+        ) &&
+        observed
+      );
+    }, 'Rendered native panel controls, keyboard focus, or enabled confirmation were not observed');
+    await until(() => state().modifierFlags === 0, 'Panel shortcut left modifiers held');
+    result.before = state();
+    result.statusBefore = await (await page.request.get(url + 'status.json')).json();
+    assert.equal(result.statusBefore.session.inputService.heldInput, false);
+    assert.equal(result.statusBefore.session.inputService.session.onConsole, false);
+    await capture('native-' + kind + '-before.png');
+    if (kind === 'open') {
+      const beforeGoTo = Date.now();
+      await page.keyboard.press('Meta+Shift+g');
+      result.goToBefore = await until(() => {
+        const observed = observedPanel(result.attemptID, beforeGoTo);
+        return (
+          observed?.scanComplete &&
+          observed.focusInPanel &&
+          sheetCount(observed) > sheetCount(result.observerBefore) &&
+          ['AXTextField', 'AXComboBox'].includes(observed.focused?.role) &&
+          observed.focused.enabled === true &&
+          observed
+        );
+      }, 'Go to Folder path field did not gain observable focus');
+      const beforePath = Date.now();
+      await page.keyboard.press('Meta+A');
+      await page.keyboard.insertText(expectedPath);
+      result.goToAfter = await until(() => {
+        const observed = observedPanel(result.attemptID, beforePath);
+        return (
+          observed?.scanComplete &&
+          observed.focusInPanel &&
+          sheetCount(observed) > sheetCount(result.observerBefore) &&
+          observed.focused?.value === expectedPath &&
+          observed
+        );
+      }, 'Go to Folder did not receive the exact requested path');
+      const beforeSelection = Date.now();
+      await page.keyboard.press('Enter');
+      result.observerSelection = await until(() => {
+        if (completion(result.attemptID, kind)) return { completed: true };
+        const observed = observedPanel(result.attemptID, beforeSelection);
+        return (
+          currentPanel(result.attemptID).selectedPaths.some((file) =>
+            sameExistingPath(file, expectedPath),
+          ) &&
+          observed?.scanComplete &&
+          observed.focusInPanel &&
+          sheetCount(observed) === sheetCount(result.observerBefore) &&
+          panelButton(observed, 'Open')?.enabled === true &&
+          observed
+        );
+      }, 'Open panel did not select the requested file with enabled confirmation');
+      result.selection = currentPanel(result.attemptID);
+      await capture('native-open-selection.png');
+    }
+    if (!completion(result.attemptID, kind)) {
+      const beforeConfirm = Date.now();
+      result.observerConfirm = await until(() => {
+        const observed = observedPanel(result.attemptID, beforeConfirm);
+        const current = currentPanel(result.attemptID);
+        return (
+          observed?.scanComplete &&
+          observed.focusInPanel &&
+          panelButton(observed, kind === 'save' ? 'Save' : 'Open')?.enabled === true &&
+          sameExistingPath(current.directory, directory) &&
+          (kind === 'save'
+            ? observed.controls.some(
+                (control) =>
+                  control.role === 'AXTextField' &&
+                  control.enabled === true &&
+                  control.value === path.basename(expectedPath),
+              )
+            : current.selectedPaths.some((file) => sameExistingPath(file, expectedPath))) &&
+          observed
+        );
+      }, 'Native confirmation lost its enabled state, focus, or requested file');
+      await page.keyboard.press('Enter');
+    }
+    result.completion = await until(
+      () => completion(result.attemptID, kind),
+      'Current native panel did not complete',
     );
+    assert.equal(result.completion.response, 1, 'Panel did not accept the operation');
+    await until(() => {
+      const current = state();
+      return kind === 'save'
+        ? current.savedPath && fs.realpathSync(current.savedPath) === expectedPath
+        : current.openedPath && fs.realpathSync(current.openedPath) === expectedPath;
+    }, 'Fixture did not complete the requested file operation');
+    result.contents = fs.readFileSync(expectedPath, 'utf8');
+    assert.equal(result.contents, expectedText);
+    if (kind === 'open') assert.equal(state().openedText, expectedText);
+    result.passed = true;
+  } catch (error) {
+    result.error = error.stack;
+  } finally {
+    result.fileExists = fs.existsSync(expectedPath);
+    result.after = state();
+    try {
+      result.observerAfter = observerSnapshot();
+    } catch (error) {
+      result.observerError = error.stack;
+      result.passed = false;
+    }
+    try {
+      await capture('native-' + kind + '-after.png');
+    } catch (error) {
+      result.captureError = error.stack;
+      result.passed = false;
+    }
+    try {
+      if (result.attemptID) {
+        result.events = panelEvents(result.attemptID);
+        await closePanel(result.attemptID, kind);
+        result.panelClosed = true;
+        result.afterCleanup = state();
+        result.observerAfterCleanup = observedPanel(result.attemptID);
+        result.cleanupEvents = panelEvents(result.attemptID).slice(result.events.length);
+        await capture('native-' + kind + '-cleanup.png');
+      }
+    } catch (error) {
+      result.cleanupError = error.stack;
+      result.passed = false;
+    }
   }
-  result.panelClosed = true;
   return result;
 }
 try {
   await page.goto(url);
   await page.waitForFunction(() => !document.querySelector('#control').disabled);
-  await page.getByRole('button', { name: 'Take control', exact: true }).click();
+  results.initialStatus = await readStatus();
+  results.initialEpoch = sessionEpoch(results.initialStatus);
+  assert.equal(state().panelInstrumentationVersion, 2, 'Rebuild the native panel fixture');
+  results.initialObserver = await until(
+    () => observedPanel(state().panel?.attemptID),
+    'Fixture-owned AX observer is not fresh and trusted; control was not acquired',
+  );
+  pendingAcquire = page
+    .waitForResponse((reply) => reply.url() === url + 'control/acquire', { timeout: 5000 })
+    .then(async (response) => {
+      const body = await response.json();
+      if (typeof body.lease === 'string' && body.lease) acquiredLease = body.lease;
+      results.acquire = { status: response.status(), ok: body.ok, leaseCaptured: !!acquiredLease };
+      assert.equal(response.status(), 200, 'Control acquisition failed');
+      assert.equal(body.ok, true, 'Control acquisition was not acknowledged');
+      assert.ok(acquiredLease, 'No owner token was returned for cleanup');
+    });
+  await Promise.all([
+    pendingAcquire,
+    page.getByRole('button', { name: 'Take control', exact: true }).click({ timeout: 5000 }),
+  ]);
   await page.waitForFunction(
     () => document.querySelector('#control').getAttribute('aria-pressed') === 'true',
   );
@@ -226,6 +502,10 @@ try {
     [-120, -48],
     [120, -48],
     [-120, 48],
+    [120, 12],
+    [-120, -12],
+    [120, 0],
+    [0, 120],
   ]) {
     const initial = await center();
     const before = windowRect(initial);
@@ -289,18 +569,105 @@ try {
         observed.during.width !== before.width || observed.during.height !== before.height,
     });
   }
-  results.save = await checkSave();
+  results.save = await checkPanel('save');
+  results.open = results.save.panelClosed
+    ? await checkPanel('open')
+    : { passed: false, error: 'Save panel cleanup was not confirmed' };
   results.motionPassed = [...results.drags, ...results.resizes].every(
     (trial) => trial.endpointPassed && trial.changedBeforeRelease,
   );
-  results.passed = results.motionPassed && results.save.passed;
+  results.passed = results.motionPassed && results.save.passed && results.open.passed;
 } catch (error) {
   results.error = error.stack;
   results.passed = false;
 } finally {
-  const release = page.getByRole('button', { name: 'Release control', exact: true });
-  if (await release.count()) await release.click().catch(() => {});
-  await browser.close();
+  const cleanup = {
+    releaseRequested: false,
+    browserClosed: false,
+    inputReleased: false,
+    identityUnchanged: false,
+  };
+  results.cleanup = cleanup;
+  // If the click failed after the server acquired control, its response can
+  // still contain the only token that permits owner-specific cancellation.
+  try {
+    await pendingAcquire;
+  } catch (error) {
+    cleanup.acquireError = error.stack;
+  }
+  try {
+    if (acquiredLease) {
+      cleanup.releaseRequested = true;
+      // A browser click cannot reliably release control while its mouse is
+      // held. Cancel through the public, owner-specific HTTP endpoint instead.
+      const response = await fetch(url + 'control/release', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Origin: new URL(url).origin },
+        body: JSON.stringify({ lease: acquiredLease }),
+        signal: AbortSignal.timeout(5000),
+      });
+      cleanup.releaseResponse = await response.json();
+      assert.equal(response.status, 200, 'Control release failed');
+      assert.equal(cleanup.releaseResponse.ok, true, 'Control release was not acknowledged');
+    }
+  } catch (error) {
+    cleanup.releaseError = error.stack;
+  }
+  try {
+    await closeBrowser();
+    cleanup.browserClosed = true;
+  } catch (error) {
+    cleanup.browserError = error.stack;
+  }
+  // Node owns this request, so a closed or failed browser cannot suppress
+  // the final native-state check or prevent the evidence from being saved.
+  try {
+    const deadline = Date.now() + 12000;
+    cleanup.observations = [];
+    do {
+      cleanup.status = await readStatus();
+      const native = cleanup.status.session?.inputService;
+      cleanup.observations.push({
+        time: new Date().toISOString(),
+        viewerControlActive: cleanup.status.controlActive,
+        nativeControlActive: native?.controlActive,
+        heldInput: native?.heldInput,
+      });
+      if (
+        cleanup.status.controlActive === false &&
+        native?.controlActive === false &&
+        native.heldInput === false
+      )
+        break;
+      await wait(100);
+    } while (Date.now() < deadline);
+  } catch (error) {
+    cleanup.statusError = error.stack;
+  }
+  try {
+    assert.ok(cleanup.status, 'Final input state could not be read');
+    assert.equal(cleanup.status.controlActive, false, 'Viewer still owns control');
+    assert.equal(cleanup.status.session.inputService.controlActive, false, 'Native owner remains');
+    assert.equal(cleanup.status.session.inputService.heldInput, false, 'Native input remains held');
+    cleanup.inputReleased = true;
+  } catch (error) {
+    cleanup.inputError = error.stack;
+  }
+  try {
+    assert.ok(results.initialEpoch, 'No initial session epoch was recorded');
+    assert.ok(cleanup.status, 'Final session identity could not be read');
+    cleanup.finalEpoch = sessionEpoch(cleanup.status);
+    assert.deepEqual(cleanup.finalEpoch, results.initialEpoch, 'Hidden session epoch changed');
+    cleanup.identityUnchanged = true;
+  } catch (error) {
+    cleanup.identityError = error.stack;
+  }
+  cleanup.passed =
+    !cleanup.releaseError &&
+    cleanup.browserClosed &&
+    cleanup.inputReleased &&
+    cleanup.identityUnchanged;
+  results.passed = results.passed === true && cleanup.passed;
   results.finishedAt = new Date().toISOString();
   fs.writeFileSync(
     path.join(output, 'native-control-verification.json'),
@@ -311,6 +678,7 @@ try {
       {
         passed: results.passed,
         error: results.error,
+        cleanup,
         drags: results.drags.map(({ requested, actual, tracking }) => ({
           requested,
           actual,
@@ -325,6 +693,11 @@ try {
           passed: results.save.passed,
           fileExists: results.save.fileExists,
           panelClosed: results.save.panelClosed,
+        },
+        open: results.open && {
+          passed: results.open.passed,
+          panelClosed: results.open.panelClosed,
+          error: results.open.error,
         },
       },
       null,

@@ -130,11 +130,31 @@ try {
   await verify('nativeTextSelection', (state) => state.selectionLength === 1);
   await page.keyboard.press('ArrowRight');
 
-  await click(225, 1222);
-  await verify('nativeDialogOpen', (state) => state.dialogCount === initial.dialogCount + 1);
-  await wait(300);
-  await page.keyboard.press('Enter');
-  await verify('nativeDialogConfirm', (state) => state.dialogResponse === 1000);
+  for (const check of ['nativeDialog', 'repeatedNativeDialog']) {
+    const before = readState();
+    await click(225, 1222);
+    const opened = await verify(
+      check + 'Open',
+      (state) =>
+        state.fixtureID === initial.fixtureID &&
+        state.dialogCount === before.dialogCount + 1 &&
+        typeof state.dialogAttemptID === 'string' &&
+        state.dialogAttemptID !== before.dialogAttemptID &&
+        state.dialogCompletedAttemptID == null &&
+        state.dialogResponse === 0,
+    );
+    await wait(300);
+    await page.keyboard.press('Enter');
+    await verify(
+      check + 'Confirm',
+      (state) =>
+        state.fixtureID === initial.fixtureID &&
+        state.dialogCount === opened.dialogCount &&
+        state.dialogAttemptID === opened.dialogAttemptID &&
+        state.dialogCompletedAttemptID === opened.dialogAttemptID &&
+        state.dialogResponse === 1000,
+    );
+  }
 
   const requestOptions = (data) => ({ data, headers: { Origin: new URL(url).origin } });
   const second = await page.request.post(

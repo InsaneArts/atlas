@@ -23,6 +23,8 @@ pub struct Held {
     pub x: f64,
     pub y: f64,
     pub count: u8,
+    #[serde(default)]
+    pub mouse_number: i64,
     pub flags: u64,
 }
 
@@ -71,6 +73,7 @@ pub fn load(path: &Path, epoch: &InputEpoch) -> Result<Option<Held>> {
         || held.keys.len() > 16
         || held.keys.iter().any(|key| *key > 127)
         || !(1..=5).contains(&held.count)
+        || held.mouse_number < 0
     {
         return Err(Error::new(
             "identity",
@@ -99,6 +102,103 @@ pub fn store(path: &Path, held: &Held) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_epoch() -> InputEpoch {
+        InputEpoch {
+            uid: unsafe { libc::getuid() },
+            security_session_id: 10,
+            display_id: 1,
+            width: 1600.0,
+            height: 900.0,
+            process_id: 1,
+        }
+    }
+
+    #[test]
+    fn legacy_held_journal_recovers_with_zero_mouse_number() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("held.json");
+        let mut epoch = test_epoch();
+        // This is the previous on-disk schema, not a newly serialized Held.
+        let legacy = serde_json::json!({
+            "epoch": epoch,
+            "button": "left",
+            "keys": [55],
+            "x": 10.5,
+            "y": 20.5,
+            "count": 2,
+            "flags": 1 << 20,
+        });
+        write_private(&path, &serde_json::to_vec(&legacy).unwrap()).unwrap();
+        epoch.process_id = 2;
+        let recovered = load(&path, &epoch).unwrap().unwrap();
+        assert_eq!(recovered.mouse_number, 0);
+        assert_eq!(recovered.button, Some(Button::Left));
+        assert_eq!(recovered.keys, vec![55]);
+        assert_eq!(recovered.flags, 1 << 20);
+        assert_eq!((recovered.x, recovered.y, recovered.count), (10.5, 20.5, 2));
+    }
+
+    #[test]
+    fn nonzero_press_number_survives_restart_and_cleanup_commit() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("held.json");
+        let mut epoch = test_epoch();
+        let held = Held {
+            epoch: epoch.clone(),
+            button: Some(Button::Right),
+            keys: vec![55],
+            x: 10.5,
+            y: 20.5,
+            count: 2,
+            mouse_number: 37,
+            flags: 1 << 20,
+        };
+        Journal::new(path.clone()).write(held.clone()).unwrap();
+
+        // A replacement input process must retain the interrupted press's
+        // number so its release can match the already-posted mouse-down.
+        epoch.process_id = 2;
+        let mut recovered = load(&path, &epoch).unwrap().unwrap();
+        assert!(recovered == held);
+        assert_eq!(recovered.mouse_number, 37);
+
+        // This validates the recovery record, not desktop event delivery.
+        recovered.epoch = epoch.clone();
+        recovered.button = None;
+        recovered.keys.clear();
+        recovered.flags = 0;
+        Journal::new(path.clone()).write(recovered.clone()).unwrap();
+        let clean = load(&path, &epoch).unwrap().unwrap();
+        assert!(clean == recovered);
+        assert_eq!(clean.mouse_number, 37);
+    }
+
+    #[test]
+    fn negative_press_number_is_not_replayed() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("held.json");
+        let epoch = test_epoch();
+        let mut held = Held {
+            epoch: epoch.clone(),
+            button: Some(Button::Left),
+            keys: Vec::new(),
+            x: 10.0,
+            y: 10.0,
+            count: 1,
+            mouse_number: 1,
+            flags: 0,
+        };
+        store(&path, &held).unwrap();
+        assert!(load(&path, &epoch).unwrap().is_some());
+        held.mouse_number = -1;
+        store(&path, &held).unwrap();
+        let Err(error) = load(&path, &epoch) else {
+            panic!("A negative mouse event number was accepted for recovery");
+        };
+        assert_eq!(error.code, "identity");
+    }
+
     #[test]
     fn clean_journals_survive_login_changes_but_held_input_does_not_cross() {
         let directory = tempfile::tempdir().unwrap();
@@ -118,6 +218,7 @@ mod tests {
             x: 10.0,
             y: 10.0,
             count: 1,
+            mouse_number: 0,
             flags: 0,
         };
         store(&path, &held).unwrap();
@@ -147,6 +248,7 @@ mod tests {
             x: 10.0,
             y: 10.0,
             count: 1,
+            mouse_number: 0,
             flags: 1 << 20,
         };
         let mut journal = Journal::new(path.clone());
