@@ -12,6 +12,7 @@ mod worker;
 
 use crate::{
     client::Client,
+    config::parse_toml,
     error::{Error, Result},
     transport::{OutputError, run_output},
 };
@@ -72,7 +73,7 @@ pub(super) fn selectable_variable(name: &str) -> bool {
 /// Freeze the selected bytes, then preview or apply the resulting plan.
 pub async fn sync(client: &Client, manifest: &Path, apply_now: bool) -> Result<Value> {
     let manifest = fs::canonicalize(manifest)?;
-    let selection: Manifest = decode(&read_limited(&manifest, 16384)?)?;
+    let selection: Manifest = parse_toml(&read_limited(&manifest, 16384)?, &manifest)?;
     freeze(client, &manifest, selection.files, apply_now).await
 }
 

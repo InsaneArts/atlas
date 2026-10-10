@@ -135,17 +135,63 @@ fn signal_timeout_and_exit_are_distinct_completed_outcomes() {
 #[test]
 fn config_paths_are_relative_and_unknown_fields_fail() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.json");
-    let mut value = json!({"helper_uid":502,"socket_path":"sock","identity_probe":"probe","input_socket":"input","output_dir":"out"});
-    std::fs::write(&path, value.to_string()).unwrap();
+    let path = dir.path().join("config.toml");
+    let text = "helper_uid = 502\nsocket_path = \"sock\"\nidentity_probe = \"probe\"\n\
+                input_socket = \"input\"\noutput_dir = \"out\"\n";
+    std::fs::write(&path, text).unwrap();
     let config = Config::load(&path).unwrap();
     assert_eq!(
         config.socket_path,
         std::fs::canonicalize(dir.path()).unwrap().join("sock")
     );
-    value["unexpected"] = json!(true);
-    std::fs::write(&path, value.to_string()).unwrap();
-    assert!(Config::load(&path).is_err());
+    std::fs::write(&path, format!("{text}unexpected = true\n")).unwrap();
+    let error = Config::load(&path).unwrap_err();
+    assert_eq!(error.code, "config");
+    assert!(error.error.contains("unexpected"), "{}", error.error);
+    std::fs::write(&path, "helper_uid = \"502\"\n").unwrap();
+    assert!(
+        Config::load(&path)
+            .unwrap_err()
+            .error
+            .contains("config.toml")
+    );
+}
+
+#[test]
+fn shipped_example_configuration_parses_and_round_trips() {
+    let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("understudy.example.toml");
+    let config = Config::load(&example).unwrap();
+    assert_eq!(config.helper_uid, 502);
+    let dir = tempfile::tempdir().unwrap();
+    let saved = dir.path().join("saved.toml");
+    std::fs::write(&saved, config.to_toml().unwrap()).unwrap();
+    assert_eq!(Config::load(&saved).unwrap(), config);
+}
+
+#[test]
+fn a_missing_configuration_points_at_a_legacy_json_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("understudy.local.toml");
+    assert!(
+        !Config::load(&path)
+            .unwrap_err()
+            .error
+            .contains("no longer read")
+    );
+    std::fs::write(dir.path().join("understudy.local.json"), "{}").unwrap();
+    assert!(
+        Config::load(&path)
+            .unwrap_err()
+            .error
+            .contains("no longer read")
+    );
+
+    // A TOML file beside its legacy JSON twin is refused until the twin is gone.
+    let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("understudy.example.toml");
+    std::fs::copy(example, &path).unwrap();
+    assert!(Config::load(&path).unwrap_err().error.contains("Both"));
+    std::fs::remove_file(dir.path().join("understudy.local.json")).unwrap();
+    Config::load(&path).unwrap();
 }
 
 #[test]

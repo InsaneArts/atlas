@@ -1,0 +1,22 @@
+# Understudy configuration.
+#
+# Copy to understudy.local.toml (ignored by Git), or run
+#   understudy setup --helper NAME
+# to see a proposal derived from the helper account. Relative paths resolve
+# against this file's directory; `~/` expands to your home directory.
+
+# UID of the separate helper login. Never your own account.
+helper_uid = 502
+
+# Unix socket of the consented capture daemon running in the helper login.
+socket_path = "/tmp/atlas-live-502/502.sock"
+
+# Shared Rust executable the helper runs for identity proofs, input and
+# environment work. `understudy install` copies this build here.
+identity_probe = "/Users/Shared/Understudy/understudy"
+
+# Socket of the Rust input service inside the helper login.
+input_socket = "/tmp/understudy-input-502/input.sock"
+
+# Private (0700) directory for captures, viewer records and metadata.
+output_dir = "runs"

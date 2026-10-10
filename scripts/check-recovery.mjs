@@ -4,11 +4,17 @@ import fs from 'node:fs';
 import net from 'node:net';
 import crypto from 'node:crypto';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 
 const output = path.resolve(process.argv[2] || 'runs');
 const setup = JSON.parse(fs.readFileSync(path.join(output, 'control-live-setup.json'), 'utf8'));
-const config = JSON.parse(fs.readFileSync('understudy.local.json', 'utf8'));
+// The CLI resolves the TOML configuration (UNDERSTUDY_CONFIG or the default path).
+const resolved = spawnSync('target/debug/understudy', ['config'], { encoding: 'utf8' });
+if (resolved.status !== 0) throw new Error(resolved.stderr || resolved.stdout);
+const { config } = JSON.parse(resolved.stdout);
+// Never drive a fixture prepared against a different helper or socket.
+if (setup.config && JSON.stringify(setup.config) !== JSON.stringify(config))
+  throw new Error('The resolved configuration differs from the one the fixture was prepared with');
 const socketPath = config.input_socket;
 const readState = () =>
   JSON.parse(fs.readFileSync(path.join(setup.logDirectory, 'state.json'), 'utf8'));
