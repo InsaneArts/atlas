@@ -17,3 +17,6 @@ pub mod session;
 pub mod setup;
 pub mod transport;
 pub mod viewer;
+
+/// This build's version, as released.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -159,8 +159,25 @@ fn build(root: &Path, uid: u32) -> Result<PathBuf> {
     Ok(executable)
 }
 
-/// The companion executable for this user, built if needed.
+/// The signed companion shipped beside `executable` in Understudy.app, if
+/// this is the app's executable.
+fn bundled(executable: &Path) -> Option<PathBuf> {
+    let directory = executable.parent()?;
+    let companion = directory.join(NAME);
+    (directory.ends_with("Contents/MacOS") && companion.is_file()).then_some(companion)
+}
+
+/// The companion executable: the one shipped in Understudy.app, or in a
+/// development build one compiled for this user if needed.
 pub fn executable() -> Result<PathBuf> {
+    if let Some(companion) = std::env::current_exe()
+        .and_then(fs::canonicalize)
+        .ok()
+        .as_deref()
+        .and_then(bundled)
+    {
+        return Ok(companion);
+    }
     let uid = nix::unistd::getuid().as_raw();
     build(
         &home()?.join("Library/Application Support/Understudy/menubar"),
@@ -341,6 +358,25 @@ mod tests {
         assert_eq!(metadata.mode() & 0o777, 0o600);
         assert_eq!(metadata.nlink(), 1, "no other hard link");
         assert_eq!(fs::read_to_string(&first).unwrap(), SOURCE);
+    }
+
+    #[test]
+    fn the_app_ships_its_companion_beside_the_executable() {
+        let dir = tempfile::tempdir().unwrap();
+        let macos = dir.path().join("Understudy.app/Contents/MacOS");
+        fs::create_dir_all(&macos).unwrap();
+        let executable = macos.join("understudy");
+        assert_eq!(bundled(&executable), None, "no companion yet");
+        fs::write(macos.join(NAME), b"").unwrap();
+        assert_eq!(bundled(&executable), Some(macos.join(NAME)));
+        let loose = dir.path().join("bin");
+        fs::create_dir_all(&loose).unwrap();
+        fs::write(loose.join(NAME), b"").unwrap();
+        assert_eq!(
+            bundled(&loose.join("understudy")),
+            None,
+            "only inside the app"
+        );
     }
 
     #[test]
