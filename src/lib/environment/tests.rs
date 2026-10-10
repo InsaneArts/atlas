@@ -654,3 +654,26 @@ fn a_briefly_held_store_lock_is_waited_for_but_a_held_one_is_refused() {
     assert!(started.elapsed() >= std::time::Duration::from_millis(200));
     drop(held);
 }
+
+/// Only a worker's own refusal becomes an error; a command's output, even
+/// JSON-shaped, stays the command's.
+#[test]
+fn a_worker_refusal_is_told_from_the_command_output() {
+    let reply = |exit: u8, text: &str| {
+        json!({
+            "exitCode": exit,
+            "timedOut": false,
+            "signal": null,
+            "events": [{"event": "output",
+                        "data": STANDARD.encode(text)}],
+        })
+    };
+    let refusal = r#"{"ok":false,"code":"environment","error":"No helper environment profile is installed","uncertain":false}"#;
+    let error = refused(reply(WORKER_REFUSED, refusal)).unwrap_err();
+    assert!(error.error.contains("No helper environment profile"));
+    assert!(
+        refused(reply(1, refusal)).is_ok(),
+        "exit 1 is the command's"
+    );
+    assert!(refused(reply(WORKER_REFUSED, "plain text")).is_ok());
+}

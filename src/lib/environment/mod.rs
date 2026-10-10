@@ -200,7 +200,9 @@ pub async fn run(client: &Client, argv: Vec<String>) -> Result<Value> {
     let id = crate::control::token();
     let stage = stage_path(client, &id)?.with_file_name(format!("environment-run-{id}"));
     create_stage(&stage, client.config.helper_uid)?;
-    let mut result = dispatch(client, &stage, Request::Run { argv }).await;
+    let mut result = dispatch(client, &stage, Request::Run { argv })
+        .await
+        .and_then(refused);
     if delivery_uncertain(&result) {
         match &mut result {
             Ok(value) => value["retainedRequest"] = json!(stage),
@@ -212,6 +214,30 @@ pub async fn run(client: &Client, argv: Vec<String>) -> Result<Value> {
         let _ = fs::remove_dir_all(&stage);
     }
     result
+}
+
+/// The exit status of a worker that refused before running anything; its
+/// error is its only output.
+pub const WORKER_REFUSED: u8 = 125;
+
+/// A run whose worker refused (no profile, a changed session) as that error;
+/// any other reply is the command's own.
+fn refused(reply: Value) -> Result<Value> {
+    if reply["exitCode"] != WORKER_REFUSED {
+        return Ok(reply);
+    }
+    let error = run_output(&reply, 65536)
+        .ok()
+        .and_then(|output| serde_json::from_slice::<Value>(&output).ok())
+        .filter(|value| value["ok"] == false && value["error"].is_string());
+    match error {
+        Some(error) => Err(problem(
+            error["error"]
+                .as_str()
+                .unwrap_or("The helper environment refused"),
+        )),
+        None => Ok(reply),
+    }
 }
 
 fn delivery_uncertain(result: &Result<Value>) -> bool {
@@ -282,13 +308,20 @@ async fn dispatch(client: &Client, stage: &Path, request: Request) -> Result<Val
     let raw_output = matches!(&request, Request::Run { .. });
     let invocation = stage.join(format!("request-{}", crate::control::token()));
     create_stage(&invocation, client.config.helper_uid)?;
-    let executable = invocation.join("understudy");
-    atomic_write(
-        &executable,
-        &read_limited(&std::env::current_exe()?, MAX_FILE)?,
-        0o700,
-    )?;
-    allow_helper(&executable, client.config.helper_uid, true)?;
+    // Understudy.app's executable is sealed with its bundle, so a copy would
+    // fail its signature: the helper runs the app's own executable. A loose
+    // build is copied, so its request keeps the binary it was made with.
+    let source = fs::canonicalize(std::env::current_exe()?)?;
+    let executable = if crate::update::app_of(&source).is_some()
+        && crate::update::reachable_by_others(&source)
+    {
+        source
+    } else {
+        let executable = invocation.join("understudy");
+        atomic_write(&executable, &read_limited(&source, MAX_FILE)?, 0o700)?;
+        allow_helper(&executable, client.config.helper_uid, true)?;
+        executable
+    };
     let expected = Identity::from_epoch(&client.identity().await?.epoch);
     let packet = Packet {
         version: 1,
