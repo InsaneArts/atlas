@@ -1,6 +1,11 @@
-//! Read-only setup inspection. Reports what exists, what is reachable and
-//! what cannot be known from here; it writes no file, changes no permission
-//! and starts nothing. A fact we cannot observe is `null`, never `false`.
+//! Helper setup. [`preview`] is read-only: it reports what exists, what is
+//! reachable and what cannot be known from here, writing nothing and starting
+//! nothing; a fact we cannot observe is `null`, never `false`. [`migrate`]
+//! moves capture to the managed private layout through [`helper`] actions run
+//! inside the helper login.
+pub mod helper;
+pub mod migrate;
+
 use crate::{
     acl::Acl,
     client::Client,
