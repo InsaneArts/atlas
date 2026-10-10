@@ -108,6 +108,8 @@ pub fn session_info() -> Result<Value> {
 }
 
 #[cfg(target_os = "macos")]
+pub mod ax;
+#[cfg(target_os = "macos")]
 mod events;
 #[cfg(target_os = "macos")]
 mod journal;
