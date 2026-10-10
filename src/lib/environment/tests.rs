@@ -613,3 +613,21 @@ fn shipped_manifest_and_profile_examples_parse_as_toml() {
     let refused = crate::config::parse_toml::<Manifest>(json, &manifest);
     assert!(refused.is_err_and(|error| error.code == "config"));
 }
+
+#[test]
+fn a_briefly_held_store_lock_is_waited_for_but_a_held_one_is_refused() {
+    let sandbox = Sandbox::new();
+    let first = state::Store::open(&sandbox.home, true).unwrap();
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        drop(first);
+    });
+    state::Store::open(&sandbox.home, true).expect("a lock released within the patience is taken");
+    release.join().unwrap();
+    let held = state::Store::open(&sandbox.home, true).unwrap();
+    let started = std::time::Instant::now();
+    let refused = state::Store::open(&sandbox.home, true).err().unwrap();
+    assert_eq!(refused.error, "Another environment operation is running");
+    assert!(started.elapsed() >= std::time::Duration::from_millis(200));
+    drop(held);
+}
