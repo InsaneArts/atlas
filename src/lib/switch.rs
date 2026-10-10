@@ -1,9 +1,10 @@
-//! `understudy switch`: fast user switching to another login, such as the
-//! helper. macOS shows its own login window, the person picks the account
-//! and types its password there; nothing here sees or stores a password.
+//! `understudy switch`: switching to another login, such as the helper. It
+//! locks the screen; the person picks the account on the lock screen and
+//! types its password there. Nothing here sees or stores a password.
 //!
-//! Only the login window is opened: the framework's per-account call takes
-//! an undocumented dictionary, not a UID, and is never guessed at.
+//! The login framework's per-account switch takes an undocumented
+//! dictionary, and its login-window call does nothing from a command-line
+//! process, so the screen lock (confirmed by the window server) is used.
 use crate::error::{Error, Result};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -64,48 +65,77 @@ pub fn accounts(helper: Option<u32>) -> Result<Vec<Account>> {
     Ok(accounts)
 }
 
-/// Show the macOS login window (fast user switching), resolved at run time
-/// so a macOS without it reports an error instead of failing to start.
+/// Call a no-argument function of the login framework, resolved at run
+/// time so a macOS without it reports an error instead of failing to start.
 #[allow(unsafe_code)] // FFI: a private framework, loaded with dlopen.
-pub fn to_login_window() -> Result<Value> {
+fn login_call(symbol: &std::ffi::CStr) -> Result<i32> {
     const FRAMEWORK: &std::ffi::CStr =
         c"/System/Library/PrivateFrameworks/login.framework/Versions/A/login";
-    let unavailable = || {
-        Error::new(
-            "switch",
-            "This macOS does not offer fast user switching here",
-        )
-    };
+    let unavailable = || Error::new("switch", "This macOS cannot lock the screen from here");
     // SAFETY: a NUL-terminated path; the handle stays open for the process.
     let handle = unsafe { libc::dlopen(FRAMEWORK.as_ptr(), libc::RTLD_LAZY) };
     if handle.is_null() {
         return Err(unavailable());
     }
     // SAFETY: a live handle and a NUL-terminated symbol name.
-    let function = unsafe { libc::dlsym(handle, c"SACSwitchToLoginWindow".as_ptr()) };
+    let function = unsafe { libc::dlsym(handle, symbol.as_ptr()) };
     if function.is_null() {
         return Err(unavailable());
     }
-    // SAFETY: SACSwitchToLoginWindow takes no arguments and returns a
-    // status, zero on success (as used by Chromium's login_util).
-    let status = unsafe {
+    // SAFETY: the login calls used here take no arguments and return a
+    // status (as Chromium's login_util declares them).
+    Ok(unsafe {
         let call: extern "C" fn() -> i32 = std::mem::transmute(function);
         call()
-    };
-    if status != 0 {
-        return Err(Error::new(
-            "switch",
-            format!("macOS refused to switch ({status})"),
-        ));
-    }
-    Ok(json!({"ok": true, "switchedTo": "login window"}))
+    })
 }
 
-/// Open the login window for switching to `account`; the person picks it
-/// there (it is listed by name).
+/// Whether this login's screen is locked now, from the window server.
+fn screen_locked() -> bool {
+    crate::native::cf::session()
+        .and_then(|record| crate::native::cf::boolean(&record, "CGSSessionScreenIsLocked"))
+        == Some(true)
+}
+
+/// Wait up to `seconds` for the screen to report locked.
+fn locked_within(seconds: u64) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+    while std::time::Instant::now() < deadline {
+        if screen_locked() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    false
+}
+
+/// Lock the screen now, so the person can choose another account from the
+/// lock screen; confirmed from the window server, not assumed.
+pub fn lock_screen() -> Result<Value> {
+    let _ = login_call(c"SACLockScreenImmediate");
+    if !locked_within(3) {
+        // Sleeping the display locks it when a password is required on wake.
+        let _ = Command::new("/usr/bin/pmset")
+            .arg("displaysleepnow")
+            .status();
+        if !locked_within(3) {
+            return Err(Error::new(
+                "switch",
+                "The screen could not be locked from here",
+            ));
+        }
+    }
+    Ok(json!({"ok": true, "locked": true}))
+}
+
+/// Lock the screen so the person can switch to `account` from it.
 pub fn to(account: &Account) -> Result<Value> {
-    let mut reply = to_login_window()?;
-    reply["choose"] = json!(account.real_name.as_deref().unwrap_or(&account.name));
+    let mut reply = lock_screen()?;
+    let name = account.real_name.as_deref().unwrap_or(&account.name);
+    reply["choose"] = json!(name);
+    reply["next"] = json!(format!(
+        "On the lock screen, click Switch User, choose {name} and sign in."
+    ));
     Ok(reply)
 }
 
@@ -131,7 +161,7 @@ mod tests {
     }
 
     #[test]
-    fn the_login_window_call_exists_on_this_macos() {
+    fn the_lock_call_exists_on_this_macos() {
         // Resolve without calling: calling would change the person's screen.
         #[allow(unsafe_code)]
         // SAFETY: dlopen/dlsym with NUL-terminated names; nothing is called.
