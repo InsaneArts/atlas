@@ -10,7 +10,7 @@ use understudy::{
     client::{Client, png_dimensions, validate_completion},
     config::Config,
     control::{ActionPermit, Controller, Lease},
-    session::{Display, require_hidden},
+    session::{Display, diagnose, require_hidden},
     transport::Transport,
 };
 
@@ -432,4 +432,90 @@ fn output_directory_is_created_private_and_never_repermissioned() {
         .to_owned();
     assert_eq!(mode(&output) & 0o777, 0o700);
     assert_eq!(mode(output.parent().unwrap()) & 0o777, 0o700);
+}
+
+fn ready_status() -> Value {
+    let mut state = status();
+    state["inputService"] = json!({"ok": true, "protocolVersion": 1, "ready": true,
+        "accessibility": true, "pid": 77, "version": env!("CARGO_PKG_VERSION"),
+        "session": {"ok": true, "uid": 502, "securitySessionID": 100384, "displayID": 28,
+        "width": 2560, "height": 1440, "onConsole": false, "hasGraphicAccess": true}});
+    state
+}
+fn check(report: &Value, name: &str) -> Value {
+    report["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|check| check["name"] == name)
+        .unwrap()["ok"]
+        .clone()
+}
+
+#[test]
+fn doctor_reports_unobservable_facts_as_unknown_not_missing() {
+    let report = diagnose(
+        json!({"ok": false, "code": "transport", "error": "Connection refused"}),
+        502,
+    );
+    assert_eq!(report["ready"], false);
+    assert_eq!(check(&report, "Helper connection"), false);
+    for name in [
+        "Hidden desktop",
+        "Screen recording",
+        "Input permission",
+        "Native input service",
+    ] {
+        assert_eq!(check(&report, name), Value::Null, "{name}");
+    }
+    assert_eq!(report["nextSteps"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn doctor_ready_never_implies_native_dialogs() {
+    let report = diagnose(ready_status(), 502);
+    assert_eq!(report["ready"], true, "{report}");
+    assert_eq!(report["capabilities"]["input"], true);
+    assert_eq!(report["capabilities"]["nativeDialogs"]["state"], "unknown");
+}
+
+#[test]
+fn doctor_reads_input_permission_from_the_input_service() {
+    let mut state = ready_status();
+    state["inputService"]["accessibility"] = json!(false);
+    let report = diagnose(state, 502);
+    assert_eq!(check(&report, "Input permission"), false);
+    assert_eq!(report["ready"], false);
+    let mut state = ready_status();
+    state["permissions"]["accessibility"] = json!(false);
+    assert_eq!(diagnose(state, 502)["ready"], true);
+}
+
+#[test]
+fn doctor_distinguishes_on_console_from_wrong_account() {
+    let guidance = |state: Value| {
+        diagnose(state, 502)["nextSteps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|step| step.as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let mut console = ready_status();
+    console["session"]["onConsole"] = json!(true);
+    assert!(guidance(console).contains("on the console"));
+    let mut other = ready_status();
+    other["user"]["uid"] = json!(503);
+    assert!(guidance(other).contains("different account"));
+}
+
+#[test]
+fn doctor_reports_an_unqueried_input_service_as_unknown() {
+    let mut console = status();
+    console["session"]["onConsole"] = json!(true);
+    let report = diagnose(console, 502);
+    assert_eq!(check(&report, "Hidden desktop"), false);
+    assert_eq!(check(&report, "Input permission"), Value::Null);
+    assert_eq!(check(&report, "Native input service"), Value::Null);
 }

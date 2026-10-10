@@ -417,6 +417,9 @@ select {
 .check.is-failed span {
   color: var(--warning);
 }
+.check.unknown span {
+  font-style: italic;
+}
 .shortcut-content {
   padding: 2px 0 16px;
 }

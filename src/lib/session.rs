@@ -165,8 +165,7 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
     Ok(Session {
         epoch,
         capture: value["permissions"]["screenCapture"] == true,
-        input: value["permissions"]["accessibility"] == true
-            && value["inputService"]["ok"] == true
+        input: value["inputService"]["ok"] == true
             && value["inputService"]["protocolVersion"] == 1
             && value["inputService"]["ready"] == true
             && value["inputService"]["accessibility"] == true
@@ -174,57 +173,135 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
     })
 }
 
+struct Check {
+    name: &'static str,
+    /// None when the fact cannot be observed yet; never reported as missing.
+    ok: Option<bool>,
+    next_step: String,
+}
+
+/// Separate observation, input and native-dialog capability. `ready` keeps its
+/// established meaning (transport, identity, permissions, input service); it
+/// never implies that native Save/Open dialogs work.
 pub fn diagnose(value: Value, uid: u32) -> Value {
     let session = require_hidden(&value, uid).ok();
     let reachable = value["ok"] == true;
-    let identity_guidance = value["sessionProof"]["error"].as_str().unwrap_or(
-        "The graphical-session proof must match this hidden helper. \
-         Switch back without logging it out, then refresh.",
-    );
+    let native = &value["inputService"];
+    let native_reachable = native["ok"] == true;
+    // The input service is only queried once the capture side proves a hidden
+    // helper; an unqueried service is unknown, not failed.
+    let queried = reachable && !native.is_null();
+    let not_queried = "Unknown until the helper is hidden and its input service can be queried.";
+    let known = |fact: bool, ok: bool| fact.then_some(ok);
+    let unknown = "Unknown until the helper connection works.";
+    let connection = if value["code"] == "identity" {
+        value["error"]
+            .as_str()
+            .unwrap_or("The socket belongs to another account")
+    } else {
+        "Start the configured helper in its logged-in account."
+    };
+    let hidden_guidance = if value["user"]["uid"]
+        .as_u64()
+        .is_some_and(|v| v != u64::from(uid))
+    {
+        "The capture service belongs to a different account than the configured helper."
+    } else if value["session"]["onConsole"] == true {
+        "The helper is on the console. Switch back to your account without logging it out."
+    } else {
+        value["sessionProof"]["error"].as_str().unwrap_or(
+            "The graphical-session proof must match this hidden helper. \
+             Switch back without logging it out, then refresh.",
+        )
+    };
     let checks = [
-        (
-            "Helper connection",
-            reachable,
-            "Start the configured helper in its logged-in account.",
-        ),
-        ("Hidden desktop", session.is_some(), identity_guidance),
-        (
-            "Screen recording",
-            reachable && value["permissions"]["screenCapture"] == true,
-            "Enable Screen & System Audio Recording for the installed helper in its account.",
-        ),
-        (
-            "Mouse and keyboard",
-            reachable && value["permissions"]["accessibility"] == true,
-            "Enable Accessibility for the installed helper in its account.",
-        ),
-        (
-            "Native input service",
-            session.as_ref().is_some_and(|session| session.input),
-            "Run understudy start-input to start the Rust input process inside the prepared helper.",
-        ),
+        Check {
+            name: "Helper connection",
+            ok: Some(reachable),
+            next_step: connection.into(),
+        },
+        Check {
+            name: "Hidden desktop",
+            ok: known(reachable, session.is_some()),
+            next_step: if reachable { hidden_guidance } else { unknown }.into(),
+        },
+        Check {
+            name: "Screen recording",
+            ok: known(reachable, value["permissions"]["screenCapture"] == true),
+            next_step: if reachable {
+                "Enable Screen & System Audio Recording for the capture helper in its account."
+            } else {
+                unknown
+            }
+            .into(),
+        },
+        Check {
+            name: "Input permission",
+            ok: known(native_reachable, native["accessibility"] == true),
+            next_step: if native_reachable {
+                "Enable Accessibility for the input service in the helper account."
+            } else if queried {
+                "Unknown until the input service answers; run understudy start-input."
+            } else {
+                not_queried
+            }
+            .into(),
+        },
+        Check {
+            name: "Native input service",
+            ok: known(queried, session.as_ref().is_some_and(|s| s.input)),
+            next_step: if queried {
+                "Run understudy start-input to start or reset the input service inside the helper."
+            } else if reachable {
+                not_queried
+            } else {
+                unknown
+            }
+            .into(),
+        },
     ];
+    let mut warnings = Vec::new();
+    if native_reachable && native["version"] != env!("CARGO_PKG_VERSION") {
+        warnings.push(format!(
+            "The input service runs version {}, this controller is {}",
+            native["version"],
+            env!("CARGO_PKG_VERSION")
+        ));
+    }
     let details = checks
         .iter()
-        .map(|(name, ok, fix)| {
+        .map(|check| {
             json!({
-                "name": name,
-                "ok": ok,
-                "nextStep": if *ok { Value::Null } else { json!(fix) },
+                "name": check.name,
+                "ok": check.ok,
+                "nextStep": (check.ok != Some(true)).then_some(&check.next_step),
             })
         })
         .collect::<Vec<_>>();
     let next_steps = checks
         .iter()
-        .filter(|(_, ok, _)| !ok)
-        .map(|(_, _, fix)| fix)
+        .filter(|check| check.ok == Some(false))
+        .map(|check| &check.next_step)
         .collect::<Vec<_>>();
+    let observe = session.as_ref().is_some_and(|s| s.capture);
     json!({
         "ok": true,
-        "ready": checks.iter().all(|(_, ok, _)| *ok),
-        "canObserve": session.is_some_and(|s| s.capture),
+        "ready": checks.iter().all(|check| check.ok == Some(true)),
+        "canObserve": observe,
+        "capabilities": {
+            "observe": observe,
+            "input": session.as_ref().is_some_and(|s| s.input),
+            // Transport, identity and permissions were all green in Phase 1
+            // while native Save/Open failed. Only a fresh native check counts.
+            "nativeDialogs": {
+                "state": "unknown",
+                "reason": "No fresh native Save/Open observation. Native dialogs were qualified \
+                           only with an authenticated Screen Sharing session into the helper.",
+            },
+        },
         "checks": details,
         "nextSteps": next_steps,
+        "warnings": warnings,
         "session": value,
     })
 }
