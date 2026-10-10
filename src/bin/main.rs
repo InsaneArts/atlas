@@ -8,6 +8,7 @@ use understudy::{
     config::Config,
     environment,
     error::{Error, Result},
+    transport::with_output,
     viewer,
 };
 
@@ -392,7 +393,9 @@ async fn execute(cli: Cli) -> Result<Value> {
             Some(EnvironmentCommand::Profile { profile, apply }) => {
                 environment::profile::sync(&client, &profile, apply).await
             }
-            Some(EnvironmentCommand::Run { argv }) => environment::run(&client, argv).await,
+            Some(EnvironmentCommand::Run { argv }) => {
+                environment::run(&client, argv).await.map(with_output)
+            }
             Some(EnvironmentCommand::Apply { plan_id }) => {
                 environment::apply(&client, &plan_id).await
             }
@@ -542,7 +545,7 @@ async fn execute(cli: Cli) -> Result<Value> {
                 .input(&serde_json::from_slice(&bytes)?, None, None)
                 .await
         }
-        Command::Run { argv } => client.run(argv).await,
+        Command::Run { argv } => client.run(argv).await.map(with_output),
         Command::Restart => client.restart().await,
     }
 }

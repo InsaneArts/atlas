@@ -2,7 +2,8 @@
 
 You are driving a separate macOS login (the helper) in the background. Your
 clicks, typing and windows stay there; the person keeps using their own desktop.
-Every command prints JSON and exits non-zero on failure.
+Every command except `agent-guide` prints JSON and exits non-zero on failure.
+`run` and `environment run` include the command's text output in `output`.
 
 ## Start
 
