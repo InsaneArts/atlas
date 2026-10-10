@@ -1,4 +1,6 @@
 //! Bounded file reads, private staging and descriptor-relative installation.
+// FFI boundary: bounded extended-attribute reads and renameatx_np.
+#![allow(unsafe_code)]
 use super::{
     Result, STATE,
     model::{Fingerprint, Node},
@@ -495,6 +497,8 @@ pub(super) fn install_prepared(source: &Path, target: &Path, create_only: bool) 
     installation_parent(&parent)?;
     let source = component(source.file_name().unwrap())?;
     let target = component(target.file_name().unwrap())?;
+    // SAFETY: a live directory descriptor and two NUL-terminated single
+    // components; RENAME_EXCL makes the rename refuse an existing target.
     let status = unsafe {
         unsafe extern "C" {
             fn renameatx_np(

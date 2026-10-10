@@ -1,5 +1,7 @@
 //! The `hello` reply: who the daemon runs as, in which session, on which
 //! display, with which permissions.
+// FFI boundary: Accessibility trust queries.
+#![allow(unsafe_code)]
 use crate::native::{
     capture,
     cf::{self, CFBoolean, CFDictionary, CFRetained, CFString},
@@ -136,6 +138,7 @@ mod tests {
 
     /// The prompt option is passed by name; it is the exported constant.
     #[test]
+    #[allow(unsafe_code)]
     fn the_prompt_option_is_the_framework_constant() {
         // SAFETY: reading an immutable framework constant in a test.
         let key = unsafe { objc2_application_services::kAXTrustedCheckOptionPrompt };
