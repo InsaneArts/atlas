@@ -56,6 +56,7 @@ unsafe extern "C" {
     fn CFStringCreateWithCString(allocator: CfRef, text: *const c_char, encoding: u32) -> CfRef;
     fn CFStringCreateWithSubstring(allocator: CfRef, string: CfRef, range: Range) -> CfRef;
     fn CFStringGetLength(string: CfRef) -> isize;
+    fn CFStringGetRangeOfComposedCharactersAtIndex(string: CfRef, index: isize) -> Range;
     fn CFStringGetMaximumSizeForEncoding(length: isize, encoding: u32) -> isize;
     fn CFStringGetCString(string: CfRef, buffer: *mut c_char, size: isize, encoding: u32) -> bool;
     fn CFArrayGetCount(array: CfRef) -> isize;
@@ -111,13 +112,21 @@ fn cf_string(text: &CStr) -> Option<Owned> {
     Owned::new(unsafe { CFStringCreateWithCString(std::ptr::null(), text.as_ptr(), UTF8) })
 }
 
-/// The first `TEXT_LIMIT` UTF-16 units of a CFString, converted without
-/// copying the rest. SAFETY: `value` must be a live CFString.
-unsafe fn bounded_string(value: CfRef) -> Option<String> {
-    // SAFETY: per contract; the substring is owned and the buffer is sized
-    // for its encoding.
+/// At most the first `TEXT_LIMIT` UTF-16 units of a CFString, converted
+/// without copying the rest and cut only between composed characters, so a
+/// surrogate pair, emoji sequence or combining mark is never split. Returns
+/// the text and whether it was cut. SAFETY: `value` must be a live CFString.
+unsafe fn bounded_string(value: CfRef) -> Option<(String, bool)> {
+    // SAFETY: per contract; the index is in bounds, the substring is owned
+    // and the buffer is sized for its encoding.
     unsafe {
-        let length = CFStringGetLength(value).min(TEXT_LIMIT);
+        let full = CFStringGetLength(value);
+        let truncated = full > TEXT_LIMIT;
+        let length = if truncated {
+            CFStringGetRangeOfComposedCharactersAtIndex(value, TEXT_LIMIT).location
+        } else {
+            full
+        };
         let range = Range {
             location: 0,
             length,
@@ -126,20 +135,20 @@ unsafe fn bounded_string(value: CfRef) -> Option<String> {
         let size = CFStringGetMaximumSizeForEncoding(length, UTF8) + 1;
         let mut buffer = vec![0 as c_char; usize::try_from(size).ok()?];
         CFStringGetCString(part.0, buffer.as_mut_ptr(), size, UTF8).then(|| {
-            CStr::from_ptr(buffer.as_ptr())
-                .to_string_lossy()
-                .into_owned()
+            let text = CStr::from_ptr(buffer.as_ptr()).to_string_lossy();
+            (text.into_owned(), truncated)
         })
     }
 }
 
 /// One traversal: its deadline, whether anything made it incomplete, the
-/// selector attributes the current element failed to read, and how often
-/// each attribute returned each AX error.
+/// selector attributes the current element failed to read or reported only
+/// in part, and how often each attribute returned each AX error.
 struct Scan {
     deadline: Instant,
     incomplete: bool,
     unreadable: Vec<String>,
+    truncated: Vec<String>,
     errors: std::collections::BTreeMap<String, usize>,
 }
 
@@ -180,8 +189,19 @@ impl Scan {
     fn text(&mut self, element: CfRef, name: &CStr) -> Option<String> {
         let value = self.attribute(element, name)?;
         // SAFETY: type-checked before reading.
-        unsafe { (CFGetTypeID(value.0) == CFStringGetTypeID()).then(|| bounded_string(value.0)) }
-            .flatten()
+        let text = unsafe {
+            (CFGetTypeID(value.0) == CFStringGetTypeID()).then(|| bounded_string(value.0))
+        }
+        .flatten();
+        self.bounded(text, name)
+    }
+    /// Keep bounded text, noting the attribute when it was cut.
+    fn bounded(&mut self, text: Option<(String, bool)>, name: &CStr) -> Option<String> {
+        let (text, truncated) = text?;
+        if truncated {
+            self.truncated.push(name.to_string_lossy().into_owned());
+        }
+        Some(text)
     }
     fn flag(&mut self, element: CfRef, name: &CStr) -> Option<bool> {
         let value = self.attribute(element, name)?;
@@ -197,7 +217,8 @@ impl Scan {
         unsafe {
             let kind = CFGetTypeID(value.0);
             if kind == CFStringGetTypeID() {
-                bounded_string(value.0)
+                let text = bounded_string(value.0);
+                self.bounded(text, c"AXValue")
             } else if kind == CFNumberGetTypeID() {
                 let mut number = 0f64;
                 CFNumberGetValue(value.0, FLOAT64, (&mut number as *mut f64).cast())
@@ -313,6 +334,10 @@ pub struct Element {
     /// not be read, so this element might match a selector unseen.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unreadable: Vec<String>,
+    /// Text attributes reported only in part (their first 200 UTF-16 units,
+    /// cut between characters); the element holds more than is shown.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub truncated: Vec<String>,
 }
 
 /// One traversal's result.
@@ -357,6 +382,7 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
         deadline: Instant::now() + limits.time,
         incomplete: false,
         unreadable: Vec::new(),
+        truncated: Vec::new(),
         errors: Default::default(),
     };
     let windows = scan.children(app.0, c"AXWindows", limits.count);
@@ -381,6 +407,7 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
         }
         let item = element.0;
         scan.unreadable.clear();
+        scan.truncated.clear();
         let mut element = Element {
             index: found.len(),
             depth,
@@ -395,8 +422,10 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
             focused: scan.flag(item, c"AXFocused"),
             frame: scan.frame(item),
             unreadable: Vec::new(),
+            truncated: Vec::new(),
         };
         element.unreadable = std::mem::take(&mut scan.unreadable);
+        element.truncated = std::mem::take(&mut scan.truncated);
         found.push(element);
         if depth + 1 >= limits.depth {
             scan.incomplete |= !scan.children(item, c"AXChildren", 1).is_empty();
@@ -437,15 +466,41 @@ mod tests {
         assert!(Owned::new(std::ptr::null()).is_none());
     }
 
-    #[test]
-    fn strings_are_bounded_before_conversion() {
-        let long = std::ffi::CString::new("x".repeat(5000)).unwrap();
+    /// Bound `text` as a CFString would be.
+    fn bound(text: &str) -> (String, bool) {
+        let text = std::ffi::CString::new(text).unwrap();
         // SAFETY: owned CFString from a NUL-terminated buffer.
         let string =
-            Owned::new(unsafe { CFStringCreateWithCString(std::ptr::null(), long.as_ptr(), UTF8) })
+            Owned::new(unsafe { CFStringCreateWithCString(std::ptr::null(), text.as_ptr(), UTF8) })
                 .unwrap();
-        let text = unsafe { bounded_string(string.0) }.unwrap();
-        assert_eq!(text.len(), TEXT_LIMIT as usize);
+        unsafe { bounded_string(string.0) }.unwrap()
+    }
+
+    #[test]
+    fn strings_are_bounded_before_conversion() {
+        let (text, truncated) = bound(&"x".repeat(5000));
+        assert_eq!((text.len(), truncated), (TEXT_LIMIT as usize, true));
+        assert_eq!(bound("short"), ("short".into(), false));
+        let exact = "y".repeat(TEXT_LIMIT as usize);
+        assert_eq!(
+            bound(&exact),
+            (exact.clone(), false),
+            "at the limit is whole"
+        );
+    }
+
+    #[test]
+    fn strings_are_cut_between_characters() {
+        // A surrogate pair straddles unit 200: 199 units, then 2 for the emoji.
+        let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+        let (text, truncated) = bound(&format!("{}{family}tail", "a".repeat(199)));
+        assert!(truncated);
+        assert_eq!(text, "a".repeat(199), "the whole emoji sequence is dropped");
+        // A combining mark at unit 200 stays with its base letter.
+        let (text, _) = bound(&format!("{}e\u{301}tail", "a".repeat(199)));
+        assert_eq!(text, "a".repeat(199));
+        let (text, _) = bound(&format!("{}e\u{301}tail", "a".repeat(198)));
+        assert_eq!(text, format!("{}e\u{301}", "a".repeat(198)));
     }
 
     #[test]

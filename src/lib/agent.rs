@@ -624,6 +624,7 @@ mod tests {
             focused: None,
             frame: None,
             unreadable: Vec::new(),
+            truncated: Vec::new(),
         }
     }
 
