@@ -8,6 +8,7 @@ use understudy::{
     config::Config,
     environment,
     error::{Error, Result},
+    menubar,
     transport::with_output,
     viewer,
 };
@@ -99,6 +100,15 @@ enum Command {
     Monitor {
         #[arg(long, default_value_t = 8765)]
         port: u16,
+    },
+    /// Show the helper in the macOS menu bar, serving the viewer it opens.
+    /// Quitting the menu bar stops both and releases control.
+    Menubar {
+        #[arg(long, default_value_t = 8765)]
+        port: u16,
+        /// Instead, draw the panel in light and dark to PNGs in DIR and exit.
+        #[arg(long, value_name = "DIR")]
+        render: Option<PathBuf>,
     },
     /// Save a real helper PNG; reports pointsPerPixel for input coordinates.
     #[command(visible_alias = "screenshot")]
@@ -425,8 +435,18 @@ async fn execute(cli: Cli) -> Result<Value> {
         Command::Install => client.install(),
         Command::StartInput => client.start_input().await,
         Command::Monitor { port } => {
-            viewer::serve(client, port).await?;
+            viewer::serve(client, port, None).await?;
             Ok(Value::Null)
+        }
+        Command::Menubar { port, render } => {
+            let executable = menubar::executable()?;
+            match render {
+                Some(directory) => viewer::render_menubar(client, &executable, &directory).await,
+                None => {
+                    viewer::serve(client, port, Some(executable)).await?;
+                    Ok(Value::Null)
+                }
+            }
         }
         Command::Capture { max_dimension } => client.capture(max_dimension).await,
         Command::Apps => client.apps().await,
@@ -608,6 +628,19 @@ mod tests {
         assert!(parse(&["click", "10", "20", "--role", "AXButton"]).is_err());
         assert!(parse(&["click", "10"]).is_err(), "Y is required with X");
         assert!(parse(&["click", "--app", "A", "--pid", "1", "--name", "x"]).is_err());
+    }
+
+    #[test]
+    fn the_menu_bar_serves_or_renders() {
+        let Ok(Cli {
+            command: Command::Menubar { port, render },
+            ..
+        }) = parse(&["menubar", "--render", "out"])
+        else {
+            panic!("menubar did not parse");
+        };
+        assert_eq!((port, render), (8765, Some(PathBuf::from("out"))));
+        assert!(parse(&["menubar", "--port", "9000"]).is_ok());
     }
 
     #[test]

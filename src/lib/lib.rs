@@ -8,6 +8,7 @@ pub mod control;
 pub mod digest;
 pub mod environment;
 pub mod error;
+pub mod menubar;
 pub mod native;
 pub mod overview;
 pub mod readiness;
