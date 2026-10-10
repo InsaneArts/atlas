@@ -17,9 +17,9 @@ the current session instead of assuming either. Audio output is shared with your
 
 ## Set up
 
-Requires macOS, Rust, a second standard account that has logged in once, and the
-separately installed, consented capture helper running in it (see
-[NOTICE.md](NOTICE.md)). Account creation, its first login and macOS privacy
+Requires macOS, Rust, a second standard account that has logged in once, and
+Understudy.app (signed) in /Applications, allowed Screen Recording and
+Accessibility inside that account. Account creation, its first login and macOS privacy
 consent stay manual. Apps in `/Applications` are shared; settings, credentials and
 home-directory tools belong to the helper account.
 
@@ -29,12 +29,12 @@ cargo build
 # Save the proposed TOML as understudy.local.toml (or copy examples/config.toml).
 ./understudy install               # copy this build to the shared executable path
 ./understudy start-input           # start, reset or upgrade the helper's input service
-./understudy setup --apply         # run capture on a private socket directory
+./understudy setup --apply         # run Understudy's helper daemon privately
 ./understudy doctor
 ```
 
 `setup` without flags changes nothing; facts it cannot observe are reported as
-unknown, never as missing. `setup --apply` runs the unchanged capture binary as a
+unknown, never as missing. `setup --apply` runs Understudy's own signed helper daemon as a
 managed LaunchAgent with a persistent private socket directory beside the existing
 job, moves input and the configuration over, then retires the old job through the
 new one. Every step is logged and resumable; `setup --rollback` restores the

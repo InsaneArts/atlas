@@ -1,7 +1,8 @@
 //! Side-by-side migration of the capture endpoint into the private layout.
 //!
-//! A managed LaunchAgent runs the unchanged, consented capture daemon on a
-//! persistent private socket directory beside the existing job. Each pass
+//! A managed LaunchAgent runs Understudy's own signed helper daemon on a
+//! persistent private socket directory beside the existing capture job, which
+//! it replaces only once verified. Each pass
 //! reconciles reality toward the target instead of trusting completion flags:
 //! every helper action is idempotent, re-inspects first and runs under a
 //! pending marker recorded in a durable log, so an interrupted pass resumes or
@@ -10,7 +11,7 @@
 use super::{
     account_with_uid, endpoint, executable_of,
     helper::{Agent, LABEL, Layout, Request, plist, text_sha256},
-    helper_job, signature,
+    helper_job, running_signature, signature,
 };
 use crate::{
     client::{Client, timestamp},
@@ -38,6 +39,12 @@ pub struct Plan {
     pub home: PathBuf,
     pub old_label: String,
     pub old_plist_sha256: String,
+    /// The managed label. Empty in logs from before the own daemon, whose
+    /// managed job ran the previous capture daemon.
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub controller_uid: u32,
     pub program: PathBuf,
     pub cdhash: String,
     pub config_path: PathBuf,
@@ -124,7 +131,7 @@ fn save_log(path: &Path, log: &Log) -> Result<()> {
 /// The configuration with sockets moved into the private layout.
 pub fn managed(config: &Config, layout: &Layout) -> Config {
     Config {
-        socket_path: layout.capture().join(format!("{}.sock", config.helper_uid)),
+        socket_path: layout.socket(),
         input_socket: layout.root().join(super::helper::INPUT).join("input.sock"),
         ..config.clone()
     }
@@ -220,10 +227,11 @@ impl Migration {
     }
     fn agent(&self) -> Agent {
         Agent {
-            label: LABEL.to_owned(),
+            label: self.log.plan.label.clone(),
             program: self.log.plan.program.clone(),
             uid: self.log.plan.uid,
-            socket_dir: self.layout().capture(),
+            controller_uid: self.log.plan.controller_uid,
+            socket: self.layout().socket(),
         }
     }
     fn note(&mut self, action: &str) -> Result<()> {
@@ -327,17 +335,29 @@ impl Migration {
         await_endpoint(&self.new).await?;
         let status = self.new.status().await;
         if status["permissions"]["screenCapture"] != true {
-            return Err(problem("The managed capture daemon lacks Screen Recording"));
+            return Err(problem(
+                "Understudy lacks Screen Recording in the helper account: log in to the \
+                 helper once, allow Understudy in System Settings, switch back, then run \
+                 setup again",
+            ));
         }
         self.new.frame(Some(256)).await?;
         let pid = status["daemon"]["pid"]
             .as_u64()
             .and_then(|pid| u32::try_from(pid).ok())
-            .ok_or_else(|| problem("The managed capture daemon reported no PID"))?;
-        let running = executable_of(pid).and_then(|path| signature(&path));
-        if running.and_then(|s| s.cdhash).as_deref() != Some(self.log.plan.cdhash.as_str()) {
+            .ok_or_else(|| problem("The managed helper daemon reported no PID"))?;
+        let running = running_signature(pid).and_then(|signature| signature.cdhash);
+        if running.as_deref() != Some(self.log.plan.cdhash.as_str()) {
+            let installed = executable_of(pid)
+                .and_then(|path| signature(&path))
+                .and_then(|signature| signature.cdhash);
             return Err(problem(
-                "The managed capture daemon is not the consented binary that was planned",
+                if installed.as_deref() == Some(&self.log.plan.cdhash) {
+                    "The helper daemon still runs the previous build; run understudy restart, then \
+                 setup --apply again"
+                } else {
+                    "The managed helper daemon is not the signed binary that was planned"
+                },
             ));
         }
         // SAFETY: getuid has no pointer arguments or preconditions.
@@ -362,8 +382,19 @@ impl Migration {
     /// Presence is read from each input socket directly, independent of the
     /// capture daemons, and only a refused or missing socket counts as absent.
     async fn move_input(&mut self, from: Endpoint, to: Endpoint) -> Result<()> {
-        let source = input_presence(self.client(from)).await?;
+        // Both configurations may name the same input socket (moving from an
+        // earlier managed layout): then the service stays and is only
+        // confirmed current through the target daemon.
+        let shared = self.client(from).config.input_socket == self.client(to).config.input_socket;
         let ready = self.input_ready(to).await;
+        if shared && ready {
+            return Ok(());
+        }
+        let source = if shared {
+            None
+        } else {
+            input_presence(self.client(from)).await?
+        };
         if source.is_none() && ready {
             return Ok(());
         }
@@ -386,7 +417,7 @@ impl Migration {
                     );
                 }
             }
-            if input_presence(previous).await?.is_some() {
+            if !shared && input_presence(previous).await?.is_some() {
                 return Err(problem("The previous input service is still running").uncertain());
             }
             Ok(())
@@ -415,7 +446,7 @@ impl Migration {
     async fn jobs(&mut self, through: Endpoint) -> Result<Value> {
         let request = Request::Inspect {
             uid: self.log.plan.uid,
-            labels: vec![self.log.plan.old_label.clone(), LABEL.to_owned()],
+            labels: vec![self.log.plan.old_label.clone(), self.log.plan.label.clone()],
         };
         let argv = helper_argv(self.client(through), &request)?;
         // Inspection is read-only and needs no pending marker.
@@ -435,6 +466,14 @@ impl Migration {
         let controller = plan.controller.clone();
         self.helper(via, Request::Prepare { uid, controller })
             .await?;
+        // The app may have changed since planning: install only the binary
+        // that was planned, still validly signed.
+        if signed_daemon(&plan.program)? != plan.cdhash {
+            return Err(problem(
+                "Understudy.app changed since setup was planned; run setup --rollback, then \
+                 setup --apply again",
+            ));
+        }
         let agent = self.agent();
         self.helper(via, Request::Install { agent }).await?;
         self.verify_new().await?;
@@ -457,7 +496,7 @@ impl Migration {
         )
         .await?;
         let jobs = self.jobs(Endpoint::New).await?;
-        if jobs[&plan.old_label]["loaded"] != false || jobs[LABEL]["loaded"] != true {
+        if jobs[&plan.old_label]["loaded"] != false || jobs[&plan.label]["loaded"] != true {
             return Err(problem(
                 "launchd does not show the expected jobs after retiring",
             ));
@@ -484,7 +523,7 @@ impl Migration {
         // Planning proved the managed label had no artifacts, so anything
         // there now was created by this migration.
         let sha256 = text_sha256(&plist(&self.agent(), &self.layout().logs()));
-        let label = LABEL.to_owned();
+        let label = plan.label.clone();
         self.helper(
             Endpoint::Old,
             Request::Retire {
@@ -496,7 +535,7 @@ impl Migration {
         )
         .await?;
         let jobs = self.jobs(Endpoint::Old).await?;
-        if jobs[&plan.old_label]["loaded"] != true || jobs[LABEL]["loaded"] != false {
+        if jobs[&plan.old_label]["loaded"] != true || jobs[&plan.label]["loaded"] != false {
             return Err(problem(
                 "launchd does not show the original job after rollback",
             ));
@@ -505,6 +544,37 @@ impl Migration {
         self.log.state = State::RolledBack;
         save_log(&self.path, &self.log)
     }
+}
+
+/// The code directory hash of `program`, once it is shown to be validly
+/// signed as Understudy with a Developer ID.
+fn signed_daemon(program: &Path) -> Result<String> {
+    if !super::developer_id(program) {
+        return Err(problem(format!(
+            "{} is not Understudy signed with a Developer ID, so macOS consent would not \
+             persist",
+            program.display()
+        )));
+    }
+    signature(program)
+        .and_then(|signature| signature.cdhash)
+        .ok_or_else(|| problem("The helper daemon's signature could not be read"))
+}
+
+/// The signed Understudy executable the helper daemon runs: this one when it
+/// is inside the app, else the installed app's.
+fn daemon_program() -> Result<PathBuf> {
+    const INSTALLED: &str = "/Applications/Understudy.app/Contents/MacOS/understudy";
+    let current = std::env::current_exe().and_then(fs::canonicalize).ok();
+    current
+        .filter(|path| {
+            path.parent()
+                .is_some_and(|dir| dir.ends_with("Contents/MacOS"))
+        })
+        .or_else(|| Some(PathBuf::from(INSTALLED)).filter(|path| path.is_file()))
+        .ok_or_else(|| {
+            problem("Install Understudy.app first; setup runs the helper daemon from it")
+        })
 }
 
 fn clients(plan: &Plan) -> Result<(Client, Client)> {
@@ -551,10 +621,8 @@ async fn plan(config_path: &Path) -> Result<Plan> {
         .as_u64()
         .and_then(|pid| u32::try_from(pid).ok())
         .ok_or_else(|| problem("The capture daemon reported no PID"))?;
-    let program = executable_of(pid).ok_or_else(|| problem("Capture executable unknown"))?;
-    let cdhash = signature(&program)
-        .and_then(|signature| signature.cdhash)
-        .ok_or_else(|| problem("The capture executable has no readable code signature"))?;
+    let program = daemon_program()?;
+    let cdhash = signed_daemon(&program)?;
     let old_label = helper_job(&client, pid).await["label"]
         .as_str()
         .ok_or_else(|| problem("The current capture job could not be identified"))?
@@ -597,6 +665,8 @@ async fn plan(config_path: &Path) -> Result<Plan> {
         home: account.home,
         old_label,
         old_plist_sha256,
+        label: LABEL.to_owned(),
+        controller_uid: controller.uid,
         program,
         cdhash,
         config_path,
@@ -611,7 +681,7 @@ fn report(log: &Log, path: &Path, outcome: Result<()>) -> Value {
         "state": log.state,
         "log": path,
         "oldLabel": log.plan.old_label,
-        "label": LABEL,
+        "label": log.plan.label,
         "config": log.plan.config_path,
         "pending": log.pending.len(),
         "history": log.history.iter().map(|(action, _)| action).collect::<Vec<_>>(),
@@ -630,7 +700,20 @@ pub async fn apply(config_path: &Path, _ownership: &Ownership) -> Result<Value> 
     let uid = Config::load(config_path)?.helper_uid;
     let path = log_path(uid)?;
     let log = match load_log(&path)? {
-        Some(log) if matches!(log.state, State::Applying | State::Applied) => log,
+        // Applied by an Understudy before its own daemon: plan the move to it.
+        Some(log) if log.plan.label.is_empty() && log.state == State::Applying => {
+            return Err(problem(format!(
+                "A setup recorded by an older Understudy is unfinished; finish or roll it back \
+                 with that version ({})",
+                path.display()
+            )));
+        }
+        Some(log)
+            if matches!(log.state, State::Applying | State::Applied)
+                && !log.plan.label.is_empty() =>
+        {
+            log
+        }
         Some(log) if log.state == State::RollingBack => {
             return Err(problem(format!(
                 "A rollback is unfinished; run setup --rollback to complete it ({})",
@@ -659,6 +742,16 @@ pub async fn apply(config_path: &Path, _ownership: &Ownership) -> Result<Value> 
         new,
     };
     migration.require_owned_pending()?;
+    if migration.log.state == State::Applied {
+        // An applied setup re-verifies. An updated Understudy.app is accepted
+        // if it is still validly signed as Understudy: its new hash is
+        // recorded, and the running daemon's executable must be that binary.
+        let current = signed_daemon(&migration.log.plan.program)?;
+        if current != migration.log.plan.cdhash {
+            migration.log.plan.cdhash = current;
+            migration.note("helper daemon updated")?;
+        }
+    }
     migration.log.state = State::Applying;
     save_log(&migration.path, &migration.log)?;
     let outcome = migration.apply().await;
@@ -670,6 +763,11 @@ pub async fn apply(config_path: &Path, _ownership: &Ownership) -> Result<Value> 
 pub async fn rollback(config_path: &Path, _ownership: &Ownership) -> Result<Value> {
     let path = log_path(Config::load(config_path)?.helper_uid)?;
     let log = load_log(&path)?.ok_or_else(|| problem("No setup migration is recorded"))?;
+    if log.plan.label.is_empty() {
+        return Err(problem(
+            "This setup was recorded by an older Understudy; roll it back with that version",
+        ));
+    }
     let (old, new) = clients(&log.plan)?;
     let mut migration = Migration {
         path,
@@ -703,6 +801,8 @@ mod tests {
             home: "/Users/h".into(),
             old_label: "dev.atlas.live-sessiond".into(),
             old_plist_sha256: "a".repeat(64),
+            label: LABEL.into(),
+            controller_uid: 501,
             program: "/x".into(),
             cdhash: "ab".into(),
             config_path,
@@ -720,7 +820,7 @@ mod tests {
         let target = managed(&config(), &layout);
         assert_eq!(
             target.socket_path,
-            PathBuf::from("/Users/atlastest/.understudy/capture/502.sock")
+            PathBuf::from("/Users/atlastest/.understudy/helper/502.sock")
         );
         assert_eq!(
             target.input_socket,
@@ -729,6 +829,25 @@ mod tests {
         assert_eq!(target.identity_probe, config().identity_probe);
         assert_eq!(target.output_dir, config().output_dir);
         assert!(target.socket_path.to_string_lossy().len() < 104);
+    }
+
+    /// A log from before the own daemon has no managed label; it reads, and
+    /// marks itself as one this version must not resume or roll back.
+    #[test]
+    fn logs_from_the_previous_daemon_are_recognised() {
+        let mut legacy = serde_json::to_value(Log {
+            version: 1,
+            plan: plan("/c/understudy.local.toml".into(), "a"),
+            state: State::Applied,
+            pending: Vec::new(),
+            history: Vec::new(),
+        })
+        .unwrap();
+        let fields = legacy["plan"].as_object_mut().unwrap();
+        fields.remove("label");
+        fields.remove("controllerUid");
+        let log: Log = serde_json::from_value(legacy).unwrap();
+        assert!(log.plan.label.is_empty());
     }
 
     #[test]
