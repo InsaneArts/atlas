@@ -18,7 +18,9 @@ Every command except `agent-guide` prints JSON and exits non-zero on failure.
 - `understudy screenshot` saves a PNG and prints its `path`; look at it.
 - `understudy windows [--app NAME]` lists windows front to back with bounds.
 - `understudy elements --app NAME [--role AXButton] [--name LABEL]` lists
-  accessibility elements with roles, names, values and frames.
+  accessibility elements with roles, names, values and frames. Text is cut
+  after 200 UTF-16 units; `truncated` names any attribute shown only in part,
+  so read long documents from their file instead.
 
 Coordinates are display points with the origin at the top left. Convert
 screenshot pixels by multiplying by `pointsPerPixel`.
