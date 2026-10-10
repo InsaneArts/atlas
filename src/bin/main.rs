@@ -240,6 +240,21 @@ enum Command {
     },
     /// Restart the helper and confirm a new hidden process before clearing uncertainty.
     Restart,
+    /// Switch to another login, such as the helper. macOS shows that
+    /// account's login window; its password is typed there, never here.
+    Switch {
+        /// Account short name. Without it, choose from a list.
+        account: Option<String>,
+        /// Show the login window without choosing an account.
+        #[arg(long, conflicts_with = "account")]
+        login_window: bool,
+        /// Only list the accounts that can be switched to.
+        #[arg(long)]
+        list: bool,
+        /// Switch without asking (it changes the person's screen).
+        #[arg(long)]
+        yes: bool,
+    },
     /// Update Understudy.app to the latest release after verifying its
     /// checksum and Developer ID signature, then move the helper onto it.
     Update {
@@ -419,6 +434,12 @@ async fn execute(cli: Cli) -> Result<Value> {
             version,
         } => return update(&cli.config, allow_unnotarized, force, version),
         Command::UpdateFinish => return update_finish(&cli.config),
+        Command::Switch {
+            account,
+            login_window,
+            list,
+            yes,
+        } => return switch(&cli.config, account, login_window, list, yes),
         Command::Setup {
             helper,
             apply: false,
@@ -437,7 +458,8 @@ async fn execute(cli: Cli) -> Result<Value> {
         | Command::EnvironmentWorker { .. }
         | Command::SetupHelper { .. }
         | Command::Update { .. }
-        | Command::UpdateFinish => {
+        | Command::UpdateFinish
+        | Command::Switch { .. } => {
             unreachable!("these commands return above")
         }
         Command::Setup { apply, .. } => {
@@ -632,6 +654,78 @@ async fn execute(cli: Cli) -> Result<Value> {
         Command::Run { argv } => client.run(argv).await.map(with_output),
         Command::Restart => client.restart().await,
     }
+}
+
+/// Ask the person on the terminal; never assume yes without one.
+fn confirm(question: &str) -> Result<bool> {
+    use std::io::{BufRead, IsTerminal, Write};
+    if !std::io::stdin().is_terminal() {
+        return Err(Error::new(
+            "switch",
+            "Switching changes the person's screen: run it in a terminal, or pass --yes",
+        ));
+    }
+    eprint!("{question} [y/N] ");
+    std::io::stderr().flush()?;
+    let mut answer = String::new();
+    std::io::stdin().lock().read_line(&mut answer)?;
+    Ok(matches!(answer.trim(), "y" | "Y" | "yes"))
+}
+
+/// List, choose and switch to another login.
+fn switch(
+    config: &std::path::Path,
+    account: Option<String>,
+    login_window: bool,
+    list: bool,
+    yes: bool,
+) -> Result<Value> {
+    use std::io::{BufRead, IsTerminal, Write};
+    use understudy::switch;
+    let helper = Config::load(config).ok().map(|config| config.helper_uid);
+    let accounts = switch::accounts(helper)?;
+    if list {
+        return Ok(json!({"ok": true, "accounts": accounts}));
+    }
+    if login_window {
+        if !yes && !confirm("Show the login window now?")? {
+            return Ok(json!({"ok": false, "cancelled": true}));
+        }
+        return switch::to_login_window();
+    }
+    let chosen = match account {
+        Some(name) => accounts
+            .iter()
+            .find(|candidate| candidate.name == name)
+            .cloned()
+            .ok_or_else(|| Error::new("switch", format!("No login named {name} to switch to")))?,
+        None => {
+            if !std::io::stdin().is_terminal() {
+                return Ok(json!({"ok": true, "accounts": accounts}));
+            }
+            for (index, candidate) in accounts.iter().enumerate() {
+                let label = candidate.real_name.as_deref().unwrap_or(&candidate.name);
+                let helper = if candidate.helper { "  (helper)" } else { "" };
+                eprintln!("  {}. {label} — {}{helper}", index + 1, candidate.name);
+            }
+            eprint!("Switch to which login? ");
+            std::io::stderr().flush()?;
+            let mut answer = String::new();
+            std::io::stdin().lock().read_line(&mut answer)?;
+            let index = answer
+                .trim()
+                .parse::<usize>()
+                .ok()
+                .and_then(|number| number.checked_sub(1))
+                .filter(|index| *index < accounts.len())
+                .ok_or_else(|| Error::new("switch", "No such choice"))?;
+            return switch::to(&accounts[index]);
+        }
+    };
+    if !yes && !confirm(&format!("Switch to {} now?", chosen.name))? {
+        return Ok(json!({"ok": false, "cancelled": true}));
+    }
+    switch::to(&chosen)
 }
 
 /// Update the app, then hand over to the new executable, so the steps that
