@@ -3,6 +3,7 @@ pub mod actions;
 pub mod client;
 pub mod config;
 pub mod control;
+pub mod digest;
 pub mod environment;
 pub mod error;
 pub mod native;
