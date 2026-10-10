@@ -43,6 +43,11 @@ unsafe extern "C" {
         values: *mut CfRef,
     ) -> i32;
     fn AXUIElementSetMessagingTimeout(element: CfRef, seconds: f32) -> i32;
+    fn AXUIElementGetAttributeValueCount(
+        element: CfRef,
+        attribute: CfRef,
+        count: *mut isize,
+    ) -> i32;
     fn AXValueGetValue(value: CfRef, kind: u32, out: *mut c_void) -> bool;
     fn AXValueGetTypeID() -> usize;
 }
@@ -72,10 +77,16 @@ const SIZE: u32 = 2;
 const FLOAT64: isize = 13;
 /// Longest text reported for any one attribute, in UTF-16 units.
 const TEXT_LIMIT: isize = 200;
-/// AX errors meaning the element could not be read: the request could not
-/// complete (timeout or unresponsive app), the element vanished while being
-/// read, or the API is disabled. Missing or unsupported attributes are not.
+/// AX errors meaning the element could not be read at all: the request could
+/// not complete (timeout or unresponsive app), the element vanished, or the
+/// API is disabled. Any of these makes the whole scan incomplete.
 const INCOMPLETE: [i32; 3] = [-25204, -25202, -25211];
+/// AX errors meaning the element simply lacks the attribute: no value,
+/// unsupported, not implemented.
+const ABSENT: [i32; 3] = [-25212, -25205, -25208];
+/// Attributes a selector matches on; an element whose selector attribute
+/// fails to read (other than being absent) may be an unseen match.
+const SELECTORS: [&CStr; 4] = [c"AXRole", c"AXTitle", c"AXDescription", c"AXIdentifier"];
 
 /// An owned CoreFoundation reference, released once. Never wraps null.
 struct Owned(CfRef);
@@ -122,35 +133,49 @@ unsafe fn bounded_string(value: CfRef) -> Option<String> {
     }
 }
 
-/// One traversal: its deadline, whether anything made it incomplete, and
-/// how often each AX error code was returned.
+/// One traversal: its deadline, whether anything made it incomplete, the
+/// selector attributes the current element failed to read, and how often
+/// each attribute returned each AX error.
 struct Scan {
     deadline: Instant,
     incomplete: bool,
-    errors: std::collections::BTreeMap<i32, usize>,
+    unreadable: Vec<String>,
+    errors: std::collections::BTreeMap<String, usize>,
 }
 
 impl Scan {
-    /// Copy an attribute; a communication failure (not "no such attribute")
-    /// marks the scan incomplete.
-    fn attribute(&mut self, element: CfRef, name: &CStr) -> Option<Owned> {
-        let name = cf_string(name)?;
+    /// Whether another AX request may start; past the deadline the scan is
+    /// incomplete and nothing more is asked.
+    fn open(&mut self) -> bool {
+        if Instant::now() >= self.deadline {
+            self.incomplete = true;
+        }
+        !self.incomplete || Instant::now() < self.deadline
+    }
+    fn failed(&mut self, status: i32, attribute: &CStr) {
+        let key = format!("{}:{status}", attribute.to_string_lossy());
+        *self.errors.entry(key).or_default() += 1;
+        if INCOMPLETE.contains(&status) {
+            self.incomplete = true;
+        } else if !ABSENT.contains(&status) && SELECTORS.contains(&attribute) {
+            self.unreadable
+                .push(attribute.to_string_lossy().into_owned());
+        }
+    }
+    /// Copy one attribute value.
+    fn attribute(&mut self, element: CfRef, attribute: &CStr) -> Option<Owned> {
+        if !self.open() {
+            return None;
+        }
+        let name = cf_string(attribute)?;
         let mut value = std::ptr::null();
         // SAFETY: live element and attribute; Copy transfers ownership on success.
         let status = unsafe { AXUIElementCopyAttributeValue(element, name.0, &mut value) };
         if status == 0 {
             return Owned::new(value);
         }
-        self.failed(status);
+        self.failed(status, attribute);
         None
-    }
-    /// Record an AX error; only those meaning the element could not be read
-    /// (as opposed to lacking the attribute) make the scan incomplete.
-    fn failed(&mut self, status: i32) {
-        *self.errors.entry(status).or_default() += 1;
-        if INCOMPLETE.contains(&status) {
-            self.incomplete = true;
-        }
     }
     fn text(&mut self, element: CfRef, name: &CStr) -> Option<String> {
         let value = self.attribute(element, name)?;
@@ -203,25 +228,45 @@ impl Scan {
         }
     }
     /// At most `maximum` element references from an array attribute, each
-    /// retained; the rest are never copied.
-    fn children(&mut self, element: CfRef, name: &CStr, maximum: usize) -> Vec<Owned> {
-        let Some(name) = cf_string(name) else {
+    /// retained. The value count is read first: zero is a leaf, and a count
+    /// beyond what was fetched (or any failure to enumerate a non-empty
+    /// array) leaves the scan incomplete instead of silently dropping values.
+    fn children(&mut self, element: CfRef, attribute: &CStr, maximum: usize) -> Vec<Owned> {
+        if !self.open() {
+            return Vec::new();
+        }
+        let Some(name) = cf_string(attribute) else {
             return Vec::new();
         };
+        let mut count = 0isize;
+        // SAFETY: live element and attribute with a valid output pointer.
+        let status = unsafe { AXUIElementGetAttributeValueCount(element, name.0, &mut count) };
+        if status != 0 {
+            self.failed(status, attribute);
+            if !ABSENT.contains(&status) {
+                self.incomplete = true;
+            }
+            return Vec::new();
+        }
+        if count <= 0 {
+            return Vec::new();
+        }
+        let wanted = count.min(isize::try_from(maximum).unwrap_or(isize::MAX));
+        if wanted < count {
+            self.incomplete = true;
+        }
         let mut array = std::ptr::null();
-        let maximum = isize::try_from(maximum).unwrap_or(isize::MAX);
         // SAFETY: live element and attribute; the range copy returns an owned
         // array whose elements are retained before it is released.
         unsafe {
-            let status = AXUIElementCopyAttributeValues(element, name.0, 0, maximum, &mut array);
-            if status != 0 {
-                self.failed(status);
-                return Vec::new();
-            }
-            let Some(array) = Owned::new(array) else {
+            let status = AXUIElementCopyAttributeValues(element, name.0, 0, wanted, &mut array);
+            let Some(array) = (status == 0).then(|| Owned::new(array)).flatten() else {
+                self.failed(status, attribute);
+                self.incomplete = true;
                 return Vec::new();
             };
             if CFGetTypeID(array.0) != CFArrayGetTypeID() {
+                self.incomplete = true;
                 return Vec::new();
             }
             (0..CFArrayGetCount(array.0))
@@ -264,6 +309,10 @@ pub struct Element {
     pub enabled: Option<bool>,
     pub focused: Option<bool>,
     pub frame: Option<Frame>,
+    /// Selector attributes (role, title, description, identifier) that could
+    /// not be read, so this element might match a selector unseen.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unreadable: Vec<String>,
 }
 
 /// One traversal's result.
@@ -273,8 +322,8 @@ pub struct Snapshot {
     /// A limit, the deadline or an unreadable element cut the scan short, so
     /// absence from it proves nothing.
     pub incomplete: bool,
-    /// AX error code -> count, for diagnosing incomplete scans.
-    pub errors: std::collections::BTreeMap<i32, usize>,
+    /// "attribute:AX error code" -> count, for diagnosing incomplete scans.
+    pub errors: std::collections::BTreeMap<String, usize>,
 }
 
 /// Bounds on one traversal.
@@ -307,6 +356,7 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
     let mut scan = Scan {
         deadline: Instant::now() + limits.time,
         incomplete: false,
+        unreadable: Vec::new(),
         errors: Default::default(),
     };
     let windows = scan.children(app.0, c"AXWindows", limits.count);
@@ -325,12 +375,13 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
         stack.push((window, 0, frame));
     }
     while let Some((element, depth, window)) = stack.pop() {
-        if found.len() >= limits.count || Instant::now() >= scan.deadline {
+        if found.len() >= limits.count || !scan.open() {
             scan.incomplete = true;
             break;
         }
         let item = element.0;
-        found.push(Element {
+        scan.unreadable.clear();
+        let mut element = Element {
             index: found.len(),
             depth,
             window: window.clone(),
@@ -343,17 +394,22 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
             enabled: scan.flag(item, c"AXEnabled"),
             focused: scan.flag(item, c"AXFocused"),
             frame: scan.frame(item),
-        });
+            unreadable: Vec::new(),
+        };
+        element.unreadable = std::mem::take(&mut scan.unreadable);
+        found.push(element);
         if depth + 1 >= limits.depth {
             scan.incomplete |= !scan.children(item, c"AXChildren", 1).is_empty();
             continue;
         }
         let budget = limits.count.saturating_sub(found.len() + stack.len());
-        let children = scan.children(item, c"AXChildren", budget.max(1));
+        let children = scan.children(item, c"AXChildren", budget);
         for child in children.into_iter().rev() {
             stack.push((child, depth + 1, window.clone()));
         }
     }
+    // A request that started before the deadline may have ended after it.
+    scan.open();
     Ok(Snapshot {
         elements: found,
         incomplete: scan.incomplete,

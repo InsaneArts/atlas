@@ -152,8 +152,15 @@ impl WindowFilter {
 
 /// The helper's on-screen windows, front to back, through a read-only probe.
 pub async fn windows(client: &Client) -> Result<Vec<Window>> {
+    windows_within(client, Duration::from_secs(5)).await
+}
+
+/// The window list, with the helper probe bounded by `limit`.
+async fn windows_within(client: &Client, limit: Duration) -> Result<Vec<Window>> {
     let probe = client.config.identity_probe.to_string_lossy().into_owned();
-    let reply = client.inspect(vec![probe, "windows-info".into()]).await?;
+    let reply = client
+        .inspect_within(vec![probe, "windows-info".into()], limit)
+        .await?;
     run_output(&reply, 1 << 20)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
@@ -212,20 +219,28 @@ pub async fn wait(
     let started = Instant::now();
     let deadline = started + timeout;
     loop {
-        let matching: Vec<_> = windows(client)
+        // Each observation gets what is left of the deadline (at least half
+        // a second); a zero timeout is exactly one observation.
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let budget = if timeout.is_zero() {
+            Duration::from_secs(5)
+        } else {
+            remaining.max(Duration::from_millis(500))
+        };
+        let matching: Vec<_> = windows_within(client, budget)
             .await?
             .into_iter()
             .filter(|window| filter.matches(window))
             .collect();
         let observed = Instant::now();
-        if matching.is_empty() == gone && observed <= deadline {
+        if matching.is_empty() == gone && (timeout.is_zero() || observed <= deadline) {
             return Ok(json!({
                 "ok": true,
                 "waitedMs": started.elapsed().as_millis() as u64,
                 "windows": matching,
             }));
         }
-        if observed >= deadline {
+        if timeout.is_zero() || observed >= deadline {
             return Ok(json!({
                 "ok": false,
                 "timedOut": true,
@@ -250,6 +265,25 @@ pub struct ElementFilter {
 }
 
 impl ElementFilter {
+    /// Whether `element` could match once attributes it failed to read are
+    /// treated as unknown.
+    pub fn might_match(&self, element: &Element) -> bool {
+        let unknown = |attribute: &str| element.unreadable.iter().any(|a| a == attribute);
+        let same = |left: &Option<String>, right: &str, attribute: &str| {
+            unknown(attribute)
+                || left
+                    .as_deref()
+                    .is_some_and(|left| left.eq_ignore_ascii_case(right))
+        };
+        self.role
+            .as_deref()
+            .is_none_or(|role| same(&element.role, role, "AXRole"))
+            && self.name.as_deref().is_none_or(|name| {
+                same(&element.title, name, "AXTitle")
+                    || same(&element.description, name, "AXDescription")
+                    || same(&element.identifier, name, "AXIdentifier")
+            })
+    }
     pub fn matches(&self, element: &Element) -> bool {
         let same = |left: &Option<String>, right: &str| {
             left.as_deref()
@@ -353,20 +387,20 @@ pub async fn elements(
     }))
 }
 
-/// The CoreGraphics window whose bounds are an element's AX window frame.
+/// The CoreGraphics window whose bounds are an element's AX window frame,
+/// or None when no window or more than one window of the process matches.
 fn owning_window(windows: &[Window], pid: i64, frame: &Frame) -> Option<i64> {
     let near = |a: f64, b: f64| (a - b).abs() <= 1.0;
-    windows
-        .iter()
-        .find(|window| {
-            window.pid == pid
-                && window.layer == 0
-                && near(window.bounds.x, frame.x)
-                && near(window.bounds.y, frame.y)
-                && near(window.bounds.width, frame.width)
-                && near(window.bounds.height, frame.height)
-        })
-        .map(|window| window.number)
+    let mut matching = windows.iter().filter(|window| {
+        window.pid == pid
+            && window.layer == 0
+            && near(window.bounds.x, frame.x)
+            && near(window.bounds.y, frame.y)
+            && near(window.bounds.width, frame.width)
+            && near(window.bounds.height, frame.height)
+    });
+    let first = matching.next()?;
+    matching.next().is_none().then_some(first.number)
 }
 
 /// Click the centre of exactly one matching element. Uniqueness needs a
@@ -410,6 +444,17 @@ pub async fn click_element(
             ),
         ));
     };
+    // An element whose selector attributes could not be read may be a
+    // second, unseen match.
+    let doubtful = elements.iter().any(|other| {
+        other.index != element.index && !other.unreadable.is_empty() && filter.might_match(other)
+    });
+    if doubtful {
+        return Err(Error::new(
+            "elements",
+            "Another element's name could not be read, so this match may not be unique",
+        ));
+    }
     let (x, y) = element
         .frame
         .as_ref()
@@ -549,6 +594,7 @@ mod tests {
             enabled: Some(true),
             focused: None,
             frame: None,
+            unreadable: Vec::new(),
         }
     }
 
@@ -569,6 +615,11 @@ mod tests {
         );
         assert!(!filter(None, Some("Sav")).matches(&save), "names are exact");
         assert!(filter(None, None).matches(&label));
+        let mut unread = element("AXButton", None, None);
+        unread.unreadable = vec!["AXTitle".into()];
+        assert!(!filter(Some("AXButton"), Some("Save")).matches(&unread));
+        assert!(filter(Some("AXButton"), Some("Save")).might_match(&unread));
+        assert!(!filter(Some("AXStaticText"), Some("Save")).might_match(&unread));
     }
 
     #[test]
@@ -608,5 +659,11 @@ mod tests {
             "other process"
         );
         assert_eq!(owning_window(&windows, 8, &frame(200.0)), None);
+        let twins = [window(4, 8, "TextEdit", 0), window(5, 8, "TextEdit", 0)];
+        assert_eq!(
+            owning_window(&twins, 8, &frame(10.0)),
+            None,
+            "identical geometry is ambiguous"
+        );
     }
 }

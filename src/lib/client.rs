@@ -384,7 +384,11 @@ impl Client {
     /// the verified hidden helper. It records no pending mutation, so callers
     /// must only pass commands that cannot change the helper.
     pub(crate) async fn inspect(&self, argv: Vec<String>) -> Result<Value> {
-        self.run_pending(argv, Duration::from_secs(5)).await
+        self.inspect_within(argv, Duration::from_secs(5)).await
+    }
+    /// [`Client::inspect`] bounded by `limit`.
+    pub(crate) async fn inspect_within(&self, argv: Vec<String>, limit: Duration) -> Result<Value> {
+        self.run_pending(argv, limit).await
     }
     /// Execute argv in the verified hidden helper as part of a mutation the
     /// caller holds ownership for and has already recorded as pending. The
