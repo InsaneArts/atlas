@@ -161,12 +161,19 @@ fn signature(path: &Path) -> Option<Signature> {
 pub const IDENTIFIER: &str = "com.insanearts.understudy";
 /// The Developer ID team that signs Understudy; consent follows it.
 pub const TEAM: &str = "A474HM679A";
+/// The identifier the menu bar companion inside the app is signed as.
+pub const COMPANION_IDENTIFIER: &str = "com.insanearts.understudy.bar";
 
 /// The code requirement for Understudy: a Developer ID Application
 /// signature by its team, under its identifier. install.sh checks the same.
 pub fn requirement() -> String {
+    requirement_for(IDENTIFIER)
+}
+
+/// The same requirement for code signed as `identifier`.
+fn requirement_for(identifier: &str) -> String {
     format!(
-        "anchor apple generic and identifier \"{IDENTIFIER}\" \
+        "anchor apple generic and identifier \"{identifier}\" \
          and certificate 1[field.1.2.840.113635.100.6.2.6] \
          and certificate leaf[field.1.2.840.113635.100.6.1.13] \
          and certificate leaf[subject.OU] = \"{TEAM}\""
@@ -178,9 +185,14 @@ pub fn requirement() -> String {
 /// requirement under which macOS consent persists. For a running process
 /// this also checks that its loaded code still matches the file on disk.
 fn satisfies_developer_id(target: &std::ffi::OsStr) -> bool {
+    satisfies(target, IDENTIFIER)
+}
+
+/// Whether `target` validly satisfies the requirement for `identifier`.
+fn satisfies(target: &std::ffi::OsStr, identifier: &str) -> bool {
     Command::new("/usr/bin/codesign")
         .args(["--verify", "--strict", "-R"])
-        .arg(format!("={}", requirement()))
+        .arg(format!("={}", requirement_for(identifier)))
         .arg(target)
         .output()
         .is_ok_and(|output| output.status.success())
@@ -189,6 +201,12 @@ fn satisfies_developer_id(target: &std::ffi::OsStr) -> bool {
 /// Whether the file at `path` is Understudy signed by its Developer ID.
 pub fn developer_id(path: &Path) -> bool {
     satisfies_developer_id(path.as_os_str())
+}
+
+/// Whether the file at `path` is the menu bar companion signed by
+/// Understudy's Developer ID.
+pub fn companion_signed(path: &Path) -> bool {
+    satisfies(path.as_os_str(), COMPANION_IDENTIFIER)
 }
 
 /// Whether process `pid` runs Understudy signed by its Developer ID, and
