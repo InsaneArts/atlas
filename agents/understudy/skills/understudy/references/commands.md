@@ -620,7 +620,7 @@ Options:
 ## understudy switch
 
 ```text
-Switch to another login, such as the helper. macOS shows that account's login window; its password is typed there, never here
+Switch to another login, such as the helper: locks the screen so you choose the account there; its password is typed there, never here
 
 Usage: understudy switch [OPTIONS] [ACCOUNT]
 
@@ -633,8 +633,8 @@ Options:
           [env: UNDERSTUDY_CONFIG]
           [default: understudy.local.toml]
 
-      --login-window
-          Show the login window without choosing an account
+      --lock
+          Just lock the screen, without choosing an account
 
       --list
           Only list the accounts that can be switched to
@@ -766,7 +766,7 @@ Commands:
   wait           Wait until a matching window appears, or with --gone until it closes
   run            Execute argv in the helper session
   restart        Restart the helper and confirm a new hidden process before clearing uncertainty
-  switch         Switch to another login, such as the helper. macOS shows that account's login window; its password is typed there, never here
+  switch         Switch to another login, such as the helper: locks the screen so you choose the account there; its password is typed there, never here
   update         Update Understudy.app to the latest release after verifying its checksum and Developer ID signature, then move the helper onto it
   init           Set Understudy up on this Mac, step by step: helper account, first sign-in, permissions, the helper job and input. Safe to run again
   uninstall      Remove Understudy from this Mac (asks first). The helper account and its files stay; the app goes to the Trash
