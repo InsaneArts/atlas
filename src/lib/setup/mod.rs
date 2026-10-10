@@ -162,20 +162,25 @@ pub const IDENTIFIER: &str = "com.insanearts.understudy";
 /// The Developer ID team that signs Understudy; consent follows it.
 pub const TEAM: &str = "A474HM679A";
 
+/// The code requirement for Understudy: a Developer ID Application
+/// signature by its team, under its identifier. install.sh checks the same.
+pub fn requirement() -> String {
+    format!(
+        "anchor apple generic and identifier \"{IDENTIFIER}\" \
+         and certificate 1[field.1.2.840.113635.100.6.2.6] \
+         and certificate leaf[field.1.2.840.113635.100.6.1.13] \
+         and certificate leaf[subject.OU] = \"{TEAM}\""
+    )
+}
+
 /// Whether `target` (a path, or a PID as text) validly satisfies a
 /// Developer ID Application signature for Understudy by its team, the
 /// requirement under which macOS consent persists. For a running process
 /// this also checks that its loaded code still matches the file on disk.
 fn satisfies_developer_id(target: &std::ffi::OsStr) -> bool {
-    let requirement = format!(
-        "=anchor apple generic and identifier \"{IDENTIFIER}\" \
-         and certificate 1[field.1.2.840.113635.100.6.2.6] \
-         and certificate leaf[field.1.2.840.113635.100.6.1.13] \
-         and certificate leaf[subject.OU] = \"{TEAM}\""
-    );
     Command::new("/usr/bin/codesign")
         .args(["--verify", "--strict", "-R"])
-        .arg(requirement)
+        .arg(format!("={}", requirement()))
         .arg(target)
         .output()
         .is_ok_and(|output| output.status.success())
@@ -591,6 +596,24 @@ fn next_steps(report: &Value) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The installer verifies downloads against exactly setup's requirement.
+    #[test]
+    fn the_installer_checks_the_same_requirement() {
+        let script = include_str!("../../../install.sh");
+        let line = script
+            .lines()
+            .find_map(|line| line.strip_prefix("REQUIREMENT=\""))
+            .and_then(|line| line.strip_suffix('"'))
+            .expect("install.sh sets REQUIREMENT");
+        let expanded = line
+            .replace("\\\"", "\"")
+            .replace("$IDENTIFIER", IDENTIFIER)
+            .replace("$TEAM", TEAM);
+        assert_eq!(expanded, requirement());
+        assert!(script.contains(&format!("IDENTIFIER=\"{IDENTIFIER}\"")));
+        assert!(script.contains(&format!("TEAM=\"{TEAM}\"")));
+    }
 
     /// Only Understudy signed by its own Developer ID team passes, as a file
     /// or as a running process.
