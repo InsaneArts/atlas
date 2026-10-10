@@ -1,5 +1,5 @@
-//! Small read-only macOS boundary, executed *inside* the helper login.
-//! SessionGetInfo reports graphical access independently of the legacy hello fallback.
+//! macOS boundary executed *inside* the helper login: the read-only session
+//! identity probe, plus the input service and its event engine.
 use crate::error::{Error, Result};
 use serde_json::Value;
 

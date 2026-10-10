@@ -1,11 +1,12 @@
 //! Read-only inspection of explicit selections; never executes a selected tool
 //! or sources a shell startup file. Presence is not application compatibility.
+use super::variable_name as variable;
 use crate::{
     client::Client,
     error::{Error, Result},
     session::require_hidden,
+    transport::{OutputError, run_output},
 };
-use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
@@ -61,12 +62,6 @@ fn component(name: &str) -> bool {
             Path::new(name).components().next(),
             Some(Component::Normal(_))
         )
-}
-fn variable(name: &str) -> bool {
-    let mut bytes = name.bytes();
-    matches!(bytes.next(), Some(c) if c.is_ascii_alphabetic() || c == b'_')
-        && name.len() <= 128
-        && bytes.all(|c| c.is_ascii_alphanumeric() || c == b'_')
 }
 
 #[derive(Default, Serialize)]
@@ -124,19 +119,10 @@ async fn probe(client: &Client, script: &str, args: &[String]) -> Result<Vec<Str
             "Helper discovery did not complete",
         ));
     }
-    let mut output = Vec::new();
-    for event in reply["events"].as_array().into_iter().flatten() {
-        if event["event"] == "output" {
-            let bytes = event["data"].as_str().ok_or_else(invalid)?;
-            output.extend(STANDARD.decode(bytes).map_err(|_| invalid())?);
-            if output.len() > 16384 {
-                return Err(Error::new(
-                    "environment",
-                    "Discovery output exceeded its limit",
-                ));
-            }
-        }
-    }
+    let output = run_output(&reply, 16384).map_err(|error| match error {
+        OutputError::Malformed => invalid(),
+        OutputError::Oversized => Error::new("environment", "Discovery output exceeded its limit"),
+    })?;
     let lines = String::from_utf8(output)
         .map_err(|_| invalid())?
         .lines()

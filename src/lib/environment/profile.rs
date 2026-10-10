@@ -1,6 +1,6 @@
 //! Explicit environment selections. Values are written only to a private file;
 //! reports contain names and readiness observations, never variable values.
-use super::{Selection, discovery, freeze, problem};
+use super::{Selection, discovery, freeze, problem, selectable_variable};
 use crate::{client::Client, error::Result};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -12,9 +12,6 @@ use std::{
 };
 
 const ENVIRONMENT_TARGET: &str = ".config/understudy/environment.json";
-const RESERVED: &[&str] = &[
-    "HOME", "USER", "LOGNAME", "SHELL", "PATH", "UID", "EUID", "TMPDIR",
-];
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -40,14 +37,6 @@ struct Reference {
     writable: bool,
 }
 
-fn variable(name: &str) -> bool {
-    let mut bytes = name.bytes();
-    matches!(bytes.next(), Some(c) if c.is_ascii_alphabetic() || c == b'_')
-        && name.len() <= 128
-        && bytes.all(|c| c.is_ascii_alphanumeric() || c == b'_')
-        && !RESERVED.contains(&name)
-}
-
 fn validate(profile: &Profile) -> Result<()> {
     if profile.version != 2 || profile.files.len() > 31 || profile.environment.len() > 16 {
         return Err(problem(
@@ -58,7 +47,7 @@ fn validate(profile: &Profile) -> Result<()> {
     if profile
         .environment
         .iter()
-        .any(|name| !variable(name) || !names.insert(name))
+        .any(|name| !selectable_variable(name) || !names.insert(name))
     {
         return Err(problem(
             "Select unique environment variable names; helper identity, home, temporary directory and PATH are managed separately",
@@ -135,7 +124,7 @@ pub async fn sync(client: &Client, path: &Path, apply: bool) -> Result<Value> {
             )));
         }
     }
-    let temporary = fs::canonicalize(&client.config.output_dir)?
+    let temporary = fs::canonicalize(client.output_dir()?)?
         .join(format!("environment-profile-{}", crate::control::token()));
     fs::DirBuilder::new().mode(0o700).create(&temporary)?;
     let generated = temporary.join("environment.json");
@@ -184,9 +173,11 @@ mod tests {
         serde_json::from_value(value).unwrap()
     }
 
+    use crate::environment::RESERVED_VARIABLES;
+
     #[test]
     fn profile_cannot_shadow_helper_identity_or_generated_state() {
-        for name in RESERVED {
+        for name in RESERVED_VARIABLES {
             assert!(validate(&profile(json!({"version":2,"environment":[name]}))).is_err());
         }
         assert!(

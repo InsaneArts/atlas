@@ -13,8 +13,8 @@ mod worker;
 use crate::{
     client::Client,
     error::{Error, Result},
+    transport::{OutputError, run_output},
 };
-use base64::{Engine, engine::general_purpose::STANDARD};
 use files::*;
 use fs2::FileExt;
 use model::*;
@@ -49,6 +49,24 @@ pub(super) struct Selection {
 
 fn problem(message: impl Into<String>) -> Error {
     Error::new("environment", message)
+}
+
+/// Identity and search-path variables the helper runner owns.
+pub(super) const RESERVED_VARIABLES: &[&str] = &[
+    "HOME", "USER", "LOGNAME", "SHELL", "PATH", "UID", "EUID", "TMPDIR",
+];
+
+/// A portable variable name: ASCII letters, digits and `_`, not leading digit.
+pub(super) fn variable_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    matches!(bytes.next(), Some(c) if c.is_ascii_alphabetic() || c == b'_')
+        && name.len() <= 128
+        && bytes.all(|c| c.is_ascii_alphanumeric() || c == b'_')
+}
+
+/// A name a profile may select and the runner may export.
+pub(super) fn selectable_variable(name: &str) -> bool {
+    variable_name(name) && !RESERVED_VARIABLES.contains(&name)
 }
 
 /// Freeze the selected bytes, then preview or apply the resulting plan.
@@ -309,25 +327,10 @@ fn decode_reply(reply: &Value, mutating: bool) -> Result<Value> {
             "Environment worker was interrupted; retain the plan and inspect or resume its transaction",
         ));
     }
-    let mut output = Vec::new();
-    for event in reply["events"].as_array().into_iter().flatten() {
-        if event["event"] == "output" {
-            let encoded = event["data"]
-                .as_str()
-                .ok_or_else(|| invalid("Malformed environment output"))?;
-            if encoded.len() as u64 > MAX_RECORD * 2 {
-                return Err(invalid("Environment output exceeded its limit"));
-            }
-            output.extend(
-                STANDARD
-                    .decode(encoded)
-                    .map_err(|_| invalid("Malformed environment output"))?,
-            );
-            if output.len() as u64 > MAX_RECORD {
-                return Err(invalid("Environment output exceeded its limit"));
-            }
-        }
-    }
+    let output = run_output(reply, MAX_RECORD as usize).map_err(|error| match error {
+        OutputError::Malformed => invalid("Malformed environment output"),
+        OutputError::Oversized => invalid("Environment output exceeded its limit"),
+    })?;
     let mut value: Value = serde_json::from_slice(&output)
         .map_err(|_| invalid("Environment worker did not return a complete result"))?;
     if !value.is_object()

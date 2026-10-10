@@ -16,11 +16,15 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
     net::{UnixListener, UnixStream},
     sync::{Mutex, Semaphore},
     task::JoinSet,
 };
+
+// Twice the controller's 32 KiB action limit, leaving room for the owner,
+// epoch and JSON re-encoding around any batch the controller accepts.
+const MAX_REQUEST: usize = 64 * 1024;
 
 struct Service {
     engine: Mutex<Engine>,
@@ -256,24 +260,37 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     let slots = Arc::new(Semaphore::new(16));
     let mut tasks = JoinSet::new();
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-    loop {
+    // Every exit path, including an internal failure, closes ownership and
+    // releases held input before returning.
+    let outcome = loop {
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => break,
-            _ = terminate.recv() => break,
+            _ = tokio::signal::ctrl_c() => break Ok(()),
+            _ = terminate.recv() => break Ok(()),
             _ = timer.tick() => {
                 if service.check().is_err() {
                     let _ = service.gate.cancel(None);
                 }
-                if !service.gate.active()?
-                    && let Ok(mut engine) = service.engine.try_lock()
-                {
-                    let _ = engine.release();
+                match service.gate.active() {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        if let Ok(mut engine) = service.engine.try_lock() {
+                            let _ = engine.release();
+                        }
+                    }
+                    Err(error) => break Err(error),
                 }
             }
             Some(_) = tasks.join_next(), if !tasks.is_empty() => {}
             accepted = listener.accept() => {
-                let (stream, _) = accepted?;
-                let peer = stream.peer_cred()?;
+                // Accept and peer lookup failures (for example descriptor
+                // exhaustion) concern one connection, not the service.
+                let Ok((stream, _)) = accepted else {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    continue;
+                };
+                let Ok(peer) = stream.peer_cred() else {
+                    continue;
+                };
                 if peer.uid() != controller_uid && peer.uid() != uid {
                     continue;
                 }
@@ -287,15 +304,17 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
                 });
             }
         }
-    }
-    service.gate.close()?;
+    };
+    let closed = service.gate.close();
     tasks.abort_all();
     while tasks.join_next().await.is_some() {}
-    service.cleanup().await?;
-    Ok(())
+    let cleanup = service.cleanup().await;
+    outcome.and(closed).and(cleanup)
 }
-async fn handle(mut stream: UnixStream, service: Arc<Service>) -> Result<()> {
-    let request = tokio::time::timeout(Duration::from_secs(3), async {
+/// One newline-terminated JSON request of at most `MAX_REQUEST` bytes, however
+/// the peer fragments it. Only newly received bytes are scanned.
+async fn read_request<R: AsyncRead + Unpin>(stream: &mut R) -> Result<Value> {
+    tokio::time::timeout(Duration::from_secs(3), async {
         let mut body = Vec::new();
         let mut buffer = [0; 4096];
         loop {
@@ -303,18 +322,32 @@ async fn handle(mut stream: UnixStream, service: Arc<Service>) -> Result<()> {
             if n == 0 {
                 return Err(Error::new("protocol", "Incomplete request"));
             }
+            let scanned = body.len();
             body.extend_from_slice(&buffer[..n]);
-            if body.len() > 32768 {
-                return Err(Error::new("protocol", "Native request exceeds 32 KiB"));
+            let end = body[scanned..]
+                .iter()
+                .position(|b| *b == b'\n')
+                .map(|offset| scanned + offset);
+            if end.unwrap_or(body.len()) > MAX_REQUEST {
+                return Err(Error::new("protocol", "Native request exceeds 64 KiB"));
             }
-            if let Some(end) = body.iter().position(|b| *b == b'\n') {
+            if let Some(end) = end {
                 return Ok(serde_json::from_slice::<Value>(&body[..end])?);
             }
         }
     })
     .await
-    .map_err(|_| Error::new("transport", "Native request timed out"))??;
-    let reply = if request["op"] == "input" {
+    .map_err(|_| Error::new("transport", "Native request timed out"))?
+}
+
+async fn handle(mut stream: UnixStream, service: Arc<Service>) -> Result<()> {
+    // Nothing was dispatched yet, so answer definitively. A silent hang-up
+    // would look like an unacknowledged mutation to the controller.
+    let request = match read_request(&mut stream).await {
+        Ok(request) => request,
+        Err(error) => return reply(&mut stream, Err(error)).await,
+    };
+    let result = if request["op"] == "input" {
         let mut dispatch = std::pin::pin!(service.dispatch(&request));
         let mut extra = [0; 1];
         tokio::select! {
@@ -329,10 +362,66 @@ async fn handle(mut stream: UnixStream, service: Arc<Service>) -> Result<()> {
     } else {
         service.dispatch(&request).await
     };
-    let mut bytes = serde_json::to_vec(&reply.unwrap_or_else(|e| json!(e)))?;
+    reply(&mut stream, result).await
+}
+async fn reply(stream: &mut UnixStream, result: Result<Value>) -> Result<()> {
+    let mut bytes = serde_json::to_vec(&result.unwrap_or_else(|e| json!(e)))?;
     bytes.push(b'\n');
     tokio::time::timeout(Duration::from_secs(1), stream.write_all(&bytes))
         .await
         .map_err(|_| Error::new("transport", "Native reply timed out"))??;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_REQUEST, read_request};
+    use tokio::io::AsyncWriteExt;
+
+    /// Deliver `line` in `chunk`-byte writes and parse it as the service would.
+    async fn deliver(line: Vec<u8>, chunk: usize) -> crate::error::Result<serde_json::Value> {
+        let (mut client, mut server) = tokio::io::duplex(chunk);
+        let writer = tokio::spawn(async move {
+            for part in line.chunks(chunk) {
+                if client.write_all(part).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let result = read_request(&mut server).await;
+        writer.abort();
+        result
+    }
+
+    fn padded(length: usize) -> Vec<u8> {
+        let mut line = br#"{"op":"hello"}"#.to_vec();
+        line.resize(length, b' ');
+        line.push(b'\n');
+        line
+    }
+
+    #[tokio::test]
+    async fn the_line_limit_holds_however_the_request_is_fragmented() {
+        for chunk in [1000, 4096, 65536] {
+            let reply = deliver(padded(MAX_REQUEST), chunk).await.unwrap();
+            assert_eq!(reply["op"], "hello");
+            let error = deliver(padded(MAX_REQUEST + 1), chunk).await.unwrap_err();
+            assert_eq!(error.code, "protocol");
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_and_truncated_requests_are_errors() {
+        assert_eq!(
+            deliver(b"{not json}\n".to_vec(), 64)
+                .await
+                .unwrap_err()
+                .code,
+            "invalid-json"
+        );
+        assert_eq!(
+            deliver(b"{\"op\":".to_vec(), 64).await.unwrap_err().code,
+            "protocol"
+        );
+    }
 }

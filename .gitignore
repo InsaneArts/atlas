@@ -21,3 +21,6 @@ __pycache__/
 /docs/
 
 /target/
+
+# Coverage profiles from instrumented tools run in this directory
+*.profraw

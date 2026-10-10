@@ -125,16 +125,12 @@ enum EnvironmentCommand {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    let result = if matches!(cli.command, Command::SessionInfo) {
-        understudy::native::session_info()
-    } else {
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .map_err(Error::from)
-            .and_then(|runtime| runtime.block_on(execute(cli)))
-    };
+    let result = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .map_err(Error::from)
+        .and_then(|runtime| runtime.block_on(execute(cli)));
     match result {
         Ok(result) => {
             if !result.is_null() {
@@ -159,27 +155,35 @@ fn main() -> ExitCode {
         }
     }
 }
+#[cfg(target_os = "macos")]
+async fn input_service(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<Value> {
+    understudy::native::service::serve(uid, controller_uid, socket).await?;
+    Ok(Value::Null)
+}
+#[cfg(not(target_os = "macos"))]
+async fn input_service(_: u32, _: u32, _: PathBuf) -> Result<Value> {
+    Err(Error::new("platform", "The input service requires macOS"))
+}
+
 async fn execute(cli: Cli) -> Result<Value> {
-    if let Command::EnvironmentWorker { packet, apply } = &cli.command {
-        return environment::worker(packet, *apply);
-    }
-    if matches!(cli.command, Command::SessionInfo) {
-        return understudy::native::session_info();
-    }
-    #[cfg(target_os = "macos")]
-    if let Command::InputService {
-        uid,
-        controller_uid,
-        socket,
-    } = cli.command
-    {
-        understudy::native::service::serve(uid, controller_uid, socket).await?;
-        return Ok(Value::Null);
-    }
+    // Helper-side commands run inside the helper login and never read the
+    // controller's configuration.
+    let command = match cli.command {
+        Command::EnvironmentWorker { packet, apply } => {
+            return environment::worker(&packet, apply);
+        }
+        Command::SessionInfo => return understudy::native::session_info(),
+        Command::InputService {
+            uid,
+            controller_uid,
+            socket,
+        } => return input_service(uid, controller_uid, socket).await,
+        command => command,
+    };
     let client = Client::new(Config::load(&cli.config)?)?;
-    match cli.command {
+    match command {
         Command::InputService { .. } | Command::SessionInfo | Command::EnvironmentWorker { .. } => {
-            unreachable!("handled before configuration")
+            unreachable!("helper-side commands return above")
         }
         Command::Status => Ok(client.status().await),
         Command::Doctor => Ok(diagnose(client.status().await, client.config.helper_uid)),
@@ -228,13 +232,11 @@ async fn execute(cli: Cli) -> Result<Value> {
         Command::Apps => client.apps().await,
         Command::Input { actions } => {
             let bytes = if let Some(path) = actions.strip_prefix('@') {
-                {
-                    let mut bytes = Vec::new();
-                    std::fs::File::open(path)?
-                        .take(32769)
-                        .read_to_end(&mut bytes)?;
-                    bytes
-                }
+                let mut bytes = Vec::new();
+                std::fs::File::open(path)?
+                    .take(32769)
+                    .read_to_end(&mut bytes)?;
+                bytes
             } else {
                 actions.into_bytes()
             };

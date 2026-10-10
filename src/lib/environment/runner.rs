@@ -33,19 +33,7 @@ fn load(home: &Path) -> Result<BTreeMap<String, String>> {
         return Err(problem("Unsupported helper environment profile"));
     }
     for (name, value) in &environment.variables {
-        let mut bytes = name.bytes();
-        let first = bytes
-            .next()
-            .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_');
-        if !first
-            || name.len() > 128
-            || !bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-            || value.contains('\0')
-            || [
-                "HOME", "USER", "LOGNAME", "SHELL", "PATH", "UID", "EUID", "TMPDIR",
-            ]
-            .contains(&name.as_str())
-        {
+        if !selectable_variable(name) || value.contains('\0') {
             return Err(problem(
                 "Helper environment contains an invalid or reserved variable",
             ));

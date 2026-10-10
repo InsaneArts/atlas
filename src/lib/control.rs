@@ -36,6 +36,7 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
 
 #[derive(Clone)]
 pub struct Controller {
+    directory: PathBuf,
     path: PathBuf,
     marker: PathBuf,
     marker_lock: PathBuf,
@@ -44,17 +45,19 @@ impl Controller {
     pub fn new(uid: u32, socket: &Path) -> Result<Self> {
         Self::at(uid, socket, &home()?.join("Library/Caches/Understudy"))
     }
+    /// Locating state is read-only; the directory appears with the first lock.
     pub fn at(uid: u32, socket: &Path, directory: &Path) -> Result<Self> {
-        fs::create_dir_all(directory)?;
         let key = format!("{uid}:{}", resolve_path(socket)?.display());
         let digest = format!("{:x}", Sha256::digest(key.as_bytes()));
         Ok(Self {
+            directory: directory.to_owned(),
             path: directory.join(format!("{}.lock", &digest[..24])),
             marker: directory.join(format!("{}.uncertain.json", &digest[..24])),
             marker_lock: directory.join(format!("{}.state.lock", &digest[..24])),
         })
     }
     pub fn acquire(&self, recovery: bool) -> Result<File> {
+        fs::create_dir_all(&self.directory)?;
         let file = OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -84,6 +87,7 @@ impl Controller {
         Ok(())
     }
     fn lock_marker(&self) -> Result<File> {
+        fs::create_dir_all(&self.directory)?;
         let file = OpenOptions::new()
             .create(true)
             .truncate(false)

@@ -1,4 +1,5 @@
 use crate::error::{Error, Result};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::{path::PathBuf, time::Duration};
 use tokio::{
@@ -11,6 +12,9 @@ use tokio::{
 pub struct Transport {
     pub path: PathBuf,
     pub timeout: Duration,
+    /// Only this account may serve the socket. Endpoints live in shared
+    /// directories, so the kernel-reported peer, not the reply, proves identity.
+    pub peer_uid: u32,
 }
 pub struct Pending {
     stream: UnixStream,
@@ -25,6 +29,15 @@ impl Transport {
         let stream = timeout_at(deadline, UnixStream::connect(&self.path))
             .await
             .map_err(|_| Error::new("transport", "Connection timed out"))??;
+        if stream.peer_cred()?.uid() != self.peer_uid {
+            return Err(Error::new(
+                "identity",
+                format!(
+                    "{} is not served by the configured helper account",
+                    self.path.display()
+                ),
+            ));
+        }
         Ok(Pending {
             stream,
             deadline,
@@ -119,5 +132,58 @@ impl Pending {
             }
             pending.extend_from_slice(&buffer[offset..count]);
         }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum OutputError {
+    Malformed,
+    Oversized,
+}
+
+/// Concatenate the base64 `output` events of a helper `run` reply. An event
+/// that must decode past `limit` is refused unread; a decoded total over
+/// `limit` (by at most a padding remainder) is refused after decoding.
+pub fn run_output(reply: &Value, limit: usize) -> std::result::Result<Vec<u8>, OutputError> {
+    let mut output = Vec::new();
+    for event in reply["events"].as_array().into_iter().flatten() {
+        if event["event"] != "output" {
+            continue;
+        }
+        let encoded = event["data"].as_str().ok_or(OutputError::Malformed)?;
+        if output.len() + (encoded.len() / 4 * 3).saturating_sub(2) > limit {
+            return Err(OutputError::Oversized);
+        }
+        STANDARD
+            .decode_vec(encoded, &mut output)
+            .map_err(|_| OutputError::Malformed)?;
+        if output.len() > limit {
+            return Err(OutputError::Oversized);
+        }
+    }
+    Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OutputError, run_output};
+    use serde_json::json;
+
+    #[test]
+    fn run_output_joins_only_output_events_within_the_limit() {
+        let reply = json!({"events": [
+            {"event": "started", "pid": 4},
+            {"event": "output", "data": "aGVs"},
+            {"event": "output", "data": "bG8="},
+        ]});
+        assert_eq!(run_output(&reply, 5).unwrap(), b"hello");
+        assert_eq!(run_output(&reply, 4), Err(OutputError::Oversized));
+        assert_eq!(run_output(&json!({}), 0).unwrap(), b"");
+        for data in [json!(7), json!("not base64!")] {
+            let reply = json!({"events": [{"event": "output", "data": data}]});
+            assert_eq!(run_output(&reply, 64), Err(OutputError::Malformed));
+        }
+        let huge = json!({"events": [{"event": "output", "data": "A".repeat(4096)}]});
+        assert_eq!(run_output(&huge, 16), Err(OutputError::Oversized));
     }
 }
