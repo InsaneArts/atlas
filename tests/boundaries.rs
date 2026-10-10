@@ -757,3 +757,21 @@ fn only_generations_nothing_will_settle_are_unresolved() {
     drop(replacement);
     assert!(!path.exists());
 }
+
+#[test]
+fn a_stale_release_is_a_no_op_but_never_ends_another_lease() {
+    let dir = tempfile::tempdir().unwrap();
+    let controller = Controller::at(502, dir.path());
+    let mut lease = Lease::default();
+    let old = lease.acquire(&controller).unwrap();
+    // Revoked elsewhere (the menu bar); the tab's own release follows.
+    assert_eq!(lease.begin_release(None).unwrap(), Some(old.clone()));
+    lease.end_release();
+    assert_eq!(lease.begin_release(Some(&old)).unwrap(), None);
+    let current = lease.acquire(&controller).unwrap();
+    assert_eq!(
+        lease.begin_release(Some(&old)).unwrap_err().code,
+        "lease-lost"
+    );
+    lease.require(&current).unwrap();
+}
