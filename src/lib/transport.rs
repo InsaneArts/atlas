@@ -164,9 +164,18 @@ pub fn run_output(reply: &Value, limit: usize) -> std::result::Result<Vec<u8>, O
     Ok(output)
 }
 
+/// A helper `run` reply with its output decoded into an `output` string (lossy
+/// UTF-8, at most 1 MiB), so callers need not decode base64 events.
+pub fn with_output(mut reply: Value) -> Value {
+    if let Ok(output) = run_output(&reply, 1 << 20) {
+        reply["output"] = json!(String::from_utf8_lossy(&output));
+    }
+    reply
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{OutputError, run_output};
+    use super::{OutputError, run_output, with_output};
     use serde_json::json;
 
     #[test]
@@ -185,5 +194,11 @@ mod tests {
         }
         let huge = json!({"events": [{"event": "output", "data": "A".repeat(4096)}]});
         assert_eq!(run_output(&huge, 16), Err(OutputError::Oversized));
+        assert_eq!(with_output(reply.clone())["output"], "hello");
+        assert!(
+            with_output(json!({"events": [{"event": "output", "data": 7}]}))
+                .get("output")
+                .is_none()
+        );
     }
 }
