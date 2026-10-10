@@ -1,5 +1,5 @@
 use crate::{
-    config::{home, resolve_path},
+    config::home,
     error::{Error, Result},
 };
 use fs2::FileExt;
@@ -34,25 +34,6 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Lock, pending-marker and marker-lock files for one exclusion key.
-#[derive(Clone)]
-struct Keyed {
-    lock: PathBuf,
-    marker: PathBuf,
-    marker_lock: PathBuf,
-}
-impl Keyed {
-    fn new(directory: &Path, key: &str) -> Self {
-        let digest = format!("{:x}", Sha256::digest(key.as_bytes()));
-        let name = &digest[..24];
-        Self {
-            lock: directory.join(format!("{name}.lock")),
-            marker: directory.join(format!("{name}.uncertain.json")),
-            marker_lock: directory.join(format!("{name}.state.lock")),
-        }
-    }
-}
-
 fn open_lock(path: &Path) -> Result<File> {
     Ok(OpenOptions::new()
         .create(true)
@@ -67,53 +48,50 @@ fn open_lock(path: &Path) -> Result<File> {
 /// Exclusive control of one helper, held until dropped.
 #[derive(Debug)]
 pub struct Ownership {
-    _locks: [File; 2],
+    _lock: File,
 }
 
-/// Controller exclusion and pending-mutation state for one helper account.
-/// It is keyed by helper UID, so a changed socket path cannot admit a second
-/// controller. Controllers that predate this key used `uid:socket`; that lock
-/// is taken and its marker honoured too, so they still exclude each other.
+/// Controller exclusion and pending-mutation state for one helper account,
+/// keyed by helper UID so a changed socket path cannot admit a second
+/// controller or hide a pending mutation.
 #[derive(Clone)]
 pub struct Controller {
     directory: PathBuf,
-    current: Keyed,
-    legacy: Keyed,
+    lock: PathBuf,
+    marker: PathBuf,
+    marker_lock: PathBuf,
 }
 impl Controller {
-    pub fn new(uid: u32, socket: &Path) -> Result<Self> {
-        Self::at(uid, socket, &home()?.join("Library/Caches/Understudy"))
+    pub fn new(uid: u32) -> Result<Self> {
+        Ok(Self::at(uid, &home()?.join("Library/Caches/Understudy")))
     }
     /// Locating state is read-only; the directory appears with the first lock.
-    pub fn at(uid: u32, socket: &Path, directory: &Path) -> Result<Self> {
-        let legacy = format!("{uid}:{}", resolve_path(socket)?.display());
-        Ok(Self {
+    pub fn at(uid: u32, directory: &Path) -> Self {
+        let digest = format!("{:x}", Sha256::digest(format!("helper:{uid}").as_bytes()));
+        let name = &digest[..24];
+        Self {
             directory: directory.to_owned(),
-            current: Keyed::new(directory, &format!("helper:{uid}")),
-            legacy: Keyed::new(directory, &legacy),
-        })
+            lock: directory.join(format!("{name}.lock")),
+            marker: directory.join(format!("{name}.uncertain.json")),
+            marker_lock: directory.join(format!("{name}.state.lock")),
+        }
     }
     pub fn acquire(&self, recovery: bool) -> Result<Ownership> {
         fs::create_dir_all(&self.directory)?;
-        let busy = || {
+        let lock = open_lock(&self.lock)?;
+        FileExt::try_lock_exclusive(&lock).map_err(|_| {
             Error::new(
                 "busy",
                 "Another Understudy controller is active. Release it first.",
             )
-        };
-        let current = open_lock(&self.current.lock)?;
-        FileExt::try_lock_exclusive(&current).map_err(|_| busy())?;
-        let legacy = open_lock(&self.legacy.lock)?;
-        FileExt::try_lock_exclusive(&legacy).map_err(|_| busy())?;
+        })?;
         if !recovery {
             self.require_known()?;
         }
-        Ok(Ownership {
-            _locks: [current, legacy],
-        })
+        Ok(Ownership { _lock: lock })
     }
     pub fn require_known(&self) -> Result<()> {
-        if self.current.marker.try_exists()? || self.legacy.marker.try_exists()? {
+        if self.marker.try_exists()? {
             return Err(Error::new(
                 "uncertain",
                 "The last action's outcome is unknown. Observe the desktop, then run 'understudy restart'.",
@@ -121,45 +99,41 @@ impl Controller {
         }
         Ok(())
     }
-    fn lock_marker(&self, keyed: &Keyed) -> Result<File> {
+    fn lock_marker(&self) -> Result<File> {
         fs::create_dir_all(&self.directory)?;
-        let file = open_lock(&keyed.marker_lock)?;
+        let file = open_lock(&self.marker_lock)?;
         FileExt::lock_exclusive(&file)?;
         Ok(file)
     }
-    /// Record a pending mutation. It is mirrored into the legacy marker so a
-    /// controller that predates the UID key also refuses to act until recovery.
+    /// Generations of mutations whose outcome is still unknown.
+    pub fn pending(&self) -> Result<Vec<String>> {
+        let _lock = self.lock_marker()?;
+        pending(&self.marker)
+    }
+    /// Record a pending mutation and return its generation.
     pub fn quarantine(&self) -> Result<String> {
+        let _lock = self.lock_marker()?;
         let generation = token();
-        for keyed in [&self.current, &self.legacy] {
-            let _lock = self.lock_marker(keyed)?;
-            let mut pending = pending(&keyed.marker)?;
-            pending.push(generation.clone());
-            write_private(&keyed.marker, &serde_json::to_vec(&pending)?)?;
-        }
+        let mut pending = pending(&self.marker)?;
+        pending.push(generation.clone());
+        write_private(&self.marker, &serde_json::to_vec(&pending)?)?;
         Ok(generation)
     }
-    /// Settle one acknowledged mutation in both markers; others stay pending.
+    /// Settle one acknowledged mutation; others stay pending.
     pub fn clear_if(&self, generation: &str) -> Result<()> {
-        for keyed in [&self.current, &self.legacy] {
-            let _lock = self.lock_marker(keyed)?;
-            let mut pending = pending(&keyed.marker)?;
-            pending.retain(|entry| entry != generation);
-            if pending.is_empty() {
-                remove_marker(&keyed.marker)?;
-            } else {
-                write_private(&keyed.marker, &serde_json::to_vec(&pending)?)?;
-            }
+        let _lock = self.lock_marker()?;
+        let mut pending = pending(&self.marker)?;
+        pending.retain(|entry| entry != generation);
+        if pending.is_empty() {
+            remove_marker(&self.marker)
+        } else {
+            write_private(&self.marker, &serde_json::to_vec(&pending)?)
         }
-        Ok(())
     }
-    /// Verified recovery settles every pending mutation, legacy ones included.
+    /// Verified recovery settles every pending mutation.
     pub fn clear(&self) -> Result<()> {
-        for keyed in [&self.current, &self.legacy] {
-            let _lock = self.lock_marker(keyed)?;
-            remove_marker(&keyed.marker)?;
-        }
-        Ok(())
+        let _lock = self.lock_marker()?;
+        remove_marker(&self.marker)
     }
 }
 
