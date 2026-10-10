@@ -159,7 +159,7 @@ fn config_paths_are_relative_and_unknown_fields_fail() {
 
 #[test]
 fn shipped_example_configuration_parses_and_round_trips() {
-    let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("understudy.example.toml");
+    let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/config.toml");
     let config = Config::load(&example).unwrap();
     assert_eq!(config.helper_uid, 502);
     let dir = tempfile::tempdir().unwrap();
@@ -187,7 +187,7 @@ fn a_missing_configuration_points_at_a_legacy_json_file() {
     );
 
     // A TOML file beside its legacy JSON twin is refused until the twin is gone.
-    let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("understudy.example.toml");
+    let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/config.toml");
     std::fs::copy(example, &path).unwrap();
     assert!(Config::load(&path).unwrap_err().error.contains("Both"));
     std::fs::remove_file(dir.path().join("understudy.local.json")).unwrap();

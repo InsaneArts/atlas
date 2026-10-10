@@ -26,7 +26,7 @@ home-directory tools belong to the helper account.
 ```sh
 cargo build
 ./understudy setup --helper NAME   # read-only report; proposes understudy.local.toml
-# Save the proposed TOML as understudy.local.toml (or copy understudy.example.toml).
+# Save the proposed TOML as understudy.local.toml (or copy examples/config.toml).
 ./understudy install               # copy this build to the shared executable path
 ./understudy start-input           # start, reset or upgrade the helper's input service
 ./understudy setup --apply         # run capture on a private socket directory
@@ -71,7 +71,7 @@ Tools on first use.
 
 Selected tools, settings and project paths can be provisioned into the helper as
 frozen, resumable plans (`understudy environment --help`; see
-`understudy.environment.example.toml` and `understudy.profile.example.toml`). This
+`examples/environment.toml` and `examples/profile.toml`). This
 copies explicit selections only; it is not an account clone and never copies
 logins or keychains.
 

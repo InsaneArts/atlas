@@ -114,7 +114,7 @@ fn missing(path: &Path) -> Error {
         "config",
         format!(
             "Missing configuration {}. Run understudy setup --helper NAME for a proposal, or copy \
-             understudy.example.toml to {DEFAULT_PATH}.{hint}",
+             examples/config.toml to {DEFAULT_PATH}.{hint}",
             path.display()
         ),
     )

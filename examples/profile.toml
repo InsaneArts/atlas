@@ -1,8 +1,8 @@
 # Environment profile: selected files, readiness requirements and exported
 # variables for the helper login.
 #
-#   understudy environment profile understudy.profile.example.toml          # preview
-#   understudy environment profile understudy.profile.example.toml --apply  # apply
+#   understudy environment profile examples/profile.toml          # preview
+#   understudy environment profile examples/profile.toml --apply  # apply
 #
 # Listing a tool or application is a readiness check, not an installation;
 # copy executables with [[files]]. Variables must be exported in the shell
