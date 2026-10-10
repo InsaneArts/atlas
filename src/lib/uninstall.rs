@@ -118,6 +118,11 @@ pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Val
         }
     }
     let _ = crate::menubar::login("off");
+    // Agents forget the plugin (only connected ones change).
+    let disconnected = crate::agents::change(&[], true).ok();
+    if disconnected.is_some() {
+        removed.push(json!("agent plugins"));
+    }
     let command = config::home()?.join(".local/bin/understudy");
     if remove_link_to(&command, &executable)? {
         removed.push(json!(command));

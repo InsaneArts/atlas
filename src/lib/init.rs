@@ -425,6 +425,29 @@ pub async fn run(config_path: &Path) -> Result<Value> {
         });
         done.push(json!({"step": "menubar", "login": login}));
     }
+    let agents = crate::agents::status();
+    let found: Vec<&str> = agents["agents"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|agent| agent["installed"] == true && agent["connected"] != true)
+        .filter_map(|agent| agent["agent"].as_str())
+        .collect();
+    if !found.is_empty() {
+        step("Agents");
+        if yes(&format!(
+            "  Teach {} to use Understudy (adds its plugin)?",
+            found.join(" and ")
+        ))? {
+            let connected = crate::agents::change(&[], false)?;
+            say(if connected["ok"] == true {
+                "  Connected. New agent sessions know how to use Understudy."
+            } else {
+                "  Not every agent connected; run understudy agents install later."
+            });
+            done.push(json!({"step": "agents", "result": connected}));
+        }
+    }
     say("\nUnderstudy is ready. Try: understudy screenshot");
     Ok(json!({"ok": true, "ready": true, "steps": done, "config": config_path}))
 }

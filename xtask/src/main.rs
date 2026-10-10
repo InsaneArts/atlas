@@ -352,6 +352,14 @@ fn dist(options: &Options) -> Result<()> {
     universal(&cli, &macos.join("understudy"))?;
     fs::copy(&companion, macos.join(COMPANION)).map_err(|error| error.to_string())?;
     check_universal(&macos.join(COMPANION))?;
+    // The agent plugin (Claude Code and Codex), matching this CLI's version.
+    exec(
+        "/usr/bin/ditto",
+        &[
+            text(&root.join("agents"))?,
+            text(&app.join("Contents/Resources/agents"))?,
+        ],
+    )?;
     // "Open at login": the menu bar registers this agent with SMAppService.
     let agents = app.join("Contents/Library/LaunchAgents");
     fs::create_dir_all(&agents).map_err(|error| error.to_string())?;
