@@ -356,6 +356,11 @@ impl Lease {
     pub fn begin_release(&mut self, requested: Option<&str>) -> Result<Option<String>> {
         self.expire();
         let current = self.owner.as_ref().or(self.retired.as_ref());
+        // Releasing a lease that already ended is a no-op; a token can
+        // never end a different controller's lease.
+        if requested.is_some() && current.is_none() {
+            return Ok(None);
+        }
         if requested.is_some() && requested != current.map(String::as_str) {
             return Err(Error::new(
                 "lease-lost",
