@@ -1,66 +1,92 @@
 # Understudy
 
-Observe and control a second macOS desktop while using your own.
+A second macOS desktop for an agent, so it can use GUI apps and tools without
+moving your windows, taking your keyboard and mouse, or covering your screen.
 
-A Rust CLI and local browser viewer connect to a prepared, logged-in helper
-account. Mouse events stream during a gesture; keyboard input supports Unicode
-and shortcuts. Input stops when the helper becomes visible, the viewer loses
-focus, or its control lease expires. This shares the host OS and audio output.
+A Rust CLI and local browser viewer drive a separate, logged-in helper account
+that stays in the background. Screenshots come from the helper's own session;
+mouse and keyboard events are posted only to that session's event tap. You keep
+working on your own desktop.
 
-**Experimental.** Live tests verify ordinary input, native alerts, and horizontal
-and vertical edge resizing. Titlebar drags move before mouse-up, but exact
-endpoints differ; OS window alignment remains a possible confounder. Hidden-session
-Save panels remain disabled. This architecture is unsuitable for general
-unattended desktop work. Audio also shares the host output.
+**Experimental.** Measured on macOS 27 with a 2560 × 1440 helper display: guarded
+clicks, Unicode text and shortcuts work in the hidden session. Drags, resizing,
+scrolling, native menus, alerts and Save/Open panels were qualified while an
+authenticated Screen Sharing session was connected to the helper; without one,
+Save/Open panels open but cannot be confirmed. `understudy verify-native` checks
+the current session instead of assuming either. Audio output is shared with yours.
 
-## Run
+## Set up
 
-Requires macOS, Rust, an existing hidden graphical login, and its consented
-capture/command helper. Account creation, the first login and macOS privacy
-consent are still manual. Reuse that account across tasks. Apps in
-`/Applications` and system-wide CLIs are shared; user settings, credentials,
-home-directory tools and app permissions belong to the helper account.
+Requires macOS, Rust, a second standard account that has logged in once, and the
+separately installed, consented capture helper running in it (see
+[NOTICE.md](NOTICE.md)). Account creation, its first login and macOS privacy
+consent stay manual. Apps in `/Applications` are shared; settings, credentials and
+home-directory tools belong to the helper account.
 
 ```sh
 cargo build
-./understudy setup --helper NAME   # read-only; proposes understudy.local.toml
-cp understudy.example.toml understudy.local.toml
-# Set the helper UID, capture socket and shared Rust executable path.
-./understudy install
-./understudy start-input
+./understudy setup --helper NAME   # read-only report; proposes understudy.local.toml
+# Save the proposed TOML as understudy.local.toml (or copy understudy.example.toml).
+./understudy install               # copy this build to the shared executable path
+./understudy start-input           # start, reset or upgrade the helper's input service
+./understudy setup --apply         # run capture on a private socket directory
 ./understudy doctor
-./understudy monitor
 ```
 
-Open the printed loopback URL. **Take control** connects mouse and keyboard;
-**Release control**, **Ctrl–Shift–Esc**, pause or tab switching releases them.
-The shortcut picker handles combinations intercepted by the browser. Continuous
-key holds and OS-reserved shortcuts are not forwarded. Preview refresh is polling,
-not a video stream.
+`setup` without flags changes nothing; facts it cannot observe are reported as
+unknown, never as missing. `setup --apply` runs the unchanged capture binary as a
+managed LaunchAgent with a persistent private socket directory beside the existing
+job, moves input and the configuration over, then retires the old job through the
+new one. Every step is logged and resumable; `setup --rollback` restores the
+previous job and configuration.
+
+`doctor` reports connection, hidden session, permissions and input separately from
+native dialogs. `ready` never implies Save/Open works; run
+`understudy verify-native` (requires the compiled
+`tests/live/DesktopFixture.swift`) for a dated observation tied to the current
+session.
+
+## Use
 
 ```sh
-./understudy capture
+./understudy monitor                                  # local viewer
+./understudy capture                                  # save a helper screenshot
 ./understudy apps
-./understudy run -- /usr/bin/open -a Calculator
-./understudy input '[{"type":"key","key":"escape"}]'
-./understudy restart
+./understudy run -- /usr/bin/open -a TextEdit
+./understudy input '[{"type":"click","x":1200,"y":880}]'
+./understudy environment run -- markdown2pdf --version
 ```
 
-If delivery becomes uncertain, observe the result and run `restart`. Recovery
-confirms native input cleanup and a new capture-helper process. Interrupted
-clicks or text are never replayed automatically. Other Understudy controllers
-share an exclusive lock; clients of the external capture helper can bypass it.
+In the viewer, **Take control** connects mouse and keyboard; **Release control**,
+**Ctrl–Shift–Esc**, pausing or switching tabs releases them. Preview refresh is
+polling, not a video stream.
+
+Selected tools, settings and project paths can be provisioned into the helper as
+frozen, resumable plans (`understudy environment --help`; see
+`understudy.environment.example.toml` and `understudy.profile.example.toml`). This
+copies explicit selections only; it is not an account clone and never copies
+logins or keychains.
+
+## Safety model
+
+- Input requires the configured helper UID, its graphical session off-console and
+  the exact display epoch; any change invalidates control.
+- Sockets are only trusted when the kernel reports the helper as their owner.
+- One controller per helper at a time. An action whose outcome is unknown blocks
+  further control until `understudy restart` (or a resumed `setup`) establishes
+  it; nothing is replayed automatically.
+- Held keys and buttons are released on cancel, disconnect, lease expiry and
+  service exit.
 
 ## Source
 
 - `src/bin/main.rs` — CLI; no TUI.
-- `src/lib/` — client, transport, session checks, ownership and HTTP viewer.
-- `src/lib/native/` — Rust CoreGraphics input, native leases and crash cleanup.
-- `web/` — viewer and browser input.
-- `tests/live/DesktopFixture.swift` — disposable AppKit test application.
-
-supplies capture and command execution.
-Its source is not vendored here. See [NOTICE.md](NOTICE.md).
+- `src/lib/` — client, transport, session checks, ownership, viewer, setup,
+  native-dialog capability and environment provisioning.
+- `src/lib/native/` — helper-side input service, events, leases, crash journal and
+  window list.
+- `web/` — viewer.
+- `tests/live/DesktopFixture.swift` — disposable AppKit fixture for live checks.
 
 ## Check
 
@@ -73,20 +99,10 @@ npm run format:check
 npm test
 ```
 
-For **actual desktop tests**, keep `monitor` running and run
-`node scripts/prepare-control-test.mjs`. Then `node scripts/check-input.mjs` checks
-viewer input using headless Chrome, and `node scripts/check-recovery.mjs` exercises
-native cancellation and crash recovery. Both send real input to the disposable
-AppKit fixture while keeping the host display free.
+Unit checks do not qualify a hidden desktop. Live checks send real input to the
+disposable fixture in the helper: `node scripts/prepare-control-test.mjs`, then
+`check-input.mjs`, `check-recovery.mjs`, `check-control.mjs` or `check-native.mjs`
+from `scripts/`. The fixture expects a 2560 × 1440 helper display at scale 1.
 
-`node scripts/check-control.mjs` additionally opens a real Chrome window to test
-OS focus and tab visibility. `node scripts/check-native.mjs` runs headlessly and
-measures native titlebar movement, edge resizing and Save behavior. It centers
-the disposable fixture before each gesture and records screen bounds, transmitted
-coordinates and window positions before mouse-up. Strict endpoint and Save
-failures remain in its output; screen-edge constraints are checked separately.
-The fixture currently requires a 2560 × 1440 helper display at scale 1.
-
-Configuration, screenshots, measurements and research remain local in ignored
-`understudy.local.toml`, `runs/` and `docs/`. CI checks code; it cannot qualify a
-hidden macOS desktop.
+Configuration, screenshots, measurements and research stay local in the ignored
+`understudy.local.toml`, `runs/` and `docs/`.
