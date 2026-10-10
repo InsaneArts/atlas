@@ -13,8 +13,15 @@ public struct LoginItem: Sendable {
 
     public var enabled: Bool { service.status == .enabled }
 
-    /// Whether this app carries the agent at all (a development build does not).
-    public var available: Bool { service.status != .notFound }
+    /// Whether this app carries the agent at all (a development build does
+    /// not). The service reports "not found" until first registered, so the
+    /// bundle is checked instead.
+    public var available: Bool {
+        FileManager.default.fileExists(
+            atPath: Bundle.main.bundleURL
+                .appendingPathComponent("Contents/Library/LaunchAgents")
+                .appendingPathComponent(Self.plist).path)
+    }
 
     public func set(_ on: Bool) throws {
         if on { try service.register() } else { try service.unregister() }

@@ -94,10 +94,41 @@ pub fn executable() -> Result<PathBuf> {
     development()
 }
 
-/// Start the companion with `args` and hand it the URL on stdin.
-async fn spawn(executable: &Path, url: &str, args: &[&str]) -> Result<(Child, ChildStdin)> {
-    let mut child = Command::new(executable)
+/// Turn "Open at Login" `on` or `off`, or report its `status`; only the
+/// companion (as part of Understudy.app) can register its login agent.
+pub fn login(state: &str) -> Result<serde_json::Value> {
+    let output = std::process::Command::new(executable()?)
+        .args(["--login", state])
+        .stdin(Stdio::null())
+        .output()?;
+    serde_json::from_slice(&output.stdout)
+        .map_err(|_| Error::new("menubar", "The menu bar did not report its login item"))
+}
+
+/// The companion to run, and the configuration its commands must use.
+pub struct Program {
+    pub executable: PathBuf,
+    pub config: PathBuf,
+}
+
+impl Program {
+    /// The companion for the configuration at `config`.
+    pub fn new(config: &Path) -> Result<Self> {
+        Ok(Self {
+            executable: executable()?,
+            config: fs::canonicalize(config)?,
+        })
+    }
+}
+
+/// Start the companion with `args` and hand it the URL on stdin. Its
+/// commands run this very `understudy` with this configuration.
+async fn spawn(program: &Program, url: &str, args: &[&str]) -> Result<(Child, ChildStdin)> {
+    let cli = std::env::current_exe().and_then(fs::canonicalize)?;
+    let mut child = Command::new(&program.executable)
         .args(args)
+        .env("UNDERSTUDY_CLI", cli)
+        .env("UNDERSTUDY_CONFIG", &program.config)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .kill_on_drop(true)
@@ -119,8 +150,8 @@ pub struct Companion {
 }
 
 impl Companion {
-    pub async fn launch(executable: &Path, url: &str) -> Result<Self> {
-        let (child, stdin) = spawn(executable, url, &[]).await?;
+    pub async fn launch(program: &Program, url: &str) -> Result<Self> {
+        let (child, stdin) = spawn(program, url, &[]).await?;
         Ok(Self {
             child,
             _stdin: stdin,
@@ -142,11 +173,11 @@ fn render_args(path: &str, dark: bool) -> Vec<&str> {
 }
 
 /// Draw the companion's panel, fed by the viewer at `url`, to a PNG.
-pub async fn render(executable: &Path, url: &str, path: &Path, dark: bool) -> Result<()> {
+pub async fn render(program: &Program, url: &str, path: &Path, dark: bool) -> Result<()> {
     let target = path
         .to_str()
         .ok_or_else(|| Error::new("usage", "The render path must be UTF-8"))?;
-    let (mut child, _stdin) = spawn(executable, url, &render_args(target, dark)).await?;
+    let (mut child, _stdin) = spawn(program, url, &render_args(target, dark)).await?;
     let status = tokio::time::timeout(Duration::from_secs(30), child.wait())
         .await
         .map_err(|_| Error::new("menubar", "The menu bar did not finish rendering"))??;
@@ -166,8 +197,11 @@ mod tests {
     #[test]
     fn the_url_arrives_on_stdin_never_in_argv() {
         let main = include_str!("../../menubar/Sources/UnderstudyBar/main.swift");
-        assert!(main.contains("readLine()"), "the URL arrives on stdin");
-        assert!(!main.contains("CommandLine.arguments.first"));
+        assert!(
+            main.contains("guard let line = readLine(), let viewer = Viewer(line)"),
+            "the URL arrives on stdin"
+        );
+        assert!(!main.contains("Viewer(CommandLine"), "never from argv");
     }
 
     #[test]

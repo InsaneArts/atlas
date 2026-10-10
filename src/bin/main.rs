@@ -119,6 +119,9 @@ enum Command {
         /// Instead, draw the panel in light and dark to PNGs in DIR and exit.
         #[arg(long, value_name = "DIR")]
         render: Option<PathBuf>,
+        /// Instead, turn "Open at Login" on or off, or report it.
+        #[arg(long, value_name = "on|off|status", conflicts_with = "render")]
+        login: Option<LoginArg>,
     },
     /// Save a real helper PNG; reports pointsPerPixel for input coordinates.
     #[command(visible_alias = "screenshot")]
@@ -271,6 +274,16 @@ enum Command {
     /// Set Understudy up on this Mac, step by step: helper account, first
     /// sign-in, permissions, the helper job and input. Safe to run again.
     Init,
+    /// Remove Understudy from this Mac (asks first). The helper account and
+    /// its files stay; the app goes to the Trash.
+    Uninstall {
+        /// Keep configuration, setup records and logs.
+        #[arg(long)]
+        keep_config: bool,
+        /// Do not ask.
+        #[arg(long)]
+        yes: bool,
+    },
     /// After an update, run by the new executable: move the helper onto it.
     #[command(hide = true)]
     UpdateFinish,
@@ -439,6 +452,12 @@ async fn execute(cli: Cli) -> Result<Value> {
         } => return update(&cli.config, allow_unnotarized, force, version),
         Command::UpdateFinish => return update_finish(&cli.config),
         Command::Init => return understudy::init::run(&cli.config).await,
+        Command::Uninstall { keep_config, yes } => {
+            return understudy::uninstall::run(&cli.config, keep_config, yes).await;
+        }
+        Command::Menubar {
+            login: Some(login), ..
+        } => return menubar::login(login.as_str()),
         Command::Switch {
             account,
             login_window,
@@ -465,6 +484,7 @@ async fn execute(cli: Cli) -> Result<Value> {
         | Command::Update { .. }
         | Command::UpdateFinish
         | Command::Init
+        | Command::Uninstall { .. }
         | Command::Switch { .. } => {
             unreachable!("these commands return above")
         }
@@ -530,12 +550,12 @@ async fn execute(cli: Cli) -> Result<Value> {
             viewer::serve(client, port, None).await?;
             Ok(Value::Null)
         }
-        Command::Menubar { port, render } => {
-            let executable = menubar::executable()?;
+        Command::Menubar { port, render, .. } => {
+            let program = menubar::Program::new(&cli.config)?;
             match render {
-                Some(directory) => viewer::render_menubar(client, &executable, &directory).await,
+                Some(directory) => viewer::render_menubar(client, &program, &directory).await,
                 None => {
-                    viewer::serve(client, port, Some(executable)).await?;
+                    viewer::serve(client, port, Some(program)).await?;
                     Ok(Value::Null)
                 }
             }
@@ -814,6 +834,22 @@ fn update_finish(config: &std::path::Path) -> Result<Value> {
     Ok(json!({"ok": true, "completedSteps": done}))
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+enum LoginArg {
+    On,
+    Off,
+    Status,
+}
+impl LoginArg {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::On => "on",
+            Self::Off => "off",
+            Self::Status => "status",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Default, ValueEnum)]
 enum ButtonArg {
     #[default]
@@ -877,7 +913,7 @@ mod tests {
     #[test]
     fn the_menu_bar_serves_or_renders() {
         let Ok(Cli {
-            command: Command::Menubar { port, render },
+            command: Command::Menubar { port, render, .. },
             ..
         }) = parse(&["menubar", "--render", "out"])
         else {

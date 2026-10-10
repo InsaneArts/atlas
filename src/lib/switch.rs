@@ -1,6 +1,9 @@
 //! `understudy switch`: fast user switching to another login, such as the
-//! helper. macOS shows its own login window for that account and the person
-//! types the password there; nothing here sees or stores a password.
+//! helper. macOS shows its own login window, the person picks the account
+//! and types its password there; nothing here sees or stores a password.
+//!
+//! Only the login window is opened: the framework's per-account call takes
+//! an undocumented dictionary, not a UID, and is never guessed at.
 use crate::error::{Error, Result};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -61,10 +64,10 @@ pub fn accounts(helper: Option<u32>) -> Result<Vec<Account>> {
     Ok(accounts)
 }
 
-/// The login framework's switch calls, resolved at run time so a macOS
-/// without them reports an error instead of failing to start.
+/// Show the macOS login window (fast user switching), resolved at run time
+/// so a macOS without it reports an error instead of failing to start.
 #[allow(unsafe_code)] // FFI: a private framework, loaded with dlopen.
-fn switch_call(symbol: &std::ffi::CStr, argument: Option<u32>) -> Result<()> {
+pub fn to_login_window() -> Result<Value> {
     const FRAMEWORK: &std::ffi::CStr =
         c"/System/Library/PrivateFrameworks/login.framework/Versions/A/login";
     let unavailable = || {
@@ -79,39 +82,31 @@ fn switch_call(symbol: &std::ffi::CStr, argument: Option<u32>) -> Result<()> {
         return Err(unavailable());
     }
     // SAFETY: a live handle and a NUL-terminated symbol name.
-    let function = unsafe { libc::dlsym(handle, symbol.as_ptr()) };
+    let function = unsafe { libc::dlsym(handle, c"SACSwitchToLoginWindow".as_ptr()) };
     if function.is_null() {
         return Err(unavailable());
     }
-    // SAFETY: SACSwitchToUser takes a uid and SACSwitchToLoginWindow takes
-    // nothing; both return a status, zero on success.
+    // SAFETY: SACSwitchToLoginWindow takes no arguments and returns a
+    // status, zero on success (as used by Chromium's login_util).
     let status = unsafe {
-        match argument {
-            Some(uid) => {
-                let call: extern "C" fn(libc::uid_t) -> i32 = std::mem::transmute(function);
-                call(uid)
-            }
-            None => {
-                let call: extern "C" fn() -> i32 = std::mem::transmute(function);
-                call()
-            }
-        }
+        let call: extern "C" fn() -> i32 = std::mem::transmute(function);
+        call()
     };
-    (status == 0)
-        .then_some(())
-        .ok_or_else(|| Error::new("switch", format!("macOS refused to switch ({status})")))
-}
-
-/// Show the login window for `account`; the person signs in there.
-pub fn to(account: &Account) -> Result<Value> {
-    switch_call(c"SACSwitchToUser", Some(account.uid))?;
-    Ok(json!({"ok": true, "switchedTo": account.name}))
-}
-
-/// Show the login window without choosing an account.
-pub fn to_login_window() -> Result<Value> {
-    switch_call(c"SACSwitchToLoginWindow", None)?;
+    if status != 0 {
+        return Err(Error::new(
+            "switch",
+            format!("macOS refused to switch ({status})"),
+        ));
+    }
     Ok(json!({"ok": true, "switchedTo": "login window"}))
+}
+
+/// Open the login window for switching to `account`; the person picks it
+/// there (it is listed by name).
+pub fn to(account: &Account) -> Result<Value> {
+    let mut reply = to_login_window()?;
+    reply["choose"] = json!(account.real_name.as_deref().unwrap_or(&account.name));
+    Ok(reply)
 }
 
 #[cfg(test)]
@@ -136,7 +131,7 @@ mod tests {
     }
 
     #[test]
-    fn the_switch_calls_exist_on_this_macos() {
+    fn the_login_window_call_exists_on_this_macos() {
         // Resolve without calling: calling would change the person's screen.
         #[allow(unsafe_code)]
         // SAFETY: dlopen/dlsym with NUL-terminated names; nothing is called.
@@ -145,9 +140,7 @@ mod tests {
                 c"/System/Library/PrivateFrameworks/login.framework/Versions/A/login".as_ptr(),
                 libc::RTLD_LAZY,
             );
-            !handle.is_null()
-                && !libc::dlsym(handle, c"SACSwitchToUser".as_ptr()).is_null()
-                && !libc::dlsym(handle, c"SACSwitchToLoginWindow".as_ptr()).is_null()
+            !handle.is_null() && !libc::dlsym(handle, c"SACSwitchToLoginWindow".as_ptr()).is_null()
         };
         assert!(found);
     }

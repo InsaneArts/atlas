@@ -18,6 +18,7 @@ pub mod session;
 pub mod setup;
 pub mod switch;
 pub mod transport;
+pub mod uninstall;
 pub mod update;
 pub mod viewer;
 
