@@ -2,6 +2,7 @@ use crate::{
     client::{Client, Frame},
     control::{self, ActionPermit, Lease, SharedLease},
     error::{Error, Result},
+    menubar::Companion,
     session::Epoch,
 };
 use axum::{
@@ -13,7 +14,12 @@ use axum::{
     routing::any,
 };
 use serde_json::{Value, json};
-use std::{collections::VecDeque, sync::Arc, time::Duration};
+use std::{
+    collections::VecDeque,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 use tokio::{
     net::TcpListener,
     sync::{Mutex, Semaphore},
@@ -158,6 +164,13 @@ impl Viewer {
     }
     async fn control(&self, route: &str, body: &Value) -> Result<Value> {
         let owner = body["lease"].as_str().unwrap_or_default();
+        // The menu bar's emergency stop: end whichever lease is held, with
+        // the same cleanup as any release. Nothing is resumed.
+        if route == "control/revoke" {
+            let held = self.lease.lock().await.active();
+            self.release(None).await?;
+            return Ok(json!({"ok": true, "released": held}));
+        }
         if route == "control/release" {
             self.release(Some(owner)).await?;
             return Ok(json!({"ok": true}));
@@ -251,7 +264,9 @@ pub async fn bind(mut client: Client, port: u16) -> Result<(TcpListener, Arc<Vie
     Ok((listener, viewer, router))
 }
 
-pub async fn serve(client: Client, port: u16) -> Result<()> {
+/// Serve the viewer until interrupted, or until the person quits the menu
+/// bar companion when one is given.
+pub async fn serve(client: Client, port: u16, companion: Option<PathBuf>) -> Result<()> {
     let (listener, viewer, router) = bind(client, port).await?;
     let record = json!({
         "url": viewer.url,
@@ -263,7 +278,17 @@ pub async fn serve(client: Client, port: u16) -> Result<()> {
         &viewer.client.output_dir()?.join("monitor.json"),
         &serde_json::to_vec_pretty(&record)?,
     )?;
-    println!("{}", serde_json::to_string_pretty(&record)?);
+    // The URL is a bearer capability. The menu bar opens it itself, so its
+    // output omits it; it stays in the private record either way.
+    let mut shown = record.clone();
+    if companion.is_some() {
+        shown["url"] = json!("held by the menu bar");
+    }
+    println!("{}", serde_json::to_string_pretty(&shown)?);
+    let mut companion = match companion {
+        Some(executable) => Some(Companion::launch(&executable, &viewer.url).await?),
+        None => None,
+    };
     let timer_view = viewer.clone();
     let expiry = tokio::spawn(async move {
         loop {
@@ -281,13 +306,43 @@ pub async fn serve(client: Client, port: u16) -> Result<()> {
     let shutdown_view = viewer.clone();
     let result = axum::serve(listener, router)
         .with_graceful_shutdown(async move {
-            let _ = tokio::signal::ctrl_c().await;
+            let quit = async {
+                match companion.as_mut() {
+                    Some(companion) => companion.exited().await,
+                    None => std::future::pending().await,
+                }
+            };
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                () = quit => {}
+            }
             let _ = shutdown_view.release(None).await;
         })
         .await;
     expiry.abort();
     let _ = viewer.release(None).await;
     result.map_err(Error::from)
+}
+
+/// Render the menu bar panel, fed by a private viewer on a free port, in the
+/// light and dark appearances. For visual checks; it never takes control.
+pub async fn render_menubar(client: Client, executable: &Path, directory: &Path) -> Result<Value> {
+    let (listener, viewer, router) = bind(client, 0).await?;
+    let server = tokio::spawn(async move { axum::serve(listener, router).await });
+    let mut paths = Vec::new();
+    let mut outcome = Ok(());
+    for (name, dark) in [("light", false), ("dark", true)] {
+        let path = directory.join(format!("menubar-{name}.png"));
+        outcome = crate::menubar::render(executable, &viewer.url, &path, dark).await;
+        if outcome.is_err() {
+            break;
+        }
+        paths.push(path);
+    }
+    server.abort();
+    let _ = viewer.release(None).await;
+    outcome?;
+    Ok(json!({"ok": true, "paths": paths}))
 }
 
 fn header<'a>(headers: &'a HeaderMap, key: &str) -> Option<&'a str> {
@@ -374,7 +429,12 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
     if method != Method::POST
         || !matches!(
             route.as_str(),
-            "input" | "control/acquire" | "control/renew" | "control/release" | "recover"
+            "input"
+                | "control/acquire"
+                | "control/renew"
+                | "control/release"
+                | "control/revoke"
+                | "recover"
         )
     {
         return json_response(404, json!({"ok": false, "error": "Unknown operation"}));
@@ -558,6 +618,26 @@ mod tests {
         let refused = viewer.recover().await.unwrap_err();
         assert_eq!(refused.code, "busy");
         assert!(controller.pending().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn revoking_ends_any_lease_and_keeps_unconfirmed_cleanup_pending() {
+        let dir = tempfile::tempdir().unwrap();
+        let viewer = unreachable(dir.path()).await;
+        let controller = viewer.client.controller.clone();
+        let idle = viewer.control("control/revoke", &json!({})).await.unwrap();
+        assert_eq!(idle, json!({"ok": true, "released": false}));
+        viewer.lease.lock().await.acquire(&controller).unwrap();
+        // The helper cannot confirm native cleanup, so control ends but the
+        // release stays an unknown outcome for recovery.
+        let error = viewer
+            .control("control/revoke", &json!({}))
+            .await
+            .unwrap_err();
+        assert!(error.uncertain);
+        assert!(!viewer.lease.lock().await.active());
+        assert_eq!(controller.unresolved().unwrap().len(), 1);
+        assert_eq!(controller.acquire(false).unwrap_err().code, "uncertain");
     }
 
     #[tokio::test]

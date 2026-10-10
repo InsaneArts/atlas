@@ -120,6 +120,22 @@ pub fn present(path: &Path) -> io::Result<bool> {
     }
 }
 
+/// Whether any extended ACL entry on `path` allows a write; deny entries are
+/// harmless. An invalid ACL is an error.
+pub fn allows_write(path: &Path) -> io::Result<bool> {
+    match Acl::of_path(path)? {
+        None => Ok(false),
+        Some(acl) if acl.is_valid() => Ok(acl
+            .entries()?
+            .iter()
+            .any(|entry| entry.allow && entry.mask & WRITE_RIGHTS != 0)),
+        Some(_) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Invalid filesystem ACL",
+        )),
+    }
+}
+
 /// Replace an open file's extended ACL with an empty one.
 pub fn clear(file: &File) -> io::Result<()> {
     // SAFETY: acl_init returns an owned handle, freed by Acl's Drop.

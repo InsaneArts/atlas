@@ -50,6 +50,7 @@ session.
 
 ```sh
 ./understudy monitor                                  # local viewer
+./understudy menubar                                  # menu bar + viewer
 ./understudy capture                                  # save a helper screenshot
 ./understudy apps
 ./understudy run -- /usr/bin/open -a TextEdit
@@ -59,7 +60,14 @@ session.
 
 In the viewer, **Take control** connects mouse and keyboard; **Release control**,
 **Ctrl–Shift–Esc**, pausing or switching tabs releases them. Preview refresh is
-polling, not a video stream.
+polling, not a video stream. The status pill says whether you are observing, an
+agent is acting, a viewer holds control, or an unknown outcome needs **Recover**;
+recovery never resumes input.
+
+`menubar` adds a status item showing the same state, a live thumbnail and the
+last action, with **Open Viewer** and **Release Control**. Quitting it stops the
+viewer. It is built from the embedded Swift source with the Xcode Command Line
+Tools on first use.
 
 Selected tools, settings and project paths can be provisioned into the helper as
 frozen, resumable plans (`understudy environment --help`; see
