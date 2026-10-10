@@ -25,3 +25,6 @@ __pycache__/
 
 # Coverage profiles from instrumented tools run in this directory
 *.profraw
+
+# SwiftPM build output
+.build/
