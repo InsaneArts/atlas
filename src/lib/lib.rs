@@ -7,5 +7,6 @@ pub mod environment;
 pub mod error;
 pub mod native;
 pub mod session;
+pub mod setup;
 pub mod transport;
 pub mod viewer;

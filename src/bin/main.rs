@@ -56,6 +56,12 @@ enum Command {
         #[arg(long)]
         socket: PathBuf,
     },
+    /// Inspect the helper account, configuration, endpoints and services; changes nothing.
+    Setup {
+        /// Helper account short name. Defaults to the configured helper.
+        #[arg(long)]
+        helper: Option<String>,
+    },
     /// Read session identity and permissions without prompting.
     Status,
     /// Report readiness and only the missing setup steps.
@@ -178,11 +184,17 @@ async fn execute(cli: Cli) -> Result<Value> {
             controller_uid,
             socket,
         } => return input_service(uid, controller_uid, socket).await,
+        Command::Setup { helper } => {
+            return understudy::setup::preview(&cli.config, helper.as_deref()).await;
+        }
         command => command,
     };
     let client = Client::new(Config::load(&cli.config)?)?;
     match command {
-        Command::InputService { .. } | Command::SessionInfo | Command::EnvironmentWorker { .. } => {
+        Command::InputService { .. }
+        | Command::SessionInfo
+        | Command::EnvironmentWorker { .. }
+        | Command::Setup { .. } => {
             unreachable!("helper-side commands return above")
         }
         Command::Status => Ok(client.status().await),
