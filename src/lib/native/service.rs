@@ -76,6 +76,7 @@ impl Service {
                 "pid": std::process::id(),
                 "version": env!("CARGO_PKG_VERSION"),
                 "build": self.build,
+                "capabilities": ["shutdown"],
                 "accessibility": Engine::trusted(),
                 "ready": self.check().is_ok(),
                 "enforcedEpoch": self.epoch()?,
@@ -100,8 +101,17 @@ impl Service {
                     "The input service has an active controller",
                 ));
             }
+            // Release held input first; only an acknowledged release closes the
+            // gate for good. Holding the engine lock keeps acquire out meanwhile.
+            let mut engine = self.engine.lock().await;
+            if let Err(error) = engine.release() {
+                return Err(Error::new(
+                    "uncertain",
+                    format!("Held input could not be released: {}", error.error),
+                )
+                .uncertain());
+            }
             self.gate.close()?;
-            self.engine.lock().await.release()?;
             return Ok(json!({ "ok": true, "stopping": true, "pid": std::process::id() }));
         }
         if operation == "release" {

@@ -4,7 +4,7 @@ use crate::{
     control::{Controller, SharedLease, write_private},
     digest::file_sha256,
     error::{Error, Result},
-    session::{Display, Epoch, Session, input_current, require_hidden},
+    session::{Display, Epoch, Session, input_current, input_settled, require_hidden},
     transport::{Transport, run_output},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -251,7 +251,7 @@ impl Client {
     async fn native_request(&self, request: Value) -> Result<Value> {
         let result = self.input_transport().call(&request).await?;
         if result["ok"] != true {
-            return Err(Error::new(
+            let error = Error::new(
                 match result["code"].as_str() {
                     Some("busy") => "busy",
                     Some("lease-lost") => "lease-lost",
@@ -263,7 +263,13 @@ impl Client {
                 result["error"]
                     .as_str()
                     .unwrap_or("Native control request failed"),
-            ));
+            );
+            // The service reports when a failure may already have changed state.
+            return Err(if result["uncertain"] == true {
+                error.uncertain()
+            } else {
+                error
+            });
         }
         Ok(result)
     }
@@ -348,6 +354,18 @@ impl Client {
         )
         .await
     }
+    /// Execute argv in the verified hidden helper as a pending mutation. The
+    /// caller must already hold controller ownership.
+    pub async fn run_owned(&self, argv: Vec<String>, timeout: Duration) -> Result<Value> {
+        self.identity().await?;
+        let timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
+        self.mutate(
+            json!({"op": "run", "argv": argv, "timeoutMs": timeout_ms}),
+            None,
+            None,
+        )
+        .await
+    }
     pub async fn apps(&self) -> Result<Value> {
         self.identity().await?;
         self.transport.call(&json!({"op": "apps"})).await
@@ -381,22 +399,26 @@ impl Client {
         *cache = Some((key, Some(build.clone())));
         Some(build)
     }
+    /// start-input: replace a stale service, otherwise make one ready.
     async fn launch_input(&self) -> Result<Value> {
         let status = self.status().await;
-        let session = require_hidden(&status, self.config.helper_uid)?;
+        require_hidden(&status, self.config.helper_uid)?;
         let native = &status["inputService"];
         let current = native["build"].is_string() && native["build"] == status["installedBuild"];
         if native["ok"] == true && !current {
             return self.upgrade_input(&status).await;
         }
+        let (pid, outcome) = self.ensure_input(&status).await?;
+        Ok(json!({ "ok": true, outcome: true, "pid": pid }))
+    }
+    /// Make a ready input service exist without replacing a running one:
+    /// reuse it, reset it, or start the installed build.
+    async fn ensure_input(&self, status: &Value) -> Result<(u32, &'static str)> {
+        let session = require_hidden(status, self.config.helper_uid)?;
         if session.input {
-            return Ok(json!({
-                "ok": true,
-                "alreadyRunning": true,
-                "pid": session.epoch.input_pid,
-            }));
+            return Ok((session.epoch.input_pid, "alreadyRunning"));
         }
-        if native["ok"] == true {
+        if status["inputService"]["ok"] == true {
             self.native_request(json!({
                 "op": "reset",
                 "epoch": session.epoch.input_epoch(),
@@ -408,21 +430,30 @@ impl Client {
                     "Native input did not become ready after reset",
                 ));
             }
-            return Ok(json!({ "ok": true, "recovered": true, "pid": session.epoch.input_pid }));
+            return Ok((session.epoch.input_pid, "recovered"));
         }
-        let pid = self.spawn_input().await?;
-        Ok(json!({ "ok": true, "started": true, "pid": pid }))
+        Ok((self.spawn_input().await?, "started"))
     }
     /// Replace a running service whose build differs from the installed
-    /// executable. Its own SIGTERM handling closes ownership and releases held
-    /// input. The replacement stays a pending mutation until the new process
-    /// is ready, runs the installed build and holds nothing.
+    /// executable through its authenticated shutdown. The replacement stays
+    /// a pending mutation until it is ready, current and holds nothing.
     async fn upgrade_input(&self, status: &Value) -> Result<Value> {
         let native = &status["inputService"];
         if !status["installedBuild"].is_string() {
             return Err(Error::new(
                 "startup",
                 "The installed executable cannot be read; refusing to replace the running service",
+            ));
+        }
+        let stoppable = native["capabilities"]
+            .as_array()
+            .is_some_and(|capabilities| capabilities.iter().any(|c| c == "shutdown"));
+        if !stoppable {
+            return Err(Error::new(
+                "startup",
+                "The running input service predates authenticated shutdown and cannot be \
+                 replaced automatically. Stop that process in the helper account (or log the \
+                 helper out and in), then run understudy start-input.",
             ));
         }
         if native["controlActive"] != false {
@@ -464,7 +495,7 @@ impl Client {
     /// Ask exactly `pid` to shut down over its authenticated socket, then wait
     /// until its endpoint is closed and the process is gone. Anything short of
     /// that is uncertain; a definitive refusal changed nothing.
-    async fn stop_input(&self, pid: u32) -> Result<()> {
+    pub async fn stop_input(&self, pid: u32) -> Result<()> {
         self.native_request(json!({ "op": "shutdown", "pid": pid }))
             .await
             .map_err(|error| {
@@ -501,7 +532,7 @@ impl Client {
     }
     /// Start the installed executable as the helper's input service. Launching
     /// is a pending mutation until a ready service answers.
-    async fn spawn_input(&self) -> Result<u32> {
+    pub async fn spawn_input(&self) -> Result<u32> {
         // Arguments stay separate from shell syntax, including configured paths.
         let script = concat!(
             "nohup \"$1\" input-service --uid \"$2\" --controller-uid \"$3\" --socket \"$4\" ",
@@ -522,21 +553,28 @@ impl Client {
         });
         let generation = self.controller.quarantine()?;
         let reply = self.transport.call(&request).await?;
-        if reply["ok"] != true || reply["exitCode"] != 0 {
-            return Err(Error::new(
-                "startup",
-                "The helper could not launch the Rust input service",
-            )
-            .uncertain());
-        }
+        // The launch prints the child PID; only that process may satisfy readiness.
+        let child = (reply["ok"] == true && reply["exitCode"] == 0)
+            .then(|| run_output(&reply, 32).ok())
+            .flatten()
+            .and_then(|output| String::from_utf8(output).ok())
+            .and_then(|text| text.trim().parse::<u32>().ok())
+            .filter(|pid| *pid > 1)
+            .ok_or_else(|| {
+                Error::new(
+                    "startup",
+                    "The helper could not launch the Rust input service",
+                )
+                .uncertain()
+            })?;
         let deadline = Instant::now() + Duration::from_secs(6);
         loop {
             let state = self.status().await;
-            if let Ok(session) = require_hidden(&state, self.config.helper_uid)
-                && session.input
+            if require_hidden(&state, self.config.helper_uid)
+                .is_ok_and(|session| session.input && session.epoch.input_pid == child)
             {
                 self.controller.clear_if(&generation)?;
-                return Ok(session.epoch.input_pid);
+                return Ok(child);
             }
             if Instant::now() >= deadline {
                 return Err(Error::new(
@@ -556,8 +594,13 @@ impl Client {
         // Input has its own process. Clear held state there before restarting
         // the capture/command helper; a new capture PID alone proves nothing
         // about an uncertain mouse or keyboard action.
-        self.launch_input().await?;
+        let (input_pid, _) = self.ensure_input(&self.status().await).await?;
         let session = self.identity().await?;
+        if session.epoch.input_pid != input_pid {
+            return Err(
+                Error::new("uncertain", "The input service changed while recovering").uncertain(),
+            );
+        }
         let cleanup = self
             .native_request(json!({ "op": "reset", "epoch": session.epoch.input_epoch() }))
             .await?;
@@ -574,16 +617,12 @@ impl Client {
             loop {
                 tokio::time::sleep(Duration::from_millis(150)).await;
                 let status = self.status().await;
+                // Settle only with a new capture process and the same input
+                // service whose cleanup was acknowledged, idle and empty.
                 if let Ok(session) = require_hidden(&status, self.config.helper_uid)
                     && session.epoch.capture_pid != before.epoch.capture_pid
+                    && input_settled(&status, self.config.helper_uid, input_pid)
                 {
-                    let native = &status["inputService"];
-                    if !session.input
-                        || native["controlActive"] != false
-                        || native["heldInput"] != false
-                    {
-                        continue;
-                    }
                     self.controller.clear()?;
                     return Ok(json!({"ok": true, "restarted": true, "session": status}));
                 }
