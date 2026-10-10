@@ -16,6 +16,9 @@ use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 use unicode_segmentation::UnicodeSegmentation;
 
+/// The working contract printed by `understudy agent-guide`.
+pub const GUIDE: &str = include_str!("agent_guide.md");
+
 /// The longest text a single `type` action accepts.
 const TYPE_LIMIT: usize = 256;
 
@@ -511,6 +514,32 @@ mod tests {
                 width: 300.0,
                 height: 200.0,
             },
+        }
+    }
+
+    #[test]
+    fn the_guide_names_only_real_commands() {
+        for command in [
+            "doctor",
+            "readiness",
+            "screenshot",
+            "windows",
+            "elements",
+            "click",
+            "type",
+            "key",
+            "drag",
+            "scroll",
+            "open",
+            "wait",
+            "run",
+            "restart",
+            "verify-native",
+        ] {
+            assert!(
+                GUIDE.contains(&format!("understudy {command}")),
+                "{command}"
+            );
         }
     }
 

@@ -142,6 +142,15 @@ enum Command {
         #[arg(long, default_value_t = 200)]
         max: usize,
     },
+    /// Print a concise guide for an LLM agent using Understudy.
+    AgentGuide,
+    /// Whether selected tools run and apps are installed in the helper account.
+    Readiness {
+        #[arg(long = "tool")]
+        tools: Vec<String>,
+        #[arg(long = "app")]
+        apps: Vec<String>,
+    },
     /// Move the pointer to display point X Y.
     Move { x: f64, y: f64 },
     /// Press at FROM, move to TO and release.
@@ -325,6 +334,10 @@ async fn execute(cli: Cli) -> Result<Value> {
         Command::EnvironmentWorker { packet, apply } => {
             return environment::worker(&packet, apply);
         }
+        Command::AgentGuide => {
+            print!("{}", agent::GUIDE);
+            return Ok(Value::Null);
+        }
         Command::SessionInfo => return understudy::native::session_info(),
         Command::WindowsInfo => return windows_info(),
         Command::ElementsInfo { pid } => return elements_info(pid),
@@ -347,6 +360,7 @@ async fn execute(cli: Cli) -> Result<Value> {
         | Command::SessionInfo
         | Command::WindowsInfo
         | Command::ElementsInfo { .. }
+        | Command::AgentGuide
         | Command::EnvironmentWorker { .. }
         | Command::SetupHelper { .. } => {
             unreachable!("helper-side commands return above")
@@ -450,6 +464,9 @@ async fn execute(cli: Cli) -> Result<Value> {
                 .target()
                 .ok_or_else(|| Error::new("usage", "Select the app with --app or --pid"))?;
             agent::elements(&client, &target, &agent::ElementFilter { role, name }, max).await
+        }
+        Command::Readiness { tools, apps } => {
+            understudy::readiness::readiness(&client, &tools, &apps).await
         }
         Command::Move { x, y } => act(&client, json!([{ "type": "move", "x": x, "y": y }])).await,
         Command::Drag {
