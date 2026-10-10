@@ -219,7 +219,9 @@ impl Service {
 }
 
 pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()> {
+    // Started through the shared link, the executable is the file it names.
     let build = std::env::current_exe()
+        .and_then(std::fs::canonicalize)
         .ok()
         .and_then(|path| crate::digest::file_sha256(&path));
     let executable = executable();

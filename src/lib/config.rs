@@ -71,11 +71,13 @@ impl Config {
         let parent = path
             .parent()
             .ok_or_else(|| Error::new("config", "Configuration has no parent directory"))?;
-        for value in [
-            &mut config.socket_path,
-            &mut config.output_dir,
-            &mut config.identity_probe,
-            &mut config.input_socket,
+        for (value, whole) in [
+            (&mut config.socket_path, true),
+            (&mut config.output_dir, true),
+            // The probe's own entry is kept: it may be a link to the app that
+            // install replaces, and must never resolve to (and overwrite) it.
+            (&mut config.identity_probe, false),
+            (&mut config.input_socket, true),
         ] {
             if value.as_os_str().is_empty() || value.to_string_lossy().contains('\0') {
                 return Err(Error::new(
@@ -89,7 +91,11 @@ impl Config {
             if value.is_relative() {
                 *value = parent.join(&*value);
             }
-            *value = resolve_path(value)?;
+            *value = if whole {
+                resolve_path(value)?
+            } else {
+                resolve_parent(value)?
+            };
         }
         Ok(config)
     }
@@ -126,6 +132,17 @@ pub fn home() -> Result<PathBuf> {
         .ok_or_else(|| Error::new("config", "HOME is unavailable"))
 }
 
+/// Resolve the directory holding `path`, keeping its final entry as named.
+pub fn resolve_parent(path: &Path) -> Result<PathBuf> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| Error::new("config", "Cannot resolve path"))?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| Error::new("config", "Cannot resolve path name"))?;
+    Ok(resolve_path(parent)?.join(name))
+}
+
 // Resolve existing ancestors too, so aliases of an absent socket share a lock.
 pub fn resolve_path(path: &Path) -> Result<PathBuf> {
     if path.exists() {
@@ -138,4 +155,30 @@ pub fn resolve_path(path: &Path) -> Result<PathBuf> {
         .file_name()
         .ok_or_else(|| Error::new("config", "Cannot resolve path name"))?;
     Ok(resolve_path(parent)?.join(name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A probe that is a link keeps its own path, so install replaces the
+    /// link and never the executable it points to.
+    #[test]
+    fn the_probe_path_is_not_followed_through_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("App/understudy");
+        fs::create_dir_all(real.parent().unwrap()).unwrap();
+        fs::write(&real, b"").unwrap();
+        let link = dir.path().join("shared/understudy");
+        fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let text = format!(
+            "helper_uid = 502\nsocket_path = \"s.sock\"\nidentity_probe = \"{}\"\n\
+             input_socket = \"i.sock\"\noutput_dir = \"out\"\n",
+            link.display()
+        );
+        let config = Config::parse(text.as_bytes(), &dir.path().join("c.toml")).unwrap();
+        let shared = fs::canonicalize(link.parent().unwrap()).unwrap();
+        assert_eq!(config.identity_probe, shared.join("understudy"));
+    }
 }

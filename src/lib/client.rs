@@ -79,6 +79,12 @@ impl Client {
         // fail its signature, so the shared path links to it instead, and
         // follows the app through updates.
         if crate::update::app_of(&source).is_some() {
+            if !crate::update::reachable_by_others(&source) {
+                return Err(Error::new(
+                    "install",
+                    "The helper account cannot reach Understudy.app here; install it in /Applications",
+                ));
+            }
             let linked = std::os::unix::fs::symlink(&source, &temporary)
                 .and_then(|()| fs::rename(&temporary, target));
             if linked.is_err() {
@@ -468,7 +474,7 @@ impl Client {
         }
         // A failed read is not cached: permissions may be repaired without
         // changing the identity key.
-        let build = file_sha256(path)?;
+        let build = crate::digest::probe_executable(path).and_then(|path| file_sha256(&path))?;
         *cache = Some((key, Some(build.clone())));
         Some(build)
     }
@@ -677,7 +683,11 @@ impl Client {
         // Input has its own process. Clear held state there before restarting
         // the capture/command helper; a new capture PID alone proves nothing
         // about an uncertain mouse or keyboard action.
-        let (input_pid, _) = self.ensure_input(&self.status().await).await?;
+        let initial = self.status().await;
+        // A service whose file was replaced (an app update) cannot become
+        // ready under the restarted helper; it is replaced there instead.
+        let stale = !crate::session::input_build_current(&initial);
+        let (input_pid, _) = self.ensure_input(&initial).await?;
         let session = self.identity().await?;
         if session.epoch.input_pid != input_pid {
             return Err(
@@ -702,16 +712,35 @@ impl Client {
                 let status = self.status().await;
                 // Settle only with a new capture process and the same input
                 // service whose cleanup was acknowledged, idle and empty.
-                if let Ok(session) = require_hidden(&status, self.config.helper_uid)
-                    && session.epoch.capture_pid != before.epoch.capture_pid
-                    && input_settled(&status, self.config.helper_uid, input_pid)
-                {
+                let Ok(session) = require_hidden(&status, self.config.helper_uid) else {
+                    continue;
+                };
+                if session.epoch.capture_pid == before.epoch.capture_pid {
+                    continue;
+                }
+                if input_settled(&status, self.config.helper_uid, input_pid) {
                     self.controller.clear()?;
                     return Ok(json!({"ok": true, "restarted": true, "session": status}));
                 }
+                // Its cleanup was confirmed above, so nothing is held: a stale
+                // service that is not ready under the new helper is replaced.
+                if stale
+                    && status["inputService"]["pid"] == input_pid
+                    && status["inputService"]["ready"] == false
+                {
+                    self.upgrade_input(&status).await?;
+                    self.controller.clear()?;
+                    let status = self.status().await;
+                    return Ok(json!({
+                        "ok": true,
+                        "restarted": true,
+                        "inputReplaced": true,
+                        "session": status,
+                    }));
+                }
             }
         };
-        tokio::time::timeout(Duration::from_secs(10), recovery)
+        tokio::time::timeout(Duration::from_secs(20), recovery)
             .await
             .map_err(|_| {
                 Error::new(

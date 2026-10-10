@@ -222,18 +222,33 @@ fn publishable(out: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Replace the published app with the verified `staged` one by renames.
+/// Exchange two existing paths in one atomic step.
+#[allow(unsafe_code)] // FFI: renamex_np(RENAME_SWAP) has no safe binding.
+fn exchange(first: &Path, second: &Path) -> Result<()> {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+    let path = |path: &Path| CString::new(path.as_os_str().as_bytes()).map_err(|e| e.to_string());
+    let (first, second) = (path(first)?, path(second)?);
+    // SAFETY: two NUL-terminated paths; RENAME_SWAP exchanges them or fails
+    // leaving both in place.
+    if unsafe { libc::renamex_np(first.as_ptr(), second.as_ptr(), libc::RENAME_SWAP) } != 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(())
+}
+
+/// Put the verified `staged` app at `out/Understudy.app`. The marker is
+/// written first and the previous app is exchanged atomically, so an
+/// interruption never leaves the output without an app this tool owns.
 fn publish(staged: &Path, out: &Path) -> Result<PathBuf> {
     let app = out.join("Understudy.app");
-    let previous = staged.with_extension("previous");
-    if app.exists() {
-        fs::rename(&app, &previous).map_err(|error| error.to_string())?;
-    }
-    fs::rename(staged, &app).map_err(|error| error.to_string())?;
     fs::write(out.join(MARKER), "Built by cargo xtask dist\n")
         .map_err(|error| error.to_string())?;
-    if previous.exists() {
-        fs::remove_dir_all(&previous).map_err(|error| error.to_string())?;
+    if app.exists() {
+        exchange(staged, &app)?;
+        // `staged` now holds the previous build; failing to remove it is harmless.
+        let _ = fs::remove_dir_all(staged);
+    } else {
+        fs::rename(staged, &app).map_err(|error| error.to_string())?;
     }
     Ok(app)
 }
@@ -427,7 +442,12 @@ mod tests {
         fs::write(staged.join("new"), "").unwrap();
         let app = publish(&staged, &dir).unwrap();
         assert!(app.join("new").exists());
-        assert!(!staged.exists() && !staged.with_extension("previous").exists());
+        assert!(!staged.exists(), "the previous build is cleared");
+        let again = dir.join("stage/2/Understudy.app");
+        fs::create_dir_all(&again).unwrap();
+        fs::write(again.join("newer"), "").unwrap();
+        let app = publish(&again, &dir).unwrap();
+        assert!(app.join("newer").exists() && !app.join("new").exists());
         fs::remove_dir_all(&dir).unwrap();
     }
 
