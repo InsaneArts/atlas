@@ -1,5 +1,9 @@
-//! The CoreFoundation pieces the native code shares: an owned reference that
-//! is released exactly once, and string and dictionary access.
+//! The CoreFoundation pieces the native code shares: typed access to the
+//! dictionaries CoreGraphics returns, and (until the accessibility code moves
+//! to typed bindings) an owned raw reference.
+pub use objc2_core_foundation::{
+    CFArray, CFBoolean, CFDictionary, CFNumber, CFRetained, CFString, CFType, Type,
+};
 use std::ffi::{CStr, c_char, c_void};
 
 pub type CfRef = *const c_void;
@@ -10,14 +14,6 @@ const UTF8: u32 = 0x0800_0100;
 unsafe extern "C" {
     fn CFRelease(value: CfRef);
     fn CFStringCreateWithCString(allocator: CfRef, text: *const c_char, encoding: u32) -> CfRef;
-    fn CFDictionaryGetValue(dictionary: CfRef, key: CfRef) -> CfRef;
-    fn CFGetTypeID(value: CfRef) -> usize;
-    fn CFBooleanGetTypeID() -> usize;
-    fn CFBooleanGetValue(value: CfRef) -> bool;
-    fn CFNumberGetTypeID() -> usize;
-    fn CFNumberGetValue(number: CfRef, kind: isize, value: *mut c_void) -> bool;
-    fn CFDataGetLength(data: CfRef) -> isize;
-    fn CFDataGetBytePtr(data: CfRef) -> *const u8;
 }
 
 /// An owned CoreFoundation reference, released once. Never wraps null.
@@ -60,58 +56,57 @@ pub fn string(text: &CStr) -> Option<Owned> {
     }
 }
 
-/// A dictionary's value for `key`, borrowed from the dictionary.
-///
-/// # Safety
-/// `dictionary` must be a live CFDictionary.
-unsafe fn value(dictionary: CfRef, key: &CStr) -> Option<CfRef> {
-    let key = string(key)?;
-    // SAFETY: per contract; the returned value is borrowed from the dictionary.
-    let value = unsafe { CFDictionaryGetValue(dictionary, key.get()) };
-    (!value.is_null()).then_some(value)
+/// A dictionary CoreGraphics returns: string keys, values of any CF type.
+pub type Record = CFDictionary<CFString, CFType>;
+
+/// View a CoreGraphics session or window dictionary as a [`Record`].
+pub fn record(dictionary: CFRetained<CFDictionary>) -> CFRetained<Record> {
+    // SAFETY: only CoreGraphics session and window-list dictionaries come
+    // here; their keys are documented CFStrings and their values CF objects.
+    unsafe { CFRetained::cast_unchecked(dictionary) }
 }
 
-/// A boolean dictionary value, if present and boolean.
-///
-/// # Safety
-/// `dictionary` must be a live CFDictionary.
-pub unsafe fn bool_value(dictionary: CfRef, key: &CStr) -> Option<bool> {
-    // SAFETY: per contract; the type is checked before reading.
-    unsafe {
-        let value = value(dictionary, key)?;
-        (CFGetTypeID(value) == CFBooleanGetTypeID()).then(|| CFBooleanGetValue(value))
-    }
+/// View the window list (an array of dictionaries) as records.
+pub fn records(array: CFRetained<CFArray>) -> CFRetained<CFArray<Record>> {
+    // SAFETY: CGWindowListCopyWindowInfo documents an array of window
+    // dictionaries with CFString keys.
+    unsafe { CFRetained::cast_unchecked(array) }
 }
 
-/// An integer dictionary value, if present and numeric.
-///
-/// # Safety
-/// `dictionary` must be a live CFDictionary.
-pub unsafe fn i64_value(dictionary: CfRef, key: &CStr) -> Option<i64> {
-    const SINT64: isize = 4;
-    // SAFETY: per contract; the type is checked and the output sized for SInt64.
-    unsafe {
-        let value = value(dictionary, key)?;
-        let mut number = 0i64;
-        (CFGetTypeID(value) == CFNumberGetTypeID()
-            && CFNumberGetValue(value, SINT64, (&mut number as *mut i64).cast()))
-        .then_some(number)
-    }
+fn value(record: &Record, key: &'static str) -> Option<CFRetained<CFType>> {
+    record.get(&CFString::from_static_str(key))
 }
 
-/// The bytes of a CFData.
-///
-/// # Safety
-/// `data` must be a live CFData.
-pub unsafe fn bytes(data: CfRef) -> Vec<u8> {
-    // SAFETY: per contract; the pointer is valid for the reported length.
-    unsafe {
-        let length = usize::try_from(CFDataGetLength(data)).unwrap_or(0);
-        if length == 0 {
-            return Vec::new();
-        }
-        std::slice::from_raw_parts(CFDataGetBytePtr(data), length).to_vec()
-    }
+/// A boolean value, if present and boolean.
+pub fn boolean(record: &Record, key: &'static str) -> Option<bool> {
+    value(record, key)?
+        .downcast_ref::<CFBoolean>()
+        .map(CFBoolean::as_bool)
+}
+
+/// An integer value, if present and representable.
+pub fn integer(record: &Record, key: &'static str) -> Option<i64> {
+    value(record, key)?.downcast_ref::<CFNumber>()?.as_i64()
+}
+
+/// A floating-point value, if present and numeric.
+pub fn float(record: &Record, key: &'static str) -> Option<f64> {
+    value(record, key)?.downcast_ref::<CFNumber>()?.as_f64()
+}
+
+/// A string value, if present and a string.
+pub fn text(record: &Record, key: &'static str) -> Option<String> {
+    value(record, key)?
+        .downcast_ref::<CFString>()
+        .map(ToString::to_string)
+}
+
+/// A nested dictionary value, as a record.
+pub fn nested(record: &Record, key: &'static str) -> Option<CFRetained<Record>> {
+    let value = value(record, key)?;
+    value
+        .downcast_ref::<CFDictionary>()
+        .map(|dictionary| self::record(dictionary.retain()))
 }
 
 #[cfg(test)]
@@ -123,5 +118,29 @@ mod tests {
         // SAFETY: null is never adopted.
         assert!(unsafe { Owned::adopt(std::ptr::null()) }.is_none());
         assert!(string(c"understudy").is_some());
+    }
+
+    #[test]
+    fn records_read_typed_values_and_refuse_other_types() {
+        let keys = [
+            CFString::from_static_str("flag"),
+            CFString::from_static_str("count"),
+            CFString::from_static_str("name"),
+        ];
+        let flag = CFBoolean::new(true);
+        let count = CFNumber::new_i64(42);
+        let name = CFString::from_static_str("helper");
+        let values: [&CFType; 3] = [flag.as_ref(), count.as_ref(), name.as_ref()];
+        let dictionary = CFDictionary::<CFString, CFType>::from_slices(
+            &keys.iter().map(|key| &**key).collect::<Vec<_>>(),
+            &values,
+        );
+        let record = record(dictionary.as_opaque().retain());
+        assert_eq!(boolean(&record, "flag"), Some(true));
+        assert_eq!(integer(&record, "count"), Some(42));
+        assert_eq!(float(&record, "count"), Some(42.0));
+        assert_eq!(text(&record, "name").as_deref(), Some("helper"));
+        assert_eq!(boolean(&record, "count"), None, "wrong type");
+        assert_eq!(integer(&record, "missing"), None);
     }
 }

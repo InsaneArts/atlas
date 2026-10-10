@@ -2,53 +2,19 @@
 //! display, with which permissions.
 use crate::native::{
     capture,
-    cf::{self, CfRef, Owned},
+    cf::{self, CFBoolean, CFDictionary, CFRetained, CFString},
+};
+use objc2_application_services::{AXIsProcessTrusted, AXIsProcessTrustedWithOptions};
+use objc2_core_graphics::{
+    CGDisplayBounds, CGDisplayCopyDisplayMode, CGDisplayMode, CGMainDisplayID,
+    CGSessionCopyCurrentDictionary,
 };
 use serde_json::{Value, json};
 
-#[repr(C)]
-struct Point {
-    x: f64,
-    y: f64,
-}
-#[repr(C)]
-struct Size {
-    width: f64,
-    height: f64,
-}
-#[repr(C)]
-struct Rect {
-    origin: Point,
-    size: Size,
-}
-
-#[link(name = "CoreGraphics", kind = "framework")]
-unsafe extern "C" {
-    fn CGSessionCopyCurrentDictionary() -> CfRef;
-    fn CGMainDisplayID() -> u32;
-    fn CGDisplayBounds(display: u32) -> Rect;
-    fn CGDisplayCopyDisplayMode(display: u32) -> CfRef;
-    fn CGDisplayModeGetPixelWidth(mode: CfRef) -> usize;
-    fn CGDisplayModeGetWidth(mode: CfRef) -> usize;
-}
-#[link(name = "ApplicationServices", kind = "framework")]
-unsafe extern "C" {
-    fn AXIsProcessTrusted() -> bool;
-    fn AXIsProcessTrustedWithOptions(options: CfRef) -> bool;
-}
-#[link(name = "CoreFoundation", kind = "framework")]
-unsafe extern "C" {
-    fn CFDictionaryCreate(
-        allocator: CfRef,
-        keys: *const CfRef,
-        values: *const CfRef,
-        count: isize,
-        key_callbacks: *const std::ffi::c_void,
-        value_callbacks: *const std::ffi::c_void,
-    ) -> CfRef;
-    static kCFBooleanTrue: CfRef;
-    static kCFTypeDictionaryKeyCallBacks: std::ffi::c_void;
-    static kCFTypeDictionaryValueCallBacks: std::ffi::c_void;
+/// Whether this process may use Accessibility.
+fn accessibility() -> bool {
+    // SAFETY: no arguments; only reads this process's consent.
+    unsafe { AXIsProcessTrusted() }
 }
 
 /// Ask macOS for whatever consent the daemon still lacks — Screen Recording
@@ -58,27 +24,15 @@ pub fn request_consent() {
     if !capture::permitted() {
         capture::request();
     }
-    // SAFETY: AXIsProcessTrusted has no arguments; the options dictionary is
-    // owned and holds one static key and value.
-    unsafe {
-        if AXIsProcessTrusted() {
-            return;
-        }
-        let Some(key) = cf::string(c"AXTrustedCheckOptionPrompt") else {
-            return;
-        };
-        let value = kCFBooleanTrue;
-        if let Some(options) = Owned::adopt(CFDictionaryCreate(
-            std::ptr::null(),
-            &key.get(),
-            &value,
-            1,
-            &kCFTypeDictionaryKeyCallBacks,
-            &kCFTypeDictionaryValueCallBacks,
-        )) {
-            AXIsProcessTrustedWithOptions(options.get());
-        }
+    if accessibility() {
+        return;
     }
+    let key = CFString::from_static_str("AXTrustedCheckOptionPrompt");
+    let options =
+        CFDictionary::<CFString, CFBoolean>::from_slices(&[&key], &[CFBoolean::new(true)]);
+    // SAFETY: the options dictionary holds the documented string key with a
+    // boolean value.
+    unsafe { AXIsProcessTrustedWithOptions(Some(options.as_opaque())) };
 }
 
 /// This process's account: name, home and UID.
@@ -90,29 +44,25 @@ fn user() -> Value {
     }
 }
 
+/// The window server's record of this graphical session.
+fn session_record() -> Option<CFRetained<cf::Record>> {
+    CGSessionCopyCurrentDictionary().map(cf::record)
+}
+
 /// Whether this graphical session is on the console now, if known.
 fn console_state() -> Option<bool> {
-    // SAFETY: Copy returns an owned dictionary or null; values are read
-    // through type-checked helpers while it is alive.
-    unsafe {
-        Owned::adopt(CGSessionCopyCurrentDictionary()).and_then(|dictionary| {
-            cf::bool_value(dictionary.get(), c"kCGSSessionOnConsoleKey")
-                .or_else(|| cf::bool_value(dictionary.get(), c"kCGSessionOnConsoleKey"))
-        })
-    }
+    let record = session_record()?;
+    cf::boolean(&record, "kCGSSessionOnConsoleKey")
+        .or_else(|| cf::boolean(&record, "kCGSessionOnConsoleKey"))
 }
 
 /// Who owns this graphical session and whether their login has finished,
 /// from the window server's own session record.
 pub fn session_owner() -> Option<(i64, bool)> {
-    // SAFETY: Copy returns an owned dictionary or null; values are read
-    // through type-checked helpers while it is alive.
-    unsafe {
-        let dictionary = Owned::adopt(CGSessionCopyCurrentDictionary())?;
-        let uid = cf::i64_value(dictionary.get(), c"kCGSSessionUserIDKey")?;
-        let done = cf::bool_value(dictionary.get(), c"kCGSessionLoginDoneKey")?;
-        Some((uid, done))
-    }
+    let record = session_record()?;
+    let uid = cf::integer(&record, "kCGSSessionUserIDKey")?;
+    let done = cf::boolean(&record, "kCGSessionLoginDoneKey")?;
+    Some((uid, done))
 }
 
 /// Whether the session is on the console. Unknown counts as on the console:
@@ -129,8 +79,7 @@ fn session(manager: &str) -> Value {
 
 /// The main display's bounds in points: x, y, width, height.
 pub fn display_bounds() -> (f64, f64, f64, f64) {
-    // SAFETY: no pointer arguments; the display ID comes from the system.
-    let bounds = unsafe { CGDisplayBounds(CGMainDisplayID()) };
+    let bounds = CGDisplayBounds(CGMainDisplayID());
     (
         bounds.origin.x,
         bounds.origin.y,
@@ -141,25 +90,19 @@ pub fn display_bounds() -> (f64, f64, f64, f64) {
 
 /// The main display in points, and its backing pixels per point.
 fn display() -> Value {
-    // SAFETY: the display ID comes from the system; the mode is owned.
-    unsafe {
-        let display = CGMainDisplayID();
-        let bounds = CGDisplayBounds(display);
-        let scale = Owned::adopt(CGDisplayCopyDisplayMode(display))
-            .map(|mode| {
-                let (pixels, points) = (
-                    CGDisplayModeGetPixelWidth(mode.get()),
-                    CGDisplayModeGetWidth(mode.get()),
-                );
-                if points > 0 {
-                    pixels as f64 / points as f64
-                } else {
-                    1.0
-                }
-            })
-            .unwrap_or(1.0);
-        json!({"width": bounds.size.width, "height": bounds.size.height, "scale": scale})
-    }
+    let display = CGMainDisplayID();
+    let bounds = CGDisplayBounds(display);
+    let mode = CGDisplayCopyDisplayMode(display);
+    let (pixels, points) = (
+        CGDisplayMode::pixel_width(mode.as_deref()),
+        CGDisplayMode::width(mode.as_deref()),
+    );
+    let scale = if points > 0 {
+        pixels as f64 / points as f64
+    } else {
+        1.0
+    };
+    json!({"width": bounds.size.width, "height": bounds.size.height, "scale": scale})
 }
 
 /// launchd's session type for this process (`launchctl managername`).
@@ -176,13 +119,11 @@ pub fn manager_name() -> String {
 
 /// The full `hello` reply.
 pub fn hello(manager: &str) -> Value {
-    // SAFETY: AXIsProcessTrusted has no arguments and reads this process's consent.
-    let accessibility = unsafe { AXIsProcessTrusted() };
     json!({
         "ok": true,
         "op": "hello",
         "user": user(),
-        "permissions": {"accessibility": accessibility, "screenCapture": capture::permitted()},
+        "permissions": {"accessibility": accessibility(), "screenCapture": capture::permitted()},
         "session": session(manager),
         "display": display(),
         "daemon": {"protocol": 1, "pid": std::process::id(), "version": env!("CARGO_PKG_VERSION")},
@@ -192,6 +133,14 @@ pub fn hello(manager: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The prompt option is passed by name; it is the exported constant.
+    #[test]
+    fn the_prompt_option_is_the_framework_constant() {
+        // SAFETY: reading an immutable framework constant in a test.
+        let key = unsafe { objc2_application_services::kAXTrustedCheckOptionPrompt };
+        assert_eq!(key.to_string(), "AXTrustedCheckOptionPrompt");
+    }
 
     #[test]
     fn hello_describes_this_process_in_its_session() {

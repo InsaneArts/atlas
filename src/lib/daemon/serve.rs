@@ -166,19 +166,16 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
 /// the Core Foundation run loop, which AppKit needs to keep its view of
 /// running applications current.
 pub fn serve_blocking(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()> {
-    #[link(name = "CoreFoundation", kind = "framework")]
-    unsafe extern "C" {
-        fn CFRunLoopRunInMode(mode: crate::native::cf::CfRef, seconds: f64, once: u8) -> i32;
-        static kCFRunLoopDefaultMode: crate::native::cf::CfRef;
-    }
+    use objc2_core_foundation::{CFRunLoop, CFString};
+    // Run-loop modes are compared by name; this is kCFRunLoopDefaultMode.
+    let default_mode = CFString::from_static_str("kCFRunLoopDefaultMode");
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
         .build()?;
     let worker = std::thread::spawn(move || runtime.block_on(serve(uid, controller_uid, socket)));
     while !worker.is_finished() {
-        // SAFETY: runs this thread's run loop for a quarter second at a time.
-        unsafe { CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.25, 0) };
+        CFRunLoop::run_in_mode(Some(&default_mode), 0.25, false);
     }
     worker
         .join()
@@ -308,6 +305,14 @@ async fn handle(stream: UnixStream, daemon: Arc<Daemon>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The run loop mode is passed by name; it is the default mode.
+    #[test]
+    fn the_run_loop_mode_is_the_default_mode() {
+        // SAFETY: reading an immutable framework constant in a test.
+        let mode = unsafe { objc2_core_foundation::kCFRunLoopDefaultMode }.unwrap();
+        assert_eq!(mode.to_string(), "kCFRunLoopDefaultMode");
+    }
     use crate::transport::{Transport, run_output};
     use tokio::io::{AsyncBufReadExt, BufReader};
 
