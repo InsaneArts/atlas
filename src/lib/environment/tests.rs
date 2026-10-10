@@ -602,12 +602,12 @@ fn selected_files_under_config_understudy_share_ancestors_with_private_state() {
 #[test]
 fn shipped_manifest_and_profile_examples_parse_as_toml() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let manifest = root.join("understudy.environment.example.toml");
+    let manifest = root.join("examples/environment.toml");
     let parsed: Manifest =
         crate::config::parse_toml(&fs::read(&manifest).unwrap(), &manifest).unwrap();
     assert_eq!(parsed.files.len(), 2);
     assert!(parsed.files[0].executable);
-    let profile = root.join("understudy.profile.example.toml");
+    let profile = root.join("examples/profile.toml");
     profile::load(&profile).unwrap();
     let json = br#"{"files": []}"#;
     let refused = crate::config::parse_toml::<Manifest>(json, &manifest);
