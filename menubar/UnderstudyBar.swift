@@ -11,9 +11,9 @@ struct Snapshot {
     var mode = "unavailable"
     var reason = "Connecting to the helper"
     var account = "Helper account"
-    var display = "Unknown"
-    var input = "Unknown"
-    var activity = "No recent actions"
+    var display = ""
+    var last = "No recent actions"
+    var when = ""
 
     var controlling: Bool { mode == "controlling" }
 
@@ -29,76 +29,52 @@ struct Snapshot {
         {
             self.display = "\(Int(width)) × \(Int(height))"
         }
-        let session = status["session"] as? [String: Any]
-        let service = session?["inputService"] as? [String: Any]
-        if service?["ready"] as? Bool == true, let pid = service?["pid"] as? Int {
-            input = "Ready · PID \(pid)"
-        } else {
-            input = service?["ok"] as? Bool == true ? "Not ready" : "Unavailable"
-        }
         if let row = (overview["activity"] as? [[String: Any]])?.first,
             let operation = row["operation"] as? String
         {
             let who = row["actor"] as? String == "viewer" ? "You" : "Agent"
-            let age = (row["ageSeconds"] as? Double).map(Snapshot.ago) ?? ""
-            let failed = row["ok"] as? Bool == true ? "" : " · failed"
-            activity = "\(who) · \(operation)\(failed) · \(age)"
+            last = "\(who) \(Snapshot.describe(operation, row))"
+            when = (row["ageSeconds"] as? Double).map(Snapshot.ago) ?? ""
         }
     }
 
+    /// What an operation did, in words; no payload is ever recorded.
+    static func describe(_ operation: String, _ row: [String: Any]) -> String {
+        let count = row["actionCount"] as? Int ?? 0
+        if row["ok"] as? Bool != true { return "\(operation) failed" }
+        if operation == "input" && count > 0 {
+            return "sent \(count) action\(count == 1 ? "" : "s")"
+        }
+        if operation == "run" { return "ran a command" }
+        if operation == "restart" { return "recovered" }
+        return operation
+    }
+
     static func ago(_ seconds: Double) -> String {
-        if seconds < 5 { return "just now" }
+        if seconds < 5 { return "Now" }
         if seconds < 90 { return "\(Int(seconds.rounded())) s ago" }
         if seconds < 5400 { return "\(Int((seconds / 60).rounded())) min ago" }
         return "\(Int((seconds / 3600).rounded())) h ago"
     }
 }
 
-/// A colour that follows the light or dark appearance it is drawn in.
-func adaptive(_ light: Int, _ dark: Int) -> NSColor {
-    func rgb(_ value: Int) -> NSColor {
-        NSColor(
-            srgbRed: CGFloat((value >> 16) & 0xff) / 255, green: CGFloat((value >> 8) & 0xff) / 255,
-            blue: CGFloat(value & 0xff) / 255, alpha: 1)
-    }
-    return NSColor(name: nil) { appearance in
-        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? rgb(dark) : rgb(light)
-    }
-}
+/// How each mode reads: a label, one small dot, and the glyph's mark.
+struct Mode {
+    enum Mark { case none, working, filled, alert, dash, dimmed }
 
-/// Label and colours for each mode, matching the web viewer.
-struct Tone {
     let label: String
     let dot: NSColor
-    let text: NSColor
-    let fill: NSColor
+    let mark: Mark
 
-    static func of(_ mode: String) -> Tone {
+    static func of(_ mode: String) -> Mode {
         switch mode {
-        case "observing":
-            return Tone(
-                label: "Observing", dot: adaptive(0x406348, 0x8fbf98),
-                text: adaptive(0x406348, 0xa9d2b0), fill: adaptive(0xe8eee4, 0x26332a))
+        case "observing": return Mode(label: "Observing", dot: .systemGreen, mark: .none)
+        case "agent": return Mode(label: "Agent working", dot: .controlAccentColor, mark: .working)
         case "controlling":
-            return Tone(
-                label: "Viewer in control", dot: adaptive(0xb1d0a2, 0xb1d0a2),
-                text: adaptive(0xffffff, 0x1b1e19), fill: adaptive(0x252722, 0xe6e8e1))
-        case "agent":
-            return Tone(
-                label: "Agent active", dot: adaptive(0x3f5a7a, 0x9fbbe0),
-                text: adaptive(0x3f5a7a, 0xb8cde8), fill: adaptive(0xe7edf4, 0x253244))
-        case "recovering":
-            return Tone(
-                label: "Needs recovery", dot: adaptive(0xc27b45, 0xe0a172),
-                text: adaptive(0x8d542d, 0xe8b48c), fill: adaptive(0xf6efe6, 0x3a2c20))
-        case "blocked":
-            return Tone(
-                label: "Not ready", dot: adaptive(0xc27b45, 0xe0a172),
-                text: adaptive(0x8d542d, 0xe8b48c), fill: adaptive(0xf6efe6, 0x3a2c20))
-        default:
-            return Tone(
-                label: "Unavailable", dot: adaptive(0xb4b8ac, 0x80847a),
-                text: .secondaryLabelColor, fill: .quaternaryLabelColor)
+            return Mode(label: "Viewer has control", dot: .controlAccentColor, mark: .filled)
+        case "recovering": return Mode(label: "Needs recovery", dot: .systemOrange, mark: .alert)
+        case "blocked": return Mode(label: "Not ready", dot: .systemOrange, mark: .dash)
+        default: return Mode(label: "Unavailable", dot: .tertiaryLabelColor, mark: .dimmed)
         }
     }
 }
@@ -164,43 +140,28 @@ final class Viewer {
 
 // MARK: - Views
 
-/// The mode pill: a rounded capsule with a dot and a label.
-final class PillView: NSView {
-    var tone = Tone.of("unavailable") {
-        didSet {
-            invalidateIntrinsicContentSize()
-            needsDisplay = true
-        }
-    }
-    private let font = NSFont.systemFont(ofSize: 11, weight: .medium)
+/// A small filled circle in the mode's colour.
+final class DotView: NSView {
+    var color = NSColor.tertiaryLabelColor { didSet { needsDisplay = true } }
 
-    override var intrinsicContentSize: NSSize {
-        let width = (tone.label as NSString).size(withAttributes: [.font: font]).width
-        return NSSize(width: ceil(width) + 28, height: 22)
-    }
+    override var intrinsicContentSize: NSSize { NSSize(width: 6, height: 6) }
 
     override func draw(_ dirtyRect: NSRect) {
-        let shape = NSBezierPath(roundedRect: bounds, xRadius: 11, yRadius: 11)
-        tone.fill.setFill()
-        shape.fill()
-        tone.dot.setFill()
-        NSBezierPath(ovalIn: NSRect(x: 10, y: bounds.midY - 3.5, width: 7, height: 7)).fill()
-        let text = NSAttributedString(
-            string: tone.label, attributes: [.font: font, .foregroundColor: tone.text])
-        text.draw(at: NSPoint(x: 22, y: bounds.midY - text.size().height / 2))
+        color.setFill()
+        NSBezierPath(ovalIn: bounds).fill()
     }
 }
 
-/// The helper desktop thumbnail, letterboxed on a dark rounded stage.
+/// The helper desktop, letterboxed on a black rounded stage.
 final class ThumbnailView: NSView {
     var image: NSImage? { didSet { needsDisplay = true } }
     var placeholder = "Waiting for the helper desktop…" { didSet { needsDisplay = true } }
 
-    override var intrinsicContentSize: NSSize { NSSize(width: 312, height: 176) }
+    override var intrinsicContentSize: NSSize { NSSize(width: 316, height: 178) }
 
     override func draw(_ dirtyRect: NSRect) {
-        let stage = NSBezierPath(roundedRect: bounds, xRadius: 8, yRadius: 8)
-        NSColor(srgbRed: 0.106, green: 0.118, blue: 0.098, alpha: 1).setFill()
+        let stage = NSBezierPath(roundedRect: bounds, xRadius: 10, yRadius: 10)
+        NSColor.black.setFill()
         stage.fill()
         NSGraphicsContext.saveGraphicsState()
         stage.addClip()
@@ -215,7 +176,7 @@ final class ThumbnailView: NSView {
                 string: placeholder,
                 attributes: [
                     .font: NSFont.systemFont(ofSize: 11),
-                    .foregroundColor: NSColor(srgbRed: 0.77, green: 0.8, blue: 0.74, alpha: 1),
+                    .foregroundColor: NSColor(white: 0.65, alpha: 1),
                 ])
             let size = text.size()
             text.draw(
@@ -223,13 +184,21 @@ final class ThumbnailView: NSView {
                     x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2))
         }
         NSGraphicsContext.restoreGraphicsState()
-        NSColor.separatorColor.setStroke()
-        stage.lineWidth = 1
-        stage.stroke()
     }
 }
 
-func label(_ text: String, size: CGFloat = 12, color: NSColor = .labelColor) -> NSTextField {
+/// A grouped block of rows on a rounded background, as in System Settings.
+final class GroupView: NSView {
+    override var wantsUpdateLayer: Bool { false }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        (dark ? NSColor(white: 1, alpha: 0.07) : NSColor.white).setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: 10, yRadius: 10).fill()
+    }
+}
+
+func label(_ text: String, size: CGFloat = 13, color: NSColor = .labelColor) -> NSTextField {
     let field = NSTextField(labelWithString: text)
     field.font = .systemFont(ofSize: size)
     field.textColor = color
@@ -237,22 +206,32 @@ func label(_ text: String, size: CGFloat = 12, color: NSColor = .labelColor) -> 
     return field
 }
 
+/// One row of a group: a label on the left, a secondary value on the right.
+func row(_ title: NSTextField, _ value: NSTextField) -> NSStackView {
+    value.textColor = .secondaryLabelColor
+    value.alignment = .right
+    value.setContentCompressionResistancePriority(.required, for: .horizontal)
+    title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    let line = NSStackView(views: [title, NSView(), value])
+    line.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
+    return line
+}
+
 // MARK: - Panel
 
-/// The popover's content: state, desktop, facts and actions.
+/// The popover's content: status, desktop, facts and actions.
 final class PanelController: NSViewController {
     let viewer: Viewer?
-    let pill = PillView()
-    let reason = label("", color: .secondaryLabelColor)
+    let dot = DotView()
+    let state = label("", size: 12, color: .secondaryLabelColor)
     let thumbnail = ThumbnailView()
     let account = label("")
     let display = label("")
-    let input = label("")
-    let activity = label("")
+    let last = label("")
+    let when = label("")
     let message = label("", size: 11, color: .secondaryLabelColor)
     let open = NSButton(title: "Open Viewer", target: nil, action: nil)
     let release = NSButton(title: "Release Control", target: nil, action: nil)
-    let quit = NSButton(title: "Quit", target: nil, action: nil)
 
     init(viewer: Viewer?) {
         self.viewer = viewer
@@ -262,66 +241,81 @@ final class PanelController: NSViewController {
     required init?(coder: NSCoder) { nil }
 
     override func loadView() {
-        let title = NSTextField(labelWithString: "Understudy")
-        title.font =
-            NSFont(name: "Iowan Old Style", size: 19) ?? .systemFont(ofSize: 17, weight: .semibold)
-        let header = NSStackView(views: [title, NSView(), pill])
-        header.distribution = .fill
-        reason.maximumNumberOfLines = 2
-        reason.lineBreakMode = .byWordWrapping
-        reason.preferredMaxLayoutWidth = 312
-
-        let rows = [
-            ("Account", account), ("Display", display), ("Input", input), ("Last action", activity),
-        ]
-        let grid = NSGridView(
-            views: rows.map { name, value in
-                value.alignment = .right
-                return [label(name, color: .secondaryLabelColor), value]
-            })
-        grid.rowSpacing = 6
-        grid.column(at: 0).xPlacement = .leading
-        grid.column(at: 1).xPlacement = .trailing
-
-        open.bezelStyle = .rounded
-        open.keyEquivalent = "\r"
-        open.target = self
-        open.action = #selector(openViewer)
-        release.bezelStyle = .rounded
-        release.target = self
-        release.action = #selector(releaseControl)
-        quit.bezelStyle = .rounded
-        quit.target = NSApp
-        quit.action = #selector(NSApplication.terminate(_:))
-        let actions = NSStackView(views: [open, release, NSView(), quit])
+        let title = label("Understudy")
+        title.font = .systemFont(ofSize: 13, weight: .semibold)
+        let status = NSStackView(views: [dot, state])
+        status.spacing = 6
+        let header = NSStackView(views: [title, NSView(), status])
+        header.edgeInsets = NSEdgeInsets(top: 0, left: 2, bottom: 0, right: 2)
 
         let separator = NSBox()
         separator.boxType = .separator
+        let facts = NSStackView(views: [row(account, display), separator, row(last, when)])
+        facts.orientation = .vertical
+        facts.spacing = 0
+        let group = GroupView()
+        group.addSubview(facts)
+        facts.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            facts.leadingAnchor.constraint(equalTo: group.leadingAnchor),
+            facts.trailingAnchor.constraint(equalTo: group.trailingAnchor),
+            facts.topAnchor.constraint(equalTo: group.topAnchor),
+            facts.bottomAnchor.constraint(equalTo: group.bottomAnchor),
+            separator.leadingAnchor.constraint(equalTo: facts.leadingAnchor, constant: 12),
+            separator.trailingAnchor.constraint(equalTo: facts.trailingAnchor, constant: -12),
+        ])
+
+        for button in [open, release] {
+            button.bezelStyle = .push
+            button.controlSize = .large
+            button.target = self
+        }
+        open.keyEquivalent = "\r"
+        open.action = #selector(openViewer)
+        release.action = #selector(releaseControl)
+        let actions = NSStackView(views: [open, release])
+        actions.orientation = .vertical
+        actions.spacing = 6
+
+        let divider = NSBox()
+        divider.boxType = .separator
+        let quit = NSButton(
+            title: "Quit Understudy", target: NSApp, action: #selector(NSApplication.terminate(_:)))
+        quit.isBordered = false
+        quit.alignment = .left
+        quit.keyEquivalent = "q"
+        quit.keyEquivalentModifierMask = .command
+        let shortcut = label("⌘Q", color: .secondaryLabelColor)
+        let quitRow = NSStackView(views: [quit, NSView(), shortcut])
+        quitRow.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 0, right: 8)
+
+        message.isHidden = true
         let stack = NSStackView(views: [
-            header, reason, thumbnail, grid, separator, actions, message,
+            header, thumbnail, group, actions, message, divider, quitRow,
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 12
-        stack.setCustomSpacing(4, after: header)
-        stack.edgeInsets = NSEdgeInsets(top: 16, left: 14, bottom: 14, right: 14)
-        for view in [header, grid, separator, actions] {
+        stack.spacing = 10
+        stack.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 10, right: 12)
+        for view in [header, thumbnail, group, actions, divider, quitRow, open, release] {
             view.translatesAutoresizingMaskIntoConstraints = false
-            view.widthAnchor.constraint(equalToConstant: 312).isActive = true
+            view.widthAnchor.constraint(equalToConstant: 316).isActive = true
         }
+        thumbnail.heightAnchor.constraint(equalTo: thumbnail.widthAnchor, multiplier: 9.0 / 16.0)
+            .isActive = true
         stack.widthAnchor.constraint(equalToConstant: 340).isActive = true
-        message.isHidden = true
         view = stack
         show(Snapshot())
     }
 
     func show(_ snapshot: Snapshot) {
-        pill.tone = Tone.of(snapshot.mode)
-        reason.stringValue = snapshot.reason
+        let mode = Mode.of(snapshot.mode)
+        dot.color = mode.dot
+        state.stringValue = mode.label
         account.stringValue = snapshot.account
         display.stringValue = snapshot.display
-        input.stringValue = snapshot.input
-        activity.stringValue = snapshot.activity
+        last.stringValue = snapshot.last
+        when.stringValue = snapshot.when
         release.isEnabled = snapshot.controlling
     }
 
@@ -340,28 +334,54 @@ final class PanelController: NSViewController {
 
 // MARK: - Status item
 
-/// The menu bar glyph: two stacked desktops and a dot in the mode's colour.
-func statusImage(_ tone: Tone) -> NSImage {
-    let image = NSImage(size: NSSize(width: 22, height: 16), flipped: false) { _ in
-        NSColor.labelColor.setStroke()
+/// The menu bar glyph: a monochrome template image of two stacked windows.
+/// The shape, not a colour, carries the state, like the system's own items.
+func statusImage(_ mode: Mode) -> NSImage {
+    let image = NSImage(size: NSSize(width: 20, height: 15), flipped: true) { _ in
+        let ink = NSColor.black.withAlphaComponent(mode.mark == .dimmed ? 0.4 : 1)
         let back = NSBezierPath(
-            roundedRect: NSRect(x: 5.5, y: 5.5, width: 13, height: 9), xRadius: 2, yRadius: 2)
-        back.lineWidth = 1.2
-        back.stroke()
-        NSColor.labelColor.setFill()
+            roundedRect: NSRect(x: 5.5, y: 0.9, width: 13.6, height: 9.4), xRadius: 2.2,
+            yRadius: 2.2)
         let front = NSBezierPath(
-            roundedRect: NSRect(x: 2, y: 2, width: 13, height: 9), xRadius: 2, yRadius: 2)
-        NSColor.windowBackgroundColor.setFill()
+            roundedRect: NSRect(x: 0.9, y: 4.7, width: 13.6, height: 9.4), xRadius: 2.2,
+            yRadius: 2.2)
+        ink.setStroke()
+        back.lineWidth = 1.3
+        back.stroke()
+        // Clear the back window behind the front one, then draw the front.
+        NSGraphicsContext.current?.compositingOperation = .clear
         front.fill()
-        front.lineWidth = 1.2
-        front.stroke()
-        NSColor.windowBackgroundColor.setFill()
-        NSBezierPath(ovalIn: NSRect(x: 13, y: 0, width: 9, height: 9)).fill()
-        tone.dot.setFill()
-        NSBezierPath(ovalIn: NSRect(x: 14.5, y: 1.5, width: 6, height: 6)).fill()
+        NSGraphicsContext.current?.compositingOperation = .sourceOver
+        ink.set()
+        front.lineWidth = 1.3
+        if mode.mark == .filled { front.fill() } else { front.stroke() }
+        switch mode.mark {
+        case .working:
+            for x in [4.6, 7.7, 10.8] {
+                NSBezierPath(ovalIn: NSRect(x: x - 0.8, y: 8.6, width: 1.6, height: 1.6)).fill()
+            }
+        case .alert:
+            let line = NSBezierPath()
+            line.move(to: NSPoint(x: 7.7, y: 7.2))
+            line.line(to: NSPoint(x: 7.7, y: 9.6))
+            line.lineWidth = 1.4
+            line.lineCapStyle = .round
+            line.stroke()
+            NSBezierPath(ovalIn: NSRect(x: 6.95, y: 10.9, width: 1.5, height: 1.5)).fill()
+        case .dash:
+            let line = NSBezierPath()
+            line.move(to: NSPoint(x: 5.6, y: 9.4))
+            line.line(to: NSPoint(x: 9.8, y: 9.4))
+            line.lineWidth = 1.4
+            line.lineCapStyle = .round
+            line.stroke()
+        default:
+            break
+        }
         return true
     }
-    image.isTemplate = false
+    image.isTemplate = true
+    image.accessibilityDescription = "Understudy: \(mode.label)"
     return image
 }
 
@@ -386,7 +406,7 @@ final class Companion: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         popover.contentViewController = panel
         popover.behavior = .transient
         popover.delegate = self
-        item.button?.image = statusImage(Tone.of("unavailable"))
+        item.button?.image = statusImage(Mode.of("unavailable"))
         item.button?.target = self
         item.button?.action = #selector(toggle)
         schedule(open: false)
@@ -421,8 +441,8 @@ final class Companion: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 guard let self else { return }
                 statusPending = false
                 let snapshot = status.map(Snapshot.init(status:)) ?? Snapshot()
-                item.button?.image = statusImage(Tone.of(snapshot.mode))
-                item.button?.toolTip = "Understudy — \(snapshot.reason)"
+                item.button?.image = statusImage(Mode.of(snapshot.mode))
+                item.button?.toolTip = "Understudy — \(Mode.of(snapshot.mode).label)"
                 panel.show(snapshot)
             }
         }
@@ -481,7 +501,7 @@ func render(viewer: Viewer, to path: String, appearance name: NSAppearance.Name)
         strip.borderWidth = 0
         strip.fillColor = .underPageBackgroundColor
         canvas.addSubview(strip)
-        let glyph = NSImageView(image: statusImage(Tone.of(snapshot.mode)))
+        let glyph = NSImageView(image: statusImage(Mode.of(snapshot.mode)))
         glyph.frame = NSRect(x: size.width - 40, y: size.height + 14, width: 22, height: 16)
         canvas.addSubview(glyph)
         content.frame = NSRect(origin: .zero, size: size)
