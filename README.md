@@ -105,7 +105,7 @@ curl -fsSL https://raw.githubusercontent.com/InsaneArts/understudy/main/install.
 ```
 
 Verifies the release checksum and its Developer ID signature, installs
-Understudy.app in /Applications (or ~/Applications) and links `understudy` into
+Understudy.app in /Applications (where the helper can run it) and links `understudy` into
 ~/.local/bin. Set `GITHUB_TOKEN` while the repository is private. Running it
 again updates.
 

@@ -2,6 +2,30 @@
 use sha2::{Digest, Sha256};
 use std::{fs, io::Read, path::Path};
 
+/// The executable a shared probe path stands for: the file itself, or the
+/// Understudy.app executable it links to when the link belongs to this
+/// account. Any other link is not followed.
+pub fn probe_executable(path: &Path) -> Option<std::path::PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = fs::symlink_metadata(path).ok()?;
+    if metadata.is_file() {
+        return Some(path.to_owned());
+    }
+    if !metadata.file_type().is_symlink() || metadata.uid() != nix::unistd::getuid().as_raw() {
+        return None;
+    }
+    let target = fs::canonicalize(path).ok()?;
+    let in_app = target
+        .parent()
+        .is_some_and(|directory| directory.ends_with("Contents/MacOS"))
+        && target
+            .ancestors()
+            .nth(3)
+            .and_then(Path::extension)
+            .is_some_and(|extension| extension == "app");
+    in_app.then_some(target)
+}
+
 /// SHA-256 of a regular file, read without following a final symlink.
 pub fn file_sha256(path: &Path) -> Option<String> {
     if !fs::symlink_metadata(path).ok()?.is_file() {
@@ -37,5 +61,24 @@ mod tests {
         std::os::unix::fs::symlink(&file, &link).unwrap();
         assert_eq!(file_sha256(&link), None);
         assert_eq!(file_sha256(dir.path()), None);
+    }
+
+    #[test]
+    fn a_probe_follows_only_its_own_link_into_an_app() {
+        use super::probe_executable;
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let app = root.join("Understudy.app/Contents/MacOS/understudy");
+        std::fs::create_dir_all(app.parent().unwrap()).unwrap();
+        std::fs::write(&app, b"x").unwrap();
+        let link = root.join("probe");
+        std::os::unix::fs::symlink(&app, &link).unwrap();
+        assert_eq!(probe_executable(&link), Some(app.clone()));
+        assert_eq!(probe_executable(&app), Some(app.clone()), "a plain file");
+        let elsewhere = root.join("other");
+        std::fs::write(&elsewhere, b"y").unwrap();
+        let stray = root.join("stray");
+        std::os::unix::fs::symlink(&elsewhere, &stray).unwrap();
+        assert_eq!(probe_executable(&stray), None, "links only into an app");
     }
 }

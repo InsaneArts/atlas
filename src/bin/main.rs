@@ -643,7 +643,15 @@ fn update(
     version: Option<String>,
 ) -> Result<Value> {
     let source = understudy::update::Source::from_env(version);
+    // Nothing else may control the helper while its app is replaced: no
+    // viewer or agent, and no action of unknown outcome. The new version's
+    // steps take control again one by one.
+    let exclusion = match Config::load(config) {
+        Ok(loaded) => Some(Client::new(loaded)?.controller.acquire(false)?),
+        Err(_) => None,
+    };
     let mut report = understudy::update::install(&source, allow_unnotarized, force)?;
+    drop(exclusion);
     if report["updated"] != true {
         return Ok(report);
     }
@@ -658,6 +666,11 @@ fn update(
         .unwrap_or_else(|_| json!({"ok": false, "error": "The new version did not report"}));
     report["ok"] = finished["ok"].clone();
     report["helper"] = finished;
+    if report["ok"] == true {
+        report["previous"] = understudy::update::finished()?;
+    } else {
+        report["next"] = json!("Fix the failed step, then run understudy update again to resume");
+    }
     Ok(report)
 }
 

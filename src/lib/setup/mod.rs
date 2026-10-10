@@ -470,9 +470,11 @@ pub async fn preview(config_path: &Path, helper: Option<&str>) -> Result<Value> 
         _ => proposal(&account),
     };
     let current = std::env::current_exe()
+        .and_then(fs::canonicalize)
         .ok()
         .and_then(|path| file_sha256(&path));
-    let installed = file_sha256(&effective.identity_probe);
+    let installed = crate::digest::probe_executable(&effective.identity_probe)
+        .and_then(|path| file_sha256(&path));
     let mut report = json!({
         "ok": true,
         "preview": true,

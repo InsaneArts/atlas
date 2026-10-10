@@ -4,8 +4,8 @@
 #   curl -fsSL https://raw.githubusercontent.com/InsaneArts/understudy/main/install.sh | sh
 #
 # Downloads the latest release, verifies its checksum and its Developer ID
-# signature, installs Understudy.app into /Applications (or ~/Applications
-# without admin rights) and links the `understudy` command into ~/.local/bin.
+# signature, installs Understudy.app into /Applications (where the helper
+# account can run it too) and links the `understudy` command into ~/.local/bin.
 #
 # Environment:
 #   GITHUB_TOKEN               token for a private repository
@@ -42,7 +42,11 @@ if [ -n "${UNDERSTUDY_DOWNLOAD_BASE:-}" ]; then
 	base=${UNDERSTUDY_DOWNLOAD_BASE%/}
 	fetch "$base/SHA256SUMS" "$work/SHA256SUMS"
 	name=$(awk 'NR == 1 { print $2 }' "$work/SHA256SUMS")
-	[ -n "$name" ] || fail "SHA256SUMS lists no archive"
+	case $name in
+	Understudy-*-macos.zip) ;;
+	*) fail "SHA256SUMS does not name an Understudy archive" ;;
+	esac
+	case $name in */*) fail "SHA256SUMS does not name an Understudy archive" ;; esac
 	fetch "$base/$name" "$work/$name"
 else
 	tag=${UNDERSTUDY_VERSION:-latest}
@@ -83,12 +87,10 @@ if ! spctl --assess --type execute "$app" 2>/dev/null; then
 	say "Note: this build is signed but not notarized."
 fi
 
-if [ -w /Applications ]; then
-	target=/Applications
-else
-	target="$HOME/Applications"
-	mkdir -p "$target"
-fi
+# The helper account runs the app too, so it lives where every account can
+# reach it.
+target=/Applications
+[ -w "$target" ] || fail "Understudy.app goes in /Applications; run this as an administrator"
 dest="$target/Understudy.app"
 # Stage beside the destination, then swap by rename: never copy over the
 # executable a running helper daemon may be using.

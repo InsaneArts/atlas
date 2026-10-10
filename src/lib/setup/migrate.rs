@@ -612,6 +612,7 @@ async fn plan(config_path: &Path) -> Result<Plan> {
     }
     let client = Client::new(config.clone())?;
     let built = std::env::current_exe()
+        .and_then(fs::canonicalize)
         .ok()
         .and_then(|path| crate::digest::file_sha256(&path));
     if built.is_none() || client.installed_build() != built {

@@ -126,12 +126,14 @@ fn download(source: &Source, work: &Path) -> Result<String> {
     match source {
         Source::Mirror(base) => {
             curl(&format!("{base}/SHA256SUMS"), &sums, "*/*", None)?;
+            // The name becomes a path: accept only a plain archive name.
             let name = fs::read_to_string(&sums)?
                 .lines()
                 .next()
                 .and_then(|line| line.split_whitespace().nth(1))
+                .filter(|name| !name.contains('/') && archive_version(name).is_some())
                 .map(str::to_owned)
-                .ok_or_else(|| problem("SHA256SUMS lists no archive"))?;
+                .ok_or_else(|| problem("SHA256SUMS does not name an Understudy archive"))?;
             curl(&format!("{base}/{name}"), &work.join(&name), "*/*", None)?;
             Ok(name)
         }
@@ -234,34 +236,104 @@ fn verify(work: &Path, name: &str, allow_unnotarized: bool) -> Result<PathBuf> {
     Ok(app)
 }
 
-/// Put `new` in place of `installed` by renames within one directory.
-fn swap(new: &Path, installed: &Path) -> Result<()> {
+/// Exchange two paths in one atomic step (both must exist).
+#[allow(unsafe_code)] // FFI: renamex_np(RENAME_SWAP) has no safe binding.
+fn exchange(first: &Path, second: &Path) -> Result<()> {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+    let path = |path: &Path| {
+        CString::new(path.as_os_str().as_bytes()).map_err(|_| problem("Invalid app path"))
+    };
+    let (first, second) = (path(first)?, path(second)?);
+    // SAFETY: two NUL-terminated paths; RENAME_SWAP exchanges them or fails
+    // leaving both in place.
+    if unsafe { libc::renamex_np(first.as_ptr(), second.as_ptr(), libc::RENAME_SWAP) } != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok(())
+}
+
+/// Where an unfinished update is recorded until the helper is on it.
+fn record_path() -> Result<PathBuf> {
+    Ok(crate::config::home()?.join("Library/Application Support/Understudy/update.json"))
+}
+
+/// The update whose helper handover has not completed, if any.
+pub fn unfinished() -> Result<Option<Value>> {
+    match fs::read(record_path()?) {
+        Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// The helper is on the new app: drop the previous bundle and the record.
+/// A previous bundle that cannot be removed is reported, not an error.
+pub fn finished() -> Result<Value> {
+    let Some(record) = unfinished()? else {
+        return Ok(json!({"previous": null}));
+    };
+    let previous = record["previous"].as_str().map(PathBuf::from);
+    let removed = previous
+        .as_ref()
+        .is_some_and(|path| fs::remove_dir_all(path).is_ok());
+    fs::remove_file(record_path()?)?;
+    Ok(json!({"previous": previous, "removed": removed}))
+}
+
+/// Put `new` in place of `installed` with one atomic exchange, keeping
+/// the previous app beside it (and recording where) until the helper's
+/// handover succeeds.
+fn swap(new: &Path, installed: &Path, name: &str) -> Result<()> {
     let parent = installed
         .parent()
         .ok_or_else(|| problem("The installed app has no parent directory"))?;
-    let token = crate::control::token();
-    let staged = parent.join(format!(".Understudy.app.{token}"));
-    let previous = parent.join(format!(".Understudy.app.previous.{token}"));
+    let staged = parent.join(format!(".Understudy.app.{}", crate::control::token()));
     check(
         "/usr/bin/ditto",
         &[new.as_os_str(), staged.as_os_str()],
         "The new app could not be staged beside the installed one",
     )?;
-    fs::rename(installed, &previous)?;
-    if let Err(error) = fs::rename(&staged, installed) {
-        // Put the working app back before reporting.
-        fs::rename(&previous, installed)?;
+    if let Err(error) = exchange(&staged, installed) {
         let _ = fs::remove_dir_all(&staged);
-        return Err(error.into());
+        return Err(error);
     }
-    fs::remove_dir_all(&previous)?;
+    // `staged` now holds the previous app.
+    let record = json!({"previous": staged, "installed": installed, "to": name});
+    let path = record_path()?;
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(path.parent().unwrap_or(Path::new("/")))?;
+    fs::write(&path, serde_json::to_vec_pretty(&record)?)?;
     Ok(())
+}
+
+/// Whether other accounts (the helper) can reach and run `executable`:
+/// every directory above it searchable and the file readable and executable
+/// by others. ACLs are not counted, so this errs on the side of refusing.
+pub fn reachable_by_others(executable: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |path: &Path| fs::metadata(path).map(|metadata| metadata.permissions().mode());
+    mode(executable).is_ok_and(|mode| mode & 0o005 == 0o005)
+        && executable
+            .ancestors()
+            .skip(1)
+            .all(|directory| mode(directory).is_ok_and(|mode| mode & 0o001 != 0))
 }
 
 /// Replace the installed app with the release from `source` when it is newer
 /// (or `force`). Reports whether it changed and the versions involved.
 pub fn install(source: &Source, allow_unnotarized: bool, force: bool) -> Result<Value> {
     let installed = installed_app()?;
+    // A swap whose handover did not finish is resumed before anything else.
+    if let Some(record) = unfinished()? {
+        return Ok(json!({"ok": true, "updated": true, "resumed": true, "record": record}));
+    }
+    if !reachable_by_others(&installed.join("Contents/MacOS/understudy")) {
+        return Err(problem(
+            "Understudy.app must be where the helper account can run it: install it in /Applications",
+        ));
+    }
     let work = scratch()?;
     let outcome = (|| {
         let name = download(source, &work)?;
@@ -276,7 +348,7 @@ pub fn install(source: &Source, allow_unnotarized: bool, force: bool) -> Result<
             }));
         }
         let app = verify(&work, &name, allow_unnotarized)?;
-        swap(&app, &installed)?;
+        swap(&app, &installed, &name)?;
         Ok(json!({
             "ok": true,
             "updated": true,
@@ -317,25 +389,45 @@ mod tests {
     }
 
     #[test]
-    fn a_swap_replaces_the_app_by_rename_and_leaves_nothing_behind() {
+    fn an_exchange_swaps_both_apps_in_one_step() {
         let dir = tempfile::tempdir().unwrap();
         let installed = dir.path().join("Understudy.app");
-        let new = dir.path().join("new/Understudy.app");
+        let new = dir.path().join(".Understudy.app.new");
         fs::create_dir_all(&installed).unwrap();
         fs::write(installed.join("version"), "old").unwrap();
         fs::create_dir_all(&new).unwrap();
         fs::write(new.join("version"), "new").unwrap();
-        swap(&new, &installed).unwrap();
+        exchange(&new, &installed).unwrap();
         assert_eq!(
             fs::read_to_string(installed.join("version")).unwrap(),
             "new"
         );
-        let leftovers: Vec<_> = fs::read_dir(dir.path())
-            .unwrap()
-            .filter_map(|entry| entry.ok())
-            .map(|entry| entry.file_name().to_string_lossy().into_owned())
-            .filter(|name| name.starts_with(".Understudy"))
-            .collect();
-        assert!(leftovers.is_empty(), "{leftovers:?}");
+        assert_eq!(
+            fs::read_to_string(new.join("version")).unwrap(),
+            "old",
+            "kept"
+        );
+        assert!(exchange(&dir.path().join("missing"), &installed).is_err());
+        assert_eq!(
+            fs::read_to_string(installed.join("version")).unwrap(),
+            "new"
+        );
+    }
+
+    #[test]
+    fn only_paths_others_can_reach_are_runnable_by_the_helper() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let private = dir.path().join("home");
+        let file = private.join("Applications/understudy");
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, b"").unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&private, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            !reachable_by_others(&file),
+            "a private home blocks the helper"
+        );
+        assert!(reachable_by_others(Path::new("/bin/ls")));
     }
 }
