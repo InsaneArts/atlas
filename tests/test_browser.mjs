@@ -235,6 +235,7 @@ import {
   facts,
   freshness,
   modeView,
+  readiness,
   recoveryView,
 } from '../web/overview.js';
 
@@ -247,30 +248,55 @@ test('overview turns modes, facts and activity into display rows', () => {
   assert.equal(freshness(20000), 'Preview is stale');
   assert.equal(ago(2), 'just now');
   assert.equal(ago(120), '2 min ago');
-  const rows = facts({
-    overview: {
-      account: 'atlastest',
-      display: { width: 2560, height: 1440 },
-      nativeDialogs: 'failed',
-    },
+  const status = {
+    overview: { display: { width: 2560, height: 1440 }, pending: 0, mode: 'observing' },
     session: { inputService: { ok: true, ready: true, pid: 42 } },
-  });
-  assert.deepEqual(rows, [
-    ['Account', 'atlastest'],
+  };
+  assert.deepEqual(facts(status), [
     ['Display', '2560 × 1440'],
-    ['Input', 'Ready · PID 42'],
-    ['Native dialogs', 'Save and Open failing'],
+    ['Input', 'Ready'],
+    ['Control', 'Available'],
+    ['Pending actions', 'None'],
+  ]);
+  assert.equal(facts(status, true)[2][1], 'This window');
+  for (const [mode, expected] of [
+    ['agent', 'Agent working'],
+    ['recovering', 'After recovery'],
+    ['blocked', 'Not ready'],
+    ['unavailable', 'Unavailable'],
+    [undefined, 'Unavailable'],
+  ])
+    assert.equal(
+      facts({ ...status, overview: { ...status.overview, mode } })[2][1],
+      expected,
+      `control availability while ${mode}`,
+    );
+  const held = { ...status, overview: { ...status.overview, mode: 'controlling', pending: 2 } };
+  assert.deepEqual(facts(held).slice(2), [
+    ['Control', 'Another window'],
+    ['Pending actions', '2'],
   ]);
   const items = activityItems({
     activity: [
-      { operation: 'input', ok: true, actionCount: 1, ageSeconds: 3 },
-      { operation: 'run', ok: false, actionCount: null, ageSeconds: 70, actor: 'viewer' },
+      { operation: 'input', ok: true, actionCount: 3, ageSeconds: 3 },
+      { operation: 'run', ok: true, ageSeconds: 40 },
+      { operation: 'restart', ok: true, ageSeconds: 70, actor: 'viewer' },
+      { operation: 'input', ok: false, actionCount: 8, ageSeconds: 200 },
     ],
   });
   assert.deepEqual(items, [
-    { who: 'Agent', text: 'input · 1 action', when: 'just now', ok: true },
-    { who: 'You', text: 'run', when: '70 s ago', ok: false },
+    { who: 'Agent', text: 'sent 3 actions', when: 'just now', ok: true },
+    { who: 'Agent', text: 'ran a command', when: '40 s ago', ok: true },
+    { who: 'You', text: 'recovered', when: '70 s ago', ok: true },
+    { who: 'Agent', text: 'input failed', when: '3 min ago', ok: false },
   ]);
+  assert.deepEqual(readiness({ checks: [{ ok: true }, { ok: true }] }), {
+    text: 'All checks passed',
+    ok: true,
+    native: 'Not verified',
+  });
+  assert.equal(readiness({ checks: [{ ok: true }, { ok: null }] }).text, '1 of 2 ready');
+  assert.equal(readiness({}).text, 'Checking…');
   assert.equal(canRecover({ mode: 'recovering' }, false), true);
   assert.equal(canRecover({ mode: 'recovering' }, true), false, 'never while holding control');
   assert.equal(canRecover({ mode: 'observing' }, false), false);
@@ -311,7 +337,13 @@ test('only Command+V is the local paste gesture', () => {
 test('control held by another viewer is never shown as yours', () => {
   const held = { mode: 'controlling', reason: 'A viewer has mouse and keyboard control' };
   assert.equal(modeView(held, true).label, 'You have control');
-  assert.equal(modeView(held, false).label, 'Viewer in control');
+  assert.equal(
+    modeView({ mode: 'observing' }, true).label,
+    'You have control',
+    'a held lease shows before the next status poll',
+  );
+  assert.equal(modeView({ mode: 'recovering' }, true).label, 'Needs recovery');
+  assert.equal(modeView(held, false).label, 'Viewer has control');
   assert.equal(modeView(held, false).reason, 'Another viewer window has control');
   assert.equal(controlBlockedBy(held, false), 'Another viewer window has control');
   assert.equal(controlBlockedBy(held, true), null);

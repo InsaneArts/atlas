@@ -12,6 +12,7 @@ import {
   facts,
   freshness,
   modeView,
+  readiness,
   recoveryView,
 } from './overview.js';
 import { PreviewLoop, unlessSuperseded } from './preview.js';
@@ -72,30 +73,42 @@ function renderOverview() {
   if (!paused) setPill(view.tone, view.label);
   el('reason').textContent = view.reason;
   el('facts').replaceChildren(
-    ...facts(status).flatMap(([name, value]) => {
+    ...facts(status, Boolean(lease)).map(([name, value]) => {
+      const row = document.createElement('div');
+      row.className = 'row';
       const term = document.createElement('dt');
       term.textContent = name;
       const detail = document.createElement('dd');
+      detail.className = 'value';
       detail.textContent = value;
-      return [term, detail];
+      row.append(term, detail);
+      return row;
     }),
   );
   const items = activityItems(overview);
   el('activity').replaceChildren(
     ...items.map(({ who, text, when, ok }) => {
       const item = document.createElement('li');
-      item.className = ok ? 'ok' : 'failed';
+      item.className = ok ? 'row' : 'row failed';
+      const description = document.createElement('span');
       const actor = document.createElement('b');
       actor.textContent = who;
       const operation = document.createElement('span');
-      operation.textContent = ok ? text : `${text} · failed`;
+      operation.className = 'operation';
+      operation.textContent = ` ${text}`;
+      description.append(actor, operation);
       const time = document.createElement('time');
+      time.className = 'value';
       time.textContent = when;
-      item.append(actor, operation, time);
+      item.append(description, time);
       return item;
     }),
   );
   el('activity-empty').hidden = items.length > 0;
+  const checks = readiness(status);
+  el('readiness-summary').textContent = checks.text;
+  el('readiness-badge').dataset.ok = String(checks.ok);
+  el('readiness-native').textContent = checks.native;
   el('agent-banner').hidden = overview?.mode !== 'agent' || Boolean(lease);
   const recovery = recoveryView(overview, { hasLease: Boolean(lease), recovering });
   el('recovery').hidden = recovery.hidden;
@@ -109,27 +122,26 @@ function renderOverview() {
 function renderControl() {
   const active = Boolean(lease);
   const blocked = active ? null : controlBlockedBy(overview, false);
-  el('control').textContent = active
-    ? 'Release control'
-    : acquiring
-      ? 'Connecting…'
-      : 'Take control';
+  // A segmented control: Control takes it, Observe releases it.
   el('control').disabled =
     acquiring || (!active && (!ready || paused || !frame || Boolean(blocked) || recovering));
   el('control').setAttribute('aria-pressed', String(active));
-  el('mode').textContent = active ? 'You have control' : blocked ? 'Watching' : 'Observing';
+  el('control').setAttribute('aria-busy', String(acquiring));
+  el('observe').setAttribute('aria-pressed', String(!active));
   stage.classList.toggle('is-controlling', active);
   for (const id of ['keyboard', 'send-escape', 'shortcut', 'send-shortcut'])
     el(id).disabled = !active;
   el('hint').textContent = active
     ? document.activeElement === keyboard
-      ? 'Keyboard connected · Ctrl Shift Esc releases'
-      : 'Click the desktop to connect your keyboard'
-    : paused
-      ? 'Viewing paused · work on the helper can continue'
-      : blocked
-        ? `${blocked}.`
-        : 'Take control to use your mouse and keyboard.';
+      ? 'Keyboard connected. Press Control-Shift-Esc to release.'
+      : 'Click the desktop to connect your keyboard.'
+    : acquiring
+      ? 'Connecting…'
+      : paused
+        ? 'Viewing paused. Work in the helper continues.'
+        : blocked
+          ? `${blocked}.`
+          : 'Choose Control to use your mouse and keyboard.';
 }
 
 async function post(route, body, options = {}, limit = 8000) {
@@ -291,7 +303,7 @@ async function observe(signal, latest) {
     )
       throw new Error('Frame geometry is unavailable');
     if (frame && frame.revision !== next.revision)
-      releaseControl('The helper changed. Take control again when ready.');
+      releaseControl('The helper changed. Choose Control again when ready.');
     if (!reply.ready && lease) releaseControl('Mouse and keyboard permission is unavailable.');
     frame = next;
     const previousURL = imageURL;
@@ -318,7 +330,7 @@ const preview = new PreviewLoop(poll, unavailable, () => (lease ? 500 : Number(e
 function canInput() {
   if (!lease || !frame || paused || document.hidden || !document.hasFocus()) return false;
   if (performance.now() - frame.at > 6500) {
-    releaseControl('The preview stopped updating. Wait for a fresh frame before taking control.');
+    releaseControl('The preview stopped updating. Wait for a fresh frame, then choose Control.');
     return false;
   }
   return true;
@@ -369,7 +381,7 @@ stage.addEventListener('pointerup', (event) => {
   if (action && canInput()) enqueue([movement, action].filter(Boolean));
 });
 function cancelGesture() {
-  if (gesture.active) releaseControl('Mouse gesture cancelled. Take control again when ready.');
+  if (gesture.active) releaseControl('Mouse gesture cancelled. Choose Control again when ready.');
 }
 stage.addEventListener('pointercancel', cancelGesture);
 stage.addEventListener('lostpointercapture', cancelGesture);
@@ -455,7 +467,31 @@ keyboard.addEventListener('paste', (event) => {
 keyboard.addEventListener('focus', renderControl);
 keyboard.addEventListener('blur', renderControl);
 
-el('control').onclick = () => (lease ? releaseControl() : takeControl());
+el('control').onclick = () => {
+  if (!lease) takeControl();
+};
+// Observe always releases: it also cancels an acquisition still in flight,
+// whose late reply the generation guard then releases.
+el('observe').onclick = () => releaseControl();
+function showSidebar(visible) {
+  document.body.classList.toggle('sidebar-hidden', !visible);
+  el('sidebar-toggle').setAttribute('aria-expanded', String(visible));
+  el('sidebar-toggle').setAttribute('aria-label', visible ? 'Hide sidebar' : 'Show sidebar');
+}
+el('sidebar-toggle').onclick = () => {
+  const visible = document.body.classList.contains('sidebar-hidden');
+  showSidebar(visible);
+  try {
+    localStorage.setItem('understudy.sidebar', visible ? 'shown' : 'hidden');
+  } catch {
+    // A preference only; the layout works without storage.
+  }
+};
+try {
+  showSidebar(localStorage.getItem('understudy.sidebar') !== 'hidden');
+} catch {
+  showSidebar(true);
+}
 el('recover').onclick = async () => {
   if (recovering || lease) return;
   recovering = true;
@@ -464,7 +500,7 @@ el('recover').onclick = async () => {
     const result = await post('recover', {}, {}, 20000);
     notice(
       result.restarted
-        ? 'The helper was recovered. Take control again when ready.'
+        ? 'The helper was recovered. Choose Control again when ready.'
         : 'The helper input service is ready.',
     );
   } catch (error) {
@@ -496,7 +532,8 @@ el('send-shortcut').onclick = () => {
 el('pause').onclick = () => {
   paused = !paused;
   releaseControl();
-  el('pause').textContent = paused ? 'Resume view' : 'Pause view';
+  el('pause').setAttribute('aria-label', paused ? 'Resume view' : 'Pause view');
+  el('pause').classList.toggle('is-paused', paused);
   preview.setActive(!paused && !document.hidden);
   if (paused) {
     setPill('off', 'Paused');

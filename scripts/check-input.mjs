@@ -59,7 +59,7 @@ try {
   assert.equal(state().clicks, initial.clicks);
   results.checks.observeDoesNotInject = true;
 
-  await page.getByRole('button', { name: 'Take control', exact: true }).click();
+  await page.getByRole('button', { name: 'Control', exact: true }).click();
   await page.waitForFunction(
     () => document.querySelector('#control').getAttribute('aria-pressed') === 'true',
   );
@@ -104,7 +104,7 @@ try {
   await until((value) => value.text === text);
   results.checks.exactUnicodeThroughViewer = true;
 
-  await page.getByRole('button', { name: 'Release control', exact: true }).click();
+  await page.getByRole('button', { name: 'Observe', exact: true }).click();
   await until((value) => !value.mouseHeld && value.modifierFlags === 0);
   const status = await (await page.request.get(url + 'status.json')).json();
   assert.equal(status.controlActive, false);

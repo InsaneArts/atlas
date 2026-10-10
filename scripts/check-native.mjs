@@ -492,7 +492,7 @@ try {
     });
   await Promise.all([
     pendingAcquire,
-    page.getByRole('button', { name: 'Take control', exact: true }).click({ timeout: 5000 }),
+    page.getByRole('button', { name: 'Control', exact: true }).click({ timeout: 5000 }),
   ]);
   await page.waitForFunction(
     () => document.querySelector('#control').getAttribute('aria-pressed') === 'true',
