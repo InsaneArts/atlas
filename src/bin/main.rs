@@ -311,7 +311,8 @@ enum EnvironmentCommand {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    cli.config = understudy::config::effective(cli.config);
     // The helper daemon keeps this thread for the Core Foundation run loop.
     #[cfg(target_os = "macos")]
     if let Command::HelperServe {

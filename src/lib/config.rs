@@ -7,6 +7,21 @@ use std::{
 };
 
 pub const DEFAULT_PATH: &str = "understudy.local.toml";
+
+/// Where `understudy init` keeps the configuration.
+pub fn installed_path() -> Result<PathBuf> {
+    Ok(home()?.join("Library/Application Support/Understudy/understudy.toml"))
+}
+
+/// The configuration to use: `path` as given, except that the default name,
+/// absent from the working directory (as for the login item, which runs in
+/// `/`), falls back to the installed configuration.
+pub fn effective(path: PathBuf) -> PathBuf {
+    if path == Path::new(DEFAULT_PATH) && !path.exists() {
+        return installed_path().unwrap_or(path);
+    }
+    path
+}
 const LIMIT: u64 = 16_384;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
