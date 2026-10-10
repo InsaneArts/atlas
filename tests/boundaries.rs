@@ -198,7 +198,7 @@ fn a_missing_configuration_points_at_a_legacy_json_file() {
 fn library_construction_cannot_target_the_caller() {
     let dir = tempfile::tempdir().unwrap();
     let config = Config {
-        helper_uid: unsafe { libc::getuid() },
+        helper_uid: nix::unistd::getuid().as_raw(),
         socket_path: dir.path().join("sock"),
         identity_probe: dir.path().join("probe"),
         input_socket: dir.path().join("input"),
@@ -404,8 +404,7 @@ fn capture_rejects_non_png_and_extreme_dimensions() {
 }
 
 fn current_uid() -> u32 {
-    // SAFETY: getuid has no pointer arguments or preconditions.
-    unsafe { libc::getuid() }
+    nix::unistd::getuid().as_raw()
 }
 
 #[tokio::test]

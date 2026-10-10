@@ -94,8 +94,7 @@ fn require_graphical_session(uid: u32, manager: &str) -> Result<()> {
 /// an error so launchd starts a fresh daemon.
 pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()> {
     validate_target_uid(uid, controller_uid)?;
-    // SAFETY: getuid has no preconditions.
-    if unsafe { libc::getuid() } != uid {
+    if nix::unistd::getuid().as_raw() != uid {
         return Err(Error::new(
             "identity",
             "The helper daemon must run as the configured helper account",
@@ -481,8 +480,8 @@ mod tests {
                 .expect(leave)
                 .unwrap()
                 .ok();
-            // SAFETY: probing the test's own process group.
-            assert_ne!(unsafe { libc::kill(-group, 0) }, 0, "{leave}");
+            let group = nix::unistd::Pid::from_raw(group);
+            assert!(nix::sys::signal::killpg(group, None).is_err(), "{leave}");
         }
     }
 
@@ -501,8 +500,7 @@ mod tests {
         let transport = Transport {
             path: socket,
             timeout: Duration::from_secs(10),
-            // SAFETY: getuid has no preconditions.
-            peer_uid: unsafe { libc::getuid() },
+            peer_uid: nix::unistd::getuid().as_raw(),
         };
         let reply = transport
             .call(&json!({"op": "run", "argv": ["/bin/sh", "-c", "printf ok; exit 4"], "timeoutMs": 3000}))

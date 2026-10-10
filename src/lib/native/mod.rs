@@ -86,9 +86,8 @@ pub fn session_info() -> Result<Value> {
     // SAFETY: functions have no pointer inputs or mutable shared Rust state.
     let display_id = unsafe { CGMainDisplayID() };
     let bounds = unsafe { CGDisplayBounds(display_id) };
-    let uid = unsafe { libc::getuid() };
-    // SAFETY: getppid has no pointer arguments or preconditions.
-    let parent_pid = unsafe { libc::getppid() };
+    let uid = nix::unistd::getuid().as_raw();
+    let parent_pid = nix::unistd::getppid().as_raw();
     Ok(json!({
         "ok": true,
         "uid": uid,

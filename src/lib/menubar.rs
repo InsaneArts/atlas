@@ -161,8 +161,7 @@ fn build(root: &Path, uid: u32) -> Result<PathBuf> {
 
 /// The companion executable for this user, built if needed.
 pub fn executable() -> Result<PathBuf> {
-    // SAFETY: getuid has no pointer arguments or preconditions.
-    let uid = unsafe { libc::getuid() };
+    let uid = nix::unistd::getuid().as_raw();
     build(
         &home()?.join("Library/Application Support/Understudy/menubar"),
         uid,
@@ -239,8 +238,7 @@ mod tests {
     use super::*;
 
     fn uid() -> u32 {
-        // SAFETY: getuid has no pointer arguments or preconditions.
-        unsafe { libc::getuid() }
+        nix::unistd::getuid().as_raw()
     }
 
     #[test]

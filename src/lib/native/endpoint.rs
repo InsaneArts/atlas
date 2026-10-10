@@ -225,8 +225,7 @@ mod tests {
     async fn a_live_endpoint_is_never_taken_over() {
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("run/s.sock");
-        // SAFETY: getuid has no preconditions.
-        let uid = unsafe { libc::getuid() };
+        let uid = nix::unistd::getuid().as_raw();
         let (_listener, endpoint) = bind(&socket, uid, "test service", Directory::Shared(0o700))
             .await
             .unwrap();
@@ -256,8 +255,7 @@ mod tests {
             .status()
             .unwrap();
         assert!(granted.success());
-        // SAFETY: getuid has no preconditions.
-        let uid = unsafe { libc::getuid() };
+        let uid = nix::unistd::getuid().as_raw();
         let refused = bind(
             &run.join("s.sock"),
             uid,
@@ -275,8 +273,7 @@ mod tests {
     #[tokio::test]
     async fn a_private_directory_keeps_setups_policy() {
         let dir = tempfile::tempdir().unwrap();
-        // SAFETY: getuid has no preconditions.
-        let uid = unsafe { libc::getuid() };
+        let uid = nix::unistd::getuid().as_raw();
         let private = Directory::Private { controller: uid };
         let run = dir.path().join("helper");
         let (listener, endpoint) = bind(&run.join("s.sock"), uid, "test", private)
