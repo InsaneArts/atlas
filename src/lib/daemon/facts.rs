@@ -124,7 +124,11 @@ pub fn hello(manager: &str) -> Value {
         "ok": true,
         "op": "hello",
         "user": user(),
-        "permissions": {"accessibility": accessibility(), "screenCapture": capture::permitted()},
+        "permissions": {
+            "accessibility": accessibility(),
+            "postEvents": objc2_core_graphics::CGPreflightPostEventAccess(),
+            "screenCapture": capture::permitted(),
+        },
         "session": session(manager),
         "display": display(),
         "daemon": {"protocol": 1, "pid": std::process::id(), "version": env!("CARGO_PKG_VERSION")},

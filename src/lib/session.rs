@@ -191,12 +191,18 @@ pub fn input_settled(status: &Value, uid: u32, pid: u32) -> bool {
         && native["heldInput"] == false
 }
 
+/// Whether the input service runs the installed build from the file still
+/// in place (a replaced file leaves even the same build stale).
+pub fn input_build_current(status: &Value) -> bool {
+    let native = &status["inputService"];
+    native["build"].is_string()
+        && native["build"] == status["installedBuild"]
+        && native["replaced"] != true
+}
+
 /// [`input_settled`], and running the installed build.
 pub fn input_current(status: &Value, uid: u32, pid: u32) -> bool {
-    let native = &status["inputService"];
-    input_settled(status, uid, pid)
-        && native["build"].is_string()
-        && native["build"] == status["installedBuild"]
+    input_settled(status, uid, pid) && input_build_current(status)
 }
 
 pub fn diagnose(value: Value, uid: u32) -> Value {
@@ -277,9 +283,7 @@ pub fn diagnose(value: Value, uid: u32) -> Value {
         },
     ];
     let mut warnings = Vec::new();
-    if native_reachable
-        && (!native["build"].is_string() || native["build"] != value["installedBuild"])
-    {
+    if native_reachable && !input_build_current(&value) {
         warnings.push(
             "The input service runs a different build than the installed executable; \
              run understudy start-input to replace it."
@@ -326,7 +330,33 @@ pub fn diagnose(value: Value, uid: u32) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_target_uid;
+    use super::{input_build_current, validate_target_uid};
+    use serde_json::json;
+
+    /// A service from a replaced file is stale even when its build matches.
+    #[test]
+    fn a_replaced_input_service_is_not_current() {
+        let status = |replaced: bool| {
+            json!({
+                "installedBuild": "abc",
+                "inputService": {"build": "abc", "replaced": replaced},
+            })
+        };
+        assert!(input_build_current(&status(false)));
+        assert!(!input_build_current(&status(true)));
+        let mut older = status(false);
+        older["inputService"]["build"] = json!("old");
+        assert!(!input_build_current(&older));
+        let mut legacy = status(false);
+        legacy["inputService"]
+            .as_object_mut()
+            .unwrap()
+            .remove("replaced");
+        assert!(
+            input_build_current(&legacy),
+            "services that predate the field"
+        );
+    }
 
     #[test]
     fn helper_may_be_the_first_normal_account_but_never_the_controller() {

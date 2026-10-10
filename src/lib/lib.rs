@@ -16,6 +16,7 @@ pub mod readiness;
 pub mod session;
 pub mod setup;
 pub mod transport;
+pub mod update;
 pub mod viewer;
 
 /// This build's version, as released.
