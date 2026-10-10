@@ -9,57 +9,21 @@ use crate::{
     native::session_info,
     session::InputEpoch,
 };
-use std::{ffi::c_void, path::PathBuf, time::Duration};
+use objc2_application_services::AXIsProcessTrusted;
+use objc2_core_foundation::{CFRetained, CGPoint as Point};
+use objc2_core_graphics::{
+    CGEvent, CGEventField, CGEventFlags, CGEventSource, CGEventSourceStateID, CGEventTapLocation,
+    CGEventType, CGMouseButton, CGScrollEventUnit,
+};
+use std::{path::PathBuf, time::Duration};
 use unicode_segmentation::UnicodeSegmentation;
 
-type CfRef = *const c_void;
-#[derive(Clone, Copy)]
-#[repr(C)]
-struct Point {
-    x: f64,
-    y: f64,
-}
-#[link(name = "CoreGraphics", kind = "framework")]
-unsafe extern "C" {
-    fn CGEventSourceCreate(state: i32) -> CfRef;
-    fn CGEventCreateMouseEvent(source: CfRef, kind: u32, point: Point, button: u32) -> CfRef;
-    fn CGEventCreateKeyboardEvent(source: CfRef, key: u16, down: bool) -> CfRef;
-    fn CGEventCreateScrollWheelEvent2(
-        source: CfRef,
-        unit: u32,
-        count: u32,
-        dy: i32,
-        dx: i32,
-        dz: i32,
-    ) -> CfRef;
-    fn CGEventKeyboardSetUnicodeString(event: CfRef, length: usize, string: *const u16);
-    fn CGEventSetFlags(event: CfRef, flags: u64);
-    fn CGEventSetIntegerValueField(event: CfRef, field: u32, value: i64);
-    fn CGEventPost(tap: u32, event: CfRef);
-}
-#[link(name = "ApplicationServices", kind = "framework")]
-unsafe extern "C" {
-    fn AXIsProcessTrusted() -> bool;
-}
-#[link(name = "CoreFoundation", kind = "framework")]
-unsafe extern "C" {
-    fn CFRelease(value: CfRef);
-}
+/// The only place events go: the helper login's own session event tap, never
+/// the global HID tap.
+const TAP: CGEventTapLocation = CGEventTapLocation::SessionEventTap;
 
-struct Owned(CfRef);
-impl Owned {
-    fn new(value: CfRef) -> Result<Self> {
-        if value.is_null() {
-            Err(Error::new("native", "Could not create a native event"))
-        } else {
-            Ok(Self(value))
-        }
-    }
-}
-impl Drop for Owned {
-    fn drop(&mut self) {
-        unsafe { CFRelease(self.0) };
-    }
+fn created(event: Option<CFRetained<CGEvent>>) -> Result<CFRetained<CGEvent>> {
+    event.ok_or_else(|| Error::new("native", "Could not create a native event"))
 }
 
 pub struct Engine {
@@ -67,7 +31,7 @@ pub struct Engine {
     pub grant: Option<Grant>,
     journal: Option<Journal>,
     journal_dirty: bool,
-    source: Owned,
+    source: CFRetained<CGEventSource>,
     held: Option<Button>,
     held_keys: Vec<u16>,
     position: Point,
@@ -82,7 +46,8 @@ unsafe impl Send for Engine {}
 
 impl Engine {
     pub fn new(uid: u32) -> Result<Self> {
-        let source = Owned::new(unsafe { CGEventSourceCreate(-1) })?;
+        let source = CGEventSource::new(CGEventSourceStateID::Private)
+            .ok_or_else(|| Error::new("native", "Could not create the event source"))?;
         let engine = Self {
             epoch: InputEpoch::from_proof(&session_info()?, std::process::id())?,
             grant: None,
@@ -107,6 +72,7 @@ impl Engine {
         Ok(engine)
     }
     pub fn trusted() -> bool {
+        // SAFETY: no arguments; only reads this process's consent.
         unsafe { AXIsProcessTrusted() }
     }
     pub fn check(&self) -> Result<()> {
@@ -175,7 +141,7 @@ impl Engine {
         Ok(())
     }
 
-    fn post(&mut self, event: Owned, flags: u64, point: Point) -> Result<()> {
+    fn post(&mut self, event: CFRetained<CGEvent>, flags: u64, point: Point) -> Result<()> {
         // Persist conservatively before the final gate. Slow storage must not
         // hold cancellation or widen the gap after the hidden-session check.
         // Until this event is posted, both the previous and requested modifier
@@ -185,11 +151,8 @@ impl Engine {
         self.persist(point, self.flags)?;
         let _authorization = self.grant.as_ref().map(Grant::authorize).transpose()?;
         self.check()?;
-        // SAFETY: owned event is live, and only the session event tap (1) is used.
-        unsafe {
-            CGEventSetFlags(event.0, flags);
-            CGEventPost(1, event.0);
-        }
+        CGEvent::set_flags(Some(&event), CGEventFlags(flags));
+        CGEvent::post(TAP, Some(&event));
         self.flags = flags;
         Ok(())
     }
@@ -201,24 +164,24 @@ impl Engine {
         count: u8,
         flags: u64,
     ) -> Result<()> {
-        let event = Owned::new(unsafe {
-            CGEventCreateMouseEvent(self.source.0, kind, point, button.number())
-        })?;
-        unsafe {
-            // A press, its drag events, and its release share one event number.
-            CGEventSetIntegerValueField(event.0, 0, self.mouse_number); // mouseEventNumber
-            CGEventSetIntegerValueField(event.0, 1, count.into()); // mouseEventClickState
-            CGEventSetIntegerValueField(
-                event.0,
-                4,
-                (point.x.round() - self.position.x.round()) as i64,
-            );
-            CGEventSetIntegerValueField(
-                event.0,
-                5,
-                (point.y.round() - self.position.y.round()) as i64,
-            );
-        }
+        let event = created(CGEvent::new_mouse_event(
+            Some(&self.source),
+            CGEventType(kind),
+            point,
+            CGMouseButton(button.number()),
+        ))?;
+        let set = |field, value| CGEvent::set_integer_value_field(Some(&event), field, value);
+        // A press, its drag events, and its release share one event number.
+        set(CGEventField::MouseEventNumber, self.mouse_number);
+        set(CGEventField::MouseEventClickState, count.into());
+        set(
+            CGEventField::MouseEventDeltaX,
+            (point.x.round() - self.position.x.round()) as i64,
+        );
+        set(
+            CGEventField::MouseEventDeltaY,
+            (point.y.round() - self.position.y.round()) as i64,
+        );
         self.post(event, flags, point)
     }
     pub fn release(&mut self) -> Result<()> {
@@ -323,9 +286,12 @@ impl Engine {
         self.commit()
     }
     fn key_event(&mut self, code: u16, down: bool, flags: u64, text: Option<&[u16]>) -> Result<()> {
-        let event = Owned::new(unsafe { CGEventCreateKeyboardEvent(self.source.0, code, down) })?;
+        let event = created(CGEvent::new_keyboard_event(Some(&self.source), code, down))?;
         if let Some(text) = text {
-            unsafe { CGEventKeyboardSetUnicodeString(event.0, text.len(), text.as_ptr()) };
+            // SAFETY: the pointer and length describe the live UTF-16 slice.
+            unsafe {
+                CGEvent::keyboard_set_unicode_string(Some(&event), text.len() as _, text.as_ptr())
+            };
         }
         self.post(event, flags, self.position)
     }
@@ -443,9 +409,14 @@ impl Engine {
             Action::Scroll { x, y, dx, dy } => {
                 self.pointer(PointerPhase::Move, Point { x, y }, Button::Left, &[], 1)
                     .await?;
-                let event = Owned::new(unsafe {
-                    CGEventCreateScrollWheelEvent2(self.source.0, 1, 2, dy, dx, 0)
-                })?;
+                let event = created(CGEvent::new_scroll_wheel_event2(
+                    Some(&self.source),
+                    CGScrollEventUnit::Line,
+                    2,
+                    dy,
+                    dx,
+                    0,
+                ))?;
                 self.post(event, 0, self.position)?;
             }
             Action::Type { text } => {
@@ -594,4 +565,23 @@ fn keycode(key: &str) -> Option<u16> {
         "up" => 126,
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The named constants are the raw values input has always used; in
+    /// particular events go to the session tap (1), never the HID tap (0).
+    #[test]
+    fn event_constants_keep_their_raw_values() {
+        assert_eq!(TAP.0, 1);
+        assert_ne!(TAP, CGEventTapLocation::HIDEventTap);
+        assert_eq!(CGEventField::MouseEventNumber.0, 0);
+        assert_eq!(CGEventField::MouseEventClickState.0, 1);
+        assert_eq!(CGEventField::MouseEventDeltaX.0, 4);
+        assert_eq!(CGEventField::MouseEventDeltaY.0, 5);
+        assert_eq!(CGScrollEventUnit::Line.0, 1);
+        assert_eq!(CGEventSourceStateID::Private.0, -1);
+    }
 }
