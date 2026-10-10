@@ -112,12 +112,19 @@ impl Controller {
     }
     /// Record a pending mutation and return its generation.
     pub fn quarantine(&self) -> Result<String> {
-        let _lock = self.lock_marker()?;
         let generation = token();
-        let mut pending = pending(&self.marker)?;
-        pending.push(generation.clone());
-        write_private(&self.marker, &serde_json::to_vec(&pending)?)?;
+        self.quarantine_as(&generation)?;
         Ok(generation)
+    }
+    /// Record a pending mutation under a generation the caller chose, so it
+    /// can persist its own claim on that generation first.
+    pub fn quarantine_as(&self, generation: &str) -> Result<()> {
+        let _lock = self.lock_marker()?;
+        let mut pending = pending(&self.marker)?;
+        if !pending.iter().any(|entry| entry == generation) {
+            pending.push(generation.to_owned());
+        }
+        write_private(&self.marker, &serde_json::to_vec(&pending)?)
     }
     /// Settle one acknowledged mutation; others stay pending.
     pub fn clear_if(&self, generation: &str) -> Result<()> {

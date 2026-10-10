@@ -61,7 +61,12 @@ impl Config {
         if bytes.len() as u64 > LIMIT {
             return Err(Error::new("config", "Configuration exceeds 16 KiB"));
         }
-        let mut config: Self = parse_toml(&bytes, &path)?;
+        Self::parse(&bytes, &path)
+    }
+    /// Parse configuration text as if it were the file at `path`: relative
+    /// paths resolve against its directory and `~/` against the home.
+    pub fn parse(bytes: &[u8], path: &Path) -> Result<Self> {
+        let mut config: Self = parse_toml(bytes, path)?;
         crate::session::validate_uid(config.helper_uid)?;
         let parent = path
             .parent()
