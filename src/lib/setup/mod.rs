@@ -525,8 +525,7 @@ pub async fn preview(config_path: &Path, helper: Option<&str>) -> Result<Value> 
             "pid": status["inputService"]["pid"],
             "version": status["inputService"]["version"],
             "build": status["inputService"]["build"],
-            "current": status["inputService"]["build"].is_string()
-                && status["inputService"]["build"] == status["installedBuild"],
+            "current": crate::session::input_build_current(&status),
             "accessibility": status["inputService"]["accessibility"],
             "ready": status["inputService"]["ready"],
             "error": status["inputService"]["error"],

@@ -91,6 +91,13 @@ impl Engine {
                 "The input process does not have Accessibility permission",
             ));
         }
+        // Without it macOS drops posted events silently: refuse instead.
+        if !objc2_core_graphics::CGPreflightPostEventAccess() {
+            return Err(Error::new(
+                "permission",
+                "The input process may not post events (Accessibility)",
+            ));
+        }
         Ok(())
     }
     pub fn recover(&mut self, path: PathBuf) -> Result<()> {

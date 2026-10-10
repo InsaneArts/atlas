@@ -65,9 +65,9 @@ pub fn timestamp() -> u128 {
 impl Client {
     pub fn install(&self) -> Result<Value> {
         let _ownership = self.controller.acquire(false)?;
-        let source = std::env::current_exe()?;
+        let source = fs::canonicalize(std::env::current_exe()?)?;
         let target = &self.config.identity_probe;
-        if source == *target {
+        if fs::canonicalize(target).ok().as_ref() == Some(&source) {
             return Ok(json!({ "ok": true, "path": target, "alreadyInstalled": true }));
         }
         let parent = target
@@ -75,6 +75,18 @@ impl Client {
             .ok_or_else(|| Error::new("config", "Shared executable needs a parent directory"))?;
         fs::create_dir_all(parent)?;
         let temporary = target.with_extension(format!("{}.new", crate::control::token()));
+        // Understudy.app's executable is sealed with its bundle: a copy would
+        // fail its signature, so the shared path links to it instead, and
+        // follows the app through updates.
+        if crate::update::app_of(&source).is_some() {
+            let linked = std::os::unix::fs::symlink(&source, &temporary)
+                .and_then(|()| fs::rename(&temporary, target));
+            if linked.is_err() {
+                let _ = fs::remove_file(&temporary);
+            }
+            linked?;
+            return Ok(json!({ "ok": true, "path": target, "linkedTo": source }));
+        }
         let result = (|| -> Result<()> {
             let mut file = OpenOptions::new()
                 .create_new(true)
@@ -439,7 +451,8 @@ impl Client {
     /// device, inode, size or modification time changes.
     pub fn installed_build(&self) -> Option<String> {
         let path = &self.config.identity_probe;
-        let metadata = fs::symlink_metadata(path).ok()?;
+        // The executable itself (through a link to the app), not the link.
+        let metadata = fs::metadata(path).ok()?;
         let key = (
             metadata.dev(),
             metadata.ino(),
@@ -464,7 +477,7 @@ impl Client {
         let status = self.status().await;
         require_hidden(&status, self.config.helper_uid)?;
         let native = &status["inputService"];
-        let current = native["build"].is_string() && native["build"] == status["installedBuild"];
+        let current = crate::session::input_build_current(&status);
         if native["ok"] == true && !current {
             return self.upgrade_input(&status).await;
         }

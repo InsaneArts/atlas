@@ -240,6 +240,22 @@ enum Command {
     },
     /// Restart the helper and confirm a new hidden process before clearing uncertainty.
     Restart,
+    /// Update Understudy.app to the latest release after verifying its
+    /// checksum and Developer ID signature, then move the helper onto it.
+    Update {
+        /// Accept a signed release that is not notarized.
+        #[arg(long)]
+        allow_unnotarized: bool,
+        /// Reinstall even when the release is not newer.
+        #[arg(long)]
+        force: bool,
+        /// Install this release tag instead of the latest.
+        #[arg(long)]
+        version: Option<String>,
+    },
+    /// After an update, run by the new executable: move the helper onto it.
+    #[command(hide = true)]
+    UpdateFinish,
 }
 
 #[derive(Subcommand)]
@@ -397,6 +413,12 @@ async fn execute(cli: Cli) -> Result<Value> {
             socket,
         } => return helper_serve(uid, controller_uid, socket).await,
         Command::SetupHelper { request } => return understudy::setup::helper::run(&request),
+        Command::Update {
+            allow_unnotarized,
+            force,
+            version,
+        } => return update(&cli.config, allow_unnotarized, force, version),
+        Command::UpdateFinish => return update_finish(&cli.config),
         Command::Setup {
             helper,
             apply: false,
@@ -413,8 +435,10 @@ async fn execute(cli: Cli) -> Result<Value> {
         | Command::ElementsInfo { .. }
         | Command::AgentGuide
         | Command::EnvironmentWorker { .. }
-        | Command::SetupHelper { .. } => {
-            unreachable!("helper-side commands return above")
+        | Command::SetupHelper { .. }
+        | Command::Update { .. }
+        | Command::UpdateFinish => {
+            unreachable!("these commands return above")
         }
         Command::Setup { apply, .. } => {
             // Recovery ownership: the migration settles only the pending
@@ -608,6 +632,73 @@ async fn execute(cli: Cli) -> Result<Value> {
         Command::Run { argv } => client.run(argv).await.map(with_output),
         Command::Restart => client.restart().await,
     }
+}
+
+/// Update the app, then hand over to the new executable, so the steps that
+/// move the helper onto it are always the new version's own.
+fn update(
+    config: &std::path::Path,
+    allow_unnotarized: bool,
+    force: bool,
+    version: Option<String>,
+) -> Result<Value> {
+    let source = understudy::update::Source::from_env(version);
+    let mut report = understudy::update::install(&source, allow_unnotarized, force)?;
+    if report["updated"] != true {
+        return Ok(report);
+    }
+    let executable = understudy::update::installed_app()?.join("Contents/MacOS/understudy");
+    let output = std::process::Command::new(executable)
+        .arg("update-finish")
+        .arg("--config")
+        .arg(config)
+        .output()?;
+    let finished: Value = serde_json::from_slice(&output.stdout)
+        .or_else(|_| serde_json::from_slice(&output.stderr))
+        .unwrap_or_else(|_| json!({"ok": false, "error": "The new version did not report"}));
+    report["ok"] = finished["ok"].clone();
+    report["helper"] = finished;
+    Ok(report)
+}
+
+/// Move the helper onto this (just installed) executable: the shared
+/// executable, the daemon, the input service, and (when a setup is
+/// recorded) setup's verification of the new signed build. Stops at the
+/// first failure and names it.
+fn update_finish(config: &std::path::Path) -> Result<Value> {
+    let Ok(loaded) = Config::load(config) else {
+        return Ok(json!({"ok": true, "next": "understudy init"}));
+    };
+    let executable = std::env::current_exe()?;
+    // The daemon restarts first: a daemon whose app was swapped under it can
+    // no longer vouch (to TCC) for a new input service it starts, while the
+    // input service it already runs is cleaned up by the restart itself.
+    let mut steps: Vec<&[&str]> = vec![&["install"], &["restart"], &["start-input"]];
+    if understudy::setup::migrate::recorded(loaded.helper_uid) {
+        steps.push(&["setup", "--apply"]);
+    }
+    let mut done = Vec::new();
+    for step in steps {
+        let output = std::process::Command::new(&executable)
+            .args(step)
+            .arg("--config")
+            .arg(config)
+            .output()?;
+        // Replies go to stdout; errors to stderr.
+        let reply: Value = serde_json::from_slice(&output.stdout)
+            .or_else(|_| serde_json::from_slice(&output.stderr))
+            .unwrap_or(Value::Null);
+        if !output.status.success() || reply["ok"] == false {
+            return Ok(json!({
+                "ok": false,
+                "failedStep": step.join(" "),
+                "failure": reply,
+                "completedSteps": done,
+            }));
+        }
+        done.push(step.join(" "));
+    }
+    Ok(json!({"ok": true, "completedSteps": done}))
 }
 
 #[derive(Clone, Copy, Default, ValueEnum)]

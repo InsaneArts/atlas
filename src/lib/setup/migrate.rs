@@ -116,6 +116,12 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     result
 }
 
+/// Whether a setup is recorded for helper `uid` (applied, in progress or
+/// rolled back).
+pub fn recorded(uid: u32) -> bool {
+    log_path(uid).is_ok_and(|path| path.exists())
+}
+
 fn load_log(path: &Path) -> Result<Option<Log>> {
     match fs::read(path) {
         Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),

@@ -30,10 +30,31 @@ struct Service {
     /// SHA-256 of the executable this process started from. Hashed once at
     /// start: `install` later renames a new build over the same path.
     build: Option<String>,
+    /// The file this process started from, by path and identity. When the
+    /// file there is replaced (an app update, even with the same build), the
+    /// running process no longer matches it and macOS may drop its events.
+    executable: Option<(PathBuf, (u64, u64))>,
     /// Signalled once an acknowledged shutdown has been answered.
     stopping: tokio::sync::Notify,
 }
+/// The started-from file and its (device, inode).
+fn executable() -> Option<(PathBuf, (u64, u64))> {
+    use std::os::unix::fs::MetadataExt;
+    let path = std::fs::canonicalize(std::env::current_exe().ok()?).ok()?;
+    let metadata = std::fs::metadata(&path).ok()?;
+    Some((path, (metadata.dev(), metadata.ino())))
+}
+
 impl Service {
+    /// Whether the file this process started from has been replaced.
+    fn replaced(&self) -> bool {
+        use std::os::unix::fs::MetadataExt;
+        self.executable.as_ref().is_none_or(|(path, identity)| {
+            std::fs::metadata(path).map_or(true, |metadata| {
+                (metadata.dev(), metadata.ino()) != *identity
+            })
+        })
+    }
     fn epoch(&self) -> Result<InputEpoch> {
         self.epoch
             .read()
@@ -73,6 +94,7 @@ impl Service {
                 "pid": std::process::id(),
                 "version": env!("CARGO_PKG_VERSION"),
                 "build": self.build,
+                "replaced": self.replaced(),
                 "capabilities": ["shutdown"],
                 "accessibility": Engine::trusted(),
                 "ready": self.check().is_ok(),
@@ -200,6 +222,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     let build = std::env::current_exe()
         .ok()
         .and_then(|path| crate::digest::file_sha256(&path));
+    let executable = executable();
     crate::session::validate_target_uid(uid, controller_uid)?;
     if controller_uid == 0 {
         return Err(Error::new(
@@ -218,6 +241,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     engine.recover(socket.with_extension("held.json"))?;
     let service = Arc::new(Service {
         build,
+        executable,
         stopping: tokio::sync::Notify::new(),
         epoch: RwLock::new(engine.epoch.clone()),
         engine: Mutex::new(engine),
