@@ -126,6 +126,24 @@ pub fn recorded(uid: u32) -> bool {
     log_path(uid).is_ok_and(|path| path.exists())
 }
 
+/// Archive helper `uid`'s setup record if it belongs to another account
+/// (a deleted helper whose UID was reused): it describes nothing here.
+/// Whether a record was archived.
+pub fn archive_foreign(uid: u32, home: &Path) -> Result<bool> {
+    let path = log_path(uid)?;
+    let Some(log) = load_log(&path)? else {
+        return Ok(false);
+    };
+    if log.plan.home == home {
+        return Ok(false);
+    }
+    fs::rename(
+        &path,
+        path.with_extension(format!("{}.foreign.json", timestamp())),
+    )?;
+    Ok(true)
+}
+
 /// Whether helper `uid`'s setup is recorded as applied with nothing it
 /// owns still pending.
 pub fn settled(uid: u32) -> bool {

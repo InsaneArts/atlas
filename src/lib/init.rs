@@ -247,8 +247,22 @@ fn write_config(path: &Path, config: &Config) -> Result<()> {
 
 /// Whether the helper's graphical session exists (it has logged in).
 fn helper_logged_in(uid: u32) -> bool {
-    sudo(&["/bin/launchctl", "print", &format!("gui/{uid}")])
+    // A signed-in desktop runs its Dock; visible without administrator rights.
+    Command::new("/usr/bin/pgrep")
+        .args(["-U", &uid.to_string(), "-x", "Dock"])
+        .output()
         .is_ok_and(|output| output.status.success())
+}
+
+/// Keep the administrator rights from `sudo -v` fresh while init waits
+/// for the person (sudo forgets them after five minutes otherwise).
+fn keep_sudo_alive() {
+    std::thread::spawn(|| {
+        loop {
+            std::thread::sleep(Duration::from_secs(60));
+            let _ = Command::new("/usr/bin/sudo").args(["-n", "-v"]).output();
+        }
+    });
 }
 
 /// Run one setup-helper request as the helper, inside its own login, with
@@ -323,18 +337,19 @@ async fn wait_for<T>(what: &str, mut ready: impl AsyncFnMut() -> Option<T>) -> R
 /// The optional finishing touches, offered only when not already in place:
 /// the menu bar at login, and teaching the installed agents.
 fn finish(done: &mut Vec<Value>) -> Result<()> {
+    // The menu bar is part of Understudy: on at login unless turned off
+    // (understudy menubar --login off).
     let login = crate::menubar::login("status").unwrap_or_default();
     if login["available"] == true && login["enabled"] != true {
         step("Menu bar");
-        if yes("  Keep Understudy in the menu bar (open at login)?")? {
-            let login = crate::menubar::login("on")?;
-            say(if login["enabled"] == true {
-                "  It opens at login and is running now."
-            } else {
-                "  macOS did not enable it; turn it on in the menu bar later."
-            });
-            done.push(json!({"step": "menubar", "login": login}));
-        }
+        let login = crate::menubar::login("on")?;
+        say(if login["enabled"] == true {
+            "  Understudy is in the menu bar and opens at login \
+             (understudy menubar --login off turns that off)."
+        } else {
+            "  macOS did not enable it; turn on Open at Login from the menu bar later."
+        });
+        done.push(json!({"step": "menubar", "login": login}));
     }
     let agents = crate::agents::status();
     let found: Vec<&str> = agents["agents"]
@@ -397,6 +412,9 @@ pub async fn run(config_path: &Path) -> Result<Value> {
     };
     let helper = setup::account_with_uid(config.helper_uid)?
         .ok_or_else(|| problem("The configured helper account does not exist"))?;
+    if setup::migrate::archive_foreign(helper.uid, &helper.home)? {
+        say("  Set aside a setup record left by an earlier account with the same ID.");
+    }
     let client = Client::new(config.clone())?;
     // An earlier action of unknown outcome is recovered before anything else.
     if !client.controller.pending()?.is_empty() {
@@ -427,6 +445,7 @@ pub async fn run(config_path: &Path) -> Result<Value> {
             &["-v"],
             "Administrator rights were not granted",
         )?;
+        keep_sudo_alive();
 
         step(&format!("Sign in to {} once", helper.name));
         if !helper_logged_in(helper.uid) {
@@ -505,20 +524,49 @@ pub async fn run(config_path: &Path) -> Result<Value> {
     if !granted(&client.status().await) {
         step("Permissions in the helper session");
         say(&format!(
-            "  In {name}'s session Understudy asks for Screen Recording and Accessibility:\n  \
-             click Allow (or Open System Settings and turn Understudy on) for both.",
+            "  Understudy is asking for Screen Recording and Accessibility in {name}'s session.\n  \
+             Go there, click Allow (or Open System Settings and turn Understudy on) for both,\n  \
+             then switch back to your own account.",
             name = helper.name
         ));
+        // Already back in this account: offer the way over.
+        if crate::session::require_hidden(&client.status().await, config.helper_uid).is_ok()
+            && yes(&format!(
+                "  Lock the screen now so you can switch to {}?",
+                helper.name
+            ))?
+        {
+            match crate::switch::lock_screen() {
+                Ok(_) => say(&format!(
+                    "  Locked. Click Switch User, choose {}, allow both, then switch back.",
+                    helper.name
+                )),
+                Err(error) => say(&format!("  {}", error.error)),
+            }
+        }
+        say("  Waiting for you to allow both and come back…");
+        // Done once the helper has been on screen and is hidden again (or
+        // everything is already granted).
+        let mut visited = false;
+        wait_for("you to allow both and switch back", async || {
+            let status = client.status().await;
+            if status["session"]["onConsole"] == true {
+                visited = true;
+            }
+            let back = crate::session::require_hidden(&status, config.helper_uid).is_ok();
+            (granted(&status) || (visited && back)).then_some(())
+        })
+        .await?;
+    } else {
+        step("Switch back to your own account");
+        say("  Understudy works while the helper runs in the background. Waiting for you…");
+        wait_for("you to switch back", async || {
+            crate::session::require_hidden(&client.status().await, config.helper_uid)
+                .is_ok()
+                .then_some(())
+        })
+        .await?;
     }
-
-    step("Switch back to your own account");
-    say("  Understudy works while the helper runs in the background. Waiting for you…");
-    wait_for("you to switch back", async || {
-        crate::session::require_hidden(&client.status().await, config.helper_uid)
-            .is_ok()
-            .then_some(())
-    })
-    .await?;
 
     // macOS applies a new Screen Recording grant to new processes only, so
     // the daemon restarts once to pick up what the person allowed.
