@@ -15,7 +15,7 @@ const ENVIRONMENT_TARGET: &str = ".config/understudy/environment.json";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Profile {
+pub(super) struct Profile {
     version: u32,
     #[serde(default)]
     files: Vec<Selection>,
@@ -35,6 +35,14 @@ struct Reference {
     path: PathBuf,
     #[serde(default)]
     writable: bool,
+}
+
+/// Read, parse and validate a TOML profile.
+pub(super) fn load(path: &Path) -> Result<Profile> {
+    let profile: Profile =
+        crate::config::parse_toml(&super::files::read_limited(path, 16384)?, path)?;
+    validate(&profile)?;
+    Ok(profile)
 }
 
 fn validate(profile: &Profile) -> Result<()> {
@@ -66,8 +74,7 @@ fn validate(profile: &Profile) -> Result<()> {
 /// launched with `environment run` consume them; existing GUI apps do not.
 pub async fn sync(client: &Client, path: &Path, apply: bool) -> Result<Value> {
     let path = fs::canonicalize(path)?;
-    let profile: Profile = super::model::decode(&super::files::read_limited(&path, 16384)?)?;
-    validate(&profile)?;
+    let profile = load(&path)?;
     let mut variables = BTreeMap::new();
     for name in &profile.environment {
         let value = std::env::var(name).map_err(|_| {

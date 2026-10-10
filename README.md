@@ -23,7 +23,8 @@ home-directory tools and app permissions belong to the helper account.
 
 ```sh
 cargo build
-cp understudy.example.json understudy.local.json
+./understudy setup --helper NAME   # read-only; proposes understudy.local.toml
+cp understudy.example.toml understudy.local.toml
 # Set the helper UID, capture socket and shared Rust executable path.
 ./understudy install
 ./understudy start-input
@@ -87,5 +88,5 @@ failures remain in its output; screen-edge constraints are checked separately.
 The fixture currently requires a 2560 × 1440 helper display at scale 1.
 
 Configuration, screenshots, measurements and research remain local in ignored
-`understudy.local.json`, `runs/` and `docs/`. CI checks code; it cannot qualify a
+`understudy.local.toml`, `runs/` and `docs/`. CI checks code; it cannot qualify a
 hidden macOS desktop.

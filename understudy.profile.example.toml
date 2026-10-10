@@ -1,0 +1,23 @@
+# Environment profile: selected files, readiness requirements and exported
+# variables for the helper login.
+#
+#   understudy environment profile understudy.profile.example.toml          # preview
+#   understudy environment profile understudy.profile.example.toml --apply  # apply
+#
+# Listing a tool or application is a readiness check, not an installation;
+# copy executables with [[files]]. Variables must be exported in the shell
+# that runs understudy. Reports name variables but never print their values.
+
+version = 2
+tools = ["markdown2pdf"]
+applications = ["Preview"]
+environment = ["EXPLICITLY_SELECTED_EXPORTED_VARIABLE"]
+
+[[files]]
+source = "/absolute/path/to/markdown2pdf"
+target = ".local/bin/markdown2pdf"
+executable = true
+
+[[references]]
+path = "/Users/Shared/Understudy/EnvironmentProof"
+writable = true

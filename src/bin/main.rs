@@ -16,7 +16,7 @@ struct Cli {
     #[arg(
         long,
         env = "UNDERSTUDY_CONFIG",
-        default_value = "understudy.local.json",
+        default_value = understudy::config::DEFAULT_PATH,
         global = true
     )]
     config: PathBuf,
@@ -28,10 +28,10 @@ enum Command {
     /// Discover and provision selected parts of the helper environment.
     #[command(
         args_conflicts_with_subcommands = true,
-        long_about = "Preview an explicit one-way snapshot into an existing hidden login. The JSON manifest contains a files array: source (absolute or relative to the manifest), target (ASCII relative path inside the helper home), and optional executable. Stop applications that write these selected settings before applying. Existing untracked differences and helper-side edits are conflicts; managed updates keep backups. This does not create accounts, copy logins, or synchronize running application databases."
+        long_about = "Preview an explicit one-way snapshot into an existing hidden login. The TOML manifest lists [[files]] tables: source (absolute or relative to the manifest), target (ASCII relative path inside the helper home), and optional executable. Stop applications that write these selected settings before applying. Existing untracked differences and helper-side edits are conflicts; managed updates keep backups. This does not create accounts, copy logins, or synchronize running application databases."
     )]
     Environment {
-        /// JSON file listing only the files to provision.
+        /// TOML manifest listing only the files to provision.
         manifest: Option<PathBuf>,
         /// Apply the previewed changes; otherwise inspect without changing selected files.
         #[arg(long)]
@@ -62,6 +62,8 @@ enum Command {
         #[arg(long)]
         helper: Option<String>,
     },
+    /// Print the resolved configuration (absolute paths) as JSON.
+    Config,
     /// Read session identity and permissions without prompting.
     Status,
     /// Report readiness and only the missing setup steps.
@@ -97,6 +99,7 @@ enum Command {
 enum EnvironmentCommand {
     /// Freeze selected files, exported variables and readiness requirements.
     Profile {
+        /// TOML profile (version = 2) of files, tools, applications, environment and references.
         profile: PathBuf,
         #[arg(long)]
         apply: bool,
@@ -197,6 +200,7 @@ async fn execute(cli: Cli) -> Result<Value> {
         | Command::Setup { .. } => {
             unreachable!("helper-side commands return above")
         }
+        Command::Config => Ok(json!({ "ok": true, "config": client.config })),
         Command::Status => Ok(client.status().await),
         Command::Doctor => Ok(diagnose(client.status().await, client.config.helper_uid)),
         Command::Environment {

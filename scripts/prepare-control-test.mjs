@@ -5,18 +5,20 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const config = path.resolve(process.argv[2] || path.join(root, 'understudy.local.json'));
-const settings = JSON.parse(fs.readFileSync(config, 'utf8'));
-const output = path.resolve(path.dirname(config), settings.output_dir || 'runs');
+// Same precedence as every other script: an explicit path argument, else
+// UNDERSTUDY_CONFIG, else the CLI default. The resolved config is recorded.
+if (process.argv[2]) process.env.UNDERSTUDY_CONFIG = path.resolve(process.argv[2]);
 function cli(args) {
-  const result = spawnSync(
-    path.join(root, 'target/debug/understudy'),
-    ['--config', config, ...args],
-    { cwd: root, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 },
-  );
+  const result = spawnSync(path.join(root, 'target/debug/understudy'), args, {
+    cwd: root,
+    encoding: 'utf8',
+    maxBuffer: 8 * 1024 * 1024,
+  });
   if (result.status !== 0) throw new Error(result.stderr || result.stdout);
   return JSON.parse(result.stdout);
 }
+const { config } = cli(['config']);
+const output = config.output_dir;
 function run(argv) {
   return (cli(['run', '--', ...argv]).events || [])
     .filter((event) => event.event === 'output')
@@ -60,7 +62,7 @@ const fixturePID = Number(
   ]),
 );
 if (!Number.isSafeInteger(fixturePID) || fixturePID < 1) throw new Error('Fixture PID unavailable');
-const record = { fixturePID, logDirectory, session: readiness.session };
+const record = { fixturePID, logDirectory, session: readiness.session, config };
 fs.mkdirSync(output, { recursive: true, mode: 0o700 });
 fs.writeFileSync(
   path.join(output, 'control-live-setup.json'),

@@ -1,0 +1,16 @@
+# Environment manifest: an explicit one-way snapshot into the helper home.
+#
+#   understudy environment understudy.environment.example.toml          # preview
+#   understudy environment understudy.environment.example.toml --apply  # apply
+#
+# source: absolute, or relative to this file. target: ASCII path inside the
+# helper home. Stop applications that write these files before applying.
+
+[[files]]
+source = "/absolute/path/to/tool"
+target = ".local/bin/tool"
+executable = true
+
+[[files]]
+source = "/absolute/path/to/tool-settings.toml"
+target = ".config/tool-settings.toml"

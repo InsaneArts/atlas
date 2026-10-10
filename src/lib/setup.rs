@@ -433,13 +433,12 @@ pub async fn preview(config_path: &Path, helper: Option<&str>) -> Result<Value> 
             "path": config_path,
             "state": if conflict { "conflict" } else { config_state },
             "error": config_error,
-            "proposed": (config.is_none() || conflict).then(|| json!({
-                "helper_uid": effective.helper_uid,
-                "socket_path": effective.socket_path,
-                "identity_probe": effective.identity_probe,
-                "input_socket": effective.input_socket,
-                "output_dir": effective.output_dir,
-            })),
+            // TOML text ready to save at the configuration path.
+            "proposed": if config.is_none() || conflict {
+                Some(effective.to_toml()?)
+            } else {
+                None
+            },
         },
         "capture": {"endpoint": endpoint(&effective.socket_path, account.uid, controller_uid)},
         "input": {"endpoint": endpoint(&effective.input_socket, account.uid, controller_uid)},
