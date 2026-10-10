@@ -195,7 +195,8 @@ impl Client {
             return Err(Error::new(
                 "identity",
                 format!(
-                    "Install the Rust identity probe at {} and ensure the helper can execute it.",
+                    "The helper cannot run the shared Understudy command at {}. Run understudy \
+                     install.",
                     self.config.identity_probe.display()
                 ),
             ));

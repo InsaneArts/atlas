@@ -1,6 +1,13 @@
-use clap::{Parser, Subcommand, ValueEnum};
+mod help;
+
+use clap::{FromArgMatches, Parser, Subcommand, ValueEnum};
 use serde_json::{Value, json};
-use std::{io::Read, path::PathBuf, process::ExitCode, time::Duration};
+use std::{
+    io::{IsTerminal, Read, Write},
+    path::PathBuf,
+    process::ExitCode,
+    time::Duration,
+};
 use understudy::{
     actions::Button,
     agent,
@@ -10,29 +17,45 @@ use understudy::{
     error::{Error, Result},
     menubar,
     transport::with_output,
+    ui::{
+        self, Format,
+        progress::Spinner,
+        render::{self, View},
+        style, text,
+    },
     viewer,
 };
 
 #[derive(Parser)]
-#[command(version, about = "Observe and control a prepared hidden macOS desktop")]
+#[command(
+    version,
+    about = "A hidden second macOS desktop where agents test apps while you keep working"
+)]
 struct Cli {
+    /// Print JSON (the default when the output is not a terminal).
+    #[arg(long, global = true, help_heading = "Global options")]
+    json: bool,
+    /// Use another settings file.
     #[arg(
         long,
+        value_name = "FILE",
         env = "UNDERSTUDY_CONFIG",
-        hide_env_values = true,
+        hide_env = true,
+        hide_default_value = true,
+        help_heading = "Global options",
         default_value = understudy::config::DEFAULT_PATH,
         global = true
     )]
     config: PathBuf,
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 #[derive(Subcommand)]
 enum Command {
-    /// Discover and provision selected parts of the helper environment.
+    /// Copy selected settings and files into the helper.
     #[command(
         args_conflicts_with_subcommands = true,
-        long_about = "Preview an explicit one-way snapshot into an existing hidden login. The TOML manifest lists [[files]] tables: source (absolute or relative to the manifest), target (ASCII relative path inside the helper home), and optional executable. Stop applications that write these selected settings before applying. Existing untracked differences and helper-side edits are conflicts; managed updates keep backups. This does not create accounts, copy logins, or synchronize running application databases."
+        long_about = "Copy selected settings and files into the helper.\n\nPreview an explicit one-way snapshot into an existing hidden login. The TOML manifest lists [[files]] tables: source (absolute or relative to the manifest), target (ASCII relative path inside the helper home), and optional executable. Stop applications that write these selected settings before applying. Existing untracked differences and helper-side edits are conflicts; managed updates keep backups. This does not create accounts, copy logins, or synchronize running application databases."
     )]
     Environment {
         /// TOML manifest listing only the files to provision.
@@ -74,9 +97,9 @@ enum Command {
         #[arg(long)]
         socket: PathBuf,
     },
-    /// Inspect the helper setup, or move it to Understudy's own helper daemon.
+    /// Inspect or repair the helper's setup (advanced).
     #[command(
-        long_about = "Without flags, report the helper account, configuration, endpoints and services without changing anything. --apply runs Understudy's own signed helper daemon as a managed LaunchAgent on a private socket directory beside the existing capture job, moves input and the configuration over once it is verified, then retires the old job, recording every step so an interruption resumes. --rollback restores the previous job and configuration."
+        long_about = "Inspect or repair the helper's setup (advanced).\n\nWithout flags, report the helper account, configuration, endpoints and services without changing anything. --apply runs Understudy's own signed helper daemon as a managed LaunchAgent on a private socket directory beside the existing capture job, moves input and the configuration over once it is verified, then retires the old job, recording every step so an interruption resumes. --rollback restores the previous job and configuration."
     )]
     Setup {
         /// Helper account short name. Defaults to the configured helper.
@@ -91,32 +114,45 @@ enum Command {
     },
     #[command(hide = true)]
     SetupHelper { request: String },
-    /// Print the resolved configuration (absolute paths) as JSON.
+    /// Show where Understudy keeps its settings, sockets and screenshots.
     Config,
-    /// Read session identity and permissions without prompting.
+    /// Show the helper: who it is, where it is and what it may do.
     Status,
-    /// Report readiness and only the missing setup steps.
-    Doctor,
-    /// Exercise real native Save/Open dialogs with the AppKit fixture and record the outcome.
+    /// Check that everything is ready, and say what to fix if not.
+    Doctor {
+        /// Include the helper's full status (in --json too).
+        #[arg(long)]
+        verbose: bool,
+    },
+    /// Check that native Save and Open dialogs work in the helper.
+    ///
+    /// Exercises real Save/Open dialogs with the AppKit fixture and records the outcome.
     VerifyNative {
         /// Compiled tests/live/DesktopFixture.swift inside a helper-readable path.
         #[arg(long, default_value = understudy::capability::FIXTURE)]
         fixture: PathBuf,
     },
-    /// Atomically install this Rust executable at the configured shared path.
+    /// Put this build where the helper can run it.
     Install,
-    /// Start the Rust input service inside the prepared helper login.
+    /// Start (or reset) the helper's input service.
     StartInput,
-    /// Serve the local browser viewer with explicit mouse/keyboard control.
+    /// Watch and control the helper in your browser.
     Monitor {
+        /// Local port for the viewer.
         #[arg(long, default_value_t = 8765)]
         port: u16,
     },
-    /// Show the helper in the macOS menu bar, serving the viewer it opens.
-    /// Quitting the menu bar stops both and releases control.
+    /// Show the helper in the menu bar, to watch it or take control.
+    ///
+    /// The menu bar runs on its own, so the terminal can close. Quit it from
+    /// its menu; that stops its viewer and releases control.
     Menubar {
+        /// Local port for the viewer it opens.
         #[arg(long, default_value_t = 8765)]
         port: u16,
+        /// Serve the menu bar from this process (how it runs on its own).
+        #[arg(long, hide = true, conflicts_with_all = ["render", "login"])]
+        serve: bool,
         /// Instead, draw the panel in light and dark to PNGs in DIR and exit.
         #[arg(long, value_name = "DIR")]
         render: Option<PathBuf>,
@@ -124,21 +160,31 @@ enum Command {
         #[arg(long, value_name = "on|off|status", conflicts_with = "render")]
         login: Option<LoginArg>,
     },
-    /// Save a real helper PNG; reports pointsPerPixel for input coordinates.
-    #[command(visible_alias = "screenshot")]
-    Capture {
+    /// Save a screenshot of the helper's screen.
+    ///
+    /// Reports pointsPerPixel: multiply screenshot pixels by it for input coordinates.
+    #[command(visible_alias = "capture")]
+    Screenshot {
+        /// Scale the image down so its longer side is at most this many pixels.
         #[arg(long)]
         max_dimension: Option<u32>,
     },
-    /// List applications in the helper session.
+    /// List the apps open in the helper.
     Apps,
-    /// Send a validated action array, or @path/to/actions.json.
-    Input { actions: String },
+    /// Send several actions at once (a JSON array, or @path/to/actions.json).
+    Input {
+        /// A JSON array of actions, or @path/to/actions.json.
+        actions: String,
+    },
+    /// Click a point, or exactly one element of an app.
+    ///
     /// Click at display point X Y (screenshot pixels × pointsPerPixel), or on
     /// exactly one accessibility element of an app with --app and --name/--role.
     Click {
+        /// Display point X (screenshot pixels × pointsPerPixel).
         #[arg(requires = "y")]
         x: Option<f64>,
+        /// Display point Y.
         y: Option<f64>,
         #[command(flatten)]
         target: AppTarget,
@@ -148,26 +194,33 @@ enum Command {
         /// Accessibility role, for example AXButton.
         #[arg(long, conflicts_with = "x")]
         role: Option<String>,
+        /// Which mouse button.
         #[arg(long, value_enum, default_value_t)]
         button: ButtonArg,
+        /// Clicks in a row: 2 for a double click.
         #[arg(long, default_value_t = 1)]
         count: u8,
         /// Comma-separated: cmd, ctrl, alt, shift, fn.
         #[arg(long, value_delimiter = ',')]
         modifiers: Vec<String>,
     },
-    /// List accessibility elements of an app's windows (role, name, value, frame).
+    /// List an app's buttons, fields and other elements.
+    ///
+    /// Lists accessibility elements of the app's windows: role, name, value and frame.
     Elements {
         #[command(flatten)]
         target: AppTarget,
+        /// Only elements with this accessibility role, for example AXButton.
         #[arg(long)]
         role: Option<String>,
+        /// Only elements with this exact title, description or identifier.
         #[arg(long)]
         name: Option<String>,
+        /// Show at most this many elements.
         #[arg(long, default_value_t = 200)]
         max: usize,
     },
-    /// Print a concise guide for an LLM agent using Understudy.
+    /// Print the guide agents read to use Understudy.
     AgentGuide {
         /// Print the agent plugin's skill (SKILL.md) instead.
         #[arg(long, hide = true, conflicts_with = "commands")]
@@ -176,67 +229,111 @@ enum Command {
         #[arg(long, hide = true)]
         commands: bool,
     },
-    /// Whether selected tools run and apps are installed in the helper account.
+    /// Check that tools and apps are ready in the helper.
     Readiness {
-        #[arg(long = "tool")]
+        /// A command-line tool to check (repeat for more).
+        #[arg(long = "tool", value_name = "NAME")]
         tools: Vec<String>,
-        #[arg(long = "app")]
+        /// An app to check (repeat for more).
+        #[arg(long = "app", value_name = "NAME")]
         apps: Vec<String>,
     },
-    /// Move the pointer to display point X Y.
-    Move { x: f64, y: f64 },
-    /// Press at FROM, move to TO and release.
+    /// Move the pointer to a point.
+    Move {
+        /// Display point X.
+        x: f64,
+        /// Display point Y.
+        y: f64,
+    },
+    /// Drag from one point to another.
     Drag {
+        /// Start point X.
         from_x: f64,
+        /// Start point Y.
         from_y: f64,
+        /// End point X.
         to_x: f64,
+        /// End point Y.
         to_y: f64,
+        /// Which mouse button.
         #[arg(long, value_enum, default_value_t)]
         button: ButtonArg,
     },
+    /// Scroll at a point.
+    ///
     /// Scroll at X Y by lines; negative values scroll up or left.
     Scroll {
+        /// Display point X.
         x: f64,
+        /// Display point Y.
         y: f64,
+        /// Lines to scroll sideways; negative scrolls left.
         #[arg(long, default_value_t = 0, allow_hyphen_values = true)]
         dx: i32,
+        /// Lines to scroll; negative scrolls up.
         #[arg(long, default_value_t = 0, allow_hyphen_values = true)]
         dy: i32,
     },
-    /// Type text, split into batches without breaking characters.
+    /// Type text.
+    ///
+    /// Long text is split into batches without breaking characters.
     Type {
+        /// The text to type.
         #[arg(required_unless_present = "stdin")]
         text: Option<String>,
         /// Read the text from standard input instead.
         #[arg(long, conflicts_with = "text")]
         stdin: bool,
     },
-    /// Press keys in order, for example `key cmd+s` or `key escape return`.
+    /// Press keys, for example cmd+s or escape.
+    ///
+    /// Keys are pressed in order: `key cmd+s` or `key escape return`.
     Key {
+        /// Keys or chords such as cmd+s, escape, return, shift+tab.
         #[arg(required = true)]
         keys: Vec<String>,
     },
-    /// List helper windows front to back (document windows unless --all).
+    /// List the helper's windows, front to back.
+    ///
+    /// Document windows only, unless --all.
     Windows {
+        /// Only windows of this app.
         #[arg(long)]
         app: Option<String>,
+        /// Only windows whose title contains this.
         #[arg(long)]
         title: Option<String>,
+        /// Include panels, menus and other non-document windows.
         #[arg(long)]
         all: bool,
     },
-    /// Open an app, files or URLs inside the helper.
+    /// Open an app, files or URLs in the helper.
     Open {
+        /// The app to open (or to open the targets with).
         #[arg(long)]
         app: Option<String>,
+        /// A variable for the app's environment when it launches (repeat for more).
+        #[arg(long = "env", value_name = "NAME=VALUE")]
+        environment: Vec<String>,
+        /// Files or URLs to open.
+        #[arg(value_name = "FILE|URL")]
         targets: Vec<String>,
     },
-    /// Wait until a matching window appears, or with --gone until it closes.
+    /// Quit an app in the helper and remove any copy `open` made of it.
+    Close {
+        /// The app's name, as `understudy apps` lists it.
+        #[arg(long)]
+        app: String,
+    },
+    /// Wait for a window to appear (or, with --gone, to close).
     Wait {
+        /// A window of this app.
         #[arg(long)]
         app: Option<String>,
+        /// A window whose title contains this.
         #[arg(long)]
         title: Option<String>,
+        /// Wait for the window to close instead.
         #[arg(long)]
         gone: bool,
         /// Seconds.
@@ -244,30 +341,35 @@ enum Command {
         timeout: u64,
     },
 
-    /// Execute argv in the helper session.
+    /// Run a command in the helper and print its output.
     Run {
+        /// The program and its arguments, after `--`.
         #[arg(last = true, required = true)]
         argv: Vec<String>,
     },
-    /// Restart the helper and confirm a new hidden process before clearing uncertainty.
+    /// Restart the helper after something went wrong.
+    ///
+    /// Confirms a new hidden helper before clearing an action of unknown outcome.
     Restart,
-    /// Switch to another login, such as the helper: locks the screen so you
-    /// choose the account there; its password is typed there, never here.
+    /// Lock the screen so you can switch to the helper.
+    ///
+    /// You sign in on the lock screen; Understudy never sees a password.
     Switch {
-        /// Account short name. Without it, choose from a list.
+        /// The account you will choose on the lock screen (the helper by default).
         account: Option<String>,
-        /// Just lock the screen, without choosing an account.
+        /// Just lock the screen.
         #[arg(long, conflicts_with = "account")]
         lock: bool,
-        /// Only list the accounts that can be switched to.
+        /// List the accounts you can switch to.
         #[arg(long)]
         list: bool,
-        /// Switch without asking (it changes the person's screen).
+        /// Lock without asking first.
         #[arg(long)]
         yes: bool,
     },
-    /// Update Understudy.app to the latest release after verifying its
-    /// checksum and Developer ID signature, then move the helper onto it.
+    /// Update Understudy, checking its signature first.
+    ///
+    /// Verifies the release's checksum and Developer ID signature, then moves the helper onto it.
     Update {
         /// Accept a signed release that is not notarized.
         #[arg(long)]
@@ -279,11 +381,13 @@ enum Command {
         #[arg(long)]
         version: Option<String>,
     },
-    /// Set Understudy up on this Mac, step by step: helper account, first
-    /// sign-in, permissions, the helper job and input. Safe to run again.
+    /// Set Understudy up, step by step (safe to run again).
+    ///
+    /// Helper account, first sign-in, permissions, the helper job and input.
     Init,
-    /// Remove Understudy from this Mac (asks first). The helper account and
-    /// its files stay; the app goes to the Trash.
+    /// Remove Understudy from this Mac (asks first).
+    ///
+    /// The helper account and its files stay; the app goes to the Trash.
     Uninstall {
         /// Keep configuration, setup records and logs.
         #[arg(long)]
@@ -292,8 +396,9 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
-    /// Connect Claude Code and Codex to Understudy (a plugin that teaches the
-    /// agent to use it and guides setup), or show which are connected.
+    /// Connect Claude Code and Codex, or show which are connected.
+    ///
+    /// Adds a plugin that teaches the agent to use Understudy and guides setup.
     Agents {
         #[command(subcommand)]
         action: Option<AgentsCommand>,
@@ -313,15 +418,19 @@ enum AgentsCommand {
     },
     /// Connect the plugin to Claude Code and/or Codex (all installed by default).
     Install {
+        /// Only Claude Code.
         #[arg(long)]
         claude: bool,
+        /// Only Codex.
         #[arg(long)]
         codex: bool,
     },
     /// Disconnect the plugin from Claude Code and/or Codex.
     Remove {
+        /// Only Claude Code.
         #[arg(long)]
         claude: bool,
+        /// Only Codex.
         #[arg(long)]
         codex: bool,
     },
@@ -342,11 +451,13 @@ enum EnvironmentCommand {
     Profile {
         /// TOML profile (version = 2) of files, tools, applications, environment and references.
         profile: PathBuf,
+        /// Apply it; otherwise only preview.
         #[arg(long)]
         apply: bool,
     },
     /// Run a command with the selected helper environment and helper tool paths.
     Run {
+        /// The program and its arguments, after `--`.
         #[arg(last = true, required = true)]
         argv: Vec<String>,
     },
@@ -374,15 +485,35 @@ enum EnvironmentCommand {
 }
 
 fn main() -> ExitCode {
-    let mut cli = Cli::parse();
+    let matches = match help::command().try_get_matches() {
+        Ok(matches) => matches,
+        Err(error) => return help::usage(error),
+    };
+    let mut cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
     cli.config = understudy::config::effective(cli.config);
+    // `understudy` alone shows what it can do.
+    let Some(command) = cli.command.take() else {
+        let _ = help::command().print_help();
+        return ExitCode::SUCCESS;
+    };
+    // Commands run by Understudy itself always answer in JSON.
+    let format = if machine_only(&command) {
+        Format::Json
+    } else {
+        ui::detect(
+            cli.json,
+            std::env::var("UNDERSTUDY_JSON").ok().as_deref(),
+            std::io::stdout().is_terminal(),
+        )
+    };
+    ui::set(format);
     // The helper daemon keeps this thread for the Core Foundation run loop.
     #[cfg(target_os = "macos")]
     if let Command::HelperServe {
         uid,
         controller_uid,
         socket,
-    } = cli.command
+    } = command
     {
         return match understudy::daemon::serve::serve_blocking(uid, controller_uid, socket) {
             Ok(()) => ExitCode::SUCCESS,
@@ -394,21 +525,41 @@ fn main() -> ExitCode {
     }
     // A refusing environment worker exits distinctly, so its caller can tell
     // the refusal from the command it would have run.
-    let worker = matches!(cli.command, Command::EnvironmentWorker { .. });
+    let worker = match &command {
+        Command::EnvironmentWorker { packet, .. } => Some(
+            packet
+                .parent()
+                .and_then(|request| request.file_name())
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        ),
+        _ => None,
+    };
+    let view = view(&command);
+    // Commands that ask questions or wait for the person stop cleanly on
+    // Ctrl-C, saying what that means for each.
+    let interrupted = match command {
+        Command::Init => Some("Stopped. Run understudy init again to continue."),
+        Command::Switch { .. } | Command::Uninstall { .. } => Some("Stopped."),
+        Command::Update { .. } => Some("Stopped. Run understudy update again to finish."),
+        _ => None,
+    };
     let result = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
         .build()
         .map_err(Error::from)
-        .and_then(|runtime| runtime.block_on(execute(cli)));
+        .and_then(|runtime| {
+            runtime.block_on(async {
+                if let Some(message) = interrupted.filter(|_| ui::interactive()) {
+                    stop_cleanly_on_interrupt(message);
+                }
+                execute(cli.config, command).await
+            })
+        });
     match result {
         Ok(result) => {
-            if !result.is_null() {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string())
-                );
-            }
+            emit(format, &view, &result);
             if result["ok"] == false
                 || result["ready"] == false
                 || result["timedOut"] == true
@@ -420,15 +571,146 @@ fn main() -> ExitCode {
             }
         }
         Err(error) => {
-            eprintln!("{}", json!(error));
-            if worker {
-                ExitCode::from(understudy::environment::WORKER_REFUSED)
-            } else {
-                ExitCode::FAILURE
+            if let Some(request) = worker {
+                let mut refusal = json!(error);
+                refusal["refusal"] = json!(request);
+                eprintln!("{refusal}");
+                return ExitCode::from(understudy::environment::WORKER_REFUSED);
+            }
+            match format {
+                Format::Json => eprintln!("{}", json!(error)),
+                Format::Human => eprintln!("{}", render::error(&error)),
+            }
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Commands Understudy runs itself (in the helper, or as a step of another
+/// command), whose output another Understudy process reads.
+fn machine_only(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::EnvironmentWorker { .. }
+            | Command::SessionInfo
+            | Command::WindowsInfo
+            | Command::ElementsInfo { .. }
+            | Command::HelperServe { .. }
+            | Command::InputService { .. }
+            | Command::SetupHelper { .. }
+            | Command::UpdateFinish
+    )
+}
+
+/// How a command's result reads for a person.
+fn view(command: &Command) -> View {
+    let at = |x: f64, y: f64| format!("{}, {}", text::number(x), text::number(y));
+    match command {
+        Command::Doctor { verbose } => View::Doctor { verbose: *verbose },
+        Command::Status => View::Status,
+        Command::Config => View::Config,
+        Command::Screenshot { .. } => View::Capture,
+        Command::Apps => View::Apps,
+        Command::Windows { .. } => View::Windows,
+        Command::Elements { .. } => View::Elements,
+        Command::Readiness { .. } => View::Readiness,
+        Command::Click {
+            x: Some(x),
+            y: Some(y),
+            ..
+        } => View::Action(format!("Clicked at {}", at(*x, *y))),
+        Command::Click { .. } => View::Action("Clicked".into()),
+        Command::Move { x, y } => View::Action(format!("Moved the pointer to {}", at(*x, *y))),
+        Command::Drag {
+            from_x,
+            from_y,
+            to_x,
+            to_y,
+            ..
+        } => View::Action(format!(
+            "Dragged from {} to {}",
+            at(*from_x, *from_y),
+            at(*to_x, *to_y)
+        )),
+        Command::Scroll { x, y, .. } => View::Action(format!("Scrolled at {}", at(*x, *y))),
+        Command::Key { keys } => View::Action(format!("Pressed {}", keys.join(" "))),
+        Command::Input { .. } => View::Action("Performed the actions".into()),
+        Command::Type { .. } => View::Type,
+        Command::Run { .. }
+        | Command::Environment {
+            command: Some(EnvironmentCommand::Run { .. }),
+            ..
+        } => View::Run,
+        Command::Environment {
+            command:
+                None | Some(EnvironmentCommand::Apply { .. } | EnvironmentCommand::Rollback { .. }),
+            ..
+        } => View::Environment,
+        Command::Close { .. } => View::Close,
+        Command::Open { app, targets, .. } => View::Open(
+            app.iter()
+                .chain(targets)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
+        Command::Wait { gone, .. } => View::Wait { gone: *gone },
+        Command::Restart => View::Restart,
+        Command::StartInput => View::StartInput,
+        Command::Install => View::Install,
+        Command::Agents {
+            action: Some(AgentsCommand::Install { .. } | AgentsCommand::Remove { .. }),
+        } => View::AgentsChange,
+        Command::Agents { .. } => View::Agents,
+        Command::Switch { .. } => View::Switch,
+        Command::Update { .. } => View::Update,
+        Command::Uninstall { .. } => View::Uninstall,
+        Command::Menubar { login: Some(_), .. } => View::Login,
+        Command::Init | Command::Monitor { .. } | Command::Menubar { .. } => View::Quiet,
+        _ => View::Generic,
+    }
+}
+
+/// Write a result: JSON for programs, its view for a person. A reader that
+/// went away (`| head`) ends the output quietly.
+fn emit(format: Format, view: &View, value: &Value) {
+    if value.is_null() {
+        return;
+    }
+    match format {
+        Format::Json => {
+            let text = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
+            let _ = writeln!(std::io::stdout().lock(), "{text}");
+        }
+        Format::Human => {
+            let shown = render::render(view, value);
+            if !shown.out.is_empty() {
+                let mut out = std::io::stdout().lock();
+                let _ = out.write_all(shown.out.as_bytes());
+                if !shown.out.ends_with('\n') {
+                    let _ = out.write_all(b"\n");
+                }
+                let _ = out.flush();
+            }
+            if !shown.err.is_empty() {
+                eprintln!("{}", shown.err);
             }
         }
     }
 }
+
+/// Ctrl-C during a question or a wait puts the cursor back and says how to
+/// resume, instead of leaving a half-drawn line.
+fn stop_cleanly_on_interrupt(message: &'static str) {
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            let _ = console::Term::stderr().show_cursor();
+            eprintln!("\n{} {message}", style::unknown());
+            std::process::exit(130);
+        }
+    });
+}
+
 #[cfg(target_os = "macos")]
 fn windows_info() -> Result<Value> {
     Ok(json!({ "ok": true, "windows": understudy::native::windows::windows()? }))
@@ -474,10 +756,10 @@ async fn input_service(_: u32, _: u32, _: PathBuf) -> Result<Value> {
     Err(Error::new("platform", "The input service requires macOS"))
 }
 
-async fn execute(cli: Cli) -> Result<Value> {
+async fn execute(config: PathBuf, command: Command) -> Result<Value> {
     // Helper-side commands run inside the helper login and never read the
     // controller's configuration.
-    let command = match cli.command {
+    let command = match command {
         Command::EnvironmentWorker { packet, apply } => {
             return environment::worker(&packet, apply);
         }
@@ -509,26 +791,31 @@ async fn execute(cli: Cli) -> Result<Value> {
             allow_unnotarized,
             force,
             version,
-        } => return update(&cli.config, allow_unnotarized, force, version),
-        Command::UpdateFinish => return update_finish(&cli.config),
-        Command::Init => return understudy::init::run(&cli.config).await,
+        } => return update(&config, allow_unnotarized, force, version),
+        Command::UpdateFinish => return update_finish(&config),
+        Command::Init => return understudy::init::run(&config).await,
         Command::Agents { action } => {
             return match action.unwrap_or(AgentsCommand::Status { brief: false }) {
                 AgentsCommand::Status { brief: true } => {
-                    println!("{}", understudy::agents::brief(&cli.config).await);
+                    println!("{}", understudy::agents::brief(&config).await);
                     Ok(Value::Null)
                 }
-                AgentsCommand::Status { brief: false } => Ok(understudy::agents::status()),
+                AgentsCommand::Status { brief: false } => {
+                    let _spinner = Spinner::new("Checking Claude Code and Codex…");
+                    Ok(understudy::agents::status())
+                }
                 AgentsCommand::Install { claude, codex } => {
+                    let _spinner = Spinner::new("Connecting…");
                     understudy::agents::change(&chosen(claude, codex), false)
                 }
                 AgentsCommand::Remove { claude, codex } => {
+                    let _spinner = Spinner::new("Disconnecting…");
                     understudy::agents::change(&chosen(claude, codex), true)
                 }
             };
         }
         Command::Uninstall { keep_config, yes } => {
-            return understudy::uninstall::run(&cli.config, keep_config, yes).await;
+            return understudy::uninstall::run(&config, keep_config, yes).await;
         }
         Command::Menubar {
             login: Some(login), ..
@@ -538,15 +825,15 @@ async fn execute(cli: Cli) -> Result<Value> {
             lock,
             list,
             yes,
-        } => return switch(&cli.config, account, lock, list, yes),
+        } => return switch(&config, account, lock, list, yes),
         Command::Setup {
             helper,
             apply: false,
             rollback: false,
-        } => return understudy::setup::preview(&cli.config, helper.as_deref()).await,
+        } => return understudy::setup::preview(&config, helper.as_deref()).await,
         command => command,
     };
-    let client = Client::new(Config::load(&cli.config)?)?;
+    let client = Client::new(Config::load(&config)?)?;
     match command {
         Command::InputService { .. }
         | Command::HelperServe { .. }
@@ -569,17 +856,24 @@ async fn execute(cli: Cli) -> Result<Value> {
             // mutations its own log records and refuses any other.
             let ownership = client.controller.acquire(true)?;
             if apply {
-                understudy::setup::migrate::apply(&cli.config, &ownership).await
+                understudy::setup::migrate::apply(&config, &ownership).await
             } else {
-                understudy::setup::migrate::rollback(&cli.config, &ownership).await
+                understudy::setup::migrate::rollback(&config, &ownership).await
             }
         }
-        Command::Config => Ok(json!({ "ok": true, "config": client.config })),
+        Command::Config => Ok(json!({ "ok": true, "config": client.config, "path": config })),
         Command::Status => Ok(client.status().await),
-        Command::Doctor => Ok(understudy::capability::doctor(
-            client.status().await,
-            client.config.helper_uid,
-        )),
+        Command::Doctor { verbose } => {
+            let report =
+                understudy::capability::doctor(client.status().await, client.config.helper_uid);
+            // People see the summary either way; programs get the full status
+            // only when they ask for it.
+            Ok(if verbose || ui::human() {
+                report
+            } else {
+                understudy::capability::summary(report)
+            })
+        }
         Command::VerifyNative { fixture } => {
             understudy::capability::verify(&client, &fixture).await
         }
@@ -614,7 +908,7 @@ async fn execute(cli: Cli) -> Result<Value> {
                 let manifest = manifest.ok_or_else(|| {
                     Error::new(
                         "usage",
-                        "Provide a manifest or use environment discover; see environment --help",
+                        "understudy environment needs a profile file, or a command such as discover or run.",
                     )
                 })?;
                 environment::sync(&client, &manifest, apply).await
@@ -626,17 +920,32 @@ async fn execute(cli: Cli) -> Result<Value> {
             viewer::serve(client, port, None).await?;
             Ok(Value::Null)
         }
-        Command::Menubar { port, render, .. } => {
-            let program = menubar::Program::new(&cli.config)?;
+        Command::Menubar {
+            port,
+            render,
+            serve,
+            ..
+        } => {
+            let program = menubar::Program::new(&config)?;
             match render {
                 Some(directory) => viewer::render_menubar(client, &program, &directory).await,
-                None => {
+                None if serve || menubar::started_at_login() => {
+                    // Its own session: closing the terminal that started it
+                    // does not hang it up.
+                    if serve {
+                        let _ = nix::unistd::setsid();
+                    }
                     viewer::serve(client, port, Some(program)).await?;
+                    Ok(Value::Null)
+                }
+                None => {
+                    let record = client.output_dir()?.join("monitor.json");
+                    menubar::start(&config, port, &record).await?;
                     Ok(Value::Null)
                 }
             }
         }
-        Command::Capture { max_dimension } => client.capture(max_dimension).await,
+        Command::Screenshot { max_dimension } => client.capture(max_dimension).await,
         Command::Apps => client.apps().await,
         Command::Click {
             x,
@@ -719,7 +1028,12 @@ async fn execute(cli: Cli) -> Result<Value> {
         Command::Windows { app, title, all } => {
             agent::list(&client, &agent::WindowFilter { app, title, all }).await
         }
-        Command::Open { app, targets } => agent::open(&client, app.as_deref(), &targets).await,
+        Command::Open {
+            app,
+            targets,
+            environment,
+        } => agent::open(&client, app.as_deref(), &targets, &environment).await,
+        Command::Close { app } => agent::close(&client, &app).await,
         Command::Wait {
             app,
             title,
@@ -754,27 +1068,16 @@ async fn execute(cli: Cli) -> Result<Value> {
                 .await
         }
         Command::Run { argv } => client.run(argv).await.map(with_output),
-        Command::Restart => client.restart().await,
+        Command::Restart => {
+            let _spinner = Spinner::new("Restarting the helper…");
+            client.restart().await
+        }
     }
 }
 
-/// Ask the person on the terminal; never assume yes without one.
-fn confirm(question: &str) -> Result<bool> {
-    use std::io::{BufRead, IsTerminal, Write};
-    if !std::io::stdin().is_terminal() {
-        return Err(Error::new(
-            "switch",
-            "Switching changes the person's screen: run it in a terminal, or pass --yes",
-        ));
-    }
-    eprint!("{question} [y/N] ");
-    std::io::stderr().flush()?;
-    let mut answer = String::new();
-    std::io::stdin().lock().read_line(&mut answer)?;
-    Ok(matches!(answer.trim(), "y" | "Y" | "yes"))
-}
-
-/// List, choose and switch to another login.
+/// Lock the screen so the person can switch to the helper (or `account`)
+/// there. macOS asks for that account's password on the lock screen; there
+/// is nothing to choose here beyond whether to lock now.
 fn switch(
     config: &std::path::Path,
     account: Option<String>,
@@ -782,57 +1085,41 @@ fn switch(
     list: bool,
     yes: bool,
 ) -> Result<Value> {
-    use std::io::{BufRead, IsTerminal, Write};
     use understudy::switch;
     let helper = Config::load(config).ok().map(|config| config.helper_uid);
     let accounts = switch::accounts(helper)?;
     if list {
         return Ok(json!({"ok": true, "accounts": accounts}));
     }
-    if lock {
-        if !yes && !confirm("Lock the screen now?")? {
-            return Ok(json!({"ok": false, "cancelled": true}));
-        }
-        return switch::lock_screen();
-    }
-    let chosen = match account {
-        Some(name) => accounts
-            .iter()
-            .find(|candidate| candidate.name == name)
-            .cloned()
-            .ok_or_else(|| Error::new("switch", format!("No login named {name} to switch to")))?,
-        None => {
-            if !std::io::stdin().is_terminal() {
-                return Ok(json!({"ok": true, "accounts": accounts}));
-            }
-            for (index, candidate) in accounts.iter().enumerate() {
-                let label = candidate.real_name.as_deref().unwrap_or(&candidate.name);
-                let helper = if candidate.helper { "  (helper)" } else { "" };
-                eprintln!("  {}. {label} — {}{helper}", index + 1, candidate.name);
-            }
-            eprint!("Switch to which login? ");
-            std::io::stderr().flush()?;
-            let mut answer = String::new();
-            std::io::stdin().lock().read_line(&mut answer)?;
-            let index = answer
-                .trim()
-                .parse::<usize>()
-                .ok()
-                .and_then(|number| number.checked_sub(1))
-                .filter(|index| *index < accounts.len())
-                .ok_or_else(|| Error::new("switch", "No such choice"))?;
-            return switch::to(&accounts[index]);
-        }
+    let target = match account {
+        Some(name) => Some(
+            accounts
+                .iter()
+                .find(|candidate| candidate.name == name)
+                .cloned()
+                .ok_or_else(|| {
+                    Error::new("switch", format!("No account named {name} to switch to"))
+                })?,
+        ),
+        None if lock => None,
+        None => accounts.iter().find(|candidate| candidate.helper).cloned(),
     };
-    if !yes
-        && !confirm(&format!(
-            "Lock the screen now so you can switch to {}?",
-            chosen.name
-        ))?
-    {
-        return Ok(json!({"ok": false, "cancelled": true}));
+    if !yes {
+        let question = match &target {
+            Some(account) => format!(
+                "Lock the screen so you can switch to {}?",
+                account.real_name.as_deref().unwrap_or(&account.name)
+            ),
+            None => "Lock the screen now?".to_owned(),
+        };
+        if !ui::prompt::confirm(&question, true, "pass --yes")? {
+            return Err(ui::prompt::cancelled());
+        }
     }
-    switch::to(&chosen)
+    match target {
+        Some(account) => switch::to(&account),
+        None => switch::lock_screen(),
+    }
 }
 
 /// Update the app, then hand over to the new executable, so the steps that
@@ -851,12 +1138,16 @@ fn update(
         Ok(loaded) => Some(Client::new(loaded)?.controller.acquire(false)?),
         Err(_) => None,
     };
+    let spinner = Spinner::new("Checking for an update…");
     let mut report = understudy::update::install(&source, allow_unnotarized, force)?;
     drop(exclusion);
     if report["updated"] != true {
         return Ok(report);
     }
+    spinner.set("Moving the helper onto the new version…");
     let executable = understudy::update::installed_app()?.join("Contents/MacOS/understudy");
+    // update-finish always answers in JSON; no flag, so a release that
+    // predates --json can finish too.
     let output = std::process::Command::new(executable)
         .arg("update-finish")
         .arg("--config")
@@ -895,6 +1186,7 @@ fn update_finish(config: &std::path::Path) -> Result<Value> {
     for step in steps {
         let output = std::process::Command::new(&executable)
             .args(step)
+            .arg("--json")
             .arg("--config")
             .arg(config)
             .output()?;
@@ -922,15 +1214,16 @@ fn command_reference() -> String {
     use clap::CommandFactory;
     let mut text = String::from(
         "# Understudy commands\n\nGenerated from `understudy --help`. Every command prints \
-         JSON and exits non-zero on failure.\n",
+         JSON when its output is not a terminal (or with `--json`) and exits non-zero on \
+         failure.\n",
     );
     let mut root = Cli::command().bin_name("understudy");
     root.build();
-    for command in root.get_subcommands_mut() {
-        if command.is_hide_set() {
+    // In the order of `understudy --help`.
+    for name in help::GROUPS.iter().flat_map(|(_, names)| names.iter()) {
+        let Some(command) = root.find_subcommand_mut(name) else {
             continue;
-        }
-        let name = command.get_name().to_owned();
+        };
         let help = command.render_long_help().to_string();
         text.push_str(&format!(
             "\n## understudy {name}\n\n```text\n{}\n```\n",
@@ -1031,7 +1324,7 @@ mod tests {
     #[test]
     fn the_menu_bar_serves_or_renders() {
         let Ok(Cli {
-            command: Command::Menubar { port, render, .. },
+            command: Some(Command::Menubar { port, render, .. }),
             ..
         }) = parse(&["menubar", "--render", "out"])
         else {
@@ -1044,7 +1337,7 @@ mod tests {
     #[test]
     fn scrolling_accepts_negative_lines() {
         let Ok(Cli {
-            command: Command::Scroll { dy, .. },
+            command: Some(Command::Scroll { dy, .. }),
             ..
         }) = parse(&["scroll", "1", "2", "--dy", "-3"])
         else {

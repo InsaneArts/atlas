@@ -9,13 +9,19 @@ use crate::{
 };
 use serde_json::{Value, json};
 use std::{
+    io::Read,
     path::{Path, PathBuf},
-    process::Command,
-    time::Duration,
+    process::{Command, Output, Stdio},
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
 
 /// The marketplace and plugin name in both agents.
 const NAME: &str = "understudy";
+
+/// How long a question to an agent's tool may take, and a change to it.
+const ASK: Duration = Duration::from_secs(10);
+const CHANGE: Duration = Duration::from_secs(120);
 
 fn problem(message: impl Into<String>) -> Error {
     Error::new("agents", message)
@@ -36,6 +42,19 @@ impl Agent {
             Agent::Claude => "claude",
             Agent::Codex => "codex",
         }
+    }
+
+    /// The name a person knows it by.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Agent::Claude => "Claude Code",
+            Agent::Codex => "Codex",
+        }
+    }
+
+    /// The agent `name` (as in `status`), if it is one.
+    pub fn named(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|agent| agent.name() == name)
     }
 
     /// The argv that connect the plugin at `marketplace`.
@@ -73,7 +92,7 @@ impl Agent {
 
     /// The tool's version, if it is installed.
     fn version(self) -> Option<String> {
-        let output = Command::new(self.name()).arg("--version").output().ok()?;
+        let output = exec(self, &["--version"], ASK).ok()?;
         output
             .status
             .success()
@@ -82,10 +101,7 @@ impl Agent {
 
     /// Whether the Understudy plugin is installed in this agent.
     fn connected(self) -> Option<bool> {
-        let output = Command::new(self.name())
-            .args(["plugin", "list", "--json"])
-            .output()
-            .ok()?;
+        let output = exec(self, &["plugin", "list", "--json"], ASK).ok()?;
         let list: Value = serde_json::from_slice(&output.stdout).ok()?;
         let plugins = match self {
             Agent::Claude => list.as_array().cloned(),
@@ -114,8 +130,79 @@ pub fn marketplace() -> Result<PathBuf> {
         .ok_or_else(|| problem("This Understudy carries no agent plugin; reinstall it"))
 }
 
+/// Run an agent's tool with no input and stop it after `limit`. Output is
+/// collected as it arrives, so a background process the tool leaves holding
+/// its output open cannot keep Understudy waiting.
+fn exec(agent: Agent, argv: &[impl AsRef<std::ffi::OsStr>], limit: Duration) -> Result<Output> {
+    let mut child = Command::new(agent.name())
+        .args(argv)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let collect = |stream: Option<Box<dyn Read + Send>>| {
+        let collected = Arc::new(Mutex::new(Vec::new()));
+        let (finished, ended) = std::sync::mpsc::channel();
+        if let Some(mut stream) = stream {
+            let sink = Arc::clone(&collected);
+            std::thread::spawn(move || {
+                let mut chunk = [0u8; 8192];
+                while let Ok(read @ 1..) = stream.read(&mut chunk) {
+                    if let Ok(mut sink) = sink.lock() {
+                        sink.extend_from_slice(&chunk[..read]);
+                    }
+                }
+                let _ = finished.send(());
+            });
+        }
+        (collected, ended)
+    };
+    let stdout = collect(
+        child
+            .stdout
+            .take()
+            .map(|s| Box::new(s) as Box<dyn Read + Send>),
+    );
+    let stderr = collect(
+        child
+            .stderr
+            .take()
+            .map(|s| Box::new(s) as Box<dyn Read + Send>),
+    );
+    let deadline = Instant::now() + limit;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(problem(format!(
+                "{} did not answer within {} seconds",
+                agent.display_name(),
+                limit.as_secs()
+            )));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    // Normally the output ends with the tool; a moment more, then keep
+    // what arrived.
+    let take = |(collected, ended): (Arc<Mutex<Vec<u8>>>, std::sync::mpsc::Receiver<()>)| {
+        let _ = ended.recv_timeout(Duration::from_millis(500));
+        collected
+            .lock()
+            .map(|bytes| bytes.clone())
+            .unwrap_or_default()
+    };
+    Ok(Output {
+        status,
+        stdout: take(stdout),
+        stderr: take(stderr),
+    })
+}
+
 fn run(agent: Agent, argv: &[String]) -> Result<()> {
-    let output = Command::new(agent.name()).args(argv).output()?;
+    let output = exec(agent, argv, CHANGE)?;
     if output.status.success() {
         return Ok(());
     }
@@ -132,19 +219,35 @@ fn run(agent: Agent, argv: &[String]) -> Result<()> {
 
 /// Each agent on this Mac and whether Understudy is connected to it.
 pub fn status() -> Value {
-    let agents: Vec<Value> = Agent::ALL
-        .iter()
-        .map(|agent| match agent.version() {
-            Some(version) => json!({
-                "agent": agent.name(),
-                "installed": true,
-                "version": version,
-                "connected": agent.connected(),
-            }),
-            None => json!({"agent": agent.name(), "installed": false}),
-        })
-        .collect();
+    let agents: Vec<Value> = std::thread::scope(|scope| {
+        let probes: Vec<_> = Agent::ALL
+            .map(|agent| scope.spawn(move || probe(agent)))
+            .into_iter()
+            .collect();
+        probes
+            .into_iter()
+            .map(|probe| probe.join().unwrap_or(Value::Null))
+            .collect()
+    });
     json!({"ok": true, "agents": agents, "plugin": marketplace().ok()})
+}
+
+fn probe(agent: Agent) -> Value {
+    match exec(agent, &["--version"], ASK) {
+        Ok(output) if output.status.success() => json!({
+            "agent": agent.name(),
+            "installed": true,
+            "version": String::from_utf8_lossy(&output.stdout).trim(),
+            "connected": agent.connected(),
+        }),
+        // Installed, but it did not answer in time.
+        Err(error) if error.code == "agents" => json!({
+            "agent": agent.name(),
+            "installed": true,
+            "error": error.error,
+        }),
+        _ => json!({"agent": agent.name(), "installed": false}),
+    }
 }
 
 /// Connect (or `remove` from) the chosen agents, or every installed one.

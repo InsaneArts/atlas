@@ -56,6 +56,21 @@ pub fn parse_toml<T: DeserializeOwned>(bytes: &[u8], origin: &Path) -> Result<T>
 impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         let path = fs::canonicalize(path).map_err(|_| missing(path))?;
+        // A file that exists but does not load is never "not set up": init
+        // would refuse to replace it, so say which file and why.
+        Self::read(&path).map_err(|error| {
+            Error::new(
+                "config-invalid",
+                format!(
+                    "Understudy could not read its settings in {}: {}",
+                    crate::ui::text::tilde(&path),
+                    error.error
+                ),
+            )
+        })
+    }
+    fn read(path: &Path) -> Result<Self> {
+        let path = path.to_owned();
         // A legacy JSON twin may still drive an older running process. Refuse
         // to let new invocations silently diverge from it.
         let legacy = path.with_extension("json");
@@ -136,9 +151,8 @@ fn missing(path: &Path) -> Error {
     Error::new(
         "config",
         format!(
-            "Missing configuration {}. Run understudy setup --helper NAME for a proposal, or copy \
-             examples/config.toml to {DEFAULT_PATH}.{hint}",
-            path.display()
+            "Understudy is not set up yet (no {}). Run understudy init.{hint}",
+            crate::ui::text::tilde(path)
         ),
     )
 }

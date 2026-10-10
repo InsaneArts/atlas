@@ -171,6 +171,11 @@ pub async fn apply(client: &Client, plan_id: &str) -> Result<Value> {
         ));
     }
     let result = dispatch(client, &stage, Request::Apply { plan }).await;
+    let finished = settled(&result, "applied");
+    drop(_lock);
+    if finished {
+        discard(&stage);
+    }
     retained(result, plan_id, &stage)
 }
 
@@ -190,7 +195,27 @@ pub async fn rollback(client: &Client, transaction_id: &str, apply: bool) -> Res
         },
     )
     .await;
+    // A preview leaves things as they were; the stage it created goes too.
+    let finished = settled(&result, if apply { "rolledBack" } else { "applied" });
+    drop(_lock);
+    if finished {
+        discard(&stage);
+    }
     retained(result, transaction_id, &stage)
+}
+
+/// Whether the helper confirmed the transaction reached `phase` with nothing
+/// left to resume, so its frozen plan (copies of the selected files) is no
+/// longer needed: rollback works from the helper's own records.
+fn settled(result: &Result<Value>, phase: &str) -> bool {
+    result.as_ref().is_ok_and(|value| {
+        value["ok"] == true && value["phase"] == phase && value["resumeRequired"] == false
+    })
+}
+
+/// Remove a frozen plan the helper no longer needs.
+fn discard(stage: &Path) {
+    let _ = fs::remove_dir_all(stage);
 }
 
 /// Execute a command with the installed helper-local profile. The reply is the
@@ -200,9 +225,7 @@ pub async fn run(client: &Client, argv: Vec<String>) -> Result<Value> {
     let id = crate::control::token();
     let stage = stage_path(client, &id)?.with_file_name(format!("environment-run-{id}"));
     create_stage(&stage, client.config.helper_uid)?;
-    let mut result = dispatch(client, &stage, Request::Run { argv })
-        .await
-        .and_then(refused);
+    let mut result = dispatch(client, &stage, Request::Run { argv }).await;
     if delivery_uncertain(&result) {
         match &mut result {
             Ok(value) => value["retainedRequest"] = json!(stage),
@@ -221,17 +244,27 @@ pub async fn run(client: &Client, argv: Vec<String>) -> Result<Value> {
 pub const WORKER_REFUSED: u8 = 125;
 
 /// A run whose worker refused (no profile, a changed session) as that error;
-/// any other reply is the command's own.
-fn refused(reply: Value) -> Result<Value> {
+/// any other reply is the command's own. A refusal names its private request
+/// directory, which the command it would have run is never told, so even a
+/// command that exits 125 with an error of the same shape stays the
+/// command's result.
+fn refused(reply: Value, request: &str) -> Result<Value> {
     if reply["exitCode"] != WORKER_REFUSED {
         return Ok(reply);
     }
     let error = run_output(&reply, 65536)
         .ok()
         .and_then(|output| serde_json::from_slice::<Value>(&output).ok())
-        .filter(|value| value["ok"] == false && value["error"].is_string());
+        .filter(|value| {
+            value["ok"] == false && value["error"].is_string() && value["refusal"] == request
+        });
     match error {
-        Some(error) => Err(problem(
+        // The worker's own code is kept, so a changed session still reads as one.
+        Some(error) => Err(Error::new(
+            error["code"]
+                .as_str()
+                .and_then(crate::error::code)
+                .unwrap_or("environment"),
             error["error"]
                 .as_str()
                 .unwrap_or("The helper environment refused"),
@@ -248,9 +281,10 @@ fn delivery_uncertain(result: &Result<Value>) -> bool {
 }
 
 fn retained(mut result: Result<Value>, id: &str, stage: &Path) -> Result<Value> {
+    let kept = stage.exists();
     match &mut result {
         Ok(value) => {
-            value["retainedPlan"] = json!(stage);
+            value["retainedPlan"] = if kept { json!(stage) } else { Value::Null };
             value["planId"] = json!(id);
             value["transactionId"] = json!(id);
         }
@@ -339,8 +373,12 @@ async fn dispatch(client: &Client, stage: &Path, request: Request) -> Result<Val
     if mutating {
         argv.push("--apply".into());
     }
+    let request = invocation
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let result = match client.run(argv).await {
-        Ok(reply) if raw_output => Ok(reply),
+        Ok(reply) if raw_output => refused(reply, &request),
         Ok(reply) => decode_reply(&reply, mutating),
         Err(error) => Err(error),
     };

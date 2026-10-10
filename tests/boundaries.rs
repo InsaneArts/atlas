@@ -146,7 +146,10 @@ fn config_paths_are_relative_and_unknown_fields_fail() {
     );
     std::fs::write(&path, format!("{text}unexpected = true\n")).unwrap();
     let error = Config::load(&path).unwrap_err();
-    assert_eq!(error.code, "config");
+    assert_eq!(
+        error.code, "config-invalid",
+        "an existing file that does not load"
+    );
     assert!(error.error.contains("unexpected"), "{}", error.error);
     std::fs::write(&path, "helper_uid = \"502\"\n").unwrap();
     assert!(
@@ -502,12 +505,12 @@ fn doctor_reports_unobservable_facts_as_unknown_not_missing() {
         502,
     );
     assert_eq!(report["ready"], false);
-    assert_eq!(check(&report, "Helper connection"), false);
+    assert_eq!(check(&report, "Helper running"), false);
     for name in [
-        "Hidden desktop",
-        "Screen recording",
-        "Input permission",
-        "Native input service",
+        "Helper in the background",
+        "Screen Recording allowed",
+        "Accessibility allowed",
+        "Input service ready",
     ] {
         assert_eq!(check(&report, name), Value::Null, "{name}");
     }
@@ -527,7 +530,7 @@ fn doctor_reads_input_permission_from_the_input_service() {
     let mut state = ready_status();
     state["inputService"]["accessibility"] = json!(false);
     let report = diagnose(state, 502);
-    assert_eq!(check(&report, "Input permission"), false);
+    assert_eq!(check(&report, "Accessibility allowed"), false);
     assert_eq!(report["ready"], false);
     let mut state = ready_status();
     state["permissions"]["accessibility"] = json!(false);
@@ -547,10 +550,16 @@ fn doctor_distinguishes_on_console_from_wrong_account() {
     };
     let mut console = ready_status();
     console["session"]["onConsole"] = json!(true);
-    assert!(guidance(console).contains("on the console"));
+    assert!(guidance(console).contains("Switch back to your own account"));
     let mut other = ready_status();
     other["user"]["uid"] = json!(503);
     assert!(guidance(other).contains("different account"));
+    // Hidden, but its session could not be verified: switching back is no help.
+    let mut unproven = ready_status();
+    unproven["sessionProof"]["ok"] = json!(false);
+    let advice = guidance(unproven);
+    assert!(advice.contains("understudy restart"), "{advice}");
+    assert!(!advice.contains("Switch back"), "{advice}");
 }
 
 #[test]
@@ -558,9 +567,9 @@ fn doctor_reports_an_unqueried_input_service_as_unknown() {
     let mut console = status();
     console["session"]["onConsole"] = json!(true);
     let report = diagnose(console, 502);
-    assert_eq!(check(&report, "Hidden desktop"), false);
-    assert_eq!(check(&report, "Input permission"), Value::Null);
-    assert_eq!(check(&report, "Native input service"), Value::Null);
+    assert_eq!(check(&report, "Helper in the background"), false);
+    assert_eq!(check(&report, "Accessibility allowed"), Value::Null);
+    assert_eq!(check(&report, "Input service ready"), Value::Null);
 }
 
 #[test]
@@ -773,4 +782,20 @@ fn a_stale_release_is_a_no_op_but_never_ends_another_lease() {
         "lease-lost"
     );
     lease.require(&current).unwrap();
+}
+
+/// The usual reasons the helper cannot be used keep codes agents act on.
+#[test]
+fn unusable_helpers_say_why_with_their_own_codes() {
+    let code = |state: Value| require_hidden(&state, 502).unwrap_err().code;
+    let mut console = status();
+    console["session"]["onConsole"] = json!(true);
+    assert_eq!(code(console), "on-console");
+    let other = json!({"ok": false, "code": "identity", "error": "Socket owned by 503"});
+    assert_eq!(code(other), "identity");
+    let silent = json!({"ok": false, "code": "transport", "error": "No answer"});
+    assert_eq!(code(silent), "transport");
+    let mut wrong = status();
+    wrong["user"]["uid"] = json!(503);
+    assert_eq!(code(wrong), "identity");
 }

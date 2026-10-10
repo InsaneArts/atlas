@@ -116,7 +116,7 @@ async function cli(args, timeout = 60000) {
   let stdout;
   let failed = null;
   try {
-    stdout = await exec(binary, ['--config', config, ...args], timeout);
+    stdout = await exec(binary, ['--json', '--config', config, ...args], timeout);
   } catch (error) {
     failed = error;
     stdout = error.stdout || error.stderr;

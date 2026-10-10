@@ -49,7 +49,10 @@ async function click(x, y, options) {
   await page.mouse.click(point.x, point.y, options);
 }
 function cli(args) {
-  return spawnSync(path.join(root, 'understudy'), args, { cwd: root, encoding: 'utf8' });
+  return spawnSync(path.join(root, 'understudy'), ['--json', ...args], {
+    cwd: root,
+    encoding: 'utf8',
+  });
 }
 try {
   await page.goto(url);

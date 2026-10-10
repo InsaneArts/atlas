@@ -239,7 +239,15 @@ impl Viewer {
 pub async fn bind(mut client: Client, port: u16) -> Result<(TcpListener, Arc<Viewer>, Router)> {
     // Everything this viewer does in the helper is the person's doing.
     client.actor = crate::client::Actor::Viewer;
-    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).await?;
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))
+        .await
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::AddrInUse => Error::new(
+                "port-in-use",
+                format!("Port {port} is in use by another program."),
+            ),
+            _ => error.into(),
+        })?;
     let authority = listener.local_addr()?.to_string();
     let prefix = format!("/{}/", control::token());
     let viewer = Arc::new(Viewer {
@@ -266,24 +274,42 @@ pub async fn serve(
     port: u16,
     companion: Option<crate::menubar::Program>,
 ) -> Result<()> {
-    let (listener, viewer, router) = bind(client, port).await?;
+    let path = client.output_dir()?.join("monitor.json");
+    let (listener, viewer, router) = match bind(client, port).await {
+        Ok(bound) => bound,
+        Err(error) if error.code == "port-in-use" => {
+            return already_running(&path, port, companion.is_some(), error);
+        }
+        Err(error) => return Err(error),
+    };
     let record = json!({
         "url": viewer.url,
         "pid": std::process::id(),
         "control": "explicit lease",
+        "menubar": companion.is_some(),
         "startedAt": crate::client::timestamp().to_string(),
     });
-    control::write_private(
-        &viewer.client.output_dir()?.join("monitor.json"),
-        &serde_json::to_vec_pretty(&record)?,
-    )?;
+    control::write_private(&path, &serde_json::to_vec_pretty(&record)?)?;
     // The URL is a bearer capability. The menu bar opens it itself, so its
     // output omits it; it stays in the private record either way.
     let mut shown = record.clone();
     if companion.is_some() {
         shown["url"] = json!("held by the menu bar");
     }
-    println!("{}", serde_json::to_string_pretty(&shown)?);
+    if crate::ui::human() {
+        let line = match companion {
+            Some(_) => {
+                "The menu bar is running. Quit it from its menu, or press Ctrl-C here.".to_owned()
+            }
+            None => format!(
+                "Viewer at {}\nOpen it in a browser to watch or take control. Ctrl-C stops it.",
+                viewer.url
+            ),
+        };
+        println!("{line}");
+    } else {
+        println!("{}", serde_json::to_string_pretty(&shown)?);
+    }
     let mut companion = match companion {
         Some(program) => Some(Companion::launch(&program, &viewer.url).await?),
         None => None,
@@ -321,6 +347,63 @@ pub async fn serve(
     expiry.abort();
     let _ = viewer.release(None).await;
     result.map_err(Error::from)
+}
+
+/// The viewer recorded at `record`, if its process is alive and serves
+/// `port`.
+pub fn running(record: &Path, port: u16) -> Option<Value> {
+    std::fs::read(record)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .filter(|running| {
+            let alive = running["pid"].as_i64().is_some_and(|pid| {
+                i32::try_from(pid).is_ok_and(|pid| {
+                    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok()
+                })
+            });
+            let url = running["url"].as_str().unwrap_or("");
+            alive && url.starts_with(&format!("http://127.0.0.1:{port}/"))
+        })
+}
+
+/// The port is taken. When Understudy's own viewer holds it, say so and
+/// succeed: the menu bar is already up, or the viewer is at its address.
+fn already_running(record: &Path, port: u16, menubar: bool, taken: Error) -> Result<()> {
+    let Some(running) = running(record, port) else {
+        return Err(taken);
+    };
+    let held_by_menubar = running["menubar"] == true;
+    if menubar && !held_by_menubar {
+        return Err(Error::new(
+            "port-in-use",
+            format!("understudy monitor is already using port {port}."),
+        ));
+    }
+    let url = running["url"].as_str().unwrap_or("");
+    if crate::ui::human() {
+        let line = match (menubar, held_by_menubar) {
+            (true, _) => format!(
+                "{} The menu bar is already running. Click the U in the menu bar.",
+                crate::ui::style::ok()
+            ),
+            (false, true) => format!(
+                "{} The menu bar's viewer is already running at {url}\n  Open it from the menu bar or in a browser.",
+                crate::ui::style::ok()
+            ),
+            (false, false) => format!(
+                "{} The viewer is already running at {url}",
+                crate::ui::style::ok()
+            ),
+        };
+        println!("{line}");
+    } else {
+        let mut shown = json!({"ok": true, "alreadyRunning": true, "pid": running["pid"]});
+        if !menubar {
+            shown["url"] = json!(url);
+        }
+        println!("{}", serde_json::to_string_pretty(&shown)?);
+    }
+    Ok(())
 }
 
 /// Render the menu bar panel, fed by a private viewer on a free port, in the

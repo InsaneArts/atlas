@@ -17,6 +17,114 @@ use tokio::{
 
 const NAME: &str = "UnderstudyBar";
 
+/// The login agent that runs `understudy menubar` (see xtask); launchd names
+/// the job in XPC_SERVICE_NAME.
+const LOGIN_JOB: &str = "com.insanearts.understudy.menubar";
+
+/// Whether this process is the menu bar's login agent, which serves the
+/// menu bar itself rather than starting it.
+pub fn started_at_login() -> bool {
+    std::env::var("XPC_SERVICE_NAME").is_ok_and(|job| job == LOGIN_JOB)
+}
+
+/// Start the menu bar in its own session, so it keeps running after this
+/// terminal closes, and report once it is up. It quits from its own menu.
+pub async fn start(config: &Path, port: u16, record: &Path) -> Result<()> {
+    let say = |already: bool, pid: serde_json::Value| -> Result<()> {
+        if crate::ui::human() {
+            let what = if already {
+                "is already running"
+            } else {
+                "is running"
+            };
+            println!(
+                "{} The menu bar {what}. Click the U at the top of the screen; quit it from its menu.",
+                crate::ui::style::ok()
+            );
+        } else {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &serde_json::json!({"ok": true, "running": true, "alreadyRunning": already, "pid": pid})
+                )?
+            );
+        }
+        Ok(())
+    };
+    if let Some(running) = crate::viewer::running(record, port).filter(|r| r["menubar"] == true) {
+        return say(true, running["pid"].clone());
+    }
+    let log_path = record.with_file_name("menubar.log");
+    let log = fs::File::create(&log_path)?;
+    let mut child = std::process::Command::new(std::env::current_exe()?)
+        .arg("menubar")
+        .arg("--serve")
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--config")
+        .arg(fs::canonicalize(config)?)
+        .env("UNDERSTUDY_JSON", "1")
+        .stdin(Stdio::null())
+        .stdout(log.try_clone()?)
+        .stderr(log)
+        .spawn()?;
+    let pid = child.id();
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        if let Some(status) = child.try_wait()? {
+            // It stopped: either another menu bar already holds the port
+            // (a success), or it could not start and said why.
+            let said = fs::read_to_string(&log_path).unwrap_or_default();
+            let reply = said.rsplit("\n{").next().and_then(|tail| {
+                let text = if tail.starts_with('{') {
+                    tail.to_owned()
+                } else {
+                    format!("{{{tail}")
+                };
+                serde_json::from_str::<serde_json::Value>(&text).ok()
+            });
+            if status.success()
+                && reply
+                    .as_ref()
+                    .is_some_and(|reply| reply["alreadyRunning"] == true)
+            {
+                return say(
+                    true,
+                    reply.map(|reply| reply["pid"].clone()).unwrap_or_default(),
+                );
+            }
+            let reason = reply
+                .as_ref()
+                .and_then(|reply| reply["error"].as_str().map(str::to_owned))
+                .unwrap_or_else(|| format!("it stopped; see {}", log_path.display()));
+            let code = reply
+                .as_ref()
+                .and_then(|reply| reply["code"].as_str())
+                .and_then(crate::error::code)
+                .unwrap_or("menubar");
+            return Err(Error::new(
+                code,
+                format!("The menu bar did not start: {reason}"),
+            ));
+        }
+        let up = crate::viewer::running(record, port)
+            .is_some_and(|running| running["pid"] == pid && running["menubar"] == true);
+        if up {
+            return say(false, pid.into());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(Error::new(
+                "menubar",
+                format!(
+                    "The menu bar did not start in time; see {}",
+                    log_path.display()
+                ),
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 /// The first non-empty line of compiler output, bounded for reports.
 fn first_line(output: &[u8]) -> String {
     String::from_utf8_lossy(output)

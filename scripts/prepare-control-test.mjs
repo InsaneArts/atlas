@@ -9,7 +9,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // UNDERSTUDY_CONFIG, else the CLI default. The resolved config is recorded.
 if (process.argv[2]) process.env.UNDERSTUDY_CONFIG = path.resolve(process.argv[2]);
 function cli(args) {
-  const result = spawnSync(path.join(root, 'target/debug/understudy'), args, {
+  const result = spawnSync(path.join(root, 'target/debug/understudy'), ['--json', ...args], {
     cwd: root,
     encoding: 'utf8',
     maxBuffer: 8 * 1024 * 1024,
@@ -26,7 +26,7 @@ function run(argv) {
     .join('')
     .trim();
 }
-const readiness = cli(['doctor']);
+const readiness = cli(['doctor', '--verbose']);
 if (!readiness.ready) throw new Error(readiness.nextSteps.join(' '));
 const display = readiness.session.display;
 if (display.width !== 2560 || display.height !== 1440 || display.scale !== 1)

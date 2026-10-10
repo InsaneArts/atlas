@@ -9,25 +9,20 @@ use crate::{
         self,
         helper::{Agent, LABEL, Layout, Request, plist, text_sha256},
     },
+    ui::{
+        progress::{done, say},
+        prompt, text,
+    },
 };
 use serde_json::{Value, json};
 use std::{
     fs,
-    io::{BufRead, IsTerminal, Write},
-    path::Path,
+    path::{Path, PathBuf},
     process::Command,
 };
 
 fn problem(message: impl Into<String>) -> Error {
     Error::new("uninstall", message)
-}
-
-fn confirm(question: &str) -> Result<bool> {
-    eprint!("{question} [y/N] ");
-    std::io::stderr().flush()?;
-    let mut answer = String::new();
-    std::io::stdin().lock().read_line(&mut answer)?;
-    Ok(matches!(answer.trim(), "y" | "Y" | "yes"))
 }
 
 /// Remove `path` only if it is a link to the app's executable (or the app's
@@ -83,28 +78,52 @@ fn retire_helper_job(executable: &Path, config: &Config) -> Result<Value> {
 
 /// Undo install and init. `keep_config` keeps settings and logs.
 pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Value> {
-    let interactive = std::io::stdin().is_terminal();
-    if !yes && !interactive {
-        return Err(problem(
-            "uninstall asks first: run it in a terminal, or pass --yes",
-        ));
-    }
-    if !yes && !confirm("Remove Understudy from this Mac? The helper account and its files stay.")?
-    {
-        return Ok(json!({"ok": false, "cancelled": true}));
-    }
     let app = crate::update::installed_app()?;
     let executable = app.join("Contents/MacOS/understudy");
+    let config = Config::load(config_path).ok();
+    let helper = config
+        .as_ref()
+        .and_then(|config| setup::account_with_uid(config.helper_uid).ok().flatten())
+        .map(|account| account.name);
+    let data = config::home()?.join("Library/Application Support/Understudy");
+    let leftovers = config
+        .as_ref()
+        .map(|config| handed_over(&config.identity_probe))
+        .unwrap_or_default();
+    if !yes {
+        let mut parts = vec![
+            "the helper's background job, the menu bar and the agent plugins".to_owned(),
+            format!("{} (to the Trash)", text::tilde(&app)),
+        ];
+        if !leftovers.is_empty() {
+            parts.push("apps and files Understudy copied for the helper to open".to_owned());
+        }
+        if !keep_config {
+            parts.push(format!("settings and logs in {}", text::tilde(&data)));
+        }
+        say("This removes from this Mac:");
+        for part in parts {
+            say(&format!("  · {part}"));
+        }
+        if let Some(name) = &helper {
+            say(&format!(
+                "The helper account {name} and its files stay, including any copied into it with understudy environment."
+            ));
+        }
+        if !prompt::confirm("Remove Understudy?", false, "pass --yes")? {
+            return Err(prompt::cancelled());
+        }
+    }
     let mut removed = Vec::new();
 
     // Nothing may be controlling the helper while its job goes away.
-    let config = Config::load(config_path).ok();
     if let Some(config) = &config {
         let client = Client::new(config.clone())?;
         let _exclusion = client.controller.acquire(false)?;
         if let Some(pid) = client.status().await["inputService"]["pid"].as_u64() {
             let _ = client.stop_input(pid as u32).await;
         }
+        say("Stopping the helper's background job (macOS may ask for your password)…");
         let retired = retire_helper_job(&executable, config)?;
         if retired["ok"] != true {
             return Err(problem(format!(
@@ -113,15 +132,19 @@ pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Val
             )));
         }
         removed.push(json!("helper job"));
+        done("Helper job", "stopped");
         if remove_link_to(&config.identity_probe, &executable)? {
             removed.push(json!(config.identity_probe));
         }
     }
-    let _ = crate::menubar::login("off");
+    if crate::menubar::login("off").is_ok() {
+        done("Menu bar", "no longer opens at login");
+    }
     // Agents forget the plugin (only connected ones change).
     let disconnected = crate::agents::change(&[], true).ok();
     if disconnected.is_some() {
         removed.push(json!("agent plugins"));
+        done("Agent plugins", "removed");
     }
     let command = config::home()?.join(".local/bin/understudy");
     if remove_link_to(&command, &executable)? {
@@ -138,17 +161,22 @@ pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Val
         ))
     })?;
     removed.push(json!(app));
-    if !keep_config {
-        let data = config::home()?.join("Library/Application Support/Understudy");
-        if data.exists() {
-            fs::remove_dir_all(&data)?;
-            removed.push(json!(data));
+    done("Understudy.app", "moved to the Trash");
+    let mut cleared = false;
+    for leftover in &leftovers {
+        if fs::remove_dir_all(leftover).is_ok() {
+            removed.push(json!(leftover));
+            cleared = true;
         }
     }
-    let helper = config
-        .as_ref()
-        .and_then(|config| setup::account_with_uid(config.helper_uid).ok().flatten())
-        .map(|account| account.name);
+    if cleared {
+        done("Copies for the helper", "removed");
+    }
+    if !keep_config && data.exists() {
+        fs::remove_dir_all(&data)?;
+        removed.push(json!(data));
+        done("Settings and logs", "removed");
+    }
     Ok(json!({
         "ok": true,
         "removed": removed,
@@ -157,6 +185,28 @@ pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Val
             "remove": helper.as_ref().map(|name| format!("sudo sysadminctl -deleteUser {name}")),
         },
     }))
+}
+
+/// What Understudy left beside the shared command for the helper: the copies
+/// `open` made and environment plans and requests.
+fn handed_over(shared_command: &Path) -> Vec<PathBuf> {
+    let Some(shared) = shared_command.parent() else {
+        return Vec::new();
+    };
+    let Ok(entries) = fs::read_dir(shared) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            name == "Open"
+                || name.starts_with("environment-plan-")
+                || name.starts_with("environment-run-")
+        })
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .map(|entry| entry.path())
+        .collect()
 }
 
 #[cfg(test)]

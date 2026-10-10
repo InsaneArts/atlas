@@ -208,6 +208,22 @@ pub fn doctor(status: Value, uid: u32) -> Value {
     report
 }
 
+/// Doctor's report without the raw helper status it was judged from: the
+/// verdict, each check, what to do, and which helper and display. `doctor
+/// --verbose` keeps the status for diagnosis.
+pub fn summary(mut report: Value) -> Value {
+    let session = report
+        .as_object_mut()
+        .and_then(|report| report.remove("session"))
+        .unwrap_or(Value::Null);
+    report["helper"] = json!({
+        "name": session["user"]["name"],
+        "uid": session["user"]["uid"],
+    });
+    report["display"] = session["display"].clone();
+    report
+}
+
 /// A fresh fixture process running in the helper.
 struct Fixture {
     pid: u32,
