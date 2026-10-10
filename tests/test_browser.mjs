@@ -183,3 +183,40 @@ test('active drags clamp at each edge and pointer cancellation sends nothing', (
     assert.equal(gesture.finish(event, point), null);
   }
 });
+
+import { statusRows } from '../web/status.js';
+
+test('status rows keep unknown distinct and show native dialogs separately', () => {
+  const rows = statusRows({
+    checks: [
+      { name: 'Helper connection', ok: true },
+      { name: 'Input permission', ok: null, nextStep: 'Run start-input.' },
+      { name: 'Screen recording', ok: false, nextStep: 'Enable it.' },
+    ],
+    capabilities: {
+      nativeDialogs: {
+        state: 'failed',
+        ageSeconds: 300,
+        reason: 'Native Save/Open did not complete in this session',
+        checks: [
+          { kind: 'save', passed: false, stage: 'save confirmation enabled' },
+          { kind: 'open', passed: false, stage: 'open confirmation enabled' },
+        ],
+      },
+    },
+  });
+  assert.deepEqual(
+    rows.map((row) => row.state),
+    ['ready', 'unknown', 'bad', 'bad'],
+  );
+  assert.equal(rows[1].text, 'Unknown. Run start-input.');
+  assert.match(rows[3].text, /^Failed 5 min ago at “save confirmation enabled”/);
+  assert.equal(
+    statusRows({
+      checks: [],
+      capabilities: { nativeDialogs: { state: 'stale', reason: 'Changed' } },
+    })[0].state,
+    'unknown',
+  );
+  assert.equal(statusRows({ checks: [] }).length, 0);
+});

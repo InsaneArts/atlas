@@ -2,7 +2,7 @@ use crate::{
     client::{Client, Frame},
     control::{self, ActionPermit, Lease, SharedLease},
     error::{Error, Result},
-    session::{Epoch, diagnose},
+    session::Epoch,
 };
 use axum::{
     Router,
@@ -115,7 +115,8 @@ impl Viewer {
         Ok(())
     }
     async fn status(&self) -> Value {
-        let mut status = diagnose(self.client.status().await, self.client.config.helper_uid);
+        let mut status =
+            crate::capability::doctor(self.client.status().await, self.client.config.helper_uid);
         if status["ready"] != true {
             let _ = self.release(None).await;
         }
@@ -432,6 +433,10 @@ fn asset(route: &str) -> Option<(&'static str, &'static [u8])> {
         "preview.js" => (
             "text/javascript; charset=utf-8",
             include_bytes!("../../web/preview.js"),
+        ),
+        "status.js" => (
+            "text/javascript; charset=utf-8",
+            include_bytes!("../../web/status.js"),
         ),
         "styles.css" => (
             "text/css; charset=utf-8",
