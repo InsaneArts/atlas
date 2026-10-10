@@ -102,13 +102,44 @@ fn admin(name: &str) -> bool {
         .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).starts_with("yes"))
 }
 
-/// Choose an existing standard account, or create one.
+/// What the person answered to "which account?".
+#[derive(Debug, PartialEq, Eq)]
+enum Choice {
+    Existing(usize),
+    Create,
+    Unknown,
+}
+
+/// Read an answer as a listed number or an account's short name; the number
+/// after the list means "create a new account".
+fn parse_choice(answer: &str, names: &[String]) -> Choice {
+    let answer = answer.trim();
+    if let Ok(number) = answer.parse::<usize>() {
+        return match number {
+            0 => Choice::Unknown,
+            number if number <= names.len() => Choice::Existing(number - 1),
+            number if number == names.len() + 1 => Choice::Create,
+            _ => Choice::Unknown,
+        };
+    }
+    names
+        .iter()
+        .position(|name| name == answer)
+        .map_or(Choice::Unknown, Choice::Existing)
+}
+
+/// Choose an existing standard account, or (only when asked for, and
+/// confirmed) create one.
 fn choose_helper() -> Result<setup::Account> {
     let candidates: Vec<_> = crate::switch::accounts(None)?
         .into_iter()
         .filter(|account| !admin(&account.name))
         .collect();
-    if !candidates.is_empty() {
+    let names: Vec<String> = candidates
+        .iter()
+        .map(|account| account.name.clone())
+        .collect();
+    loop {
         say("Standard accounts on this Mac:");
         for (index, account) in candidates.iter().enumerate() {
             let label = account.real_name.as_deref().unwrap_or(&account.name);
@@ -116,17 +147,18 @@ fn choose_helper() -> Result<setup::Account> {
         }
         say(&format!(
             "  {}. Create a new helper account",
-            candidates.len() + 1
+            names.len() + 1
         ));
-        let choice = ask("Which account should be the helper?")?;
-        if let Some(account) = choice
-            .parse::<usize>()
-            .ok()
-            .and_then(|number| number.checked_sub(1))
-            .and_then(|index| candidates.get(index))
-        {
-            return setup::account_named(&account.name)?
-                .ok_or_else(|| problem("That account disappeared"));
+        match parse_choice(
+            &ask("Which account should be the helper? (number or name)")?,
+            &names,
+        ) {
+            Choice::Existing(index) => {
+                return setup::account_named(&names[index])?
+                    .ok_or_else(|| problem("That account disappeared"));
+            }
+            Choice::Create => break,
+            Choice::Unknown => say("  Please type one of the numbers or account names above."),
         }
     }
     let name = match ask("Short name for the new helper account [understudy]:")? {
@@ -139,6 +171,19 @@ fn choose_helper() -> Result<setup::Account> {
     {
         return Err(problem(
             "Account names use letters, digits, '.', '_' and '-'",
+        ));
+    }
+    if setup::account_named(&name)?.is_some() {
+        return Err(problem(format!(
+            "An account named {name} already exists; choose it instead"
+        )));
+    }
+    let answer = ask(&format!(
+        "Create a new standard account named {name}? [y/N]"
+    ))?;
+    if !matches!(answer.as_str(), "y" | "Y" | "yes") {
+        return Err(problem(
+            "No account was created; run understudy init again to choose",
         ));
     }
     say("macOS will ask for your administrator password, then a password for the helper.");
@@ -320,14 +365,12 @@ pub async fn run(config_path: &Path) -> Result<Value> {
                  Understudy will ask for two permissions in that session.",
                 name = helper.name
             ));
-            if yes(&format!("  Switch to {} now?", helper.name))? {
-                crate::switch::to(&crate::switch::Account {
-                    name: helper.name.clone(),
-                    uid: helper.uid,
-                    real_name: None,
-                    helper: true,
-                })?;
-            }
+            say(&format!(
+                "  To switch: click your name (or the people icon) in the menu bar and choose\n  \
+                 {name}, or use Apple menu › Lock Screen and pick {name}. Sign in there.\n\n  \
+                 Waiting for {name} to sign in… (Ctrl-C stops; running init again resumes.)",
+                name = helper.name
+            ));
             wait_for("the helper to sign in", async || {
                 helper_logged_in(helper.uid).then_some(())
             })
@@ -481,6 +524,19 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), before);
         let leftovers = fs::read_dir(path.parent().unwrap()).unwrap().count();
         assert_eq!(leftovers, 1, "no temporary file is left behind");
+    }
+
+    #[test]
+    fn answers_name_an_account_by_number_or_name_and_never_guess() {
+        let names = vec!["atlastest".to_owned(), "other".to_owned()];
+        assert_eq!(parse_choice("1", &names), Choice::Existing(0));
+        assert_eq!(parse_choice("atlastest", &names), Choice::Existing(0));
+        assert_eq!(parse_choice(" other ", &names), Choice::Existing(1));
+        assert_eq!(parse_choice("3", &names), Choice::Create);
+        assert_eq!(parse_choice("0", &names), Choice::Unknown);
+        assert_eq!(parse_choice("4", &names), Choice::Unknown);
+        assert_eq!(parse_choice("Atlas Test", &names), Choice::Unknown);
+        assert_eq!(parse_choice("", &names), Choice::Unknown);
     }
 
     /// A new configuration points everything at the helper's private layout.
