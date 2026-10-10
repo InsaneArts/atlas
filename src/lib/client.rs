@@ -82,7 +82,7 @@ impl Client {
     pub fn new(config: Config) -> Result<Self> {
         crate::session::validate_uid(config.helper_uid)?;
         Ok(Self {
-            controller: Controller::new(config.helper_uid, &config.socket_path)?,
+            controller: Controller::new(config.helper_uid)?,
             transport: Transport {
                 path: config.socket_path.clone(),
                 timeout: Duration::from_secs(30),

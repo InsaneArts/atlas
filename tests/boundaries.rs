@@ -209,12 +209,10 @@ fn library_construction_cannot_target_the_caller() {
 }
 
 #[test]
-fn symlink_aliases_share_the_same_lock_and_pending_marker() {
+fn controllers_for_one_helper_share_the_lock_and_pending_marker() {
     let dir = tempfile::tempdir().unwrap();
-    let alias = dir.path().join("alias");
-    std::os::unix::fs::symlink(dir.path(), &alias).unwrap();
-    let first = Controller::at(502, &dir.path().join("sock"), dir.path()).unwrap();
-    let second = Controller::at(502, &alias.join("sock"), dir.path()).unwrap();
+    let first = Controller::at(502, dir.path());
+    let second = Controller::at(502, dir.path());
     let held = first.acquire(false).unwrap();
     assert_eq!(second.acquire(false).unwrap_err().code, "busy");
     first.quarantine().unwrap();
@@ -229,7 +227,7 @@ fn symlink_aliases_share_the_same_lock_and_pending_marker() {
 #[tokio::test]
 async fn lease_expiry_keeps_flock_until_the_action_settles() {
     let dir = tempfile::tempdir().unwrap();
-    let controller = Controller::at(502, &dir.path().join("socket"), dir.path()).unwrap();
+    let controller = Controller::at(502, dir.path());
     let lease = Arc::new(Mutex::new(Lease::new(Duration::from_millis(10))));
     let owner = lease.lock().await.acquire(&controller).unwrap();
     let permit = ActionPermit::begin(lease.clone(), &owner).await.unwrap();
@@ -247,7 +245,7 @@ async fn lease_expiry_keeps_flock_until_the_action_settles() {
 #[test]
 fn cleanup_completion_cannot_clear_unknown_input_delivery() {
     let dir = tempfile::tempdir().unwrap();
-    let controller = Controller::at(502, &dir.path().join("socket"), dir.path()).unwrap();
+    let controller = Controller::at(502, dir.path());
     let input = controller.quarantine().unwrap();
     let cleanup = controller.quarantine().unwrap();
     controller.clear_if(&cleanup).unwrap();
@@ -280,7 +278,7 @@ fn async_transport_futures_do_not_embed_large_receive_buffers() {
 #[tokio::test]
 async fn old_owner_cannot_release_a_new_lease() {
     let dir = tempfile::tempdir().unwrap();
-    let controller = Controller::at(502, &dir.path().join("socket"), dir.path()).unwrap();
+    let controller = Controller::at(502, dir.path());
     let mut lease = Lease::default();
     let old = lease.acquire(&controller).unwrap();
     lease.release();
@@ -294,7 +292,7 @@ async fn old_owner_cannot_release_a_new_lease() {
 #[test]
 fn delayed_acquire_failure_cannot_release_a_replacement_owner() {
     let dir = tempfile::tempdir().unwrap();
-    let controller = Controller::at(502, &dir.path().join("socket"), dir.path()).unwrap();
+    let controller = Controller::at(502, dir.path());
     let mut lease = Lease::default();
     let old = lease.acquire(&controller).unwrap();
     assert_eq!(lease.begin_release(Some(&old)).unwrap(), Some(old.clone()));
@@ -453,7 +451,7 @@ fn constructing_a_client_writes_nothing() {
     Client::new(config(dir.path())).unwrap();
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
     let state = dir.path().join("state");
-    Controller::at(502, &dir.path().join("sock"), &state).unwrap();
+    Controller::at(502, &state);
     assert!(!state.exists());
 }
 
@@ -566,53 +564,18 @@ fn doctor_reports_an_unqueried_input_service_as_unknown() {
     assert_eq!(check(&report, "Native input service"), Value::Null);
 }
 
-/// State file a pre-UID-key controller used for `uid:socket`.
-fn legacy_state(
-    dir: &std::path::Path,
-    socket: &std::path::Path,
-    suffix: &str,
-) -> std::path::PathBuf {
-    use sha2::{Digest, Sha256};
-    let key = format!(
-        "502:{}",
-        understudy::config::resolve_path(socket).unwrap().display()
-    );
-    let digest = format!("{:x}", Sha256::digest(key.as_bytes()));
-    dir.join(format!("{}.{suffix}", &digest[..24]))
-}
-
 #[test]
-fn exclusion_is_per_helper_whatever_the_socket_path() {
+fn exclusion_is_per_helper_account() {
     let dir = tempfile::tempdir().unwrap();
-    let first = Controller::at(502, &dir.path().join("a.sock"), dir.path()).unwrap();
-    let moved = Controller::at(502, &dir.path().join("b.sock"), dir.path()).unwrap();
-    let other = Controller::at(503, &dir.path().join("a.sock"), dir.path()).unwrap();
+    let first = Controller::at(502, dir.path());
+    let moved = Controller::at(502, dir.path());
+    let other = Controller::at(503, dir.path());
     let held = first.acquire(false).unwrap();
     assert_eq!(moved.acquire(false).unwrap_err().code, "busy");
     drop(other.acquire(false).unwrap());
     first.quarantine().unwrap();
     drop(held);
     assert_eq!(moved.acquire(false).unwrap_err().code, "uncertain");
-}
-
-#[test]
-fn legacy_socket_keyed_controllers_still_exclude_and_block() {
-    use fs2::FileExt;
-    let dir = tempfile::tempdir().unwrap();
-    let socket = dir.path().join("a.sock");
-    let controller = Controller::at(502, &socket, dir.path()).unwrap();
-    let old = std::fs::File::create(legacy_state(dir.path(), &socket, "lock")).unwrap();
-    old.try_lock_exclusive().unwrap();
-    assert_eq!(controller.acquire(false).unwrap_err().code, "busy");
-    drop(old);
-    let marker = legacy_state(dir.path(), &socket, "uncertain.json");
-    std::fs::write(&marker, "[\"old\"]").unwrap();
-    assert_eq!(controller.acquire(false).unwrap_err().code, "uncertain");
-    let recovery = controller.acquire(true).unwrap();
-    controller.clear().unwrap();
-    assert!(!marker.exists());
-    drop(recovery);
-    controller.acquire(false).unwrap();
 }
 
 #[test]
@@ -627,27 +590,6 @@ fn doctor_warns_when_the_input_service_build_is_not_the_installed_one() {
     assert_eq!(warnings(json!("abc"), json!("def")), 1);
     assert_eq!(warnings(Value::Null, json!("def")), 1, "pre-build services");
     assert_eq!(warnings(Value::Null, Value::Null), 1);
-}
-
-#[test]
-fn pending_mutations_are_visible_to_legacy_controllers() {
-    let dir = tempfile::tempdir().unwrap();
-    let socket = dir.path().join("a.sock");
-    let controller = Controller::at(502, &socket, dir.path()).unwrap();
-    let marker = legacy_state(dir.path(), &socket, "uncertain.json");
-    let generation = controller.quarantine().unwrap();
-    let mirrored: Vec<String> = serde_json::from_slice(&std::fs::read(&marker).unwrap()).unwrap();
-    assert_eq!(mirrored, vec![generation.clone()]);
-    controller.clear_if(&generation).unwrap();
-    assert!(!marker.exists());
-
-    // A generation only an older controller recorded stays pending.
-    std::fs::write(&marker, "[\"old\"]").unwrap();
-    let generation = controller.quarantine().unwrap();
-    controller.clear_if(&generation).unwrap();
-    let left: Vec<String> = serde_json::from_slice(&std::fs::read(&marker).unwrap()).unwrap();
-    assert_eq!(left, vec!["old".to_owned()]);
-    assert_eq!(controller.require_known().unwrap_err().code, "uncertain");
 }
 
 #[test]
@@ -707,4 +649,19 @@ fn a_settled_service_need_not_be_current_but_a_current_one_must_be_settled() {
     assert!(!input_settled(&state, 502, 77));
     state["inputService"]["heldInput"] = json!(false);
     assert!(!input_settled(&state, 502, 76), "another PID");
+}
+
+#[test]
+fn pending_generations_are_listed_until_settled() {
+    let dir = tempfile::tempdir().unwrap();
+    let controller = Controller::at(502, dir.path());
+    assert!(controller.pending().unwrap().is_empty());
+    let first = controller.quarantine().unwrap();
+    let second = controller.quarantine().unwrap();
+    assert_eq!(
+        controller.pending().unwrap(),
+        vec![first.clone(), second.clone()]
+    );
+    controller.clear_if(&first).unwrap();
+    assert_eq!(controller.pending().unwrap(), vec![second]);
 }
