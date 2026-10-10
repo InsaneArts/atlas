@@ -49,6 +49,16 @@ const compilation = spawnSync(
 );
 if (compilation.status !== 0) throw new Error(compilation.stderr);
 fs.renameSync(binary + '.new', binary);
+// Earlier fixtures stack at the same position and would take the clicks
+// meant for this one: end every helper instance of this disposable binary.
+// Only this account's processes running this exact executable are matched;
+// pkill and pgrep exit 1 when nothing matches, which is not a failure here.
+const owned = `-U "$(/usr/bin/id -u)" -f '^${binary} '`;
+run(['/bin/sh', '-c', `/usr/bin/pkill ${owned}; true`]);
+for (let attempt = 0; run(['/bin/sh', '-c', `/usr/bin/pgrep ${owned}; true`]); attempt++) {
+  if (attempt === 50) throw new Error('Earlier fixtures did not exit');
+  spawnSync('/bin/sleep', ['0.1']);
+}
 const logDirectory = run(['/usr/bin/mktemp', '-d', '/tmp/understudy-viewer.XXXXXX']);
 run(['/bin/chmod', '755', logDirectory]);
 const fixturePID = Number(
