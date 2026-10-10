@@ -89,8 +89,7 @@ pub struct Session {
 }
 
 pub fn validate_uid(uid: u32) -> Result<()> {
-    // SAFETY: getuid has no pointer arguments or preconditions.
-    validate_target_uid(uid, unsafe { libc::getuid() })
+    validate_target_uid(uid, nix::unistd::getuid().as_raw())
 }
 
 pub(crate) fn validate_target_uid(uid: u32, controller_uid: u32) -> Result<()> {

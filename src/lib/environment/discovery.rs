@@ -10,9 +10,7 @@ use crate::{
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
-    ffi::CString,
     fs,
-    os::unix::ffi::OsStrExt,
     path::{Component, Path, PathBuf},
 };
 
@@ -91,18 +89,15 @@ impl Access {
     }
 }
 fn access(path: &Path) -> Access {
-    let Ok(name) = CString::new(path.as_os_str().as_bytes()) else {
-        return Access::default();
-    };
+    use nix::unistd::AccessFlags;
     let metadata = fs::metadata(path).ok();
-    // SAFETY: access receives a live NUL-terminated path; it only checks access.
-    let permits = |mode| unsafe { libc::access(name.as_ptr(), mode) == 0 };
+    let permits = |mode| nix::unistd::access(path, mode).is_ok();
     Access {
         file: metadata.as_ref().is_some_and(|m| m.is_file()),
         directory: metadata.as_ref().is_some_and(|m| m.is_dir()),
-        readable: permits(libc::R_OK),
-        writable: permits(libc::W_OK),
-        executable: permits(libc::X_OK),
+        readable: permits(AccessFlags::R_OK),
+        writable: permits(AccessFlags::W_OK),
+        executable: permits(AccessFlags::X_OK),
     }
 }
 

@@ -34,29 +34,14 @@ pub fn worker(path: &Path, apply: bool) -> Result<Value> {
 }
 
 fn account_home(uid: u32) -> Result<PathBuf> {
-    use std::{ffi::CStr, os::unix::ffi::OsStrExt};
-    let mut record = std::mem::MaybeUninit::<libc::passwd>::uninit();
-    let mut found = std::ptr::null_mut();
-    let mut buffer = vec![0_u8; 65536];
-    // SAFETY: valid bounded scratch buffer and passwd/result output pointers.
-    let status = unsafe {
-        libc::getpwuid_r(
-            uid,
-            record.as_mut_ptr(),
-            buffer.as_mut_ptr().cast(),
-            buffer.len(),
-            &mut found,
-        )
-    };
-    if status != 0 || found.is_null() {
-        return Err(problem("Cannot resolve the helper account home"));
-    }
-    let record = unsafe { record.assume_init() };
-    if record.pw_uid != uid || record.pw_dir.is_null() {
+    let account = crate::setup::account_with_uid(uid)
+        .ok()
+        .flatten()
+        .ok_or_else(|| problem("Cannot resolve the helper account home"))?;
+    if account.uid != uid {
         return Err(problem("Invalid helper account record"));
     }
-    let bytes = unsafe { CStr::from_ptr(record.pw_dir) }.to_bytes();
-    let home = fs::canonicalize(Path::new(std::ffi::OsStr::from_bytes(bytes)))?;
+    let home = fs::canonicalize(&account.home)?;
     let directory = directory(&home, false)?.ok_or_else(|| problem("Helper home is missing"))?;
     installation_parent(&directory)?;
     if directory.metadata()?.uid() != uid {
@@ -191,7 +176,7 @@ fn desired_mode(payload: &Payload) -> u32 {
 
 fn validate_plan(home: &Path, plan: &Plan) -> Result<()> {
     validate_id(&plan.id)?;
-    if plan.version != 1 || plan.home != home || plan.uid != unsafe { libc::getuid() } {
+    if plan.version != 1 || plan.home != home || plan.uid != nix::unistd::getuid().as_raw() {
         return Err(problem(
             "Frozen plan does not belong to this helper home and UID",
         ));

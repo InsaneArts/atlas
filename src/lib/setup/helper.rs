@@ -198,8 +198,7 @@ impl Layout {
 /// this process's own; the home comes from directory services, not `$HOME`.
 pub fn run(request: &str) -> Result<Value> {
     let request: Request = serde_json::from_str(request)?;
-    // SAFETY: getuid has no pointer arguments or preconditions.
-    let uid = unsafe { libc::getuid() };
+    let uid = nix::unistd::getuid().as_raw();
     if request.uid() != uid || uid < 501 {
         return Err(problem(
             "setup-helper must run as the requested helper account",
@@ -529,8 +528,7 @@ fn retire(layout: &Layout, label: &str, sha256: &str, missing_ok: bool) -> Resul
     }
     if let Job::Loaded { pid, path: loaded } = job(layout, label)? {
         // Unloading the job that runs this worker would sever its own reply.
-        // SAFETY: getppid has no pointer arguments or preconditions.
-        if pid == u32::try_from(unsafe { libc::getppid() }).ok() {
+        if pid == u32::try_from(nix::unistd::getppid().as_raw()).ok() {
             return Err(problem(format!(
                 "Refusing to unload {label} through its own capture daemon"
             )));
@@ -740,7 +738,7 @@ mod tests {
 
     #[test]
     fn the_worker_refuses_another_account() {
-        let other = unsafe { libc::getuid() } + 1;
+        let other = nix::unistd::getuid().as_raw() + 1;
         let request = json!({"action": "inspect", "uid": other, "labels": []}).to_string();
         assert_eq!(run(&request).unwrap_err().code, "setup");
     }
@@ -748,7 +746,7 @@ mod tests {
     #[test]
     fn install_accepts_only_the_managed_agent() {
         let layout = Layout {
-            uid: unsafe { libc::getuid() },
+            uid: nix::unistd::getuid().as_raw(),
             home: "/nonexistent-home".into(),
         };
         let agent = |label: &str, socket: PathBuf| Agent {
@@ -771,7 +769,7 @@ mod tests {
     fn sandbox() -> (tempfile::TempDir, Layout, String) {
         let dir = tempfile::tempdir().unwrap();
         let layout = Layout {
-            uid: unsafe { libc::getuid() },
+            uid: nix::unistd::getuid().as_raw(),
             home: fs::canonicalize(dir.path()).unwrap(),
         };
         fs::create_dir_all(layout.home.join("Library/LaunchAgents")).unwrap();

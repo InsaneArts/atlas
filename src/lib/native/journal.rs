@@ -105,7 +105,7 @@ mod tests {
 
     fn test_epoch() -> InputEpoch {
         InputEpoch {
-            uid: unsafe { libc::getuid() },
+            uid: nix::unistd::getuid().as_raw(),
             security_session_id: 10,
             display_id: 1,
             width: 1600.0,
@@ -204,7 +204,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("held.json");
         let mut epoch = InputEpoch {
-            uid: unsafe { libc::getuid() },
+            uid: nix::unistd::getuid().as_raw(),
             security_session_id: 10,
             display_id: 1,
             width: 1600.0,
@@ -234,7 +234,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("held.json");
         let epoch = InputEpoch {
-            uid: unsafe { libc::getuid() },
+            uid: nix::unistd::getuid().as_raw(),
             security_session_id: 10,
             display_id: 1,
             width: 1600.0,

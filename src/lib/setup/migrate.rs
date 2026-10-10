@@ -362,8 +362,7 @@ impl Migration {
                  setup --apply again",
             ));
         }
-        // SAFETY: getuid has no pointer arguments or preconditions.
-        let controller = unsafe { libc::getuid() };
+        let controller = nix::unistd::getuid().as_raw();
         if endpoint(&self.new.config.socket_path, self.log.plan.uid, controller).private
             != Some(true)
         {
@@ -593,8 +592,7 @@ async fn plan(config_path: &Path) -> Result<Plan> {
     let old_config = fs::read_to_string(&config_path)?;
     let account = account_with_uid(config.helper_uid)?
         .ok_or_else(|| problem("The configured helper account does not exist"))?;
-    // SAFETY: getuid has no pointer arguments or preconditions.
-    let controller = account_with_uid(unsafe { libc::getuid() })?
+    let controller = account_with_uid(nix::unistd::getuid().as_raw())?
         .ok_or_else(|| problem("The controller account cannot be resolved"))?;
     let layout = Layout {
         uid: config.helper_uid,

@@ -5,13 +5,20 @@ use super::{
     problem,
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
+use nix::{
+    errno::Errno,
+    fcntl::{AtFlags, OFlag, openat, renameat},
+    sys::stat::{Mode, mkdirat},
+    unistd::{Gid, UnlinkatFlags, fchown, linkat, unlinkat},
+};
 use sha2::{Digest, Sha256};
 use std::os::macos::fs::MetadataExt as _;
 use std::{
+    ffi::{CStr, CString},
     fs,
     io::{Read, Write},
     os::{
-        fd::{AsRawFd, FromRawFd},
+        fd::AsRawFd,
         unix::{
             ffi::OsStrExt,
             fs::{MetadataExt, PermissionsExt},
@@ -52,27 +59,21 @@ pub(super) fn open_regular(path: &Path, create: bool) -> Result<Option<fs::File>
             .ok_or_else(|| problem("Missing file name"))?,
     )?;
     let flags = if create {
-        libc::O_RDWR | libc::O_CREAT
+        OFlag::O_RDWR | OFlag::O_CREAT
     } else {
-        libc::O_RDONLY
+        OFlag::O_RDONLY
     };
-    // SAFETY: valid directory descriptor and a single NUL-terminated component.
-    let fd = unsafe {
-        libc::openat(
-            parent.as_raw_fd(),
-            name.as_ptr(),
-            flags | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
-            0o600,
-        )
+    let opened = openat(
+        &parent,
+        name.as_c_str(),
+        flags | OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK | OFlag::O_CLOEXEC,
+        Mode::from_bits_truncate(0o600),
+    );
+    let file = match opened {
+        Ok(fd) => fs::File::from(fd),
+        Err(Errno::ENOENT) => return Ok(None),
+        Err(error) => return Err(std::io::Error::from(error).into()),
     };
-    if fd < 0 {
-        let error = std::io::Error::last_os_error();
-        if error.kind() == std::io::ErrorKind::NotFound {
-            return Ok(None);
-        }
-        return Err(error.into());
-    }
-    let file = unsafe { fs::File::from_raw_fd(fd) };
     if !file.metadata()?.is_file() {
         return Err(problem("Expected a regular environment file"));
     }
@@ -88,7 +89,7 @@ pub(super) fn snapshot(path: &Path) -> Result<Option<(Fingerprint, Vec<u8>)>> {
     let xattrs = attributes(&file)?;
     let flags = metadata.st_flags();
     // Replacing these files could silently discard information or affect aliases.
-    if metadata.uid() != unsafe { libc::getuid() }
+    if metadata.uid() != nix::unistd::getuid().as_raw()
         || metadata.nlink() != 1
         || acl
         || flags != 0
@@ -146,6 +147,10 @@ fn component(name: &std::ffi::OsStr) -> Result<std::ffi::CString> {
 
 fn attributes(file: &fs::File) -> Result<std::collections::BTreeMap<String, String>> {
     const LIMIT: usize = 16384;
+    // Sizes are read first so the limit holds before anything is allocated,
+    // and each read must return exactly that size: a short read (as resource
+    // forks allow) is refused, never kept as a truncated value.
+    // SAFETY: a live descriptor; a null buffer of length 0 asks for the size.
     let size = unsafe { libc::flistxattr(file.as_raw_fd(), std::ptr::null_mut(), 0, 0) };
     if size < 0 {
         return Err(std::io::Error::last_os_error().into());
@@ -157,6 +162,7 @@ fn attributes(file: &fs::File) -> Result<std::collections::BTreeMap<String, Stri
     }
     let mut names = vec![0_u8; size as usize];
     if size > 0 {
+        // SAFETY: the buffer is writable for the length passed.
         let read = unsafe {
             libc::flistxattr(file.as_raw_fd(), names.as_mut_ptr().cast(), names.len(), 0)
         };
@@ -173,6 +179,7 @@ fn attributes(file: &fs::File) -> Result<std::collections::BTreeMap<String, Stri
         let text = std::str::from_utf8(name)
             .map_err(|_| problem("Unsupported attribute name encoding"))?;
         let name = std::ffi::CString::new(name).unwrap();
+        // SAFETY: a live descriptor and NUL-terminated name; null buffer, size only.
         let size = unsafe {
             libc::fgetxattr(
                 file.as_raw_fd(),
@@ -193,6 +200,7 @@ fn attributes(file: &fs::File) -> Result<std::collections::BTreeMap<String, Stri
             ));
         }
         let mut value = vec![0_u8; size as usize];
+        // SAFETY: the buffer is writable for the length passed.
         let read = unsafe {
             libc::fgetxattr(
                 file.as_raw_fd(),
@@ -220,6 +228,7 @@ pub(super) fn restore_attributes(
     for key in current.keys().filter(|key| !expected.contains_key(*key)) {
         let name = std::ffi::CString::new(key.as_bytes())
             .map_err(|_| problem("Invalid attribute name"))?;
+        // SAFETY: a live descriptor and NUL-terminated name.
         let status = unsafe { libc::fremovexattr(file.as_raw_fd(), name.as_ptr(), 0) };
         if status != 0 {
             return Err(problem(
@@ -241,6 +250,8 @@ pub(super) fn restore_attributes(
         if current.get(key) == expected.get(key) {
             continue;
         }
+        // SAFETY: a live descriptor, NUL-terminated name, and a value buffer
+        // readable for the length passed.
         let status = unsafe {
             libc::fsetxattr(
                 file.as_raw_fd(),
@@ -368,16 +379,17 @@ pub(super) fn open_directory(path: &Path) -> Result<fs::File> {
 }
 
 pub(super) fn directory(path: &Path, create: bool) -> Result<Option<fs::File>> {
-    use std::{
-        ffi::CString,
-        os::{
-            fd::{AsRawFd, FromRawFd},
-            unix::ffi::OsStrExt,
-        },
-    };
     if !path.is_absolute() {
         return Err(problem("Provisioning paths must be absolute"));
     }
+    let open = |directory: &fs::File, name: &CStr| {
+        openat(
+            directory,
+            name,
+            OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+            Mode::empty(),
+        )
+    };
     let mut directory = fs::File::open("/")?;
     for component in path.components() {
         let Component::Normal(name) = component else {
@@ -387,40 +399,19 @@ pub(super) fn directory(path: &Path, create: bool) -> Result<Option<fs::File>> {
             return Err(problem("Invalid provisioning directory"));
         };
         let name = CString::new(name.as_bytes()).map_err(|_| problem("Invalid path"))?;
-        // SAFETY: live directory descriptor and NUL-terminated single component.
-        let mut fd = unsafe {
-            libc::openat(
-                directory.as_raw_fd(),
-                name.as_ptr(),
-                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-            )
+        let mut opened = open(&directory, &name);
+        if create && matches!(opened, Err(Errno::ENOENT)) {
+            match mkdirat(&directory, name.as_c_str(), Mode::from_bits_truncate(0o700)) {
+                Ok(()) | Err(Errno::EEXIST) => {}
+                Err(error) => return Err(std::io::Error::from(error).into()),
+            }
+            opened = open(&directory, &name);
+        }
+        directory = match opened {
+            Ok(fd) => fs::File::from(fd),
+            Err(Errno::ENOENT) => return Ok(None),
+            Err(error) => return Err(std::io::Error::from(error).into()),
         };
-        if fd == -1
-            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOENT)
-            && create
-        {
-            let created = unsafe { libc::mkdirat(directory.as_raw_fd(), name.as_ptr(), 0o700) };
-            if created != 0 && std::io::Error::last_os_error().raw_os_error() != Some(libc::EEXIST)
-            {
-                return Err(std::io::Error::last_os_error().into());
-            }
-            fd = unsafe {
-                libc::openat(
-                    directory.as_raw_fd(),
-                    name.as_ptr(),
-                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-                )
-            };
-        }
-        if fd == -1 {
-            let error = std::io::Error::last_os_error();
-            if error.kind() == std::io::ErrorKind::NotFound {
-                return Ok(None);
-            }
-            return Err(error.into());
-        }
-        // SAFETY: successful openat returned a new owned descriptor.
-        directory = unsafe { fs::File::from_raw_fd(fd) };
     }
     Ok(Some(directory))
 }
@@ -433,20 +424,12 @@ pub(super) fn atomic_install(
     mode: u32,
     create_only: bool,
 ) -> Result<()> {
-    use std::{
-        ffi::CString,
-        os::{
-            fd::{AsRawFd, FromRawFd},
-            unix::ffi::OsStrExt,
-        },
-    };
     let parent = open_directory(
         path.parent()
             .ok_or_else(|| problem("Missing parent directory"))?,
     )?;
     let metadata = parent.metadata()?;
-    // SAFETY: getuid has no arguments or preconditions.
-    if metadata.uid() != unsafe { libc::getuid() }
+    if metadata.uid() != nix::unistd::getuid().as_raw()
         || metadata.mode() & 0o022 != 0
         || writable_acl(&parent)?
     {
@@ -461,57 +444,41 @@ pub(super) fn atomic_install(
     )
     .map_err(|_| problem("Invalid path"))?;
     let temporary = CString::new(format!(".understudy-{}", crate::control::token())).unwrap();
-    // SAFETY: valid parent descriptor, new randomized single-component name.
-    let fd = unsafe {
-        libc::openat(
-            parent.as_raw_fd(),
-            temporary.as_ptr(),
-            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-            mode as libc::c_uint,
+    let mut file = fs::File::from(
+        openat(
+            &parent,
+            temporary.as_c_str(),
+            OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+            Mode::from_bits_truncate(mode as libc::mode_t),
         )
-    };
-    if fd == -1 {
-        return Err(std::io::Error::last_os_error().into());
-    }
-    let mut file = unsafe { fs::File::from_raw_fd(fd) };
+        .map_err(std::io::Error::from)?,
+    );
+    let discard = || unlinkat(&parent, temporary.as_c_str(), UnlinkatFlags::NoRemoveDir);
     let result = (|| -> Result<()> {
         clear_acl(&file)?;
         file.set_permissions(fs::Permissions::from_mode(mode))?;
         file.write_all(bytes)?;
         file.sync_all()?;
-        let status = if create_only {
+        if create_only {
             // Linking the new inode refuses an existing destination atomically.
-            let status = unsafe {
-                libc::linkat(
-                    parent.as_raw_fd(),
-                    temporary.as_ptr(),
-                    parent.as_raw_fd(),
-                    name.as_ptr(),
-                    0,
-                )
-            };
-            if status == 0 {
-                unsafe { libc::unlinkat(parent.as_raw_fd(), temporary.as_ptr(), 0) };
-            }
-            status
+            linkat(
+                &parent,
+                temporary.as_c_str(),
+                &parent,
+                name.as_c_str(),
+                AtFlags::empty(),
+            )
+            .map_err(std::io::Error::from)?;
+            let _ = discard();
         } else {
-            unsafe {
-                libc::renameat(
-                    parent.as_raw_fd(),
-                    temporary.as_ptr(),
-                    parent.as_raw_fd(),
-                    name.as_ptr(),
-                )
-            }
-        };
-        if status != 0 {
-            return Err(std::io::Error::last_os_error().into());
+            renameat(&parent, temporary.as_c_str(), &parent, name.as_c_str())
+                .map_err(std::io::Error::from)?;
         }
         parent.sync_all()?;
         Ok(())
     })();
     if result.is_err() {
-        unsafe { libc::unlinkat(parent.as_raw_fd(), temporary.as_ptr(), 0) };
+        let _ = discard();
     }
     result
 }
@@ -556,10 +523,7 @@ pub(super) fn install_prepared(source: &Path, target: &Path, create_only: bool) 
 pub(super) fn set_group(path: &Path, gid: u32) -> Result<()> {
     let file = open_regular(path, false)?.ok_or_else(|| problem("Prepared file is missing"))?;
     if file.metadata()?.gid() != gid {
-        // SAFETY: live file descriptor; -1 preserves the current owner.
-        if unsafe { libc::fchown(file.as_raw_fd(), u32::MAX, gid) } != 0 {
-            return Err(std::io::Error::last_os_error().into());
-        }
+        fchown(&file, None, Some(Gid::from_raw(gid))).map_err(std::io::Error::from)?;
         file.sync_all()?;
     }
     Ok(())
@@ -573,16 +537,12 @@ pub(super) fn unlink(path: &Path, is_directory: bool) -> Result<()> {
     .ok_or_else(|| problem("Parent directory disappeared"))?;
     installation_parent(&parent)?;
     let name = component(path.file_name().ok_or_else(|| problem("Missing name"))?)?;
-    let result = unsafe {
-        libc::unlinkat(
-            parent.as_raw_fd(),
-            name.as_ptr(),
-            if is_directory { libc::AT_REMOVEDIR } else { 0 },
-        )
+    let kind = if is_directory {
+        UnlinkatFlags::RemoveDir
+    } else {
+        UnlinkatFlags::NoRemoveDir
     };
-    if result != 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
+    unlinkat(&parent, name.as_c_str(), kind).map_err(std::io::Error::from)?;
     parent.sync_all()?;
     Ok(())
 }
@@ -606,9 +566,8 @@ pub(super) fn create_private_directory(path: &Path) -> Result<fs::File> {
     .ok_or_else(|| problem("Parent directory disappeared"))?;
     installation_parent(&parent)?;
     let name = component(path.file_name().ok_or_else(|| problem("Missing name"))?)?;
-    if unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o700) } != 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
+    mkdirat(&parent, name.as_c_str(), Mode::from_bits_truncate(0o700))
+        .map_err(std::io::Error::from)?;
     let dir = directory(path, false)?.ok_or_else(|| problem("New directory disappeared"))?;
     clear_acl(&dir)?;
     dir.set_permissions(fs::Permissions::from_mode(0o700))?;
@@ -620,7 +579,7 @@ pub(super) fn create_private_directory(path: &Path) -> Result<fs::File> {
 
 pub(super) fn validate_private(file: &fs::File, directory: bool) -> Result<()> {
     let metadata = file.metadata()?;
-    if metadata.uid() != unsafe { libc::getuid() }
+    if metadata.uid() != nix::unistd::getuid().as_raw()
         || (directory && !metadata.is_dir())
         || (!directory && !metadata.is_file())
         || metadata.mode() & 0o7777 != if directory { 0o700 } else { 0o600 }
@@ -636,7 +595,7 @@ pub(super) fn validate_private(file: &fs::File, directory: bool) -> Result<()> {
 
 pub(super) fn installation_parent(directory: &fs::File) -> Result<()> {
     let metadata = directory.metadata()?;
-    if metadata.uid() != unsafe { libc::getuid() }
+    if metadata.uid() != nix::unistd::getuid().as_raw()
         || metadata.mode() & 0o022 != 0
         || writable_acl(directory)?
     {

@@ -122,9 +122,8 @@ impl Client {
                 .create(path)?;
         }
         let metadata = fs::symlink_metadata(path)?;
-        // SAFETY: getuid has no pointer arguments or preconditions.
         if !metadata.is_dir()
-            || metadata.uid() != unsafe { libc::getuid() }
+            || metadata.uid() != nix::unistd::getuid().as_raw()
             || metadata.mode() & 0o077 != 0
         {
             return Err(Error::new(
@@ -611,8 +610,7 @@ impl Client {
             "nohup \"$1\" input-service --uid \"$2\" --controller-uid \"$3\" --socket \"$4\" ",
             ">\"$HOME/Library/Logs/Understudy-input.log\" 2>&1 </dev/null & echo $!",
         );
-        // SAFETY: getuid has no pointer arguments or preconditions.
-        let controller_uid = unsafe { libc::getuid() };
+        let controller_uid = nix::unistd::getuid().as_raw();
         let request = json!({
             "op": "run",
             "argv": [
@@ -850,9 +848,10 @@ fn process_exists(pid: u32) -> bool {
     let Ok(pid) = i32::try_from(pid) else {
         return false;
     };
-    // SAFETY: signal 0 only checks for existence and permission.
-    let alive = unsafe { libc::kill(pid, 0) } == 0;
-    alive || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    matches!(
+        nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None),
+        Ok(()) | Err(nix::errno::Errno::EPERM)
+    )
 }
 
 #[cfg(test)]

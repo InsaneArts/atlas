@@ -9,10 +9,14 @@
 //! A client that goes away, or a daemon that stops, ends the command.
 use crate::daemon::protocol::failure;
 use base64::{Engine, engine::general_purpose::STANDARD};
+use nix::{
+    sys::signal::{Signal, killpg},
+    unistd::Pid,
+};
 use serde_json::{Value, json};
 use std::{
     os::{
-        fd::{AsRawFd, OwnedFd},
+        fd::OwnedFd,
         unix::{fs::PermissionsExt, process::ExitStatusExt},
     },
     path::{Path, PathBuf},
@@ -68,41 +72,9 @@ fn resolve(program: &str, path: Option<&str>) -> Option<PathBuf> {
 
 /// The conventional name of a macOS signal number, as "SIGTERM".
 pub fn signal_name(signal: i32) -> String {
-    let name = match signal {
-        libc::SIGHUP => "HUP",
-        libc::SIGINT => "INT",
-        libc::SIGQUIT => "QUIT",
-        libc::SIGILL => "ILL",
-        libc::SIGTRAP => "TRAP",
-        libc::SIGABRT => "ABRT",
-        libc::SIGEMT => "EMT",
-        libc::SIGFPE => "FPE",
-        libc::SIGKILL => "KILL",
-        libc::SIGBUS => "BUS",
-        libc::SIGSEGV => "SEGV",
-        libc::SIGSYS => "SYS",
-        libc::SIGPIPE => "PIPE",
-        libc::SIGALRM => "ALRM",
-        libc::SIGTERM => "TERM",
-        libc::SIGURG => "URG",
-        libc::SIGSTOP => "STOP",
-        libc::SIGTSTP => "TSTP",
-        libc::SIGCONT => "CONT",
-        libc::SIGCHLD => "CHLD",
-        libc::SIGTTIN => "TTIN",
-        libc::SIGTTOU => "TTOU",
-        libc::SIGIO => "IO",
-        libc::SIGXCPU => "XCPU",
-        libc::SIGXFSZ => "XFSZ",
-        libc::SIGVTALRM => "VTALRM",
-        libc::SIGPROF => "PROF",
-        libc::SIGWINCH => "WINCH",
-        libc::SIGINFO => "INFO",
-        libc::SIGUSR1 => "USR1",
-        libc::SIGUSR2 => "USR2",
-        _ => return format!("SIG{signal}"),
-    };
-    format!("SIG{name}")
+    Signal::try_from(signal)
+        .map(|signal| signal.as_str().to_owned())
+        .unwrap_or_else(|_| format!("SIG{signal}"))
 }
 
 /// The final reply for a command that ran.
@@ -120,22 +92,22 @@ fn ended(status: ExitStatus, timed_out: bool, started: Instant, truncated: bool)
     reply
 }
 
-/// Signal the command's whole process group; whether any member remains.
-fn signal_group(group: i32, signal: i32) -> bool {
-    // SAFETY: a negative PID addresses the process group the command leads.
-    unsafe { libc::kill(-group, signal) == 0 }
+/// Signal the command's whole process group (`None` only probes); whether
+/// any member remains.
+fn signal_group(group: Pid, signal: impl Into<Option<Signal>>) -> bool {
+    killpg(group, signal).is_ok()
 }
 
 /// After a timeout, end every member of the group before replying: SIGTERM,
 /// then SIGKILL once the grace has passed, until none remains.
-async fn end_group(group: i32) {
-    if !signal_group(group, libc::SIGTERM) {
+async fn end_group(group: Pid) {
+    if !signal_group(group, Signal::SIGTERM) {
         return;
     }
     let deadline = Instant::now() + GRACE;
-    while signal_group(group, 0) {
+    while signal_group(group, None) {
         if Instant::now() >= deadline {
-            signal_group(group, libc::SIGKILL);
+            signal_group(group, Signal::SIGKILL);
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
         if Instant::now() >= deadline + GRACE {
@@ -292,17 +264,12 @@ pub async fn run(
             "The command exited before it could be observed",
         );
     };
-    let group = pid as i32;
-    let reader = OwnedFd::from(reader);
-    // SAFETY: fcntl on a descriptor this function owns.
-    unsafe {
-        let flags = libc::fcntl(reader.as_raw_fd(), libc::F_GETFL);
-        libc::fcntl(reader.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK);
-    }
-    let mut pipe = match pipe::Receiver::from_owned_fd_unchecked(reader) {
+    let group = Pid::from_raw(pid as i32);
+    // Checks that this is a pipe and makes it non-blocking.
+    let mut pipe = match pipe::Receiver::from_owned_fd(OwnedFd::from(reader)) {
         Ok(receiver) => receiver,
         Err(error) => {
-            signal_group(group, libc::SIGKILL);
+            signal_group(group, Signal::SIGKILL);
             let _ = child.wait().await;
             return failure("spawn-failed", error.to_string());
         }
@@ -321,7 +288,7 @@ pub async fn run(
     let mut open = true;
     let mut linger = None;
     if abandoned {
-        signal_group(group, libc::SIGTERM);
+        signal_group(group, Signal::SIGTERM);
         stopping = true;
         deadline.as_mut().reset(tokio::time::Instant::now() + GRACE);
     }
@@ -349,9 +316,9 @@ pub async fn run(
             }
             () = &mut deadline, if status.is_none() => {
                 if stopping {
-                    signal_group(group, libc::SIGKILL);
+                    signal_group(group, Signal::SIGKILL);
                 } else {
-                    signal_group(group, libc::SIGTERM);
+                    signal_group(group, Signal::SIGTERM);
                     stopping = true;
                     timed_out = true;
                 }
@@ -364,7 +331,7 @@ pub async fn run(
             }
         }
         if abandoned && !stopping && status.is_none() {
-            signal_group(group, libc::SIGTERM);
+            signal_group(group, Signal::SIGTERM);
             stopping = true;
             deadline.as_mut().reset(tokio::time::Instant::now() + GRACE);
         }
@@ -388,6 +355,7 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nix::sys::signal::kill;
     use tokio::sync::mpsc;
 
     async fn execute(argv: &[&str], timeout_ms: u64) -> (Vec<Value>, Value) {
@@ -419,8 +387,8 @@ mod tests {
         String::from_utf8(bytes).unwrap()
     }
 
-    fn group_alive(group: i32) -> bool {
-        signal_group(group, 0)
+    fn group_alive(group: i64) -> bool {
+        signal_group(Pid::from_raw(group as i32), None)
     }
 
     #[tokio::test]
@@ -449,7 +417,7 @@ mod tests {
         assert_eq!(reply["timedOut"], true);
         assert_eq!(reply["exitCode"], Value::Null);
         assert_eq!(reply["signal"], "SIGTERM");
-        let group = events[0]["pid"].as_i64().unwrap() as i32;
+        let group = events[0]["pid"].as_i64().unwrap();
         assert!(!group_alive(group), "no member of the group survives");
         let (_, reply) = execute(&["/bin/sh", "-c", "kill -TERM $$"], 5000).await;
         assert_eq!(
@@ -464,7 +432,7 @@ mod tests {
         let (events, reply) =
             execute(&["/bin/sh", "-c", "(trap '' TERM; sleep 30) & wait"], 300).await;
         assert_eq!(reply["timedOut"], true);
-        let group = events[0]["pid"].as_i64().unwrap() as i32;
+        let group = events[0]["pid"].as_i64().unwrap();
         assert!(
             !group_alive(group),
             "the descendant was killed before the reply"
@@ -480,16 +448,12 @@ mod tests {
             "returned after the shell exited"
         );
         assert_eq!(reply["exitCode"], 0);
-        let child: i32 = output(&events).trim().parse().unwrap();
-        // SAFETY: probing and ending the test's own background process.
-        unsafe {
-            assert_eq!(
-                libc::kill(child, 0),
-                0,
-                "a background process outlives the run"
-            );
-            libc::kill(child, libc::SIGKILL);
-        }
+        let child = Pid::from_raw(output(&events).trim().parse().unwrap());
+        assert!(
+            kill(child, None).is_ok(),
+            "a background process outlives the run"
+        );
+        kill(child, Signal::SIGKILL).unwrap();
     }
 
     /// A client that stops reading cannot stall supervision or the timeout.
@@ -539,7 +503,7 @@ mod tests {
         let reply = run(&argv, Duration::from_secs(60), sender, cancel).await;
         assert!(started.elapsed() < Duration::from_secs(8));
         assert_eq!(reply["code"], "transport");
-        let group = receiver.recv().await.unwrap()["pid"].as_i64().unwrap() as i32;
+        let group = receiver.recv().await.unwrap()["pid"].as_i64().unwrap();
         assert!(!group_alive(group), "nothing the command started survives");
     }
 
@@ -633,12 +597,12 @@ mod tests {
 
     #[test]
     fn signals_have_conventional_names() {
-        assert_eq!(signal_name(libc::SIGTERM), "SIGTERM");
-        assert_eq!(signal_name(libc::SIGKILL), "SIGKILL");
-        assert_eq!(signal_name(libc::SIGXCPU), "SIGXCPU");
-        assert_eq!(signal_name(libc::SIGXFSZ), "SIGXFSZ");
-        assert_eq!(signal_name(libc::SIGSYS), "SIGSYS");
-        assert_eq!(signal_name(libc::SIGINFO), "SIGINFO");
+        assert_eq!(signal_name(Signal::SIGTERM as i32), "SIGTERM");
+        assert_eq!(signal_name(Signal::SIGKILL as i32), "SIGKILL");
+        assert_eq!(signal_name(Signal::SIGXCPU as i32), "SIGXCPU");
+        assert_eq!(signal_name(Signal::SIGXFSZ as i32), "SIGXFSZ");
+        assert_eq!(signal_name(Signal::SIGSYS as i32), "SIGSYS");
+        assert_eq!(signal_name(Signal::SIGINFO as i32), "SIGINFO");
         assert_eq!(signal_name(64), "SIG64");
     }
 }

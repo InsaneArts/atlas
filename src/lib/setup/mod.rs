@@ -43,6 +43,7 @@ fn lookup(key: Lookup) -> Result<Option<Account>> {
     let mut buffer = Vec::new();
     let mut status = libc::ERANGE;
     // Directory-service records can exceed any fixed buffer; grow on ERANGE.
+    // The error is the return value: macOS need not set errno here.
     for size in [16 << 10, 64 << 10, 256 << 10, 1 << 20] {
         buffer.resize(size, 0);
         // SAFETY: valid entry, buffer and result pointers that outlive the call;
@@ -401,8 +402,7 @@ fn proposal(account: &Account) -> Config {
 }
 
 pub async fn preview(config_path: &Path, helper: Option<&str>) -> Result<Value> {
-    // SAFETY: getuid has no pointer arguments or preconditions.
-    let controller_uid = unsafe { libc::getuid() };
+    let controller_uid = nix::unistd::getuid().as_raw();
     let controller = account_with_uid(controller_uid)?;
     let (config, config_state, config_error) = if fs::symlink_metadata(config_path).is_err() {
         (None, "missing", None)
@@ -604,7 +604,7 @@ mod tests {
 
     #[test]
     fn accounts_resolve_through_directory_services() {
-        let me = account_with_uid(unsafe { libc::getuid() })
+        let me = account_with_uid(nix::unistd::getuid().as_raw())
             .unwrap()
             .unwrap();
         assert_eq!(account_named(&me.name).unwrap(), Some(me.clone()));
@@ -647,7 +647,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let socket = dir.path().join("socket");
-        let me = unsafe { libc::getuid() };
+        let me = nix::unistd::getuid().as_raw();
         let report = endpoint(&socket, me, me + 7);
         assert!(!report.present);
         assert_eq!(report.private, Some(true));

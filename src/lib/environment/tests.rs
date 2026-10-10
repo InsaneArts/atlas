@@ -38,7 +38,7 @@ impl Sandbox {
     fn preview(&self, files: Vec<Payload>) -> Value {
         worker::preview(
             &self.home,
-            unsafe { libc::getuid() },
+            nix::unistd::getuid().as_raw(),
             &crate::control::token(),
             files,
             &|| Ok(()),
@@ -337,6 +337,29 @@ fn bounded_extended_attributes_are_preserved_and_compared_exactly() {
     assert_eq!(fs::metadata(path).unwrap().mode() & 0o777, 0o640);
 }
 
+/// Values larger than a page are read whole, never as a prefix, and the
+/// 16 KiB budget is enforced.
+#[test]
+fn large_extended_attributes_are_read_whole_and_bounded() {
+    let sandbox = Sandbox::new();
+    let path = sandbox.home.join("large");
+    atomic_write(&path, b"x", 0o600).unwrap();
+    let mut attributes = fingerprint(&path).unwrap().unwrap().xattrs;
+    let value: Vec<u8> = (0..10_000).map(|i| (i % 251) as u8).collect();
+    attributes.insert("user.understudy-large".into(), STANDARD.encode(&value));
+    restore_attributes(&path, &attributes).unwrap();
+    let read = fingerprint(&path).unwrap().unwrap().xattrs;
+    assert_eq!(
+        STANDARD.decode(&read["user.understudy-large"]).unwrap(),
+        value
+    );
+    attributes.insert(
+        "user.understudy-larger".into(),
+        STANDARD.encode(vec![7_u8; 8_000]),
+    );
+    assert!(restore_attributes(&path, &attributes).is_err());
+}
+
 #[test]
 fn every_apply_guard_failure_can_resume_then_restore_the_original_files() {
     // Each guard is a possible console/session transition. The assertions cover
@@ -540,7 +563,7 @@ fn aliases_of_existing_managed_targets_are_rejected() {
     assert!(
         worker::preview(
             &sandbox.home,
-            unsafe { libc::getuid() },
+            nix::unistd::getuid().as_raw(),
             &crate::control::token(),
             vec![sandbox.payload("config", b"data")],
             &|| Ok(())

@@ -5,7 +5,6 @@ use crate::native::{
     cf::{self, CfRef, Owned},
 };
 use serde_json::{Value, json};
-use std::ffi::CStr;
 
 #[repr(C)]
 struct Point {
@@ -84,27 +83,10 @@ pub fn request_consent() {
 
 /// This process's account: name, home and UID.
 fn user() -> Value {
-    // SAFETY: getuid has no preconditions; getpwuid_r writes only into the
-    // provided record and buffer, which outlive the reads below.
-    unsafe {
-        let uid = libc::getuid();
-        let mut record: libc::passwd = std::mem::zeroed();
-        let mut buffer = vec![0 as libc::c_char; 4096];
-        let mut found = std::ptr::null_mut();
-        let status = libc::getpwuid_r(
-            uid,
-            &mut record,
-            buffer.as_mut_ptr(),
-            buffer.len(),
-            &mut found,
-        );
-        let text = |pointer: *const libc::c_char| {
-            (!pointer.is_null()).then(|| CStr::from_ptr(pointer).to_string_lossy().into_owned())
-        };
-        if status != 0 || found.is_null() {
-            return json!({"uid": uid, "name": null, "home": null});
-        }
-        json!({"uid": uid, "name": text(record.pw_name), "home": text(record.pw_dir)})
+    let uid = nix::unistd::getuid().as_raw();
+    match crate::setup::account_with_uid(uid) {
+        Ok(Some(account)) => json!({"uid": uid, "name": account.name, "home": account.home}),
+        _ => json!({"uid": uid, "name": null, "home": null}),
     }
 }
 
@@ -214,8 +196,7 @@ mod tests {
     #[test]
     fn hello_describes_this_process_in_its_session() {
         let reply = hello(&manager_name());
-        // SAFETY: getuid has no preconditions.
-        assert_eq!(reply["user"]["uid"], unsafe { libc::getuid() });
+        assert_eq!(reply["user"]["uid"], nix::unistd::getuid().as_raw());
         assert!(reply["user"]["name"].is_string());
         assert!(
             reply["user"]["home"]
