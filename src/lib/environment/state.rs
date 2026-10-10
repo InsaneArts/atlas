@@ -2,6 +2,31 @@
 use super::{model::*, *};
 use fs2::FileExt;
 
+/// How long a lock that looks held is retried. A process being spawned
+/// elsewhere briefly holds every open file of its parent, close-on-exec ones
+/// too, until it executes, so a just-released lock can look held for a few
+/// milliseconds; a real concurrent operation holds it far longer.
+const LOCK_PATIENCE: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Take the store lock without blocking on a real holder.
+fn take(lock: &fs::File, write: bool) -> Result<()> {
+    let deadline = std::time::Instant::now() + LOCK_PATIENCE;
+    loop {
+        let taken = if write {
+            lock.try_lock_exclusive()
+        } else {
+            FileExt::try_lock_shared(lock)
+        };
+        if taken.is_ok() {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(problem("Another environment operation is running"));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
 pub(super) struct Store {
     pub path: PathBuf,
     _lock: Option<fs::File>,
@@ -22,12 +47,7 @@ impl Store {
         let lock = open_regular(&path.join("lock"), write)?;
         if let Some(lock) = &lock {
             validate_private(lock, false)?;
-            if write {
-                lock.try_lock_exclusive()
-            } else {
-                FileExt::try_lock_shared(lock)
-            }
-            .map_err(|_| problem("Another environment operation is running"))?;
+            take(lock, write)?;
         }
         Ok(Self { path, _lock: lock })
     }
