@@ -161,11 +161,18 @@ async function poll(signal, current) {
   el('checks').replaceChildren(
     ...(status.checks || []).map((check) => {
       const row = document.createElement('div');
-      row.className = 'check' + (check.ok ? '' : ' bad');
+      // null means the fact cannot be observed yet; it is not a failure.
+      const state = check.ok === true ? 'ready' : check.ok === null ? 'unknown' : 'bad';
+      row.className = 'check ' + state;
       const name = document.createElement('b');
       name.textContent = check.name;
       const result = document.createElement('span');
-      result.textContent = check.ok ? 'Ready' : check.nextStep;
+      result.textContent =
+        state === 'ready'
+          ? 'Ready'
+          : state === 'unknown'
+            ? 'Unknown. ' + check.nextStep
+            : check.nextStep;
       row.append(name, result);
       return row;
     }),
