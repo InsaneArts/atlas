@@ -9,6 +9,7 @@ pub mod daemon;
 pub mod digest;
 pub mod environment;
 pub mod error;
+pub mod init;
 pub mod menubar;
 pub mod native;
 pub mod overview;

@@ -268,6 +268,9 @@ enum Command {
         #[arg(long)]
         version: Option<String>,
     },
+    /// Set Understudy up on this Mac, step by step: helper account, first
+    /// sign-in, permissions, the helper job and input. Safe to run again.
+    Init,
     /// After an update, run by the new executable: move the helper onto it.
     #[command(hide = true)]
     UpdateFinish,
@@ -435,6 +438,7 @@ async fn execute(cli: Cli) -> Result<Value> {
             version,
         } => return update(&cli.config, allow_unnotarized, force, version),
         Command::UpdateFinish => return update_finish(&cli.config),
+        Command::Init => return understudy::init::run(&cli.config).await,
         Command::Switch {
             account,
             login_window,
@@ -460,6 +464,7 @@ async fn execute(cli: Cli) -> Result<Value> {
         | Command::SetupHelper { .. }
         | Command::Update { .. }
         | Command::UpdateFinish
+        | Command::Init
         | Command::Switch { .. } => {
             unreachable!("these commands return above")
         }
