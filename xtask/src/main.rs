@@ -12,11 +12,15 @@ use std::{
 /// The bundle identifier; consent follows it with the signing team.
 const IDENTIFIER: &str = "com.insanearts.understudy";
 const COMPANION: &str = "UnderstudyBar";
-/// Rust and Swift targets for one universal build.
-const TARGETS: [(&str, &str); 2] = [
-    ("aarch64-apple-darwin", "arm64-apple-macos14"),
-    ("x86_64-apple-darwin", "x86_64-apple-macos14"),
+/// The oldest macOS the app runs on, for every slice and the Info.plist.
+const MINIMUM_MACOS: &str = "14.0";
+/// Rust triple, Swift target and lipo architecture for one universal build.
+const TARGETS: [(&str, &str, &str); 2] = [
+    ("aarch64-apple-darwin", "arm64-apple-macos14", "arm64"),
+    ("x86_64-apple-darwin", "x86_64-apple-macos14", "x86_64"),
 ];
+/// Beside an app this tool published, so it never replaces anything else.
+const MARKER: &str = ".understudy-dist";
 const USAGE: &str = "usage: cargo xtask dist --sign IDENTITY [--notarize PROFILE] [--out DIR]
 
   --sign IDENTITY     Developer ID Application identity to sign with
@@ -82,10 +86,14 @@ fn root() -> PathBuf {
         .to_owned()
 }
 
-/// Run a command, failing with its name if it does not succeed.
+/// Run a command, failing with its name if it does not succeed. A deployment
+/// target inherited from the caller's shell is dropped: it could raise the
+/// required macOS above the advertised one (and setting it also changes the
+/// host's proc-macro builds).
 fn exec(program: &str, args: &[&str]) -> Result<()> {
     println!("+ {program} {}", args.join(" "));
     let status = Command::new(program)
+        .env_remove("MACOSX_DEPLOYMENT_TARGET")
         .args(args)
         .status()
         .map_err(|error| format!("{program}: {error}"))?;
@@ -137,7 +145,7 @@ fn info_plist(version: &str) -> String {
 	<key>CFBundleVersion</key>
 	<string>{version}</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>14.0</string>
+	<string>{MINIMUM_MACOS}</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>
@@ -146,6 +154,41 @@ fn info_plist(version: &str) -> String {
 </plist>
 "#
     )
+}
+
+/// No slice of `binary` may require a newer macOS than the advertised one.
+fn check_minimum(binary: &Path) -> Result<()> {
+    for (_, _, arch) in TARGETS {
+        let build = output(
+            "/usr/bin/xcrun",
+            &["vtool", "-arch", arch, "-show-build", text(binary)?],
+        )?;
+        // LC_BUILD_VERSION reports `minos`; the older LC_VERSION_MIN_MACOSX
+        // (low deployment targets) reports `version`.
+        let minimum = build
+            .lines()
+            .find_map(|line| {
+                let line = line.trim();
+                line.strip_prefix("minos ")
+                    .or_else(|| line.strip_prefix("version "))
+            })
+            .map(str::trim);
+        if minimum.is_none_or(|minimum| version(minimum) > version(MINIMUM_MACOS)) {
+            return Err(format!(
+                "{} ({arch}) requires macOS {}, newer than {MINIMUM_MACOS}",
+                binary.display(),
+                minimum.unwrap_or("?")
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// A dotted version as comparable numbers.
+fn version(text: &str) -> Vec<u32> {
+    text.split('.')
+        .filter_map(|part| part.parse().ok())
+        .collect()
 }
 
 /// Merge per-architecture builds of one executable into a universal one.
@@ -160,23 +203,77 @@ fn universal(parts: &[PathBuf], output: &Path) -> Result<()> {
     if !(found.contains(&"arm64") && found.contains(&"x86_64")) {
         return Err(format!("{} is not universal: {archs}", output.display()));
     }
+    check_minimum(output)
+}
+
+/// Refuse output directories holding apps this tool did not build there.
+fn publishable(out: &Path) -> Result<()> {
+    let home = env::var("HOME").unwrap_or_default();
+    let resolved = fs::canonicalize(out).unwrap_or_else(|_| out.to_owned());
+    if resolved == Path::new("/Applications") || resolved == Path::new(&home).join("Applications") {
+        return Err("--out must be a build directory, not an Applications folder".into());
+    }
+    if out.join("Understudy.app").exists() && !out.join(MARKER).exists() {
+        return Err(format!(
+            "{} holds an Understudy.app this tool did not build; choose another --out",
+            out.display()
+        ));
+    }
     Ok(())
+}
+
+/// Replace the published app with the verified `staged` one by renames.
+fn publish(staged: &Path, out: &Path) -> Result<PathBuf> {
+    let app = out.join("Understudy.app");
+    let previous = staged.with_extension("previous");
+    if app.exists() {
+        fs::rename(&app, &previous).map_err(|error| error.to_string())?;
+    }
+    fs::rename(staged, &app).map_err(|error| error.to_string())?;
+    fs::write(out.join(MARKER), "Built by cargo xtask dist\n")
+        .map_err(|error| error.to_string())?;
+    if previous.exists() {
+        fs::remove_dir_all(&previous).map_err(|error| error.to_string())?;
+    }
+    Ok(app)
 }
 
 fn dist(options: &Options) -> Result<()> {
     let root = root();
     let version = understudy::VERSION;
-    let stage = options.out.join("stage");
+    publishable(&options.out)?;
+    // A fresh staging directory per run; nothing is published until verified.
+    let stage = options.out.join(format!("stage/{}", std::process::id()));
+    if stage.exists() {
+        fs::remove_dir_all(&stage).map_err(|error| error.to_string())?;
+    }
     fs::create_dir_all(&stage).map_err(|error| error.to_string())?;
     let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    // Exactly this package's binary, into a target directory of our own.
+    let manifest = root.join("Cargo.toml");
+    let target_dir = root.join("target/xtask");
     let mut cli = Vec::new();
     let mut companion = Vec::new();
-    for (rust, swift) in TARGETS {
+    for (rust, swift, _) in TARGETS {
         exec(
             &cargo,
-            &["build", "--release", "--locked", "--target", rust],
+            &[
+                "build",
+                "--manifest-path",
+                text(&manifest)?,
+                "--package",
+                "understudy",
+                "--bin",
+                "understudy",
+                "--release",
+                "--locked",
+                "--target",
+                rust,
+                "--target-dir",
+                text(&target_dir)?,
+            ],
         )?;
-        cli.push(root.join(format!("target/{rust}/release/understudy")));
+        cli.push(target_dir.join(format!("{rust}/release/understudy")));
         let built = stage.join(format!("{COMPANION}-{rust}"));
         exec(
             "/usr/bin/swiftc",
@@ -193,10 +290,7 @@ fn dist(options: &Options) -> Result<()> {
         )?;
         companion.push(built);
     }
-    let app = options.out.join("Understudy.app");
-    if app.exists() {
-        fs::remove_dir_all(&app).map_err(|error| error.to_string())?;
-    }
+    let app = stage.join("Understudy.app");
     let macos = app.join("Contents/MacOS");
     fs::create_dir_all(&macos).map_err(|error| error.to_string())?;
     fs::create_dir_all(app.join("Contents/Resources")).map_err(|error| error.to_string())?;
@@ -252,6 +346,9 @@ fn dist(options: &Options) -> Result<()> {
         let _ = fs::remove_file(upload);
     }
 
+    // Verified (and notarized when asked): only now replace the previous build.
+    let app = publish(&app, &options.out)?;
+    let _ = fs::remove_dir_all(&stage);
     let name = format!("Understudy-{version}-macos.zip");
     let zip = options.out.join(&name);
     let _ = fs::remove_file(&zip);
@@ -309,6 +406,32 @@ mod tests {
     }
 
     #[test]
+    fn minimum_versions_compare_numerically() {
+        assert!(version("11.0") <= version(MINIMUM_MACOS));
+        assert!(version("10.12") <= version(MINIMUM_MACOS));
+        assert!(version("15.0") > version(MINIMUM_MACOS));
+        assert!(version("14.10") > version("14.9"));
+    }
+
+    #[test]
+    fn output_directories_never_hold_apps_this_tool_did_not_build() {
+        let dir = std::env::temp_dir().join(format!("xtask-out-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("Understudy.app")).unwrap();
+        assert!(publishable(&dir).unwrap_err().contains("did not build"));
+        fs::write(dir.join(MARKER), "").unwrap();
+        assert!(publishable(&dir).is_ok());
+        assert!(publishable(Path::new("/Applications")).is_err());
+        let staged = dir.join("stage/1/Understudy.app");
+        fs::create_dir_all(&staged).unwrap();
+        fs::write(staged.join("new"), "").unwrap();
+        let app = publish(&staged, &dir).unwrap();
+        assert!(app.join("new").exists());
+        assert!(!staged.exists() && !staged.with_extension("previous").exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn the_info_plist_is_valid_and_names_the_consented_executable() {
         let dir = std::env::temp_dir().join(format!("xtask-plist-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
@@ -325,6 +448,7 @@ mod tests {
             r#""CFBundleExecutable":"understudy""#,
             r#""CFBundleShortVersionString":"1.2.3""#,
             r#""LSUIElement":true"#,
+            r#""LSMinimumSystemVersion":"14.0""#,
         ] {
             assert!(json.contains(expected), "{expected} in {json}");
         }

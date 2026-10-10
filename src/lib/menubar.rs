@@ -159,12 +159,13 @@ fn build(root: &Path, uid: u32) -> Result<PathBuf> {
     Ok(executable)
 }
 
-/// The signed companion shipped beside `executable` in Understudy.app, if
-/// this is the app's executable.
+/// The companion shipped beside `executable` in Understudy.app, if this is
+/// the app's executable and it is there as a regular file.
 fn bundled(executable: &Path) -> Option<PathBuf> {
     let directory = executable.parent()?;
     let companion = directory.join(NAME);
-    (directory.ends_with("Contents/MacOS") && companion.is_file()).then_some(companion)
+    let regular = fs::symlink_metadata(&companion).is_ok_and(|metadata| metadata.is_file());
+    (directory.ends_with("Contents/MacOS") && regular).then_some(companion)
 }
 
 /// The companion executable: the one shipped in Understudy.app, or in a
@@ -176,6 +177,14 @@ pub fn executable() -> Result<PathBuf> {
         .as_deref()
         .and_then(bundled)
     {
+        // It receives the viewer's private URL: run only the companion
+        // Understudy signed, never a file merely placed there.
+        if !crate::setup::companion_signed(&companion) {
+            return Err(Error::new(
+                "menubar",
+                "The menu bar companion in Understudy.app is not signed by Understudy",
+            ));
+        }
         return Ok(companion);
     }
     let uid = nix::unistd::getuid().as_raw();
@@ -377,6 +386,17 @@ mod tests {
             None,
             "only inside the app"
         );
+        fs::remove_file(macos.join(NAME)).unwrap();
+        std::os::unix::fs::symlink(loose.join(NAME), macos.join(NAME)).unwrap();
+        assert_eq!(bundled(&executable), None, "never through a link");
+        assert!(
+            !crate::setup::companion_signed(&loose.join(NAME)),
+            "an unsigned file is not the companion"
+        );
+        let installed = Path::new("/Applications/Understudy.app/Contents/MacOS").join(NAME);
+        if installed.exists() {
+            assert!(crate::setup::companion_signed(&installed));
+        }
     }
 
     #[test]
