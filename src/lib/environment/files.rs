@@ -1,6 +1,4 @@
 //! Bounded file reads, private staging and descriptor-relative installation.
-// FFI boundary: bounded extended-attribute reads and renameatx_np.
-#![allow(unsafe_code)]
 use super::{
     Result, STATE,
     model::{Fingerprint, Node},
@@ -147,6 +145,7 @@ fn component(name: &std::ffi::OsStr) -> Result<std::ffi::CString> {
     std::ffi::CString::new(name.as_bytes()).map_err(|_| problem("Invalid filesystem component"))
 }
 
+#[allow(unsafe_code)] // FFI: bounded extended-attribute reads.
 fn attributes(file: &fs::File) -> Result<std::collections::BTreeMap<String, String>> {
     const LIMIT: usize = 16384;
     // Sizes are read first so the limit holds before anything is allocated,
@@ -221,6 +220,7 @@ fn attributes(file: &fs::File) -> Result<std::collections::BTreeMap<String, Stri
     Ok(result)
 }
 
+#[allow(unsafe_code)] // FFI: extended-attribute writes by descriptor.
 pub(super) fn restore_attributes(
     path: &Path,
     expected: &std::collections::BTreeMap<String, String>,
@@ -486,6 +486,7 @@ pub(super) fn atomic_install(
 }
 
 /// Move a recorded prepared inode into place. No-replace is atomic for creates.
+#[allow(unsafe_code)] // FFI: renameatx_np has no safe binding.
 pub(super) fn install_prepared(source: &Path, target: &Path, create_only: bool) -> Result<()> {
     if source.parent() != target.parent() {
         return Err(problem(

@@ -7,7 +7,7 @@ use serde_json::Value;
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 pub fn session_info() -> Result<Value> {
-    use objc2_core_graphics::{CGDisplayBounds, CGMainDisplayID, CGSessionCopyCurrentDictionary};
+    use objc2_core_graphics::{CGDisplayBounds, CGMainDisplayID};
     use objc2_security::{SessionAttributeBits, SessionGetInfo, callerSecuritySession};
     use serde_json::json;
     let mut security_id = 0;
@@ -22,9 +22,8 @@ pub fn session_info() -> Result<Value> {
             format!("SessionGetInfo failed: {status}"),
         ));
     }
-    let record = CGSessionCopyCurrentDictionary()
-        .map(cf::record)
-        .ok_or_else(|| Error::new("identity", "No graphical session dictionary"))?;
+    let record =
+        cf::session().ok_or_else(|| Error::new("identity", "No graphical session dictionary"))?;
     let on_console = cf::boolean(&record, "kCGSSessionOnConsoleKey")
         .or_else(|| cf::boolean(&record, "kCGSessionOnConsoleKey"))
         .ok_or_else(|| Error::new("identity", "Missing console-session state"))?;
