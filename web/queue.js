@@ -28,7 +28,7 @@ export class InputQueue {
     if (this.pending.length >= 32) {
       this.failed(
         new Error(
-          'Input is arriving faster than the helper can handle it. Take control again when ready.',
+          'Input is arriving faster than the helper can handle it. Choose Control again when ready.',
         ),
       );
       return;

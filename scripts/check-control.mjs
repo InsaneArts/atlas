@@ -60,7 +60,7 @@ try {
   await wait(400);
   assert.equal(readState().clicks, initial.clicks);
   results.checks.observationDoesNotInject = { passed: true };
-  await page.getByRole('button', { name: 'Take control', exact: true }).click();
+  await page.getByRole('button', { name: 'Control', exact: true }).click();
   await page.waitForFunction(
     () => document.querySelector('#control').getAttribute('aria-pressed') === 'true',
   );
@@ -212,7 +212,7 @@ try {
   results.checks.pauseReleasesOwnership = { passed: true };
   await page.getByRole('button', { name: 'Resume view', exact: true }).click();
   await page.waitForFunction(() => !document.querySelector('#control').disabled);
-  await page.getByRole('button', { name: 'Take control', exact: true }).click();
+  await page.getByRole('button', { name: 'Control', exact: true }).click();
   await page.waitForFunction(
     () => document.querySelector('#control').getAttribute('aria-pressed') === 'true',
   );
