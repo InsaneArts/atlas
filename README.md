@@ -3,100 +3,16 @@
 A second macOS desktop for an agent, so it can use GUI apps and tools without
 moving your windows, taking your keyboard and mouse, or covering your screen.
 
-A Rust CLI and local browser viewer drive a separate, logged-in helper account
-that stays in the background. Screenshots come from the helper's own session;
-mouse and keyboard events are posted only to that session's event tap. You keep
-working on your own desktop.
+Understudy drives a separate, logged-in helper account that stays in the
+background. Screenshots come from the helper's own session; mouse and keyboard
+events are posted only to that session's event tap. You keep working on your own
+desktop, and you can watch the helper or take control at any time.
 
-**Experimental.** Measured on macOS 27 with a 2560 × 1440 helper display: guarded
-clicks, Unicode text and shortcuts work in the hidden session. Drags, resizing,
-scrolling, native menus, alerts and Save/Open panels were qualified while an
-authenticated Screen Sharing session was connected to the helper; without one,
-Save/Open panels open but cannot be confirmed. `understudy verify-native` checks
-the current session instead of assuming either. Audio output is shared with yours.
-
-## Set up
-
-Requires macOS, Rust, a second standard account that has logged in once, and
-Understudy.app (signed) in /Applications, allowed Screen Recording and
-Accessibility inside that account. Account creation, its first login and macOS privacy
-consent stay manual. Apps in `/Applications` are shared; settings, credentials and
-home-directory tools belong to the helper account.
-
-```sh
-cargo build
-./understudy setup --helper NAME   # read-only report; proposes understudy.local.toml
-# Save the proposed TOML as understudy.local.toml (or copy examples/config.toml).
-./understudy install               # copy this build to the shared executable path
-./understudy start-input           # start, reset or upgrade the helper's input service
-./understudy setup --apply         # run Understudy's helper daemon privately
-./understudy doctor
-```
-
-`setup` without flags changes nothing; facts it cannot observe are reported as
-unknown, never as missing. `setup --apply` runs Understudy's own signed helper daemon as a
-managed LaunchAgent with a persistent private socket directory beside the existing
-job, moves input and the configuration over, then retires the old job through the
-new one. Every step is logged and resumable; `setup --rollback` restores the
-previous job and configuration.
-
-`doctor` reports connection, hidden session, permissions and input separately from
-native dialogs. `ready` never implies Save/Open works; run
-`understudy verify-native` (requires the compiled
-`tests/live/DesktopFixture.swift`) for a dated observation tied to the current
-session.
-
-## Use
-
-```sh
-./understudy monitor                                  # local viewer
-./understudy menubar                                  # menu bar + viewer
-./understudy capture                                  # save a helper screenshot
-./understudy apps
-./understudy run -- /usr/bin/open -a TextEdit
-./understudy input '[{"type":"click","x":1200,"y":880}]'
-./understudy environment run -- markdown2pdf --version
-```
-
-In the viewer, **Take control** connects mouse and keyboard; **Release control**,
-**Ctrl–Shift–Esc**, pausing or switching tabs releases them. Preview refresh is
-polling, not a video stream. The status pill says whether you are observing, an
-agent is acting, a viewer holds control, or an unknown outcome needs **Recover**;
-recovery never resumes input.
-
-`menubar` adds a status item showing the same state, a live thumbnail and the
-last action, with **Open Viewer** and **Release Control**. Quitting it stops the
-viewer. It is built from the embedded Swift source with the Xcode Command Line
-Tools on first use.
-
-Selected tools, settings and project paths can be provisioned into the helper as
-frozen, resumable plans (`understudy environment --help`; see
-`examples/environment.toml` and `examples/profile.toml`). This
-copies explicit selections only; it is not an account clone and never copies
-logins or keychains.
-
-## Safety model
-
-- Input requires the configured helper UID, its graphical session off-console and
-  the exact display epoch; any change invalidates control.
-- Sockets are only trusted when the kernel reports the helper as their owner.
-- One controller per helper at a time. An action whose outcome is unknown blocks
-  further control until `understudy restart` (or a resumed `setup`) establishes
-  it; nothing is replayed automatically.
-- Held keys and buttons are released on cancel, disconnect, lease expiry and
-  service exit.
-
-## Source
-
-- `src/bin/main.rs` — CLI; no TUI.
-- `src/lib/` — client, transport, session checks, ownership, viewer, setup,
-  native-dialog capability and environment provisioning.
-- `src/lib/native/` — helper-side input service, events, leases, crash journal and
-  window list.
-- `src/lib/daemon/` — the helper daemon: capture, commands and session facts.
-- `web/` — viewer; `menubar/` — the menu bar companion.
-- `xtask/` — release tooling.
-- `tests/live/DesktopFixture.swift` — disposable AppKit fixture for live checks.
+**Experimental.** Measured on macOS 27 with a 2560 × 1440 helper display: clicks,
+Unicode text, shortcuts, drags, scrolling, native menus and alerts work in the
+hidden session. Save/Open panels open but can only be confirmed while a Screen
+Sharing session is connected to the helper; `understudy verify-native` checks the
+current session instead of assuming. Audio output is shared with yours.
 
 ## Install
 
@@ -105,30 +21,110 @@ curl -fsSL https://raw.githubusercontent.com/InsaneArts/understudy/main/install.
 ```
 
 Verifies the release checksum and its Developer ID signature, installs
-Understudy.app in /Applications (where the helper can run it) and links `understudy` into
-~/.local/bin. Set `GITHUB_TOKEN` while the repository is private. Running it
-again updates.
+Understudy.app in /Applications (where the helper account can run it too) and
+links `understudy` into `~/.local/bin`. Set `GITHUB_TOKEN` while the repository is
+private. Running it again updates.
 
-## Release
+## Set up
 
 ```sh
+understudy init
+```
+
+A guided setup, safe to run again. It asks which account to use as the helper (or
+creates one), asks for your administrator password once to install the helper's
+job, has you sign in to the helper and click **Allow** for Screen Recording and
+Accessibility there, then verifies everything and reports ready. It never types
+or stores a password and never changes privacy settings for you.
+
+## Use
+
+```sh
+understudy doctor                                     # is everything ready?
+understudy screenshot                                 # a helper screenshot
+understudy run -- /usr/bin/open -a TextEdit           # a command in the helper
+understudy click 1200 880                             # input, in display points
+understudy type "hello"
+understudy click --app TextEdit --name "Save"         # a named element
+understudy agent-guide                                # how an agent should use it
+```
+
+Every command prints JSON and exits non-zero on failure. An action whose outcome
+is unknown blocks further control until `understudy restart` recovers; nothing is
+replayed.
+
+## Watch and take control
+
+- `understudy menubar` — a menu bar item with the helper's state, a live
+  thumbnail and the last action; **Open Viewer**, **Release Control**,
+  **Switch to Helper…**, **Recover** and **Open at Login**.
+- `understudy monitor` — the local browser viewer. **Control** connects your mouse
+  and keyboard; **Observe**, Ctrl–Shift–Esc, pausing or switching tabs releases
+  them.
+- `understudy switch` — opens the macOS login window to switch to the helper (or
+  any account); you type its password there.
+
+## Update and remove
+
+```sh
+understudy update        # verified download, atomic swap, helper moved onto it
+understudy uninstall     # asks first; keeps the helper account
+```
+
+`update` resumes an interrupted update before anything else. `uninstall` moves
+the app to the Trash and prints how to remove the helper account if you want to.
+
+## Safety model
+
+- Input requires the configured helper UID, its graphical session off-console and
+  the exact display epoch; any change invalidates control.
+- Sockets are only trusted when the kernel reports the helper as their owner.
+- One controller per helper at a time. Held keys and buttons are released on
+  cancel, disconnect, lease expiry and service exit.
+- The helper daemon is Understudy's own Developer ID-signed app; setup verifies
+  its signature, team and the code actually running before trusting it.
+
+## Develop
+
+Requires Rust and the Xcode Command Line Tools.
+
+```sh
+cargo build
+./target/debug/understudy setup --helper NAME   # read-only report and proposal
 cargo xtask dist --sign "Developer ID Application: …" [--notarize PROFILE]
 ```
 
-Builds Understudy.app for Apple silicon and Intel, signs the menu bar companion
-and the app with the Developer ID, checks it against the requirement setup
-enforces, and writes `target/dist/Understudy-VERSION-macos.zip` with its
-SHA-256. `--notarize` uses a `notarytool` keychain profile, then staples.
+`setup` without flags changes nothing; `setup --apply` moves an existing capture
+job to Understudy's managed helper job (logged, resumable, `--rollback`). `xtask
+dist` builds the universal app, signs the menu bar companion and the app, checks
+the Developer ID requirement and writes `target/dist/Understudy-VERSION-macos.zip`
+with its SHA-256.
 
-## Check
+Selected tools, settings and project paths can be provisioned into the helper as
+frozen, resumable plans (`understudy environment --help`; see
+`examples/environment.toml` and `examples/profile.toml`). This copies explicit
+selections only; it never copies logins or keychains.
+
+### Source
+
+- `src/bin/main.rs` — CLI; no TUI.
+- `src/lib/` — client, transport, session checks, ownership, viewer, setup, init,
+  update and environment provisioning.
+- `src/lib/daemon/` — the helper daemon: capture, commands and session facts.
+- `src/lib/native/` — helper-side input service, events, leases, crash journal and
+  window list.
+- `menubar/` — the menu bar app (Swift package); `web/` — the viewer.
+- `xtask/` — release tooling; `install.sh` — the installer.
+- `tests/live/DesktopFixture.swift` — disposable AppKit fixture for live checks.
+
+### Check
 
 ```sh
 cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings
 cargo test
-npm ci
-npm run format:check
-npm test
+swift test --package-path menubar
+npm ci && npm run format:check && npm test
 ```
 
 Unit checks do not qualify a hidden desktop. Live checks send real input to the
