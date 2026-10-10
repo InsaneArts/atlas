@@ -10,7 +10,7 @@ use understudy::{
     client::{Client, png_dimensions, validate_completion},
     config::Config,
     control::{ActionPermit, Controller, Lease},
-    session::{Display, diagnose, require_hidden},
+    session::{Display, diagnose, input_current, require_hidden},
     transport::Transport,
 };
 
@@ -648,4 +648,48 @@ fn pending_mutations_are_visible_to_legacy_controllers() {
     let left: Vec<String> = serde_json::from_slice(&std::fs::read(&marker).unwrap()).unwrap();
     assert_eq!(left, vec!["old".to_owned()]);
     assert_eq!(controller.require_known().unwrap_err().code, "uncertain");
+}
+
+#[test]
+fn a_replacement_counts_only_when_ready_current_idle_and_expected() {
+    let current = || {
+        let mut state = ready_status();
+        state["inputService"]["build"] = json!("b");
+        state["inputService"]["controlActive"] = json!(false);
+        state["inputService"]["heldInput"] = json!(false);
+        state["installedBuild"] = json!("b");
+        state
+    };
+    assert!(input_current(&current(), 502, 77));
+    assert!(!input_current(&current(), 502, 78), "another PID");
+    for (field, value) in [
+        ("heldInput", json!(true)),
+        ("controlActive", json!(true)),
+        ("build", json!("old")),
+        ("accessibility", json!(false)),
+    ] {
+        let mut state = current();
+        state["inputService"][field] = value;
+        assert!(!input_current(&state, 502, 77), "{field}");
+    }
+    let mut state = current();
+    state["sessionProof"]["onConsole"] = json!(true);
+    assert!(!input_current(&state, 502, 77), "visible helper");
+}
+
+#[test]
+fn an_unreadable_installed_build_is_retried_not_cached() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let client = Client::new(config(dir.path())).unwrap();
+    assert_eq!(client.installed_build(), None);
+    std::fs::write(dir.path().join("probe"), b"abc").unwrap();
+    let probe = dir.path().join("probe");
+    std::fs::set_permissions(&probe, std::fs::Permissions::from_mode(0o000)).unwrap();
+    assert_eq!(client.installed_build(), None);
+    std::fs::set_permissions(&probe, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(
+        client.installed_build().as_deref(),
+        Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+    );
 }

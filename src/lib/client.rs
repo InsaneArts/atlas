@@ -4,7 +4,7 @@ use crate::{
     control::{Controller, SharedLease, write_private},
     digest::file_sha256,
     error::{Error, Result},
-    session::{Display, Epoch, Session, require_hidden},
+    session::{Display, Epoch, Session, input_current, require_hidden},
     transport::{Transport, run_output},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -375,9 +375,11 @@ impl Client {
         {
             return build.clone();
         }
-        let build = file_sha256(path);
-        *cache = Some((key, build.clone()));
-        build
+        // A failed read is not cached: permissions may be repaired without
+        // changing the identity key.
+        let build = file_sha256(path)?;
+        *cache = Some((key, Some(build.clone())));
+        Some(build)
     }
     async fn launch_input(&self) -> Result<Value> {
         let status = self.status().await;
@@ -435,14 +437,15 @@ impl Client {
             .filter(|pid| *pid > 1)
             .ok_or_else(|| Error::new("startup", "The running input service has no valid PID"))?;
         let generation = self.controller.quarantine()?;
-        self.stop_input(previous).await?;
+        if let Err(error) = self.stop_input(previous).await {
+            if !error.uncertain {
+                self.controller.clear_if(&generation)?;
+            }
+            return Err(error);
+        }
         let pid = self.spawn_input().await?;
         let state = self.status().await;
-        let replacement = &state["inputService"];
-        if replacement["heldInput"] != false
-            || !replacement["build"].is_string()
-            || replacement["build"] != state["installedBuild"]
-        {
+        if !input_current(&state, self.config.helper_uid, pid) {
             return Err(Error::new(
                 "uncertain",
                 "The replacement input service is not confirmed current with nothing held",
@@ -455,52 +458,46 @@ impl Client {
             "upgraded": true,
             "previousPid": previous,
             "pid": pid,
-            "build": replacement["build"],
+            "build": state["inputService"]["build"],
         }))
     }
-    /// SIGTERM exactly `pid`, after the helper confirms it is still the input
-    /// service executable running as the helper, then wait for its endpoint
-    /// to close.
+    /// Ask exactly `pid` to shut down over its authenticated socket, then wait
+    /// until its endpoint is closed and the process is gone. Anything short of
+    /// that is uncertain; a definitive refusal changed nothing.
     async fn stop_input(&self, pid: u32) -> Result<()> {
-        let script = concat!(
-            "[ \"$(/bin/ps -o uid= -p \"$1\" | /usr/bin/tr -d ' ')\" = \"$2\" ] && ",
-            "[ \"$(/bin/ps -o comm= -p \"$1\")\" = \"$3\" ] && exec /bin/kill -TERM \"$1\"",
-        );
-        let request = json!({
-            "op": "run",
-            "argv": [
-                "/bin/sh", "-c", script, "sh",
-                pid.to_string(),
-                self.config.helper_uid.to_string(),
-                self.config.identity_probe,
-            ],
-            "timeoutMs": 3000,
-        });
-        let reply = self.transport.call(&request).await?;
-        if reply["ok"] != true || reply["exitCode"] != 0 {
-            return Err(Error::new(
-                "uncertain",
-                "The running input service could not be verified and stopped",
-            )
-            .uncertain());
-        }
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while self
-            .input_transport()
-            .call(&json!({ "op": "hello" }))
+        self.native_request(json!({ "op": "shutdown", "pid": pid }))
             .await
-            .is_ok_and(|hello| hello["pid"] == pid)
-        {
+            .map_err(|error| {
+                if error.uncertain {
+                    error
+                } else {
+                    Error::new(
+                        error.code,
+                        format!("The running input service refused to stop: {}", error.error),
+                    )
+                }
+            })?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let closed = matches!(
+                tokio::net::UnixStream::connect(&self.config.input_socket).await,
+                Err(error) if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                )
+            );
+            if closed && !process_exists(pid) {
+                return Ok(());
+            }
             if Instant::now() >= deadline {
                 return Err(Error::new(
                     "uncertain",
-                    "The previous input service did not exit after SIGTERM",
+                    "The previous input service did not confirm exit",
                 )
                 .uncertain());
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        Ok(())
     }
     /// Start the installed executable as the helper's input service. Launching
     /// is a pending mutation until a ready service answers.
@@ -728,4 +725,26 @@ pub fn png_dimensions(png: &[u8]) -> Result<(u32, u32)> {
         return Err(invalid());
     }
     Ok((width, height))
+}
+
+/// Whether a process exists, whoever owns it (EPERM still means it exists).
+fn process_exists(pid: u32) -> bool {
+    let Ok(pid) = i32::try_from(pid) else {
+        return false;
+    };
+    // SAFETY: signal 0 only checks for existence and permission.
+    let alive = unsafe { libc::kill(pid, 0) } == 0;
+    alive || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::process_exists;
+
+    #[test]
+    fn process_existence_ignores_ownership() {
+        assert!(process_exists(std::process::id()));
+        assert!(process_exists(1), "launchd exists though owned by root");
+        assert!(!process_exists(u32::MAX));
+    }
 }
