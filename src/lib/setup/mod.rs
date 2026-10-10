@@ -157,10 +157,11 @@ pub const IDENTIFIER: &str = "com.insanearts.understudy";
 /// The Developer ID team that signs Understudy; consent follows it.
 pub const TEAM: &str = "A474HM679A";
 
-/// Whether `path` validly satisfies a Developer ID Application signature
-/// for Understudy by its team, the requirement under which macOS consent
-/// persists.
-pub fn developer_id(path: &Path) -> bool {
+/// Whether `target` (a path, or a PID as text) validly satisfies a
+/// Developer ID Application signature for Understudy by its team, the
+/// requirement under which macOS consent persists. For a running process
+/// this also checks that its loaded code still matches the file on disk.
+fn satisfies_developer_id(target: &std::ffi::OsStr) -> bool {
     let requirement = format!(
         "=anchor apple generic and identifier \"{IDENTIFIER}\" \
          and certificate 1[field.1.2.840.113635.100.6.2.6] \
@@ -170,15 +171,21 @@ pub fn developer_id(path: &Path) -> bool {
     Command::new("/usr/bin/codesign")
         .args(["--verify", "--strict", "-R"])
         .arg(requirement)
-        .arg(path)
+        .arg(target)
         .output()
         .is_ok_and(|output| output.status.success())
 }
 
-/// The signature of the code running as `pid` — what is loaded, not the
-/// file now at its path.
-fn running_signature(pid: u32) -> Option<Signature> {
-    signature(Path::new(&pid.to_string()))
+/// Whether the file at `path` is Understudy signed by its Developer ID.
+pub fn developer_id(path: &Path) -> bool {
+    satisfies_developer_id(path.as_os_str())
+}
+
+/// Whether process `pid` runs Understudy signed by its Developer ID, and
+/// its loaded code is exactly the file now on disk. (`codesign -d` on a PID
+/// describes the file at its path, so only verification proves this.)
+fn running_developer_id(pid: u32) -> bool {
+    satisfies_developer_id(pid.to_string().as_ref())
 }
 
 fn executable_of(pid: u32) -> Option<PathBuf> {
@@ -579,8 +586,8 @@ fn next_steps(report: &Value) -> Vec<String> {
 mod tests {
     use super::*;
 
-    /// Only Understudy signed by its own Developer ID team passes; the
-    /// signature of a running process is read from its loaded code.
+    /// Only Understudy signed by its own Developer ID team passes, as a file
+    /// or as a running process.
     #[test]
     fn signatures_are_checked_against_understudys_identity() {
         assert!(
@@ -589,8 +596,10 @@ mod tests {
         );
         let test = std::env::current_exe().unwrap();
         assert!(!developer_id(&test), "ad-hoc signed test build");
-        let running = running_signature(std::process::id()).unwrap();
-        assert_eq!(running.cdhash, signature(&test).unwrap().cdhash);
+        assert!(
+            !running_developer_id(std::process::id()),
+            "this ad-hoc test process is not Understudy's Developer ID"
+        );
     }
 
     #[test]

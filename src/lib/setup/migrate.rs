@@ -11,7 +11,7 @@
 use super::{
     account_with_uid, endpoint, executable_of,
     helper::{Agent, LABEL, Layout, Request, plist, text_sha256},
-    helper_job, running_signature, signature,
+    helper_job, running_developer_id, signature,
 };
 use crate::{
     client::{Client, timestamp},
@@ -346,18 +346,20 @@ impl Migration {
             .as_u64()
             .and_then(|pid| u32::try_from(pid).ok())
             .ok_or_else(|| problem("The managed helper daemon reported no PID"))?;
-        let running = running_signature(pid).and_then(|signature| signature.cdhash);
-        if running.as_deref() != Some(self.log.plan.cdhash.as_str()) {
-            let installed = executable_of(pid)
-                .and_then(|path| signature(&path))
-                .and_then(|signature| signature.cdhash);
+        // The file it runs must be the planned build, and its loaded code
+        // must be valid, Understudy's, and still that file.
+        let installed = executable_of(pid)
+            .and_then(|path| signature(&path))
+            .and_then(|signature| signature.cdhash);
+        if installed.as_deref() != Some(self.log.plan.cdhash.as_str()) {
             return Err(problem(
-                if installed.as_deref() == Some(&self.log.plan.cdhash) {
-                    "The helper daemon still runs the previous build; run understudy restart, then \
-                 setup --apply again"
-                } else {
-                    "The managed helper daemon is not the signed binary that was planned"
-                },
+                "The managed helper daemon is not the signed binary that was planned",
+            ));
+        }
+        if !running_developer_id(pid) {
+            return Err(problem(
+                "The helper daemon still runs a previous build; run understudy restart, then \
+                 setup --apply again",
             ));
         }
         // SAFETY: getuid has no pointer arguments or preconditions.
