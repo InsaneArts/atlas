@@ -93,8 +93,21 @@ logins or keychains.
   native-dialog capability and environment provisioning.
 - `src/lib/native/` — helper-side input service, events, leases, crash journal and
   window list.
-- `web/` — viewer.
+- `src/lib/daemon/` — the helper daemon: capture, commands and session facts.
+- `web/` — viewer; `menubar/` — the menu bar companion.
+- `xtask/` — release tooling.
 - `tests/live/DesktopFixture.swift` — disposable AppKit fixture for live checks.
+
+## Release
+
+```sh
+cargo xtask dist --sign "Developer ID Application: …" [--notarize PROFILE]
+```
+
+Builds Understudy.app for Apple silicon and Intel, signs the menu bar companion
+and the app with the Developer ID, checks it against the requirement setup
+enforces, and writes `target/dist/Understudy-VERSION-macos.zip` with its
+SHA-256. `--notarize` uses a `notarytool` keychain profile, then staples.
 
 ## Check
 

@@ -46,8 +46,15 @@ objc2-core-graphics = { version = "0.3.2", default-features = false, features = 
 objc2-image-io = { version = "0.3.2", default-features = false, features = ["std", "CGImageDestination", "objc2-core-graphics"] }
 objc2-security = { version = "0.3.2", default-features = false, features = ["std", "AuthSession"] }
 
-[lints.rust]
+[lints]
+workspace = true
+
+[workspace]
+members = ["xtask"]
+default-members = [".", "xtask"]
+
+[workspace.lints.rust]
 unsafe_code = "deny"
 
-[lints.clippy]
+[workspace.lints.clippy]
 undocumented_unsafe_blocks = "deny"
