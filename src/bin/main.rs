@@ -73,9 +73,9 @@ enum Command {
         #[arg(long)]
         socket: PathBuf,
     },
-    /// Inspect the helper setup, or migrate capture to the private managed layout.
+    /// Inspect the helper setup, or move it to Understudy's own helper daemon.
     #[command(
-        long_about = "Without flags, report the helper account, configuration, endpoints and services without changing anything. --apply runs the unchanged capture daemon as a managed LaunchAgent on a private socket directory beside the existing job, moves input and the configuration over, then retires the old job, recording every step so an interruption resumes. --rollback restores the previous job and configuration."
+        long_about = "Without flags, report the helper account, configuration, endpoints and services without changing anything. --apply runs Understudy's own signed helper daemon as a managed LaunchAgent on a private socket directory beside the existing capture job, moves input and the configuration over once it is verified, then retires the old job, recording every step so an interruption resumes. --rollback restores the previous job and configuration."
     )]
     Setup {
         /// Helper account short name. Defaults to the configured helper.

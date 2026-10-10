@@ -152,6 +152,35 @@ fn signature(path: &Path) -> Option<Signature> {
         .then(|| parse_signature(&String::from_utf8_lossy(&output.stderr)))
 }
 
+/// The bundle identifier the helper daemon must be signed as.
+pub const IDENTIFIER: &str = "com.insanearts.understudy";
+/// The Developer ID team that signs Understudy; consent follows it.
+pub const TEAM: &str = "A474HM679A";
+
+/// Whether `path` validly satisfies a Developer ID Application signature
+/// for Understudy by its team, the requirement under which macOS consent
+/// persists.
+pub fn developer_id(path: &Path) -> bool {
+    let requirement = format!(
+        "=anchor apple generic and identifier \"{IDENTIFIER}\" \
+         and certificate 1[field.1.2.840.113635.100.6.2.6] \
+         and certificate leaf[field.1.2.840.113635.100.6.1.13] \
+         and certificate leaf[subject.OU] = \"{TEAM}\""
+    );
+    Command::new("/usr/bin/codesign")
+        .args(["--verify", "--strict", "-R"])
+        .arg(requirement)
+        .arg(path)
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+/// The signature of the code running as `pid` — what is loaded, not the
+/// file now at its path.
+fn running_signature(pid: u32) -> Option<Signature> {
+    signature(Path::new(&pid.to_string()))
+}
+
 fn executable_of(pid: u32) -> Option<PathBuf> {
     let mut buffer = vec![0_u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
     // SAFETY: the buffer is writable for the length passed.
@@ -549,6 +578,20 @@ fn next_steps(report: &Value) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only Understudy signed by its own Developer ID team passes; the
+    /// signature of a running process is read from its loaded code.
+    #[test]
+    fn signatures_are_checked_against_understudys_identity() {
+        assert!(
+            !developer_id(Path::new("/bin/ls")),
+            "Apple-signed, not ours"
+        );
+        let test = std::env::current_exe().unwrap();
+        assert!(!developer_id(&test), "ad-hoc signed test build");
+        let running = running_signature(std::process::id()).unwrap();
+        assert_eq!(running.cdhash, signature(&test).unwrap().cdhash);
+    }
 
     #[test]
     fn accounts_resolve_through_directory_services() {

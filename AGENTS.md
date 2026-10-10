@@ -6,8 +6,10 @@
   configured hidden helper login. The browser viewer may run on the main desktop.
 - Keep UID, graphical-session, off-console and exact display-epoch guards.
   Post only to the session event tap; never fall back to global HID input.
-- Use normal macOS consent. Do not modify TCC or replace the installed consented
-  capture helper. The shared Rust input executable is a separate process.
+- Use normal macOS consent. Do not modify TCC. The helper daemon is Understudy's
+  own Developer ID-signed app, whose consent persists across updates signed by
+  the same identity; never ship it unsigned or ad-hoc signed. The shared Rust
+  input executable is a separate process.
 - Cancel ownership independently of event execution. Retain controller exclusion
   through cleanup; keep every unacknowledged mutation pending until recovery.
 - Preserve investigation evidence. docs/, runs/, local configuration and archived

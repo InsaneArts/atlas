@@ -22,12 +22,14 @@ use std::{
 
 /// Private Understudy directory in the helper home and its entries.
 pub const ROOT: &str = ".understudy";
-pub const CAPTURE: &str = "capture";
+/// Where the helper daemon's socket lives.
+pub const DAEMON: &str = "helper";
 pub const INPUT: &str = "input";
 const LOGS: &str = "logs";
 const BACKUP: &str = "backup";
 /// Label of the capture job Understudy manages.
-pub const LABEL: &str = "dev.understudy.capture";
+/// The managed LaunchAgent running Understudy's own helper daemon.
+pub const LABEL: &str = "com.insanearts.understudy.helper";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -35,7 +37,8 @@ pub struct Agent {
     pub label: String,
     pub program: PathBuf,
     pub uid: u32,
-    pub socket_dir: PathBuf,
+    pub controller_uid: u32,
+    pub socket: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,10 +124,13 @@ pub fn plist(agent: &Agent, logs: &Path) -> String {
     let string = |value: &str| format!("<string>{}</string>", escape(value));
     let arguments = [
         agent.program.to_string_lossy().into_owned(),
+        "helper-serve".into(),
         "--uid".into(),
         agent.uid.to_string(),
-        "--socket-dir".into(),
-        agent.socket_dir.to_string_lossy().into_owned(),
+        "--controller-uid".into(),
+        agent.controller_uid.to_string(),
+        "--socket".into(),
+        agent.socket.to_string_lossy().into_owned(),
     ]
     .iter()
     .map(|argument| format!("\t\t{}\n", string(argument)))
@@ -140,6 +146,7 @@ pub fn plist(agent: &Agent, logs: &Path) -> String {
          \t<key>RunAtLoad</key>\n\t<true/>\n\
          \t<key>KeepAlive</key>\n\t<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>\n\t</dict>\n\
          \t<key>LimitLoadToSessionType</key>\n\t<string>Aqua</string>\n\
+         \t<key>ProcessType</key>\n\t<string>Interactive</string>\n\
          \t<key>StandardOutPath</key>\n\t{log}\n\
          \t<key>StandardErrorPath</key>\n\t{log}\n\
          </dict>\n</plist>\n",
@@ -165,8 +172,12 @@ impl Layout {
     pub fn logs(&self) -> PathBuf {
         self.root().join(LOGS)
     }
-    pub fn capture(&self) -> PathBuf {
-        self.root().join(CAPTURE)
+    pub fn daemon(&self) -> PathBuf {
+        self.root().join(DAEMON)
+    }
+    /// The managed daemon's socket.
+    pub fn socket(&self) -> PathBuf {
+        self.daemon().join(format!("{}.sock", self.uid))
     }
     pub fn agent_plist(&self, label: &str) -> PathBuf {
         self.home
@@ -373,7 +384,7 @@ fn prepare(layout: &Layout, controller: &str) -> Result<Value> {
     let root = layout.root();
     let directories = [
         (root.clone(), true),
-        (root.join(CAPTURE), true),
+        (root.join(DAEMON), true),
         (root.join(INPUT), true),
         (root.join(LOGS), false),
         (root.join(BACKUP), false),
@@ -449,16 +460,16 @@ fn atomic_write(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
 }
 
 fn install(layout: &Layout, agent: &Agent) -> Result<Value> {
-    if agent.label != LABEL || agent.socket_dir != layout.capture() {
+    if agent.label != LABEL || agent.uid != layout.uid || agent.socket != layout.socket() {
         return Err(problem(
-            "Only the managed capture agent in the private layout can be installed",
+            "Only the managed helper daemon in the private layout can be installed",
         ));
     }
     if !fs::symlink_metadata(&agent.program).is_ok_and(|metadata| metadata.is_file())
         || !agent.program.is_absolute()
     {
         return Err(problem(
-            "The capture program must be an absolute regular file",
+            "The helper daemon program must be an absolute regular file",
         ));
     }
     let text = plist(agent, &layout.logs());
@@ -616,7 +627,8 @@ mod tests {
             label: LABEL.into(),
             program: "/Users/Shared/A&B <x>/sessiond".into(),
             uid: 502,
-            socket_dir: "/Users/h/.understudy/capture".into(),
+            controller_uid: 501,
+            socket: "/Users/h/.understudy/helper/502.sock".into(),
         };
         let text = plist(&agent, Path::new("/Users/h/.understudy/logs"));
         assert!(text.contains("<string>/Users/Shared/A&amp;B &lt;x&gt;/sessiond</string>"));
@@ -641,7 +653,14 @@ mod tests {
             parsed["ProgramArguments"][0],
             "/Users/Shared/A&B <x>/sessiond"
         );
-        assert_eq!(parsed["ProgramArguments"][2], "502");
+        assert_eq!(parsed["ProgramArguments"][1], "helper-serve");
+        assert_eq!(parsed["ProgramArguments"][3], "502");
+        assert_eq!(parsed["ProgramArguments"][5], "501");
+        assert_eq!(
+            parsed["ProgramArguments"][7],
+            "/Users/h/.understudy/helper/502.sock"
+        );
+        assert_eq!(parsed["ProcessType"], "Interactive");
         assert_eq!(parsed["KeepAlive"]["SuccessfulExit"], false);
         assert_eq!(parsed["LimitLoadToSessionType"], "Aqua");
     }
@@ -732,15 +751,17 @@ mod tests {
             uid: unsafe { libc::getuid() },
             home: "/nonexistent-home".into(),
         };
-        let agent = |label: &str, socket_dir: PathBuf| Agent {
+        let agent = |label: &str, socket: PathBuf| Agent {
             label: label.into(),
             program: "/bin/sh".into(),
             uid: layout.uid,
-            socket_dir,
+            controller_uid: 0,
+            socket,
         };
         for agent in [
-            agent("other.label", layout.capture()),
-            agent(LABEL, layout.root().join("capture/../elsewhere")),
+            agent("other.label", layout.socket()),
+            agent(LABEL, layout.root().join("helper/../elsewhere.sock")),
+            agent(LABEL, layout.daemon().join("other.sock")),
             agent(LABEL, "/tmp/x".into()),
         ] {
             assert!(install(&layout, &agent).is_err());
@@ -817,7 +838,7 @@ mod tests {
     fn prepare_creates_repairs_and_refuses_foreign_access() {
         let (_dir, layout, _) = sandbox();
         prepare(&layout, "root").unwrap();
-        let capture = layout.capture();
+        let capture = layout.daemon();
         let mode = |path: &Path| fs::metadata(path).unwrap().mode() & 0o777;
         assert_eq!(mode(&capture), 0o700);
         assert_eq!(acl_policy(&acl_lines(&capture).unwrap(), Some(0)), Ok(true));
