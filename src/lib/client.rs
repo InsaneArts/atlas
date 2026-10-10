@@ -349,7 +349,8 @@ impl Client {
         if lease.is_none() {
             let cleanup = self.native_control("release", owner).await;
             if result.is_ok() && cleanup.is_err() {
-                self.controller.quarantine()?;
+                // Nothing will settle this release; it stays for recovery.
+                drop(self.controller.quarantine()?);
                 return Err(Error::new(
                     "uncertain",
                     "Input finished but native release was not confirmed",
@@ -642,7 +643,8 @@ impl Client {
     pub async fn restart(&self) -> Result<Value> {
         let _ownership = self.controller.acquire(true)?;
         let before = self.identity().await?;
-        self.controller.quarantine()?;
+        // Held through verification, so the restart reads as in progress.
+        let _recovery = self.controller.quarantine()?;
         // Input has its own process. Clear held state there before restarting
         // the capture/command helper; a new capture PID alone proves nothing
         // about an uncertain mouse or keyboard action.
@@ -718,12 +720,18 @@ impl Client {
                 "The observation expired before dispatch",
             ));
         }
-        let generation = self.controller.quarantine()?;
+        // A restart runs under the claim its caller holds through
+        // verification; every other mutation claims its own generation.
+        let generation = (request["op"] != "restart")
+            .then(|| self.controller.quarantine())
+            .transpose()?;
         let pending = match connection.dispatch(&request).await {
             Ok(pending) => pending,
             Err(error) => {
-                if !error.uncertain && request["op"] != "restart" {
-                    self.controller.clear_if(&generation)?;
+                if let Some(generation) = &generation
+                    && !error.uncertain
+                {
+                    self.controller.clear_if(generation)?;
                 }
                 return Err(error);
             }
@@ -731,9 +739,9 @@ impl Client {
         drop(authorization);
         let mut reply = pending.finish().await?;
         validate_completion(&request, &reply)?;
-        if request["op"] != "restart"
+        if let Some(generation) = &generation
             && reply["uncertain"] != true
-            && let Err(error) = self.controller.clear_if(&generation)
+            && let Err(error) = self.controller.clear_if(generation)
         {
             reply["warnings"] = json!([format!(
                 "Operation completed, but its pending marker could not be cleared: {error}"
