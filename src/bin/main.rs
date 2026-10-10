@@ -19,6 +19,7 @@ struct Cli {
     #[arg(
         long,
         env = "UNDERSTUDY_CONFIG",
+        hide_env_values = true,
         default_value = understudy::config::DEFAULT_PATH,
         global = true
     )]
@@ -167,7 +168,14 @@ enum Command {
         max: usize,
     },
     /// Print a concise guide for an LLM agent using Understudy.
-    AgentGuide,
+    AgentGuide {
+        /// Print the agent plugin's skill (SKILL.md) instead.
+        #[arg(long, hide = true, conflicts_with = "commands")]
+        skill: bool,
+        /// Print the command reference (Markdown) instead.
+        #[arg(long, hide = true)]
+        commands: bool,
+    },
     /// Whether selected tools run and apps are installed in the helper account.
     Readiness {
         #[arg(long = "tool")]
@@ -284,9 +292,48 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
+    /// Connect Claude Code and Codex to Understudy (a plugin that teaches the
+    /// agent to use it and guides setup), or show which are connected.
+    Agents {
+        #[command(subcommand)]
+        action: Option<AgentsCommand>,
+    },
     /// After an update, run by the new executable: move the helper onto it.
     #[command(hide = true)]
     UpdateFinish,
+}
+
+#[derive(Subcommand)]
+enum AgentsCommand {
+    /// Which agents are on this Mac and whether Understudy is connected.
+    Status {
+        /// One plain line for an agent's session start.
+        #[arg(long)]
+        brief: bool,
+    },
+    /// Connect the plugin to Claude Code and/or Codex (all installed by default).
+    Install {
+        #[arg(long)]
+        claude: bool,
+        #[arg(long)]
+        codex: bool,
+    },
+    /// Disconnect the plugin from Claude Code and/or Codex.
+    Remove {
+        #[arg(long)]
+        claude: bool,
+        #[arg(long)]
+        codex: bool,
+    },
+}
+
+/// The agents named by --claude/--codex (none means every installed one).
+fn chosen(claude: bool, codex: bool) -> Vec<understudy::agents::Agent> {
+    use understudy::agents::Agent;
+    [(claude, Agent::Claude), (codex, Agent::Codex)]
+        .into_iter()
+        .filter_map(|(on, agent)| on.then_some(agent))
+        .collect()
 }
 
 #[derive(Subcommand)]
@@ -427,8 +474,14 @@ async fn execute(cli: Cli) -> Result<Value> {
         Command::EnvironmentWorker { packet, apply } => {
             return environment::worker(&packet, apply);
         }
-        Command::AgentGuide => {
-            print!("{}", agent::GUIDE);
+        Command::AgentGuide { skill, commands } => {
+            if skill {
+                print!("{}", agent::skill());
+            } else if commands {
+                print!("{}", command_reference());
+            } else {
+                print!("{}", agent::GUIDE);
+            }
             return Ok(Value::Null);
         }
         Command::SessionInfo => return understudy::native::session_info(),
@@ -452,6 +505,21 @@ async fn execute(cli: Cli) -> Result<Value> {
         } => return update(&cli.config, allow_unnotarized, force, version),
         Command::UpdateFinish => return update_finish(&cli.config),
         Command::Init => return understudy::init::run(&cli.config).await,
+        Command::Agents { action } => {
+            return match action.unwrap_or(AgentsCommand::Status { brief: false }) {
+                AgentsCommand::Status { brief: true } => {
+                    println!("{}", understudy::agents::brief(&cli.config).await);
+                    Ok(Value::Null)
+                }
+                AgentsCommand::Status { brief: false } => Ok(understudy::agents::status()),
+                AgentsCommand::Install { claude, codex } => {
+                    understudy::agents::change(&chosen(claude, codex), false)
+                }
+                AgentsCommand::Remove { claude, codex } => {
+                    understudy::agents::change(&chosen(claude, codex), true)
+                }
+            };
+        }
         Command::Uninstall { keep_config, yes } => {
             return understudy::uninstall::run(&cli.config, keep_config, yes).await;
         }
@@ -478,12 +546,13 @@ async fn execute(cli: Cli) -> Result<Value> {
         | Command::SessionInfo
         | Command::WindowsInfo
         | Command::ElementsInfo { .. }
-        | Command::AgentGuide
+        | Command::AgentGuide { .. }
         | Command::EnvironmentWorker { .. }
         | Command::SetupHelper { .. }
         | Command::Update { .. }
         | Command::UpdateFinish
         | Command::Init
+        | Command::Agents { .. }
         | Command::Uninstall { .. }
         | Command::Switch { .. } => {
             unreachable!("these commands return above")
@@ -831,7 +900,32 @@ fn update_finish(config: &std::path::Path) -> Result<Value> {
         }
         done.push(step.join(" "));
     }
-    Ok(json!({"ok": true, "completedSteps": done}))
+    let agents = understudy::agents::refresh();
+    Ok(json!({"ok": true, "completedSteps": done, "agents": agents}))
+}
+
+/// Every visible command with its full help, as Markdown: the agent
+/// plugin's commands reference (a test keeps the plugin's copy equal).
+fn command_reference() -> String {
+    use clap::CommandFactory;
+    let mut text = String::from(
+        "# Understudy commands\n\nGenerated from `understudy --help`. Every command prints \
+         JSON and exits non-zero on failure.\n",
+    );
+    let mut root = Cli::command().bin_name("understudy");
+    root.build();
+    for command in root.get_subcommands_mut() {
+        if command.is_hide_set() {
+            continue;
+        }
+        let name = command.get_name().to_owned();
+        let help = command.render_long_help().to_string();
+        text.push_str(&format!(
+            "\n## understudy {name}\n\n```text\n{}\n```\n",
+            help.trim_end()
+        ));
+    }
+    text
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -894,6 +988,18 @@ impl AppTarget {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The agent plugin's command reference is exactly this CLI's help.
+    #[test]
+    fn the_plugin_command_reference_matches_this_cli() {
+        let checked_in =
+            include_str!("../../agents/understudy/skills/understudy/references/commands.md");
+        assert_eq!(
+            checked_in,
+            command_reference(),
+            "regenerate with: understudy agent-guide --commands"
+        );
+    }
 
     fn parse(args: &[&str]) -> std::result::Result<Cli, clap::Error> {
         Cli::try_parse_from(std::iter::once("understudy").chain(args.iter().copied()))

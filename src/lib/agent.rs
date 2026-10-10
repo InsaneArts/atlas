@@ -19,6 +19,46 @@ use unicode_segmentation::UnicodeSegmentation;
 /// The working contract printed by `understudy agent-guide`.
 pub const GUIDE: &str = include_str!("agent_guide.md");
 
+/// When a skill loads: what Understudy is for, in the words an agent matches.
+const SKILL_DESCRIPTION: &str = "Test or operate macOS GUI apps, dialogs, menu bar items, \
+installers and command-line tools in a hidden second login (the helper), without touching \
+the person's own desktop, windows, keyboard or mouse. Use it to take screenshots of an app, \
+click or type in a GUI, run something that would steal focus, or check that a GUI change \
+actually works.";
+
+/// The agent plugin's skill: when to use Understudy and its rules, then the
+/// guide itself. The plugin's SKILL.md is this text (a test keeps them equal).
+pub fn skill() -> String {
+    let guide = GUIDE
+        .split_once('\n')
+        .map_or(GUIDE, |(_, rest)| rest)
+        .trim_start();
+    format!(
+        "---\nname: understudy\ndescription: {SKILL_DESCRIPTION}\n---\n\n\
+# Understudy\n\n\
+Use it for anything that would otherwise touch the person's desktop: launching or \
+clicking through an app, testing a dialog, a menu bar item or an installer, taking \
+screenshots of a GUI. Do not use it for pure unit tests or for files you can read \
+directly.\n\n\
+## Rules\n\n\
+- Never act on the person's own desktop; everything happens in the helper.\n\
+- Never use sudo or change privacy settings. If `doctor` is not ready, tell the person \
+what it says (or use the setup skill).\n\
+- If a command reports `on-console`, the helper is on screen: ask the person to switch \
+back to their own account. Do not retry.\n\
+- Ask the person before `understudy switch`, and before anything that locks, sleeps \
+or logs out.\n\
+- After an `uncertain` result, run `understudy restart` before anything else.\n\
+- The person can watch or take control at any time with `understudy menubar` or \
+`understudy monitor`; mention it when you start a long task.\n\n\
+{guide}\n\
+## References\n\n\
+- [references/commands.md](references/commands.md): every command and its options.\n\
+- [references/troubleshooting.md](references/troubleshooting.md): what each error \
+code means and what to do.\n"
+    )
+}
+
 /// The longest text a single `type` action accepts.
 const TYPE_LIMIT: usize = 256;
 

@@ -1,0 +1,9 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [{ "type": "command", "command": "./scripts/status", "timeout": 5 }]
+      }
+    ]
+  }
+}

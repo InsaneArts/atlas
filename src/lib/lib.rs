@@ -1,6 +1,7 @@
 pub mod acl;
 pub mod actions;
 pub mod agent;
+pub mod agents;
 pub mod capability;
 pub mod client;
 pub mod config;
