@@ -628,3 +628,24 @@ fn doctor_warns_when_the_input_service_build_is_not_the_installed_one() {
     assert_eq!(warnings(Value::Null, json!("def")), 1, "pre-build services");
     assert_eq!(warnings(Value::Null, Value::Null), 1);
 }
+
+#[test]
+fn pending_mutations_are_visible_to_legacy_controllers() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("a.sock");
+    let controller = Controller::at(502, &socket, dir.path()).unwrap();
+    let marker = legacy_state(dir.path(), &socket, "uncertain.json");
+    let generation = controller.quarantine().unwrap();
+    let mirrored: Vec<String> = serde_json::from_slice(&std::fs::read(&marker).unwrap()).unwrap();
+    assert_eq!(mirrored, vec![generation.clone()]);
+    controller.clear_if(&generation).unwrap();
+    assert!(!marker.exists());
+
+    // A generation only an older controller recorded stays pending.
+    std::fs::write(&marker, "[\"old\"]").unwrap();
+    let generation = controller.quarantine().unwrap();
+    controller.clear_if(&generation).unwrap();
+    let left: Vec<String> = serde_json::from_slice(&std::fs::read(&marker).unwrap()).unwrap();
+    assert_eq!(left, vec!["old".to_owned()]);
+    assert_eq!(controller.require_known().unwrap_err().code, "uncertain");
+}

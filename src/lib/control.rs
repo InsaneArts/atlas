@@ -127,32 +127,31 @@ impl Controller {
         FileExt::lock_exclusive(&file)?;
         Ok(file)
     }
+    /// Record a pending mutation. It is mirrored into the legacy marker so a
+    /// controller that predates the UID key also refuses to act until recovery.
     pub fn quarantine(&self) -> Result<String> {
-        let _lock = self.lock_marker(&self.current)?;
         let generation = token();
-        let mut pending = self.pending()?;
-        pending.push(generation.clone());
-        write_private(&self.current.marker, &serde_json::to_vec(&pending)?)?;
+        for keyed in [&self.current, &self.legacy] {
+            let _lock = self.lock_marker(keyed)?;
+            let mut pending = pending(&keyed.marker)?;
+            pending.push(generation.clone());
+            write_private(&keyed.marker, &serde_json::to_vec(&pending)?)?;
+        }
         Ok(generation)
     }
-    fn pending(&self) -> Result<Vec<String>> {
-        match fs::read_to_string(&self.current.marker) {
-            Ok(text) => {
-                Ok(serde_json::from_str(&text).unwrap_or_else(|_| vec!["legacy-unknown".into()]))
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-            Err(error) => Err(error.into()),
-        }
-    }
+    /// Settle one acknowledged mutation in both markers; others stay pending.
     pub fn clear_if(&self, generation: &str) -> Result<()> {
-        let _lock = self.lock_marker(&self.current)?;
-        let mut pending = self.pending()?;
-        pending.retain(|entry| entry != generation);
-        if pending.is_empty() {
-            remove_marker(&self.current.marker)
-        } else {
-            write_private(&self.current.marker, &serde_json::to_vec(&pending)?)
+        for keyed in [&self.current, &self.legacy] {
+            let _lock = self.lock_marker(keyed)?;
+            let mut pending = pending(&keyed.marker)?;
+            pending.retain(|entry| entry != generation);
+            if pending.is_empty() {
+                remove_marker(&keyed.marker)?;
+            } else {
+                write_private(&keyed.marker, &serde_json::to_vec(&pending)?)?;
+            }
         }
+        Ok(())
     }
     /// Verified recovery settles every pending mutation, legacy ones included.
     pub fn clear(&self) -> Result<()> {
@@ -161,6 +160,17 @@ impl Controller {
             remove_marker(&keyed.marker)?;
         }
         Ok(())
+    }
+}
+
+/// Pending generations in a marker; an unreadable one stays pending as unknown.
+fn pending(marker: &Path) -> Result<Vec<String>> {
+    match fs::read_to_string(marker) {
+        Ok(text) => {
+            Ok(serde_json::from_str(&text).unwrap_or_else(|_| vec!["legacy-unknown".into()]))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(error.into()),
     }
 }
 
