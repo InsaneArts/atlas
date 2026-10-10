@@ -279,6 +279,31 @@ fn as_helper(executable: &Path, helper: &setup::Account, request: &Request) -> R
     Ok(reply)
 }
 
+/// Restart the helper daemon (launchd starts a fresh process) and wait for
+/// the new one to answer.
+async fn restart_daemon(client: &Client, config: &Config) -> Result<()> {
+    let before = client.status().await["daemon"]["pid"].clone();
+    let transport = crate::transport::Transport {
+        path: config.socket_path.clone(),
+        timeout: Duration::from_secs(10),
+        peer_uid: config.helper_uid,
+    };
+    transport.call(&json!({"op": "restart"})).await?;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let pid = client.status().await["daemon"]["pid"].clone();
+        if pid.is_number() && pid != before {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(problem(
+                "The helper daemon did not come back after a restart",
+            ));
+        }
+    }
+}
+
 /// Poll `ready` every few seconds until it holds or patience runs out.
 async fn wait_for<T>(what: &str, mut ready: impl AsyncFnMut() -> Option<T>) -> Result<T> {
     let deadline = Instant::now() + PATIENCE;
@@ -293,6 +318,48 @@ async fn wait_for<T>(what: &str, mut ready: impl AsyncFnMut() -> Option<T>) -> R
         }
         tokio::time::sleep(Duration::from_secs(3)).await;
     }
+}
+
+/// The optional finishing touches, offered only when not already in place:
+/// the menu bar at login, and teaching the installed agents.
+fn finish(done: &mut Vec<Value>) -> Result<()> {
+    let login = crate::menubar::login("status").unwrap_or_default();
+    if login["available"] == true && login["enabled"] != true {
+        step("Menu bar");
+        if yes("  Keep Understudy in the menu bar (open at login)?")? {
+            let login = crate::menubar::login("on")?;
+            say(if login["enabled"] == true {
+                "  It opens at login and is running now."
+            } else {
+                "  macOS did not enable it; turn it on in the menu bar later."
+            });
+            done.push(json!({"step": "menubar", "login": login}));
+        }
+    }
+    let agents = crate::agents::status();
+    let found: Vec<&str> = agents["agents"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|agent| agent["installed"] == true && agent["connected"] != true)
+        .filter_map(|agent| agent["agent"].as_str())
+        .collect();
+    if !found.is_empty() {
+        step("Agents");
+        if yes(&format!(
+            "  Teach {} to use Understudy (adds its plugin)?",
+            found.join(" and ")
+        ))? {
+            let connected = crate::agents::change(&[], false)?;
+            say(if connected["ok"] == true {
+                "  Connected. New agent sessions know how to use Understudy."
+            } else {
+                "  Not every agent connected; run understudy agents install later."
+            });
+            done.push(json!({"step": "agents", "result": connected}));
+        }
+    }
+    Ok(())
 }
 
 /// Guide the person from an installed app to a ready helper.
@@ -339,8 +406,11 @@ pub async fn run(config_path: &Path) -> Result<Value> {
     if crate::capability::doctor(client.status().await, config.helper_uid)["ready"] == true
         && setup::migrate::settled(config.helper_uid)
     {
-        say("\nUnderstudy is already set up and ready.");
-        return Ok(json!({"ok": true, "ready": true, "alreadySetUp": true}));
+        say("  The helper is already set up and ready.");
+        let mut done = vec![json!({"step": "verified"})];
+        finish(&mut done)?;
+        say("\nUnderstudy is ready. Try: understudy screenshot");
+        return Ok(json!({"ok": true, "ready": true, "alreadySetUp": true, "steps": done}));
     }
     done.push(json!({"step": "config", "path": config_path, "helper": helper.name}));
 
@@ -408,36 +478,54 @@ pub async fn run(config_path: &Path) -> Result<Value> {
         done.push(json!({"step": "daemon", "label": LABEL}));
     }
 
-    step("Permissions in the helper session");
-    let mut told = false;
-    wait_for("Screen Recording and Accessibility", async || {
-        let status = client.status().await;
-        let permissions = &status["permissions"];
-        let granted = permissions["screenCapture"] == true && permissions["accessibility"] == true;
-        if !granted && !told {
-            told = true;
-            say(&format!(
-                "  In {}'s session, allow Understudy in the two prompts (Screen Recording and\n  \
-                 Accessibility). If a prompt was dismissed, open System Settings › Privacy &\n  \
-                 Security there and turn Understudy on.",
-                helper.name
-            ));
-        }
-        granted.then_some(())
-    })
-    .await?;
-
-    // The session check below runs this executable in the helper.
+    // The session checks below run this executable in the helper.
     client.install()?;
 
+    let granted = |status: &Value| {
+        status["permissions"]["screenCapture"] == true
+            && status["permissions"]["accessibility"] == true
+    };
+    if !granted(&client.status().await) {
+        step("Permissions in the helper session");
+        say(&format!(
+            "  In {name}'s session Understudy asks for Screen Recording and Accessibility:\n  \
+             click Allow (or Open System Settings and turn Understudy on) for both.",
+            name = helper.name
+        ));
+    }
+
     step("Switch back to your own account");
-    say("  Understudy works while the helper runs in the background.");
+    say("  Understudy works while the helper runs in the background. Waiting for you…");
     wait_for("you to switch back", async || {
         crate::session::require_hidden(&client.status().await, config.helper_uid)
             .is_ok()
             .then_some(())
     })
     .await?;
+
+    // macOS applies a new Screen Recording grant to new processes only, so
+    // the daemon restarts once to pick up what the person allowed.
+    if !granted(&client.status().await) {
+        restart_daemon(&client, &config).await?;
+    }
+    let status = client.status().await;
+    if !granted(&status) {
+        let missing: Vec<&str> = [
+            ("screenCapture", "Screen Recording"),
+            ("accessibility", "Accessibility"),
+        ]
+        .into_iter()
+        .filter(|(key, _)| status["permissions"][*key] != true)
+        .map(|(_, name)| name)
+        .collect();
+        return Err(problem(format!(
+            "Understudy still lacks {} in {}. Switch to {}, open System Settings › Privacy & \
+             Security, turn Understudy on there, switch back and run understudy init again.",
+            missing.join(" and "),
+            helper.name,
+            helper.name
+        )));
+    }
 
     step("Input and verification");
     client.start_input().await?;
@@ -458,39 +546,7 @@ pub async fn run(config_path: &Path) -> Result<Value> {
     }
     done.push(json!({"step": "verified"}));
 
-    step("Menu bar");
-    if yes("  Keep Understudy in the menu bar (open at login)?")? {
-        let login = crate::menubar::login("on")?;
-        say(if login["enabled"] == true {
-            "  It opens at login and is running now."
-        } else {
-            "  macOS did not enable it; turn it on in the menu bar later."
-        });
-        done.push(json!({"step": "menubar", "login": login}));
-    }
-    let agents = crate::agents::status();
-    let found: Vec<&str> = agents["agents"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|agent| agent["installed"] == true && agent["connected"] != true)
-        .filter_map(|agent| agent["agent"].as_str())
-        .collect();
-    if !found.is_empty() {
-        step("Agents");
-        if yes(&format!(
-            "  Teach {} to use Understudy (adds its plugin)?",
-            found.join(" and ")
-        ))? {
-            let connected = crate::agents::change(&[], false)?;
-            say(if connected["ok"] == true {
-                "  Connected. New agent sessions know how to use Understudy."
-            } else {
-                "  Not every agent connected; run understudy agents install later."
-            });
-            done.push(json!({"step": "agents", "result": connected}));
-        }
-    }
+    finish(&mut done)?;
     say("\nUnderstudy is ready. Try: understudy screenshot");
     Ok(json!({"ok": true, "ready": true, "steps": done, "config": config_path}))
 }
