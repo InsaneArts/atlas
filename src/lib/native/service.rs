@@ -33,6 +33,8 @@ struct Service {
     /// SHA-256 of the executable this process started from. Hashed once at
     /// start: `install` later renames a new build over the same path.
     build: Option<String>,
+    /// Signalled once an acknowledged shutdown has been answered.
+    stopping: tokio::sync::Notify,
 }
 impl Service {
     fn epoch(&self) -> Result<InputEpoch> {
@@ -82,6 +84,25 @@ impl Service {
                 "heldInput": held_input,
                 "streaming": true,
             }));
+        }
+        if operation == "shutdown" {
+            // Bound to this process: a replacement that has since bound the same
+            // socket never honours a request meant for its predecessor.
+            if request["pid"].as_u64() != Some(std::process::id().into()) {
+                return Err(Error::new(
+                    "identity",
+                    "Shutdown names a different input service process",
+                ));
+            }
+            if self.gate.active()? {
+                return Err(Error::new(
+                    "busy",
+                    "The input service has an active controller",
+                ));
+            }
+            self.gate.close()?;
+            self.engine.lock().await.release()?;
+            return Ok(json!({ "ok": true, "stopping": true, "pid": std::process::id() }));
         }
         if operation == "release" {
             self.gate.cancel(Some(owner))?;
@@ -260,6 +281,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     engine.recover(socket.with_extension("held.json"))?;
     let service = Arc::new(Service {
         build,
+        stopping: tokio::sync::Notify::new(),
         epoch: RwLock::new(engine.epoch.clone()),
         engine: Mutex::new(engine),
         gate: Arc::new(Gate::default()),
@@ -274,6 +296,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
         tokio::select! {
             _ = tokio::signal::ctrl_c() => break Ok(()),
             _ = terminate.recv() => break Ok(()),
+            _ = service.stopping.notified() => break Ok(()),
             _ = timer.tick() => {
                 if service.check().is_err() {
                     let _ = service.gate.cancel(None);
@@ -370,7 +393,12 @@ async fn handle(mut stream: UnixStream, service: Arc<Service>) -> Result<()> {
     } else {
         service.dispatch(&request).await
     };
-    reply(&mut stream, result).await
+    let stopping = request["op"] == "shutdown" && result.is_ok();
+    let written = reply(&mut stream, result).await;
+    if stopping {
+        service.stopping.notify_one();
+    }
+    written
 }
 async fn reply(stream: &mut UnixStream, result: Result<Value>) -> Result<()> {
     let mut bytes = serde_json::to_vec(&result.unwrap_or_else(|e| json!(e)))?;
