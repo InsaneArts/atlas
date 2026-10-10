@@ -98,6 +98,17 @@ logins or keychains.
 - `xtask/` — release tooling.
 - `tests/live/DesktopFixture.swift` — disposable AppKit fixture for live checks.
 
+## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/InsaneArts/understudy/main/install.sh | sh
+```
+
+Verifies the release checksum and its Developer ID signature, installs
+Understudy.app in /Applications (or ~/Applications) and links `understudy` into
+~/.local/bin. Set `GITHUB_TOKEN` while the repository is private. Running it
+again updates.
+
 ## Release
 
 ```sh
