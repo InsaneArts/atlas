@@ -1,61 +1,7 @@
-//! The CoreFoundation pieces the native code shares: typed access to the
-//! dictionaries CoreGraphics returns, and (until the accessibility code moves
-//! to typed bindings) an owned raw reference.
+//! Typed access to the dictionaries CoreGraphics returns.
 pub use objc2_core_foundation::{
     CFArray, CFBoolean, CFDictionary, CFNumber, CFRetained, CFString, CFType, Type,
 };
-use std::ffi::{CStr, c_char, c_void};
-
-pub type CfRef = *const c_void;
-
-const UTF8: u32 = 0x0800_0100;
-
-#[link(name = "CoreFoundation", kind = "framework")]
-unsafe extern "C" {
-    fn CFRelease(value: CfRef);
-    fn CFStringCreateWithCString(allocator: CfRef, text: *const c_char, encoding: u32) -> CfRef;
-}
-
-/// An owned CoreFoundation reference, released once. Never wraps null.
-#[derive(Debug)]
-pub struct Owned(CfRef);
-
-impl Drop for Owned {
-    fn drop(&mut self) {
-        // SAFETY: only non-null references from Create/Copy/Retain are wrapped.
-        unsafe { CFRelease(self.0) };
-    }
-}
-
-impl Owned {
-    /// Take ownership of a reference; None for null.
-    ///
-    /// # Safety
-    /// `value` must be null or a live CoreFoundation reference the caller
-    /// owns (from a Create or Copy function, or retained) and hands over: it
-    /// is released when the returned value drops.
-    pub unsafe fn adopt(value: CfRef) -> Option<Self> {
-        (!value.is_null()).then(|| Self(value))
-    }
-    /// The reference, borrowed for as long as this value lives.
-    pub fn get(&self) -> CfRef {
-        self.0
-    }
-}
-
-/// A CFString from static or NUL-terminated text.
-pub fn string(text: &CStr) -> Option<Owned> {
-    // SAFETY: NUL-terminated text and the default allocator; Create returns
-    // an owned string or null.
-    unsafe {
-        Owned::adopt(CFStringCreateWithCString(
-            std::ptr::null(),
-            text.as_ptr(),
-            UTF8,
-        ))
-    }
-}
-
 /// A dictionary CoreGraphics returns: string keys, values of any CF type.
 pub type Record = CFDictionary<CFString, CFType>;
 
@@ -112,13 +58,6 @@ pub fn nested(record: &Record, key: &'static str) -> Option<CFRetained<Record>> 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn null_is_never_owned_and_strings_are() {
-        // SAFETY: null is never adopted.
-        assert!(unsafe { Owned::adopt(std::ptr::null()) }.is_none());
-        assert!(string(c"understudy").is_some());
-    }
 
     #[test]
     fn records_read_typed_values_and_refuse_other_types() {

@@ -4,78 +4,18 @@
 //! fetched and string lengths are capped before anything is copied. A scan
 //! that hit a limit or a communication failure reports itself incomplete.
 use crate::error::{Error, Result};
+use objc2_application_services::{AXError, AXUIElement, AXValue, AXValueType};
+use objc2_core_foundation::{
+    CFArray, CFBoolean, CFIndex, CFNumber, CFRange, CFRetained, CFString, CFType, CGPoint, CGSize,
+};
 use serde::{Deserialize, Serialize};
 use std::{
-    ffi::{CStr, c_char, c_void},
+    ptr::NonNull,
     time::{Duration, Instant},
 };
 
-type CfRef = *const c_void;
-
-#[repr(C)]
-#[derive(Default)]
-struct Point {
-    x: f64,
-    y: f64,
-}
-#[repr(C)]
-#[derive(Default)]
-struct Size {
-    width: f64,
-    height: f64,
-}
-#[repr(C)]
-struct Range {
-    location: isize,
-    length: isize,
-}
-
-#[link(name = "ApplicationServices", kind = "framework")]
-unsafe extern "C" {
-    fn AXUIElementCreateApplication(pid: i32) -> CfRef;
-    fn AXUIElementCreateSystemWide() -> CfRef;
-    fn AXUIElementCopyAttributeValue(element: CfRef, attribute: CfRef, value: *mut CfRef) -> i32;
-    fn AXUIElementCopyAttributeValues(
-        element: CfRef,
-        attribute: CfRef,
-        index: isize,
-        maximum: isize,
-        values: *mut CfRef,
-    ) -> i32;
-    fn AXUIElementSetMessagingTimeout(element: CfRef, seconds: f32) -> i32;
-    fn AXUIElementGetAttributeValueCount(
-        element: CfRef,
-        attribute: CfRef,
-        count: *mut isize,
-    ) -> i32;
-    fn AXValueGetValue(value: CfRef, kind: u32, out: *mut c_void) -> bool;
-    fn AXValueGetTypeID() -> usize;
-}
-#[link(name = "CoreFoundation", kind = "framework")]
-unsafe extern "C" {
-    fn CFStringCreateWithSubstring(allocator: CfRef, string: CfRef, range: Range) -> CfRef;
-    fn CFStringGetLength(string: CfRef) -> isize;
-    fn CFStringGetRangeOfComposedCharactersAtIndex(string: CfRef, index: isize) -> Range;
-    fn CFStringGetMaximumSizeForEncoding(length: isize, encoding: u32) -> isize;
-    fn CFStringGetCString(string: CfRef, buffer: *mut c_char, size: isize, encoding: u32) -> bool;
-    fn CFArrayGetCount(array: CfRef) -> isize;
-    fn CFArrayGetValueAtIndex(array: CfRef, index: isize) -> CfRef;
-    fn CFBooleanGetValue(boolean: CfRef) -> bool;
-    fn CFNumberGetValue(number: CfRef, kind: isize, value: *mut c_void) -> bool;
-    fn CFGetTypeID(value: CfRef) -> usize;
-    fn CFStringGetTypeID() -> usize;
-    fn CFArrayGetTypeID() -> usize;
-    fn CFBooleanGetTypeID() -> usize;
-    fn CFNumberGetTypeID() -> usize;
-    fn CFRetain(value: CfRef) -> CfRef;
-}
-
-const UTF8: u32 = 0x0800_0100;
-const POINT: u32 = 1;
-const SIZE: u32 = 2;
-const FLOAT64: isize = 13;
 /// Longest text reported for any one attribute, in UTF-16 units.
-const TEXT_LIMIT: isize = 200;
+const TEXT_LIMIT: CFIndex = 200;
 /// AX errors meaning the element could not be read at all: the request could
 /// not complete (timeout or unresponsive app), the element vanished, or the
 /// API is disabled. Any of these makes the whole scan incomplete.
@@ -85,37 +25,37 @@ const INCOMPLETE: [i32; 3] = [-25204, -25202, -25211];
 const ABSENT: [i32; 3] = [-25212, -25205, -25208];
 /// Attributes a selector matches on; an element whose selector attribute
 /// fails to read (other than being absent) may be an unseen match.
-const SELECTORS: [&CStr; 4] = [c"AXRole", c"AXTitle", c"AXDescription", c"AXIdentifier"];
-
-use crate::native::cf::{Owned, string as cf_string};
+const SELECTORS: [&str; 4] = ["AXRole", "AXTitle", "AXDescription", "AXIdentifier"];
 
 /// At most the first `TEXT_LIMIT` UTF-16 units of a CFString, converted
 /// without copying the rest and cut only between composed characters, so a
 /// surrogate pair, emoji sequence or combining mark is never split. Returns
-/// the text and whether it was cut. SAFETY: `value` must be a live CFString.
-unsafe fn bounded_string(value: CfRef) -> Option<(String, bool)> {
-    // SAFETY: per contract; the index is in bounds, the substring is owned
-    // and the buffer is sized for its encoding.
-    unsafe {
-        let full = CFStringGetLength(value);
-        let truncated = full > TEXT_LIMIT;
-        let length = if truncated {
-            CFStringGetRangeOfComposedCharactersAtIndex(value, TEXT_LIMIT).location
-        } else {
-            full
-        };
-        let range = Range {
-            location: 0,
-            length,
-        };
-        let part = Owned::adopt(CFStringCreateWithSubstring(std::ptr::null(), value, range))?;
-        let size = CFStringGetMaximumSizeForEncoding(length, UTF8) + 1;
-        let mut buffer = vec![0 as c_char; usize::try_from(size).ok()?];
-        CFStringGetCString(part.get(), buffer.as_mut_ptr(), size, UTF8).then(|| {
-            let text = CStr::from_ptr(buffer.as_ptr()).to_string_lossy();
-            (text.into_owned(), truncated)
-        })
-    }
+/// the text and whether it was cut.
+fn bounded_string(value: &CFString) -> Option<(String, bool)> {
+    let full = value.length();
+    let truncated = full > TEXT_LIMIT;
+    let length = if truncated {
+        // SAFETY: the index is inside the string (it is longer than it).
+        unsafe { value.range_of_composed_characters_at_index(TEXT_LIMIT) }.location
+    } else {
+        full
+    };
+    let range = CFRange {
+        location: 0,
+        length,
+    };
+    // SAFETY: a live string, the default allocator and a range within it.
+    let part = unsafe { CFString::with_substring(None, Some(value), range) }?;
+    Some((part.to_string(), truncated))
+}
+
+/// Take over the reference a successful Copy wrote to `slot`, if any.
+///
+/// # Safety
+/// `slot` must hold null or a reference the caller owns (from a Copy).
+unsafe fn adopt<T: objc2_core_foundation::Type>(slot: *const T) -> Option<CFRetained<T>> {
+    // SAFETY: per contract; ownership of the one reference moves here.
+    NonNull::new(slot.cast_mut()).map(|value| unsafe { CFRetained::from_raw(value) })
 }
 
 /// One traversal: its deadline, whether anything made it incomplete, the
@@ -138,112 +78,107 @@ impl Scan {
         }
         !self.incomplete || Instant::now() < self.deadline
     }
-    fn failed(&mut self, status: i32, attribute: &CStr) {
-        let key = format!("{}:{status}", attribute.to_string_lossy());
+    fn failed(&mut self, status: AXError, attribute: &str) {
+        let key = format!("{attribute}:{}", status.0);
         *self.errors.entry(key).or_default() += 1;
-        if INCOMPLETE.contains(&status) {
+        if INCOMPLETE.contains(&status.0) {
             self.incomplete = true;
-        } else if !ABSENT.contains(&status) && SELECTORS.contains(&attribute) {
-            self.unreadable
-                .push(attribute.to_string_lossy().into_owned());
+        } else if !ABSENT.contains(&status.0) && SELECTORS.contains(&attribute) {
+            self.unreadable.push(attribute.to_owned());
         }
     }
     /// Copy one attribute value.
-    fn attribute(&mut self, element: CfRef, attribute: &CStr) -> Option<Owned> {
+    fn attribute(
+        &mut self,
+        element: &AXUIElement,
+        attribute: &'static str,
+    ) -> Option<CFRetained<CFType>> {
         if !self.open() {
             return None;
         }
-        let name = cf_string(attribute)?;
-        let mut value = std::ptr::null();
-        // SAFETY: live element and attribute; Copy transfers ownership on success.
-        let status = unsafe { AXUIElementCopyAttributeValue(element, name.get(), &mut value) };
-        if status == 0 {
-            // SAFETY: a successful Copy hands over one owned reference.
-            return unsafe { Owned::adopt(value) };
+        let name = CFString::from_static_str(attribute);
+        let mut value: *const CFType = std::ptr::null();
+        // SAFETY: a valid output slot; on success the Copy hands over one
+        // owned reference, adopted below.
+        let status = unsafe { element.copy_attribute_value(&name, NonNull::from(&mut value)) };
+        if status == AXError::Success {
+            // SAFETY: a successful Copy wrote an owned reference (or null).
+            return unsafe { adopt(value) };
         }
         self.failed(status, attribute);
         None
     }
-    fn text(&mut self, element: CfRef, name: &CStr) -> Option<String> {
+    fn text(&mut self, element: &AXUIElement, name: &'static str) -> Option<String> {
         let value = self.attribute(element, name)?;
-        // SAFETY: type-checked before reading.
-        let text = unsafe {
-            (CFGetTypeID(value.get()) == CFStringGetTypeID()).then(|| bounded_string(value.get()))
-        }
-        .flatten();
+        let text = value.downcast_ref::<CFString>().and_then(bounded_string);
         self.bounded(text, name)
     }
     /// Keep bounded text, noting the attribute when it was cut.
-    fn bounded(&mut self, text: Option<(String, bool)>, name: &CStr) -> Option<String> {
+    fn bounded(&mut self, text: Option<(String, bool)>, name: &str) -> Option<String> {
         let (text, truncated) = text?;
         if truncated {
-            self.truncated.push(name.to_string_lossy().into_owned());
+            self.truncated.push(name.to_owned());
         }
         Some(text)
     }
-    fn flag(&mut self, element: CfRef, name: &CStr) -> Option<bool> {
+    fn flag(&mut self, element: &AXUIElement, name: &'static str) -> Option<bool> {
         let value = self.attribute(element, name)?;
-        // SAFETY: type-checked before reading.
-        unsafe {
-            (CFGetTypeID(value.get()) == CFBooleanGetTypeID())
-                .then(|| CFBooleanGetValue(value.get()))
-        }
+        value.downcast_ref::<CFBoolean>().map(CFBoolean::as_bool)
     }
     /// The element's value as text: strings bounded, numbers and booleans rendered.
-    fn value(&mut self, element: CfRef) -> Option<String> {
-        let value = self.attribute(element, c"AXValue")?;
-        // SAFETY: each branch checks the CF type before reading.
-        unsafe {
-            let kind = CFGetTypeID(value.get());
-            if kind == CFStringGetTypeID() {
-                let text = bounded_string(value.get());
-                self.bounded(text, c"AXValue")
-            } else if kind == CFNumberGetTypeID() {
-                let mut number = 0f64;
-                CFNumberGetValue(value.get(), FLOAT64, (&mut number as *mut f64).cast())
-                    .then(|| number.to_string())
-            } else if kind == CFBooleanGetTypeID() {
-                Some(CFBooleanGetValue(value.get()).to_string())
-            } else {
-                None
-            }
+    fn value(&mut self, element: &AXUIElement) -> Option<String> {
+        let value = self.attribute(element, "AXValue")?;
+        if let Some(text) = value.downcast_ref::<CFString>() {
+            let text = bounded_string(text);
+            self.bounded(text, "AXValue")
+        } else if let Some(number) = value.downcast_ref::<CFNumber>() {
+            number.as_f64().map(|number| number.to_string())
+        } else {
+            value
+                .downcast_ref::<CFBoolean>()
+                .map(|flag| flag.as_bool().to_string())
         }
     }
-    fn frame(&mut self, element: CfRef) -> Option<Frame> {
-        let position = self.attribute(element, c"AXPosition")?;
-        let size = self.attribute(element, c"AXSize")?;
-        let (mut point, mut extent) = (Point::default(), Size::default());
-        // SAFETY: both are type-checked AXValues read into matching structs.
-        unsafe {
-            (CFGetTypeID(position.get()) == AXValueGetTypeID()
-                && CFGetTypeID(size.get()) == AXValueGetTypeID()
-                && AXValueGetValue(position.get(), POINT, (&mut point as *mut Point).cast())
-                && AXValueGetValue(size.get(), SIZE, (&mut extent as *mut Size).cast()))
-            .then_some(Frame {
-                x: point.x,
-                y: point.y,
-                width: extent.width,
-                height: extent.height,
-            })
-        }
+    fn frame(&mut self, element: &AXUIElement) -> Option<Frame> {
+        let position = self.attribute(element, "AXPosition")?;
+        let size = self.attribute(element, "AXSize")?;
+        let (position, size) = (
+            position.downcast_ref::<AXValue>()?,
+            size.downcast_ref::<AXValue>()?,
+        );
+        let (mut point, mut extent) = (CGPoint::ZERO, CGSize::ZERO);
+        // SAFETY: each AXValue is read into the struct its type names.
+        let read = unsafe {
+            position.value(AXValueType::CGPoint, NonNull::from(&mut point).cast())
+                && size.value(AXValueType::CGSize, NonNull::from(&mut extent).cast())
+        };
+        read.then_some(Frame {
+            x: point.x,
+            y: point.y,
+            width: extent.width,
+            height: extent.height,
+        })
     }
-    /// At most `maximum` element references from an array attribute, each
-    /// retained. The value count is read first: zero is a leaf, and a count
-    /// beyond what was fetched (or any failure to enumerate a non-empty
-    /// array) leaves the scan incomplete instead of silently dropping values.
-    fn children(&mut self, element: CfRef, attribute: &CStr, maximum: usize) -> Vec<Owned> {
+    /// At most `maximum` elements from an array attribute. The value count
+    /// is read first: zero is a leaf, and a count beyond what was fetched (or
+    /// any failure to enumerate a non-empty array) leaves the scan incomplete
+    /// instead of silently dropping values.
+    fn children(
+        &mut self,
+        element: &AXUIElement,
+        attribute: &'static str,
+        maximum: usize,
+    ) -> Vec<CFRetained<AXUIElement>> {
         if !self.open() {
             return Vec::new();
         }
-        let Some(name) = cf_string(attribute) else {
-            return Vec::new();
-        };
-        let mut count = 0isize;
-        // SAFETY: live element and attribute with a valid output pointer.
-        let status = unsafe { AXUIElementGetAttributeValueCount(element, name.get(), &mut count) };
-        if status != 0 {
+        let name = CFString::from_static_str(attribute);
+        let mut count: CFIndex = 0;
+        // SAFETY: a valid output slot for the count.
+        let status = unsafe { element.attribute_value_count(&name, NonNull::from(&mut count)) };
+        if status != AXError::Success {
             self.failed(status, attribute);
-            if !ABSENT.contains(&status) {
+            if !ABSENT.contains(&status.0) {
                 self.incomplete = true;
             }
             return Vec::new();
@@ -251,30 +186,31 @@ impl Scan {
         if count <= 0 {
             return Vec::new();
         }
-        let wanted = count.min(isize::try_from(maximum).unwrap_or(isize::MAX));
+        let wanted = count.min(CFIndex::try_from(maximum).unwrap_or(CFIndex::MAX));
         if wanted < count {
             self.incomplete = true;
         }
-        let mut array = std::ptr::null();
-        // SAFETY: live element and attribute; the range copy returns an owned
-        // array whose elements are retained before it is released.
-        unsafe {
-            let status = AXUIElementCopyAttributeValues(element, name.get(), 0, wanted, &mut array);
-            let Some(array) = (status == 0).then(|| Owned::adopt(array)).flatten() else {
-                self.failed(status, attribute);
-                self.incomplete = true;
-                return Vec::new();
-            };
-            if CFGetTypeID(array.get()) != CFArrayGetTypeID() {
-                self.incomplete = true;
-                return Vec::new();
-            }
-            (0..CFArrayGetCount(array.get()))
-                .filter_map(|index| {
-                    Owned::adopt(CFRetain(CFArrayGetValueAtIndex(array.get(), index)))
-                })
-                .collect()
-        }
+        let mut array: *const CFArray = std::ptr::null();
+        // SAFETY: a valid output slot; on success the Copy hands over one
+        // owned array, adopted below.
+        let status =
+            unsafe { element.copy_attribute_values(&name, 0, wanted, NonNull::from(&mut array)) };
+        // SAFETY: a successful Copy wrote an owned array (or null).
+        let Some(array) = (status == AXError::Success)
+            .then(|| unsafe { adopt(array) })
+            .flatten()
+        else {
+            self.failed(status, attribute);
+            self.incomplete = true;
+            return Vec::new();
+        };
+        // SAFETY: every element of a CFArray is a CF object; each is checked
+        // to be an AXUIElement before use.
+        let values = unsafe { CFRetained::cast_unchecked::<CFArray<CFType>>(array) };
+        values
+            .iter()
+            .filter_map(|value| value.downcast::<AXUIElement>().ok())
+            .collect()
     }
 }
 
@@ -351,14 +287,12 @@ impl Default for Limits {
 
 /// Depth-first elements of `pid`'s windows (the menu bar is excluded).
 pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
-    // SAFETY: the system-wide element sets this process's global messaging
-    // timeout, which covers every element read below.
-    if let Some(system) = unsafe { Owned::adopt(AXUIElementCreateSystemWide()) } {
-        unsafe { AXUIElementSetMessagingTimeout(system.get(), 1.0) };
-    }
-    // SAFETY: Create returns an owned element (or null) for any PID.
-    let app = unsafe { Owned::adopt(AXUIElementCreateApplication(pid)) }
-        .ok_or_else(|| Error::new("elements", "No accessibility element for that process"))?;
+    // SAFETY: plain constructors; the system-wide element sets this
+    // process's global messaging timeout, which covers every read below.
+    let app = unsafe {
+        AXUIElement::new_system_wide().set_messaging_timeout(1.0);
+        AXUIElement::new_application(pid)
+    };
     let mut scan = Scan {
         deadline: Instant::now() + limits.time,
         incomplete: false,
@@ -366,19 +300,19 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
         truncated: Vec::new(),
         errors: Default::default(),
     };
-    let windows = scan.children(app.get(), c"AXWindows", limits.count);
+    let windows = scan.children(&app, "AXWindows", limits.count);
     // An app that answers nothing at all, not even its role, is unreachable
     // (no Accessibility trust, or not a GUI process); report it, not "empty".
-    if windows.is_empty() && scan.text(app.get(), c"AXRole").is_none() {
+    if windows.is_empty() && scan.text(&app, "AXRole").is_none() {
         return Err(Error::new(
             "permission",
             "The app's accessibility tree is unavailable; check Accessibility for the helper",
         ));
     }
     let mut found = Vec::new();
-    let mut stack: Vec<(Owned, usize, Option<Frame>)> = Vec::new();
+    let mut stack: Vec<(CFRetained<AXUIElement>, usize, Option<Frame>)> = Vec::new();
     for window in windows.into_iter().rev() {
-        let frame = scan.frame(window.get());
+        let frame = scan.frame(&window);
         stack.push((window, 0, frame));
     }
     while let Some((element, depth, window)) = stack.pop() {
@@ -386,21 +320,21 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
             scan.incomplete = true;
             break;
         }
-        let item = element.get();
+        let item = &*element;
         scan.unreadable.clear();
         scan.truncated.clear();
         let mut element = Element {
             index: found.len(),
             depth,
             window: window.clone(),
-            role: scan.text(item, c"AXRole"),
-            subrole: scan.text(item, c"AXSubrole"),
-            title: scan.text(item, c"AXTitle"),
-            description: scan.text(item, c"AXDescription"),
+            role: scan.text(item, "AXRole"),
+            subrole: scan.text(item, "AXSubrole"),
+            title: scan.text(item, "AXTitle"),
+            description: scan.text(item, "AXDescription"),
             value: scan.value(item),
-            identifier: scan.text(item, c"AXIdentifier"),
-            enabled: scan.flag(item, c"AXEnabled"),
-            focused: scan.flag(item, c"AXFocused"),
+            identifier: scan.text(item, "AXIdentifier"),
+            enabled: scan.flag(item, "AXEnabled"),
+            focused: scan.flag(item, "AXFocused"),
             frame: scan.frame(item),
             unreadable: Vec::new(),
             truncated: Vec::new(),
@@ -409,11 +343,11 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
         element.truncated = std::mem::take(&mut scan.truncated);
         found.push(element);
         if depth + 1 >= limits.depth {
-            scan.incomplete |= !scan.children(item, c"AXChildren", 1).is_empty();
+            scan.incomplete |= !scan.children(item, "AXChildren", 1).is_empty();
             continue;
         }
         let budget = limits.count.saturating_sub(found.len() + stack.len());
-        let children = scan.children(item, c"AXChildren", budget);
+        let children = scan.children(item, "AXChildren", budget);
         for child in children.into_iter().rev() {
             stack.push((child, depth + 1, window.clone()));
         }
@@ -445,14 +379,12 @@ mod tests {
     #[test]
     fn null_references_are_never_owned() {
         // SAFETY: null is never adopted.
-        assert!(unsafe { Owned::adopt(std::ptr::null()) }.is_none());
+        assert!(unsafe { adopt::<CFType>(std::ptr::null()) }.is_none());
     }
 
     /// Bound `text` as a CFString would be.
     fn bound(text: &str) -> (String, bool) {
-        let string = cf_string(&std::ffi::CString::new(text).unwrap()).unwrap();
-        // SAFETY: a live CFString.
-        unsafe { bounded_string(string.get()) }.unwrap()
+        bounded_string(&CFString::from_str(text)).unwrap()
     }
 
     #[test]
