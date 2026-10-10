@@ -355,7 +355,7 @@ pub fn acl_policy(lines: &[String], controller: Option<u32>) -> std::result::Res
     Ok(granted)
 }
 
-fn acl_lines(path: &Path) -> Result<Vec<String>> {
+pub(crate) fn acl_lines(path: &Path) -> Result<Vec<String>> {
     Ok(match Acl::of_path(path)? {
         None => Vec::new(),
         Some(acl) => acl.text()?.lines().skip(1).map(str::to_owned).collect(),

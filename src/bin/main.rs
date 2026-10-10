@@ -54,6 +54,16 @@ enum Command {
     WindowsInfo,
     #[command(hide = true)]
     ElementsInfo { pid: i32 },
+    /// The helper daemon inside the helper login (started by its LaunchAgent).
+    #[command(hide = true)]
+    HelperServe {
+        #[arg(long)]
+        uid: u32,
+        #[arg(long)]
+        controller_uid: u32,
+        #[arg(long)]
+        socket: PathBuf,
+    },
     #[command(hide = true)]
     InputService {
         #[arg(long)]
@@ -271,6 +281,22 @@ enum EnvironmentCommand {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    // The helper daemon keeps this thread for the Core Foundation run loop.
+    #[cfg(target_os = "macos")]
+    if let Command::HelperServe {
+        uid,
+        controller_uid,
+        socket,
+    } = cli.command
+    {
+        return match understudy::daemon::serve::serve_blocking(uid, controller_uid, socket) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("{}", json!(error));
+                ExitCode::FAILURE
+            }
+        };
+    }
     let result = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -333,6 +359,14 @@ async fn input_service(uid: u32, controller_uid: u32, socket: PathBuf) -> Result
     understudy::native::service::serve(uid, controller_uid, socket).await?;
     Ok(Value::Null)
 }
+#[cfg(target_os = "macos")]
+async fn helper_serve(_: u32, _: u32, _: PathBuf) -> Result<Value> {
+    unreachable!("the helper daemon is started from main")
+}
+#[cfg(not(target_os = "macos"))]
+async fn helper_serve(_: u32, _: u32, _: PathBuf) -> Result<Value> {
+    Err(Error::new("platform", "The helper daemon requires macOS"))
+}
 #[cfg(not(target_os = "macos"))]
 async fn input_service(_: u32, _: u32, _: PathBuf) -> Result<Value> {
     Err(Error::new("platform", "The input service requires macOS"))
@@ -357,6 +391,11 @@ async fn execute(cli: Cli) -> Result<Value> {
             controller_uid,
             socket,
         } => return input_service(uid, controller_uid, socket).await,
+        Command::HelperServe {
+            uid,
+            controller_uid,
+            socket,
+        } => return helper_serve(uid, controller_uid, socket).await,
         Command::SetupHelper { request } => return understudy::setup::helper::run(&request),
         Command::Setup {
             helper,
@@ -368,6 +407,7 @@ async fn execute(cli: Cli) -> Result<Value> {
     let client = Client::new(Config::load(&cli.config)?)?;
     match command {
         Command::InputService { .. }
+        | Command::HelperServe { .. }
         | Command::SessionInfo
         | Command::WindowsInfo
         | Command::ElementsInfo { .. }

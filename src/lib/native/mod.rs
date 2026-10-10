@@ -108,7 +108,15 @@ pub fn session_info() -> Result<Value> {
 }
 
 #[cfg(target_os = "macos")]
+pub mod apps;
+#[cfg(target_os = "macos")]
 pub mod ax;
+#[cfg(target_os = "macos")]
+pub mod capture;
+#[cfg(target_os = "macos")]
+pub mod cf;
+#[cfg(target_os = "macos")]
+pub(crate) mod endpoint;
 #[cfg(target_os = "macos")]
 mod events;
 #[cfg(target_os = "macos")]

@@ -1,0 +1,53 @@
+//! Applications running in the helper login, as the helper daemon reports
+//! them: name, bundle identifier, process, and whether each is frontmost,
+//! hidden or a background agent.
+use objc2_app_kit::{NSApplicationActivationPolicy, NSWorkspace};
+use serde_json::{Value, json};
+
+fn policy(policy: NSApplicationActivationPolicy) -> &'static str {
+    match policy {
+        NSApplicationActivationPolicy::Regular => "regular",
+        NSApplicationActivationPolicy::Accessory => "accessory",
+        NSApplicationActivationPolicy::Prohibited => "prohibited",
+        _ => "unknown",
+    }
+}
+
+/// The running applications, in the order the system lists them.
+/// Called on worker threads, so each call drains its own autorelease pool.
+pub fn running() -> Vec<Value> {
+    objc2::rc::autoreleasepool(|_| {
+        NSWorkspace::sharedWorkspace()
+            .runningApplications()
+            .iter()
+            .map(|app| {
+                json!({
+                    "name": app.localizedName().map(|name| name.to_string()),
+                    "bundleId": app.bundleIdentifier().map(|id| id.to_string()),
+                    "pid": app.processIdentifier(),
+                    "active": app.isActive(),
+                    "hidden": app.isHidden(),
+                    "policy": policy(app.activationPolicy()),
+                })
+            })
+            .collect()
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn this_session_lists_running_applications() {
+        let apps = running();
+        assert!(!apps.is_empty(), "a logged-in session always runs apps");
+        for app in &apps {
+            assert!(app["pid"].as_i64().is_some_and(|pid| pid > 0));
+            assert!(
+                ["regular", "accessory", "prohibited", "unknown"]
+                    .contains(&app["policy"].as_str().unwrap())
+            );
+        }
+    }
+}
