@@ -251,14 +251,14 @@ enum Command {
     },
     /// Restart the helper and confirm a new hidden process before clearing uncertainty.
     Restart,
-    /// Switch to another login, such as the helper. macOS shows that
-    /// account's login window; its password is typed there, never here.
+    /// Switch to another login, such as the helper: locks the screen so you
+    /// choose the account there; its password is typed there, never here.
     Switch {
         /// Account short name. Without it, choose from a list.
         account: Option<String>,
-        /// Show the login window without choosing an account.
+        /// Just lock the screen, without choosing an account.
         #[arg(long, conflicts_with = "account")]
-        login_window: bool,
+        lock: bool,
         /// Only list the accounts that can be switched to.
         #[arg(long)]
         list: bool,
@@ -528,10 +528,10 @@ async fn execute(cli: Cli) -> Result<Value> {
         } => return menubar::login(login.as_str()),
         Command::Switch {
             account,
-            login_window,
+            lock,
             list,
             yes,
-        } => return switch(&cli.config, account, login_window, list, yes),
+        } => return switch(&cli.config, account, lock, list, yes),
         Command::Setup {
             helper,
             apply: false,
@@ -771,7 +771,7 @@ fn confirm(question: &str) -> Result<bool> {
 fn switch(
     config: &std::path::Path,
     account: Option<String>,
-    login_window: bool,
+    lock: bool,
     list: bool,
     yes: bool,
 ) -> Result<Value> {
@@ -782,11 +782,11 @@ fn switch(
     if list {
         return Ok(json!({"ok": true, "accounts": accounts}));
     }
-    if login_window {
-        if !yes && !confirm("Show the login window now?")? {
+    if lock {
+        if !yes && !confirm("Lock the screen now?")? {
             return Ok(json!({"ok": false, "cancelled": true}));
         }
-        return switch::to_login_window();
+        return switch::lock_screen();
     }
     let chosen = match account {
         Some(name) => accounts
@@ -817,7 +817,12 @@ fn switch(
             return switch::to(&accounts[index]);
         }
     };
-    if !yes && !confirm(&format!("Switch to {} now?", chosen.name))? {
+    if !yes
+        && !confirm(&format!(
+            "Lock the screen now so you can switch to {}?",
+            chosen.name
+        ))?
+    {
         return Ok(json!({"ok": false, "cancelled": true}));
     }
     switch::to(&chosen)

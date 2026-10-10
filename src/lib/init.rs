@@ -435,11 +435,28 @@ pub async fn run(config_path: &Path) -> Result<Value> {
                  Understudy will ask for two permissions in that session.",
                 name = helper.name
             ));
-            say(&format!(
+            let manual = format!(
                 "  To switch: click your name (or the people icon) in the menu bar and choose\n  \
-                 {name}, or use Apple menu › Lock Screen and pick {name}. Sign in there.\n\n  \
-                 Waiting for {name} to sign in… (Ctrl-C stops; running init again resumes.)",
+                 {name}, or use Apple menu › Lock Screen, click Switch User and pick {name}.",
                 name = helper.name
+            );
+            if yes(&format!(
+                "  Lock the screen now so you can switch to {}?",
+                helper.name
+            ))? {
+                match crate::switch::lock_screen() {
+                    Ok(_) => say(&format!(
+                        "  Locked. On the lock screen, click Switch User, choose {} and sign in.",
+                        helper.name
+                    )),
+                    Err(error) => say(&format!("  {} \n{manual}", error.error)),
+                }
+            } else {
+                say(&manual);
+            }
+            say(&format!(
+                "\n  Waiting for {} to sign in… (Ctrl-C stops; running init again resumes.)",
+                helper.name
             ));
             wait_for("the helper to sign in", async || {
                 helper_logged_in(helper.uid).then_some(())
