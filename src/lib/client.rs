@@ -2,6 +2,7 @@ use crate::{
     actions,
     config::Config,
     control::{Controller, SharedLease, write_private},
+    digest::file_sha256,
     error::{Error, Result},
     session::{Display, Epoch, Session, require_hidden},
     transport::{Transport, run_output},
@@ -26,11 +27,15 @@ pub struct Frame {
     pub epoch: Epoch,
     pub at: Instant,
 }
+/// Identity (device, inode, size, mtime) of the installed executable and its hash.
+type BuildCache = Arc<std::sync::Mutex<Option<((u64, u64, u64, i64, i64), Option<String>)>>>;
+
 #[derive(Clone)]
 pub struct Client {
     pub config: Config,
     pub transport: Transport,
     pub controller: Controller,
+    installed: BuildCache,
 }
 
 pub fn timestamp() -> u128 {
@@ -83,6 +88,7 @@ impl Client {
                 timeout: Duration::from_secs(30),
                 peer_uid: config.helper_uid,
             },
+            installed: BuildCache::default(),
             config,
         })
     }
@@ -130,6 +136,7 @@ impl Client {
             .call(&json!({ "op": "hello" }))
             .await
             .unwrap_or_else(|error| json!(error));
+        hello["installedBuild"] = json!(self.installed_build());
         let proof = self
             .session_proof()
             .await
@@ -350,9 +357,36 @@ impl Client {
         self.identity().await?;
         self.launch_input().await
     }
+    /// SHA-256 of the installed shared executable, rehashed only when its
+    /// device, inode, size or modification time changes.
+    pub fn installed_build(&self) -> Option<String> {
+        let path = &self.config.identity_probe;
+        let metadata = fs::symlink_metadata(path).ok()?;
+        let key = (
+            metadata.dev(),
+            metadata.ino(),
+            metadata.size(),
+            metadata.mtime(),
+            metadata.mtime_nsec(),
+        );
+        let mut cache = self.installed.lock().ok()?;
+        if let Some((cached, build)) = cache.as_ref()
+            && *cached == key
+        {
+            return build.clone();
+        }
+        let build = file_sha256(path);
+        *cache = Some((key, build.clone()));
+        build
+    }
     async fn launch_input(&self) -> Result<Value> {
         let status = self.status().await;
         let session = require_hidden(&status, self.config.helper_uid)?;
+        let native = &status["inputService"];
+        let current = native["build"].is_string() && native["build"] == status["installedBuild"];
+        if native["ok"] == true && !current {
+            return self.upgrade_input(&status).await;
+        }
         if session.input {
             return Ok(json!({
                 "ok": true,
@@ -360,13 +394,7 @@ impl Client {
                 "pid": session.epoch.input_pid,
             }));
         }
-        if status["inputService"]["ok"] == true {
-            if status["inputService"]["protocolVersion"] != 1 {
-                return Err(Error::new(
-                    "startup",
-                    "An older input service is running. Stop that service before installing the current binary.",
-                ));
-            }
+        if native["ok"] == true {
             self.native_request(json!({
                 "op": "reset",
                 "epoch": session.epoch.input_epoch(),
@@ -380,6 +408,103 @@ impl Client {
             }
             return Ok(json!({ "ok": true, "recovered": true, "pid": session.epoch.input_pid }));
         }
+        let pid = self.spawn_input().await?;
+        Ok(json!({ "ok": true, "started": true, "pid": pid }))
+    }
+    /// Replace a running service whose build differs from the installed
+    /// executable. Its own SIGTERM handling closes ownership and releases held
+    /// input. The replacement stays a pending mutation until the new process
+    /// is ready, runs the installed build and holds nothing.
+    async fn upgrade_input(&self, status: &Value) -> Result<Value> {
+        let native = &status["inputService"];
+        if !status["installedBuild"].is_string() {
+            return Err(Error::new(
+                "startup",
+                "The installed executable cannot be read; refusing to replace the running service",
+            ));
+        }
+        if native["controlActive"] != false {
+            return Err(Error::new(
+                "busy",
+                "The input service has an active controller; release it before upgrading",
+            ));
+        }
+        let previous = native["pid"]
+            .as_u64()
+            .and_then(|pid| u32::try_from(pid).ok())
+            .filter(|pid| *pid > 1)
+            .ok_or_else(|| Error::new("startup", "The running input service has no valid PID"))?;
+        let generation = self.controller.quarantine()?;
+        self.stop_input(previous).await?;
+        let pid = self.spawn_input().await?;
+        let state = self.status().await;
+        let replacement = &state["inputService"];
+        if replacement["heldInput"] != false
+            || !replacement["build"].is_string()
+            || replacement["build"] != state["installedBuild"]
+        {
+            return Err(Error::new(
+                "uncertain",
+                "The replacement input service is not confirmed current with nothing held",
+            )
+            .uncertain());
+        }
+        self.controller.clear_if(&generation)?;
+        Ok(json!({
+            "ok": true,
+            "upgraded": true,
+            "previousPid": previous,
+            "pid": pid,
+            "build": replacement["build"],
+        }))
+    }
+    /// SIGTERM exactly `pid`, after the helper confirms it is still the input
+    /// service executable running as the helper, then wait for its endpoint
+    /// to close.
+    async fn stop_input(&self, pid: u32) -> Result<()> {
+        let script = concat!(
+            "[ \"$(/bin/ps -o uid= -p \"$1\" | /usr/bin/tr -d ' ')\" = \"$2\" ] && ",
+            "[ \"$(/bin/ps -o comm= -p \"$1\")\" = \"$3\" ] && exec /bin/kill -TERM \"$1\"",
+        );
+        let request = json!({
+            "op": "run",
+            "argv": [
+                "/bin/sh", "-c", script, "sh",
+                pid.to_string(),
+                self.config.helper_uid.to_string(),
+                self.config.identity_probe,
+            ],
+            "timeoutMs": 3000,
+        });
+        let reply = self.transport.call(&request).await?;
+        if reply["ok"] != true || reply["exitCode"] != 0 {
+            return Err(Error::new(
+                "uncertain",
+                "The running input service could not be verified and stopped",
+            )
+            .uncertain());
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while self
+            .input_transport()
+            .call(&json!({ "op": "hello" }))
+            .await
+            .is_ok_and(|hello| hello["pid"] == pid)
+        {
+            if Instant::now() >= deadline {
+                return Err(Error::new(
+                    "uncertain",
+                    "The previous input service did not exit after SIGTERM",
+                )
+                .uncertain());
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        Ok(())
+    }
+    /// Start the installed executable as the helper's input service. Launching
+    /// is a pending mutation until a ready service answers.
+    async fn spawn_input(&self) -> Result<u32> {
         // Arguments stay separate from shell syntax, including configured paths.
         let script = concat!(
             "nohup \"$1\" input-service --uid \"$2\" --controller-uid \"$3\" --socket \"$4\" ",
@@ -398,12 +523,14 @@ impl Client {
             ],
             "timeoutMs": 3000,
         });
+        let generation = self.controller.quarantine()?;
         let reply = self.transport.call(&request).await?;
         if reply["ok"] != true || reply["exitCode"] != 0 {
             return Err(Error::new(
                 "startup",
                 "The helper could not launch the Rust input service",
-            ));
+            )
+            .uncertain());
         }
         let deadline = Instant::now() + Duration::from_secs(6);
         loop {
@@ -411,14 +538,16 @@ impl Client {
             if let Ok(session) = require_hidden(&state, self.config.helper_uid)
                 && session.input
             {
-                return Ok(json!({ "ok": true, "started": true, "pid": session.epoch.input_pid }));
+                self.controller.clear_if(&generation)?;
+                return Ok(session.epoch.input_pid);
             }
             if Instant::now() >= deadline {
                 return Err(Error::new(
                     "startup",
                     "Input service did not become ready. Check ~/Library/Logs/Understudy-input.log \
                      in the helper account and confirm that identity_probe points to the current Rust binary.",
-                ));
+                )
+                .uncertain());
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }

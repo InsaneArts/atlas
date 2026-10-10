@@ -30,6 +30,9 @@ struct Service {
     engine: Mutex<Engine>,
     gate: Arc<Gate>,
     epoch: RwLock<InputEpoch>,
+    /// SHA-256 of the executable this process started from. Hashed once at
+    /// start: `install` later renames a new build over the same path.
+    build: Option<String>,
 }
 impl Service {
     fn epoch(&self) -> Result<InputEpoch> {
@@ -70,6 +73,7 @@ impl Service {
                 "protocolVersion": 1,
                 "pid": std::process::id(),
                 "version": env!("CARGO_PKG_VERSION"),
+                "build": self.build,
                 "accessibility": Engine::trusted(),
                 "ready": self.check().is_ok(),
                 "enforcedEpoch": self.epoch()?,
@@ -241,6 +245,9 @@ async fn bind(socket: &Path, uid: u32) -> Result<(UnixListener, Endpoint)> {
 }
 
 pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()> {
+    let build = std::env::current_exe()
+        .ok()
+        .and_then(|path| crate::digest::file_sha256(&path));
     crate::session::validate_target_uid(uid, controller_uid)?;
     if controller_uid == 0 {
         return Err(Error::new(
@@ -252,6 +259,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     let (listener, _endpoint) = bind(&socket, uid).await?;
     engine.recover(socket.with_extension("held.json"))?;
     let service = Arc::new(Service {
+        build,
         epoch: RwLock::new(engine.epoch.clone()),
         engine: Mutex::new(engine),
         gate: Arc::new(Gate::default()),

@@ -614,3 +614,17 @@ fn legacy_socket_keyed_controllers_still_exclude_and_block() {
     drop(recovery);
     controller.acquire(false).unwrap();
 }
+
+#[test]
+fn doctor_warns_when_the_input_service_build_is_not_the_installed_one() {
+    let warnings = |service: Value, installed: Value| {
+        let mut state = ready_status();
+        state["inputService"]["build"] = service;
+        state["installedBuild"] = installed;
+        diagnose(state, 502)["warnings"].as_array().unwrap().len()
+    };
+    assert_eq!(warnings(json!("abc"), json!("abc")), 0);
+    assert_eq!(warnings(json!("abc"), json!("def")), 1);
+    assert_eq!(warnings(Value::Null, json!("def")), 1, "pre-build services");
+    assert_eq!(warnings(Value::Null, Value::Null), 1);
+}

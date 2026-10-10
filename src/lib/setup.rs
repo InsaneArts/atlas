@@ -454,6 +454,9 @@ pub async fn preview(config_path: &Path, helper: Option<&str>) -> Result<Value> 
         report["input"]["service"] = json!({
             "pid": status["inputService"]["pid"],
             "version": status["inputService"]["version"],
+            "build": status["inputService"]["build"],
+            "current": status["inputService"]["build"].is_string()
+                && status["inputService"]["build"] == status["installedBuild"],
             "accessibility": status["inputService"]["accessibility"],
             "ready": status["inputService"]["ready"],
             "error": status["inputService"]["error"],
@@ -512,6 +515,13 @@ fn next_steps(report: &Value) -> Vec<String> {
     if report["input"]["service"]["accessibility"] == false {
         steps
             .push("Grant Accessibility to the input service inside the helper account.".to_owned());
+    }
+    if report["input"]["service"]["current"] == false {
+        steps.push(
+            "The input service runs a different build than the installed executable; run \
+             understudy start-input to replace it."
+                .to_owned(),
+        );
     }
     if report["rustExecutable"]["matchesThisBuild"] == false {
         steps.push(

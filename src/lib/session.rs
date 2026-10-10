@@ -261,12 +261,14 @@ pub fn diagnose(value: Value, uid: u32) -> Value {
         },
     ];
     let mut warnings = Vec::new();
-    if native_reachable && native["version"] != env!("CARGO_PKG_VERSION") {
-        warnings.push(format!(
-            "The input service runs version {}, this controller is {}",
-            native["version"],
-            env!("CARGO_PKG_VERSION")
-        ));
+    if native_reachable
+        && (!native["build"].is_string() || native["build"] != value["installedBuild"])
+    {
+        warnings.push(
+            "The input service runs a different build than the installed executable; \
+             run understudy start-input to replace it."
+                .to_owned(),
+        );
     }
     let details = checks
         .iter()
