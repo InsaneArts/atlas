@@ -5,17 +5,16 @@ use crate::{
     acl::Acl,
     client::Client,
     config::Config,
+    digest::file_sha256,
     error::{Error, Result},
     session::{require_hidden, validate_target_uid},
     transport::run_output,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::{
     ffi::{CStr, CString},
     fs,
-    io::Read,
     os::unix::fs::{FileTypeExt, MetadataExt},
     path::{Path, PathBuf},
     process::Command,
@@ -108,25 +107,6 @@ fn admin(name: &str) -> Option<bool> {
         Some(67) => Some(false),
         _ => None,
     }
-}
-
-/// SHA-256 of a regular file, read without following a final symlink.
-pub fn sha256(path: &Path) -> Option<String> {
-    let metadata = fs::symlink_metadata(path).ok()?;
-    if !metadata.is_file() {
-        return None;
-    }
-    let mut file = fs::File::open(path).ok()?;
-    let mut hasher = Sha256::new();
-    let mut buffer = vec![0; 1 << 16];
-    loop {
-        let count = file.read(&mut buffer).ok()?;
-        if count == 0 {
-            break;
-        }
-        hasher.update(&buffer[..count]);
-    }
-    Some(format!("{:x}", hasher.finalize()))
 }
 
 #[derive(Debug, Default, PartialEq, Eq, Serialize)]
@@ -286,7 +266,7 @@ fn endpoint(path: &Path, helper: u32, controller: u32) -> Endpoint {
 fn binary(path: &Path) -> Value {
     json!({
         "path": path,
-        "sha256": sha256(path),
+        "sha256": file_sha256(path),
         "signature": signature(path),
     })
 }
@@ -419,8 +399,10 @@ pub async fn preview(config_path: &Path, helper: Option<&str>) -> Result<Value> 
         Some(config) if !conflict => config.clone(),
         _ => proposal(&account),
     };
-    let current = std::env::current_exe().ok().and_then(|path| sha256(&path));
-    let installed = sha256(&effective.identity_probe);
+    let current = std::env::current_exe()
+        .ok()
+        .and_then(|path| file_sha256(&path));
+    let installed = file_sha256(&effective.identity_probe);
     let mut report = json!({
         "ok": true,
         "preview": true,

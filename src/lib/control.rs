@@ -34,12 +34,51 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Lock, pending-marker and marker-lock files for one exclusion key.
+#[derive(Clone)]
+struct Keyed {
+    lock: PathBuf,
+    marker: PathBuf,
+    marker_lock: PathBuf,
+}
+impl Keyed {
+    fn new(directory: &Path, key: &str) -> Self {
+        let digest = format!("{:x}", Sha256::digest(key.as_bytes()));
+        let name = &digest[..24];
+        Self {
+            lock: directory.join(format!("{name}.lock")),
+            marker: directory.join(format!("{name}.uncertain.json")),
+            marker_lock: directory.join(format!("{name}.state.lock")),
+        }
+    }
+}
+
+fn open_lock(path: &Path) -> Result<File> {
+    Ok(OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)?)
+}
+
+/// Exclusive control of one helper, held until dropped.
+#[derive(Debug)]
+pub struct Ownership {
+    _locks: [File; 2],
+}
+
+/// Controller exclusion and pending-mutation state for one helper account.
+/// It is keyed by helper UID, so a changed socket path cannot admit a second
+/// controller. Controllers that predate this key used `uid:socket`; that lock
+/// is taken and its marker honoured too, so they still exclude each other.
 #[derive(Clone)]
 pub struct Controller {
     directory: PathBuf,
-    path: PathBuf,
-    marker: PathBuf,
-    marker_lock: PathBuf,
+    current: Keyed,
+    legacy: Keyed,
 }
 impl Controller {
     pub fn new(uid: u32, socket: &Path) -> Result<Self> {
@@ -47,38 +86,34 @@ impl Controller {
     }
     /// Locating state is read-only; the directory appears with the first lock.
     pub fn at(uid: u32, socket: &Path, directory: &Path) -> Result<Self> {
-        let key = format!("{uid}:{}", resolve_path(socket)?.display());
-        let digest = format!("{:x}", Sha256::digest(key.as_bytes()));
+        let legacy = format!("{uid}:{}", resolve_path(socket)?.display());
         Ok(Self {
             directory: directory.to_owned(),
-            path: directory.join(format!("{}.lock", &digest[..24])),
-            marker: directory.join(format!("{}.uncertain.json", &digest[..24])),
-            marker_lock: directory.join(format!("{}.state.lock", &digest[..24])),
+            current: Keyed::new(directory, &format!("helper:{uid}")),
+            legacy: Keyed::new(directory, &legacy),
         })
     }
-    pub fn acquire(&self, recovery: bool) -> Result<File> {
+    pub fn acquire(&self, recovery: bool) -> Result<Ownership> {
         fs::create_dir_all(&self.directory)?;
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&self.path)?;
-        FileExt::try_lock_exclusive(&file).map_err(|_| {
+        let busy = || {
             Error::new(
                 "busy",
                 "Another Understudy controller is active. Release it first.",
             )
-        })?;
+        };
+        let current = open_lock(&self.current.lock)?;
+        FileExt::try_lock_exclusive(&current).map_err(|_| busy())?;
+        let legacy = open_lock(&self.legacy.lock)?;
+        FileExt::try_lock_exclusive(&legacy).map_err(|_| busy())?;
         if !recovery {
             self.require_known()?;
         }
-        Ok(file)
+        Ok(Ownership {
+            _locks: [current, legacy],
+        })
     }
     pub fn require_known(&self) -> Result<()> {
-        if self.marker.try_exists()? {
+        if self.current.marker.try_exists()? || self.legacy.marker.try_exists()? {
             return Err(Error::new(
                 "uncertain",
                 "The last action's outcome is unknown. Observe the desktop, then run 'understudy restart'.",
@@ -86,29 +121,22 @@ impl Controller {
         }
         Ok(())
     }
-    fn lock_marker(&self) -> Result<File> {
+    fn lock_marker(&self, keyed: &Keyed) -> Result<File> {
         fs::create_dir_all(&self.directory)?;
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&self.marker_lock)?;
+        let file = open_lock(&keyed.marker_lock)?;
         FileExt::lock_exclusive(&file)?;
         Ok(file)
     }
     pub fn quarantine(&self) -> Result<String> {
-        let _lock = self.lock_marker()?;
+        let _lock = self.lock_marker(&self.current)?;
         let generation = token();
         let mut pending = self.pending()?;
         pending.push(generation.clone());
-        write_private(&self.marker, &serde_json::to_vec(&pending)?)?;
+        write_private(&self.current.marker, &serde_json::to_vec(&pending)?)?;
         Ok(generation)
     }
     fn pending(&self) -> Result<Vec<String>> {
-        match fs::read_to_string(&self.marker) {
+        match fs::read_to_string(&self.current.marker) {
             Ok(text) => {
                 Ok(serde_json::from_str(&text).unwrap_or_else(|_| vec!["legacy-unknown".into()]))
             }
@@ -117,32 +145,36 @@ impl Controller {
         }
     }
     pub fn clear_if(&self, generation: &str) -> Result<()> {
-        let _lock = self.lock_marker()?;
+        let _lock = self.lock_marker(&self.current)?;
         let mut pending = self.pending()?;
         pending.retain(|entry| entry != generation);
         if pending.is_empty() {
-            match fs::remove_file(&self.marker) {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                other => other?,
-            }
+            remove_marker(&self.current.marker)
         } else {
-            write_private(&self.marker, &serde_json::to_vec(&pending)?)?;
+            write_private(&self.current.marker, &serde_json::to_vec(&pending)?)
+        }
+    }
+    /// Verified recovery settles every pending mutation, legacy ones included.
+    pub fn clear(&self) -> Result<()> {
+        for keyed in [&self.current, &self.legacy] {
+            let _lock = self.lock_marker(keyed)?;
+            remove_marker(&keyed.marker)?;
         }
         Ok(())
     }
-    pub fn clear(&self) -> Result<()> {
-        let _lock = self.lock_marker()?;
-        match fs::remove_file(&self.marker) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            other => Ok(other?),
-        }
+}
+
+fn remove_marker(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        other => Ok(other?),
     }
 }
 
 pub struct Lease {
     pub owner: Option<String>,
     pub retired: Option<String>,
-    descriptor: Option<File>,
+    descriptor: Option<Ownership>,
     expires: Instant,
     inflight: bool,
     cleaning: bool,

@@ -565,3 +565,52 @@ fn doctor_reports_an_unqueried_input_service_as_unknown() {
     assert_eq!(check(&report, "Input permission"), Value::Null);
     assert_eq!(check(&report, "Native input service"), Value::Null);
 }
+
+/// State file a pre-UID-key controller used for `uid:socket`.
+fn legacy_state(
+    dir: &std::path::Path,
+    socket: &std::path::Path,
+    suffix: &str,
+) -> std::path::PathBuf {
+    use sha2::{Digest, Sha256};
+    let key = format!(
+        "502:{}",
+        understudy::config::resolve_path(socket).unwrap().display()
+    );
+    let digest = format!("{:x}", Sha256::digest(key.as_bytes()));
+    dir.join(format!("{}.{suffix}", &digest[..24]))
+}
+
+#[test]
+fn exclusion_is_per_helper_whatever_the_socket_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = Controller::at(502, &dir.path().join("a.sock"), dir.path()).unwrap();
+    let moved = Controller::at(502, &dir.path().join("b.sock"), dir.path()).unwrap();
+    let other = Controller::at(503, &dir.path().join("a.sock"), dir.path()).unwrap();
+    let held = first.acquire(false).unwrap();
+    assert_eq!(moved.acquire(false).unwrap_err().code, "busy");
+    drop(other.acquire(false).unwrap());
+    first.quarantine().unwrap();
+    drop(held);
+    assert_eq!(moved.acquire(false).unwrap_err().code, "uncertain");
+}
+
+#[test]
+fn legacy_socket_keyed_controllers_still_exclude_and_block() {
+    use fs2::FileExt;
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("a.sock");
+    let controller = Controller::at(502, &socket, dir.path()).unwrap();
+    let old = std::fs::File::create(legacy_state(dir.path(), &socket, "lock")).unwrap();
+    old.try_lock_exclusive().unwrap();
+    assert_eq!(controller.acquire(false).unwrap_err().code, "busy");
+    drop(old);
+    let marker = legacy_state(dir.path(), &socket, "uncertain.json");
+    std::fs::write(&marker, "[\"old\"]").unwrap();
+    assert_eq!(controller.acquire(false).unwrap_err().code, "uncertain");
+    let recovery = controller.acquire(true).unwrap();
+    controller.clear().unwrap();
+    assert!(!marker.exists());
+    drop(recovery);
+    controller.acquire(false).unwrap();
+}
