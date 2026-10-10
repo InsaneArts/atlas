@@ -1,6 +1,4 @@
 //! CoreGraphics input belongs to one private event source in the helper session.
-// FFI boundary: event engine Send, Accessibility trust and UTF-16 key text.
-#![allow(unsafe_code)]
 use super::{
     journal::{self, Held, Journal},
     lease::Grant,
@@ -44,6 +42,7 @@ pub struct Engine {
 }
 // SAFETY: Engine is exclusively accessed under the service mutex; no event or
 // source reference escapes it. CoreGraphics posting does not require AppKit's main thread.
+#[allow(unsafe_code)]
 unsafe impl Send for Engine {}
 
 impl Engine {
@@ -73,6 +72,7 @@ impl Engine {
         engine.check()?;
         Ok(engine)
     }
+    #[allow(unsafe_code)] // FFI: Accessibility trust query.
     pub fn trusted() -> bool {
         // SAFETY: no arguments; only reads this process's consent.
         unsafe { AXIsProcessTrusted() }
@@ -287,6 +287,7 @@ impl Engine {
         }
         self.commit()
     }
+    #[allow(unsafe_code)] // FFI: key text is passed as a UTF-16 pointer.
     fn key_event(&mut self, code: u16, down: bool, flags: u64, text: Option<&[u16]>) -> Result<()> {
         let event = created(CGEvent::new_keyboard_event(Some(&self.source), code, down))?;
         if let Some(text) = text {

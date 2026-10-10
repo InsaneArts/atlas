@@ -5,7 +5,7 @@ use crate::{
     error::{Error, Result},
     native::cf,
 };
-use objc2_core_graphics::{CGWindowListCopyWindowInfo, CGWindowListOption};
+use objc2_core_graphics::CGWindowListOption;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -65,12 +65,9 @@ fn read_window(entry: &cf::Record) -> Option<Window> {
 pub fn windows() -> Result<Vec<Window>> {
     let options =
         CGWindowListOption::OptionOnScreenOnly | CGWindowListOption::ExcludeDesktopElements;
-    let list = CGWindowListCopyWindowInfo(options, 0)
+    let list = cf::windows(options)
         .ok_or_else(|| Error::new("windows", "The window list is unavailable"))?;
-    Ok(cf::records(list)
-        .iter()
-        .filter_map(|entry| read_window(&entry))
-        .collect())
+    Ok(list.iter().filter_map(|entry| read_window(entry)).collect())
 }
 
 /// Whether the point lies inside window `target` with nothing in front of it

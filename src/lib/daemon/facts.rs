@@ -1,7 +1,5 @@
 //! The `hello` reply: who the daemon runs as, in which session, on which
 //! display, with which permissions.
-// FFI boundary: Accessibility trust queries.
-#![allow(unsafe_code)]
 use crate::native::{
     capture,
     cf::{self, CFBoolean, CFDictionary, CFRetained, CFString},
@@ -9,11 +7,11 @@ use crate::native::{
 use objc2_application_services::{AXIsProcessTrusted, AXIsProcessTrustedWithOptions};
 use objc2_core_graphics::{
     CGDisplayBounds, CGDisplayCopyDisplayMode, CGDisplayMode, CGMainDisplayID,
-    CGSessionCopyCurrentDictionary,
 };
 use serde_json::{Value, json};
 
 /// Whether this process may use Accessibility.
+#[allow(unsafe_code)] // FFI: Accessibility trust query.
 fn accessibility() -> bool {
     // SAFETY: no arguments; only reads this process's consent.
     unsafe { AXIsProcessTrusted() }
@@ -22,6 +20,7 @@ fn accessibility() -> bool {
 /// Ask macOS for whatever consent the daemon still lacks — Screen Recording
 /// and Accessibility — so it is listed in System Settings with a prompt in
 /// the helper's session. Nothing is granted here; the person decides.
+#[allow(unsafe_code)] // FFI: the consent prompt takes an options dictionary.
 pub fn request_consent() {
     if !capture::permitted() {
         capture::request();
@@ -48,7 +47,7 @@ fn user() -> Value {
 
 /// The window server's record of this graphical session.
 fn session_record() -> Option<CFRetained<cf::Record>> {
-    CGSessionCopyCurrentDictionary().map(cf::record)
+    cf::session()
 }
 
 /// Whether this graphical session is on the console now, if known.

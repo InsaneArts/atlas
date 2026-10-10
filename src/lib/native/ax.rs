@@ -16,6 +16,13 @@ use std::{
     time::{Duration, Instant},
 };
 
+// The bindings' constructors panic on a null element; these report it.
+#[link(name = "ApplicationServices", kind = "framework")]
+unsafe extern "C-unwind" {
+    fn AXUIElementCreateApplication(pid: libc::pid_t) -> Option<NonNull<AXUIElement>>;
+    fn AXUIElementCreateSystemWide() -> Option<NonNull<AXUIElement>>;
+}
+
 /// Longest text reported for any one attribute, in UTF-16 units.
 const TEXT_LIMIT: CFIndex = 200;
 /// AX errors meaning the element could not be read at all: the request could
@@ -289,12 +296,16 @@ impl Default for Limits {
 
 /// Depth-first elements of `pid`'s windows (the menu bar is excluded).
 pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
-    // SAFETY: plain constructors; the system-wide element sets this
-    // process's global messaging timeout, which covers every read below.
+    // SAFETY: plain constructors returning an owned element or null; the
+    // system-wide element sets this process's global messaging timeout,
+    // which covers every read below.
     let app = unsafe {
-        AXUIElement::new_system_wide().set_messaging_timeout(1.0);
-        AXUIElement::new_application(pid)
-    };
+        if let Some(system) = AXUIElementCreateSystemWide() {
+            CFRetained::from_raw(system).set_messaging_timeout(1.0);
+        }
+        AXUIElementCreateApplication(pid).map(|app| CFRetained::from_raw(app))
+    }
+    .ok_or_else(|| Error::new("elements", "No accessibility element for that process"))?;
     let mut scan = Scan {
         deadline: Instant::now() + limits.time,
         incomplete: false,
