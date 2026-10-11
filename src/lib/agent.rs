@@ -503,17 +503,30 @@ fn app_pid(windows: &[Window], target: &Target) -> Result<i64> {
         Target::Pid(pid) => return Ok(*pid),
         Target::Name(name) => name,
     };
-    let mut pids: Vec<i64> = windows
-        .iter()
-        .filter(|window| {
-            window.layer == 0
-                && window
+    // Its ordinary windows first; an app showing only a floating panel or an
+    // alert is found by those. Layers from the Dock's up (the Dock, the menu
+    // bar and system overlays) are never an app's own.
+    const DOCK_LAYER: i64 = 20;
+    let owned = |ordinary: bool| -> Vec<i64> {
+        windows
+            .iter()
+            .filter(|window| {
+                (if ordinary {
+                    window.layer == 0
+                } else {
+                    (0..DOCK_LAYER).contains(&window.layer)
+                }) && window
                     .owner
                     .as_deref()
                     .is_some_and(|owner| owner.eq_ignore_ascii_case(name))
-        })
-        .map(|window| window.pid)
-        .collect();
+            })
+            .map(|window| window.pid)
+            .collect()
+    };
+    let mut pids = owned(true);
+    if pids.is_empty() {
+        pids = owned(false);
+    }
     pids.sort_unstable();
     pids.dedup();
     match pids.as_slice() {
@@ -583,7 +596,6 @@ fn owning_window(windows: &[Window], pid: i64, frame: &Frame) -> Option<i64> {
     let near = |a: f64, b: f64| (a - b).abs() <= 1.0;
     let mut matching = windows.iter().filter(|window| {
         window.pid == pid
-            && window.layer == 0
             && near(window.bounds.x, frame.x)
             && near(window.bounds.y, frame.y)
             && near(window.bounds.width, frame.width)
@@ -851,6 +863,12 @@ mod tests {
             "only document windows"
         );
         assert!(app_pid(&windows, &name("Preview")).is_err());
+        let alert = [window(3, 5, "Atlas", 8), window(1, 7, "Dock", 20)];
+        assert_eq!(
+            app_pid(&alert, &name("Atlas")).unwrap(),
+            5,
+            "a floating alert"
+        );
         let twice = [window(1, 8, "TextEdit", 0), window(2, 9, "TextEdit", 0)];
         let error = app_pid(&twice, &name("TextEdit")).unwrap_err();
         assert!(error.error.contains("--pid"), "{}", error.error);

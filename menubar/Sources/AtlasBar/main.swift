@@ -102,6 +102,23 @@ func watchParent() {
     }
 }
 
+// `--notice TITLE MESSAGE`: tell the person something in this session (the
+// helper's, when its daemon asks), wait for OK, then exit.
+if let index = CommandLine.arguments.firstIndex(of: "--notice"),
+    index + 2 < CommandLine.arguments.count
+{
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    let alert = NSAlert()
+    alert.messageText = CommandLine.arguments[index + 1]
+    alert.informativeText = CommandLine.arguments[index + 2]
+    alert.addButton(withTitle: "OK")
+    app.activate(ignoringOtherApps: true)
+    alert.window.level = .floating
+    alert.runModal()
+    exit(0)
+}
+
 // `--login on|off|status`: manage "Open at Login" for the CLI, then exit.
 if let index = CommandLine.arguments.firstIndex(of: "--login"),
     index + 1 < CommandLine.arguments.count
