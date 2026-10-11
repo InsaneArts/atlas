@@ -193,7 +193,8 @@ pub struct WindowFilter {
 impl WindowFilter {
     pub fn matches(&self, window: &Window) -> bool {
         let lower = |text: &Option<String>| text.as_deref().map(str::to_lowercase);
-        (self.all || window.layer == 0)
+        // With --app, an app's floating panels and alerts count as its own.
+        (self.all || window.layer == 0 || (self.app.is_some() && app_layer(window)))
             && self
                 .app
                 .as_ref()
@@ -490,8 +491,18 @@ impl ElementFilter {
     }
 }
 
+/// Layers from the Dock's up hold the Dock, the menu bar and system overlays,
+/// never an app's own windows.
+const DOCK_LAYER: i64 = 20;
+
+/// Whether `window` is one of an app's own visible windows: an ordinary one,
+/// or a floating panel or alert below the Dock's layer.
+fn app_layer(window: &Window) -> bool {
+    window.layer == 0 || ((1..DOCK_LAYER).contains(&window.layer) && window.alpha > 0.0)
+}
+
 /// The app an element command is about: a PID, or a name that must resolve
-/// to exactly one process owning a document window.
+/// to exactly one process with a window of its own on screen.
 #[derive(Debug, Clone)]
 pub enum Target {
     Name(String),
@@ -503,30 +514,28 @@ fn app_pid(windows: &[Window], target: &Target) -> Result<i64> {
         Target::Pid(pid) => return Ok(*pid),
         Target::Name(name) => name,
     };
-    // Its ordinary windows first; an app showing only a floating panel or an
-    // alert is found by those. Layers from the Dock's up (the Dock, the menu
-    // bar and system overlays) are never an app's own.
-    const DOCK_LAYER: i64 = 20;
-    let owned = |ordinary: bool| -> Vec<i64> {
-        windows
-            .iter()
-            .filter(|window| {
-                (if ordinary {
-                    window.layer == 0
-                } else {
-                    (0..DOCK_LAYER).contains(&window.layer)
-                }) && window
+    let candidates: Vec<&Window> = windows
+        .iter()
+        .filter(|window| {
+            app_layer(window)
+                && window
                     .owner
                     .as_deref()
                     .is_some_and(|owner| owner.eq_ignore_ascii_case(name))
-            })
-            .map(|window| window.pid)
-            .collect()
+        })
+        .collect();
+    // Its ordinary windows first; an app showing only a floating panel or an
+    // alert is found by those.
+    let ordinary: Vec<i64> = candidates
+        .iter()
+        .filter(|window| window.layer == 0)
+        .map(|window| window.pid)
+        .collect();
+    let mut pids = if ordinary.is_empty() {
+        candidates.iter().map(|window| window.pid).collect()
+    } else {
+        ordinary
     };
-    let mut pids = owned(true);
-    if pids.is_empty() {
-        pids = owned(false);
-    }
     pids.sort_unstable();
     pids.dedup();
     match pids.as_slice() {
@@ -594,15 +603,30 @@ pub async fn elements(
 /// or None when no window or more than one window of the process matches.
 fn owning_window(windows: &[Window], pid: i64, frame: &Frame) -> Option<i64> {
     let near = |a: f64, b: f64| (a - b).abs() <= 1.0;
-    let mut matching = windows.iter().filter(|window| {
-        window.pid == pid
-            && near(window.bounds.x, frame.x)
-            && near(window.bounds.y, frame.y)
-            && near(window.bounds.width, frame.width)
-            && near(window.bounds.height, frame.height)
-    });
-    let first = matching.next()?;
-    matching.next().is_none().then_some(first.number)
+    let matching: Vec<&Window> = windows
+        .iter()
+        .filter(|window| {
+            window.pid == pid
+                && app_layer(window)
+                && near(window.bounds.x, frame.x)
+                && near(window.bounds.y, frame.y)
+                && near(window.bounds.width, frame.width)
+                && near(window.bounds.height, frame.height)
+        })
+        .collect();
+    // An ordinary window wins over a same-sized overlay of the same app.
+    let unique = |windows: Vec<&Window>| match windows.as_slice() {
+        [window] => Some(window.number),
+        _ => None,
+    };
+    unique(
+        matching
+            .iter()
+            .copied()
+            .filter(|window| window.layer == 0)
+            .collect(),
+    )
+    .or_else(|| unique(matching))
 }
 
 /// Click the centre of exactly one matching element. Uniqueness needs a
@@ -851,6 +875,44 @@ mod tests {
         assert!(!filter(Some("AXButton"), Some("Save")).matches(&unread));
         assert!(filter(Some("AXButton"), Some("Save")).might_match(&unread));
         assert!(!filter(Some("AXStaticText"), Some("Save")).might_match(&unread));
+    }
+
+    #[test]
+    fn an_apps_own_windows_include_visible_floating_ones_only() {
+        let name = Target::Name("Opie".into());
+        let mut hidden = window(4, 6, "Opie", 3);
+        hidden.alpha = 0.0;
+        assert!(
+            app_pid(&[hidden], &name).is_err(),
+            "an invisible panel is no window"
+        );
+        let panel = window(5, 6, "Opie", 3);
+        assert_eq!(app_pid(std::slice::from_ref(&panel), &name).unwrap(), 6);
+        let frame = Frame {
+            x: 10.0,
+            y: 20.0,
+            width: 300.0,
+            height: 200.0,
+        };
+        let ordinary = window(7, 6, "Opie", 0);
+        assert_eq!(
+            owning_window(&[panel.clone(), ordinary], 6, &frame),
+            Some(7),
+            "the ordinary window wins over a same-sized overlay"
+        );
+        assert_eq!(
+            owning_window(std::slice::from_ref(&panel), 6, &frame),
+            Some(5)
+        );
+        let filter = WindowFilter {
+            app: Some("opie".into()),
+            ..WindowFilter::default()
+        };
+        assert!(
+            filter.matches(&panel),
+            "windows --app shows its floating panel"
+        );
+        assert!(!WindowFilter::default().matches(&panel));
     }
 
     #[test]

@@ -117,7 +117,11 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
         },
     )
     .await?;
-    let consent = tokio::spawn(facts::request_consent_on_arrival());
+    // A Screen Recording grant reaches this process only through a restart.
+    let restarter = daemon.clone();
+    let consent = tokio::spawn(facts::request_consent_on_arrival(move || {
+        restarter.restarting.notify_one();
+    }));
     let slots = Arc::new(Semaphore::new(CONNECTIONS));
     let mut tasks = JoinSet::new();
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;

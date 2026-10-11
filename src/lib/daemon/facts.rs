@@ -40,13 +40,13 @@ fn request_accessibility() {
 /// Recording, with its System Settings page opened so its switch is there
 /// even when macOS shows no prompt. Nothing is granted here; the person
 /// decides, in the normal way.
-pub async fn request_consent_on_arrival() {
+pub async fn request_consent_on_arrival(restart: impl Fn()) {
     let shown = || console_state() == Some(true);
     let mut present = false;
     loop {
         let now = shown();
         if now && !present {
-            ask(&shown).await;
+            ask(&shown, &restart).await;
         }
         // Leaving while being asked counts as never having arrived.
         present = now && shown();
@@ -56,8 +56,9 @@ pub async fn request_consent_on_arrival() {
 
 /// One arrival's requests, given up as soon as the helper leaves the screen.
 /// When the person has turned on what was asked for, Atlas says so here, so
-/// they know to switch back.
-async fn ask(shown: &impl Fn() -> bool) {
+/// they know to switch back, and restarts this process if it cannot yet use
+/// Screen Recording (macOS applies that grant to new processes only).
+async fn ask(shown: &impl Fn() -> bool, restart: &impl Fn()) {
     // Let the desktop settle after the switch, and let macOS finish a new
     // account's setup screens: a prompt raised behind them is never seen.
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -67,11 +68,15 @@ async fn ask(shown: &impl Fn() -> bool) {
     if !shown() {
         return;
     }
-    // Asked on an earlier visit, or before macOS's Quit & Reopen restarted
-    // this process, and everything is on now: say so.
-    if accessibility() && capture::permitted() {
+    let recording = || async { capture::permitted() || screen_recording_now().await };
+    // Asked on an earlier visit, or before a restart, and everything is on
+    // now: say so (and pick up the grant).
+    if accessibility() && recording().await {
         if asked(false) {
             done_notice();
+        }
+        if !capture::permitted() {
+            restart();
         }
         return;
     }
@@ -93,45 +98,49 @@ async fn ask(shown: &impl Fn() -> bool) {
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
-    if shown() && !capture::permitted() {
+    if !recording().await {
+        if !shown() {
+            return;
+        }
         capture::request();
         tokio::time::sleep(Duration::from_secs(1)).await;
         if !shown() {
             return;
         }
         open_settings("Privacy_ScreenCapture");
-        // This process sees a new Screen Recording grant only after it
-        // restarts; a fresh process sees it at once.
-        loop {
+        while !screen_recording_now().await {
             tokio::time::sleep(Duration::from_secs(2)).await;
             if !shown() {
                 return;
-            }
-            if screen_recording_now() {
-                break;
             }
         }
     }
     if shown() {
         asked(false);
         done_notice();
+        if !capture::permitted() {
+            restart();
+        }
     }
 }
 
-/// Whether Screen Recording is allowed now, as a fresh Atlas process sees it.
-fn screen_recording_now() -> bool {
-    std::env::current_exe()
-        .ok()
-        .and_then(|executable| {
-            std::process::Command::new(executable)
-                .arg("permissions-info")
-                .stdin(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .output()
-                .ok()
-        })
-        .and_then(|output| serde_json::from_slice::<Value>(&output.stdout).ok())
-        .is_some_and(|reply| reply["screenCapture"] == true)
+/// Whether Screen Recording is allowed now, as a fresh Atlas process sees it
+/// (never waiting more than a few seconds for it).
+async fn screen_recording_now() -> bool {
+    let Ok(executable) = std::env::current_exe() else {
+        return false;
+    };
+    let run = tokio::process::Command::new(executable)
+        .arg("permissions-info")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    match tokio::time::timeout(Duration::from_secs(5), run).await {
+        Ok(Ok(output)) => serde_json::from_slice::<Value>(&output.stdout)
+            .is_ok_and(|reply| reply["screenCapture"] == true),
+        _ => false,
+    }
 }
 
 /// This process's permissions now (`atlas permissions-info`).
@@ -150,7 +159,7 @@ fn asked(remember: bool) -> bool {
     let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
         return false;
     };
-    let path = home.join(".atlas/consent-asked");
+    let path = home.join(crate::setup::helper::ROOT).join("consent-asked");
     let was = path.exists();
     if remember {
         if let Some(parent) = path.parent() {
@@ -164,11 +173,16 @@ fn asked(remember: bool) -> bool {
 }
 
 /// Tell the person, in the helper, that it is set up and they can go back.
+/// The notice runs on its own; its process is collected when it closes.
 fn done_notice() {
     let Ok(companion) = crate::menubar::executable() else {
         return;
     };
-    let _ = std::process::Command::new(companion)
+    use std::os::unix::process::CommandExt;
+    // Its own process group: restarting this daemon (to pick up Screen
+    // Recording) must not close the notice the person is reading.
+    let shown = std::process::Command::new(companion)
+        .process_group(0)
         .args([
             "--notice",
             "Atlas is set up here",
@@ -179,6 +193,11 @@ fn done_notice() {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
+    if let Ok(mut child) = shown {
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+    }
 }
 
 /// Whether macOS's setup screens for a new account are open in this session.
