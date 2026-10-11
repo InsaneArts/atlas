@@ -1,6 +1,6 @@
 import Foundation
 
-/// The outcome of one `understudy` command: its JSON reply, or why there was
+/// The outcome of one `atlas` command: its JSON reply, or why there was
 /// none.
 public struct Outcome: @unchecked Sendable {
     public let ok: Bool
@@ -24,7 +24,7 @@ public struct Outcome: @unchecked Sendable {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             return Outcome(
                 ok: false, reply: [:],
-                message: text.flatMap { $0.isEmpty ? nil : $0 } ?? "Understudy did not answer")
+                message: text.flatMap { $0.isEmpty ? nil : $0 } ?? "Atlas did not answer")
         }
         let ok = status == 0 && reply["ok"] as? Bool != false
         let message = ok ? "Done" : (reply["error"] as? String ?? "It did not work")
@@ -32,7 +32,7 @@ public struct Outcome: @unchecked Sendable {
     }
 }
 
-/// Runs the `understudy` command line. The menu bar holds no policy of its
+/// Runs the `atlas` command line. The menu bar holds no policy of its
 /// own: every action is a CLI command, so the CLI stays complete.
 public struct Commands: Sendable {
     public let executable: URL
@@ -41,22 +41,22 @@ public struct Commands: Sendable {
         self.executable = executable
     }
 
-    /// The `understudy` beside this app's own executable (in Understudy.app).
+    /// The `atlas` beside this app's own executable (in Atlas.app).
     public static func beside(_ executable: URL) -> Commands {
-        Commands(executable: executable.deletingLastPathComponent().appendingPathComponent("understudy"))
+        Commands(executable: executable.deletingLastPathComponent().appendingPathComponent("atlas"))
     }
 
-    /// The `understudy` that started this app (`UNDERSTUDY_CLI`), else the
-    /// one beside it. Its configuration arrives as `UNDERSTUDY_CONFIG`, which
+    /// The `atlas` that started this app (`ATLAS_CLI`), else the
+    /// one beside it. Its configuration arrives as `ATLAS_CONFIG`, which
     /// every command inherits.
     public static func parent(fallback executable: URL) -> Commands {
-        if let path = ProcessInfo.processInfo.environment["UNDERSTUDY_CLI"], !path.isEmpty {
+        if let path = ProcessInfo.processInfo.environment["ATLAS_CLI"], !path.isEmpty {
             return Commands(executable: URL(fileURLWithPath: path))
         }
         return beside(executable)
     }
 
-    /// Run `understudy arguments…` off the main thread; the outcome arrives
+    /// Run `atlas arguments…` off the main thread; the outcome arrives
     /// on the main queue.
     public func run(_ arguments: [String], _ done: @escaping @MainActor @Sendable (Outcome) -> Void) {
         let executable = self.executable

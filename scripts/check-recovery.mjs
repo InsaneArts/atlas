@@ -8,8 +8,8 @@ import { spawn, spawnSync } from 'node:child_process';
 
 const output = path.resolve(process.argv[2] || 'runs');
 const setup = JSON.parse(fs.readFileSync(path.join(output, 'control-live-setup.json'), 'utf8'));
-// The CLI resolves the TOML configuration (UNDERSTUDY_CONFIG or the default path).
-const resolved = spawnSync('target/debug/understudy', ['--json', 'config'], { encoding: 'utf8' });
+// The CLI resolves the TOML configuration (ATLAS_CONFIG or the default path).
+const resolved = spawnSync('target/debug/atlas', ['--json', 'config'], { encoding: 'utf8' });
 if (resolved.status !== 0) throw new Error(resolved.stderr || resolved.stdout);
 const { config } = JSON.parse(resolved.stdout);
 // Never drive a fixture prepared against a different helper or socket.
@@ -41,7 +41,7 @@ function call(request, socket = socketPath) {
 }
 async function cli(args) {
   return new Promise((resolve) => {
-    const child = spawn('./understudy', ['--json', ...args]);
+    const child = spawn('./atlas', ['--json', ...args]);
     let out = '',
       err = '';
     child.stdout.on('data', (b) => (out += b));

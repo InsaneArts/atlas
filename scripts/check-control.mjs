@@ -49,7 +49,7 @@ async function click(x, y, options) {
   await page.mouse.click(point.x, point.y, options);
 }
 function cli(args) {
-  return spawnSync(path.join(root, 'understudy'), ['--json', ...args], {
+  return spawnSync(path.join(root, 'atlas'), ['--json', ...args], {
     cwd: root,
     encoding: 'utf8',
   });
@@ -118,7 +118,7 @@ try {
   await click(200, 740);
   await wait(350);
   await page.keyboard.press('Meta+A');
-  const unicode = 'Understudy — ქართული 日本語 🧑🏽‍💻 é';
+  const unicode = 'Atlas — ქართული 日本語 🧑🏽‍💻 é';
   await page.keyboard.insertText(unicode);
   await verify('committedUnicode', (state) => state.text === unicode);
   await page.keyboard.press('Meta+A');

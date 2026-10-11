@@ -189,9 +189,14 @@ function releaseControl(message = '') {
   clearPendingInput();
   renderOverview();
   if (previous)
-    post('control/release', { lease: previous }, { keepalive: true }).catch((error) => {
-      if (!lease && generation === controlGeneration) notice(error.message);
-    });
+    post('control/release', { lease: previous }, { keepalive: true })
+      // Show the release at once, not at the next status poll.
+      .then(() => {
+        if (!lease && generation === controlGeneration) return readStatus();
+      })
+      .catch((error) => {
+        if (!lease && generation === controlGeneration) notice(error.message);
+      });
   if (message) notice(message);
 }
 
@@ -242,6 +247,19 @@ function unavailable(error) {
   el('empty').hidden = false;
   el('empty').textContent = error.message;
   el('details').open = true;
+}
+
+/** Read the status once, outside the polling loop, and show it. */
+async function readStatus() {
+  try {
+    const sequence = ++statusSequence;
+    const response = await fetch('status.json', { cache: 'no-store' });
+    const reply = await response.json();
+    if (sequence === statusSequence) status = reply;
+  } catch {
+    // The next poll reports the helper.
+  }
+  renderOverview();
 }
 
 // A superseded poll has no effects at all, failures included: a newer
@@ -495,13 +513,13 @@ el('sidebar-toggle').onclick = () => {
   const visible = document.body.classList.contains('sidebar-hidden');
   showSidebar(visible);
   try {
-    localStorage.setItem('understudy.sidebar', visible ? 'shown' : 'hidden');
+    localStorage.setItem('atlas.sidebar', visible ? 'shown' : 'hidden');
   } catch {
     // A preference only; the layout works without storage.
   }
 };
 try {
-  showSidebar(localStorage.getItem('understudy.sidebar') !== 'hidden');
+  showSidebar(localStorage.getItem('atlas.sidebar') !== 'hidden');
 } catch {
   showSidebar(true);
 }
@@ -522,15 +540,7 @@ el('recover').onclick = async () => {
     recovering = false;
     // Read the outcome directly: a paused preview makes no requests, and
     // this never resumes capture or control.
-    try {
-      const sequence = ++statusSequence;
-      const response = await fetch('status.json', { cache: 'no-store' });
-      const reply = await response.json();
-      if (sequence === statusSequence) status = reply;
-    } catch {
-      // The next poll reports the helper; the notice already has the outcome.
-    }
-    renderOverview();
+    await readStatus();
     preview.refresh();
   }
 };

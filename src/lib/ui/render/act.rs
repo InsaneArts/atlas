@@ -152,10 +152,44 @@ pub fn environment(value: &Value) -> Rendered {
     let Some(files) = value["files"].as_array() else {
         return failed(value).unwrap_or_else(|| Rendered::out(super::generic(value)));
     };
+    let id = value["transactionId"].as_str().unwrap_or("ID");
+    let next = |what: &str, command: String| {
+        format!("  {} {what}: {}", style::dim("→"), style::cmd(command))
+    };
+    // Stopped part way, whatever the reason: say how to finish.
+    // A refused or previewed undo is an error like any other, not a stopped copy.
+    let undo = value["operation"] == "rollback" || value["operation"] == "rollbackPreview";
+    let partial = value["operation"] != "rollbackPreview"
+        && (value["resumeRequired"] == true
+            || (value["error"].is_string()
+                && (value["phase"] == "applying" || value["phase"] == "rollingBack")))
+        && (!undo || value["phase"] == "rollingBack");
+    if partial {
+        let undoing = undo || value["phase"] == "rollingBack" || value["phase"] == "rolledBack";
+        let reason = value["error"]
+            .as_str()
+            .map(|error| format!(": {error}"))
+            .unwrap_or_default();
+        let (what, command) = if undoing {
+            (
+                "Undoing stopped part way",
+                format!("atlas environment rollback {id} --apply"),
+            )
+        } else {
+            (
+                "Copying stopped part way",
+                format!("atlas environment apply {id}"),
+            )
+        };
+        return Rendered::err(format!(
+            "{}\n{}",
+            card(&format!("{what}{reason}"), None, false),
+            next("To finish", command)
+        ));
+    }
     if value["error"].is_string() {
         return failed(value).unwrap_or_default();
     }
-    let id = value["transactionId"].as_str().unwrap_or("ID");
     let word = |operation: &str| match operation {
         "create" => "add",
         "update" => "update",
@@ -172,9 +206,6 @@ pub fn environment(value: &Value) -> Rendered {
             .filter_map(Value::as_str)
             .map(|target| format!("  ~/{}", text::printable(target)))
             .collect()
-    };
-    let next = |what: &str, command: String| {
-        format!("  {} {what}: {}", style::dim("→"), style::cmd(command))
     };
     let count = |n: usize| text::count(n, "file");
     let mut lines = Vec::new();
@@ -193,22 +224,10 @@ pub fn environment(value: &Value) -> Rendered {
             lines.extend(pending);
             lines.push(next(
                 "To undo",
-                format!("understudy environment rollback {id} --apply"),
+                format!("atlas environment rollback {id} --apply"),
             ));
         }
     } else if value["applied"] == true {
-        if value["resumeRequired"] == true {
-            let left = value["pendingTargets"].as_array().map_or(0, Vec::len);
-            return Rendered::err(format!(
-                "{}\n{}",
-                card(
-                    &format!("Copying stopped with {} left.", count(left)),
-                    None,
-                    false
-                ),
-                next("To finish", format!("understudy environment apply {id}"))
-            ));
-        }
         lines.push(format!("{} Copied into the helper", style::ok()));
         for file in files {
             let operation = file["operation"].as_str().unwrap_or("");
@@ -219,19 +238,24 @@ pub fn environment(value: &Value) -> Rendered {
         }
         lines.push(next(
             "To undo",
-            format!("understudy environment rollback {id} --apply"),
+            format!("atlas environment rollback {id} --apply"),
         ));
     } else {
         let conflicts: Vec<String> = files
             .iter()
             .filter(|file| file["operation"] == "conflict")
-            .map(|file| line("changed there", file["target"].as_str().unwrap_or("?")))
+            .map(|file| line("in the way", file["target"].as_str().unwrap_or("?")))
             .collect();
         if !conflicts.is_empty() {
             let mut err = vec![card(
                 &format!(
-                    "{} changed in the helper since Understudy last copied {}, so nothing was copied.",
+                    "Nothing was copied: {} in the helper already {} or changed there since Atlas copied {}.",
                     count(conflicts.len()),
+                    if conflicts.len() == 1 {
+                        "exists"
+                    } else {
+                        "exist"
+                    },
                     if conflicts.len() == 1 { "it" } else { "them" }
                 ),
                 None,
@@ -257,10 +281,7 @@ pub fn environment(value: &Value) -> Rendered {
                     file["target"].as_str().unwrap_or("?"),
                 ));
             }
-            lines.push(next(
-                "To copy",
-                format!("understudy environment apply {id}"),
-            ));
+            lines.push(next("To copy", format!("atlas environment apply {id}")));
         }
     }
     Rendered::out(lines.join("\n"))
@@ -278,7 +299,106 @@ pub fn close(value: &Value) -> String {
         .as_array()
         .is_some_and(|removed| !removed.is_empty())
     {
-        line.push_str(&style::dim(" · removed Understudy's copy of it"));
+        line.push_str(&style::dim(" · removed Atlas's copy of it"));
     }
     line
+}
+
+/// What `environment discover` found, here and in the helper.
+pub fn discover(value: &Value) -> String {
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    for item in value["selections"].as_array().into_iter().flatten() {
+        let name = text::printable(item["name"].as_str().unwrap_or("?")).into_owned();
+        let here = item["host"]
+            .as_str()
+            .map(|path| text::tilde(std::path::Path::new(path)))
+            .unwrap_or_else(|| "not found".to_owned());
+        let helper = match item["kind"].as_str() {
+            Some("tool") => item["helperCandidates"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|candidate| candidate["access"]["executable"] == true)
+                .and_then(|candidate| candidate["path"].as_str())
+                .map(str::to_owned)
+                .unwrap_or_else(|| "not found".to_owned()),
+            _ => "not checked".to_owned(),
+        };
+        let found = item["host"].is_string() && helper != "not found";
+        let mark = if found { style::ok() } else { style::unknown() };
+        rows.push(vec![format!("{mark} {name}"), here, helper]);
+    }
+    for variable in value["environment"].as_array().into_iter().flatten() {
+        let yes = |key: &str| {
+            if variable[key] == true {
+                "set"
+            } else {
+                "not set"
+            }
+        };
+        let mark = if variable["hostDefined"] == true && variable["helperInheritedDefined"] == true
+        {
+            style::ok()
+        } else {
+            style::unknown()
+        };
+        rows.push(vec![
+            format!(
+                "{mark} ${}",
+                text::printable(variable["name"].as_str().unwrap_or("?"))
+            ),
+            yes("hostDefined").to_owned(),
+            yes("helperInheritedDefined").to_owned(),
+        ]);
+    }
+    for reference in value["references"].as_array().into_iter().flatten() {
+        let access = |side: &Value| {
+            match (side["readable"] == true, side["writable"] == true) {
+                (true, true) => "read and write",
+                (true, false) => "read only",
+                _ => "no access",
+            }
+            .to_owned()
+        };
+        let mark = if reference["helper"]["readable"] == true {
+            style::ok()
+        } else {
+            style::unknown()
+        };
+        rows.push(vec![
+            format!(
+                "{mark} {}",
+                text::tilde(std::path::Path::new(
+                    reference["path"].as_str().unwrap_or("?")
+                ))
+            ),
+            access(&reference["host"]),
+            access(&reference["helper"]),
+        ]);
+    }
+    if rows.is_empty() {
+        return "Nothing to check: name --tool, --app, --env or --reference.".to_owned();
+    }
+    crate::ui::table::render(&["", "HERE", "IN THE HELPER"], &rows)
+}
+
+/// `setup` without --apply: whether anything needs doing.
+pub fn setup_preview(value: &Value) -> String {
+    let steps: Vec<&str> = value["nextSteps"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    if steps.is_empty() {
+        return format!("{} The helper's setup is current", style::ok());
+    }
+    let mut lines = vec![format!(
+        "{} The helper's setup needs attention:",
+        style::unknown()
+    )];
+    for (number, step) in steps.iter().enumerate() {
+        lines.push(format!("  {}. {}", number + 1, text::printable(step)));
+    }
+    lines.join("\n")
 }

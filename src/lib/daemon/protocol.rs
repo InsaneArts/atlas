@@ -1,5 +1,5 @@
 //! Protocol v1 requests the helper daemon accepts, validated before anything
-//! runs. Replies and error wording match the capture daemon Understudy used
+//! runs. Replies and error wording match the capture daemon Atlas used
 //! before, so existing clients are unaffected.
 use serde_json::{Value, json};
 use std::time::Duration;

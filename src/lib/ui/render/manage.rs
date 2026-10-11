@@ -1,4 +1,4 @@
-//! Views of looking after Understudy itself: agents, switching, updates,
+//! Views of looking after Atlas itself: agents, switching, updates,
 //! removal and the menu bar's login item.
 use super::{Rendered, card, style, text};
 use crate::ui::table;
@@ -36,14 +36,13 @@ pub fn agents(value: &Value) -> String {
             ]
         })
         .collect();
-    let mut lines = vec![table::render(&["AGENT", "VERSION", "UNDERSTUDY"], &rows)];
-    if agents
-        .iter()
-        .any(|agent| agent["installed"] == true && agent["connected"] == false)
-    {
+    let mut lines = vec![table::render(&["AGENT", "VERSION", "ATLAS"], &rows)];
+    if agents.iter().any(|agent| {
+        agent["installed"] == true && agent["connected"] != true && agent["error"].is_null()
+    }) {
         lines.push(format!(
             "\nTo connect: {}",
-            style::cmd("understudy agents install")
+            style::cmd("atlas agents install")
         ));
     }
     lines.join("\n")
@@ -72,7 +71,7 @@ pub fn agents_change(value: &Value) -> Rendered {
         }
     }
     if connected {
-        out.push(style::dim("New sessions know how to use Understudy."));
+        out.push(style::dim("New sessions know how to use Atlas."));
     }
     Rendered {
         out: out.join("\n"),
@@ -112,9 +111,9 @@ pub fn switch(value: &Value) -> String {
     }
 }
 
-/// `Understudy-0.3.0-macos.zip` as `0.3.0`.
+/// `Atlas-0.3.0-macos.zip` as `0.3.0`.
 fn version(name: &str) -> &str {
-    name.strip_prefix("Understudy-")
+    name.strip_prefix("Atlas-")
         .and_then(|rest| rest.strip_suffix("-macos.zip"))
         .unwrap_or(name)
 }
@@ -124,10 +123,10 @@ pub fn update(value: &Value) -> Rendered {
         let installed = value["version"].as_str().unwrap_or("");
         let available = version(value["available"].as_str().unwrap_or(installed));
         let out = if available.is_empty() || available == installed {
-            format!("{} Understudy {installed} is up to date", style::ok())
+            format!("{} Atlas {installed} is up to date", style::ok())
         } else {
             format!(
-                "{} Understudy {installed} is installed; {available} is not newer. --force installs it anyway.",
+                "{} Atlas {installed} is installed; {available} is not newer. --force installs it anyway.",
                 style::ok()
             )
         };
@@ -153,7 +152,7 @@ pub fn update(value: &Value) -> Rendered {
         return Rendered {
             out: String::new(),
             err: format!(
-                "{}\n  {} Fix that, then run understudy update again to finish.",
+                "{}\n  {} Fix that, then run atlas update again to finish.",
                 card(
                     &format!("The app was updated, but {step} failed: {reason}"),
                     None,
@@ -165,12 +164,12 @@ pub fn update(value: &Value) -> Rendered {
     }
     let to = version(value["to"].as_str().unwrap_or(""));
     // Nothing was set up yet, so there was no helper to move.
-    if helper["next"] == "understudy init" {
+    if helper["next"] == "atlas init" {
         return Rendered {
             out: format!(
-                "{} Updated Understudy to {to}\n  Run {} to set up the helper.",
+                "{} Updated Atlas to {to}\n  Run {} to set up the helper.",
                 style::ok(),
-                style::cmd("understudy init")
+                style::cmd("atlas init")
             ),
             err: String::new(),
         };
@@ -178,7 +177,7 @@ pub fn update(value: &Value) -> Rendered {
     let mut lines = vec![if value["resumed"] == true {
         format!("{} Finished the earlier update", style::ok())
     } else {
-        format!("{} Updated Understudy to {to}", style::ok())
+        format!("{} Updated Atlas to {to}", style::ok())
     }];
     let refreshed = helper["agents"]["refreshed"]
         .as_array()
@@ -196,7 +195,7 @@ pub fn update(value: &Value) -> Rendered {
 }
 
 pub fn uninstall(value: &Value) -> String {
-    let mut lines = vec![format!("{} Understudy is removed", style::ok())];
+    let mut lines = vec![format!("{} Atlas is removed", style::ok())];
     if let (Some(name), Some(command)) = (
         value["kept"]["helperAccount"].as_str(),
         value["kept"]["remove"].as_str(),
@@ -213,7 +212,7 @@ pub fn uninstall(value: &Value) -> String {
 pub fn login(value: &Value) -> String {
     if value["available"] == false {
         return format!(
-            "{} Open at Login needs Understudy.app in /Applications",
+            "{} Open at Login needs Atlas.app in /Applications",
             style::unknown()
         );
     }

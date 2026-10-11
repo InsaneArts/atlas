@@ -577,7 +577,7 @@ mod tests {
                 "/nonexistent/binary: command not found on PATH"
             )
         );
-        let (_, reply) = execute(&["no-such-command-understudy"], 3000).await;
+        let (_, reply) = execute(&["no-such-command-atlas"], 3000).await;
         assert_eq!(reply["code"], "spawn-failed");
         let (events, reply) =
             execute(&["/bin/sh", "-c", "head -c 17000000 /dev/zero"], 20000).await;

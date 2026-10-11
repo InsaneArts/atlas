@@ -1,16 +1,16 @@
 {
-  "name": "understudy",
+  "name": "atlas",
   "owner": {
     "name": "InsaneArts"
   },
   "plugins": [
     {
-      "name": "understudy",
-      "source": "./understudy",
+      "name": "atlas",
+      "source": "./atlas",
       "description": "Test macOS GUI apps in a hidden second login without touching your desktop."
     }
   ],
   "metadata": {
-    "description": "Understudy: test macOS GUI apps in a hidden second login."
+    "description": "Atlas: test macOS GUI apps in a hidden second login."
   }
 }

@@ -2,7 +2,7 @@
 //! answer. Each needs a terminal; without one it refuses with what to pass
 //! instead, so nothing ever waits on a pipe or answers itself, and keys
 //! pressed before a question appears are discarded. Esc cancels a yes/no or
-//! a choice; Ctrl-C stops any question. Understudy never asks for a
+//! a choice; Ctrl-C stops any question. Atlas never asks for a
 //! password: sudo and macOS ask in their own words.
 use super::interactive;
 use crate::error::{Error, Result};

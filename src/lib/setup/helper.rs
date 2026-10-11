@@ -20,16 +20,16 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Private Understudy directory in the helper home and its entries.
-pub const ROOT: &str = ".understudy";
+/// Private Atlas directory in the helper home and its entries.
+pub const ROOT: &str = ".atlas";
 /// Where the helper daemon's socket lives.
 pub const DAEMON: &str = "helper";
 pub const INPUT: &str = "input";
 const LOGS: &str = "logs";
 const BACKUP: &str = "backup";
-/// Label of the capture job Understudy manages.
-/// The managed LaunchAgent running Understudy's own helper daemon.
-pub const LABEL: &str = "com.insanearts.understudy.helper";
+/// Label of the capture job Atlas manages.
+/// The managed LaunchAgent running Atlas's own helper daemon.
+pub const LABEL: &str = "com.insanearts.atlas.helper";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -245,7 +245,8 @@ fn parse_job(text: &str) -> Result<Job> {
     })
 }
 
-/// Fails closed: only launchctl's "no such service" status means absent.
+/// Fails closed: only launchctl's "no such service" and "no such desktop
+/// domain" (the helper is signed out) statuses mean absent.
 fn job(layout: &Layout, label: &str) -> Result<Job> {
     let output = Command::new("/bin/launchctl")
         .args(["print", &format!("{}/{label}", layout.domain())])
@@ -253,6 +254,9 @@ fn job(layout: &Layout, label: &str) -> Result<Job> {
     match output.status.code() {
         Some(0) => parse_job(&String::from_utf8_lossy(&output.stdout)),
         Some(113) => Ok(Job::Absent),
+        // The helper is signed out: its desktop domain does not exist, so
+        // nothing can be loaded there.
+        Some(125) => Ok(Job::Absent),
         _ => Err(problem(format!(
             "launchctl could not inspect {label}: {}",
             String::from_utf8_lossy(&output.stderr).trim()
@@ -602,7 +606,7 @@ mod tests {
 
     #[test]
     fn names_are_conservative() {
-        for name in ["dev.understudy.capture", "theiskaa", "a_b-c.1"] {
+        for name in ["dev.atlas.capture", "theiskaa", "a_b-c.1"] {
             assert!(valid_name(name), "{name}");
         }
         for name in [
@@ -626,9 +630,9 @@ mod tests {
             program: "/Users/Shared/A&B <x>/sessiond".into(),
             uid: 502,
             controller_uid: 501,
-            socket: "/Users/h/.understudy/helper/502.sock".into(),
+            socket: "/Users/h/.atlas/helper/502.sock".into(),
         };
-        let text = plist(&agent, Path::new("/Users/h/.understudy/logs"));
+        let text = plist(&agent, Path::new("/Users/h/.atlas/logs"));
         assert!(text.contains("<string>/Users/Shared/A&amp;B &lt;x&gt;/sessiond</string>"));
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent.plist");
@@ -656,7 +660,7 @@ mod tests {
         assert_eq!(parsed["ProgramArguments"][5], "501");
         assert_eq!(
             parsed["ProgramArguments"][7],
-            "/Users/h/.understudy/helper/502.sock"
+            "/Users/h/.atlas/helper/502.sock"
         );
         assert_eq!(parsed["ProcessType"], "Interactive");
         assert_eq!(parsed["KeepAlive"]["SuccessfulExit"], false);
@@ -774,7 +778,7 @@ mod tests {
         };
         fs::create_dir_all(layout.home.join("Library/LaunchAgents")).unwrap();
         // A label launchd has never seen: inspection is real and read-only.
-        let label = format!("dev.understudy.test.{}", &crate::control::token()[..12]);
+        let label = format!("dev.atlas.test.{}", &crate::control::token()[..12]);
         (dir, layout, label)
     }
 

@@ -55,6 +55,51 @@ pub struct Client {
     installed: BuildCache,
 }
 
+/// Screenshots are kept for a week; older ones are removed as new ones come.
+fn prune_captures(output: &Path) {
+    const WEEK: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+    let Ok(entries) = fs::read_dir(output) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let old = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age > WEEK);
+        let capture = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.ends_with("-capture.png"));
+        if old && capture && entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// The folder holding the shared command: made (or repaired) so the helper
+/// can pass through it, whatever this terminal's umask. Only a folder of
+/// this account is changed; anyone else's is left for the checks to refuse.
+fn shared_folder(folder: &Path) -> Result<()> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    match fs::symlink_metadata(folder) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir_all(folder)?;
+        }
+        Err(error) => return Err(error.into()),
+        Ok(_) => {}
+    }
+    let metadata = fs::symlink_metadata(folder)?;
+    if metadata.file_type().is_dir()
+        && metadata.uid() == nix::unistd::getuid().as_raw()
+        && metadata.mode() & 0o777 != 0o755
+    {
+        fs::set_permissions(folder, fs::Permissions::from_mode(0o755))?;
+    }
+    Ok(())
+}
+
 pub fn timestamp() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -66,6 +111,13 @@ impl Client {
     pub fn install(&self) -> Result<Value> {
         let source = fs::canonicalize(std::env::current_exe()?)?;
         let target = &self.config.identity_probe;
+        // Only Atlas's own shared folder is repaired; a custom location keeps
+        // the permissions its owner chose.
+        if let Some(parent) = target.parent()
+            && Path::new(crate::handoff::ROOT).parent() == Some(parent)
+        {
+            shared_folder(parent)?;
+        }
         // Finding it current changes nothing, so it needs no exclusion and
         // works while an earlier action still awaits recovery.
         if fs::canonicalize(target).ok().as_ref() == Some(&source) {
@@ -80,14 +132,14 @@ impl Client {
             .ok_or_else(|| Error::new("config", "Shared executable needs a parent directory"))?;
         fs::create_dir_all(parent)?;
         let temporary = target.with_extension(format!("{}.new", crate::control::token()));
-        // Understudy.app's executable is sealed with its bundle: a copy would
+        // Atlas.app's executable is sealed with its bundle: a copy would
         // fail its signature, so the shared path links to it instead, and
         // follows the app through updates.
         if crate::update::app_of(&source).is_some() {
             if !crate::update::reachable_by_others(&source) {
                 return Err(Error::new(
                     "install",
-                    "The helper account cannot reach Understudy.app here; install it in /Applications",
+                    "The helper account cannot reach Atlas.app here; install it in /Applications",
                 ));
             }
             let linked = std::os::unix::fs::symlink(&source, &temporary)
@@ -195,7 +247,7 @@ impl Client {
             return Err(Error::new(
                 "identity",
                 format!(
-                    "The helper cannot run the shared Understudy command at {}. Run understudy \
+                    "The helper cannot run the shared Atlas command at {}. Run atlas \
                      install.",
                     self.config.identity_probe.display()
                 ),
@@ -262,6 +314,7 @@ impl Client {
             .output_dir()?
             .join(format!("{}-capture.png", timestamp()));
         write_private(&path, &frame.png)?;
+        prune_captures(self.output_dir()?);
         Ok(json!({
             "ok": true,
             "path": path,
@@ -340,6 +393,47 @@ impl Client {
         self.input_inner(actions, Some((epoch, Instant::now())), None)
             .await
     }
+    /// The input service, still running in this same session, was pinned
+    /// to an earlier display (switching accounts can renumber it): pin it to
+    /// the current verified display, as start-input does. When the display
+    /// changed size it is re-pinned too, but the action is refused so the
+    /// caller looks at the screen again before acting on it.
+    async fn repin(&self, session: Session) -> Result<Session> {
+        let unavailable = || {
+            Error::new(
+                "permission",
+                "The native input service is unavailable; run atlas start-input",
+            )
+        };
+        let status = self.status().await;
+        let native = &status["inputService"];
+        let pinned = &native["enforcedEpoch"];
+        let epoch = &session.epoch;
+        let same_session = native["ok"] == true
+            && native["protocolVersion"] == 1
+            && native["accessibility"] == true
+            && pinned["uid"] == epoch.uid
+            && pinned["securitySessionId"] == epoch.security_session_id
+            && pinned["processId"] == epoch.input_pid;
+        if !same_session {
+            return Err(unavailable());
+        }
+        let same_size = pinned["width"].as_f64() == Some(epoch.display.width)
+            && pinned["height"].as_f64() == Some(epoch.display.height);
+        self.native_request(json!({"op": "reset", "epoch": epoch.input_epoch()}))
+            .await?;
+        let current = self.identity().await?;
+        if !current.input {
+            return Err(unavailable());
+        }
+        if !same_size {
+            return Err(Error::new(
+                "session-changed",
+                "The helper's display changed size. Take a new screenshot, then try again.",
+            ));
+        }
+        Ok(current)
+    }
     async fn input_inner(
         &self,
         actions: &Value,
@@ -363,12 +457,11 @@ impl Client {
                 "The helper changed since this frame",
             ));
         }
-        if !session.input {
-            return Err(Error::new(
-                "permission",
-                "The native input service is unavailable; run understudy start-input",
-            ));
-        }
+        let session = if session.input || lease.is_some() {
+            session
+        } else {
+            self.repin(session).await?
+        };
         actions::validate(actions, &session.epoch.display)?;
         let standalone = crate::control::token();
         let owner = lease.map(|(_, token)| token).unwrap_or(&standalone);
@@ -553,7 +646,7 @@ impl Client {
                 "startup",
                 "The running input service predates authenticated shutdown and cannot be \
                  replaced automatically. Stop that process in the helper account (or log the \
-                 helper out and in), then run understudy start-input.",
+                 helper out and in), then run atlas start-input.",
             ));
         }
         if native["controlActive"] != false {
@@ -636,7 +729,7 @@ impl Client {
         // Arguments stay separate from shell syntax, including configured paths.
         let script = concat!(
             "nohup \"$1\" input-service --uid \"$2\" --controller-uid \"$3\" --socket \"$4\" ",
-            ">\"$HOME/Library/Logs/Understudy-input.log\" 2>&1 </dev/null & echo $!",
+            ">\"$HOME/Library/Logs/Atlas-input.log\" 2>&1 </dev/null & echo $!",
         );
         let controller_uid = nix::unistd::getuid().as_raw();
         let request = json!({
@@ -676,7 +769,7 @@ impl Client {
             if Instant::now() >= deadline {
                 return Err(Error::new(
                     "startup",
-                    "Input service did not become ready. Check ~/Library/Logs/Understudy-input.log \
+                    "Input service did not become ready. Check ~/Library/Logs/Atlas-input.log \
                      in the helper account and confirm that identity_probe points to the current Rust binary.",
                 )
                 .uncertain());
@@ -911,15 +1004,15 @@ fn process_exists(pid: u32) -> bool {
     )
 }
 
-/// Refuse input work while the helper's Understudy lacks Accessibility; an
+/// Refuse input work while the helper's Atlas lacks Accessibility; an
 /// unknown answer is not a refusal.
 fn require_accessibility(status: &Value) -> Result<()> {
     if status["permissions"]["accessibility"] == false {
         return Err(Error::new(
             "permission",
-            "The helper does not allow Understudy Accessibility yet, which input needs. In the \
-             helper's System Settings › Privacy & Security › Accessibility, turn Understudy on \
-             (understudy init guides this).",
+            "The helper does not allow Atlas Accessibility yet, which input needs. In the \
+             helper's System Settings › Privacy & Security › Accessibility, turn Atlas on \
+             (atlas init guides this).",
         ));
     }
     Ok(())

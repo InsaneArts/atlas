@@ -269,7 +269,7 @@ final class PanelObserver {
             visited.append(entry.element)
             let role = attribute(entry.element, "AXRole", stage) as? String
             let title = attribute(entry.element, "AXTitle", stage) as? String
-            if role == "AXWindow", title == "UNDERSTUDY CONTROL TEST • uid \(getuid())" {
+            if role == "AXWindow", title == "ATLAS CONTROL TEST • uid \(getuid())" {
                 observation.ownerWindowPresent = true
             }
             let panelWindow = role == "AXWindow" && title == observation.kind?.capitalized
@@ -450,7 +450,7 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate
         contentRect: NSRect(x: 100, y: 180, width: 860, height: 680),
         styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered,
         defer: false)
-    let clock = NSTextField(labelWithString: "UNDERSTUDY LIVE FIXTURE")
+    let clock = NSTextField(labelWithString: "ATLAS LIVE FIXTURE")
     private var inputMonitor: Any?
     private var panelAttempt: (id: String, kind: String, panel: NSSavePanel)?
     private var panelResponse: Int?
@@ -461,8 +461,8 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         do {
-            let file = recorder.directory.appendingPathComponent("understudy-open-fixture.txt")
-            let contents = Data("Understudy native Open — ქართული 日本語 🧑🏽‍💻 é\n".utf8)
+            let file = recorder.directory.appendingPathComponent("atlas-open-fixture.txt")
+            let contents = Data("Atlas native Open — ქართული 日本語 🧑🏽‍💻 é\n".utf8)
             if FileManager.default.fileExists(atPath: file.path) {
                 guard try Data(contentsOf: file) == contents else {
                     throw CocoaError(.fileWriteFileExists)
@@ -511,7 +511,7 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate
             self.recorder.record("inputState", values: values)
             return event
         }
-        window.title = "UNDERSTUDY CONTROL TEST • uid \(getuid())"
+        window.title = "ATLAS CONTROL TEST • uid \(getuid())"
         window.acceptsMouseMovedEvents = true
         window.delegate = self
         guard let view = window.contentView else { return }
@@ -550,7 +550,7 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate
             guard let self else { return }
             self.recorder.state.ticks += 1
             self.clock.stringValue =
-                "UNDERSTUDY uid \(getuid()) • tick \(self.recorder.state.ticks)"
+                "ATLAS uid \(getuid()) • tick \(self.recorder.state.ticks)"
             self.recorder.record("tick")
         }
         recorder.record("ready", values: ["pid": getpid()])
@@ -584,8 +584,8 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate
             item.submenu = submenu
             return submenu
         }
-        section("Understudy").addItem(
-            withTitle: "Quit Understudy Fixture", action: #selector(NSApplication.terminate(_:)),
+        section("Atlas").addItem(
+            withTitle: "Quit Atlas Fixture", action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q")
         let file = section("File")
         let save = file.addItem(
@@ -670,7 +670,7 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate
         recorder.state.dialogResponse = 0
         recorder.record("dialogOpen", values: ["attemptID": attemptID])
         let alert = NSAlert()
-        alert.messageText = "Understudy disposable dialog"
+        alert.messageText = "Atlas disposable dialog"
         alert.informativeText = "Choose Confirm to record a verified response."
         alert.addButton(withTitle: "Confirm")
         alert.addButton(withTitle: "Cancel")
@@ -694,7 +694,7 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextViewDelegate
         let panel = NSSavePanel()
         panel.directoryURL = recorder.directory
         panel.isExtensionHidden = false
-        panel.nameFieldStringValue = "understudy-fixture.txt"
+        panel.nameFieldStringValue = "atlas-fixture.txt"
         beginPanel(panel, kind: "save")
     }
 

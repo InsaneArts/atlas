@@ -445,7 +445,7 @@ pub(super) fn atomic_install(
             .as_bytes(),
     )
     .map_err(|_| problem("Invalid path"))?;
-    let temporary = CString::new(format!(".understudy-{}", crate::control::token())).unwrap();
+    let temporary = CString::new(format!(".atlas-{}", crate::control::token())).unwrap();
     let mut file = fs::File::from(
         openat(
             &parent,

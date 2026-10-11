@@ -1,17 +1,17 @@
 [package]
-name = "understudy"
+name = "atlas"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 autobins = false
 description = "Observe and control a prepared background macOS desktop"
-repository = "https://github.com/InsaneArts/understudy"
+repository = "https://github.com/InsaneArts/atlas"
 
 [lib]
 path = "src/lib/lib.rs"
 
 [[bin]]
-name = "understudy"
+name = "atlas"
 path = "src/bin/main.rs"
 
 [dependencies]
@@ -44,7 +44,7 @@ strip = true
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.5"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSRunningApplication", "NSWorkspace", "libc"] }
-objc2-foundation = { version = "0.3.2", features = ["NSString", "NSArray"] }
+objc2-foundation = { version = "0.3.2", features = ["NSString", "NSArray", "NSURL"] }
 objc2-application-services = { version = "0.3.2", default-features = false, features = ["std", "HIServices", "AXError", "AXUIElement", "AXValue", "libc"] }
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFArray", "CFBase", "CFCGTypes", "CFData", "CFDictionary", "CFNumber", "CFRunLoop", "CFString"] }
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGBase", "CGBitmapContext", "CGColorSpace", "CGContext", "CGDirectDisplay", "CGEvent", "CGEventSource", "CGEventTypes", "CGImage", "CGRemoteOperation", "CGSession", "CGWindow"] }

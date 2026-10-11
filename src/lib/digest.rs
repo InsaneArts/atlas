@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 use std::{fs, io::Read, path::Path};
 
 /// The executable a shared probe path stands for: the file itself, or the
-/// Understudy.app executable it links to when the link belongs to this
+/// Atlas.app executable it links to when the link belongs to this
 /// account. Any other link is not followed.
 pub fn probe_executable(path: &Path) -> Option<std::path::PathBuf> {
     use std::os::unix::fs::MetadataExt;
@@ -68,7 +68,7 @@ mod tests {
         use super::probe_executable;
         let dir = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(dir.path()).unwrap();
-        let app = root.join("Understudy.app/Contents/MacOS/understudy");
+        let app = root.join("Atlas.app/Contents/MacOS/atlas");
         std::fs::create_dir_all(app.parent().unwrap()).unwrap();
         std::fs::write(&app, b"x").unwrap();
         let link = root.join("probe");

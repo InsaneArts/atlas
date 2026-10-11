@@ -6,10 +6,10 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // Same precedence as every other script: an explicit path argument, else
-// UNDERSTUDY_CONFIG, else the CLI default. The resolved config is recorded.
-if (process.argv[2]) process.env.UNDERSTUDY_CONFIG = path.resolve(process.argv[2]);
+// ATLAS_CONFIG, else the CLI default. The resolved config is recorded.
+if (process.argv[2]) process.env.ATLAS_CONFIG = path.resolve(process.argv[2]);
 function cli(args) {
-  const result = spawnSync(path.join(root, 'target/debug/understudy'), ['--json', ...args], {
+  const result = spawnSync(path.join(root, 'target/debug/atlas'), ['--json', ...args], {
     cwd: root,
     encoding: 'utf8',
     maxBuffer: 8 * 1024 * 1024,
@@ -31,7 +31,7 @@ if (!readiness.ready) throw new Error(readiness.nextSteps.join(' '));
 const display = readiness.session.display;
 if (display.width !== 2560 || display.height !== 1440 || display.scale !== 1)
   throw new Error('This live fixture is qualified at 2560 × 1440, scale 1.');
-const directory = '/Users/Shared/UnderstudyTests';
+const directory = '/Users/Shared/AtlasTests';
 fs.mkdirSync(directory, { recursive: true, mode: 0o755 });
 const binary = path.join(directory, 'DesktopFixture');
 const compilation = spawnSync(
@@ -59,7 +59,7 @@ for (let attempt = 0; run(['/bin/sh', '-c', `/usr/bin/pgrep ${owned}; true`]); a
   if (attempt === 50) throw new Error('Earlier fixtures did not exit');
   spawnSync('/bin/sleep', ['0.1']);
 }
-const logDirectory = run(['/usr/bin/mktemp', '-d', '/tmp/understudy-viewer.XXXXXX']);
+const logDirectory = run(['/usr/bin/mktemp', '-d', '/tmp/atlas-viewer.XXXXXX']);
 run(['/bin/chmod', '755', logDirectory]);
 const fixturePID = Number(
   run([

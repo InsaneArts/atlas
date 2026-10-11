@@ -1,12 +1,12 @@
-//! `understudy --help`: the commands in a few groups a person can scan,
+//! `atlas --help`: the commands in a few groups a person can scan,
 //! built from each command's own one-line description so they never drift.
 use super::Cli;
+use atlas::ui::{self, Format, style};
 use clap::{
     CommandFactory,
     error::{ContextKind, ContextValue, ErrorKind},
 };
 use std::{io::IsTerminal, process::ExitCode};
-use understudy::ui::{self, Format, style};
 
 /// Each visible command in exactly one group, in reading order.
 pub const GROUPS: &[(&str, &[&str])] = &[
@@ -31,7 +31,7 @@ pub const GROUPS: &[(&str, &[&str])] = &[
         &["switch", "monitor", "restart", "start-input"],
     ),
     (
-        "Look after Understudy",
+        "Look after Atlas",
         &[
             "update",
             "uninstall",
@@ -46,63 +46,51 @@ pub const GROUPS: &[(&str, &[&str])] = &[
 /// A few ways to use each command that takes arguments, shown under its
 /// `--help` and in its usage errors.
 const EXAMPLES: &[(&str, &[&str])] = &[
-    (
-        "doctor",
-        &["understudy doctor", "understudy doctor --verbose"],
-    ),
-    ("windows", &["understudy windows --app TextEdit"]),
+    ("doctor", &["atlas doctor", "atlas doctor --verbose"]),
+    ("windows", &["atlas windows --app TextEdit"]),
     (
         "elements",
-        &["understudy elements --app TextEdit --role AXButton"],
+        &["atlas elements --app TextEdit --role AXButton"],
     ),
     (
         "click",
         &[
-            "understudy click --app TextEdit --name Save",
-            "understudy click 1200 880",
+            "atlas click --app TextEdit --name Save",
+            "atlas click 1200 880",
         ],
     ),
-    ("type", &["understudy type \"hello\""]),
-    (
-        "key",
-        &["understudy key cmd+s", "understudy key escape return"],
-    ),
-    ("move", &["understudy move 640 400"]),
-    ("drag", &["understudy drag 100 200 400 200"]),
-    ("scroll", &["understudy scroll 640 400 --dy 3"]),
-    ("input", &["understudy input @actions.json"]),
+    ("type", &["atlas type \"hello\""]),
+    ("key", &["atlas key cmd+s", "atlas key escape return"]),
+    ("move", &["atlas move 640 400"]),
+    ("drag", &["atlas drag 100 200 400 200"]),
+    ("scroll", &["atlas scroll 640 400 --dy 3"]),
+    ("input", &["atlas input @actions.json"]),
     (
         "open",
         &[
-            "understudy open --app TextEdit",
-            "understudy open ./build/Debug/MyApp.app --env DEBUG=1",
-            "understudy open https://example.com",
+            "atlas open --app TextEdit",
+            "atlas open ./build/Debug/MyApp.app --env DEBUG=1",
+            "atlas open https://example.com",
         ],
     ),
-    ("close", &["understudy close --app TextEdit"]),
+    ("close", &["atlas close --app TextEdit"]),
     (
         "wait",
         &[
-            "understudy wait --app TextEdit",
-            "understudy wait --title Save --gone",
+            "atlas wait --app TextEdit",
+            "atlas wait --title Save --gone",
         ],
     ),
-    ("run", &["understudy run -- ls ~/Documents"]),
+    ("run", &["atlas run -- ls ~/Documents"]),
     (
         "readiness",
         &[
-            "understudy readiness --tool git",
-            "understudy readiness --tool git --app Xcode",
+            "atlas readiness --tool git",
+            "atlas readiness --tool git --app Xcode",
         ],
     ),
-    (
-        "monitor",
-        &["understudy monitor", "understudy monitor --port 8800"],
-    ),
-    (
-        "agents",
-        &["understudy agents", "understudy agents install"],
-    ),
+    ("monitor", &["atlas monitor", "atlas monitor --port 8800"]),
+    ("agents", &["atlas agents", "atlas agents install"]),
 ];
 
 fn examples(name: &str) -> &'static [&'static str] {
@@ -134,7 +122,7 @@ pub fn command() -> clap::Command {
         groups.push('\n');
     }
     root.help_template(format!(
-        "{{about-with-newline}}\n{{usage-heading}} {{usage}}\n\n{groups}Global options:\n{{options}}\n\nRun understudy COMMAND --help for details. Without a terminal, every command prints JSON."
+        "{{about-with-newline}}\n{{usage-heading}} {{usage}}\n\n{groups}Global options:\n{{options}}\n\nRun atlas COMMAND --help for details. Without a terminal, every command prints JSON."
     ))
 }
 
@@ -150,23 +138,54 @@ pub fn usage(error: clap::Error) -> ExitCode {
     ) {
         error.exit();
     }
-    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    // Lossy: an argument need not be UTF-8, and this only shows it.
+    let arguments: Vec<String> = std::env::args_os()
+        .skip(1)
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect();
+    // The command on the line, with its subcommand (`environment rollback`);
+    // commands Atlas runs itself are never suggested.
     let root = Cli::command();
-    let name = arguments
+    let mut current = &root;
+    let mut path = Vec::new();
+    for argument in arguments
         .iter()
         .take_while(|argument| argument.as_str() != "--")
-        .find_map(|argument| {
-            root.get_subcommands()
-                .find(|command| {
-                    command.get_name() == argument
-                        || command.get_all_aliases().any(|alias| alias == argument)
-                })
-                .map(|command| command.get_name().to_owned())
-        });
+    {
+        if let Some(command) = current.get_subcommands().find(|command| {
+            !command.is_hide_set()
+                && (command.get_name() == argument
+                    || command.get_all_aliases().any(|alias| alias == argument))
+        }) {
+            path.push(command.get_name().to_owned());
+            current = command;
+        }
+    }
+    let name = (!path.is_empty()).then(|| path.join(" "));
     let message = explain(&error, name.as_deref());
+    // An example that uses the option that went wrong, when there is one.
+    let option = match error.get(ContextKind::InvalidArg) {
+        Some(ContextValue::String(value)) => value.split_whitespace().next().map(str::to_owned),
+        _ => None,
+    };
+    let example = match path.as_slice() {
+        [command] => {
+            let list = examples(command);
+            option
+                .as_deref()
+                .filter(|option| option.starts_with('-'))
+                .and_then(|option| {
+                    list.iter()
+                        .find(|example| example.split_whitespace().any(|word| word == option))
+                })
+                .or(list.first())
+                .copied()
+        }
+        _ => None,
+    };
     let format = ui::detect(
         arguments.iter().any(|argument| argument == "--json"),
-        std::env::var("UNDERSTUDY_JSON").ok().as_deref(),
+        std::env::var("ATLAS_JSON").ok().as_deref(),
         std::io::stdout().is_terminal(),
     );
     ui::set(format);
@@ -179,10 +198,10 @@ pub fn usage(error: clap::Error) -> ExitCode {
         }
         Format::Human => {
             let help = match &name {
-                Some(name) => format!("understudy {name} --help"),
-                None => "understudy --help".to_owned(),
+                Some(name) => format!("atlas {name} --help"),
+                None => "atlas --help".to_owned(),
             };
-            let fix = match name.as_deref().map(examples).and_then(|list| list.first()) {
+            let fix = match example {
                 Some(example) => {
                     format!("Try {}, or see {}.", style::cmd(example), style::cmd(help))
                 }
@@ -212,7 +231,7 @@ fn explain(error: &clap::Error, name: Option<&str>) -> String {
         word.trim_matches(|c| c == '<' || c == '>' || c == '.' || c == '[' || c == ']')
             .to_owned()
     };
-    let command = name.map_or("understudy".to_owned(), |name| format!("understudy {name}"));
+    let command = name.map_or("atlas".to_owned(), |name| format!("atlas {name}"));
     let suggestion = |kind| {
         let suggested = list(kind);
         (!suggested.is_empty()).then(|| format!(" Did you mean {}?", suggested.join(" or ")))
@@ -312,20 +331,17 @@ mod tests {
     fn usage_errors_say_what_was_wrong_plainly() {
         let said = |line: &[&str]| {
             let error = command()
-                .try_get_matches_from(std::iter::once("understudy").chain(line.iter().copied()))
+                .try_get_matches_from(std::iter::once("atlas").chain(line.iter().copied()))
                 .expect_err("should not parse");
             explain(&error, Some(line[0]))
         };
         assert_eq!(said(&["readiness", "--tool"]), "--tool needs a value.");
         assert_eq!(
             said(&["update", "--forse"]),
-            "understudy update has no option --forse. Did you mean --force?"
+            "atlas update has no option --forse. Did you mean --force?"
         );
-        assert_eq!(said(&["type"]), "understudy type needs TEXT.");
-        assert_eq!(
-            said(&["drag", "1", "2"]),
-            "understudy drag needs TO_X and TO_Y."
-        );
+        assert_eq!(said(&["type"]), "atlas type needs TEXT.");
+        assert_eq!(said(&["drag", "1", "2"]), "atlas drag needs TO_X and TO_Y.");
         assert_eq!(
             said(&["click", "--button", "sideways", "1", "2"]),
             "\"sideways\" does not work for --button. Use left, middle, right."

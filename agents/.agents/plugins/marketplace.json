@@ -1,10 +1,10 @@
 {
-  "name": "understudy",
-  "interface": { "displayName": "Understudy" },
+  "name": "atlas",
+  "interface": { "displayName": "Atlas" },
   "plugins": [
     {
-      "name": "understudy",
-      "source": { "source": "local", "path": "./understudy" },
+      "name": "atlas",
+      "source": { "source": "local", "path": "./atlas" },
       "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
       "category": "Developer Tools"
     }

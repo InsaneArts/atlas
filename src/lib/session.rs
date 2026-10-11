@@ -117,7 +117,7 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
         }
         return Err(Error::new(
             "transport",
-            "The helper is not answering. Run understudy doctor.",
+            "The helper is not answering. Run atlas doctor.",
         ));
     }
     if value["user"]["uid"]
@@ -126,20 +126,20 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
     {
         return Err(Error::new(
             "identity",
-            "A different account answered than the configured helper. Run understudy doctor.",
+            "A different account answered than the configured helper. Run atlas doctor.",
         ));
     }
     if value["session"]["onConsole"] == true || value["sessionProof"]["onConsole"] == true {
         return Err(Error::new(
             "on-console",
-            "The helper is on screen right now. Understudy works only while it is in the \
+            "The helper is on screen right now. Atlas works only while it is in the \
              background: switch back to your own account.",
         ));
     }
     let invalid = || {
         Error::new(
             "identity",
-            "The helper's session could not be verified. Run understudy doctor.",
+            "The helper's session could not be verified. Run atlas doctor.",
         )
     };
     let pid = value["daemon"]["pid"]
@@ -204,6 +204,24 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
     })
 }
 
+/// Whether the input service in `value` is healthy and in the same helper
+/// session as `session`, pinned to an earlier number of the same-size
+/// display (switching accounts can renumber it). The next action re-pins it
+/// to the current display, so it counts as ready.
+pub fn repinnable(value: &Value, session: &Session) -> bool {
+    let native = &value["inputService"];
+    let pinned = &native["enforcedEpoch"];
+    let epoch = &session.epoch;
+    native["ok"] == true
+        && native["protocolVersion"] == 1
+        && native["accessibility"] == true
+        && pinned["uid"] == epoch.uid
+        && pinned["securitySessionId"] == epoch.security_session_id
+        && pinned["processId"] == epoch.input_pid
+        && pinned["width"].as_f64() == Some(epoch.display.width)
+        && pinned["height"].as_f64() == Some(epoch.display.height)
+}
+
 struct Check {
     name: &'static str,
     /// None when the fact cannot be observed yet; never reported as missing.
@@ -253,20 +271,20 @@ pub fn diagnose(value: Value, uid: u32) -> Value {
             .as_str()
             .unwrap_or("The socket belongs to another account")
     } else {
-        "Start the helper: run understudy init (safe to run again)."
+        "Start the helper: run atlas init (safe to run again)."
     };
     let hidden_guidance = if value["user"]["uid"]
         .as_u64()
         .is_some_and(|v| v != u64::from(uid))
     {
-        "A different account answered than the configured helper; run understudy init."
+        "A different account answered than the configured helper; run atlas init."
     } else if value["session"]["onConsole"] == true || value["sessionProof"]["onConsole"] == true {
         "Switch back to your own account without logging the helper out."
     } else {
         // The session check's own reason, when it gave one, says what to fix.
         value["sessionProof"]["error"].as_str().unwrap_or(
-            "The helper could not be checked. Run understudy restart; if that does not help, \
-             run understudy init.",
+            "The helper could not be checked. Run atlas restart; if that does not help, \
+             run atlas init.",
         )
     };
     let checks = [
@@ -285,7 +303,7 @@ pub fn diagnose(value: Value, uid: u32) -> Value {
             ok: known(reachable, value["permissions"]["screenCapture"] == true),
             next_step: if reachable {
                 "In the helper's System Settings › Privacy & Security › Screen & System Audio \
-                 Recording, turn Understudy on."
+                 Recording, turn Atlas on."
             } else {
                 unknown
             }
@@ -294,11 +312,11 @@ pub fn diagnose(value: Value, uid: u32) -> Value {
         Check {
             name: "Accessibility allowed",
             ok: known(native_reachable, native["accessibility"] == true),
-            next_step: if native_reachable {
+            next_step: if native_reachable || value["permissions"]["accessibility"] == false {
                 "In the helper's System Settings › Privacy & Security › Accessibility, turn \
-                 Understudy on."
+                 Atlas on (atlas init walks you through it)."
             } else if queried {
-                "Run understudy start-input."
+                "Run atlas start-input."
             } else {
                 not_queried
             }
@@ -306,9 +324,16 @@ pub fn diagnose(value: Value, uid: u32) -> Value {
         },
         Check {
             name: "Input service ready",
-            ok: known(queried, session.as_ref().is_some_and(|s| s.input)),
-            next_step: if queried {
-                "Run understudy start-input."
+            ok: known(
+                queried,
+                session
+                    .as_ref()
+                    .is_some_and(|s| s.input || repinnable(&value, s)),
+            ),
+            next_step: if queried && value["permissions"]["accessibility"] == false {
+                "Turn on Accessibility for Atlas in the helper first; atlas init walks you through it."
+            } else if queried {
+                "Run atlas start-input."
             } else if reachable {
                 not_queried
             } else {
@@ -320,8 +345,7 @@ pub fn diagnose(value: Value, uid: u32) -> Value {
     let mut warnings = Vec::new();
     if native_reachable && !input_build_current(&value) {
         warnings.push(
-            "The input service is from an older build; understudy start-input replaces it."
-                .to_owned(),
+            "The input service is from an older build; atlas start-input replaces it.".to_owned(),
         );
     }
     let details = checks
@@ -346,7 +370,7 @@ pub fn diagnose(value: Value, uid: u32) -> Value {
         "canObserve": observe,
         "capabilities": {
             "observe": observe,
-            "input": session.as_ref().is_some_and(|s| s.input),
+            "input": session.as_ref().is_some_and(|s| s.input || repinnable(&value, s)),
             // Transport, identity and permissions were all green in Phase 1
             // while native Save/Open failed. Only a fresh native check counts.
             "nativeDialogs": {
@@ -362,10 +386,124 @@ pub fn diagnose(value: Value, uid: u32) -> Value {
     })
 }
 
+/// Whether a desktop session running as `uid` is older than the account's
+/// home folder: a deleted account's session, still signed in, that macOS
+/// now attributes to the account that reused its user ID.
+pub fn leftover_session(uid: u32, name: &str, home: &std::path::Path) -> bool {
+    // How long ago the account was made: its record's creation time, or
+    // failing that its home folder's.
+    let Some(age) = account_age(name).or_else(|| {
+        std::fs::metadata(home)
+            .and_then(|metadata| metadata.created())
+            .ok()
+            .and_then(|created| created.elapsed().ok())
+    }) else {
+        return false;
+    };
+    let Ok(output) = std::process::Command::new("/bin/ps")
+        .args(["-axo", "uid=,etime=,comm="])
+        .output()
+    else {
+        return false;
+    };
+    // A session cannot start before its account exists; a few seconds of
+    // slack cover clock rounding.
+    let slack = std::time::Duration::from_secs(10);
+    String::from_utf8_lossy(&output.stdout).lines().any(|line| {
+        let mut words = line.split_whitespace();
+        let (Some(owner), Some(elapsed), Some(command)) =
+            (words.next(), words.next(), words.next())
+        else {
+            return false;
+        };
+        owner == uid.to_string()
+            && command.ends_with("/loginwindow")
+            && running_for(elapsed).is_some_and(|running| running > age + slack)
+    })
+}
+
+/// How long ago account `name` was created, from its directory record.
+fn account_age(name: &str) -> Option<std::time::Duration> {
+    let output = std::process::Command::new("/usr/bin/dscl")
+        .args([".", "-read", &format!("/Users/{name}"), "accountPolicyData"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let after = text.split("<key>creationTime</key>").nth(1)?;
+    let value = after.split("<real>").nth(1)?.split("</real>").next()?;
+    let created =
+        std::time::UNIX_EPOCH + std::time::Duration::from_secs_f64(value.trim().parse().ok()?);
+    created.elapsed().ok()
+}
+
+/// `ps` elapsed time (`[[days-]hours:]minutes:seconds`) as a duration.
+fn running_for(elapsed: &str) -> Option<std::time::Duration> {
+    let (days, clock) = match elapsed.split_once('-') {
+        Some((days, clock)) => (days.parse::<u64>().ok()?, clock),
+        None => (0, elapsed),
+    };
+    let parts: Vec<u64> = clock
+        .split(':')
+        .map(|part| part.parse().ok())
+        .collect::<Option<_>>()?;
+    let seconds = match parts.as_slice() {
+        [minutes, seconds] => minutes * 60 + seconds,
+        [hours, minutes, seconds] => hours * 3600 + minutes * 60 + seconds,
+        _ => return None,
+    };
+    Some(std::time::Duration::from_secs(days * 86_400 + seconds))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{input_build_current, validate_target_uid};
+    use super::{input_build_current, running_for, validate_target_uid};
     use serde_json::json;
+
+    #[test]
+    fn input_pinned_to_an_earlier_same_size_display_counts_as_ready() {
+        use super::{Display, Epoch, Session, repinnable};
+        let session = Session {
+            epoch: Epoch {
+                uid: 503,
+                capture_pid: 10,
+                display: Display {
+                    width: 1512.0,
+                    height: 982.0,
+                    scale: 2.0,
+                },
+                security_session_id: 100135,
+                display_id: 15,
+                input_pid: 11318,
+            },
+            capture: true,
+            input: false,
+        };
+        let status = |width: f64| {
+            json!({"inputService": {"ok": true, "protocolVersion": 1,
+            "accessibility": true, "enforcedEpoch": {"uid": 503, "securitySessionId": 100135,
+            "displayId": 9, "processId": 11318, "width": width, "height": 982.0}}})
+        };
+        assert!(repinnable(&status(1512.0), &session));
+        assert!(
+            !repinnable(&status(1440.0), &session),
+            "a new size needs a new look"
+        );
+        let mut other = status(1512.0);
+        other["inputService"]["enforcedEpoch"]["securitySessionId"] = json!(1);
+        assert!(!repinnable(&other, &session), "never across sessions");
+    }
+
+    #[test]
+    fn elapsed_times_read_like_ps_writes_them() {
+        use std::time::Duration;
+        assert_eq!(running_for("05:09"), Some(Duration::from_secs(309)));
+        assert_eq!(running_for("12:05:09"), Some(Duration::from_secs(43_509)));
+        assert_eq!(
+            running_for("2-00:00:01"),
+            Some(Duration::from_secs(172_801))
+        );
+        assert_eq!(running_for("soon"), None);
+    }
 
     /// A service from a replaced file is stale even when its build matches.
     #[test]

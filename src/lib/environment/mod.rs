@@ -31,7 +31,7 @@ pub use worker::worker;
 
 const MAX_FILE: u64 = 128 * 1024 * 1024;
 const MAX_RECORD: u64 = 4 * 1024 * 1024;
-const STATE: &str = ".config/understudy/provisioning";
+const STATE: &str = ".config/atlas/provisioning";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -84,6 +84,7 @@ pub(super) async fn freeze(
     apply_now: bool,
 ) -> Result<Value> {
     client.identity().await?;
+    prune(client).await;
     if selections.is_empty() || selections.len() > 32 {
         return Err(problem("Select 1–32 files"));
     }
@@ -163,7 +164,13 @@ pub(super) async fn freeze(
 /// Apply or resume the same immutable snapshot. Original source files are not read.
 pub async fn apply(client: &Client, plan_id: &str) -> Result<Value> {
     let stage = stage_path(client, plan_id)?;
-    let _lock = lock_stage(&stage)?;
+    if directory(&stage, false)?.is_none() {
+        return Err(problem(format!(
+            "There is no plan {plan_id} to apply: it was applied completely, or never made. \
+             To undo an applied plan, run atlas environment rollback {plan_id} --apply."
+        )));
+    }
+    let lock = lock_stage(&stage)?;
     let plan: Plan = decode(&read_limited(&stage.join("plan.json"), MAX_RECORD)?)?;
     if plan.id != plan_id || plan.uid != client.config.helper_uid {
         return Err(problem(
@@ -171,21 +178,22 @@ pub async fn apply(client: &Client, plan_id: &str) -> Result<Value> {
         ));
     }
     let result = dispatch(client, &stage, Request::Apply { plan }).await;
-    let finished = settled(&result, "applied");
-    drop(_lock);
-    if finished {
+    // Discarded while still locked, so nothing else can start on it.
+    if settled(&result, "applied") {
         discard(&stage);
     }
-    retained(result, plan_id, &stage)
+    drop(lock);
+    operation(retained(result, plan_id, &stage), "apply")
 }
 
 /// Preview rollback by default; restore only this transaction's unchanged files.
 pub async fn rollback(client: &Client, transaction_id: &str, apply: bool) -> Result<Value> {
     let stage = stage_path(client, transaction_id)?;
-    if directory(&stage, false)?.is_none() {
+    let created = directory(&stage, false)?.is_none();
+    if created {
         create_stage(&stage, client.config.helper_uid)?;
     }
-    let _lock = lock_stage(&stage)?;
+    let lock = lock_stage(&stage)?;
     let result = dispatch(
         client,
         &stage,
@@ -195,13 +203,35 @@ pub async fn rollback(client: &Client, transaction_id: &str, apply: bool) -> Res
         },
     )
     .await;
-    // A preview leaves things as they were; the stage it created goes too.
-    let finished = settled(&result, if apply { "rolledBack" } else { "applied" });
-    drop(_lock);
-    if finished {
+    // An undo that finished needs no plan. A preview changes nothing, so it
+    // only removes a working folder it made itself and left empty of
+    // unconfirmed requests.
+    if (apply && settled(&result, "rolledBack")) || (created && !apply && !requests(&stage)) {
         discard(&stage);
     }
-    retained(result, transaction_id, &stage)
+    drop(lock);
+    operation(
+        retained(result, transaction_id, &stage),
+        if apply { "rollback" } else { "rollbackPreview" },
+    )
+}
+
+/// Say which step a result answers, so it is read in the right direction.
+fn operation(mut result: Result<Value>, name: &str) -> Result<Value> {
+    if let Ok(value) = &mut result {
+        value["operation"] = json!(name);
+    }
+    result
+}
+
+/// Whether `stage` holds a retained request: a step whose outcome is not
+/// known yet, kept as evidence until it is.
+fn requests(stage: &Path) -> bool {
+    fs::read_dir(stage).is_ok_and(|entries| {
+        entries
+            .flatten()
+            .any(|entry| entry.file_name().to_string_lossy().starts_with("request-"))
+    })
 }
 
 /// Whether the helper confirmed the transaction reached `phase` with nothing
@@ -213,9 +243,92 @@ fn settled(result: &Result<Value>, phase: &str) -> bool {
     })
 }
 
+/// Atlas's own plan and request folders beside the shared command: named
+/// with a valid ID, real folders owned by this account. Anything else there
+/// is left alone.
+pub fn leftovers(shared: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(shared) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let id = name
+                .strip_prefix("environment-plan-")
+                .or_else(|| name.strip_prefix("environment-run-"));
+            id.is_some_and(|id| validate_id(id).is_ok())
+                && fs::symlink_metadata(entry.path()).is_ok_and(|metadata| {
+                    metadata.file_type().is_dir()
+                        && metadata.uid() == nix::unistd::getuid().as_raw()
+                })
+        })
+        .map(|entry| entry.path())
+        .collect()
+}
+
 /// Remove a frozen plan the helper no longer needs.
 fn discard(stage: &Path) {
     let _ = fs::remove_dir_all(stage);
+}
+
+/// How long a frozen plan is kept before the helper is asked whether it is
+/// still needed.
+const UNUSED: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 60 * 60);
+
+/// Remove frozen plans older than UNUSED that the helper no longer needs:
+/// ones it never applied, and ones applied or undone completely. A plan with
+/// a retained request (a step whose outcome is unknown), one the helper must
+/// still resume, or one it cannot answer for, stays.
+async fn prune(client: &Client) {
+    let Some(shared) = client.config.identity_probe.parent() else {
+        return;
+    };
+    let old: Vec<(String, PathBuf)> = leftovers(shared)
+        .into_iter()
+        .filter_map(|stage| {
+            let name = stage.file_name()?.to_string_lossy().into_owned();
+            let id = name.strip_prefix("environment-plan-")?.to_owned();
+            let age = fs::symlink_metadata(&stage)
+                .ok()?
+                .modified()
+                .ok()?
+                .elapsed()
+                .ok()?;
+            (age > UNUSED).then_some((id, stage))
+        })
+        .collect();
+    for (id, stage) in old {
+        // Everything below happens under the plan's own lock; a plan in use
+        // is skipped.
+        let Ok(lock) = lock_stage(&stage) else {
+            continue;
+        };
+        let ours = read_limited(&stage.join("plan.json"), MAX_RECORD)
+            .ok()
+            .and_then(|bytes| decode::<Plan>(&bytes).ok())
+            .is_some_and(|plan| plan.id == id && plan.uid == client.config.helper_uid);
+        if !ours || requests(&stage) {
+            continue;
+        }
+        // A read-only question: has the helper ever started this plan?
+        let answer = dispatch(
+            client,
+            &stage,
+            Request::Rollback {
+                id: id.clone(),
+                apply: false,
+            },
+        )
+        .await;
+        let never = answer
+            .as_ref()
+            .is_ok_and(|answer| answer["ok"] == false && answer["error"] == worker::MISSING);
+        if never && !requests(&stage) {
+            discard(&stage);
+        }
+        drop(lock);
+    }
 }
 
 /// Execute a command with the installed helper-local profile. The reply is the
@@ -342,7 +455,7 @@ async fn dispatch(client: &Client, stage: &Path, request: Request) -> Result<Val
     let raw_output = matches!(&request, Request::Run { .. });
     let invocation = stage.join(format!("request-{}", crate::control::token()));
     create_stage(&invocation, client.config.helper_uid)?;
-    // Understudy.app's executable is sealed with its bundle, so a copy would
+    // Atlas.app's executable is sealed with its bundle, so a copy would
     // fail its signature: the helper runs the app's own executable. A loose
     // build is copied, so its request keeps the binary it was made with.
     let source = fs::canonicalize(std::env::current_exe()?)?;
@@ -351,7 +464,7 @@ async fn dispatch(client: &Client, stage: &Path, request: Request) -> Result<Val
     {
         source
     } else {
-        let executable = invocation.join("understudy");
+        let executable = invocation.join("atlas");
         atomic_write(&executable, &read_limited(&source, MAX_FILE)?, 0o700)?;
         allow_helper(&executable, client.config.helper_uid, true)?;
         executable

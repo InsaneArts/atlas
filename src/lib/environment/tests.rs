@@ -207,8 +207,8 @@ fn unsupported_metadata_and_links_are_refused_without_modification() {
 #[test]
 fn aliases_reserved_state_and_special_files_are_rejected() {
     for target in [
-        ".config//understudy/provisioning/lock",
-        ".CONFIG/understudy/./PROVISIONING/files.json",
+        ".config//atlas/provisioning/lock",
+        ".CONFIG/atlas/./PROVISIONING/files.json",
         "../escape",
     ] {
         assert!(unique_targets([Path::new(target)].into_iter()).is_err());
@@ -313,10 +313,7 @@ fn bounded_extended_attributes_are_preserved_and_compared_exactly() {
     let path = sandbox.home.join("config");
     atomic_write(&path, b"old", 0o640).unwrap();
     let mut attributes = fingerprint(&path).unwrap().unwrap().xattrs;
-    attributes.insert(
-        "user.understudy-test".into(),
-        STANDARD.encode([0_u8, 1, 255, 3]),
-    );
+    attributes.insert("user.atlas-test".into(), STANDARD.encode([0_u8, 1, 255, 3]));
     restore_attributes(&path, &attributes).unwrap();
     let state = state::Store::open(&sandbox.home, true).unwrap();
     state
@@ -346,15 +343,12 @@ fn large_extended_attributes_are_read_whole_and_bounded() {
     atomic_write(&path, b"x", 0o600).unwrap();
     let mut attributes = fingerprint(&path).unwrap().unwrap().xattrs;
     let value: Vec<u8> = (0..10_000).map(|i| (i % 251) as u8).collect();
-    attributes.insert("user.understudy-large".into(), STANDARD.encode(&value));
+    attributes.insert("user.atlas-large".into(), STANDARD.encode(&value));
     restore_attributes(&path, &attributes).unwrap();
     let read = fingerprint(&path).unwrap().unwrap().xattrs;
-    assert_eq!(
-        STANDARD.decode(&read["user.understudy-large"]).unwrap(),
-        value
-    );
+    assert_eq!(STANDARD.decode(&read["user.atlas-large"]).unwrap(), value);
     attributes.insert(
-        "user.understudy-larger".into(),
+        "user.atlas-larger".into(),
         STANDARD.encode(vec![7_u8; 8_000]),
     );
     assert!(restore_attributes(&path, &attributes).is_err());
@@ -474,9 +468,7 @@ fn rollback_of_an_unacknowledged_prepared_file_leaves_no_owned_candidate() {
     let sandbox = Sandbox::new();
     let plan = sandbox.plan(vec![sandbox.payload("file", b"one")]);
     assert_eq!(sandbox.apply(&plan)["ok"], true);
-    let candidate = sandbox
-        .home
-        .join(format!(".understudy-{}-0-install", plan.id));
+    let candidate = sandbox.home.join(format!(".atlas-{}-0-install", plan.id));
     fs::rename(sandbox.home.join("file"), &candidate).unwrap();
     let store = state::Store::open(&sandbox.home, true).unwrap();
     let mut transaction = store.transaction(&plan.id).unwrap().unwrap();
@@ -570,7 +562,7 @@ fn aliases_of_existing_managed_targets_are_rejected() {
         )
         .is_err()
     );
-    for path in [".config", ".config/understudy"] {
+    for path in [".config", ".config/atlas"] {
         assert!(unique_targets([Path::new(path)].into_iter()).is_err());
     }
 }
@@ -597,14 +589,14 @@ fn an_existing_acl_is_refused_without_removing_its_entries() {
 }
 
 #[test]
-fn selected_files_under_config_understudy_share_ancestors_with_private_state() {
+fn selected_files_under_config_atlas_share_ancestors_with_private_state() {
     let sandbox = Sandbox::new();
     let plan = sandbox.plan(vec![
         sandbox.payload(
-            ".config/understudy/environment.json",
+            ".config/atlas/environment.json",
             b"{\"version\":1,\"variables\":{}}",
         ),
-        sandbox.payload(".config/understudy/proof/subfolder/input", b"selected"),
+        sandbox.payload(".config/atlas/proof/subfolder/input", b"selected"),
     ]);
     assert!(!sandbox.home.join(".config").exists());
     let result = sandbox.apply(&plan);
@@ -612,13 +604,8 @@ fn selected_files_under_config_understudy_share_ancestors_with_private_state() {
     assert_eq!(sandbox.apply(&plan)["ok"], true);
     let result = sandbox.rollback(&plan, true);
     assert_eq!(result["ok"], true, "{result}");
-    assert!(
-        !sandbox
-            .home
-            .join(".config/understudy/environment.json")
-            .exists()
-    );
-    assert!(!sandbox.home.join(".config/understudy/proof").exists());
+    assert!(!sandbox.home.join(".config/atlas/environment.json").exists());
+    assert!(!sandbox.home.join(".config/atlas/proof").exists());
     assert!(sandbox.home.join(STATE).is_dir());
 }
 

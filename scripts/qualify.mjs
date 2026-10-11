@@ -1,9 +1,9 @@
 // Sustained daily-use qualification against the real helper. Requires a
-// running `understudy menubar` (or `monitor`) started with the same config;
+// running `atlas menubar` (or `monitor`) started with the same config;
 // its private record is the first argument. Headless: nothing opens on the
 // main desktop, and all input goes through the guarded helper paths.
 //
-//   node scripts/qualify.mjs runs/…/monitor.json --config understudy.local.toml \
+//   node scripts/qualify.mjs runs/…/monitor.json --config atlas.local.toml \
 //     [--minutes 30] [--stop-server]
 //
 // Every attempt is recorded in qualify-<run>-samples.jsonl and the verdict in
@@ -34,14 +34,14 @@ if (!Number.isFinite(minutes) || minutes <= 0 || minutes > 720)
   throw new Error('--minutes must be in (0, 720]');
 if (process.env.PWDEBUG) throw new Error('Unset PWDEBUG: the qualification must stay headless');
 
-const binary = path.join(root, 'target/debug/understudy');
+const binary = path.join(root, 'target/debug/atlas');
 const { url, pid: serverPid } = JSON.parse(fs.readFileSync(record, 'utf8'));
 const run = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
 const output = path.dirname(record);
-const work = `/Users/Shared/UnderstudyQualify-${run}`;
+const work = `/Users/Shared/AtlasQualify-${run}`;
 const title = `notes-${run}.txt`;
 const notes = `${work}/${title}`;
-const caches = path.join(process.env.HOME, 'Library/Caches/Understudy');
+const caches = path.join(process.env.HOME, 'Library/Caches/Atlas');
 /** Commands that may change the helper; anything unacknowledged is unknown. */
 const MUTATING = new Set(['key', 'type', 'open', 'run', 'environment', 'click', 'move', 'input']);
 const MAX_FRAME_AGE_MS = 10000;
@@ -244,7 +244,7 @@ async function companionPid() {
   }
   for (const pid of children) {
     const command = (await exec('/bin/ps', ['-o', 'comm=', '-p', pid], 5000)).trim();
-    if (command.endsWith('/UnderstudyBar')) return Number(pid);
+    if (command.endsWith('/AtlasBar')) return Number(pid);
   }
   return null;
 }
@@ -465,8 +465,7 @@ try {
     browser = await chromium.launch({
       headless: true,
       executablePath:
-        process.env.UNDERSTUDY_CHROME ||
-        '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        process.env.ATLAS_CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
     });
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     page.on('pageerror', (error) => failure('page', error));

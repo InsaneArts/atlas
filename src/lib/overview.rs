@@ -126,7 +126,7 @@ mod tests {
     fn report(reachable: bool, ready: bool) -> Value {
         json!({
             "ready": ready,
-            "nextSteps": ["Run understudy start-input"],
+            "nextSteps": ["Run atlas start-input"],
             "capabilities": {"nativeDialogs": {"state": "failed"}},
             "session": {"ok": reachable, "user": {"name": "atlastest"},
                 "inputService": {"controlActive": false}},
@@ -191,7 +191,7 @@ mod tests {
             "an input start or upgrade in progress is not a blocked helper"
         );
         let blocked = overview(&report(true, false), false, unresolved(0), &[], NOW);
-        assert_eq!(blocked["reason"], "Run understudy start-input");
+        assert_eq!(blocked["reason"], "Run atlas start-input");
         assert_eq!(
             overview(&ready, false, unresolved(0), &[row(30)], NOW)["activity"][0]["ageSeconds"],
             30

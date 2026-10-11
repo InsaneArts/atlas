@@ -1,15 +1,15 @@
 # Attribution
 
-Understudy is an InsaneArts project. Its helper daemon speaks the newline-JSON
-protocol of the Offstage daemon by Viraat Das, against which Understudy was
+Atlas is an InsaneArts project. Its helper daemon speaks the newline-JSON
+protocol of the Offstage daemon by Viraat Das, against which Atlas was
 first built and tested at
 [commit 38a2372](https://github.com/viraatdas/offstage/commit/38a2372b27add177b6768693270af78e4d07cefe)
-(0.3.15); Understudy now ships its own implementation and no longer needs
+(0.3.15); Atlas now ships its own implementation and no longer needs
 Offstage. No upstream repository is vendored.
 
 The Rust input implementation uses the same macOS virtual-key mappings and
 protocol conventions. The upstream notice is retained below. No project-wide
-license for Understudy's own code has been selected.
+license for Atlas's own code has been selected.
 
 MIT License
 

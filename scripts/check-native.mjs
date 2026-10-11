@@ -24,7 +24,7 @@ const results = {
 const browser = await chromium.launch({
   headless: true,
   executablePath:
-    process.env.UNDERSTUDY_CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    process.env.ATLAS_CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
 });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
 let acquiredLease = null;
@@ -283,12 +283,12 @@ async function checkPanel(kind) {
   const directory = fs.realpathSync(setup.logDirectory);
   const expectedPath = path.join(
     directory,
-    kind === 'save' ? 'understudy-fixture.txt' : 'understudy-open-fixture.txt',
+    kind === 'save' ? 'atlas-fixture.txt' : 'atlas-open-fixture.txt',
   );
   const expectedText =
     kind === 'save'
-      ? 'Understudy native Save — ქართული 日本語 🧑🏽‍💻 é'
-      : 'Understudy native Open — ქართული 日本語 🧑🏽‍💻 é\n';
+      ? 'Atlas native Save — ქართული 日本語 🧑🏽‍💻 é'
+      : 'Atlas native Open — ქართული 日本語 🧑🏽‍💻 é\n';
   const result = {
     kind,
     expectedPath,

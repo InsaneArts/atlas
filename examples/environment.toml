@@ -1,7 +1,7 @@
 # Environment manifest: an explicit one-way snapshot into the helper home.
 #
-#   understudy environment examples/environment.toml          # preview
-#   understudy environment examples/environment.toml --apply  # apply
+#   atlas environment examples/environment.toml          # preview
+#   atlas environment examples/environment.toml --apply  # apply
 #
 # source: absolute, or relative to this file. target: ASCII path inside the
 # helper home. Stop applications that write these files before applying.

@@ -1,15 +1,15 @@
-# Understudy commands
+# Atlas commands
 
-Generated from `understudy --help`. Every command prints JSON when its output is not a terminal (or with `--json`) and exits non-zero on failure.
+Generated from `atlas --help`. Every command prints JSON when its output is not a terminal (or with `--json`) and exits non-zero on failure.
 
-## understudy init
+## atlas init
 
 ```text
-Set Understudy up, step by step (safe to run again).
+Set Atlas up, step by step (safe to run again).
 
 Helper account, first sign-in, permissions, the helper job and input.
 
-Usage: understudy init [OPTIONS]
+Usage: atlas init [OPTIONS]
 
 Options:
   -h, --help
@@ -23,12 +23,12 @@ Global options:
           Use another settings file
 ```
 
-## understudy doctor
+## atlas doctor
 
 ```text
 Check that everything is ready, and say what to fix if not
 
-Usage: understudy doctor [OPTIONS]
+Usage: atlas doctor [OPTIONS]
 
 Options:
       --verbose
@@ -43,19 +43,23 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+Examples:
+  atlas doctor
+  atlas doctor --verbose
 ```
 
-## understudy agents
+## atlas agents
 
 ```text
 Connect Claude Code and Codex, or show which are connected.
 
-Adds a plugin that teaches the agent to use Understudy and guides setup.
+Adds a plugin that teaches the agent to use Atlas and guides setup.
 
-Usage: understudy agents [OPTIONS] [COMMAND]
+Usage: atlas agents [OPTIONS] [COMMAND]
 
 Commands:
-  status   Which agents are on this Mac and whether Understudy is connected
+  status   Which agents are on this Mac and whether Atlas is connected
   install  Connect the plugin to Claude Code and/or Codex (all installed by default)
   remove   Disconnect the plugin from Claude Code and/or Codex
   help     Print this message or the help of the given subcommand(s)
@@ -70,16 +74,20 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+Examples:
+  atlas agents
+  atlas agents install
 ```
 
-## understudy menubar
+## atlas menubar
 
 ```text
 Show the helper in the menu bar, to watch it or take control.
 
 The menu bar runs on its own, so the terminal can close. Quit it from its menu; that stops its viewer and releases control.
 
-Usage: understudy menubar [OPTIONS]
+Usage: atlas menubar [OPTIONS]
 
 Options:
       --port <PORT>
@@ -106,14 +114,14 @@ Global options:
           Use another settings file
 ```
 
-## understudy screenshot
+## atlas screenshot
 
 ```text
 Save a screenshot of the helper's screen.
 
 Reports pointsPerPixel: multiply screenshot pixels by it for input coordinates.
 
-Usage: understudy screenshot [OPTIONS]
+Usage: atlas screenshot [OPTIONS]
 
 Options:
       --max-dimension <MAX_DIMENSION>
@@ -130,14 +138,14 @@ Global options:
           Use another settings file
 ```
 
-## understudy windows
+## atlas windows
 
 ```text
 List the helper's windows, front to back.
 
 Document windows only, unless --all.
 
-Usage: understudy windows [OPTIONS]
+Usage: atlas windows [OPTIONS]
 
 Options:
       --app <APP>
@@ -158,16 +166,19 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+Examples:
+  atlas windows --app TextEdit
 ```
 
-## understudy elements
+## atlas elements
 
 ```text
 List an app's buttons, fields and other elements.
 
 Lists accessibility elements of the app's windows: role, name, value and frame.
 
-Usage: understudy elements [OPTIONS]
+Usage: atlas elements [OPTIONS]
 
 Options:
       --app <APP>
@@ -196,14 +207,17 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+Examples:
+  atlas elements --app TextEdit --role AXButton
 ```
 
-## understudy apps
+## atlas apps
 
 ```text
 List the apps open in the helper
 
-Usage: understudy apps [OPTIONS]
+Usage: atlas apps [OPTIONS]
 
 Options:
   -h, --help
@@ -217,12 +231,12 @@ Global options:
           Use another settings file
 ```
 
-## understudy status
+## atlas status
 
 ```text
 Show the helper: who it is, where it is and what it may do
 
-Usage: understudy status [OPTIONS]
+Usage: atlas status [OPTIONS]
 
 Options:
   -h, --help
@@ -236,14 +250,14 @@ Global options:
           Use another settings file
 ```
 
-## understudy click
+## atlas click
 
 ```text
 Click a point, or exactly one element of an app.
 
 Click at display point X Y (screenshot pixels × pointsPerPixel), or on exactly one accessibility element of an app with --app and --name/--role.
 
-Usage: understudy click [OPTIONS] [X] [Y]
+Usage: atlas click [OPTIONS] [X] [Y]
 
 Arguments:
   [X]
@@ -288,16 +302,20 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+Examples:
+  atlas click --app TextEdit --name Save
+  atlas click 1200 880
 ```
 
-## understudy type
+## atlas type
 
 ```text
 Type text.
 
 Long text is split into batches without breaking characters.
 
-Usage: understudy type [OPTIONS] [TEXT]
+Usage: atlas type [OPTIONS] [TEXT]
 
 Arguments:
   [TEXT]
@@ -316,16 +334,19 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+Examples:
+  atlas type "hello"
 ```
 
-## understudy key
+## atlas key
 
 ```text
 Press keys, for example cmd+s or escape.
 
 Keys are pressed in order: `key cmd+s` or `key escape return`.
 
-Usage: understudy key [OPTIONS] <KEYS>...
+Usage: atlas key [OPTIONS] <KEYS>...
 
 Arguments:
   <KEYS>...
@@ -341,14 +362,18 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+Examples:
+  atlas key cmd+s
+  atlas key escape return
 ```
 
-## understudy move
+## atlas move
 
 ```text
 Move the pointer to a point
 
-Usage: understudy move [OPTIONS] <X> <Y>
+Usage: atlas move [OPTIONS] <X> <Y>
 
 Arguments:
   <X>
@@ -367,14 +392,17 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+Examples:
+  atlas move 640 400
 ```
 
-## understudy drag
+## atlas drag
 
 ```text
 Drag from one point to another
 
-Usage: understudy drag [OPTIONS] <FROM_X> <FROM_Y> <TO_X> <TO_Y>
+Usage: atlas drag [OPTIONS] <FROM_X> <FROM_Y> <TO_X> <TO_Y>
 
 Arguments:
   <FROM_X>
@@ -405,16 +433,19 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+Examples:
+  atlas drag 100 200 400 200
 ```
 
-## understudy scroll
+## atlas scroll
 
 ```text
 Scroll at a point.
 
 Scroll at X Y by lines; negative values scroll up or left.
 
-Usage: understudy scroll [OPTIONS] <X> <Y>
+Usage: atlas scroll [OPTIONS] <X> <Y>
 
 Arguments:
   <X>
@@ -443,14 +474,19 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+Examples:
+  atlas scroll 640 400 --dy 3
 ```
 
-## understudy input
+## atlas input
 
 ```text
-Send several actions at once (a JSON array, or @path/to/actions.json)
+Send several actions at once (a JSON array, or @path/to/actions.json).
 
-Usage: understudy input [OPTIONS] <ACTIONS>
+Each action is an object with a "type": move {x, y}; click {x, y, button?, count?, modifiers?}; drag {fromX, fromY, toX, toY, button?}; scroll {x, y, dx?, dy?}; type {text}; key {key}; wait {ms}. Up to 32 actions that finish within two seconds; coordinates are display points. Example: [{"type":"click","x":200,"y":120},{"type":"type","text":"hi"}]
+
+Usage: atlas input [OPTIONS] <ACTIONS>
 
 Arguments:
   <ACTIONS>
@@ -458,7 +494,7 @@ Arguments:
 
 Options:
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 
 Global options:
       --json
@@ -466,14 +502,17 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+Examples:
+  atlas input @actions.json
 ```
 
-## understudy open
+## atlas open
 
 ```text
 Open an app, files or URLs in the helper
 
-Usage: understudy open [OPTIONS] [FILE|URL]...
+Usage: atlas open [OPTIONS] [FILE|URL]...
 
 Arguments:
   [FILE|URL]...
@@ -495,21 +534,28 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+Examples:
+  atlas open --app TextEdit
+  atlas open ./build/Debug/MyApp.app --env DEBUG=1
+  atlas open https://example.com
 ```
 
-## understudy close
+## atlas close
 
 ```text
-Quit an app in the helper and remove any copy `open` made of it
+Quit an app in the helper and remove the copies `open` made for it.
 
-Usage: understudy close [OPTIONS] --app <APP>
+The app quits at once, without asking to save: save first (key cmd+s).
+
+Usage: atlas close [OPTIONS] --app <APP>
 
 Options:
       --app <APP>
-          The app's name, as `understudy apps` lists it
+          The app's name, as `atlas apps` lists it
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 
 Global options:
       --json
@@ -517,14 +563,17 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+Examples:
+  atlas close --app TextEdit
 ```
 
-## understudy wait
+## atlas wait
 
 ```text
 Wait for a window to appear (or, with --gone, to close)
 
-Usage: understudy wait [OPTIONS]
+Usage: atlas wait [OPTIONS]
 
 Options:
       --app <APP>
@@ -550,17 +599,21 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+Examples:
+  atlas wait --app TextEdit
+  atlas wait --title Save --gone
 ```
 
-## understudy run
+## atlas run
 
 ```text
 Run a command in the helper and print its output
 
-Usage: understudy run [OPTIONS] -- <ARGV>...
+Usage: atlas run [OPTIONS] -- <COMMAND>...
 
 Arguments:
-  <ARGV>...
+  <COMMAND>...
           The program and its arguments, after `--`
 
 Options:
@@ -573,14 +626,17 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+Examples:
+  atlas run -- ls ~/Documents
 ```
 
-## understudy readiness
+## atlas readiness
 
 ```text
 Check that tools and apps are ready in the helper
 
-Usage: understudy readiness [OPTIONS]
+Usage: atlas readiness [OPTIONS]
 
 Options:
       --tool <NAME>
@@ -598,23 +654,27 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+Examples:
+  atlas readiness --tool git
+  atlas readiness --tool git --app Xcode
 ```
 
-## understudy environment
+## atlas environment
 
 ```text
 Copy selected settings and files into the helper.
 
 Preview an explicit one-way snapshot into an existing hidden login. The TOML manifest lists [[files]] tables: source (absolute or relative to the manifest), target (ASCII relative path inside the helper home), and optional executable. Stop applications that write these selected settings before applying. Existing untracked differences and helper-side edits are conflicts; managed updates keep backups. This does not create accounts, copy logins, or synchronize running application databases.
 
-Usage: understudy environment [OPTIONS] [MANIFEST]
-       understudy environment <COMMAND>
+Usage: atlas environment [OPTIONS] [MANIFEST]
+       atlas environment <COMMAND>
 
 Commands:
   profile   Freeze selected files, exported variables and readiness requirements
   run       Run a command with the selected helper environment and helper tool paths
-  apply     Apply or resume an immutable environment plan returned by preview
-  rollback  Preview rollback, or restore matching managed state with --apply
+  apply     Copy a previewed plan into the helper (or finish one that stopped)
+  rollback  Show what undoing a copy would do, or undo it with --apply
   discover  Inspect selected tools, apps, variables and reference paths without launching them
   help      Print this message or the help of the given subcommand(s)
 
@@ -637,20 +697,20 @@ Global options:
           Use another settings file
 ```
 
-## understudy verify-native
+## atlas verify-native
 
 ```text
 Check that native Save and Open dialogs work in the helper.
 
 Exercises real Save/Open dialogs with the AppKit fixture and records the outcome.
 
-Usage: understudy verify-native [OPTIONS]
+Usage: atlas verify-native [OPTIONS]
 
 Options:
       --fixture <FIXTURE>
           Compiled tests/live/DesktopFixture.swift inside a helper-readable path
           
-          [default: /Users/Shared/UnderstudyTests/DesktopFixture]
+          [default: /Users/Shared/AtlasTests/DesktopFixture]
 
   -h, --help
           Print help (see a summary with '-h')
@@ -663,14 +723,14 @@ Global options:
           Use another settings file
 ```
 
-## understudy switch
+## atlas switch
 
 ```text
 Lock the screen so you can switch to the helper.
 
-You sign in on the lock screen; Understudy never sees a password.
+You sign in on the lock screen; Atlas never sees a password.
 
-Usage: understudy switch [OPTIONS] [ACCOUNT]
+Usage: atlas switch [OPTIONS] [ACCOUNT]
 
 Arguments:
   [ACCOUNT]
@@ -697,12 +757,12 @@ Global options:
           Use another settings file
 ```
 
-## understudy monitor
+## atlas monitor
 
 ```text
 Watch and control the helper in your browser
 
-Usage: understudy monitor [OPTIONS]
+Usage: atlas monitor [OPTIONS]
 
 Options:
       --port <PORT>
@@ -719,16 +779,20 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+Examples:
+  atlas monitor
+  atlas monitor --port 8800
 ```
 
-## understudy restart
+## atlas restart
 
 ```text
 Restart the helper after something went wrong.
 
 Confirms a new hidden helper before clearing an action of unknown outcome.
 
-Usage: understudy restart [OPTIONS]
+Usage: atlas restart [OPTIONS]
 
 Options:
   -h, --help
@@ -742,12 +806,12 @@ Global options:
           Use another settings file
 ```
 
-## understudy start-input
+## atlas start-input
 
 ```text
 Start (or reset) the helper's input service
 
-Usage: understudy start-input [OPTIONS]
+Usage: atlas start-input [OPTIONS]
 
 Options:
   -h, --help
@@ -761,14 +825,14 @@ Global options:
           Use another settings file
 ```
 
-## understudy update
+## atlas update
 
 ```text
-Update Understudy, checking its signature first.
+Update Atlas, checking its signature first.
 
 Verifies the release's checksum and Developer ID signature, then moves the helper onto it.
 
-Usage: understudy update [OPTIONS]
+Usage: atlas update [OPTIONS]
 
 Options:
       --allow-unnotarized
@@ -791,14 +855,14 @@ Global options:
           Use another settings file
 ```
 
-## understudy uninstall
+## atlas uninstall
 
 ```text
-Remove Understudy from this Mac (asks first).
+Remove Atlas from this Mac (asks first).
 
 The helper account and its files stay; the app goes to the Trash.
 
-Usage: understudy uninstall [OPTIONS]
+Usage: atlas uninstall [OPTIONS]
 
 Options:
       --keep-config
@@ -818,12 +882,12 @@ Global options:
           Use another settings file
 ```
 
-## understudy install
+## atlas install
 
 ```text
 Put this build where the helper can run it
 
-Usage: understudy install [OPTIONS]
+Usage: atlas install [OPTIONS]
 
 Options:
   -h, --help
@@ -837,14 +901,14 @@ Global options:
           Use another settings file
 ```
 
-## understudy setup
+## atlas setup
 
 ```text
 Inspect or repair the helper's setup (advanced).
 
-Without flags, report the helper account, configuration, endpoints and services without changing anything. --apply runs Understudy's own signed helper daemon as a managed LaunchAgent on a private socket directory beside the existing capture job, moves input and the configuration over once it is verified, then retires the old job, recording every step so an interruption resumes. --rollback restores the previous job and configuration.
+Without flags, report the helper account, configuration, endpoints and services without changing anything. --apply runs Atlas's own signed helper daemon as a managed LaunchAgent on a private socket directory beside the existing capture job, moves input and the configuration over once it is verified, then retires the old job, recording every step so an interruption resumes. --rollback restores the previous job and configuration.
 
-Usage: understudy setup [OPTIONS]
+Usage: atlas setup [OPTIONS]
 
 Options:
       --helper <HELPER>
@@ -867,12 +931,12 @@ Global options:
           Use another settings file
 ```
 
-## understudy config
+## atlas config
 
 ```text
-Show where Understudy keeps its settings, sockets and screenshots
+Show where Atlas keeps its settings, sockets and screenshots
 
-Usage: understudy config [OPTIONS]
+Usage: atlas config [OPTIONS]
 
 Options:
   -h, --help
@@ -886,12 +950,12 @@ Global options:
           Use another settings file
 ```
 
-## understudy agent-guide
+## atlas agent-guide
 
 ```text
-Print the guide agents read to use Understudy
+Print the guide agents read to use Atlas
 
-Usage: understudy agent-guide [OPTIONS]
+Usage: atlas agent-guide [OPTIONS]
 
 Options:
   -h, --help

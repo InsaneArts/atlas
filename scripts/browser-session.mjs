@@ -7,9 +7,9 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 
 export async function openViewerBrowser(url) {
-  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'understudy-viewer-'));
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-viewer-'));
   const executable =
-    process.env.UNDERSTUDY_CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+    process.env.ATLAS_CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
   const chrome = spawn(
     executable,
     [

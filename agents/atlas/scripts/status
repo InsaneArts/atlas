@@ -1,0 +1,11 @@
+#!/bin/sh
+# Session start: one short line about Atlas for the agent. Local only,
+# quick, and it never fails the session.
+atlas=$(command -v atlas 2>/dev/null)
+[ -n "$atlas" ] || [ ! -x "$HOME/.local/bin/atlas" ] || atlas="$HOME/.local/bin/atlas"
+if [ -z "$atlas" ]; then
+	echo "Atlas is not installed. If the person wants GUI testing in a hidden desktop, offer the atlas setup skill."
+	exit 0
+fi
+"$atlas" agents status --brief 2>/dev/null || echo "Atlas is installed; run atlas doctor before using it."
+exit 0

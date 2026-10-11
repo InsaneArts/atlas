@@ -6,20 +6,32 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub const DEFAULT_PATH: &str = "understudy.local.toml";
+pub const DEFAULT_PATH: &str = "atlas.local.toml";
 
-/// Where `understudy init` keeps the configuration.
+/// Where `atlas init` keeps the configuration: `~/.config/atlas.toml`.
+/// Screenshots, logs and records stay in `~/Library/Application Support/Atlas`.
 pub fn installed_path() -> Result<PathBuf> {
-    Ok(home()?.join("Library/Application Support/Understudy/understudy.toml"))
+    Ok(home()?.join(".config/atlas.toml"))
 }
 
-/// The configuration to use: `path` as given, except that the default name,
-/// absent from the working directory (as for the login item, which runs in
-/// `/`), falls back to the installed configuration.
-pub fn effective(path: PathBuf) -> PathBuf {
+/// The configuration to use: `path` as given (by --config or ATLAS_CONFIG),
+/// otherwise the installed one. Only a development build, run from a
+/// checkout, uses the checkout's own `atlas.local.toml`; installed Atlas
+/// never picks up a file just because it is in the current folder.
+pub fn effective(given: Option<PathBuf>) -> PathBuf {
+    // A file asked for by --config or ATLAS_CONFIG is always the one used.
+    if let Some(path) = given {
+        return path;
+    }
+    let path = PathBuf::from(DEFAULT_PATH);
+    let installed = std::env::current_exe()
+        .and_then(fs::canonicalize)
+        .ok()
+        .and_then(|executable| crate::update::app_of(&executable))
+        .is_some();
     // A legacy JSON twin keeps the local name, so loading reports it.
-    let legacy = path.with_extension("json").exists();
-    if path == Path::new(DEFAULT_PATH) && !path.exists() && !legacy {
+    let local = path.exists() || path.with_extension("json").exists();
+    if installed || !local {
         return installed_path().unwrap_or(path);
     }
     path
@@ -55,14 +67,30 @@ pub fn parse_toml<T: DeserializeOwned>(bytes: &[u8], origin: &Path) -> Result<T>
 
 impl Config {
     pub fn load(path: &Path) -> Result<Self> {
-        let path = fs::canonicalize(path).map_err(|_| missing(path))?;
+        let path = fs::canonicalize(path).map_err(|error| {
+            // Only a path with nothing there is "not set up"; a dangling link
+            // or an unreadable folder is a file to repair, which init would
+            // not replace.
+            if fs::symlink_metadata(path).is_err() {
+                missing(path)
+            } else {
+                Error::new(
+                    "config-invalid",
+                    format!(
+                        "Atlas could not read its settings in {}: {error}. Repair or remove that \
+                         file, then run atlas init.",
+                        crate::ui::text::tilde(path)
+                    ),
+                )
+            }
+        })?;
         // A file that exists but does not load is never "not set up": init
         // would refuse to replace it, so say which file and why.
         Self::read(&path).map_err(|error| {
             Error::new(
                 "config-invalid",
                 format!(
-                    "Understudy could not read its settings in {}: {}",
+                    "Atlas could not read its settings in {}: {}",
                     crate::ui::text::tilde(&path),
                     error.error
                 ),
@@ -142,7 +170,7 @@ fn missing(path: &Path) -> Error {
     let hint = if legacy.exists() {
         format!(
             " Configuration is TOML; {} is no longer read. Copy its values into the TOML file \
-             (understudy setup --helper NAME shows the key names with default values).",
+             (atlas setup --helper NAME shows the key names with default values).",
             legacy.display()
         )
     } else {
@@ -151,7 +179,7 @@ fn missing(path: &Path) -> Error {
     Error::new(
         "config",
         format!(
-            "Understudy is not set up yet (no {}). Run understudy init.{hint}",
+            "Atlas is not set up yet (no {}). Run atlas init.{hint}",
             crate::ui::text::tilde(path)
         ),
     )
@@ -197,10 +225,10 @@ mod tests {
     #[test]
     fn the_probe_path_is_not_followed_through_a_link() {
         let dir = tempfile::tempdir().unwrap();
-        let real = dir.path().join("App/understudy");
+        let real = dir.path().join("App/atlas");
         fs::create_dir_all(real.parent().unwrap()).unwrap();
         fs::write(&real, b"").unwrap();
-        let link = dir.path().join("shared/understudy");
+        let link = dir.path().join("shared/atlas");
         fs::create_dir_all(link.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(&real, &link).unwrap();
         let text = format!(
@@ -210,6 +238,6 @@ mod tests {
         );
         let config = Config::parse(text.as_bytes(), &dir.path().join("c.toml")).unwrap();
         let shared = fs::canonicalize(link.parent().unwrap()).unwrap();
-        assert_eq!(config.identity_probe, shared.join("understudy"));
+        assert_eq!(config.identity_probe, shared.join("atlas"));
     }
 }

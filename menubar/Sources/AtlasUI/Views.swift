@@ -1,5 +1,5 @@
 import AppKit
-import UnderstudyKit
+import AtlasKit
 
 extension Mode.Tone {
     /// The dot's colour: system green when ready, the accent while working,

@@ -1,4 +1,4 @@
-# Working on Understudy
+# Working on Atlas
 
 - Use the Rust library/CLI layout and fmt, clippy and test checks used by the
   neighboring markdown2pdf project. No Python runtime and no TUI.
@@ -9,7 +9,7 @@
   configured hidden helper login. The browser viewer may run on the main desktop.
 - Keep UID, graphical-session, off-console and exact display-epoch guards.
   Post only to the session event tap; never fall back to global HID input.
-- Use normal macOS consent. Do not modify TCC. The helper daemon is Understudy's
+- Use normal macOS consent. Do not modify TCC. The helper daemon is Atlas's
   own Developer ID-signed app, whose consent persists across updates signed by
   the same identity; never ship it unsigned or ad-hoc signed. The shared Rust
   input executable is a separate process.

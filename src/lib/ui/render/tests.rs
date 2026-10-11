@@ -15,12 +15,12 @@ fn a_ready_doctor_is_one_line() {
         "ok": true, "ready": true,
         "checks": [{"name": "Helper running", "ok": true}],
         "nextSteps": [], "warnings": [],
-        "helper": {"name": "understudy", "uid": 502},
+        "helper": {"name": "atlas", "uid": 502},
         "display": {"width": 2560.0, "height": 1440.0, "scale": 1.0},
     });
     assert_eq!(
         show(View::Doctor { verbose: false }, report).out,
-        "✓ Understudy is ready  helper understudy · 2560 × 1440"
+        "✓ Atlas is ready  helper atlas · 2560 × 1440"
     );
 }
 
@@ -38,7 +38,7 @@ fn a_doctor_that_is_not_ready_lists_checks_and_fixes() {
     });
     assert_eq!(
         show(View::Doctor { verbose: false }, report).out,
-        "✗ Understudy is not ready\n\n  ✓ Helper running\n  ✗ Helper in the background\n  – Input service\n\nTo fix:\n  1. Switch back to your own account.\n! The input service is from an older build."
+        "✗ Atlas is not ready\n\n  ✓ Helper running\n  ✗ Helper in the background\n  – Input service\n\nTo fix:\n  1. Switch back to your own account.\n! The input service is from an older build."
     );
 }
 
@@ -48,10 +48,10 @@ fn errors_say_what_happened_and_what_to_do() {
     let plain = Error::new("on-console", "The helper is on screen right now");
     assert_eq!(
         error(&plain),
-        "✗ The helper is on screen right now\n  → Switch back to your own account. Understudy works while the helper is in the background."
+        "✗ The helper is on screen right now\n  → Switch back to your own account. Atlas works while the helper is in the background."
     );
-    let says = Error::new("config", "No configuration; run understudy init");
-    assert_eq!(error(&says), "✗ No configuration; run understudy init");
+    let says = Error::new("config", "No configuration; run atlas init");
+    assert_eq!(error(&says), "✗ No configuration; run atlas init");
     let unsure = Error::new("transport", "The helper stopped answering").uncertain();
     assert!(error(&unsure).contains("don't repeat it"));
 }
@@ -147,7 +147,7 @@ fn agents_are_a_table_with_a_way_to_connect() {
     );
     assert!(shown.out.contains("Claude Code  2.1.296  ✓ connected"));
     assert!(shown.out.contains("Codex        0.162.0  – not connected"));
-    assert!(shown.out.ends_with("To connect: understudy agents install"));
+    assert!(shown.out.ends_with("To connect: atlas agents install"));
 }
 
 #[test]
@@ -156,10 +156,10 @@ fn an_update_is_one_line_or_says_where_it_stopped() {
         View::Update,
         json!({"ok": true, "updated": false, "version": "0.1.0"}),
     );
-    assert_eq!(current.out, "✓ Understudy 0.1.0 is up to date");
+    assert_eq!(current.out, "✓ Atlas 0.1.0 is up to date");
     let stopped = show(
         View::Update,
-        json!({"ok": false, "updated": true, "to": "Understudy-0.3.0-macos.zip",
+        json!({"ok": false, "updated": true, "to": "Atlas-0.3.0-macos.zip",
                "helper": {"ok": false, "failedStep": "restart", "failure": {"error": "No answer"}}}),
     );
     assert!(
@@ -190,12 +190,12 @@ fn results_without_a_view_are_summarised_not_dumped() {
 fn an_update_before_setup_says_to_set_up() {
     let shown = show(
         View::Update,
-        json!({"ok": true, "updated": true, "to": "Understudy-0.3.0-macos.zip",
-               "helper": {"ok": true, "next": "understudy init"}}),
+        json!({"ok": true, "updated": true, "to": "Atlas-0.3.0-macos.zip",
+               "helper": {"ok": true, "next": "atlas init"}}),
     );
     assert_eq!(
         shown.out,
-        "✓ Updated Understudy to 0.3.0\n  Run understudy init to set up the helper."
+        "✓ Updated Atlas to 0.3.0\n  Run atlas init to set up the helper."
     );
 }
 
@@ -204,13 +204,13 @@ fn a_verbose_doctor_shows_the_facts_behind_it() {
     let report = json!({
         "ok": true, "ready": true, "checks": [], "nextSteps": [], "warnings": [],
         "capabilities": {"nativeDialogs": {"state": "unknown", "reason": "Not checked"}},
-        "session": {"user": {"name": "understudy", "uid": 502},
+        "session": {"user": {"name": "atlas", "uid": 502},
                     "display": {"width": 2560.0, "height": 1440.0},
                     "daemon": {"pid": 7, "version": "0.1.0"},
                     "inputService": {"pid": 9, "ready": true}},
     });
     let shown = show(View::Doctor { verbose: true }, report).out;
-    assert!(shown.contains("understudy (uid 502)"));
+    assert!(shown.contains("atlas (uid 502)"));
     assert!(shown.contains("pid 7 · version 0.1.0"));
     assert!(shown.contains("unknown · Not checked"));
 }
@@ -228,12 +228,12 @@ fn roles_from_helper_apps_are_made_safe() {
 fn status_is_a_short_list_or_says_the_helper_is_silent() {
     let shown = show(
         View::Status,
-        json!({"ok": true, "user": {"name": "understudy"}, "session": {"onConsole": false},
+        json!({"ok": true, "user": {"name": "atlas"}, "session": {"onConsole": false},
                "display": {"width": 2560.0, "height": 1440.0},
                "permissions": {"screenCapture": true, "accessibility": false},
                "inputService": {"ok": true, "ready": true}, "daemon": {"version": "0.1.0"}}),
     );
-    assert!(shown.out.contains("understudy · in the background"));
+    assert!(shown.out.contains("atlas · in the background"));
     assert!(shown.out.contains("Screen Recording ✓  Accessibility ✗"));
     assert!(shown.out.contains("Input     ready"));
     let silent = show(
@@ -247,13 +247,9 @@ fn status_is_a_short_list_or_says_the_helper_is_silent() {
 fn config_names_the_settings_file() {
     let shown = show(
         View::Config,
-        json!({"ok": true, "path": "/etc/understudy.toml", "config": {"helper_uid": 502}}),
+        json!({"ok": true, "path": "/etc/atlas.toml", "config": {"helper_uid": 502}}),
     );
-    assert!(
-        shown
-            .out
-            .starts_with("Settings        /etc/understudy.toml")
-    );
+    assert!(shown.out.starts_with("Settings        /etc/atlas.toml"));
 }
 
 #[test]
@@ -319,11 +315,7 @@ fn agent_changes_list_each_agent() {
         ]}),
     );
     assert!(shown.out.starts_with("✓ Claude Code connected"));
-    assert!(
-        shown
-            .out
-            .ends_with("New sessions know how to use Understudy.")
-    );
+    assert!(shown.out.ends_with("New sessions know how to use Atlas."));
     assert!(shown.err.starts_with("✗ Codex: not installed"));
 }
 
@@ -331,9 +323,9 @@ fn agent_changes_list_each_agent() {
 fn switching_lists_accounts_or_says_what_to_choose() {
     let list = show(
         View::Switch,
-        json!({"ok": true, "accounts": [{"name": "understudy", "realName": "Helper", "helper": true}]}),
+        json!({"ok": true, "accounts": [{"name": "atlas", "realName": "Helper", "helper": true}]}),
     );
-    assert!(list.out.contains("Helper  understudy  helper"));
+    assert!(list.out.contains("Helper  atlas    helper"));
     let none = show(View::Switch, json!({"ok": true, "accounts": []}));
     assert_eq!(none.out, "No other account to switch to.");
     let locked = show(
@@ -350,13 +342,13 @@ fn switching_lists_accounts_or_says_what_to_choose() {
 fn removal_and_login_read_as_sentences() {
     let removed = show(
         View::Uninstall,
-        json!({"ok": true, "kept": {"helperAccount": "understudy",
-                                     "remove": "sudo sysadminctl -deleteUser understudy"}}),
+        json!({"ok": true, "kept": {"helperAccount": "atlas",
+                                     "remove": "sudo sysadminctl -deleteUser atlas"}}),
     );
     assert!(
         removed
             .out
-            .contains("The helper account understudy is still here")
+            .contains("The helper account atlas is still here")
     );
     let on = show(
         View::Login,
@@ -383,11 +375,11 @@ fn readiness_marks_each_item() {
 #[test]
 fn a_fix_is_left_out_only_when_the_message_says_what_to_run() {
     console::set_colors_enabled(false);
-    // Naming the helper account (often "understudy") is not a fix.
-    let named = Error::new("switch", "No account named understudy to switch to");
+    // Naming the helper account (often "atlas") is not a fix.
+    let named = Error::new("switch", "No account named atlas to switch to");
     assert!(error(&named).contains("→ Use the Apple menu"));
-    let says = Error::new("init", "Run understudy init again.");
-    assert_eq!(error(&says), "✗ Run understudy init again.");
+    let says = Error::new("init", "Run atlas init again.");
+    assert_eq!(error(&says), "✗ Run atlas init again.");
     let stopped = Error::new("cancelled", "Stopped.");
     assert_eq!(error(&stopped), "– Stopped.");
 }
@@ -405,7 +397,7 @@ fn environment_steps_say_what_changes_and_what_comes_next() {
     assert!(
         preview
             .out
-            .ends_with(&format!("To copy: understudy environment apply {id}"))
+            .ends_with(&format!("To copy: atlas environment apply {id}"))
     );
     let applied = show(
         View::Environment,
@@ -413,9 +405,11 @@ fn environment_steps_say_what_changes_and_what_comes_next() {
                "transactionId": id, "files": [{"operation": "create", "target": "Notes/note.txt"}]}),
     );
     assert!(applied.out.starts_with("✓ Copied into the helper"));
-    assert!(applied.out.ends_with(&format!(
-        "To undo: understudy environment rollback {id} --apply"
-    )));
+    assert!(
+        applied
+            .out
+            .ends_with(&format!("To undo: atlas environment rollback {id} --apply"))
+    );
     let undone = show(
         View::Environment,
         json!({"ok": true, "rolledBack": true, "transactionId": id,
@@ -427,9 +421,22 @@ fn environment_steps_say_what_changes_and_what_comes_next() {
         json!({"ok": false, "applied": false, "transactionId": id,
                "files": [{"operation": "conflict", "target": "Notes/note.txt"}]}),
     );
+    assert!(conflict.err.starts_with(
+        "✗ Nothing was copied: 1 file in the helper already exists or changed there since Atlas copied it."
+    ));
+    let stopped = show(
+        View::Environment,
+        json!({"ok": false, "error": "Disk full", "phase": "applying", "resumeRequired": true,
+               "transactionId": id, "files": [{"operation": "create", "target": "a"}]}),
+    );
     assert!(
-        conflict
+        stopped
             .err
-            .starts_with("✗ 1 file changed in the helper since Understudy last copied it")
+            .starts_with("✗ Copying stopped part way: Disk full")
+    );
+    assert!(
+        stopped
+            .err
+            .ends_with(&format!("To finish: atlas environment apply {id}"))
     );
 }

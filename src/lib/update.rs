@@ -1,4 +1,4 @@
-//! `understudy update`: replace the installed Understudy.app with the latest
+//! `atlas update`: replace the installed Atlas.app with the latest
 //! release after the same checks as install.sh — checksum, signature, the
 //! Developer ID requirement and notarization — swapping by rename so a
 //! running helper daemon never sees a half-written executable.
@@ -15,7 +15,7 @@ use std::{
     process::Command,
 };
 
-const REPO: &str = "InsaneArts/understudy";
+const REPO: &str = "InsaneArts/atlas";
 
 /// Where releases come from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,9 +27,9 @@ pub enum Source {
 }
 
 impl Source {
-    /// The mirror in `UNDERSTUDY_DOWNLOAD_BASE`, else GitHub.
+    /// The mirror in `ATLAS_DOWNLOAD_BASE`, else GitHub.
     pub fn from_env(tag: Option<String>) -> Self {
-        match std::env::var("UNDERSTUDY_DOWNLOAD_BASE") {
+        match std::env::var("ATLAS_DOWNLOAD_BASE") {
             Ok(base) if !base.is_empty() => Self::Mirror(base.trim_end_matches('/').to_owned()),
             _ => Self::GitHub { tag },
         }
@@ -40,12 +40,11 @@ fn problem(message: impl Into<String>) -> Error {
     Error::new("update", message)
 }
 
-/// The Understudy.app this executable belongs to.
+/// The Atlas.app this executable belongs to.
 pub fn installed_app() -> Result<PathBuf> {
     let executable = std::env::current_exe().and_then(fs::canonicalize)?;
-    app_of(&executable).ok_or_else(|| {
-        problem("This understudy is not inside Understudy.app; install it with install.sh")
-    })
+    app_of(&executable)
+        .ok_or_else(|| problem("This atlas is not inside Atlas.app; install it with install.sh"))
 }
 
 /// The app bundle `executable` is the main executable of, if any.
@@ -56,9 +55,9 @@ pub(crate) fn app_of(executable: &Path) -> Option<PathBuf> {
         .then(|| app.to_owned())
 }
 
-/// The version in a release archive's name, `Understudy-X.Y.Z-macos.zip`.
+/// The version in a release archive's name, `Atlas-X.Y.Z-macos.zip`.
 fn archive_version(name: &str) -> Option<Vec<u64>> {
-    name.strip_prefix("Understudy-")?
+    name.strip_prefix("Atlas-")?
         .strip_suffix("-macos.zip")?
         .split('.')
         .map(|part| part.parse().ok())
@@ -111,7 +110,7 @@ fn check(program: &str, args: &[&std::ffi::OsStr], why: &str) -> Result<()> {
 /// A private scratch directory for one update.
 fn scratch() -> Result<PathBuf> {
     let path = crate::config::home()?
-        .join("Library/Caches/Understudy")
+        .join("Library/Caches/Atlas")
         .join(format!("update-{}", crate::control::token()));
     fs::DirBuilder::new()
         .recursive(true)
@@ -133,7 +132,7 @@ fn download(source: &Source, work: &Path) -> Result<String> {
                 .and_then(|line| line.split_whitespace().nth(1))
                 .filter(|name| !name.contains('/') && archive_version(name).is_some())
                 .map(str::to_owned)
-                .ok_or_else(|| problem("SHA256SUMS does not name an Understudy archive"))?;
+                .ok_or_else(|| problem("SHA256SUMS does not name an Atlas archive"))?;
             curl(&format!("{base}/{name}"), &work.join(&name), "*/*", None)?;
             Ok(name)
         }
@@ -168,7 +167,7 @@ fn download(source: &Source, work: &Path) -> Result<String> {
             let (_, sums_url) = asset(&|name| name == "SHA256SUMS")
                 .ok_or_else(|| problem("The release has no SHA256SUMS"))?;
             let (name, url) = asset(&|name| archive_version(name).is_some())
-                .ok_or_else(|| problem("The release has no Understudy archive"))?;
+                .ok_or_else(|| problem("The release has no Atlas archive"))?;
             let octets = "application/octet-stream";
             curl(&sums_url, &sums, octets, token.as_deref())?;
             curl(&url, &work.join(&name), octets, token.as_deref())?;
@@ -201,7 +200,7 @@ fn verify(work: &Path, name: &str, allow_unnotarized: bool) -> Result<PathBuf> {
         ],
         "The archive could not be unpacked",
     )?;
-    let app = unpacked.join("Understudy.app");
+    let app = unpacked.join("Atlas.app");
     check(
         "/usr/bin/codesign",
         &[
@@ -212,10 +211,8 @@ fn verify(work: &Path, name: &str, allow_unnotarized: bool) -> Result<PathBuf> {
         ],
         "The app's signature is invalid",
     )?;
-    if !setup::developer_id(&app.join("Contents/MacOS/understudy")) {
-        return Err(problem(
-            "The app is not Understudy signed by its Developer ID",
-        ));
+    if !setup::developer_id(&app.join("Contents/MacOS/atlas")) {
+        return Err(problem("The app is not Atlas signed by its Developer ID"));
     }
     let notarized = check(
         "/usr/sbin/spctl",
@@ -254,7 +251,7 @@ fn exchange(first: &Path, second: &Path) -> Result<()> {
 
 /// Where an unfinished update is recorded until the helper is on it.
 fn record_path() -> Result<PathBuf> {
-    Ok(crate::config::home()?.join("Library/Application Support/Understudy/update.json"))
+    Ok(crate::config::home()?.join("Library/Application Support/Atlas/update.json"))
 }
 
 /// The update whose helper handover has not completed, if any.
@@ -287,7 +284,7 @@ fn swap(new: &Path, installed: &Path, name: &str) -> Result<()> {
     let parent = installed
         .parent()
         .ok_or_else(|| problem("The installed app has no parent directory"))?;
-    let staged = parent.join(format!(".Understudy.app.{}", crate::control::token()));
+    let staged = parent.join(format!(".Atlas.app.{}", crate::control::token()));
     check(
         "/usr/bin/ditto",
         &[new.as_os_str(), staged.as_os_str()],
@@ -329,9 +326,9 @@ pub fn install(source: &Source, allow_unnotarized: bool, force: bool) -> Result<
     if let Some(record) = unfinished()? {
         return Ok(json!({"ok": true, "updated": true, "resumed": true, "record": record}));
     }
-    if !reachable_by_others(&installed.join("Contents/MacOS/understudy")) {
+    if !reachable_by_others(&installed.join("Contents/MacOS/atlas")) {
         return Err(problem(
-            "Understudy.app must be where the helper account can run it: install it in /Applications",
+            "Atlas.app must be where the helper account can run it: install it in /Applications",
         ));
     }
     let work = scratch()?;
@@ -368,31 +365,29 @@ mod tests {
     #[test]
     fn archives_name_their_version() {
         assert_eq!(
-            archive_version("Understudy-0.10.2-macos.zip"),
+            archive_version("Atlas-0.10.2-macos.zip"),
             Some(vec![0, 10, 2])
         );
-        assert_eq!(archive_version("Understudy-x-macos.zip"), None);
+        assert_eq!(archive_version("Atlas-x-macos.zip"), None);
         assert_eq!(archive_version("SHA256SUMS"), None);
-        assert!(archive_version("Understudy-0.10.0-macos.zip").unwrap() > version("0.9.9"));
+        assert!(archive_version("Atlas-0.10.0-macos.zip").unwrap() > version("0.9.9"));
     }
 
     #[test]
     fn only_an_app_executable_belongs_to_an_app() {
         assert_eq!(
-            app_of(Path::new(
-                "/Applications/Understudy.app/Contents/MacOS/understudy"
-            )),
-            Some(PathBuf::from("/Applications/Understudy.app"))
+            app_of(Path::new("/Applications/Atlas.app/Contents/MacOS/atlas")),
+            Some(PathBuf::from("/Applications/Atlas.app"))
         );
-        assert_eq!(app_of(Path::new("/usr/local/bin/understudy")), None);
-        assert_eq!(app_of(Path::new("/x/Contents/MacOS/understudy")), None);
+        assert_eq!(app_of(Path::new("/usr/local/bin/atlas")), None);
+        assert_eq!(app_of(Path::new("/x/Contents/MacOS/atlas")), None);
     }
 
     #[test]
     fn an_exchange_swaps_both_apps_in_one_step() {
         let dir = tempfile::tempdir().unwrap();
-        let installed = dir.path().join("Understudy.app");
-        let new = dir.path().join(".Understudy.app.new");
+        let installed = dir.path().join("Atlas.app");
+        let new = dir.path().join(".Atlas.app.new");
         fs::create_dir_all(&installed).unwrap();
         fs::write(installed.join("version"), "old").unwrap();
         fs::create_dir_all(&new).unwrap();
@@ -419,7 +414,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let private = dir.path().join("home");
-        let file = private.join("Applications/understudy");
+        let file = private.join("Applications/atlas");
         fs::create_dir_all(file.parent().unwrap()).unwrap();
         fs::write(&file, b"").unwrap();
         fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).unwrap();

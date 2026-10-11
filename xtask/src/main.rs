@@ -1,4 +1,4 @@
-//! Release tooling. `cargo xtask dist` builds Understudy.app for both Mac
+//! Release tooling. `cargo xtask dist` builds Atlas.app for both Mac
 //! architectures, signs it inside out with a Developer ID, checks it against
 //! the same requirement setup enforces, optionally notarizes and staples it,
 //! and writes a zip with its SHA-256 sum.
@@ -10,8 +10,8 @@ use std::{
 };
 
 /// The bundle identifier; consent follows it with the signing team.
-const IDENTIFIER: &str = "com.insanearts.understudy";
-const COMPANION: &str = "UnderstudyBar";
+const IDENTIFIER: &str = "com.insanearts.atlas";
+const COMPANION: &str = "AtlasBar";
 /// The oldest macOS the app runs on, for every slice and the Info.plist.
 const MINIMUM_MACOS: &str = "14.0";
 /// Rust triple and architecture for one universal build.
@@ -20,9 +20,9 @@ const TARGETS: [(&str, &str); 2] = [
     ("x86_64-apple-darwin", "x86_64"),
 ];
 /// The menu bar's login agent, bundled in the app.
-const MENUBAR: &str = "com.insanearts.understudy.menubar";
+const MENUBAR: &str = "com.insanearts.atlas.menubar";
 /// Beside an app this tool published, so it never replaces anything else.
-const MARKER: &str = ".understudy-dist";
+const MARKER: &str = ".atlas-dist";
 const USAGE: &str = "usage: cargo xtask dist --sign IDENTITY [--notarize PROFILE] [--out DIR]
 
   --sign IDENTITY     Developer ID Application identity to sign with
@@ -135,11 +135,11 @@ fn info_plist(version: &str) -> String {
 	<key>CFBundleIdentifier</key>
 	<string>{IDENTIFIER}</string>
 	<key>CFBundleName</key>
-	<string>Understudy</string>
+	<string>Atlas</string>
 	<key>CFBundleDisplayName</key>
-	<string>Understudy</string>
+	<string>Atlas</string>
 	<key>CFBundleExecutable</key>
-	<string>understudy</string>
+	<string>atlas</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundlePackageType</key>
@@ -195,7 +195,7 @@ fn version(text: &str) -> Vec<u32> {
         .collect()
 }
 
-/// The menu bar's LaunchAgent: `understudy menubar` from inside the app,
+/// The menu bar's LaunchAgent: `atlas menubar` from inside the app,
 /// started at login once the person turns on "Open at Login". Quitting it
 /// keeps it quit until the next login.
 fn menubar_agent() -> String {
@@ -207,10 +207,10 @@ fn menubar_agent() -> String {
 	<key>Label</key>
 	<string>{MENUBAR}</string>
 	<key>BundleProgram</key>
-	<string>Contents/MacOS/understudy</string>
+	<string>Contents/MacOS/atlas</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>understudy</string>
+		<string>atlas</string>
 		<string>menubar</string>
 	</array>
 	<key>AssociatedBundleIdentifiers</key>
@@ -254,9 +254,9 @@ fn publishable(out: &Path) -> Result<()> {
     if resolved == Path::new("/Applications") || resolved == Path::new(&home).join("Applications") {
         return Err("--out must be a build directory, not an Applications folder".into());
     }
-    if out.join("Understudy.app").exists() && !out.join(MARKER).exists() {
+    if out.join("Atlas.app").exists() && !out.join(MARKER).exists() {
         return Err(format!(
-            "{} holds an Understudy.app this tool did not build; choose another --out",
+            "{} holds an Atlas.app this tool did not build; choose another --out",
             out.display()
         ));
     }
@@ -277,11 +277,11 @@ fn exchange(first: &Path, second: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Put the verified `staged` app at `out/Understudy.app`. The marker is
+/// Put the verified `staged` app at `out/Atlas.app`. The marker is
 /// written first and the previous app is exchanged atomically, so an
 /// interruption never leaves the output without an app this tool owns.
 fn publish(staged: &Path, out: &Path) -> Result<PathBuf> {
-    let app = out.join("Understudy.app");
+    let app = out.join("Atlas.app");
     fs::write(out.join(MARKER), "Built by cargo xtask dist\n")
         .map_err(|error| error.to_string())?;
     if app.exists() {
@@ -296,7 +296,7 @@ fn publish(staged: &Path, out: &Path) -> Result<PathBuf> {
 
 fn dist(options: &Options) -> Result<()> {
     let root = root();
-    let version = understudy::VERSION;
+    let version = atlas::VERSION;
     publishable(&options.out)?;
     // A fresh staging directory per run; nothing is published until verified.
     let stage = options.out.join(format!("stage/{}", std::process::id()));
@@ -317,9 +317,9 @@ fn dist(options: &Options) -> Result<()> {
                 "--manifest-path",
                 text(&manifest)?,
                 "--package",
-                "understudy",
+                "atlas",
                 "--bin",
-                "understudy",
+                "atlas",
                 "--release",
                 "--locked",
                 "--target",
@@ -328,7 +328,7 @@ fn dist(options: &Options) -> Result<()> {
                 text(&target_dir)?,
             ],
         )?;
-        cli.push(target_dir.join(format!("{rust}/release/understudy")));
+        cli.push(target_dir.join(format!("{rust}/release/atlas")));
     }
     // The menu bar package, for both architectures in one build.
     let package = root.join("menubar");
@@ -345,13 +345,13 @@ fn dist(options: &Options) -> Result<()> {
         &[swift.as_slice(), &["--show-bin-path"]].concat(),
     )?;
     let companion = PathBuf::from(bin.trim()).join(COMPANION);
-    let app = stage.join("Understudy.app");
+    let app = stage.join("Atlas.app");
     let macos = app.join("Contents/MacOS");
     fs::create_dir_all(&macos).map_err(|error| error.to_string())?;
     fs::create_dir_all(app.join("Contents/Resources")).map_err(|error| error.to_string())?;
     fs::write(app.join("Contents/Info.plist"), info_plist(version))
         .map_err(|error| error.to_string())?;
-    universal(&cli, &macos.join("understudy"))?;
+    universal(&cli, &macos.join("atlas"))?;
     fs::copy(&companion, macos.join(COMPANION)).map_err(|error| error.to_string())?;
     check_universal(&macos.join(COMPANION))?;
     // The app icon, drawn by menubar/Resources/AppIcon.swift.
@@ -375,7 +375,7 @@ fn dist(options: &Options) -> Result<()> {
         .map_err(|error| error.to_string())?;
 
     // Inside out: the companion carries its own identifier, then the app
-    // (whose main executable is the consented `understudy`) seals it.
+    // (whose main executable is the consented `atlas`) seals it.
     let sign = |identifier: Option<&str>, path: &Path| -> Result<()> {
         let mut args = vec!["--force", "--options", "runtime", "--timestamp"];
         if let Some(identifier) = identifier {
@@ -390,7 +390,7 @@ fn dist(options: &Options) -> Result<()> {
         "/usr/bin/codesign",
         &["--verify", "--strict", "--deep", text(&app)?],
     )?;
-    if !understudy::setup::developer_id(&macos.join("understudy")) {
+    if !atlas::setup::developer_id(&macos.join("atlas")) {
         return Err(
             "the app does not satisfy setup's Developer ID requirement (identity and team)".into(),
         );
@@ -424,7 +424,7 @@ fn dist(options: &Options) -> Result<()> {
     // Verified (and notarized when asked): only now replace the previous build.
     let app = publish(&app, &options.out)?;
     let _ = fs::remove_dir_all(&stage);
-    let name = format!("Understudy-{version}-macos.zip");
+    let name = format!("Atlas-{version}-macos.zip");
     let zip = options.out.join(&name);
     let _ = fs::remove_file(&zip);
     exec(
@@ -492,18 +492,18 @@ mod tests {
     fn output_directories_never_hold_apps_this_tool_did_not_build() {
         let dir = std::env::temp_dir().join(format!("xtask-out-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(dir.join("Understudy.app")).unwrap();
+        fs::create_dir_all(dir.join("Atlas.app")).unwrap();
         assert!(publishable(&dir).unwrap_err().contains("did not build"));
         fs::write(dir.join(MARKER), "").unwrap();
         assert!(publishable(&dir).is_ok());
         assert!(publishable(Path::new("/Applications")).is_err());
-        let staged = dir.join("stage/1/Understudy.app");
+        let staged = dir.join("stage/1/Atlas.app");
         fs::create_dir_all(&staged).unwrap();
         fs::write(staged.join("new"), "").unwrap();
         let app = publish(&staged, &dir).unwrap();
         assert!(app.join("new").exists());
         assert!(!staged.exists(), "the previous build is cleared");
-        let again = dir.join("stage/2/Understudy.app");
+        let again = dir.join("stage/2/Atlas.app");
         fs::create_dir_all(&again).unwrap();
         fs::write(again.join("newer"), "").unwrap();
         let app = publish(&again, &dir).unwrap();
@@ -524,9 +524,9 @@ mod tests {
         .unwrap();
         fs::remove_dir_all(&dir).unwrap();
         for expected in [
-            r#""Label":"com.insanearts.understudy.menubar""#,
-            r#""BundleProgram":"Contents\/MacOS\/understudy""#,
-            r#""ProgramArguments":["understudy","menubar"]"#,
+            r#""Label":"com.insanearts.atlas.menubar""#,
+            r#""BundleProgram":"Contents\/MacOS\/atlas""#,
+            r#""ProgramArguments":["atlas","menubar"]"#,
             r#""RunAtLoad":true"#,
         ] {
             assert!(json.contains(expected), "{expected} in {json}");
@@ -551,8 +551,8 @@ mod tests {
             "the icon the plist names is checked in"
         );
         for expected in [
-            r#""CFBundleIdentifier":"com.insanearts.understudy""#,
-            r#""CFBundleExecutable":"understudy""#,
+            r#""CFBundleIdentifier":"com.insanearts.atlas""#,
+            r#""CFBundleExecutable":"atlas""#,
             r#""CFBundleIconFile":"AppIcon""#,
             r#""CFBundleShortVersionString":"1.2.3""#,
             r#""LSUIElement":true"#,

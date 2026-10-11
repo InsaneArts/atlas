@@ -98,10 +98,20 @@ pub fn valid_key(value: &str) -> bool {
         return false;
     }
     let lower = value.to_lowercase();
-    let mut parts: Vec<_> = lower.split('+').collect();
-    let mut key = parts.pop().unwrap_or_default();
-    if key.is_empty() && !parts.is_empty() {
-        key = "=";
+    // "cmd++" is the plus key, on the = key; a chord ending in a bare "+"
+    // ("cmd+") names no key at all.
+    let (chord, plus) = match lower.strip_suffix("++") {
+        Some(rest) => (rest, true),
+        None => (lower.as_str(), false),
+    };
+    let mut parts: Vec<_> = chord.split('+').collect();
+    let key = if plus {
+        "="
+    } else {
+        parts.pop().unwrap_or_default()
+    };
+    if plus && parts.iter().any(|part| part.is_empty()) {
+        return false;
     }
     let printable =
         key.len() == 1 && "abcdefghijklmnopqrstuvwxyz0123456789=-][;'\\,/`.".contains(key);
@@ -201,4 +211,27 @@ pub fn validate(value: &Value, display: &Display) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keys_are_named_or_refused() {
+        for key in [
+            "cmd+s",
+            "return",
+            "cmd+shift+z",
+            "f5",
+            "cmd++",
+            "ctrl+alt+delete",
+            "=",
+        ] {
+            assert!(valid_key(key), "{key}");
+        }
+        for key in ["foo", "cmd+zz", "cmd+", "+", "cmd+bogus+s", "f13", ""] {
+            assert!(!valid_key(key), "{key}");
+        }
+    }
 }

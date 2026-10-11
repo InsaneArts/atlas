@@ -1,7 +1,7 @@
-//! The macOS menu bar companion: the Swift package in menubar/. Understudy.app
+//! The macOS menu bar companion: the Swift package in menubar/. Atlas.app
 //! ships it signed beside this executable; a development checkout builds the
 //! package with SwiftPM. It renders the local viewer's status and frame and
-//! runs `understudy` commands; it reaches nothing else. The capability URL
+//! runs `atlas` commands; it reaches nothing else. The capability URL
 //! travels on its stdin, never in argv, and closing stdin makes it quit.
 use crate::error::{Error, Result};
 use std::{
@@ -15,11 +15,11 @@ use tokio::{
     process::{Child, ChildStdin, Command},
 };
 
-const NAME: &str = "UnderstudyBar";
+const NAME: &str = "AtlasBar";
 
-/// The login agent that runs `understudy menubar` (see xtask); launchd names
+/// The login agent that runs `atlas menubar` (see xtask); launchd names
 /// the job in XPC_SERVICE_NAME.
-const LOGIN_JOB: &str = "com.insanearts.understudy.menubar";
+const LOGIN_JOB: &str = "com.insanearts.atlas.menubar";
 
 /// Whether this process is the menu bar's login agent, which serves the
 /// menu bar itself rather than starting it.
@@ -29,7 +29,9 @@ pub fn started_at_login() -> bool {
 
 /// Start the menu bar in its own session, so it keeps running after this
 /// terminal closes, and report once it is up. It quits from its own menu.
-pub async fn start(config: &Path, port: u16, record: &Path) -> Result<()> {
+/// One start runs at a time; a start that fails is stopped, never left
+/// half-running.
+pub async fn start(config: &Path, port: u16, output: &Path) -> Result<()> {
     let say = |already: bool, pid: serde_json::Value| -> Result<()> {
         if crate::ui::human() {
             let what = if already {
@@ -38,7 +40,7 @@ pub async fn start(config: &Path, port: u16, record: &Path) -> Result<()> {
                 "is running"
             };
             println!(
-                "{} The menu bar {what}. Click the U at the top of the screen; quit it from its menu.",
+                "{} The menu bar {what}. Click the A at the top of the screen; quit it from its menu.",
                 crate::ui::style::ok()
             );
         } else {
@@ -51,10 +53,12 @@ pub async fn start(config: &Path, port: u16, record: &Path) -> Result<()> {
         }
         Ok(())
     };
-    if let Some(running) = crate::viewer::running(record, port).filter(|r| r["menubar"] == true) {
+    let record = output.join(crate::viewer::MENUBAR_RECORD);
+    let _starting = starting(&output.join("menubar.lock")).await?;
+    if let Some(running) = crate::viewer::running(&record, port) {
         return say(true, running["pid"].clone());
     }
-    let log_path = record.with_file_name("menubar.log");
+    let log_path = output.join("menubar.log");
     let log = fs::File::create(&log_path)?;
     let mut child = std::process::Command::new(std::env::current_exe()?)
         .arg("menubar")
@@ -63,7 +67,7 @@ pub async fn start(config: &Path, port: u16, record: &Path) -> Result<()> {
         .arg(port.to_string())
         .arg("--config")
         .arg(fs::canonicalize(config)?)
-        .env("UNDERSTUDY_JSON", "1")
+        .env("ATLAS_JSON", "1")
         .stdin(Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log)
@@ -72,17 +76,7 @@ pub async fn start(config: &Path, port: u16, record: &Path) -> Result<()> {
     let deadline = std::time::Instant::now() + Duration::from_secs(20);
     loop {
         if let Some(status) = child.try_wait()? {
-            // It stopped: either another menu bar already holds the port
-            // (a success), or it could not start and said why.
-            let said = fs::read_to_string(&log_path).unwrap_or_default();
-            let reply = said.rsplit("\n{").next().and_then(|tail| {
-                let text = if tail.starts_with('{') {
-                    tail.to_owned()
-                } else {
-                    format!("{{{tail}")
-                };
-                serde_json::from_str::<serde_json::Value>(&text).ok()
-            });
+            let reply = last_reply(&log_path);
             if status.success()
                 && reply
                     .as_ref()
@@ -93,26 +87,37 @@ pub async fn start(config: &Path, port: u16, record: &Path) -> Result<()> {
                     reply.map(|reply| reply["pid"].clone()).unwrap_or_default(),
                 );
             }
-            let reason = reply
-                .as_ref()
-                .and_then(|reply| reply["error"].as_str().map(str::to_owned))
-                .unwrap_or_else(|| format!("it stopped; see {}", log_path.display()));
             let code = reply
                 .as_ref()
                 .and_then(|reply| reply["code"].as_str())
                 .and_then(crate::error::code)
                 .unwrap_or("menubar");
+            // The login item may have taken the port a moment before its
+            // record appears: give it a few seconds.
+            if code == "port-in-use" {
+                for _ in 0..25 {
+                    if let Some(running) = crate::viewer::running(&record, port) {
+                        return say(true, running["pid"].clone());
+                    }
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            }
+            let reason = reply
+                .as_ref()
+                .and_then(|reply| reply["error"].as_str().map(str::to_owned))
+                .unwrap_or_else(|| format!("it stopped; see {}", log_path.display()));
             return Err(Error::new(
                 code,
                 format!("The menu bar did not start: {reason}"),
             ));
         }
-        let up = crate::viewer::running(record, port)
-            .is_some_and(|running| running["pid"] == pid && running["menubar"] == true);
-        if up {
+        if crate::viewer::running(&record, port).is_some_and(|running| running["pid"] == pid) {
             return say(false, pid.into());
         }
         if std::time::Instant::now() >= deadline {
+            // Never leave a half-started menu bar behind.
+            let _ = child.kill();
+            let _ = child.wait();
             return Err(Error::new(
                 "menubar",
                 format!(
@@ -123,6 +128,91 @@ pub async fn start(config: &Path, port: u16, record: &Path) -> Result<()> {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+/// Hold the menu bar's start lock, waiting up to 30 seconds for another start.
+async fn starting(path: &Path) -> Result<fs::File> {
+    use fs2::FileExt;
+    use std::os::unix::fs::OpenOptionsExt;
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .mode(0o600)
+        .open(path)?;
+    for _ in 0..300 {
+        if lock.try_lock_exclusive().is_ok() {
+            return Ok(lock);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    Err(Error::new(
+        "busy",
+        "Another menu bar start is still running",
+    ))
+}
+
+/// The last JSON reply the serving process wrote to its log.
+fn last_reply(log: &Path) -> Option<serde_json::Value> {
+    let said = fs::read_to_string(log).ok()?;
+    let start = said
+        .rfind("\n{")
+        .map(|at| at + 1)
+        .or_else(|| said.find('{'))?;
+    serde_json::from_str(said[start..].trim()).ok()
+}
+
+/// Stop a running menu bar (as `uninstall` and `update` must): the port it
+/// was serving, so it can be started again there. Only a process that is
+/// Atlas itself is signalled; a stale record naming anything else is not.
+pub fn stop(output: &Path) -> Option<u16> {
+    let record = output.join(crate::viewer::MENUBAR_RECORD);
+    let port = fs::read(&record)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|record| {
+            let url = record["url"]
+                .as_str()?
+                .strip_prefix("http://127.0.0.1:")?
+                .to_owned();
+            url.split('/').next()?.parse::<u16>().ok()
+        })?;
+    let running = crate::viewer::running(&record, port)?;
+    let pid = running["pid"]
+        .as_i64()
+        .and_then(|pid| i32::try_from(pid).ok())?;
+    if !is_atlas(pid) {
+        return None;
+    }
+    let pid = nix::unistd::Pid::from_raw(pid);
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGINT).ok()?;
+    for _ in 0..50 {
+        if nix::sys::signal::kill(pid, None).is_err() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    Some(port)
+}
+
+/// Whether process `pid` runs an executable named like this one (`atlas`).
+fn is_atlas(pid: i32) -> bool {
+    let Some(name) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.file_name().map(|name| name.to_owned()))
+    else {
+        return false;
+    };
+    std::process::Command::new("/bin/ps")
+        .args(["-o", "comm=", "-p", &pid.to_string()])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .is_some_and(|output| {
+            let command = String::from_utf8_lossy(&output.stdout);
+            Path::new(command.trim()).file_name() == Some(name.as_os_str())
+        })
 }
 
 /// The first non-empty line of compiler output, bounded for reports.
@@ -136,7 +226,7 @@ fn first_line(output: &[u8]) -> String {
         .collect()
 }
 
-/// The companion shipped beside `executable` in Understudy.app, if this is
+/// The companion shipped beside `executable` in Atlas.app, if this is
 /// the app's executable and it is there as a regular file.
 fn bundled(executable: &Path) -> Option<PathBuf> {
     let directory = executable.parent()?;
@@ -151,7 +241,7 @@ fn development() -> Result<PathBuf> {
     if !package.join("Package.swift").is_file() {
         return Err(Error::new(
             "menubar",
-            "Run the menu bar from Understudy.app; install it with install.sh",
+            "Run the menu bar from Atlas.app; install it with install.sh",
         ));
     }
     let swift = |args: &[&str]| {
@@ -180,7 +270,7 @@ fn development() -> Result<PathBuf> {
     Ok(Path::new(&directory).join(NAME))
 }
 
-/// The companion executable: the signed one shipped in Understudy.app, or in
+/// The companion executable: the signed one shipped in Atlas.app, or in
 /// a development checkout the package built here.
 pub fn executable() -> Result<PathBuf> {
     if let Some(companion) = std::env::current_exe()
@@ -190,11 +280,11 @@ pub fn executable() -> Result<PathBuf> {
         .and_then(bundled)
     {
         // It receives the viewer's private URL: run only the companion
-        // Understudy signed, never a file merely placed there.
+        // Atlas signed, never a file merely placed there.
         if !crate::setup::companion_signed(&companion) {
             return Err(Error::new(
                 "menubar",
-                "The menu bar companion in Understudy.app is not signed by Understudy",
+                "The menu bar companion in Atlas.app is not signed by Atlas",
             ));
         }
         return Ok(companion);
@@ -203,14 +293,41 @@ pub fn executable() -> Result<PathBuf> {
 }
 
 /// Turn "Open at Login" `on` or `off`, or report its `status`; only the
-/// companion (as part of Understudy.app) can register its login agent.
+/// companion (as part of Atlas.app) can register its login agent.
 pub fn login(state: &str) -> Result<serde_json::Value> {
     let output = std::process::Command::new(executable()?)
         .args(["--login", state])
         .stdin(Stdio::null())
         .output()?;
-    serde_json::from_slice(&output.stdout)
-        .map_err(|_| Error::new("menubar", "The menu bar did not report its login item"))
+    let reply: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|_| Error::new("menubar", "The menu bar did not report its login item"))?;
+    // Turning it on or off is the person's choice, and init keeps it.
+    if state != "status" && reply["ok"] == true {
+        decide_login();
+    }
+    Ok(reply)
+}
+
+/// Where the decision about opening at login is remembered.
+fn login_record() -> Option<PathBuf> {
+    crate::config::home()
+        .ok()
+        .map(|home| home.join("Library/Application Support/Atlas/menubar-login"))
+}
+
+/// Whether opening the menu bar at login was decided (by init or the person).
+pub fn login_decided() -> bool {
+    login_record().is_some_and(|path| path.exists())
+}
+
+/// Remember that opening at login was decided.
+pub fn decide_login() {
+    if let Some(path) = login_record() {
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let _ = fs::write(path, b"decided\n");
+    }
 }
 
 /// The companion to run, and the configuration its commands must use.
@@ -230,13 +347,13 @@ impl Program {
 }
 
 /// Start the companion with `args` and hand it the URL on stdin. Its
-/// commands run this very `understudy` with this configuration.
+/// commands run this very `atlas` with this configuration.
 async fn spawn(program: &Program, url: &str, args: &[&str]) -> Result<(Child, ChildStdin)> {
     let cli = std::env::current_exe().and_then(fs::canonicalize)?;
     let mut child = Command::new(&program.executable)
         .args(args)
-        .env("UNDERSTUDY_CLI", cli)
-        .env("UNDERSTUDY_CONFIG", &program.config)
+        .env("ATLAS_CLI", cli)
+        .env("ATLAS_CONFIG", &program.config)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .kill_on_drop(true)
@@ -304,7 +421,7 @@ mod tests {
 
     #[test]
     fn the_url_arrives_on_stdin_never_in_argv() {
-        let main = include_str!("../../menubar/Sources/UnderstudyBar/main.swift");
+        let main = include_str!("../../menubar/Sources/AtlasBar/main.swift");
         assert!(
             main.contains("guard let line = readLine(), let viewer = Viewer(line)"),
             "the URL arrives on stdin"
@@ -315,20 +432,16 @@ mod tests {
     #[test]
     fn the_app_ships_its_companion_beside_the_executable() {
         let dir = tempfile::tempdir().unwrap();
-        let macos = dir.path().join("Understudy.app/Contents/MacOS");
+        let macos = dir.path().join("Atlas.app/Contents/MacOS");
         fs::create_dir_all(&macos).unwrap();
-        let executable = macos.join("understudy");
+        let executable = macos.join("atlas");
         assert_eq!(bundled(&executable), None, "no companion yet");
         fs::write(macos.join(NAME), b"").unwrap();
         assert_eq!(bundled(&executable), Some(macos.join(NAME)));
         let loose = dir.path().join("bin");
         fs::create_dir_all(&loose).unwrap();
         fs::write(loose.join(NAME), b"").unwrap();
-        assert_eq!(
-            bundled(&loose.join("understudy")),
-            None,
-            "only inside the app"
-        );
+        assert_eq!(bundled(&loose.join("atlas")), None, "only inside the app");
         fs::remove_file(macos.join(NAME)).unwrap();
         std::os::unix::fs::symlink(loose.join(NAME), macos.join(NAME)).unwrap();
         assert_eq!(bundled(&executable), None, "never through a link");
@@ -336,7 +449,7 @@ mod tests {
             !crate::setup::companion_signed(&loose.join(NAME)),
             "an unsigned file is not the companion"
         );
-        let installed = Path::new("/Applications/Understudy.app/Contents/MacOS").join(NAME);
+        let installed = Path::new("/Applications/Atlas.app/Contents/MacOS").join(NAME);
         if installed.exists() {
             assert!(crate::setup::companion_signed(&installed));
         }

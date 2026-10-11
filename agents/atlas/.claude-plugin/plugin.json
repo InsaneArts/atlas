@@ -1,0 +1,8 @@
+{
+  "name": "atlas",
+  "version": "0.1.0",
+  "description": "Test and operate macOS GUI apps in a hidden second login, without touching the person's desktop; guides setup when Atlas is missing.",
+  "author": { "name": "InsaneArts" },
+  "homepage": "https://github.com/InsaneArts/atlas",
+  "keywords": ["macos", "gui", "testing", "screenshots", "automation"]
+}

@@ -1,11 +1,11 @@
 import AppKit
-import UnderstudyKit
+import AtlasKit
 
 /// Draw the panel and its menu bar glyph, as a person would see them, to a
 /// PNG at Retina scale. Used for visual checks without capturing the host
-/// screen. For design checks, `UNDERSTUDY_RENDER_PREVIEW=1` shows every
-/// action as on a set-up Mac, `UNDERSTUDY_RENDER_MODE` overrides the mode
-/// and `UNDERSTUDY_RENDER_MESSAGE` shows a feedback line.
+/// screen. For design checks, `ATLAS_RENDER_PREVIEW=1` shows every
+/// action as on a set-up Mac, `ATLAS_RENDER_MODE` overrides the mode
+/// and `ATLAS_RENDER_MESSAGE` shows a feedback line.
 public func render(viewer: Viewer, to path: String, appearance name: NSAppearance.Name) {
     let environment = ProcessInfo.processInfo.environment
     let panel = PanelController(viewer: viewer, commands: nil, loginItem: nil)
@@ -25,14 +25,14 @@ public func render(viewer: Viewer, to path: String, appearance name: NSAppearanc
     group.notify(queue: .main) {
         let appearance = NSAppearance(named: name)!
         var snapshot = status.map(Snapshot.init(status:)) ?? Snapshot()
-        if let mode = environment["UNDERSTUDY_RENDER_MODE"], !mode.isEmpty {
+        if let mode = environment["ATLAS_RENDER_MODE"], !mode.isEmpty {
             snapshot.mode = mode
         }
         let content = panel.view
         content.appearance = appearance
-        if environment["UNDERSTUDY_RENDER_PREVIEW"] == "1" { panel.preview() }
+        if environment["ATLAS_RENDER_PREVIEW"] == "1" { panel.preview() }
         panel.show(snapshot)
-        if let message = environment["UNDERSTUDY_RENDER_MESSAGE"], !message.isEmpty {
+        if let message = environment["ATLAS_RENDER_MESSAGE"], !message.isEmpty {
             panel.say(message)
         }
         panel.thumbnail.image = frame.flatMap(NSImage.init(data:))

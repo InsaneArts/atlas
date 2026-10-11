@@ -1,6 +1,6 @@
-//! `understudy agents`: connect Claude Code and Codex to Understudy. The
+//! `atlas agents`: connect Claude Code and Codex to Atlas. The
 //! plugin (a skill that teaches the agent, a setup skill, and a session-start
-//! status line) ships inside Understudy.app, so it always matches this CLI;
+//! status line) ships inside Atlas.app, so it always matches this CLI;
 //! connecting registers that folder as a local marketplace in each agent.
 use crate::{
     client::Client,
@@ -17,7 +17,7 @@ use std::{
 };
 
 /// The marketplace and plugin name in both agents.
-const NAME: &str = "understudy";
+const NAME: &str = "atlas";
 
 /// How long a question to an agent's tool may take, and a change to it.
 const ASK: Duration = Duration::from_secs(10);
@@ -27,7 +27,7 @@ fn problem(message: impl Into<String>) -> Error {
     Error::new("agents", message)
 }
 
-/// The agents Understudy can connect, and their command-line tools.
+/// The agents Atlas can connect, and their command-line tools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Agent {
     Claude,
@@ -90,20 +90,32 @@ impl Agent {
         }
     }
 
-    /// The tool's version, if it is installed.
-    fn version(self) -> Option<String> {
-        let output = exec(self, &["--version"], ASK).ok()?;
-        output
-            .status
-            .success()
-            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    /// Whether the tool is here: its version, or why it could not be asked.
+    fn presence(self) -> Presence {
+        match exec(self, &["--version"], ASK) {
+            Ok(output) if output.status.success() => {
+                Presence::Installed(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+            }
+            // Installed, but it did not answer in time.
+            Err(error) if error.code == "agents" => Presence::Silent(error.error),
+            _ => Presence::Missing,
+        }
     }
 
-    /// Whether the Understudy plugin is installed in this agent.
-    fn connected(self) -> Option<bool> {
-        let output = exec(self, &["plugin", "list", "--json"], ASK).ok()?;
-        let list: Value = serde_json::from_slice(&output.stdout).ok()?;
-        let plugins = match self {
+    /// Whether the Atlas plugin is installed in this agent (unknown when
+    /// its list cannot be read); an error when it does not answer.
+    fn connected(self) -> std::result::Result<Option<bool>, String> {
+        let output = match exec(self, &["plugin", "list", "--json"], ASK) {
+            Ok(output) => output,
+            Err(error) if error.code == "agents" => return Err(error.error),
+            Err(_) => return Ok(None),
+        };
+        Ok(Self::listed(&output.stdout, self))
+    }
+
+    fn listed(stdout: &[u8], agent: Agent) -> Option<bool> {
+        let list: Value = serde_json::from_slice(stdout).ok()?;
+        let plugins = match agent {
             Agent::Claude => list.as_array().cloned(),
             Agent::Codex => list["installed"].as_array().cloned(),
         }?;
@@ -114,7 +126,15 @@ impl Agent {
     }
 }
 
-/// The plugin marketplace shipped with this CLI: inside Understudy.app, or
+/// Whether an agent's tool is on this Mac.
+enum Presence {
+    Installed(String),
+    /// Installed, but it did not answer in time.
+    Silent(String),
+    Missing,
+}
+
+/// The plugin marketplace shipped with this CLI: inside Atlas.app, or
 /// in a development checkout its `agents/` folder.
 pub fn marketplace() -> Result<PathBuf> {
     if let Ok(app) = crate::update::installed_app() {
@@ -127,19 +147,61 @@ pub fn marketplace() -> Result<PathBuf> {
     checkout
         .is_dir()
         .then_some(checkout)
-        .ok_or_else(|| problem("This Understudy carries no agent plugin; reinstall it"))
+        .ok_or_else(|| problem("This Atlas carries no agent plugin; reinstall it"))
 }
 
 /// Run an agent's tool with no input and stop it after `limit`. Output is
 /// collected as it arrives, so a background process the tool leaves holding
-/// its output open cannot keep Understudy waiting.
+/// its output open cannot keep Atlas waiting.
+/// The process groups of agent tools running now.
+static RUNNING: Mutex<Vec<i32>> = Mutex::new(Vec::new());
+
+/// Stop every agent tool Atlas is running (Atlas itself is being stopped).
+pub fn stop_running() {
+    let groups = RUNNING
+        .lock()
+        .map(|groups| groups.clone())
+        .unwrap_or_default();
+    if groups.is_empty() {
+        return;
+    }
+    let signal = |signal| {
+        for group in &groups {
+            let _ = nix::sys::signal::killpg(nix::unistd::Pid::from_raw(*group), signal);
+        }
+    };
+    signal(nix::sys::signal::Signal::SIGTERM);
+    // A tool that ignores the request is stopped outright.
+    std::thread::sleep(Duration::from_millis(300));
+    signal(nix::sys::signal::Signal::SIGKILL);
+}
+
 fn exec(agent: Agent, argv: &[impl AsRef<std::ffi::OsStr>], limit: Duration) -> Result<Output> {
-    let mut child = Command::new(agent.name())
+    use std::os::unix::process::CommandExt;
+    // Its own process group, so a timeout stops whatever it started too.
+    let child = Command::new(agent.name())
         .args(argv)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .process_group(0)
         .spawn()?;
+    let group = i32::try_from(child.id()).ok();
+    if let (Some(group), Ok(mut running)) = (group, RUNNING.lock()) {
+        running.push(group);
+    }
+    let result = supervise(agent, child, limit);
+    if let (Some(group), Ok(mut running)) = (group, RUNNING.lock()) {
+        running.retain(|running| *running != group);
+    }
+    result
+}
+
+/// Wait for `child` within `limit`, collecting its output.
+fn supervise(agent: Agent, mut child: std::process::Child, limit: Duration) -> Result<Output> {
+    // Output is collected as it arrives, up to a limit (the rest is read
+    // and dropped, so the tool never blocks on a full pipe).
+    const KEEP: usize = 1 << 20;
     let collect = |stream: Option<Box<dyn Read + Send>>| {
         let collected = Arc::new(Mutex::new(Vec::new()));
         let (finished, ended) = std::sync::mpsc::channel();
@@ -149,7 +211,8 @@ fn exec(agent: Agent, argv: &[impl AsRef<std::ffi::OsStr>], limit: Duration) -> 
                 let mut chunk = [0u8; 8192];
                 while let Ok(read @ 1..) = stream.read(&mut chunk) {
                     if let Ok(mut sink) = sink.lock() {
-                        sink.extend_from_slice(&chunk[..read]);
+                        let room = KEEP.saturating_sub(sink.len()).min(read);
+                        sink.extend_from_slice(&chunk[..room]);
                     }
                 }
                 let _ = finished.send(());
@@ -175,6 +238,12 @@ fn exec(agent: Agent, argv: &[impl AsRef<std::ffi::OsStr>], limit: Duration) -> 
             break status;
         }
         if Instant::now() >= deadline {
+            if let Ok(group) = i32::try_from(child.id()) {
+                let _ = nix::sys::signal::killpg(
+                    nix::unistd::Pid::from_raw(group),
+                    nix::sys::signal::Signal::SIGKILL,
+                );
+            }
             let _ = child.kill();
             let _ = child.wait();
             return Err(problem(format!(
@@ -217,7 +286,7 @@ fn run(agent: Agent, argv: &[String]) -> Result<()> {
     )))
 }
 
-/// Each agent on this Mac and whether Understudy is connected to it.
+/// Each agent on this Mac and whether Atlas is connected to it.
 pub fn status() -> Value {
     let agents: Vec<Value> = std::thread::scope(|scope| {
         let probes: Vec<_> = Agent::ALL
@@ -233,42 +302,60 @@ pub fn status() -> Value {
 }
 
 fn probe(agent: Agent) -> Value {
-    match exec(agent, &["--version"], ASK) {
-        Ok(output) if output.status.success() => json!({
+    match agent.presence() {
+        Presence::Installed(version) => match agent.connected() {
+            Ok(connected) => json!({
+                "agent": agent.name(),
+                "installed": true,
+                "version": version,
+                "connected": connected,
+            }),
+            Err(error) => json!({
+                "agent": agent.name(),
+                "installed": true,
+                "version": version,
+                "error": error,
+            }),
+        },
+        Presence::Silent(error) => json!({
             "agent": agent.name(),
             "installed": true,
-            "version": String::from_utf8_lossy(&output.stdout).trim(),
-            "connected": agent.connected(),
+            "error": error,
         }),
-        // Installed, but it did not answer in time.
-        Err(error) if error.code == "agents" => json!({
-            "agent": agent.name(),
-            "installed": true,
-            "error": error.error,
-        }),
-        _ => json!({"agent": agent.name(), "installed": false}),
+        Presence::Missing => json!({"agent": agent.name(), "installed": false}),
     }
 }
 
 /// Connect (or `remove` from) the chosen agents, or every installed one.
 pub fn change(chosen: &[Agent], remove: bool) -> Result<Value> {
     let marketplace = if remove { None } else { Some(marketplace()?) };
-    let chosen: Vec<Agent> = if chosen.is_empty() {
+    let present: Vec<(Agent, Presence)> = if chosen.is_empty() {
         Agent::ALL
             .into_iter()
-            .filter(|agent| agent.version().is_some())
+            .map(|agent| (agent, agent.presence()))
+            .filter(|(_, presence)| !matches!(presence, Presence::Missing))
             .collect()
     } else {
-        chosen.to_vec()
+        chosen
+            .iter()
+            .map(|agent| (*agent, agent.presence()))
+            .collect()
     };
-    if chosen.is_empty() {
+    if present.is_empty() {
         return Err(problem("Neither Claude Code nor Codex is installed"));
     }
     let mut results = Vec::new();
-    for agent in chosen {
-        if agent.version().is_none() {
-            results.push(json!({"agent": agent.name(), "ok": false, "error": "not installed"}));
-            continue;
+    for (agent, presence) in present {
+        match presence {
+            Presence::Installed(_) => {}
+            Presence::Silent(error) => {
+                results.push(json!({"agent": agent.name(), "ok": false, "error": error}));
+                continue;
+            }
+            Presence::Missing => {
+                results.push(json!({"agent": agent.name(), "ok": false, "error": "not installed"}));
+                continue;
+            }
         }
         let steps = match &marketplace {
             Some(path) => agent.connect(path),
@@ -294,7 +381,7 @@ pub fn change(chosen: &[Agent], remove: bool) -> Result<Value> {
 pub fn refresh() -> Value {
     let refreshed: Vec<Value> = Agent::ALL
         .into_iter()
-        .filter(|agent| agent.connected() == Some(true))
+        .filter(|agent| agent.connected() == Ok(Some(true)))
         .map(|agent| {
             let plugin = format!("{NAME}@{NAME}");
             let steps: Vec<Vec<String>> = match agent {
@@ -320,12 +407,12 @@ pub fn refresh() -> Value {
 pub async fn brief(config_path: &Path) -> String {
     let version = crate::VERSION;
     let Ok(config) = Config::load(config_path) else {
-        return "Understudy is installed but not set up. If the person wants GUI testing, \
-                offer the understudy setup skill (understudy init)."
+        return "Atlas is installed but not set up. If the person wants GUI testing, \
+                offer the atlas setup skill (atlas init)."
             .to_owned();
     };
     let Ok(client) = Client::new(config.clone()) else {
-        return format!("Understudy {version}: run understudy doctor before using it.");
+        return format!("Atlas {version}: run atlas doctor before using it.");
     };
     if client
         .controller
@@ -333,22 +420,18 @@ pub async fn brief(config_path: &Path) -> String {
         .is_ok_and(|pending| !pending.is_empty())
     {
         return format!(
-            "Understudy {version}: an action's outcome is unknown; run understudy restart first."
+            "Atlas {version}: an action's outcome is unknown; run atlas restart first."
         );
     }
     let Ok(status) = tokio::time::timeout(Duration::from_millis(1500), client.status()).await
     else {
-        return format!(
-            "Understudy {version}: the helper is not answering; run understudy doctor."
-        );
+        return format!("Atlas {version}: the helper is not answering; run atlas doctor.");
     };
     let ready = crate::capability::doctor(status, config.helper_uid)["ready"] == true;
     if ready {
-        format!("Understudy {version}: ready. Use the understudy skill for GUI work.")
+        format!("Atlas {version}: ready. Use the atlas skill for GUI work.")
     } else {
-        format!(
-            "Understudy {version}: not ready; run understudy doctor and tell the person what it says."
-        )
+        format!("Atlas {version}: not ready; run atlas doctor and tell the person what it says.")
     }
 }
 
@@ -358,7 +441,7 @@ mod tests {
 
     #[test]
     fn connecting_registers_the_local_marketplace_then_installs() {
-        let path = Path::new("/Applications/Understudy.app/Contents/Resources/agents");
+        let path = Path::new("/Applications/Atlas.app/Contents/Resources/agents");
         assert_eq!(
             Agent::Claude.connect(path),
             [
@@ -370,29 +453,23 @@ mod tests {
                     "--scope",
                     "user"
                 ],
-                vec![
-                    "plugin",
-                    "install",
-                    "understudy@understudy",
-                    "--scope",
-                    "user"
-                ],
+                vec!["plugin", "install", "atlas@atlas", "--scope", "user"],
             ]
         );
         assert_eq!(
             Agent::Codex.connect(path),
             [
                 vec!["plugin", "marketplace", "add", path.to_str().unwrap()],
-                vec!["plugin", "add", "understudy@understudy"],
+                vec!["plugin", "add", "atlas@atlas"],
             ]
         );
         assert_eq!(
             Agent::Codex.disconnect()[0],
-            ["plugin", "remove", "understudy@understudy"]
+            ["plugin", "remove", "atlas@atlas"]
         );
         assert_eq!(
             Agent::Claude.disconnect()[1],
-            ["plugin", "marketplace", "remove", "understudy"]
+            ["plugin", "marketplace", "remove", "atlas"]
         );
     }
 
@@ -402,7 +479,7 @@ mod tests {
     fn the_plugin_matches_this_cli() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("agents");
         for manifest in [".claude-plugin/plugin.json", ".codex-plugin/plugin.json"] {
-            let text = std::fs::read_to_string(root.join("understudy").join(manifest)).unwrap();
+            let text = std::fs::read_to_string(root.join("atlas").join(manifest)).unwrap();
             let value: Value = serde_json::from_str(&text).unwrap();
             assert_eq!(value["name"], NAME, "{manifest}");
             assert_eq!(value["version"], crate::VERSION, "{manifest}");
@@ -415,12 +492,11 @@ mod tests {
             let value: Value = serde_json::from_str(&text).unwrap();
             assert_eq!(value["name"], NAME, "{marketplace}");
         }
-        let skill =
-            std::fs::read_to_string(root.join("understudy/skills/understudy/SKILL.md")).unwrap();
+        let skill = std::fs::read_to_string(root.join("atlas/skills/atlas/SKILL.md")).unwrap();
         assert_eq!(
             skill,
             crate::agent::skill(),
-            "regenerate with: understudy agent-guide --skill"
+            "regenerate with: atlas agent-guide --skill"
         );
     }
 
@@ -429,7 +505,7 @@ mod tests {
     fn every_error_code_is_in_the_troubleshooting_reference() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         let reference = std::fs::read_to_string(
-            root.join("agents/understudy/skills/understudy/references/troubleshooting.md"),
+            root.join("agents/atlas/skills/atlas/references/troubleshooting.md"),
         )
         .unwrap();
         let mut sources = Vec::new();

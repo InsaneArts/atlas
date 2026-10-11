@@ -18,16 +18,6 @@ fn accessibility() -> bool {
     unsafe { AXIsProcessTrusted() }
 }
 
-/// Ask macOS for whatever consent the daemon still lacks — Screen Recording
-/// and Accessibility — so it is listed in System Settings with a prompt in
-/// the helper's session. Nothing is granted here; the person decides.
-pub fn request_consent() {
-    if !capture::permitted() {
-        capture::request();
-    }
-    request_accessibility();
-}
-
 /// Ask for Accessibility with the system prompt, unless it is allowed.
 #[allow(unsafe_code)] // FFI: the consent prompt takes an options dictionary.
 fn request_accessibility() {
@@ -42,30 +32,119 @@ fn request_accessibility() {
     unsafe { AXIsProcessTrustedWithOptions(Some(options.as_opaque())) };
 }
 
-/// Ask again for missing consent each time the helper comes on screen. A
-/// prompt raised while the session is in the background can be lost, and
-/// two raised together may show only one; on arrival they come one by one.
+/// Ask for missing consent whenever the helper comes on screen (or starts
+/// while on screen), never in the background, where prompts are lost.
+/// macOS shows one prompt at a time and the Screen Recording prompt only
+/// once per app, so the requests come one by one: Accessibility first,
+/// waiting until it is on (macOS reports that at once), then Screen
+/// Recording, with its System Settings page opened so its switch is there
+/// even when macOS shows no prompt. Nothing is granted here; the person
+/// decides, in the normal way.
 pub async fn request_consent_on_arrival() {
-    let mut present = console_state() == Some(true);
+    let shown = || console_state() == Some(true);
+    let mut present = false;
     loop {
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        let shown = || console_state() == Some(true);
         let now = shown();
         if now && !present {
-            // Let the desktop settle after the switch before asking, and ask
-            // only while the helper is still on screen.
-            tokio::time::sleep(Duration::from_secs(2)).await;
-            if shown() {
-                request_accessibility();
-                tokio::time::sleep(Duration::from_secs(1)).await;
+            ask(&shown).await;
+        }
+        // Leaving while being asked counts as never having arrived.
+        present = now && shown();
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
+/// One arrival's requests, given up as soon as the helper leaves the screen.
+async fn ask(shown: &impl Fn() -> bool) {
+    // Let the desktop settle after the switch, and let macOS finish a new
+    // account's setup screens: a prompt raised behind them is never seen.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    while shown() && setting_up() {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    if !shown() {
+        return;
+    }
+    if !accessibility() {
+        request_accessibility();
+        // As long as the person stays, however long they take. Should the
+        // prompt not appear, its System Settings page opens instead.
+        let mut second = 0u32;
+        while !accessibility() {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            if !shown() {
+                return;
             }
-            if shown() && !capture::permitted() {
-                capture::request();
+            second += 1;
+            if second == 15 {
+                open_settings("Privacy_Accessibility");
             }
         }
-        // Leaving during the pause counts as never having arrived.
-        present = now && shown();
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
+    if shown() && !capture::permitted() {
+        capture::request();
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        if shown() {
+            open_settings("Privacy_ScreenCapture");
+        }
+    }
+}
+
+/// Whether macOS's setup screens for a new account are open in this session.
+fn setting_up() -> bool {
+    let uid = nix::unistd::getuid().as_raw().to_string();
+    std::process::Command::new("/bin/ps")
+        .args(["-axo", "uid=,comm="])
+        .output()
+        .is_ok_and(|output| {
+            String::from_utf8_lossy(&output.stdout).lines().any(|line| {
+                let line = line.trim_start();
+                line.strip_prefix(&uid).is_some_and(|rest| {
+                    rest.starts_with(char::is_whitespace)
+                        && rest
+                            .trim()
+                            .ends_with("/Setup Assistant.app/Contents/MacOS/Setup Assistant")
+                })
+            })
+        })
+}
+
+/// Typing in the helper arrives exactly as sent: macOS's autocorrect,
+/// automatic capitalisation, smart punctuation and predictions are turned
+/// off in the helper's own preferences (apps read them when they start).
+/// The person's account is never touched.
+pub fn type_exactly() {
+    for key in [
+        "NSAutomaticSpellingCorrectionEnabled",
+        "NSAutomaticCapitalizationEnabled",
+        "NSAutomaticPeriodSubstitutionEnabled",
+        "NSAutomaticDashSubstitutionEnabled",
+        "NSAutomaticQuoteSubstitutionEnabled",
+        "NSAutomaticTextReplacementEnabled",
+        "NSAutomaticTextCompletionEnabled",
+        "NSAutomaticInlinePredictionEnabled",
+        "WebAutomaticSpellingCorrectionEnabled",
+    ] {
+        let _ = std::process::Command::new("/usr/bin/defaults")
+            .args(["write", "-g", key, "-bool", "false"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+}
+
+/// Open a Privacy & Security page of System Settings in this session.
+fn open_settings(page: &str) {
+    let _ = std::process::Command::new("/usr/bin/open")
+        .arg(format!(
+            "x-apple.systempreferences:com.apple.preference.security?{page}"
+        ))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
 }
 
 /// This process's account: name, home and UID.
