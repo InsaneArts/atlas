@@ -11,7 +11,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const ENVIRONMENT_TARGET: &str = ".config/understudy/environment.json";
+const ENVIRONMENT_TARGET: &str = ".config/atlas/environment.json";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

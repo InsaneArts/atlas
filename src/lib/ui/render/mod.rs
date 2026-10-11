@@ -27,6 +27,8 @@ pub enum View {
     Type,
     Run,
     Environment,
+    Discover,
+    SetupPreview,
     Close,
     /// What was opened.
     Open(String),
@@ -84,10 +86,15 @@ pub fn render(view: &View, value: &Value) -> Rendered {
         View::Run => act::run(value),
         View::Open(what) => failed(value).unwrap_or_else(|| {
             let mut out = format!("{} Opened {}", style::ok(), text::printable(what));
-            if value["copied"].as_array().is_some_and(|copied| !copied.is_empty()) {
+            if value["copied"]
+                .as_array()
+                .is_some_and(|copied| !copied.is_empty())
+            {
                 out.push_str(&format!(
                     "\n  {}",
-                    style::dim("copied first to /Users/Shared/Understudy/Open, where the helper can read it")
+                    style::dim(
+                        "copied first to /Users/Shared/Atlas/Open, where the helper can read it"
+                    )
                 ));
             }
             Rendered::out(out)
@@ -96,6 +103,10 @@ pub fn render(view: &View, value: &Value) -> Rendered {
             failed(value).unwrap_or_else(|| Rendered::out(act::wait(value, *gone)))
         }
         View::Environment => act::environment(value),
+        View::Discover => failed(value).unwrap_or_else(|| Rendered::out(act::discover(value))),
+        View::SetupPreview => {
+            failed(value).unwrap_or_else(|| Rendered::out(act::setup_preview(value)))
+        }
         View::Close => failed(value).unwrap_or_else(|| Rendered::out(act::close(value))),
         View::Restart => failed(value).unwrap_or_else(|| Rendered::out(act::restart(value))),
         View::StartInput => failed(value).unwrap_or_else(|| Rendered::out(act::start_input(value))),
@@ -141,9 +152,9 @@ pub fn card(message: &str, code: Option<&str>, uncertain: bool) -> String {
     let mut lines = vec![format!("{} {}", style::fail(), message.trim())];
     let fix = if uncertain {
         Some(
-            "It may or may not have happened, so don't repeat it. Take a screenshot, then run understudy restart.",
+            "It may or may not have happened, so don't repeat it. Take a screenshot, then run atlas restart.",
         )
-    } else if message.to_lowercase().contains("run understudy ") {
+    } else if message.to_lowercase().contains("run atlas ") {
         // The message already says what to run.
         None
     } else {

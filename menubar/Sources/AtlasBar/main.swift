@@ -1,10 +1,10 @@
 import AppKit
-import UnderstudyKit
-import UnderstudyUI
+import AtlasKit
+import AtlasUI
 
-// Understudy's menu bar app. The viewer's capability URL arrives on stdin,
+// Atlas's menu bar app. The viewer's capability URL arrives on stdin,
 // never in argv, and the app quits when stdin closes, so it never outlives
-// the `understudy menubar` that started it.
+// the `atlas menubar` that started it.
 
 final class Companion: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     let viewer: Viewer
@@ -32,7 +32,7 @@ final class Companion: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         item.button?.image = statusImage(Mode.of("unavailable"))
         item.button?.target = self
         item.button?.action = #selector(toggle)
-        // The helper to switch to is whichever `understudy` reports.
+        // The helper to switch to is whichever `atlas` reports.
         commands.run(["switch", "--list"]) { [weak self] outcome in
             let accounts = outcome.reply["accounts"] as? [[String: Any]] ?? []
             self?.panel.helper =
@@ -77,7 +77,7 @@ final class Companion: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 let snapshot = status.map(Snapshot.init(status:)) ?? Snapshot()
                 let mode = Mode.of(snapshot.mode)
                 item.button?.image = statusImage(mode)
-                item.button?.toolTip = "Understudy — \(mode.label)"
+                item.button?.toolTip = "Atlas — \(mode.label)"
                 panel.show(snapshot)
             }
         }

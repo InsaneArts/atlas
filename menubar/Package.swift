@@ -1,17 +1,17 @@
 // swift-tools-version: 6.0
 import PackageDescription
 
-// Understudy's menu bar app. It shows what the local viewer reports and runs
-// `understudy` commands; it holds no state or policy of its own.
+// Atlas's menu bar app. It shows what the local viewer reports and runs
+// `atlas` commands; it holds no state or policy of its own.
 let package = Package(
-    name: "UnderstudyBar",
+    name: "AtlasBar",
     platforms: [.macOS(.v14)],
-    products: [.executable(name: "UnderstudyBar", targets: ["UnderstudyBar"])],
+    products: [.executable(name: "AtlasBar", targets: ["AtlasBar"])],
     targets: [
-        .target(name: "UnderstudyKit"),
-        .target(name: "UnderstudyUI", dependencies: ["UnderstudyKit"]),
-        .executableTarget(name: "UnderstudyBar", dependencies: ["UnderstudyKit", "UnderstudyUI"]),
-        .testTarget(name: "UnderstudyKitTests", dependencies: ["UnderstudyKit"]),
+        .target(name: "AtlasKit"),
+        .target(name: "AtlasUI", dependencies: ["AtlasKit"]),
+        .executableTarget(name: "AtlasBar", dependencies: ["AtlasKit", "AtlasUI"]),
+        .testTarget(name: "AtlasKitTests", dependencies: ["AtlasKit"]),
     ],
     swiftLanguageModes: [.v5]
 )

@@ -1,4 +1,4 @@
-//! `understudy switch`: switching to another login, such as the helper. It
+//! `atlas switch`: switching to another login, such as the helper. It
 //! locks the screen; the person picks the account on the lock screen and
 //! types its password there. Nothing here sees or stores a password.
 //!

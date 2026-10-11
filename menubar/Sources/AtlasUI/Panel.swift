@@ -1,13 +1,13 @@
 import AppKit
-import UnderstudyKit
+import AtlasKit
 
 /// The popover's content: status, desktop, facts and actions. Every action
-/// is an `understudy` command (or the viewer's own control endpoint).
+/// is an `atlas` command (or the viewer's own control endpoint).
 public final class PanelController: NSViewController {
     let viewer: Viewer?
     let commands: Commands?
     let loginItem: LoginItem?
-    /// The helper's short name, once `understudy switch --list` reports it.
+    /// The helper's short name, once `atlas switch --list` reports it.
     public var helper: String? {
         didSet {
             switchButton.isEnabled = helper != nil
@@ -40,7 +40,7 @@ public final class PanelController: NSViewController {
     let recover = RowButton("Recover", symbol: "arrow.clockwise")
     let atLogin = NSSwitch()
     lazy var loginRow = NSStackView(views: [label("Open at Login"), NSView(), atLogin])
-    let quit = RowButton("Quit Understudy", detail: "⌘Q")
+    let quit = RowButton("Quit Atlas", detail: "⌘Q")
 
     public init(viewer: Viewer?, commands: Commands?, loginItem: LoginItem?) {
         self.viewer = viewer
@@ -54,7 +54,7 @@ public final class PanelController: NSViewController {
     public override func loadView() {
         let width = Self.content
         // Header: the app, its state in a word and a dot, and why.
-        let title = label("Understudy", weight: .semibold)
+        let title = label("Atlas", weight: .semibold)
         let status = NSStackView(views: [dot, state])
         status.spacing = 5
         let top = NSStackView(views: [title, NSView(), status])

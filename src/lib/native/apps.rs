@@ -1,6 +1,6 @@
 //! Applications running in the helper login, as the helper daemon reports
-//! them: name, bundle identifier, process, and whether each is frontmost,
-//! hidden or a background agent.
+//! them: name, bundle identifier, process and its executable, and whether
+//! each is frontmost, hidden or a background agent.
 use objc2_app_kit::{NSApplicationActivationPolicy, NSWorkspace};
 use serde_json::{Value, json};
 
@@ -25,6 +25,10 @@ pub fn running() -> Vec<Value> {
                     "name": app.localizedName().map(|name| name.to_string()),
                     "bundleId": app.bundleIdentifier().map(|id| id.to_string()),
                     "pid": app.processIdentifier(),
+                    "executable": app
+                        .executableURL()
+                        .and_then(|url| url.path())
+                        .map(|path| path.to_string()),
                     "active": app.isActive(),
                     "hidden": app.isHidden(),
                     "policy": policy(app.activationPolicy()),

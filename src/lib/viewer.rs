@@ -274,11 +274,16 @@ pub async fn serve(
     port: u16,
     companion: Option<crate::menubar::Program>,
 ) -> Result<()> {
-    let path = client.output_dir()?.join("monitor.json");
+    let output = client.output_dir()?.to_path_buf();
+    let path = output.join(if companion.is_some() {
+        MENUBAR_RECORD
+    } else {
+        MONITOR_RECORD
+    });
     let (listener, viewer, router) = match bind(client, port).await {
         Ok(bound) => bound,
         Err(error) if error.code == "port-in-use" => {
-            return already_running(&path, port, companion.is_some(), error);
+            return already_running(&output, port, companion.is_some(), error);
         }
         Err(error) => return Err(error),
     };
@@ -346,61 +351,101 @@ pub async fn serve(
         .await;
     expiry.abort();
     let _ = viewer.release(None).await;
+    // The record goes with this viewer, unless another has replaced it.
+    let ours = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .is_some_and(|record| record["pid"] == std::process::id());
+    if ours {
+        let _ = std::fs::remove_file(&path);
+    }
     result.map_err(Error::from)
 }
 
-/// The viewer recorded at `record`, if its process is alive and serves
-/// `port`.
+/// The records of a running viewer, in the output folder: the menu bar's
+/// and `monitor`'s are separate, so neither overwrites the other.
+pub const MENUBAR_RECORD: &str = "menubar.json";
+pub const MONITOR_RECORD: &str = "monitor.json";
+
+/// The viewer recorded at `record`, if it serves `port` and answers there now.
 pub fn running(record: &Path, port: u16) -> Option<Value> {
     std::fs::read(record)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         .filter(|running| {
-            let alive = running["pid"].as_i64().is_some_and(|pid| {
-                i32::try_from(pid).is_ok_and(|pid| {
-                    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok()
-                })
-            });
             let url = running["url"].as_str().unwrap_or("");
-            alive && url.starts_with(&format!("http://127.0.0.1:{port}/"))
+            url.starts_with(&format!("http://127.0.0.1:{port}/")) && answers(url)
         })
 }
 
-/// The port is taken. When Understudy's own viewer holds it, say so and
-/// succeed: the menu bar is already up, or the viewer is at its address.
-fn already_running(record: &Path, port: u16, menubar: bool, taken: Error) -> Result<()> {
-    let Some(running) = running(record, port) else {
-        return Err(taken);
+/// Whether a viewer answers at `url` (its private address) right now.
+fn answers(url: &str) -> bool {
+    use std::io::{Read, Write};
+    let Some(rest) = url.strip_prefix("http://") else {
+        return false;
     };
-    let held_by_menubar = running["menubar"] == true;
-    if menubar && !held_by_menubar {
-        return Err(Error::new(
-            "port-in-use",
-            format!("understudy monitor is already using port {port}."),
-        ));
+    let (authority, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+    let Ok(address) = authority.parse::<std::net::SocketAddr>() else {
+        return false;
+    };
+    let timeout = Duration::from_secs(1);
+    let Ok(mut stream) = std::net::TcpStream::connect_timeout(&address, timeout) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
+    let request = format!("GET {path} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n");
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
     }
-    let url = running["url"].as_str().unwrap_or("");
-    if crate::ui::human() {
-        let line = match (menubar, held_by_menubar) {
-            (true, _) => format!(
-                "{} The menu bar is already running. Click the U in the menu bar.",
-                crate::ui::style::ok()
-            ),
-            (false, true) => format!(
-                "{} The menu bar's viewer is already running at {url}\n  Open it from the menu bar or in a browser.",
-                crate::ui::style::ok()
-            ),
-            (false, false) => format!(
-                "{} The viewer is already running at {url}",
-                crate::ui::style::ok()
-            ),
-        };
-        println!("{line}");
-    } else {
-        let mut shown = json!({"ok": true, "alreadyRunning": true, "pid": running["pid"]});
-        if !menubar {
-            shown["url"] = json!(url);
+    let mut head = [0u8; 16];
+    stream.read(&mut head).is_ok_and(|read| {
+        let status = String::from_utf8_lossy(&head[..read]);
+        status.starts_with("HTTP/1.1 200")
+    })
+}
+
+/// The port is taken. When Atlas's own viewer holds it, say so and
+/// succeed: the menu bar is already up, or the viewer is at its address.
+/// The menu bar's address stays private to it.
+fn already_running(output: &Path, port: u16, menubar: bool, taken: Error) -> Result<()> {
+    let bar = running(&output.join(MENUBAR_RECORD), port);
+    let monitor = running(&output.join(MONITOR_RECORD), port);
+    let human = crate::ui::human();
+    let ok = crate::ui::style::ok();
+    let shown = match (menubar, bar, monitor) {
+        (true, Some(bar), _) => {
+            if human {
+                println!(
+                    "{ok} The menu bar is already running. Click the A at the top of the screen; quit it from its menu."
+                );
+            }
+            json!({"ok": true, "alreadyRunning": true, "running": true, "pid": bar["pid"]})
         }
+        (true, None, Some(_)) => {
+            return Err(Error::new(
+                "port-in-use",
+                format!("atlas monitor is already using port {port}."),
+            ));
+        }
+        (false, Some(bar), _) => {
+            if human {
+                println!(
+                    "{ok} The menu bar's viewer is already running. Open it from the menu bar with Open Viewer."
+                );
+            }
+            json!({"ok": true, "alreadyRunning": true, "menubar": true, "pid": bar["pid"]})
+        }
+        (false, None, Some(viewer)) => {
+            let url = viewer["url"].as_str().unwrap_or("");
+            if human {
+                println!("{ok} The viewer is already running at {url}");
+            }
+            json!({"ok": true, "alreadyRunning": true, "pid": viewer["pid"], "url": url})
+        }
+        _ => return Err(taken),
+    };
+    if !human {
         println!("{}", serde_json::to_string_pretty(&shown)?);
     }
     Ok(())
@@ -469,7 +514,7 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
     else {
         return json_response(
             404,
-            json!({"ok": false, "error": "Use the viewer URL printed by Understudy"}),
+            json!({"ok": false, "error": "Use the viewer URL printed by Atlas"}),
         );
     };
     if method == Method::GET {

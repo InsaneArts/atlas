@@ -158,13 +158,13 @@ fn signature(path: &Path) -> Option<Signature> {
 }
 
 /// The bundle identifier the helper daemon must be signed as.
-pub const IDENTIFIER: &str = "com.insanearts.understudy";
-/// The Developer ID team that signs Understudy; consent follows it.
+pub const IDENTIFIER: &str = "com.insanearts.atlas";
+/// The Developer ID team that signs Atlas; consent follows it.
 pub const TEAM: &str = "A474HM679A";
 /// The identifier the menu bar companion inside the app is signed as.
-pub const COMPANION_IDENTIFIER: &str = "com.insanearts.understudy.bar";
+pub const COMPANION_IDENTIFIER: &str = "com.insanearts.atlas.bar";
 
-/// The code requirement for Understudy: a Developer ID Application
+/// The code requirement for Atlas: a Developer ID Application
 /// signature by its team, under its identifier. install.sh checks the same.
 pub fn requirement() -> String {
     requirement_for(IDENTIFIER)
@@ -181,7 +181,7 @@ fn requirement_for(identifier: &str) -> String {
 }
 
 /// Whether `target` (a path, or a PID as text) validly satisfies a
-/// Developer ID Application signature for Understudy by its team, the
+/// Developer ID Application signature for Atlas by its team, the
 /// requirement under which macOS consent persists. For a running process
 /// this also checks that its loaded code still matches the file on disk.
 fn satisfies_developer_id(target: &std::ffi::OsStr) -> bool {
@@ -198,18 +198,35 @@ fn satisfies(target: &std::ffi::OsStr, identifier: &str) -> bool {
         .is_ok_and(|output| output.status.success())
 }
 
-/// Whether the file at `path` is Understudy signed by its Developer ID.
+/// Whether `name` administers this Mac (a helper must not); None when macOS
+/// cannot say, which never counts as "no".
+pub fn administrator(name: &str) -> Option<bool> {
+    let output = Command::new("/usr/sbin/dseditgroup")
+        .args(["-o", "checkmember", "-m", name, "admin"])
+        .output()
+        .ok()?;
+    let answer = String::from_utf8_lossy(&output.stdout);
+    if answer.starts_with("yes ") {
+        Some(true)
+    } else if answer.starts_with("no ") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// Whether the file at `path` is Atlas signed by its Developer ID.
 pub fn developer_id(path: &Path) -> bool {
     satisfies_developer_id(path.as_os_str())
 }
 
 /// Whether the file at `path` is the menu bar companion signed by
-/// Understudy's Developer ID.
+/// Atlas's Developer ID.
 pub fn companion_signed(path: &Path) -> bool {
     satisfies(path.as_os_str(), COMPANION_IDENTIFIER)
 }
 
-/// Whether process `pid` runs Understudy signed by its Developer ID, and
+/// Whether process `pid` runs Atlas signed by its Developer ID, and
 /// its loaded code is exactly the file now on disk. (`codesign -d` on a PID
 /// describes the file at its path, so only verification proves this.)
 fn running_developer_id(pid: u32) -> bool {
@@ -266,7 +283,7 @@ fn screen_sharing() -> Value {
             None => "unknown",
         },
         // Service state never proves an authenticated session; only a fresh
-        // native capability check can (understudy verify-native).
+        // native capability check can (atlas verify-native).
         "authenticatedConnection": Value::Null,
     })
 }
@@ -424,8 +441,8 @@ fn proposal(account: &Account) -> Config {
     Config {
         helper_uid: uid,
         socket_path: format!("/tmp/atlas-live-{uid}/{uid}.sock").into(),
-        identity_probe: "/Users/Shared/Understudy/understudy".into(),
-        input_socket: format!("/tmp/understudy-input-{uid}/input.sock").into(),
+        identity_probe: "/Users/Shared/Atlas/atlas".into(),
+        input_socket: format!("/tmp/atlas-input-{uid}/input.sock").into(),
         output_dir: "runs".into(),
     }
 }
@@ -577,7 +594,7 @@ fn next_steps(report: &Value) -> Vec<String> {
     if report["capture"]["daemon"]["screenRecording"] == false {
         steps.push(
             "In the helper's System Settings › Privacy & Security › Screen & System Audio Recording, \
-             turn Understudy on."
+             turn Atlas on."
                 .to_owned(),
         );
     }
@@ -588,25 +605,16 @@ fn next_steps(report: &Value) -> Vec<String> {
     if report["input"]["service"]["current"] == false {
         steps.push(
             "The input service runs a different build than the installed executable; run \
-             understudy start-input to replace it."
+             atlas start-input to replace it."
                 .to_owned(),
         );
     }
     if report["rustExecutable"]["matchesThisBuild"] == false {
         steps.push(
-            "The shared Rust executable differs from this build; run understudy install."
-                .to_owned(),
+            "The shared Rust executable differs from this build; run atlas install.".to_owned(),
         );
     }
-    let qualified = "Native Save/Open dialogs were only qualified with an authenticated Screen \
-                     Sharing session into the helper";
-    match report["screenSharing"]["service"].as_str() {
-        Some("disabled") => steps.push(format!("{qualified}; that service is disabled.")),
-        Some("enabled") => {}
-        _ => steps.push(format!(
-            "{qualified}; whether that service is enabled could not be determined."
-        )),
-    }
+    // Whether Save/Open panels work is doctor's native-dialog report, not a step.
     steps
 }
 
@@ -632,10 +640,10 @@ mod tests {
         assert!(script.contains(&format!("TEAM=\"{TEAM}\"")));
     }
 
-    /// Only Understudy signed by its own Developer ID team passes, as a file
+    /// Only Atlas signed by its own Developer ID team passes, as a file
     /// or as a running process.
     #[test]
-    fn signatures_are_checked_against_understudys_identity() {
+    fn signatures_are_checked_against_atlass_identity() {
         assert!(
             !developer_id(Path::new("/bin/ls")),
             "Apple-signed, not ours"
@@ -644,7 +652,7 @@ mod tests {
         assert!(!developer_id(&test), "ad-hoc signed test build");
         assert!(
             !running_developer_id(std::process::id()),
-            "this ad-hoc test process is not Understudy's Developer ID"
+            "this ad-hoc test process is not Atlas's Developer ID"
         );
     }
 
@@ -654,11 +662,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(account_named(&me.name).unwrap(), Some(me.clone()));
-        assert!(
-            account_named("no-such-understudy-account")
-                .unwrap()
-                .is_none()
-        );
+        assert!(account_named("no-such-atlas-account").unwrap().is_none());
         assert!(account_named("bad\0name").is_err());
     }
 
@@ -742,16 +746,12 @@ mod tests {
     }
 
     #[test]
-    fn unknown_screen_sharing_is_not_reported_as_disabled() {
-        let steps = |service: &str| {
-            next_steps(
-                &json!({"config": {"state": "present"}, "session": {"reachable": true,
-                "hidden": true}, "screenSharing": {"service": service}}),
-            )
-            .join(" ")
-        };
-        assert!(steps("disabled").contains("that service is disabled"));
-        assert!(steps("unknown").contains("could not be determined"));
-        assert!(!steps("enabled").contains("Screen"));
+    fn screen_sharing_is_never_a_setup_step() {
+        for service in ["disabled", "unknown", "enabled"] {
+            let steps = next_steps(&json!({"config": {"state": "present"},
+                "session": {"reachable": true, "hidden": true},
+                "screenSharing": {"service": service}}));
+            assert!(!steps.join(" ").contains("Screen Sharing"), "{service}");
+        }
     }
 }

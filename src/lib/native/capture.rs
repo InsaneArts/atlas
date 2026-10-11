@@ -31,7 +31,7 @@ pub fn permitted() -> bool {
     CGPreflightScreenCaptureAccess()
 }
 
-/// Ask macOS for Screen Recording, so Understudy appears in System Settings
+/// Ask macOS for Screen Recording, so Atlas appears in System Settings
 /// with a prompt in the helper's session. Returns whether it is allowed now;
 /// a grant takes effect for the next process.
 pub fn request() -> bool {
@@ -110,7 +110,7 @@ pub fn main_display(limit: Option<u32>) -> Result<Shot> {
     if !permitted() {
         return Err(Error::new(
             "permission",
-            "Screen Recording is not allowed for Understudy in the helper account",
+            "Screen Recording is not allowed for Atlas in the helper account",
         ));
     }
     let display = CGMainDisplayID();

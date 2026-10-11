@@ -1,11 +1,12 @@
-// Draws Understudy's app icon and builds AppIcon.icns beside this script:
+// Draws Atlas's app icon and builds AppIcon.icns beside this script:
 //
 //     swift menubar/Resources/AppIcon.swift
 //
-// The mark is the menu bar glyph's "U" whose detached top-right cap, the
-// stand-in, is system blue, on the macOS rounded-square grid (an 824-point
-// tile with a soft shadow in a 1024-point canvas). The "U" is drawn again
-// here rather than shared: change it together with StatusImage.swift.
+// The mark is the menu bar glyph's "A" whose free-floating crossbar, the
+// load Atlas carries, is system blue, on the macOS rounded-square grid (an
+// 824-point tile with a soft shadow in a 1024-point canvas). The "A" is
+// drawn again here rather than shared: change it together with
+// StatusImage.swift.
 import AppKit
 
 func hex(_ value: UInt32) -> NSColor {
@@ -30,29 +31,33 @@ func drawIcon() {
     NSGraphicsContext.saveGraphicsState()
     tile.addClip()
     NSGradient(starting: hex(0xFFFFFF), ending: hex(0xE4E4E9))!.draw(in: tile, angle: -90)
-    let left: CGFloat = 316
-    let right: CGFloat = 708
-    let top: CGFloat = 776
-    let bottom: CGFloat = 246
-    let stem: CGFloat = 132
-    let capBottom: CGFloat = 614
-    let gap: CGFloat = 26
-    let radius = (right - left) / 2
-    let center = NSPoint(x: (left + right) / 2, y: bottom + radius)
+    // Upright coordinates: the apex is at the top.
+    let left: CGFloat = 240
+    let right: CGFloat = 784
+    let top: CGFloat = 788
+    let bottom: CGFloat = 236
+    let apex: CGFloat = 100
+    let leg: CGFloat = 96
+    let center = (left + right) / 2
+    let slope = (center - apex / 2 - left) / (top - bottom)
+    let reach = (center - left - leg) / (center - apex / 2 - left)
+    let notch = bottom + reach * (top - bottom)
     let letter = NSBezierPath()
-    letter.move(to: NSPoint(x: left, y: top))
-    letter.line(to: NSPoint(x: left, y: center.y))
-    letter.appendArc(
-        withCenter: center, radius: radius, startAngle: 180, endAngle: 360, clockwise: false)
-    letter.line(to: NSPoint(x: right, y: capBottom - gap))
-    letter.line(to: NSPoint(x: right - stem, y: capBottom - gap))
-    letter.line(to: NSPoint(x: right - stem, y: center.y))
-    letter.appendArc(
-        withCenter: center, radius: radius - stem, startAngle: 360, endAngle: 180, clockwise: true)
-    letter.line(to: NSPoint(x: left + stem, y: top))
+    letter.move(to: NSPoint(x: left, y: bottom))
+    letter.line(to: NSPoint(x: center - apex / 2, y: top))
+    letter.line(to: NSPoint(x: center + apex / 2, y: top))
+    letter.line(to: NSPoint(x: right, y: bottom))
+    letter.line(to: NSPoint(x: right - leg, y: bottom))
+    letter.line(to: NSPoint(x: center, y: notch))
+    letter.line(to: NSPoint(x: left + leg, y: bottom))
     letter.close()
+    // The crossbar, clear of the legs at its upper (narrower) edge.
+    let barBottom: CGFloat = 322
+    let barTop: CGFloat = 400
+    let gap: CGFloat = 20
+    let inside = left + leg + slope * (barTop - bottom) + gap
     let cap = NSBezierPath(
-        rect: NSRect(x: right - stem, y: capBottom, width: stem, height: top - capBottom))
+        rect: NSRect(x: inside, y: barBottom, width: 2 * (center - inside), height: barTop - barBottom))
     NSGraphicsContext.saveGraphicsState()
     let lift = NSShadow()
     lift.shadowColor = NSColor.black.withAlphaComponent(0.16)

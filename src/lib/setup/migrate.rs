@@ -1,6 +1,6 @@
 //! Side-by-side migration of the capture endpoint into the private layout.
 //!
-//! A managed LaunchAgent runs Understudy's own signed helper daemon on a
+//! A managed LaunchAgent runs Atlas's own signed helper daemon on a
 //! persistent private socket directory beside the existing capture job, which
 //! it replaces only once verified. Each pass
 //! reconciles reality toward the target instead of trusting completion flags:
@@ -50,7 +50,7 @@ pub struct Plan {
     pub config_path: PathBuf,
     pub old_config: String,
     pub new_config: String,
-    /// A first setup (by `understudy init`): no earlier capture job, so
+    /// A first setup (by `atlas init`): no earlier capture job, so
     /// nothing is moved or retired and there is nothing to roll back to.
     #[serde(default)]
     pub fresh: bool,
@@ -89,7 +89,7 @@ fn problem(message: impl Into<String>) -> Error {
 
 fn log_path(uid: u32) -> Result<PathBuf> {
     Ok(home()?
-        .join("Library/Application Support/Understudy")
+        .join("Library/Application Support/Atlas")
         .join(format!("setup-{uid}.json")))
 }
 
@@ -233,7 +233,7 @@ async fn await_endpoint(client: &Client) -> Result<()> {
     while !reachable(client).await {
         if Instant::now() >= deadline {
             return Err(problem(format!(
-                "The helper did not answer in time ({}). Run understudy doctor.",
+                "The helper did not answer in time ({}). Run atlas doctor.",
                 crate::ui::text::tilde(&client.config.socket_path)
             )));
         }
@@ -312,7 +312,7 @@ impl Migration {
         if foreign {
             return Err(Error::new(
                 "uncertain",
-                "Another action's outcome is unknown. Observe the desktop, run understudy \
+                "Another action's outcome is unknown. Observe the desktop, run atlas \
                  restart, then run setup again.",
             )
             .uncertain());
@@ -364,7 +364,7 @@ impl Migration {
         }
         Err(problem(
             "The helper is not running in the background. Sign in to the helper account \
-             once, switch back, then run understudy init again.",
+             once, switch back, then run atlas init again.",
         ))
     }
     /// The managed endpoint is private, captures, and runs the planned binary.
@@ -373,8 +373,8 @@ impl Migration {
         let status = self.new.status().await;
         if status["permissions"]["screenCapture"] != true {
             return Err(problem(
-                "Understudy lacks Screen Recording in the helper account: log in to the \
-                 helper once, allow Understudy in System Settings, switch back, then run \
+                "Atlas lacks Screen Recording in the helper account: log in to the \
+                 helper once, allow Atlas in System Settings, switch back, then run \
                  setup again",
             ));
         }
@@ -383,23 +383,23 @@ impl Migration {
             .as_u64()
             .and_then(|pid| u32::try_from(pid).ok())
             .ok_or_else(|| {
-                problem("The helper did not say which process it is. Run understudy restart.")
+                problem("The helper did not say which process it is. Run atlas restart.")
             })?;
         // The file it runs must be the planned build, and its loaded code
-        // must be valid, Understudy's, and still that file.
+        // must be valid, Atlas's, and still that file.
         let installed = executable_of(pid)
             .and_then(|path| signature(&path))
             .and_then(|signature| signature.cdhash);
         if installed.as_deref() != Some(self.log.plan.cdhash.as_str()) {
             return Err(problem(
-                "The helper is not running the signed Understudy build that was expected. Run \
-                 understudy restart.",
+                "The helper is not running the signed Atlas build that was expected. Run \
+                 atlas restart.",
             ));
         }
         if !running_developer_id(pid) {
             return Err(problem(
-                "The helper still runs an older build. Run understudy restart, then \
-                 understudy setup --apply.",
+                "The helper still runs an older build. Run atlas restart, then \
+                 atlas setup --apply.",
             ));
         }
         let controller = nix::unistd::getuid().as_raw();
@@ -509,7 +509,7 @@ impl Migration {
             .await?;
         if signed_daemon(&plan.program)? != plan.cdhash {
             return Err(problem(
-                "Understudy.app changed since setup was planned; run understudy init again",
+                "Atlas.app changed since setup was planned; run atlas init again",
             ));
         }
         let agent = self.agent();
@@ -517,7 +517,7 @@ impl Migration {
             .await?;
         self.verify_new().await?;
         if !self.input_ready(Endpoint::New).await {
-            return Err(problem("Input is not ready; run understudy start-input"));
+            return Err(problem("Input is not ready; run atlas start-input"));
         }
         self.settle_all()?;
         self.log.state = State::Applied;
@@ -540,7 +540,7 @@ impl Migration {
         // that was planned, still validly signed.
         if signed_daemon(&plan.program)? != plan.cdhash {
             return Err(problem(
-                "Understudy.app changed since setup was planned; run setup --rollback, then \
+                "Atlas.app changed since setup was planned; run setup --rollback, then \
                  setup --apply again",
             ));
         }
@@ -617,11 +617,11 @@ impl Migration {
 }
 
 /// The code directory hash of `program`, once it is shown to be validly
-/// signed as Understudy with a Developer ID.
+/// signed as Atlas with a Developer ID.
 fn signed_daemon(program: &Path) -> Result<String> {
     if !super::developer_id(program) {
         return Err(problem(format!(
-            "{} is not Understudy signed with a Developer ID, so macOS consent would not \
+            "{} is not Atlas signed with a Developer ID, so macOS consent would not \
              persist",
             program.display()
         )));
@@ -631,10 +631,10 @@ fn signed_daemon(program: &Path) -> Result<String> {
         .ok_or_else(|| problem("The helper app's signature could not be read"))
 }
 
-/// The signed Understudy executable the helper daemon runs: this one when it
+/// The signed Atlas executable the helper daemon runs: this one when it
 /// is inside the app, else the installed app's.
 fn daemon_program() -> Result<PathBuf> {
-    const INSTALLED: &str = "/Applications/Understudy.app/Contents/MacOS/understudy";
+    const INSTALLED: &str = "/Applications/Atlas.app/Contents/MacOS/atlas";
     let current = std::env::current_exe().and_then(fs::canonicalize).ok();
     current
         .filter(|path| {
@@ -643,12 +643,12 @@ fn daemon_program() -> Result<PathBuf> {
         })
         .or_else(|| Some(PathBuf::from(INSTALLED)).filter(|path| path.is_file()))
         .ok_or_else(|| {
-            problem("Install Understudy.app in /Applications first; the helper runs it from there")
+            problem("Install Atlas.app in /Applications first; the helper runs it from there")
         })
 }
 
 /// Plan a first setup of the configuration at `config_path`, whose helper
-/// already runs the managed daemon (started by `understudy init`).
+/// already runs the managed daemon (started by `atlas init`).
 async fn plan_fresh(config_path: &Path) -> Result<Plan> {
     let config_path = fs::canonicalize(config_path)?;
     let config = Config::load(&config_path)?;
@@ -670,7 +670,7 @@ async fn plan_fresh(config_path: &Path) -> Result<Plan> {
     require_hidden(&status, config.helper_uid).map_err(|_| {
         problem(
             "The helper is not running in the background. Switch back to your own account, then \
-             run understudy doctor.",
+             run atlas doctor.",
         )
     })?;
     let program = daemon_program()?;
@@ -737,6 +737,13 @@ pub async fn apply_fresh(config_path: &Path, ownership: &Ownership) -> Result<Va
         new,
     };
     migration.require_owned_pending()?;
+    // An updated Atlas.app, still validly signed as Atlas, continues the
+    // same setup: its new signature is recorded, as apply does.
+    let current = signed_daemon(&migration.log.plan.program)?;
+    if current != migration.log.plan.cdhash {
+        migration.log.plan.cdhash = current;
+        migration.note("helper daemon updated")?;
+    }
     migration.log.state = State::Applying;
     save_log(&migration.path, &migration.log)?;
     let outcome = migration.apply().await;
@@ -776,22 +783,20 @@ async fn plan(config_path: &Path) -> Result<Plan> {
         .and_then(|path| crate::digest::file_sha256(&path));
     if built.is_none() || client.installed_build() != built {
         return Err(problem(
-            "The helper runs the installed executable; run understudy install first",
+            "The helper runs the installed executable; run atlas install first",
         ));
     }
     let status = client.status().await;
     require_hidden(&status, config.helper_uid).map_err(|_| {
         problem(
             "The helper is not running in the background. Switch back to your own account, then \
-             run understudy doctor.",
+             run atlas doctor.",
         )
     })?;
     let pid = status["daemon"]["pid"]
         .as_u64()
         .and_then(|pid| u32::try_from(pid).ok())
-        .ok_or_else(|| {
-            problem("The helper did not say which process it is. Run understudy restart.")
-        })?;
+        .ok_or_else(|| problem("The helper did not say which process it is. Run atlas restart."))?;
     let program = daemon_program()?;
     let cdhash = signed_daemon(&program)?;
     let old_label = helper_job(&client, pid).await["label"]
@@ -872,10 +877,10 @@ pub async fn apply(config_path: &Path, _ownership: &Ownership) -> Result<Value> 
     let uid = Config::load(config_path)?.helper_uid;
     let path = log_path(uid)?;
     let log = match load_log(&path)? {
-        // Applied by an Understudy before its own daemon: plan the move to it.
+        // Applied by an Atlas before its own daemon: plan the move to it.
         Some(log) if log.plan.label.is_empty() && log.state == State::Applying => {
             return Err(problem(format!(
-                "A setup recorded by an older Understudy is unfinished; finish or roll it back \
+                "A setup recorded by an older Atlas is unfinished; finish or roll it back \
                  with that version ({})",
                 path.display()
             )));
@@ -915,8 +920,8 @@ pub async fn apply(config_path: &Path, _ownership: &Ownership) -> Result<Value> 
     };
     migration.require_owned_pending()?;
     if migration.log.state == State::Applied {
-        // An applied setup re-verifies. An updated Understudy.app is accepted
-        // if it is still validly signed as Understudy: its new hash is
+        // An applied setup re-verifies. An updated Atlas.app is accepted
+        // if it is still validly signed as Atlas: its new hash is
         // recorded, and the running daemon's executable must be that binary.
         let current = signed_daemon(&migration.log.plan.program)?;
         if current != migration.log.plan.cdhash {
@@ -937,7 +942,7 @@ pub async fn rollback(config_path: &Path, _ownership: &Ownership) -> Result<Valu
     let log = load_log(&path)?.ok_or_else(|| problem("No setup migration is recorded"))?;
     if log.plan.label.is_empty() {
         return Err(problem(
-            "This setup was recorded by an older Understudy; roll it back with that version",
+            "This setup was recorded by an older Atlas; roll it back with that version",
         ));
     }
     if log.plan.fresh {
@@ -965,8 +970,8 @@ mod tests {
         Config {
             helper_uid: 502,
             socket_path: "/tmp/atlas-live-502/502.sock".into(),
-            identity_probe: "/Users/Shared/Understudy/understudy".into(),
-            input_socket: "/tmp/understudy-input-502/input.sock".into(),
+            identity_probe: "/Users/Shared/Atlas/atlas".into(),
+            input_socket: "/tmp/atlas-input-502/input.sock".into(),
             output_dir: "/Users/c/runs".into(),
         }
     }
@@ -998,11 +1003,11 @@ mod tests {
         let target = managed(&config(), &layout);
         assert_eq!(
             target.socket_path,
-            PathBuf::from("/Users/atlastest/.understudy/helper/502.sock")
+            PathBuf::from("/Users/atlastest/.atlas/helper/502.sock")
         );
         assert_eq!(
             target.input_socket,
-            PathBuf::from("/Users/atlastest/.understudy/input/input.sock")
+            PathBuf::from("/Users/atlastest/.atlas/input/input.sock")
         );
         assert_eq!(target.identity_probe, config().identity_probe);
         assert_eq!(target.output_dir, config().output_dir);
@@ -1015,7 +1020,7 @@ mod tests {
     fn logs_from_the_previous_daemon_are_recognised() {
         let mut legacy = serde_json::to_value(Log {
             version: 1,
-            plan: plan("/c/understudy.local.toml".into(), "a"),
+            plan: plan("/c/atlas.local.toml".into(), "a"),
             state: State::Applied,
             pending: Vec::new(),
             history: Vec::new(),
@@ -1034,7 +1039,7 @@ mod tests {
         let path = dir.path().join("deep/setup-502.json");
         let log = Log {
             version: 1,
-            plan: plan("/c/understudy.local.toml".into(), "a"),
+            plan: plan("/c/atlas.local.toml".into(), "a"),
             state: State::Applying,
             pending: vec!["g".into()],
             history: vec![("prepare".into(), "1".into())],
@@ -1052,7 +1057,7 @@ mod tests {
     #[test]
     fn plans_resolve_relative_configuration_against_the_file() {
         let dir = tempfile::tempdir().unwrap();
-        let config_path = dir.path().join("understudy.local.toml");
+        let config_path = dir.path().join("atlas.local.toml");
         let text = "helper_uid = 502\nsocket_path = \"s.sock\"\nidentity_probe = \"p\"\n\
                     input_socket = \"i.sock\"\noutput_dir = \"runs\"\n";
         let (old, _) = clients(&plan(config_path, text)).unwrap();

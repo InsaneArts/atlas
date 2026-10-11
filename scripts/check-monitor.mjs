@@ -1,4 +1,4 @@
-// Real browser + real running helper. Requires ./understudy monitor first.
+// Real browser + real running helper. Requires ./atlas monitor first.
 import { chromium } from 'playwright';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,7 +10,7 @@ const { url } = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
 const browser = await chromium.launch({
   headless: true,
   executablePath:
-    process.env.UNDERSTUDY_CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    process.env.ATLAS_CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
 });
 try {
   const page = await browser.newPage({

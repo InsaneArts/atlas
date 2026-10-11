@@ -102,7 +102,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     }
     let manager = facts::manager_name();
     require_graphical_session(uid, &manager)?;
-    facts::request_consent();
+    facts::type_exactly();
     let daemon = Arc::new(Daemon::new(
         manager,
         capture::main_display,
@@ -123,8 +123,15 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let outcome = loop {
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => break Ok(()),
-            _ = terminate.recv() => break Ok(()),
+            // Stopped from outside (macOS's Quit & Reopen after a new
+            // permission, say): exit unsuccessfully so launchd starts it
+            // again. Uninstalling unloads the job first, so it stays down.
+            _ = tokio::signal::ctrl_c() => {
+                break Err(Error::new("restart", "Interrupted; launchd starts it again"));
+            }
+            _ = terminate.recv() => {
+                break Err(Error::new("restart", "Stopped; launchd starts it again"));
+            }
             () = daemon.restarting.notified() => {
                 break Err(Error::new("restart", "Restarting at the controller's request"));
             }
@@ -401,7 +408,7 @@ mod tests {
         assert_eq!(hello[0]["ok"], true, "facts stay available");
     }
 
-    /// Reply shapes match the daemon Understudy used before (recorded).
+    /// Reply shapes match the daemon Atlas used before (recorded).
     #[tokio::test]
     async fn replies_keep_the_recorded_shapes() {
         let keys = |value: &Value| {
@@ -441,7 +448,15 @@ mod tests {
         let apps = &exchange(daemon(false), r#"{"op":"apps"}"#).await[0];
         assert_eq!(
             keys(&apps["apps"][0]),
-            ["active", "bundleId", "hidden", "name", "pid", "policy"]
+            [
+                "active",
+                "bundleId",
+                "executable",
+                "hidden",
+                "name",
+                "pid",
+                "policy"
+            ]
         );
     }
 

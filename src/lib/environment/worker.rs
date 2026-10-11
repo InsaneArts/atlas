@@ -1,6 +1,10 @@
 //! Runs inside the selected login. Every mutation is guarded and journaled.
 use super::{model::*, state::Store, *};
 
+/// The helper's answer for a plan it never applied.
+pub(super) const MISSING: &str =
+    "Nothing was copied into the helper with this ID, so there is nothing to undo";
+
 /// Internal worker; invoked through the verified helper, never through sudo.
 pub fn worker(path: &Path, apply: bool) -> Result<Value> {
     let packet: Packet = decode(&read_limited(path, MAX_RECORD)?)?;
@@ -425,7 +429,7 @@ fn finish_file(
 
 fn candidate(path: &Path, id: &str, index: usize, rollback: bool) -> PathBuf {
     path.parent().unwrap().join(format!(
-        ".understudy-{id}-{index}-{}",
+        ".atlas-{id}-{index}-{}",
         if rollback { "restore" } else { "install" }
     ))
 }
@@ -497,9 +501,7 @@ pub(super) fn rollback(
     let store = Store::open(home, apply)?;
     store.require_available(id)?;
     let mut ledger = store.ledger()?;
-    let mut transaction = store.transaction(id)?.ok_or_else(|| {
-        problem("Transaction is missing; legacy ledgers do not contain rollback history")
-    })?;
+    let mut transaction = store.transaction(id)?.ok_or_else(|| problem(MISSING))?;
     validate_plan(home, &transaction.plan)?;
     if transaction.phase == Phase::RolledBack {
         return report(&transaction, Ok(()), true);

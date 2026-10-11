@@ -1,6 +1,6 @@
-//! How Understudy talks to people and to programs. On a terminal it writes
+//! How Atlas talks to people and to programs. On a terminal it writes
 //! short plain text, asks one question at a time and shows progress; for
-//! programs (a pipe, `--json`, `UNDERSTUDY_JSON=1`) every result stays the
+//! programs (a pipe, `--json`, `ATLAS_JSON=1`) every result stays the
 //! same JSON it always was, so agents and scripts never see formatting.
 pub mod hints;
 pub mod progress;
@@ -21,7 +21,7 @@ pub enum Format {
 
 static FORMAT: OnceLock<Format> = OnceLock::new();
 
-/// `--json` wins; then `UNDERSTUDY_JSON` (`1` for JSON, `0` for text even
+/// `--json` wins; then `ATLAS_JSON` (`1` for JSON, `0` for text even
 /// through a pipe); otherwise text only when the output is a terminal.
 pub fn detect(json: bool, variable: Option<&str>, terminal: bool) -> Format {
     if json {
@@ -61,13 +61,13 @@ pub fn interactive() -> bool {
     human() && std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
 }
 
-/// What to try next once Understudy is set up, one command per line.
+/// What to try next once Atlas is set up, one command per line.
 pub fn suggestions() -> Vec<String> {
     let commands = [
-        ("understudy screenshot", "see the helper's screen"),
-        ("understudy menubar", "watch it, or take control"),
-        ("understudy doctor", "check that it is ready"),
-        ("understudy --help", "every command"),
+        ("atlas screenshot", "see the helper's screen"),
+        ("atlas menubar", "watch it, or take control"),
+        ("atlas doctor", "check that it is ready"),
+        ("atlas --help", "every command"),
     ];
     commands
         .iter()

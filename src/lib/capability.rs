@@ -28,15 +28,15 @@ use std::{
 };
 
 /// Default location of the compiled fixture (tests/live/DesktopFixture.swift).
-pub const FIXTURE: &str = "/Users/Shared/UnderstudyTests/DesktopFixture";
+pub const FIXTURE: &str = "/Users/Shared/AtlasTests/DesktopFixture";
 /// How long an observation stays meaningful.
 const FRESH: Duration = Duration::from_secs(30 * 60);
 /// Clock skew tolerated before an observation counts as from the future.
 const SKEW: u64 = 60;
 // Explicit escapes: the fixture's Open file ends in a decomposed e + U+0301,
 // which renders like the precomposed U+00E9 typed for Save but differs in bytes.
-const SAVE_TEXT: &str = "Understudy native Save \u{2014} \u{10e5}\u{10d0}\u{10e0}\u{10d7}\u{10e3}\u{10da}\u{10d8} \u{65e5}\u{672c}\u{8a9e} \u{1f9d1}\u{1f3fd}\u{200d}\u{1f4bb} \u{e9}";
-const OPEN_TEXT: &str = "Understudy native Open \u{2014} \u{10e5}\u{10d0}\u{10e0}\u{10d7}\u{10e3}\u{10da}\u{10d8} \u{65e5}\u{672c}\u{8a9e} \u{1f9d1}\u{1f3fd}\u{200d}\u{1f4bb} e\u{301}\n";
+const SAVE_TEXT: &str = "Atlas native Save \u{2014} \u{10e5}\u{10d0}\u{10e0}\u{10d7}\u{10e3}\u{10da}\u{10d8} \u{65e5}\u{672c}\u{8a9e} \u{1f9d1}\u{1f3fd}\u{200d}\u{1f4bb} \u{e9}";
+const OPEN_TEXT: &str = "Atlas native Open \u{2014} \u{10e5}\u{10d0}\u{10e0}\u{10d7}\u{10e3}\u{10da}\u{10d8} \u{65e5}\u{672c}\u{8a9e} \u{1f9d1}\u{1f3fd}\u{200d}\u{1f4bb} e\u{301}\n";
 
 /// What must be unchanged for an observation to still describe this session.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -108,7 +108,7 @@ fn problem(message: impl Into<String>) -> Error {
 
 fn record_path(uid: u32) -> Result<PathBuf> {
     Ok(home()?
-        .join("Library/Application Support/Understudy")
+        .join("Library/Application Support/Atlas")
         .join(format!("native-{uid}.json")))
 }
 
@@ -154,8 +154,8 @@ pub fn assess(record: Option<&Record>, current: Option<&Generation>, at: u64) ->
     let Some(record) = record else {
         return json!({
             "state": "unknown",
-            "reason": "No native Save/Open observation. Run understudy verify-native; dialogs \
-                       were qualified only with an authenticated Screen Sharing session.",
+            "reason": "Native Save and Open panels are known to work only while a Screen \
+                       Sharing session is connected to the helper.",
         });
     };
     let (state, reason) = if !record.consistent() {
@@ -319,7 +319,7 @@ fn launched(output: &str) -> Option<(u32, PathBuf)> {
     let suffix = directory
         .file_name()?
         .to_str()?
-        .strip_prefix("understudy-canary.")?;
+        .strip_prefix("atlas-canary.")?;
     let canary = directory.parent() == Some(Path::new("/private/tmp"))
         && !suffix.is_empty()
         && suffix.bytes().all(|c| c.is_ascii_alphanumeric());
@@ -538,7 +538,7 @@ impl Canary<'_> {
         .await
     }
     async fn save(&mut self) -> Result<()> {
-        let expected = self.fixture.file("understudy-fixture.txt");
+        let expected = self.fixture.file("atlas-fixture.txt");
         self.at("fixture text receives focus and input");
         let state = self.fixture.state();
         let x = state["windowX"].as_f64().unwrap_or_default() + 100.0;
@@ -577,7 +577,7 @@ impl Canary<'_> {
         Ok(())
     }
     async fn open(&mut self) -> Result<()> {
-        let expected = self.fixture.file("understudy-open-fixture.txt");
+        let expected = self.fixture.file("atlas-open-fixture.txt");
         self.at("open fixture file prepared");
         if fs::read_to_string(&expected).ok().as_deref() != Some(OPEN_TEXT) {
             return Err(problem("The fixture did not prepare its Open file"));
@@ -648,8 +648,8 @@ impl Canary<'_> {
             "events.jsonl",
             "panel-observer.json",
             "fixture.log",
-            "understudy-fixture.txt",
-            "understudy-open-fixture.txt",
+            "atlas-fixture.txt",
+            "atlas-open-fixture.txt",
         ] {
             match fs::read(self.fixture.file(name)) {
                 Ok(bytes) => write_private(&directory.join(name), &bytes)?,
@@ -675,7 +675,7 @@ impl Canary<'_> {
             "i=$((i+1)); [ $i -gt 50 ] && exit 4; sleep 0.1; done; ",
             "fi; ",
             "[ \"$4\" = remove ] || exit 0; ",
-            "case \"$3\" in /private/tmp/understudy-canary.?*) /bin/rm -rf -- \"$3\";; ",
+            "case \"$3\" in /private/tmp/atlas-canary.?*) /bin/rm -rf -- \"$3\";; ",
             "*) exit 5;; esac",
         );
         let reply = self
@@ -704,7 +704,7 @@ impl Canary<'_> {
 /// a slow or outdated fixture is still cleaned up.
 async fn launch(client: &Client, ownership: &Ownership, program: &Path) -> Result<Fixture> {
     let script = concat!(
-        "d=$(/usr/bin/mktemp -d /private/tmp/understudy-canary.XXXXXX) || exit 1; ",
+        "d=$(/usr/bin/mktemp -d /private/tmp/atlas-canary.XXXXXX) || exit 1; ",
         "/bin/chmod 755 \"$d\" || exit 1; umask 022; ",
         "nohup \"$1\" \"$d\" >\"$d/fixture.log\" 2>&1 </dev/null & ",
         "echo \"$! $d\"",
@@ -736,6 +736,17 @@ async fn launch(client: &Client, ownership: &Ownership, program: &Path) -> Resul
 
 /// Run the native Save/Open canary and record the dated outcome.
 pub async fn verify(client: &Client, fixture: &Path) -> Result<Value> {
+    // A development check: its test app is built from a checkout, never shipped.
+    if !fixture.is_file() {
+        return Err(Error::new(
+            "native",
+            format!(
+                "verify-native is a development check: it needs Atlas's test app at {}, built \
+                 from tests/live/DesktopFixture.swift in a checkout.",
+                fixture.display()
+            ),
+        ));
+    }
     let uid = client.config.helper_uid;
     let ownership = client.controller.acquire(false)?;
     let status = client.status().await;
@@ -746,7 +757,7 @@ pub async fn verify(client: &Client, fixture: &Path) -> Result<Value> {
         .ok_or_else(|| {
             Error::new(
                 "permission",
-                "verify-native needs a hidden helper with ready input; see understudy doctor",
+                "verify-native needs a hidden helper with ready input; see atlas doctor",
             )
         })?;
     let boot = boot_time().ok_or_else(|| problem("The boot time is unavailable"))?;
@@ -779,7 +790,7 @@ pub async fn verify(client: &Client, fixture: &Path) -> Result<Value> {
     };
     write_record(uid, &record)?;
     let mut report = json!({
-        "ok": true,
+        "ok": record.passed,
         "passed": record.passed,
         "checks": record.checks,
         "evidence": record.evidence,
@@ -893,17 +904,17 @@ mod tests {
     #[test]
     fn launcher_output_must_name_a_canary_directory() {
         assert_eq!(
-            launched("123 /private/tmp/understudy-canary.Ab12Cd\n"),
-            Some((123, "/private/tmp/understudy-canary.Ab12Cd".into()))
+            launched("123 /private/tmp/atlas-canary.Ab12Cd\n"),
+            Some((123, "/private/tmp/atlas-canary.Ab12Cd".into()))
         );
         for output in [
-            "123 /private/tmp/understudy-canary.",
+            "123 /private/tmp/atlas-canary.",
             "123 /private/tmp/other.Ab12Cd",
-            "123 /private/tmp/understudy-canary.x/nested",
-            "123 /private/tmp/understudy-canary.a-b",
-            "123 /tmp/understudy-canary.Ab12Cd",
-            "1 /private/tmp/understudy-canary.Ab12Cd",
-            "x /private/tmp/understudy-canary.Ab12Cd",
+            "123 /private/tmp/atlas-canary.x/nested",
+            "123 /private/tmp/atlas-canary.a-b",
+            "123 /tmp/atlas-canary.Ab12Cd",
+            "1 /private/tmp/atlas-canary.Ab12Cd",
+            "x /private/tmp/atlas-canary.Ab12Cd",
             "",
         ] {
             assert_eq!(launched(output), None, "{output:?}");

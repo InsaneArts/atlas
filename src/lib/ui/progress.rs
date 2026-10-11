@@ -54,7 +54,9 @@ impl Spinner {
         }
         let bar = ProgressBar::new_spinner();
         bar.set_style(
-            ProgressStyle::with_template("{spinner:.cyan} {msg} {elapsed:.dim}")
+            // The message is cut to the terminal's width: a wrapped line
+            // would be redrawn over the lines above it.
+            ProgressStyle::with_template("{spinner:.cyan} {wide_msg} {elapsed:.dim}")
                 .unwrap_or_else(|_| ProgressStyle::default_spinner())
                 .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
         );

@@ -40,9 +40,9 @@ pub fn doctor(value: &Value, verbose: bool) -> String {
         } else {
             format!("  {}", style::dim(facts.join(" · ")))
         };
-        lines.push(format!("{} Understudy is ready{detail}", style::ok()));
+        lines.push(format!("{} Atlas is ready{detail}", style::ok()));
     } else {
-        lines.push(format!("{} Understudy is not ready", style::fail()));
+        lines.push(format!("{} Atlas is not ready", style::fail()));
         lines.push(String::new());
         for check in value["checks"].as_array().into_iter().flatten() {
             let name = check["name"].as_str().unwrap_or("Check");
@@ -70,7 +70,7 @@ pub fn doctor(value: &Value, verbose: bool) -> String {
     let native = &value["capabilities"]["nativeDialogs"];
     if native["state"] == "failed" {
         lines.push(format!(
-            "{} Native Save and Open dialogs failed their last check. understudy verify-native checks again.",
+            "{} Native Save and Open dialogs failed their last check. atlas verify-native checks again.",
             style::warn()
         ));
     }

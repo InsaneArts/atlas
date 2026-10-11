@@ -1,11 +1,11 @@
 import Foundation
 import ServiceManagement
 
-/// "Open at login": the LaunchAgent bundled in Understudy.app at
+/// "Open at login": the LaunchAgent bundled in Atlas.app at
 /// Contents/Library/LaunchAgents, registered with the system so the menu bar
 /// runs whenever the person logs in, and follows the app through updates.
 public struct LoginItem: Sendable {
-    public static let plist = "com.insanearts.understudy.menubar.plist"
+    public static let plist = "com.insanearts.atlas.menubar.plist"
 
     public init() {}
 

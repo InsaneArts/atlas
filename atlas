@@ -1,0 +1,9 @@
+#!/bin/sh
+# Checkout convenience; installed builds run the Rust executable directly.
+set -eu
+atlas_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ ! -x "$atlas_root/target/debug/atlas" ]; then
+    printf '%s\n' 'Build first with: cargo build' >&2
+    exit 1
+fi
+exec "$atlas_root/target/debug/atlas" "$@"

@@ -1,14 +1,6 @@
 mod help;
 
-use clap::{FromArgMatches, Parser, Subcommand, ValueEnum};
-use serde_json::{Value, json};
-use std::{
-    io::{IsTerminal, Read, Write},
-    path::PathBuf,
-    process::ExitCode,
-    time::Duration,
-};
-use understudy::{
+use atlas::{
     actions::Button,
     agent,
     client::Client,
@@ -25,6 +17,14 @@ use understudy::{
     },
     viewer,
 };
+use clap::{FromArgMatches, Parser, Subcommand, ValueEnum};
+use serde_json::{Value, json};
+use std::{
+    io::{IsTerminal, Read, Write},
+    path::PathBuf,
+    process::ExitCode,
+    time::Duration,
+};
 
 #[derive(Parser)]
 #[command(
@@ -39,14 +39,12 @@ struct Cli {
     #[arg(
         long,
         value_name = "FILE",
-        env = "UNDERSTUDY_CONFIG",
+        env = "ATLAS_CONFIG",
         hide_env = true,
-        hide_default_value = true,
         help_heading = "Global options",
-        default_value = understudy::config::DEFAULT_PATH,
         global = true
     )]
-    config: PathBuf,
+    config: Option<PathBuf>,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -99,7 +97,7 @@ enum Command {
     },
     /// Inspect or repair the helper's setup (advanced).
     #[command(
-        long_about = "Inspect or repair the helper's setup (advanced).\n\nWithout flags, report the helper account, configuration, endpoints and services without changing anything. --apply runs Understudy's own signed helper daemon as a managed LaunchAgent on a private socket directory beside the existing capture job, moves input and the configuration over once it is verified, then retires the old job, recording every step so an interruption resumes. --rollback restores the previous job and configuration."
+        long_about = "Inspect or repair the helper's setup (advanced).\n\nWithout flags, report the helper account, configuration, endpoints and services without changing anything. --apply runs Atlas's own signed helper daemon as a managed LaunchAgent on a private socket directory beside the existing capture job, moves input and the configuration over once it is verified, then retires the old job, recording every step so an interruption resumes. --rollback restores the previous job and configuration."
     )]
     Setup {
         /// Helper account short name. Defaults to the configured helper.
@@ -114,7 +112,7 @@ enum Command {
     },
     #[command(hide = true)]
     SetupHelper { request: String },
-    /// Show where Understudy keeps its settings, sockets and screenshots.
+    /// Show where Atlas keeps its settings, sockets and screenshots.
     Config,
     /// Show the helper: who it is, where it is and what it may do.
     Status,
@@ -129,7 +127,7 @@ enum Command {
     /// Exercises real Save/Open dialogs with the AppKit fixture and records the outcome.
     VerifyNative {
         /// Compiled tests/live/DesktopFixture.swift inside a helper-readable path.
-        #[arg(long, default_value = understudy::capability::FIXTURE)]
+        #[arg(long, default_value = atlas::capability::FIXTURE)]
         fixture: PathBuf,
     },
     /// Put this build where the helper can run it.
@@ -148,7 +146,7 @@ enum Command {
     /// its menu; that stops its viewer and releases control.
     Menubar {
         /// Local port for the viewer it opens.
-        #[arg(long, default_value_t = 8765)]
+        #[arg(long, default_value_t = 8765, value_parser = clap::value_parser!(u16).range(1..))]
         port: u16,
         /// Serve the menu bar from this process (how it runs on its own).
         #[arg(long, hide = true, conflicts_with_all = ["render", "login"])]
@@ -172,6 +170,12 @@ enum Command {
     /// List the apps open in the helper.
     Apps,
     /// Send several actions at once (a JSON array, or @path/to/actions.json).
+    ///
+    /// Each action is an object with a "type": move {x, y}; click {x, y,
+    /// button?, count?, modifiers?}; drag {fromX, fromY, toX, toY, button?};
+    /// scroll {x, y, dx?, dy?}; type {text}; key {key}; wait {ms}. Up to 32
+    /// actions that finish within two seconds; coordinates are display points.
+    /// Example: [{"type":"click","x":200,"y":120},{"type":"type","text":"hi"}]
     Input {
         /// A JSON array of actions, or @path/to/actions.json.
         actions: String,
@@ -220,7 +224,7 @@ enum Command {
         #[arg(long, default_value_t = 200)]
         max: usize,
     },
-    /// Print the guide agents read to use Understudy.
+    /// Print the guide agents read to use Atlas.
     AgentGuide {
         /// Print the agent plugin's skill (SKILL.md) instead.
         #[arg(long, hide = true, conflicts_with = "commands")]
@@ -319,9 +323,11 @@ enum Command {
         #[arg(value_name = "FILE|URL")]
         targets: Vec<String>,
     },
-    /// Quit an app in the helper and remove any copy `open` made of it.
+    /// Quit an app in the helper and remove the copies `open` made for it.
+    ///
+    /// The app quits at once, without asking to save: save first (key cmd+s).
     Close {
-        /// The app's name, as `understudy apps` lists it.
+        /// The app's name, as `atlas apps` lists it.
         #[arg(long)]
         app: String,
     },
@@ -344,7 +350,7 @@ enum Command {
     /// Run a command in the helper and print its output.
     Run {
         /// The program and its arguments, after `--`.
-        #[arg(last = true, required = true)]
+        #[arg(last = true, required = true, value_name = "COMMAND")]
         argv: Vec<String>,
     },
     /// Restart the helper after something went wrong.
@@ -353,7 +359,7 @@ enum Command {
     Restart,
     /// Lock the screen so you can switch to the helper.
     ///
-    /// You sign in on the lock screen; Understudy never sees a password.
+    /// You sign in on the lock screen; Atlas never sees a password.
     Switch {
         /// The account you will choose on the lock screen (the helper by default).
         account: Option<String>,
@@ -367,7 +373,7 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
-    /// Update Understudy, checking its signature first.
+    /// Update Atlas, checking its signature first.
     ///
     /// Verifies the release's checksum and Developer ID signature, then moves the helper onto it.
     Update {
@@ -381,11 +387,11 @@ enum Command {
         #[arg(long)]
         version: Option<String>,
     },
-    /// Set Understudy up, step by step (safe to run again).
+    /// Set Atlas up, step by step (safe to run again).
     ///
     /// Helper account, first sign-in, permissions, the helper job and input.
     Init,
-    /// Remove Understudy from this Mac (asks first).
+    /// Remove Atlas from this Mac (asks first).
     ///
     /// The helper account and its files stay; the app goes to the Trash.
     Uninstall {
@@ -398,7 +404,7 @@ enum Command {
     },
     /// Connect Claude Code and Codex, or show which are connected.
     ///
-    /// Adds a plugin that teaches the agent to use Understudy and guides setup.
+    /// Adds a plugin that teaches the agent to use Atlas and guides setup.
     Agents {
         #[command(subcommand)]
         action: Option<AgentsCommand>,
@@ -410,7 +416,7 @@ enum Command {
 
 #[derive(Subcommand)]
 enum AgentsCommand {
-    /// Which agents are on this Mac and whether Understudy is connected.
+    /// Which agents are on this Mac and whether Atlas is connected.
     Status {
         /// One plain line for an agent's session start.
         #[arg(long)]
@@ -437,8 +443,8 @@ enum AgentsCommand {
 }
 
 /// The agents named by --claude/--codex (none means every installed one).
-fn chosen(claude: bool, codex: bool) -> Vec<understudy::agents::Agent> {
-    use understudy::agents::Agent;
+fn chosen(claude: bool, codex: bool) -> Vec<atlas::agents::Agent> {
+    use atlas::agents::Agent;
     [(claude, Agent::Claude), (codex, Agent::Codex)]
         .into_iter()
         .filter_map(|(on, agent)| on.then_some(agent))
@@ -458,13 +464,19 @@ enum EnvironmentCommand {
     /// Run a command with the selected helper environment and helper tool paths.
     Run {
         /// The program and its arguments, after `--`.
-        #[arg(last = true, required = true)]
+        #[arg(last = true, required = true, value_name = "COMMAND")]
         argv: Vec<String>,
     },
-    /// Apply or resume an immutable environment plan returned by preview.
-    Apply { plan_id: String },
-    /// Preview rollback, or restore matching managed state with --apply.
+    /// Copy a previewed plan into the helper (or finish one that stopped).
+    Apply {
+        /// The ID the preview printed.
+        #[arg(value_name = "ID")]
+        plan_id: String,
+    },
+    /// Show what undoing a copy would do, or undo it with --apply.
     Rollback {
+        /// The ID the copy printed.
+        #[arg(value_name = "ID")]
         transaction_id: String,
         #[arg(long)]
         apply: bool,
@@ -490,19 +502,19 @@ fn main() -> ExitCode {
         Err(error) => return help::usage(error),
     };
     let mut cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
-    cli.config = understudy::config::effective(cli.config);
-    // `understudy` alone shows what it can do.
+    let config = atlas::config::effective(cli.config.take());
+    // `atlas` alone shows what it can do.
     let Some(command) = cli.command.take() else {
         let _ = help::command().print_help();
         return ExitCode::SUCCESS;
     };
-    // Commands run by Understudy itself always answer in JSON.
+    // Commands run by Atlas itself always answer in JSON.
     let format = if machine_only(&command) {
         Format::Json
     } else {
         ui::detect(
             cli.json,
-            std::env::var("UNDERSTUDY_JSON").ok().as_deref(),
+            std::env::var("ATLAS_JSON").ok().as_deref(),
             std::io::stdout().is_terminal(),
         )
     };
@@ -515,7 +527,7 @@ fn main() -> ExitCode {
         socket,
     } = command
     {
-        return match understudy::daemon::serve::serve_blocking(uid, controller_uid, socket) {
+        return match atlas::daemon::serve::serve_blocking(uid, controller_uid, socket) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("{}", json!(error));
@@ -539,9 +551,9 @@ fn main() -> ExitCode {
     // Commands that ask questions or wait for the person stop cleanly on
     // Ctrl-C, saying what that means for each.
     let interrupted = match command {
-        Command::Init => Some("Stopped. Run understudy init again to continue."),
+        Command::Init => Some("Stopped. Run atlas init again to continue."),
         Command::Switch { .. } | Command::Uninstall { .. } => Some("Stopped."),
-        Command::Update { .. } => Some("Stopped. Run understudy update again to finish."),
+        Command::Update { .. } => Some("Stopped. Run atlas update again to finish."),
         _ => None,
     };
     let result = tokio::runtime::Builder::new_multi_thread()
@@ -554,7 +566,7 @@ fn main() -> ExitCode {
                 if let Some(message) = interrupted.filter(|_| ui::interactive()) {
                     stop_cleanly_on_interrupt(message);
                 }
-                execute(cli.config, command).await
+                execute(config, command).await
             })
         });
     match result {
@@ -575,7 +587,7 @@ fn main() -> ExitCode {
                 let mut refusal = json!(error);
                 refusal["refusal"] = json!(request);
                 eprintln!("{refusal}");
-                return ExitCode::from(understudy::environment::WORKER_REFUSED);
+                return ExitCode::from(atlas::environment::WORKER_REFUSED);
             }
             match format {
                 Format::Json => eprintln!("{}", json!(error)),
@@ -586,8 +598,8 @@ fn main() -> ExitCode {
     }
 }
 
-/// Commands Understudy runs itself (in the helper, or as a step of another
-/// command), whose output another Understudy process reads.
+/// Commands Atlas runs itself (in the helper, or as a step of another
+/// command), whose output another Atlas process reads.
 fn machine_only(command: &Command) -> bool {
     matches!(
         command,
@@ -643,10 +655,24 @@ fn view(command: &Command) -> View {
         } => View::Run,
         Command::Environment {
             command:
-                None | Some(EnvironmentCommand::Apply { .. } | EnvironmentCommand::Rollback { .. }),
+                None
+                | Some(
+                    EnvironmentCommand::Apply { .. }
+                    | EnvironmentCommand::Rollback { .. }
+                    | EnvironmentCommand::Profile { .. },
+                ),
             ..
         } => View::Environment,
         Command::Close { .. } => View::Close,
+        Command::Environment {
+            command: Some(EnvironmentCommand::Discover { .. }),
+            ..
+        } => View::Discover,
+        Command::Setup {
+            apply: false,
+            rollback: false,
+            ..
+        } => View::SetupPreview,
         Command::Open { app, targets, .. } => View::Open(
             app.iter()
                 .chain(targets)
@@ -704,6 +730,9 @@ fn emit(format: Format, view: &View, value: &Value) {
 fn stop_cleanly_on_interrupt(message: &'static str) {
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
+            // An agent tool Atlas started in its own process group does not
+            // see the terminal's Ctrl-C: stop it too, before saying stopped.
+            atlas::agents::stop_running();
             let _ = console::Term::stderr().show_cursor();
             eprintln!("\n{} {message}", style::unknown());
             std::process::exit(130);
@@ -713,12 +742,12 @@ fn stop_cleanly_on_interrupt(message: &'static str) {
 
 #[cfg(target_os = "macos")]
 fn windows_info() -> Result<Value> {
-    Ok(json!({ "ok": true, "windows": understudy::native::windows::windows()? }))
+    Ok(json!({ "ok": true, "windows": atlas::native::windows::windows()? }))
 }
 #[cfg(target_os = "macos")]
 fn elements_info(pid: i32) -> Result<Value> {
-    let limits = understudy::native::ax::Limits::default();
-    let snapshot = understudy::native::ax::elements(pid, limits)?;
+    let limits = atlas::native::ax::Limits::default();
+    let snapshot = atlas::native::ax::elements(pid, limits)?;
     Ok(json!({
         "ok": true,
         "elements": snapshot.elements,
@@ -740,7 +769,7 @@ fn windows_info() -> Result<Value> {
 
 #[cfg(target_os = "macos")]
 async fn input_service(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<Value> {
-    understudy::native::service::serve(uid, controller_uid, socket).await?;
+    atlas::native::service::serve(uid, controller_uid, socket).await?;
     Ok(Value::Null)
 }
 #[cfg(target_os = "macos")]
@@ -773,7 +802,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             }
             return Ok(Value::Null);
         }
-        Command::SessionInfo => return understudy::native::session_info(),
+        Command::SessionInfo => return atlas::native::session_info(),
         Command::WindowsInfo => return windows_info(),
         Command::ElementsInfo { pid } => return elements_info(pid),
         Command::InputService {
@@ -786,36 +815,36 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             controller_uid,
             socket,
         } => return helper_serve(uid, controller_uid, socket).await,
-        Command::SetupHelper { request } => return understudy::setup::helper::run(&request),
+        Command::SetupHelper { request } => return atlas::setup::helper::run(&request),
         Command::Update {
             allow_unnotarized,
             force,
             version,
         } => return update(&config, allow_unnotarized, force, version),
         Command::UpdateFinish => return update_finish(&config),
-        Command::Init => return understudy::init::run(&config).await,
+        Command::Init => return atlas::init::run(&config).await,
         Command::Agents { action } => {
             return match action.unwrap_or(AgentsCommand::Status { brief: false }) {
                 AgentsCommand::Status { brief: true } => {
-                    println!("{}", understudy::agents::brief(&config).await);
+                    println!("{}", atlas::agents::brief(&config).await);
                     Ok(Value::Null)
                 }
                 AgentsCommand::Status { brief: false } => {
                     let _spinner = Spinner::new("Checking Claude Code and Codex…");
-                    Ok(understudy::agents::status())
+                    Ok(atlas::agents::status())
                 }
                 AgentsCommand::Install { claude, codex } => {
                     let _spinner = Spinner::new("Connecting…");
-                    understudy::agents::change(&chosen(claude, codex), false)
+                    atlas::agents::change(&chosen(claude, codex), false)
                 }
                 AgentsCommand::Remove { claude, codex } => {
                     let _spinner = Spinner::new("Disconnecting…");
-                    understudy::agents::change(&chosen(claude, codex), true)
+                    atlas::agents::change(&chosen(claude, codex), true)
                 }
             };
         }
         Command::Uninstall { keep_config, yes } => {
-            return understudy::uninstall::run(&config, keep_config, yes).await;
+            return atlas::uninstall::run(&config, keep_config, yes).await;
         }
         Command::Menubar {
             login: Some(login), ..
@@ -830,7 +859,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             helper,
             apply: false,
             rollback: false,
-        } => return understudy::setup::preview(&config, helper.as_deref()).await,
+        } => return atlas::setup::preview(&config, helper.as_deref()).await,
         command => command,
     };
     let client = Client::new(Config::load(&config)?)?;
@@ -856,27 +885,54 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             // mutations its own log records and refuses any other.
             let ownership = client.controller.acquire(true)?;
             if apply {
-                understudy::setup::migrate::apply(&config, &ownership).await
+                atlas::setup::migrate::apply(&config, &ownership).await
             } else {
-                understudy::setup::migrate::rollback(&config, &ownership).await
+                atlas::setup::migrate::rollback(&config, &ownership).await
             }
         }
         Command::Config => Ok(json!({ "ok": true, "config": client.config, "path": config })),
         Command::Status => Ok(client.status().await),
         Command::Doctor { verbose } => {
-            let report =
-                understudy::capability::doctor(client.status().await, client.config.helper_uid);
+            let mut report =
+                atlas::capability::doctor(client.status().await, client.config.helper_uid);
+            let uid = client.config.helper_uid;
+            if let Ok(Some(account)) = atlas::setup::account_with_uid(uid)
+                && atlas::setup::administrator(&account.name) != Some(false)
+            {
+                // The helper must stay a standard account; init refuses this too.
+                report["ready"] = json!(false);
+                if let Some(steps) = report["nextSteps"].as_array_mut() {
+                    steps.insert(
+                        0,
+                        json!(format!(
+                            "{} must be a standard account, not an administrator: change it in System Settings › Users & Groups.",
+                            account.name
+                        )),
+                    );
+                }
+            }
+            if let Ok(Some(account)) = atlas::setup::account_with_uid(uid)
+                && atlas::session::leftover_session(uid, &account.name, &account.home)
+            {
+                let step = format!(
+                    "macOS still runs a session of a deleted account with {}'s user ID and mixes it up with the helper. Restart the Mac.",
+                    account.name
+                );
+                // Not ready: init refuses this state too.
+                report["ready"] = json!(false);
+                if let Some(steps) = report["nextSteps"].as_array_mut() {
+                    steps.insert(0, json!(step));
+                }
+            }
             // People see the summary either way; programs get the full status
             // only when they ask for it.
             Ok(if verbose || ui::human() {
                 report
             } else {
-                understudy::capability::summary(report)
+                atlas::capability::summary(report)
             })
         }
-        Command::VerifyNative { fixture } => {
-            understudy::capability::verify(&client, &fixture).await
-        }
+        Command::VerifyNative { fixture } => atlas::capability::verify(&client, &fixture).await,
         Command::Environment {
             manifest,
             apply,
@@ -908,7 +964,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
                 let manifest = manifest.ok_or_else(|| {
                     Error::new(
                         "usage",
-                        "understudy environment needs a profile file, or a command such as discover or run.",
+                        "atlas environment needs a profile file, or a command such as discover or run.",
                     )
                 })?;
                 environment::sync(&client, &manifest, apply).await
@@ -939,8 +995,8 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
                     Ok(Value::Null)
                 }
                 None => {
-                    let record = client.output_dir()?.join("monitor.json");
-                    menubar::start(&config, port, &record).await?;
+                    let output = client.output_dir()?.to_path_buf();
+                    menubar::start(&config, port, &output).await?;
                     Ok(Value::Null)
                 }
             }
@@ -986,7 +1042,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             agent::elements(&client, &target, &agent::ElementFilter { role, name }, max).await
         }
         Command::Readiness { tools, apps } => {
-            understudy::readiness::readiness(&client, &tools, &apps).await
+            atlas::readiness::readiness(&client, &tools, &apps).await
         }
         Command::Move { x, y } => act(&client, json!([{ "type": "move", "x": x, "y": y }])).await,
         Command::Drag {
@@ -1024,7 +1080,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             };
             agent::type_text(&client, &text).await
         }
-        Command::Key { keys } => act(&client, agent::keys(&keys)).await,
+        Command::Key { keys } => act(&client, agent::keys(&keys)?).await,
         Command::Windows { app, title, all } => {
             agent::list(&client, &agent::WindowFilter { app, title, all }).await
         }
@@ -1085,7 +1141,7 @@ fn switch(
     list: bool,
     yes: bool,
 ) -> Result<Value> {
-    use understudy::switch;
+    use atlas::switch;
     let helper = Config::load(config).ok().map(|config| config.helper_uid);
     let accounts = switch::accounts(helper)?;
     if list {
@@ -1130,7 +1186,7 @@ fn update(
     force: bool,
     version: Option<String>,
 ) -> Result<Value> {
-    let source = understudy::update::Source::from_env(version);
+    let source = atlas::update::Source::from_env(version);
     // Nothing else may control the helper while its app is replaced: no
     // viewer or agent, and no action of unknown outcome. The new version's
     // steps take control again one by one.
@@ -1139,16 +1195,16 @@ fn update(
         Err(_) => None,
     };
     let spinner = Spinner::new("Checking for an update…");
-    let mut report = understudy::update::install(&source, allow_unnotarized, force)?;
+    let mut report = atlas::update::install(&source, allow_unnotarized, force)?;
     drop(exclusion);
     if report["updated"] != true {
         return Ok(report);
     }
     spinner.set("Moving the helper onto the new version…");
-    let executable = understudy::update::installed_app()?.join("Contents/MacOS/understudy");
+    let executable = atlas::update::installed_app()?.join("Contents/MacOS/atlas");
     // update-finish always answers in JSON; no flag, so a release that
     // predates --json can finish too.
-    let output = std::process::Command::new(executable)
+    let output = std::process::Command::new(&executable)
         .arg("update-finish")
         .arg("--config")
         .arg(config)
@@ -1159,9 +1215,30 @@ fn update(
     report["ok"] = finished["ok"].clone();
     report["helper"] = finished;
     if report["ok"] == true {
-        report["previous"] = understudy::update::finished()?;
+        report["previous"] = atlas::update::finished()?;
+        // A running menu bar moves onto the new version too.
+        let output = Config::load(config)
+            .ok()
+            .and_then(|loaded| Client::new(loaded).ok())
+            .and_then(|client| client.output_dir().ok().map(std::path::Path::to_path_buf));
+        if let Some(port) = output.and_then(|output| atlas::menubar::stop(&output)) {
+            spinner.set("Restarting the menu bar…");
+            let restarted = std::process::Command::new(&executable)
+                .arg("menubar")
+                .arg("--port")
+                .arg(port.to_string())
+                .arg("--config")
+                .arg(config)
+                .env("ATLAS_JSON", "1")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success());
+            report["menubarRestarted"] = json!(restarted);
+        }
     } else {
-        report["next"] = json!("Fix the failed step, then run understudy update again to resume");
+        report["next"] = json!("Fix the failed step, then run atlas update again to resume");
     }
     Ok(report)
 }
@@ -1172,14 +1249,14 @@ fn update(
 /// first failure and names it.
 fn update_finish(config: &std::path::Path) -> Result<Value> {
     let Ok(loaded) = Config::load(config) else {
-        return Ok(json!({"ok": true, "next": "understudy init"}));
+        return Ok(json!({"ok": true, "next": "atlas init"}));
     };
     let executable = std::env::current_exe()?;
     // The daemon restarts first: a daemon whose app was swapped under it can
     // no longer vouch (to TCC) for a new input service it starts, while the
     // input service it already runs is cleaned up by the restart itself.
     let mut steps: Vec<&[&str]> = vec![&["install"], &["restart"], &["start-input"]];
-    if understudy::setup::migrate::recorded(loaded.helper_uid) {
+    if atlas::setup::migrate::recorded(loaded.helper_uid) {
         steps.push(&["setup", "--apply"]);
     }
     let mut done = Vec::new();
@@ -1204,29 +1281,29 @@ fn update_finish(config: &std::path::Path) -> Result<Value> {
         }
         done.push(step.join(" "));
     }
-    let agents = understudy::agents::refresh();
+    let agents = atlas::agents::refresh();
     Ok(json!({"ok": true, "completedSteps": done, "agents": agents}))
 }
 
 /// Every visible command with its full help, as Markdown: the agent
 /// plugin's commands reference (a test keeps the plugin's copy equal).
 fn command_reference() -> String {
-    use clap::CommandFactory;
     let mut text = String::from(
-        "# Understudy commands\n\nGenerated from `understudy --help`. Every command prints \
+        "# Atlas commands\n\nGenerated from `atlas --help`. Every command prints \
          JSON when its output is not a terminal (or with `--json`) and exits non-zero on \
          failure.\n",
     );
-    let mut root = Cli::command().bin_name("understudy");
+    // With each command's examples, as `--help` shows them.
+    let mut root = help::command().bin_name("atlas");
     root.build();
-    // In the order of `understudy --help`.
+    // In the order of `atlas --help`.
     for name in help::GROUPS.iter().flat_map(|(_, names)| names.iter()) {
         let Some(command) = root.find_subcommand_mut(name) else {
             continue;
         };
         let help = command.render_long_help().to_string();
         text.push_str(&format!(
-            "\n## understudy {name}\n\n```text\n{}\n```\n",
+            "\n## atlas {name}\n\n```text\n{}\n```\n",
             help.trim_end()
         ));
     }
@@ -1297,17 +1374,16 @@ mod tests {
     /// The agent plugin's command reference is exactly this CLI's help.
     #[test]
     fn the_plugin_command_reference_matches_this_cli() {
-        let checked_in =
-            include_str!("../../agents/understudy/skills/understudy/references/commands.md");
+        let checked_in = include_str!("../../agents/atlas/skills/atlas/references/commands.md");
         assert_eq!(
             checked_in,
             command_reference(),
-            "regenerate with: understudy agent-guide --commands"
+            "regenerate with: atlas agent-guide --commands"
         );
     }
 
     fn parse(args: &[&str]) -> std::result::Result<Cli, clap::Error> {
-        Cli::try_parse_from(std::iter::once("understudy").chain(args.iter().copied()))
+        Cli::try_parse_from(std::iter::once("atlas").chain(args.iter().copied()))
     }
 
     #[test]

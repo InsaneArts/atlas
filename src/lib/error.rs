@@ -26,7 +26,7 @@ impl Error {
     }
 }
 
-/// Every failure code Understudy reports. Agents act on these (see the
+/// Every failure code Atlas reports. Agents act on these (see the
 /// plugin's troubleshooting.md, which a test keeps in step).
 pub const CODES: &[&str] = &[
     "agents",
@@ -72,7 +72,7 @@ pub const CODES: &[&str] = &[
     "windows",
 ];
 
-/// The code another Understudy process reported, if it is one of ours.
+/// The code another Atlas process reported, if it is one of ours.
 pub fn code(name: &str) -> Option<&'static str> {
     CODES.iter().copied().find(|code| *code == name)
 }
@@ -101,8 +101,7 @@ mod tests {
     /// Agents learn every code from the plugin's table, and only those.
     #[test]
     fn the_codes_are_the_documented_ones() {
-        let table =
-            include_str!("../../agents/understudy/skills/understudy/references/troubleshooting.md");
+        let table = include_str!("../../agents/atlas/skills/atlas/references/troubleshooting.md");
         let documented: Vec<&str> = table
             .lines()
             .filter_map(|line| line.strip_prefix("| `"))

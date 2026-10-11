@@ -1,4 +1,4 @@
-//! `understudy uninstall`: undo what install.sh and init did on this Mac.
+//! `atlas uninstall`: undo what install.sh and init did on this Mac.
 //! It asks first, keeps the helper account (and says how to remove it), and
 //! moves the app to the Trash rather than deleting it.
 use crate::{
@@ -79,13 +79,13 @@ fn retire_helper_job(executable: &Path, config: &Config) -> Result<Value> {
 /// Undo install and init. `keep_config` keeps settings and logs.
 pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Value> {
     let app = crate::update::installed_app()?;
-    let executable = app.join("Contents/MacOS/understudy");
+    let executable = app.join("Contents/MacOS/atlas");
     let config = Config::load(config_path).ok();
     let helper = config
         .as_ref()
         .and_then(|config| setup::account_with_uid(config.helper_uid).ok().flatten())
         .map(|account| account.name);
-    let data = config::home()?.join("Library/Application Support/Understudy");
+    let data = config::home()?.join("Library/Application Support/Atlas");
     let leftovers = config
         .as_ref()
         .map(|config| handed_over(&config.identity_probe))
@@ -96,10 +96,14 @@ pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Val
             format!("{} (to the Trash)", text::tilde(&app)),
         ];
         if !leftovers.is_empty() {
-            parts.push("apps and files Understudy copied for the helper to open".to_owned());
+            parts.push("apps and files Atlas copied for the helper to open".to_owned());
         }
         if !keep_config {
-            parts.push(format!("settings and logs in {}", text::tilde(&data)));
+            parts.push(format!(
+                "settings in {} and logs in {}",
+                text::tilde(config_path),
+                text::tilde(&data)
+            ));
         }
         say("This removes from this Mac:");
         for part in parts {
@@ -107,10 +111,10 @@ pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Val
         }
         if let Some(name) = &helper {
             say(&format!(
-                "The helper account {name} and its files stay, including any copied into it with understudy environment."
+                "The helper account {name} and its files stay, including any copied into it with atlas environment."
             ));
         }
-        if !prompt::confirm("Remove Understudy?", false, "pass --yes")? {
+        if !prompt::confirm("Remove Atlas?", false, "pass --yes")? {
             return Err(prompt::cancelled());
         }
     }
@@ -137,8 +141,14 @@ pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Val
             removed.push(json!(config.identity_probe));
         }
     }
-    if crate::menubar::login("off").is_ok() {
-        done("Menu bar", "no longer opens at login");
+    let stopped = config
+        .as_ref()
+        .and_then(|config| Client::new(config.clone()).ok())
+        .and_then(|client| client.output_dir().ok().map(Path::to_path_buf))
+        .and_then(|output| crate::menubar::stop(&output))
+        .is_some();
+    if crate::menubar::login("off").is_ok() || stopped {
+        done("Menu bar", "stopped and no longer opens at login");
     }
     // Agents forget the plugin (only connected ones change).
     let disconnected = crate::agents::change(&[], true).ok();
@@ -146,14 +156,14 @@ pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Val
         removed.push(json!("agent plugins"));
         done("Agent plugins", "removed");
     }
-    let command = config::home()?.join(".local/bin/understudy");
+    let command = config::home()?.join(".local/bin/atlas");
     if remove_link_to(&command, &executable)? {
         removed.push(json!(command));
     }
     // The app goes to the Trash, where it can be recovered.
     let trash = config::home()?
         .join(".Trash")
-        .join(format!("Understudy-{}.app", crate::control::token()));
+        .join(format!("Atlas-{}.app", crate::control::token()));
     fs::rename(&app, &trash).map_err(|_| {
         problem(format!(
             "Could not move {} to the Trash; remove it yourself",
@@ -161,7 +171,7 @@ pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Val
         ))
     })?;
     removed.push(json!(app));
-    done("Understudy.app", "moved to the Trash");
+    done("Atlas.app", "moved to the Trash");
     let mut cleared = false;
     for leftover in &leftovers {
         if fs::remove_dir_all(leftover).is_ok() {
@@ -172,10 +182,20 @@ pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Val
     if cleared {
         done("Copies for the helper", "removed");
     }
+    // Only the installed settings; a checkout's own file is never removed.
+    let installed = config::installed_path().ok();
+    if !keep_config
+        && installed.as_deref() == Some(config_path)
+        && fs::symlink_metadata(config_path).is_ok()
+    {
+        fs::remove_file(config_path)?;
+        removed.push(json!(config_path));
+        done("Settings", "removed");
+    }
     if !keep_config && data.exists() {
         fs::remove_dir_all(&data)?;
         removed.push(json!(data));
-        done("Settings and logs", "removed");
+        done("Logs and records", "removed");
     }
     Ok(json!({
         "ok": true,
@@ -187,26 +207,15 @@ pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Val
     }))
 }
 
-/// What Understudy left beside the shared command for the helper: the copies
-/// `open` made and environment plans and requests.
+/// What Atlas left for the helper: the copies `open` made, and environment
+/// plans and requests beside the shared command. Only folders that are
+/// provably Atlas's own are listed.
 fn handed_over(shared_command: &Path) -> Vec<PathBuf> {
-    let Some(shared) = shared_command.parent() else {
-        return Vec::new();
-    };
-    let Ok(entries) = fs::read_dir(shared) else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .filter(|entry| {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            name == "Open"
-                || name.starts_with("environment-plan-")
-                || name.starts_with("environment-run-")
-        })
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-        .map(|entry| entry.path())
-        .collect()
+    let mut leftovers: Vec<PathBuf> = crate::handoff::root_if_owned().into_iter().collect();
+    if let Some(shared) = shared_command.parent() {
+        leftovers.extend(crate::environment::leftovers(shared));
+    }
+    leftovers
 }
 
 #[cfg(test)]
@@ -217,7 +226,7 @@ mod tests {
     fn only_links_to_the_app_are_removed() {
         let dir = tempfile::tempdir().unwrap();
         let root = fs::canonicalize(dir.path()).unwrap();
-        let executable = root.join("Understudy.app/Contents/MacOS/understudy");
+        let executable = root.join("Atlas.app/Contents/MacOS/atlas");
         fs::create_dir_all(executable.parent().unwrap()).unwrap();
         fs::write(&executable, b"").unwrap();
         let ours = root.join("ours");

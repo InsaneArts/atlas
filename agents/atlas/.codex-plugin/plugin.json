@@ -1,0 +1,25 @@
+{
+  "name": "atlas",
+  "version": "0.1.0",
+  "description": "Test and operate macOS GUI apps in a hidden second login, without touching the person's desktop; guides setup when Atlas is missing.",
+  "author": { "name": "InsaneArts" },
+  "homepage": "https://github.com/InsaneArts/atlas",
+  "keywords": ["macos", "gui", "testing", "screenshots", "automation"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Atlas",
+    "shortDescription": "Test Mac apps in a hidden second desktop",
+    "longDescription": "Run, click through and screenshot macOS apps in a hidden helper login while the person keeps using their own desktop. Guides installation and setup when Atlas is not ready.",
+    "developerName": "InsaneArts",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Write"],
+    "composerIcon": "./assets/atlas.svg",
+    "logo": "./assets/atlas.svg",
+    "defaultPrompt": [
+      "Open this app in Atlas and show me its first screen",
+      "Check that the Save dialog works in the helper desktop",
+      "Set up Atlas on this Mac"
+    ],
+    "brandColor": "#0A84FF"
+  }
+}

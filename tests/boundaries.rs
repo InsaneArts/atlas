@@ -1,17 +1,17 @@
-use serde_json::{Value, json};
-use std::{sync::Arc, time::Duration};
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::UnixListener,
-    sync::Mutex,
-};
-use understudy::{
+use atlas::{
     actions,
     client::{Client, png_dimensions, validate_completion},
     config::Config,
     control::{ActionPermit, Controller, Lease},
     session::{Display, diagnose, input_current, input_settled, require_hidden},
     transport::Transport,
+};
+use serde_json::{Value, json};
+use std::{sync::Arc, time::Duration};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::UnixListener,
+    sync::Mutex,
 };
 
 fn status() -> Value {
@@ -174,14 +174,14 @@ fn shipped_example_configuration_parses_and_round_trips() {
 #[test]
 fn a_missing_configuration_points_at_a_legacy_json_file() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("understudy.local.toml");
+    let path = dir.path().join("atlas.local.toml");
     assert!(
         !Config::load(&path)
             .unwrap_err()
             .error
             .contains("no longer read")
     );
-    std::fs::write(dir.path().join("understudy.local.json"), "{}").unwrap();
+    std::fs::write(dir.path().join("atlas.local.json"), "{}").unwrap();
     assert!(
         Config::load(&path)
             .unwrap_err()
@@ -193,7 +193,7 @@ fn a_missing_configuration_points_at_a_legacy_json_file() {
     let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/config.toml");
     std::fs::copy(example, &path).unwrap();
     assert!(Config::load(&path).unwrap_err().error.contains("Both"));
-    std::fs::remove_file(dir.path().join("understudy.local.json")).unwrap();
+    std::fs::remove_file(dir.path().join("atlas.local.json")).unwrap();
     Config::load(&path).unwrap();
 }
 
@@ -266,7 +266,7 @@ fn cleanup_completion_cannot_clear_unknown_input_delivery() {
 #[test]
 fn async_transport_futures_do_not_embed_large_receive_buffers() {
     let transport = Transport {
-        path: "/tmp/unused-understudy-test".into(),
+        path: "/tmp/unused-atlas-test".into(),
         timeout: Duration::from_secs(1),
         peer_uid: 502,
     };
@@ -320,7 +320,7 @@ async fn exchange(
     chunks: Vec<Vec<u8>>,
     timeout: Duration,
     pause: Duration,
-) -> understudy::error::Result<Value> {
+) -> atlas::error::Result<Value> {
     let dir = tempfile::Builder::new()
         .prefix("ust-")
         .tempdir_in("/tmp")
@@ -558,7 +558,7 @@ fn doctor_distinguishes_on_console_from_wrong_account() {
     let mut unproven = ready_status();
     unproven["sessionProof"]["ok"] = json!(false);
     let advice = guidance(unproven);
-    assert!(advice.contains("understudy restart"), "{advice}");
+    assert!(advice.contains("atlas restart"), "{advice}");
     assert!(!advice.contains("Switch back"), "{advice}");
 }
 
@@ -703,7 +703,7 @@ fn only_generations_nothing_will_settle_are_unresolved() {
     controller.clear_if(&working).unwrap();
     drop(working);
     // A crashed writer leaves its claim file behind, unlocked.
-    let crashed = understudy::control::token();
+    let crashed = atlas::control::token();
     let claim = controller.quarantine_as(&crashed).unwrap();
     let find = |suffix: &str| {
         std::fs::read_dir(dir.path())
@@ -742,7 +742,7 @@ fn only_generations_nothing_will_settle_are_unresolved() {
         .replace(".uncertain.json", "");
     let orphan = dir
         .path()
-        .join(format!("{name}.{}.live", understudy::control::token()));
+        .join(format!("{name}.{}.live", atlas::control::token()));
     std::fs::write(&orphan, b"").unwrap();
     let held = controller.quarantine().unwrap();
     controller.clear().unwrap();

@@ -100,7 +100,7 @@ pub struct Controller {
 }
 impl Controller {
     pub fn new(uid: u32) -> Result<Self> {
-        Ok(Self::at(uid, &home()?.join("Library/Caches/Understudy")))
+        Ok(Self::at(uid, &home()?.join("Library/Caches/Atlas")))
     }
     /// Locating state is read-only; the directory appears with the first lock.
     pub fn at(uid: u32, directory: &Path) -> Self {
@@ -120,7 +120,7 @@ impl Controller {
         FileExt::try_lock_exclusive(&lock).map_err(|_| {
             Error::new(
                 "busy",
-                "Another Understudy controller is active. Release it first.",
+                "Another Atlas controller is active. Release it first.",
             )
         })?;
         if !recovery {
@@ -132,7 +132,7 @@ impl Controller {
         if self.marker.try_exists()? {
             return Err(Error::new(
                 "uncertain",
-                "The last action's outcome is unknown. Observe the desktop, then run 'understudy restart'.",
+                "The last action's outcome is unknown. Observe the desktop, then run 'atlas restart'.",
             ));
         }
         Ok(())

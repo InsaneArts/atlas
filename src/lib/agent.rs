@@ -6,6 +6,7 @@ use crate::{
     actions::Button,
     client::Client,
     error::{Error, Result},
+    handoff,
     native::{
         ax::{Element, Frame},
         windows::{Bounds, Window, unobstructed},
@@ -13,25 +14,20 @@ use crate::{
     transport::run_output,
 };
 use serde_json::{Value, json};
-use std::{
-    fs,
-    os::unix::fs::PermissionsExt,
-    path::{Path, PathBuf},
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 use unicode_segmentation::UnicodeSegmentation;
 
-/// The working contract printed by `understudy agent-guide`.
+/// The working contract printed by `atlas agent-guide`.
 pub const GUIDE: &str = include_str!("agent_guide.md");
 
-/// When a skill loads: what Understudy is for, in the words an agent matches.
+/// When a skill loads: what Atlas is for, in the words an agent matches.
 const SKILL_DESCRIPTION: &str = "Test or operate macOS GUI apps, dialogs, menu bar items, \
 installers and command-line tools in a hidden second login (the helper), without touching \
 the person's own desktop, windows, keyboard or mouse. Use it to take screenshots of an app, \
 click or type in a GUI, run something that would steal focus, or check that a GUI change \
 actually works.";
 
-/// The agent plugin's skill: when to use Understudy and its rules, then the
+/// The agent plugin's skill: when to use Atlas and its rules, then the
 /// guide itself. The plugin's SKILL.md is this text (a test keeps them equal).
 pub fn skill() -> String {
     let guide = GUIDE
@@ -39,8 +35,8 @@ pub fn skill() -> String {
         .map_or(GUIDE, |(_, rest)| rest)
         .trim_start();
     format!(
-        "---\nname: understudy\ndescription: {SKILL_DESCRIPTION}\n---\n\n\
-# Understudy\n\n\
+        "---\nname: atlas\ndescription: {SKILL_DESCRIPTION}\n---\n\n\
+# Atlas\n\n\
 Use it for anything that would otherwise touch the person's desktop: launching or \
 clicking through an app, testing a dialog, a menu bar item or an installer, taking \
 screenshots of a GUI. Do not use it for pure unit tests or for files you can read \
@@ -51,11 +47,11 @@ directly.\n\n\
 what it says (or use the setup skill).\n\
 - If a command reports `on-console`, the helper is on screen: ask the person to switch \
 back to their own account. Do not retry.\n\
-- Ask the person before `understudy switch`, and before anything that locks, sleeps \
+- Ask the person before `atlas switch`, and before anything that locks, sleeps \
 or logs out.\n\
-- After an `uncertain` result, run `understudy restart` before anything else.\n\
-- The person can watch or take control at any time with `understudy menubar` or \
-`understudy monitor`; mention it when you start a long task.\n\n\
+- After an `uncertain` result, run `atlas restart` before anything else.\n\
+- The person can watch or take control at any time with `atlas menubar` or \
+`atlas monitor`; mention it when you start a long task.\n\n\
 {guide}\n\
 ## References\n\n\
 - [references/commands.md](references/commands.md): every command and its options.\n\
@@ -164,13 +160,23 @@ pub async fn type_text(client: &Client, text: &str) -> Result<Value> {
     Ok(json!({ "ok": true, "typed": typed, "batches": batches.len() }))
 }
 
-/// Keys pressed in order, as one batch.
-pub fn keys(keys: &[String]) -> Value {
-    Value::Array(
+/// Keys pressed in order, as one batch; an unknown key is named.
+pub fn keys(keys: &[String]) -> Result<Value> {
+    if let Some(unknown) = keys.iter().find(|key| !crate::actions::valid_key(key)) {
+        return Err(Error::new(
+            "usage",
+            format!(
+                "{unknown} is not a key Atlas knows. Use a letter, digit or symbol, a name such \
+                 as return, tab, escape, space, delete, up or f5, with modifiers like cmd+s or \
+                 cmd+shift+z."
+            ),
+        ));
+    }
+    Ok(Value::Array(
         keys.iter()
             .map(|key| json!({ "type": "key", "key": key }))
             .collect(),
-    )
+    ))
 }
 
 /// Which helper windows a command is about.
@@ -235,12 +241,10 @@ pub async fn open(
 ) -> Result<Value> {
     if app.is_none() && targets.is_empty() {
         return Err(Error::new(
-            "input",
-            "Name an app with --app, a target, or both",
+            "usage",
+            "Name an app with --app, a file or URL, or both",
         ));
     }
-    let helper = client.config.helper_uid;
-    let mut copied = Vec::new();
     let mut argv = vec!["/usr/bin/open".to_owned()];
     for variable in environment {
         if variable
@@ -254,22 +258,42 @@ pub async fn open(
         }
         argv.extend(["--env".to_owned(), variable.clone()]);
     }
-    if let Some(app) = app {
-        // A name is the helper's to look up; a path is this side's file.
-        let app = if app.contains('/') {
-            hand_over(app, helper, &mut copied)?
+    // Copying, launching and pruning happen under one ownership, so no other
+    // open, close or controller interleaves.
+    let ownership = client.controller.acquire(false)?;
+    let apps = client.apps().await?;
+    handoff::prune(&app_names(&apps));
+    let running: Vec<handoff::Running> = apps["apps"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|app| handoff::Running {
+            name: app["name"].as_str().unwrap_or("").to_owned(),
+            executable: app["executable"].as_str().unwrap_or("").to_owned(),
+        })
+        .collect();
+    // A name is the helper's to look up; a path is this side's file.
+    let app_target = app.map(|app| {
+        if app.contains('/') {
+            handoff::resolve(app)
         } else {
-            app.to_owned()
-        };
-        argv.extend(["-a".to_owned(), app]);
+            handoff::Target::Name(app.to_owned())
+        }
+    });
+    let mut wanted: Vec<handoff::Target> = app_target.into_iter().collect();
+    wanted.extend(targets.iter().map(|target| handoff::resolve(target)));
+    let mut copied = Vec::new();
+    let mut given = handoff::hand_over(client, &ownership, wanted, &running, &mut copied)
+        .await?
+        .into_iter();
+    if app.is_some() {
+        argv.extend(["-a".to_owned(), given.next().unwrap_or_default()]);
     }
     if !targets.is_empty() {
         argv.push("--".to_owned());
-        for target in targets {
-            argv.push(hand_over(target, helper, &mut copied)?);
-        }
+        argv.extend(given);
     }
-    let reply = client.run(argv).await?;
+    let reply = client.run_owned(&ownership, argv).await?;
     let opened = reply["exitCode"] == 0;
     let mut value = json!({ "ok": opened, "opened": opened });
     if !copied.is_empty() {
@@ -282,161 +306,92 @@ pub async fn open(
     Ok(value)
 }
 
+fn app_names(apps: &Value) -> Vec<&str> {
+    apps["apps"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|app| app["name"].as_str())
+        .collect()
+}
+
 /// Quit `app` in the helper (every process of that name), wait until it is
-/// gone, then remove the copy `open` made of it, if there is one.
+/// gone, then remove the copies `open` made of it.
 pub async fn close(client: &Client, app: &str) -> Result<Value> {
-    let pids = |apps: &Value| -> Vec<u64> {
+    if app.contains('/') {
+        return Err(Error::new(
+            "usage",
+            "close takes the app's name as atlas apps lists it, not a path",
+        ));
+    }
+    let ownership = client.controller.acquire(false)?;
+    let running = |apps: &Value| -> Vec<(u64, String)> {
         apps["apps"]
             .as_array()
             .into_iter()
             .flatten()
             .filter(|running| running["name"] == app)
-            .filter_map(|running| running["pid"].as_u64())
+            .filter_map(|running| {
+                Some((
+                    running["pid"].as_u64()?,
+                    running["executable"].as_str().unwrap_or("").to_owned(),
+                ))
+            })
             .collect()
     };
-    let running = pids(&client.apps().await?);
-    if !running.is_empty() {
-        let mut argv = vec!["/bin/kill".to_owned()];
-        argv.extend(running.iter().map(u64::to_string));
-        client.run(argv).await?;
+    let processes = running(&client.apps().await?);
+    // The helper's session and Atlas's own services are never closed.
+    let own = std::env::current_exe()
+        .ok()
+        .and_then(|exe| crate::update::app_of(&exe))
+        .map(|bundle| bundle.to_string_lossy().into_owned());
+    if processes.iter().any(|(_, executable)| {
+        executable.starts_with("/System/Library/CoreServices/")
+            || own
+                .as_deref()
+                .is_some_and(|bundle| executable.starts_with(bundle))
+    }) {
+        return Err(Error::new(
+            "input",
+            format!("Atlas does not close {app}: it is part of macOS or of Atlas"),
+        ));
+    }
+    if !processes.is_empty() {
+        // In the helper, each process is signalled only while it is still
+        // the executable listed, so a reused process ID is left alone.
+        const QUIT: &str = r#"while [ $# -ge 2 ]; do
+  pid=$1 exe=$2; shift 2
+  [ -n "$exe" ] && [ "$(/bin/ps -o comm= -p "$pid")" = "$exe" ] && /bin/kill "$pid"
+done
+exit 0"#;
+        let mut argv = vec![
+            "/bin/sh".to_owned(),
+            "-c".to_owned(),
+            QUIT.to_owned(),
+            "sh".to_owned(),
+        ];
+        for (pid, executable) in &processes {
+            argv.extend([pid.to_string(), executable.clone()]);
+        }
+        client.run_owned(&ownership, argv).await?;
         let deadline = Instant::now() + Duration::from_secs(10);
-        while !pids(&client.apps().await?).is_empty() {
+        while !running(&client.apps().await?).is_empty() {
             if Instant::now() >= deadline {
                 return Err(Error::new(
-                    "input",
+                    "wait-failed",
                     format!("{app} did not quit within 10 seconds"),
                 ));
             }
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
     }
-    let removed: Vec<String> = copies_of(app)
-        .into_iter()
-        .filter(|copy| fs::remove_dir_all(copy).is_ok())
-        .map(|copy| copy.to_string_lossy().into_owned())
-        .collect();
+    let removed = handoff::remove_copies_of(app);
     Ok(json!({
         "ok": true,
         "app": app,
-        "closed": !running.is_empty(),
+        "closed": !processes.is_empty(),
         "removed": removed,
     }))
-}
-
-/// The apps in HANDOFF that are `app`: named so, or whose bundle calls itself so.
-fn copies_of(app: &str) -> Vec<PathBuf> {
-    let Ok(entries) = fs::read_dir(HANDOFF) else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|extension| extension == "app"))
-        .filter(|path| {
-            path.file_stem().is_some_and(|stem| stem == app)
-                || ["CFBundleDisplayName", "CFBundleName", "CFBundleExecutable"]
-                    .iter()
-                    .any(|key| bundle_value(path, key).as_deref() == Some(app))
-        })
-        .collect()
-}
-
-/// One string from a bundle's Info.plist.
-fn bundle_value(bundle: &Path, key: &str) -> Option<String> {
-    let output = std::process::Command::new("/usr/libexec/PlistBuddy")
-        .arg("-c")
-        .arg(format!("Print :{key}"))
-        .arg(bundle.join("Contents/Info.plist"))
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
-}
-
-/// Where `open` copies an app or file the helper cannot read, such as a
-/// build in a private folder. Only the helper account is let in.
-pub const HANDOFF: &str = "/Users/Shared/Understudy/Open";
-
-/// `target` as the helper can open it. URLs and names pass through; a path
-/// here becomes absolute (the helper has its own working directory), and
-/// one the helper cannot read is copied into HANDOFF first.
-fn hand_over(target: &str, helper: u32, copied: &mut Vec<Value>) -> Result<String> {
-    let Ok(path) = fs::canonicalize(target) else {
-        return Ok(target.to_owned());
-    };
-    if readable_by_others(&path) {
-        return Ok(path.to_string_lossy().into_owned());
-    }
-    let name = path
-        .file_name()
-        .ok_or_else(|| Error::new("input", format!("Cannot open {target}")))?;
-    let handoff = handoff(helper)?;
-    let copy = handoff.join(name);
-    match fs::symlink_metadata(&copy) {
-        Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(&copy)?,
-        Ok(_) => fs::remove_file(&copy)?,
-        Err(_) => {}
-    }
-    let status = std::process::Command::new("/usr/bin/ditto")
-        .arg("--noacl")
-        .arg(&path)
-        .arg(&copy)
-        .stdin(std::process::Stdio::null())
-        .status()?;
-    if !status.success() {
-        return Err(Error::new(
-            "io",
-            format!("Could not copy {} for the helper", path.display()),
-        ));
-    }
-    copied.push(json!({"from": path, "to": copy}));
-    Ok(copy.to_string_lossy().into_owned())
-}
-
-/// Whether accounts other than this one may read `path`: it is readable
-/// (and, for a folder, enterable) by others, and so is every folder above.
-fn readable_by_others(path: &Path) -> bool {
-    let mode = |path: &Path| fs::metadata(path).map(|metadata| metadata.permissions().mode());
-    let own = if path.is_dir() { 0o005 } else { 0o004 };
-    mode(path).is_ok_and(|mode| mode & own == own)
-        && path
-            .ancestors()
-            .skip(1)
-            .all(|folder| mode(folder).is_ok_and(|mode| mode & 0o001 != 0))
-}
-
-/// HANDOFF, private to this account apart from an inherited read-only
-/// grant to the helper.
-fn handoff(helper: u32) -> Result<PathBuf> {
-    let folder = PathBuf::from(HANDOFF);
-    fs::create_dir_all(&folder)?;
-    fs::set_permissions(&folder, fs::Permissions::from_mode(0o700))?;
-    let account = nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(helper))
-        .ok()
-        .flatten()
-        .ok_or_else(|| Error::new("identity", "The helper account was not found"))?;
-    let grant = format!(
-        "{} allow list,search,readattr,readextattr,readsecurity,read,execute,file_inherit,directory_inherit",
-        account.name
-    );
-    for args in [vec!["-N"], vec!["+a", grant.as_str()]] {
-        let status = std::process::Command::new("/bin/chmod")
-            .args(&args)
-            .arg(&folder)
-            .stdin(std::process::Stdio::null())
-            .status()?;
-        if !status.success() {
-            return Err(Error::new(
-                "io",
-                format!("Could not let the helper into {HANDOFF}"),
-            ));
-        }
-    }
-    Ok(folder)
 }
 
 /// Poll the window list until a matching window appears (or, with `gone`,
@@ -449,7 +404,7 @@ pub async fn wait(
     timeout: Duration,
 ) -> Result<Value> {
     if filter.app.is_none() && filter.title.is_none() {
-        return Err(Error::new("input", "Wait for --app, --title, or both"));
+        return Err(Error::new("usage", "Wait for --app, --title, or both"));
     }
     let started = Instant::now();
     let deadline = started + timeout;
@@ -674,11 +629,11 @@ pub async fn click_element(
         return Err(Error::new(
             "elements",
             match matching.len() {
-                0 => "No visible element matches. Run understudy elements --app NAME to see \
+                0 => "No visible element matches. Run atlas elements --app NAME to see \
                       what is there."
                     .to_owned(),
                 count => format!(
-                    "{count} elements match. Run understudy elements with the same --name to \
+                    "{count} elements match. Run atlas elements with the same --name to \
                      tell them apart, then add --role."
                 ),
             },
@@ -771,12 +726,9 @@ mod tests {
             "wait",
             "run",
             "restart",
-            "verify-native",
+            "close",
         ] {
-            assert!(
-                GUIDE.contains(&format!("understudy {command}")),
-                "{command}"
-            );
+            assert!(GUIDE.contains(&format!("atlas {command}")), "{command}");
         }
     }
 
@@ -791,7 +743,7 @@ mod tests {
                 &["cmd".into(), "shift".into()],
             ),
             drag((1.0, 2.0), (300.0, 400.0), Button::Left),
-            keys(&["cmd+s".into(), "return".into()]),
+            keys(&["cmd+s".into(), "return".into()]).unwrap(),
         ] {
             crate::actions::validate(&actions, &display()).unwrap();
         }

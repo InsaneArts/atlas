@@ -24,11 +24,11 @@ pub(super) fn validate_argv(argv: &[String]) -> Result<()> {
 }
 
 fn load(home: &Path) -> Result<BTreeMap<String, String>> {
-    let path = home.join(".config/understudy/environment.json");
+    let path = home.join(".config/atlas/environment.json");
     let file = open_regular(&path, false)?.ok_or_else(|| {
         problem(
-            "No helper environment profile is installed. Use understudy run instead, or run \
-             understudy environment profile to set one up.",
+            "No helper environment profile is installed. Use atlas run instead, or run \
+             atlas environment profile to set one up.",
         )
     })?;
     validate_private(&file, false)?;
@@ -90,7 +90,7 @@ mod tests {
     fn profile_file_is_private_bounded_and_never_evaluated_as_shell() {
         let root = tempfile::tempdir().unwrap();
         let home = fs::canonicalize(root.path()).unwrap();
-        let path = home.join(".config/understudy/environment.json");
+        let path = home.join(".config/atlas/environment.json");
         let literal = "$(touch should-not-run); private value";
         atomic_write(
             &path,
@@ -124,7 +124,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let home = fs::canonicalize(root.path()).unwrap();
         atomic_write(
-            &home.join(".config/understudy/environment.json"),
+            &home.join(".config/atlas/environment.json"),
             b"{\"version\":1,\"variables\":{}}",
             0o600,
         )

@@ -1,7 +1,7 @@
 import Foundation
 import XCTest
 
-@testable import UnderstudyKit
+@testable import AtlasKit
 
 final class SnapshotTests: XCTestCase {
     func testStatusReportsDecodeIntoWhatThePanelShows() {
@@ -52,12 +52,12 @@ final class ViewerTests: XCTestCase {
 }
 
 final class CommandTests: XCTestCase {
-    /// A stand-in `understudy` that prints a reply and an exit status.
+    /// A stand-in `atlas` that prints a reply and an exit status.
     func fake(_ script: String) throws -> Commands {
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("understudy-kit-\(UUID().uuidString)")
+            .appendingPathComponent("atlas-kit-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let file = directory.appendingPathComponent("understudy")
+        let file = directory.appendingPathComponent("atlas")
         try ("#!/bin/sh\n" + script).write(to: file, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
         return Commands(executable: file)
@@ -90,7 +90,7 @@ final class CommandTests: XCTestCase {
     func testActionsMapToCommands() {
         XCTAssertEqual(Action.switchToHelper("atlastest").arguments, ["switch", "atlastest", "--yes"])
         XCTAssertEqual(Action.recover.arguments, ["restart"])
-        XCTAssertEqual(Commands.beside(URL(fileURLWithPath: "/A.app/Contents/MacOS/UnderstudyBar")).executable.path,
-            "/A.app/Contents/MacOS/understudy")
+        XCTAssertEqual(Commands.beside(URL(fileURLWithPath: "/A.app/Contents/MacOS/AtlasBar")).executable.path,
+            "/A.app/Contents/MacOS/atlas")
     }
 }

@@ -23,7 +23,7 @@ const results = {
 const browser = await chromium.launch({
   headless: true,
   executablePath:
-    process.env.UNDERSTUDY_CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    process.env.ATLAS_CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
 });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
 const errors = [];
