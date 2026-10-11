@@ -191,7 +191,7 @@ Options:
           Only elements with this accessibility role, for example AXButton
 
       --name <NAME>
-          Only elements with this exact title, description or identifier
+          Only elements with this exact title, label text, description or identifier
 
       --max <MAX>
           Show at most this many elements
@@ -274,7 +274,7 @@ Options:
           Exact process ID, for apps with several processes
 
       --name <NAME>
-          Exact element title, description or identifier
+          Exact element title, label text, description or identifier
 
       --role <ROLE>
           Accessibility role, for example AXButton

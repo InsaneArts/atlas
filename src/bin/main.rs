@@ -197,7 +197,7 @@ enum Command {
         y: Option<f64>,
         #[command(flatten)]
         target: AppTarget,
-        /// Exact element title, description or identifier.
+        /// Exact element title, label text, description or identifier.
         #[arg(long, conflicts_with = "x")]
         name: Option<String>,
         /// Accessibility role, for example AXButton.
@@ -222,7 +222,7 @@ enum Command {
         /// Only elements with this accessibility role, for example AXButton.
         #[arg(long)]
         role: Option<String>,
-        /// Only elements with this exact title, description or identifier.
+        /// Only elements with this exact title, label text, description or identifier.
         #[arg(long)]
         name: Option<String>,
         /// Show at most this many elements.
