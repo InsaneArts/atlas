@@ -113,6 +113,9 @@ if let index = CommandLine.arguments.firstIndex(of: "--notice"),
     alert.messageText = CommandLine.arguments[index + 1]
     alert.informativeText = CommandLine.arguments[index + 2]
     alert.addButton(withTitle: "OK")
+    // Finish launching first, so the request to come forward is honoured and
+    // the notice has keyboard focus (Return closes it).
+    app.finishLaunching()
     app.activate(ignoringOtherApps: true)
     alert.window.level = .floating
     alert.runModal()
