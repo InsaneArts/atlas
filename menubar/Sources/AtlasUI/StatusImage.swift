@@ -1,104 +1,115 @@
 import AppKit
 import AtlasKit
 
-/// The menu bar glyph: a monochrome template "A" whose crossbar floats free
-/// of its legs, the load Atlas carries. Marks take the crossbar's place;
-/// control turns it into a solid tile with the letter cut out. The shape,
-/// not a colour, carries the state, like the system's own items.
+/// The menu bar glyph: Atlas's orbit, a solid sphere with a ring passing in
+/// front of it. Control turns it into a solid tile with the orbit cut out,
+/// and an unavailable helper dims it. Work and trouble add a coloured dot
+/// beside it, as the system's own indicators do, so only those two are not
+/// templates; they draw in the menu bar's label colour instead.
 public func statusImage(_ mode: Mode) -> NSImage {
-    let image = NSImage(size: NSSize(width: 15, height: 16), flipped: true) { _ in
-        let scale = pixelScale()
-        // A heavier stroke on a standard display, a lighter one on Retina.
-        let stem: CGFloat = scale < 1.5 ? 2 : 1.5
-        let ink = NSColor.black.withAlphaComponent(mode.mark == .dimmed ? 0.4 : 1)
-        ink.set()
-        guard mode.mark != .filled else {
-            NSBezierPath(
-                roundedRect: NSRect(x: 0, y: 0, width: 15, height: 16), xRadius: 4, yRadius: 4
-            ).fill()
-            NSGraphicsContext.current?.compositingOperation = .clear
-            let small = LetterA(left: 3, right: 12, top: 3, bottom: 13, apex: 1.6, leg: 1.8)
-            small.legs.fill()
-            small.bar(at: 9, height: 1.5, gap: 0.6).fill()
-            NSGraphicsContext.current?.compositingOperation = .sourceOver
-            return true
-        }
-        let letter = LetterA(
-            left: 1, right: 14, top: 1, bottom: 15, apex: 2, leg: scale < 1.5 ? 2 : 1.75)
-        letter.legs.fill()
+    let dot: NSColor? =
         switch mode.mark {
-        case .working:
-            ellipsis(center: NSPoint(x: 7.5, y: 12.5), scale: scale)
-        case .alert:
-            NSBezierPath(rect: NSRect(x: 7, y: 6, width: 1, height: 4)).fill()
-            NSBezierPath(rect: NSRect(x: 7, y: 11, width: 1, height: 1)).fill()
-        case .dash:
-            NSBezierPath(rect: NSRect(x: 5.5, y: 12, width: 4, height: 1)).fill()
-        default:
-            letter.bar(at: 10, height: stem, gap: 0.8).fill()
+        case .working: .systemBlue
+        case .alert, .dash: .systemOrange
+        default: nil
+        }
+    let image = NSImage(size: NSSize(width: dot == nil ? 18 : 25, height: 16), flipped: true) { _ in
+        let line: CGFloat = pixelScale() < 1.5 ? 1.5 : 1.3
+        // Drawn opaque in one layer, then faded as a whole, so overlapping
+        // strokes never darken: by the label colour's own alpha, and more
+        // when dimmed.
+        let ink = dot == nil ? NSColor.black : (NSColor.labelColor.usingColorSpace(.sRGB) ?? .black)
+        ink.withAlphaComponent(1).set()
+        let context = NSGraphicsContext.current?.cgContext
+        context?.saveGState()
+        context?.setAlpha(ink.alphaComponent * (mode.mark == .dimmed ? 0.4 : 1))
+        context?.beginTransparencyLayer(auxiliaryInfo: nil)
+        if mode.mark == .filled {
+            NSBezierPath(
+                roundedRect: NSRect(x: 0, y: 0, width: 18, height: 16), xRadius: 4, yRadius: 4
+            ).fill()
+            Orbit(center: NSPoint(x: 9, y: 8), scale: 0.72).draw(line: line, cutOut: true)
+        } else {
+            Orbit(center: NSPoint(x: 9, y: 8), scale: 1).draw(line: line, cutOut: false)
+        }
+        context?.endTransparencyLayer()
+        context?.restoreGState()
+        if let dot {
+            dot.setFill()
+            NSBezierPath(ovalIn: NSRect(x: 19.25, y: 5.75, width: 4.5, height: 4.5)).fill()
         }
         return true
     }
-    image.isTemplate = true
+    image.isTemplate = dot == nil
     image.accessibilityDescription = "Atlas: \(mode.label)"
     return image
 }
 
-/// An "A" in a flipped (top-down) box: two slanted legs meeting in a flat
-/// apex, and a crossbar drawn apart from them.
-struct LetterA {
-    let left: CGFloat, right: CGFloat, top: CGFloat, bottom: CGFloat
-    /// The flat top's width, and each leg's horizontal thickness.
-    let apex: CGFloat, leg: CGFloat
+/// The orbit in a flipped (top-down) box: a sphere and a tilted ring whose
+/// front half passes over it, kept apart from it by a clear gap above. The
+/// app icon (menubar/Resources/AppIcon.swift) draws the same shape.
+struct Orbit {
+    let center: NSPoint
+    let scale: CGFloat
 
-    var center: CGFloat { (left + right) / 2 }
-
-    /// Where the inside of the left leg is at height `y`.
-    func inside(at y: CGFloat) -> CGFloat {
-        left + leg + (center - apex / 2 - left) * (bottom - y) / (bottom - top)
+    /// Draw in the current colour. `cutOut` clears the shape from what is
+    /// already drawn instead, for the solid tile.
+    func draw(line: CGFloat, cutOut: Bool) {
+        let context = NSGraphicsContext.current
+        let erase: NSCompositingOperation = cutOut ? .clear : .sourceOver
+        let restore: NSCompositingOperation = cutOut ? .sourceOver : .clear
+        let radius = 4.6 * scale
+        let sphere = NSBezierPath(
+            ovalIn: NSRect(
+                x: center.x - radius, y: center.y - radius, width: 2 * radius, height: 2 * radius))
+        context?.compositingOperation = erase
+        stroke(ring(from: 0, to: 360), width: line)
+        sphere.fill()
+        // A gap where the ring's front crosses the sphere, then the sphere
+        // back below the ring, so the gap shows only above it.
+        context?.compositingOperation = restore
+        stroke(ring(from: 40, to: 140), width: line + 1.3 * scale)
+        context?.compositingOperation = erase
+        NSGraphicsContext.saveGraphicsState()
+        sphere.addClip()
+        let below = NSBezierPath()
+        below.appendArc(withCenter: .zero, radius: 1, startAngle: 0, endAngle: 180, clockwise: false)
+        below.line(to: NSPoint(x: -1, y: 10))
+        below.line(to: NSPoint(x: 1, y: 10))
+        below.close()
+        below.transform(using: tilt)
+        below.fill()
+        NSGraphicsContext.restoreGraphicsState()
+        stroke(ring(from: 0, to: 180), width: line)
+        context?.compositingOperation = .sourceOver
     }
 
-    var legs: NSBezierPath {
-        // The inner edges meet below the apex, by symmetry on the centre line.
-        let reach = (center - left - leg) / (center - apex / 2 - left)
-        let notch = bottom - reach * (bottom - top)
+    /// Unit-circle geometry to the ring's tilted ellipse.
+    private var tilt: AffineTransform {
+        let t = CGAffineTransform(translationX: center.x, y: center.y)
+            .rotated(by: -20 * .pi / 180)
+            .scaledBy(x: 8.2 * scale, y: 2.5 * scale)
+        return AffineTransform(m11: t.a, m12: t.b, m21: t.c, m22: t.d, tX: t.tx, tY: t.ty)
+    }
+
+    /// Part of the ring, by angle; 0 to 180 degrees is the half in front.
+    private func ring(from start: CGFloat, to end: CGFloat) -> NSBezierPath {
         let path = NSBezierPath()
-        path.move(to: NSPoint(x: left, y: bottom))
-        path.line(to: NSPoint(x: center - apex / 2, y: top))
-        path.line(to: NSPoint(x: center + apex / 2, y: top))
-        path.line(to: NSPoint(x: right, y: bottom))
-        path.line(to: NSPoint(x: right - leg, y: bottom))
-        path.line(to: NSPoint(x: center, y: notch))
-        path.line(to: NSPoint(x: left + leg, y: bottom))
-        path.close()
+        path.appendArc(
+            withCenter: .zero, radius: 1, startAngle: start, endAngle: end, clockwise: false)
+        path.transform(using: tilt)
         return path
     }
 
-    /// The crossbar from `y` down by `height`, `gap` clear of each leg.
-    func bar(at y: CGFloat, height: CGFloat, gap: CGFloat) -> NSBezierPath {
-        let from = inside(at: y) + gap
-        return NSBezierPath(rect: NSRect(x: from, y: y, width: 2 * center - 2 * from, height: height))
+    private func stroke(_ path: NSBezierPath, width: CGFloat) {
+        path.lineWidth = width
+        path.lineCapStyle = .butt
+        path.stroke()
     }
 }
 
-/// Three dots: whole pixels on a standard display, round dots on Retina.
-private func ellipsis(center: NSPoint, scale: CGFloat) {
-    if scale < 1.5 {
-        for dx: CGFloat in [-2, 0, 2] {
-            NSBezierPath(rect: NSRect(x: center.x + dx - 0.5, y: center.y - 0.5, width: 1, height: 1))
-                .fill()
-        }
-    } else {
-        for dx: CGFloat in [-2.5, 0, 2.5] {
-            NSBezierPath(
-                ovalIn: NSRect(x: center.x + dx - 0.75, y: center.y - 0.75, width: 1.5, height: 1.5)
-            ).fill()
-        }
-    }
-}
-
-/// Device pixels per point of the context being drawn into, so stems land on
-/// whole pixels on both standard and Retina displays.
+/// Device pixels per point of the context being drawn into, so lines stay
+/// crisp on both standard and Retina displays.
 private func pixelScale() -> CGFloat {
     guard let t = NSGraphicsContext.current?.cgContext.userSpaceToDeviceSpaceTransform else {
         return 2

@@ -2,7 +2,7 @@
 // activity, readiness and whether recovery is offered. Pure functions only.
 
 const MODES = {
-  observing: { label: 'Observing', tone: 'live' },
+  observing: { label: 'Watching', tone: 'live' },
   controlling: { label: 'Viewer has control', tone: 'control' },
   agent: { label: 'Agent working', tone: 'agent' },
   recovering: { label: 'Needs recovery', tone: 'warning' },
@@ -110,6 +110,14 @@ export function activityItems(overview, limit = 6) {
   }));
 }
 
+/** The few latest actions shown over the desktop, oldest first, while recent. */
+export function captionItems(overview, limit = 3, withinSeconds = 60) {
+  const recent = (overview?.activity || []).filter(
+    (row) => Number(row.ageSeconds) <= withinSeconds,
+  );
+  return activityItems({ activity: recent }, limit).reverse();
+}
+
 /** One line for the readiness group: all checks, then native dialogs. */
 export function readiness(status) {
   const checks = status?.checks || [];
@@ -128,12 +136,25 @@ export function canRecover(overview, hasLease) {
   return !hasLease && (overview?.mode === 'recovering' || overview?.mode === 'blocked');
 }
 
-/** The recovery card while idle, offered, or recovering. */
+/** The recovery alert while idle, offered, or recovering. */
 export function recoveryView(overview, { hasLease = false, recovering = false } = {}) {
   if (recovering)
-    return { hidden: false, busy: true, reason: 'Restoring the helper input service.' };
-  if (!canRecover(overview, hasLease)) return { hidden: true, busy: false, reason: '' };
-  return { hidden: false, busy: false, reason: modeView(overview).reason };
+    return {
+      hidden: false,
+      busy: true,
+      title: 'Recovering the helper',
+      reason: 'Restoring the helper input service.',
+    };
+  if (!canRecover(overview, hasLease)) return { hidden: true, busy: false, title: '', reason: '' };
+  return {
+    hidden: false,
+    busy: false,
+    title:
+      overview.mode === 'blocked'
+        ? "The helper isn't ready"
+        : "The last action's outcome is unknown",
+    reason: modeView(overview).reason,
+  };
 }
 
 /** Taking control waits while an agent, another viewer or recovery needs it. */

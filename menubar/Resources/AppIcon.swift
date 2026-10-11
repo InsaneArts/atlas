@@ -2,11 +2,10 @@
 //
 //     swift menubar/Resources/AppIcon.swift
 //
-// The mark is the menu bar glyph's "A" whose free-floating crossbar, the
-// load Atlas carries, is system blue, on the macOS rounded-square grid (an
-// 824-point tile with a soft shadow in a 1024-point canvas). The "A" is
-// drawn again here rather than shared: change it together with
-// StatusImage.swift.
+// The mark is Atlas's orbit, a graphite sphere with a ring passing in front
+// of it, on a white tile on the macOS rounded-square grid (an 824-point tile
+// with a soft shadow in a 1024-point canvas). The menu bar glyph in
+// StatusImage.swift draws the same shape: change them together.
 import AppKit
 
 func hex(_ value: UInt32) -> NSColor {
@@ -28,49 +27,62 @@ func drawIcon() {
     tile.fill()
     NSGraphicsContext.restoreGraphicsState()
 
+    let paper = NSGradient(starting: hex(0xFFFFFF), ending: hex(0xE1E4E9))!
     NSGraphicsContext.saveGraphicsState()
     tile.addClip()
-    NSGradient(starting: hex(0xFFFFFF), ending: hex(0xE4E4E9))!.draw(in: tile, angle: -90)
-    // Upright coordinates: the apex is at the top.
-    let left: CGFloat = 240
-    let right: CGFloat = 784
-    let top: CGFloat = 788
-    let bottom: CGFloat = 236
-    let apex: CGFloat = 100
-    let leg: CGFloat = 96
-    let center = (left + right) / 2
-    let slope = (center - apex / 2 - left) / (top - bottom)
-    let reach = (center - left - leg) / (center - apex / 2 - left)
-    let notch = bottom + reach * (top - bottom)
-    let letter = NSBezierPath()
-    letter.move(to: NSPoint(x: left, y: bottom))
-    letter.line(to: NSPoint(x: center - apex / 2, y: top))
-    letter.line(to: NSPoint(x: center + apex / 2, y: top))
-    letter.line(to: NSPoint(x: right, y: bottom))
-    letter.line(to: NSPoint(x: right - leg, y: bottom))
-    letter.line(to: NSPoint(x: center, y: notch))
-    letter.line(to: NSPoint(x: left + leg, y: bottom))
-    letter.close()
-    // The crossbar, clear of the legs at its upper (narrower) edge.
-    let barBottom: CGFloat = 322
-    let barTop: CGFloat = 400
-    let gap: CGFloat = 20
-    let inside = left + leg + slope * (barTop - bottom) + gap
-    let cap = NSBezierPath(
-        rect: NSRect(x: inside, y: barBottom, width: 2 * (center - inside), height: barTop - barBottom))
+    paper.draw(in: tile, angle: -90)
+
+    // Upright coordinates. The ring rises to the right; its front half is
+    // the lower one.
+    let center = NSPoint(x: 512, y: 504)
+    func ring(from start: CGFloat, to end: CGFloat) -> NSBezierPath {
+        let path = NSBezierPath()
+        path.appendArc(
+            withCenter: .zero, radius: 1, startAngle: start, endAngle: end, clockwise: false)
+        var tilt = AffineTransform(translationByX: center.x, byY: center.y)
+        tilt.rotate(byDegrees: 20)
+        tilt.scale(x: 372, y: 112)
+        path.transform(using: tilt)
+        return path
+    }
+    func stroke(_ path: NSBezierPath, width: CGFloat) -> CGPath {
+        path.cgPath.copy(strokingWithWidth: width, lineCap: .butt, lineJoin: .miter, miterLimit: 10)
+    }
+    let ink = NSGradient(colors: [hex(0x1C1C1E), hex(0x48484C), hex(0x1C1C1E)])!
+    let context = NSGraphicsContext.current!.cgContext
+
+    // The back of the ring, then the sphere over it.
+    hex(0x1C1C1E).withAlphaComponent(0.9).setFill()
+    NSBezierPath(cgPath: stroke(ring(from: 0, to: 360), width: 30)).fill()
+    let sphere = NSBezierPath(
+        ovalIn: NSRect(x: center.x - 212, y: center.y - 212, width: 424, height: 424))
+    let light = NSPoint(x: 444, y: 597)
     NSGraphicsContext.saveGraphicsState()
-    let lift = NSShadow()
-    lift.shadowColor = NSColor.black.withAlphaComponent(0.16)
-    lift.shadowOffset = NSSize(width: 0, height: -8)
-    lift.shadowBlurRadius = 18
-    lift.set()
-    hex(0x1C1C1E).setFill()
-    letter.fill()
-    hex(0x0A84FF).setFill()
-    cap.fill()
+    sphere.addClip()
+    NSGradient(
+        colors: [hex(0x8E8E94), hex(0x3A3A3E), hex(0x0F0F11)], atLocations: [0, 0.42, 1],
+        colorSpace: .sRGB)!
+        .draw(
+            fromCenter: light, radius: 0, toCenter: light, radius: 382,
+            options: .drawsAfterEndingLocation)
     NSGraphicsContext.restoreGraphicsState()
-    NSGradient(starting: hex(0x48484C), ending: hex(0x1C1C1E))!.draw(in: letter, angle: -90)
-    NSGradient(starting: hex(0x4AA3FF), ending: hex(0x0A6FE8))!.draw(in: cap, angle: -90)
+
+    // The paper shows through a gap where the ring's front crosses the sphere.
+    NSGraphicsContext.saveGraphicsState()
+    NSBezierPath(
+        ovalIn: NSRect(x: center.x - 232, y: center.y - 232, width: 464, height: 464)
+    ).addClip()
+    context.addPath(stroke(ring(from: 180, to: 360), width: 64))
+    context.clip()
+    paper.draw(in: tile, angle: -90)
+    NSGraphicsContext.restoreGraphicsState()
+
+    // The front of the ring.
+    NSGraphicsContext.saveGraphicsState()
+    context.addPath(stroke(ring(from: 180, to: 360), width: 30))
+    context.clip()
+    ink.draw(in: NSRect(x: 130, y: 300, width: 764, height: 420), angle: 0)
+    NSGraphicsContext.restoreGraphicsState()
     NSGraphicsContext.restoreGraphicsState()
 
     let rim = NSBezierPath(

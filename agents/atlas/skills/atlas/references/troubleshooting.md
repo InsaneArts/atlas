@@ -2,7 +2,9 @@
 
 Every failure is JSON: `{"ok": false, "code": "...", "error": "...", "uncertain": ...}`.
 Read `error` to the person when you stop. If `uncertain` is true, the action may
-or may not have happened: do not repeat it; run `atlas restart` first.
+or may not have happened: never repeat it; take a screenshot, run
+`atlas restart`, and look again. (`atlas run` replies `ok` when the command ran;
+its own failure is in `exitCode`.)
 
 | Code | Means | Do |
 | --- | --- | --- |
@@ -10,7 +12,7 @@ or may not have happened: do not repeat it; run `atlas restart` first.
 | `apps` | The helper's running apps could not be listed. | Retry once; then run `atlas doctor`. |
 | `bad-request` | The helper daemon rejected a malformed request. | Check the command's arguments against `references/commands.md`. |
 | `busy` | Another controller (often the person, in the viewer) has control. | Wait and retry later; never take control from the person. |
-| `cancelled` | The person stopped at a question (Esc). | Nothing changed; ask the person before trying again. |
+| `cancelled` | The person stopped at a question (Esc). | That step did not happen, but earlier steps may have; check with `atlas doctor`, and ask the person before trying again. |
 | `capture` | A screenshot could not be taken or encoded. | Retry once; then `atlas doctor`. |
 | `config` | Atlas is not set up (no settings file). | Use the setup skill (`atlas init`). |
 | `config-invalid` | The settings file exists but could not be read. | Show `error` to the person; they fix or move the file, then run `atlas init`. |

@@ -21,38 +21,47 @@ use unicode_segmentation::UnicodeSegmentation;
 pub const GUIDE: &str = include_str!("agent_guide.md");
 
 /// When a skill loads: what Atlas is for, in the words an agent matches.
-const SKILL_DESCRIPTION: &str = "Test or operate macOS GUI apps, dialogs, menu bar items, \
-installers and command-line tools in a hidden second login (the helper), without touching \
-the person's own desktop, windows, keyboard or mouse. Use it to take screenshots of an app, \
-click or type in a GUI, run something that would steal focus, or check that a GUI change \
-actually works.";
+const SKILL_DESCRIPTION: &str = "See and use macOS GUIs in a hidden second login (the helper) \
+without touching the person's desktop, windows, keyboard or mouse. Use it whenever you change \
+something a person could see in a Mac app (a window, dialog, menu, menu bar item, layout or \
+icon), open the build in the helper and check it before saying it works. Also use it to \
+reproduce on-screen bugs, run installers or anything that opens windows or takes focus, test \
+a web app in Safari, take screenshots, and click or type in apps. Not for unit tests, builds \
+or reading files.";
 
-/// The agent plugin's skill: when to use Atlas and its rules, then the
-/// guide itself. The plugin's SKILL.md is this text (a test keeps them equal).
+/// The rules every agent follows, set between the guide's introduction and
+/// its first section in the plugin's skill.
+const SKILL_RULES: &str = "## Rules
+
+- Never act on the person's own desktop; everything happens in the helper.
+- Check your on-screen work in the helper before saying it works, and show the
+  screenshots.
+- Do the work yourself: opening builds, copying files in, cleaning up. The
+  person only ran `atlas init`.
+- Never use sudo, type a password or change privacy settings. If `doctor` is
+  not ready, run the Atlas commands it suggests; tell the person only what
+  needs them (or use the setup skill).
+- Never take control from the person: on `busy`, wait.
+- Ask the person before `atlas switch`, and before anything that locks, sleeps
+  or logs out.
+- After an `uncertain` result, never repeat the action: take a screenshot, run
+  `atlas restart`, and look again before going on.
+- Leave the helper as you found it: close what you opened, roll back what you
+  copied.
+
+";
+
+/// The agent plugin's skill: the guide with its rules. The plugin's SKILL.md
+/// is this text (a test keeps them equal).
 pub fn skill() -> String {
     let guide = GUIDE
         .split_once('\n')
         .map_or(GUIDE, |(_, rest)| rest)
         .trim_start();
+    let (introduction, sections) = guide.split_once("## ").unwrap_or(("", guide));
     format!(
-        "---\nname: atlas\ndescription: {SKILL_DESCRIPTION}\n---\n\n\
-# Atlas\n\n\
-Use it for anything that would otherwise touch the person's desktop: launching or \
-clicking through an app, testing a dialog, a menu bar item or an installer, taking \
-screenshots of a GUI. Do not use it for pure unit tests or for files you can read \
-directly.\n\n\
-## Rules\n\n\
-- Never act on the person's own desktop; everything happens in the helper.\n\
-- Never use sudo or change privacy settings. If `doctor` is not ready, tell the person \
-what it says (or use the setup skill).\n\
-- If a command reports `on-console`, the helper is on screen: ask the person to switch \
-back to their own account. Do not retry.\n\
-- Ask the person before `atlas switch`, and before anything that locks, sleeps \
-or logs out.\n\
-- After an `uncertain` result, run `atlas restart` before anything else.\n\
-- The person can watch or take control at any time with `atlas menubar` or \
-`atlas monitor`; mention it when you start a long task.\n\n\
-{guide}\n\
+        "---\nname: atlas\ndescription: \"{SKILL_DESCRIPTION}\"\n---\n\n# Atlas\n\n\
+{introduction}{SKILL_RULES}## {sections}\n\
 ## References\n\n\
 - [references/commands.md](references/commands.md): every command and its options.\n\
 - [references/troubleshooting.md](references/troubleshooting.md): what each error \
@@ -777,6 +786,16 @@ mod tests {
         ] {
             assert!(GUIDE.contains(&format!("atlas {command}")), "{command}");
         }
+    }
+
+    /// Agents read the skill's description from YAML front matter: it stays
+    /// one double-quoted line with nothing that would end or break it.
+    #[test]
+    fn the_skill_description_is_valid_front_matter() {
+        assert!(!SKILL_DESCRIPTION.contains(['"', '\\', '\n']));
+        assert!(skill().starts_with(&format!(
+            "---\nname: atlas\ndescription: \"{SKILL_DESCRIPTION}\"\n---\n"
+        )));
     }
 
     #[test]

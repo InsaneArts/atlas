@@ -64,7 +64,7 @@ public struct Mode: Equatable, Sendable {
 
     public static func of(_ mode: String) -> Mode {
         switch mode {
-        case "observing": return Mode(label: "Observing", tone: .ready, mark: .none)
+        case "observing": return Mode(label: "Watching", tone: .ready, mark: .none)
         case "agent": return Mode(label: "Agent working", tone: .active, mark: .working)
         case "controlling": return Mode(label: "Viewer has control", tone: .active, mark: .filled)
         case "recovering": return Mode(label: "Needs recovery", tone: .attention, mark: .alert)

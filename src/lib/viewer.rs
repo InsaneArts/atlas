@@ -806,6 +806,11 @@ mod tests {
                 continue;
             }
             let (mime, bytes) = asset(&route).unwrap_or_else(|| panic!("{route} is not served"));
+            // Images, such as the mark, are served but import nothing.
+            if !route.ends_with(".js") {
+                seen.push(route);
+                continue;
+            }
             assert!(mime.starts_with("text/javascript"), "{route}: {mime}");
             let source = std::str::from_utf8(bytes).unwrap();
             pending.extend(

@@ -8,6 +8,7 @@ import {
 } from './input.js';
 import {
   activityItems,
+  captionItems,
   controlBlockedBy,
   facts,
   freshness,
@@ -33,7 +34,9 @@ let paused = false,
 let status = null,
   statusSequence = 0,
   overview = null,
-  recovering = false;
+  recovering = false,
+  // The recovery alert set aside with Not Now, until the reason changes.
+  recoveryLater = null;
 let lease = null,
   acquiring = false,
   controlGeneration = 0,
@@ -89,34 +92,57 @@ function renderOverview() {
   el('activity').replaceChildren(
     ...items.map(({ who, text, when, ok }) => {
       const item = document.createElement('li');
-      item.className = ok ? 'row' : 'row failed';
+      if (!ok) item.className = 'failed';
+      const actor = document.createElement('span');
+      actor.className = 'actor';
+      actor.setAttribute('aria-hidden', 'true');
+      actor.textContent = ok ? who[0] : '!';
       const description = document.createElement('span');
-      const actor = document.createElement('b');
-      actor.textContent = who;
-      const operation = document.createElement('span');
-      operation.className = 'operation';
-      operation.textContent = ` ${text}`;
-      description.append(actor, operation);
+      description.className = 'text';
+      description.textContent = `${who} ${text}`;
       const time = document.createElement('time');
-      time.className = 'value';
       time.textContent = when;
-      item.append(description, time);
+      item.append(actor, description, time);
       return item;
     }),
   );
   el('activity-empty').hidden = items.length > 0;
+  renderCaptions();
   const checks = readiness(status);
   el('readiness-summary').textContent = checks.text;
   el('readiness-badge').dataset.ok = String(checks.ok);
   el('readiness-native').textContent = checks.native;
   el('agent-banner').hidden = overview?.mode !== 'agent' || Boolean(lease);
   const recovery = recoveryView(overview, { hasLease: Boolean(lease), recovering });
-  el('recovery').hidden = recovery.hidden;
+  // Not Now covers one incident: once nothing needs recovery, a later one alerts again.
+  if (recovery.hidden) recoveryLater = null;
+  const later = !recovery.busy && recoveryLater === `${overview?.mode}:${recovery.reason}`;
+  el('recovery').hidden = recovery.hidden || later;
+  el('recover-open').hidden = recovery.hidden || !later;
+  el('recovery-title').textContent = recovery.title;
   el('recover-reason').textContent = recovery.reason;
   el('recover').disabled = recovery.busy;
+  el('recover-later').disabled = recovery.busy;
   el('recover').textContent = recovery.busy ? 'Recovering…' : 'Recover';
   if (overview?.mode === 'blocked') el('details').open = true;
   renderControl();
+}
+
+/** The latest actions over the desktop, while watching with the inspector closed. */
+function renderCaptions() {
+  const shown = !lease && !paused && el('inspector').hidden;
+  el('captions').replaceChildren(
+    ...(shown ? captionItems(overview) : []).map(({ who, text, when, ok }) => {
+      const item = document.createElement('li');
+      item.className = ok ? 'glass' : 'glass failed';
+      const description = document.createElement('b');
+      description.textContent = `${who} ${text}`;
+      const time = document.createElement('time');
+      time.textContent = when;
+      item.append(description, time);
+      return item;
+    }),
+  );
 }
 
 function renderControl() {
@@ -129,8 +155,7 @@ function renderControl() {
   el('control').setAttribute('aria-busy', String(acquiring));
   el('observe').setAttribute('aria-pressed', String(!active));
   stage.classList.toggle('is-controlling', active);
-  for (const id of ['keyboard', 'send-escape', 'shortcut', 'send-shortcut'])
-    el(id).disabled = !active;
+  for (const id of ['keyboard', 'send-escape', 'shortcut']) el(id).disabled = !active;
   el('hint').textContent = active
     ? document.activeElement === keyboard
       ? 'Keyboard connected. Press Control-Shift-Esc to release.'
@@ -245,7 +270,9 @@ function unavailable(error) {
   imageURL = null;
   screen.removeAttribute('src');
   el('empty').hidden = false;
-  el('empty').textContent = error.message;
+  el('empty').dataset.state = 'error';
+  el('empty-title').textContent = "Can't show the helper";
+  el('empty-text').textContent = error.message;
   el('details').open = true;
 }
 
@@ -332,11 +359,12 @@ async function observe(signal, latest) {
     screen.hidden = false;
     el('empty').hidden = true;
     stage.style.aspectRatio = `${frame.imageWidth} / ${frame.imageHeight}`;
+    stage.style.setProperty('--ratio', String(frame.imageWidth / frame.imageHeight));
     ready = reply.ready;
-    el('account').textContent = reply.session?.user?.name || 'Helper account';
+    el('account').textContent = reply.session?.user?.name || 'Helper';
     renderFreshness();
     el('detail').textContent =
-      `${frame.imageWidth} × ${frame.imageHeight} preview · images stay in memory`;
+      `${frame.imageWidth} × ${frame.imageHeight} pictures, kept in memory only`;
     renderControl();
   } finally {
     if (nextURL) URL.revokeObjectURL(nextURL);
@@ -504,28 +532,56 @@ el('control').onclick = () => {
 // Observe always releases: it also cancels an acquisition still in flight,
 // whose late reply the generation guard then releases.
 el('observe').onclick = () => releaseControl();
-function showSidebar(visible) {
-  document.body.classList.toggle('sidebar-hidden', !visible);
-  el('sidebar-toggle').setAttribute('aria-expanded', String(visible));
-  el('sidebar-toggle').setAttribute('aria-label', visible ? 'Hide sidebar' : 'Show sidebar');
+function showInspector(visible) {
+  el('inspector').hidden = !visible;
+  el('inspector-toggle').setAttribute('aria-expanded', String(visible));
+  el('inspector-toggle').setAttribute('aria-label', visible ? 'Hide inspector' : 'Show inspector');
+  renderCaptions();
 }
-el('sidebar-toggle').onclick = () => {
-  const visible = document.body.classList.contains('sidebar-hidden');
-  showSidebar(visible);
+el('inspector-toggle').onclick = () => {
+  const visible = el('inspector').hidden;
+  showInspector(visible);
   try {
-    localStorage.setItem('atlas.sidebar', visible ? 'shown' : 'hidden');
+    localStorage.setItem('atlas.inspector', visible ? 'shown' : 'hidden');
   } catch {
     // A preference only; the layout works without storage.
   }
 };
 try {
-  showSidebar(localStorage.getItem('atlas.sidebar') !== 'hidden');
+  showInspector(localStorage.getItem('atlas.inspector') === 'shown');
 } catch {
-  showSidebar(true);
+  showInspector(false);
 }
+const tabs = ['activity', 'session'];
+function showTab(name) {
+  for (const tab of tabs) {
+    const selected = tab === name;
+    el(`tab-${tab}`).setAttribute('aria-selected', String(selected));
+    el(`tab-${tab}`).tabIndex = selected ? 0 : -1;
+    el(`panel-${tab}`).hidden = !selected;
+  }
+}
+for (const tab of tabs) el(`tab-${tab}`).onclick = () => showTab(tab);
+el('inspector')
+  .querySelector('[role=tablist]')
+  .addEventListener('keydown', (event) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    const next = tabs[(tabs.indexOf(document.activeElement.id.slice(4)) + 1) % tabs.length];
+    showTab(next);
+    el(`tab-${next}`).focus();
+  });
+el('recover-later').onclick = () => {
+  recoveryLater = `${overview?.mode}:${recoveryView(overview).reason}`;
+  renderOverview();
+};
+el('recover-open').onclick = () => {
+  recoveryLater = null;
+  renderOverview();
+};
 el('recover').onclick = async () => {
   if (recovering || lease) return;
   recovering = true;
+  recoveryLater = null;
   renderOverview();
   try {
     const result = await post('recover', {}, {}, 20000);
@@ -548,15 +604,17 @@ el('send-escape').onclick = () => {
   enqueue([{ type: 'key', key: 'escape' }]);
   keyboard.focus({ preventScroll: true });
 };
-el('send-shortcut').onclick = () => {
-  enqueue([{ type: 'key', key: el('shortcut').value }]);
+el('shortcut').onchange = () => {
+  const key = el('shortcut').value;
+  el('shortcut').value = '';
+  if (key) enqueue([{ type: 'key', key }]);
   keyboard.focus({ preventScroll: true });
 };
 el('pause').onclick = () => {
   paused = !paused;
   releaseControl();
-  el('pause').setAttribute('aria-label', paused ? 'Resume view' : 'Pause view');
-  el('pause').classList.toggle('is-paused', paused);
+  el('pause').setAttribute('aria-label', paused ? 'Resume picture' : 'Pause picture');
+  document.body.classList.toggle('is-paused', paused);
   preview.setActive(!paused && !document.hidden);
   if (paused) {
     setPill('off', 'Paused');
@@ -566,6 +624,7 @@ el('pause').onclick = () => {
     setPill('off', 'Connecting');
   }
   renderControl();
+  renderCaptions();
   renderFreshness();
 };
 el('rate').onchange = () => preview.refresh();

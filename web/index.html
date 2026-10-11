@@ -3,11 +3,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta
-      name="description"
-      content="Observe and control your prepared helper desktop from Atlas."
-    />
-    <meta name="color-scheme" content="light dark" />
+    <meta name="description" content="Watch and control your hidden helper desktop from Atlas." />
+    <meta name="color-scheme" content="dark" />
     <title>Atlas</title>
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="styles.css" />
@@ -15,71 +12,83 @@
   </head>
   <body>
     <a class="skip-link" href="#stage">Skip to desktop</a>
-    <header class="toolbar">
-      <div class="title">
-        <h1 id="account">Helper account</h1>
-        <p class="subtitle">
-          <span class="pill" id="pill" data-tone="off"
-            ><span class="dot" id="dot" aria-hidden="true"></span
-            ><span id="state" role="status" aria-live="polite">Connecting</span></span
-          ><span class="separator" aria-hidden="true">·</span
-          ><span id="updated">Waiting for the first frame</span>
-        </p>
+    <header class="header">
+      <div class="brand">
+        <img src="favicon.svg" alt="" width="28" height="28" />
+        <span>Atlas</span>
       </div>
-      <div class="segmented" role="group" aria-label="Mode">
-        <button id="observe" type="button" aria-pressed="true">Observe</button>
-        <button id="control" type="button" aria-pressed="false" disabled>Control</button>
-      </div>
-      <div class="tools">
-        <button class="icon-button" id="pause" type="button" aria-label="Pause view">
-          <svg class="icon-pause" viewBox="0 0 12 12" aria-hidden="true">
-            <rect x="2.5" y="2" width="2.2" height="8" rx="0.8" />
-            <rect x="7.3" y="2" width="2.2" height="8" rx="0.8" />
-          </svg>
-          <svg class="icon-resume" viewBox="0 0 12 12" aria-hidden="true">
-            <path d="M3.5 2.2v7.6L9.8 6z" />
-          </svg>
-        </button>
-        <button
-          class="icon-button"
-          id="sidebar-toggle"
-          type="button"
-          aria-label="Hide sidebar"
-          aria-controls="sidebar"
-          aria-expanded="true"
+      <p class="status glass" id="pill" data-tone="off">
+        <span class="dot" aria-hidden="true"></span
+        ><span class="status-label" id="state" role="status" aria-live="polite">Connecting</span
+        ><span class="status-detail"
+          ><span aria-hidden="true">·</span> <span id="account">Helper</span>
+          <span aria-hidden="true">·</span>
+          <span id="updated">Waiting for the first frame</span></span
         >
-          <svg class="icon-sidebar" viewBox="0 0 16 13" aria-hidden="true">
-            <rect x="0.75" y="0.75" width="14.5" height="11.5" rx="2.5" />
-            <path d="M10.5 1v11" />
+      </p>
+      <div class="header-tools">
+        <button
+          class="round glass"
+          id="inspector-toggle"
+          type="button"
+          aria-label="Show inspector"
+          aria-controls="inspector"
+          aria-expanded="false"
+        >
+          <svg viewBox="0 0 18 16" aria-hidden="true">
+            <rect x="1" y="1" width="16" height="14" rx="3" />
+            <path d="M11.5 1.4v13.2M13.4 4.6H15M13.4 7H15M13.4 9.4H15" />
           </svg>
         </button>
       </div>
     </header>
 
+    <div class="notice glass" id="notice" role="status" aria-live="polite" hidden></div>
+
     <div class="layout">
       <main class="primary">
-        <section class="banner" id="recovery" aria-labelledby="recovery-title" hidden>
-          <svg class="banner-mark" viewBox="0 0 18 18" aria-hidden="true">
-            <circle cx="9" cy="9" r="8" />
-            <path d="M9 4.8v5" />
-            <circle class="banner-point" cx="9" cy="12.8" r="1.1" />
-          </svg>
-          <div class="banner-text">
-            <h2 id="recovery-title">The last action's outcome is unknown</h2>
-            <p id="recover-reason">
-              Recovering restarts the helper's capture and releases held keys. Nothing is resumed.
-            </p>
-          </div>
-          <button class="button button-primary" id="recover" type="button">Recover</button>
-        </section>
-
-        <div class="notice" id="notice" role="status" aria-live="polite" hidden></div>
-
         <div class="stage" id="stage" aria-label="Helper desktop">
           <img id="screen" alt="Current screen of the helper account" draggable="false" hidden />
-          <div class="empty" id="empty" role="status">Waiting for the helper desktop…</div>
-          <div class="agent-pill" id="agent-banner" role="status" hidden>
+          <div class="empty" id="empty" role="status" data-state="waiting">
+            <span class="spinner" aria-hidden="true"></span>
+            <p class="empty-title" id="empty-title">Connecting to the helper</p>
+            <p class="empty-text" id="empty-text">The first picture arrives in a moment.</p>
+          </div>
+          <p class="chip glass agent-chip" id="agent-banner" role="status" hidden>
             <span class="dot" aria-hidden="true"></span>An agent is working
+          </p>
+          <p class="chip glass control-chip">
+            <span class="dot" aria-hidden="true"></span>Your mouse and keyboard go to the helper
+            <span class="chip-detail">· Control-Shift-Esc gives them back</span>
+          </p>
+          <p class="chip glass paused-chip">Picture paused</p>
+          <ol class="captions" id="captions" aria-label="Latest actions"></ol>
+          <div class="scrim" id="recovery" hidden>
+            <section
+              class="alert"
+              role="alertdialog"
+              aria-labelledby="recovery-title"
+              aria-describedby="recover-reason recover-detail"
+            >
+              <span class="alert-icon" aria-hidden="true">
+                <img src="favicon.svg" alt="" width="56" height="56" />
+                <svg viewBox="0 0 22 22">
+                  <path class="warning" d="M11 2l10 17.5H1z" />
+                  <path class="warning-mark" d="M11 8.5v4.7" />
+                  <circle class="warning-point" cx="11" cy="16.2" r="1.1" />
+                </svg>
+              </span>
+              <h2 id="recovery-title">The last action's outcome is unknown</h2>
+              <p id="recover-reason"></p>
+              <p id="recover-detail">
+                Recovering restarts the helper's capture and releases held keys. Nothing is
+                repeated.
+              </p>
+              <div class="alert-buttons">
+                <button class="alert-button default" id="recover" type="button">Recover</button>
+                <button class="alert-button" id="recover-later" type="button">Not Now</button>
+              </div>
+            </section>
           </div>
           <textarea
             id="keyboard"
@@ -95,76 +104,138 @@
           ></textarea>
         </div>
 
-        <div class="stage-footer">
-          <p id="reason">Connecting to the helper</p>
-          <div class="keys">
-            <span id="hint">Choose Control to use your mouse and keyboard.</span>
-            <button class="button" id="send-escape" type="button" disabled>esc</button>
+        <nav class="dock glass" aria-label="Viewer controls">
+          <div class="segmented" role="group" aria-label="Mode">
+            <button id="observe" type="button" aria-pressed="true">
+              <svg viewBox="0 0 18 12" aria-hidden="true">
+                <path class="outline" d="M1 6c2.5-4.2 13.5-4.2 16 0-2.5 4.2-13.5 4.2-16 0z" />
+                <circle cx="9" cy="6" r="2.2" />
+              </svg>
+              Watch
+            </button>
+            <button id="control" type="button" aria-pressed="false" disabled>
+              <svg viewBox="0 0 12 16" aria-hidden="true">
+                <path d="M1 1v11.5L4 9.8l2 4.6 2.2-1-2-4.5h4z" />
+              </svg>
+              Control
+            </button>
           </div>
-        </div>
+          <span class="divider" aria-hidden="true"></span>
+          <label class="visually-hidden" for="shortcut">Send a shortcut</label>
+          <select class="dock-select" id="shortcut" disabled>
+            <option value="">Shortcuts</option>
+            <option value="cmd+c">Copy ⌘C</option>
+            <option value="cmd+v">Paste ⌘V</option>
+            <option value="cmd+a">Select All ⌘A</option>
+            <option value="cmd+z">Undo ⌘Z</option>
+            <option value="cmd+shift+z">Redo ⇧⌘Z</option>
+            <option value="cmd+s">Save ⌘S</option>
+            <option value="cmd+tab">Switch App ⌘⇥</option>
+          </select>
+          <button
+            class="dock-button"
+            id="send-escape"
+            type="button"
+            aria-label="Send Escape"
+            disabled
+          >
+            <kbd>esc</kbd>
+          </button>
+          <span class="divider" aria-hidden="true"></span>
+          <button class="dock-button" id="recover-open" type="button" hidden>Recover…</button>
+          <button class="dock-button" id="pause" type="button" aria-label="Pause picture">
+            <svg class="icon-pause" viewBox="0 0 14 14" aria-hidden="true">
+              <rect x="3" y="2.4" width="2.6" height="9.2" rx="0.9" />
+              <rect x="8.4" y="2.4" width="2.6" height="9.2" rx="0.9" />
+            </svg>
+            <svg class="icon-resume" viewBox="0 0 14 14" aria-hidden="true">
+              <path d="M4 2.4v9.2L11.4 7z" />
+            </svg>
+          </button>
+        </nav>
+        <p class="hint" id="hint">Choose Control to use your mouse and keyboard.</p>
       </main>
 
-      <aside class="sidebar" id="sidebar" aria-label="Session">
-        <section class="group">
-          <h2>Session</h2>
-          <dl class="rows" id="facts"></dl>
+      <aside class="inspector glass" id="inspector" aria-label="Inspector" hidden>
+        <div class="tabs" role="tablist" aria-label="Inspector">
+          <button
+            id="tab-activity"
+            type="button"
+            role="tab"
+            aria-selected="true"
+            aria-controls="panel-activity"
+          >
+            Activity
+          </button>
+          <button
+            id="tab-session"
+            type="button"
+            role="tab"
+            aria-selected="false"
+            aria-controls="panel-session"
+            tabindex="-1"
+          >
+            Session
+          </button>
+        </div>
+
+        <section
+          class="tab-panel"
+          id="panel-activity"
+          role="tabpanel"
+          aria-labelledby="tab-activity"
+        >
+          <ol class="activity" id="activity" aria-label="Recent actions in the helper"></ol>
+          <p class="empty-row" id="activity-empty">No recent actions</p>
+          <p class="footnote">Pictures of the helper stay in memory and are never saved.</p>
         </section>
 
-        <section class="group">
-          <h2>Recent activity</h2>
-          <ol class="rows activity" id="activity" aria-label="Recent actions in the helper"></ol>
-          <p class="rows empty-row" id="activity-empty">No recent actions</p>
-        </section>
-
-        <section class="group">
-          <h2>Readiness</h2>
-          <div class="rows">
-            <div class="row readiness">
-              <svg class="badge" id="readiness-badge" viewBox="0 0 14 14" aria-hidden="true">
-                <circle cx="7" cy="7" r="6.35" />
-                <path d="M4 7.2 6.1 9.2 10 5" />
-              </svg>
-              <span id="readiness-summary">Checking…</span>
-            </div>
-            <div class="row">
-              <span>Save and Open panels</span>
-              <span class="value" id="readiness-native">Not verified</span>
-            </div>
-            <details class="disclosure" id="details">
-              <summary>Details</summary>
-              <div class="checks" id="checks" aria-label="Session readiness"></div>
-            </details>
+        <section
+          class="tab-panel"
+          id="panel-session"
+          role="tabpanel"
+          aria-labelledby="tab-session"
+          hidden
+        >
+          <p class="reason" id="reason">Connecting to the helper</p>
+          <div class="group">
+            <h2>Helper</h2>
+            <dl class="rows" id="facts"></dl>
           </div>
-        </section>
-
-        <section class="group">
-          <h2>Preview</h2>
-          <div class="rows">
-            <div class="row">
-              <label for="rate">Refresh</label>
-              <select id="rate">
-                <option value="1000">Every second</option>
-                <option value="2000" selected>Every 2 seconds</option>
-                <option value="5000">Every 5 seconds</option>
-              </select>
+          <div class="group">
+            <h2>Readiness</h2>
+            <div class="rows">
+              <div class="row readiness">
+                <svg class="badge" id="readiness-badge" viewBox="0 0 16 16" aria-hidden="true">
+                  <circle cx="8" cy="8" r="7.2" />
+                  <path d="M4.8 8.2 7 10.3l4.2-4.4" />
+                </svg>
+                <span id="readiness-summary">Checking…</span>
+              </div>
+              <div class="row">
+                <span>Save and Open panels</span>
+                <span class="value" id="readiness-native">Not verified</span>
+              </div>
+              <details class="disclosure" id="details">
+                <summary>Details</summary>
+                <div class="checks" id="checks" aria-label="Session readiness"></div>
+              </details>
             </div>
-            <div class="row">
-              <label for="shortcut">Shortcut</label>
-              <span class="shortcut">
-                <select id="shortcut" disabled>
-                  <option value="cmd+a">Select All</option>
-                  <option value="cmd+c">Copy</option>
-                  <option value="cmd+v">Paste</option>
-                  <option value="cmd+z">Undo</option>
-                  <option value="cmd+shift+z">Redo</option>
-                  <option value="cmd+s">Save</option>
-                  <option value="cmd+tab">Switch App</option>
+          </div>
+          <div class="group">
+            <h2>Picture</h2>
+            <div class="rows">
+              <div class="row">
+                <label for="rate">Refresh</label>
+                <select id="rate">
+                  <option value="1000">Every second</option>
+                  <option value="2000" selected>Every 2 seconds</option>
+                  <option value="5000">Every 5 seconds</option>
                 </select>
-                <button class="button" id="send-shortcut" type="button" disabled>Send</button>
-              </span>
+              </div>
             </div>
+            <p class="footnote" id="detail">Pictures stay in memory.</p>
           </div>
-          <p class="footnote" id="detail">Preview images stay in memory.</p>
         </section>
       </aside>
     </div>

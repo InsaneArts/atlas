@@ -60,6 +60,7 @@ Usage: atlas agents [OPTIONS] [COMMAND]
 
 Commands:
   status   Which agents are on this Mac and whether Atlas is connected
+  project  Tell a project's agents to test with Atlas: adds a short section to its AGENTS.md (and to a separate CLAUDE.md)
   install  Connect the plugin to Claude Code and/or Codex (all installed by default)
   remove   Disconnect the plugin from Claude Code and/or Codex
   help     Print this message or the help of the given subcommand(s)
@@ -78,6 +79,7 @@ Global options:
 Examples:
   atlas agents
   atlas agents install
+  atlas agents project
 ```
 
 ## atlas menubar
@@ -628,7 +630,7 @@ Global options:
           Use another settings file
 
 Examples:
-  atlas run -- ls ~/Documents
+  atlas run -- /bin/sh -c 'ls "$HOME/Documents"'
 ```
 
 ## atlas readiness

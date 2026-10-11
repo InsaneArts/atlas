@@ -315,8 +315,29 @@ fn agent_changes_list_each_agent() {
         ]}),
     );
     assert!(shown.out.starts_with("✓ Claude Code connected"));
-    assert!(shown.out.ends_with("New sessions know how to use Atlas."));
+    assert!(shown.out.contains("New sessions know how to use Atlas."));
+    assert!(
+        shown
+            .out
+            .ends_with("atlas agents project tells its agents to test with it.")
+    );
     assert!(shown.err.starts_with("✗ Codex: not installed"));
+}
+
+#[test]
+fn a_project_says_which_files_carry_atlas() {
+    let shown = show(
+        View::AgentsProject,
+        json!({"ok": true, "files": [
+            {"path": "/p/AGENTS.md", "change": "added"},
+            {"path": "/p/CLAUDE.md", "change": "unchanged"},
+        ]}),
+    );
+    assert_eq!(
+        shown.out,
+        "✓ Added Atlas to AGENTS.md\n✓ CLAUDE.md already has Atlas\n\
+         Agents working here will now test changes in the helper."
+    );
 }
 
 #[test]
