@@ -451,7 +451,7 @@ pub async fn wait(
 pub struct ElementFilter {
     /// AX role, for example `AXButton`, compared case-insensitively.
     pub role: Option<String>,
-    /// Exact title, description or identifier, compared case-insensitively.
+    /// Exact title, label text, description or identifier, compared case-insensitively.
     pub name: Option<String>,
 }
 
@@ -473,6 +473,7 @@ impl ElementFilter {
                 same(&element.title, name, "AXTitle")
                     || same(&element.description, name, "AXDescription")
                     || same(&element.identifier, name, "AXIdentifier")
+                    || label(element).is_some_and(|text| text.eq_ignore_ascii_case(name))
             })
     }
     pub fn matches(&self, element: &Element) -> bool {
@@ -487,8 +488,18 @@ impl ElementFilter {
                 same(&element.title, name)
                     || same(&element.description, name)
                     || same(&element.identifier, name)
+                    || label(element).is_some_and(|text| text.eq_ignore_ascii_case(name))
             })
     }
+}
+
+/// The text of a plain label (SwiftUI and AppKit put it in the value of a
+/// static text), which names it like a title. A text field's value is typed
+/// content, never a name.
+fn label(element: &Element) -> Option<&str> {
+    (element.role.as_deref() == Some("AXStaticText"))
+        .then_some(element.value.as_deref())
+        .flatten()
 }
 
 /// Layers from the Dock's up hold the Dock, the menu bar and system overlays,
@@ -875,6 +886,20 @@ mod tests {
         assert!(!filter(Some("AXButton"), Some("Save")).matches(&unread));
         assert!(filter(Some("AXButton"), Some("Save")).might_match(&unread));
         assert!(!filter(Some("AXStaticText"), Some("Save")).might_match(&unread));
+    }
+
+    #[test]
+    fn a_label_is_named_by_its_text_but_a_field_is_not() {
+        let filter = ElementFilter {
+            role: None,
+            name: Some("Main".into()),
+        };
+        let mut label = element("AXStaticText", None, None);
+        label.value = Some("Main".into());
+        assert!(filter.matches(&label) && filter.might_match(&label));
+        let mut field = element("AXTextField", None, None);
+        field.value = Some("Main".into());
+        assert!(!filter.matches(&field), "typed text is not a name");
     }
 
     #[test]
