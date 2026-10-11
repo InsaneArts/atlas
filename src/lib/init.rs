@@ -841,7 +841,7 @@ pub async fn run(config_path: &Path) -> Result<Value> {
              2. macOS asks about Accessibility: click Open System Settings and turn Atlas on.\n  \
              3. System Settings then shows Screen & System Audio Recording: turn Atlas on\n     \
              there too. If macOS offers to quit and reopen Atlas, either choice is fine.\n  \
-             4. Switch back here. Atlas carries on by itself."
+             4. When Atlas says it is set up there, switch back here. Atlas carries on by itself."
         ));
         loop {
             // The person is here, in their own account: offer the way over.

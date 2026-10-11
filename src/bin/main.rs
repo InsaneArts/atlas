@@ -72,6 +72,11 @@ enum Command {
     },
     #[command(hide = true)]
     SessionInfo,
+    /// This process's permissions as macOS grants them now (the helper's
+    /// daemon asks a fresh process: its own Screen Recording reading only
+    /// changes when it restarts).
+    #[command(hide = true)]
+    PermissionsInfo,
     #[command(hide = true)]
     WindowsInfo,
     #[command(hide = true)]
@@ -605,6 +610,7 @@ fn machine_only(command: &Command) -> bool {
         command,
         Command::EnvironmentWorker { .. }
             | Command::SessionInfo
+            | Command::PermissionsInfo
             | Command::WindowsInfo
             | Command::ElementsInfo { .. }
             | Command::HelperServe { .. }
@@ -803,6 +809,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             return Ok(Value::Null);
         }
         Command::SessionInfo => return atlas::native::session_info(),
+        Command::PermissionsInfo => return Ok(atlas::daemon::facts::permissions_now()),
         Command::WindowsInfo => return windows_info(),
         Command::ElementsInfo { pid } => return elements_info(pid),
         Command::InputService {
@@ -867,6 +874,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
         Command::InputService { .. }
         | Command::HelperServe { .. }
         | Command::SessionInfo
+        | Command::PermissionsInfo
         | Command::WindowsInfo
         | Command::ElementsInfo { .. }
         | Command::AgentGuide { .. }
