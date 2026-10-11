@@ -427,6 +427,12 @@ enum AgentsCommand {
         #[arg(long)]
         brief: bool,
     },
+    /// Tell a project's agents to test with Atlas: adds a short section to
+    /// its AGENTS.md (and to a separate CLAUDE.md).
+    Project {
+        /// The project folder (default: this one).
+        dir: Option<PathBuf>,
+    },
     /// Connect the plugin to Claude Code and/or Codex (all installed by default).
     Install {
         /// Only Claude Code.
@@ -693,6 +699,9 @@ fn view(command: &Command) -> View {
         Command::Agents {
             action: Some(AgentsCommand::Install { .. } | AgentsCommand::Remove { .. }),
         } => View::AgentsChange,
+        Command::Agents {
+            action: Some(AgentsCommand::Project { .. }),
+        } => View::AgentsProject,
         Command::Agents { .. } => View::Agents,
         Command::Switch { .. } => View::Switch,
         Command::Update { .. } => View::Update,
@@ -839,6 +848,9 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
                 AgentsCommand::Status { brief: false } => {
                     let _spinner = Spinner::new("Checking Claude Code and Codex…");
                     Ok(atlas::agents::status())
+                }
+                AgentsCommand::Project { dir } => {
+                    atlas::agents::project(&dir.unwrap_or_else(|| PathBuf::from(".")))
                 }
                 AgentsCommand::Install { claude, codex } => {
                     let _spinner = Spinner::new("Connecting…");

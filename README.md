@@ -1,125 +1,127 @@
-# Atlas
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.svg">
+  <img alt="atlas: a hidden Mac desktop where your agents test what they build" width="480" src="assets/banner-light.svg">
+</picture>
 
-A hidden second macOS desktop where your agents test apps while you keep working.
+<br/>
 
-Atlas runs a separate, signed-in helper account in the background. Agents
-take screenshots of it and click and type in it; your own windows, keyboard and
-mouse stay yours. You can watch the helper from the menu bar or take control at
-any time.
+<p>
+  <a href="https://github.com/InsaneArts/atlas/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/InsaneArts/atlas/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+  <a href="https://github.com/InsaneArts/atlas/releases"><img alt="Release" src="https://img.shields.io/github/v/release/InsaneArts/atlas"></a>
+  <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-lightgrey">
+  <a href="Cargo.toml"><img alt="Rust" src="https://img.shields.io/badge/rust-edition%202024-orange"></a>
+</p>
 
-**Experimental.** Clicks, typing, shortcuts, drags, scrolling, menus and alerts
-work in the hidden desktop. Save and Open panels are known to work only while a
-Screen Sharing session is connected to the helper. Sound plays on your speakers.
+An agent can change a Mac app, but it cannot see the change run without taking
+over your screen. Atlas gives agents a screen of their own: a separate,
+signed-in helper account that runs in the background. There they open their
+builds, take screenshots, click and type, and come back with proof that the
+change works. Your windows, keyboard and mouse are never touched.
 
-## Get started
+You set it up once, then watch from the menu bar and take over when you want.
+
+**Experimental.** Save and Open panels work only while Screen Sharing is
+connected to the helper, and sound plays on your speakers.
+
+## Set up
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/InsaneArts/atlas/main/install.sh | sh
 atlas init
 ```
 
-The installer checks the release's checksum and Developer ID signature, puts
-Atlas.app in /Applications and adds the `atlas` command. While the
-repository is private it needs `GITHUB_TOKEN`.
-
-`init` walks you through the rest and is safe to run again:
-
-1. Choose the helper account, or create one.
-2. Type your administrator password once (for the helper's background job).
-3. Switch to the helper, sign in, and click **Allow** twice (Screen Recording and
-   Accessibility). Atlas can lock the screen for you to switch.
-4. Switch back. Atlas checks everything, turns on the menu bar at login, and
-   offers to teach Claude Code and Codex to use it.
-
-Atlas never types or stores a password and never changes privacy settings
+`init` walks you through it and is safe to run again: choose or create the
+helper account, type your password once, then switch to the helper and click
+**Allow** twice. Atlas never stores a password or changes privacy settings
 for you.
 
-## Use
+## Teach your agents
+
+`init` connects Claude Code and Codex, so every session has the Atlas skill
+(later: `atlas agents install`). To make agents use it whenever they change
+something you can see, add a short section to each project:
 
 ```sh
-atlas doctor                               # is everything ready?
-atlas screenshot                           # save the helper's screen
-atlas open --app TextEdit                  # open an app in the helper
-atlas click --app TextEdit --name Save     # click a named button
-atlas click 1200 880                       # or a point
-atlas type "hello"
-atlas run -- ls ~/Documents                # run a command in the helper
-atlas                                      # every command
+cd your-project
+atlas agents project      # adds it to AGENTS.md, and to CLAUDE.md if separate
 ```
 
-In a terminal Atlas prints short text. When its output goes to a program
-(or with `--json`, or `ATLAS_JSON=1`) every command prints JSON and exits
-non-zero on failure, so agents and scripts read exact results. `atlas agent-guide` is the guide
-agents follow.
+Or paste it yourself:
 
-If an action's outcome is unknown, Atlas stops taking actions until
-`atlas restart` recovers the helper; nothing is replayed.
+```markdown
+## Test on screen with Atlas
 
-## Watch and take control
+This Mac has Atlas: a hidden second macOS login (the helper) where you can run
+and test apps without touching my desktop, windows, keyboard or mouse.
 
-- **Menu bar** (`atlas menubar`, on at login after `init`): the helper's
-  state, a live thumbnail, **Open Viewer**, **Switch to Helper…** and **Recover**.
-- **Viewer** (`atlas monitor`): the helper in your browser. **Control** takes
-  the mouse and keyboard; **Observe** or Ctrl–Shift–Esc gives them back.
-- **Switch** (`atlas switch`): locks the screen so you can switch to the
-  helper; you sign in there.
+- When a change affects anything on screen (a window, dialog, menu, the menu
+  bar, how an app behaves), test it in the helper before saying it works.
+- Run `atlas agent-guide` once per session and follow it. Start with
+  `atlas doctor`; if it is not ready, run the Atlas commands it suggests, and
+  tell me only what needs me.
+- Build, close any older copy (`atlas close --app NAME`), then
+  `atlas open path/to/App.app` and `atlas wait --app NAME`. Check the change
+  with `atlas screenshot` and `atlas elements`, show me the screenshots, and
+  `atlas close --app NAME` when you are done.
+- If the app needs my settings or files, copy only those into the helper
+  yourself with `atlas environment`, and roll the copy back when you are done.
+  Never ask me to copy anything.
+- Never test on my own desktop and never change privacy permissions. If an
+  action's outcome is unknown, never repeat it: run `atlas restart`, look
+  again, and tell me.
+```
+
+## What agents do with it
+
+When an agent changes something on screen, it checks the change the way a
+person would, only in the helper:
+
+1. **Checks Atlas is ready** with `atlas doctor`, and tells you what to fix if
+   it is not.
+2. **Runs its build** with `atlas open path/to/App.app` and waits for the
+   window.
+3. **Looks** with `atlas screenshot`, and reads buttons and fields by name with
+   `atlas elements`.
+4. **Uses the app** with `atlas click --app App --name Save`, `atlas type` and
+   `atlas key`, looking again after each step.
+5. **Reports** with the screenshots as evidence, then `atlas close` quits the
+   app and removes Atlas's copy.
+
+Every command answers in JSON when an agent runs it, and fails loudly. If the
+outcome of an action is unknown, Atlas refuses further actions until it is
+recovered, so an agent never repeats a click blindly. `atlas agent-guide` is
+the full guide agents read.
+
+## Give the helper what an app needs
+
+You never copy anything by hand: `init` is the only thing you run. The helper
+starts without your files, so when an app needs some, the agent brings them in
+and takes them away again:
+
+- **Builds.** `atlas open` copies a build the helper can't read into
+  `/Users/Shared/Atlas/Open`, and `atlas close` deletes the copy.
+- **Settings and files.** The agent picks only what the app needs (say, Opie's
+  rings), previews the copy, applies it, and rolls it back when it is done.
+  Atlas never overwrites a file the helper already had, and never throws away
+  a change made in the helper.
+
+## Watch and take over
+
+- **Menu bar:** what the agent is doing, a live thumbnail, Open Viewer and
+  Recover.
+- **Viewer** (`atlas monitor`): the helper in your browser, with each action
+  as it happens. **Control** takes the mouse and keyboard; **Watch** or
+  Ctrl–Shift–Esc gives them back.
 
 ## Update and remove
 
 ```sh
-atlas update       # checks the signature, swaps the app, moves the helper onto it
-atlas uninstall    # asks first; keeps the helper account
+atlas update
+atlas uninstall    # keeps the helper account
 ```
 
 ## Safety
 
-- Input goes only to the configured helper's session, while it is in the
-  background, on the exact display it was checked against.
-- Atlas trusts a socket only when the system says the helper owns it.
-- In the helper, Atlas turns off autocorrect and smart punctuation so typed
-  text arrives exactly. Your own account's settings are never changed.
-- One controller at a time. Held keys and buttons are released when control
-  ends for any reason.
-- The helper runs Atlas's own Developer ID-signed app, checked before it is
-  trusted.
-
-## Develop
-
-Requires Rust and the Xcode Command Line Tools.
-
-```sh
-cargo build
-cargo xtask dist --sign "Developer ID Application: …" [--notarize PROFILE]
-```
-
-`xtask dist` builds the universal, signed app and writes
-`target/dist/Atlas-VERSION-macos.zip` with its SHA-256.
-
-| Path | What |
-| --- | --- |
-| `src/bin/main.rs` | the command line |
-| `src/lib/` | client, session checks, control, viewer, setup, init, update, `ui/` (terminal output) |
-| `src/lib/daemon/` | the helper daemon: screenshots, commands, session facts |
-| `src/lib/native/` | the helper's input service, events and window list |
-| `menubar/` | the menu bar app (Swift); `web/` the viewer |
-| `agents/` | the Claude Code and Codex plugin |
-| `xtask/`, `install.sh` | release tooling and the installer |
-
-Checks:
-
-```sh
-cargo fmt --all --check
-cargo clippy --all-targets -- -D warnings
-cargo test
-swift test --package-path menubar
-npm ci && npm run format:check && npm test
-```
-
-Unit checks do not prove the hidden desktop works. Live checks drive a
-disposable fixture in the helper: `node scripts/prepare-control-test.mjs`, then
-the `check-*.mjs` scripts. They expect a 2560 × 1440 helper display at scale 1.
-
-Advanced: `atlas setup` inspects (and with `--apply` repairs) the helper's
-job, and `atlas environment` copies selected tools, settings and project
-paths into the helper (see `examples/`). Local settings, screenshots and notes
-stay in the ignored `atlas.local.toml`, `runs/` and `docs/`.
+- Agents act only in the helper's session, while it is in the background.
+- One controller at a time; held keys are released when control ends.
+- Nothing is ever replayed after an unknown outcome.

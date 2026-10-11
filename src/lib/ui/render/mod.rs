@@ -40,6 +40,7 @@ pub enum View {
     Install,
     Agents,
     AgentsChange,
+    AgentsProject,
     Switch,
     Update,
     Uninstall,
@@ -113,6 +114,9 @@ pub fn render(view: &View, value: &Value) -> Rendered {
         View::Install => failed(value).unwrap_or_else(|| Rendered::out(act::install(value))),
         View::Agents => Rendered::out(manage::agents(value)),
         View::AgentsChange => manage::agents_change(value),
+        View::AgentsProject => {
+            failed(value).unwrap_or_else(|| Rendered::out(manage::agents_project(value)))
+        }
         View::Switch => failed(value).unwrap_or_else(|| Rendered::out(manage::switch(value))),
         View::Update => manage::update(value),
         View::Uninstall => failed(value).unwrap_or_else(|| Rendered::out(manage::uninstall(value))),

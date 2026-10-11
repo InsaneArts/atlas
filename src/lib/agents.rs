@@ -376,6 +376,136 @@ pub fn change(chosen: &[Agent], remove: bool) -> Result<Value> {
     Ok(json!({"ok": ok, "agents": results}))
 }
 
+/// The section `atlas agents project` keeps in a project's AGENTS.md: when
+/// to test in the helper, and how. The README shows the same text.
+pub const PROJECT_SECTION: &str = include_str!("agent_project.md");
+const SECTION_START: &str = "<!-- atlas:start -->";
+const SECTION_END: &str = "<!-- atlas:end -->";
+
+/// Add the Atlas section to a project's AGENTS.md, or bring it up to date,
+/// and to its CLAUDE.md when that is a separate file that does not already
+/// include AGENTS.md. Nothing else in either file changes, and a file is
+/// replaced whole or not at all.
+pub fn project(dir: &Path) -> Result<Value> {
+    if !dir.is_dir() {
+        return Err(problem(format!("{} is not a folder", dir.display())));
+    }
+    let agents = dir.join("AGENTS.md");
+    let claude = dir.join("CLAUDE.md");
+    let mut plans = vec![(agents.clone(), read_instructions(&agents)?)];
+    if let Some(text) = read_instructions(&claude)? {
+        let same = match (claude.canonicalize(), agents.canonicalize()) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        };
+        if !same && !text.contains("@AGENTS.md") {
+            plans.push((claude, Some(text)));
+        }
+    }
+    // Check every file before changing any.
+    let mut changes = Vec::new();
+    for (path, before) in plans {
+        let before = before.unwrap_or_default();
+        let after = with_section(&before).ok_or_else(|| {
+            problem(format!(
+                "{} has an Atlas marker without its pair. Remove the lines \
+                 {SECTION_START} and {SECTION_END}, then run this again",
+                path.display()
+            ))
+        })?;
+        changes.push((path, before, after));
+    }
+    let mut files = Vec::new();
+    for (path, before, after) in changes {
+        let change = if before == after {
+            "unchanged"
+        } else if before.contains(SECTION_START) {
+            "updated"
+        } else {
+            "added"
+        };
+        if before != after {
+            replace_file(&path, after.as_bytes())
+                .map_err(|error| problem(format!("Could not write {}: {error}", path.display())))?;
+        }
+        files.push(json!({"path": path, "change": change}));
+    }
+    Ok(json!({"ok": true, "files": files}))
+}
+
+/// An instruction file's text, or None when there is none.
+fn read_instructions(path: &Path) -> Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(problem(format!(
+            "Could not read {}: {error}",
+            path.display()
+        ))),
+    }
+}
+
+/// `text` with the Atlas section in place of an earlier one, or appended;
+/// None when the markers are not exactly one pair in order.
+fn with_section(text: &str) -> Option<String> {
+    let block = format!("{SECTION_START}\n{PROJECT_SECTION}{SECTION_END}\n");
+    match (
+        text.matches(SECTION_START).count(),
+        text.matches(SECTION_END).count(),
+    ) {
+        (0, 0) => {}
+        (1, 1) => {
+            let start = text.find(SECTION_START)?;
+            let end = text.find(SECTION_END).filter(|&end| end > start)?;
+            let rest = &text[end + SECTION_END.len()..];
+            return Some(format!(
+                "{}{block}{}",
+                &text[..start],
+                rest.strip_prefix('\n').unwrap_or(rest)
+            ));
+        }
+        _ => return None,
+    }
+    let gap = match text {
+        "" => "",
+        _ if text.ends_with("\n\n") => "",
+        _ if text.ends_with('\n') => "\n",
+        _ => "\n\n",
+    };
+    Some(format!("{text}{gap}{block}"))
+}
+
+/// Replace a file through a temporary file beside it, so a failure leaves
+/// the old text whole. A link is followed and its target replaced; the
+/// file keeps its permissions.
+fn replace_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::{io::Write, os::unix::fs::OpenOptionsExt, os::unix::fs::PermissionsExt};
+    let target = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mode = std::fs::metadata(&target).map_or(0o644, |m| m.permissions().mode() & 0o777);
+    let temporary = target.with_file_name(format!(
+        ".{}.atlas-{}",
+        target
+            .file_name()
+            .map_or("instructions".into(), |n| n.to_string_lossy()),
+        crate::control::token()
+    ));
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(mode)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&temporary)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, &target)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
 /// After an update, bring each connected agent's copy of the plugin up to
 /// date (agents cache plugins when installing). Never fails the update.
 pub fn refresh() -> Value {
@@ -429,7 +559,10 @@ pub async fn brief(config_path: &Path) -> String {
     };
     let ready = crate::capability::doctor(status, config.helper_uid)["ready"] == true;
     if ready {
-        format!("Atlas {version}: ready. Use the atlas skill for GUI work.")
+        format!(
+            "Atlas {version}: ready. After any change a person could see, check it in the \
+             hidden helper with the atlas skill before saying it works."
+        )
     } else {
         format!("Atlas {version}: not ready; run atlas doctor and tell the person what it says.")
     }
@@ -438,6 +571,100 @@ pub async fn brief(config_path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_project_section_is_added_once_and_kept_current() {
+        let block = format!("{SECTION_START}\n{PROJECT_SECTION}{SECTION_END}\n");
+        assert_eq!(with_section("").unwrap(), block);
+        assert_eq!(
+            with_section("# Rules").unwrap(),
+            format!("# Rules\n\n{block}")
+        );
+        assert_eq!(
+            with_section("# Rules\n").unwrap(),
+            format!("# Rules\n\n{block}")
+        );
+        let once = with_section("# Rules\n\nKeep this.\n").unwrap();
+        assert_eq!(
+            with_section(&once).unwrap(),
+            once,
+            "a second run changes nothing"
+        );
+        let old = format!("# Rules\n{SECTION_START}\nold words\n{SECTION_END}\nAfter.\n");
+        assert_eq!(
+            with_section(&old).unwrap(),
+            format!("# Rules\n{block}After.\n")
+        );
+        // An unpaired or reversed marker is refused, never guessed at.
+        for broken in [
+            format!("{SECTION_START}\nKeep this.\n"),
+            format!("Keep this.\n{SECTION_END}\n"),
+            format!("{SECTION_END}\n{SECTION_START}\n"),
+            format!("{once}{SECTION_START}\n"),
+        ] {
+            assert_eq!(with_section(&broken), None, "{broken}");
+        }
+    }
+
+    #[test]
+    fn a_broken_marker_leaves_every_file_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("AGENTS.md"), "# Rules\n").unwrap();
+        let broken = format!("# Claude\n{SECTION_START}\nKeep this.\n");
+        std::fs::write(dir.path().join("CLAUDE.md"), &broken).unwrap();
+        assert!(project(dir.path()).is_err());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("AGENTS.md")).unwrap(),
+            "# Rules\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap(),
+            broken
+        );
+    }
+
+    #[test]
+    fn a_project_gets_the_section_in_agents_and_a_separate_claude_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("CLAUDE.md"), "# Claude\n").unwrap();
+        let result = project(dir.path()).unwrap();
+        let changes: Vec<&str> = result["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|file| file["change"].as_str().unwrap())
+            .collect();
+        assert_eq!(changes, ["added", "added"]);
+        for name in ["AGENTS.md", "CLAUDE.md"] {
+            let text = std::fs::read_to_string(dir.path().join(name)).unwrap();
+            assert!(text.contains(PROJECT_SECTION), "{name}");
+        }
+        assert_eq!(
+            project(dir.path()).unwrap()["files"][0]["change"],
+            "unchanged"
+        );
+
+        // A CLAUDE.md that already includes AGENTS.md is left alone.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("CLAUDE.md"), "@AGENTS.md\n").unwrap();
+        assert_eq!(
+            project(dir.path()).unwrap()["files"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap(),
+            "@AGENTS.md\n"
+        );
+    }
+
+    #[test]
+    fn the_readme_shows_the_project_section() {
+        let readme = include_str!("../../README.md");
+        assert!(readme.contains(PROJECT_SECTION.trim_end()));
+    }
 
     #[test]
     fn connecting_registers_the_local_marketplace_then_installs() {

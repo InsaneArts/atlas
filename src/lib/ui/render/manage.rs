@@ -48,6 +48,31 @@ pub fn agents(value: &Value) -> String {
     lines.join("\n")
 }
 
+/// Which instruction files now carry the Atlas section.
+pub fn agents_project(value: &Value) -> String {
+    let mut lines = Vec::new();
+    let mut changed = false;
+    for file in value["files"].as_array().into_iter().flatten() {
+        let path = file["path"].as_str().unwrap_or("?");
+        let name = std::path::Path::new(path)
+            .file_name()
+            .map_or(path.into(), |name| name.to_string_lossy());
+        let line = match file["change"].as_str() {
+            Some("added") => format!("Added Atlas to {name}"),
+            Some("updated") => format!("Updated Atlas in {name}"),
+            _ => format!("{name} already has Atlas"),
+        };
+        changed |= file["change"] != "unchanged";
+        lines.push(format!("{} {}", style::ok(), text::printable(&line)));
+    }
+    if changed {
+        lines.push(style::dim(
+            "Agents working here will now test changes in the helper.",
+        ));
+    }
+    lines.join("\n")
+}
+
 pub fn agents_change(value: &Value) -> Rendered {
     let mut out = Vec::new();
     let mut err = Vec::new();
@@ -72,6 +97,10 @@ pub fn agents_change(value: &Value) -> Rendered {
     }
     if connected {
         out.push(style::dim("New sessions know how to use Atlas."));
+        out.push(format!(
+            "In each project, {} tells its agents to test with it.",
+            style::cmd("atlas agents project")
+        ));
     }
     Rendered {
         out: out.join("\n"),

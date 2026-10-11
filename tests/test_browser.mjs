@@ -230,6 +230,7 @@ test('status rows keep unknown distinct and show native dialogs separately', () 
 import {
   activityItems,
   ago,
+  captionItems,
   canRecover,
   controlBlockedBy,
   facts,
@@ -290,6 +291,24 @@ test('overview turns modes, facts and activity into display rows', () => {
     { who: 'You', text: 'recovered', when: '70 s ago', ok: true },
     { who: 'Agent', text: 'input failed', when: '3 min ago', ok: false },
   ]);
+  const captions = captionItems({
+    activity: [
+      { operation: 'input', ok: true, actionCount: 1, ageSeconds: 2 },
+      { operation: 'run', ok: true, ageSeconds: 30 },
+      { operation: 'restart', ok: true, ageSeconds: 50 },
+      { operation: 'run', ok: true, ageSeconds: 55 },
+      { operation: 'input', ok: false, actionCount: 2, ageSeconds: 90 },
+    ],
+  });
+  assert.deepEqual(
+    captions.map((item) => item.text),
+    ['recovered', 'ran a command', 'sent 1 action'],
+    'the three latest recent actions, oldest first',
+  );
+  assert.deepEqual(
+    captionItems({ activity: [{ operation: 'run', ok: true, ageSeconds: 61 }] }),
+    [],
+  );
   assert.deepEqual(readiness({ checks: [{ ok: true }, { ok: true }] }), {
     text: 'All checks passed',
     ok: true,
@@ -355,13 +374,15 @@ test('the recovery card follows recovery, not a stale status', () => {
   assert.deepEqual(recoveryView(needs), {
     hidden: false,
     busy: false,
+    title: "The last action's outcome is unknown",
     reason: 'An outcome is unknown',
   });
+  assert.equal(recoveryView({ mode: 'blocked', reason: 'x' }).title, "The helper isn't ready");
   assert.equal(recoveryView(needs, { recovering: true }).busy, true);
   assert.equal(recoveryView({ mode: 'observing' }, { recovering: true }).hidden, false);
   assert.deepEqual(
     recoveryView({ mode: 'observing' }),
-    { hidden: true, busy: false, reason: '' },
+    { hidden: true, busy: false, title: '', reason: '' },
     'an observing status after recovery hides the card',
   );
   assert.equal(recoveryView(needs, { hasLease: true }).hidden, true);

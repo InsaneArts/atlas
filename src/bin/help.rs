@@ -81,7 +81,7 @@ const EXAMPLES: &[(&str, &[&str])] = &[
             "atlas wait --title Save --gone",
         ],
     ),
-    ("run", &["atlas run -- ls ~/Documents"]),
+    ("run", &["atlas run -- /bin/sh -c 'ls \"$HOME/Documents\"'"]),
     (
         "readiness",
         &[
@@ -90,7 +90,14 @@ const EXAMPLES: &[(&str, &[&str])] = &[
         ],
     ),
     ("monitor", &["atlas monitor", "atlas monitor --port 8800"]),
-    ("agents", &["atlas agents", "atlas agents install"]),
+    (
+        "agents",
+        &[
+            "atlas agents",
+            "atlas agents install",
+            "atlas agents project",
+        ],
+    ),
 ];
 
 fn examples(name: &str) -> &'static [&'static str] {
