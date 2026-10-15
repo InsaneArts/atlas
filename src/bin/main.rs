@@ -139,7 +139,9 @@ enum Command {
     Install,
     /// Start (or reset) the helper's input service.
     StartInput,
-    /// Watch and control the helper in your browser.
+    /// Watch and control the helper in Atlas's viewer window.
+    ///
+    /// Starts the menu bar first when it is not running.
     Monitor {
         /// Local port for the viewer.
         #[arg(long, default_value_t = 8765)]
@@ -1103,7 +1105,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
         Command::Install => client.install(),
         Command::StartInput => client.start_input().await,
         Command::Monitor { port } => {
-            viewer::serve(client, port, None).await?;
+            viewer::monitor(&config, port, client.output_dir()?).await?;
             Ok(Value::Null)
         }
         Command::Menubar {
@@ -1121,7 +1123,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
                     if serve {
                         let _ = nix::unistd::setsid();
                     }
-                    viewer::serve(client, port, Some(program)).await?;
+                    viewer::serve(client, port, program).await?;
                     Ok(Value::Null)
                 }
                 None => {

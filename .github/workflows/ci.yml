@@ -28,5 +28,5 @@ jobs:
         run: swiftc tests/live/DesktopFixture.swift -o /tmp/AtlasFixture -framework AppKit -framework CoreGraphics
       - name: Build and test the menu bar package
         run: |
-          swift build -c release --package-path menubar
-          swift test --package-path menubar
+          swift build -c release --package-path app
+          swift test --package-path app
