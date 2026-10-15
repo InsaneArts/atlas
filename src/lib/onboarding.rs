@@ -134,7 +134,7 @@ fn me() -> Result<(u32, String, Option<String>)> {
     Ok((uid, account.name, real))
 }
 
-fn real_name(name: &str) -> Option<String> {
+pub(crate) fn real_name(name: &str) -> Option<String> {
     let output = Command::new("/usr/bin/dscl")
         .args([".", "-read", &format!("/Users/{name}"), "RealName"])
         .output()
@@ -280,9 +280,17 @@ pub async fn status(config_path: &Path) -> Result<Value> {
 /// the process that uses them, reports them.
 async fn helper_side(uid: u32, pairing: Option<&Pairing>) -> Value {
     let layout = home().map(|home| Layout { uid, home });
-    let installed = layout
-        .as_ref()
-        .is_ok_and(|layout| layout.agent_plist(LABEL).exists());
+    // Installed for the account asking now: a job left by an earlier Atlas
+    // (another app, another account) needs Allow again.
+    let installed = layout.as_ref().is_ok_and(|layout| {
+        let current = fs::read_to_string(layout.agent_plist(LABEL)).ok();
+        match (current, pairing) {
+            (None, _) => false,
+            (Some(_), None) => true,
+            (Some(text), Some(pairing)) => expected_agent(layout, pairing.controller_uid)
+                .is_ok_and(|agent| text == setup::helper::plist(&agent, &layout.logs())),
+        }
+    });
     let running = Command::new("/bin/launchctl")
         .args(["print", &format!("gui/{uid}/{LABEL}")])
         .output()
@@ -624,16 +632,51 @@ pub fn accept(controller_uid: u32, controller_name: &str) -> Result<Value> {
         uid,
         controller: controller.name.clone(),
     })?;
-    let installed = run(&Request::Install {
-        agent: Agent {
-            label: LABEL.to_owned(),
-            program: executable,
-            uid,
-            controller_uid: controller.uid,
-            socket: layout.socket(),
-        },
+    let agent = expected_agent(&layout, controller.uid)?;
+    // An earlier Atlas's job (another app, another account, an older
+    // version) is set aside first; its definition is kept as a backup.
+    let inspected = run(&Request::Inspect {
+        uid,
+        labels: vec![LABEL.to_owned()],
     })?;
+    let earlier = &inspected["jobs"][LABEL];
+    let expected = setup::helper::text_sha256(&setup::helper::plist(&agent, &layout.logs()));
+    if let Some(sha256) = earlier["plistSha256"]
+        .as_str()
+        .filter(|sha| *sha != expected)
+    {
+        run(&Request::Retire {
+            uid,
+            label: LABEL.to_owned(),
+            sha256: sha256.to_owned(),
+            missing_ok: false,
+        })?;
+    }
+    let installed = run(&Request::Install { agent })?;
+    // A job already loaded but not running waits for launchd to try again:
+    // start it now.
+    if installed["pid"].is_null() {
+        let output = Command::new("/bin/launchctl")
+            .args(["kickstart", &format!("gui/{uid}/{LABEL}")])
+            .output()?;
+        if !output.status.success() {
+            return Err(problem(
+                "Atlas was set up here but did not start; sign out of this account, sign in again and open Atlas",
+            ));
+        }
+    }
     Ok(json!({"ok": true, "controller": controller.name, "installed": installed}))
+}
+
+/// The background job Atlas installs in this account for `controller_uid`.
+fn expected_agent(layout: &Layout, controller_uid: u32) -> Result<Agent> {
+    Ok(Agent {
+        label: LABEL.to_owned(),
+        program: init::app_executable()?,
+        uid: layout.uid,
+        controller_uid,
+        socket: layout.socket(),
+    })
 }
 
 /// Mark (`true`) or clear the onboarding window being open in this account.
@@ -669,7 +712,7 @@ pub fn window_open(home: &Path) -> bool {
         .is_ok_and(|output| {
             String::from_utf8_lossy(&output.stdout)
                 .trim()
-                .ends_with("AtlasBar")
+                .ends_with("AtlasApp")
         })
 }
 
