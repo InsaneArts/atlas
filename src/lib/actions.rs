@@ -1,3 +1,6 @@
+//! The input actions a batch may hold, and the bounds every batch is checked
+//! against before anything is sent: coordinates on the display, known keys
+//! and modifiers, and a total that finishes within two seconds.
 use crate::{
     error::{Error, Result},
     session::Display,
@@ -163,7 +166,7 @@ pub fn validate(value: &Value, display: &Display) -> Result<()> {
             && x < display.width
             && y < display.height
     };
-    let mut cost = 0;
+    let mut cost: u32 = 0;
     for action in actions {
         let (valid, duration) = match action {
             Action::Pointer {
@@ -198,14 +201,19 @@ pub fn validate(value: &Value, display: &Display) -> Result<()> {
                 point(x, y) && (-100..=100).contains(&dx) && (-100..=100).contains(&dy),
                 10,
             ),
-            Action::Type { text } => (
-                (1..=256).contains(&text.chars().count()),
-                text.chars().count() as u32 * 3,
-            ),
+            Action::Type { text } => {
+                let characters = text.chars().count();
+                (
+                    (1..=256).contains(&characters),
+                    u32::try_from(characters)
+                        .unwrap_or(u32::MAX)
+                        .saturating_mul(3),
+                )
+            }
             Action::Key { key } => (valid_key(&key), 10),
             Action::Wait { ms } => (ms <= 250, ms),
         };
-        cost += duration;
+        cost = cost.saturating_add(duration);
         if !valid || cost > 2000 {
             return Err(invalid());
         }
@@ -233,5 +241,20 @@ mod tests {
         for key in ["foo", "cmd+zz", "cmd+", "+", "cmd+bogus+s", "f13", ""] {
             assert!(!valid_key(key), "{key}");
         }
+    }
+
+    /// An absurd wait is refused, never added up.
+    #[test]
+    fn an_oversized_wait_is_refused_without_overflowing() {
+        let display = Display {
+            width: 100.0,
+            height: 100.0,
+            scale: 1.0,
+        };
+        let batch = serde_json::json!([
+            {"type": "wait", "ms": 1},
+            {"type": "wait", "ms": u32::MAX},
+        ]);
+        assert!(validate(&batch, &display).is_err());
     }
 }
