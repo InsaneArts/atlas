@@ -1,216 +1,105 @@
 import AppKit
 import AtlasKit
+import Combine
+import SwiftUI
+
+/// What the panel shows: the latest status, the helper's desktop, and what
+/// the last action said.
+@MainActor
+public final class PanelModel: ObservableObject {
+    @Published public var snapshot = Snapshot()
+    @Published public var helper: String?
+    @Published public var image: NSImage?
+    @Published public var placeholder = "Waiting for the helper’s screen…"
+    @Published var message: String?
+    @Published var working = false
+    @Published var atLogin = false
+    @Published var loginAvailable = false
+
+    public init() {}
+}
+
+/// Sets the panel's desktop picture (kept apart so callers need not know
+/// the panel is drawn with SwiftUI).
+@MainActor
+public final class PanelThumbnail {
+    let model: PanelModel
+    init(model: PanelModel) { self.model = model }
+    public var image: NSImage? {
+        get { model.image }
+        set { model.image = newValue }
+    }
+    public var placeholder: String {
+        get { model.placeholder }
+        set { model.placeholder = newValue }
+    }
+}
 
 /// The popover's content: status, desktop, facts and actions. Every action
 /// is an `atlas` command (or the viewer's own control endpoint).
 public final class PanelController: NSViewController {
     let viewer: Viewer?
-    let commands: Commands?
+    let commands: AtlasKit.Commands?
     let loginItem: LoginItem?
+    let model: PanelModel
+    public let thumbnail: PanelThumbnail
+    /// The setup window this panel opened, while it runs.
+    var onboarding: Process?
+    private var sizing: AnyCancellable?
+
     /// The helper's short name, once `atlas switch --list` reports it.
     public var helper: String? {
-        didSet {
-            switchButton.isEnabled = helper != nil
-            switchButton.detail = helper ?? ""
-            if isViewLoaded { fit() }
-        }
+        get { model.helper }
+        set { model.helper = newValue }
     }
-    /// Render-only: show every action as it looks when it is available.
-    var previewing = false
 
-    static let width: CGFloat = 340
-    static let inset: CGFloat = 14
-    /// The rows reach closer to the edge than the text, as in system menus.
-    static let edge: CGFloat = 6
-    static var content: CGFloat { width - 2 * inset }
+    static let width: CGFloat = 320
 
-    let dot = DotView()
-    let state = label("", size: 12, weight: .medium, color: .secondaryLabelColor)
-    let reason = label("", size: 11, color: .secondaryLabelColor)
-    public let thumbnail = ThumbnailView()
-    let account = label("")
-    let display = label("")
-    let last = label("")
-    let message = label("", size: 11, color: .secondaryLabelColor)
-    let spinner = NSProgressIndicator()
-    lazy var feedback = NSStackView(views: [spinner, message])
-    let open = RowButton("Open Viewer", symbol: "eye")
-    let release = RowButton("Release Control", symbol: "hand.raised")
-    let switchButton = RowButton("Switch to Helper…", symbol: "person.2")
-    let recover = RowButton("Recover", symbol: "arrow.clockwise")
-    let atLogin = NSSwitch()
-    lazy var loginRow = NSStackView(views: [label("Open at Login"), NSView(), atLogin])
-    let quit = RowButton("Quit Atlas", detail: "⌘Q")
-
-    public init(viewer: Viewer?, commands: Commands?, loginItem: LoginItem?) {
+    public init(viewer: Viewer?, commands: AtlasKit.Commands?, loginItem: LoginItem?) {
         self.viewer = viewer
         self.commands = commands
         self.loginItem = loginItem
+        let model = MainActor.assumeIsolated { PanelModel() }
+        self.model = model
+        thumbnail = MainActor.assumeIsolated { PanelThumbnail(model: model) }
         super.init(nibName: nil, bundle: nil)
     }
 
     required init?(coder: NSCoder) { nil }
 
     public override func loadView() {
-        let width = Self.content
-        // Header: the app, its state in a word and a dot, and why.
-        let title = label("Atlas", weight: .semibold)
-        let status = NSStackView(views: [dot, state])
-        status.spacing = 5
-        let top = NSStackView(views: [title, NSView(), status])
-        reason.maximumNumberOfLines = 2
-        reason.lineBreakMode = .byWordWrapping
-        reason.preferredMaxLayoutWidth = width
-        let header = NSStackView(views: [top, reason])
-        header.orientation = .vertical
-        header.alignment = .leading
-        header.spacing = 2
-        top.widthAnchor.constraint(equalTo: header.widthAnchor).isActive = true
-
-        // Facts: a System Settings style inset group.
-        let rows: [NSView] = [
-            infoRow("Account", account), Hairline(), infoRow("Display", display), Hairline(),
-            infoRow("Last action", last),
-        ]
-        let facts = NSStackView(views: rows)
-        facts.orientation = .vertical
-        facts.spacing = 0
-        let group = GroupView()
-        group.addSubview(facts)
-        facts.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            facts.leadingAnchor.constraint(equalTo: group.leadingAnchor),
-            facts.trailingAnchor.constraint(equalTo: group.trailingAnchor),
-            facts.topAnchor.constraint(equalTo: group.topAnchor),
-            facts.bottomAnchor.constraint(equalTo: group.bottomAnchor),
-        ])
-        for view in rows {
-            if view is Hairline {
-                view.leadingAnchor.constraint(equalTo: facts.leadingAnchor, constant: 12).isActive =
-                    true
-                view.trailingAnchor.constraint(equalTo: facts.trailingAnchor, constant: -12)
-                    .isActive = true
-            } else {
-                view.widthAnchor.constraint(equalTo: facts.widthAnchor).isActive = true
-            }
-        }
-
-        // Actions: Control Center style rows, the viewer first.
-        open.press = { [weak self] in self?.openViewer() }
-        open.isEmphasized = true
-        open.keyEquivalent = "\r"
-        release.press = { [weak self] in self?.releaseControl() }
-        release.isEmphasized = true
-        release.isHidden = true
-        switchButton.press = { [weak self] in self?.switchToHelper() }
-        // The helper may be known before the panel is first drawn.
-        switchButton.isEnabled = helper != nil
-        switchButton.detail = helper ?? ""
-        recover.press = { [weak self] in self?.recoverHelper() }
-        let actions = NSStackView(views: [open, release, switchButton, recover])
-        actions.orientation = .vertical
-        actions.spacing = 0
-
-        // What the last action said, only while there is something to say.
-        spinner.style = .spinning
-        spinner.controlSize = .small
-        spinner.isDisplayedWhenStopped = false
-        spinner.isHidden = true
-        message.maximumNumberOfLines = 3
-        message.lineBreakMode = .byWordWrapping
-        message.preferredMaxLayoutWidth = width - 22
-        feedback.spacing = 6
-        feedback.alignment = .centerY
-        feedback.isHidden = true
-
-        // Footer: the login switch and Quit, as in the system's own menus.
-        atLogin.controlSize = .mini
-        atLogin.target = self
-        atLogin.action = #selector(toggleLogin)
-        atLogin.state = loginItem?.enabled == true ? .on : .off
-        loginRow.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 0, right: 10)
-        loginRow.heightAnchor.constraint(equalToConstant: 26).isActive = true
-        loginRow.isHidden = loginItem?.available != true
-        quit.keyEquivalent = "q"
-        quit.keyEquivalentModifierMask = .command
-        quit.press = { NSApp.terminate(nil) }
-
-        let divider = Hairline()
-        let stack = NSStackView(views: [
-            header, thumbnail, group, actions, feedback, divider, loginRow, quit,
-        ])
-        stack.orientation = .vertical
-        stack.alignment = .centerX
-        stack.spacing = 0
-        stack.edgeInsets = NSEdgeInsets(
-            top: Self.inset, left: Self.edge, bottom: Self.edge, right: Self.edge)
-        stack.setCustomSpacing(12, after: header)
-        stack.setCustomSpacing(10, after: thumbnail)
-        stack.setCustomSpacing(8, after: group)
-        stack.setCustomSpacing(6, after: actions)
-        stack.setCustomSpacing(8, after: feedback)
-        stack.setCustomSpacing(6, after: divider)
-        for view in [header, thumbnail, group, feedback, divider] {
-            view.translatesAutoresizingMaskIntoConstraints = false
-            view.widthAnchor.constraint(equalToConstant: width).isActive = true
-        }
-        for view in [actions, loginRow, quit] {
-            view.translatesAutoresizingMaskIntoConstraints = false
-            view.widthAnchor.constraint(equalToConstant: width + 2 * (Self.inset - Self.edge)).isActive =
-                true
-        }
-        for view in [open, release, switchButton, recover] {
-            view.widthAnchor.constraint(equalTo: actions.widthAnchor).isActive = true
-        }
-        thumbnail.heightAnchor.constraint(equalTo: thumbnail.widthAnchor, multiplier: 9.0 / 16.0)
-            .isActive = true
-        stack.widthAnchor.constraint(equalToConstant: Self.width).isActive = true
-        view = stack
-        show(Snapshot())
-    }
-
-    public func show(_ snapshot: Snapshot) {
-        let mode = Mode.of(snapshot.mode)
-        dot.color = mode.tone.color
-        state.stringValue = mode.label
-        reason.stringValue = snapshot.reason
-        reason.isHidden = snapshot.reason.isEmpty
-        account.stringValue = snapshot.account
-        display.stringValue = snapshot.display.isEmpty ? "—" : snapshot.display
-        last.stringValue = [snapshot.last, snapshot.when].filter { !$0.isEmpty }
-            .joined(separator: " · ")
-        last.toolTip = last.stringValue
-        // Releasing is offered only while the viewer holds control.
-        release.isHidden = !snapshot.controlling
-        release.isEnabled = snapshot.controlling
-        recover.isEnabled = commands != nil || previewing
-        recover.isEmphasized = snapshot.mode == "recovering"
+        model.atLogin = loginItem?.enabled == true
+        model.loginAvailable = loginItem?.available == true
+        let host = NSHostingView(rootView: PanelView(model: model, actions: self))
+        host.sizingOptions = [.intrinsicContentSize]
+        host.appearance = NSAppearance(named: .darkAqua)
+        view = host
+        // The popover follows the content as rows and messages come and go.
+        sizing = model.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in DispatchQueue.main.async { self?.fit() } }
         fit()
     }
 
-    /// The popover follows the content as rows and messages come and go, so
-    /// nothing is squeezed to make room.
     func fit() {
         view.layoutSubtreeIfNeeded()
         let size = view.fittingSize
         if preferredContentSize != size { preferredContentSize = size }
     }
 
+    public func show(_ snapshot: Snapshot) {
+        model.snapshot = snapshot
+    }
+
     func say(_ text: String, working: Bool = false) {
-        message.stringValue = text
-        spinner.isHidden = !working
-        if working { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
-        feedback.isHidden = false
-        fit()
+        model.message = text
+        model.working = working
     }
 
     /// Render-only: every action available, as on a set-up Mac.
     func preview() {
-        previewing = true
-        helper = helper ?? "helper"
-        loginRow.isHidden = false
-        recover.isEnabled = true
-        fit()
+        model.helper = model.helper ?? "helper"
+        model.loginAvailable = true
     }
 
     func perform(_ action: Action, working: String, done: String) {
@@ -226,14 +115,14 @@ public final class PanelController: NSViewController {
     }
 
     func releaseControl() {
-        release.isEnabled = false
+        say("Releasing control…", working: true)
         viewer?.revoke { [weak self] failure in
             self?.say(failure ?? "Control released.")
         }
     }
 
     func switchToHelper() {
-        guard let helper else { return }
+        guard let helper = model.helper else { return }
         perform(.switchToHelper(helper), working: "Switching…", done: "Switched")
     }
 
@@ -241,12 +130,242 @@ public final class PanelController: NSViewController {
         perform(.recover, working: "Recovering the helper…", done: "The helper is ready again")
     }
 
-    @objc func toggleLogin() {
+    /// The setup window, in its own process (it has a Dock icon while
+    /// open); one at a time, brought forward when already open.
+    func gettingStarted() {
+        if let running = onboarding, running.isRunning {
+            NSRunningApplication(processIdentifier: running.processIdentifier)?
+                .activate(options: [.activateAllWindows])
+            return
+        }
+        guard let executable = Bundle.main.executableURL else { return }
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = ["--onboarding"]
         do {
-            try loginItem?.set(atLogin.state == .on)
+            try process.run()
+            onboarding = process
         } catch {
-            atLogin.state = loginItem?.enabled == true ? .on : .off
             say(error.localizedDescription)
         }
+    }
+
+    func setLogin(_ on: Bool) {
+        do {
+            try loginItem?.set(on)
+            model.atLogin = loginItem?.enabled == true
+        } catch {
+            model.atLogin = loginItem?.enabled == true
+            say(error.localizedDescription)
+        }
+    }
+}
+
+struct PanelView: View {
+    @ObservedObject var model: PanelModel
+    let actions: PanelController
+
+    var body: some View {
+        let snapshot = model.snapshot
+        let mode = Mode.of(snapshot.mode)
+        VStack(spacing: 12) {
+            header(mode, snapshot)
+            Desktop(image: model.image, placeholder: model.placeholder)
+            if snapshot.mode == "recovering" {
+                RecoveryCard(reason: snapshot.reason) { actions.recoverHelper() }
+            }
+            facts(snapshot)
+            HStack(spacing: 8) {
+                Button("Open Viewer") { actions.openViewer() }
+                    .buttonStyle(AtlasButtonStyle(emphasis: .primary, fill: true))
+                    .keyboardShortcut(.defaultAction)
+                if snapshot.controlling {
+                    Button("Release Control") { actions.releaseControl() }
+                        .buttonStyle(AtlasButtonStyle(emphasis: .glass, fill: true))
+                } else {
+                    Button("Switch to Helper…") { actions.switchToHelper() }
+                        .buttonStyle(AtlasButtonStyle(emphasis: .glass, fill: true))
+                        .disabled(model.helper == nil)
+                }
+            }
+            if let message = model.message {
+                HStack(spacing: 8) {
+                    if model.working { Spinner(size: 12) }
+                    Text(message).font(.system(size: 11.5)).foregroundStyle(AtlasStyle.ink2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+                .accessibilityElement(children: .combine)
+            }
+            Rule()
+            VStack(spacing: 1) {
+                if model.loginAvailable {
+                    HStack {
+                        Text("Open at Login").font(.system(size: 13))
+                        Spacer()
+                        Toggle(
+                            "Open at Login",
+                            isOn: Binding(get: { model.atLogin }, set: { actions.setLogin($0) })
+                        )
+                        .toggleStyle(.switch).controlSize(.mini).labelsHidden().tint(AtlasStyle.blue)
+                    }
+                    .padding(.horizontal, 8)
+                    .frame(height: 30)
+                }
+                MenuRow(title: "Getting Started…") { actions.gettingStarted() }
+                if snapshot.mode != "recovering" {
+                    MenuRow(title: "Recover") { actions.recoverHelper() }
+                }
+                MenuRow(title: "Quit Atlas", detail: "⌘Q") { NSApp.terminate(nil) }
+                    .keyboardShortcut("q", modifiers: .command)
+            }
+            .padding(.horizontal, -6)
+        }
+        .padding(14)
+        .frame(width: PanelController.width)
+        .background(AtlasStyle.ground)
+        .foregroundStyle(AtlasStyle.ink)
+        .environment(\.colorScheme, .dark)
+    }
+
+    func header(_ mode: Mode, _ snapshot: Snapshot) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 10) {
+                AppIcon(size: 30)
+                Text("Atlas").font(.system(size: 14, weight: .semibold))
+                Spacer()
+                HStack(spacing: 6) {
+                    Circle().fill(mode.tone.swatch).frame(width: 7, height: 7)
+                    Text(mode.label).font(.system(size: 11.5, weight: .medium))
+                }
+                .padding(.horizontal, 10)
+                .frame(height: 24)
+                .background(Capsule().fill(Color.white.opacity(0.06)))
+                .accessibilityElement(children: .combine)
+            }
+            if !snapshot.reason.isEmpty && snapshot.mode != "recovering" {
+                Text(snapshot.reason).font(.system(size: 11.5)).foregroundStyle(AtlasStyle.ink2)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    func facts(_ snapshot: Snapshot) -> some View {
+        let last = [snapshot.last, snapshot.when].filter { !$0.isEmpty }.joined(separator: " · ")
+        return Card {
+            FactRow(name: "Helper", value: snapshot.account.isEmpty ? "—" : snapshot.account)
+            Rule()
+            FactRow(name: "Display", value: snapshot.display.isEmpty ? "—" : snapshot.display)
+            Rule()
+            FactRow(name: "Last action", value: last.isEmpty ? "—" : last)
+        }
+    }
+}
+
+extension Mode.Tone {
+    /// The dot's colour: green when ready, blue while working, orange when it
+    /// needs the person, quiet grey otherwise.
+    var swatch: Color {
+        switch self {
+        case .ready: return AtlasStyle.green
+        case .active: return AtlasStyle.blue
+        case .attention: return AtlasStyle.orange
+        case .quiet: return AtlasStyle.ink3
+        }
+    }
+}
+
+/// The helper's desktop, letterboxed on a dark rounded stage.
+struct Desktop: View {
+    let image: NSImage?
+    let placeholder: String
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            RoundedRectangle(cornerRadius: 10).fill(Color.black)
+            if let image {
+                Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                HStack(spacing: 5) {
+                    Circle().fill(AtlasStyle.green).frame(width: 5, height: 5)
+                    Text("Live").font(.system(size: 10, weight: .semibold))
+                }
+                .padding(.horizontal, 8)
+                .frame(height: 20)
+                .background(Capsule().fill(Color.black.opacity(0.55)))
+                .padding(8)
+            } else {
+                Text(placeholder).font(.system(size: 11.5)).foregroundStyle(AtlasStyle.ink3)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(16)
+            }
+        }
+        .aspectRatio(16 / 10, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.white.opacity(0.14), lineWidth: 0.5))
+        .accessibilityElement()
+        .accessibilityLabel(image == nil ? placeholder : "The helper's screen")
+    }
+}
+
+struct RecoveryCard: View {
+    let reason: String
+    let recover: () -> Void
+    var body: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("The last action didn't finish").font(.system(size: 12.5, weight: .semibold))
+                Text(reason.isEmpty ? "Recover before anything else runs." : reason)
+                    .font(.system(size: 11.5)).foregroundStyle(AtlasStyle.ink2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 6)
+            Button("Recover", action: recover).buttonStyle(AtlasButtonStyle(emphasis: .primary))
+                .controlSize(.small)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 12).fill(AtlasStyle.orange.opacity(0.10)))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(AtlasStyle.orange.opacity(0.35), lineWidth: 0.5))
+    }
+}
+
+struct FactRow: View {
+    let name: String
+    let value: String
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(name).foregroundStyle(AtlasStyle.ink2)
+            Spacer(minLength: 8)
+            Text(value).lineLimit(1).truncationMode(.tail).help(value)
+        }
+        .font(.system(size: 12))
+        .padding(.horizontal, 12)
+        .frame(height: 32)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// A row like a menu item: plain text, highlighted under the pointer.
+struct MenuRow: View {
+    let title: String
+    var detail = ""
+    let action: () -> Void
+    @State private var hovering = false
+    var body: some View {
+        Button(action: action) {
+            HStack {
+                Text(title).font(.system(size: 13))
+                Spacer()
+                Text(detail).font(.system(size: 13)).foregroundStyle(AtlasStyle.ink3)
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 28)
+            .background(RoundedRectangle(cornerRadius: 7).fill(hovering ? Color.white.opacity(0.08) : .clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
     }
 }
