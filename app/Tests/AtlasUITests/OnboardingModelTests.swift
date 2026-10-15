@@ -12,11 +12,6 @@ let freshMac = """
 
 @MainActor
 @Suite struct OnboardingModelTests {
-    /// Wait until `done` holds, for models that read in the background.
-    func settle(_ done: () -> Bool) async {
-        for _ in 0..<200 where !done() { try? await Task.sleep(for: .milliseconds(10)) }
-    }
-
     @Test func aFreshMacOffersANewAccountFirst() async {
         let commands = FakeCommands(["onboarding status": freshMac])
         let model = OnboardingModel(commands: commands)

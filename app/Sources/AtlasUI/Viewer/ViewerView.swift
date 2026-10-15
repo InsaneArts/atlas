@@ -5,8 +5,8 @@ import SwiftUI
 /// The viewer window: the helper's desktop filling it, its state above, the
 /// controls below, and an inspector beside it on request.
 public struct ViewerView: View {
-    @Bindable var model: ViewerModel
-    @Environment(\.accessibilityReduceMotion) private var still
+    let model: ViewerModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Below this width the inspector would squeeze the desktop: it waits.
     static let inspectorRoom: CGFloat = 1000
@@ -41,14 +41,14 @@ public struct ViewerView: View {
                     }
                     if inspector {
                         Inspector(model: model)
-                            .transition(still ? .opacity : .move(edge: .trailing).combined(with: .opacity))
+                            .transition(reduceMotion ? .opacity : .move(edge: .trailing).combined(with: .opacity))
                     }
                 }
                 .padding(.horizontal, 22)
                 .padding(.bottom, 18)
             }
             .ignoresSafeArea(.container, edges: .top)
-            .animation(still ? nil : .spring(response: 0.35, dampingFraction: 1), value: inspector)
+            .animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 1), value: inspector)
         }
         .background(AtlasStyle.ground)
         .foregroundStyle(AtlasStyle.ink)
@@ -68,7 +68,7 @@ public struct ViewerView: View {
 
 /// Brand, the status pill and the inspector toggle, in the title bar.
 struct ViewerHeader: View {
-    @Bindable var model: ViewerModel
+    let model: ViewerModel
     /// Wide enough for the inspector.
     var room = true
 
@@ -111,7 +111,6 @@ struct ViewerHeader: View {
 /// "Agent working · Atlas Helper · Live", with a dot in the mode's colour.
 struct StatusLine: View {
     let model: ViewerModel
-    @Environment(\.accessibilityReduceMotion) private var still
 
     var body: some View {
         let mode = model.mode
@@ -143,7 +142,7 @@ struct Pulse: View {
     var pulsing = false
     var size: CGFloat = 8
     @State private var dim = false
-    @Environment(\.accessibilityReduceMotion) private var still
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Circle().fill(color)
@@ -155,7 +154,7 @@ struct Pulse: View {
     }
 
     private func animate() {
-        guard pulsing, !still else {
+        guard pulsing, !reduceMotion else {
             dim = false
             return
         }
@@ -168,7 +167,7 @@ struct Pulse: View {
 /// The helper's desktop, letterboxed at its own shape, with what is
 /// happening laid over it.
 struct Stage: View {
-    @Bindable var model: ViewerModel
+    let model: ViewerModel
 
     var body: some View {
         let size = model.image?.size ?? CGSize(width: 16, height: 10)
@@ -183,7 +182,7 @@ struct Stage: View {
                     .opacity(model.paused ? 0.55 : 1)
                 DesktopInput(model: model)
             } else {
-                Empty(model: model)
+                NoPicture(model: model)
             }
             VStack(spacing: 8) {
                 chips
@@ -225,7 +224,7 @@ struct Stage: View {
             Chip {
                 Pulse(color: AtlasStyle.blue, size: 7)
                 Text("Your mouse and keyboard go to the helper")
-                Text("· Control-Shift-Esc gives them back").foregroundStyle(AtlasStyle.ink3)
+                Text("· Control-Shift-Escape gives them back").foregroundStyle(AtlasStyle.ink3)
             }
         } else if model.paused && model.image != nil {
             Chip { Text("Picture paused") }
@@ -256,7 +255,7 @@ struct Chip<Content: View>: View {
 }
 
 /// No picture yet, or none to show.
-struct Empty: View {
+struct NoPicture: View {
     let model: ViewerModel
 
     var body: some View {
@@ -358,7 +357,7 @@ struct RecoveryAlert: View {
 
 /// Watch or control, the shortcuts, recovery and pause.
 struct Dock: View {
-    @Bindable var model: ViewerModel
+    let model: ViewerModel
 
     var body: some View {
         HStack(spacing: 4) {
@@ -418,6 +417,50 @@ struct Segment: View {
         .opacity(enabled ? 1 : 0.4)
         .accessibilityAddTraits(on ? [.isSelected] : [])
         .animation(.easeOut(duration: 0.15), value: on)
+    }
+}
+
+/// Common shortcuts and Escape, sent as keys to the helper.
+struct Shortcuts: View {
+    let model: ViewerModel
+
+    static let items: [(String, String)] = [
+        ("Copy ⌘C", "cmd+c"), ("Paste ⌘V", "cmd+v"), ("Select All ⌘A", "cmd+a"), ("Undo ⌘Z", "cmd+z"),
+        ("Redo ⇧⌘Z", "cmd+shift+z"), ("Save ⌘S", "cmd+s"), ("Switch App ⌘⇥", "cmd+tab"),
+    ]
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Menu {
+                ForEach(Self.items, id: \.1) { item in
+                    Button(item.0) { model.sendKey(item.1) }
+                }
+            } label: {
+                Text("Shortcuts").font(.system(size: 13))
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.visible)
+            .fixedSize()
+            .padding(.horizontal, 12)
+            .frame(height: 34)
+            .help("Send a shortcut to the helper")
+            Button {
+                model.sendKey("escape")
+            } label: {
+                Text("esc")
+                    .font(.system(size: 11, weight: .semibold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(AtlasStyle.ink2, lineWidth: 1))
+                    .padding(.horizontal, 10)
+                    .frame(height: 34)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Send Escape")
+        }
+        .foregroundStyle(AtlasStyle.ink2)
+        .disabled(!model.holdingControl)
     }
 }
 
@@ -604,10 +647,9 @@ struct SessionTab: View {
 
     /// The picture's size in pixels, which a Retina picture's points are not.
     private var pictureNote: String {
-        guard let pixels = model.image?.representations.first, pixels.pixelsWide > 0 else {
-            return "Pictures stay in memory."
-        }
-        return "\(pixels.pixelsWide) × \(pixels.pixelsHigh) pictures, kept in memory only."
+        let memory = "Pictures of the helper stay in memory and are never saved."
+        guard let pixels = model.image?.representations.first, pixels.pixelsWide > 0 else { return memory }
+        return "\(pixels.pixelsWide) × \(pixels.pixelsHigh) pixels. \(memory)"
     }
 
     private func color(_ state: StatusRow.State) -> Color {

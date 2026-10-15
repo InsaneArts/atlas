@@ -10,7 +10,7 @@ import Observation
 public final class PanelModel {
     public private(set) var status = ViewerStatus()
     public private(set) var image: NSImage?
-    public private(set) var placeholder = "Waiting for the helper’s screen…"
+    public private(set) var placeholder = "Waiting for the helper's screen…"
     /// What the last action said, and whether it still runs.
     public private(set) var message: String?
     public private(set) var working = false
@@ -56,7 +56,7 @@ public final class PanelModel {
         if open { polling.append(repeating(every: 2) { await $0.readFrame() }) }
     }
 
-    public func stop() {
+    private func stop() {
         polling.forEach { $0.cancel() }
         polling = []
     }
@@ -108,7 +108,7 @@ public final class PanelModel {
         guard number == frameReading, !Task.isCancelled else { return }
         // A failed capture never leaves an old desktop on show.
         image = shown.flatMap { NSImage(data: $0.png) }
-        placeholder = "The helper’s screen is not available"
+        placeholder = "The helper's screen is not available"
     }
 
     // MARK: Actions
@@ -145,7 +145,7 @@ public final class PanelModel {
     }
 
     public func recover() async {
-        await perform(.recover, working: "Recovering the helper…", done: "The helper is ready again")
+        await perform(.recover, working: "Recovering the helper…", done: "The helper is ready again.")
     }
 
     public func setLogin(_ on: Bool) {

@@ -105,8 +105,8 @@ import Testing
     @Test func freshnessReadsAsWords() {
         #expect(Words.freshness(1) == "Live")
         #expect(Words.freshness(5) == "Updated 5 s ago")
-        #expect(Words.freshness(20) == "Preview is stale")
-        #expect(Words.freshness(nil) == "Waiting for the first frame")
+        #expect(Words.freshness(Freshness.stale) == "Picture is stale")
+        #expect(Words.freshness(nil) == "Waiting for the first picture")
     }
 
     @Test func factsAndActivityReadAsWords() throws {

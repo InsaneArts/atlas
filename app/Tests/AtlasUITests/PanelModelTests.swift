@@ -10,13 +10,14 @@ import Testing
     @Test func thePanelFollowsTheServiceStatus() async {
         let service = FakeService()
         service.reply = ["overview": ["mode": "recovering", "account": "atlas"]]
+        service.fail = ["frame"]
         let model = PanelModel(service: service, commands: nil, loginItem: nil)
         await model.readStatus()
         await model.readFrame()
         #expect(model.mode.label == "Needs you")
         #expect(model.recovering)
         #expect(model.image == nil)
-        #expect(model.placeholder == "The helper’s screen is not available")
+        #expect(model.placeholder == "The helper's screen is not available")
     }
 
     @Test func releasingControlRevokesItAndSaysSo() async {

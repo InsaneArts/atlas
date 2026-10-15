@@ -4,15 +4,9 @@ import Foundation
 /// words when it gave any.
 public struct ServiceError: Error, Equatable, Sendable, LocalizedError {
     public var message: String
-    /// The service's error code (`busy`, `lease-lost`, …), if it gave one.
-    public var code: String?
-    /// The action may or may not have happened.
-    public var uncertain = false
 
-    public init(_ message: String, code: String? = nil, uncertain: Bool = false) {
+    public init(_ message: String) {
         self.message = message
-        self.code = code
-        self.uncertain = uncertain
     }
 
     public var errorDescription: String? { message }
@@ -39,7 +33,6 @@ public struct Frame: Sendable, Equatable {
 /// The viewer service, as the app sees it; a protocol so the models are
 /// tested with a stand-in.
 public protocol ViewerService: Sendable {
-    var base: URL { get }
     func status() async throws -> ViewerStatus
     func frame() async throws -> Frame
     func acquire(frame: String) async throws -> String
@@ -100,7 +93,7 @@ public struct ViewerClient: ViewerService {
             let revision = header("X-Session-Revision"), !revision.isEmpty,
             let width = header("X-Display-Width").flatMap(Double.init), width > 0,
             let height = header("X-Display-Height").flatMap(Double.init), height > 0
-        else { throw ServiceError("Frame geometry is unavailable") }
+        else { throw ServiceError("The helper's screen size is unknown.") }
         return Frame(png: data, id: id, revision: revision, display: .init(width: width, height: height))
     }
 
@@ -156,9 +149,7 @@ public struct ViewerClient: ViewerService {
         do {
             (data, response) = try await session.data(for: request(route, body: body, timeout: timeout))
         } catch let error as URLError where error.code == .timedOut {
-            throw ServiceError(
-                "The request timed out. Its outcome may be unknown; do not repeat it automatically.",
-                code: "transport", uncertain: true)
+            throw ServiceError("The helper did not answer in time.")
         }
         let ok = (try? JSONDecoder().decode(Acknowledgement.self, from: data))?.ok == true
         guard (response as? HTTPURLResponse)?.statusCode == 200, ok else {
@@ -171,12 +162,8 @@ public struct ViewerClient: ViewerService {
     private struct Acknowledgement: Decodable { let ok: Bool? }
 
     static func failure(_ data: Data, fallback: String) -> ServiceError {
-        struct Reply: Decodable {
-            let error: String?
-            let code: String?
-            let uncertain: Bool?
-        }
+        struct Reply: Decodable { let error: String? }
         let reply = try? JSONDecoder().decode(Reply.self, from: data)
-        return ServiceError(reply?.error ?? fallback, code: reply?.code, uncertain: reply?.uncertain == true)
+        return ServiceError(reply?.error ?? fallback)
     }
 }

@@ -26,10 +26,16 @@ final class DesktopCanvasView: NSView, @preconcurrency NSTextInputClient {
                 rect: .zero, options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect], owner: self))
     }
 
+    // The key monitor never outlives the window, whichever goes first.
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window == nil { stopIntercepting() }
+        NotificationCenter.default.removeObserver(self, name: NSWindow.willCloseNotification, object: nil)
+        guard let window else { return stopIntercepting() }
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(windowWillClose), name: NSWindow.willCloseNotification, object: window)
     }
+
+    @objc private func windowWillClose() { stopIntercepting() }
 
     /// Follow control: take the keyboard while it is held, give it up after.
     func follow() {
@@ -67,13 +73,15 @@ final class DesktopCanvasView: NSView, @preconcurrency NSTextInputClient {
     }
 
     override func becomeFirstResponder() -> Bool {
-        model?.keyboardConnected = true
-        return true
+        let became = super.becomeFirstResponder()
+        if became { model?.keyboardConnected = true }
+        return became
     }
 
     override func resignFirstResponder() -> Bool {
-        model?.keyboardConnected = false
-        return true
+        let resigned = super.resignFirstResponder()
+        if resigned { model?.keyboardConnected = false }
+        return resigned
     }
 
     private func intercept(_ event: NSEvent) -> NSEvent? {
@@ -247,50 +255,8 @@ struct DesktopInput: NSViewRepresentable {
         view.model = model
         // Read here so SwiftUI calls this again when control changes.
         _ = model.holdingControl
-        DispatchQueue.main.async { view.follow() }
-    }
-}
-
-/// Common shortcuts and Escape, sent as keys to the helper.
-struct Shortcuts: View {
-    let model: ViewerModel
-
-    static let items: [(String, String)] = [
-        ("Copy ⌘C", "cmd+c"), ("Paste ⌘V", "cmd+v"), ("Select All ⌘A", "cmd+a"), ("Undo ⌘Z", "cmd+z"),
-        ("Redo ⇧⌘Z", "cmd+shift+z"), ("Save ⌘S", "cmd+s"), ("Switch App ⌘⇥", "cmd+tab"),
-    ]
-
-    var body: some View {
-        HStack(spacing: 4) {
-            Menu {
-                ForEach(Self.items, id: \.1) { item in
-                    Button(item.0) { model.sendKey(item.1) }
-                }
-            } label: {
-                Text("Shortcuts").font(.system(size: 13))
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.visible)
-            .fixedSize()
-            .padding(.horizontal, 12)
-            .frame(height: 34)
-            .help("Send a shortcut to the helper")
-            Button {
-                model.sendKey("escape")
-            } label: {
-                Text("esc")
-                    .font(.system(size: 11, weight: .semibold))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 1)
-                    .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(AtlasStyle.ink2, lineWidth: 1))
-                    .padding(.horizontal, 10)
-                    .frame(height: 34)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Send Escape")
-        }
-        .foregroundStyle(AtlasStyle.ink2)
-        .disabled(!model.holdingControl)
+        // Changing the first responder during a SwiftUI update is not
+        // allowed: follow control once this update has finished.
+        Task { @MainActor in view.follow() }
     }
 }

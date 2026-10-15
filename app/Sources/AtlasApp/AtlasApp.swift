@@ -38,10 +38,7 @@ enum AtlasApp {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
         if let index = arguments.firstIndex(of: "--render"), index + 1 < arguments.count {
-            let appearance: NSAppearance.Name = arguments.contains("--dark") ? .darkAqua : .aqua
-            listen(received: { _ in }, closed: { NSApp.terminate(nil) })
-            Task { exit(await renderPanel(service: service, to: arguments[index + 1], appearance: appearance) ? 0 : 4) }
-            app.run()
+            render(service: service, to: arguments[index + 1], dark: arguments.contains("--dark"))
         }
         let controller = AppController(commands: commands, service: service)
         app.delegate = controller
@@ -83,6 +80,15 @@ enum AtlasApp {
             print("{\"ok\": false, \"error\": \"\(message)\"}")
             exit(1)
         }
+    }
+
+    /// `--render PATH`: draw the panel from the service's status, then exit.
+    static func render(service: ViewerClient, to path: String, dark: Bool) -> Never {
+        let app = NSApplication.shared
+        listen(received: { _ in }, closed: { NSApp.terminate(nil) })
+        Task { exit(await renderPanel(service: service, to: path, appearance: dark ? .darkAqua : .aqua) ? 0 : 4) }
+        app.run()
+        exit(0)
     }
 
     /// `--onboarding`: the setup window on its own (Atlas.app opened before

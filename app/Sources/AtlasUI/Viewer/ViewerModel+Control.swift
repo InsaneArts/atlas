@@ -23,15 +23,16 @@ extension ViewerModel {
             acquiring = false
             input.activate(granted)
             say(nil)
-            // Renew every 2.5 s; end control once the picture is 6.5 s old,
-            // whether or not the person is still giving input.
+            // Renew every fifth tick (2.5 s); end control once the picture
+            // is stale, whether or not the person is still giving input.
             heartbeat = Task { [weak self] in
                 var tick = 0
                 while !Task.isCancelled {
-                    try? await Task.sleep(for: .milliseconds(500))
+                    guard let interval = self?.heartbeatInterval else { return }
+                    try? await Task.sleep(for: interval)
                     guard !Task.isCancelled, let self, lease == granted else { return }
                     guard !pictureStale else {
-                        releaseControl("The picture stopped updating. Wait for a fresh one, then choose Control.")
+                        releaseControl(Self.stalePicture)
                         return
                     }
                     tick += 1
@@ -99,20 +100,18 @@ extension ViewerModel {
         wheelSending = nil
     }
 
-    /// Whether input may go to the helper now; a picture gone stale ends control.
+    static let stalePicture = "The picture stopped updating. Wait for a fresh one, then choose Control."
+
     /// The last picture is too old to aim input at.
     var pictureStale: Bool {
         guard let frameAt else { return true }
-        return clock() - frameAt > 6.5
+        return clock() - frameAt >= Freshness.stale
     }
 
+    /// Whether input may go to the helper now. Only the heartbeat ends
+    /// control over a stale picture; this side just stops sending.
     var canInput: Bool {
-        guard lease != nil, frame != nil, !paused, focused, shown else { return false }
-        if pictureStale {
-            releaseControl("The picture stopped updating. Wait for a fresh one, then choose Control.")
-            return false
-        }
-        return true
+        lease != nil && frame != nil && !paused && focused && shown && !pictureStale
     }
 
     func enqueue(_ actions: [InputAction]) {
@@ -130,7 +129,7 @@ extension ViewerModel {
 
     func pointerDown(_ button: MouseButton, at location: CGPoint, in size: CGSize, modifiers: Modifiers) {
         guard canInput, let point = point(location, in: size),
-            let action = gesture.start(button, at: point, modifiers: modifiers, now: Self.now)
+            let action = gesture.start(button, at: point, modifiers: modifiers, now: clock())
         else { return }
         enqueue([action])
     }
@@ -146,7 +145,7 @@ extension ViewerModel {
     func pointerUp(_ button: MouseButton, at location: CGPoint, in size: CGSize, modifiers: Modifiers) {
         guard let point = point(location, in: size, clamp: true) ?? gesture.last else { return }
         let movement = gesture.move(button, to: point, modifiers: modifiers)
-        guard let action = gesture.finish(button, at: point, modifiers: modifiers, now: Self.now), canInput else {
+        guard let action = gesture.finish(button, at: point, modifiers: modifiers, now: clock()), canInput else {
             return
         }
         enqueue([movement, action].compactMap { $0 })
@@ -212,8 +211,6 @@ extension ViewerModel {
         }
         for chunk in chunks { enqueue([.type(text: chunk)]) }
     }
-
-    static var now: Double { ProcessInfo.processInfo.systemUptime }
 }
 
 extension ViewerModel: InputSink {

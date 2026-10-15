@@ -6,7 +6,6 @@ import Foundation
 public struct ViewerStatus: Decodable, Equatable, Sendable {
     public var ready = false
     public var canObserve = false
-    public var controlActive = false
     public var checks: [Check] = []
     public var nextSteps: [String] = []
     public var error: String?
@@ -164,14 +163,13 @@ public struct ViewerStatus: Decodable, Equatable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case ready, canObserve, controlActive, checks, nextSteps, error, session, capabilities, overview
+        case ready, canObserve, checks, nextSteps, error, session, capabilities, overview
     }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         ready = (try? container.decodeIfPresent(Bool.self, forKey: .ready)) == true
         canObserve = (try? container.decodeIfPresent(Bool.self, forKey: .canObserve)) == true
-        controlActive = (try? container.decodeIfPresent(Bool.self, forKey: .controlActive)) == true
         checks = (try? container.decodeIfPresent([Check].self, forKey: .checks)) ?? []
         nextSteps = (try? container.decodeIfPresent([String].self, forKey: .nextSteps)) ?? []
         error = try? container.decodeIfPresent(String.self, forKey: .error)
