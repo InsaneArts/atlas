@@ -9,6 +9,7 @@ use crate::{
 };
 use serde_json::{Value, json};
 use std::{
+    fs,
     io::Read,
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
@@ -179,8 +180,10 @@ pub fn stop_running() {
 fn exec(agent: Agent, argv: &[impl AsRef<std::ffi::OsStr>], limit: Duration) -> Result<Output> {
     use std::os::unix::process::CommandExt;
     // Its own process group, so a timeout stops whatever it started too.
-    let child = Command::new(agent.name())
+    let (executable, path) = executable(agent);
+    let child = Command::new(executable)
         .args(argv)
+        .env("PATH", path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -195,6 +198,129 @@ fn exec(agent: Agent, argv: &[impl AsRef<std::ffi::OsStr>], limit: Duration) -> 
         running.retain(|running| *running != group);
     }
     result
+}
+
+/// The tool's executable, and the PATH to run it with. Opened from the
+/// Finder or at login, Atlas has launchd's PATH, not the shell's, so the
+/// places the tools install to are searched as well, and last the shell
+/// is asked for its PATH. The tool gets every place searched, as a tool
+/// installed with npm needs node beside it.
+fn executable(agent: Agent) -> (PathBuf, std::ffi::OsString) {
+    let name = agent.name();
+    let original = std::env::var_os("PATH").unwrap_or_default();
+    let mut places: Vec<PathBuf> = std::env::split_paths(&original).collect();
+    let mut found = find(name, &places);
+    if found.is_none() {
+        places.extend(install_places());
+        found = find(name, &places);
+    }
+    if found.is_none() {
+        places.extend(shell_path().iter().cloned());
+        found = find(name, &places);
+    }
+    let path = std::env::join_paths(&places).unwrap_or(original);
+    (found.unwrap_or_else(|| PathBuf::from(name)), path)
+}
+
+/// `name` as a runnable file in the first of `places` that has it.
+fn find(name: &str, places: &[PathBuf]) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    places
+        .iter()
+        .map(|place| place.join(name))
+        .find(|candidate| {
+            fs::metadata(candidate)
+                .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+        })
+}
+
+/// Where the tools install to: Claude Code's own installer, Homebrew, and
+/// the global bin of npm and the Node version managers.
+fn install_places() -> Vec<PathBuf> {
+    let mut places = Vec::new();
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        for relative in [
+            ".local/bin",
+            ".claude/local",
+            ".npm-global/bin",
+            ".volta/bin",
+            ".bun/bin",
+            "Library/pnpm",
+            ".local/share/pnpm",
+        ] {
+            places.push(home.join(relative));
+        }
+        // Every Node that nvm or fnm manages, newest first.
+        for (root, tail) in [
+            (".nvm/versions/node", "bin"),
+            (".local/share/fnm/node-versions", "installation/bin"),
+        ] {
+            let mut versions: Vec<PathBuf> = fs::read_dir(home.join(root))
+                .map(|entries| entries.flatten().map(|entry| entry.path()).collect())
+                .unwrap_or_default();
+            versions.sort();
+            places.extend(versions.into_iter().rev().map(|version| version.join(tail)));
+        }
+    }
+    places.extend(["/opt/homebrew/bin", "/usr/local/bin"].map(PathBuf::from));
+    places
+}
+
+/// The PATH the person's shell sets up, asked once and for a few seconds
+/// at most; nothing when the shell does not answer.
+fn shell_path() -> &'static [PathBuf] {
+    static SHELL_PATH: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
+    SHELL_PATH.get_or_init(|| {
+        use std::os::unix::process::CommandExt;
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_owned());
+        // An interactive shell may print other things: the answer is marked.
+        let script = "printf '\\n<atlas-path>%s</atlas-path>\\n' \"$PATH\"";
+        let Ok(mut child) = Command::new(shell)
+            .args(["-ilc", script])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()
+        else {
+            return Vec::new();
+        };
+        let Some(mut stdout) = child.stdout.take() else {
+            return Vec::new();
+        };
+        let reader = std::thread::spawn(move || {
+            let mut text = Vec::new();
+            let _ = stdout.read_to_end(&mut text);
+            text
+        });
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while child.try_wait().ok().flatten().is_none() {
+            if Instant::now() >= deadline {
+                if let Ok(group) = i32::try_from(child.id()) {
+                    let _ = nix::sys::signal::killpg(
+                        nix::unistd::Pid::from_raw(group),
+                        nix::sys::signal::Signal::SIGKILL,
+                    );
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let text = reader.join().unwrap_or_default();
+        marked_path(&String::from_utf8_lossy(&text))
+    })
+}
+
+/// The PATH between the markers in a shell's output, split into places.
+fn marked_path(output: &str) -> Vec<PathBuf> {
+    output
+        .split("<atlas-path>")
+        .nth(1)
+        .and_then(|rest| rest.split("</atlas-path>").next())
+        .map(|path| std::env::split_paths(path).collect())
+        .unwrap_or_default()
 }
 
 /// Wait for `child` within `limit`, collecting its output.
@@ -571,6 +697,56 @@ pub async fn brief(config_path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tool_is_found_where_it_can_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let (first, second) = (dir.path().join("first"), dir.path().join("second"));
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        fs::write(first.join("claude"), b"").unwrap();
+        let places = vec![dir.path().join("missing"), first.clone(), second.clone()];
+        assert_eq!(find("claude", &places), None, "not runnable yet");
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(second.join("claude"), fs::Permissions::from_mode(0o755)).ok();
+        fs::write(second.join("claude"), b"").unwrap();
+        fs::set_permissions(second.join("claude"), fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(find("claude", &places), Some(second.join("claude")));
+        fs::set_permissions(first.join("claude"), fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            find("claude", &places),
+            Some(first.join("claude")),
+            "first place wins"
+        );
+        fs::create_dir_all(second.join("codex")).unwrap();
+        assert_eq!(find("codex", &places), None, "a folder is not a tool");
+    }
+
+    #[test]
+    fn the_places_tools_install_to_are_searched() {
+        let places = install_places();
+        let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+        assert_eq!(
+            places[0],
+            home.join(".local/bin"),
+            "Claude Code's own installer first"
+        );
+        assert!(places.contains(&PathBuf::from("/opt/homebrew/bin")));
+        assert!(places.contains(&PathBuf::from("/usr/local/bin")));
+    }
+
+    #[test]
+    fn the_shells_path_is_read_between_its_markers() {
+        let noisy = "Last login: today\n<atlas-path>/opt/homebrew/bin:/usr/bin</atlas-path>\nbye\n";
+        assert_eq!(
+            marked_path(noisy),
+            vec![
+                PathBuf::from("/opt/homebrew/bin"),
+                PathBuf::from("/usr/bin")
+            ]
+        );
+        assert!(marked_path("nothing here").is_empty());
+    }
 
     #[test]
     fn the_project_section_is_added_once_and_kept_current() {
