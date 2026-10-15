@@ -213,22 +213,45 @@ fn choose_helper() -> Result<setup::Account> {
     // A user ID nothing runs as: a deleted account's session can outlive
     // it, and sharing its ID would mix that session with the helper's.
     let uid = free_uid()?.to_string();
+    let mut args = vec![
+        "/usr/sbin/sysadminctl",
+        "-addUser",
+        &name,
+        "-fullName",
+        FULL_NAME,
+        "-UID",
+        &uid,
+        "-password",
+        "-",
+    ];
+    let picture = helper_picture();
+    if let Some(picture) = &picture {
+        args.extend(["-picture", picture]);
+    }
     quietly_attended(
         "/usr/bin/sudo",
-        &[
-            "/usr/sbin/sysadminctl",
-            "-addUser",
-            &name,
-            "-fullName",
-            "Atlas Helper",
-            "-UID",
-            &uid,
-            "-password",
-            "-",
-        ],
+        &args,
         "The helper account could not be created",
     )?;
     setup::account_named(&name)?.ok_or_else(|| problem("The new account was not found"))
+}
+
+/// The full name a new helper account gets.
+pub const FULL_NAME: &str = "Atlas";
+
+/// The picture a new helper account gets, Atlas's mark: shipped in
+/// Atlas.app, or in a development checkout drawn into app/Resources.
+/// macOS keeps a copy on the account, so the file need not stay.
+pub(crate) fn helper_picture() -> Option<String> {
+    let bundled = crate::update::installed_app()
+        .ok()
+        .map(|app| app.join("Contents/Resources/HelperPicture.png"));
+    let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).join("app/Resources/HelperPicture.png");
+    [bundled, Some(checkout)]
+        .into_iter()
+        .flatten()
+        .find(|path| path.is_file())
+        .and_then(|path| path.to_str().map(str::to_owned))
 }
 
 /// The lowest user ID from 501 that no account has and no process runs as.

@@ -108,7 +108,7 @@ struct ViewerHeader: View {
     }
 }
 
-/// "Agent working · Atlas Helper · Live", with a dot in the mode's colour.
+/// "Agent working · Atlas · Live", with a dot in the mode's colour.
 struct StatusLine: View {
     let model: ViewerModel
 

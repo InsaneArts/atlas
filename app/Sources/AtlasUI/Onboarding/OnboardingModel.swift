@@ -19,7 +19,7 @@ public final class OnboardingModel {
 
     // Choosing a helper.
     public var picked: String?
-    public var fullName = "Atlas Helper"
+    public var fullName = "Atlas"
     public var accountName = "atlas"
     public var password = ""
     public var verify = ""
@@ -197,7 +197,7 @@ public final class OnboardingModel {
         verify = ""
         await act(
             ["onboarding", "create", "--account", accountName, "--full-name", fullName],
-            "Creating \(fullName)… Confirm in the macOS dialog.", input: secret)
+            "Creating the account… Confirm in the macOS dialog.", input: secret)
         secret.resetBytes(in: 0..<secret.count)
     }
 

@@ -1,11 +1,13 @@
-// Draws Atlas's app icon and builds AppIcon.icns beside this script:
+// Draws Atlas's app icon and builds AppIcon.icns beside this script, and
+// the helper account's picture, HelperPicture.png:
 //
 //     swift app/Resources/AppIcon.swift
 //
 // The mark is Atlas's orbit, a graphite sphere with a ring passing in front
 // of it, on a white tile on the macOS rounded-square grid (an 824-point tile
-// with a soft shadow in a 1024-point canvas). The menu bar glyph in
-// StatusImage.swift draws the same shape: change them together.
+// with a soft shadow in a 1024-point canvas). The account picture is the
+// same mark filling the canvas, which macOS shows in a circle. The menu bar
+// glyph in StatusImage.swift draws the same shape: change them together.
 import AppKit
 
 func hex(_ value: UInt32) -> NSColor {
@@ -27,10 +29,26 @@ func drawIcon() {
     tile.fill()
     NSGraphicsContext.restoreGraphicsState()
 
+    drawOrbit(on: tile)
+
+    let rim = NSBezierPath(
+        roundedRect: tileRect.insetBy(dx: 1, dy: 1), xRadius: 184, yRadius: 184)
+    rim.lineWidth = 2
+    NSColor.black.withAlphaComponent(0.06).setStroke()
+    rim.stroke()
+}
+
+/// The account picture: the mark on paper filling the whole canvas.
+func drawPicture() {
+    drawOrbit(on: NSBezierPath(rect: NSRect(x: 0, y: 0, width: 1024, height: 1024)))
+}
+
+/// The orbit on a paper gradient, clipped to `surface`.
+func drawOrbit(on surface: NSBezierPath) {
     let paper = NSGradient(starting: hex(0xFFFFFF), ending: hex(0xE1E4E9))!
     NSGraphicsContext.saveGraphicsState()
-    tile.addClip()
-    paper.draw(in: tile, angle: -90)
+    surface.addClip()
+    paper.draw(in: surface, angle: -90)
 
     // Upright coordinates. The ring rises to the right; its front half is
     // the lower one.
@@ -74,7 +92,7 @@ func drawIcon() {
     ).addClip()
     context.addPath(stroke(ring(from: 180, to: 360), width: 64))
     context.clip()
-    paper.draw(in: tile, angle: -90)
+    paper.draw(in: surface, angle: -90)
     NSGraphicsContext.restoreGraphicsState()
 
     // The front of the ring.
@@ -84,15 +102,9 @@ func drawIcon() {
     ink.draw(in: NSRect(x: 130, y: 300, width: 764, height: 420), angle: 0)
     NSGraphicsContext.restoreGraphicsState()
     NSGraphicsContext.restoreGraphicsState()
-
-    let rim = NSBezierPath(
-        roundedRect: tileRect.insetBy(dx: 1, dy: 1), xRadius: 184, yRadius: 184)
-    rim.lineWidth = 2
-    NSColor.black.withAlphaComponent(0.06).setStroke()
-    rim.stroke()
 }
 
-func png(pixels: Int) -> Data {
+func png(pixels: Int, draw: () -> Void = drawIcon) -> Data {
     let rep = NSBitmapImageRep(
         bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels, bitsPerSample: 8,
         samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
@@ -100,7 +112,7 @@ func png(pixels: Int) -> Data {
     rep.size = NSSize(width: 1024, height: 1024)
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-    drawIcon()
+    draw()
     NSGraphicsContext.current?.flushGraphics()
     NSGraphicsContext.restoreGraphicsState()
     return rep.representation(using: .png, properties: [:])!
@@ -123,4 +135,6 @@ iconutil.arguments = [
 try iconutil.run()
 iconutil.waitUntilExit()
 try? FileManager.default.removeItem(at: iconset)
+// The size macOS keeps for account pictures.
+try png(pixels: 512, draw: drawPicture).write(to: here.appendingPathComponent("HelperPicture.png"))
 exit(iconutil.terminationStatus)
