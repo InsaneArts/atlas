@@ -27,17 +27,16 @@ connected to the helper, and sound plays on your speakers.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/InsaneArts/atlas/main/install.sh | sh
-atlas init
 ```
 
-`init` walks you through it and is safe to run again: choose or create the
-helper account, type your password once, then switch to the helper and click
-**Allow** twice. Atlas never stores a password or changes privacy settings
-for you.
+Atlas opens and walks you through the rest in one window: choose or create the
+helper account, switch to it once to allow Atlas there, and switch back. It is
+safe to open again, and `atlas init` does the same in a terminal. Atlas never
+stores a password or changes privacy settings for you.
 
 ## Teach your agents
 
-`init` connects Claude Code and Codex, so every session has the Atlas skill
+Setup connects Claude Code and Codex, so every session has the Atlas skill
 (later: `atlas agents install`). To make agents use it whenever they change
 something you can see, add a short section to each project:
 
@@ -94,7 +93,7 @@ the full guide agents read.
 
 ## Give the helper what an app needs
 
-You never copy anything by hand: `init` is the only thing you run. The helper
+You never copy anything by hand: setting up is the only thing you do. The helper
 starts without your files, so when an app needs some, the agent brings them in
 and takes them away again:
 

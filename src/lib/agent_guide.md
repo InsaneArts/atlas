@@ -3,7 +3,7 @@
 Atlas gives you a Mac screen of your own: a separate, signed-in macOS login
 (the helper) running in the background. You open apps there, look at them,
 click and type, while the person keeps using their own desktop undisturbed.
-The person's only job was `atlas init`; everything after that is yours.
+The person's only job was setting Atlas up; everything after that is yours.
 
 Commands print JSON whenever their output is not a terminal (as in your shell;
 add `--json` if you ever see plain text) and exit non-zero on failure. Failures
@@ -28,7 +28,7 @@ Do not use it for unit tests, builds, or files and logs you can read directly.
 Never act on the person's own desktop; Atlas cannot, and you must not try.
 
 If `atlas` is missing, or `doctor` stays not ready after the steps below, say
-so and offer to set it up (the setup skill; the person runs `atlas init`). Do
+so and offer to set it up (the setup skill; the person opens Atlas). Do
 not test on the person's desktop instead, and do not silently skip the check.
 
 ## Start

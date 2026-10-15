@@ -538,7 +538,7 @@ pub async fn brief(config_path: &Path) -> String {
     let version = crate::VERSION;
     let Ok(config) = Config::load(config_path) else {
         return "Atlas is installed but not set up. If the person wants GUI testing, \
-                offer the atlas setup skill (atlas init)."
+                offer the atlas setup skill (the person opens Atlas)."
             .to_owned();
     };
     let Ok(client) = Client::new(config.clone()) else {
