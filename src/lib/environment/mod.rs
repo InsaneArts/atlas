@@ -57,6 +57,24 @@ pub(super) const RESERVED_VARIABLES: &[&str] = &[
     "HOME", "USER", "LOGNAME", "SHELL", "PATH", "UID", "EUID", "TMPDIR",
 ];
 
+/// Where tools installed for every account live, in search order.
+pub(crate) const SHARED_BIN: &[&str] = &[
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+];
+
+/// Where a command runs from inside the helper whose home is `home`: the
+/// helper's own tools first, then the shared places.
+pub(crate) fn helper_search_path(home: &Path) -> Vec<PathBuf> {
+    let mut places = vec![home.join(".local/bin"), home.join(".cargo/bin")];
+    places.extend(SHARED_BIN.iter().map(PathBuf::from));
+    places
+}
+
 /// A portable variable name: ASCII letters, digits and `_`, not leading digit.
 pub(super) fn variable_name(name: &str) -> bool {
     let mut bytes = name.bytes();

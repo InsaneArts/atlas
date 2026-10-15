@@ -35,16 +35,6 @@ fn parse_accounts(listing: &str) -> Vec<(String, u32)> {
         .collect()
 }
 
-fn real_name(name: &str) -> Option<String> {
-    let output = Command::new("/usr/bin/dscl")
-        .args([".", "-read", &format!("/Users/{name}"), "RealName"])
-        .output()
-        .ok()?;
-    let text = String::from_utf8(output.stdout).ok()?;
-    let value = text.strip_prefix("RealName:")?.trim().to_owned();
-    (!value.is_empty()).then_some(value)
-}
-
 /// Accounts other than this one, the helper first.
 pub fn accounts(helper: Option<u32>) -> Result<Vec<Account>> {
     let output = Command::new("/usr/bin/dscl")
@@ -55,7 +45,7 @@ pub fn accounts(helper: Option<u32>) -> Result<Vec<Account>> {
         .into_iter()
         .filter(|(_, uid)| *uid != me)
         .map(|(name, uid)| Account {
-            real_name: real_name(&name),
+            real_name: crate::setup::real_name(&name),
             helper: Some(uid) == helper,
             name,
             uid,
@@ -65,10 +55,19 @@ pub fn accounts(helper: Option<u32>) -> Result<Vec<Account>> {
     Ok(accounts)
 }
 
-/// Call a no-argument function of the login framework, resolved at run
-/// time so a macOS without it reports an error instead of failing to start.
+/// The other accounts that are standard (not administrators): the ones
+/// that can be the helper.
+pub fn standard_accounts() -> Result<Vec<Account>> {
+    Ok(accounts(None)?
+        .into_iter()
+        .filter(|account| crate::setup::administrator(&account.name) == Some(false))
+        .collect())
+}
+
+/// A no-argument function of the login framework, resolved at run time so
+/// a macOS without it reports an error instead of failing to start.
 #[allow(unsafe_code)] // FFI: a private framework, loaded with dlopen.
-fn login_call(symbol: &std::ffi::CStr) -> Result<i32> {
+fn login_symbol(symbol: &std::ffi::CStr) -> Result<extern "C" fn() -> i32> {
     const FRAMEWORK: &std::ffi::CStr =
         c"/System/Library/PrivateFrameworks/login.framework/Versions/A/login";
     let unavailable = || Error::new("switch", "This macOS cannot lock the screen from here");
@@ -84,10 +83,12 @@ fn login_call(symbol: &std::ffi::CStr) -> Result<i32> {
     }
     // SAFETY: the login calls used here take no arguments and return a
     // status (as Chromium's login_util declares them).
-    Ok(unsafe {
-        let call: extern "C" fn() -> i32 = std::mem::transmute(function);
-        call()
-    })
+    Ok(unsafe { std::mem::transmute::<*mut std::ffi::c_void, extern "C" fn() -> i32>(function) })
+}
+
+/// Call a no-argument function of the login framework.
+fn login_call(symbol: &std::ffi::CStr) -> Result<i32> {
+    Ok(login_symbol(symbol)?())
 }
 
 /// Whether this login's screen is locked now, from the window server.
@@ -161,17 +162,10 @@ mod tests {
     }
 
     #[test]
-    fn the_lock_call_exists_on_this_macos() {
-        // Resolve without calling: calling would change the person's screen.
-        #[allow(unsafe_code)]
-        // SAFETY: dlopen/dlsym with NUL-terminated names; nothing is called.
-        let found = unsafe {
-            let handle = libc::dlopen(
-                c"/System/Library/PrivateFrameworks/login.framework/Versions/A/login".as_ptr(),
-                libc::RTLD_LAZY,
-            );
-            !handle.is_null() && !libc::dlsym(handle, c"SACSwitchToLoginWindow".as_ptr()).is_null()
-        };
-        assert!(found);
+    fn the_lock_calls_exist_on_this_macos() {
+        // Resolved without calling: calling would change the person's screen.
+        assert!(login_symbol(c"SACLockScreenImmediate").is_ok());
+        assert!(login_symbol(c"SACSwitchToLoginWindow").is_ok());
+        assert_eq!(login_symbol(c"SACNoSuchCall").unwrap_err().code, "switch");
     }
 }

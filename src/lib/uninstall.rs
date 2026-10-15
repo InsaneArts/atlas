@@ -18,7 +18,6 @@ use serde_json::{Value, json};
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 fn problem(message: impl Into<String>) -> Error {
@@ -37,6 +36,7 @@ fn remove_link_to(path: &Path, executable: &Path) -> Result<bool> {
 }
 
 /// Stop the helper's job as the helper, outside the daemon it would stop.
+/// sudo may ask the person for their password.
 fn retire_helper_job(executable: &Path, config: &Config) -> Result<Value> {
     let helper = setup::account_with_uid(config.helper_uid)?
         .ok_or_else(|| problem("The helper account does not exist"))?;
@@ -58,28 +58,17 @@ fn retire_helper_job(executable: &Path, config: &Config) -> Result<Value> {
         sha256: text_sha256(&plist(&agent, &layout.logs())),
         missing_ok: true,
     };
-    let output = Command::new("/usr/bin/sudo")
-        .args([
-            "/bin/launchctl",
-            "asuser",
-            &helper.uid.to_string(),
-            "/usr/bin/sudo",
-            "-u",
-            &helper.name,
-        ])
-        .arg(executable)
-        .arg("setup-helper")
-        .arg(serde_json::to_string(&request)?)
-        .output()?;
-    serde_json::from_slice(&output.stdout)
-        .or_else(|_| serde_json::from_slice(&output.stderr))
-        .map_err(|_| problem("The helper job could not be stopped"))
+    let (_, reply) = setup::request_as_helper(executable, &helper, &request, false)?;
+    if reply.is_null() {
+        return Err(problem("The helper job could not be stopped"));
+    }
+    Ok(reply)
 }
 
 /// Undo install and init. `keep_config` keeps settings and logs.
 pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Value> {
     let app = crate::update::installed_app()?;
-    let executable = app.join("Contents/MacOS/atlas");
+    let executable = crate::update::installed_executable()?;
     let config = Config::load(config_path).ok();
     let helper = config
         .as_ref()
@@ -124,8 +113,11 @@ pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Val
     if let Some(config) = &config {
         let client = Client::new(config.clone())?;
         let _exclusion = client.controller.acquire(false)?;
-        if let Some(pid) = client.status().await["inputService"]["pid"].as_u64() {
-            let _ = client.stop_input(pid as u32).await;
+        if let Some(pid) = client.status().await["inputService"]["pid"]
+            .as_u64()
+            .and_then(|pid| u32::try_from(pid).ok())
+        {
+            let _ = client.stop_input(pid).await;
         }
         say("Stopping the helper's background job (macOS may ask for your password)…");
         let retired = retire_helper_job(&executable, config)?;

@@ -84,7 +84,7 @@ fn ended(status: ExitStatus, timed_out: bool, started: Instant, truncated: bool)
         "exitCode": status.code(),
         "signal": status.signal().map(signal_name),
         "timedOut": timed_out,
-        "durationMs": started.elapsed().as_millis() as u64,
+        "durationMs": u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
     });
     if truncated {
         reply["outputTruncated"] = json!(true);
@@ -258,13 +258,14 @@ pub async fn run(
         Err(error) => return failure("spawn-failed", format!("{}: {error}", argv[0])),
     };
     let started = Instant::now();
-    let Some(pid) = child.id() else {
+    let Some(group) = child.id().and_then(|pid| i32::try_from(pid).ok()) else {
         return failure(
             "spawn-failed",
             "The command exited before it could be observed",
         );
     };
-    let group = Pid::from_raw(pid as i32);
+    let pid = group;
+    let group = Pid::from_raw(group);
     // Checks that this is a pipe and makes it non-blocking.
     let mut pipe = match pipe::Receiver::from_owned_fd(OwnedFd::from(reader)) {
         Ok(receiver) => receiver,

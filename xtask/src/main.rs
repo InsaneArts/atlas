@@ -2,7 +2,10 @@
 //! architectures, signs it inside out with a Developer ID, checks it against
 //! the same requirement setup enforces, optionally notarizes and staples it,
 //! and writes a zip with its SHA-256 sum.
-use atlas::menubar::{APP_EXECUTABLE, LOGIN_JOB};
+use atlas::{
+    menubar::{APP_EXECUTABLE, LOGIN_JOB},
+    setup::IDENTIFIER,
+};
 use sha2::{Digest, Sha256};
 use std::{
     env, fs,
@@ -10,8 +13,6 @@ use std::{
     process::{Command, ExitCode},
 };
 
-/// The bundle identifier; consent follows it with the signing team.
-const IDENTIFIER: &str = "com.insanearts.atlas";
 /// The oldest macOS the app runs on, for every slice and the Info.plist.
 const MINIMUM_MACOS: &str = "14.0";
 /// Rust triple and architecture for one universal build.
@@ -494,39 +495,41 @@ mod tests {
 
     #[test]
     fn output_directories_never_hold_apps_this_tool_did_not_build() {
-        let dir = std::env::temp_dir().join(format!("xtask-out-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
+        let out = tempfile::tempdir().unwrap();
+        let dir = out.path();
         fs::create_dir_all(dir.join("Atlas.app")).unwrap();
-        assert!(publishable(&dir).unwrap_err().contains("did not build"));
+        assert!(publishable(dir).unwrap_err().contains("did not build"));
         fs::write(dir.join(MARKER), "").unwrap();
-        assert!(publishable(&dir).is_ok());
+        assert!(publishable(dir).is_ok());
         assert!(publishable(Path::new("/Applications")).is_err());
         let staged = dir.join("stage/1/Atlas.app");
         fs::create_dir_all(&staged).unwrap();
         fs::write(staged.join("new"), "").unwrap();
-        let app = publish(&staged, &dir).unwrap();
+        let app = publish(&staged, dir).unwrap();
         assert!(app.join("new").exists());
         assert!(!staged.exists(), "the previous build is cleared");
         let again = dir.join("stage/2/Atlas.app");
         fs::create_dir_all(&again).unwrap();
         fs::write(again.join("newer"), "").unwrap();
-        let app = publish(&again, &dir).unwrap();
+        let app = publish(&again, dir).unwrap();
         assert!(app.join("newer").exists() && !app.join("new").exists());
-        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A plist written to a temporary file, as `plutil` reads it back.
+    fn plist_json(text: &str) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("file.plist");
+        fs::write(&path, text).unwrap();
+        output(
+            "/usr/bin/plutil",
+            &["-convert", "json", "-o", "-", path.to_str().unwrap()],
+        )
+        .unwrap()
     }
 
     #[test]
     fn the_login_agent_runs_the_menu_bar_from_inside_the_app() {
-        let dir = std::env::temp_dir().join(format!("xtask-agent-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("agent.plist");
-        fs::write(&path, menubar_agent()).unwrap();
-        let json = output(
-            "/usr/bin/plutil",
-            &["-convert", "json", "-o", "-", path.to_str().unwrap()],
-        )
-        .unwrap();
-        fs::remove_dir_all(&dir).unwrap();
+        let json = plist_json(&menubar_agent());
         for expected in [
             r#""Label":"com.insanearts.atlas.menubar""#,
             r#""BundleProgram":"Contents\/MacOS\/atlas""#,
@@ -540,16 +543,7 @@ mod tests {
 
     #[test]
     fn the_info_plist_is_valid_and_names_the_consented_executable() {
-        let dir = std::env::temp_dir().join(format!("xtask-plist-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("Info.plist");
-        fs::write(&path, info_plist("1.2.3")).unwrap();
-        let json = output(
-            "/usr/bin/plutil",
-            &["-convert", "json", "-o", "-", path.to_str().unwrap()],
-        )
-        .unwrap();
-        fs::remove_dir_all(&dir).unwrap();
+        let json = plist_json(&info_plist("1.2.3"));
         assert!(
             root().join("app/Resources/AppIcon.icns").is_file(),
             "the icon the plist names is checked in"

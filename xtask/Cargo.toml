@@ -11,3 +11,6 @@ atlas = { path = ".." }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+tempfile = "3"

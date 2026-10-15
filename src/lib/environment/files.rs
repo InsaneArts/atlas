@@ -179,7 +179,7 @@ fn attributes(file: &fs::File) -> Result<std::collections::BTreeMap<String, Stri
     {
         let text = std::str::from_utf8(name)
             .map_err(|_| problem("Unsupported attribute name encoding"))?;
-        let name = std::ffi::CString::new(name).unwrap();
+        let name = std::ffi::CString::new(name).map_err(|_| problem("Invalid attribute name"))?;
         // SAFETY: a live descriptor and NUL-terminated name; null buffer, size only.
         let size = unsafe {
             libc::fgetxattr(
@@ -445,7 +445,8 @@ pub(super) fn atomic_install(
             .as_bytes(),
     )
     .map_err(|_| problem("Invalid path"))?;
-    let temporary = CString::new(format!(".atlas-{}", crate::control::token())).unwrap();
+    let temporary = CString::new(format!(".atlas-{}", crate::control::token()))
+        .map_err(|_| problem("Invalid path"))?;
     let mut file = fs::File::from(
         openat(
             &parent,
@@ -488,16 +489,18 @@ pub(super) fn atomic_install(
 /// Move a recorded prepared inode into place. No-replace is atomic for creates.
 #[allow(unsafe_code)] // FFI: renameatx_np has no safe binding.
 pub(super) fn install_prepared(source: &Path, target: &Path, create_only: bool) -> Result<()> {
+    let missing =
+        || problem("Prepared replacement and its destination need a directory and a name");
     if source.parent() != target.parent() {
         return Err(problem(
             "Prepared replacement must share its destination directory",
         ));
     }
-    let parent = directory(target.parent().unwrap(), false)?
+    let parent = directory(target.parent().ok_or_else(missing)?, false)?
         .ok_or_else(|| problem("Destination parent disappeared"))?;
     installation_parent(&parent)?;
-    let source = component(source.file_name().unwrap())?;
-    let target = component(target.file_name().unwrap())?;
+    let source = component(source.file_name().ok_or_else(missing)?)?;
+    let target = component(target.file_name().ok_or_else(missing)?)?;
     // SAFETY: a live directory descriptor and two NUL-terminated single
     // components; RENAME_EXCL makes the rename refuse an existing target.
     let status = unsafe {

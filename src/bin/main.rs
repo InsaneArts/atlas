@@ -579,7 +579,6 @@ fn main() -> ExitCode {
     };
     ui::set(format);
     // The helper daemon keeps this thread for the Core Foundation run loop.
-    #[cfg(target_os = "macos")]
     if let Command::HelperServe {
         uid,
         controller_uid,
@@ -881,17 +880,49 @@ async fn input_service(uid: u32, controller_uid: u32, socket: PathBuf) -> Result
     atlas::native::service::serve(uid, controller_uid, socket).await?;
     Ok(Value::Null)
 }
-#[cfg(target_os = "macos")]
-async fn helper_serve(_: u32, _: u32, _: PathBuf) -> Result<Value> {
-    unreachable!("the helper daemon is started from main")
-}
-#[cfg(not(target_os = "macos"))]
-async fn helper_serve(_: u32, _: u32, _: PathBuf) -> Result<Value> {
-    Err(Error::new("platform", "The helper daemon requires macOS"))
-}
 #[cfg(not(target_os = "macos"))]
 async fn input_service(_: u32, _: u32, _: PathBuf) -> Result<Value> {
     Err(Error::new("platform", "The input service requires macOS"))
+}
+
+/// `atlas doctor`: the helper's readiness, with the checks only this side
+/// can make (the account itself, and a leftover session of a deleted one).
+async fn doctor(client: &Client, verbose: bool) -> Value {
+    let uid = client.config.helper_uid;
+    let mut report = atlas::capability::doctor(client.status().await, uid);
+    // Both states make the helper unusable; init refuses them too.
+    let mut first_steps = Vec::new();
+    if let Ok(Some(account)) = atlas::setup::account_with_uid(uid) {
+        if atlas::session::leftover_session(uid, &account.name, &account.home) {
+            first_steps.push(format!(
+                "macOS still runs a session of a deleted account with {}'s user ID and mixes it \
+                 up with the helper. Restart the Mac.",
+                account.name
+            ));
+        }
+        if atlas::setup::administrator(&account.name) != Some(false) {
+            first_steps.push(format!(
+                "{} must be a standard account, not an administrator: change it in System \
+                 Settings › Users & Groups.",
+                account.name
+            ));
+        }
+    }
+    if !first_steps.is_empty() {
+        report["ready"] = json!(false);
+        if let Some(steps) = report["nextSteps"].as_array_mut() {
+            for (index, step) in first_steps.into_iter().enumerate() {
+                steps.insert(index, json!(step));
+            }
+        }
+    }
+    // People see the summary either way; programs get the full status
+    // only when they ask for it.
+    if verbose || ui::human() {
+        report
+    } else {
+        atlas::capability::summary(report)
+    }
 }
 
 async fn execute(config: PathBuf, command: Command) -> Result<Value> {
@@ -920,11 +951,6 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             controller_uid,
             socket,
         } => return input_service(uid, controller_uid, socket).await,
-        Command::HelperServe {
-            uid,
-            controller_uid,
-            socket,
-        } => return helper_serve(uid, controller_uid, socket).await,
         Command::SetupHelper { request } => return atlas::setup::helper::run(&request),
         Command::Update {
             allow_unnotarized,
@@ -1010,7 +1036,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
         | Command::Agents { .. }
         | Command::Uninstall { .. }
         | Command::Switch { .. } => {
-            unreachable!("these commands return above")
+            unreachable!("these commands return above, or from main")
         }
         Command::Setup { apply, .. } => {
             // Recovery ownership: the migration settles only the pending
@@ -1024,46 +1050,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
         }
         Command::Config => Ok(json!({ "ok": true, "config": client.config, "path": config })),
         Command::Status => Ok(client.status().await),
-        Command::Doctor { verbose } => {
-            let mut report =
-                atlas::capability::doctor(client.status().await, client.config.helper_uid);
-            let uid = client.config.helper_uid;
-            if let Ok(Some(account)) = atlas::setup::account_with_uid(uid)
-                && atlas::setup::administrator(&account.name) != Some(false)
-            {
-                // The helper must stay a standard account; init refuses this too.
-                report["ready"] = json!(false);
-                if let Some(steps) = report["nextSteps"].as_array_mut() {
-                    steps.insert(
-                        0,
-                        json!(format!(
-                            "{} must be a standard account, not an administrator: change it in System Settings › Users & Groups.",
-                            account.name
-                        )),
-                    );
-                }
-            }
-            if let Ok(Some(account)) = atlas::setup::account_with_uid(uid)
-                && atlas::session::leftover_session(uid, &account.name, &account.home)
-            {
-                let step = format!(
-                    "macOS still runs a session of a deleted account with {}'s user ID and mixes it up with the helper. Restart the Mac.",
-                    account.name
-                );
-                // Not ready: init refuses this state too.
-                report["ready"] = json!(false);
-                if let Some(steps) = report["nextSteps"].as_array_mut() {
-                    steps.insert(0, json!(step));
-                }
-            }
-            // People see the summary either way; programs get the full status
-            // only when they ask for it.
-            Ok(if verbose || ui::human() {
-                report
-            } else {
-                atlas::capability::summary(report)
-            })
-        }
+        Command::Doctor { verbose } => Ok(doctor(&client, verbose).await),
         Command::VerifyNative { fixture } => atlas::capability::verify(&client, &fixture).await,
         Command::Environment {
             manifest,
@@ -1333,7 +1320,7 @@ fn update(
         return Ok(report);
     }
     spinner.set("Moving the helper onto the new version…");
-    let executable = atlas::update::installed_app()?.join("Contents/MacOS/atlas");
+    let executable = atlas::update::installed_executable()?;
     // update-finish always answers in JSON; no flag, so a release that
     // predates --json can finish too.
     let output = std::process::Command::new(&executable)

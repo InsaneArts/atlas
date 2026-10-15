@@ -34,7 +34,7 @@ pub fn session_info() -> Result<Value> {
         "uid": nix::unistd::getuid().as_raw(),
         "parentPID": nix::unistd::getppid().as_raw(),
         "securitySessionID": security_id,
-        "hasGraphicAccess": attributes.0 & 0x0010 != 0,
+        "hasGraphicAccess": attributes.contains(SessionAttributeBits::sessionHasGraphicAccess),
         "onConsole": on_console,
         "displayID": display_id,
         "width": bounds.size.width,
@@ -45,6 +45,15 @@ pub fn session_info() -> Result<Value> {
 #[cfg(not(target_os = "macos"))]
 pub fn session_info() -> Result<Value> {
     Err(Error::new("platform", "Session identity requires macOS"))
+}
+
+/// Whether this process may use Accessibility (macOS has let the person
+/// allow it for Atlas).
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)] // FFI: Accessibility trust query.
+pub fn accessibility_trusted() -> bool {
+    // SAFETY: no arguments; only reads this process's consent.
+    unsafe { objc2_application_services::AXIsProcessTrusted() }
 }
 
 #[cfg(target_os = "macos")]

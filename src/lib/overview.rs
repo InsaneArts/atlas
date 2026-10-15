@@ -111,7 +111,8 @@ pub fn overview(
                 "ok": row["ok"],
                 "actionCount": row["actionCount"],
                 "actor": row["actor"].as_str().unwrap_or("agent"),
-                "ageSeconds": age(row, now).map(|nanos| (nanos / 1_000_000_000) as u64),
+                "ageSeconds": age(row, now)
+                    .map(|nanos| u64::try_from(nanos / 1_000_000_000).unwrap_or(u64::MAX)),
             }))
             .collect::<Vec<_>>(),
     })

@@ -1,3 +1,8 @@
+//! The controller's side of the helper: one [`Client`] per configuration
+//! that talks to the helper daemon and the input service over their
+//! sockets, proves the helper is the hidden session it expects before every
+//! action, holds controller exclusion while acting, and keeps the
+//! screenshots and activity log in the private output folder.
 use crate::{
     actions,
     config::Config,
@@ -100,7 +105,9 @@ fn shared_folder(folder: &Path) -> Result<()> {
         return Err(Error::new(
             "install",
             format!(
-                "{} belongs to another account, or others can change it. Atlas is set up for                  one person per Mac; if no one else uses it, remove the folder (an                  administrator can) and try again.",
+                "{} belongs to another account, or others can change it. Atlas is set up for \
+                 one person per Mac; if no one else uses it, remove the folder (an \
+                 administrator can) and try again.",
                 folder.display()
             ),
         ));
@@ -417,18 +424,11 @@ impl Client {
             )
         };
         let status = self.status().await;
-        let native = &status["inputService"];
-        let pinned = &native["enforcedEpoch"];
-        let epoch = &session.epoch;
-        let same_session = native["ok"] == true
-            && native["protocolVersion"] == 1
-            && native["accessibility"] == true
-            && pinned["uid"] == epoch.uid
-            && pinned["securitySessionId"] == epoch.security_session_id
-            && pinned["processId"] == epoch.input_pid;
-        if !same_session {
+        if !crate::session::pinned_to_session(&status, &session) {
             return Err(unavailable());
         }
+        let epoch = &session.epoch;
+        let pinned = &status["inputService"]["enforcedEpoch"];
         let same_size = pinned["width"].as_f64() == Some(epoch.display.width)
             && pinned["height"].as_f64() == Some(epoch.display.height);
         self.native_request(json!({"op": "reset", "epoch": epoch.input_epoch()}))

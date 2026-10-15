@@ -1,22 +1,15 @@
 //! The `hello` reply: who the daemon runs as, in which session, on which
 //! display, with which permissions.
 use crate::native::{
-    capture,
-    cf::{self, CFBoolean, CFDictionary, CFRetained, CFString},
+    accessibility_trusted as accessibility, capture,
+    cf::{self, CFBoolean, CFDictionary, CFString},
 };
-use objc2_application_services::{AXIsProcessTrusted, AXIsProcessTrustedWithOptions};
+use objc2_application_services::AXIsProcessTrustedWithOptions;
 use objc2_core_graphics::{
     CGDisplayBounds, CGDisplayCopyDisplayMode, CGDisplayMode, CGMainDisplayID,
 };
 use serde_json::{Value, json};
 use std::time::Duration;
-
-/// Whether this process may use Accessibility.
-#[allow(unsafe_code)] // FFI: Accessibility trust query.
-fn accessibility() -> bool {
-    // SAFETY: no arguments; only reads this process's consent.
-    unsafe { AXIsProcessTrusted() }
-}
 
 /// Ask for Accessibility with the system prompt, unless it is allowed.
 #[allow(unsafe_code)] // FFI: the consent prompt takes an options dictionary.
@@ -62,7 +55,7 @@ async fn ask(shown: &impl Fn() -> bool, restart: &impl Fn()) {
     // Let the desktop settle after the switch, and let macOS finish a new
     // account's setup screens: a prompt raised behind them is never seen.
     tokio::time::sleep(Duration::from_secs(2)).await;
-    while shown() && setting_up() {
+    while shown() && setting_up().await {
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
     if !shown() {
@@ -206,23 +199,27 @@ fn done_notice() {
     }
 }
 
-/// Whether macOS's setup screens for a new account are open in this session.
-fn setting_up() -> bool {
+/// Whether macOS's setup screens for a new account are open in this session
+/// (asked of `ps`, off the runtime).
+async fn setting_up() -> bool {
     let uid = nix::unistd::getuid().as_raw().to_string();
-    std::process::Command::new("/bin/ps")
+    let listed = tokio::process::Command::new("/bin/ps")
         .args(["-axo", "uid=,comm="])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .output()
-        .is_ok_and(|output| {
-            String::from_utf8_lossy(&output.stdout).lines().any(|line| {
-                let line = line.trim_start();
-                line.strip_prefix(&uid).is_some_and(|rest| {
-                    rest.starts_with(char::is_whitespace)
-                        && rest
-                            .trim()
-                            .ends_with("/Setup Assistant.app/Contents/MacOS/Setup Assistant")
-                })
+        .await;
+    listed.is_ok_and(|output| {
+        String::from_utf8_lossy(&output.stdout).lines().any(|line| {
+            let line = line.trim_start();
+            line.strip_prefix(&uid).is_some_and(|rest| {
+                rest.starts_with(char::is_whitespace)
+                    && rest
+                        .trim()
+                        .ends_with("/Setup Assistant.app/Contents/MacOS/Setup Assistant")
             })
         })
+    })
 }
 
 /// Typing in the helper arrives exactly as sent: macOS's autocorrect,
@@ -271,14 +268,10 @@ fn user() -> Value {
     }
 }
 
-/// The window server's record of this graphical session.
-fn session_record() -> Option<CFRetained<cf::Record>> {
-    cf::session()
-}
-
-/// Whether this graphical session is on the console now, if known.
+/// Whether this graphical session is on the console now, if known, from
+/// the window server's own session record.
 fn console_state() -> Option<bool> {
-    let record = session_record()?;
+    let record = cf::session()?;
     cf::boolean(&record, "kCGSSessionOnConsoleKey")
         .or_else(|| cf::boolean(&record, "kCGSessionOnConsoleKey"))
 }
@@ -286,7 +279,7 @@ fn console_state() -> Option<bool> {
 /// Who owns this graphical session and whether their login has finished,
 /// from the window server's own session record.
 pub fn session_owner() -> Option<(i64, bool)> {
-    let record = session_record()?;
+    let record = cf::session()?;
     let uid = cf::integer(&record, "kCGSSessionUserIDKey")?;
     let done = cf::boolean(&record, "kCGSessionLoginDoneKey")?;
     Some((uid, done))

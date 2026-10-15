@@ -1271,6 +1271,7 @@ dependencies = [
  "atlas",
  "libc",
  "sha2",
+ "tempfile",
 ]
 
 [[package]]

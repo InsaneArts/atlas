@@ -1,6 +1,6 @@
 //! Read-only inspection of explicit selections; never executes a selected tool
 //! or sources a shell startup file. Presence is not application compatibility.
-use super::variable_name as variable;
+use super::{SHARED_BIN, helper_search_path, variable_name as variable};
 use crate::{
     client::Client,
     error::{Error, Result},
@@ -11,17 +11,10 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
     fs,
+    ops::Range,
     path::{Component, Path, PathBuf},
 };
 
-const SHARED_BIN: &[&str] = &[
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-    "/usr/bin",
-    "/bin",
-    "/usr/sbin",
-    "/sbin",
-];
 // Every path is a separate positional argument. No selected name, path or
 // environment value is interpreted as shell syntax or emitted by this probe.
 const PATH_PROBE: &str = r#"
@@ -173,13 +166,11 @@ pub async fn discover(
         .unwrap_or_default();
     host_bins.extend([home.join(".local/bin"), home.join(".cargo/bin")]);
     host_bins.extend(SHARED_BIN.iter().map(PathBuf::from));
-    let mut helper_bins = vec![
-        helper_home.join(".local/bin"),
-        helper_home.join(".cargo/bin"),
-    ];
-    helper_bins.extend(SHARED_BIN.iter().map(PathBuf::from));
+    let helper_bins = helper_search_path(&helper_home);
+    // Every helper-side path is probed in one run; each report remembers
+    // which of them are its candidates.
     let mut paths = Vec::<PathBuf>::new();
-    let mut reports = Vec::new();
+    let mut reports: Vec<(Value, Range<usize>)> = Vec::new();
     for name in tools {
         let host = host_bins.iter().map(|dir| dir.join(name)).find(|path| {
             let metadata = access(path);
@@ -187,8 +178,10 @@ pub async fn discover(
         });
         let start = paths.len();
         paths.extend(helper_bins.iter().map(|dir| dir.join(name)));
-        reports.push(json!({"kind":"tool", "name":name, "host":host,
-            "helperCandidateRange":[start,paths.len()], "executed":false}));
+        reports.push((
+            json!({"kind": "tool", "name": name, "host": host, "executed": false}),
+            start..paths.len(),
+        ));
     }
     for name in apps {
         let bundle = if name.ends_with(".app") {
@@ -210,9 +203,17 @@ pub async fn discover(
             PathBuf::from("/System/Applications").join(&bundle),
             helper_home.join("Applications").join(&bundle),
         ]);
-        reports.push(json!({"kind":"application", "name":name, "host":host,
-            "helperCandidateRange":[start,paths.len()], "launched":false,
-            "accountData":"separate", "signIn":"not checked"}));
+        reports.push((
+            json!({
+                "kind": "application",
+                "name": name,
+                "host": host,
+                "launched": false,
+                "accountData": "separate",
+                "signIn": "not checked",
+            }),
+            start..paths.len(),
+        ));
     }
     let reference_start = paths.len();
     paths.extend_from_slice(references);
@@ -225,27 +226,25 @@ pub async fn discover(
         .iter()
         .map(|s| Access::from_flags(s))
         .collect::<Result<Vec<_>>>()?;
-    for report in &mut reports {
-        let range = report
-            .as_object_mut()
-            .unwrap()
-            .remove("helperCandidateRange")
-            .unwrap();
-        let start = range[0].as_u64().unwrap() as usize;
-        let end = range[1].as_u64().unwrap() as usize;
-        report["helperCandidates"] = json!(
-            (start..end)
-                .map(|i| json!({"path":paths[i],"access":observed[i]}))
-                .collect::<Vec<_>>()
-        );
-        report["available"] = json!((start..end).any(|i| {
-            if report["kind"] == "tool" {
-                observed[i].file && observed[i].executable
-            } else {
-                observed[i].directory && observed[i].readable && observed[i].executable
-            }
-        }));
-    }
+    let selections: Vec<Value> = reports
+        .into_iter()
+        .map(|(mut report, range)| {
+            let usable = |access: &Access| {
+                if report["kind"] == "tool" {
+                    access.file && access.executable
+                } else {
+                    access.directory && access.readable && access.executable
+                }
+            };
+            report["available"] = json!(range.clone().any(|i| usable(&observed[i])));
+            report["helperCandidates"] = json!(
+                range
+                    .map(|i| json!({"path": paths[i], "access": observed[i]}))
+                    .collect::<Vec<_>>()
+            );
+            report
+        })
+        .collect();
     let defined = probe(client, ENV_PROBE, environment).await?;
     if defined.iter().any(|s| s != "defined" && s != "undefined") {
         return Err(invalid());
@@ -256,12 +255,36 @@ pub async fn discover(
             "Helper changed during discovery; repeat the inspection",
         ));
     }
+    let variables: Vec<Value> = environment
+        .iter()
+        .zip(defined)
+        .map(|(name, value)| {
+            json!({
+                "name": name,
+                "hostDefined": std::env::var_os(name).is_some(),
+                "helperInheritedDefined": value == "defined",
+            })
+        })
+        .collect();
+    let references: Vec<Value> = references
+        .iter()
+        .enumerate()
+        .map(|(i, path)| {
+            json!({"path": path, "host": access(path), "helper": observed[reference_start + i]})
+        })
+        .collect();
     Ok(json!({
-        "ok":true, "readOnly":true, "helperUID":session.epoch.uid,
-        "selections":reports,
-        "environment":environment.iter().zip(defined).map(|(name, value)| json!({"name":name,"hostDefined":std::env::var_os(name).is_some(),"helperInheritedDefined":value=="defined"})).collect::<Vec<_>>(),
-        "references":references.iter().enumerate().map(|(i,path)|json!({"path":path,"host":access(path),"helper":observed[reference_start+i]})).collect::<Vec<_>>(),
-        "scope":"Selected executable/app presence and access only. Shell startup files were not loaded; inherited variables may differ from Terminal. Dependencies, app data and sign-ins require separate live verification. No selected program was executed and no file contents or variable values were read into the report."
+        "ok": true,
+        "readOnly": true,
+        "helperUID": session.epoch.uid,
+        "selections": selections,
+        "environment": variables,
+        "references": references,
+        "scope": "Selected executable/app presence and access only. Shell startup files were \
+                  not loaded; inherited variables may differ from Terminal. Dependencies, app \
+                  data and sign-ins require separate live verification. No selected program \
+                  was executed and no file contents or variable values were read into the \
+                  report.",
     }))
 }
 

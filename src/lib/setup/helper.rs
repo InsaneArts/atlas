@@ -27,8 +27,7 @@ pub const DAEMON: &str = "helper";
 pub const INPUT: &str = "input";
 const LOGS: &str = "logs";
 const BACKUP: &str = "backup";
-/// Label of the capture job Atlas manages.
-/// The managed LaunchAgent running Atlas's own helper daemon.
+/// Label of the managed LaunchAgent running Atlas's own helper daemon.
 pub const LABEL: &str = "com.insanearts.atlas.helper";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,7 +118,7 @@ fn escape(text: &str) -> String {
         .replace('>', "&gt;")
 }
 
-/// The LaunchAgent definition for an unchanged capture daemon.
+/// The LaunchAgent definition that runs the helper daemon `agent` describes.
 pub fn plist(agent: &Agent, logs: &Path) -> String {
     let string = |value: &str| format!("<string>{}</string>", escape(value));
     let arguments = [
@@ -261,6 +260,14 @@ fn job(layout: &Layout, label: &str) -> Result<Job> {
             "launchctl could not inspect {label}: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         ))),
+    }
+}
+
+/// The pid of `label`'s job in this login, when launchd has it running.
+pub(crate) fn job_pid(layout: &Layout, label: &str) -> Option<u32> {
+    match job(layout, label).ok()? {
+        Job::Loaded { pid, .. } => pid,
+        Job::Absent => None,
     }
 }
 
@@ -490,23 +497,30 @@ fn install(layout: &Layout, agent: &Agent) -> Result<Value> {
             )));
         }
     }
-    let state = match job(layout, LABEL)? {
+    let pid = loaded(layout, LABEL, &path)?;
+    Ok(json!({ "ok": true, "plist": path, "pid": pid, "sha256": text_sha256(&text) }))
+}
+
+/// Load `label` from `path` unless launchd has it already; its pid, once
+/// running. A job loaded from another definition is an error.
+fn loaded(layout: &Layout, label: &str, path: &Path) -> Result<Option<u32>> {
+    let state = match job(layout, label)? {
         Job::Absent => {
             launchctl(&["bootstrap", &layout.domain(), &path.to_string_lossy()])?;
-            wait_for(layout, LABEL, true)?
+            wait_for(layout, label, true)?
         }
         loaded => loaded,
     };
-    let Job::Loaded { pid, path: loaded } = state else {
+    let Job::Loaded { pid, path: from } = state else {
         unreachable!("wait_for returned a loaded job");
     };
-    if loaded != path {
+    if from != path {
         return Err(problem(format!(
-            "{LABEL} is loaded from {}",
-            loaded.display()
+            "{label} is loaded from {}",
+            from.display()
         )));
     }
-    Ok(json!({ "ok": true, "plist": path, "pid": pid, "sha256": text_sha256(&text) }))
+    Ok(pid)
 }
 
 fn retire(layout: &Layout, label: &str, sha256: &str, missing_ok: bool) -> Result<Value> {
@@ -581,22 +595,7 @@ fn restore(layout: &Layout, label: &str, sha256: &str) -> Result<Value> {
             )));
         }
     }
-    let state = match job(layout, label)? {
-        Job::Absent => {
-            launchctl(&["bootstrap", &layout.domain(), &path.to_string_lossy()])?;
-            wait_for(layout, label, true)?
-        }
-        loaded => loaded,
-    };
-    let Job::Loaded { pid, path: loaded } = state else {
-        unreachable!("wait_for returned a loaded job");
-    };
-    if loaded != path {
-        return Err(problem(format!(
-            "{label} is loaded from {}",
-            loaded.display()
-        )));
-    }
+    let pid = loaded(layout, label, &path)?;
     Ok(json!({ "ok": true, "plist": path, "pid": pid }))
 }
 

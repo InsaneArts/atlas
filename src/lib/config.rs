@@ -1,3 +1,6 @@
+//! Atlas's settings: which account is the helper and where its sockets, the
+//! shared command and the screenshots live, read from a small TOML file
+//! whose relative paths resolve against the file itself.
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{

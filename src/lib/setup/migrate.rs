@@ -250,6 +250,18 @@ struct Migration {
 }
 
 impl Migration {
+    /// The migration `log` at `path`, with a client for each of the plan's
+    /// two configurations. Construction reads nothing.
+    fn new(path: PathBuf, log: Log) -> Result<Self> {
+        let old = Config::parse(log.plan.old_config.as_bytes(), &log.plan.config_path)?;
+        let new = Config::parse(log.plan.new_config.as_bytes(), &log.plan.config_path)?;
+        Ok(Self {
+            path,
+            log,
+            old: Client::new(old)?,
+            new: Client::new(new)?,
+        })
+    }
     fn client(&self, endpoint: Endpoint) -> &Client {
         match endpoint {
             Endpoint::Old => &self.old,
@@ -729,13 +741,7 @@ pub async fn apply_fresh(config_path: &Path, ownership: &Ownership) -> Result<Va
             }
         }
     };
-    let (old, new) = clients(&log.plan)?;
-    let mut migration = Migration {
-        path,
-        log,
-        old,
-        new,
-    };
+    let mut migration = Migration::new(path, log)?;
     migration.require_owned_pending()?;
     // An updated Atlas.app, still validly signed as Atlas, continues the
     // same setup: its new signature is recorded, as apply does.
@@ -748,12 +754,6 @@ pub async fn apply_fresh(config_path: &Path, ownership: &Ownership) -> Result<Va
     save_log(&migration.path, &migration.log)?;
     let outcome = migration.apply().await;
     Ok(report(&migration.log, &migration.path, outcome))
-}
-
-fn clients(plan: &Plan) -> Result<(Client, Client)> {
-    let old = Config::parse(plan.old_config.as_bytes(), &plan.config_path)?;
-    let new = Config::parse(plan.new_config.as_bytes(), &plan.config_path)?;
-    Ok((Client::new(old)?, Client::new(new)?))
 }
 
 /// Plan from the live configuration. Reads only; refuses unless the managed
@@ -911,13 +911,7 @@ pub async fn apply(config_path: &Path, _ownership: &Ownership) -> Result<Value> 
             }
         }
     };
-    let (old, new) = clients(&log.plan)?;
-    let mut migration = Migration {
-        path,
-        log,
-        old,
-        new,
-    };
+    let mut migration = Migration::new(path, log)?;
     migration.require_owned_pending()?;
     if migration.log.state == State::Applied {
         // An applied setup re-verifies. An updated Atlas.app is accepted
@@ -950,13 +944,7 @@ pub async fn rollback(config_path: &Path, _ownership: &Ownership) -> Result<Valu
             "This was a first setup: there is nothing earlier to roll back to",
         ));
     }
-    let (old, new) = clients(&log.plan)?;
-    let mut migration = Migration {
-        path,
-        log,
-        old,
-        new,
-    };
+    let mut migration = Migration::new(path, log)?;
     migration.require_owned_pending()?;
     let outcome = migration.rollback().await;
     Ok(report(&migration.log, &migration.path, outcome))
@@ -1060,9 +1048,16 @@ mod tests {
         let config_path = dir.path().join("atlas.local.toml");
         let text = "helper_uid = 502\nsocket_path = \"s.sock\"\nidentity_probe = \"p\"\n\
                     input_socket = \"i.sock\"\noutput_dir = \"runs\"\n";
-        let (old, _) = clients(&plan(config_path, text)).unwrap();
+        let log = Log {
+            version: 1,
+            plan: plan(config_path, text),
+            state: State::Applying,
+            pending: Vec::new(),
+            history: Vec::new(),
+        };
+        let migration = Migration::new(dir.path().join("setup-502.json"), log).unwrap();
         assert_eq!(
-            old.config.socket_path,
+            migration.old.config.socket_path,
             fs::canonicalize(dir.path()).unwrap().join("s.sock")
         );
     }
