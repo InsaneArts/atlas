@@ -108,9 +108,9 @@ and takes them away again:
 
 - **Menu bar:** what the agent is doing, a live thumbnail, Open Viewer and
   Recover.
-- **Viewer** (`atlas monitor`): the helper in your browser, with each action
-  as it happens. **Control** takes the mouse and keyboard; **Watch** or
-  Ctrl–Shift–Esc gives them back.
+- **Viewer** (Open Viewer, or `atlas monitor`): the helper's screen in its own
+  window, with each action as it happens. **Control** takes the mouse and
+  keyboard; **Watch** or Control–Shift–Esc gives them back.
 
 ## Update and remove
 

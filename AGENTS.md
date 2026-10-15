@@ -6,7 +6,8 @@
   FFI that has none lives in a module or function marked
   allow(unsafe_code) with its reason, and every unsafe block has a SAFETY note.
 - All controlled applications, screenshots and injected events belong to the
-  configured hidden helper login. The browser viewer may run on the main desktop.
+  configured hidden helper login. Atlas.app's viewer window may run on the main
+  desktop.
 - Keep UID, graphical-session, off-console and exact display-epoch guards.
   Post only to the session event tap; never fall back to global HID input.
 - Use normal macOS consent. Do not modify TCC. The helper daemon is Atlas's
@@ -18,7 +19,8 @@
 - Preserve investigation evidence. docs/, runs/, local configuration and archived
   experiments stay untracked. Keep the remote focused on maintained source.
 - Run cargo fmt --all --check, cargo clippy --all-targets -- -D warnings,
-  cargo test, npm run format:check and npm test after relevant changes.
+  cargo test, npm run format:check and npm test after relevant changes; in
+  app/, swift test and swift format lint -rs Sources Tests (Swift 6 mode).
 - Unit checks are not desktop evidence. Exercise changed input behavior against
   the real helper and distinguish native windows/dialogs from custom test views.
 - Coordinate physical lock, sleep and user-switch transitions with the person.

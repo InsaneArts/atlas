@@ -45,7 +45,7 @@ not test on the person's desktop instead, and do not silently skip the check.
    before assuming you are signed in.
 
 When you start something long, tell the person they can watch it live from
-the Atlas menu bar item, or in the browser with `atlas monitor`.
+the Atlas menu bar item, or open the viewer window with `atlas monitor`.
 
 ## Look
 
