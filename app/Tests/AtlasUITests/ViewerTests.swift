@@ -226,7 +226,7 @@ func png(width: Int = 4, height: Int = 3) -> Data {
         model.refresh()
         await settle { model.lease == nil }
         #expect(model.lease == nil)
-        #expect(model.notice == "The helper changed. Choose Control again when ready.")
+        #expect(model.notice == "The helper changed. Take control again when ready.")
         model.close()
     }
 
@@ -287,6 +287,42 @@ func png(width: Int = 4, height: Int = 3) -> Data {
         model.close()
     }
 
+    @Test func theKeysMenuSendsTheKeyItNames() async throws {
+        let service = FakeService()
+        let model = await watching(service)
+        await model.takeControl()
+        let menu = KeysButton.menu(for: model)
+        let items = menu.items.compactMap { $0 as? KeyItem }
+        #expect(items.count == KeysButton.groups.joined().count)
+        let switchApp = try #require(items.first { $0.title == "Switch App" })
+        #expect(switchApp.keyEquivalent == "\t" && switchApp.keyEquivalentModifierMask == .command)
+        switchApp.fire()
+        try #require(items.first { $0.title == "Escape" }).fire()
+        await settle { service.actions.count == 2 }
+        #expect(service.actions == [[.key("cmd+tab")], [.key("escape")]])
+        model.releaseControl()
+        switchApp.fire()
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(service.actions.count == 2, "nothing is sent without control")
+        model.close()
+    }
+
+    @Test func captionsStepAsideForTheSidebarControlAndPause() async {
+        let service = FakeService()
+        service.reply = [
+            "ready": true, "canObserve": true,
+            "overview": ["mode": "observing", "activity": [["operation": "run", "ok": true, "ageSeconds": 1]]],
+        ]
+        let model = await watching(service)
+        #expect(model.captions.map(\.line) == ["Agent ran a command"])
+        model.sidebarShown = true
+        #expect(model.captions.isEmpty)
+        model.sidebarShown = false
+        await model.takeControl()
+        #expect(model.captions.isEmpty)
+        model.close()
+    }
+
     @Test func pasteIsLimited() async {
         let service = FakeService()
         let model = await watching(service)
@@ -308,7 +344,7 @@ func png(width: Int = 4, height: Int = 3) -> Data {
         #expect(model.recoveryDeferred)
         await model.recover()
         #expect(service.log.contains("recover"))
-        #expect(model.notice == "The helper was recovered. Choose Control again when ready.")
+        #expect(model.notice == "The helper was recovered. Take control again when ready.")
         model.close()
     }
 }

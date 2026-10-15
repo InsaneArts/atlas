@@ -8,51 +8,45 @@ import Observation
 /// which owns the helper's safety.
 @MainActor
 @Observable
-public final class ViewerModel {
-    public enum Tab: String, Sendable { case activity, session }
-
-    public private(set) var status = ViewerStatus()
+final class ViewerModel {
+    private(set) var status = ViewerStatus()
     /// Whether any status has been read yet.
-    public private(set) var hasStatus = false
+    private(set) var hasStatus = false
     /// The latest picture and what it was taken of.
-    public private(set) var frame: Frame?
-    public private(set) var image: NSImage?
+    private(set) var frame: Frame?
+    private(set) var image: NSImage?
     /// When the picture arrived, in seconds of uptime (never steps back).
-    public private(set) var frameAt: TimeInterval?
+    private(set) var frameAt: TimeInterval?
     /// Why the picture cannot be shown, when it cannot.
-    public private(set) var unavailable: String?
+    private(set) var unavailable: String?
     /// The helper accepts input (its status said so with the last picture).
-    public private(set) var ready = false
-    public private(set) var paused = false
-    public private(set) var recovering = false
+    private(set) var ready = false
+    private(set) var paused = false
+    private(set) var recovering = false
     /// One line about the last thing that happened, until the next.
-    public private(set) var notice: String?
+    private(set) var notice: String?
 
     /// Seconds between pictures while watching.
-    public var rate: Double = 2 {
+    var rate: Double = 2 {
         didSet {
             guard !still else { return }
             UserDefaults.standard.set(rate, forKey: Self.rateKey)
             refresh()
         }
     }
-    public var inspectorShown = false {
-        didSet { if !still { UserDefaults.standard.set(inspectorShown, forKey: Self.inspectorKey) } }
+    var sidebarShown = false {
+        didSet { if !still { UserDefaults.standard.set(sidebarShown, forKey: Self.sidebarKey) } }
     }
-    public var tab = Tab.activity
 
     // Control: the lease this window holds, and an acquisition under way.
-    public internal(set) var lease: String?
-    public internal(set) var acquiring = false
+    var lease: String?
+    var acquiring = false
     /// Text the input method is composing, not yet sent.
-    public internal(set) var composing = ""
+    var composing = ""
     /// The desktop takes the keyboard (while in control).
-    public internal(set) var keyboardConnected = false
-    /// Readiness details shown open, when the person chose; else open while
-    /// something is wrong.
-    public var detailsChosen: Bool?
+    var keyboardConnected = false
     /// The window is in full screen (its title bar buttons are hidden).
-    public internal(set) var fullScreen = false
+    var fullScreen = false
 
     /// The recovery alert set aside with Not Now, until its reason changes.
     @ObservationIgnored private var recoveryLater: String?
@@ -66,7 +60,8 @@ public final class ViewerModel {
     // Control's working parts (see ViewerModel+Control.swift).
     @ObservationIgnored var controlGeneration = 0
     @ObservationIgnored var heartbeat: Task<Void, Never>?
-    /// One heartbeat tick (tests shorten it); it renews every fifth tick.
+    /// One heartbeat tick (tests shorten it); the lease is renewed every
+    /// `renewEvery` ticks.
     @ObservationIgnored var heartbeatInterval: Duration = .milliseconds(500)
     @ObservationIgnored var gesture = PointerGesture()
     @ObservationIgnored var wheel = WheelAccumulator()
@@ -84,23 +79,27 @@ public final class ViewerModel {
     @ObservationIgnored let still: Bool
 
     static let rateKey = "viewer.rate"
-    static let inspectorKey = "viewer.inspector"
+    /// The saved setting keeps the sidebar's old name.
+    static let sidebarKey = "viewer.inspector"
+    static let rates: [Double] = [1, 2, 5]
+    /// Seconds between pictures while holding control.
+    static let controlRate = 0.5
 
-    public init(service: any ViewerService, still: Bool = false) {
+    init(service: any ViewerService, still: Bool = false) {
         self.service = service
         self.still = still
         let saved = UserDefaults.standard.double(forKey: Self.rateKey)
-        rate = [1, 2, 5].contains(saved) ? saved : 2
-        inspectorShown = UserDefaults.standard.bool(forKey: Self.inspectorKey)
+        rate = Self.rates.contains(saved) ? saved : 2
+        sidebarShown = UserDefaults.standard.bool(forKey: Self.sidebarKey)
         input.sink = self
     }
 
     // MARK: What the window shows
 
     var overview: Overview { Overview(status) }
-    public var holdingControl: Bool { lease != nil }
+    var holdingControl: Bool { lease != nil }
 
-    public var mode: Mode {
+    var mode: Mode {
         if paused { return Mode(label: "Paused", tone: .quiet, mark: .dimmed) }
         let mode = Mode.seen(by: status.overview, holdingControl: holdingControl)
         if unavailable != nil && mode.tone != .attention {
@@ -110,68 +109,69 @@ public final class ViewerModel {
     }
 
     /// The account name in the header.
-    public var account: String {
+    var account: String {
         status.overview.accountName ?? status.session.userName ?? status.overview.account ?? "Helper"
     }
 
     /// "Live", "Updated 4 s ago"…, read again each second by the header.
-    public func freshness() -> String {
-        if paused { return "Viewing paused" }
+    func freshness() -> String {
+        if paused { return "Picture paused" }
         if frame == nil && unavailable != nil { return "No picture" }
         return Words.freshness(frameAt.map { clock() - $0 })
     }
 
-    /// The latest actions over the desktop, while watching with the inspector closed.
-    public var captions: [ActivityItem] {
-        holdingControl || paused || inspectorShown ? [] : overview.captions()
+    /// The latest actions over the desktop, while watching with the sidebar closed.
+    var captions: [ActivityItem] {
+        holdingControl || paused || sidebarShown ? [] : overview.captions()
     }
 
     /// Why taking control must wait now, in words, if it must.
-    public var controlBlocked: String? {
+    var controlBlocked: String? {
         holdingControl ? nil : overview.controlBlocked(holdingControl: false)
     }
 
-    public var canTakeControl: Bool {
+    var canTakeControl: Bool {
         !acquiring && !holdingControl && ready && !paused && frame != nil && controlBlocked == nil && !recovering
     }
 
-    /// The recovery alert, unless set aside with Not Now.
-    public var recovery: Recovery? {
-        guard let recovery = overview.recovery(holdingControl: holdingControl, recovering: recovering),
-            recovery.busy || recoveryLater != laterKey(recovery)
-        else { return nil }
-        return recovery
+    /// The recovery alert the status calls for now, set aside or not.
+    private var recoveryOffered: Recovery? {
+        overview.recovery(holdingControl: holdingControl, recovering: recovering)
     }
 
-    /// Recovery was set aside: the dock offers it again.
-    public var recoveryDeferred: Bool {
-        guard let offered = overview.recovery(holdingControl: holdingControl, recovering: recovering) else {
-            return false
-        }
+    /// The recovery alert, unless set aside with Not Now.
+    var recovery: Recovery? {
+        guard let offered = recoveryOffered, offered.busy || recoveryLater != laterKey(offered) else { return nil }
+        return offered
+    }
+
+    /// Recovery was set aside: the footer offers it again.
+    var recoveryDeferred: Bool {
+        guard let offered = recoveryOffered else { return false }
         return !offered.busy && recoveryLater == laterKey(offered)
     }
 
-    private func laterKey(_ recovery: Recovery) -> String { "\(status.overview.mode):\(recovery.reason)" }
+    private func laterKey(_ recovery: Recovery) -> String { "\(status.overview.mode.rawValue):\(recovery.reason)" }
 
-    /// The line under the dock.
-    public var hint: String {
+    /// The line beside the footer's buttons.
+    var hint: String {
         if holdingControl {
             return keyboardConnected
-                ? "Keyboard connected. Press Control-Shift-Escape to give control back."
-                : "Click the desktop to connect your keyboard."
+                ? "Your mouse and keyboard go to the helper."
+                : "Click the helper's screen to connect your keyboard."
         }
         if acquiring { return "Connecting…" }
-        if paused { return "Viewing paused. Work in the helper continues." }
+        if paused { return "Picture paused. Work in the helper continues." }
         if let blocked = controlBlocked { return "\(blocked)." }
         if unavailable != nil { return "Control returns once the helper's screen is back." }
         if hasStatus && !ready && frame != nil { return "Mouse and keyboard aren't ready in the helper yet." }
-        return "Choose Control to use your mouse and keyboard."
+        return "Watching. Control-Shift-Escape takes control."
     }
 
     // MARK: Reading
 
     /// Read while the window is on screen and not paused; stop otherwise.
-    public func setActive(_ active: Bool) {
+    func setActive(_ active: Bool) {
         guard !still else { return }
         self.active = active
         generation += 1
@@ -191,7 +191,7 @@ public final class ViewerModel {
     }
 
     /// Read again now, or right after the reading under way.
-    public func refresh() {
+    func refresh() {
         dirty = true
         napping?.cancel()
     }
@@ -203,7 +203,7 @@ public final class ViewerModel {
             await poll(number)
             guard active, number == generation, !Task.isCancelled else { return }
             if dirty { continue }
-            let seconds = holdingControl ? 0.5 : rate
+            let seconds = holdingControl ? Self.controlRate : rate
             let nap = Task { _ = try? await Task.sleep(for: .seconds(seconds)) }
             napping = nap
             await nap.value
@@ -239,7 +239,7 @@ public final class ViewerModel {
                 throw ServiceError("The helper's screen size is unknown.")
             }
             if let frame, frame.revision != next.revision {
-                releaseControl("The helper changed. Choose Control again when ready.")
+                releaseControl("The helper changed. Take control again when ready.")
             }
             frame = next
             image = picture
@@ -253,7 +253,7 @@ public final class ViewerModel {
 
     /// What the panel last saw, shown while the first reading is under
     /// way. It is only a picture: control waits for a reading of its own.
-    public func begin(with status: ViewerStatus, image: NSImage?) {
+    func begin(with status: ViewerStatus, image: NSImage?) {
         guard !hasStatus, frame == nil else { return }
         self.status = status
         hasStatus = status != ViewerStatus()
@@ -261,7 +261,7 @@ public final class ViewerModel {
     }
 
     /// Read the status once, outside the picture loop, and show it.
-    public func readStatus() async {
+    func readStatus() async {
         statusReading += 1
         let reading = statusReading
         guard let reply = try? await service.status(), reading == statusReading else { return }
@@ -277,7 +277,7 @@ public final class ViewerModel {
             if holdingControl || acquiring { releaseControl("Mouse and keyboard permission is unavailable.") }
         }
         // Not Now covers one incident: once nothing needs recovery, a later one alerts again.
-        if overview.recovery(holdingControl: holdingControl, recovering: recovering) == nil { recoveryLater = nil }
+        if recoveryOffered == nil { recoveryLater = nil }
     }
 
     /// No picture: say why, and give control back.
@@ -296,12 +296,7 @@ public final class ViewerModel {
         notice = text
     }
 
-    /// Readiness details open: as the person chose, else while something is wrong.
-    public var detailsShown: Bool {
-        detailsChosen ?? (status.overview.mode == "blocked" || unavailable != nil)
-    }
-
-    public func togglePause() {
+    func togglePause() {
         paused.toggle()
         releaseControl()
         if !paused {
@@ -313,33 +308,28 @@ public final class ViewerModel {
     }
 
     /// Resume reading after the window was hidden, unless paused.
-    public func visible(_ shown: Bool) {
+    func visible(_ shown: Bool) {
         self.shown = shown
         if !shown { releaseControl() }
         setActive(shown && !paused)
     }
 
-    public func recoverLater() {
-        if let offered = overview.recovery(holdingControl: holdingControl, recovering: recovering) {
-            recoveryLater = laterKey(offered)
-        }
+    func recoverLater() {
+        if let offered = recoveryOffered { recoveryLater = laterKey(offered) }
     }
 
-    public func recoverNow() {
+    func recoverNow() {
         recoveryLater = nil
     }
 
     /// Recover the helper. Never while holding control; never repeats an action.
-    public func recover() async {
+    func recover() async {
         guard !recovering, !holdingControl else { return }
         recovering = true
         recoveryLater = nil
         do {
             let restarted = try await service.recover()
-            say(
-                restarted
-                    ? "The helper was recovered. Choose Control again when ready."
-                    : "The helper is ready again.")
+            say(restarted ? "The helper was recovered. Take control again when ready." : "The helper is ready again.")
         } catch {
             say(error.localizedDescription)
         }
@@ -350,7 +340,7 @@ public final class ViewerModel {
     }
 
     /// The window is closing: give control back and stop reading.
-    public func close() {
+    func close() {
         shown = false
         releaseControl()
         setActive(false)
@@ -359,10 +349,10 @@ public final class ViewerModel {
     // MARK: Drawing
 
     /// A viewer fixed at one state, for drawing it.
-    public static func still(
+    static func still(
         _ status: ViewerStatus, image: NSImage?, display: ViewerStatus.Size = .init(width: 1512, height: 982),
-        lease: String? = nil, paused: Bool = false, unavailable: String? = nil, inspector: Bool = false,
-        tab: Tab = .activity, notice: String? = nil
+        lease: String? = nil, paused: Bool = false, unavailable: String? = nil, sidebar: Bool = false,
+        notice: String? = nil
     ) -> ViewerModel {
         let model = ViewerModel(service: StillService(), still: true)
         model.status = status
@@ -376,8 +366,7 @@ public final class ViewerModel {
         model.lease = lease
         model.paused = paused
         model.unavailable = unavailable
-        model.inspectorShown = inspector
-        model.tab = tab
+        model.sidebarShown = sidebar
         model.notice = notice
         return model
     }

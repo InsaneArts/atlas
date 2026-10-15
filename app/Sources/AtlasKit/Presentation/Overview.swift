@@ -16,15 +16,15 @@ public struct Mode: Equatable, Sendable {
         self.mark = mark
     }
 
-    /// The service's mode name, as the person reads it.
-    public static func of(_ mode: String) -> Mode {
+    /// The helper's mode, as the person reads it.
+    public static func of(_ mode: HelperMode) -> Mode {
         switch mode {
-        case "observing": Mode(label: "Watching", tone: .ready, mark: .none)
-        case "agent": Mode(label: "Agent working", tone: .active, mark: .working)
-        case "controlling": Mode(label: "Viewer has control", tone: .active, mark: .filled)
-        case "recovering": Mode(label: "Needs you", tone: .attention, mark: .alert)
-        case "blocked": Mode(label: "Not ready", tone: .attention, mark: .dash)
-        default: Mode(label: "Unavailable", tone: .quiet, mark: .dimmed)
+        case .observing: Mode(label: "Watching", tone: .ready, mark: .none)
+        case .agent: Mode(label: "Agent working", tone: .active, mark: .working)
+        case .controlling: Mode(label: "Viewer has control", tone: .active, mark: .filled)
+        case .recovering: Mode(label: "Needs you", tone: .attention, mark: .alert)
+        case .blocked: Mode(label: "Not ready", tone: .attention, mark: .dash)
+        case .unavailable: Mode(label: "Unavailable", tone: .quiet, mark: .dimmed)
         }
     }
 
@@ -32,10 +32,10 @@ public struct Mode: Equatable, Sendable {
     /// holds control; a viewer knows whether it is that one.
     public static func seen(by overview: ViewerStatus.Overview, holdingControl: Bool) -> Mode {
         let mode = overview.mode
-        if holdingControl && mode != "recovering" && mode != "unavailable" {
+        if holdingControl && mode != .recovering && mode != .unavailable {
             return Mode(label: "You have control", tone: .active, mark: .filled)
         }
-        if mode == "controlling" && !holdingControl {
+        if mode == .controlling && !holdingControl {
             return Mode(label: "Another viewer has control", tone: .active, mark: .filled)
         }
         return of(mode)
@@ -69,6 +69,22 @@ public enum Words {
         guard let size, size.width > 0, size.height > 0 else { return nil }
         return "\(Int(size.width.rounded())) × \(Int(size.height.rounded()))"
     }
+
+    /// How fresh the picture is, from the age of the last one.
+    public static func freshness(_ age: Double?) -> String {
+        guard let age, age.isFinite else { return "Waiting for the first picture" }
+        if age < Freshness.live { return "Live" }
+        if age < Freshness.stale { return "Updated \(Int(age.rounded())) s ago" }
+        return "Picture is stale"
+    }
+}
+
+/// How old a picture may be, in seconds: the header and control agree on it.
+public enum Freshness {
+    /// Younger than this reads as live.
+    public static let live: Double = 3
+    /// This old, the picture is stale: the header says so and control ends.
+    public static let stale: Double = 6.5
 }
 
 /// One row of recent activity, as shown.
@@ -83,6 +99,22 @@ public struct ActivityItem: Equatable, Sendable, Identifiable {
     public let age: Double?
 
     public var line: String { "\(who) \(text)" }
+}
+
+/// One check in the viewer sidebar's Ready card.
+public struct StatusRow: Equatable, Sendable, Identifiable {
+    public enum State: Sendable { case ready, unknown, bad }
+    public let name: String
+    public let state: State
+    public let text: String
+    public var id: String { name }
+}
+
+/// The recovery alert: what it says, and whether recovery is running.
+public struct Recovery: Equatable, Sendable {
+    public let title: String
+    public let reason: String
+    public let busy: Bool
 }
 
 /// What the panel and viewer show of a status: one place, so they agree.
@@ -130,94 +162,33 @@ public struct Overview: Equatable, Sendable {
     /// Whether this viewer could take control now, and if not, why.
     func availability(holdingControl: Bool) -> String {
         if holdingControl { return "This window" }
-        switch status.overview.mode {
-        case "observing": return "Available"
-        case "controlling": return "Another window"
-        case "agent": return "Agent working"
-        case "recovering": return "After recovery"
-        case "blocked": return "Not ready"
-        default: return "Unavailable"
+        return switch status.overview.mode {
+        case .observing: "Available"
+        case .controlling: "Another window"
+        case .agent: "Agent working"
+        case .recovering: "After recovery"
+        case .blocked: "Not ready"
+        case .unavailable: "Unavailable"
         }
     }
 
     /// Why taking control must wait, if it must.
     public func controlBlocked(holdingControl: Bool) -> String? {
         switch status.overview.mode {
-        case "agent": "An agent is acting in the helper"
-        case "recovering": "Recover before taking control"
-        case "controlling" where !holdingControl: "Another viewer has control"
+        case .agent: "An agent is acting in the helper"
+        case .recovering: "Recover before taking control"
+        case .controlling where !holdingControl: "Another viewer has control"
         default: nil
         }
     }
 
-    /// The readiness summary: all checks, then native Save and Open panels.
-    public var readiness: (text: String, ok: Bool, native: String) {
-        let native =
-            switch status.overview.nativeDialogs {
-            case "passed": "Verified"
-            case "failed": "Failing"
-            default: "Not verified"
-            }
-        let checks = status.checks
-        guard !checks.isEmpty else { return ("Checking…", false, native) }
-        let ready = checks.filter { $0.ok == true }.count
-        let all = ready == checks.count
-        return (all ? "All checks passed" : "\(ready) of \(checks.count) ready", all, native)
-    }
-
-    /// Recovery is offered only without control, when something needs it.
-    func recoveryOffered(holdingControl: Bool) -> Bool {
-        !holdingControl && (status.overview.mode == "recovering" || status.overview.mode == "blocked")
-    }
-
-    /// The recovery alert's title.
-    var recoveryTitle: String {
-        status.overview.mode == "blocked" ? "The helper isn't ready" : "The last action's outcome is unknown"
-    }
-}
-
-/// How old a picture may be, in seconds: the header and control agree on it.
-public enum Freshness {
-    /// Younger than this reads as live.
-    public static let live: Double = 3
-    /// This old, the picture is stale: the header says so and control ends.
-    public static let stale: Double = 6.5
-}
-
-extension Words {
-    /// How fresh the picture is, from the age of the last one.
-    public static func freshness(_ age: Double?) -> String {
-        guard let age, age.isFinite else { return "Waiting for the first picture" }
-        if age < Freshness.live { return "Live" }
-        if age < Freshness.stale { return "Updated \(Int(age.rounded())) s ago" }
-        return "Picture is stale"
-    }
-}
-
-/// One readiness line in the viewer's Session tab.
-public struct StatusRow: Equatable, Sendable, Identifiable {
-    public enum State: Sendable { case ready, unknown, bad }
-    public let name: String
-    public let state: State
-    public let text: String
-    public var id: String { name }
-}
-
-/// The recovery alert: what it says, and whether recovery is running.
-public struct Recovery: Equatable, Sendable {
-    public let title: String
-    public let reason: String
-    public let busy: Bool
-}
-
-extension Overview {
-    /// The pill's sentence: why the helper is in its mode.
+    /// The sidebar's sentence: why the helper is in its mode.
     public func reason(holdingControl: Bool) -> String {
         let mode = status.overview.mode
-        if holdingControl && mode != "recovering" && mode != "unavailable" {
+        if holdingControl && mode != .recovering && mode != .unavailable {
             return "You have mouse and keyboard control"
         }
-        if mode == "controlling" { return "Another viewer has control" }
+        if mode == .controlling { return "Another viewer has control" }
         return status.overview.reason.isEmpty ? "Connecting to the helper" : status.overview.reason
     }
 
@@ -232,7 +203,7 @@ extension Overview {
             }
         }
         let native = status.capabilities.nativeDialogs
-        let age = native.ageSeconds.map { $0 < 90 ? "just now" : "\(Int(($0 / 60).rounded())) min ago" } ?? ""
+        let age = native.ageSeconds.map(Words.ago) ?? ""
         switch native.state {
         case "passed":
             rows.append(StatusRow(name: "Native dialogs", state: .ready, text: "Save and Open passed \(age)"))
@@ -247,13 +218,19 @@ extension Overview {
         return rows
     }
 
+    /// Recovery is offered only without control, when something needs it.
+    func recoveryOffered(holdingControl: Bool) -> Bool {
+        !holdingControl && (status.overview.mode == .recovering || status.overview.mode == .blocked)
+    }
+
     /// The recovery alert, if any: while recovering, or when offered.
     public func recovery(holdingControl: Bool, recovering: Bool) -> Recovery? {
         if recovering {
-            return Recovery(
-                title: "Recovering the helper", reason: "Restoring the helper.", busy: true)
+            return Recovery(title: "Recovering the helper", reason: "Restoring the helper.", busy: true)
         }
         guard recoveryOffered(holdingControl: holdingControl) else { return nil }
-        return Recovery(title: recoveryTitle, reason: reason(holdingControl: false), busy: false)
+        let title =
+            status.overview.mode == .blocked ? "The helper isn't ready" : "The last action's outcome is unknown"
+        return Recovery(title: title, reason: reason(holdingControl: false), busy: false)
     }
 }

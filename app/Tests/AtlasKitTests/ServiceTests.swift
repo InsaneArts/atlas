@@ -3,11 +3,6 @@ import Testing
 
 @testable import AtlasKit
 
-/// A status reply as the viewer service writes it.
-func status(_ reply: [String: Any]) throws -> ViewerStatus {
-    try JSONDecoder().decode(ViewerStatus.self, from: JSONSerialization.data(withJSONObject: reply))
-}
-
 @Suite struct StatusTests {
     @Test func aStatusReportDecodesIntoWhatThePanelShows() throws {
         let reading = try status([
@@ -24,7 +19,7 @@ func status(_ reply: [String: Any]) throws -> ViewerStatus {
         #expect(reading.ready)
         #expect(reading.session.userName == "atlastest")
         #expect(reading.session.inputReady)
-        #expect(reading.overview.mode == "controlling")
+        #expect(reading.overview.mode == .controlling)
         #expect(reading.overview.accountName == "Atlas Test")
         #expect(Words.size(reading.overview.display) == "2560 × 1440")
         #expect(Overview(reading).lastAction == "You sent 3 actions · 42 s ago")
@@ -32,13 +27,15 @@ func status(_ reply: [String: Any]) throws -> ViewerStatus {
 
     @Test func missingOrWrongFieldsFallBackToSafeDefaults() throws {
         let empty = try status([:])
-        #expect(empty.overview.mode == "unavailable")
+        #expect(empty.overview.mode == .unavailable)
         #expect(!empty.ready)
         #expect(Overview(empty).lastAction == "No recent actions")
         let odd = try status(["ready": "yes", "overview": ["mode": 3, "activity": "none"]])
         #expect(!odd.ready)
-        #expect(odd.overview.mode == "unavailable")
+        #expect(odd.overview.mode == .unavailable)
         #expect(odd.overview.activity.isEmpty)
+        let unknown = try status(["overview": ["mode": "dreaming"]])
+        #expect(unknown.overview.mode == .unavailable, "a mode this app does not know reads as unavailable")
     }
 
     @Test func aFailingNativeDialogCheckNamesItsStage() throws {

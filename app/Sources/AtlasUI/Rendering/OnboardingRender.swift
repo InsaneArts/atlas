@@ -5,7 +5,7 @@ import SwiftUI
 /// Every onboarding screen in a fixed state, by file name, for checking
 /// against the design without a real setup.
 @MainActor
-public func onboardingScreens() -> [(name: String, model: OnboardingModel, size: NSSize)] {
+func onboardingScreens() -> [(name: String, model: OnboardingModel, size: NSSize)] {
     func facts(_ reply: [String: Any]) -> OnboardingFacts {
         let data = (try? JSONSerialization.data(withJSONObject: reply)) ?? Data()
         return OnboardingFacts(json: data) ?? OnboardingFacts()
@@ -74,7 +74,7 @@ public func onboardingScreens() -> [(name: String, model: OnboardingModel, size:
         ("08-helper-allow", .still(asker(running: false, ax: false, screen: false)), card),
         ("09-helper-permissions", .still(asker(running: true, ax: true, screen: false)), card),
         (
-            "10-helper-guide", .still(asker(running: true, ax: false, screen: false), guiding: "Accessibility"),
+            "10-helper-guide", .still(asker(running: true, ax: false, screen: false), guiding: .accessibility),
             OnboardingWindow.side
         ),
         ("11-helper-done", .still(asker(running: true, ax: true, screen: true)), card),
@@ -85,16 +85,9 @@ public func onboardingScreens() -> [(name: String, model: OnboardingModel, size:
 @MainActor
 public func renderOnboarding(to directory: String) -> Bool {
     let folder = URL(fileURLWithPath: directory)
-    var drawn = true
-    for screen in onboardingScreens() {
-        let host = NSHostingView(rootView: OnboardingView(model: screen.model))
-        host.frame = NSRect(origin: .zero, size: screen.size)
-        guard let appearance = NSAppearance(named: .darkAqua), let data = png(of: host, appearance: appearance),
-            (try? data.write(to: folder.appendingPathComponent("\(screen.name).png"))) != nil
-        else {
-            drawn = false
-            continue
-        }
-    }
-    return drawn
+    return onboardingScreens().map { screen in
+        draw(
+            OnboardingView(model: screen.model), size: screen.size,
+            to: folder.appendingPathComponent("\(screen.name).png"))
+    }.allSatisfy { $0 }
 }

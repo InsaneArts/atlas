@@ -5,7 +5,7 @@ import ServiceManagement
 /// Contents/Library/LaunchAgents, registered with the system so Atlas runs
 /// whenever the person logs in, and follows the app through updates.
 public struct LoginItem: Sendable {
-    public static let plist = "com.insanearts.atlas.menubar.plist"
+    static let plist = "com.insanearts.atlas.menubar.plist"
 
     public init() {}
 

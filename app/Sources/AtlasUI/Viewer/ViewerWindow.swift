@@ -6,14 +6,16 @@ import SwiftUI
 /// reads only while on screen, and gives control back whenever it closes,
 /// hides or loses focus.
 @MainActor
-public final class ViewerWindow: NSObject, NSWindowDelegate {
+final class ViewerWindow: NSObject, NSWindowDelegate {
+    static let autosaveName = "AtlasViewer"
+
     let model: ViewerModel
     let window: NSWindow
     let closed: @MainActor (ViewerWindow) -> Void
     /// Open until closed, minimised included.
-    public private(set) var isOpen = false
+    private(set) var isOpen = false
 
-    public init(model: ViewerModel, closed: @escaping @MainActor (ViewerWindow) -> Void) {
+    init(model: ViewerModel, closed: @escaping @MainActor (ViewerWindow) -> Void) {
         self.model = model
         self.closed = closed
         window = NSWindow(
@@ -39,14 +41,14 @@ public final class ViewerWindow: NSObject, NSWindowDelegate {
         // The window keeps the size it is given; the content fills it.
         host.sizingOptions = []
         window.contentView = host
-        window.setFrameAutosaveName("AtlasViewer")
+        window.setFrameAutosaveName(Self.autosaveName)
     }
 
-    public var isKey: Bool { window.isKeyWindow }
+    var isKey: Bool { window.isKeyWindow }
 
-    public func show() {
+    func show() {
         NSApp.setActivationPolicy(.regular)
-        if !isOpen && !window.setFrameUsingName("AtlasViewer") { window.center() }
+        if !isOpen && !window.setFrameUsingName(Self.autosaveName) { window.center() }
         isOpen = true
         if window.isMiniaturized { window.deminiaturize(nil) }
         window.makeKeyAndOrderFront(nil)
@@ -55,26 +57,26 @@ public final class ViewerWindow: NSObject, NSWindowDelegate {
         model.visible(true)
     }
 
-    public func windowWillEnterFullScreen(_ notification: Notification) { model.fullScreen = true }
-    public func windowDidExitFullScreen(_ notification: Notification) { model.fullScreen = false }
+    func windowWillEnterFullScreen(_ notification: Notification) { model.fullScreen = true }
+    func windowDidExitFullScreen(_ notification: Notification) { model.fullScreen = false }
 
-    public func close() { window.close() }
+    func close() { window.close() }
 
     // Off screen (minimised, covered, or on another Space): stop reading
     // and give control back; on screen again: read again.
-    public func windowDidChangeOcclusionState(_ notification: Notification) {
+    func windowDidChangeOcclusionState(_ notification: Notification) {
         model.visible(window.occlusionState.contains(.visible) && window.isVisible)
     }
 
-    public func windowDidBecomeKey(_ notification: Notification) {
+    func windowDidBecomeKey(_ notification: Notification) {
         model.gainedFocus()
     }
 
-    public func windowDidResignKey(_ notification: Notification) {
+    func windowDidResignKey(_ notification: Notification) {
         model.lostFocus()
     }
 
-    public func windowWillClose(_ notification: Notification) {
+    func windowWillClose(_ notification: Notification) {
         isOpen = false
         model.close()
         Task { closed(self) }

@@ -2,7 +2,7 @@ import AtlasKit
 import Foundation
 import Testing
 
-/// Wait until `done` holds, for models that work in the background; after
+/// Wait until `done` holds, for code that works in the background; after
 /// two seconds the test fails with `message`.
 @MainActor
 func settle(_ message: String = "the condition never held", _ done: () -> Bool) async {
@@ -30,6 +30,7 @@ final class FakeCommands: CommandRunning, @unchecked Sendable {
     var ran: [[String]] { lock.withLock { log.map(\.0) } }
     var inputs: [Data?] { lock.withLock { log.map(\.1) } }
 
+    /// Change what `key` answers from now on.
     func answer(_ key: String, _ reply: String) {
         lock.withLock { answers[key] = reply }
     }

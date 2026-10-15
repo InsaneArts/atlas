@@ -3,11 +3,6 @@ import Testing
 
 @testable import AtlasKit
 
-/// Facts from a status reply as `atlas onboarding status` writes it.
-func facts(_ reply: [String: Any]) throws -> OnboardingFacts {
-    try #require(OnboardingFacts(json: JSONSerialization.data(withJSONObject: reply)))
-}
-
 @Suite struct OnboardingTests {
     func controller(_ helper: [String: Any]? = nil, finished: Bool = false) throws -> OnboardingFacts {
         var reply: [String: Any] = [

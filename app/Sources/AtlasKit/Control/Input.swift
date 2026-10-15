@@ -157,6 +157,13 @@ public struct WheelAccumulator: Sendable {
 /// A mouse button held and moved: down, moves while held, up. Repeated
 /// clicks in the same place soon after count up to a triple click.
 public struct PointerGesture: Sendable {
+    /// A click this soon after the last, in seconds, counts as a repeat.
+    static let repeatWithin = 0.5
+    /// A click this close to the last, in points, counts as a repeat.
+    static let repeatNear = 10.0
+    /// Moving further than this, in points, makes a press a drag.
+    static let dragFrom = 3.0
+
     struct Active {
         let button: MouseButton
         let count: Int
@@ -188,7 +195,9 @@ public struct PointerGesture: Sendable {
     {
         guard active == nil else { return nil }
         var count = 1
-        if let previous, previous.button == button, now - previous.at < 0.5, previous.point.distance(to: point) < 10 {
+        if let previous, previous.button == button, now - previous.at < Self.repeatWithin,
+            previous.point.distance(to: point) < Self.repeatNear
+        {
             count = min(3, previous.count + 1)
         }
         active = Active(button: button, count: count, from: point, last: point)
@@ -199,7 +208,7 @@ public struct PointerGesture: Sendable {
     public mutating func move(_ button: MouseButton, to point: DesktopPoint, modifiers: Modifiers) -> InputAction? {
         guard var current = active, current.button == button, point != current.last else { return nil }
         current.last = point
-        current.moved = current.moved || point.distance(to: current.from) > 3
+        current.moved = current.moved || point.distance(to: current.from) > Self.dragFrom
         active = current
         // Only the press carries the click count, as the service expects.
         return .pointer(
@@ -275,7 +284,7 @@ public final class InputQueue {
         guard pending.count < Self.limit else {
             sink?.inputFailed(
                 ServiceError(
-                    "Input is arriving faster than the helper can handle it. Choose Control again when ready."))
+                    "Input is arriving faster than the helper can handle it. Take control again when ready."))
             return
         }
         pending.append(Item(actions: actions, frame: frame, lease: owner, generation: generation))

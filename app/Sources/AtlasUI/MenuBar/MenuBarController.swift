@@ -5,12 +5,12 @@ import SwiftUI
 /// Atlas's menu bar item and its panel. The glyph follows the helper's
 /// mode; the panel reads the desktop only while it is open.
 @MainActor
-public final class MenuBarController: NSObject, NSPopoverDelegate {
+final class MenuBarController: NSObject, NSPopoverDelegate {
     let model: PanelModel
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let popover = NSPopover()
 
-    public init(model: PanelModel) {
+    init(model: PanelModel) {
         self.model = model
         super.init()
         let content = NSHostingController(rootView: PanelView(model: model))
@@ -45,11 +45,11 @@ public final class MenuBarController: NSObject, NSPopoverDelegate {
         }
     }
 
-    public func closePanel() {
+    func closePanel() {
         if popover.isShown { popover.performClose(nil) }
     }
 
-    public func popoverDidClose(_ notification: Notification) {
+    func popoverDidClose(_ notification: Notification) {
         model.watch(open: false)
     }
 }

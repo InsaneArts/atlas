@@ -3,16 +3,16 @@ import AtlasKit
 import SwiftUI
 
 /// The popover's content: status, desktop, facts and actions.
-public struct PanelView: View {
+struct PanelView: View {
     static let width: CGFloat = 320
 
     let model: PanelModel
 
-    public init(model: PanelModel) {
+    init(model: PanelModel) {
         self.model = model
     }
 
-    public var body: some View {
+    var body: some View {
         let mode = model.mode
         VStack(spacing: 12) {
             header(mode)

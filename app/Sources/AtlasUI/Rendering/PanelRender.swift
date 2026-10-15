@@ -13,7 +13,7 @@ public func renderPanel(service: any ViewerService, to path: String, appearance 
     async let reading = try? service.status()
     async let picture = try? service.frame()
     var status = await reading ?? ViewerStatus()
-    if let mode = environment["ATLAS_RENDER_MODE"], !mode.isEmpty {
+    if let mode = environment["ATLAS_RENDER_MODE"].flatMap(HelperMode.init(rawValue:)) {
         status.overview.mode = mode
     }
     let message = environment["ATLAS_RENDER_MESSAGE"].flatMap { $0.isEmpty ? nil : $0 }

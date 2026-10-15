@@ -5,9 +5,18 @@ import AtlasKit
 /// belongs to it. The service checks every action against the lease and
 /// the picture it was aimed at; this side only stops sending early.
 extension ViewerModel {
+    /// The lease is renewed every this many heartbeat ticks (2.5 s).
+    static let renewEvery = 5
+    /// Scroll events are gathered this long, then sent as whole lines.
+    static let scrollGathering: Duration = .milliseconds(70)
+    /// Code points one paste may carry, and one typed chunk the helper accepts.
+    static let pasteLimit = 2048
+    static let chunkLimit = 256
+    static let stalePicture = "The picture stopped updating. Wait for a fresh one, then take control again."
+
     /// Take control with the picture on screen. A reply that arrives after
     /// the person changed their mind, or left the window, is given back.
-    public func takeControl() async {
+    func takeControl() async {
         guard canTakeControl, let frame else { return }
         acquiring = true
         controlGeneration += 1
@@ -23,8 +32,8 @@ extension ViewerModel {
             acquiring = false
             input.activate(granted)
             say(nil)
-            // Renew every fifth tick (2.5 s); end control once the picture
-            // is stale, whether or not the person is still giving input.
+            // Renew now and then; end control once the picture is stale,
+            // whether or not the person is still giving input.
             heartbeat = Task { [weak self] in
                 var tick = 0
                 while !Task.isCancelled {
@@ -36,7 +45,7 @@ extension ViewerModel {
                         return
                     }
                     tick += 1
-                    if tick % 5 == 0 { await renew(granted) }
+                    if tick % Self.renewEvery == 0 { await renew(granted) }
                 }
             }
             refresh()
@@ -58,7 +67,7 @@ extension ViewerModel {
 
     /// Give control back: at once here, then to the service. Also cancels an
     /// acquisition still under way, whose late grant is then given back.
-    public func releaseControl(_ message: String? = nil) {
+    func releaseControl(_ message: String? = nil) {
         controlGeneration += 1
         let generation = controlGeneration
         let previous = lease
@@ -82,12 +91,12 @@ extension ViewerModel {
     }
 
     /// The window stopped taking the keyboard: control goes back.
-    public func lostFocus() {
+    func lostFocus() {
         focused = false
         releaseControl()
     }
 
-    public func gainedFocus() {
+    func gainedFocus() {
         focused = true
     }
 
@@ -99,8 +108,6 @@ extension ViewerModel {
         wheelSending?.cancel()
         wheelSending = nil
     }
-
-    static let stalePicture = "The picture stopped updating. Wait for a fresh one, then choose Control."
 
     /// The last picture is too old to aim input at.
     var pictureStale: Bool {
@@ -163,7 +170,7 @@ extension ViewerModel {
         wheelAt = point
         guard wheelSending == nil else { return }
         wheelSending = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(70))
+            try? await Task.sleep(for: Self.scrollGathering)
             guard let self, !Task.isCancelled else { return }
             wheelSending = nil
             let delta = wheel.take()
@@ -192,20 +199,20 @@ extension ViewerModel {
         return true
     }
 
-    /// A key from the dock (Escape, a shortcut).
-    public func sendKey(_ key: String) {
+    /// A key from the footer's Keys menu (Escape, a shortcut).
+    func sendKey(_ key: String) {
         enqueue([.key(key)])
     }
 
     /// Committed text, typed in order, in chunks the helper accepts.
     func send(text: String) {
         guard !text.isEmpty, canInput else { return }
-        guard text.unicodeScalars.count <= 2048 else {
+        guard text.unicodeScalars.count <= Self.pasteLimit else {
             say("Paste is limited to 2,048 characters at a time.")
             return
         }
         let chunks = textChunks(text)
-        guard chunks.allSatisfy({ $0.unicodeScalars.count <= 256 }) else {
+        guard chunks.allSatisfy({ $0.unicodeScalars.count <= Self.chunkLimit }) else {
             say("This text contains a character sequence too long to type.")
             return
         }
@@ -214,11 +221,11 @@ extension ViewerModel {
 }
 
 extension ViewerModel: InputSink {
-    public func send(lease: String, frame: String, actions: [InputAction]) async throws {
+    func send(lease: String, frame: String, actions: [InputAction]) async throws {
         try await service.input(lease: lease, frame: frame, actions: actions)
     }
 
-    public func inputSent() { refresh() }
+    func inputSent() { refresh() }
 
-    public func inputFailed(_ error: any Error) { releaseControl(error.localizedDescription) }
+    func inputFailed(_ error: any Error) { releaseControl(error.localizedDescription) }
 }

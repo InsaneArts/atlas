@@ -2,6 +2,36 @@ import AppKit
 import AtlasKit
 import Observation
 
+/// One of the two permissions Atlas needs in the helper, and where System
+/// Settings keeps its switch.
+enum Permission: String, CaseIterable, Sendable {
+    case accessibility = "Accessibility"
+    case screenRecording = "Screen Recording"
+
+    var title: String { rawValue }
+
+    /// "1 of 2", as the guide panel counts them.
+    var number: Int { (Permission.allCases.firstIndex(of: self) ?? 0) + 1 }
+
+    /// The Privacy & Security page that holds the switch.
+    var settingsURL: URL? {
+        let anchor =
+            switch self {
+            case .accessibility: "Privacy_Accessibility"
+            case .screenRecording: "Privacy_ScreenCapture"
+            }
+        return URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)")
+    }
+
+    /// Whether `asker` (this account, in the helper) has it.
+    func granted(to asker: OnboardingFacts.Asker) -> Bool {
+        switch self {
+        case .accessibility: asker.accessibility
+        case .screenRecording: asker.screenCapture
+        }
+    }
+}
+
 /// The onboarding window's state: the facts `atlas onboarding status`
 /// reports (read again every moment while the window is open), the person's
 /// choices, and what is running now. Every action is an `atlas` command; the
@@ -9,47 +39,50 @@ import Observation
 @MainActor
 @Observable
 public final class OnboardingModel {
-    public private(set) var facts = OnboardingFacts()
-    public var choices = OnboardingChoices()
-    public private(set) var loaded = false
+    /// How often the facts are read while the window is open.
+    static let readEvery: Duration = .seconds(1.5)
+
+    private(set) var facts = OnboardingFacts()
+    var choices = OnboardingChoices()
+    private(set) var loaded = false
     /// The command running now, if any, in words.
-    public private(set) var working: String?
+    private(set) var working: String?
     /// What went wrong last, in one line.
-    public var problem: String?
+    var problem: String?
 
     // Choosing a helper.
-    public var picked: String?
-    public var fullName = "Atlas"
-    public var accountName = "atlas"
-    public var password = ""
-    public var verify = ""
+    var picked: String?
+    var fullName = "Atlas"
+    var accountName = "atlas"
+    var password = ""
+    var verify = ""
 
     // Finishing.
-    public enum Finish: Equatable, Sendable { case idle, running, passed, failed(String) }
-    public private(set) var finish = Finish.idle
+    enum Finish: Equatable, Sendable { case idle, running, passed, failed(String) }
+    private(set) var finish = Finish.idle
 
     // Agents.
-    public struct AgentChoice: Identifiable, Equatable, Sendable {
-        public let id: String
-        public let title: String
-        public var found = false
-        public var connected = false
-        public var on = false
+    struct AgentChoice: Identifiable, Equatable, Sendable {
+        let id: String
+        let title: String
+        var found = false
+        var connected = false
+        var on = false
     }
-    public var agents: [AgentChoice] = []
+    var agents: [AgentChoice] = []
     /// Whether `atlas agents status` has said which agents are installed.
-    public private(set) var agentsLoaded = false
-    public var projects: [URL] = []
-    public private(set) var taught: [URL] = []
+    private(set) var agentsLoaded = false
+    var projects: [URL] = []
+    private(set) var taught: [URL] = []
 
     // Done.
-    public var openAtLogin = true
+    var openAtLogin = true
 
-    /// The side panel beside System Settings, while it is open.
-    public var guiding: String?
+    /// The permission the guide panel beside System Settings is about, while it is open.
+    var guiding: Permission?
 
     /// Closes the window (set by it).
-    @ObservationIgnored public var close: (@MainActor () -> Void)?
+    @ObservationIgnored var close: (@MainActor () -> Void)?
 
     @ObservationIgnored let commands: any CommandRunning
     @ObservationIgnored private var polling: Task<Void, Never>?
@@ -68,29 +101,30 @@ public final class OnboardingModel {
         self.still = still
     }
 
-    public var step: OnboardingStep { onboardingStep(facts, choices) }
+    var step: OnboardingStep { onboardingStep(facts, choices) }
 
     // MARK: Reading
 
-    /// Read the facts now and then every 1.5 s until `stop()`.
-    public func start() {
+    /// Read the facts now and then every `readEvery` until `stop()`.
+    func start() {
         guard !still, polling == nil else { return }
         closed = false
         polling = Task { [weak self] in
-            // Ends once cancelled or once the model is gone.
-            while !Task.isCancelled, await self?.read() != nil {
-                try? await Task.sleep(for: .seconds(1.5))
+            // Ends once cancelled, or once the model is gone.
+            while !Task.isCancelled, let model = self {
+                await model.read()
+                try? await Task.sleep(for: Self.readEvery)
             }
         }
     }
 
-    public func stop() {
+    func stop() {
         polling?.cancel()
         polling = nil
     }
 
     /// Read the facts again soon: now, or right after the reading under way.
-    public func refresh() {
+    func refresh() {
         guard !still, !closed else { return }
         if reading {
             readAgain = true
@@ -139,13 +173,13 @@ public final class OnboardingModel {
         default: break
         }
         // The switch is on (or the step moved on): the side panel steps aside.
-        if let pane = guiding, step != .permissions || granted(pane) {
+        if let permission = guiding, step != .permissions || granted(permission) {
             guiding = nil
         }
     }
 
-    func granted(_ pane: String) -> Bool {
-        pane == "Accessibility" ? facts.asker.accessibility : facts.asker.screenCapture
+    func granted(_ permission: Permission) -> Bool {
+        permission.granted(to: facts.asker)
     }
 
     /// Run one command, with its words shown while it runs; one at a time.
@@ -163,9 +197,9 @@ public final class OnboardingModel {
 
     // MARK: The person's account
 
-    public func begin() { choices.started = true }
+    func begin() { choices.started = true }
 
-    public func useHelper() async {
+    func useHelper() async {
         guard let picked else { return }
         if picked.isEmpty {
             choices.creating = true
@@ -174,7 +208,7 @@ public final class OnboardingModel {
         }
     }
 
-    public var passwordProblem: String? {
+    var passwordProblem: String? {
         if password.utf8.count > 256 { return "Use a password of at most 256 characters." }
         if password.unicodeScalars.contains(where: { $0.properties.generalCategory == .control }) {
             return "Use a password without control characters."
@@ -183,12 +217,12 @@ public final class OnboardingModel {
         return password == verify ? nil : "The two passwords are different."
     }
 
-    public var canCreate: Bool {
+    var canCreate: Bool {
         !fullName.isEmpty && !accountName.isEmpty && !password.isEmpty && password == verify
             && passwordProblem == nil
     }
 
-    public func createAccount() async {
+    func createAccount() async {
         guard canCreate, working == nil else { return }
         var secret = Data(password.utf8)
         secret.append(0x0A)
@@ -201,7 +235,7 @@ public final class OnboardingModel {
         secret.resetBytes(in: 0..<secret.count)
     }
 
-    public func lockAndSwitch() async {
+    func lockAndSwitch() async {
         await act(["switch", facts.helper.name, "--yes"], "Locking the screen…")
     }
 
@@ -214,7 +248,7 @@ public final class OnboardingModel {
         }
     }
 
-    public func retryFinish() {
+    func retryFinish() {
         finish = .idle
         runFinish()
     }
@@ -244,7 +278,7 @@ public final class OnboardingModel {
         }
     }
 
-    public func chooseProject() {
+    func chooseProject() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -255,13 +289,13 @@ public final class OnboardingModel {
         for url in panel.urls where !projects.contains(url) { projects.append(url) }
     }
 
-    public func removeProject(_ url: URL) {
+    func removeProject(_ url: URL) {
         projects.removeAll { $0 == url }
     }
 
     /// Connect the chosen agents, then teach each chosen project; a project
     /// that cannot be taught is named, and the rest still follow.
-    public func connectAgents() async {
+    func connectAgents() async {
         let chosen = agents.filter { $0.on && $0.found && !$0.connected }
         if !chosen.isEmpty {
             guard
@@ -290,7 +324,7 @@ public final class OnboardingModel {
 
     /// Done: set Open at Login, open Atlas, then close the window; on any
     /// failure the window stays, saying why.
-    public func complete() async {
+    func complete() async {
         guard let login = await act(["onboarding", "login", openAtLogin ? "on" : "off"], "Finishing…"), login.ok,
             let started = await act(["menubar"], "Opening Atlas…"), started.ok
         else { return }
@@ -300,30 +334,26 @@ public final class OnboardingModel {
     // MARK: The helper's account
 
     /// Allow exactly the account shown: a request changed since is refused.
-    public func allow() async {
+    func allow() async {
         let asker = facts.asker
         await act(
             ["onboarding", "accept", "--controller-uid", String(asker.uid), "--controller-name", asker.name],
             "Setting Atlas up in this account…")
     }
 
-    /// Open a Privacy & Security page, with the side panel beside it.
-    public func openSettings(_ pane: String) {
-        let anchor = pane == "Accessibility" ? "Privacy_Accessibility" : "Privacy_ScreenCapture"
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") {
-            NSWorkspace.shared.open(url)
-        }
-        guiding = pane
+    /// Open the permission's Privacy & Security page, with the guide panel beside it.
+    func openSettings(_ permission: Permission) {
+        if let url = permission.settingsURL { NSWorkspace.shared.open(url) }
+        guiding = permission
     }
 
-    public var nextPermission: String? {
-        if !facts.asker.accessibility { return "Accessibility" }
-        if !facts.asker.screenCapture { return "Screen Recording" }
-        return nil
+    /// The first permission still to allow, if any.
+    var nextPermission: Permission? {
+        Permission.allCases.first { !granted($0) }
     }
 
     /// Lock this account for the switch back; the window's work here is done.
-    public func switchBack() async {
+    func switchBack() async {
         let name = facts.asker.name
         let arguments = name.isEmpty ? ["switch", "--lock", "--yes"] : ["switch", name, "--yes"]
         if let outcome = await act(arguments, "Locking the screen…"), outcome.ok { close?() }
@@ -342,7 +372,7 @@ public final class OnboardingModel {
     }
 
     /// The window closed: stop reading, start nothing new, and clear the mark.
-    public func closing() async {
+    func closing() async {
         closed = true
         stop()
         if facts.role == .helper, !still {
@@ -353,9 +383,9 @@ public final class OnboardingModel {
     // MARK: Drawing
 
     /// A model fixed at one state, for drawing the screens.
-    public static func still(
+    static func still(
         _ facts: OnboardingFacts, _ choices: OnboardingChoices = .init(),
-        finish: Finish = .idle, working: String? = nil, guiding: String? = nil
+        finish: Finish = .idle, working: String? = nil, guiding: Permission? = nil
     ) -> OnboardingModel {
         let model = OnboardingModel(commands: Commands(executable: URL(fileURLWithPath: "/usr/bin/false")), still: true)
         model.facts = facts

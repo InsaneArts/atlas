@@ -20,18 +20,18 @@ import Testing
     }
 
     @Test func everyModeHasALabelToneAndMark() {
-        #expect(Mode.of("observing").tone == .ready)
-        #expect(Mode.of("controlling").mark == .filled)
-        #expect(Mode.of("recovering").tone == .attention)
-        #expect(Mode.of("anything else").label == "Unavailable")
+        #expect(Mode.of(.observing).tone == .ready)
+        #expect(Mode.of(.controlling).mark == .filled)
+        #expect(Mode.of(.recovering).tone == .attention)
+        #expect(Mode.of(.unavailable).label == "Unavailable")
     }
 
     @Test func aViewerKnowsWhetherItHoldsControl() {
         var overview = ViewerStatus.Overview()
-        overview.mode = "controlling"
+        overview.mode = .controlling
         #expect(Mode.seen(by: overview, holdingControl: true).label == "You have control")
         #expect(Mode.seen(by: overview, holdingControl: false).label == "Another viewer has control")
-        overview.mode = "recovering"
+        overview.mode = .recovering
         #expect(Mode.seen(by: overview, holdingControl: true).label == "Needs you")
     }
 }
@@ -59,17 +59,6 @@ import Testing
         #expect(try overview("observing").controlBlocked(holdingControl: false) == nil)
         #expect(try overview("recovering").recoveryOffered(holdingControl: false))
         #expect(try !overview("recovering").recoveryOffered(holdingControl: true))
-    }
-
-    @Test func readinessCountsChecks() throws {
-        let reading = try status([
-            "checks": [["name": "input", "ok": true], ["name": "capture", "ok": NSNull()]],
-            "overview": ["nativeDialogs": "passed"],
-        ])
-        let readiness = Overview(reading).readiness
-        #expect(readiness.text == "1 of 2 ready")
-        #expect(!readiness.ok)
-        #expect(readiness.native == "Verified")
     }
 }
 

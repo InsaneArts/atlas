@@ -7,16 +7,16 @@ import SwiftUI
 /// Settings beside it. It has a Dock icon while open, like any app window.
 @MainActor
 public final class OnboardingWindow: NSObject, NSWindowDelegate {
-    public static let card = NSSize(width: 720, height: 540)
-    public static let side = NSSize(width: 360, height: 500)
+    static let card = NSSize(width: 720, height: 540)
+    static let side = NSSize(width: 360, height: 500)
 
     let model: OnboardingModel
     let window: NSWindow
     let closed: @MainActor (OnboardingWindow) -> Void
     /// Open until closed.
-    public private(set) var isOpen = false
+    private(set) var isOpen = false
     /// Whether the window takes the keyboard now.
-    public var isKey: Bool { window.isKeyWindow }
+    var isKey: Bool { window.isKeyWindow }
 
     /// `closed` runs once the window has closed and its model has stopped.
     public init(model: OnboardingModel, closed: @escaping @MainActor (OnboardingWindow) -> Void) {
@@ -76,7 +76,7 @@ public final class OnboardingWindow: NSObject, NSWindowDelegate {
         }
     }
 
-    public func close() { window.close() }
+    func close() { window.close() }
 
     /// The app settles its Dock icon once `closed` has run.
     public func windowWillClose(_ notification: Notification) {
