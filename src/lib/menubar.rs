@@ -81,25 +81,16 @@ pub async fn launch(config: &Path, port: u16, output: &Path) -> Result<(bool, se
     let deadline = std::time::Instant::now() + Duration::from_secs(20);
     loop {
         if let Some(status) = child.try_wait()? {
-            let reply = last_reply(&log_path);
-            if status.success()
-                && reply
-                    .as_ref()
-                    .is_some_and(|reply| reply["alreadyRunning"] == true)
-            {
-                return Ok((
-                    true,
-                    reply.map(|reply| reply["pid"].clone()).unwrap_or_default(),
-                ));
-            }
-            let code = reply
-                .as_ref()
-                .and_then(|reply| reply["code"].as_str())
+            let reply = last_reply(&log_path).unwrap_or_default();
+            let already = status.success() && reply["alreadyRunning"] == true;
+            let code = reply["code"]
+                .as_str()
                 .and_then(crate::error::code)
                 .unwrap_or("menubar");
-            // The login item may have taken the port a moment before its
-            // record appears: give it a few seconds.
-            if code == "port-in-use" {
+            // Another menu bar holds the port (the one that just stopped said
+            // so, or the login item took it a moment before its record
+            // appeared): give its record a few seconds.
+            if already || code == "port-in-use" {
                 for _ in 0..25 {
                     if let Some(running) = crate::viewer::running(&record, port) {
                         return Ok((true, running));
@@ -107,17 +98,23 @@ pub async fn launch(config: &Path, port: u16, output: &Path) -> Result<(bool, se
                     tokio::time::sleep(Duration::from_millis(200)).await;
                 }
             }
-            let reason = reply
-                .as_ref()
-                .and_then(|reply| reply["error"].as_str().map(str::to_owned))
-                .unwrap_or_else(|| format!("it stopped; see {}", log_path.display()));
+            let reason = if already {
+                format!("another menu bar holds port {port} but did not answer")
+            } else {
+                reply["error"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| format!("it stopped; see {}", log_path.display()))
+            };
             return Err(Error::new(
                 code,
                 format!("The menu bar did not start: {reason}"),
             ));
         }
-        if crate::viewer::running(&record, port).is_some_and(|running| running["pid"] == pid) {
-            return Ok((false, pid.into()));
+        if let Some(running) =
+            crate::viewer::running(&record, port).filter(|running| running["pid"] == pid)
+        {
+            return Ok((false, running));
         }
         if std::time::Instant::now() >= deadline {
             // Never leave a half-started menu bar behind.
@@ -220,17 +217,6 @@ fn is_atlas(pid: i32) -> bool {
         })
 }
 
-/// The first non-empty line of compiler output, bounded for reports.
-fn first_line(output: &[u8]) -> String {
-    String::from_utf8_lossy(output)
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or("no output")
-        .chars()
-        .take(300)
-        .collect()
-}
-
 /// The app shipped beside `executable` in Atlas.app, if this is the
 /// bundle's `atlas` and the app is there as a regular file.
 fn bundled(executable: &Path) -> Option<PathBuf> {
@@ -267,7 +253,11 @@ fn development() -> Result<PathBuf> {
     if !built.status.success() {
         return Err(Error::new(
             "menubar",
-            format!("The menu bar did not build: {}", first_line(&built.stderr)),
+            format!(
+                "The menu bar did not build: {}",
+                crate::ui::text::first_line(&built.stderr, 300)
+                    .unwrap_or_else(|| "no output".to_owned())
+            ),
         ));
     }
     let bin = swift(&["build", "-c", "release", "--show-bin-path"])?;
@@ -502,6 +492,5 @@ mod tests {
             render_args("/tmp/a.png", true),
             ["--render", "/tmp/a.png", "--dark"]
         );
-        assert_eq!(first_line(b"\n\nerror: x\nmore"), "error: x");
     }
 }
