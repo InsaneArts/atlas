@@ -174,14 +174,12 @@ public struct Commands: CommandRunning {
 public enum Action: Sendable, Equatable {
     case switchToHelper(String)
     case recover
-    case doctor
 
     public var arguments: [String] {
         switch self {
         // The person clicked Switch: that is the confirmation.
         case .switchToHelper(let account): ["switch", account, "--yes"]
         case .recover: ["restart"]
-        case .doctor: ["doctor"]
         }
     }
 }

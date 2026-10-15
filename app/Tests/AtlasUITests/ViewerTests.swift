@@ -14,57 +14,9 @@ func png(width: Int = 4, height: Int = 3) -> Data {
     return bitmap?.representation(using: .png, properties: [:]) ?? Data()
 }
 
-/// A viewer service that answers from fixed replies, can hold its status
-/// reply until told, and records what it was asked.
-@MainActor
-final class ScriptedService: ViewerService, @unchecked Sendable {
-    nonisolated let base = URL(string: "http://127.0.0.1:1/x/")!
-    var reply: [String: Any] = ["ready": true, "canObserve": true, "overview": ["mode": "observing"]]
-    var revision = "r1"
-    var picture = Data()
-    var holdStatus = false
-    var failStatus = false
-    var held: CheckedContinuation<Void, Never>?
-    var statusCalls = 0
-    var log: [String] = []
-
-    func status() async throws -> ViewerStatus {
-        statusCalls += 1
-        if holdStatus {
-            holdStatus = false
-            await withCheckedContinuation { held = $0 }
-        }
-        if failStatus { throw ServiceError("late network error") }
-        return try JSONDecoder().decode(ViewerStatus.self, from: JSONSerialization.data(withJSONObject: reply))
-    }
-
-    func frame() async throws -> Frame {
-        Frame(png: picture, id: "frame-\(statusCalls)", revision: revision, display: .init(width: 1512, height: 982))
-    }
-
-    func acquire(frame: String) async throws -> String {
-        log.append("acquire \(frame)")
-        return "lease"
-    }
-    func renew(lease: String, frame: String) async throws { log.append("renew") }
-    func release(lease: String) async throws { log.append("release \(lease)") }
-    func revoke() async throws { log.append("revoke") }
-    func input(lease: String, frame: String, actions: [InputAction]) async throws {
-        log.append("input \(lease) \(actions.count)")
-    }
-    func recover() async throws -> Bool {
-        log.append("recover")
-        return true
-    }
-}
-
 @MainActor
 @Suite struct ViewerModelTests {
-    func settle(_ done: () -> Bool = { false }) async {
-        for _ in 0..<100 where !done() { try? await Task.sleep(for: .milliseconds(5)) }
-    }
-
-    func watching(_ service: ScriptedService) async -> ViewerModel {
+    func watching(_ service: FakeService) async -> ViewerModel {
         service.picture = png()
         let model = ViewerModel(service: service)
         // A fixed clock: pictures never age, however slowly the tests run.
@@ -75,7 +27,7 @@ final class ScriptedService: ViewerService, @unchecked Sendable {
     }
 
     @Test func aReadingShowsTheStatusAndThePicture() async {
-        let service = ScriptedService()
+        let service = FakeService()
         let model = await watching(service)
         #expect(model.frame != nil)
         #expect(model.image != nil)
@@ -85,8 +37,8 @@ final class ScriptedService: ViewerService, @unchecked Sendable {
         model.close()
     }
 
-    @Test func theMenuBarsPictureShowsAtOnceButControlWaitsForAReading() async throws {
-        let service = ScriptedService()
+    @Test func thePanelsPictureShowsAtOnceButControlWaitsForAReading() async throws {
+        let service = FakeService()
         service.picture = png()
         let model = ViewerModel(service: service)
         model.clock = { 0 }
@@ -94,7 +46,7 @@ final class ScriptedService: ViewerService, @unchecked Sendable {
             ViewerStatus.self, from: Data(#"{"ready": true, "overview": {"mode": "observing"}}"#.utf8))
         model.begin(with: status, image: NSImage(data: png()))
         #expect(model.image != nil)
-        #expect(!model.canTakeControl, "a picture from the menu bar names no frame")
+        #expect(!model.canTakeControl, "a picture from the panel names no frame")
         model.visible(true)
         await settle { model.frame != nil }
         #expect(model.canTakeControl)
@@ -102,17 +54,17 @@ final class ScriptedService: ViewerService, @unchecked Sendable {
     }
 
     @Test func pausingDropsAReadingStillUnderWayAndResumingReadsOnce() async {
-        let service = ScriptedService()
-        service.holdStatus = true
+        let service = FakeService()
+        service.hold = ["status"]
         service.picture = png()
         let model = ViewerModel(service: service)
         model.visible(true)
-        await settle { service.held != nil }
+        await settle { service.held["status"] != nil }
         model.togglePause()
         model.togglePause()
         model.togglePause()
-        service.held?.resume()
-        await settle()
+        service.resume("status")
+        await settle { service.answered == 1 }
         #expect(model.frame == nil, "the paused window shows no late picture")
         #expect(model.paused)
         model.togglePause()
@@ -122,21 +74,21 @@ final class ScriptedService: ViewerService, @unchecked Sendable {
     }
 
     @Test func aLateFailureCannotOverwriteAPausedViewer() async {
-        let service = ScriptedService()
-        service.holdStatus = true
-        service.failStatus = true
+        let service = FakeService()
+        service.hold = ["status"]
+        service.fail = ["status"]
         let model = ViewerModel(service: service)
         model.visible(true)
-        await settle { service.held != nil }
+        await settle { service.held["status"] != nil }
         model.togglePause()
-        service.held?.resume()
-        await settle()
+        service.resume("status")
+        await settle { service.answered == 1 }
         #expect(model.unavailable == nil)
         model.close()
     }
 
     @Test func aStatusThatCannotObserveSaysWhy() async {
-        let service = ScriptedService()
+        let service = FakeService()
         service.reply = ["canObserve": false, "nextSteps": ["Sign in to the helper."]]
         let model = ViewerModel(service: service)
         model.visible(true)
@@ -147,7 +99,7 @@ final class ScriptedService: ViewerService, @unchecked Sendable {
     }
 
     @Test func takingControlHoldsALeaseAndGivingItBackReleasesIt() async {
-        let service = ScriptedService()
+        let service = FakeService()
         let model = await watching(service)
         await model.takeControl()
         #expect(model.lease == "lease")
@@ -161,7 +113,7 @@ final class ScriptedService: ViewerService, @unchecked Sendable {
     }
 
     @Test func leavingTheWindowGivesControlBack() async {
-        let service = ScriptedService()
+        let service = FakeService()
         let model = await watching(service)
         await model.takeControl()
         model.lostFocus()
@@ -170,7 +122,7 @@ final class ScriptedService: ViewerService, @unchecked Sendable {
     }
 
     @Test func aGrantThatArrivesAfterLeavingIsGivenBack() async {
-        let service = ScriptedService()
+        let service = FakeService()
         let model = await watching(service)
         model.gainedFocus()
         let taking = Task { await model.takeControl() }
@@ -182,8 +134,25 @@ final class ScriptedService: ViewerService, @unchecked Sendable {
         model.close()
     }
 
+    @Test(arguments: [true, false])
+    func aGrantThatArrivesWhileHiddenOrPausedIsGivenBack(hidden: Bool) async {
+        let service = FakeService()
+        let model = await watching(service)
+        service.hold = ["acquire"]
+        let taking = Task { await model.takeControl() }
+        await settle { service.held["acquire"] != nil }
+        #expect(model.acquiring)
+        if hidden { model.visible(false) } else { model.togglePause() }
+        service.resume("acquire")
+        await taking.value
+        #expect(model.lease == nil)
+        #expect(!model.acquiring)
+        await settle { service.log.contains("release lease") }
+        model.close()
+    }
+
     @Test func controlCanBeTakenAgainAfterComingBackToTheWindow() async {
-        let service = ScriptedService()
+        let service = FakeService()
         let model = await watching(service)
         await model.takeControl()
         model.lostFocus()
@@ -194,7 +163,7 @@ final class ScriptedService: ViewerService, @unchecked Sendable {
     }
 
     @Test func aStatusThatIsNotReadyEndsControlAtOnce() async {
-        let service = ScriptedService()
+        let service = FakeService()
         let model = await watching(service)
         await model.takeControl()
         service.reply = ["ready": false, "canObserve": true, "overview": ["mode": "observing"]]
@@ -205,7 +174,7 @@ final class ScriptedService: ViewerService, @unchecked Sendable {
     }
 
     @Test func hidingTheWindowGivesControlBack() async {
-        let service = ScriptedService()
+        let service = FakeService()
         let model = await watching(service)
         await model.takeControl()
         model.visible(false)
@@ -214,19 +183,43 @@ final class ScriptedService: ViewerService, @unchecked Sendable {
     }
 
     @Test func aStalePictureEndsControlWithoutFurtherInput() async {
-        let service = ScriptedService()
+        let service = FakeService()
         let model = await watching(service)
+        model.heartbeatInterval = .milliseconds(5)
         await model.takeControl()
         model.setActive(false)
-        model.clock = { 10 }
+        model.clock = { Freshness.stale }
+        #expect(!model.canInput)
         await settle { model.lease == nil }
-        #expect(model.lease == nil)
-        #expect(model.notice == "The picture stopped updating. Wait for a fresh one, then choose Control.")
+        #expect(model.notice == ViewerModel.stalePicture)
+        model.close()
+    }
+
+    @Test func aFailedRenewalEndsControl() async {
+        let service = FakeService()
+        let model = await watching(service)
+        model.heartbeatInterval = .milliseconds(5)
+        service.fail = ["renew"]
+        await model.takeControl()
+        await settle { model.lease == nil }
+        #expect(service.log.contains("renew"))
+        #expect(model.notice == "renew failed")
+        model.close()
+    }
+
+    @Test func anInputThatFailsEndsControl() async {
+        let service = FakeService()
+        let model = await watching(service)
+        service.fail = ["input"]
+        await model.takeControl()
+        model.sendKey("escape")
+        await settle { model.lease == nil }
+        #expect(model.notice == "input failed")
         model.close()
     }
 
     @Test func aChangedHelperEndsControl() async {
-        let service = ScriptedService()
+        let service = FakeService()
         let model = await watching(service)
         await model.takeControl()
         service.revision = "r2"
@@ -238,7 +231,7 @@ final class ScriptedService: ViewerService, @unchecked Sendable {
     }
 
     @Test func controlWaitsWhileAnAgentWorks() async {
-        let service = ScriptedService()
+        let service = FakeService()
         service.reply = ["ready": true, "canObserve": true, "overview": ["mode": "agent"]]
         let model = await watching(service)
         #expect(!model.canTakeControl)
@@ -247,7 +240,7 @@ final class ScriptedService: ViewerService, @unchecked Sendable {
     }
 
     @Test func typedTextAndKeysGoToTheHelperWhileInControl() async {
-        let service = ScriptedService()
+        let service = FakeService()
         let model = await watching(service)
         await model.takeControl()
         model.send(text: "héllo")
@@ -256,12 +249,46 @@ final class ScriptedService: ViewerService, @unchecked Sendable {
         await settle { service.log.filter { $0.hasPrefix("input") }.count >= 2 }
         #expect(service.log.filter { $0.hasPrefix("input lease") }.count == 2)
         #expect(model.keyPressed(keyCode: 53, modifiers: [.control, .shift]) { nil })
-        #expect(model.lease == nil, "Control-Shift-Esc gives control back")
+        #expect(model.lease == nil, "Control-Shift-Escape gives control back")
+        model.close()
+    }
+
+    @Test func scrollingIsGatheredIntoOneBatch() async {
+        let service = FakeService()
+        let model = await watching(service)
+        await model.takeControl()
+        let size = CGSize(width: 400, height: 300)
+        for _ in 0..<3 { model.scrolled(dx: 0, dy: 10, precise: false, at: CGPoint(x: 200, y: 150), in: size) }
+        await settle { service.actions.count == 1 }
+        #expect(service.actions.first?.count == 3)
+        #expect(service.actions.first?.last == .scroll(x: 756, y: 491, dx: 0, dy: 30))
+        model.close()
+    }
+
+    @Test func composedTextIsShownUntilCommittedThenTyped() async {
+        let service = FakeService()
+        let model = await watching(service)
+        await model.takeControl()
+        let canvas = DesktopCanvasView()
+        canvas.model = model
+        let none = NSRange(location: NSNotFound, length: 0)
+        canvas.setMarkedText("ni", selectedRange: NSRange(location: 2, length: 0), replacementRange: none)
+        #expect(canvas.hasMarkedText())
+        #expect(model.composing == "ni")
+        canvas.unmarkText()
+        #expect(!canvas.hasMarkedText())
+        #expect(model.composing.isEmpty)
+        canvas.setMarkedText("n", selectedRange: NSRange(location: 1, length: 0), replacementRange: none)
+        canvas.insertText("你", replacementRange: none)
+        #expect(!canvas.hasMarkedText())
+        #expect(model.composing.isEmpty)
+        await settle { service.actions.count == 1 }
+        #expect(service.actions.first == [.type(text: "你")])
         model.close()
     }
 
     @Test func pasteIsLimited() async {
-        let service = ScriptedService()
+        let service = FakeService()
         let model = await watching(service)
         await model.takeControl()
         model.send(text: String(repeating: "a", count: 2049))
@@ -270,7 +297,7 @@ final class ScriptedService: ViewerService, @unchecked Sendable {
     }
 
     @Test func recoveryCanBeSetAsideUntilItsReasonChanges() async {
-        let service = ScriptedService()
+        let service = FakeService()
         service.reply = [
             "ready": true, "canObserve": true, "overview": ["mode": "recovering", "reason": "Unknown outcome"],
         ]

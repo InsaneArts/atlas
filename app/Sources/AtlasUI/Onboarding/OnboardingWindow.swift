@@ -13,6 +13,10 @@ public final class OnboardingWindow: NSObject, NSWindowDelegate {
     let model: OnboardingModel
     let window: NSWindow
     let closed: @MainActor (OnboardingWindow) -> Void
+    /// Open until closed.
+    public private(set) var isOpen = false
+    /// Whether the window takes the keyboard now.
+    public var isKey: Bool { window.isKeyWindow }
 
     /// `closed` runs once the window has closed and its model has stopped.
     public init(model: OnboardingModel, closed: @escaping @MainActor (OnboardingWindow) -> Void) {
@@ -48,7 +52,6 @@ public final class OnboardingWindow: NSObject, NSWindowDelegate {
             window.center()
         }
         isOpen = true
-        if window.isMiniaturized { window.deminiaturize(nil) }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate()
         model.start()
@@ -72,11 +75,6 @@ public final class OnboardingWindow: NSObject, NSWindowDelegate {
             window.animator().setFrame(NSRect(origin: origin, size: frame.size), display: true)
         }
     }
-
-    /// Open until closed, minimised included.
-    public private(set) var isOpen = false
-    /// Whether the window takes the keyboard now.
-    public var isKey: Bool { window.isKeyWindow }
 
     public func close() { window.close() }
 

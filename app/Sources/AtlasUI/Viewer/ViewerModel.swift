@@ -9,7 +9,7 @@ import Observation
 @MainActor
 @Observable
 public final class ViewerModel {
-    public enum Tab: String, CaseIterable, Sendable { case activity, session }
+    public enum Tab: String, Sendable { case activity, session }
 
     public private(set) var status = ViewerStatus()
     /// Whether any status has been read yet.
@@ -63,9 +63,11 @@ public final class ViewerModel {
     @ObservationIgnored var shown = false
     @ObservationIgnored var focused = true
 
-    // Control's working parts (see ViewerControl.swift).
+    // Control's working parts (see ViewerModel+Control.swift).
     @ObservationIgnored var controlGeneration = 0
     @ObservationIgnored var heartbeat: Task<Void, Never>?
+    /// One heartbeat tick (tests shorten it); it renews every fifth tick.
+    @ObservationIgnored var heartbeatInterval: Duration = .milliseconds(500)
     @ObservationIgnored var gesture = PointerGesture()
     @ObservationIgnored var wheel = WheelAccumulator()
     @ObservationIgnored var wheelAt: DesktopPoint?
@@ -115,7 +117,7 @@ public final class ViewerModel {
     /// "Live", "Updated 4 s ago"…, read again each second by the header.
     public func freshness() -> String {
         if paused { return "Viewing paused" }
-        if frame == nil && unavailable != nil { return "No current frame" }
+        if frame == nil && unavailable != nil { return "No picture" }
         return Words.freshness(frameAt.map { clock() - $0 })
     }
 
@@ -155,7 +157,7 @@ public final class ViewerModel {
     public var hint: String {
         if holdingControl {
             return keyboardConnected
-                ? "Keyboard connected. Press Control-Shift-Esc to give control back."
+                ? "Keyboard connected. Press Control-Shift-Escape to give control back."
                 : "Click the desktop to connect your keyboard."
         }
         if acquiring { return "Connecting…" }
@@ -234,7 +236,7 @@ public final class ViewerModel {
             }
             guard current() else { return }
             guard let picture = NSImage(data: next.png), picture.size.width > 0, picture.size.height > 0 else {
-                throw ServiceError("Frame geometry is unavailable")
+                throw ServiceError("The helper's screen size is unknown.")
             }
             if let frame, frame.revision != next.revision {
                 releaseControl("The helper changed. Choose Control again when ready.")
@@ -249,7 +251,7 @@ public final class ViewerModel {
         }
     }
 
-    /// What the menu bar last saw, shown while the first reading is under
+    /// What the panel last saw, shown while the first reading is under
     /// way. It is only a picture: control waits for a reading of its own.
     public func begin(with status: ViewerStatus, image: NSImage?) {
         guard !hasStatus, frame == nil else { return }
@@ -337,7 +339,7 @@ public final class ViewerModel {
             say(
                 restarted
                     ? "The helper was recovered. Choose Control again when ready."
-                    : "The helper input service is ready.")
+                    : "The helper is ready again.")
         } catch {
             say(error.localizedDescription)
         }
@@ -383,7 +385,6 @@ public final class ViewerModel {
 
 /// A service that is never asked anything (drawing only).
 struct StillService: ViewerService {
-    let base = URL(fileURLWithPath: "/")
     func status() async throws -> ViewerStatus { ViewerStatus() }
     func frame() async throws -> Frame { throw ServiceError("still") }
     func acquire(frame: String) async throws -> String { throw ServiceError("still") }

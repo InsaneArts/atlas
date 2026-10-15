@@ -1,7 +1,7 @@
 import Foundation
 
 /// A mouse button, as the service names it.
-public enum MouseButton: String, Codable, Sendable, CaseIterable {
+public enum MouseButton: String, Codable, Sendable {
     case left, middle, right
 }
 

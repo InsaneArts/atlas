@@ -20,6 +20,8 @@ public final class AppController: NSObject, NSApplicationDelegate {
     }
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
+        // One window of each kind: no Show Tab Bar in the Window menu.
+        NSWindow.allowsAutomaticWindowTabbing = false
         NSApp.mainMenu = appMenu(quit: (self, #selector(quitFromMenu(_:))))
         let model = PanelModel(service: service, commands: commands, loginItem: LoginItem())
         model.gettingStarted = { [weak self] in self?.showOnboarding() }

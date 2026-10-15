@@ -288,11 +288,11 @@ public final class OnboardingModel {
         if !failed.isEmpty { problem = failed.joined(separator: " ") }
     }
 
-    /// Done: set Open at Login, open the menu bar, then close the window; on
-    /// any failure the window stays, saying why.
+    /// Done: set Open at Login, open Atlas, then close the window; on any
+    /// failure the window stays, saying why.
     public func complete() async {
         guard let login = await act(["onboarding", "login", openAtLogin ? "on" : "off"], "Finishing…"), login.ok,
-            let started = await act(["menubar"], "Opening the menu bar…"), started.ok
+            let started = await act(["menubar"], "Opening Atlas…"), started.ok
         else { return }
         close?()
     }

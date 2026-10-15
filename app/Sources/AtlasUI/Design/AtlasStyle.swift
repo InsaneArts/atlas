@@ -6,9 +6,7 @@ import SwiftUI
 /// for the one thing to do next, and system blue for what is happening now.
 public enum AtlasStyle {
     public static let ground = Color(red: 0x16 / 255, green: 0x16 / 255, blue: 0x18 / 255)
-    public static var groundColor: NSColor {
-        NSColor(srgbRed: 0x16 / 255, green: 0x16 / 255, blue: 0x18 / 255, alpha: 1)
-    }
+    public static let groundColor = NSColor(srgbRed: 0x16 / 255, green: 0x16 / 255, blue: 0x18 / 255, alpha: 1)
     static let ink = Color(red: 0xF5 / 255, green: 0xF5 / 255, blue: 0xF7 / 255)
     static let ink2 = Color(red: 0xA1 / 255, green: 0xA1 / 255, blue: 0xA6 / 255)
     static let ink3 = Color(red: 0x8E / 255, green: 0x8E / 255, blue: 0x93 / 255)
@@ -178,7 +176,7 @@ struct Rule: View {
 struct Spinner: View {
     var size: CGFloat = 13
     @State private var turning = false
-    @Environment(\.accessibilityReduceMotion) private var still
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
@@ -189,7 +187,7 @@ struct Spinner: View {
         }
         .frame(width: size, height: size)
         .onAppear {
-            guard !still else { return }
+            guard !reduceMotion else { return }
             withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) { turning = true }
         }
         .accessibilityHidden(true)

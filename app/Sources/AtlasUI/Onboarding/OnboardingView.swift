@@ -330,7 +330,7 @@ struct SwitchScreen: View {
                 StepRow(
                     index: 2,
                     title: helper.signedIn
-                        ? "Open Atlas in \(helper.title)" : "Answer macOS's welcome questions, then open Atlas there",
+                        ? "Open Atlas in \(helper.title)" : "Answer the welcome questions, then open Atlas there",
                     detail: "In Applications, or with Spotlight", state: rows[1])
                 StepRow(
                     index: 3, title: "Allow Atlas twice, then switch back", detail: "Atlas there shows you how",
@@ -548,7 +548,7 @@ struct DoneScreen: View {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Open Atlas at login").font(.system(size: 13, weight: .semibold))
-                        Text("So the menu bar is there whenever you are.").font(.system(size: 12))
+                        Text("So Atlas is there whenever you are.").font(.system(size: 12))
                             .foregroundStyle(AtlasStyle.ink2)
                     }
                     Spacer(minLength: 8)
@@ -621,7 +621,7 @@ struct PermissionsScreen: View {
     var body: some View {
         let asker = model.facts.asker
         Column(width: 460) {
-            Eyebrow(text: "Two switches, once")
+            Eyebrow(text: "Permissions")
             Headline(title: "Let Atlas see and use", tail: "this screen.")
             Lede(
                 text:

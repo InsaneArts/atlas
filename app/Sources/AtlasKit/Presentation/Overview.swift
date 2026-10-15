@@ -166,23 +166,31 @@ public struct Overview: Equatable, Sendable {
     }
 
     /// Recovery is offered only without control, when something needs it.
-    public func recoveryOffered(holdingControl: Bool) -> Bool {
+    func recoveryOffered(holdingControl: Bool) -> Bool {
         !holdingControl && (status.overview.mode == "recovering" || status.overview.mode == "blocked")
     }
 
     /// The recovery alert's title.
-    public var recoveryTitle: String {
+    var recoveryTitle: String {
         status.overview.mode == "blocked" ? "The helper isn't ready" : "The last action's outcome is unknown"
     }
 }
 
+/// How old a picture may be, in seconds: the header and control agree on it.
+public enum Freshness {
+    /// Younger than this reads as live.
+    public static let live: Double = 3
+    /// This old, the picture is stale: the header says so and control ends.
+    public static let stale: Double = 6.5
+}
+
 extension Words {
-    /// How fresh the picture is, from the age of the last frame.
+    /// How fresh the picture is, from the age of the last one.
     public static func freshness(_ age: Double?) -> String {
-        guard let age, age.isFinite else { return "Waiting for the first frame" }
-        if age < 3 { return "Live" }
-        if age < 8 { return "Updated \(Int(age.rounded())) s ago" }
-        return "Preview is stale"
+        guard let age, age.isFinite else { return "Waiting for the first picture" }
+        if age < Freshness.live { return "Live" }
+        if age < Freshness.stale { return "Updated \(Int(age.rounded())) s ago" }
+        return "Picture is stale"
     }
 }
 
@@ -243,7 +251,7 @@ extension Overview {
     public func recovery(holdingControl: Bool, recovering: Bool) -> Recovery? {
         if recovering {
             return Recovery(
-                title: "Recovering the helper", reason: "Restoring the helper input service.", busy: true)
+                title: "Recovering the helper", reason: "Restoring the helper.", busy: true)
         }
         guard recoveryOffered(holdingControl: holdingControl) else { return nil }
         return Recovery(title: recoveryTitle, reason: reason(holdingControl: false), busy: false)
