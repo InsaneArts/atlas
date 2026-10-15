@@ -47,6 +47,14 @@ pub fn installed_app() -> Result<PathBuf> {
         .ok_or_else(|| problem("This atlas is not inside Atlas.app; install it with install.sh"))
 }
 
+/// The `atlas` executable inside the installed Atlas.app.
+pub fn installed_executable() -> Result<PathBuf> {
+    Ok(installed_app()?.join(EXECUTABLE))
+}
+
+/// Where the main executable lives inside Atlas.app.
+const EXECUTABLE: &str = "Contents/MacOS/atlas";
+
 /// The app bundle `executable` is the main executable of, if any.
 pub(crate) fn app_of(executable: &Path) -> Option<PathBuf> {
     let macos = executable.parent()?;
@@ -83,14 +91,24 @@ fn token() -> Option<String> {
         })
 }
 
+/// Download `url` to `output`. A token travels to curl as a config line on
+/// its standard input, never in the command line other accounts can read.
 fn curl(url: &str, output: &Path, accept: &str, token: Option<&str>) -> Result<()> {
+    use std::io::Write;
     let mut command = Command::new("/usr/bin/curl");
     command.args(["-fsSL", "-H", &format!("Accept: {accept}"), "-o"]);
     command.arg(output);
-    if let Some(token) = token {
-        command.args(["-H", &format!("Authorization: Bearer {token}")]);
+    if token.is_some() {
+        command
+            .args(["-K", "-"])
+            .stdin(std::process::Stdio::piped());
     }
-    let status = command.arg(url).status()?;
+    let mut child = command.arg(url).spawn()?;
+    if let (Some(token), Some(mut stdin)) = (token, child.stdin.take()) {
+        let quoted = token.replace('\\', "\\\\").replace('"', "\\\"");
+        stdin.write_all(format!("header = \"Authorization: Bearer {quoted}\"\n").as_bytes())?;
+    }
+    let status = child.wait()?;
     status
         .success()
         .then_some(())
@@ -211,7 +229,7 @@ fn verify(work: &Path, name: &str, allow_unnotarized: bool) -> Result<PathBuf> {
         ],
         "The app's signature is invalid",
     )?;
-    if !setup::developer_id(&app.join("Contents/MacOS/atlas")) {
+    if !setup::developer_id(&app.join(EXECUTABLE)) {
         return Err(problem("The app is not Atlas signed by its Developer ID"));
     }
     let notarized = check(
@@ -326,7 +344,7 @@ pub fn install(source: &Source, allow_unnotarized: bool, force: bool) -> Result<
     if let Some(record) = unfinished()? {
         return Ok(json!({"ok": true, "updated": true, "resumed": true, "record": record}));
     }
-    if !reachable_by_others(&installed.join("Contents/MacOS/atlas")) {
+    if !reachable_by_others(&installed.join(EXECUTABLE)) {
         return Err(problem(
             "Atlas.app must be where the helper account can run it: install it in /Applications",
         ));
