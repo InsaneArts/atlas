@@ -6,7 +6,7 @@ import AtlasKit
 /// and an unavailable helper dims it. Work and trouble add a coloured dot
 /// beside it, as the system's own indicators do, so only those two are not
 /// templates; they draw in the menu bar's label colour instead.
-public func statusImage(_ mode: Mode) -> NSImage {
+func statusImage(_ mode: Mode) -> NSImage {
     let dot: NSColor? =
         switch mode.mark {
         case .working: .systemBlue

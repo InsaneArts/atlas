@@ -47,7 +47,11 @@ public protocol ViewerService: Sendable {
 /// arrives on standard input, never in arguments). Requests carry the
 /// service's own origin, as it requires.
 public struct ViewerClient: ViewerService {
-    public let base: URL
+    /// How long a request may take; recovery restarts the helper, so longer.
+    static let timeout: TimeInterval = 8
+    static let recoveryTimeout: TimeInterval = 20
+
+    let base: URL
     let origin: String
     let session: URLSession
 
@@ -61,12 +65,12 @@ public struct ViewerClient: ViewerService {
         origin = "http://127.0.0.1:\(port)"
         let configuration = URLSessionConfiguration.ephemeral
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        configuration.timeoutIntervalForRequest = 8
+        configuration.timeoutIntervalForRequest = Self.timeout
         session = URLSession(configuration: configuration)
     }
 
     func request(
-        _ route: String, body: (any Encodable & Sendable)? = nil, timeout: TimeInterval = 8
+        _ route: String, body: (any Encodable & Sendable)? = nil, timeout: TimeInterval = ViewerClient.timeout
     ) throws -> URLRequest {
         var request = URLRequest(url: base.appendingPathComponent(route))
         request.timeoutInterval = timeout
@@ -138,12 +142,14 @@ public struct ViewerClient: ViewerService {
     public func recover() async throws -> Bool {
         struct Body: Encodable {}
         struct Reply: Decodable { let restarted: Bool? }
-        let data = try await post("recover", Body(), timeout: 20)
+        let data = try await post("recover", Body(), timeout: Self.recoveryTimeout)
         return (try? JSONDecoder().decode(Reply.self, from: data))?.restarted == true
     }
 
     /// POST `body` to `route`; the reply when it says `ok`, else its error.
-    func post(_ route: String, _ body: some Encodable & Sendable, timeout: TimeInterval = 8) async throws -> Data {
+    func post(
+        _ route: String, _ body: some Encodable & Sendable, timeout: TimeInterval = ViewerClient.timeout
+    ) async throws -> Data {
         let data: Data
         let response: URLResponse
         do {

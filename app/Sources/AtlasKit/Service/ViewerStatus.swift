@@ -1,5 +1,11 @@
 import Foundation
 
+/// What the helper is doing, as the service names it. A name this app does
+/// not know reads as unavailable.
+public enum HelperMode: String, Decodable, Sendable {
+    case observing, agent, controlling, recovering, blocked, unavailable
+}
+
 /// The viewer service's `status.json`: the helper's readiness, its session
 /// and the overview the panel and viewer show. Every field may be missing
 /// (the service could not reach the helper), so each has a safe default.
@@ -91,7 +97,7 @@ public struct ViewerStatus: Decodable, Equatable, Sendable {
 
     /// What is happening in the helper, as the service sums it up.
     public struct Overview: Decodable, Equatable, Sendable {
-        public var mode = "unavailable"
+        public var mode = HelperMode.unavailable
         public var reason = "Connecting to the helper"
         public var account: String?
         /// The account's full name ("Atlas"), when it has one.
@@ -99,24 +105,22 @@ public struct ViewerStatus: Decodable, Equatable, Sendable {
         public var display: Size?
         /// Actions of unknown outcome, waiting for recovery.
         public var pending = 0
-        public var nativeDialogs = "unknown"
         public var activity: [Activity] = []
 
         public init() {}
 
         enum CodingKeys: String, CodingKey {
-            case mode, reason, account, accountName, display, pending, nativeDialogs, activity
+            case mode, reason, account, accountName, display, pending, activity
         }
 
         public init(from decoder: any Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
-            mode = (try? container.decodeIfPresent(String.self, forKey: .mode)) ?? "unavailable"
+            mode = (try? container.decodeIfPresent(HelperMode.self, forKey: .mode)) ?? .unavailable
             reason = (try? container.decodeIfPresent(String.self, forKey: .reason)) ?? reason
             account = try? container.decodeIfPresent(String.self, forKey: .account)
             accountName = try? container.decodeIfPresent(String.self, forKey: .accountName)
             display = try? container.decodeIfPresent(Size.self, forKey: .display)
             pending = (try? container.decodeIfPresent(Int.self, forKey: .pending)) ?? 0
-            nativeDialogs = (try? container.decodeIfPresent(String.self, forKey: .nativeDialogs)) ?? "unknown"
             activity = (try? container.decodeIfPresent([Activity].self, forKey: .activity)) ?? []
         }
     }

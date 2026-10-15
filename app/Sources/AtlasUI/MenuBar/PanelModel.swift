@@ -7,22 +7,27 @@ import Observation
 /// request to the viewer service; the panel holds no policy of its own.
 @MainActor
 @Observable
-public final class PanelModel {
-    public private(set) var status = ViewerStatus()
-    public private(set) var image: NSImage?
-    public private(set) var placeholder = "Waiting for the helper's screen…"
+final class PanelModel {
+    /// Seconds between status readings with the panel open and closed; the
+    /// desktop is read at the open rate while the panel is open.
+    static let openEvery = 2.0
+    static let closedEvery = 5.0
+
+    private(set) var status = ViewerStatus()
+    private(set) var image: NSImage?
+    private(set) var placeholder = "Waiting for the helper's screen…"
     /// What the last action said, and whether it still runs.
-    public private(set) var message: String?
-    public private(set) var working = false
+    private(set) var message: String?
+    private(set) var working = false
     /// The helper's short name, once `atlas switch --list` reports it.
-    public private(set) var helper: String?
-    public private(set) var atLogin = false
-    public private(set) var loginAvailable = false
+    private(set) var helper: String?
+    private(set) var atLogin = false
+    private(set) var loginAvailable = false
 
     /// Opens the setup window (set by the app).
-    @ObservationIgnored public var gettingStarted: (@MainActor () -> Void)?
+    @ObservationIgnored var gettingStarted: (@MainActor () -> Void)?
     /// Opens the viewer window (set by the app).
-    @ObservationIgnored public var openViewer: (@MainActor () -> Void)?
+    @ObservationIgnored var openViewer: (@MainActor () -> Void)?
 
     @ObservationIgnored let service: (any ViewerService)?
     @ObservationIgnored let commands: (any CommandRunning)?
@@ -32,7 +37,7 @@ public final class PanelModel {
     @ObservationIgnored private var statusReading = 0
     @ObservationIgnored private var frameReading = 0
 
-    public init(service: (any ViewerService)?, commands: (any CommandRunning)?, loginItem: LoginItem?) {
+    init(service: (any ViewerService)?, commands: (any CommandRunning)?, loginItem: LoginItem?) {
         self.service = service
         self.commands = commands
         self.loginItem = loginItem
@@ -40,20 +45,20 @@ public final class PanelModel {
         loginAvailable = loginItem?.available == true
     }
 
-    public var mode: Mode { Mode.of(status.overview.mode) }
+    var mode: Mode { Mode.of(status.overview.mode) }
     var overview: Overview { Overview(status) }
-    var controlling: Bool { status.overview.mode == "controlling" }
-    var recovering: Bool { status.overview.mode == "recovering" }
+    var controlling: Bool { status.overview.mode == .controlling }
+    var recovering: Bool { status.overview.mode == .recovering }
 
     // MARK: Reading
 
-    /// Read the status now and then every 2 s open or 5 s closed, and the
-    /// desktop every 2 s while open, until called again or `stop()`. The two
-    /// run apart, so a slow capture never holds the status back.
-    public func watch(open: Bool) {
+    /// Read the status now and then at the open or closed rate, and the
+    /// desktop at the open rate while open, until called again or `stop()`.
+    /// The two run apart, so a slow capture never holds the status back.
+    func watch(open: Bool) {
         stop()
-        polling.append(repeating(every: open ? 2 : 5) { await $0.readStatus() })
-        if open { polling.append(repeating(every: 2) { await $0.readFrame() }) }
+        polling.append(repeating(every: open ? Self.openEvery : Self.closedEvery) { await $0.readStatus() })
+        if open { polling.append(repeating(every: Self.openEvery) { await $0.readFrame() }) }
     }
 
     private func stop() {
@@ -76,7 +81,7 @@ public final class PanelModel {
     }
 
     /// The helper to switch to is whichever `atlas` reports.
-    public func findHelper() async {
+    func findHelper() async {
         struct Reply: Decodable {
             struct Account: Decodable {
                 let name: String
@@ -127,7 +132,7 @@ public final class PanelModel {
     }
 
     /// The emergency stop: never waits for anything else.
-    public func releaseControl() async {
+    func releaseControl() async {
         guard let service else { return }
         say("Releasing control…", working: true)
         do {
@@ -139,16 +144,16 @@ public final class PanelModel {
         await readStatus()
     }
 
-    public func switchToHelper() async {
+    func switchToHelper() async {
         guard let helper else { return }
         await perform(.switchToHelper(helper), working: "Switching…", done: "Switched")
     }
 
-    public func recover() async {
+    func recover() async {
         await perform(.recover, working: "Recovering the helper…", done: "The helper is ready again.")
     }
 
-    public func setLogin(_ on: Bool) {
+    func setLogin(_ on: Bool) {
         do {
             try loginItem?.set(on)
         } catch {
@@ -160,7 +165,7 @@ public final class PanelModel {
     // MARK: Drawing
 
     /// A panel fixed at one state, for drawing it.
-    public static func still(
+    static func still(
         _ status: ViewerStatus, image: NSImage?, message: String? = nil, everything: Bool = false
     ) -> PanelModel {
         let model = PanelModel(service: nil, commands: nil, loginItem: nil)

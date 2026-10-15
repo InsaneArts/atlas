@@ -36,7 +36,7 @@ func sampleDesktop(_ size: NSSize = NSSize(width: 1512, height: 982)) -> NSImage
 
 /// Every viewer state, by file name, for checking against the design.
 @MainActor
-public func viewerScreens() -> [(name: String, model: ViewerModel)] {
+func viewerScreens() -> [(name: String, model: ViewerModel)] {
     func status(_ mode: String, reason: String = "An agent is acting in the helper", ok: Bool = true) -> ViewerStatus {
         let reply: [String: Any] = [
             "ready": true, "canObserve": true,
@@ -63,12 +63,13 @@ public func viewerScreens() -> [(name: String, model: ViewerModel)] {
     return [
         ("01-watching", .still(status("agent"), image: desktop)),
         (
-            "02-inspector-activity",
-            .still(status("observing", reason: "Watching the helper"), image: desktop, inspector: true)
+            "02-sidebar",
+            .still(status("observing", reason: "Watching the helper"), image: desktop, sidebar: true)
         ),
         (
-            "03-inspector-session",
-            .still(status("observing", reason: "Watching the helper"), image: desktop, inspector: true, tab: .session)
+            "03-sidebar-control",
+            .still(
+                status("controlling", reason: "You have control"), image: desktop, lease: "lease", sidebar: true)
         ),
         ("04-control", .still(status("controlling", reason: "A viewer has control"), image: desktop, lease: "lease")),
         (
@@ -92,16 +93,7 @@ public func viewerScreens() -> [(name: String, model: ViewerModel)] {
 @MainActor
 public func renderViewer(to directory: String, size: NSSize = NSSize(width: 1280, height: 820)) -> Bool {
     let folder = URL(fileURLWithPath: directory)
-    var drawn = true
-    for screen in viewerScreens() {
-        let host = NSHostingView(rootView: ViewerView(model: screen.model))
-        host.frame = NSRect(origin: .zero, size: size)
-        guard let appearance = NSAppearance(named: .darkAqua), let data = png(of: host, appearance: appearance),
-            (try? data.write(to: folder.appendingPathComponent("\(screen.name).png"))) != nil
-        else {
-            drawn = false
-            continue
-        }
-    }
-    return drawn
+    return viewerScreens().map { screen in
+        draw(ViewerView(model: screen.model), size: size, to: folder.appendingPathComponent("\(screen.name).png"))
+    }.allSatisfy { $0 }
 }

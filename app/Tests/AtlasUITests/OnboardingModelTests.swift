@@ -89,6 +89,52 @@ let freshMac = """
 }
 
 @MainActor
+@Suite struct PermissionTests {
+    @Test func accessibilityIsAskedForFirstThenScreenRecording() async {
+        let commands = FakeCommands([
+            "onboarding status": """
+            {"ok": true, "role": "helper", "me": {"name": "atlas"}, "app": {"installed": true, "signed": true},
+             "helper": {"controller": {"uid": 501, "name": "me"}, "installed": true, "running": true,
+                        "permissions": {"accessibility": false, "screenCapture": false}}}
+            """,
+            "onboarding window": #"{"ok": true}"#,
+        ])
+        let model = OnboardingModel(commands: commands)
+        model.refresh()
+        await settle { model.loaded }
+        #expect(model.step == .permissions)
+        #expect(model.nextPermission == .accessibility)
+        #expect(!model.granted(.accessibility) && !model.granted(.screenRecording))
+        #expect(Permission.accessibility.number == 1 && Permission.screenRecording.number == 2)
+        #expect(Permission.screenRecording.settingsURL?.absoluteString.hasSuffix("Privacy_ScreenCapture") == true)
+    }
+
+    @Test func theGuidePanelStepsAsideOnceItsSwitchIsOn() async {
+        func reply(accessibility: Bool) -> String {
+            """
+            {"ok": true, "role": "helper", "me": {"name": "atlas"}, "app": {"installed": true, "signed": true},
+             "helper": {"controller": {"uid": 501, "name": "me"}, "installed": true, "running": true,
+                        "permissions": {"accessibility": \(accessibility), "screenCapture": false}}}
+            """
+        }
+        let commands = FakeCommands([
+            "onboarding status": reply(accessibility: false), "onboarding window": #"{"ok": true}"#,
+        ])
+        let model = OnboardingModel(commands: commands)
+        model.refresh()
+        await settle { model.loaded }
+        model.guiding = .accessibility
+        model.refresh()
+        await settle { commands.ran.filter { $0 == ["onboarding", "status"] }.count == 2 }
+        #expect(model.guiding == .accessibility, "still waiting for the switch")
+        commands.answer("onboarding status", reply(accessibility: true))
+        model.refresh()
+        await settle { model.guiding == nil }
+        #expect(model.nextPermission == .screenRecording)
+    }
+}
+
+@MainActor
 @Suite struct OnboardingRenderTests {
     @Test func everyOnboardingScreenDraws() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(

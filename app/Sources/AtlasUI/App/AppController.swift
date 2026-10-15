@@ -42,7 +42,7 @@ public final class AppController: NSObject, NSApplicationDelegate {
     }
 
     /// The viewer window; one at a time, brought forward when already open.
-    public func showViewer() {
+    func showViewer() {
         if let viewer, viewer.isOpen {
             viewer.show()
             return
@@ -83,7 +83,7 @@ public final class AppController: NSObject, NSApplicationDelegate {
     }
 
     /// The setup window; one at a time, brought forward when already open.
-    public func showOnboarding() {
+    func showOnboarding() {
         if let onboarding, onboarding.isOpen {
             onboarding.show()
             return
