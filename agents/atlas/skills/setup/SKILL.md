@@ -6,7 +6,8 @@ description: Install or set up Atlas on this Mac when it is missing or not ready
 # Set up Atlas
 
 Atlas needs three things: the app installed, a helper account set up with
-`atlas init`, and two permissions the person allows inside that account.
+Atlas's setup window (or `atlas init`), and two permissions the person allows
+inside that account.
 You guide; the person types passwords and clicks Allow. Never run sudo yourself,
 never type or store a password, never change privacy settings.
 
@@ -35,18 +36,19 @@ curl -fsSL https://raw.githubusercontent.com/InsaneArts/atlas/main/install.sh | 
 While the repository is private this needs `GITHUB_TOKEN`; ask the person to
 run it themselves if they prefer.
 
-## 3. Guided setup (the person runs it)
+## 3. Guided setup (the person does it)
 
-`atlas init` asks questions, asks for their administrator password once,
-and has them sign in to the helper account and click Allow twice. It needs a
-real terminal, so ask them to open Terminal and run:
+Ask the person to open Atlas (from Applications, or `open -a Atlas`). Its
+window walks them through choosing or creating the helper account, switching
+to it once to allow Atlas there, and switching back. If they prefer a
+terminal, `atlas init` does the same and needs a real terminal:
 
 ```sh
 atlas init
 ```
 
-It is safe to run again, and it shows what it is waiting for. Wait for them to
-say it finished.
+Both are safe to run again and show what they are waiting for. Wait for the
+person to say it finished.
 
 ## 4. Confirm
 

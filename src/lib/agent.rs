@@ -37,7 +37,7 @@ const SKILL_RULES: &str = "## Rules
 - Check your on-screen work in the helper before saying it works, and show the
   screenshots.
 - Do the work yourself: opening builds, copying files in, cleaning up. The
-  person only ran `atlas init`.
+  person only set Atlas up.
 - Never use sudo, type a password or change privacy settings. If `doctor` is
   not ready, run the Atlas commands it suggests; tell the person only what
   needs them (or use the setup skill).
