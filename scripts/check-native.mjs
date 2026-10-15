@@ -1,12 +1,17 @@
 // Native window motion in legal bounds. The fixture's logged Center command
 // prepares each trial; only the subsequent mouse path counts as desktop evidence.
+// Input goes through the viewer service HTTP with the actions the native
+// viewer sends. The record is runs/menubar.json by default (or a folder
+// holding it), next to runs/control-live-setup.json.
+import { ViewerClient, recordPath } from './viewer-client.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { chromium } from 'playwright';
+import { fileURLToPath } from 'node:url';
 
-const output = path.resolve(process.argv[2] || 'runs');
-const { url } = JSON.parse(fs.readFileSync(path.join(output, 'monitor.json'), 'utf8'));
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const record = recordPath(process.argv[2], path.join(root, 'runs/menubar.json'));
+const output = path.dirname(record);
 const setup = JSON.parse(fs.readFileSync(path.join(output, 'control-live-setup.json'), 'utf8'));
 const state = () =>
   JSON.parse(fs.readFileSync(path.join(setup.logDirectory, 'state.json'), 'utf8'));
@@ -14,24 +19,17 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const results = {
   startedAt: new Date().toISOString(),
   actualHiddenDesktop: true,
-  browser: 'headless Chrome',
-  osFocusAndTabCoexistenceTested: false,
+  client: 'viewer service HTTP',
   fixturePreparation: 'Center Window for Native Test menu command before each gesture',
   sampleDelayMs: 160,
   drags: [],
   resizes: [],
 };
-const browser = await chromium.launch({
-  headless: true,
-  executablePath:
-    process.env.ATLAS_CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-});
-const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
+const viewer = new ViewerClient(record);
 let acquiredLease = null;
-let pendingAcquire = null;
 
 async function readStatus() {
-  const response = await fetch(url + 'status.json', { signal: AbortSignal.timeout(5000) });
+  const response = await viewer.get('status.json', { timeout: 5000 });
   assert.equal(response.status, 200, 'Viewer status request failed');
   return response.json();
 }
@@ -53,19 +51,6 @@ function sessionEpoch(status) {
 }
 function sameExistingPath(left, right) {
   return typeof left === 'string' && fs.realpathSync(left) === fs.realpathSync(right);
-}
-async function closeBrowser() {
-  let timer;
-  try {
-    await Promise.race([
-      browser.close(),
-      new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error('Browser did not close within 5 seconds')), 5000);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 function windowRect(value) {
@@ -92,7 +77,7 @@ function requireInterior(rectangle, visible) {
 async function center() {
   const previous = state().centerCount;
   assert.ok(Number.isInteger(previous), 'Rebuild the fixture with screen geometry support');
-  await page.keyboard.press('Meta+Control+0');
+  await viewer.key('cmd+ctrl+0');
   const deadline = Date.now() + 3000;
   while (state().centerCount === previous && Date.now() < deadline) await wait(20);
   const value = state();
@@ -103,39 +88,21 @@ async function center() {
   requireInterior(windowRect(value), value.screen.visibleFrame);
   return value;
 }
-async function point(location) {
-  const box = await page.locator('#screen').boundingBox();
-  const { width, height } = setup.session.display;
-  return {
-    x: box.x + (location.x / width) * box.width,
-    y: box.y + (location.y / height) * box.height,
-  };
-}
-async function pointer(phase, location) {
-  const response = page.waitForResponse((reply) => {
-    if (reply.url() !== url + 'input') return false;
-    return (reply.request().postDataJSON()?.actions || []).some(
-      (action) =>
-        (phase === 'hover'
-          ? action.type === 'move'
-          : action.type === 'pointer' && action.phase === phase) &&
-        Math.abs(action.x - location.x) < 1.5 &&
-        Math.abs(action.y - location.y) < 1.5,
-    );
-  });
-  const position = await point(location);
-  if (phase === 'down') await page.mouse.down();
-  else if (phase === 'up') await page.mouse.up();
-  else await page.mouse.move(position.x, position.y);
-  const reply = await response;
-  assert.equal(reply.status(), 200, await reply.text());
+/** One acknowledged pointer action; the actions as transmitted. */
+async function pointer(phase, { x, y }) {
+  const transmitted =
+    phase === 'hover'
+      ? await viewer.hover(x, y)
+      : phase === 'down'
+        ? await viewer.down(x, y)
+        : phase === 'up'
+          ? await viewer.up(x, y)
+          : await viewer.moveTo(x, y);
   await wait(results.sampleDelayMs);
-  return reply.request().postDataJSON().actions;
+  return transmitted;
 }
 async function capture(name) {
-  const response = await page.request.get(url + 'frame.png');
-  assert.equal(response.status(), 200);
-  fs.writeFileSync(path.join(output, name), await response.body());
+  fs.writeFileSync(path.join(output, name), (await viewer.frame()).png);
 }
 async function drag(from, delta, name) {
   await pointer('hover', from);
@@ -148,7 +115,7 @@ async function drag(from, delta, name) {
   }
   await wait(200);
   const during = state();
-  const status = await (await page.request.get(url + 'status.json')).json();
+  const status = await viewer.status();
   assert.equal(status.controlActive, true);
   assert.equal(status.session.inputService.heldInput, true);
   assert.equal(status.session.inputService.session.onConsole, false);
@@ -257,7 +224,7 @@ async function closePanel(attemptID, kind) {
   for (let attempt = 0; attempt < 2; attempt++) {
     const panel = currentPanel(attemptID);
     const after = Date.now();
-    if (panel.response == null) await page.keyboard.press('Escape');
+    if (panel.response == null) await viewer.key('escape');
     try {
       await until(() => {
         const observed = observedPanel(attemptID, after);
@@ -306,15 +273,15 @@ async function checkPanel(kind) {
       await pointer('hover', text);
       await pointer('down', text);
       await pointer('up', text);
-      await page.keyboard.press('Meta+A');
-      await page.keyboard.insertText(expectedText);
+      await viewer.key('cmd+a');
+      await viewer.type(expectedText);
       await until(() => state().text === expectedText, 'Fixture text did not arrive');
     } else {
       assert.equal(fs.readFileSync(expectedPath, 'utf8'), expectedText);
       assert.equal(fs.realpathSync(initial.openFixturePath), expectedPath);
     }
     const previousID = state().panel?.attemptID;
-    await page.keyboard.press(kind === 'save' ? 'Meta+s' : 'Meta+o');
+    await viewer.key(kind === 'save' ? 'cmd+s' : 'cmd+o');
     const panel = await until(() => {
       const current = state().panel;
       return current?.kind === kind && current.attemptID !== previousID && current;
@@ -348,13 +315,13 @@ async function checkPanel(kind) {
     }, 'Rendered native panel controls, keyboard focus, or enabled confirmation were not observed');
     await until(() => state().modifierFlags === 0, 'Panel shortcut left modifiers held');
     result.before = state();
-    result.statusBefore = await (await page.request.get(url + 'status.json')).json();
+    result.statusBefore = await viewer.status();
     assert.equal(result.statusBefore.session.inputService.heldInput, false);
     assert.equal(result.statusBefore.session.inputService.session.onConsole, false);
     await capture('native-' + kind + '-before.png');
     if (kind === 'open') {
       const beforeGoTo = Date.now();
-      await page.keyboard.press('Meta+Shift+g');
+      await viewer.key('cmd+shift+g');
       result.goToBefore = await until(() => {
         const observed = observedPanel(result.attemptID, beforeGoTo);
         return (
@@ -367,8 +334,8 @@ async function checkPanel(kind) {
         );
       }, 'Go to Folder path field did not gain observable focus');
       const beforePath = Date.now();
-      await page.keyboard.press('Meta+A');
-      await page.keyboard.insertText(expectedPath);
+      await viewer.key('cmd+a');
+      await viewer.type(expectedPath);
       result.goToAfter = await until(() => {
         const observed = observedPanel(result.attemptID, beforePath);
         return (
@@ -380,7 +347,7 @@ async function checkPanel(kind) {
         );
       }, 'Go to Folder did not receive the exact requested path');
       const beforeSelection = Date.now();
-      await page.keyboard.press('Enter');
+      await viewer.key('return');
       result.observerSelection = await until(() => {
         if (completion(result.attemptID, kind)) return { completed: true };
         const observed = observedPanel(result.attemptID, beforeSelection);
@@ -419,7 +386,7 @@ async function checkPanel(kind) {
           observed
         );
       }, 'Native confirmation lost its enabled state, focus, or requested file');
-      await page.keyboard.press('Enter');
+      await viewer.key('return');
     }
     result.completion = await until(
       () => completion(result.attemptID, kind),
@@ -471,8 +438,6 @@ async function checkPanel(kind) {
   return result;
 }
 try {
-  await page.goto(url);
-  await page.waitForFunction(() => !document.querySelector('#control').disabled);
   results.initialStatus = await readStatus();
   results.initialEpoch = sessionEpoch(results.initialStatus);
   assert.equal(state().panelInstrumentationVersion, 2, 'Rebuild the native panel fixture');
@@ -480,23 +445,19 @@ try {
     () => observedPanel(state().panel?.attemptID),
     'Fixture-owned AX observer is not fresh and trusted; control was not acquired',
   );
-  pendingAcquire = page
-    .waitForResponse((reply) => reply.url() === url + 'control/acquire', { timeout: 5000 })
-    .then(async (response) => {
-      const body = await response.json();
-      if (typeof body.lease === 'string' && body.lease) acquiredLease = body.lease;
-      results.acquire = { status: response.status(), ok: body.ok, leaseCaptured: !!acquiredLease };
-      assert.equal(response.status(), 200, 'Control acquisition failed');
-      assert.equal(body.ok, true, 'Control acquisition was not acknowledged');
-      assert.ok(acquiredLease, 'No owner token was returned for cleanup');
-    });
-  await Promise.all([
-    pendingAcquire,
-    page.getByRole('button', { name: 'Control', exact: true }).click({ timeout: 5000 }),
-  ]);
-  await page.waitForFunction(
-    () => document.querySelector('#control').getAttribute('aria-pressed') === 'true',
-  );
+  try {
+    acquiredLease = await viewer.acquire();
+    results.acquire = { status: 200, ok: true, leaseCaptured: !!acquiredLease };
+  } catch (error) {
+    results.acquire = {
+      status: error.status,
+      ok: false,
+      leaseCaptured: false,
+      code: error.code,
+      uncertain: error.uncertain,
+    };
+    throw error;
+  }
   for (const [dx, dy] of [
     [120, 48],
     [-120, -48],
@@ -583,44 +544,25 @@ try {
 } finally {
   const cleanup = {
     releaseRequested: false,
-    browserClosed: false,
+    keepAliveStopped: false,
     inputReleased: false,
     identityUnchanged: false,
   };
   results.cleanup = cleanup;
-  // If the click failed after the server acquired control, its response can
-  // still contain the only token that permits owner-specific cancellation.
+  // Release through the owner-specific endpoint, even with the mouse held
+  // and even when a failed renewal or input already ended the session: the
+  // client keeps the acquired lease until the service confirms the release.
   try {
-    await pendingAcquire;
-  } catch (error) {
-    cleanup.acquireError = error.stack;
-  }
-  try {
+    if (viewer.lost) cleanup.lostBeforeRelease = viewer.lost.message;
     if (acquiredLease) {
       cleanup.releaseRequested = true;
-      // A browser click cannot reliably release control while its mouse is
-      // held. Cancel through the public, owner-specific HTTP endpoint instead.
-      const response = await fetch(url + 'control/release', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Origin: new URL(url).origin },
-        body: JSON.stringify({ lease: acquiredLease }),
-        signal: AbortSignal.timeout(5000),
-      });
-      cleanup.releaseResponse = await response.json();
-      assert.equal(response.status, 200, 'Control release failed');
-      assert.equal(cleanup.releaseResponse.ok, true, 'Control release was not acknowledged');
+      cleanup.releaseResponse = await viewer.release();
     }
   } catch (error) {
     cleanup.releaseError = error.stack;
   }
-  try {
-    await closeBrowser();
-    cleanup.browserClosed = true;
-  } catch (error) {
-    cleanup.browserError = error.stack;
-  }
-  // Node owns this request, so a closed or failed browser cannot suppress
-  // the final native-state check or prevent the evidence from being saved.
+  viewer.stop();
+  cleanup.keepAliveStopped = true;
   try {
     const deadline = Date.now() + 12000;
     cleanup.observations = [];
@@ -664,7 +606,7 @@ try {
   }
   cleanup.passed =
     !cleanup.releaseError &&
-    cleanup.browserClosed &&
+    cleanup.keepAliveStopped &&
     cleanup.inputReleased &&
     cleanup.identityUnchanged;
   results.passed = results.passed === true && cleanup.passed;
