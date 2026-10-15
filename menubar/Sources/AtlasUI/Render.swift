@@ -22,7 +22,7 @@ public func render(viewer: Viewer, to path: String, appearance name: NSAppearanc
         frame = $0
         group.leave()
     }
-    group.notify(queue: .main) {
+    group.notify(queue: .main) { MainActor.assumeIsolated {
         let appearance = NSAppearance(named: name)!
         var snapshot = status.map(Snapshot.init(status:)) ?? Snapshot()
         if let mode = environment["ATLAS_RENDER_MODE"], !mode.isEmpty {
@@ -80,5 +80,5 @@ public func render(viewer: Viewer, to path: String, appearance name: NSAppearanc
             (try? png.write(to: URL(fileURLWithPath: path))) != nil
         else { exit(4) }
         exit(0)
-    }
+    } }
 }
