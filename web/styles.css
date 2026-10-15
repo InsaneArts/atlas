@@ -2,8 +2,10 @@
    glass controls floating around it, as in QuickTime or Screen Sharing. */
 :root {
   color-scheme: dark;
-  --ground: #0c0c0e;
-  --glass: rgba(38, 38, 42, 0.72);
+  --ground: #161618;
+  --glass: rgba(255, 255, 255, 0.045);
+  --float: rgba(22, 22, 24, 0.84);
+  --ink3: #8e8e93;
   --glass-solid: #26262a;
   --edge: rgba(255, 255, 255, 0.12);
   --label: #f5f5f7;
@@ -80,14 +82,19 @@ select:disabled {
 /* Glass: a floating material over the dark ground. */
 .glass {
   background: var(--glass);
-  backdrop-filter: blur(30px) saturate(180%);
-  -webkit-backdrop-filter: blur(30px) saturate(180%);
-  box-shadow:
-    inset 0 0 0 0.5px var(--edge),
-    0 10px 30px rgba(0, 0, 0, 0.35);
+  box-shadow: inset 0 0 0 0.5px var(--edge);
+}
+/* Over the desktop picture the material must stay readable. */
+.chip.glass,
+.captions .glass {
+  background: var(--float);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
 }
 @media (prefers-reduced-transparency: reduce) {
-  .glass {
+  .glass,
+  .chip.glass,
+  .captions .glass {
     background: var(--glass-solid);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
@@ -399,82 +406,62 @@ select:disabled {
   -webkit-backdrop-filter: blur(3px);
 }
 .alert {
-  width: 280px;
+  width: 340px;
   max-width: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
-  padding: 20px 16px 16px;
-  border-radius: 14px;
+  gap: 12px;
+  padding: 26px 24px 20px;
+  border-radius: 16px;
   text-align: center;
-  background: rgba(44, 44, 48, 0.92);
-  backdrop-filter: blur(40px) saturate(180%);
-  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  background: var(--ground);
   box-shadow:
     inset 0 0 0 0.5px rgba(255, 255, 255, 0.14),
     0 24px 60px rgba(0, 0, 0, 0.55);
 }
-.alert-icon {
-  position: relative;
-  width: 56px;
-  height: 56px;
-}
-.alert-icon img {
-  display: block;
-}
-.alert-icon svg {
-  position: absolute;
-  right: -3px;
-  bottom: -3px;
-  width: 22px;
-  height: 22px;
-}
-.warning {
-  fill: var(--orange);
-  stroke: #2c2c30;
-  stroke-width: 1.5;
-  stroke-linejoin: round;
-}
-.warning-mark {
-  stroke: #1d1d1f;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-}
-.warning-point {
-  fill: #1d1d1f;
+.alert-eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--orange);
 }
 .alert h2 {
-  margin-top: 4px;
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  text-wrap: balance;
 }
-.alert p {
-  font-size: 11.5px;
-  line-height: 1.45;
-  color: #c7c7cc;
+.alert p:not(.alert-eyebrow) {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--secondary);
 }
 .alert-buttons {
-  align-self: stretch;
   display: flex;
-  flex-direction: column;
+  justify-content: center;
   gap: 8px;
   margin-top: 6px;
 }
 .alert-button {
-  height: 30px;
+  height: 34px;
+  padding: 0 16px;
   border: 0;
-  border-radius: 7px;
+  border-radius: 999px;
   font-size: 13px;
-  font-weight: 500;
-  background: var(--fill-strong);
+  background: transparent;
+  color: var(--secondary);
+}
+.alert-button:not(.default):hover:not(:disabled) {
+  color: var(--label);
 }
 .alert-button.default {
-  background: var(--accent-button);
-  color: #fff;
-}
-.alert-button.default:hover:not(:disabled) {
-  background: var(--accent-hover);
+  padding: 0 20px;
+  font-weight: 600;
+  background: var(--label);
+  color: var(--ground);
 }
 
 .keyboard-proxy {
@@ -532,12 +519,12 @@ select:disabled {
   stroke-width: 1.4;
 }
 #observe[aria-pressed='true'] {
-  background: var(--fill-strong);
-  color: var(--label);
+  background: var(--label);
+  color: var(--ground);
 }
 #control[aria-pressed='true'] {
-  background: var(--accent-button);
-  color: #fff;
+  background: var(--label);
+  color: var(--ground);
 }
 #control[aria-busy='true'] {
   opacity: 0.6;
@@ -630,23 +617,23 @@ option {
 .tabs {
   display: flex;
   gap: 2px;
-  padding: 2px;
-  border-radius: 9px;
+  padding: 3px;
+  border-radius: 999px;
   background: var(--fill);
 }
 .tabs button {
   flex: 1;
   height: 28px;
   border: 0;
-  border-radius: 7px;
+  border-radius: 999px;
   background: transparent;
   color: var(--secondary);
   font-size: 12px;
   font-weight: 600;
 }
 .tabs button[aria-selected='true'] {
-  background: var(--fill-strong);
-  color: var(--label);
+  background: var(--label);
+  color: var(--ground);
 }
 .tab-panel {
   flex: 1;
@@ -721,10 +708,12 @@ option {
 
 /* Grouped rows, as in System Settings. */
 .group h2 {
-  margin: 0 0 6px 4px;
-  font-size: 12px;
+  margin: 0 0 8px 4px;
+  font-size: 11px;
   font-weight: 600;
-  color: var(--secondary);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink3);
 }
 .rows {
   margin: 0;
