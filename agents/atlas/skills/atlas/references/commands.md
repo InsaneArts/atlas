@@ -762,7 +762,9 @@ Global options:
 ## atlas monitor
 
 ```text
-Watch and control the helper in your browser
+Watch and control the helper in Atlas's viewer window.
+
+Starts the menu bar first when it is not running.
 
 Usage: atlas monitor [OPTIONS]
 
@@ -773,7 +775,7 @@ Options:
           [default: 8765]
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 
 Global options:
       --json
