@@ -28,6 +28,8 @@ final class Companion: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         popover.contentViewController = panel
         popover.behavior = .transient
+        // Atlas's panel is always dark, like its other windows.
+        popover.appearance = NSAppearance(named: .darkAqua)
         popover.delegate = self
         item.button?.image = statusImage(Mode.of("unavailable"))
         item.button?.target = self
@@ -94,6 +96,39 @@ final class Companion: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 }
 
+// A command that exits before reading what it was given must not end the
+// app: writes to its closed pipe fail with an error instead.
+signal(SIGPIPE, SIG_IGN)
+
+/// The setup window's menus: Quit and Close, and Edit, so typing and
+/// pasting work in its fields as in any app.
+@MainActor
+func onboardingMenu() -> NSMenu {
+    let menu = NSMenu()
+    let app = NSMenu(title: "Atlas")
+    app.addItem(withTitle: "Hide Atlas", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+    app.addItem(.separator())
+    app.addItem(withTitle: "Quit Atlas", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    let edit = NSMenu(title: "Edit")
+    edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+    let redo = edit.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
+    redo.keyEquivalentModifierMask = [.command, .shift]
+    edit.addItem(.separator())
+    edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+    edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+    edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+    edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+    let window = NSMenu(title: "Window")
+    window.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+    window.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+    for submenu in [app, edit, window] {
+        let item = NSMenuItem()
+        item.submenu = submenu
+        menu.addItem(item)
+    }
+    return menu
+}
+
 /// Quit when the parent closes stdin, so the bar never outlives the server.
 func watchParent() {
     Thread.detachNewThread {
@@ -140,6 +175,34 @@ if let index = CommandLine.arguments.firstIndex(of: "--login"),
         print("{\"ok\": false, \"error\": \"\(message)\"}")
         exit(1)
     }
+}
+
+// `--onboarding`: the setup window, on its own (Atlas.app opened before it
+// is set up). It quits when the window closes.
+if CommandLine.arguments.contains("--onboarding") {
+    let app = NSApplication.shared
+    let executable = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
+    let window = MainActor.assumeIsolated {
+        app.mainMenu = onboardingMenu()
+        let model = OnboardingModel(commands: .parent(fallback: executable))
+        let window = OnboardingWindow(model: model) { NSApp.terminate(nil) }
+        app.setActivationPolicy(.regular)
+        app.finishLaunching()
+        window.show()
+        return window
+    }
+    withExtendedLifetime(window) { app.run() }
+    exit(0)
+}
+
+// `--render-onboarding DIR`: draw every onboarding screen to PNGs, then exit.
+if let index = CommandLine.arguments.firstIndex(of: "--render-onboarding"),
+    index + 1 < CommandLine.arguments.count
+{
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    MainActor.assumeIsolated { renderOnboarding(to: CommandLine.arguments[index + 1]) }
+    exit(0)
 }
 
 guard let line = readLine(), let viewer = Viewer(line) else {

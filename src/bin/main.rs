@@ -417,6 +417,48 @@ enum Command {
     /// After an update, run by the new executable: move the helper onto it.
     #[command(hide = true)]
     UpdateFinish,
+    /// The steps the Atlas window's onboarding drives (JSON only).
+    #[command(hide = true)]
+    Onboarding {
+        #[command(subcommand)]
+        step: OnboardingCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum OnboardingCommand {
+    /// Everything the window needs to choose its step.
+    Status,
+    /// Make an existing standard account the helper.
+    Choose { account: String },
+    /// Create a standard account (its password on standard input) and
+    /// make it the helper.
+    Create {
+        #[arg(long)]
+        account: String,
+        #[arg(long = "full-name", default_value = "Atlas Helper")]
+        full_name: String,
+    },
+    /// In the helper: let the account that asked use this one (the one the
+    /// window showed).
+    Accept {
+        #[arg(long = "controller-uid")]
+        controller_uid: u32,
+        #[arg(long = "controller-name")]
+        controller_name: String,
+    },
+    /// Mark the window open or closed in this account.
+    Window {
+        #[arg(value_parser = ["open", "closed"])]
+        state: String,
+    },
+    /// Back in the person's account: start input and check everything.
+    Finish,
+    /// Open the menu bar at login (on or off), decided once.
+    Login {
+        #[arg(value_parser = ["on", "off"])]
+        state: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -514,8 +556,12 @@ fn main() -> ExitCode {
     };
     let mut cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
     let config = atlas::config::effective(cli.config.take());
-    // `atlas` alone shows what it can do.
+    // `atlas` alone shows what it can do; opened as an app (Finder,
+    // Launchpad, `open`), it shows the window instead.
     let Some(command) = cli.command.take() else {
+        if opened_as_app() {
+            return open_app(&config);
+        }
         let _ = help::command().print_help();
         return ExitCode::SUCCESS;
     };
@@ -609,6 +655,51 @@ fn main() -> ExitCode {
     }
 }
 
+/// Whether launchd started this as the app (opened from Finder and the
+/// like) rather than a shell running `atlas`.
+fn opened_as_app() -> bool {
+    std::os::unix::process::parent_id() == 1 && !std::io::stdin().is_terminal()
+}
+
+/// Opened as an app: the onboarding window until Atlas is set up here (or
+/// in the helper another account chose), the menu bar after that. Either
+/// replaces this process, so the app stays the one the person opened.
+fn open_app(config: &std::path::Path) -> ExitCode {
+    use std::os::unix::process::CommandExt;
+    let Ok(executable) = std::env::current_exe() else {
+        return ExitCode::FAILURE;
+    };
+    let me = nix::unistd::getuid().as_raw();
+    let helper_here = atlas::onboarding::request().is_some_and(|pairing| pairing.helper_uid == me);
+    let finished = !helper_here
+        && Config::load(config).is_ok_and(|config| {
+            atlas::setup::migrate::settled(config.helper_uid)
+                && atlas::setup::account_with_uid(config.helper_uid)
+                    .is_ok_and(|account| account.is_some())
+        });
+    let error = if finished {
+        std::process::Command::new(&executable)
+            .arg("--config")
+            .arg(config)
+            .arg("menubar")
+            .exec()
+    } else {
+        match menubar::executable() {
+            Ok(window) => std::process::Command::new(window)
+                .arg("--onboarding")
+                .env("ATLAS_CLI", &executable)
+                .env("ATLAS_CONFIG", config)
+                .exec(),
+            Err(error) => {
+                eprintln!("{}", error.error);
+                return ExitCode::FAILURE;
+            }
+        }
+    };
+    eprintln!("Atlas could not open: {error}");
+    ExitCode::FAILURE
+}
+
 /// Commands Atlas runs itself (in the helper, or as a step of another
 /// command), whose output another Atlas process reads.
 fn machine_only(command: &Command) -> bool {
@@ -623,6 +714,7 @@ fn machine_only(command: &Command) -> bool {
             | Command::InputService { .. }
             | Command::SetupHelper { .. }
             | Command::UpdateFinish
+            | Command::Onboarding { .. }
     )
 }
 
@@ -839,6 +931,23 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
         } => return update(&config, allow_unnotarized, force, version),
         Command::UpdateFinish => return update_finish(&config),
         Command::Init => return atlas::init::run(&config).await,
+        Command::Onboarding { step } => {
+            use atlas::onboarding;
+            return match step {
+                OnboardingCommand::Status => onboarding::status(&config).await,
+                OnboardingCommand::Choose { account } => onboarding::choose(&config, &account),
+                OnboardingCommand::Create { account, full_name } => {
+                    onboarding::create(&config, &account, &full_name)
+                }
+                OnboardingCommand::Accept {
+                    controller_uid,
+                    controller_name,
+                } => onboarding::accept(controller_uid, &controller_name),
+                OnboardingCommand::Window { state } => onboarding::window(state == "open"),
+                OnboardingCommand::Finish => onboarding::finish(&config).await,
+                OnboardingCommand::Login { state } => onboarding::login(&config, state == "on"),
+            };
+        }
         Command::Agents { action } => {
             return match action.unwrap_or(AgentsCommand::Status { brief: false }) {
                 AgentsCommand::Status { brief: true } => {
@@ -895,6 +1004,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
         | Command::Update { .. }
         | Command::UpdateFinish
         | Command::Init
+        | Command::Onboarding { .. }
         | Command::Agents { .. }
         | Command::Uninstall { .. }
         | Command::Switch { .. } => {

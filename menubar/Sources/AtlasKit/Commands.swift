@@ -57,8 +57,12 @@ public struct Commands: Sendable {
     }
 
     /// Run `atlas arguments…` off the main thread; the outcome arrives
-    /// on the main queue.
-    public func run(_ arguments: [String], _ done: @escaping @MainActor @Sendable (Outcome) -> Void) {
+    /// on the main queue. `input`, if any, is written to the command's
+    /// standard input (a secret travels this way, never in its arguments).
+    public func run(
+        _ arguments: [String], input: Data? = nil,
+        _ done: @escaping @MainActor @Sendable (Outcome) -> Void
+    ) {
         let executable = self.executable
         DispatchQueue.global(qos: .userInitiated).async {
             let process = Process()
@@ -69,10 +73,17 @@ public struct Commands: Sendable {
             let stderr = Pipe()
             process.standardOutput = stdout
             process.standardError = stderr
-            process.standardInput = FileHandle.nullDevice
+            let stdin = input.map { _ in Pipe() }
+            process.standardInput = stdin ?? FileHandle.nullDevice
             let outcome: Outcome
             do {
                 try process.run()
+                if let stdin, let input {
+                    // A command that exits early closes the pipe: the error is
+                    // caught here, never raised (SIGPIPE is ignored by the app).
+                    try? stdin.fileHandleForWriting.write(contentsOf: input)
+                    try? stdin.fileHandleForWriting.close()
+                }
                 let out = stdout.fileHandleForReading.readDataToEndOfFile()
                 let err = stderr.fileHandleForReading.readDataToEndOfFile()
                 process.waitUntilExit()

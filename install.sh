@@ -12,6 +12,7 @@
 #   ATLAS_VERSION         release tag to install (default: latest)
 #   ATLAS_DOWNLOAD_BASE   mirror directory URL holding the zip and SHA256SUMS
 #   ATLAS_ALLOW_UNNOTARIZED=1  accept a signed but not notarized build
+#   ATLAS_NO_OPEN=1        do not open Atlas when installed
 set -eu
 
 REPO="InsaneArts/atlas"
@@ -118,6 +119,10 @@ case ":$PATH:" in
 esac
 if ls "$HOME/Library/Application Support/Atlas"/setup-*.json >/dev/null 2>&1; then
 	say "Next: atlas restart && atlas setup --apply"
+elif [ -z "${SSH_CONNECTION:-}" ] && [ -z "${ATLAS_NO_OPEN:-}" ]; then
+	# The setup window walks the person through the rest.
+	say "Opening Atlas to finish setting up (or run atlas init in a terminal)."
+	open "$dest" || say "Next: open Atlas from Applications, or run atlas init"
 else
-	say "Next: atlas init"
+	say "Next: open Atlas from Applications, or run atlas init"
 fi

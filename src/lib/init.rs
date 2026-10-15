@@ -120,7 +120,7 @@ fn sudo(args: &[&str]) -> Result<std::process::Output> {
 }
 
 /// The installed app's executable; init runs from it.
-fn app_executable() -> Result<PathBuf> {
+pub(crate) fn app_executable() -> Result<PathBuf> {
     let app = crate::update::installed_app()?;
     let executable = app.join("Contents/MacOS/atlas");
     if !crate::update::reachable_by_others(&executable) {
@@ -132,7 +132,7 @@ fn app_executable() -> Result<PathBuf> {
 }
 
 /// `~/.local/bin/atlas` → the app, so `atlas` works in a terminal.
-fn link_command(executable: &Path) -> Result<Value> {
+pub(crate) fn link_command(executable: &Path) -> Result<Value> {
     let bin = config::home()?.join(".local/bin");
     fs::create_dir_all(&bin)?;
     let link = bin.join("atlas");
@@ -146,7 +146,7 @@ fn link_command(executable: &Path) -> Result<Value> {
 }
 
 /// Whether `name` can be a new account's short name.
-fn valid_account_name(name: &str) -> std::result::Result<(), String> {
+pub(crate) fn valid_account_name(name: &str) -> std::result::Result<(), String> {
     if name.is_empty() || name.len() > 31 {
         return Err("Use 1 to 31 characters.".into());
     }
@@ -232,7 +232,7 @@ fn choose_helper() -> Result<setup::Account> {
 }
 
 /// The lowest user ID from 501 that no account has and no process runs as.
-fn free_uid() -> Result<u32> {
+pub(crate) fn free_uid() -> Result<u32> {
     let taken = |program: &str, args: &[&str]| -> Result<Vec<u32>> {
         let output = Command::new(program).args(args).output()?;
         if !output.status.success() {
@@ -251,7 +251,7 @@ fn free_uid() -> Result<u32> {
 }
 
 /// The configuration for `helper` in the managed private layout.
-fn proposed(helper: &setup::Account) -> Result<Config> {
+pub(crate) fn proposed(helper: &setup::Account) -> Result<Config> {
     let layout = Layout {
         uid: helper.uid,
         home: helper.home.clone(),
@@ -266,7 +266,7 @@ fn proposed(helper: &setup::Account) -> Result<Config> {
 }
 
 /// Write a new configuration atomically, readable only by this account.
-fn write_config(path: &Path, config: &Config) -> Result<()> {
+pub(crate) fn write_config(path: &Path, config: &Config) -> Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
     let parent = path
         .parent()
@@ -294,7 +294,7 @@ fn write_config(path: &Path, config: &Config) -> Result<()> {
 
 /// Replace the configuration that named `previous` (its helper account is
 /// gone or changed), atomically, and only while the file still says so.
-fn replace_config(path: &Path, previous: &Config, config: &Config) -> Result<()> {
+pub(crate) fn replace_config(path: &Path, previous: &Config, config: &Config) -> Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
     // Replacing a link would leave the file it points to unchanged.
     if fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
@@ -330,7 +330,7 @@ fn replace_config(path: &Path, previous: &Config, config: &Config) -> Result<()>
 }
 
 /// Whether the helper's graphical session exists (it has logged in).
-fn helper_logged_in(uid: u32) -> bool {
+pub(crate) fn helper_logged_in(uid: u32) -> bool {
     // A signed-in desktop runs its Dock; visible without administrator rights.
     Command::new("/usr/bin/pgrep")
         .args(["-U", &uid.to_string(), "-x", "Dock"])
@@ -534,7 +534,7 @@ fn offer_lock(name: &str) -> Result<()> {
 }
 
 /// The permissions the helper still lacks, by their System Settings names.
-fn missing(status: &Value) -> Vec<&'static str> {
+pub(crate) fn missing(status: &Value) -> Vec<&'static str> {
     [
         ("screenCapture", "Screen & System Audio Recording"),
         ("accessibility", "Accessibility"),
