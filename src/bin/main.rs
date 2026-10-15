@@ -438,7 +438,7 @@ enum OnboardingCommand {
     Create {
         #[arg(long)]
         account: String,
-        #[arg(long = "full-name", default_value = "Atlas Helper")]
+        #[arg(long = "full-name", default_value = atlas::init::FULL_NAME)]
         full_name: String,
     },
     /// In the helper: let the account that asked use this one (the one the

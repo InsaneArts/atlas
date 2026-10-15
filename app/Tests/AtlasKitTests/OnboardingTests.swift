@@ -26,7 +26,7 @@ func facts(_ reply: [String: Any]) throws -> OnboardingFacts {
         allowed: Bool = true, admin: Bool = false, leftover: Bool = false, paired: Bool = true
     ) -> [String: Any] {
         [
-            "exists": true, "name": "atlas", "realName": "Atlas Helper",
+            "exists": true, "name": "atlas", "realName": "Atlas",
             "administrator": admin, "leftoverSession": leftover, "paired": paired,
             "signedIn": signedIn, "answering": answering, "onConsole": !hidden, "hidden": hidden,
             "permissions": ["screenCapture": allowed, "accessibility": allowed],

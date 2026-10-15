@@ -352,12 +352,15 @@ fn dist(options: &Options) -> Result<()> {
     universal(&cli, &macos.join("atlas"))?;
     fs::copy(&executable, macos.join(APP_EXECUTABLE)).map_err(|error| error.to_string())?;
     check_universal(&macos.join(APP_EXECUTABLE))?;
-    // The app icon, drawn by app/Resources/AppIcon.swift.
-    fs::copy(
-        package.join("Resources/AppIcon.icns"),
-        app.join("Contents/Resources/AppIcon.icns"),
-    )
-    .map_err(|error| error.to_string())?;
+    // The app icon and the helper account's picture, both drawn by
+    // app/Resources/AppIcon.swift.
+    for file in ["AppIcon.icns", "HelperPicture.png"] {
+        fs::copy(
+            package.join("Resources").join(file),
+            app.join("Contents/Resources").join(file),
+        )
+        .map_err(|error| error.to_string())?;
+    }
     // The agent plugin (Claude Code and Codex), matching this CLI's version.
     exec(
         "/usr/bin/ditto",
@@ -550,6 +553,10 @@ mod tests {
         assert!(
             root().join("app/Resources/AppIcon.icns").is_file(),
             "the icon the plist names is checked in"
+        );
+        assert!(
+            root().join("app/Resources/HelperPicture.png").is_file(),
+            "the helper's account picture is checked in"
         );
         for expected in [
             r#""CFBundleIdentifier":"com.insanearts.atlas""#,

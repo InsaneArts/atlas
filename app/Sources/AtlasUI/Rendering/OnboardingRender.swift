@@ -24,7 +24,7 @@ public func onboardingScreens() -> [(name: String, model: OnboardingModel, size:
         signedIn: Bool = true, answering: Bool = true, hidden: Bool = true, allowed: Bool = true
     ) -> [String: Any] {
         [
-            "exists": true, "name": "atlas", "realName": "Atlas Helper", "administrator": false,
+            "exists": true, "name": "atlas", "realName": "Atlas", "administrator": false,
             "leftoverSession": false, "paired": true, "signedIn": signedIn, "answering": answering,
             "onConsole": !hidden, "hidden": hidden,
             "permissions": ["screenCapture": allowed, "accessibility": allowed],
@@ -32,7 +32,7 @@ public func onboardingScreens() -> [(name: String, model: OnboardingModel, size:
     }
     func asker(running: Bool, ax: Bool, screen: Bool) -> OnboardingFacts {
         facts([
-            "role": "helper", "me": ["name": "atlas", "realName": "Atlas Helper"],
+            "role": "helper", "me": ["name": "atlas", "realName": "Atlas"],
             "app": ["installed": true, "signed": true],
             "helper": [
                 "controller": ["uid": 501, "name": "theiskaa", "realName": "Ismayil"],
@@ -63,7 +63,7 @@ public func onboardingScreens() -> [(name: String, model: OnboardingModel, size:
         ("03-create", .still(controller(nil), creating), card),
         (
             "03-create-working",
-            .still(controller(nil), creating, working: "Creating Atlas Helper… Confirm in the macOS dialog."), card
+            .still(controller(nil), creating, working: "Creating the account… Confirm in the macOS dialog."), card
         ),
         ("04-switch", .still(controller(helper(signedIn: false, answering: false, allowed: false))), card),
         ("04-switch-open-atlas", .still(controller(helper(answering: false, allowed: false))), card),

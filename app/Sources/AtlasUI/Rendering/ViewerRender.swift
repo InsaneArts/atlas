@@ -41,10 +41,10 @@ public func viewerScreens() -> [(name: String, model: ViewerModel)] {
         let reply: [String: Any] = [
             "ready": true, "canObserve": true,
             "checks": [["name": "Helper session", "ok": true], ["name": "Input service", "ok": ok]],
-            "session": ["user": ["name": "Atlas Helper"], "inputService": ["ok": true, "ready": true]],
+            "session": ["user": ["name": "Atlas"], "inputService": ["ok": true, "ready": true]],
             "capabilities": ["nativeDialogs": ["state": "unknown", "reason": "Run atlas verify-native to check."]],
             "overview": [
-                "mode": mode, "reason": reason, "account": "atlas", "accountName": "Atlas Helper",
+                "mode": mode, "reason": reason, "account": "atlas", "accountName": "Atlas",
                 "display": ["width": 1512, "height": 982], "pending": mode == "recovering" ? 1 : 0,
                 "activity": [
                     [
@@ -82,7 +82,7 @@ public func viewerScreens() -> [(name: String, model: ViewerModel)] {
             "07-unavailable",
             .still(
                 status("unavailable", reason: "The helper is signed out"), image: nil,
-                unavailable: "Sign in to Atlas Helper, then switch back.")
+                unavailable: "Sign in to Atlas, then switch back.")
         ),
         ("08-notice", .still(status("observing"), image: desktop, notice: "Control released.")),
     ]

@@ -189,7 +189,8 @@ struct ChooseScreen: View {
             )
             VStack(spacing: 8) {
                 Choice(
-                    title: "Create a new account", detail: "Recommended. A standard account named Atlas Helper.",
+                    title: "Create a new account",
+                    detail: "Recommended. A standard account named Atlas, with Atlas's picture.",
                     symbol: "plus", selected: model.picked == ""
                 ) { model.picked = "" }
                 ForEach(model.facts.candidates, id: \.name) { candidate in
@@ -261,7 +262,7 @@ struct CreateScreen: View {
         Column(width: 440) {
             Eyebrow(text: "New account")
             Headline(
-                title: "Create \(model.fullName.isEmpty ? "the helper" : model.fullName).",
+                title: "Create the helper account.",
                 tail: model.working != nil ? "Confirm in the macOS dialog." : "macOS asks for your password next.")
             Card {
                 Field(label: "Full name", text: $model.fullName)

@@ -94,7 +94,7 @@ public struct ViewerStatus: Decodable, Equatable, Sendable {
         public var mode = "unavailable"
         public var reason = "Connecting to the helper"
         public var account: String?
-        /// The account's full name ("Atlas Helper"), when it has one.
+        /// The account's full name ("Atlas"), when it has one.
         public var accountName: String?
         public var display: Size?
         /// Actions of unknown outcome, waiting for recovery.

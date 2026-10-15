@@ -449,22 +449,22 @@ pub fn create(config_path: &Path, name: &str, full_name: &str) -> Result<Value> 
     }
     let mut password = read_secret(std::io::stdin())?;
     let uid = init::free_uid()?.to_string();
-    let result = answer_prompts(
-        "/usr/sbin/sysadminctl",
-        &[
-            "-addUser",
-            name,
-            "-fullName",
-            full_name,
-            "-UID",
-            &uid,
-            "-password",
-            "-",
-            "interactive",
-        ],
-        &password,
-        APPROVAL,
-    );
+    let mut args = vec![
+        "-addUser",
+        name,
+        "-fullName",
+        full_name,
+        "-UID",
+        &uid,
+        "-password",
+        "-",
+    ];
+    let picture = init::helper_picture();
+    if let Some(picture) = &picture {
+        args.extend(["-picture", picture]);
+    }
+    args.push("interactive");
+    let result = answer_prompts("/usr/sbin/sysadminctl", &args, &password, APPROVAL);
     password.fill(0);
     // sysadminctl reports success even when it did nothing: the account
     // itself is the answer.
