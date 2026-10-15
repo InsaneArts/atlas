@@ -17,24 +17,19 @@ use serde_json::{Value, json};
 /// What the aggregate `ready` does not cover.
 const NOT_VERIFIED: [&str; 2] = ["application launch", "application sign-in"];
 
-/// Directories tools resolve from inside the helper when no environment is
-/// selected, in the runner's order.
+/// The PATH tools resolve from inside the helper when no environment is
+/// selected: the same places, in the same order, as the runner.
 fn helper_path(home: &str) -> String {
-    format!(
-        "{home}/.local/bin:{home}/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:\
-         /usr/sbin:/sbin"
-    )
+    std::env::join_paths(crate::environment::helper_search_path(
+        std::path::Path::new(home),
+    ))
+    .map(|path| path.to_string_lossy().into_owned())
+    .unwrap_or_default()
 }
 
 /// The first non-empty line of command output, bounded for reports.
 fn first_line(output: &[u8]) -> String {
-    String::from_utf8_lossy(output)
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or_default()
-        .chars()
-        .take(200)
-        .collect()
+    crate::ui::text::first_line(output, 200).unwrap_or_default()
 }
 
 /// Classify a present tool from its `--version` invocation. Completion is

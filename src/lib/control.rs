@@ -1,3 +1,7 @@
+//! Who may act on the helper, and what is still unsettled: one controller at
+//! a time ([`Controller`], a file lock per helper account), a marker of every
+//! mutation whose outcome is unknown until verified recovery clears it, and
+//! the short-lived [`Lease`] a viewer holds while a person has control.
 use crate::{
     config::home,
     error::{Error, Result},

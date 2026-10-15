@@ -1,7 +1,7 @@
 //! Native dialog capability: an explicit, mutating canary and its dated record.
 //!
-//! Transport, identity and permissions were all green while native Save/Open
-//! failed, so readiness never implies dialogs work. `verify-native` launches
+//! A helper can pass every readiness check while native Save/Open panels
+//! fail, so readiness never implies dialogs work. `verify-native` launches
 //! a fresh copy of the maintained AppKit fixture, drives its real NSSavePanel
 //! and NSOpenPanel with guarded keyboard input under one controller ownership
 //! and one display epoch, checks exact file bytes, archives the fixture's
@@ -392,10 +392,7 @@ impl Canary<'_> {
         let reply = self
             .run(vec![probe.into_owned(), "windows-info".into()])
             .await?;
-        run_output(&reply, 1 << 20)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-            .and_then(|value| serde_json::from_value(value["windows"].clone()).ok())
+        crate::native::windows::from_probe(&reply)
             .ok_or_else(|| problem("The helper window list is unavailable"))
     }
     fn display(&self) -> Bounds {

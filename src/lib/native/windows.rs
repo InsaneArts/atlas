@@ -61,6 +61,16 @@ fn read_window(entry: &cf::Record) -> Option<Window> {
     })
 }
 
+/// The windows a `windows-info` probe run in the helper reported, from the
+/// helper daemon's reply for that run; None when it did not answer whole.
+pub fn from_probe(reply: &serde_json::Value) -> Option<Vec<Window>> {
+    let output = crate::transport::run_output(reply, 1 << 20).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&output).ok()?;
+    (value["ok"] == true)
+        .then(|| serde_json::from_value(value["windows"].clone()).ok())
+        .flatten()
+}
+
 /// On-screen windows in front-to-back order.
 pub fn windows() -> Result<Vec<Window>> {
     let options =

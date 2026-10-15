@@ -1,6 +1,6 @@
 //! Protocol v1 requests the helper daemon accepts, validated before anything
-//! runs. Replies and error wording match the capture daemon Atlas used
-//! before, so existing clients are unaffected.
+//! runs. Refusals keep their exact wording: clients and the live checks
+//! match on it.
 use serde_json::{Value, json};
 use std::time::Duration;
 
@@ -140,9 +140,9 @@ mod tests {
         assert_eq!(timeout, Duration::from_secs(30));
     }
 
-    /// The wording the previous capture daemon used, recorded from it.
+    /// The wording clients match on.
     #[test]
-    fn refusals_match_the_recorded_daemon() {
+    fn refusals_keep_their_wording() {
         assert_eq!(
             refused(r#"{"notAnOp":true}"#),
             json!({"ok": false, "code": "bad-request", "error": "request is missing an \"op\" string"})

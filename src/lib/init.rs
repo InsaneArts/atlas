@@ -121,8 +121,7 @@ fn sudo(args: &[&str]) -> Result<std::process::Output> {
 
 /// The installed app's executable; init runs from it.
 pub(crate) fn app_executable() -> Result<PathBuf> {
-    let app = crate::update::installed_app()?;
-    let executable = app.join("Contents/MacOS/atlas");
+    let executable = crate::update::installed_executable()?;
     if !crate::update::reachable_by_others(&executable) {
         return Err(problem(
             "Atlas.app must be in /Applications so the helper account can run it",
@@ -163,10 +162,7 @@ pub(crate) fn valid_account_name(name: &str) -> std::result::Result<(), String> 
 /// Choose an existing standard account, or (only when asked for, and
 /// confirmed) create one.
 fn choose_helper() -> Result<setup::Account> {
-    let candidates: Vec<_> = crate::switch::accounts(None)?
-        .into_iter()
-        .filter(|account| setup::administrator(&account.name) == Some(false))
-        .collect();
+    let candidates = crate::switch::standard_accounts()?;
     let mut items: Vec<String> = candidates
         .iter()
         .map(|account| match &account.real_name {
@@ -210,24 +206,9 @@ fn choose_helper() -> Result<setup::Account> {
     }
     say("macOS asks for your administrator password, then a password for the new account.");
     // sysadminctl logs every step to the terminal; only its questions show.
-    // A user ID nothing runs as: a deleted account's session can outlive
-    // it, and sharing its ID would mix that session with the helper's.
-    let uid = free_uid()?.to_string();
-    let mut args = vec![
-        "/usr/sbin/sysadminctl",
-        "-addUser",
-        &name,
-        "-fullName",
-        FULL_NAME,
-        "-UID",
-        &uid,
-        "-password",
-        "-",
-    ];
-    let picture = helper_picture();
-    if let Some(picture) = &picture {
-        args.extend(["-picture", picture]);
-    }
+    let mut args = vec![SYSADMINCTL.to_owned()];
+    args.extend(add_user_args(&name, FULL_NAME, free_uid()?));
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
     quietly_attended(
         "/usr/bin/sudo",
         &args,
@@ -238,6 +219,31 @@ fn choose_helper() -> Result<setup::Account> {
 
 /// The full name a new helper account gets.
 pub const FULL_NAME: &str = "Atlas";
+
+/// macOS's account tool, which creates the helper account.
+pub(crate) const SYSADMINCTL: &str = "/usr/sbin/sysadminctl";
+
+/// The arguments that make `sysadminctl` create a standard account `name`
+/// called `full_name` with user ID `uid`, asking for its password itself
+/// (`-password -`), with Atlas's picture when it is at hand.
+pub(crate) fn add_user_args(name: &str, full_name: &str, uid: u32) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "-addUser",
+        name,
+        "-fullName",
+        full_name,
+        "-UID",
+        &uid.to_string(),
+        "-password",
+        "-",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    if let Some(picture) = helper_picture() {
+        args.extend(["-picture".to_owned(), picture]);
+    }
+    args
+}
 
 /// The picture a new helper account gets, Atlas's mark: shipped in
 /// Atlas.app, or in a development checkout drawn into app/Resources.
@@ -254,7 +260,9 @@ pub(crate) fn helper_picture() -> Option<String> {
         .and_then(|path| path.to_str().map(str::to_owned))
 }
 
-/// The lowest user ID from 501 that no account has and no process runs as.
+/// The lowest user ID from 501 that no account has and no process runs as:
+/// a deleted account's session can outlive it, and sharing its ID would mix
+/// that session with the helper's.
 pub(crate) fn free_uid() -> Result<u32> {
     let taken = |program: &str, args: &[&str]| -> Result<Vec<u32>> {
         let output = Command::new(program).args(args).output()?;
@@ -375,23 +383,8 @@ fn keep_sudo_alive() {
 /// Run one setup-helper request as the helper, inside its own login, with
 /// the administrator rights init holds.
 fn as_helper(executable: &Path, helper: &setup::Account, request: &Request) -> Result<Value> {
-    let request = serde_json::to_string(request)?;
-    let program = executable.to_string_lossy();
-    let output = sudo(&[
-        "/bin/launchctl",
-        "asuser",
-        &helper.uid.to_string(),
-        "/usr/bin/sudo",
-        "-u",
-        &helper.name,
-        &program,
-        "setup-helper",
-        &request,
-    ])?;
-    let reply: Value = serde_json::from_slice(&output.stdout)
-        .or_else(|_| serde_json::from_slice(&output.stderr))
-        .unwrap_or(Value::Null);
-    if !output.status.success() || reply["ok"] != true {
+    let (succeeded, reply) = setup::request_as_helper(executable, helper, request, true)?;
+    if !succeeded || reply["ok"] != true {
         return Err(problem(format!(
             "Setting up the helper failed: {}",
             reply["error"].as_str().unwrap_or("no reply")
@@ -446,12 +439,10 @@ async fn wait_for<T>(what: &str, mut ready: impl AsyncFnMut() -> Option<T>) -> R
     }
 }
 
-/// The finishing touches, offered only when not already in place: the menu
-/// bar at login, and teaching the installed agents.
-/// The closing steps, which never fail a setup that worked. The menu bar is
-/// turned on at login only by the first setup (a later run leaves the
-/// person's choice alone), and only for the default settings, the ones the
-/// login item uses.
+/// The closing steps, which never fail a setup that worked: the menu bar at
+/// login, and teaching the installed agents. The menu bar is turned on at
+/// login only by the first setup (a later run leaves the person's choice
+/// alone), and only for the default settings, the ones the login item uses.
 fn finish(done_steps: &mut Vec<Value>, settings: &Path) -> Result<()> {
     let default = config::installed_path().ok().as_deref() == Some(settings);
     // Until it is decided once (here, or by the person), never again after.

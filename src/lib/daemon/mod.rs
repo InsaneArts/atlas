@@ -8,3 +8,13 @@ pub mod protocol;
 pub mod run;
 #[cfg(target_os = "macos")]
 pub mod serve;
+
+#[cfg(not(target_os = "macos"))]
+pub mod serve {
+    use crate::error::{Error, Result};
+
+    /// The helper daemon runs on macOS only.
+    pub fn serve_blocking(_: u32, _: u32, _: std::path::PathBuf) -> Result<()> {
+        Err(Error::new("platform", "The helper daemon requires macOS"))
+    }
+}

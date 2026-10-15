@@ -6,10 +6,9 @@ use super::{
 use crate::{
     actions::{Action, Button, PointerPhase},
     error::{Error, Result},
-    native::session_info,
+    native::{accessibility_trusted, session_info},
     session::InputEpoch,
 };
-use objc2_application_services::AXIsProcessTrusted;
 use objc2_core_foundation::{CFRetained, CGPoint as Point};
 use objc2_core_graphics::{
     CGEvent, CGEventField, CGEventFlags, CGEventSource, CGEventSourceStateID, CGEventTapLocation,
@@ -72,10 +71,9 @@ impl Engine {
         engine.check()?;
         Ok(engine)
     }
-    #[allow(unsafe_code)] // FFI: Accessibility trust query.
+    /// Whether this process may use Accessibility.
     pub fn trusted() -> bool {
-        // SAFETY: no arguments; only reads this process's consent.
-        unsafe { AXIsProcessTrusted() }
+        accessibility_trusted()
     }
     pub fn check(&self) -> Result<()> {
         let current = InputEpoch::from_proof(&session_info()?, std::process::id())?;

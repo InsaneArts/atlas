@@ -225,11 +225,7 @@ async fn windows_within(client: &Client, limit: Duration) -> Result<Vec<Window>>
     let reply = client
         .inspect_within(vec![probe, "windows-info".into()], limit)
         .await?;
-    run_output(&reply, 1 << 20)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .filter(|value| value["ok"] == true)
-        .and_then(|value| serde_json::from_value(value["windows"].clone()).ok())
+    crate::native::windows::from_probe(&reply)
         .ok_or_else(|| Error::new("windows", "The helper window list is unavailable"))
 }
 
@@ -436,7 +432,7 @@ pub async fn wait(
         if matching.is_empty() == gone && (timeout.is_zero() || observed <= deadline) {
             return Ok(json!({
                 "ok": true,
-                "waitedMs": started.elapsed().as_millis() as u64,
+                "waitedMs": u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 "windows": matching,
             }));
         }

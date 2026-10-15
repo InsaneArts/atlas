@@ -130,18 +130,8 @@ fn me() -> Result<(u32, String, Option<String>)> {
     let uid = nix::unistd::getuid().as_raw();
     let account =
         setup::account_with_uid(uid)?.ok_or_else(|| problem("This account cannot be resolved"))?;
-    let real = real_name(&account.name);
+    let real = setup::real_name(&account.name);
     Ok((uid, account.name, real))
-}
-
-pub(crate) fn real_name(name: &str) -> Option<String> {
-    let output = Command::new("/usr/bin/dscl")
-        .args([".", "-read", &format!("/Users/{name}"), "RealName"])
-        .output()
-        .ok()?;
-    let text = String::from_utf8(output.stdout).ok()?;
-    let value = text.strip_prefix("RealName:")?.trim().to_owned();
-    (!value.is_empty()).then_some(value)
 }
 
 fn home() -> Result<PathBuf> {
@@ -257,7 +247,7 @@ pub async fn status(config_path: &Path) -> Result<Value> {
             "exists": true,
             "uid": helper.uid,
             "name": helper.name,
-            "realName": real_name(&helper.name),
+            "realName": setup::real_name(&helper.name),
             "administrator": admin,
             "leftoverSession": leftover,
             "paired": paired,
@@ -291,12 +281,9 @@ async fn helper_side(uid: u32, pairing: Option<&Pairing>) -> Value {
                 .is_ok_and(|agent| text == setup::helper::plist(&agent, &layout.logs())),
         }
     });
-    let running = Command::new("/bin/launchctl")
-        .args(["print", &format!("gui/{uid}/{LABEL}")])
-        .output()
-        .is_ok_and(|output| {
-            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("pid = ")
-        });
+    let running = layout
+        .as_ref()
+        .is_ok_and(|layout| setup::helper::job_pid(layout, LABEL).is_some());
     // macOS counts a process the window starts as the window's own, so only
     // the job's answer tells what Atlas itself may do here.
     let mut permissions = json!({"screenCapture": false, "accessibility": false});
@@ -317,7 +304,7 @@ async fn helper_side(uid: u32, pairing: Option<&Pairing>) -> Value {
         json!({
             "uid": pairing.controller_uid,
             "name": pairing.controller_name,
-            "realName": real_name(&pairing.controller_name),
+            "realName": setup::real_name(&pairing.controller_name),
         })
     });
     json!({
@@ -330,9 +317,8 @@ async fn helper_side(uid: u32, pairing: Option<&Pairing>) -> Value {
 
 /// Standard accounts that could be the helper.
 fn candidates() -> Result<Vec<Value>> {
-    Ok(crate::switch::accounts(None)?
+    Ok(crate::switch::standard_accounts()?
         .into_iter()
-        .filter(|account| setup::administrator(&account.name) == Some(false))
         .map(|account| {
             json!({"name": account.name, "uid": account.uid, "realName": account.real_name})
         })
@@ -448,23 +434,10 @@ pub fn create(config_path: &Path, name: &str, full_name: &str) -> Result<Value> 
         return Err(problem(format!("{name} already exists; choose it instead")));
     }
     let mut password = read_secret(std::io::stdin())?;
-    let uid = init::free_uid()?.to_string();
-    let mut args = vec![
-        "-addUser",
-        name,
-        "-fullName",
-        full_name,
-        "-UID",
-        &uid,
-        "-password",
-        "-",
-    ];
-    let picture = init::helper_picture();
-    if let Some(picture) = &picture {
-        args.extend(["-picture", picture]);
-    }
-    args.push("interactive");
-    let result = answer_prompts("/usr/sbin/sysadminctl", &args, &password, APPROVAL);
+    let mut args = init::add_user_args(name, full_name, init::free_uid()?);
+    args.push("interactive".to_owned());
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let result = answer_prompts(init::SYSADMINCTL, &args, &password, APPROVAL);
     password.fill(0);
     // sysadminctl reports success even when it did nothing: the account
     // itself is the answer.
@@ -724,9 +697,8 @@ pub fn window_open(home: &Path) -> bool {
         .args(["-o", "comm=", "-p", &pid.to_string()])
         .output()
         .is_ok_and(|output| {
-            String::from_utf8_lossy(&output.stdout)
-                .trim()
-                .ends_with("AtlasApp")
+            Path::new(String::from_utf8_lossy(&output.stdout).trim()).file_name()
+                == Some(std::ffi::OsStr::new(crate::menubar::APP_EXECUTABLE))
         })
 }
 

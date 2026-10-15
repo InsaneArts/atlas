@@ -195,9 +195,6 @@ pub fn resolve(target: &str) -> Target {
     }
 }
 
-/// The paths among `targets` as the helper can open them: unchanged when it
-/// can read them (or they are copies already), otherwise copied first. The
-/// copies made are added to `copied`.
 /// A running app, as the helper lists it.
 pub struct Running {
     pub name: String,
@@ -207,6 +204,9 @@ pub struct Running {
 /// Which app the copies are opened with, by the names it may run as.
 const OPENED_WITH: &str = ".opened-with";
 
+/// The paths among `targets` as the helper can open them: unchanged when it
+/// can read them (or they are copies already), otherwise copied first. The
+/// copies made are added to `copied`.
 pub async fn hand_over(
     client: &Client,
     ownership: &Ownership,

@@ -151,9 +151,6 @@ pub fn marketplace() -> Result<PathBuf> {
         .ok_or_else(|| problem("This Atlas carries no agent plugin; reinstall it"))
 }
 
-/// Run an agent's tool with no input and stop it after `limit`. Output is
-/// collected as it arrives, so a background process the tool leaves holding
-/// its output open cannot keep Atlas waiting.
 /// The process groups of agent tools running now.
 static RUNNING: Mutex<Vec<i32>> = Mutex::new(Vec::new());
 
@@ -177,6 +174,9 @@ pub fn stop_running() {
     signal(nix::sys::signal::Signal::SIGKILL);
 }
 
+/// Run an agent's tool with no input and stop it after `limit`. Output is
+/// collected as it arrives, so a background process the tool leaves holding
+/// its output open cannot keep Atlas waiting.
 fn exec(agent: Agent, argv: &[impl AsRef<std::ffi::OsStr>], limit: Duration) -> Result<Output> {
     use std::os::unix::process::CommandExt;
     // Its own process group, so a timeout stops whatever it started too.
@@ -401,14 +401,11 @@ fn run(agent: Agent, argv: &[String]) -> Result<()> {
     if output.status.success() {
         return Ok(());
     }
-    let text = String::from_utf8_lossy(&output.stderr);
     Err(problem(format!(
         "{} {} failed: {}",
         agent.name(),
         argv.join(" "),
-        text.lines()
-            .find(|line| !line.trim().is_empty())
-            .unwrap_or("no output")
+        crate::ui::text::first_line(&output.stderr, 300).unwrap_or_else(|| "no output".to_owned())
     )))
 }
 

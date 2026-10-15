@@ -412,9 +412,9 @@ mod tests {
         assert_eq!(hello[0]["ok"], true, "facts stay available");
     }
 
-    /// Reply shapes match the daemon Atlas used before (recorded).
+    /// The reply shapes clients and the live checks read.
     #[tokio::test]
-    async fn replies_keep_the_recorded_shapes() {
+    async fn replies_keep_their_shapes() {
         let keys = |value: &Value| {
             let mut keys: Vec<_> = value.as_object().unwrap().keys().cloned().collect();
             keys.sort();

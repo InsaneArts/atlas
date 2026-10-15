@@ -1,3 +1,6 @@
+//! One request to a helper-side socket and its reply: a JSON line in, event
+//! lines and a final reply out, within one deadline, from a peer the kernel
+//! says is the helper account.
 use crate::error::{Error, Result};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};

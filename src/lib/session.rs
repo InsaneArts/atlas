@@ -1,3 +1,6 @@
+//! What the helper's status proves about its session: the display and the
+//! processes an action is tied to (its [`Epoch`]), whether the helper is the
+//! hidden graphical login it must be, and the doctor report built from it.
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -144,8 +147,9 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
     };
     let pid = value["daemon"]["pid"]
         .as_u64()
-        .filter(|p| *p > 0 && *p <= u32::MAX as u64)
-        .ok_or_else(invalid)? as u32;
+        .and_then(|pid| u32::try_from(pid).ok())
+        .filter(|pid| *pid > 0)
+        .ok_or_else(invalid)?;
     let display: Display =
         serde_json::from_value(value["display"].clone()).map_err(|_| invalid())?;
     if value["ok"] != true
@@ -204,11 +208,9 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
     })
 }
 
-/// Whether the input service in `value` is healthy and in the same helper
-/// session as `session`, pinned to an earlier number of the same-size
-/// display (switching accounts can renumber it). The next action re-pins it
-/// to the current display, so it counts as ready.
-pub fn repinnable(value: &Value, session: &Session) -> bool {
+/// Whether the input service in `value` is healthy and the one `session`
+/// names, in the same login, whatever display it is pinned to.
+pub fn pinned_to_session(value: &Value, session: &Session) -> bool {
     let native = &value["inputService"];
     let pinned = &native["enforcedEpoch"];
     let epoch = &session.epoch;
@@ -218,6 +220,16 @@ pub fn repinnable(value: &Value, session: &Session) -> bool {
         && pinned["uid"] == epoch.uid
         && pinned["securitySessionId"] == epoch.security_session_id
         && pinned["processId"] == epoch.input_pid
+}
+
+/// Whether the input service in `value` is healthy and in the same helper
+/// session as `session`, pinned to an earlier number of the same-size
+/// display (switching accounts can renumber it). The next action re-pins it
+/// to the current display, so it counts as ready.
+pub fn repinnable(value: &Value, session: &Session) -> bool {
+    let pinned = &value["inputService"]["enforcedEpoch"];
+    let epoch = &session.epoch;
+    pinned_to_session(value, session)
         && pinned["width"].as_f64() == Some(epoch.display.width)
         && pinned["height"].as_f64() == Some(epoch.display.height)
 }
@@ -229,9 +241,6 @@ struct Check {
     next_step: String,
 }
 
-/// Separate observation, input and native-dialog capability. `ready` keeps its
-/// established meaning (transport, identity, permissions, input service); it
-/// never implies that native Save/Open dialogs work.
 /// Whether `status` shows input service `pid` ready in the hidden helper with
 /// no controller and nothing held.
 pub fn input_settled(status: &Value, uid: u32, pid: u32) -> bool {
@@ -255,6 +264,10 @@ pub fn input_current(status: &Value, uid: u32, pid: u32) -> bool {
     input_settled(status, uid, pid) && input_build_current(status)
 }
 
+/// The doctor report for a status snapshot: each check, what to do about a
+/// failed one, and `ready` for transport, identity, permissions and the
+/// input service. Whether native Save/Open dialogs work is a separate
+/// observation ([`crate::capability`]) that `ready` never implies.
 pub fn diagnose(value: Value, uid: u32) -> Value {
     let session = require_hidden(&value, uid).ok();
     let reachable = value["ok"] == true;
@@ -371,8 +384,8 @@ pub fn diagnose(value: Value, uid: u32) -> Value {
         "capabilities": {
             "observe": observe,
             "input": session.as_ref().is_some_and(|s| s.input || repinnable(&value, s)),
-            // Transport, identity and permissions were all green in Phase 1
-            // while native Save/Open failed. Only a fresh native check counts.
+            // Only a fresh native check counts; capability::doctor puts the
+            // recorded observation here.
             "nativeDialogs": {
                 "state": "unknown",
                 "reason": "No fresh native Save/Open observation. Native dialogs were qualified \

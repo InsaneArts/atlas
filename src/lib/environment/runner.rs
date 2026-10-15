@@ -53,17 +53,8 @@ pub(super) fn execute(
 ) -> Result<Value> {
     validate_argv(argv)?;
     let variables = load(home)?;
-    let path = std::env::join_paths([
-        home.join(".local/bin"),
-        home.join(".cargo/bin"),
-        PathBuf::from("/opt/homebrew/bin"),
-        PathBuf::from("/usr/local/bin"),
-        PathBuf::from("/usr/bin"),
-        PathBuf::from("/bin"),
-        PathBuf::from("/usr/sbin"),
-        PathBuf::from("/sbin"),
-    ])
-    .map_err(|_| problem("Invalid helper command path"))?;
+    let path = std::env::join_paths(helper_search_path(home))
+        .map_err(|_| problem("Invalid helper command path"))?;
     let mut command = Command::new(&argv[0]);
     command
         .args(&argv[1..])
