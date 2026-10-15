@@ -164,13 +164,22 @@ impl Viewer {
             crate::client::timestamp(),
         );
         // The helper's full name, as people know the account; looked up
-        // until it is known.
+        // (off the runtime, it asks directory services) until it is known.
         if let Some(name) = status["overview"]["account"].as_str() {
-            let title = self.account_name.get().cloned().or_else(|| {
-                let title = crate::onboarding::real_name(name)?;
-                let _ = self.account_name.set(title.clone());
-                Some(title)
-            });
+            let title = match self.account_name.get() {
+                Some(title) => Some(title.clone()),
+                None => {
+                    let name = name.to_owned();
+                    let title = tokio::task::spawn_blocking(move || crate::setup::real_name(&name))
+                        .await
+                        .ok()
+                        .flatten();
+                    if let Some(title) = &title {
+                        let _ = self.account_name.set(title.clone());
+                    }
+                    title
+                }
+            };
             status["overview"]["accountName"] = json!(title);
         }
         status
@@ -520,7 +529,9 @@ fn already_running(output: &Path, port: u16, taken: Error) -> Result<()> {
 /// when it is not running.
 pub async fn monitor(config: &Path, port: u16, output: &Path) -> Result<()> {
     let (_, record) = crate::menubar::launch(config, port, output).await?;
-    let url = record["url"].as_str().unwrap_or("");
+    let url = record["url"]
+        .as_str()
+        .ok_or_else(|| Error::new("menubar", "The menu bar's record names no viewer"))?;
     post_local(url, "app/viewer", &json!({}))?;
     if crate::ui::human() {
         println!(
@@ -801,9 +812,8 @@ fn response(code: u16, mime: &str, body: Vec<u8>, headers: &[(&str, String)]) ->
 mod tests {
     use super::*;
 
-    /// A viewer whose helper is unreachable and whose controller state is
-    /// private to the test.
-    /// A viewer bound to a free port, for a helper that is not there.
+    /// A viewer bound to a free port, for a helper that is not there, with
+    /// controller state private to the test.
     async fn bound(dir: &std::path::Path) -> (tokio::net::TcpListener, Arc<Viewer>, Router) {
         let text = "helper_uid = 60001\nsocket_path = \"c.sock\"\noutput_dir = \"out\"\n\
                     identity_probe = \"probe\"\ninput_socket = \"i.sock\"\n";

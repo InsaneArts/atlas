@@ -65,6 +65,15 @@ pub fn tilde(path: impl AsRef<Path>) -> String {
     }
 }
 
+/// The first non-empty line of a program's output, at most `limit`
+/// characters, for a report; None when it printed nothing.
+pub fn first_line(output: &[u8], limit: usize) -> Option<String> {
+    String::from_utf8_lossy(output)
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .map(|line| line.chars().take(limit).collect())
+}
+
 /// `1 window`, `3 windows`.
 pub fn count(n: usize, noun: &str) -> String {
     if n == 1 {
@@ -118,6 +127,19 @@ mod tests {
         assert!(clip("日本語のタイトル", 7).width() <= 7);
         assert_eq!(clip("abc", 0), "…");
         assert_eq!(clip("abc", 1), "…");
+    }
+
+    #[test]
+    fn the_first_line_of_output_is_bounded() {
+        assert_eq!(
+            first_line(b"\n\nerror: x\nmore", 300).as_deref(),
+            Some("error: x")
+        );
+        assert_eq!(
+            first_line(&[b'x'; 500], 200).map(|line| line.len()),
+            Some(200)
+        );
+        assert_eq!(first_line(b"  \n", 10), None);
     }
 
     #[test]

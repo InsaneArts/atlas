@@ -105,18 +105,48 @@ pub fn account_with_uid(uid: u32) -> Result<Option<Account>> {
     lookup(Lookup::Uid(uid))
 }
 
-fn admin(name: &str) -> Option<bool> {
-    let status = Command::new("/usr/sbin/dseditgroup")
-        .args(["-o", "checkmember", "-m", name, "admin"])
+/// The full name of account `name`, as people know it, if it has one.
+pub fn real_name(name: &str) -> Option<String> {
+    let output = Command::new("/usr/bin/dscl")
+        .args([".", "-read", &format!("/Users/{name}"), "RealName"])
         .output()
-        .ok()?
-        .status;
-    // checkmember exits 0 for a member and 67 for a non-member.
-    match status.code() {
-        Some(0) => Some(true),
-        Some(67) => Some(false),
-        _ => None,
+        .ok()?;
+    let text = String::from_utf8(output.stdout).ok()?;
+    let value = text.strip_prefix("RealName:")?.trim().to_owned();
+    (!value.is_empty()).then_some(value)
+}
+
+/// Run one `setup-helper` request as `helper`, inside its own login, through
+/// sudo: with the administrator rights already held (`cached_rights`, as
+/// init holds them), or letting sudo ask. The reply is whether the command
+/// succeeded and the JSON it printed (null when it printed none).
+pub(crate) fn request_as_helper(
+    executable: &Path,
+    helper: &Account,
+    request: &helper::Request,
+    cached_rights: bool,
+) -> Result<(bool, Value)> {
+    let mut command = Command::new("/usr/bin/sudo");
+    if cached_rights {
+        command.arg("-n");
     }
+    let output = command
+        .args([
+            "/bin/launchctl",
+            "asuser",
+            &helper.uid.to_string(),
+            "/usr/bin/sudo",
+            "-u",
+            &helper.name,
+        ])
+        .arg(executable)
+        .arg("setup-helper")
+        .arg(serde_json::to_string(request)?)
+        .output()?;
+    let reply = serde_json::from_slice(&output.stdout)
+        .or_else(|_| serde_json::from_slice(&output.stderr))
+        .unwrap_or(Value::Null);
+    Ok((output.status.success(), reply))
 }
 
 #[derive(Debug, Default, PartialEq, Eq, Serialize)]
@@ -236,19 +266,14 @@ fn running_developer_id(pid: u32) -> bool {
 // FFI: proc_pidpath has no safe binding.
 #[allow(unsafe_code)]
 fn executable_of(pid: u32) -> Option<PathBuf> {
-    let mut buffer = vec![0_u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    let size = u32::try_from(libc::PROC_PIDPATHINFO_MAXSIZE).ok()?;
+    let mut buffer = vec![0_u8; usize::try_from(size).ok()?];
     // SAFETY: the buffer is writable for the length passed.
-    let length = unsafe {
-        libc::proc_pidpath(
-            i32::try_from(pid).ok()?,
-            buffer.as_mut_ptr().cast(),
-            buffer.len() as u32,
-        )
-    };
-    (length > 0).then(|| {
-        buffer.truncate(length as usize);
-        PathBuf::from(String::from_utf8_lossy(&buffer).into_owned())
-    })
+    let length =
+        unsafe { libc::proc_pidpath(i32::try_from(pid).ok()?, buffer.as_mut_ptr().cast(), size) };
+    let length = usize::try_from(length).ok().filter(|length| *length > 0)?;
+    buffer.truncate(length);
+    Some(PathBuf::from(String::from_utf8_lossy(&buffer).into_owned()))
 }
 
 /// Parse `launchctl print-disabled` output for one service.
@@ -498,7 +523,7 @@ pub async fn preview(config_path: &Path, helper: Option<&str>) -> Result<Value> 
         "controller": controller,
         "helper": {
             "account": account,
-            "admin": admin(&account.name),
+            "admin": administrator(&account.name),
         },
         "config": {
             "path": config_path,
@@ -531,10 +556,10 @@ pub async fn preview(config_path: &Path, helper: Option<&str>) -> Result<Value> 
         "hidden": reachable.then_some(session.is_some()),
         "error": (!reachable).then(|| status["error"].clone()),
     });
+    let pid = status["daemon"]["pid"]
+        .as_u64()
+        .and_then(|p| u32::try_from(p).ok());
     if reachable {
-        let pid = status["daemon"]["pid"]
-            .as_u64()
-            .and_then(|p| u32::try_from(p).ok());
         report["capture"]["daemon"] = json!({
             "pid": pid,
             "binary": pid.and_then(executable_of).map(|path| binary(&path)),
@@ -550,10 +575,8 @@ pub async fn preview(config_path: &Path, helper: Option<&str>) -> Result<Value> 
             "error": status["inputService"]["error"],
         });
     }
-    report["capture"]["job"] = match (&session, &status["daemon"]["pid"]) {
-        (Some(_), pid) if pid.is_u64() => {
-            helper_job(&client, pid.as_u64().unwrap_or_default() as u32).await
-        }
+    report["capture"]["job"] = match (&session, pid) {
+        (Some(_), Some(pid)) => helper_job(&client, pid).await,
         _ => json!({"label": null, "observed": false}),
     };
     report["nextSteps"] = json!(next_steps(&report));
