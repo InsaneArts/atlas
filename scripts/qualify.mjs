@@ -1,9 +1,11 @@
 // Sustained daily-use qualification against the real helper. Requires a
-// running `atlas menubar` (or `monitor`) started with the same config;
-// its private record is the first argument. Headless: nothing opens on the
-// main desktop, and all input goes through the guarded helper paths.
+// running `atlas menubar` started with the same config; its private record
+// is the first argument (runs/menubar.json by default). Nothing opens on the
+// main desktop: control goes through the viewer service HTTP with the
+// actions the native viewer sends, and all input through the guarded helper
+// paths.
 //
-//   node scripts/qualify.mjs runs/…/monitor.json --config atlas.local.toml \
+//   node scripts/qualify.mjs [runs/…/menubar.json] --config atlas.local.toml \
 //     [--minutes 30] [--stop-server]
 //
 // Every attempt is recorded in qualify-<run>-samples.jsonl and the verdict in
@@ -11,7 +13,7 @@
 // are reported incomplete. The exit status is 0 only for a passed run. An
 // unknown outcome stops the run at once and keeps its fixtures for
 // inspection; nothing is recovered automatically.
-import { chromium } from 'playwright';
+import { ViewerClient } from './viewer-client.mjs';
 import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -24,18 +26,23 @@ const option = (name) => {
   const index = argv.indexOf(name);
   return index >= 0 ? argv[index + 1] : undefined;
 };
-const record = path.resolve(argv[0] || '');
+const record = path.resolve(
+  argv[0] && !argv[0].startsWith('--') ? argv[0] : path.join(root, 'runs/menubar.json'),
+);
 const config = option('--config') && path.resolve(option('--config'));
 const minutes = Number(option('--minutes') ?? 30);
 const stopServer = argv.includes('--stop-server');
 if (!fs.existsSync(record) || !config || !fs.existsSync(config))
-  throw new Error('Usage: qualify.mjs MONITOR_JSON --config CONFIG [--minutes N] [--stop-server]');
+  throw new Error(
+    'Usage: qualify.mjs [MENUBAR_JSON] --config CONFIG [--minutes N] [--stop-server]',
+  );
 if (!Number.isFinite(minutes) || minutes <= 0 || minutes > 720)
   throw new Error('--minutes must be in (0, 720]');
-if (process.env.PWDEBUG) throw new Error('Unset PWDEBUG: the qualification must stay headless');
 
 const binary = path.join(root, 'target/debug/atlas');
-const { url, pid: serverPid } = JSON.parse(fs.readFileSync(record, 'utf8'));
+const { pid: serverPid } = JSON.parse(fs.readFileSync(record, 'utf8'));
+const viewerClient = new ViewerClient(record);
+const url = viewerClient.url;
 const run = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
 const output = path.dirname(record);
 const work = `/Users/Shared/AtlasQualify-${run}`;
@@ -244,7 +251,7 @@ async function companionPid() {
   }
   for (const pid of children) {
     const command = (await exec('/bin/ps', ['-o', 'comm=', '-p', pid], 5000)).trim();
-    if (command.endsWith('/AtlasBar')) return Number(pid);
+    if (command.endsWith('/AtlasApp')) return Number(pid);
   }
   return null;
 }
@@ -326,52 +333,57 @@ async function accessibleFocus(window) {
   return elements.some((e) => e.focused === true && same(e.window, window.bounds));
 }
 
-/** Act and await the viewer's reply to `route` together. */
-async function viewerAction(page, route, act) {
-  const [response] = await Promise.all([
-    page.waitForResponse((r) => r.url().endsWith(`/${route}`), { timeout: 10000 }),
-    act(),
-  ]).catch((error) => {
-    // A request that may have been sent but never answered is unknown.
-    throw unknown(`${route}: ${message(error)}`);
-  });
-  let body;
+/**
+ * One viewer request; a request that may have been sent but never answered,
+ * or that the service calls uncertain, is unknown.
+ */
+async function viewerAction(route, act) {
+  let reply;
   try {
-    body = await response.json();
-  } catch {
-    throw unknown(`${route}: unreadable reply`);
+    reply = await act();
+  } catch (error) {
+    if (error.uncertain) throw unknown(`${route}: ${message(error)}`);
+    throw error;
   }
-  if (body.uncertain) throw unknown(body.error);
-  if (!response.ok() || body.ok !== true)
-    throw new Error(body.error || `HTTP ${response.status()}`);
   await requireSettled(route);
-  return body;
+  return reply;
 }
 
-async function controlCycle(page) {
+/** Wait for `predicate` over status.json, failing after `timeout`. */
+async function untilStatus(predicate, timeout, text) {
+  const end = Date.now() + timeout;
+  while (!predicate(await fetchJson('status.json'))) {
+    if (Date.now() > end) throw new Error(text);
+    await sleep(100);
+  }
+}
+
+async function controlCycle(client) {
   if (!(await untilMode('observing', 20000)))
     return failure('control.wait', 'Observing was not reached in 20 s');
   const acquired = await attempt('control.acquire', async () => {
-    await page.waitForFunction(() => !document.getElementById('control').disabled, null, {
-      timeout: 10000,
-    });
-    await viewerAction(page, 'control/acquire', () => page.click('#control', { timeout: 5000 }));
-    await page.waitForFunction(
-      () => document.getElementById('state').textContent === 'You have control',
-      null,
-      { timeout: 5000 },
+    await untilStatus((status) => status.ready === true, 10000, 'The helper is not ready');
+    await viewerAction('control/acquire', () => client.acquire());
+    await untilStatus(
+      (status) => status.controlActive === true,
+      5000,
+      'Control was not reported active',
     );
     return true;
   });
-  if (!acquired) return;
-  await attempt('control.input', async () => {
-    const box = await page.locator('#screen').boundingBox();
-    await viewerAction(page, 'input', () =>
-      page.mouse.move(box.x + box.width * 0.9, box.y + box.height * 0.88, { steps: 3 }),
-    );
-  });
+  if (acquired)
+    await attempt('control.input', async () => {
+      const { width, height } = client.latest;
+      for (let step = 1; step <= 3; step++)
+        await viewerAction('input', () =>
+          client.hover(width * (0.84 + 0.02 * step), height * (0.82 + 0.02 * step)),
+        );
+    });
+  // Whatever happened, a lease taken here is given back before the CLI work,
+  // even when a failed input or renewal already ended the session.
+  if (!acquired && !client.owner) return;
   await attempt('control.release', async () => {
-    await viewerAction(page, 'control/release', () => page.click('#observe', { timeout: 5000 }));
+    await viewerAction('control/release', () => client.release());
     const end = Date.now() + 5000;
     while ((await fetchJson('status.json')).session?.inputService?.controlActive !== false) {
       if (Date.now() > end) throw new Error('Native control stayed active after release');
@@ -441,7 +453,6 @@ const alive = (pid) => {
   }
 };
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-let browser = null;
 let cycles = 0;
 let created = false;
 const cleanup = {};
@@ -462,20 +473,11 @@ try {
     created = true;
     await cli(['run', '--', '/usr/bin/touch', notes]);
     loops.push(loop(2000, viewer), loop(10000, usage));
-    browser = await chromium.launch({
-      headless: true,
-      executablePath:
-        process.env.ATLAS_CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    });
-    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-    page.on('pageerror', (error) => failure('page', error));
-    await page.goto(url, { timeout: 20000 });
-    await page.waitForSelector('#screen:not([hidden])', { timeout: 20000 });
     const deadline = Date.now() + minutes * 60000;
     while (Date.now() < deadline && !interrupted && !fatal) {
       cycles++;
       write('cycle', { cycle: cycles });
-      await controlCycle(page);
+      await controlCycle(viewerClient);
       await workCycle(cycles);
     }
   } catch (error) {
@@ -485,7 +487,12 @@ try {
     stopping = true;
     stop.abort();
     await Promise.race([Promise.all(loops), pause(20000)]);
-    if (browser) await Promise.race([browser.close(), pause(10000)]).catch(() => {});
+    // Control never outlives the run; a release with an unknown outcome
+    // keeps the run's evidence as it is.
+    await viewerClient.release().catch((error) => {
+      failure('control.cleanup', error);
+      if (error.uncertain) stopped ||= `release: ${message(error)}`;
+    });
     if (stopped) cleanup.skipped = 'An unknown outcome is kept for inspection';
     else if (created) {
       // Close only the proven-front fixture, confirm it is gone, then delete.

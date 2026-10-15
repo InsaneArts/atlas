@@ -3,7 +3,7 @@
 //     node scripts/banner.mjs
 //
 // The mark is Atlas's orbit as the app icon draws it
-// (menubar/Resources/AppIcon.swift), on no tile: a shaded sphere with a ring
+// (app/Resources/AppIcon.swift), on no tile: a shaded sphere with a ring
 // passing in front of it, apart from it by a gap. Change them together.
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
