@@ -16,11 +16,12 @@ use tokio::{
     process::{Child, ChildStdin, Command},
 };
 
-const NAME: &str = "AtlasApp";
+/// The app's executable, shipped beside `atlas` in Atlas.app.
+pub const APP_EXECUTABLE: &str = "AtlasApp";
 
 /// The login agent that runs `atlas menubar` (see xtask); launchd names
 /// the job in XPC_SERVICE_NAME.
-const LOGIN_JOB: &str = "com.insanearts.atlas.menubar";
+pub const LOGIN_JOB: &str = "com.insanearts.atlas.menubar";
 
 /// Whether this process is the menu bar's login agent, which serves the
 /// menu bar itself rather than starting it.
@@ -31,7 +32,7 @@ pub fn started_at_login() -> bool {
 /// Start the menu bar in its own session, so it keeps running after this
 /// terminal closes, and report once it is up. It quits from its own menu.
 pub async fn start(config: &Path, port: u16, output: &Path) -> Result<()> {
-    let (already, pid) = launch(config, port, output).await?;
+    let (already, record) = launch(config, port, output).await?;
     if crate::ui::human() {
         let what = if already {
             "is already running"
@@ -46,21 +47,21 @@ pub async fn start(config: &Path, port: u16, output: &Path) -> Result<()> {
         println!(
             "{}",
             serde_json::to_string_pretty(
-                &serde_json::json!({"ok": true, "running": true, "alreadyRunning": already, "pid": pid})
+                &serde_json::json!({"ok": true, "running": true, "alreadyRunning": already, "pid": record["pid"]})
             )?
         );
     }
     Ok(())
 }
 
-/// Start the menu bar unless it runs already: whether it did, and its pid.
-/// One start runs at a time; a start that fails is stopped, never left
-/// half-running.
+/// Start the menu bar unless it runs already: whether it did, and its
+/// private record (pid and viewer URL). One start runs at a time; a start
+/// that fails is stopped, never left half-running.
 pub async fn launch(config: &Path, port: u16, output: &Path) -> Result<(bool, serde_json::Value)> {
     let record = output.join(crate::viewer::MENUBAR_RECORD);
     let _starting = starting(&output.join("menubar.lock")).await?;
     if let Some(running) = crate::viewer::running(&record, port) {
-        return Ok((true, running["pid"].clone()));
+        return Ok((true, running));
     }
     let log_path = output.join("menubar.log");
     let log = fs::File::create(&log_path)?;
@@ -101,7 +102,7 @@ pub async fn launch(config: &Path, port: u16, output: &Path) -> Result<(bool, se
             if code == "port-in-use" {
                 for _ in 0..25 {
                     if let Some(running) = crate::viewer::running(&record, port) {
-                        return Ok((true, running["pid"].clone()));
+                        return Ok((true, running));
                     }
                     tokio::time::sleep(Duration::from_millis(200)).await;
                 }
@@ -230,13 +231,13 @@ fn first_line(output: &[u8]) -> String {
         .collect()
 }
 
-/// The companion shipped beside `executable` in Atlas.app, if this is
-/// the app's executable and it is there as a regular file.
+/// The app shipped beside `executable` in Atlas.app, if this is the
+/// bundle's `atlas` and the app is there as a regular file.
 fn bundled(executable: &Path) -> Option<PathBuf> {
     let directory = executable.parent()?;
-    let companion = directory.join(NAME);
-    let regular = fs::symlink_metadata(&companion).is_ok_and(|metadata| metadata.is_file());
-    (directory.ends_with("Contents/MacOS") && regular).then_some(companion)
+    let app = directory.join(APP_EXECUTABLE);
+    let regular = fs::symlink_metadata(&app).is_ok_and(|metadata| metadata.is_file());
+    (directory.ends_with("Contents/MacOS") && regular).then_some(app)
 }
 
 /// The package in the checkout this binary was built from, built with SwiftPM.
@@ -262,7 +263,7 @@ fn development() -> Result<PathBuf> {
                 )
             })
     };
-    let built = swift(&["build", "-c", "release", "--product", NAME])?;
+    let built = swift(&["build", "-c", "release", "--product", APP_EXECUTABLE])?;
     if !built.status.success() {
         return Err(Error::new(
             "menubar",
@@ -271,33 +272,33 @@ fn development() -> Result<PathBuf> {
     }
     let bin = swift(&["build", "-c", "release", "--show-bin-path"])?;
     let directory = String::from_utf8_lossy(&bin.stdout).trim().to_owned();
-    Ok(Path::new(&directory).join(NAME))
+    Ok(Path::new(&directory).join(APP_EXECUTABLE))
 }
 
-/// The companion executable: the signed one shipped in Atlas.app, or in
-/// a development checkout the package built here.
+/// The app's executable: the signed one shipped in Atlas.app, or in a
+/// development checkout the package built here.
 pub fn executable() -> Result<PathBuf> {
-    if let Some(companion) = std::env::current_exe()
+    if let Some(app) = std::env::current_exe()
         .and_then(fs::canonicalize)
         .ok()
         .as_deref()
         .and_then(bundled)
     {
-        // It receives the viewer's private URL: run only the companion
-        // Atlas signed, never a file merely placed there.
-        if !crate::setup::companion_signed(&companion) {
+        // It receives the viewer's private URL: run only the app Atlas
+        // signed, never a file merely placed there.
+        if !crate::setup::app_signed(&app) {
             return Err(Error::new(
                 "menubar",
-                "The menu bar companion in Atlas.app is not signed by Atlas",
+                "The app inside Atlas.app is not signed by Atlas",
             ));
         }
-        return Ok(companion);
+        return Ok(app);
     }
     development()
 }
 
 /// Turn "Open at Login" `on` or `off`, or report its `status`; only the
-/// companion (as part of Atlas.app) can register its login agent.
+/// app (as part of Atlas.app) can register its login agent.
 pub fn login(state: &str) -> Result<serde_json::Value> {
     let output = std::process::Command::new(executable()?)
         .args(["--login", state])
@@ -334,14 +335,14 @@ pub fn decide_login() {
     }
 }
 
-/// The companion to run, and the configuration its commands must use.
+/// The app to run, and the configuration its commands must use.
 pub struct Program {
     pub executable: PathBuf,
     pub config: PathBuf,
 }
 
 impl Program {
-    /// The companion for the configuration at `config`.
+    /// The app for the configuration at `config`.
     pub fn new(config: &Path) -> Result<Self> {
         Ok(Self {
             executable: executable()?,
@@ -350,8 +351,8 @@ impl Program {
     }
 }
 
-/// Start the companion with `args` and hand it the URL on stdin. Its
-/// commands run this very `atlas` with this configuration.
+/// Start the app with `args` and hand it the URL on stdin. Its commands
+/// run this very `atlas` with this configuration.
 async fn spawn(program: &Program, url: &str, args: &[&str]) -> Result<(Child, ChildStdin)> {
     let cli = std::env::current_exe().and_then(fs::canonicalize)?;
     let mut child = Command::new(&program.executable)
@@ -371,7 +372,7 @@ async fn spawn(program: &Program, url: &str, args: &[&str]) -> Result<(Child, Ch
     Ok((child, stdin))
 }
 
-/// A line the service sends the companion on its stdin.
+/// A line the service sends the app on its stdin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Line {
     /// Bring the viewer window forward.
@@ -386,15 +387,14 @@ impl Line {
     }
 }
 
-/// A running companion. Dropping it closes its stdin, which makes it quit,
-/// and kills it if it has not.
-pub struct Companion {
+/// The running app. Dropping it stops the app.
+pub struct App {
     child: Child,
     writer: tokio::task::JoinHandle<()>,
 }
 
-impl Companion {
-    /// Start the companion; each of `lines` is passed on to it.
+impl App {
+    /// Start the app; each of `lines` is passed on to it.
     pub async fn launch(
         program: &Program,
         url: &str,
@@ -406,23 +406,24 @@ impl Companion {
                 if stdin.write_all(line.text().as_bytes()).await.is_err()
                     || stdin.flush().await.is_err()
                 {
-                    break;
+                    // The app is gone: later lines are refused, not kept.
+                    return;
                 }
             }
-            // Its stdin stays open until the companion is dropped.
+            // Its stdin stays open until the app is dropped.
             std::future::pending::<()>().await;
         });
         Ok(Self { child, writer })
     }
-    /// Resolves when the person quits the companion.
+    /// Resolves when the person quits the app.
     pub async fn exited(&mut self) {
         let _ = self.child.wait().await;
     }
 }
 
-impl Drop for Companion {
+impl Drop for App {
     fn drop(&mut self) {
-        // Closes its stdin.
+        // Closes its stdin; the child is killed as it drops.
         self.writer.abort();
     }
 }
@@ -436,7 +437,7 @@ fn render_args(path: &str, dark: bool) -> Vec<&str> {
     args
 }
 
-/// Draw the companion's panel, fed by the viewer at `url`, to a PNG.
+/// Draw the app's panel, fed by the viewer at `url`, to a PNG.
 pub async fn render(program: &Program, url: &str, path: &Path, dark: bool) -> Result<()> {
     let target = path
         .to_str()
@@ -469,28 +470,28 @@ mod tests {
     }
 
     #[test]
-    fn the_app_ships_its_companion_beside_the_executable() {
+    fn the_bundle_ships_the_app_beside_atlas() {
         let dir = tempfile::tempdir().unwrap();
         let macos = dir.path().join("Atlas.app/Contents/MacOS");
         fs::create_dir_all(&macos).unwrap();
         let executable = macos.join("atlas");
-        assert_eq!(bundled(&executable), None, "no companion yet");
-        fs::write(macos.join(NAME), b"").unwrap();
-        assert_eq!(bundled(&executable), Some(macos.join(NAME)));
+        assert_eq!(bundled(&executable), None, "no app yet");
+        fs::write(macos.join(APP_EXECUTABLE), b"").unwrap();
+        assert_eq!(bundled(&executable), Some(macos.join(APP_EXECUTABLE)));
         let loose = dir.path().join("bin");
         fs::create_dir_all(&loose).unwrap();
-        fs::write(loose.join(NAME), b"").unwrap();
+        fs::write(loose.join(APP_EXECUTABLE), b"").unwrap();
         assert_eq!(bundled(&loose.join("atlas")), None, "only inside the app");
-        fs::remove_file(macos.join(NAME)).unwrap();
-        std::os::unix::fs::symlink(loose.join(NAME), macos.join(NAME)).unwrap();
+        fs::remove_file(macos.join(APP_EXECUTABLE)).unwrap();
+        std::os::unix::fs::symlink(loose.join(APP_EXECUTABLE), macos.join(APP_EXECUTABLE)).unwrap();
         assert_eq!(bundled(&executable), None, "never through a link");
         assert!(
-            !crate::setup::companion_signed(&loose.join(NAME)),
-            "an unsigned file is not the companion"
+            !crate::setup::app_signed(&loose.join(APP_EXECUTABLE)),
+            "an unsigned file is not the app"
         );
-        let installed = Path::new("/Applications/Atlas.app/Contents/MacOS").join(NAME);
+        let installed = Path::new("/Applications/Atlas.app/Contents/MacOS").join(APP_EXECUTABLE);
         if installed.exists() {
-            assert!(crate::setup::companion_signed(&installed));
+            assert!(crate::setup::app_signed(&installed));
         }
     }
 

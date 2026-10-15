@@ -181,13 +181,13 @@ fn done_notice() {
     {
         return;
     }
-    let Ok(companion) = crate::menubar::executable() else {
+    let Ok(app) = crate::menubar::executable() else {
         return;
     };
     use std::os::unix::process::CommandExt;
     // Its own process group: restarting this daemon (to pick up Screen
     // Recording) must not close the notice the person is reading.
-    let shown = std::process::Command::new(companion)
+    let shown = std::process::Command::new(app)
         .process_group(0)
         .args([
             "--notice",
