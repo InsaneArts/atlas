@@ -91,10 +91,21 @@ fn shared_folder(folder: &Path) -> Result<()> {
         Ok(_) => {}
     }
     let metadata = fs::symlink_metadata(folder)?;
-    if metadata.file_type().is_dir()
-        && metadata.uid() == nix::unistd::getuid().as_raw()
-        && metadata.mode() & 0o777 != 0o755
-    {
+    let me = nix::unistd::getuid().as_raw();
+    // Any account can make folders in /Users/Shared: one another account
+    // made, or that others can change, is never used.
+    let foreign = metadata.uid() != me && metadata.uid() != 0;
+    let open = metadata.uid() == 0 && metadata.mode() & 0o022 != 0;
+    if !metadata.file_type().is_dir() || foreign || open {
+        return Err(Error::new(
+            "install",
+            format!(
+                "{} belongs to another account, or others can change it. Atlas is set up for                  one person per Mac; if no one else uses it, remove the folder (an                  administrator can) and try again.",
+                folder.display()
+            ),
+        ));
+    }
+    if metadata.uid() == me && metadata.mode() & 0o777 != 0o755 {
         fs::set_permissions(folder, fs::Permissions::from_mode(0o755))?;
     }
     Ok(())

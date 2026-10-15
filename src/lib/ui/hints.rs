@@ -31,6 +31,7 @@ pub fn fix(code: &str) -> Option<&'static str> {
         "on-console" => {
             "Switch back to your own account. Atlas works while the helper is in the background."
         }
+        "onboarding" => "Open Atlas again to carry on setting up, or run atlas init.",
         "permission" => {
             "In the helper account, open System Settings › Privacy & Security and turn Atlas on. atlas init walks you through it."
         }

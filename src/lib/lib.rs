@@ -14,6 +14,7 @@ pub mod handoff;
 pub mod init;
 pub mod menubar;
 pub mod native;
+pub mod onboarding;
 pub mod overview;
 pub mod readiness;
 pub mod session;

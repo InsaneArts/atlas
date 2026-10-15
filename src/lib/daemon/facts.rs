@@ -175,6 +175,12 @@ fn asked(remember: bool) -> bool {
 /// Tell the person, in the helper, that it is set up and they can go back.
 /// The notice runs on its own; its process is collected when it closes.
 fn done_notice() {
+    // The onboarding window, when open here, tells the person itself.
+    if std::env::var_os("HOME")
+        .is_some_and(|home| crate::onboarding::window_open(std::path::Path::new(&home)))
+    {
+        return;
+    }
     let Ok(companion) = crate::menubar::executable() else {
         return;
     };
