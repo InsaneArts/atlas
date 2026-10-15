@@ -161,8 +161,8 @@ fn signature(path: &Path) -> Option<Signature> {
 pub const IDENTIFIER: &str = "com.insanearts.atlas";
 /// The Developer ID team that signs Atlas; consent follows it.
 pub const TEAM: &str = "A474HM679A";
-/// The identifier the menu bar companion inside the app is signed as.
-pub const COMPANION_IDENTIFIER: &str = "com.insanearts.atlas.bar";
+/// The identifier the app's executable inside Atlas.app is signed as.
+pub const APP_IDENTIFIER: &str = "com.insanearts.atlas.bar";
 
 /// The code requirement for Atlas: a Developer ID Application
 /// signature by its team, under its identifier. install.sh checks the same.
@@ -220,10 +220,10 @@ pub fn developer_id(path: &Path) -> bool {
     satisfies_developer_id(path.as_os_str())
 }
 
-/// Whether the file at `path` is the menu bar companion signed by
-/// Atlas's Developer ID.
-pub fn companion_signed(path: &Path) -> bool {
-    satisfies(path.as_os_str(), COMPANION_IDENTIFIER)
+/// Whether the file at `path` is the app's executable signed by Atlas's
+/// Developer ID.
+pub fn app_signed(path: &Path) -> bool {
+    satisfies(path.as_os_str(), APP_IDENTIFIER)
 }
 
 /// Whether process `pid` runs Atlas signed by its Developer ID, and

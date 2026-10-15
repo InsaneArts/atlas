@@ -2,6 +2,7 @@
 //! architectures, signs it inside out with a Developer ID, checks it against
 //! the same requirement setup enforces, optionally notarizes and staples it,
 //! and writes a zip with its SHA-256 sum.
+use atlas::menubar::{APP_EXECUTABLE, LOGIN_JOB};
 use sha2::{Digest, Sha256};
 use std::{
     env, fs,
@@ -11,8 +12,6 @@ use std::{
 
 /// The bundle identifier; consent follows it with the signing team.
 const IDENTIFIER: &str = "com.insanearts.atlas";
-/// The Swift app's executable (app/), shipped beside `atlas`.
-const APP_EXECUTABLE: &str = "AtlasApp";
 /// The oldest macOS the app runs on, for every slice and the Info.plist.
 const MINIMUM_MACOS: &str = "14.0";
 /// Rust triple and architecture for one universal build.
@@ -20,8 +19,6 @@ const TARGETS: [(&str, &str); 2] = [
     ("aarch64-apple-darwin", "arm64"),
     ("x86_64-apple-darwin", "x86_64"),
 ];
-/// The menu bar's login agent, bundled in the app.
-const MENUBAR: &str = "com.insanearts.atlas.menubar";
 /// Beside an app this tool published, so it never replaces anything else.
 const MARKER: &str = ".atlas-dist";
 const USAGE: &str = "usage: cargo xtask dist --sign IDENTITY [--notarize PROFILE] [--out DIR]
@@ -206,7 +203,7 @@ fn menubar_agent() -> String {
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>{MENUBAR}</string>
+	<string>{LOGIN_JOB}</string>
 	<key>BundleProgram</key>
 	<string>Contents/MacOS/atlas</string>
 	<key>ProgramArguments</key>
@@ -372,7 +369,7 @@ fn dist(options: &Options) -> Result<()> {
     // "Open at login": the menu bar registers this agent with SMAppService.
     let agents = app.join("Contents/Library/LaunchAgents");
     fs::create_dir_all(&agents).map_err(|error| error.to_string())?;
-    fs::write(agents.join(format!("{MENUBAR}.plist")), menubar_agent())
+    fs::write(agents.join(format!("{LOGIN_JOB}.plist")), menubar_agent())
         .map_err(|error| error.to_string())?;
 
     // Inside out: the Swift executable carries its own identifier, then the app
@@ -386,7 +383,7 @@ fn dist(options: &Options) -> Result<()> {
         exec("/usr/bin/codesign", &args)
     };
     sign(
-        Some(atlas::setup::COMPANION_IDENTIFIER),
+        Some(atlas::setup::APP_IDENTIFIER),
         &macos.join(APP_EXECUTABLE),
     )?;
     sign(None, &app)?;

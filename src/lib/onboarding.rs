@@ -145,7 +145,7 @@ pub(crate) fn real_name(name: &str) -> Option<String> {
 }
 
 fn home() -> Result<PathBuf> {
-    let (uid, ..) = me()?;
+    let uid = nix::unistd::getuid().as_raw();
     Ok(setup::account_with_uid(uid)?
         .ok_or_else(|| problem("This account cannot be resolved"))?
         .home)
@@ -641,20 +641,34 @@ pub fn accept(controller_uid: u32, controller_name: &str) -> Result<Value> {
     })?;
     let earlier = &inspected["jobs"][LABEL];
     let expected = setup::helper::text_sha256(&setup::helper::plist(&agent, &layout.logs()));
-    if let Some(sha256) = earlier["plistSha256"]
+    let retired = earlier["plistSha256"]
         .as_str()
         .filter(|sha| *sha != expected)
-    {
+        .map(str::to_owned);
+    if let Some(sha256) = &retired {
         run(&Request::Retire {
             uid,
             label: LABEL.to_owned(),
-            sha256: sha256.to_owned(),
+            sha256: sha256.clone(),
             missing_ok: false,
         })?;
     }
-    let installed = run(&Request::Install { agent })?;
-    // A job already loaded but not running waits for launchd to try again:
-    // start it now.
+    let installed = match run(&Request::Install { agent }) {
+        Ok(installed) => installed,
+        Err(error) => {
+            // The earlier job comes back when the new one cannot go in.
+            if let Some(sha256) = retired {
+                let _ = run(&Request::Restore {
+                    uid,
+                    label: LABEL.to_owned(),
+                    sha256,
+                });
+            }
+            return Err(error);
+        }
+    };
+    // Install waits for the job to load, not to run; a job launchd has not
+    // started yet (or gave up on earlier) is started now.
     if installed["pid"].is_null() {
         let output = Command::new("/bin/launchctl")
             .args(["kickstart", &format!("gui/{uid}/{LABEL}")])

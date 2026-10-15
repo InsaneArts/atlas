@@ -1,8 +1,12 @@
+//! The local service Atlas.app talks to: a capability URL on the loopback
+//! interface that answers status, pictures of the helper, control and input
+//! for one menu bar, and keeps a private record of itself in the output
+//! directory so `atlas monitor` and the login item can find it.
 use crate::{
     client::{Client, Frame},
     control::{self, ActionPermit, Lease, SharedLease},
     error::{Error, Result},
-    menubar::{Companion, Line},
+    menubar::{App, Line},
     session::Epoch,
 };
 use axum::{
@@ -39,19 +43,19 @@ pub struct Viewer {
     prefix: String,
     authority: String,
     /// The helper account's full name, once read.
-    account_name: std::sync::OnceLock<Option<String>>,
-    /// The menu bar app this viewer serves, when it serves one.
+    account_name: std::sync::OnceLock<String>,
+    /// The app this viewer serves, when it serves one.
     app: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<Line>>>,
 }
 impl Viewer {
-    /// Pass `line` to the menu bar app this viewer serves.
+    /// Pass `line` to the app this viewer serves.
     fn send(&self, line: Line) -> Result<()> {
         let app = self
             .app
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         app.as_ref()
-            .ok_or_else(|| Error::new("menubar", "This viewer has no menu bar to show it"))?
+            .ok_or_else(|| Error::new("menubar", "No menu bar is attached to this viewer"))?
             .send(line)
             .map_err(|_| Error::new("menubar", "The menu bar is not running"))
     }
@@ -159,12 +163,14 @@ impl Viewer {
             &activity,
             crate::client::timestamp(),
         );
-        // The helper's full name, as people know the account; looked up once.
+        // The helper's full name, as people know the account; looked up
+        // until it is known.
         if let Some(name) = status["overview"]["account"].as_str() {
-            let title = self
-                .account_name
-                .get_or_init(|| crate::onboarding::real_name(name))
-                .clone();
+            let title = self.account_name.get().cloned().or_else(|| {
+                let title = crate::onboarding::real_name(name)?;
+                let _ = self.account_name.set(title.clone());
+                Some(title)
+            });
             status["overview"]["accountName"] = json!(title);
         }
         status
@@ -305,11 +311,17 @@ pub async fn serve(client: Client, port: u16, program: crate::menubar::Program) 
         }
         Err(error) => return Err(error),
     };
+    let (lines, receiver) = tokio::sync::mpsc::unbounded_channel();
+    *viewer
+        .app
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(lines);
+    // The record names a viewer with an app; none is left when the app
+    // does not start.
+    let mut app = App::launch(&program, &viewer.url, receiver).await?;
     let record = json!({
         "url": viewer.url,
         "pid": std::process::id(),
-        "control": "explicit lease",
-        "menubar": true,
         "startedAt": crate::client::timestamp().to_string(),
     });
     control::write_private(&path, &serde_json::to_vec_pretty(&record)?)?;
@@ -322,12 +334,6 @@ pub async fn serve(client: Client, port: u16, program: crate::menubar::Program) 
     } else {
         println!("{}", serde_json::to_string_pretty(&shown)?);
     }
-    let (lines, receiver) = tokio::sync::mpsc::unbounded_channel();
-    *viewer
-        .app
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(lines);
-    let mut companion = Companion::launch(&program, &viewer.url, receiver).await?;
     let timer_view = viewer.clone();
     let expiry = tokio::spawn(async move {
         loop {
@@ -347,7 +353,7 @@ pub async fn serve(client: Client, port: u16, program: crate::menubar::Program) 
         .with_graceful_shutdown(async move {
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {}
-                () = companion.exited() => {}
+                () = app.exited() => {}
             }
             let _ = shutdown_view.release(None).await;
         })
@@ -396,6 +402,8 @@ fn exchange(
 ) -> Result<(u16, Vec<u8>)> {
     use std::io::{Read, Write};
     let refused = || Error::new("menubar", "The menu bar's viewer did not answer");
+    // Any trouble on the wire reads the same to the person.
+    let io = |_: std::io::Error| refused();
     let rest = url.strip_prefix("http://").ok_or_else(refused)?;
     let (authority, path) = rest.split_at(rest.find('/').ok_or_else(refused)?);
     let address: std::net::SocketAddr = authority.parse().map_err(|_| refused())?;
@@ -406,8 +414,8 @@ fn exchange(
             .filter(|left| !left.is_zero())
             .ok_or_else(refused)
     };
-    let mut stream = std::net::TcpStream::connect_timeout(&address, left()?)?;
-    stream.set_write_timeout(Some(left()?))?;
+    let mut stream = std::net::TcpStream::connect_timeout(&address, left()?).map_err(io)?;
+    stream.set_write_timeout(Some(left()?)).map_err(io)?;
     let mut head =
         format!("{method} {path}{route} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n");
     if let Some(body) = body {
@@ -417,15 +425,15 @@ fn exchange(
         ));
     }
     head.push_str("\r\n");
-    stream.write_all(head.as_bytes())?;
+    stream.write_all(head.as_bytes()).map_err(io)?;
     if let Some(body) = body {
-        stream.write_all(body)?;
+        stream.write_all(body).map_err(io)?;
     }
     let mut reply = Vec::new();
     let mut chunk = [0u8; 4096];
     loop {
-        stream.set_read_timeout(Some(left()?))?;
-        let read = stream.read(&mut chunk)?;
+        stream.set_read_timeout(Some(left()?)).map_err(io)?;
+        let read = stream.read(&mut chunk).map_err(io)?;
         if read == 0 {
             break;
         }
@@ -511,20 +519,9 @@ fn already_running(output: &Path, port: u16, taken: Error) -> Result<()> {
 /// Open the viewer window in the menu bar app, starting the menu bar first
 /// when it is not running.
 pub async fn monitor(config: &Path, port: u16, output: &Path) -> Result<()> {
-    crate::menubar::launch(config, port, output).await?;
-    let record = running(&output.join(MENUBAR_RECORD), port)
-        .ok_or_else(|| Error::new("menubar", "The menu bar did not start"))?;
+    let (_, record) = crate::menubar::launch(config, port, output).await?;
     let url = record["url"].as_str().unwrap_or("");
-    let reply = post_local(url, "app/viewer", &json!({}))?;
-    if reply["ok"] != true {
-        return Err(Error::new(
-            "menubar",
-            reply["error"]
-                .as_str()
-                .unwrap_or("The menu bar did not open its viewer")
-                .to_owned(),
-        ));
-    }
+    post_local(url, "app/viewer", &json!({}))?;
     if crate::ui::human() {
         println!(
             "{} The viewer is open. Watch the helper there, or take control.",
@@ -550,7 +547,7 @@ fn post_local(url: &str, route: &str, body: &Value) -> Result<Value> {
         Duration::from_secs(5),
     )?;
     let reply: Value = serde_json::from_slice(&reply)
-        .map_err(|_| Error::new("menubar", "The menu bar's viewer gave no answer"))?;
+        .map_err(|_| Error::new("menubar", "The menu bar's viewer did not answer"))?;
     if status != 200 {
         return Err(Error::new(
             "menubar",
@@ -806,13 +803,18 @@ mod tests {
 
     /// A viewer whose helper is unreachable and whose controller state is
     /// private to the test.
-    async fn unreachable(dir: &std::path::Path) -> Arc<Viewer> {
+    /// A viewer bound to a free port, for a helper that is not there.
+    async fn bound(dir: &std::path::Path) -> (tokio::net::TcpListener, Arc<Viewer>, Router) {
         let text = "helper_uid = 60001\nsocket_path = \"c.sock\"\noutput_dir = \"out\"\n\
                     identity_probe = \"probe\"\ninput_socket = \"i.sock\"\n";
         let config = crate::config::Config::parse(text.as_bytes(), &dir.join("u.toml")).unwrap();
         let mut client = Client::new(config).unwrap();
         client.controller = control::Controller::at(60001, &dir.join("state"));
-        bind(client, 0).await.unwrap().1
+        bind(client, 0).await.unwrap()
+    }
+
+    async fn unreachable(dir: &std::path::Path) -> Arc<Viewer> {
+        bound(dir).await.1
     }
 
     #[test]
@@ -837,17 +839,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn monitor_asks_a_running_viewer_and_reads_its_answer() {
-        let dir = std::env::temp_dir().join(format!("atlas-post-local-{}", std::process::id()));
-        let (listener, viewer, router) = {
-            let text = "helper_uid = 60001\nsocket_path = \"c.sock\"\noutput_dir = \"out\"\n\
-                        identity_probe = \"probe\"\ninput_socket = \"i.sock\"\n";
-            let config =
-                crate::config::Config::parse(text.as_bytes(), &dir.join("u.toml")).unwrap();
-            let mut client = Client::new(config).unwrap();
-            client.controller = control::Controller::at(60001, &dir.join("state"));
-            bind(client, 0).await.unwrap()
-        };
+    async fn post_local_reads_the_viewers_answer_in_its_own_words() {
+        let dir = tempfile::tempdir().unwrap();
+        let (listener, viewer, router) = bound(dir.path()).await;
         let server = tokio::spawn(async move { axum::serve(listener, router).await });
         let url = viewer.url.clone();
         let refused = tokio::task::spawn_blocking({
@@ -856,11 +850,7 @@ mod tests {
         })
         .await
         .unwrap();
-        assert_eq!(
-            refused.unwrap_err().code,
-            "menubar",
-            "no menu bar to show it"
-        );
+        assert_eq!(refused.unwrap_err().code, "menubar", "no menu bar attached");
         let (lines, mut received) = tokio::sync::mpsc::unbounded_channel();
         *viewer.app.lock().unwrap() = Some(lines);
         let opened = tokio::task::spawn_blocking({
@@ -878,13 +868,12 @@ mod tests {
                 .unwrap()
         );
         server.abort();
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]
     async fn the_viewer_window_opens_only_through_the_menu_bar_it_serves() {
-        let dir = std::env::temp_dir().join(format!("atlas-app-line-{}", std::process::id()));
-        let viewer = unreachable(&dir).await;
+        let dir = tempfile::tempdir().unwrap();
+        let viewer = unreachable(dir.path()).await;
         assert_eq!(viewer.send(Line::Viewer).unwrap_err().code, "menubar");
         let (lines, mut received) = tokio::sync::mpsc::unbounded_channel();
         *viewer.app.lock().unwrap() = Some(lines);
@@ -892,7 +881,6 @@ mod tests {
         assert_eq!(received.recv().await, Some(Line::Viewer));
         drop(received);
         assert_eq!(viewer.send(Line::Viewer).unwrap_err().code, "menubar");
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]
