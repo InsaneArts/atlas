@@ -2,7 +2,7 @@ use crate::{
     client::{Client, Frame},
     control::{self, ActionPermit, Lease, SharedLease},
     error::{Error, Result},
-    menubar::Companion,
+    menubar::{Companion, Line},
     session::Epoch,
 };
 use axum::{
@@ -38,8 +38,24 @@ pub struct Viewer {
     pub url: String,
     prefix: String,
     authority: String,
+    /// The helper account's full name, once read.
+    account_name: std::sync::OnceLock<Option<String>>,
+    /// The menu bar app this viewer serves, when it serves one.
+    app: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<Line>>>,
 }
 impl Viewer {
+    /// Pass `line` to the menu bar app this viewer serves.
+    fn send(&self, line: Line) -> Result<()> {
+        let app = self
+            .app
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        app.as_ref()
+            .ok_or_else(|| Error::new("menubar", "This viewer has no menu bar to show it"))?
+            .send(line)
+            .map_err(|_| Error::new("menubar", "The menu bar is not running"))
+    }
+
     async fn frame(&self) -> Result<(String, Arc<Frame>)> {
         let _capture = self.capture.lock().await;
         let current = self.client.identity().await?.epoch;
@@ -143,6 +159,14 @@ impl Viewer {
             &activity,
             crate::client::timestamp(),
         );
+        // The helper's full name, as people know the account; looked up once.
+        if let Some(name) = status["overview"]["account"].as_str() {
+            let title = self
+                .account_name
+                .get_or_init(|| crate::onboarding::real_name(name))
+                .clone();
+            status["overview"]["accountName"] = json!(title);
+        }
         status
     }
     /// Explicit, person-initiated recovery: the verified restart when an
@@ -260,6 +284,8 @@ pub async fn bind(mut client: Client, port: u16) -> Result<(TcpListener, Arc<Vie
         url: format!("http://{authority}{prefix}"),
         prefix,
         authority,
+        app: std::sync::Mutex::new(None),
+        account_name: std::sync::OnceLock::new(),
     });
     let router = Router::new()
         .fallback(any(handle))
@@ -267,23 +293,15 @@ pub async fn bind(mut client: Client, port: u16) -> Result<(TcpListener, Arc<Vie
     Ok((listener, viewer, router))
 }
 
-/// Serve the viewer until interrupted, or until the person quits the menu
-/// bar companion when one is given.
-pub async fn serve(
-    client: Client,
-    port: u16,
-    companion: Option<crate::menubar::Program>,
-) -> Result<()> {
+/// Serve the viewer for the menu bar app until the person quits it, or
+/// until interrupted.
+pub async fn serve(client: Client, port: u16, program: crate::menubar::Program) -> Result<()> {
     let output = client.output_dir()?.to_path_buf();
-    let path = output.join(if companion.is_some() {
-        MENUBAR_RECORD
-    } else {
-        MONITOR_RECORD
-    });
+    let path = output.join(MENUBAR_RECORD);
     let (listener, viewer, router) = match bind(client, port).await {
         Ok(bound) => bound,
         Err(error) if error.code == "port-in-use" => {
-            return already_running(&output, port, companion.is_some(), error);
+            return already_running(&output, port, error);
         }
         Err(error) => return Err(error),
     };
@@ -291,34 +309,25 @@ pub async fn serve(
         "url": viewer.url,
         "pid": std::process::id(),
         "control": "explicit lease",
-        "menubar": companion.is_some(),
+        "menubar": true,
         "startedAt": crate::client::timestamp().to_string(),
     });
     control::write_private(&path, &serde_json::to_vec_pretty(&record)?)?;
-    // The URL is a bearer capability. The menu bar opens it itself, so its
-    // output omits it; it stays in the private record either way.
+    // The URL is a bearer capability: it stays in the private record and
+    // with the app, never in output.
     let mut shown = record.clone();
-    if companion.is_some() {
-        shown["url"] = json!("held by the menu bar");
-    }
+    shown["url"] = json!("held by the menu bar");
     if crate::ui::human() {
-        let line = match companion {
-            Some(_) => {
-                "The menu bar is running. Quit it from its menu, or press Ctrl-C here.".to_owned()
-            }
-            None => format!(
-                "Viewer at {}\nOpen it in a browser to watch or take control. Ctrl-C stops it.",
-                viewer.url
-            ),
-        };
-        println!("{line}");
+        println!("The menu bar is running. Quit it from its menu, or press Ctrl-C here.");
     } else {
         println!("{}", serde_json::to_string_pretty(&shown)?);
     }
-    let mut companion = match companion {
-        Some(program) => Some(Companion::launch(&program, &viewer.url).await?),
-        None => None,
-    };
+    let (lines, receiver) = tokio::sync::mpsc::unbounded_channel();
+    *viewer
+        .app
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(lines);
+    let mut companion = Companion::launch(&program, &viewer.url, receiver).await?;
     let timer_view = viewer.clone();
     let expiry = tokio::spawn(async move {
         loop {
@@ -336,15 +345,9 @@ pub async fn serve(
     let shutdown_view = viewer.clone();
     let result = axum::serve(listener, router)
         .with_graceful_shutdown(async move {
-            let quit = async {
-                match companion.as_mut() {
-                    Some(companion) => companion.exited().await,
-                    None => std::future::pending().await,
-                }
-            };
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {}
-                () = quit => {}
+                () = companion.exited() => {}
             }
             let _ = shutdown_view.release(None).await;
         })
@@ -362,10 +365,8 @@ pub async fn serve(
     result.map_err(Error::from)
 }
 
-/// The records of a running viewer, in the output folder: the menu bar's
-/// and `monitor`'s are separate, so neither overwrites the other.
+/// The record of the running viewer, in the output folder.
 pub const MENUBAR_RECORD: &str = "menubar.json";
-pub const MONITOR_RECORD: &str = "monitor.json";
 
 /// The viewer recorded at `record`, if it serves `port` and answers there now.
 pub fn running(record: &Path, port: u16) -> Option<Value> {
@@ -380,75 +381,186 @@ pub fn running(record: &Path, port: u16) -> Option<Value> {
 
 /// Whether a viewer answers at `url` (its private address) right now.
 fn answers(url: &str) -> bool {
-    use std::io::{Read, Write};
-    let Some(rest) = url.strip_prefix("http://") else {
-        return false;
-    };
-    let (authority, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
-    let Ok(address) = authority.parse::<std::net::SocketAddr>() else {
-        return false;
-    };
-    let timeout = Duration::from_secs(1);
-    let Ok(mut stream) = std::net::TcpStream::connect_timeout(&address, timeout) else {
-        return false;
-    };
-    let _ = stream.set_read_timeout(Some(timeout));
-    let _ = stream.set_write_timeout(Some(timeout));
-    let request = format!("GET {path} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n");
-    if stream.write_all(request.as_bytes()).is_err() {
-        return false;
-    }
-    let mut head = [0u8; 16];
-    stream.read(&mut head).is_ok_and(|read| {
-        let status = String::from_utf8_lossy(&head[..read]);
-        status.starts_with("HTTP/1.1 200")
-    })
+    exchange(url, "GET", "", None, Duration::from_secs(1)).is_ok_and(|(status, _)| status == 200)
 }
 
-/// The port is taken. When Atlas's own viewer holds it, say so and
-/// succeed: the menu bar is already up, or the viewer is at its address.
-/// The menu bar's address stays private to it.
-fn already_running(output: &Path, port: u16, menubar: bool, taken: Error) -> Result<()> {
-    let bar = running(&output.join(MENUBAR_RECORD), port);
-    let monitor = running(&output.join(MONITOR_RECORD), port);
-    let human = crate::ui::human();
-    let ok = crate::ui::style::ok();
-    let shown = match (menubar, bar, monitor) {
-        (true, Some(bar), _) => {
-            if human {
-                println!(
-                    "{ok} The menu bar is already running. Click the A at the top of the screen; quit it from its menu."
-                );
-            }
-            json!({"ok": true, "alreadyRunning": true, "running": true, "pid": bar["pid"]})
-        }
-        (true, None, Some(_)) => {
-            return Err(Error::new(
-                "port-in-use",
-                format!("atlas monitor is already using port {port}."),
-            ));
-        }
-        (false, Some(bar), _) => {
-            if human {
-                println!(
-                    "{ok} The menu bar's viewer is already running. Open it from the menu bar with Open Viewer."
-                );
-            }
-            json!({"ok": true, "alreadyRunning": true, "menubar": true, "pid": bar["pid"]})
-        }
-        (false, None, Some(viewer)) => {
-            let url = viewer["url"].as_str().unwrap_or("");
-            if human {
-                println!("{ok} The viewer is already running at {url}");
-            }
-            json!({"ok": true, "alreadyRunning": true, "pid": viewer["pid"], "url": url})
-        }
-        _ => return Err(taken),
+/// One request to the local viewer at `url`, as its own origin, within
+/// `deadline` overall: the reply's status and body. Replies are small; a
+/// larger one is refused.
+fn exchange(
+    url: &str,
+    method: &str,
+    route: &str,
+    body: Option<&[u8]>,
+    deadline: Duration,
+) -> Result<(u16, Vec<u8>)> {
+    use std::io::{Read, Write};
+    let refused = || Error::new("menubar", "The menu bar's viewer did not answer");
+    let rest = url.strip_prefix("http://").ok_or_else(refused)?;
+    let (authority, path) = rest.split_at(rest.find('/').ok_or_else(refused)?);
+    let address: std::net::SocketAddr = authority.parse().map_err(|_| refused())?;
+    let until = std::time::Instant::now() + deadline;
+    let left = || {
+        until
+            .checked_duration_since(std::time::Instant::now())
+            .filter(|left| !left.is_zero())
+            .ok_or_else(refused)
     };
-    if !human {
-        println!("{}", serde_json::to_string_pretty(&shown)?);
+    let mut stream = std::net::TcpStream::connect_timeout(&address, left()?)?;
+    stream.set_write_timeout(Some(left()?))?;
+    let mut head =
+        format!("{method} {path}{route} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n");
+    if let Some(body) = body {
+        head.push_str(&format!(
+            "Origin: http://{authority}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n",
+            body.len()
+        ));
+    }
+    head.push_str("\r\n");
+    stream.write_all(head.as_bytes())?;
+    if let Some(body) = body {
+        stream.write_all(body)?;
+    }
+    let mut reply = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        stream.set_read_timeout(Some(left()?))?;
+        let read = stream.read(&mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        reply.extend_from_slice(&chunk[..read]);
+        if reply.len() > 1 << 16 {
+            return Err(refused());
+        }
+        if let Some(parsed) = parse_response(&reply) {
+            return Ok(parsed);
+        }
+    }
+    parse_response(&reply).ok_or_else(refused)
+}
+
+/// A complete HTTP/1.1 reply's status and body, framed by Content-Length
+/// or chunked encoding; None until all of it has arrived.
+fn parse_response(reply: &[u8]) -> Option<(u16, Vec<u8>)> {
+    let split = reply.windows(4).position(|window| window == b"\r\n\r\n")?;
+    let head = std::str::from_utf8(&reply[..split]).ok()?;
+    let rest = &reply[split + 4..];
+    let mut lines = head.split("\r\n");
+    let status = lines
+        .next()?
+        .strip_prefix("HTTP/1.1 ")?
+        .get(..3)?
+        .parse::<u16>()
+        .ok()?;
+    let mut length = None;
+    let mut chunked = false;
+    for line in lines {
+        let (name, value) = line.split_once(':')?;
+        let value = value.trim();
+        if name.eq_ignore_ascii_case("content-length") {
+            length = Some(value.parse::<usize>().ok()?);
+        } else if name.eq_ignore_ascii_case("transfer-encoding") {
+            chunked = value.eq_ignore_ascii_case("chunked");
+        }
+    }
+    if chunked {
+        let mut body = Vec::new();
+        let mut at = rest;
+        loop {
+            let end = at.windows(2).position(|window| window == b"\r\n")?;
+            let size = std::str::from_utf8(&at[..end])
+                .ok()?
+                .split(';')
+                .next()?
+                .trim();
+            let size = usize::from_str_radix(size, 16).ok()?;
+            at = &at[end + 2..];
+            if size == 0 {
+                return Some((status, body));
+            }
+            body.extend_from_slice(at.get(..size)?);
+            at = at.get(size + 2..)?;
+        }
+    }
+    let length = length?;
+    Some((status, rest.get(..length)?.to_vec()))
+}
+
+/// The port is taken. When the menu bar holds it, say so and succeed.
+fn already_running(output: &Path, port: u16, taken: Error) -> Result<()> {
+    let Some(bar) = running(&output.join(MENUBAR_RECORD), port) else {
+        return Err(taken);
+    };
+    if crate::ui::human() {
+        println!(
+            "{} The menu bar is already running. Click Atlas at the top of the screen; quit it from its menu.",
+            crate::ui::style::ok()
+        );
+    } else {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(
+                &json!({"ok": true, "alreadyRunning": true, "running": true, "pid": bar["pid"]})
+            )?
+        );
     }
     Ok(())
+}
+
+/// Open the viewer window in the menu bar app, starting the menu bar first
+/// when it is not running.
+pub async fn monitor(config: &Path, port: u16, output: &Path) -> Result<()> {
+    crate::menubar::launch(config, port, output).await?;
+    let record = running(&output.join(MENUBAR_RECORD), port)
+        .ok_or_else(|| Error::new("menubar", "The menu bar did not start"))?;
+    let url = record["url"].as_str().unwrap_or("");
+    let reply = post_local(url, "app/viewer", &json!({}))?;
+    if reply["ok"] != true {
+        return Err(Error::new(
+            "menubar",
+            reply["error"]
+                .as_str()
+                .unwrap_or("The menu bar did not open its viewer")
+                .to_owned(),
+        ));
+    }
+    if crate::ui::human() {
+        println!(
+            "{} The viewer is open. Watch the helper there, or take control.",
+            crate::ui::style::ok()
+        );
+    } else {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({"ok": true, "viewer": "open"}))?
+        );
+    }
+    Ok(())
+}
+
+/// POST `body` to `route` of the local viewer at `url`, as its own origin,
+/// and read its JSON reply; a refusal is an error in its own words.
+fn post_local(url: &str, route: &str, body: &Value) -> Result<Value> {
+    let (status, reply) = exchange(
+        url,
+        "POST",
+        route,
+        Some(&serde_json::to_vec(body)?),
+        Duration::from_secs(5),
+    )?;
+    let reply: Value = serde_json::from_slice(&reply)
+        .map_err(|_| Error::new("menubar", "The menu bar's viewer gave no answer"))?;
+    if status != 200 {
+        return Err(Error::new(
+            "menubar",
+            reply["error"]
+                .as_str()
+                .unwrap_or("The menu bar's viewer refused")
+                .to_owned(),
+        ));
+    }
+    Ok(reply)
 }
 
 /// Render the menu bar panel, fed by a private viewer on a free port, in the
@@ -480,7 +592,7 @@ fn header<'a>(headers: &'a HeaderMap, key: &str) -> Option<&'a str> {
     headers.get(key)?.to_str().ok()
 }
 
-// A browser can abort any request. Axum drops the handler future when that
+// A client can abort any request. Axum drops the handler future when that
 // happens, which could stop between a quarantine or lease change and its
 // matching cleanup. Each request therefore runs to completion in its own task.
 async fn handle(State(viewer): State<Arc<Viewer>>, request: Request) -> Response {
@@ -512,14 +624,12 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
         .strip_prefix(&viewer.prefix)
         .map(str::to_owned)
     else {
-        return json_response(
-            404,
-            json!({"ok": false, "error": "Use the viewer URL printed by Atlas"}),
-        );
+        return json_response(404, json!({"ok": false, "error": "Unknown viewer address"}));
     };
     if method == Method::GET {
-        if let Some((mime, bytes)) = asset(&route) {
-            return response(200, mime, bytes.to_vec(), &[]);
+        // The address itself answers, so a running viewer can be found.
+        if route.is_empty() {
+            return json_response(200, json!({"ok": true, "service": "atlas-viewer"}));
         }
         if route == "status.json" {
             return json_response(200, viewer.status().await);
@@ -566,6 +676,7 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
                 | "control/release"
                 | "control/revoke"
                 | "recover"
+                | "app/viewer"
         )
     {
         return json_response(404, json!({"ok": false, "error": "Unknown operation"}));
@@ -609,6 +720,12 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
             );
         }
     };
+    if route == "app/viewer" {
+        return match viewer.send(Line::Viewer) {
+            Ok(()) => json_response(200, json!({"ok": true, "viewer": "open"})),
+            Err(error) => json_response(409, json!(error)),
+        };
+    }
     let outcome = if route == "recover" {
         viewer.recover().await
     } else {
@@ -639,48 +756,6 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
     }
 }
 
-fn asset(route: &str) -> Option<(&'static str, &'static [u8])> {
-    Some(match route {
-        "" => (
-            "text/html; charset=utf-8",
-            include_bytes!("../../web/index.html"),
-        ),
-        "app.js" => (
-            "text/javascript; charset=utf-8",
-            include_bytes!("../../web/app.js"),
-        ),
-        "input.js" => (
-            "text/javascript; charset=utf-8",
-            include_bytes!("../../web/input.js"),
-        ),
-        "queue.js" => (
-            "text/javascript; charset=utf-8",
-            include_bytes!("../../web/queue.js"),
-        ),
-        "pointer.js" => (
-            "text/javascript; charset=utf-8",
-            include_bytes!("../../web/pointer.js"),
-        ),
-        "preview.js" => (
-            "text/javascript; charset=utf-8",
-            include_bytes!("../../web/preview.js"),
-        ),
-        "status.js" => (
-            "text/javascript; charset=utf-8",
-            include_bytes!("../../web/status.js"),
-        ),
-        "overview.js" => (
-            "text/javascript; charset=utf-8",
-            include_bytes!("../../web/overview.js"),
-        ),
-        "styles.css" => (
-            "text/css; charset=utf-8",
-            include_bytes!("../../web/styles.css"),
-        ),
-        "favicon.svg" => ("image/svg+xml", include_bytes!("../../web/favicon.svg")),
-        _ => return None,
-    })
-}
 fn json_response(code: u16, value: Value) -> Response {
     response(
         code,
@@ -740,6 +815,86 @@ mod tests {
         bind(client, 0).await.unwrap().1
     }
 
+    #[test]
+    fn replies_are_read_by_their_framing_and_status() {
+        let plain = b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 11\r\n\r\n{\"ok\":true}";
+        assert_eq!(
+            parse_response(plain),
+            Some((200, b"{\"ok\":true}".to_vec()))
+        );
+        assert_eq!(
+            parse_response(&plain[..plain.len() - 3]),
+            None,
+            "not all here yet"
+        );
+        let chunked = b"HTTP/1.1 409 Conflict\r\nTransfer-Encoding: chunked\r\n\r\n4\r\n{\"ok\r\n8\r\n\":false}\r\n0\r\n\r\n";
+        assert_eq!(
+            parse_response(chunked),
+            Some((409, b"{\"ok\":false}".to_vec()))
+        );
+        assert_eq!(parse_response(b"HTTP/1.1 200 OK\r\n\r\n"), None, "unframed");
+        assert_eq!(parse_response(b"garbage\r\n\r\n"), None);
+    }
+
+    #[tokio::test]
+    async fn monitor_asks_a_running_viewer_and_reads_its_answer() {
+        let dir = std::env::temp_dir().join(format!("atlas-post-local-{}", std::process::id()));
+        let (listener, viewer, router) = {
+            let text = "helper_uid = 60001\nsocket_path = \"c.sock\"\noutput_dir = \"out\"\n\
+                        identity_probe = \"probe\"\ninput_socket = \"i.sock\"\n";
+            let config =
+                crate::config::Config::parse(text.as_bytes(), &dir.join("u.toml")).unwrap();
+            let mut client = Client::new(config).unwrap();
+            client.controller = control::Controller::at(60001, &dir.join("state"));
+            bind(client, 0).await.unwrap()
+        };
+        let server = tokio::spawn(async move { axum::serve(listener, router).await });
+        let url = viewer.url.clone();
+        let refused = tokio::task::spawn_blocking({
+            let url = url.clone();
+            move || post_local(&url, "app/viewer", &json!({}))
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            refused.unwrap_err().code,
+            "menubar",
+            "no menu bar to show it"
+        );
+        let (lines, mut received) = tokio::sync::mpsc::unbounded_channel();
+        *viewer.app.lock().unwrap() = Some(lines);
+        let opened = tokio::task::spawn_blocking({
+            let url = url.clone();
+            move || post_local(&url, "app/viewer", &json!({}))
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(opened["viewer"], "open");
+        assert_eq!(received.recv().await, Some(Line::Viewer));
+        assert!(
+            tokio::task::spawn_blocking(move || answers(&url))
+                .await
+                .unwrap()
+        );
+        server.abort();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn the_viewer_window_opens_only_through_the_menu_bar_it_serves() {
+        let dir = std::env::temp_dir().join(format!("atlas-app-line-{}", std::process::id()));
+        let viewer = unreachable(&dir).await;
+        assert_eq!(viewer.send(Line::Viewer).unwrap_err().code, "menubar");
+        let (lines, mut received) = tokio::sync::mpsc::unbounded_channel();
+        *viewer.app.lock().unwrap() = Some(lines);
+        viewer.send(Line::Viewer).unwrap();
+        assert_eq!(received.recv().await, Some(Line::Viewer));
+        drop(received);
+        assert_eq!(viewer.send(Line::Viewer).unwrap_err().code, "menubar");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[tokio::test]
     async fn recovery_is_refused_while_control_is_held() {
         let dir = tempfile::tempdir().unwrap();
@@ -788,44 +943,5 @@ mod tests {
         let status = viewer.status().await;
         assert_eq!(status["overview"]["mode"], "unavailable");
         assert_eq!(status["overview"]["pending"], 1);
-    }
-
-    /// Every module the page loads, and every module those import, is served.
-    #[test]
-    fn served_scripts_resolve_every_import() {
-        let page = std::str::from_utf8(asset("").unwrap().1).unwrap();
-        let mut pending: Vec<String> = page
-            .split("src=\"")
-            .skip(1)
-            .filter_map(|rest| rest.split('"').next())
-            .map(str::to_owned)
-            .collect();
-        let mut seen = Vec::new();
-        while let Some(route) = pending.pop() {
-            if seen.contains(&route) {
-                continue;
-            }
-            let (mime, bytes) = asset(&route).unwrap_or_else(|| panic!("{route} is not served"));
-            // Images, such as the mark, are served but import nothing.
-            if !route.ends_with(".js") {
-                seen.push(route);
-                continue;
-            }
-            assert!(mime.starts_with("text/javascript"), "{route}: {mime}");
-            let source = std::str::from_utf8(bytes).unwrap();
-            pending.extend(
-                source
-                    .split("from './")
-                    .skip(1)
-                    .filter_map(|rest| rest.split('\'').next())
-                    .map(str::to_owned),
-            );
-            seen.push(route);
-        }
-        assert!(seen.contains(&"overview.js".to_owned()), "{seen:?}");
-        for route in ["styles.css", "favicon.svg"] {
-            assert!(asset(route).is_some(), "{route}");
-        }
-        assert!(asset("../Cargo.toml").is_none());
     }
 }

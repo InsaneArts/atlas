@@ -307,7 +307,7 @@ impl Engine {
     }
     fn release_modifiers(&mut self) -> Result<()> {
         if self.flags != 0 {
-            // Finish the chord in CoreGraphics too. Browser key-up events do
+            // Finish the chord in CoreGraphics too. Viewer key-up events do
             // not represent remote holds, so a completed gesture must be clean.
             for code in [55, 56, 58, 59, 63] {
                 self.key_event(code, false, 0, None)?;

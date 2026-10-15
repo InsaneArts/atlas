@@ -1,0 +1,251 @@
+import Foundation
+
+/// How a mode reads: a label, the tone of its dot, the mark the menu bar
+/// glyph carries, and a one-line reason. Colour is chosen by the UI.
+public struct Mode: Equatable, Sendable {
+    public enum Tone: Sendable { case ready, active, attention, quiet }
+    public enum Mark: Sendable { case none, working, filled, alert, dash, dimmed }
+
+    public let label: String
+    public let tone: Tone
+    public let mark: Mark
+
+    public init(label: String, tone: Tone, mark: Mark) {
+        self.label = label
+        self.tone = tone
+        self.mark = mark
+    }
+
+    /// The service's mode name, as the person reads it.
+    public static func of(_ mode: String) -> Mode {
+        switch mode {
+        case "observing": Mode(label: "Watching", tone: .ready, mark: .none)
+        case "agent": Mode(label: "Agent working", tone: .active, mark: .working)
+        case "controlling": Mode(label: "Viewer has control", tone: .active, mark: .filled)
+        case "recovering": Mode(label: "Needs you", tone: .attention, mark: .alert)
+        case "blocked": Mode(label: "Not ready", tone: .attention, mark: .dash)
+        default: Mode(label: "Unavailable", tone: .quiet, mark: .dimmed)
+        }
+    }
+
+    /// The mode as a viewer sees it: the service knows only that some viewer
+    /// holds control; a viewer knows whether it is that one.
+    public static func seen(by overview: ViewerStatus.Overview, holdingControl: Bool) -> Mode {
+        let mode = overview.mode
+        if holdingControl && mode != "recovering" && mode != "unavailable" {
+            return Mode(label: "You have control", tone: .active, mark: .filled)
+        }
+        if mode == "controlling" && !holdingControl {
+            return Mode(label: "Another viewer has control", tone: .active, mark: .filled)
+        }
+        return of(mode)
+    }
+}
+
+/// Words for times, operations and facts, shared by the panel and viewer.
+public enum Words {
+    /// Seconds ago as a short relative time.
+    public static func ago(_ seconds: Double) -> String {
+        if seconds < 5 { return "just now" }
+        if seconds < 90 { return "\(Int(seconds.rounded())) s ago" }
+        if seconds < 5400 { return "\(Int((seconds / 60).rounded())) min ago" }
+        return "\(Int((seconds / 3600).rounded())) h ago"
+    }
+
+    /// What an operation did. No payload is ever recorded.
+    public static func describe(_ row: ViewerStatus.Activity) -> String {
+        if !row.ok { return "\(row.operation) failed" }
+        let count = row.actionCount ?? 0
+        switch row.operation {
+        case "input" where count > 0: return "sent \(count) action\(count == 1 ? "" : "s")"
+        case "run": return "ran a command"
+        case "restart": return "recovered"
+        default: return row.operation
+        }
+    }
+
+    /// "1512 × 982", or nil when unknown.
+    public static func size(_ size: ViewerStatus.Size?) -> String? {
+        guard let size, size.width > 0, size.height > 0 else { return nil }
+        return "\(Int(size.width.rounded())) × \(Int(size.height.rounded()))"
+    }
+}
+
+/// One row of recent activity, as shown.
+public struct ActivityItem: Equatable, Sendable, Identifiable {
+    public let id: Int
+    /// "You" or "Agent".
+    public let who: String
+    public let text: String
+    public let when: String
+    public let ok: Bool
+    /// Seconds ago, when known.
+    public let age: Double?
+
+    public var line: String { "\(who) \(text)" }
+}
+
+/// What the panel and viewer show of a status: one place, so they agree.
+public struct Overview: Equatable, Sendable {
+    public let status: ViewerStatus
+
+    public init(_ status: ViewerStatus) {
+        self.status = status
+    }
+
+    /// Recent operations, newest first.
+    public func activity(limit: Int = 6) -> [ActivityItem] {
+        status.overview.activity.prefix(limit).enumerated().map { index, row in
+            ActivityItem(
+                id: index, who: row.actor == "viewer" ? "You" : "Agent", text: Words.describe(row),
+                when: row.ageSeconds.map(Words.ago) ?? "", ok: row.ok, age: row.ageSeconds)
+        }
+    }
+
+    /// The few latest actions shown over the desktop, oldest first, while recent.
+    public func captions(limit: Int = 3, within seconds: Double = 60) -> [ActivityItem] {
+        Array(activity(limit: 12).filter { ($0.age ?? .infinity) <= seconds }.prefix(limit).reversed())
+    }
+
+    /// The newest action in one line, for the panel.
+    public var lastAction: String {
+        guard let first = activity(limit: 1).first else { return "No recent actions" }
+        return [first.line, first.when].filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
+    /// Label and value rows about the session; this viewer knows whether
+    /// it holds control.
+    public func facts(holdingControl: Bool) -> [(String, String)] {
+        let overview = status.overview
+        let input =
+            status.session.inputReady ? "Ready" : status.session.inputReachable ? "Not ready" : "Unavailable"
+        return [
+            ("Display", Words.size(overview.display) ?? "Unknown"),
+            ("Input", input),
+            ("Control", availability(holdingControl: holdingControl)),
+            ("Pending actions", overview.pending > 0 ? String(overview.pending) : "None"),
+        ]
+    }
+
+    /// Whether this viewer could take control now, and if not, why.
+    func availability(holdingControl: Bool) -> String {
+        if holdingControl { return "This window" }
+        switch status.overview.mode {
+        case "observing": return "Available"
+        case "controlling": return "Another window"
+        case "agent": return "Agent working"
+        case "recovering": return "After recovery"
+        case "blocked": return "Not ready"
+        default: return "Unavailable"
+        }
+    }
+
+    /// Why taking control must wait, if it must.
+    public func controlBlocked(holdingControl: Bool) -> String? {
+        switch status.overview.mode {
+        case "agent": "An agent is acting in the helper"
+        case "recovering": "Recover before taking control"
+        case "controlling" where !holdingControl: "Another viewer has control"
+        default: nil
+        }
+    }
+
+    /// The readiness summary: all checks, then native Save and Open panels.
+    public var readiness: (text: String, ok: Bool, native: String) {
+        let native =
+            switch status.overview.nativeDialogs {
+            case "passed": "Verified"
+            case "failed": "Failing"
+            default: "Not verified"
+            }
+        let checks = status.checks
+        guard !checks.isEmpty else { return ("Checking…", false, native) }
+        let ready = checks.filter { $0.ok == true }.count
+        let all = ready == checks.count
+        return (all ? "All checks passed" : "\(ready) of \(checks.count) ready", all, native)
+    }
+
+    /// Recovery is offered only without control, when something needs it.
+    public func recoveryOffered(holdingControl: Bool) -> Bool {
+        !holdingControl && (status.overview.mode == "recovering" || status.overview.mode == "blocked")
+    }
+
+    /// The recovery alert's title.
+    public var recoveryTitle: String {
+        status.overview.mode == "blocked" ? "The helper isn't ready" : "The last action's outcome is unknown"
+    }
+}
+
+extension Words {
+    /// How fresh the picture is, from the age of the last frame.
+    public static func freshness(_ age: Double?) -> String {
+        guard let age, age.isFinite else { return "Waiting for the first frame" }
+        if age < 3 { return "Live" }
+        if age < 8 { return "Updated \(Int(age.rounded())) s ago" }
+        return "Preview is stale"
+    }
+}
+
+/// One readiness line in the viewer's Session tab.
+public struct StatusRow: Equatable, Sendable, Identifiable {
+    public enum State: Sendable { case ready, unknown, bad }
+    public let name: String
+    public let state: State
+    public let text: String
+    public var id: String { name }
+}
+
+/// The recovery alert: what it says, and whether recovery is running.
+public struct Recovery: Equatable, Sendable {
+    public let title: String
+    public let reason: String
+    public let busy: Bool
+}
+
+extension Overview {
+    /// The pill's sentence: why the helper is in its mode.
+    public func reason(holdingControl: Bool) -> String {
+        let mode = status.overview.mode
+        if holdingControl && mode != "recovering" && mode != "unavailable" {
+            return "You have mouse and keyboard control"
+        }
+        if mode == "controlling" { return "Another viewer has control" }
+        return status.overview.reason.isEmpty ? "Connecting to the helper" : status.overview.reason
+    }
+
+    /// Each readiness check, then the native Save and Open check, which
+    /// never counts as ready. An unknown check is unobservable, not failed.
+    public var statusRows: [StatusRow] {
+        var rows = status.checks.map { check in
+            switch check.ok {
+            case true: StatusRow(name: check.name, state: .ready, text: "Ready")
+            case nil: StatusRow(name: check.name, state: .unknown, text: "Unknown. \(check.nextStep ?? "")")
+            default: StatusRow(name: check.name, state: .bad, text: check.nextStep ?? "Not ready")
+            }
+        }
+        let native = status.capabilities.nativeDialogs
+        let age = native.ageSeconds.map { $0 < 90 ? "just now" : "\(Int(($0 / 60).rounded())) min ago" } ?? ""
+        switch native.state {
+        case "passed":
+            rows.append(StatusRow(name: "Native dialogs", state: .ready, text: "Save and Open passed \(age)"))
+        case "failed":
+            let stage = native.failedAt.map { " at “\($0)”" } ?? ""
+            rows.append(StatusRow(name: "Native dialogs", state: .bad, text: "Failed \(age)\(stage). \(native.reason)"))
+        default:
+            if !native.reason.isEmpty {
+                rows.append(StatusRow(name: "Native dialogs", state: .unknown, text: native.reason))
+            }
+        }
+        return rows
+    }
+
+    /// The recovery alert, if any: while recovering, or when offered.
+    public func recovery(holdingControl: Bool, recovering: Bool) -> Recovery? {
+        if recovering {
+            return Recovery(
+                title: "Recovering the helper", reason: "Restoring the helper input service.", busy: true)
+        }
+        guard recoveryOffered(holdingControl: holdingControl) else { return nil }
+        return Recovery(title: recoveryTitle, reason: reason(holdingControl: false), busy: false)
+    }
+}

@@ -11,7 +11,8 @@ use std::{
 
 /// The bundle identifier; consent follows it with the signing team.
 const IDENTIFIER: &str = "com.insanearts.atlas";
-const COMPANION: &str = "AtlasBar";
+/// The Swift app's executable (app/), shipped beside `atlas`.
+const APP_EXECUTABLE: &str = "AtlasApp";
 /// The oldest macOS the app runs on, for every slice and the Info.plist.
 const MINIMUM_MACOS: &str = "14.0";
 /// Rust triple and architecture for one universal build.
@@ -330,21 +331,21 @@ fn dist(options: &Options) -> Result<()> {
         )?;
         cli.push(target_dir.join(format!("{rust}/release/atlas")));
     }
-    // The menu bar package, for both architectures in one build.
-    let package = root.join("menubar");
+    // The Swift app package, for both architectures in one build.
+    let package = root.join("app");
     let mut swift = vec!["build", "-c", "release", "--package-path", text(&package)?];
     for (_, arch) in TARGETS {
         swift.extend(["--arch", arch]);
     }
     exec(
         "/usr/bin/swift",
-        &[swift.as_slice(), &["--product", COMPANION]].concat(),
+        &[swift.as_slice(), &["--product", APP_EXECUTABLE]].concat(),
     )?;
     let bin = output(
         "/usr/bin/swift",
         &[swift.as_slice(), &["--show-bin-path"]].concat(),
     )?;
-    let companion = PathBuf::from(bin.trim()).join(COMPANION);
+    let executable = PathBuf::from(bin.trim()).join(APP_EXECUTABLE);
     let app = stage.join("Atlas.app");
     let macos = app.join("Contents/MacOS");
     fs::create_dir_all(&macos).map_err(|error| error.to_string())?;
@@ -352,9 +353,9 @@ fn dist(options: &Options) -> Result<()> {
     fs::write(app.join("Contents/Info.plist"), info_plist(version))
         .map_err(|error| error.to_string())?;
     universal(&cli, &macos.join("atlas"))?;
-    fs::copy(&companion, macos.join(COMPANION)).map_err(|error| error.to_string())?;
-    check_universal(&macos.join(COMPANION))?;
-    // The app icon, drawn by menubar/Resources/AppIcon.swift.
+    fs::copy(&executable, macos.join(APP_EXECUTABLE)).map_err(|error| error.to_string())?;
+    check_universal(&macos.join(APP_EXECUTABLE))?;
+    // The app icon, drawn by app/Resources/AppIcon.swift.
     fs::copy(
         package.join("Resources/AppIcon.icns"),
         app.join("Contents/Resources/AppIcon.icns"),
@@ -374,7 +375,7 @@ fn dist(options: &Options) -> Result<()> {
     fs::write(agents.join(format!("{MENUBAR}.plist")), menubar_agent())
         .map_err(|error| error.to_string())?;
 
-    // Inside out: the companion carries its own identifier, then the app
+    // Inside out: the Swift executable carries its own identifier, then the app
     // (whose main executable is the consented `atlas`) seals it.
     let sign = |identifier: Option<&str>, path: &Path| -> Result<()> {
         let mut args = vec!["--force", "--options", "runtime", "--timestamp"];
@@ -384,7 +385,10 @@ fn dist(options: &Options) -> Result<()> {
         args.extend(["--sign", &options.sign, text(path)?]);
         exec("/usr/bin/codesign", &args)
     };
-    sign(Some(&format!("{IDENTIFIER}.bar")), &macos.join(COMPANION))?;
+    sign(
+        Some(atlas::setup::COMPANION_IDENTIFIER),
+        &macos.join(APP_EXECUTABLE),
+    )?;
     sign(None, &app)?;
     exec(
         "/usr/bin/codesign",
@@ -547,7 +551,7 @@ mod tests {
         .unwrap();
         fs::remove_dir_all(&dir).unwrap();
         assert!(
-            root().join("menubar/Resources/AppIcon.icns").is_file(),
+            root().join("app/Resources/AppIcon.icns").is_file(),
             "the icon the plist names is checked in"
         );
         for expected in [

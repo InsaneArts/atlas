@@ -1,6 +1,7 @@
-//! The macOS menu bar companion: the Swift package in menubar/. Atlas.app
-//! ships it signed beside this executable; a development checkout builds the
-//! package with SwiftPM. It renders the local viewer's status and frame and
+//! The macOS app: the Swift package in app/, whose AtlasApp executable
+//! draws the menu bar, the viewer and the setup window. Atlas.app ships it
+//! signed beside this executable; a development checkout builds the package
+//! with SwiftPM. It renders the local viewer's status and frame and
 //! runs `atlas` commands; it reaches nothing else. The capability URL
 //! travels on its stdin, never in argv, and closing stdin makes it quit.
 use crate::error::{Error, Result};
@@ -15,7 +16,7 @@ use tokio::{
     process::{Child, ChildStdin, Command},
 };
 
-const NAME: &str = "AtlasBar";
+const NAME: &str = "AtlasApp";
 
 /// The login agent that runs `atlas menubar` (see xtask); launchd names
 /// the job in XPC_SERVICE_NAME.
@@ -29,34 +30,37 @@ pub fn started_at_login() -> bool {
 
 /// Start the menu bar in its own session, so it keeps running after this
 /// terminal closes, and report once it is up. It quits from its own menu.
+pub async fn start(config: &Path, port: u16, output: &Path) -> Result<()> {
+    let (already, pid) = launch(config, port, output).await?;
+    if crate::ui::human() {
+        let what = if already {
+            "is already running"
+        } else {
+            "is running"
+        };
+        println!(
+            "{} The menu bar {what}. Click Atlas at the top of the screen; quit it from its menu.",
+            crate::ui::style::ok()
+        );
+    } else {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(
+                &serde_json::json!({"ok": true, "running": true, "alreadyRunning": already, "pid": pid})
+            )?
+        );
+    }
+    Ok(())
+}
+
+/// Start the menu bar unless it runs already: whether it did, and its pid.
 /// One start runs at a time; a start that fails is stopped, never left
 /// half-running.
-pub async fn start(config: &Path, port: u16, output: &Path) -> Result<()> {
-    let say = |already: bool, pid: serde_json::Value| -> Result<()> {
-        if crate::ui::human() {
-            let what = if already {
-                "is already running"
-            } else {
-                "is running"
-            };
-            println!(
-                "{} The menu bar {what}. Click the A at the top of the screen; quit it from its menu.",
-                crate::ui::style::ok()
-            );
-        } else {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(
-                    &serde_json::json!({"ok": true, "running": true, "alreadyRunning": already, "pid": pid})
-                )?
-            );
-        }
-        Ok(())
-    };
+pub async fn launch(config: &Path, port: u16, output: &Path) -> Result<(bool, serde_json::Value)> {
     let record = output.join(crate::viewer::MENUBAR_RECORD);
     let _starting = starting(&output.join("menubar.lock")).await?;
     if let Some(running) = crate::viewer::running(&record, port) {
-        return say(true, running["pid"].clone());
+        return Ok((true, running["pid"].clone()));
     }
     let log_path = output.join("menubar.log");
     let log = fs::File::create(&log_path)?;
@@ -82,10 +86,10 @@ pub async fn start(config: &Path, port: u16, output: &Path) -> Result<()> {
                     .as_ref()
                     .is_some_and(|reply| reply["alreadyRunning"] == true)
             {
-                return say(
+                return Ok((
                     true,
                     reply.map(|reply| reply["pid"].clone()).unwrap_or_default(),
-                );
+                ));
             }
             let code = reply
                 .as_ref()
@@ -97,7 +101,7 @@ pub async fn start(config: &Path, port: u16, output: &Path) -> Result<()> {
             if code == "port-in-use" {
                 for _ in 0..25 {
                     if let Some(running) = crate::viewer::running(&record, port) {
-                        return say(true, running["pid"].clone());
+                        return Ok((true, running["pid"].clone()));
                     }
                     tokio::time::sleep(Duration::from_millis(200)).await;
                 }
@@ -112,7 +116,7 @@ pub async fn start(config: &Path, port: u16, output: &Path) -> Result<()> {
             ));
         }
         if crate::viewer::running(&record, port).is_some_and(|running| running["pid"] == pid) {
-            return say(false, pid.into());
+            return Ok((false, pid.into()));
         }
         if std::time::Instant::now() >= deadline {
             // Never leave a half-started menu bar behind.
@@ -237,7 +241,7 @@ fn bundled(executable: &Path) -> Option<PathBuf> {
 
 /// The package in the checkout this binary was built from, built with SwiftPM.
 fn development() -> Result<PathBuf> {
-    let package = Path::new(env!("CARGO_MANIFEST_DIR")).join("menubar");
+    let package = Path::new(env!("CARGO_MANIFEST_DIR")).join("app");
     if !package.join("Package.swift").is_file() {
         return Err(Error::new(
             "menubar",
@@ -367,24 +371,59 @@ async fn spawn(program: &Program, url: &str, args: &[&str]) -> Result<(Child, Ch
     Ok((child, stdin))
 }
 
+/// A line the service sends the companion on its stdin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Line {
+    /// Bring the viewer window forward.
+    Viewer,
+}
+
+impl Line {
+    fn text(self) -> &'static str {
+        match self {
+            Self::Viewer => "viewer\n",
+        }
+    }
+}
+
 /// A running companion. Dropping it closes its stdin, which makes it quit,
 /// and kills it if it has not.
 pub struct Companion {
     child: Child,
-    _stdin: ChildStdin,
+    writer: tokio::task::JoinHandle<()>,
 }
 
 impl Companion {
-    pub async fn launch(program: &Program, url: &str) -> Result<Self> {
-        let (child, stdin) = spawn(program, url, &[]).await?;
-        Ok(Self {
-            child,
-            _stdin: stdin,
-        })
+    /// Start the companion; each of `lines` is passed on to it.
+    pub async fn launch(
+        program: &Program,
+        url: &str,
+        mut lines: tokio::sync::mpsc::UnboundedReceiver<Line>,
+    ) -> Result<Self> {
+        let (child, mut stdin) = spawn(program, url, &[]).await?;
+        let writer = tokio::spawn(async move {
+            while let Some(line) = lines.recv().await {
+                if stdin.write_all(line.text().as_bytes()).await.is_err()
+                    || stdin.flush().await.is_err()
+                {
+                    break;
+                }
+            }
+            // Its stdin stays open until the companion is dropped.
+            std::future::pending::<()>().await;
+        });
+        Ok(Self { child, writer })
     }
     /// Resolves when the person quits the companion.
     pub async fn exited(&mut self) {
         let _ = self.child.wait().await;
+    }
+}
+
+impl Drop for Companion {
+    fn drop(&mut self) {
+        // Closes its stdin.
+        self.writer.abort();
     }
 }
 
@@ -421,12 +460,12 @@ mod tests {
 
     #[test]
     fn the_url_arrives_on_stdin_never_in_argv() {
-        let main = include_str!("../../menubar/Sources/AtlasBar/main.swift");
+        let main = include_str!("../../app/Sources/AtlasApp/AtlasApp.swift");
         assert!(
-            main.contains("guard let line = readLine(), let viewer = Viewer(line)"),
+            main.contains("guard let line = readLine(), let service = ViewerClient(line)"),
             "the URL arrives on stdin"
         );
-        assert!(!main.contains("Viewer(CommandLine"), "never from argv");
+        assert!(!main.contains("ViewerClient(arguments"), "never from argv");
     }
 
     #[test]
