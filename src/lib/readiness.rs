@@ -35,7 +35,7 @@ fn first_line(output: &[u8]) -> String {
 /// Classify a present tool from its `--version` invocation. Completion is
 /// judged before the exit status; a probe the tool does not understand is
 /// unknown, not a failure of the tool.
-pub fn tool_status(reply: &Value, output: &[u8]) -> (&'static str, String) {
+pub(crate) fn tool_status(reply: &Value, output: &[u8]) -> (&'static str, String) {
     let text = String::from_utf8_lossy(output).to_lowercase();
     if reply["timedOut"] == true || !reply["signal"].is_null() {
         return ("unknown", "The --version probe did not complete".into());
@@ -116,7 +116,7 @@ fn bundle_identifier(text: &str) -> bool {
 }
 
 /// Parse the app probe's `key=value` lines; anything unexpected is None.
-pub fn app_facts(output: &str) -> Option<(String, Vec<String>)> {
+pub(crate) fn app_facts(output: &str) -> Option<(String, Vec<String>)> {
     let mut identifier = None;
     let mut state = Vec::new();
     for line in output.lines() {
