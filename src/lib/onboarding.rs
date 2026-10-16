@@ -410,7 +410,10 @@ pub fn choose(config_path: &Path, name: &str) -> Result<Value> {
 /// for an administrator's approval in its own dialog.
 pub fn create(config_path: &Path, name: &str, full_name: &str) -> Result<Value> {
     init::valid_account_name(name).map_err(problem)?;
-    if full_name.is_empty() || full_name.len() > 64 || full_name.chars().any(|c| c.is_control()) {
+    if full_name.is_empty()
+        || full_name.chars().count() > 64
+        || full_name.chars().any(|c| c.is_control())
+    {
         return Err(problem("Use a full name of 1 to 64 characters"));
     }
     if setup::account_named(name)?.is_some() {
@@ -484,7 +487,13 @@ fn answer_prompts(
         .stdout
         .take()
         .ok_or_else(|| problem("No output pipe"))?;
+    let errors = child
+        .stderr
+        .take()
+        .ok_or_else(|| problem("No error pipe"))?;
     let receiver = init::forward(output);
+    // Drained as it comes, so a chatty program never blocks on it.
+    let complaints = init::forward(errors);
     let deadline = Instant::now() + patience;
     let mut seen = Vec::new();
     let mut answered = 0;
@@ -495,16 +504,23 @@ fn answer_prompts(
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
         // A question ends without a newline: "User password:".
-        let asked = String::from_utf8_lossy(&seen)
-            .to_ascii_lowercase()
-            .matches("password:")
+        let asked = seen
+            .windows(PROMPT.len())
+            .filter(|window| window.eq_ignore_ascii_case(PROMPT))
             .count();
-        if asked > answered && answered < 3 {
+        if asked > answered && answered < MAX_ANSWERS {
             // Let the prompt turn echo off before typing.
             std::thread::sleep(Duration::from_millis(150));
-            input.write_all(secret)?;
-            input.write_all(b"\n")?;
-            input.flush()?;
+            let typed = input
+                .write_all(secret)
+                .and_then(|()| input.write_all(b"\n"))
+                .and_then(|()| input.flush());
+            if let Err(error) = typed {
+                let _ = child.kill();
+                let _ = child.wait();
+                seen.fill(0);
+                return Err(error.into());
+            }
             answered += 1;
         }
         if Instant::now() >= deadline {
@@ -514,22 +530,49 @@ fn answer_prompts(
     }
     drop(input);
     let status = child.wait()?;
-    let mut text = String::from_utf8_lossy(&seen).into_owned();
-    let secret = String::from_utf8_lossy(secret).into_owned();
-    if !secret.is_empty() {
-        text = text.replace(&secret, "");
-    }
-    let summary = text
-        .lines()
-        .map(str::trim)
-        .rfind(|line| !line.is_empty() && !line.to_ascii_lowercase().contains("password"))
-        .unwrap_or("")
-        .to_owned();
+    // The secret is cut out byte for byte, never copied into a string.
+    let kept = without(&seen, secret);
+    seen.fill(0);
+    let text = String::from_utf8_lossy(&kept).into_owned();
     if status.success() {
-        Ok(text)
-    } else {
-        Err(problem(summary))
+        return Ok(text);
     }
+    let complained: Vec<u8> = complaints.try_iter().flatten().collect();
+    let last = |text: &str| {
+        text.lines()
+            .map(str::trim)
+            .rfind(|line| !line.is_empty() && !line.to_ascii_lowercase().contains("password"))
+            .map(str::to_owned)
+    };
+    let summary = last(&text)
+        .or_else(|| last(&String::from_utf8_lossy(&without(&complained, secret))))
+        .unwrap_or_default();
+    Err(problem(summary))
+}
+
+/// What a password question ends with, in any case.
+const PROMPT: &[u8] = b"password:";
+
+/// The most password questions answered, so a program that keeps asking
+/// (after a refused password, say) is not fed the secret forever.
+const MAX_ANSWERS: usize = 3;
+
+/// `bytes` with every occurrence of `secret` cut out.
+fn without(bytes: &[u8], secret: &[u8]) -> Vec<u8> {
+    if secret.is_empty() {
+        return bytes.to_vec();
+    }
+    let mut kept = Vec::with_capacity(bytes.len());
+    let mut rest = bytes;
+    while !rest.is_empty() {
+        if rest.starts_with(secret) {
+            rest = &rest[secret.len()..];
+        } else {
+            kept.push(rest[0]);
+            rest = &rest[1..];
+        }
+    }
+    kept
 }
 
 /// In the helper: let the account that asked use this one, by installing
@@ -773,6 +816,14 @@ mod tests {
         let wrong = "printf 'Password:'; read p; exit 3";
         let failed = answer_prompts("/bin/sh", &["-c", wrong], b"abc", Duration::from_secs(10));
         assert!(failed.is_err());
+    }
+
+    #[test]
+    fn the_secret_is_cut_out_byte_for_byte() {
+        assert_eq!(without(b"a se cret b se cret", b"se cret"), b"a  b ");
+        assert_eq!(without(b"sesecret", b"secret"), b"se");
+        assert_eq!(without(b"\xff\xfepass", b"\xfe"), b"\xffpass");
+        assert_eq!(without(b"kept", b""), b"kept");
     }
 
     fn pairing(controller: u32) -> Pairing {
