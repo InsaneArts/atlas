@@ -19,8 +19,11 @@ use std::{
 };
 use tokio::sync::Mutex;
 
+/// Random bytes in a [`token`]; it is twice as many hexadecimal digits.
+pub const TOKEN_BYTES: usize = 24;
+
 pub fn token() -> String {
-    let mut bytes = [0; 24];
+    let mut bytes = [0; TOKEN_BYTES];
     rand::rng().fill_bytes(&mut bytes);
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -58,18 +61,23 @@ fn open_lock(path: &Path) -> Result<File> {
 pub struct Pending {
     generation: String,
     live: PathBuf,
-    _lock: File,
+    /// The claim file, exclusively locked for as long as it is open.
+    lock: File,
 }
 impl std::ops::Deref for Pending {
     type Target = str;
     fn deref(&self) -> &str {
-        &self.generation
+        self.generation()
     }
 }
 impl Pending {
+    /// The generation this mutation is recorded under.
+    pub fn generation(&self) -> &str {
+        &self.generation
+    }
     /// Whether the claim path still names the file this claim locked.
     fn names_own_file(&self) -> bool {
-        let (named, held) = (fs::symlink_metadata(&self.live), self._lock.metadata());
+        let (named, held) = (fs::symlink_metadata(&self.live), self.lock.metadata());
         matches!((named, held), (Ok(a), Ok(b)) if (a.dev(), a.ino()) == (b.dev(), b.ino()))
     }
 }
@@ -202,7 +210,7 @@ impl Controller {
         let claim = Pending {
             generation: generation.to_owned(),
             live,
-            _lock: file,
+            lock: file,
         };
         let _lock = self.lock_marker()?;
         // Claim files are only unlinked under the marker lock or by their
@@ -371,7 +379,9 @@ impl Lease {
                 "This token cannot release another controller",
             ));
         }
-        let previous = self.owner.take().or(self.retired.take());
+        // Both the live and any retired token end here.
+        let retired = self.retired.take();
+        let previous = self.owner.take().or(retired);
         if previous.is_some() {
             self.cleaning = true;
         }
@@ -407,16 +417,64 @@ impl ActionPermit {
 }
 impl Drop for ActionPermit {
     fn drop(&mut self) {
-        if let Ok(mut state) = self.lease.try_lock() {
+        let finish = |state: &mut Lease| {
             state.inflight = false;
             state.expire();
-        } else {
+        };
+        if let Ok(mut state) = self.lease.try_lock() {
+            finish(&mut state);
+        } else if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             let lease = self.lease.clone();
-            tokio::spawn(async move {
-                let mut state = lease.lock().await;
-                state.inflight = false;
-                state.expire();
-            });
+            runtime.spawn(async move { finish(&mut *lease.lock().await) });
+        } else {
+            // Outside any runtime, waiting here blocks no async task.
+            finish(&mut self.lease.blocking_lock());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A permit dropped outside any runtime, while the lease is locked
+    /// elsewhere, waits for it instead of panicking.
+    #[test]
+    fn a_permit_settles_without_a_runtime() {
+        let lease: SharedLease = Arc::new(Mutex::new(Lease::new(Duration::from_secs(60))));
+        let token = token();
+        {
+            let mut state = lease.blocking_lock();
+            state.owner = Some(token.clone());
+            state.expires = Instant::now() + Duration::from_secs(60);
+        }
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let permit = runtime
+            .block_on(ActionPermit::begin(lease.clone(), &token))
+            .unwrap();
+        drop(runtime);
+        let held = lease.clone().blocking_lock_owned();
+        let holder = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            drop(held);
+        });
+        drop(permit);
+        holder.join().unwrap();
+        assert!(!lease.blocking_lock().inflight);
+    }
+
+    #[test]
+    fn beginning_a_release_clears_the_retired_token_too() {
+        let mut lease = Lease::new(Duration::from_secs(60));
+        lease.owner = Some("a".repeat(48));
+        lease.expires = Instant::now() + Duration::from_secs(60);
+        lease.retired = Some("b".repeat(48));
+        assert_eq!(lease.begin_release(None).unwrap(), Some("a".repeat(48)));
+        assert_eq!((lease.owner.clone(), lease.retired.clone()), (None, None));
+        lease.retired = Some("b".repeat(48));
+        assert_eq!(lease.begin_release(None).unwrap(), Some("b".repeat(48)));
+        assert_eq!(lease.retired, None);
     }
 }
