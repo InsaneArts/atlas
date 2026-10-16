@@ -1,6 +1,8 @@
 //! Darwin extended ACLs (sys/acl.h) behind one owned, freed-on-drop handle.
-// FFI boundary: macOS ACL functions have no safe binding.
-#![allow(unsafe_code)]
+#![allow(
+    unsafe_code,
+    reason = "FFI boundary: macOS ACL functions have no safe binding"
+)]
 use std::{
     ffi::{CStr, CString, c_char, c_int, c_void},
     fs::File,
@@ -14,9 +16,25 @@ const ACL_FIRST_ENTRY: c_int = 0;
 const ACL_NEXT_ENTRY: c_int = -1;
 const ACL_EXTENDED_ALLOW: c_int = 1;
 
+// Permission bits from sys/acl.h.
+const ACL_WRITE_DATA: u64 = 1 << 2;
+const ACL_DELETE: u64 = 1 << 4;
+const ACL_APPEND_DATA: u64 = 1 << 5;
+const ACL_DELETE_CHILD: u64 = 1 << 6;
+const ACL_WRITE_ATTRIBUTES: u64 = 1 << 8;
+const ACL_WRITE_EXTATTRIBUTES: u64 = 1 << 10;
+const ACL_WRITE_SECURITY: u64 = 1 << 12;
+const ACL_CHANGE_OWNER: u64 = 1 << 13;
+
 /// Data, append, delete, attribute, ACL and ownership writes.
-pub const WRITE_RIGHTS: u64 =
-    (1 << 2) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 8) | (1 << 10) | (1 << 12) | (1 << 13);
+pub const WRITE_RIGHTS: u64 = ACL_WRITE_DATA
+    | ACL_DELETE
+    | ACL_APPEND_DATA
+    | ACL_DELETE_CHILD
+    | ACL_WRITE_ATTRIBUTES
+    | ACL_WRITE_EXTATTRIBUTES
+    | ACL_WRITE_SECURITY
+    | ACL_CHANGE_OWNER;
 
 unsafe extern "C" {
     fn acl_get_file(path: *const c_char, kind: c_int) -> *mut c_void;
@@ -75,19 +93,29 @@ impl Acl {
         // SAFETY: live ACL handle.
         unsafe { acl_valid(self.0) == 0 }
     }
+    /// Every entry. Only the end of the list (EINVAL from the next entry)
+    /// ends it; any other failure is an error, never a shorter list.
     pub fn entries(&self) -> io::Result<Vec<Entry>> {
         let mut entries = Vec::new();
         let mut index = ACL_FIRST_ENTRY;
         let mut entry = std::ptr::null_mut();
-        // SAFETY: live ACL handle; entries borrow from it and valid out pointers.
-        while unsafe { acl_get_entry(self.0, index, &mut entry) } == 0 {
+        loop {
+            // SAFETY: live ACL handle; entries borrow from it and the out
+            // pointer is valid for writes.
+            if unsafe { acl_get_entry(self.0, index, &raw mut entry) } != 0 {
+                let error = io::Error::last_os_error();
+                if error.raw_os_error() == Some(libc::EINVAL) {
+                    break;
+                }
+                return Err(error);
+            }
             index = ACL_NEXT_ENTRY;
             let (mut tag, mut mask) = (0, 0);
             // SAFETY: `entry` was just returned for this live ACL; both
             // outputs are valid for writes.
-            if unsafe { acl_get_tag_type(entry, &mut tag) } != 0
+            if unsafe { acl_get_tag_type(entry, &raw mut tag) } != 0
                 // SAFETY: as above.
-                || unsafe { acl_get_permset_mask_np(entry, &mut mask) } != 0
+                || unsafe { acl_get_permset_mask_np(entry, &raw mut mask) } != 0
             {
                 return Err(io::Error::last_os_error());
             }
