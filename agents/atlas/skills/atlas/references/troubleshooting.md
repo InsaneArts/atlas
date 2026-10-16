@@ -11,7 +11,7 @@ its own failure is in `exitCode`.)
 | `agents` | Connecting Claude Code or Codex failed. | Show `error`; `atlas agents` lists what is installed. |
 | `apps` | The helper's running apps could not be listed. | Retry once; then run `atlas doctor`. |
 | `bad-request` | The helper daemon rejected a malformed request. | Check the command's arguments against `references/commands.md`. |
-| `blocked` | This shell may not connect to the helper or write Atlas's own files, usually because an agent sandbox blocks local sockets or writes outside its folder. The helper may be fine. | Run Atlas commands outside the sandbox (ask for that permission). Do not run `atlas init` for this. |
+| `blocked` | This shell may not connect to the helper or write Atlas's own files, usually because an agent sandbox blocks local sockets or writes outside its folder. The helper may be fine. | Run Atlas commands outside the sandbox (ask for that permission), or have the sandbox allow the helper socket and the folders Atlas writes: `~/Library/Caches/Atlas`, `~/Library/Application Support/Atlas/runs` and `/Users/Shared/Atlas`. Do not run `atlas init` for this. |
 | `busy` | Another controller (often the person, in the viewer) has control. | Wait and retry later; never take control from the person. |
 | `cancelled` | The person stopped at a question (Esc). | That step did not happen, but earlier steps may have; check with `atlas doctor`, and ask the person before trying again. |
 | `capture` | A screenshot could not be taken or encoded. | Retry once; then `atlas doctor`. |

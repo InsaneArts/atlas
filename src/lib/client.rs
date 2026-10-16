@@ -1028,7 +1028,18 @@ impl Client {
     /// helper itself is fine.
     pub fn writable(&self) -> Result<()> {
         self.controller.writable()?;
-        crate::control::probe_write(self.output_dir()?)
+        crate::control::probe_write(self.output_dir()?)?;
+
+        // Builds and environment plans are staged beside the shared Atlas
+        // command for the helper to read; a missing folder is setup's
+        // concern, not this check's.
+        if let Some(shared) = self.config.identity_probe.parent()
+            && shared.is_dir()
+        {
+            crate::control::probe_write(shared)?;
+        }
+
+        Ok(())
     }
 
     fn record(&self, request: &Value, reply: &Value, elapsed: Duration) -> Result<()> {
