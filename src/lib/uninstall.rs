@@ -139,7 +139,7 @@ pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Val
         .and_then(|client| client.output_dir().ok().map(Path::to_path_buf))
         .and_then(|output| crate::menubar::stop(&output))
         .is_some();
-    if crate::menubar::login("off").is_ok() || stopped {
+    if crate::menubar::set_login(crate::menubar::Login::Off).is_ok() || stopped {
         done("Menu bar", "stopped and no longer opens at login");
     }
     // Agents forget the plugin (only connected ones change).

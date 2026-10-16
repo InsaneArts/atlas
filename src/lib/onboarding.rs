@@ -729,7 +729,11 @@ pub fn login(config_path: &Path, on: bool) -> Result<Value> {
             config_path.display()
         )));
     }
-    crate::menubar::login(if on { "on" } else { "off" })
+    crate::menubar::set_login(if on {
+        crate::menubar::Login::On
+    } else {
+        crate::menubar::Login::Off
+    })
 }
 
 #[cfg(test)]
