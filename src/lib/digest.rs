@@ -28,10 +28,25 @@ pub fn probe_executable(path: &Path) -> Option<std::path::PathBuf> {
 
 /// SHA-256 of a regular file, read without following a final symlink.
 pub fn file_sha256(path: &Path) -> Option<String> {
-    if !fs::symlink_metadata(path).ok()?.is_file() {
-        return None;
-    }
-    let mut file = fs::File::open(path).ok()?;
+    sha256(&open_regular(path)?)
+}
+
+/// `path` opened for reading if it is a regular file. A final symlink is
+/// never followed, and the check is made on the opened descriptor, so the
+/// file read is the file checked. Opening never blocks (on a FIFO, say);
+/// reads of a regular file are unaffected.
+pub(crate) fn open_regular(path: &Path) -> Option<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .ok()?;
+    file.metadata().ok()?.is_file().then_some(file)
+}
+
+/// SHA-256 of everything left to read in `file`.
+pub(crate) fn sha256(mut file: &fs::File) -> Option<String> {
     let mut hasher = Sha256::new();
     let mut buffer = vec![0; 1 << 16];
     loop {
@@ -61,6 +76,9 @@ mod tests {
         std::os::unix::fs::symlink(&file, &link).unwrap();
         assert_eq!(file_sha256(&link), None);
         assert_eq!(file_sha256(dir.path()), None);
+        let fifo = dir.path().join("fifo");
+        nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).unwrap();
+        assert_eq!(file_sha256(&fifo), None, "never waits for a writer");
     }
 
     #[test]

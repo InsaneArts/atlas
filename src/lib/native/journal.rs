@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs,
     io::Read,
-    os::unix::fs::MetadataExt,
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
 };
 
@@ -50,16 +50,23 @@ impl Journal {
     }
 }
 pub fn load(path: &Path, epoch: &InputEpoch) -> Result<Option<Held>> {
-    let mut file = match fs::File::open(path) {
+    let foreign = || Error::new("identity", "Held-input journal must belong to the helper");
+    // A symlink is never followed (O_NOFOLLOW fails with ELOOP), and the
+    // checks are made on the opened descriptor, so the file read is the file
+    // checked. Opening never blocks on a FIFO.
+    let mut file = match fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+    {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.raw_os_error() == Some(libc::ELOOP) => return Err(foreign()),
         Err(error) => return Err(error.into()),
     };
-    if fs::symlink_metadata(path)?.file_type().is_symlink() || file.metadata()?.uid() != epoch.uid {
-        return Err(Error::new(
-            "identity",
-            "Held-input journal must belong to the helper",
-        ));
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.uid() != epoch.uid {
+        return Err(foreign());
     }
     let mut bytes = Vec::new();
     (&mut file).take(4097).read_to_end(&mut bytes)?;
@@ -227,6 +234,45 @@ mod tests {
         held.button = Some(Button::Left);
         store(&path, &held).unwrap();
         assert!(load(&path, &epoch).is_err());
+    }
+
+    /// Only the journal file itself is read: never a link to one, even a
+    /// valid one, nor anything that is not a regular file.
+    #[test]
+    fn a_linked_or_irregular_journal_is_refused() {
+        let directory = tempfile::tempdir().unwrap();
+        let epoch = test_epoch();
+        let real = directory.path().join("real.json");
+        store(
+            &real,
+            &Held {
+                epoch: epoch.clone(),
+                button: None,
+                keys: Vec::new(),
+                x: 1.0,
+                y: 1.0,
+                count: 1,
+                mouse_number: 0,
+                flags: 0,
+            },
+        )
+        .unwrap();
+        assert!(load(&real, &epoch).unwrap().is_some());
+        let link = directory.path().join("held.json");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        assert_eq!(load(&link, &epoch).err().unwrap().code, "identity");
+        assert_eq!(
+            load(directory.path(), &epoch).err().unwrap().code,
+            "identity"
+        );
+        let fifo = directory.path().join("fifo.json");
+        nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).unwrap();
+        assert_eq!(load(&fifo, &epoch).err().unwrap().code, "identity");
+        assert!(
+            load(&directory.path().join("absent.json"), &epoch)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

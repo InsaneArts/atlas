@@ -34,16 +34,29 @@ struct Service {
     /// The file this process started from, by path and identity. When the
     /// file there is replaced (an app update, even with the same build), the
     /// running process no longer matches it and macOS may drop its events.
-    executable: Option<(PathBuf, (u64, u64))>,
+    executable: Option<Executable>,
     /// Signalled once an acknowledged shutdown has been answered.
     stopping: tokio::sync::Notify,
 }
-/// The started-from file and its (device, inode).
-fn executable() -> Option<(PathBuf, (u64, u64))> {
+/// A file by path and (device, inode).
+type Executable = (PathBuf, (u64, u64));
+
+/// The started-from file's SHA-256, and its path with its (device, inode).
+/// Both come from one open descriptor, so they describe the same file even
+/// if the path is replaced meanwhile.
+fn started_from() -> (Option<String>, Option<Executable>) {
     use std::os::unix::fs::MetadataExt;
-    let path = std::fs::canonicalize(std::env::current_exe().ok()?).ok()?;
-    let metadata = std::fs::metadata(&path).ok()?;
-    Some((path, (metadata.dev(), metadata.ino())))
+    // Started through the shared link, the executable is the file it names.
+    let Some(path) = std::env::current_exe().and_then(std::fs::canonicalize).ok() else {
+        return (None, None);
+    };
+    let Some((file, metadata)) = crate::digest::open_regular(&path)
+        .and_then(|file| file.metadata().ok().map(|metadata| (file, metadata)))
+    else {
+        return (None, None);
+    };
+    let build = crate::digest::sha256(&file);
+    (build, Some((path, (metadata.dev(), metadata.ino()))))
 }
 
 impl Service {
@@ -224,12 +237,7 @@ impl Service {
 }
 
 pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()> {
-    // Started through the shared link, the executable is the file it names.
-    let build = std::env::current_exe()
-        .and_then(std::fs::canonicalize)
-        .ok()
-        .and_then(|path| crate::digest::file_sha256(&path));
-    let executable = executable();
+    let (build, executable) = started_from();
     crate::session::validate_target_uid(uid, controller_uid)?;
     if controller_uid == 0 {
         return Err(Error::new(
