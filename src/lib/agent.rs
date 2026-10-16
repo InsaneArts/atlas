@@ -599,7 +599,9 @@ pub async fn wait(
         return Err(Error::new("usage", "Wait for --app, --title, or both"));
     }
     let started = Instant::now();
-    let deadline = started + timeout;
+    let deadline = started
+        .checked_add(timeout)
+        .ok_or_else(|| Error::new("usage", "That --timeout is too long to wait"))?;
     loop {
         // Each observation gets what is left of the deadline (at least half
         // a second); a zero timeout is exactly one observation.
