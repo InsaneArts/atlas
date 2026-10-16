@@ -56,7 +56,8 @@ not test on the person's desktop instead, and do not silently skip the check.
 
 ## Start
 
-1. `atlas doctor`: continue when `ready` is true. Otherwise do the
+1. `atlas doctor`: continue when `ready` is true (while it is not, doctor
+   still answers `ok` but exits 1). Otherwise do the
    `nextSteps` that are Atlas commands (such as `atlas start-input` or
    `atlas restart`) and check again. Tell the person only what needs them: a
    password, allowing a permission, switching accounts. Never change
@@ -199,9 +200,10 @@ unless you looked at it in the helper.
   Never take it from them; wait and try again, and tell the person if it lasts.
 - `on-console`: the helper is on screen right now. Ask the person to switch
   back to their own account; do not retry until they have.
-- `blocked`: your shell may not connect to the helper, usually because your
-  sandbox blocks local sockets. The helper is likely fine: run Atlas commands
-  outside the sandbox, and never run `atlas init` for this.
+- `blocked`: your shell may not connect to the helper or write Atlas's own
+  files (locks, screenshots), usually because your sandbox blocks them. The
+  helper is likely fine: run Atlas commands outside the sandbox, and never run
+  `atlas init` for this.
 - Anything else: read `error`, and see references/troubleshooting.md.
 
 ## Limits
@@ -210,8 +212,13 @@ unless you looked at it in the helper.
 - Native Save/Open panels work only while an authenticated Screen Sharing
   session is connected to the helper (`doctor` → `capabilities.nativeDialogs`).
   Without it, clicks in a panel report `ok` but do nothing; `atlas key escape`
-  closes it. Save existing files with Cmd+S, or create files with tools via
-  `run`; report a panel flow you could not drive as not checked.
+  closes it. The sheet asking whether to keep a new document (Save As, Where,
+  Delete) is one: `key cmd+backspace` deletes it, `key escape` cancels. Save
+  existing files with Cmd+S, or create files with tools via `run`; report a
+  panel flow you could not drive as not checked.
+- The helper's Desktop, Documents and Downloads are protected by macOS: `run`
+  gets "Operation not permitted" there. Keep files elsewhere in its home, such
+  as `$HOME/atlas-work`.
 - Credentials and app sign-ins are never copied from the person's account.
 - Audio plays on the person's speakers.
 - Some things are shared with the person's account. The process list is the

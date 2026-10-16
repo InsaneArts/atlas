@@ -35,21 +35,45 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
         .write(true)
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
-        .open(path)?;
+        .open(path)
+        .map_err(|error| Error::writing(path, error))?;
     file.write_all(bytes)?;
     file.sync_all()?;
     Ok(())
 }
 
+/// Whether a new private file can be made in `directory` right now: one is
+/// created under a name of its own and removed again. Reopening a file that
+/// is already there would prove nothing about the next one.
+pub fn probe_write(directory: &Path) -> Result<()> {
+    fs::create_dir_all(directory).map_err(|error| Error::writing(directory, error))?;
+
+    let moment = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    let path = directory.join(format!(".probe-{}-{moment}", std::process::id()));
+    OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&path)
+        .map_err(|error| Error::writing(&path, error))?;
+    fs::remove_file(&path).map_err(|error| Error::writing(&path, error))?;
+
+    Ok(())
+}
+
 fn open_lock(path: &Path) -> Result<File> {
-    Ok(OpenOptions::new()
+    OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
         .write(true)
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
-        .open(path)?)
+        .open(path)
+        .map_err(|error| Error::writing(path, error))
 }
 
 /// A mutation still being carried out. For its lifetime it holds an
@@ -64,23 +88,27 @@ pub struct Pending {
     /// The claim file, exclusively locked for as long as it is open.
     lock: File,
 }
+
 impl std::ops::Deref for Pending {
     type Target = str;
     fn deref(&self) -> &str {
         self.generation()
     }
 }
+
 impl Pending {
     /// The generation this mutation is recorded under.
     pub fn generation(&self) -> &str {
         &self.generation
     }
+
     /// Whether the claim path still names the file this claim locked.
     fn names_own_file(&self) -> bool {
         let (named, held) = (fs::symlink_metadata(&self.live), self.lock.metadata());
         matches!((named, held), (Ok(a), Ok(b)) if (a.dev(), a.ino()) == (b.dev(), b.ino()))
     }
 }
+
 impl Drop for Pending {
     fn drop(&mut self) {
         // Only an unlocked claim file is ever removed by others, and a
@@ -110,10 +138,12 @@ pub struct Controller {
     marker_lock: PathBuf,
     name: String,
 }
+
 impl Controller {
     pub fn new(uid: u32) -> Result<Self> {
         Ok(Self::at(uid, &home()?.join("Library/Caches/Atlas")))
     }
+
     /// Locating state is read-only; the directory appears with the first lock.
     pub fn at(uid: u32, directory: &Path) -> Self {
         let digest = format!("{:x}", Sha256::digest(format!("helper:{uid}").as_bytes()));
@@ -126,8 +156,16 @@ impl Controller {
             name: name.to_owned(),
         }
     }
+
+    /// Whether this process may keep its locks and claims here at all. An
+    /// agent's sandbox may forbid writing, and the error then says so.
+    pub fn writable(&self) -> Result<()> {
+        probe_write(&self.directory)
+    }
+
     pub fn acquire(&self, recovery: bool) -> Result<Ownership> {
-        fs::create_dir_all(&self.directory)?;
+        fs::create_dir_all(&self.directory)
+            .map_err(|error| Error::writing(&self.directory, error))?;
         let lock = open_lock(&self.lock)?;
         FileExt::try_lock_exclusive(&lock).map_err(|_| {
             Error::new(
@@ -140,6 +178,7 @@ impl Controller {
         }
         Ok(Ownership { _lock: lock })
     }
+
     pub fn require_known(&self) -> Result<()> {
         if self.marker.try_exists()? {
             return Err(Error::new(
@@ -149,17 +188,21 @@ impl Controller {
         }
         Ok(())
     }
+
     fn lock_marker(&self) -> Result<File> {
-        fs::create_dir_all(&self.directory)?;
+        fs::create_dir_all(&self.directory)
+            .map_err(|error| Error::writing(&self.directory, error))?;
         let file = open_lock(&self.marker_lock)?;
         FileExt::lock_exclusive(&file)?;
         Ok(file)
     }
+
     /// Generations of mutations whose outcome is still unknown.
     pub fn pending(&self) -> Result<Vec<String>> {
         let _lock = self.lock_marker()?;
         pending(&self.marker)
     }
+
     /// Generations no mutation in progress will settle: their writer
     /// dropped or lost its claim (an uncertain failure or a crash), or the
     /// entry is not one of ours. For display only; every pending generation
@@ -173,6 +216,7 @@ impl Controller {
             .filter(|generation| !self.in_progress(generation))
             .collect())
     }
+
     /// The claim file for a generation; only plain tokens name one.
     fn live(&self, generation: &str) -> Option<PathBuf> {
         (!generation.is_empty() && generation.bytes().all(|b| b.is_ascii_hexdigit())).then(|| {
@@ -180,6 +224,7 @@ impl Controller {
                 .join(format!("{}.{generation}.live", self.name))
         })
     }
+
     /// Whether some live mutation, in any process, still holds the claim.
     fn in_progress(&self, generation: &str) -> bool {
         let Some(live) = self.live(generation) else {
@@ -191,10 +236,12 @@ impl Controller {
             .open(live)
             .is_ok_and(|file| FileExt::try_lock_shared(&file).is_err())
     }
+
     /// Record a pending mutation this process is carrying out.
     pub fn quarantine(&self) -> Result<Pending> {
         self.quarantine_as(&token())
     }
+
     /// Record a pending mutation under a generation the caller chose, so it
     /// can persist its own claim on that generation first. The claim is
     /// taken before the marker is written, so a marked generation is never
@@ -203,7 +250,8 @@ impl Controller {
         let live = self
             .live(generation)
             .ok_or_else(|| Error::new("state", "Pending generations are hexadecimal tokens"))?;
-        fs::create_dir_all(&self.directory)?;
+        fs::create_dir_all(&self.directory)
+            .map_err(|error| Error::writing(&self.directory, error))?;
         let file = open_lock(&live)?;
         FileExt::try_lock_exclusive(&file)
             .map_err(|_| Error::new("busy", "That generation is already being carried out"))?;
@@ -229,6 +277,7 @@ impl Controller {
         write_private(&self.marker, &serde_json::to_vec(&pending)?)?;
         Ok(claim)
     }
+
     /// Settle one acknowledged mutation; others stay pending.
     pub fn clear_if(&self, generation: &str) -> Result<()> {
         let _lock = self.lock_marker()?;
@@ -245,6 +294,7 @@ impl Controller {
             write_private(&self.marker, &serde_json::to_vec(&pending)?)
         }
     }
+
     /// Verified recovery settles every pending mutation and removes every
     /// claim file no live mutation holds, listed or not.
     pub fn clear(&self) -> Result<()> {
@@ -293,11 +343,13 @@ pub struct Lease {
     cleaning: bool,
     ttl: Duration,
 }
+
 impl Default for Lease {
     fn default() -> Self {
         Self::new(Duration::from_secs(10))
     }
 }
+
 impl Lease {
     pub fn new(ttl: Duration) -> Self {
         Self {
@@ -310,6 +362,7 @@ impl Lease {
             ttl,
         }
     }
+
     pub fn expire(&mut self) {
         if self.owner.is_some() && Instant::now() >= self.expires {
             self.retired = self.owner.take();
@@ -319,6 +372,7 @@ impl Lease {
             self.descriptor = None;
         }
     }
+
     pub fn acquire(&mut self, controller: &Controller) -> Result<String> {
         self.expire();
         if self.descriptor.is_some() {
@@ -330,6 +384,7 @@ impl Lease {
         self.expires = Instant::now() + self.ttl;
         Ok(token)
     }
+
     pub fn require(&mut self, token: &str) -> Result<()> {
         self.expire();
         // Tokens are fixed-length random strings; compare without an early byte exit.
@@ -349,22 +404,26 @@ impl Lease {
         }
         Ok(())
     }
+
     pub fn renew(&mut self, token: &str) -> Result<()> {
         self.require(token)?;
         self.expires = Instant::now() + self.ttl;
         Ok(())
     }
+
     pub fn release(&mut self) {
         self.owner = None;
         self.retired = None;
         self.cleaning = false;
         self.expire();
     }
+
     pub fn abandon_acquire(&mut self, owner: &str) {
         if self.require(owner).is_ok() && !self.inflight && !self.cleaning {
             self.release();
         }
     }
+
     pub fn begin_release(&mut self, requested: Option<&str>) -> Result<Option<String>> {
         self.expire();
         let current = self.owner.as_ref().or(self.retired.as_ref());
@@ -387,10 +446,12 @@ impl Lease {
         }
         Ok(previous)
     }
+
     pub fn end_release(&mut self) {
         self.cleaning = false;
         self.expire();
     }
+
     pub fn active(&mut self) -> bool {
         self.expire();
         self.descriptor.is_some()
@@ -402,6 +463,7 @@ pub type SharedLease = Arc<Mutex<Lease>>;
 pub struct ActionPermit {
     lease: SharedLease,
 }
+
 impl ActionPermit {
     pub async fn begin(lease: SharedLease, token: &str) -> Result<Self> {
         {
@@ -415,6 +477,7 @@ impl ActionPermit {
         Ok(Self { lease })
     }
 }
+
 impl Drop for ActionPermit {
     fn drop(&mut self) {
         let finish = |state: &mut Lease| {
@@ -436,6 +499,22 @@ impl Drop for ActionPermit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Checking that the lock can be kept creates its directory, leaves no
+    /// file behind and never touches the lock; a place that cannot be
+    /// written says so.
+    #[test]
+    fn writable_leaves_the_directory_as_it_found_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, &directory.path().join("Atlas"));
+        controller.writable().unwrap();
+
+        assert_eq!(fs::read_dir(&controller.directory).unwrap().count(), 0);
+        controller.acquire(true).unwrap();
+
+        let unwritable = Controller::at(505, Path::new("/dev/null/Atlas"));
+        assert_eq!(unwritable.writable().unwrap_err().code, "io");
+    }
 
     /// A permit dropped outside any runtime, while the lease is locked
     /// elsewhere, waits for it instead of panicking.

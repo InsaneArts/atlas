@@ -48,6 +48,7 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
 }
+
 #[derive(Subcommand)]
 enum Command {
     /// Copy selected settings and files into the helper.
@@ -887,6 +888,7 @@ fn stop_cleanly_on_interrupt(message: &'static str) {
 fn windows_info() -> Result<Value> {
     Ok(json!({ "ok": true, "windows": atlas::native::windows::windows()? }))
 }
+
 #[cfg(target_os = "macos")]
 fn elements_info(pid: i32) -> Result<Value> {
     let limits = atlas::native::ax::Limits::default();
@@ -898,6 +900,7 @@ fn elements_info(pid: i32) -> Result<Value> {
         "errors": snapshot.errors,
     }))
 }
+
 #[cfg(not(target_os = "macos"))]
 fn elements_info(_: i32) -> Result<Value> {
     Err(Error::new(
@@ -905,6 +908,7 @@ fn elements_info(_: i32) -> Result<Value> {
         "Accessibility elements require macOS",
     ))
 }
+
 #[cfg(not(target_os = "macos"))]
 fn windows_info() -> Result<Value> {
     Err(Error::new("platform", "Window listing requires macOS"))
@@ -915,6 +919,7 @@ async fn input_service(uid: u32, controller_uid: u32, socket: PathBuf) -> Result
     atlas::native::service::serve(uid, controller_uid, socket).await?;
     Ok(Value::Null)
 }
+
 #[cfg(not(target_os = "macos"))]
 async fn input_service(_: u32, _: u32, _: PathBuf) -> Result<Value> {
     Err(Error::new("platform", "The input service requires macOS"))
@@ -931,6 +936,7 @@ async fn doctor(client: &Client, verbose: bool) -> Value {
     let signed_out = atlas::session::signed_out(&status, || {
         account.is_some() && !atlas::init::helper_logged_in(uid)
     });
+    let shell_blocked = status["code"] == "blocked";
     let mut report = atlas::capability::doctor(status, uid);
     if signed_out {
         let step = "The helper account is signed out (after a restart or a log out). The person \
@@ -961,14 +967,29 @@ async fn doctor(client: &Client, verbose: bool) -> Value {
                 account.name
             ));
         }
-        if atlas::setup::administrator(&account.name) != Some(false) {
-            first_steps.push(format!(
+
+        match atlas::setup::administrator(&account.name) {
+            Some(false) => {}
+            Some(true) => first_steps.push(format!(
                 "{} must be a standard account, not an administrator: change it in System \
                  Settings › Users & Groups.",
                 account.name
-            ));
+            )),
+            None => first_steps.push(format!(
+                "macOS did not say whether {} is an administrator. Run atlas doctor outside \
+                 any sandbox.",
+                account.name
+            )),
         }
     }
+
+    // Every command keeps a lock and screenshots in the person's Library;
+    // a shell that may not write there cannot use the helper. (A shell
+    // that could not even connect has been told so already.)
+    if !shell_blocked && let Err(error) = client.writable() {
+        first_steps.push(error.error);
+    }
+
     if !first_steps.is_empty() {
         report["ready"] = json!(false);
         if let Some(steps) = report["nextSteps"].as_array_mut() {
@@ -1561,6 +1582,7 @@ enum LoginArg {
     Off,
     Status,
 }
+
 impl LoginArg {
     fn as_str(self) -> &'static str {
         match self {
@@ -1578,6 +1600,7 @@ enum ButtonArg {
     Middle,
     Right,
 }
+
 impl From<ButtonArg> for Button {
     fn from(button: ButtonArg) -> Self {
         match button {
@@ -1604,6 +1627,7 @@ struct AppTarget {
     #[arg(long)]
     pid: Option<i32>,
 }
+
 impl AppTarget {
     fn target(self) -> Option<agent::Target> {
         self.pid

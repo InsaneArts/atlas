@@ -11,6 +11,7 @@ pub struct Display {
     pub height: f64,
     pub scale: f64,
 }
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Epoch {
     pub uid: u32,
@@ -20,6 +21,7 @@ pub struct Epoch {
     pub display_id: u64,
     pub input_pid: u32,
 }
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InputEpoch {
@@ -30,6 +32,7 @@ pub struct InputEpoch {
     pub height: f64,
     pub process_id: u32,
 }
+
 impl Epoch {
     pub fn input_epoch(&self) -> InputEpoch {
         InputEpoch {
@@ -42,6 +45,7 @@ impl Epoch {
         }
     }
 }
+
 /// The lowest UID macOS gives an account a person signs in to.
 const FIRST_USER_UID: u32 = 501;
 /// The largest display side, in points, a session may report.
@@ -106,6 +110,7 @@ impl InputEpoch {
         Ok(epoch)
     }
 }
+
 #[derive(Clone, Debug)]
 pub struct Session {
     pub epoch: Epoch,
@@ -298,9 +303,19 @@ pub fn diagnose(value: Value, uid: u32) -> Value {
     // The input service is only queried once the capture side proves a hidden
     // helper; an unqueried service is unknown, not failed.
     let queried = reachable && !native.is_null();
-    let not_queried = "Unknown until the helper runs in the background.";
     let known = |fact: bool, ok: bool| fact.then_some(ok);
-    let unknown = "Unknown until the helper is running.";
+
+    // A blocked shell says nothing of the helper, so it may well be running.
+    let blocked = "Unknown until this shell can reach the helper.";
+    let (unknown, not_queried) = if value["code"] == "blocked" {
+        (blocked, blocked)
+    } else {
+        (
+            "Unknown until the helper is running.",
+            "Unknown until the helper runs in the background.",
+        )
+    };
+
     let connection = if value["code"] == "identity" {
         value["error"]
             .as_str()
@@ -540,6 +555,13 @@ mod tests {
         let report = diagnose(status, uid.max(501));
         assert_eq!(report["checks"][0]["name"], "Helper reachable from here");
         assert_eq!(report["nextSteps"][0], "This shell may not connect");
+        for check in report["checks"].as_array().unwrap().iter().skip(1) {
+            assert_eq!(
+                check["nextStep"],
+                "Unknown until this shell can reach the helper."
+            );
+        }
+
         let stopped = diagnose(
             json!({"ok": false, "code": "io", "error": "No such file"}),
             501,

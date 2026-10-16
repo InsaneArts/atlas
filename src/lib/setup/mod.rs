@@ -237,10 +237,18 @@ fn satisfies(target: &std::ffi::OsStr, identifier: &str) -> bool {
 /// Whether `name` administers this Mac (a helper must not); None when macOS
 /// cannot say, which never counts as "no".
 pub fn administrator(name: &str) -> Option<bool> {
+    // An agent's sandbox may keep dseditgroup from the directory service;
+    // the account's group list still answers there.
+    directory_member(name).or_else(|| listed_member(name))
+}
+
+/// What the directory service says of `name` in the admin group.
+fn directory_member(name: &str) -> Option<bool> {
     let output = Command::new("/usr/sbin/dseditgroup")
         .args(["-o", "checkmember", "-m", name, "admin"])
         .output()
         .ok()?;
+
     let answer = String::from_utf8_lossy(&output.stdout);
     if answer.starts_with("yes ") {
         Some(true)
@@ -249,6 +257,29 @@ pub fn administrator(name: &str) -> Option<bool> {
     } else {
         None
     }
+}
+
+/// The admin group's ID, the same on every Mac.
+const ADMIN_GID: &str = "80";
+
+/// Whether the admin group is among the group IDs `id` lists for `name`.
+/// IDs, not names: a name `id` cannot resolve is printed as its number.
+fn listed_member(name: &str) -> Option<bool> {
+    let output = Command::new("/usr/bin/id")
+        .args(["-G", name])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())?;
+
+    parse_admin_listed(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Whether `id -G`'s list holds the admin group's ID; None for no list.
+fn parse_admin_listed(groups: &str) -> Option<bool> {
+    let mut groups = groups.split_whitespace().peekable();
+    groups.peek()?;
+
+    Some(groups.any(|group| group == ADMIN_GID))
 }
 
 /// Whether the file at `path` is Atlas signed by its Developer ID.
@@ -723,6 +754,16 @@ mod tests {
         assert_eq!(parse_disabled(text, "com.apple.screensharing"), Some(true));
         assert_eq!(parse_disabled(text, "com.openssh.sshd"), Some(false));
         assert_eq!(parse_disabled(text, "com.apple.screen"), None);
+    }
+
+    #[test]
+    fn group_lists_name_the_admin_group_exactly() {
+        assert_eq!(parse_admin_listed("20 12 80 61\n"), Some(true));
+
+        // An ID merely starting with 80 is not the admin group.
+        assert_eq!(parse_admin_listed("20 12 801 61\n"), Some(false));
+
+        assert_eq!(parse_admin_listed("\n"), None);
     }
 
     #[test]

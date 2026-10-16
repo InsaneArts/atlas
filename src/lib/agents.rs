@@ -106,7 +106,14 @@ impl Agent {
     /// Whether the Atlas plugin is installed in this agent (unknown when
     /// its list cannot be read); an error when it does not answer.
     fn connected(self) -> std::result::Result<Option<bool>, String> {
-        let output = match exec(self, &["plugin", "list", "--json"], ASK) {
+        // Codex's whole list asks its remote marketplaces too, which can
+        // take longer than ASK; Atlas's own marketplace answers at once.
+        let list: &[&str] = match self {
+            Agent::Claude => &["plugin", "list", "--json"],
+            Agent::Codex => &["plugin", "list", "--marketplace", NAME, "--json"],
+        };
+
+        let output = match exec(self, list, ASK) {
             Ok(output) => output,
             Err(error) if error.code == "agents" => return Err(error.error),
             Err(_) => return Ok(None),

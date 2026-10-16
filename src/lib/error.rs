@@ -23,9 +23,29 @@ impl Error {
             uncertain: false,
         }
     }
+
     pub fn uncertain(mut self) -> Self {
         self.uncertain = true;
         self
+    }
+
+    /// A file Atlas keeps could not be written at `path`. The kernel answers
+    /// EPERM, not EACCES, when policy forbids the write: usually an agent's
+    /// sandbox, sometimes a locked file. Atlas itself may be fine, so say so.
+    pub fn writing(path: &std::path::Path, error: std::io::Error) -> Self {
+        if error.raw_os_error() == Some(libc::EPERM) {
+            return Self::new(
+                "blocked",
+                format!(
+                    "This shell may not write {} (operation not permitted), usually because \
+                     an agent's sandbox blocks it: run atlas outside the sandbox. Outside one, \
+                     check the file's permissions and flags.",
+                    path.display()
+                ),
+            );
+        }
+
+        Self::from(error)
     }
 }
 
@@ -88,12 +108,14 @@ impl fmt::Display for Error {
         f.write_str(&self.error)
     }
 }
+
 impl StdError for Error {}
 impl From<std::io::Error> for Error {
     fn from(value: std::io::Error) -> Self {
         Self::new("io", value.to_string())
     }
 }
+
 impl From<serde_json::Error> for Error {
     fn from(value: serde_json::Error) -> Self {
         Self::new("invalid-json", value.to_string())
