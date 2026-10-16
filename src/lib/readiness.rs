@@ -74,7 +74,13 @@ async fn probe(client: &Client, home: &str, name: &str) -> Result<(Value, &'stat
     let argv = vec![name.to_owned(), "--version".to_owned()];
     match environment_run(client, argv).await {
         Ok(reply) => Ok((reply, "environment")),
-        Err(error) if error.error.contains("No helper environment profile") => {
+        // An older helper build refused with the generic code; its wording
+        // is matched only for that.
+        Err(error)
+            if error.code == crate::environment::NO_PROFILE
+                || (error.code == "environment"
+                    && error.error.contains("No helper environment profile")) =>
+        {
             let argv = vec![
                 "/usr/bin/env".to_owned(),
                 format!("PATH={}", helper_path(home)),

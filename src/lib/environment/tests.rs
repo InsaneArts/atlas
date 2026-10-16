@@ -669,6 +669,13 @@ fn a_worker_refusal_is_told_from_the_command_output() {
     assert!(refused(reply(WORKER_REFUSED, lookalike), "request-ab12").is_ok());
     assert!(refused(reply(WORKER_REFUSED, refusal), "request-other").is_ok());
     assert!(refused(reply(WORKER_REFUSED, "plain text"), "request-ab12").is_ok());
+    // A missing profile keeps its own code across the process boundary, so
+    // readiness can fall back to the helper's PATH on it.
+    let missing = format!(
+        r#"{{"ok":false,"code":"{NO_PROFILE}","error":"No helper environment profile is installed","refusal":"request-ab12"}}"#
+    );
+    let error = refused(reply(WORKER_REFUSED, &missing), "request-ab12").unwrap_err();
+    assert_eq!(error.code, NO_PROFILE);
 }
 
 /// A frozen-plan folder as freeze leaves it, in a private shared folder.
