@@ -80,7 +80,13 @@ pub(crate) fn signal_name(signal: i32) -> String {
 }
 
 /// The final reply for a command that ran.
-fn ended(status: ExitStatus, timed_out: bool, started: Instant, truncated: bool) -> Value {
+fn ended(
+    status: ExitStatus,
+    timed_out: bool,
+    started: Instant,
+    truncated: bool,
+    unfinished: bool,
+) -> Value {
     let mut reply = json!({
         "ok": true,
         "exitCode": status.code(),
@@ -91,6 +97,12 @@ fn ended(status: ExitStatus, timed_out: bool, started: Instant, truncated: bool)
     if truncated {
         reply["outputTruncated"] = json!(true);
     }
+    // Something the command started still held its output when collection
+    // stopped, or the pipe failed: the end of the output may be missing.
+    if unfinished {
+        reply["outputUnfinished"] = json!(true);
+    }
+
     reply
 }
 
@@ -290,6 +302,7 @@ pub async fn run(
     let mut stopping = false;
     let mut timed_out = false;
     let mut open = true;
+    let mut unfinished = false;
     let mut linger = None;
     if abandoned {
         signal_group(group, Signal::SIGTERM);
@@ -299,7 +312,11 @@ pub async fn run(
     while status.is_none() || open {
         tokio::select! {
             read = pipe.read(&mut buffer), if open => match read {
-                Ok(0) | Err(_) => open = false,
+                Ok(0) => open = false,
+                Err(_) => {
+                    open = false;
+                    unfinished = true;
+                }
                 Ok(count) if !abandoned => {
                     output.push(&buffer[..count]);
                     if output.full() && output.flush(&events).is_err() {
@@ -332,6 +349,7 @@ pub async fn run(
             () = tokio::time::sleep_until(linger.unwrap_or_else(tokio::time::Instant::now)),
                 if linger.is_some() && open => {
                 open = false;
+                unfinished = true;
             }
         }
         if abandoned && !stopping && status.is_none() {
@@ -351,7 +369,7 @@ pub async fn run(
         return failure("transport", "The client went away");
     }
     match status {
-        Some(Ok(status)) => ended(status, timed_out, started, output.truncated),
+        Some(Ok(status)) => ended(status, timed_out, started, output.truncated, unfinished),
         _ => failure("wait-failed", "The command's exit status could not be read"),
     }
 }

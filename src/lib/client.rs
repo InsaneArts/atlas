@@ -193,7 +193,7 @@ impl Client {
         Ok(json!({ "ok": true, "path": target }))
     }
 
-    /// Construction only validates; reads such as status and doctor never write.
+    /// Construction only validates; reads such as status never write; doctor only probes that Atlas's own folders can be written, making them when missing.
     pub fn new(config: Config) -> Result<Self> {
         crate::session::validate_uid(config.helper_uid)?;
         Ok(Self {

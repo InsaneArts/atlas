@@ -197,12 +197,21 @@ pub fn run_output(reply: &Value, limit: usize) -> std::result::Result<Vec<u8>, O
 }
 
 /// A helper `run` reply with its output decoded into an `output` string (lossy
-/// UTF-8, at most 1 MiB) in place of the base64 events it came in, so callers
-/// need not decode them and never read them twice. Events stay only when
-/// they could not be decoded.
+/// UTF-8, at most 1 MiB) and the command's `pid` in place of the events they
+/// came in, so callers need not decode them and never read them twice.
+/// Events stay only when they could not be decoded.
 pub fn with_output(mut reply: Value) -> Value {
     if let Ok(output) = run_output(&reply, 1 << 20) {
+        let pid = reply["events"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|event| event["event"] == "started")
+            .and_then(|event| event["pid"].as_i64());
         reply["output"] = json!(String::from_utf8_lossy(&output));
+        if let Some(pid) = pid {
+            reply["pid"] = json!(pid);
+        }
         if let Some(object) = reply.as_object_mut() {
             object.remove("events");
         }
@@ -283,6 +292,7 @@ mod tests {
         assert_eq!(run_output(&huge, 16), Err(OutputError::Oversized));
         let decoded = with_output(reply.clone());
         assert_eq!(decoded["output"], "hello");
+        assert_eq!(decoded["pid"], 4, "the process is still named");
         assert!(
             decoded.get("events").is_none(),
             "decoded events are not repeated"

@@ -40,6 +40,7 @@ pub fn effective(given: Option<PathBuf>) -> PathBuf {
     }
     path
 }
+
 const LIMIT: u64 = 16_384;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -52,6 +53,7 @@ pub struct Config {
     #[serde(default = "default_output")]
     pub output_dir: PathBuf,
 }
+
 fn default_output() -> PathBuf {
     PathBuf::from("runs")
 }
@@ -101,6 +103,7 @@ impl Config {
             )
         })
     }
+
     fn read(path: &Path) -> Result<Self> {
         // A legacy JSON twin may still drive an older running process. Refuse
         // to let new invocations silently diverge from it.
@@ -126,6 +129,7 @@ impl Config {
         }
         Self::parse(&bytes, path)
     }
+
     /// Parse configuration text as if it were the file at `path`: relative
     /// paths resolve against its directory and `~/` against the home.
     pub fn parse(bytes: &[u8], path: &Path) -> Result<Self> {
@@ -162,6 +166,7 @@ impl Config {
         }
         Ok(config)
     }
+
     /// The configuration as the TOML a user would save.
     pub fn to_toml(&self) -> Result<String> {
         toml::to_string(self).map_err(|error| Error::new("config", error.to_string()))
@@ -188,14 +193,19 @@ fn missing(path: &Path) -> Error {
     )
 }
 
-/// This process's home, from `$HOME`: where its own settings, caches and
-/// records live. (onboarding resolves the account's home through directory
-/// services instead, because there it must name the account's real home,
-/// the one launchd and the helper's layout use, whatever the environment
-/// says.)
+/// This process's home: where its own settings, caches and records live.
+/// The account's home as macOS knows it, so that two shells of one account
+/// share one set of locks and records whatever `$HOME` says in either;
+/// `$HOME` only when the account cannot be looked up.
 pub fn home() -> Result<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
+    let account = nix::unistd::User::from_uid(nix::unistd::getuid())
+        .ok()
+        .flatten()
+        .map(|user| user.dir)
+        .filter(|dir| dir.is_absolute());
+
+    account
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
         .ok_or_else(|| Error::new("config", "HOME is unavailable"))
 }
 

@@ -118,7 +118,9 @@ screenshot pixels by multiplying by `pointsPerPixel`.
   Atlas sees them, so for the helper's home use
   `atlas run -- /bin/sh -c 'cat "$HOME/notes.txt"'`. The reply is `ok` when
   the command ran: check its `exitCode` (and `timedOut`) for the command's own
-  result. `output` holds its text, left out past 1 MiB (`outputTruncated`).
+  result. `output` holds its text, left out past 1 MiB (`outputTruncated`);
+  `outputUnfinished` means something the command started still held the
+  output, so its end may be missing. `pid` is the command's process.
   A command is stopped after 20 seconds; `--timeout SECONDS` allows up to
   600.
   Atlas stays busy while it runs, so start anything longer in the background
@@ -205,6 +207,7 @@ unless you looked at it in the helper.
 - `"uncertain": true` or the code `uncertain`: the action may or may not have
   happened. Never repeat it. Take a screenshot, run `atlas restart` (input is
   refused until it succeeds), look again, then decide; clean up as usual.
+  `partial: true` on a failed input says some of its events were posted first.
 - `busy`: the person (or another agent) has control, perhaps from the viewer.
   Never take it from them; wait and try again, and tell the person if it lasts.
 - `on-console`: the helper is on screen right now. Ask the person to switch

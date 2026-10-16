@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File, OpenOptions},
     io::Write,
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
+    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
@@ -37,6 +37,7 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
         .custom_flags(libc::O_NOFOLLOW)
         .open(path)
         .map_err(|error| Error::writing(path, error))?;
+    own_private(&file, path)?;
     file.write_all(bytes)?;
     file.sync_all()?;
     Ok(())
@@ -47,6 +48,14 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
 /// is already there would prove nothing about the next one.
 pub fn probe_write(directory: &Path) -> Result<()> {
     fs::create_dir_all(directory).map_err(|error| Error::writing(directory, error))?;
+    // A probe an interrupted run left behind is nothing but litter.
+    if let Ok(entries) = fs::read_dir(directory) {
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().starts_with(".probe-") {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
 
     let moment = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -65,7 +74,7 @@ pub fn probe_write(directory: &Path) -> Result<()> {
 }
 
 fn open_lock(path: &Path) -> Result<File> {
-    OpenOptions::new()
+    let file = OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
@@ -73,7 +82,27 @@ fn open_lock(path: &Path) -> Result<File> {
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
         .open(path)
-        .map_err(|error| Error::writing(path, error))
+        .map_err(|error| Error::writing(path, error))?;
+    own_private(&file, path)?;
+
+    Ok(file)
+}
+
+/// Refuse a file that is not a plain file of this account; one that others
+/// may touch (made with a wider mode before) is tightened to 0600.
+fn own_private(file: &File, path: &Path) -> Result<()> {
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.uid() != nix::unistd::getuid().as_raw() {
+        return Err(Error::new(
+            "state",
+            format!("{} is not a plain file of this account", path.display()),
+        ));
+    }
+    if metadata.mode() & 0o077 != 0 {
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+
+    Ok(())
 }
 
 /// A mutation still being carried out. For its lifetime it holds an

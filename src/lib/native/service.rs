@@ -39,6 +39,7 @@ struct Service {
     /// Signalled once an acknowledged shutdown has been answered.
     stopping: tokio::sync::Notify,
 }
+
 /// The operations the input service answers, by their `op` string.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Operation {
@@ -51,6 +52,7 @@ enum Operation {
     Input,
     Unknown,
 }
+
 impl Operation {
     fn of(request: &Value) -> Self {
         match request["op"].as_str().unwrap_or_default() {
@@ -97,12 +99,14 @@ impl Service {
             })
         })
     }
+
     fn epoch(&self) -> Result<InputEpoch> {
         self.epoch
             .read()
             .map(|value| value.clone())
             .map_err(|_| Error::new("native", "Input identity failed"))
     }
+
     fn check(&self) -> Result<()> {
         if InputEpoch::from_proof(&session_info()?, std::process::id())? != self.epoch()?
             || !Engine::trusted()
@@ -114,6 +118,7 @@ impl Service {
         }
         Ok(())
     }
+
     async fn cleanup(&self) -> Result<()> {
         let mut engine = self.engine.lock().await;
         if !self.gate.active()? {
@@ -121,6 +126,7 @@ impl Service {
         }
         Ok(())
     }
+
     async fn dispatch(&self, request: &Value) -> Result<Value> {
         let owner = request["owner"].as_str().unwrap_or_default();
         let operation = Operation::of(request);
@@ -245,12 +251,18 @@ impl Service {
         drop(grant.authorize()?);
         engine.grant = Some(grant);
         for (performed, action) in actions.into_iter().enumerate() {
+            let before = engine.posted;
             if let Err(error) = engine.perform(action).await {
                 let _ = self.gate.cancel(Some(owner));
+                // An action that posted some of its events before failing
+                // (a few typed characters, one click of two) had part of
+                // its effect, and nobody can say which part.
+                let partial = engine.posted > before;
                 let cleanup = engine.release();
                 let mut reply = json!(error);
                 reply["performed"] = json!(performed);
-                reply["uncertain"] = json!(cleanup.is_err());
+                reply["partial"] = json!(partial);
+                reply["uncertain"] = json!(cleanup.is_err() || partial || error.uncertain);
                 if let Err(error) = cleanup {
                     reply["cleanupError"] = json!(error.error);
                 }
@@ -355,6 +367,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     let cleanup = service.cleanup().await;
     outcome.and(closed).and(cleanup)
 }
+
 /// One JSON request of at most `MAX_REQUEST` bytes.
 async fn read_request<R: AsyncRead + Unpin>(stream: &mut R) -> Result<Value> {
     let line = super::endpoint::read_line(stream, MAX_REQUEST).await?;
@@ -391,6 +404,7 @@ async fn handle(mut stream: UnixStream, service: Arc<Service>) -> Result<()> {
     }
     written
 }
+
 async fn reply(stream: &mut UnixStream, result: Result<Value>) -> Result<()> {
     let mut bytes = serde_json::to_vec(&result.unwrap_or_else(|e| json!(e)))?;
     bytes.push(b'\n');

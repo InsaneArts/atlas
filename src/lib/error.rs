@@ -45,7 +45,7 @@ impl Error {
             );
         }
 
-        Self::from(error)
+        Self::new("io", format!("{}: {error}", path.display()))
     }
 }
 

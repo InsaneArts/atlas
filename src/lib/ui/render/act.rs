@@ -69,6 +69,18 @@ pub fn run(value: &Value) -> Rendered {
             style::warn()
         ));
     }
+    if value["outputTruncated"] == true {
+        notes.push(format!(
+            "{} The output was cut at 1 MB; the rest was not kept.",
+            style::warn()
+        ));
+    }
+    if value["outputUnfinished"] == true {
+        notes.push(format!(
+            "{} Something the command started still held its output; the end may be missing.",
+            style::warn()
+        ));
+    }
     let took = value["durationMs"]
         .as_f64()
         .map(|ms| format!(" · {}", text::duration(ms)))
