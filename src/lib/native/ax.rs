@@ -1,11 +1,15 @@
-//! Accessibility elements of one application, read *inside* the helper login.
-//! Read-only and bounded: a global messaging timeout and an overall deadline
-//! keep an unresponsive app from hanging the probe; depth, count, children
-//! fetched and string lengths are capped before anything is copied. A scan
-//! that hit a limit or a communication failure reports itself incomplete.
+//! Accessibility elements of one application, read *inside* the helper login:
+//! its windows and the menus it has open. Read-only and bounded: a global
+//! messaging timeout and an overall deadline keep an unresponsive app from
+//! hanging the probe; depth, count, children fetched and string lengths are
+//! capped before anything is copied. A scan that hit a limit or a
+//! communication failure reports itself incomplete.
 // FFI boundary: Accessibility reads return values through out-pointers.
 #![allow(unsafe_code)]
-use crate::error::{Error, Result};
+use crate::{
+    error::{Error, Result},
+    native::windows::{self, MENU_LAYER},
+};
 use objc2_application_services::{AXError, AXUIElement, AXValue, AXValueType};
 use objc2_core_foundation::{
     CFArray, CFBoolean, CFIndex, CFNumber, CFRange, CFRetained, CFString, CFType, CGPoint, CGSize,
@@ -76,6 +80,8 @@ struct Scan {
     unreadable: Vec<String>,
     truncated: Vec<String>,
     errors: std::collections::BTreeMap<String, usize>,
+    /// The last AX error any read returned.
+    last_error: Option<i32>,
 }
 
 impl Scan {
@@ -88,6 +94,7 @@ impl Scan {
         !self.incomplete || Instant::now() < self.deadline
     }
     fn failed(&mut self, status: AXError, attribute: &str) {
+        self.last_error = Some(status.0);
         let key = format!("{attribute}:{}", status.0);
         *self.errors.entry(key).or_default() += 1;
         if INCOMPLETE.contains(&status.0) {
@@ -221,6 +228,116 @@ impl Scan {
             .filter_map(|value| value.downcast::<AXUIElement>().ok())
             .collect()
     }
+    /// What the app draws in `bounds`, one of its windows at the menu layer:
+    /// the element above a point inside it whose frame is the window's (an
+    /// open menu, a popover, a combo box's list, a panel raised to the menu
+    /// layer). A window whose points all reach a window in `read` instead
+    /// shows nothing of its own (a tooltip, a click-through overlay, a menu
+    /// fading out); the elements hit there must turn up in that window's
+    /// scan. Menus are found this way because a context menu hangs below the
+    /// view it opened from, and a menu bar or status item menu below its
+    /// item, never among the app's windows.
+    fn drawn_at(&mut self, app: &AXUIElement, bounds: &Frame, read: &[Frame]) -> Option<Drawn> {
+        let points = [0.5, 0.25, 0.75];
+        let mut hits = Vec::new();
+        // A point can fall on a separator; a menu has items around it.
+        for fraction in points {
+            if !self.open() {
+                return None;
+            }
+            let (x, y) = (
+                bounds.x + bounds.width / 2.0,
+                bounds.y + bounds.height * fraction,
+            );
+            let mut hit: *const AXUIElement = std::ptr::null();
+            // SAFETY: a valid output slot; on success the Copy hands over one
+            // owned element, adopted below.
+            let status = unsafe {
+                app.copy_element_at_position(x as f32, y as f32, NonNull::from(&mut hit))
+            };
+            if status != AXError::Success {
+                self.failed(status, "AXElementAtPosition");
+                continue;
+            }
+            // SAFETY: a successful Copy wrote an owned reference (or null).
+            let Some(leaf) = (unsafe { adopt(hit) }) else {
+                continue;
+            };
+            let mut element = Some(leaf.clone());
+            // An item sits a few levels below its menu or window.
+            for _ in 0..12 {
+                let Some(current) = element else {
+                    break;
+                };
+                let frame = self.frame(&current);
+                let menu = self.text(&current, "AXRole").as_deref() == Some("AXMenu");
+                let parent = self
+                    .attribute(&current, "AXParent")
+                    .and_then(|parent| parent.downcast::<AXUIElement>().ok());
+                let top = parent.as_ref().is_some_and(|parent| {
+                    self.text(parent, "AXRole").as_deref() == Some("AXApplication")
+                });
+                match judge(menu, frame.as_ref(), top, bounds, read) {
+                    Step::Found { menu: true } => return Some(Drawn::Menu(current)),
+                    Step::Found { menu: false } => return Some(Drawn::Window(current)),
+                    Step::Through => {
+                        hits.push(leaf);
+                        break;
+                    }
+                    Step::Stop => break,
+                    Step::Up => element = parent,
+                }
+            }
+        }
+        (hits.len() == points.len()).then_some(Drawn::Through(hits))
+    }
+}
+
+/// What an app draws at the menu layer (see [`Scan::drawn_at`]).
+enum Drawn {
+    Menu(CFRetained<AXUIElement>),
+    Window(CFRetained<AXUIElement>),
+    /// Nothing of its own: every point reached a window read already, at
+    /// these elements, which that window's scan must contain.
+    Through(Vec<CFRetained<AXUIElement>>),
+}
+
+/// One step up from the element hit inside a menu-layer window.
+#[derive(Debug, PartialEq, Eq)]
+enum Step {
+    /// This element has the window's frame: what it draws (a menu or not).
+    Found { menu: bool },
+    /// The top of another window already read: the point fell through.
+    Through,
+    /// The top of something else: the window cannot be placed.
+    Stop,
+    /// Keep climbing.
+    Up,
+}
+
+/// Judge one element on the way up from a hit: whether it is `menu`, its
+/// `frame`, and whether it is `top` (its parent is the application).
+fn judge(menu: bool, frame: Option<&Frame>, top: bool, bounds: &Frame, read: &[Frame]) -> Step {
+    if frame.is_some_and(|frame| frame.matches(bounds)) {
+        return Step::Found { menu };
+    }
+    if !top {
+        return Step::Up;
+    }
+    if frame.is_some_and(|frame| read.iter().any(|other| other.matches(frame))) {
+        Step::Through
+    } else {
+        Step::Stop
+    }
+}
+
+/// Whether a menu met inside a window or another menu is left out of the
+/// scan: closed (no frame, or no size), or open and read as a menu of its
+/// own. Any other menu, such as one a view draws itself, is read.
+fn skip_nested_menu(frame: Option<&Frame>, open: &[Frame]) -> bool {
+    frame.is_none_or(|frame| {
+        frame.width <= 0.0 || frame.height <= 0.0 || open.iter().any(|menu| menu.matches(frame))
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -237,6 +354,14 @@ impl Frame {
             (self.y + self.height / 2.0).round(),
         )
     }
+    /// Whether two frames are the same within a point.
+    pub fn matches(&self, other: &Frame) -> bool {
+        let near = |a: f64, b: f64| (a - b).abs() <= 1.0;
+        near(self.x, other.x)
+            && near(self.y, other.y)
+            && near(self.width, other.width)
+            && near(self.height, other.height)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -245,7 +370,7 @@ pub struct Element {
     /// Position in depth-first order, stable within one snapshot.
     pub index: usize,
     pub depth: usize,
-    /// Frame of the top-level window this element belongs to.
+    /// Frame of the top-level window (or open menu) this element belongs to.
     pub window: Option<Frame>,
     pub role: Option<String>,
     pub subrole: Option<String>,
@@ -264,6 +389,10 @@ pub struct Element {
     /// cut between characters); the element holds more than is shown.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub truncated: Vec<String>,
+    /// In a menu the app has open (its menu bar, a status item or a
+    /// context menu), where a click goes while the menu is open.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub menu: bool,
 }
 
 /// One traversal's result.
@@ -294,7 +423,9 @@ impl Default for Limits {
     }
 }
 
-/// Depth-first elements of `pid`'s windows (the menu bar is excluded).
+/// Depth-first elements of `pid`'s windows, then of the menus it has open
+/// (a menu bar, status item or context menu). Closed menus and the menu bar
+/// itself are left out: nothing in them is on screen.
 pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
     // SAFETY: plain constructors returning an owned element or null; the
     // system-wide element sets this process's global messaging timeout,
@@ -312,6 +443,7 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
         unreadable: Vec::new(),
         truncated: Vec::new(),
         errors: Default::default(),
+        last_error: None,
     };
     let windows = scan.children(&app, "AXWindows", limits.count);
     // An app that answers nothing at all, not even its role, is unreachable
@@ -322,25 +454,91 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
             "The app's accessibility tree is unavailable; check Accessibility for the helper",
         ));
     }
-    let mut found = Vec::new();
-    let mut stack: Vec<(CFRetained<AXUIElement>, usize, Option<Frame>)> = Vec::new();
-    for window in windows.into_iter().rev() {
-        let frame = scan.frame(&window);
-        stack.push((window, 0, frame));
+    let mut roots: Vec<(CFRetained<AXUIElement>, Option<Frame>, bool)> = windows
+        .into_iter()
+        .map(|window| {
+            let frame = scan.frame(&window);
+            (window, frame, false)
+        })
+        .collect();
+    // Elements hit through a click-through window, which the scan below
+    // must reach; any it does not might hold an unseen match.
+    let mut unvisited: Vec<CFRetained<AXUIElement>> = Vec::new();
+    // An open menu is a window of its own at the menu layer. A window there
+    // that cannot be read might hold an unseen match, so it leaves the scan
+    // incomplete.
+    match windows::windows() {
+        Ok(list) => {
+            let menus = list.into_iter().filter(|window| {
+                window.pid == i64::from(pid) && window.layer == MENU_LAYER && window.alpha > 0.0
+            });
+            for menu in menus {
+                let bounds = Frame {
+                    x: menu.bounds.x,
+                    y: menu.bounds.y,
+                    width: menu.bounds.width,
+                    height: menu.bounds.height,
+                };
+                // A window the app lists among its windows is read already.
+                if roots
+                    .iter()
+                    .any(|(_, frame, _)| frame.as_ref().is_some_and(|frame| frame.matches(&bounds)))
+                {
+                    continue;
+                }
+                let read: Vec<Frame> = roots
+                    .iter()
+                    .filter_map(|(_, frame, _)| frame.clone())
+                    .collect();
+                match scan.drawn_at(&app, &bounds, &read) {
+                    Some(Drawn::Menu(element)) => roots.push((element, Some(bounds), true)),
+                    Some(Drawn::Window(element)) => roots.push((element, Some(bounds), false)),
+                    Some(Drawn::Through(hits)) => unvisited.extend(hits),
+                    None => scan.incomplete = true,
+                }
+            }
+        }
+        Err(_) => scan.incomplete = true,
     }
-    while let Some((element, depth, window)) = stack.pop() {
+    let open_menus: Vec<Frame> = roots
+        .iter()
+        .filter(|(.., menu)| *menu)
+        .filter_map(|(_, frame, _)| frame.clone())
+        .collect();
+    let mut found = Vec::new();
+    let mut stack: Vec<(CFRetained<AXUIElement>, usize, Option<Frame>, bool)> = roots
+        .into_iter()
+        .rev()
+        .map(|(root, frame, menu)| (root, 0, frame, menu))
+        .collect();
+    while let Some((element, depth, window, menu)) = stack.pop() {
         if found.len() >= limits.count || !scan.open() {
             scan.incomplete = true;
             break;
         }
         let item = &*element;
+        unvisited.retain(|hit| **hit != *item);
         scan.unreadable.clear();
         scan.truncated.clear();
+        let role = scan.text(item, "AXRole");
+        if depth > 0 && role.as_deref() == Some("AXMenu") {
+            scan.last_error = None;
+            let frame = scan.frame(item);
+            // A frame that failed to read (rather than being absent) leaves
+            // an open menu possible: it might hold an unseen match.
+            if frame.is_none() && scan.last_error.is_some_and(|code| !ABSENT.contains(&code)) {
+                scan.incomplete = true;
+                continue;
+            }
+            if skip_nested_menu(frame.as_ref(), &open_menus) {
+                continue;
+            }
+        }
         let mut element = Element {
             index: found.len(),
             depth,
             window: window.clone(),
-            role: scan.text(item, "AXRole"),
+            role,
             subrole: scan.text(item, "AXSubrole"),
             title: scan.text(item, "AXTitle"),
             description: scan.text(item, "AXDescription"),
@@ -351,6 +549,7 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
             frame: scan.frame(item),
             unreadable: Vec::new(),
             truncated: Vec::new(),
+            menu,
         };
         element.unreadable = std::mem::take(&mut scan.unreadable);
         element.truncated = std::mem::take(&mut scan.truncated);
@@ -362,8 +561,11 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
         let budget = limits.count.saturating_sub(found.len() + stack.len());
         let children = scan.children(item, "AXChildren", budget);
         for child in children.into_iter().rev() {
-            stack.push((child, depth + 1, window.clone()));
+            stack.push((child, depth + 1, window.clone(), menu));
         }
+    }
+    if !unvisited.is_empty() {
+        scan.incomplete = true;
     }
     // A request that started before the deadline may have ended after it.
     scan.open();
@@ -387,6 +589,79 @@ mod tests {
             height: 10.0,
         };
         assert_eq!(frame.center(), (26.0, 25.0));
+    }
+
+    #[test]
+    fn a_hit_is_placed_by_the_frames_above_it() {
+        let frame = |x: f64, width: f64| Frame {
+            x,
+            y: 20.0,
+            width,
+            height: 100.0,
+        };
+        let menu = frame(10.0, 200.0);
+        let window = frame(300.0, 600.0);
+        let read = [window.clone()];
+        let step = |is_menu, at: Option<&Frame>, top| judge(is_menu, at, top, &menu, &read);
+        assert_eq!(step(true, Some(&menu), false), Step::Found { menu: true });
+        assert_eq!(
+            step(false, Some(&menu), false),
+            Step::Found { menu: false },
+            "a popover or list with the window's frame"
+        );
+        assert_eq!(
+            step(true, Some(&frame(50.0, 90.0)), false),
+            Step::Up,
+            "a submenu over its parent is passed"
+        );
+        assert_eq!(step(false, None, false), Step::Up);
+        assert_eq!(step(false, Some(&window), true), Step::Through);
+        assert_eq!(
+            step(false, Some(&frame(900.0, 40.0)), true),
+            Step::Stop,
+            "the top of something not read"
+        );
+        assert_eq!(step(false, None, true), Step::Stop);
+    }
+
+    #[test]
+    fn only_closed_or_already_read_nested_menus_are_skipped() {
+        let frame = |x: f64, width: f64| Frame {
+            x,
+            y: 20.0,
+            width,
+            height: 100.0,
+        };
+        let open = [frame(10.0, 200.0)];
+        assert!(skip_nested_menu(None, &open), "no frame: closed");
+        assert!(
+            skip_nested_menu(Some(&frame(0.0, 0.0)), &open),
+            "no size: closed"
+        );
+        assert!(
+            skip_nested_menu(Some(&frame(10.5, 200.0)), &open),
+            "read as its own"
+        );
+        assert!(
+            !skip_nested_menu(Some(&frame(400.0, 200.0)), &open),
+            "a menu a view draws is read"
+        );
+    }
+
+    #[test]
+    fn frames_match_within_a_point() {
+        let frame = Frame {
+            x: 10.0,
+            y: 20.0,
+            width: 31.0,
+            height: 10.0,
+        };
+        let mut near = frame.clone();
+        near.x += 0.5;
+        near.height -= 1.0;
+        assert!(frame.matches(&near));
+        near.width += 2.0;
+        assert!(!frame.matches(&near));
     }
 
     #[test]

@@ -9,7 +9,7 @@ use crate::{
     handoff,
     native::{
         ax::{Element, Frame},
-        windows::{Bounds, Window, unobstructed},
+        windows::{Bounds, MENU_LAYER, Window, unobstructed},
     },
     transport::run_output,
 };
@@ -456,45 +456,86 @@ pub async fn wait(
 pub struct ElementFilter {
     /// AX role, for example `AXButton`, compared case-insensitively.
     pub role: Option<String>,
-    /// Exact title, label text, description or identifier, compared case-insensitively.
+    /// Exact title, label text, description or identifier, compared
+    /// case-insensitively. A label that joins several parts ("QA Eject,
+    /// Option-Space, 6 Slices") is also named by its first part.
     pub name: Option<String>,
 }
 
+/// How an element's name matched a `--name`: only as the first part of a
+/// label that joins several, or whole. A whole match is the better one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum NameMatch {
+    Leading,
+    Exact,
+}
+
+/// How `text` matches `name`: whole, or as the first of its ", " parts.
+fn name_match(text: &str, name: &str) -> Option<NameMatch> {
+    if text.eq_ignore_ascii_case(name) {
+        return Some(NameMatch::Exact);
+    }
+    let first = text.split_once(", ").map(|(first, _)| first)?;
+    first
+        .eq_ignore_ascii_case(name)
+        .then_some(NameMatch::Leading)
+}
+
 impl ElementFilter {
+    /// How `element` matches, treating the attributes in `unknown` as
+    /// matching (they could not be read). An identifier is never a label,
+    /// so it only matches whole.
+    fn compare(&self, element: &Element, unknown: &dyn Fn(&str) -> bool) -> Option<NameMatch> {
+        let role = self.role.as_deref().is_none_or(|role| {
+            unknown("AXRole")
+                || element
+                    .role
+                    .as_deref()
+                    .is_some_and(|own| own.eq_ignore_ascii_case(role))
+        });
+        if !role {
+            return None;
+        }
+        let Some(name) = self.name.as_deref() else {
+            return Some(NameMatch::Exact);
+        };
+        let text = |value: &Option<String>, attribute: &str| {
+            if unknown(attribute) {
+                return Some(NameMatch::Exact);
+            }
+            value.as_deref().and_then(|text| name_match(text, name))
+        };
+        let identifier = if unknown("AXIdentifier") {
+            Some(NameMatch::Exact)
+        } else {
+            element
+                .identifier
+                .as_deref()
+                .filter(|identifier| identifier.eq_ignore_ascii_case(name))
+                .map(|_| NameMatch::Exact)
+        };
+        [
+            text(&element.title, "AXTitle"),
+            text(&element.description, "AXDescription"),
+            identifier,
+            label(element).and_then(|text| name_match(text, name)),
+        ]
+        .into_iter()
+        .flatten()
+        .max()
+    }
+    /// How `element` matches, if it does.
+    pub fn match_of(&self, element: &Element) -> Option<NameMatch> {
+        self.compare(element, &|_| false)
+    }
+    pub fn matches(&self, element: &Element) -> bool {
+        self.match_of(element).is_some()
+    }
     /// Whether `element` could match once attributes it failed to read are
     /// treated as unknown.
     pub fn might_match(&self, element: &Element) -> bool {
         let unknown = |attribute: &str| element.unreadable.iter().any(|a| a == attribute);
-        let same = |left: &Option<String>, right: &str, attribute: &str| {
-            unknown(attribute)
-                || left
-                    .as_deref()
-                    .is_some_and(|left| left.eq_ignore_ascii_case(right))
-        };
-        self.role
-            .as_deref()
-            .is_none_or(|role| same(&element.role, role, "AXRole"))
-            && self.name.as_deref().is_none_or(|name| {
-                same(&element.title, name, "AXTitle")
-                    || same(&element.description, name, "AXDescription")
-                    || same(&element.identifier, name, "AXIdentifier")
-                    || label(element).is_some_and(|text| text.eq_ignore_ascii_case(name))
-            })
-    }
-    pub fn matches(&self, element: &Element) -> bool {
-        let same = |left: &Option<String>, right: &str| {
-            left.as_deref()
-                .is_some_and(|left| left.eq_ignore_ascii_case(right))
-        };
-        self.role
-            .as_deref()
-            .is_none_or(|role| same(&element.role, role))
-            && self.name.as_deref().is_none_or(|name| {
-                same(&element.title, name)
-                    || same(&element.description, name)
-                    || same(&element.identifier, name)
-                    || label(element).is_some_and(|text| text.eq_ignore_ascii_case(name))
-            })
+        self.compare(element, &unknown).is_some()
     }
 }
 
@@ -512,9 +553,16 @@ fn label(element: &Element) -> Option<&str> {
 const DOCK_LAYER: i64 = 20;
 
 /// Whether `window` is one of an app's own visible windows: an ordinary one,
-/// or a floating panel or alert below the Dock's layer.
+/// or a floating panel or alert below the Dock's layer. An open menu is not
+/// one: `windows` and `wait` never mistake it for the window it opens.
 fn app_layer(window: &Window) -> bool {
     window.layer == 0 || ((1..DOCK_LAYER).contains(&window.layer) && window.alpha > 0.0)
+}
+
+/// [`app_layer`], or a menu the app has open: what an element command may
+/// act on.
+fn app_or_menu_layer(window: &Window) -> bool {
+    app_layer(window) || (window.layer == MENU_LAYER && window.alpha > 0.0)
 }
 
 /// The app an element command is about: a PID, or a name that must resolve
@@ -533,25 +581,31 @@ fn app_pid(windows: &[Window], target: &Target) -> Result<i64> {
     let candidates: Vec<&Window> = windows
         .iter()
         .filter(|window| {
-            app_layer(window)
+            app_or_menu_layer(window)
                 && window
                     .owner
                     .as_deref()
                     .is_some_and(|owner| owner.eq_ignore_ascii_case(name))
         })
         .collect();
-    // Its ordinary windows first; an app showing only a floating panel or an
-    // alert is found by those.
-    let ordinary: Vec<i64> = candidates
+    // Its ordinary windows first, then floating panels and alerts, then open
+    // menus: an app showing only one of those is found by it.
+    let tiers: [&dyn Fn(&Window) -> bool; 3] = [
+        &|window| window.layer == 0,
+        &|window| window.layer != MENU_LAYER,
+        &|_| true,
+    ];
+    let mut pids: Vec<i64> = tiers
         .iter()
-        .filter(|window| window.layer == 0)
-        .map(|window| window.pid)
-        .collect();
-    let mut pids = if ordinary.is_empty() {
-        candidates.iter().map(|window| window.pid).collect()
-    } else {
-        ordinary
-    };
+        .map(|tier| {
+            candidates
+                .iter()
+                .filter(|window| tier(window))
+                .map(|window| window.pid)
+                .collect::<Vec<_>>()
+        })
+        .find(|pids| !pids.is_empty())
+        .unwrap_or_default();
     pids.sort_unstable();
     pids.dedup();
     match pids.as_slice() {
@@ -623,7 +677,7 @@ fn owning_window(windows: &[Window], pid: i64, frame: &Frame) -> Option<i64> {
         .iter()
         .filter(|window| {
             window.pid == pid
-                && app_layer(window)
+                && app_or_menu_layer(window)
                 && near(window.bounds.x, frame.x)
                 && near(window.bounds.y, frame.y)
                 && near(window.bounds.width, frame.width)
@@ -643,6 +697,59 @@ fn owning_window(windows: &[Window], pid: i64, frame: &Frame) -> Option<i64> {
             .collect(),
     )
     .or_else(|| unique(matching))
+}
+
+/// The one element a click by name or role is for. While a menu is open
+/// only its items count (a click outside it just closes the menu). A whole
+/// name wins over the first part of a longer label, judged over every match
+/// before the one chosen must have a frame. Refused when no visible element
+/// or several match, or when another element whose name could not be read
+/// might match too.
+fn choose<'a>(elements: &'a [Element], filter: &ElementFilter) -> Result<&'a Element> {
+    let menu_open = elements.iter().any(|element| element.menu);
+    let elements: Vec<&Element> = elements
+        .iter()
+        .filter(|element| element.menu || !menu_open)
+        .collect();
+    let matches: Vec<(&Element, NameMatch)> = elements
+        .iter()
+        .filter_map(|element| Some((*element, filter.match_of(element)?)))
+        .collect();
+    let best = matches.iter().map(|(_, kind)| *kind).max();
+    let matching: Vec<&Element> = matches
+        .iter()
+        .filter(|(element, kind)| Some(*kind) == best && element.frame.is_some())
+        .map(|(element, _)| *element)
+        .collect();
+    let [element] = matching.as_slice() else {
+        return Err(Error::new(
+            "elements",
+            match matching.len() {
+                0 if menu_open => "No item of the open menu matches. Run atlas elements --app \
+                                   NAME to see it, or press escape to close the menu."
+                    .to_owned(),
+                0 => "No visible element matches. Run atlas elements --app NAME to see \
+                      what is there."
+                    .to_owned(),
+                count => format!(
+                    "{count} elements match. Run atlas elements with the same --name to \
+                     tell them apart, then add --role."
+                ),
+            },
+        ));
+    };
+    // An element whose selector attributes could not be read may be a
+    // second, unseen match.
+    let doubtful = elements.iter().any(|other| {
+        other.index != element.index && !other.unreadable.is_empty() && filter.might_match(other)
+    });
+    if doubtful {
+        return Err(Error::new(
+            "elements",
+            "Another element's name could not be read, so this match may not be unique",
+        ));
+    }
+    Ok(element)
 }
 
 /// Click the centre of exactly one matching element. Uniqueness needs a
@@ -673,35 +780,7 @@ pub async fn click_element(
             "The accessibility scan was incomplete, so a unique match cannot be established",
         ));
     }
-    let matching: Vec<_> = elements
-        .iter()
-        .filter(|element| filter.matches(element) && element.frame.is_some())
-        .collect();
-    let [element] = matching.as_slice() else {
-        return Err(Error::new(
-            "elements",
-            match matching.len() {
-                0 => "No visible element matches. Run atlas elements --app NAME to see \
-                      what is there."
-                    .to_owned(),
-                count => format!(
-                    "{count} elements match. Run atlas elements with the same --name to \
-                     tell them apart, then add --role."
-                ),
-            },
-        ));
-    };
-    // An element whose selector attributes could not be read may be a
-    // second, unseen match.
-    let doubtful = elements.iter().any(|other| {
-        other.index != element.index && !other.unreadable.is_empty() && filter.might_match(other)
-    });
-    if doubtful {
-        return Err(Error::new(
-            "elements",
-            "Another element's name could not be read, so this match may not be unique",
-        ));
-    }
+    let element = choose(&elements, filter)?;
     let (x, y) = element
         .frame
         .as_ref()
@@ -876,6 +955,7 @@ mod tests {
             frame: None,
             unreadable: Vec::new(),
             truncated: Vec::new(),
+            menu: false,
         }
     }
 
@@ -975,6 +1055,163 @@ mod tests {
         let error = app_pid(&twice, &name("TextEdit")).unwrap_err();
         assert!(error.error.contains("--pid"), "{}", error.error);
         assert_eq!(app_pid(&twice, &Target::Pid(9)).unwrap(), 9);
+    }
+
+    /// A label that joins several parts (SwiftUI's combined rows) is
+    /// named by its first part too, but a whole name is the better match.
+    #[test]
+    fn a_combined_label_is_named_by_its_first_part() {
+        let filter = ElementFilter {
+            role: None,
+            name: Some("qa eject".into()),
+        };
+        let row = element("AXButton", None, Some("QA Eject, Option-Space, 6 Slices"));
+        assert_eq!(filter.match_of(&row), Some(NameMatch::Leading));
+        let whole = element("AXButton", Some("QA Eject"), None);
+        assert_eq!(filter.match_of(&whole), Some(NameMatch::Exact));
+        assert!(NameMatch::Exact > NameMatch::Leading);
+        for other in [
+            "QA Ejected, 6 Slices",
+            "Eject, QA Eject",
+            "QA Eject 6 Slices",
+        ] {
+            assert!(
+                !filter.matches(&element("AXButton", None, Some(other))),
+                "{other}"
+            );
+        }
+        let mut field = element("AXTextField", None, None);
+        field.value = Some("QA Eject, typed".into());
+        assert!(!filter.matches(&field), "typed text is still not a name");
+        let mut identified = element("AXButton", None, None);
+        identified.identifier = Some("QA Eject, more".into());
+        assert!(!filter.matches(&identified), "identifiers match whole");
+    }
+
+    #[test]
+    fn open_menus_are_an_apps_own_windows() {
+        let name = Target::Name("Opie".into());
+        let mut menu = window(9, 6, "Opie", MENU_LAYER);
+        assert_eq!(
+            app_pid(std::slice::from_ref(&menu), &name).unwrap(),
+            6,
+            "a menu bar app with only its menu open"
+        );
+        let frame = Frame {
+            x: 10.0,
+            y: 20.0,
+            width: 300.0,
+            height: 200.0,
+        };
+        assert_eq!(
+            owning_window(std::slice::from_ref(&menu), 6, &frame),
+            Some(9)
+        );
+        menu.alpha = 0.0;
+        assert!(
+            app_pid(&[menu], &name).is_err(),
+            "a closed menu is no window"
+        );
+        // Two processes of one name: the one with a panel wins over one
+        // showing only a menu, and a same-sized ordinary window over a menu.
+        let panel = window(4, 7, "Opie", 3);
+        assert_eq!(
+            app_pid(&[window(9, 6, "Opie", MENU_LAYER), panel], &name).unwrap(),
+            7
+        );
+        let ordinary = window(5, 6, "Opie", 0);
+        assert_eq!(
+            owning_window(&[window(9, 6, "Opie", MENU_LAYER), ordinary], 6, &frame),
+            Some(5)
+        );
+        let menubar = window(1, 2, "Window Server", 24);
+        assert!(
+            !app_or_menu_layer(&menubar),
+            "the menu bar is not the app's"
+        );
+        let open = window(9, 6, "Opie", MENU_LAYER);
+        let filter = WindowFilter {
+            app: Some("opie".into()),
+            ..WindowFilter::default()
+        };
+        assert!(
+            !filter.matches(&open),
+            "wait and windows never take an open menu for a window"
+        );
+    }
+
+    /// An element as the scan reports it, with a frame.
+    fn shown(index: usize, role: &str, title: Option<&str>, description: Option<&str>) -> Element {
+        let mut element = element(role, title, description);
+        element.index = index;
+        element.frame = Some(Frame {
+            x: 10.0,
+            y: 10.0,
+            width: 20.0,
+            height: 20.0,
+        });
+        element
+    }
+
+    fn named(name: &str) -> ElementFilter {
+        ElementFilter {
+            role: None,
+            name: Some(name.into()),
+        }
+    }
+
+    #[test]
+    fn a_click_chooses_one_visible_element() {
+        let whole = shown(0, "AXButton", Some("Delete"), None);
+        let row = shown(1, "AXButton", None, Some("Delete, 3 files"));
+        let both = [row.clone(), whole.clone()];
+        let chosen = choose(&both, &named("delete")).unwrap();
+        assert_eq!(chosen.index, 0, "a whole name wins over a first part");
+        assert_eq!(
+            choose(std::slice::from_ref(&row), &named("delete"))
+                .unwrap()
+                .index,
+            1,
+            "a first part alone is enough"
+        );
+        // A whole match without a frame does not hand the click to a row
+        // named only in part.
+        let mut hidden = whole.clone();
+        hidden.frame = None;
+        let error = choose(&[hidden, row.clone()], &named("delete")).unwrap_err();
+        assert!(
+            error.error.contains("No visible element"),
+            "{}",
+            error.error
+        );
+        let other = shown(2, "AXButton", None, Some("Delete, 9 files"));
+        let error = choose(&[row.clone(), other], &named("delete")).unwrap_err();
+        assert!(
+            error.error.starts_with("2 elements match"),
+            "{}",
+            error.error
+        );
+        let mut unread = shown(3, "AXButton", None, None);
+        unread.unreadable = vec!["AXTitle".into()];
+        let error = choose(&[whole.clone(), unread.clone()], &named("delete")).unwrap_err();
+        assert!(error.error.contains("could not be read"), "{}", error.error);
+    }
+
+    #[test]
+    fn with_a_menu_open_only_its_items_are_chosen() {
+        let button = shown(0, "AXButton", Some("Copy"), None);
+        let mut unread = shown(1, "AXTextArea", None, None);
+        unread.unreadable = vec!["AXDescription".into()];
+        let mut item = shown(2, "AXMenuItem", Some("Copy"), None);
+        item.menu = true;
+        let elements = [button.clone(), unread.clone(), item.clone()];
+        assert_eq!(
+            choose(&elements, &named("copy")).unwrap().index,
+            2,
+            "the window's button and its unreadable neighbour are out of play"
+        );
+        let error = choose(&[button, unread, item], &named("paste")).unwrap_err();
+        assert!(error.error.contains("open menu"), "{}", error.error);
     }
 
     #[test]

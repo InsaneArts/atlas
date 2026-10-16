@@ -8,6 +8,10 @@ use crate::{
 use objc2_core_graphics::CGWindowListOption;
 use serde::{Deserialize, Serialize};
 
+/// The layer an open menu's window sits on (the pop-up menu level): menu
+/// bar, status item and context menus alike.
+pub const MENU_LAYER: i64 = 101;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Bounds {
