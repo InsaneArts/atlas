@@ -9,7 +9,7 @@
 //! rolls back without blind replays. The job carrying a reply is never the one
 //! being unloaded, and only artifacts this migration created are undone.
 use super::{
-    account_with_uid, endpoint, executable_of,
+    Account, account_with_uid, endpoint, executable_of,
     helper::{Agent, LABEL, Layout, Request, plist, text_sha256},
     helper_job, running_developer_id, signature,
 };
@@ -463,11 +463,19 @@ impl Migration {
                 path.display()
             )));
         }
+        // Replacing a link would leave the file it points to unchanged.
+        if fs::symlink_metadata(&path)?.file_type().is_symlink() {
+            return Err(problem(format!(
+                "{} is a link, so setup cannot switch it. Replace the link with the file it \
+                 points to, then run setup again.",
+                path.display()
+            )));
+        }
         save_private(&path, want.as_bytes())?;
         self.note("configuration switched")
     }
     /// Both labels as launchd reports them, inspected through `through`.
-    async fn jobs(&mut self, through: Endpoint) -> Result<Value> {
+    async fn jobs(&self, through: Endpoint) -> Result<Value> {
         let request = Request::Inspect {
             uid: self.log.plan.uid,
             labels: vec![self.log.plan.old_label.clone(), self.log.plan.label.clone()],
@@ -630,9 +638,18 @@ fn daemon_program() -> Result<PathBuf> {
         })
 }
 
-/// Plan a first setup of the configuration at `config_path`, whose helper
-/// already runs the managed daemon (started by `atlas init`).
-async fn plan_fresh(config_path: &Path) -> Result<Plan> {
+/// What every plan starts from: the configuration (its canonical path,
+/// meaning and text), both accounts, and the helper's managed layout.
+struct Basis {
+    config_path: PathBuf,
+    config: Config,
+    text: String,
+    account: Account,
+    controller: Account,
+    layout: Layout,
+}
+
+fn basis(config_path: &Path) -> Result<Basis> {
     let config_path = fs::canonicalize(config_path)?;
     let config = Config::load(&config_path)?;
     let text = fs::read_to_string(&config_path)?;
@@ -644,6 +661,27 @@ async fn plan_fresh(config_path: &Path) -> Result<Plan> {
         uid: config.helper_uid,
         home: account.home.clone(),
     };
+    Ok(Basis {
+        config_path,
+        config,
+        text,
+        account,
+        controller,
+        layout,
+    })
+}
+
+/// Plan a first setup of the configuration at `config_path`, whose helper
+/// already runs the managed daemon (started by `atlas init`).
+async fn plan_fresh(config_path: &Path) -> Result<Plan> {
+    let Basis {
+        config_path,
+        config,
+        text,
+        account,
+        controller,
+        layout,
+    } = basis(config_path)?;
     if config.socket_path != layout.socket() {
         return Err(problem(
             "The configuration does not use the managed private layout",
@@ -675,51 +713,108 @@ async fn plan_fresh(config_path: &Path) -> Result<Plan> {
     })
 }
 
-/// Record and verify a first setup (see [`plan_fresh`]). Re-running on an
-/// applied setup re-verifies it, like [`apply`].
-pub async fn apply_fresh(config_path: &Path, ownership: &Ownership) -> Result<Value> {
-    let uid = Config::load(config_path)?.helper_uid;
-    let path = log_path(uid)?;
-    let log = match load_log(&path)? {
-        Some(log) if log.version != 1 => {
-            return Err(problem(format!(
-                "The setup record has an unknown version ({})",
+/// Where a pass starts from the recorded log.
+#[derive(Debug, PartialEq)]
+enum Start {
+    /// Resume or re-verify the recorded setup.
+    Resume(Log),
+    /// Plan anew, archiving the earlier record, if any.
+    Plan(Option<Log>),
+}
+
+fn unknown_version(path: &Path) -> Error {
+    problem(format!(
+        "The setup record has an unknown version ({})",
+        path.display()
+    ))
+}
+
+fn rollback_unfinished(path: &Path) -> Error {
+    problem(format!(
+        "A rollback is unfinished; run setup --rollback to complete it ({})",
+        path.display()
+    ))
+}
+
+/// Where [`apply`] starts from `log`, recorded at `path`.
+fn apply_start(log: Option<Log>, path: &Path) -> Result<Start> {
+    match log {
+        Some(log) if log.version != 1 => Err(unknown_version(path)),
+        // Applied by an Atlas before its own daemon: plan the move to it.
+        Some(log) if log.plan.label.is_empty() && log.state == State::Applying => {
+            Err(problem(format!(
+                "A setup recorded by an older Atlas is unfinished; finish or roll it back \
+                 with that version ({})",
                 path.display()
-            )));
+            )))
         }
-        Some(log) if log.state == State::RollingBack => {
-            return Err(problem(format!(
-                "A rollback is unfinished; run setup --rollback to complete it ({})",
-                path.display()
-            )));
+        Some(log)
+            if matches!(log.state, State::Applying | State::Applied)
+                && !log.plan.label.is_empty() =>
+        {
+            Ok(Start::Resume(log))
         }
-        // A migrated (not fresh) setup re-verifies the way it was made.
-        Some(log) if !log.plan.label.is_empty() && !log.plan.fresh => {
-            return apply(config_path, ownership).await;
-        }
-        Some(log) if log.plan.fresh => log,
-        previous => {
+        Some(log) if log.state == State::RollingBack => Err(rollback_unfinished(path)),
+        previous => Ok(Start::Plan(previous)),
+    }
+}
+
+/// Where [`apply_fresh`] starts from `log`, recorded at `path`; None for a
+/// migrated (not fresh) setup, which re-verifies the way it was made.
+fn fresh_start(log: Option<Log>, path: &Path) -> Result<Option<Start>> {
+    match log {
+        Some(log) if log.version != 1 => Err(unknown_version(path)),
+        Some(log) if log.state == State::RollingBack => Err(rollback_unfinished(path)),
+        Some(log) if !log.plan.label.is_empty() && !log.plan.fresh => Ok(None),
+        Some(log) if log.plan.fresh => Ok(Some(Start::Resume(log))),
+        previous => Ok(Some(Start::Plan(previous))),
+    }
+}
+
+/// The setup log for the configuration at `config_path`: where it is
+/// recorded, and what is recorded there.
+fn recorded_log(config_path: &Path) -> Result<(PathBuf, Option<Log>)> {
+    let path = log_path(Config::load(config_path)?.helper_uid)?;
+    let log = load_log(&path)?;
+    Ok((path, log))
+}
+
+/// The log a pass works from: the recorded one, or a new one for `plan`
+/// with the earlier record (if any) archived beside it first.
+async fn starting_log(
+    path: &Path,
+    start: Start,
+    plan: impl Future<Output = Result<Plan>>,
+) -> Result<Log> {
+    match start {
+        Start::Resume(log) => Ok(log),
+        Start::Plan(previous) => {
             if let Some(previous) = previous {
                 let archive = path.with_extension(format!("{}.json", timestamp()));
                 save_log(&archive, &previous)?;
             }
-            Log {
+            Ok(Log {
                 version: 1,
-                plan: plan_fresh(config_path).await?,
+                plan: plan.await?,
                 state: State::Applying,
                 pending: Vec::new(),
                 history: Vec::new(),
-            }
+            })
         }
-    };
+    }
+}
+
+/// Apply `log`, first recording an updated Atlas.app (still validly signed
+/// as Atlas) as the same setup when `recheck` is set.
+async fn carry_out(path: PathBuf, log: Log, recheck: bool) -> Result<Value> {
     let mut migration = Migration::new(path, log)?;
     migration.require_owned_pending()?;
-    // An updated Atlas.app, still validly signed as Atlas, continues the
-    // same setup: its new signature is recorded, as apply does.
-    let current = signed_daemon(&migration.log.plan.program)?;
-    if current != migration.log.plan.cdhash {
-        migration.log.plan.cdhash = current;
-        migration.note("helper daemon updated")?;
+    if recheck {
+        let current = signed_daemon(&migration.log.plan.program)?;
+        if current != migration.log.plan.cdhash {
+            migration.log.plan.cdhash = current;
+            migration.note("helper daemon updated")?;
+        }
     }
     migration.log.state = State::Applying;
     save_log(&migration.path, &migration.log)?;
@@ -727,20 +822,30 @@ pub async fn apply_fresh(config_path: &Path, ownership: &Ownership) -> Result<Va
     Ok(report(&migration.log, &migration.path, outcome))
 }
 
+/// Record and verify a first setup (see [`plan_fresh`]). Re-running on an
+/// applied setup re-verifies it, like [`apply`].
+pub async fn apply_fresh(config_path: &Path, ownership: &Ownership) -> Result<Value> {
+    let (path, log) = recorded_log(config_path)?;
+    let Some(start) = fresh_start(log, &path)? else {
+        return apply(config_path, ownership).await;
+    };
+    let log = starting_log(&path, start, plan_fresh(config_path)).await?;
+    // An updated Atlas.app, still validly signed as Atlas, continues the
+    // same setup: its new signature is recorded, as apply does.
+    carry_out(path, log, true).await
+}
+
 /// Plan from the live configuration. Reads only; refuses unless the managed
 /// label has no artifacts and the current job is a verified plain plist.
 async fn plan(config_path: &Path) -> Result<Plan> {
-    let config_path = fs::canonicalize(config_path)?;
-    let config = Config::load(&config_path)?;
-    let old_config = fs::read_to_string(&config_path)?;
-    let account = account_with_uid(config.helper_uid)?
-        .ok_or_else(|| problem("The configured helper account does not exist"))?;
-    let controller = account_with_uid(nix::unistd::getuid().as_raw())?
-        .ok_or_else(|| problem("The controller account cannot be resolved"))?;
-    let layout = Layout {
-        uid: config.helper_uid,
-        home: account.home.clone(),
-    };
+    let Basis {
+        config_path,
+        config,
+        text: old_config,
+        account,
+        controller,
+        layout,
+    } = basis(config_path)?;
     let target = managed(&config, &layout);
     if config.socket_path == target.socket_path {
         return Err(problem(
@@ -845,66 +950,21 @@ fn report(log: &Log, path: &Path, outcome: Result<()>) -> Value {
 /// Migrate, resume, or re-verify the managed private capture endpoint.
 /// Callers prove controller ownership (acquired for recovery) by passing it.
 pub async fn apply(config_path: &Path, _ownership: &Ownership) -> Result<Value> {
-    let uid = Config::load(config_path)?.helper_uid;
-    let path = log_path(uid)?;
-    let log = match load_log(&path)? {
-        // Applied by an Atlas before its own daemon: plan the move to it.
-        Some(log) if log.plan.label.is_empty() && log.state == State::Applying => {
-            return Err(problem(format!(
-                "A setup recorded by an older Atlas is unfinished; finish or roll it back \
-                 with that version ({})",
-                path.display()
-            )));
-        }
-        Some(log)
-            if matches!(log.state, State::Applying | State::Applied)
-                && !log.plan.label.is_empty() =>
-        {
-            log
-        }
-        Some(log) if log.state == State::RollingBack => {
-            return Err(problem(format!(
-                "A rollback is unfinished; run setup --rollback to complete it ({})",
-                path.display()
-            )));
-        }
-        previous => {
-            if let Some(previous) = previous {
-                let archive = path.with_extension(format!("{}.json", timestamp()));
-                save_log(&archive, &previous)?;
-            }
-            Log {
-                version: 1,
-                plan: plan(config_path).await?,
-                state: State::Applying,
-                pending: Vec::new(),
-                history: Vec::new(),
-            }
-        }
-    };
-    let mut migration = Migration::new(path, log)?;
-    migration.require_owned_pending()?;
-    if migration.log.state == State::Applied {
-        // An applied setup re-verifies. An updated Atlas.app is accepted
-        // if it is still validly signed as Atlas: its new hash is
-        // recorded, and the running daemon's executable must be that binary.
-        let current = signed_daemon(&migration.log.plan.program)?;
-        if current != migration.log.plan.cdhash {
-            migration.log.plan.cdhash = current;
-            migration.note("helper daemon updated")?;
-        }
-    }
-    migration.log.state = State::Applying;
-    save_log(&migration.path, &migration.log)?;
-    let outcome = migration.apply().await;
-    Ok(report(&migration.log, &migration.path, outcome))
+    let (path, log) = recorded_log(config_path)?;
+    let start = apply_start(log, &path)?;
+    let log = starting_log(&path, start, plan(config_path)).await?;
+    // An applied setup re-verifies. An updated Atlas.app is accepted if it
+    // is still validly signed as Atlas: its new hash is recorded, and the
+    // running daemon's executable must be that binary.
+    let applied = log.state == State::Applied;
+    carry_out(path, log, applied).await
 }
 
 /// Undo an applied or interrupted migration recorded in the log.
 /// Callers prove controller ownership (acquired for recovery) by passing it.
 pub async fn rollback(config_path: &Path, _ownership: &Ownership) -> Result<Value> {
-    let path = log_path(Config::load(config_path)?.helper_uid)?;
-    let log = load_log(&path)?.ok_or_else(|| problem("No setup migration is recorded"))?;
+    let (path, log) = recorded_log(config_path)?;
+    let log = log.ok_or_else(|| problem("No setup migration is recorded"))?;
     if log.plan.label.is_empty() {
         return Err(problem(
             "This setup was recorded by an older Atlas; roll it back with that version",
@@ -1048,5 +1108,165 @@ mod tests {
         assert!(helper_result(&reply(r#"{"ok":false,"error":"no"}"#)).is_err());
         assert!(helper_result(&reply("garbage")).is_err());
         assert!(helper_result(&json!({"ok": true, "exitCode": 0})).is_err());
+    }
+
+    const OLD: &str = "helper_uid = 60001\nsocket_path = \"a.sock\"\nidentity_probe = \"p\"\n\
+                       input_socket = \"i.sock\"\noutput_dir = \"runs\"\n";
+    const NEW: &str = "helper_uid = 60001\nsocket_path = \"b.sock\"\nidentity_probe = \"p\"\n\
+                       input_socket = \"i.sock\"\noutput_dir = \"runs\"\n";
+
+    /// A migration from OLD to NEW kept entirely in `dir`: its configuration
+    /// file, its log and its pending-mutation state.
+    fn sandbox(dir: &Path) -> Migration {
+        let config_path = dir.join("atlas.toml");
+        fs::write(&config_path, OLD).unwrap();
+        let mut planned = plan(config_path, OLD);
+        planned.new_config = NEW.into();
+        let log = Log {
+            version: 1,
+            plan: planned,
+            state: State::Applying,
+            pending: Vec::new(),
+            history: Vec::new(),
+        };
+        let mut migration = Migration::new(dir.join("setup.json"), log).unwrap();
+        let controller = crate::control::Controller::at(60001, &dir.join("state"));
+        migration.old.controller = controller.clone();
+        migration.new.controller = controller;
+        migration
+    }
+
+    #[test]
+    fn the_configuration_switches_only_from_known_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut migration = sandbox(dir.path());
+        let path = migration.log.plan.config_path.clone();
+        migration.switch_config(OLD, NEW).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), NEW);
+        migration.switch_config(OLD, NEW).unwrap();
+        assert_eq!(migration.log.history.len(), 1, "already switched");
+        fs::write(&path, "edited").unwrap();
+        assert!(migration.switch_config(NEW, OLD).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "edited");
+        // A link is never replaced, even with the expected contents behind it.
+        let real = dir.path().join("real.toml");
+        fs::write(&real, NEW).unwrap();
+        fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&real, &path).unwrap();
+        assert!(migration.switch_config(NEW, OLD).is_err());
+        assert!(
+            fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read_to_string(&real).unwrap(), NEW);
+    }
+
+    #[test]
+    fn uncertain_outcomes_stay_pending_and_definitive_ones_settle() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut migration = sandbox(dir.path());
+        let step = |migration: &mut Migration| {
+            let claim = migration.begin().unwrap();
+            claim.to_string()
+        };
+        let uncertain = step(&mut migration);
+        let outcome = migration.conclude(&uncertain, Err::<(), _>(problem("lost").uncertain()));
+        assert!(outcome.unwrap_err().uncertain);
+        let definitive = step(&mut migration);
+        assert!(
+            migration
+                .conclude(&definitive, Err::<(), _>(problem("refused")))
+                .is_err()
+        );
+        let succeeded = step(&mut migration);
+        assert_eq!(migration.conclude(&succeeded, Ok(7)).unwrap(), 7);
+        assert_eq!(migration.log.pending, vec![uncertain.clone()]);
+        assert_eq!(
+            migration.old.controller.pending().unwrap(),
+            vec![uncertain.clone()]
+        );
+        let saved = load_log(&migration.path).unwrap().unwrap();
+        assert_eq!(saved.pending, vec![uncertain]);
+    }
+
+    #[test]
+    fn only_pending_actions_this_setup_owns_let_it_continue() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut migration = sandbox(dir.path());
+        migration.require_owned_pending().unwrap();
+        drop(migration.begin().unwrap());
+        migration.require_owned_pending().unwrap();
+        drop(migration.old.controller.quarantine().unwrap());
+        let error = migration.require_owned_pending().unwrap_err();
+        assert!(error.uncertain);
+        assert_eq!(error.code, "uncertain");
+    }
+
+    fn recorded(state: State, label: &str, fresh: bool, version: u32) -> Log {
+        let mut planned = plan("/c/atlas.toml".into(), "a");
+        planned.label = label.into();
+        planned.fresh = fresh;
+        Log {
+            version,
+            plan: planned,
+            state,
+            pending: Vec::new(),
+            history: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn apply_starts_only_from_a_log_it_can_continue() {
+        let path = Path::new("/x/setup-502.json");
+        assert_eq!(apply_start(None, path).unwrap(), Start::Plan(None));
+        for state in [State::Applying, State::Applied] {
+            let log = recorded(state, LABEL, false, 1);
+            assert_eq!(
+                apply_start(Some(log.clone()), path).unwrap(),
+                Start::Resume(log)
+            );
+        }
+        for refused in [
+            recorded(State::Applied, LABEL, false, 2),
+            recorded(State::Applying, "", false, 1),
+            recorded(State::RollingBack, LABEL, false, 1),
+        ] {
+            assert!(
+                apply_start(Some(refused.clone()), path).is_err(),
+                "{refused:?}"
+            );
+        }
+        for replanned in [
+            recorded(State::RolledBack, LABEL, false, 1),
+            recorded(State::Applied, "", false, 1),
+        ] {
+            assert_eq!(
+                apply_start(Some(replanned.clone()), path).unwrap(),
+                Start::Plan(Some(replanned))
+            );
+        }
+    }
+
+    #[test]
+    fn a_first_setup_resumes_its_own_log_and_defers_to_a_migration() {
+        let path = Path::new("/x/setup-502.json");
+        assert_eq!(fresh_start(None, path).unwrap(), Some(Start::Plan(None)));
+        let fresh = recorded(State::Applied, LABEL, true, 1);
+        assert_eq!(
+            fresh_start(Some(fresh.clone()), path).unwrap(),
+            Some(Start::Resume(fresh))
+        );
+        let migrated = recorded(State::Applied, LABEL, false, 1);
+        assert_eq!(fresh_start(Some(migrated), path).unwrap(), None);
+        assert!(fresh_start(Some(recorded(State::Applied, LABEL, true, 2)), path).is_err());
+        assert!(fresh_start(Some(recorded(State::RollingBack, LABEL, true, 1)), path).is_err());
+        // An unfinished setup by an older Atlas is archived and planned anew.
+        let legacy = recorded(State::Applying, "", false, 1);
+        assert_eq!(
+            fresh_start(Some(legacy.clone()), path).unwrap(),
+            Some(Start::Plan(Some(legacy)))
+        );
     }
 }
