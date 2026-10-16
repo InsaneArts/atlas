@@ -44,6 +44,7 @@ fn invalid() -> Error {
         "Invalid discovery selection; use at most 16 tools, apps, variable names and absolute reference paths each",
     )
 }
+
 fn component(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 128
@@ -64,6 +65,7 @@ struct Access {
     writable: bool,
     executable: bool,
 }
+
 impl Access {
     fn from_flags(flags: &str) -> Result<Self> {
         if !flags.starts_with('-') || flags.bytes().skip(1).any(|c| !b"fdrwx".contains(&c)) {
@@ -81,6 +83,7 @@ impl Access {
         })
     }
 }
+
 fn access(path: &Path) -> Access {
     use nix::unistd::AccessFlags;
     let metadata = fs::metadata(path).ok();

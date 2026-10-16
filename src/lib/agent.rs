@@ -193,7 +193,19 @@ pub fn keys(keys: &[String]) -> Result<Value> {
 /// Whether two app names name the same app: compared case-insensitively,
 /// so `textedit` and `TextEdit` (or `ÉDITEUR` and `Éditeur`) agree.
 pub(crate) fn same_text(a: &str, b: &str) -> bool {
-    a == b || a.to_lowercase() == b.to_lowercase()
+    a == b
+        || a.chars()
+            .flat_map(char::to_lowercase)
+            .eq(b.chars().flat_map(char::to_lowercase))
+}
+
+/// Whether `text`, which is only the start of a longer value, could begin
+/// a value named `name`: the part shown must begin the name.
+fn could_begin(text: &str, name: &str) -> bool {
+    let mut name = name.chars().flat_map(char::to_lowercase);
+    text.chars()
+        .flat_map(char::to_lowercase)
+        .all(|c| name.next() == Some(c))
 }
 
 /// Which helper windows a command is about.
@@ -707,6 +719,10 @@ impl ElementFilter {
     /// never a label, so it only matches whole.
     fn compare(&self, element: &Element, unknown: &dyn Fn(&str) -> bool) -> Option<NameMatch> {
         let cut = |attribute: &str| element.truncated.iter().any(|a| a == attribute);
+        // What is shown of a cut attribute can still rule a name out.
+        let could_hide = |value: &Option<String>, name: &str| {
+            value.as_deref().is_some_and(|text| could_begin(text, name))
+        };
         let role = self.role.as_deref().is_none_or(|role| {
             unknown("AXRole")
                 || element
@@ -721,18 +737,19 @@ impl ElementFilter {
             return Some(NameMatch::Exact);
         };
         let text = |value: &Option<String>, attribute: &str| {
+            if cut(attribute) {
+                return (unknown(attribute) && could_hide(value, name)).then_some(NameMatch::Exact);
+            }
             if unknown(attribute) {
                 return Some(NameMatch::Exact);
             }
-            if cut(attribute) {
-                return None;
-            }
             value.as_deref().and_then(|text| name_match(text, name))
         };
-        let identifier = if unknown("AXIdentifier") {
+        let identifier = if cut("AXIdentifier") {
+            (unknown("AXIdentifier") && could_hide(&element.identifier, name))
+                .then_some(NameMatch::Exact)
+        } else if unknown("AXIdentifier") {
             Some(NameMatch::Exact)
-        } else if cut("AXIdentifier") {
-            None
         } else {
             element
                 .identifier
@@ -740,10 +757,11 @@ impl ElementFilter {
                 .filter(|identifier| same_text(identifier, name))
                 .map(|_| NameMatch::Exact)
         };
-        let label = if unknown("AXValue") {
+        let label = if cut("AXValue") {
+            (unknown("AXValue") && label(element).is_some_and(|text| could_begin(text, name)))
+                .then_some(NameMatch::Exact)
+        } else if unknown("AXValue") {
             label(element).map(|_| NameMatch::Exact)
-        } else if cut("AXValue") {
-            None
         } else {
             label(element).and_then(|text| name_match(text, name))
         };
@@ -1599,6 +1617,18 @@ mod tests {
             2,
             "a collapsed element is not on screen"
         );
+
+        // A long message cut short cannot hide a short name; what is shown
+        // of a cut name can.
+        let mut message = shown(6, "AXStaticText", None, None);
+        message.value = Some("This document explains what the button does".into());
+        message.truncated = vec!["AXValue".into()];
+        let ok = shown(7, "AXButton", Some("OK"), None);
+        assert_eq!(choose(&[message, ok], &named("ok")).unwrap().index, 7);
+        let mut long = shown(8, "AXButton", Some("Delete every"), None);
+        long.truncated = vec!["AXTitle".into()];
+        assert!(named("delete everything").might_match(&long));
+        assert!(!named("delete").might_match(&long));
 
         let help = shown(4, "AXButton", Some("Help"), None);
         let title = shown(5, "AXMenuBarItem", Some("Help"), None);

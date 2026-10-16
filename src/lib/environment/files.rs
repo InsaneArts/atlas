@@ -27,6 +27,7 @@ use std::{
     path::{Component, Path, PathBuf},
     process::Command,
 };
+
 pub(super) fn read_limited(path: &Path, limit: u64) -> Result<Vec<u8>> {
     let file = open_regular(path, false)?.ok_or_else(|| problem("Environment file is missing"))?;
     read_file(file, limit)
@@ -280,9 +281,11 @@ pub(super) fn restore_attributes(
     }
     Ok(())
 }
+
 pub(super) fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
+
 pub(super) fn relative_target(path: &Path) -> Result<()> {
     relative_path(path, false)
 }
@@ -316,6 +319,7 @@ fn relative_path(path: &Path, directory: bool) -> Result<()> {
     }
     Ok(())
 }
+
 pub(super) fn unique_targets<'a>(targets: impl Iterator<Item = &'a Path>) -> Result<()> {
     let mut seen = Vec::<String>::new();
     for path in targets {
@@ -338,6 +342,7 @@ pub(super) fn unique_targets<'a>(targets: impl Iterator<Item = &'a Path>) -> Res
     }
     Ok(())
 }
+
 pub(super) fn has_acl(path: &Path) -> Result<bool> {
     crate::acl::present(path).map_err(|error| match error.kind() {
         std::io::ErrorKind::InvalidData => problem("Invalid filesystem ACL"),
@@ -352,6 +357,7 @@ pub(super) fn remove_inherited_acl(path: &Path) -> Result<()> {
     clear_acl(&folder)
         .map_err(|error| problem(format!("Could not make provisioning data private: {error}")))
 }
+
 pub(super) fn destination(home: &Path, relative: &Path) -> Result<PathBuf> {
     relative_target(relative)?;
     checked_path(home, relative)
@@ -377,6 +383,7 @@ fn checked_path(home: &Path, relative: &Path) -> Result<PathBuf> {
     }
     Ok(path)
 }
+
 pub(super) fn open_directory(path: &Path) -> Result<fs::File> {
     directory(path, true)?.ok_or_else(|| problem("Missing provisioning directory"))
 }
@@ -418,9 +425,11 @@ pub(super) fn directory(path: &Path, create: bool) -> Result<Option<fs::File>> {
     }
     Ok(Some(directory))
 }
+
 pub(super) fn atomic_write(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     atomic_install(path, bytes, mode, false)
 }
+
 pub(super) fn atomic_install(
     path: &Path,
     bytes: &[u8],
@@ -608,6 +617,7 @@ fn descriptor_acl(file: &fs::File) -> Result<bool> {
         .transpose()?
         .is_some_and(|entries| !entries.is_empty()))
 }
+
 /// The helper's short name, as an ACL entry names it. Resolved once per
 /// operation and passed to every allow_helper of it.
 pub(super) fn helper_name(uid: u32) -> Result<String> {

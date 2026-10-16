@@ -64,6 +64,7 @@ impl Rendered {
             err: String::new(),
         }
     }
+
     fn err(text: impl Into<String>) -> Self {
         Self {
             out: String::new(),

@@ -233,18 +233,21 @@ impl Migration {
             new: Client::new(new)?,
         })
     }
+
     fn client(&self, endpoint: Endpoint) -> &Client {
         match endpoint {
             Endpoint::Old => &self.old,
             Endpoint::New => &self.new,
         }
     }
+
     fn layout(&self) -> Layout {
         Layout {
             uid: self.log.plan.uid,
             home: self.log.plan.home.clone(),
         }
     }
+
     fn agent(&self) -> Agent {
         Agent {
             label: self.log.plan.label.clone(),
@@ -254,12 +257,14 @@ impl Migration {
             socket: self.layout().socket(),
         }
     }
+
     fn note(&mut self, action: &str) -> Result<()> {
         self.log
             .history
             .push((action.to_owned(), timestamp().to_string()));
         save_log(&self.path, &self.log)
     }
+
     /// Claim a generation in the log, then record the pending mutation under
     /// it. A crash between the two leaves only a harmless log-only claim.
     /// The claim is held while the step runs.
@@ -269,11 +274,13 @@ impl Migration {
         save_log(&self.path, &self.log)?;
         self.old.controller.quarantine_as(&generation)
     }
+
     fn settle(&mut self, generation: &str) -> Result<()> {
         self.old.controller.clear_if(generation)?;
         self.log.pending.retain(|entry| entry != generation);
         save_log(&self.path, &self.log)
     }
+
     /// Settle a definitive outcome; keep an uncertain one pending.
     fn conclude<T>(&mut self, generation: &str, outcome: Result<T>) -> Result<T> {
         match outcome {
@@ -284,6 +291,7 @@ impl Migration {
             }
         }
     }
+
     /// Refuse to act while a mutation this migration does not own is pending.
     fn require_owned_pending(&self) -> Result<()> {
         let foreign = self
@@ -302,6 +310,7 @@ impl Migration {
         }
         Ok(())
     }
+
     /// Settle every generation this migration owns, once a full verification
     /// has established the outcome of all its actions.
     fn settle_all(&mut self) -> Result<()> {
@@ -310,6 +319,7 @@ impl Migration {
         }
         Ok(())
     }
+
     /// Run one typed request inside the helper as a recorded mutation. Only an
     /// affirmative worker result settles it: an interrupted run, missing or
     /// malformed output, or a worker error may have changed state part way,
@@ -338,6 +348,7 @@ impl Migration {
         self.note(&format!("{request:?}"))?;
         Ok(value)
     }
+
     /// The first endpoint in `order` with a verified hidden helper.
     async fn reachable_endpoint(&self, order: [Endpoint; 2]) -> Result<Endpoint> {
         for endpoint in order {
@@ -350,6 +361,7 @@ impl Migration {
              once, switch back, then run atlas init again.",
         ))
     }
+
     /// The managed endpoint is private, captures, and runs the planned binary.
     async fn verify_new(&self) -> Result<()> {
         await_endpoint(&self.new).await?;
@@ -393,6 +405,7 @@ impl Migration {
         }
         Ok(())
     }
+
     /// Whether `endpoint`'s socket serves the current, idle input service.
     async fn input_ready(&self, endpoint: Endpoint) -> bool {
         let client = self.client(endpoint);
@@ -402,6 +415,7 @@ impl Migration {
             .and_then(|pid| u32::try_from(pid).ok())
             .is_some_and(|pid| input_current(&status, client.config.helper_uid, pid))
     }
+
     /// Make the service on `to`'s socket the only, current input service.
     /// Presence is read from each input socket directly, independent of the
     /// capture daemons, and only a refused or missing socket counts as absent.
@@ -450,6 +464,7 @@ impl Migration {
         self.conclude(&generation, outcome)?;
         self.note("input moved")
     }
+
     /// Make the configuration file hold `want`, refusing unknown contents.
     fn switch_config(&mut self, from: &str, want: &str) -> Result<()> {
         let path = self.log.plan.config_path.clone();
@@ -474,6 +489,7 @@ impl Migration {
         save_private(&path, want.as_bytes())?;
         self.note("configuration switched")
     }
+
     /// Both labels as launchd reports them, inspected through `through`.
     async fn jobs(&self, through: Endpoint) -> Result<Value> {
         let request = Request::Inspect {

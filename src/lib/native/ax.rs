@@ -48,7 +48,13 @@ const ABSENT: [AXError; 3] = [
 ];
 /// Attributes a selector matches on; an element whose selector attribute
 /// fails to read (other than being absent) may be an unseen match.
-const SELECTORS: [&str; 4] = ["AXRole", "AXTitle", "AXDescription", "AXIdentifier"];
+const SELECTORS: [&str; 5] = [
+    "AXRole",
+    "AXTitle",
+    "AXDescription",
+    "AXIdentifier",
+    "AXValue",
+];
 
 /// At most the first `TEXT_LIMIT` UTF-16 units of a CFString, converted
 /// without copying the rest and cut only between composed characters, so a

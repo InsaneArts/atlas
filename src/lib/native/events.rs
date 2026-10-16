@@ -339,23 +339,17 @@ impl Engine {
     }
 
     fn release_modifiers(&mut self) -> Result<()> {
-        if self.flags == 0 {
-            return Ok(());
-        }
-
-        // Finish the chord in CoreGraphics too. Viewer key-up events do
-        // not represent remote holds, so a completed gesture must be clean.
-        // Every modifier is released even when one release fails.
-        let mut first = Ok(());
-        for code in MODIFIER_KEYS {
-            if let Err(error) = self.key_event(code, false, 0, None)
-                && first.is_ok()
-            {
-                first = Err(error);
+        if self.flags != 0 {
+            // Finish the chord in CoreGraphics too. Viewer key-up events do
+            // not represent remote holds, so a completed gesture must be clean.
+            // A failed release stops here, leaving the flags held so that
+            // the next release tries again.
+            for code in MODIFIER_KEYS {
+                self.key_event(code, false, 0, None)?;
             }
         }
 
-        first
+        Ok(())
     }
 
     fn key(&mut self, code: u16, flags: u64, text: Option<&[u16]>) -> Result<()> {

@@ -163,30 +163,37 @@ pub struct Layout {
     pub uid: u32,
     pub home: PathBuf,
 }
+
 impl Layout {
     pub fn root(&self) -> PathBuf {
         self.home.join(ROOT)
     }
+
     pub fn logs(&self) -> PathBuf {
         self.root().join(LOGS)
     }
+
     pub fn daemon(&self) -> PathBuf {
         self.root().join(DAEMON)
     }
+
     /// The managed daemon's socket.
     pub fn socket(&self) -> PathBuf {
         self.daemon().join(format!("{}.sock", self.uid))
     }
+
     pub fn agent_plist(&self, label: &str) -> PathBuf {
         self.home
             .join("Library/LaunchAgents")
             .join(format!("{label}.plist"))
     }
+
     fn backup(&self, label: &str, sha256: &str) -> PathBuf {
         self.root()
             .join(BACKUP)
             .join(format!("{label}-{}.plist", &sha256[..16]))
     }
+
     fn domain(&self) -> String {
         format!("gui/{}", self.uid)
     }

@@ -262,7 +262,10 @@ impl Service {
                 let mut reply = json!(error);
                 reply["performed"] = json!(performed);
                 reply["partial"] = json!(partial);
-                reply["uncertain"] = json!(cleanup.is_err() || partial || error.uncertain);
+                // A cancellation is the person's doing and tells them what
+                // landed; any other break mid-action leaves that unknown.
+                let unknown = partial && error.code != "cancelled";
+                reply["uncertain"] = json!(cleanup.is_err() || unknown || error.uncertain);
                 if let Err(error) = cleanup {
                     reply["cleanupError"] = json!(error.error);
                 }

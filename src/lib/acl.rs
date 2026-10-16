@@ -72,11 +72,13 @@ impl Acl {
         // SAFETY: NUL-terminated path and the documented extended ACL type.
         Self::wrap(unsafe { acl_get_file(path.as_ptr(), ACL_TYPE_EXTENDED) })
     }
+
     /// The extended ACL of an open file, or None.
     pub fn of_file(file: &File) -> io::Result<Option<Self>> {
         // SAFETY: the descriptor stays open for the duration of the call.
         Self::wrap(unsafe { acl_get_fd(file.as_raw_fd()) })
     }
+
     fn wrap(acl: *mut c_void) -> io::Result<Option<Self>> {
         if !acl.is_null() {
             return Ok(Some(Self(acl)));
@@ -89,10 +91,12 @@ impl Acl {
             Err(error)
         }
     }
+
     pub fn is_valid(&self) -> bool {
         // SAFETY: live ACL handle.
         unsafe { acl_valid(self.0) == 0 }
     }
+
     /// Every entry. Only the end of the list (EINVAL from the next entry)
     /// ends it; any other failure is an error, never a shorter list.
     pub fn entries(&self) -> io::Result<Vec<Entry>> {
@@ -126,6 +130,7 @@ impl Acl {
         }
         Ok(entries)
     }
+
     /// Text form, one `user:UUID:name:id:allow|deny:rights` line per entry.
     pub fn text(&self) -> io::Result<String> {
         // SAFETY: live ACL handle; the returned string is freed with acl_free.

@@ -29,15 +29,17 @@ pub fn token() -> String {
 }
 
 pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
+    // Emptied only once it is known to be ours.
     let mut file = OpenOptions::new()
         .create(true)
-        .truncate(true)
+        .truncate(false)
         .write(true)
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
         .open(path)
         .map_err(|error| Error::writing(path, error))?;
     own_private(&file, path)?;
+    file.set_len(0)?;
     file.write_all(bytes)?;
     file.sync_all()?;
     Ok(())
@@ -48,10 +50,23 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
 /// is already there would prove nothing about the next one.
 pub fn probe_write(directory: &Path) -> Result<()> {
     fs::create_dir_all(directory).map_err(|error| Error::writing(directory, error))?;
-    // A probe an interrupted run left behind is nothing but litter.
+    // A probe an interrupted run left behind is litter; one of a process
+    // still running is its own, about to be removed.
     if let Ok(entries) = fs::read_dir(directory) {
         for entry in entries.flatten() {
-            if entry.file_name().to_string_lossy().starts_with(".probe-") {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            let Some(rest) = name.strip_prefix(".probe-") else {
+                continue;
+            };
+            let alive = rest
+                .split('-')
+                .next()
+                .and_then(|pid| pid.parse::<i32>().ok())
+                .is_some_and(|pid| {
+                    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok()
+                });
+            if !alive {
                 let _ = fs::remove_file(entry.path());
             }
         }
@@ -68,9 +83,12 @@ pub fn probe_write(directory: &Path) -> Result<()> {
         .custom_flags(libc::O_NOFOLLOW)
         .open(&path)
         .map_err(|error| Error::writing(&path, error))?;
-    fs::remove_file(&path).map_err(|error| Error::writing(&path, error))?;
-
-    Ok(())
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        // Another process's cleanup may have taken it: it was written.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(Error::writing(&path, error)),
+    }
 }
 
 fn open_lock(path: &Path) -> Result<File> {
