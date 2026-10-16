@@ -32,6 +32,7 @@ pub struct Frame {
     pub epoch: Epoch,
     pub at: Instant,
 }
+
 /// Identity (device, inode, size, mtime) of the installed executable and its hash.
 type BuildCache = Arc<std::sync::Mutex<Option<((u64, u64, u64, i64, i64), Option<String>)>>>;
 
@@ -191,6 +192,7 @@ impl Client {
         )?;
         Ok(json!({ "ok": true, "path": target }))
     }
+
     /// Construction only validates; reads such as status and doctor never write.
     pub fn new(config: Config) -> Result<Self> {
         crate::session::validate_uid(config.helper_uid)?;
@@ -206,6 +208,7 @@ impl Client {
             config,
         })
     }
+
     /// The private output directory, created 0700 (with any missing parents)
     /// on first use. An existing directory must already be private; it is
     /// never re-permissioned. The umask can only remove mode bits.
@@ -215,7 +218,8 @@ impl Client {
             fs::DirBuilder::new()
                 .recursive(true)
                 .mode(0o700)
-                .create(path)?;
+                .create(path)
+                .map_err(|error| Error::writing(path, error))?;
         }
         let metadata = fs::symlink_metadata(path)?;
         if !metadata.is_dir()
@@ -232,9 +236,11 @@ impl Client {
         }
         Ok(path)
     }
+
     pub async fn status(&self) -> Value {
         self.verified_status().await.unwrap_or_else(|e| json!(e))
     }
+
     async fn verified_status(&self) -> Result<Value> {
         let mut hello = self.transport.call(&json!({"op": "hello"})).await?;
         // Do not launch the probe into an unverified UID or the visible desktop.
@@ -257,6 +263,7 @@ impl Client {
         hello["sessionProof"] = proof;
         Ok(hello)
     }
+
     async fn session_proof(&self) -> Result<Value> {
         let request = json!({
             "op": "run",
@@ -278,9 +285,11 @@ impl Client {
             .map_err(|_| Error::new("identity", "Malformed or oversized identity output"))?;
         Ok(serde_json::from_slice(&output)?)
     }
+
     pub async fn identity(&self) -> Result<Session> {
         require_hidden(&self.status().await, self.config.helper_uid)
     }
+
     pub async fn frame(&self, maximum: Option<u32>) -> Result<Frame> {
         if maximum.is_some_and(|m| m == 0 || m > 8192) {
             return Err(Error::new("input", "Maximum dimension must be 1–8192"));
@@ -329,6 +338,7 @@ impl Client {
             at,
         })
     }
+
     pub async fn capture(&self, maximum: Option<u32>) -> Result<Value> {
         let frame = self.frame(maximum).await?;
         let path = self
@@ -346,6 +356,7 @@ impl Client {
             "pointsPerPixel": frame.display.width / f64::from(frame.width),
         }))
     }
+
     pub fn input_transport(&self) -> Transport {
         Transport {
             path: self.config.input_socket.clone(),
@@ -353,10 +364,12 @@ impl Client {
             peer_uid: self.config.helper_uid,
         }
     }
+
     pub async fn native_control(&self, operation: &str, owner: &str) -> Result<Value> {
         self.native_request(json!({ "op": operation, "owner": owner }))
             .await
     }
+
     pub async fn acquire_input(&self, owner: &str, epoch: &Epoch) -> Result<Value> {
         self.native_request(json!({
             "op": "acquire",
@@ -365,6 +378,7 @@ impl Client {
         }))
         .await
     }
+
     async fn native_request(&self, request: Value) -> Result<Value> {
         let result = self.input_transport().call(&request).await?;
         if result["ok"] != true {
@@ -390,6 +404,7 @@ impl Client {
         }
         Ok(result)
     }
+
     pub async fn input(
         &self,
         actions: &Value,
@@ -403,6 +418,7 @@ impl Client {
         };
         self.input_inner(actions, expected, lease).await
     }
+
     /// Send one validated batch under controller ownership the caller already
     /// holds, refusing unless the helper still has exactly `epoch`.
     pub async fn input_owned(
@@ -414,6 +430,7 @@ impl Client {
         self.input_inner(actions, Some((epoch, Instant::now())), None)
             .await
     }
+
     /// The input service, still running in this same session, was pinned
     /// to an earlier display (switching accounts can renumber it): pin it to
     /// the current verified display, as start-input does. When the display
@@ -448,6 +465,7 @@ impl Client {
         }
         Ok(current)
     }
+
     async fn input_inner(
         &self,
         actions: &Value,
@@ -525,20 +543,24 @@ impl Client {
         }
         result
     }
+
     pub async fn run(&self, argv: Vec<String>) -> Result<Value> {
         self.run_within(argv, RUN_TIMEOUT).await
     }
+
     /// [`Client::run`], stopping the command after `timeout` (at most ten
     /// minutes). Control stays held until it ends.
     pub async fn run_within(&self, argv: Vec<String>, timeout: Duration) -> Result<Value> {
         let ownership = self.controller.acquire(false)?;
         self.run_owned_within(&ownership, argv, timeout).await
     }
+
     /// Execute argv in the verified hidden helper as a recorded mutation under
     /// controller ownership the caller already holds.
     pub async fn run_owned(&self, ownership: &Ownership, argv: Vec<String>) -> Result<Value> {
         self.run_owned_within(ownership, argv, RUN_TIMEOUT).await
     }
+
     /// [`Client::run_owned`], stopping the command after `timeout`.
     pub async fn run_owned_within(
         &self,
@@ -567,16 +589,19 @@ impl Client {
         )
         .await
     }
+
     /// Run a fixed, read-only inspection command (such as the window list) in
     /// the verified hidden helper. It records no pending mutation, so callers
     /// must only pass commands that cannot change the helper.
     pub(crate) async fn inspect(&self, argv: Vec<String>) -> Result<Value> {
         self.inspect_within(argv, Duration::from_secs(5)).await
     }
+
     /// [`Client::inspect`] bounded by `limit`.
     pub(crate) async fn inspect_within(&self, argv: Vec<String>, limit: Duration) -> Result<Value> {
         self.run_pending(argv, limit).await
     }
+
     /// Execute argv in the verified hidden helper as part of a mutation the
     /// caller holds ownership for and has already recorded as pending. The
     /// caller settles that record once the outcome is established.
@@ -595,15 +620,18 @@ impl Client {
         validate_completion(&request, &reply)?;
         Ok(reply)
     }
+
     pub async fn apps(&self) -> Result<Value> {
         self.identity().await?;
         self.transport.call(&json!({"op": "apps"})).await
     }
+
     pub async fn start_input(&self) -> Result<Value> {
         let _ownership = self.controller.acquire(false)?;
         self.identity().await?;
         self.launch_input().await
     }
+
     /// SHA-256 of the installed shared executable, rehashed only when its
     /// device, inode, size or modification time changes.
     pub fn installed_build(&self) -> Option<String> {
@@ -631,6 +659,7 @@ impl Client {
         }
         Some(build)
     }
+
     /// start-input: replace a stale service, otherwise make one ready.
     async fn launch_input(&self) -> Result<Value> {
         let status = self.status().await;
@@ -643,6 +672,7 @@ impl Client {
         let (pid, outcome) = self.ensure_input(&status).await?;
         Ok(json!({ "ok": true, outcome: true, "pid": pid }))
     }
+
     /// Make a ready input service exist without replacing a running one:
     /// reuse it, reset it, or start the installed build.
     async fn ensure_input(&self, status: &Value) -> Result<(u32, &'static str)> {
@@ -681,6 +711,7 @@ impl Client {
             }
         }
     }
+
     /// Replace a running service whose build differs from the installed
     /// executable through its authenticated shutdown. The replacement stays
     /// a pending mutation until it is ready, current and holds nothing.
@@ -739,6 +770,7 @@ impl Client {
             "build": state["inputService"]["build"],
         }))
     }
+
     /// Ask exactly `pid` to shut down over its authenticated socket, then wait
     /// until its endpoint is closed and the process is gone. Anything short of
     /// that is uncertain; a definitive refusal changed nothing.
@@ -777,6 +809,7 @@ impl Client {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
+
     /// Start the installed executable as the helper's input service. The caller
     /// records the launch as a pending mutation and settles it on success.
     pub async fn spawn_input(&self) -> Result<u32> {
@@ -831,6 +864,7 @@ impl Client {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
+
     pub async fn restart(&self) -> Result<Value> {
         let _ownership = self.controller.acquire(true)?;
         let before = self.identity().await?;
@@ -912,6 +946,7 @@ impl Client {
                 .uncertain()
             })?
     }
+
     async fn mutate(
         &self,
         request: Value,
@@ -987,6 +1022,15 @@ impl Client {
         }
         Ok(reply)
     }
+
+    /// Whether this shell may keep Atlas's own files: the controller lock
+    /// and the screenshots. An agent's sandbox may forbid both while the
+    /// helper itself is fine.
+    pub fn writable(&self) -> Result<()> {
+        self.controller.writable()?;
+        crate::control::probe_write(self.output_dir()?)
+    }
+
     fn record(&self, request: &Value, reply: &Value, elapsed: Duration) -> Result<()> {
         let directory = self.output_dir()?;
         let lock = OpenOptions::new()
