@@ -15,6 +15,7 @@ use std::{
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
     net::UnixStream,
+    signal::unix::{SignalKind, signal},
     sync::{Mutex, Semaphore},
     task::JoinSet,
 };
@@ -149,11 +150,15 @@ impl Service {
             }
             self.gate.cancel(None)?;
             let mut engine = self.engine.lock().await;
-            engine.rebind(current.clone())?;
+            let rebound = engine.rebind(current);
+            // Enforce whatever epoch the engine now holds, even when its
+            // release failed: the two never disagree, and the timer keeps
+            // retrying that release against the display it was bound to.
             *self
                 .epoch
                 .write()
-                .map_err(|_| Error::new("native", "Input identity failed"))? = current;
+                .map_err(|_| Error::new("native", "Input identity failed"))? = engine.epoch.clone();
+            rebound?;
             return Ok(json!({ "ok": true, "released": true }));
         }
         self.check()?;
@@ -252,12 +257,15 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     let mut timer = tokio::time::interval(Duration::from_millis(50));
     let slots = Arc::new(Semaphore::new(16));
     let mut tasks = JoinSet::new();
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    // Both listeners exist before the loop, so a signal that arrives between
+    // two passes is still delivered.
+    let mut interrupt = signal(SignalKind::interrupt())?;
+    let mut terminate = signal(SignalKind::terminate())?;
     // Every exit path, including an internal failure, closes ownership and
     // releases held input before returning.
     let outcome = loop {
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => break Ok(()),
+            _ = interrupt.recv() => break Ok(()),
             _ = terminate.recv() => break Ok(()),
             _ = service.stopping.notified() => break Ok(()),
             _ = timer.tick() => {
@@ -289,6 +297,12 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
                     continue;
                 }
                 let Ok(slot) = slots.clone().try_acquire_owned() else {
+                    // Nothing was dispatched: say so, rather than hang up in
+                    // a way the controller must treat as uncertain.
+                    super::endpoint::turn_away(stream, &json!(Error::new(
+                        "busy",
+                        "The input service is serving too many connections; try again",
+                    )));
                     continue;
                 };
                 let service = service.clone();

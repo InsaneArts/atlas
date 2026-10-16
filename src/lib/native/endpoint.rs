@@ -167,6 +167,21 @@ pub(crate) async fn bind(
     Ok((listener, endpoint))
 }
 
+/// Answer a connection there is no room to serve with `reply`, then close it.
+/// The reply is written once without waiting (a new socket's buffer holds
+/// it), so turning a client away never stalls the accept loop.
+pub(crate) fn turn_away(stream: UnixStream, reply: &serde_json::Value) {
+    use std::io::Write;
+    let Ok(mut line) = serde_json::to_vec(reply) else {
+        return;
+    };
+    line.push(b'\n');
+    // The descriptor stays non-blocking once taken from the runtime.
+    if let Ok(mut stream) = stream.into_std() {
+        let _ = stream.write(&line);
+    }
+}
+
 /// One newline-terminated request line of at most `limit` bytes, however the
 /// peer fragments it, within three seconds. Only new bytes are scanned.
 pub(crate) async fn read_line<R: AsyncRead + Unpin>(
@@ -240,6 +255,44 @@ mod tests {
         assert_eq!(second.code, "busy");
         drop(endpoint);
         assert!(!socket.exists(), "the endpoint removes its own socket");
+    }
+
+    /// A socket nothing listens on is replaced; anything that is not a
+    /// socket is refused and left alone.
+    #[tokio::test]
+    async fn a_stale_socket_is_replaced_and_a_non_socket_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("run/s.sock");
+        let uid = nix::unistd::getuid().as_raw();
+        fs::create_dir(socket.parent().unwrap()).unwrap();
+        fs::set_permissions(socket.parent().unwrap(), fs::Permissions::from_mode(0o700)).unwrap();
+        drop(std::os::unix::net::UnixListener::bind(&socket).unwrap());
+        let stale = fs::symlink_metadata(&socket).unwrap().ino();
+        let (_listener, endpoint) = bind(&socket, uid, "test service", Directory::Shared(0o700))
+            .await
+            .unwrap();
+        assert_ne!(fs::symlink_metadata(&socket).unwrap().ino(), stale);
+        UnixStream::connect(&socket).await.unwrap();
+        drop((_listener, endpoint));
+        fs::write(&socket, b"not a socket").unwrap();
+        let refused = bind(&socket, uid, "test service", Directory::Shared(0o700))
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(refused.code, "identity");
+        assert_eq!(fs::read(&socket).unwrap(), b"not a socket");
+    }
+
+    #[tokio::test]
+    async fn a_turned_away_client_reads_why() {
+        use tokio::io::AsyncReadExt;
+        let (mut client, server) = UnixStream::pair().unwrap();
+        turn_away(server, &serde_json::json!({"ok": false, "code": "busy"}));
+        let mut reply = String::new();
+        client.read_to_string(&mut reply).await.unwrap();
+        let line = reply.strip_suffix('\n').unwrap();
+        let value: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_eq!(value, serde_json::json!({"ok": false, "code": "busy"}));
     }
 
     #[tokio::test]
