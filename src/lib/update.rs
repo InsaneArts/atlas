@@ -14,23 +14,43 @@ use std::{
     process::Command,
 };
 
-const REPO: &str = "InsaneArts/atlas";
+/// The command that installs Atlas, served by its website.
+pub const INSTALL_COMMAND: &str = "curl -fsSL https://atlas.insanearts.io/install.sh | sh";
 
-/// Where releases come from.
+/// Where the website serves releases: one directory per version, and
+/// `latest/` for the newest.
+const RELEASES: &str = "https://atlas.insanearts.io/releases";
+
+/// What a missing newest release means.
+const NO_RELEASE: &str =
+    "Atlas has no public release yet. Check https://atlas.insanearts.io for news.";
+
+/// Where releases come from: a directory URL holding the archive and
+/// SHA256SUMS (https, or file:// for a local mirror).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Source {
-    /// A directory URL holding the archive and SHA256SUMS (file:// or https).
-    Mirror(String),
-    /// A GitHub release: the latest, or a tag.
-    GitHub { tag: Option<String> },
+pub struct Source {
+    base: String,
+    /// The website's newest release, which may not be published yet.
+    latest: bool,
 }
 
 impl Source {
-    /// The mirror in `ATLAS_DOWNLOAD_BASE`, else GitHub.
+    /// The mirror in `ATLAS_DOWNLOAD_BASE`, else the website's release
+    /// `tag`, or its newest.
     pub fn from_env(tag: Option<String>) -> Self {
         match std::env::var("ATLAS_DOWNLOAD_BASE") {
-            Ok(base) if !base.is_empty() => Self::Mirror(base.trim_end_matches('/').to_owned()),
-            _ => Self::GitHub { tag },
+            Ok(base) if !base.is_empty() => Self {
+                base: base.trim_end_matches('/').to_owned(),
+                latest: false,
+            },
+            _ => Self::website(tag.as_deref()),
+        }
+    }
+
+    fn website(tag: Option<&str>) -> Self {
+        Self {
+            base: format!("{RELEASES}/{}", tag.unwrap_or("latest")),
+            latest: tag.is_none(),
         }
     }
 }
@@ -42,8 +62,11 @@ fn problem(message: impl Into<String>) -> Error {
 /// The Atlas.app this executable belongs to.
 pub fn installed_app() -> Result<PathBuf> {
     let executable = std::env::current_exe().and_then(fs::canonicalize)?;
-    app_of(&executable)
-        .ok_or_else(|| problem("This atlas is not inside Atlas.app; install it with install.sh"))
+    app_of(&executable).ok_or_else(|| {
+        problem(format!(
+            "This atlas is not inside Atlas.app; install it with: {INSTALL_COMMAND}"
+        ))
+    })
 }
 
 /// The `atlas` executable inside the installed Atlas.app.
@@ -77,57 +100,26 @@ fn version(text: &str) -> Vec<u64> {
         .collect()
 }
 
-/// A GitHub token while the repository is private: the environment, else
-/// the GitHub CLI's login.
-fn token() -> Option<String> {
-    ["GITHUB_TOKEN", "GH_TOKEN"]
-        .iter()
-        .find_map(|name| std::env::var(name).ok().filter(|token| !token.is_empty()))
-        .or_else(|| {
-            let output = Command::new("gh").args(["auth", "token"]).output().ok()?;
-            let token = String::from_utf8(output.stdout).ok()?.trim().to_owned();
-            (output.status.success() && !token.is_empty()).then_some(token)
-        })
-}
-
 /// How long a download may take to connect, and in all.
 const CONNECT_TIMEOUT: &str = "30";
 const DOWNLOAD_TIMEOUT: &str = "900";
 
 /// Download `url` to `output` over HTTPS only (redirects too), or from a
-/// local file:// mirror. A token travels to curl as a config line on its
-/// standard input, never in the command line other accounts can read.
-fn curl(url: &str, output: &Path, accept: &str, token: Option<&str>) -> Result<()> {
-    use std::{io::Write, process::Stdio};
+/// local file:// mirror.
+fn curl(url: &str, output: &Path) -> Result<()> {
     let protocols = if url.starts_with("file://") {
         "=file"
     } else {
         "=https"
     };
-    let mut command = Command::new("/usr/bin/curl");
-    command
+    let finished = Command::new("/usr/bin/curl")
         .args(["-fsSL", "--proto", protocols, "--proto-redir", "=https"])
         .args(["--connect-timeout", CONNECT_TIMEOUT])
         .args(["--max-time", DOWNLOAD_TIMEOUT])
-        .args(["-H", &format!("Accept: {accept}"), "-o"])
+        .arg("-o")
         .arg(output)
-        .stderr(Stdio::piped());
-    if token.is_some() {
-        command.args(["-K", "-"]).stdin(Stdio::piped());
-    }
-    let mut child = command.arg(url).spawn()?;
-    if let (Some(token), Some(mut stdin)) = (token, child.stdin.take()) {
-        let quoted = token.replace('\\', "\\\\").replace('"', "\\\"");
-        let written =
-            stdin.write_all(format!("header = \"Authorization: Bearer {quoted}\"\n").as_bytes());
-        drop(stdin);
-        if let Err(error) = written {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(error.into());
-        }
-    }
-    let finished = child.wait_with_output()?;
+        .arg(url)
+        .output()?;
     if finished.status.success() {
         return Ok(());
     }
@@ -136,6 +128,16 @@ fn curl(url: &str, output: &Path, accept: &str, token: Option<&str>) -> Result<(
         "" => format!("Could not download {url}"),
         said => format!("Could not download {url}: {said}"),
     }))
+}
+
+/// A newest release the website does not have yet is not published, not a
+/// failed download.
+fn unpublished(error: Error, latest: bool) -> Error {
+    if latest && error.error.contains("returned error: 404") {
+        problem(NO_RELEASE)
+    } else {
+        error
+    }
 }
 
 /// Run a tool, failing with `why` if it does not succeed.
@@ -162,61 +164,20 @@ fn scratch() -> Result<PathBuf> {
 
 /// Download the release archive and its sums into `work`; the archive's name.
 fn download(source: &Source, work: &Path) -> Result<String> {
+    let base = &source.base;
     let sums = work.join("SHA256SUMS");
-    match source {
-        Source::Mirror(base) => {
-            curl(&format!("{base}/SHA256SUMS"), &sums, "*/*", None)?;
-            // The name becomes a path: accept only a plain archive name.
-            let name = fs::read_to_string(&sums)?
-                .lines()
-                .next()
-                .and_then(|line| line.split_whitespace().nth(1))
-                .filter(|name| !name.contains('/') && archive_version(name).is_some())
-                .map(str::to_owned)
-                .ok_or_else(|| problem("SHA256SUMS does not name an Atlas archive"))?;
-            curl(&format!("{base}/{name}"), &work.join(&name), "*/*", None)?;
-            Ok(name)
-        }
-        Source::GitHub { tag } => {
-            let token = token();
-            let api = match tag {
-                Some(tag) => format!("https://api.github.com/repos/{REPO}/releases/tags/{tag}"),
-                None => format!("https://api.github.com/repos/{REPO}/releases/latest"),
-            };
-            let release = work.join("release.json");
-            curl(
-                &api,
-                &release,
-                "application/vnd.github+json",
-                token.as_deref(),
-            )
-            .map_err(|error| {
-                problem(format!(
-                    "Could not read the release ({}); set GITHUB_TOKEN while the repository is \
-                     private",
-                    error.error
-                ))
-            })?;
-            let release: Value = serde_json::from_slice(&fs::read(&release)?)?;
-            let asset = |wanted: &dyn Fn(&str) -> bool| {
-                release["assets"].as_array().and_then(|assets| {
-                    assets.iter().find_map(|asset| {
-                        let name = asset["name"].as_str()?;
-                        let url = asset["url"].as_str()?;
-                        wanted(name).then(|| (name.to_owned(), url.to_owned()))
-                    })
-                })
-            };
-            let (_, sums_url) = asset(&|name| name == "SHA256SUMS")
-                .ok_or_else(|| problem("The release has no SHA256SUMS"))?;
-            let (name, url) = asset(&|name| archive_version(name).is_some())
-                .ok_or_else(|| problem("The release has no Atlas archive"))?;
-            let octets = "application/octet-stream";
-            curl(&sums_url, &sums, octets, token.as_deref())?;
-            curl(&url, &work.join(&name), octets, token.as_deref())?;
-            Ok(name)
-        }
-    }
+    curl(&format!("{base}/SHA256SUMS"), &sums)
+        .map_err(|error| unpublished(error, source.latest))?;
+    // The name becomes a path: accept only a plain archive name.
+    let name = fs::read_to_string(&sums)?
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .filter(|name| !name.contains('/') && archive_version(name).is_some())
+        .map(str::to_owned)
+        .ok_or_else(|| problem("SHA256SUMS does not name an Atlas archive"))?;
+    curl(&format!("{base}/{name}"), &work.join(&name))?;
+    Ok(name)
 }
 
 /// Verify the archive against SHA256SUMS, unpack it and check the app.
@@ -471,6 +432,35 @@ mod tests {
     }
 
     #[test]
+    fn releases_come_from_the_website() {
+        assert_eq!(
+            Source::website(None),
+            Source {
+                base: "https://atlas.insanearts.io/releases/latest".into(),
+                latest: true,
+            }
+        );
+        assert_eq!(
+            Source::website(Some("0.2.0")),
+            Source {
+                base: "https://atlas.insanearts.io/releases/0.2.0".into(),
+                latest: false,
+            }
+        );
+        assert!(INSTALL_COMMAND.contains("https://atlas.insanearts.io/install.sh"));
+    }
+
+    #[test]
+    fn a_missing_newest_release_is_not_yet_published() {
+        let missing =
+            || problem("Could not download x: curl: (22) The requested URL returned error: 404");
+        assert_eq!(unpublished(missing(), true).error, NO_RELEASE);
+        assert_ne!(unpublished(missing(), false).error, NO_RELEASE);
+        let offline = problem("Could not download x: curl: (6) Could not resolve host");
+        assert_ne!(unpublished(offline, true).error, NO_RELEASE);
+    }
+
+    #[test]
     fn only_an_app_executable_belongs_to_an_app() {
         assert_eq!(
             app_of(Path::new("/Applications/Atlas.app/Contents/MacOS/atlas")),
@@ -615,10 +605,10 @@ mod tests {
     fn downloads_report_why_they_failed() {
         let dir = tempfile::tempdir().unwrap();
         let missing = format!("file://{}/missing", dir.path().display());
-        let error = curl(&missing, &dir.path().join("out"), "*/*", None).unwrap_err();
+        let error = curl(&missing, &dir.path().join("out")).unwrap_err();
         assert!(error.error.starts_with("Could not download"));
         assert!(error.error.contains("curl"), "{}", error.error);
-        let plain = curl("http://127.0.0.1:9/x", &dir.path().join("out"), "*/*", None).unwrap_err();
+        let plain = curl("http://127.0.0.1:9/x", &dir.path().join("out")).unwrap_err();
         assert!(
             plain.error.contains("Could not download"),
             "{}",
@@ -627,7 +617,7 @@ mod tests {
         let source = dir.path().join("source");
         fs::write(&source, b"bytes").unwrap();
         let local = format!("file://{}", source.display());
-        curl(&local, &dir.path().join("copy"), "*/*", None).unwrap();
+        curl(&local, &dir.path().join("copy")).unwrap();
         assert_eq!(fs::read(dir.path().join("copy")).unwrap(), b"bytes");
     }
 

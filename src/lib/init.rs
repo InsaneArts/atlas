@@ -667,10 +667,11 @@ fn app_step(done_steps: &mut Vec<Value>) -> Result<PathBuf> {
     // Checked before anything is set up: macOS keeps the helper's permissions
     // only for Atlas signed by its Developer ID.
     if !setup::developer_id(&executable) {
-        return Err(problem(
-            "This Atlas.app is not signed by Atlas's developer. Install Atlas with install.sh \
-             (or atlas update), then run atlas init again.",
-        ));
+        return Err(problem(format!(
+            "This Atlas.app is not signed by Atlas's developer. Install Atlas with: {} (or \
+             atlas update), then run atlas init again.",
+            crate::update::INSTALL_COMMAND
+        )));
     }
     let linked = link_command(&executable)?;
     done("Atlas.app", &text::tilde(crate::update::installed_app()?));
