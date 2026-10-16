@@ -21,8 +21,9 @@ screen and instead of guessing:
 - **To run anything that would disturb the person**: apps that open windows or
   take focus, installers, first-launch flows, menu bar extras, login items,
   commands that pop dialogs or touch the clipboard.
-- **To check a web app in a real Mac browser**: the helper shares this Mac's
-  network, so `atlas open --app Safari http://localhost:3000` works.
+- **To run a web app's native wrapper or installer**: the helper shares this
+  Mac's network. Web pages themselves stay blank there (see Limits), so test
+  a web app's pages another way.
 
 Do not use it for unit tests, builds, or files and logs you can read directly.
 Never act on the person's own desktop; Atlas cannot, and you must not try.
@@ -58,7 +59,9 @@ the Atlas menu bar item, or open the viewer window with `atlas monitor`.
 
 - `atlas screenshot` saves a PNG and prints its `path`. Open the image and look
   at it; never assume what is on screen.
-- `atlas apps` lists the running apps by name: the names `--app` takes.
+- `atlas apps` lists the running apps by name: the names `--app` takes. The
+  ordinary apps are those with `policy: "regular"`; the rest are background
+  processes.
 - `atlas windows [--app NAME]` lists windows front to back with bounds.
 - `atlas elements --app NAME [--role AXButton] [--name LABEL]` lists
   accessibility elements with roles, names, values and frames, including the
@@ -82,7 +85,8 @@ screenshot pixels by multiplying by `pointsPerPixel`.
 - Otherwise `atlas click X Y [--button right] [--count 2] [--modifiers cmd]`.
 - `atlas type "text"` (or `--stdin` for long text), `atlas key cmd+s`
   (`key escape return` presses several; `cmd++` is Command and plus),
-  `atlas drag FX FY TX TY`, `atlas scroll X Y --dy -3`.
+  `atlas drag FX FY TX TY`, `atlas scroll X Y --dy -3` (at most 100 lines a
+  call). `atlas input` sends up to 32 actions that finish within two seconds.
 - `atlas open --app NAME [FILE|URL]`, then `atlas wait --app NAME`, which
   waits for a window. A menu bar app may start with none: open one from its
   menu bar item.
@@ -201,6 +205,12 @@ unless you looked at it in the helper.
 - The helper's Desktop, Documents and Downloads are protected by macOS: `run`
   gets "Operation not permitted" there. Keep files elsewhere in its home, such
   as `$HOME/atlas-work`.
+- Web pages do not draw in the helper: Safari and every other WebKit view
+  (Dictionary, help windows, apps built on web views) show a blank area and
+  list no elements, because macOS reports the hidden login's windows as not
+  visible and WebKit then stops drawing (`doctor` →
+  `capabilities.webContent`). Native windows are unaffected. Test a web app's
+  pages another way, and report them as not checked.
 - Credentials and app sign-ins are never copied from the person's account.
 - Audio plays on the person's speakers.
 - Some things are shared with the person's account. The process list is the
@@ -212,7 +222,8 @@ unless you looked at it in the helper.
 - The helper cannot read the unified log (`log show`); it is a standard
   account. The log holds the helper's messages too, so read it from your own
   shell (outside your sandbox, if it blocks this):
-  `log show --last 5m --predicate 'process == "App"'`.
+  `/usr/bin/log show --last 5m --predicate 'process == "App"'` (the full
+  path: `log` is also a zsh builtin).
 - An app's notification prompt in the helper is a permission: never answer it
   yourself. Until the person allows it there, check a notification's effect
   instead.

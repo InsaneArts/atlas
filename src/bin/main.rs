@@ -279,10 +279,10 @@ enum Command {
         x: f64,
         /// Display point Y.
         y: f64,
-        /// Lines to scroll sideways; negative scrolls left.
+        /// Lines to scroll sideways, at most 100; negative scrolls left.
         #[arg(long, default_value_t = 0, allow_hyphen_values = true)]
         dx: i32,
-        /// Lines to scroll; negative scrolls up.
+        /// Lines to scroll, at most 100; negative scrolls up.
         #[arg(long, default_value_t = 0, allow_hyphen_values = true)]
         dy: i32,
     },

@@ -29,6 +29,7 @@ pub struct Transport {
     /// directories, so the kernel-reported peer, not the reply, proves identity.
     pub peer_uid: u32,
 }
+
 pub struct Pending {
     stream: UnixStream,
     deadline: Instant,
@@ -58,6 +59,7 @@ impl Transport {
             started,
         })
     }
+
     pub async fn call(&self, request: &Value) -> Result<Value> {
         self.connect()
             .await?
@@ -107,6 +109,7 @@ impl Pending {
             })?
             .map_err(Error::uncertain)
     }
+
     async fn receive(&mut self) -> Result<Value> {
         let mut pending = Vec::new();
         let mut total = 0;
@@ -194,11 +197,17 @@ pub fn run_output(reply: &Value, limit: usize) -> std::result::Result<Vec<u8>, O
 }
 
 /// A helper `run` reply with its output decoded into an `output` string (lossy
-/// UTF-8, at most 1 MiB), so callers need not decode base64 events.
+/// UTF-8, at most 1 MiB) in place of the base64 events it came in, so callers
+/// need not decode them and never read them twice. Events stay only when
+/// they could not be decoded.
 pub fn with_output(mut reply: Value) -> Value {
     if let Ok(output) = run_output(&reply, 1 << 20) {
         reply["output"] = json!(String::from_utf8_lossy(&output));
+        if let Some(object) = reply.as_object_mut() {
+            object.remove("events");
+        }
     }
+
     reply
 }
 
@@ -272,11 +281,18 @@ mod tests {
         }
         let huge = json!({"events": [{"event": "output", "data": "A".repeat(4096)}]});
         assert_eq!(run_output(&huge, 16), Err(OutputError::Oversized));
-        assert_eq!(with_output(reply.clone())["output"], "hello");
+        let decoded = with_output(reply.clone());
+        assert_eq!(decoded["output"], "hello");
         assert!(
-            with_output(json!({"events": [{"event": "output", "data": 7}]}))
-                .get("output")
-                .is_none()
+            decoded.get("events").is_none(),
+            "decoded events are not repeated"
+        );
+
+        let undecodable = with_output(json!({"events": [{"event": "output", "data": 7}]}));
+        assert!(undecodable.get("output").is_none());
+        assert!(
+            undecodable.get("events").is_some(),
+            "what could not be decoded stays"
         );
     }
 }

@@ -190,6 +190,13 @@ pub fn assess(record: Option<&Record>, current: Option<&Generation>, at: u64) ->
     })
 }
 
+/// What doctor says of web content. WebKit stops drawing a page whose
+/// window macOS reports as not visible, which is every window of a hidden
+/// login; a page then shows blank and has no accessibility elements.
+const WEB_CONTENT: &str = "Web pages (Safari and other WebKit views) are known to draw only \
+                           while a Screen Sharing session is connected to the helper; \
+                           otherwise they stay blank and out of elements.";
+
 /// Doctor's native-dialog assessment for a status snapshot.
 pub fn native_dialogs(status: &Value, uid: u32) -> Value {
     let record = record_path(uid)
@@ -205,6 +212,10 @@ pub fn doctor(status: Value, uid: u32) -> Value {
     let native = native_dialogs(&status, uid);
     let mut report = crate::session::diagnose(status, uid);
     report["capabilities"]["nativeDialogs"] = native;
+    report["capabilities"]["webContent"] = json!({
+        "state": "unknown",
+        "reason": WEB_CONTENT,
+    });
     report
 }
 
@@ -272,9 +283,11 @@ impl Fixture {
         serde_json::from_slice(&read_bounded(&self.directory.join(name), MAX_FIXTURE_RECORD).ok()?)
             .ok()
     }
+
     fn state(&self) -> Value {
         self.read("state.json").unwrap_or(Value::Null)
     }
+
     /// The panel observer's latest scan of `attempt`, if it is fresh.
     fn observed(&self, attempt: &str) -> Option<Value> {
         let observed = self.read("panel-observer.json")?;
@@ -293,6 +306,7 @@ impl Fixture {
             && ms.saturating_sub(finished) <= 1500)
             .then_some(observed)
     }
+
     fn completion(&self, attempt: &str, kind: &str) -> Option<Value> {
         fixture_text(&self.directory.join("events.jsonl"))?
             .lines()
@@ -301,6 +315,7 @@ impl Fixture {
                 event["attemptID"] == attempt && event["event"] == format!("{kind}Closed")
             })
     }
+
     fn file(&self, name: &str) -> PathBuf {
         self.directory.join(name)
     }
@@ -377,9 +392,11 @@ impl Canary<'_> {
     fn at(&self, stage: &str) {
         *self.stage.borrow_mut() = stage.to_owned();
     }
+
     fn stage(&self) -> String {
         self.stage.borrow().clone()
     }
+
     fn check(&self, kind: &str, outcome: Result<()>) -> Check {
         Check {
             kind: kind.to_owned(),
@@ -388,18 +405,22 @@ impl Canary<'_> {
             error: outcome.err().map(|error| error.error),
         }
     }
+
     async fn run(&self, argv: Vec<String>) -> Result<Value> {
         self.client.run_owned(self.ownership, argv).await
     }
+
     async fn keys(&self, actions: Value) -> Result<()> {
         self.client
             .input_owned(self.ownership, &actions, &self.epoch)
             .await
             .map(|_| ())
     }
+
     async fn press(&self, key: &str) -> Result<()> {
         self.keys(json!([{ "type": "key", "key": key }])).await
     }
+
     async fn capture(&mut self, name: &str) {
         if let Ok(frame) = self.client.frame(Some(1600)).await
             && let Ok(directory) = self.client.output_dir()
@@ -410,6 +431,7 @@ impl Canary<'_> {
             }
         }
     }
+
     async fn ready(&self) -> Result<()> {
         self.at("fixture becomes ready");
         let fixture = &self.fixture;
@@ -422,6 +444,7 @@ impl Canary<'_> {
         })
         .await
     }
+
     /// The helper's on-screen windows, front to back.
     async fn windows(&self) -> Result<Vec<Window>> {
         let probe = self.client.config.identity_probe.to_string_lossy();
@@ -431,6 +454,7 @@ impl Canary<'_> {
         crate::native::windows::from_probe(&reply)
             .ok_or_else(|| problem("The helper window list is unavailable"))
     }
+
     fn display(&self) -> Bounds {
         Bounds {
             x: 0.0,
@@ -439,6 +463,7 @@ impl Canary<'_> {
             height: self.epoch.display.height,
         }
     }
+
     /// The fixture's ordinary window in a fresh window list.
     fn fixture_window(&self, windows: &[Window]) -> Option<i64> {
         let pid = i64::from(self.fixture.pid);
@@ -447,6 +472,7 @@ impl Canary<'_> {
             .find(|window| window.pid == pid && window.layer == 0)
             .map(|window| window.number)
     }
+
     /// Click an uncovered part of the fixture's window until it is the
     /// frontmost app window. A fresh app launched from a daemon is not
     /// activated by macOS on its own, and a panel may have lost focus.
@@ -472,6 +498,7 @@ impl Canary<'_> {
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
     }
+
     /// Centre the focused fixture with its own shortcut, so the text field
     /// and panels land on the display rather than wherever it opened.
     async fn center(&self) -> Result<()> {
@@ -484,6 +511,7 @@ impl Canary<'_> {
         })
         .await
     }
+
     /// Escape any panel still presented and confirm it closed; a check never
     /// starts on top of a previous panel or sheet. The fixture is brought
     /// forward first so the Escape cannot reach another application.
@@ -506,6 +534,7 @@ impl Canary<'_> {
         })
         .await
     }
+
     /// Open a panel with `shortcut` and return its new attempt ID once both
     /// AppKit and the AX observer show it focused with Cancel enabled.
     async fn open_panel(&self, kind: &str, shortcut: &str) -> Result<String> {
@@ -538,6 +567,7 @@ impl Canary<'_> {
         .await?;
         Ok(attempt)
     }
+
     async fn confirm(&self, kind: &str, attempt: &str, expected: &Path) -> Result<()> {
         if self.fixture.completion(attempt, kind).is_none() {
             self.at(&format!("{kind} confirmation enabled"));
@@ -570,6 +600,7 @@ impl Canary<'_> {
         })
         .await
     }
+
     async fn save(&mut self) -> Result<()> {
         let expected = self.fixture.file("atlas-fixture.txt");
         self.at("fixture text receives focus and input");
@@ -609,6 +640,7 @@ impl Canary<'_> {
         }
         Ok(())
     }
+
     async fn open(&mut self) -> Result<()> {
         let expected = self.fixture.file("atlas-open-fixture.txt");
         self.at("open fixture file prepared");
@@ -652,6 +684,7 @@ impl Canary<'_> {
         }
         Ok(())
     }
+
     /// One independent check: no leftover panel, the fixture in front, then
     /// the operation itself.
     async fn attempt(&mut self, kind: &str) -> Check {
@@ -668,6 +701,7 @@ impl Canary<'_> {
         .await;
         self.check(kind, outcome)
     }
+
     /// Copy the fixture's own records next to the screenshots before cleanup
     /// removes its directory.
     fn archive(&mut self) -> Result<()> {
@@ -694,6 +728,7 @@ impl Canary<'_> {
         self.evidence.push(directory);
         Ok(())
     }
+
     /// Stop exactly the fixture this canary launched, confirm it exited, and
     /// only then remove its canary directory, unless its evidence could not
     /// be archived elsewhere.
@@ -875,6 +910,7 @@ mod tests {
             boot: 5,
         }
     }
+
     fn check(kind: &str, passed: bool) -> Check {
         Check {
             kind: kind.into(),
@@ -883,6 +919,7 @@ mod tests {
             error: None,
         }
     }
+
     fn record(save: bool, open: bool, observed_at: u64) -> Record {
         Record {
             observed_at,
