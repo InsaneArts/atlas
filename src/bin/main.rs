@@ -1333,6 +1333,16 @@ fn switch(
     }
 }
 
+/// The configuration, or None when Atlas is not set up here yet. A file
+/// that is there but does not load is an error, never "not set up".
+fn set_up(config: &std::path::Path) -> Result<Option<Config>> {
+    match Config::load(config) {
+        Ok(loaded) => Ok(Some(loaded)),
+        Err(error) if error.code == "config" => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 /// Update the app, then hand over to the new executable, so the steps that
 /// move the helper onto it are always the new version's own.
 fn update(
@@ -1345,9 +1355,9 @@ fn update(
     // Nothing else may control the helper while its app is replaced: no
     // viewer or agent, and no action of unknown outcome. The new version's
     // steps take control again one by one.
-    let exclusion = match Config::load(config) {
-        Ok(loaded) => Some(Client::new(loaded)?.controller.acquire(false)?),
-        Err(_) => None,
+    let exclusion = match set_up(config)? {
+        Some(loaded) => Some(Client::new(loaded)?.controller.acquire(false)?),
+        None => None,
     };
     let spinner = Spinner::new("Checking for an update…");
     let mut report = atlas::update::install(&source, allow_unnotarized, force)?;
@@ -1403,7 +1413,7 @@ fn update(
 /// recorded) setup's verification of the new signed build. Stops at the
 /// first failure and names it.
 fn update_finish(config: &std::path::Path) -> Result<Value> {
-    let Ok(loaded) = Config::load(config) else {
+    let Some(loaded) = set_up(config)? else {
         return Ok(json!({"ok": true, "next": "atlas init"}));
     };
     let executable = std::env::current_exe()?;
@@ -1577,6 +1587,19 @@ mod tests {
         };
         assert_eq!((port, render), (8765, Some(PathBuf::from("out"))));
         assert!(parse(&["menubar", "--port", "9000"]).is_ok());
+    }
+
+    /// Only missing settings mean "not set up"; a broken file is an error.
+    #[test]
+    fn finishing_an_update_needs_settings_that_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("config.toml");
+        let finished = update_finish(&missing).unwrap();
+        assert_eq!(finished, json!({"ok": true, "next": "atlas init"}));
+        let broken = dir.path().join("broken.toml");
+        std::fs::write(&broken, "helper_uid = [").unwrap();
+        let error = update_finish(&broken).unwrap_err();
+        assert_eq!(error.code, "config-invalid", "{}", error.error);
     }
 
     #[test]
