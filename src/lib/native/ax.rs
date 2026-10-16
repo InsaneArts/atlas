@@ -32,10 +32,18 @@ const TEXT_LIMIT: CFIndex = 200;
 /// AX errors meaning the element could not be read at all: the request could
 /// not complete (timeout or unresponsive app), the element vanished, or the
 /// API is disabled. Any of these makes the whole scan incomplete.
-const INCOMPLETE: [i32; 3] = [-25204, -25202, -25211];
+const INCOMPLETE: [AXError; 3] = [
+    AXError::CannotComplete,
+    AXError::InvalidUIElement,
+    AXError::APIDisabled,
+];
 /// AX errors meaning the element simply lacks the attribute: no value,
 /// unsupported, not implemented.
-const ABSENT: [i32; 3] = [-25212, -25205, -25208];
+const ABSENT: [AXError; 3] = [
+    AXError::NoValue,
+    AXError::AttributeUnsupported,
+    AXError::NotImplemented,
+];
 /// Attributes a selector matches on; an element whose selector attribute
 /// fails to read (other than being absent) may be an unseen match.
 const SELECTORS: [&str; 4] = ["AXRole", "AXTitle", "AXDescription", "AXIdentifier"];
@@ -81,25 +89,24 @@ struct Scan {
     truncated: Vec<String>,
     errors: std::collections::BTreeMap<String, usize>,
     /// The last AX error any read returned.
-    last_error: Option<i32>,
+    last_error: Option<AXError>,
 }
 
 impl Scan {
     /// Whether another AX request may start; past the deadline the scan is
     /// incomplete and nothing more is asked.
     fn open(&mut self) -> bool {
-        if Instant::now() >= self.deadline {
-            self.incomplete = true;
-        }
-        !self.incomplete || Instant::now() < self.deadline
+        let open = Instant::now() < self.deadline;
+        self.incomplete |= !open;
+        open
     }
     fn failed(&mut self, status: AXError, attribute: &str) {
-        self.last_error = Some(status.0);
+        self.last_error = Some(status);
         let key = format!("{attribute}:{}", status.0);
         *self.errors.entry(key).or_default() += 1;
-        if INCOMPLETE.contains(&status.0) {
+        if INCOMPLETE.contains(&status) {
             self.incomplete = true;
-        } else if !ABSENT.contains(&status.0) && SELECTORS.contains(&attribute) {
+        } else if !ABSENT.contains(&status) && SELECTORS.contains(&attribute) {
             self.unreadable.push(attribute.to_owned());
         }
     }
@@ -194,7 +201,7 @@ impl Scan {
         let status = unsafe { element.attribute_value_count(&name, NonNull::from(&mut count)) };
         if status != AXError::Success {
             self.failed(status, attribute);
-            if !ABSENT.contains(&status.0) {
+            if !ABSENT.contains(&status) {
                 self.incomplete = true;
             }
             return Vec::new();
@@ -668,6 +675,35 @@ mod tests {
     fn null_references_are_never_owned() {
         // SAFETY: null is never adopted.
         assert!(unsafe { adopt::<CFType>(std::ptr::null()) }.is_none());
+    }
+
+    /// The named AX errors are the raw codes the scan has always sorted on.
+    #[test]
+    fn ax_error_lists_keep_their_codes() {
+        assert_eq!(INCOMPLETE.map(|e| e.0), [-25204, -25202, -25211]);
+        assert_eq!(ABSENT.map(|e| e.0), [-25212, -25205, -25208]);
+    }
+
+    /// Past the deadline nothing more is asked and the scan is incomplete.
+    #[test]
+    fn a_scan_closes_at_its_deadline() {
+        let mut scan = Scan {
+            deadline: Instant::now() + std::time::Duration::from_secs(60),
+            incomplete: false,
+            unreadable: Vec::new(),
+            truncated: Vec::new(),
+            errors: Default::default(),
+            last_error: None,
+        };
+        assert!(scan.open() && !scan.incomplete);
+        scan.incomplete = true;
+        assert!(
+            scan.open(),
+            "an incomplete scan may still ask until its deadline"
+        );
+        scan.deadline = Instant::now();
+        scan.incomplete = false;
+        assert!(!scan.open() && scan.incomplete);
     }
 
     /// Bound `text` as a CFString would be.
