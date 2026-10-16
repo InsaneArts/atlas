@@ -624,40 +624,7 @@ pub fn accept(controller_uid: u32, controller_name: &str) -> Result<Value> {
         controller: controller.name.clone(),
     })?;
     let agent = expected_agent(&layout, controller.uid)?;
-    // An earlier Atlas's job (another app, another account, an older
-    // version) is set aside first; its definition is kept as a backup.
-    let inspected = run(&Request::Inspect {
-        uid,
-        labels: vec![LABEL.to_owned()],
-    })?;
-    let earlier = &inspected["jobs"][LABEL];
-    let expected = setup::helper::text_sha256(&setup::helper::plist(&agent, &layout.logs()));
-    let retired = earlier["plistSha256"]
-        .as_str()
-        .filter(|sha| *sha != expected)
-        .map(str::to_owned);
-    if let Some(sha256) = &retired {
-        run(&Request::Retire {
-            uid,
-            label: LABEL.to_owned(),
-            sha256: sha256.clone(),
-            missing_ok: false,
-        })?;
-    }
-    let installed = match run(&Request::Install { agent }) {
-        Ok(installed) => installed,
-        Err(error) => {
-            // The earlier job comes back when the new one cannot go in.
-            if let Some(sha256) = retired {
-                let _ = run(&Request::Restore {
-                    uid,
-                    label: LABEL.to_owned(),
-                    sha256,
-                });
-            }
-            return Err(error);
-        }
-    };
+    let installed = init::install_job(run, uid, agent, &layout.logs())?;
     // Install waits for the job to load, not to run; a job launchd has not
     // started yet (or gave up on earlier) is started now.
     if installed["pid"].is_null() {
