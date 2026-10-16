@@ -300,10 +300,9 @@ pub async fn open(
     });
     let mut wanted: Vec<handoff::Target> = app_target.into_iter().collect();
     wanted.extend(targets.iter().map(|target| handoff::resolve(target)));
-    let mut copied = Vec::new();
-    let mut given = handoff::hand_over(client, &ownership, wanted, &running, &mut copied)
-        .await?
-        .into_iter();
+    let handed = handoff::hand_over(client, &ownership, wanted, &running).await?;
+    let copied = handed.copied;
+    let mut given = handed.paths.into_iter();
     if app.is_some() {
         argv.extend(["-a".to_owned(), given.next().unwrap_or_default()]);
     }
