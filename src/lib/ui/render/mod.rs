@@ -151,9 +151,16 @@ pub fn error(error: &Error) -> String {
 }
 
 /// `✗ what went wrong` and, when the message does not already say, `→ what
-/// to do`.
+/// to do`. Messages can carry text from the helper, so each line is made
+/// safe to print.
 pub fn card(message: &str, code: Option<&str>, uncertain: bool) -> String {
-    let mut lines = vec![format!("{} {}", style::fail(), message.trim())];
+    let message = message
+        .trim()
+        .lines()
+        .map(text::printable)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut lines = vec![format!("{} {message}", style::fail())];
     let fix = if uncertain {
         Some(
             "It may or may not have happened, so don't repeat it. Take a screenshot, then run atlas restart.",
