@@ -72,20 +72,15 @@ code means and what to do.\n"
 /// The longest text a single `type` action accepts.
 const TYPE_LIMIT: usize = 256;
 
-fn button(button: Button) -> &'static str {
-    match button {
-        Button::Left => "left",
-        Button::Middle => "middle",
-        Button::Right => "right",
-    }
-}
+/// How long a read-only look at the helper (its window list) may take.
+const PROBE_LIMIT: Duration = Duration::from_secs(5);
 
 pub fn click(x: f64, y: f64, which: Button, count: u8, modifiers: &[String]) -> Value {
     json!([{
         "type": "click",
         "x": x,
         "y": y,
-        "button": button(which),
+        "button": which,
         "count": count,
         "modifiers": modifiers,
     }])
@@ -98,13 +93,13 @@ pub fn drag(from: (f64, f64), to: (f64, f64), which: Button) -> Value {
         "fromY": from.1,
         "toX": to.0,
         "toY": to.1,
-        "button": button(which),
+        "button": which,
     }])
 }
 
 /// Text as `type` batches of at most 256 characters, never splitting a
 /// grapheme cluster (an emoji sequence or a letter with combining marks).
-pub fn type_batches(text: &str) -> Result<Vec<String>> {
+pub(crate) fn type_batches(text: &str) -> Result<Vec<String>> {
     let mut batches = Vec::new();
     let mut chunk = String::new();
     let mut length = 0;
@@ -232,8 +227,8 @@ impl WindowFilter {
 }
 
 /// The helper's on-screen windows, front to back, through a read-only probe.
-pub async fn windows(client: &Client) -> Result<Vec<Window>> {
-    windows_within(client, Duration::from_secs(5)).await
+pub(crate) async fn windows(client: &Client) -> Result<Vec<Window>> {
+    windows_within(client, PROBE_LIMIT).await
 }
 
 /// The window list, with the helper probe bounded by `limit`.
@@ -381,15 +376,11 @@ fn app_program(executable: &str) -> bool {
 
 /// The names of the selected processes that were (or, with `quit` false,
 /// were not) among the `signalled` ones, sorted, each once.
-fn names_by_quit(
-    processes: &[(u64, String, String, bool)],
-    signalled: &[u64],
-    quit: bool,
-) -> Vec<String> {
+fn names_by_quit(processes: &[Process], signalled: &[u64], quit: bool) -> Vec<String> {
     let mut names: Vec<String> = processes
         .iter()
-        .filter(|(pid, ..)| signalled.contains(pid) == quit)
-        .map(|(_, _, name, _)| name.clone())
+        .filter(|process| signalled.contains(&process.pid) == quit)
+        .map(|process| process.name.clone())
         .collect();
     names.sort();
     names.dedup();
@@ -422,13 +413,18 @@ pub enum Closing<'a> {
     All,
 }
 
-/// The running apps `closing` selects, as (pid, executable, name, whether
-/// it is protected).
-fn selected(
-    apps: &Value,
-    closing: Closing,
-    atlas: Option<&str>,
-) -> Vec<(u64, String, String, bool)> {
+/// A running app's process that `close` selected.
+#[derive(Debug, Clone, PartialEq)]
+struct Process {
+    pid: u64,
+    executable: String,
+    name: String,
+    /// Part of macOS or of Atlas, so never closed.
+    protected: bool,
+}
+
+/// The running apps `closing` selects.
+fn selected(apps: &Value, closing: Closing, atlas: Option<&str>) -> Vec<Process> {
     apps["apps"]
         .as_array()
         .into_iter()
@@ -457,15 +453,18 @@ fn selected(
             }
         })
         .filter_map(|running| {
-            Some((
-                running["pid"].as_u64()?,
-                running["executable"].as_str().unwrap_or("").to_owned(),
-                running["name"].as_str().unwrap_or("").to_owned(),
-                protected(running, atlas),
-            ))
+            Some(Process {
+                pid: running["pid"].as_u64()?,
+                executable: running["executable"].as_str().unwrap_or("").to_owned(),
+                name: running["name"].as_str().unwrap_or("").to_owned(),
+                protected: protected(running, atlas),
+            })
         })
         .collect()
 }
+
+/// How long `close` waits for the apps it signalled to quit.
+const QUIT_WAIT: Duration = Duration::from_secs(10);
 
 /// Quit apps in the helper: one by name (every process of it), or with
 /// [`Closing::All`] every app that is not part of macOS or Atlas. Waits
@@ -485,7 +484,7 @@ pub async fn close(client: &Client, closing: Closing<'_>) -> Result<Value> {
     let processes = selected(&apps, closing, atlas.as_deref());
     // The helper's session and Atlas's own services are never closed.
     if let Closing::App(app) = closing
-        && processes.iter().any(|(.., protected)| *protected)
+        && processes.iter().any(|process| process.protected)
     {
         return Err(Error::new(
             "input",
@@ -513,8 +512,8 @@ exit 0"#;
             QUIT.to_owned(),
             "sh".to_owned(),
         ];
-        for (pid, executable, ..) in &processes {
-            argv.extend([pid.to_string(), executable.clone()]);
+        for process in &processes {
+            argv.extend([process.pid.to_string(), process.executable.clone()]);
         }
         let reply = client.run_owned(&ownership, argv).await?;
         if reply["ok"] != true || reply["timedOut"] == true || reply["exitCode"] != 0 {
@@ -527,7 +526,7 @@ exit 0"#;
         // did not check out was left alone.
         quit = signalled(&run_output(&reply, 64 * 1024).unwrap_or_default());
         let pids = &quit;
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + QUIT_WAIT;
         loop {
             let apps = client.apps().await?;
             // One app is closed once no process of its name is left (a
@@ -535,8 +534,8 @@ exit 0"#;
             // gone, whatever started since.
             let mut left: Vec<String> = selected(&apps, closing, atlas.as_deref())
                 .into_iter()
-                .filter(|(pid, ..)| matches!(closing, Closing::App(_)) || pids.contains(pid))
-                .map(|(_, _, name, _)| name)
+                .filter(|process| matches!(closing, Closing::App(_)) || pids.contains(&process.pid))
+                .map(|process| process.name)
                 .collect();
             left.sort();
             left.dedup();
@@ -547,7 +546,11 @@ exit 0"#;
             if Instant::now() >= deadline {
                 return Err(Error::new(
                     "wait-failed",
-                    format!("{} did not quit within 10 seconds", left.join(", ")),
+                    format!(
+                        "{} did not quit within {} seconds",
+                        left.join(", "),
+                        QUIT_WAIT.as_secs()
+                    ),
                 ));
             }
             tokio::time::sleep(Duration::from_millis(200)).await;
@@ -607,7 +610,7 @@ pub async fn wait(
         // a second); a zero timeout is exactly one observation.
         let remaining = deadline.saturating_duration_since(Instant::now());
         let budget = if timeout.is_zero() {
-            Duration::from_secs(5)
+            PROBE_LIMIT
         } else {
             remaining.max(Duration::from_millis(500))
         };
@@ -683,7 +686,7 @@ pub struct ElementFilter {
 /// How an element's name matched a `--name`: only as the first part of a
 /// label that joins several, or whole. A whole match is the better one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum NameMatch {
+pub(crate) enum NameMatch {
     Leading,
     Exact,
 }
@@ -743,7 +746,7 @@ impl ElementFilter {
         .max()
     }
     /// How `element` matches, if it does.
-    pub fn match_of(&self, element: &Element) -> Option<NameMatch> {
+    pub(crate) fn match_of(&self, element: &Element) -> Option<NameMatch> {
         self.compare(element, &|_| false)
     }
     pub fn matches(&self, element: &Element) -> bool {
@@ -751,7 +754,7 @@ impl ElementFilter {
     }
     /// Whether `element` could match once attributes it failed to read are
     /// treated as unknown.
-    pub fn might_match(&self, element: &Element) -> bool {
+    pub(crate) fn might_match(&self, element: &Element) -> bool {
         let unknown = |attribute: &str| element.unreadable.iter().any(|a| a == attribute);
         self.compare(element, &unknown).is_some()
     }
@@ -844,7 +847,7 @@ async fn app_elements(client: &Client, pid: i64) -> Result<(Vec<Element>, bool)>
     let reply = client
         .inspect(vec![probe, "elements-info".into(), pid.to_string()])
         .await?;
-    let value = run_output(&reply, 8 << 20)
+    let mut value = run_output(&reply, 8 << 20)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         .ok_or_else(|| Error::new("elements", "The accessibility probe returned no result"))?;
@@ -857,7 +860,7 @@ async fn app_elements(client: &Client, pid: i64) -> Result<(Vec<Element>, bool)>
                 .to_owned(),
         ));
     }
-    let elements = serde_json::from_value(value["elements"].clone())
+    let elements = serde_json::from_value(value["elements"].take())
         .map_err(|_| Error::new("elements", "Malformed accessibility elements"))?;
     Ok((elements, value["truncated"] == true))
 }
@@ -1093,6 +1096,11 @@ mod tests {
 
     #[test]
     fn sugar_produces_valid_actions() {
+        assert_eq!(click(1.0, 2.0, Button::Right, 1, &[])[0]["button"], "right");
+        assert_eq!(
+            drag((1.0, 2.0), (3.0, 4.0), Button::Middle)[0]["button"],
+            "middle"
+        );
         for actions in [
             click(
                 10.0,
@@ -1282,7 +1290,7 @@ mod tests {
         let names = |closing| {
             selected(&apps, closing, Some("/Applications/Atlas.app"))
                 .into_iter()
-                .map(|(_, _, name, _)| name)
+                .map(|process| process.name)
                 .collect::<Vec<_>>()
         };
         assert_eq!(names(Closing::All), ["Calendar", "Safari", "Opie QA"]);
@@ -1302,10 +1310,16 @@ mod tests {
         ));
         assert!(!app_program("Notes.app/Contents/MacOS/Notes"));
         assert_eq!(signalled(b"12\n 34 \nnot a pid\n"), [12, 34]);
+        let process = |pid, name: &str| Process {
+            pid,
+            executable: format!("/{pid}"),
+            name: name.to_owned(),
+            protected: false,
+        };
         let processes = [
-            (1, "/a".to_owned(), "Notes".to_owned(), false),
-            (2, "/b".to_owned(), "Notes".to_owned(), false),
-            (3, "/c".to_owned(), "Safari".to_owned(), false),
+            process(1, "Notes"),
+            process(2, "Notes"),
+            process(3, "Safari"),
         ];
         assert_eq!(names_by_quit(&processes, &[1, 2], true), ["Notes"]);
         assert_eq!(names_by_quit(&processes, &[1, 2], false), ["Safari"]);
@@ -1320,7 +1334,7 @@ mod tests {
         assert_eq!(names(Closing::App("Finder")), ["Finder"], "refused later");
         assert_eq!(names(Closing::App("opie qa")), ["Opie QA"], "any case");
         assert!(names(Closing::App("Opie")).is_empty(), "whole names only");
-        assert!(selected(&apps, Closing::App("Finder"), None)[0].3);
+        assert!(selected(&apps, Closing::App("Finder"), None)[0].protected);
         // A development build, outside the app, still spares the installed
         // Atlas by its identifier.
         let installed = json!({"executable": "/Applications/Atlas.app/Contents/MacOS/atlas",
