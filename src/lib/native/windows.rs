@@ -12,6 +12,10 @@ use serde::{Deserialize, Serialize};
 /// bar, status item and context menus alike.
 pub const MENU_LAYER: i64 = 101;
 
+/// The layer of the menu bar itself, a window of the Window Server's that
+/// shows the frontmost app's titles.
+pub const MENU_BAR_LAYER: i64 = 24;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Bounds {
@@ -20,10 +24,12 @@ pub struct Bounds {
     pub width: f64,
     pub height: f64,
 }
+
 impl Bounds {
     pub fn contains(&self, x: f64, y: f64) -> bool {
         x >= self.x && y >= self.y && x < self.x + self.width && y < self.y + self.height
     }
+
     pub fn covers(&self, other: &Bounds) -> bool {
         self.x <= other.x
             && self.y <= other.y

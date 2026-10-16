@@ -70,7 +70,9 @@ not test on the person's desktop instead, and do not silently skip the check.
 3. `atlas screenshot` and look: an earlier session may have left windows
    open. `atlas close --all` quits every app bundle with a Dock icon and
    every menu bar app not made by Apple, login items included. Atlas and
-   macOS's own in /System/Library (Finder among them) stay.
+   macOS's own in /System/Library (Finder among them) stay. An app may still
+   bring back windows an earlier session left unsaved when it launches:
+   close those first (Cmd+W, then Cmd+Backspace in the keep-or-delete sheet).
 
 When you start something long, tell the person they can watch it live from
 the Atlas menu bar item, or open the viewer window with `atlas monitor`.
@@ -83,7 +85,8 @@ the Atlas menu bar item, or open the viewer window with `atlas monitor`.
 - `atlas windows [--app NAME]` lists windows front to back with bounds.
 - `atlas elements --app NAME [--role AXButton] [--name LABEL]` lists
   accessibility elements with roles, names, values and frames, including the
-  items of a menu the app has open (`menu: true`). Text is cut after 200
+  items of a menu the app has open (`menu: true`) and, while the app is in
+  front, its menu bar titles (role `AXMenuBarItem`). Text is cut after 200
   UTF-16 units; `truncated` names any attribute shown only in part, so read
   long documents from their file instead.
 
@@ -95,8 +98,10 @@ screenshot pixels by multiplying by `pointsPerPixel`.
 - Prefer `atlas click --app NAME --name LABEL [--role ROLE]`: it clicks one
   named element only if it is visible, and refuses ambiguity. A label that
   joins several parts ("QA Eject, Option-Space, 6 Slices") is also found by
-  its first part. With a menu open (menu bar, menu bar item or context menu),
-  it clicks that menu's items.
+  its first part. It opens a menu by its title (`--name Format
+  --role AXMenuBarItem`) and, with a menu open (menu bar, menu bar item or
+  context menu), clicks that menu's items. Buttons in a sheet work the same
+  way.
 - Otherwise `atlas click X Y [--button right] [--count 2] [--modifiers cmd]`.
 - `atlas type "text"` (or `--stdin` for long text), `atlas key cmd+s`
   (`key escape return` presses several; `cmd++` is Command and plus),
