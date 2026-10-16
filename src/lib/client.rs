@@ -144,8 +144,9 @@ impl Client {
         {
             shared_folder(parent)?;
         }
-        // Finding it current changes nothing, so it needs no exclusion and
-        // works while an earlier action still awaits recovery.
+        // A link already pointing at this executable (or this executable
+        // itself) changes nothing, so it needs no exclusion and works while
+        // an earlier action still awaits recovery. A copy is always replaced.
         if fs::canonicalize(target).ok().as_ref() == Some(&source) {
             return Ok(json!({ "ok": true, "path": target, "alreadyInstalled": true }));
         }
@@ -157,7 +158,6 @@ impl Client {
             .parent()
             .ok_or_else(|| Error::new("config", "Shared executable needs a parent directory"))?;
         fs::create_dir_all(parent)?;
-        let temporary = target.with_extension(format!("{}.new", crate::control::token()));
         // Atlas.app's executable is sealed with its bundle: a copy would
         // fail its signature, so the shared path links to it instead, and
         // follows the app through updates.
@@ -168,6 +168,7 @@ impl Client {
                     "The helper account cannot reach Atlas.app here; install it in /Applications",
                 ));
             }
+            let temporary = target.with_extension(format!("{}.new", crate::control::token()));
             let linked = std::os::unix::fs::symlink(&source, &temporary)
                 .and_then(|()| fs::rename(&temporary, target));
             if linked.is_err() {
@@ -176,24 +177,18 @@ impl Client {
             linked?;
             return Ok(json!({ "ok": true, "path": target, "linkedTo": source }));
         }
-        let result = (|| -> Result<()> {
-            let mut file = OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .mode(0o755)
-                .open(&temporary)?;
-            std::io::copy(&mut fs::File::open(source)?, &mut file)?;
-            file.set_permissions(fs::Permissions::from_mode(0o755))?;
-            file.sync_all()?;
+        crate::config::write_beside(
+            target,
+            0o755,
+            |file| {
+                std::io::copy(&mut fs::File::open(&source)?, file)?;
+                file.set_permissions(fs::Permissions::from_mode(0o755))?;
+                Ok(())
+            },
             // A running helper may still map the previous executable. Renaming
             // a fresh inode avoids modifying its code-signed pages in place.
-            fs::rename(&temporary, target)?;
-            Ok(())
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(&temporary);
-        }
-        result?;
+            |temporary| Ok(fs::rename(temporary, target)?),
+        )?;
         Ok(json!({ "ok": true, "path": target }))
     }
     /// Construction only validates; reads such as status and doctor never write.

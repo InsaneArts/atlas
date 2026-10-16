@@ -43,20 +43,12 @@ fn attended(program: &str, args: &[&str], why: &str) -> Result<()> {
         .ok_or_else(|| problem(why.to_owned()))
 }
 
-/// Like `attended`, but timestamped log lines on standard error (as
-/// sysadminctl writes) are dropped; anything else, such as a password
-/// question, is shown as it arrives. On failure the dropped lines are shown.
-fn quietly_attended(program: &str, args: &[&str], why: &str) -> Result<()> {
-    use std::io::{Read, Write};
-    let mut child = Command::new(program)
-        .args(args)
-        .stderr(std::process::Stdio::piped())
-        .spawn()?;
-    let mut stream = child
-        .stderr
-        .take()
-        .ok_or_else(|| problem("The command has no error output"))?;
-    let (sender, receiver) = std::sync::mpsc::channel::<Vec<u8>>();
+/// Read `stream` on a thread of its own, passing each chunk on as it
+/// arrives; the channel closes when the stream ends.
+pub(crate) fn forward(
+    mut stream: impl std::io::Read + Send + 'static,
+) -> std::sync::mpsc::Receiver<Vec<u8>> {
+    let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut chunk = [0u8; 4096];
         while let Ok(read @ 1..) = stream.read(&mut chunk) {
@@ -65,9 +57,23 @@ fn quietly_attended(program: &str, args: &[&str], why: &str) -> Result<()> {
             }
         }
     });
-    let log_line = |line: &[u8]| {
-        let text = String::from_utf8_lossy(line);
-        let bytes = text.as_bytes();
+    receiver
+}
+
+/// Like `attended`, but timestamped log lines on standard error (as
+/// sysadminctl writes) are dropped; anything else, such as a password
+/// question, is shown as it arrives. On failure the dropped lines are shown.
+fn quietly_attended(program: &str, args: &[&str], why: &str) -> Result<()> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    let stream = child
+        .stderr
+        .take()
+        .ok_or_else(|| problem("The command has no error output"))?;
+    let receiver = forward(stream);
+    let log_line = |bytes: &[u8]| {
         // "2026-10-11 14:28:19.767 sysadminctl[…]": a date, then a time.
         bytes.len() > 20
             && bytes[..4].iter().all(u8::is_ascii_digit)
@@ -298,7 +304,6 @@ pub(crate) fn proposed(helper: &setup::Account) -> Result<Config> {
 
 /// Write a new configuration atomically, readable only by this account.
 pub(crate) fn write_config(path: &Path, config: &Config) -> Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
     let parent = path
         .parent()
         .ok_or_else(|| problem("The configuration needs a directory"))?;
@@ -306,27 +311,19 @@ pub(crate) fn write_config(path: &Path, config: &Config) -> Result<()> {
         .recursive(true)
         .mode(0o700)
         .create(parent)?;
-    let temporary = parent.join(format!(".atlas.toml.{}", crate::control::token()));
-    let written = (|| -> Result<()> {
-        let mut file = fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .mode(0o600)
-            .open(&temporary)?;
-        file.write_all(config.to_toml()?.as_bytes())?;
-        file.sync_all()?;
+    let toml = config.to_toml()?;
+    config::write_beside(
+        path,
+        0o600,
+        |file| Ok(file.write_all(toml.as_bytes())?),
         // Never replaces a configuration that appeared meanwhile.
-        fs::hard_link(&temporary, path)?;
-        Ok(())
-    })();
-    let _ = fs::remove_file(&temporary);
-    written
+        |temporary| Ok(fs::hard_link(temporary, path)?),
+    )
 }
 
 /// Replace the configuration that named `previous` (its helper account is
 /// gone or changed), atomically, and only while the file still says so.
 pub(crate) fn replace_config(path: &Path, previous: &Config, config: &Config) -> Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
     // Replacing a link would leave the file it points to unchanged.
     if fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
         return Err(problem(format!(
@@ -335,29 +332,21 @@ pub(crate) fn replace_config(path: &Path, previous: &Config, config: &Config) ->
             text::tilde(path)
         )));
     }
-    let parent = path
-        .parent()
-        .ok_or_else(|| problem("The configuration needs a directory"))?;
-    let temporary = parent.join(format!(".atlas.toml.{}", crate::control::token()));
-    let written = (|| -> Result<()> {
-        let mut file = fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .mode(0o600)
-            .open(&temporary)?;
-        file.write_all(config.to_toml()?.as_bytes())?;
-        file.sync_all()?;
-        if Config::load(path).ok().as_ref() != Some(previous) {
-            return Err(problem(format!(
-                "{} changed while Atlas was updating it; run atlas init again",
-                text::tilde(path)
-            )));
-        }
-        fs::rename(&temporary, path)?;
-        Ok(())
-    })();
-    let _ = fs::remove_file(&temporary);
-    written
+    let toml = config.to_toml()?;
+    config::write_beside(
+        path,
+        0o600,
+        |file| Ok(file.write_all(toml.as_bytes())?),
+        |temporary| {
+            if Config::load(path).ok().as_ref() != Some(previous) {
+                return Err(problem(format!(
+                    "{} changed while Atlas was updating it; run atlas init again",
+                    text::tilde(path)
+                )));
+            }
+            Ok(fs::rename(temporary, path)?)
+        },
+    )
 }
 
 /// Whether the helper's graphical session exists (it has logged in).
