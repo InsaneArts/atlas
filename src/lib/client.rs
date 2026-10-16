@@ -479,8 +479,18 @@ impl Client {
         actions::validate(actions, &session.epoch.display)?;
         let standalone = crate::control::token();
         let owner = lease.map(|(_, token)| token).unwrap_or(&standalone);
-        if lease.is_none() {
-            self.acquire_input(owner, &session.epoch).await?;
+        if lease.is_none()
+            && let Err(error) = self.acquire_input(owner, &session.epoch).await
+        {
+            if error.uncertain {
+                // The service may now hold input for `owner`: release it, or
+                // leave the outcome pending for recovery.
+                let pending = self.controller.quarantine()?;
+                if self.native_control("release", owner).await.is_ok() {
+                    self.controller.clear_if(&pending)?;
+                }
+            }
+            return Err(error);
         }
         let result = self
             .mutate(
@@ -496,13 +506,20 @@ impl Client {
             .await;
         if lease.is_none() {
             let cleanup = self.native_control("release", owner).await;
-            if result.is_ok() && cleanup.is_err() {
-                // Nothing will settle this release; it stays for recovery.
+            if cleanup.is_err() {
+                // Nothing will settle this release, whatever the input did;
+                // it stays for recovery.
                 drop(self.controller.quarantine()?);
-                return Err(Error::new(
-                    "uncertain",
-                    "Input finished but native release was not confirmed",
-                )
+                return Err(match result {
+                    Ok(_) => Error::new(
+                        "uncertain",
+                        "Input finished but native release was not confirmed",
+                    ),
+                    Err(error) => Error::new(
+                        "uncertain",
+                        format!("{} Native release was not confirmed either.", error.error),
+                    ),
+                }
                 .uncertain());
             }
         }
@@ -600,16 +617,18 @@ impl Client {
             metadata.mtime(),
             metadata.mtime_nsec(),
         );
-        let mut cache = self.installed.lock().ok()?;
-        if let Some((cached, build)) = cache.as_ref()
+        if let Some((cached, build)) = self.installed.lock().ok()?.as_ref()
             && *cached == key
         {
             return build.clone();
         }
-        // A failed read is not cached: permissions may be repaired without
+        // Hashed without the lock, so other callers are not held up. A
+        // failed read is not cached: permissions may be repaired without
         // changing the identity key.
         let build = crate::digest::probe_executable(path).and_then(|path| file_sha256(&path))?;
-        *cache = Some((key, Some(build.clone())));
+        if let Ok(mut cache) = self.installed.lock() {
+            *cache = Some((key, Some(build.clone())));
+        }
         Some(build)
     }
     /// start-input: replace a stale service, otherwise make one ready.
@@ -950,17 +969,21 @@ impl Client {
         drop(authorization);
         let mut reply = pending.finish().await?;
         validate_completion(&request, &reply)?;
+        let mut warnings = Vec::new();
         if let Some(generation) = &generation
             && reply["uncertain"] != true
             && let Err(error) = self.controller.clear_if(generation)
         {
-            reply["warnings"] = json!([format!(
+            warnings.push(format!(
                 "Operation completed, but its pending marker could not be cleared: {error}"
-            )]);
+            ));
         }
         if self.record(&request, &reply, started.elapsed()).is_err() {
-            reply["warnings"] =
-                json!(["Operation result is valid; local metadata could not be recorded"]);
+            warnings
+                .push("Operation result is valid; local metadata could not be recorded".to_owned());
+        }
+        if !warnings.is_empty() {
+            reply["warnings"] = json!(warnings);
         }
         Ok(reply)
     }
