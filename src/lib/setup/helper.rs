@@ -197,7 +197,7 @@ impl Layout {
 pub fn run(request: &str) -> Result<Value> {
     let request: Request = serde_json::from_str(request)?;
     let uid = nix::unistd::getuid().as_raw();
-    if request.uid() != uid || uid < 501 {
+    if request.uid() != uid || uid < super::FIRST_USER_UID {
         return Err(problem(
             "setup-helper must run as the requested helper account",
         ));
@@ -243,6 +243,11 @@ fn parse_job(text: &str) -> Result<Job> {
     })
 }
 
+/// launchctl's exit status for a service its domain does not have.
+const NO_SUCH_SERVICE: i32 = 113;
+/// launchctl's exit status for a domain that does not exist.
+const NO_SUCH_DOMAIN: i32 = 125;
+
 /// Fails closed: only launchctl's "no such service" and "no such desktop
 /// domain" (the helper is signed out) statuses mean absent.
 fn job(layout: &Layout, label: &str) -> Result<Job> {
@@ -251,10 +256,9 @@ fn job(layout: &Layout, label: &str) -> Result<Job> {
         .output()?;
     match output.status.code() {
         Some(0) => parse_job(&String::from_utf8_lossy(&output.stdout)),
-        Some(113) => Ok(Job::Absent),
-        // The helper is signed out: its desktop domain does not exist, so
-        // nothing can be loaded there.
-        Some(125) => Ok(Job::Absent),
+        // When the helper is signed out its desktop domain does not exist,
+        // so nothing can be loaded there.
+        Some(NO_SUCH_SERVICE | NO_SUCH_DOMAIN) => Ok(Job::Absent),
         _ => Err(problem(format!(
             "launchctl could not inspect {label}: {}",
             String::from_utf8_lossy(&output.stderr).trim()
@@ -283,20 +287,31 @@ fn launchctl(arguments: &[&str]) -> Result<()> {
     }
 }
 
-fn wait_for(layout: &Layout, label: &str, loaded: bool) -> Result<Job> {
+/// Poll `label` for up to five seconds until `wanted` accepts its state,
+/// returning what `wanted` takes from it; `what` names the awaited state.
+fn wait_for<T>(
+    layout: &Layout,
+    label: &str,
+    what: &str,
+    wanted: impl Fn(Job) -> Option<T>,
+) -> Result<T> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        let state = job(layout, label)?;
-        if (state != Job::Absent) == loaded {
-            return Ok(state);
+        if let Some(value) = wanted(job(layout, label)?) {
+            return Ok(value);
         }
         if Instant::now() >= deadline {
-            return Err(problem(format!(
-                "{label} did not become {}",
-                if loaded { "loaded" } else { "unloaded" }
-            )));
+            return Err(problem(format!("{label} did not become {what}")));
         }
         std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// A loaded job's pid and definition path.
+fn as_loaded(job: Job) -> Option<(Option<u32>, PathBuf)> {
+    match job {
+        Job::Loaded { pid, path } => Some((pid, path)),
+        Job::Absent => None,
     }
 }
 
@@ -483,15 +498,12 @@ fn install(layout: &Layout, agent: &Agent) -> Result<Value> {
 /// Load `label` from `path` unless launchd has it already; its pid, once
 /// running. A job loaded from another definition is an error.
 fn loaded(layout: &Layout, label: &str, path: &Path) -> Result<Option<u32>> {
-    let state = match job(layout, label)? {
-        Job::Absent => {
+    let (pid, from) = match as_loaded(job(layout, label)?) {
+        Some(loaded) => loaded,
+        None => {
             launchctl(&["bootstrap", &layout.domain(), &path.to_string_lossy()])?;
-            wait_for(layout, label, true)?
+            wait_for(layout, label, "loaded", as_loaded)?
         }
-        loaded => loaded,
-    };
-    let Job::Loaded { pid, path: from } = state else {
-        unreachable!("wait_for returned a loaded job");
     };
     if from != path {
         return Err(problem(format!(
@@ -537,7 +549,9 @@ fn retire(layout: &Layout, label: &str, sha256: &str, missing_ok: bool) -> Resul
             )));
         }
         launchctl(&["bootout", &format!("{}/{label}", layout.domain())])?;
-        wait_for(layout, label, false)?;
+        wait_for(layout, label, "unloaded", |job| {
+            (job == Job::Absent).then_some(())
+        })?;
     }
     if let File::Regular(_) = plist {
         match file(&backup)? {

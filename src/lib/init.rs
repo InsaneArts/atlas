@@ -266,9 +266,9 @@ pub(crate) fn helper_picture() -> Option<String> {
         .and_then(|path| path.to_str().map(str::to_owned))
 }
 
-/// The lowest user ID from 501 that no account has and no process runs as:
-/// a deleted account's session can outlive it, and sharing its ID would mix
-/// that session with the helper's.
+/// The lowest user ID from the first user ID (501) that no account has and
+/// no process runs as: a deleted account's session can outlive it, and
+/// sharing its ID would mix that session with the helper's.
 pub(crate) fn free_uid() -> Result<u32> {
     let taken = |program: &str, args: &[&str]| -> Result<Vec<u32>> {
         let output = Command::new(program).args(args).output()?;
@@ -282,7 +282,7 @@ pub(crate) fn free_uid() -> Result<u32> {
     };
     let accounts = taken("/usr/bin/dscl", &[".", "-list", "/Users", "UniqueID"])?;
     let running = taken("/bin/ps", &["-axo", "uid="])?;
-    (501..600)
+    (setup::FIRST_USER_UID..600)
         .find(|uid| !accounts.contains(uid) && !running.contains(uid))
         .ok_or_else(|| problem("No free user ID for the helper account"))
 }

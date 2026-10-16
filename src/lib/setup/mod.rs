@@ -37,8 +37,14 @@ enum Lookup {
     Uid(u32),
 }
 
-// FFI: getpw*_r, whose ERANGE nix misreads on macOS.
-#[allow(unsafe_code)]
+/// macOS numbers people's accounts from this user ID; lower ones belong to
+/// the system.
+pub const FIRST_USER_UID: u32 = 501;
+
+#[allow(
+    unsafe_code,
+    reason = "FFI: getpw*_r, whose ERANGE nix misreads on macOS"
+)]
 fn lookup(key: Lookup) -> Result<Option<Account>> {
     // SAFETY: passwd is plain C data for which all-zero is a valid value.
     let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
@@ -263,8 +269,7 @@ fn running_developer_id(pid: u32) -> bool {
     satisfies_developer_id(pid.to_string().as_ref())
 }
 
-// FFI: proc_pidpath has no safe binding.
-#[allow(unsafe_code)]
+#[allow(unsafe_code, reason = "FFI: proc_pidpath has no safe binding")]
 fn executable_of(pid: u32) -> Option<PathBuf> {
     let size = u32::try_from(libc::PROC_PIDPATHINFO_MAXSIZE).ok()?;
     let mut buffer = vec![0_u8; usize::try_from(size).ok()?];
@@ -460,18 +465,6 @@ async fn helper_job(client: &Client, capture_pid: u32) -> Value {
     })
 }
 
-/// A configuration the user could adopt; shown, never written, by preview.
-fn proposal(account: &Account) -> Config {
-    let uid = account.uid;
-    Config {
-        helper_uid: uid,
-        socket_path: format!("/tmp/atlas-live-{uid}/{uid}.sock").into(),
-        identity_probe: "/Users/Shared/Atlas/atlas".into(),
-        input_socket: format!("/tmp/atlas-input-{uid}/input.sock").into(),
-        output_dir: "runs".into(),
-    }
-}
-
 pub async fn preview(config_path: &Path, helper: Option<&str>) -> Result<Value> {
     let controller_uid = nix::unistd::getuid().as_raw();
     let controller = account_with_uid(controller_uid)?;
@@ -507,9 +500,11 @@ pub async fn preview(config_path: &Path, helper: Option<&str>) -> Result<Value> 
     let conflict = config
         .as_ref()
         .is_some_and(|config| config.helper_uid != account.uid);
+    // Otherwise the configuration atlas init would write; shown, never
+    // written, by preview.
     let effective = match &config {
         Some(config) if !conflict => config.clone(),
-        _ => proposal(&account),
+        _ => crate::init::proposed(&account)?,
     };
     let current = std::env::current_exe()
         .and_then(fs::canonicalize)

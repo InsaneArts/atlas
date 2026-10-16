@@ -29,8 +29,10 @@ fn parse_accounts(listing: &str) -> Vec<(String, u32)> {
             let mut columns = line.split_whitespace();
             let name = columns.next()?;
             let uid = columns.next()?.parse::<u32>().ok()?;
-            // System accounts live below 501 or start with an underscore.
-            (uid >= 501 && !name.starts_with('_')).then(|| (name.to_owned(), uid))
+            // System accounts live below the first user ID or start with an
+            // underscore.
+            (uid >= crate::setup::FIRST_USER_UID && !name.starts_with('_'))
+                .then(|| (name.to_owned(), uid))
         })
         .collect()
 }
@@ -40,19 +42,45 @@ pub fn accounts(helper: Option<u32>) -> Result<Vec<Account>> {
     let output = Command::new("/usr/bin/dscl")
         .args([".", "-list", "/Users", "UniqueID"])
         .output()?;
+    // A failed listing is an error, never "no other accounts".
+    if !output.status.success() {
+        return Err(Error::new(
+            "switch",
+            format!(
+                "macOS could not list the accounts: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        ));
+    }
     let me = nix::unistd::getuid().as_raw();
-    let mut accounts: Vec<Account> = parse_accounts(&String::from_utf8_lossy(&output.stdout))
+    Ok(listed(
+        &String::from_utf8_lossy(&output.stdout),
+        me,
+        helper,
+        crate::setup::real_name,
+    ))
+}
+
+/// The ordinary logins in `listing` other than `me`, the helper first,
+/// then by user ID.
+fn listed(
+    listing: &str,
+    me: u32,
+    helper: Option<u32>,
+    real_name: impl Fn(&str) -> Option<String>,
+) -> Vec<Account> {
+    let mut accounts: Vec<Account> = parse_accounts(listing)
         .into_iter()
         .filter(|(_, uid)| *uid != me)
         .map(|(name, uid)| Account {
-            real_name: crate::setup::real_name(&name),
+            real_name: real_name(&name),
             helper: Some(uid) == helper,
             name,
             uid,
         })
         .collect();
     accounts.sort_by_key(|account| (!account.helper, account.uid));
-    Ok(accounts)
+    accounts
 }
 
 /// The other accounts that are standard (not administrators): the ones
@@ -66,7 +94,7 @@ pub fn standard_accounts() -> Result<Vec<Account>> {
 
 /// A no-argument function of the login framework, resolved at run time so
 /// a macOS without it reports an error instead of failing to start.
-#[allow(unsafe_code)] // FFI: a private framework, loaded with dlopen.
+#[allow(unsafe_code, reason = "FFI: a private framework, loaded with dlopen")]
 fn login_symbol(symbol: &std::ffi::CStr) -> Result<extern "C" fn() -> i32> {
     const FRAMEWORK: &std::ffi::CStr =
         c"/System/Library/PrivateFrameworks/login.framework/Versions/A/login";
@@ -155,10 +183,34 @@ mod tests {
 
     #[test]
     fn the_helper_is_listed_first_and_this_login_never() {
+        let listing = "zed 504\nme 501\natlas 503\nann 502\n_hidden 600\n";
+        let named = |name: &str| (name == "atlas").then(|| "Atlas".to_owned());
+        let accounts = listed(listing, 501, Some(503), named);
+        let order: Vec<(&str, bool)> = accounts
+            .iter()
+            .map(|account| (account.name.as_str(), account.helper))
+            .collect();
+        assert_eq!(
+            order,
+            [("atlas", true), ("ann", false), ("zed", false)],
+            "the helper first, then by user ID, never this login"
+        );
+        assert_eq!(accounts[0].real_name.as_deref(), Some("Atlas"));
+        let without = listed(listing, 501, None, |_| None);
+        assert!(without.iter().all(|account| !account.helper));
+        assert_eq!(without[0].uid, 502);
+    }
+
+    #[test]
+    fn this_mac_lists_only_other_ordinary_logins() {
         let accounts = accounts(Some(u32::MAX)).unwrap();
         let me = nix::unistd::getuid().as_raw();
         assert!(accounts.iter().all(|account| account.uid != me));
-        assert!(accounts.iter().all(|account| account.uid >= 501));
+        assert!(
+            accounts
+                .iter()
+                .all(|account| account.uid >= crate::setup::FIRST_USER_UID)
+        );
     }
 
     #[test]
