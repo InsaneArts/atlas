@@ -9,6 +9,31 @@ fn show(view: View, value: Value) -> Rendered {
     render(&view, &value)
 }
 
+/// Errors, steps and warnings can carry the helper's text: it never drives
+/// the terminal, while the lines Atlas wrote stay lines.
+#[test]
+fn helper_text_in_errors_and_steps_is_made_safe() {
+    let shown = show(
+        View::Generic,
+        json!({"ok": false, "error": "Bad \u{1b}[2J name\nsecond line"}),
+    );
+    assert!(
+        shown.err.starts_with("✗ Bad \\u{1b}[2J name\nsecond line"),
+        "{}",
+        shown.err
+    );
+    let report = json!({
+        "ok": true, "ready": false, "checks": [],
+        "nextSteps": ["Fix \u{1b}]0;title\u{7}"],
+        "warnings": ["Odd \u{202e}name"],
+    });
+    let out = show(View::Doctor { verbose: false }, report).out;
+    assert!(
+        !out.contains('\u{1b}') && !out.contains('\u{202e}'),
+        "{out}"
+    );
+}
+
 #[test]
 fn a_ready_doctor_is_one_line() {
     let report = json!({

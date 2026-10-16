@@ -359,7 +359,7 @@ pub fn discover(value: &Value) -> String {
                 .flatten()
                 .find(|candidate| candidate["access"]["executable"] == true)
                 .and_then(|candidate| candidate["path"].as_str())
-                .map(str::to_owned)
+                .map(|path| text::printable(path).into_owned())
                 .unwrap_or_else(|| "not found".to_owned()),
             _ => "not checked".to_owned(),
         };

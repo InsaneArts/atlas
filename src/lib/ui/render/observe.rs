@@ -58,13 +58,13 @@ pub fn doctor(value: &Value, verbose: bool) -> String {
             lines.push(String::new());
             lines.push("To fix:".to_owned());
             for (number, step) in steps.iter().enumerate() {
-                lines.push(format!("  {}. {step}", number + 1));
+                lines.push(format!("  {}. {}", number + 1, text::printable(step)));
             }
         }
     }
     for warning in value["warnings"].as_array().into_iter().flatten() {
         if let Some(warning) = warning.as_str() {
-            lines.push(format!("{} {warning}", style::warn()));
+            lines.push(format!("{} {}", style::warn(), text::printable(warning)));
         }
     }
     let native = &value["capabilities"]["nativeDialogs"];
@@ -136,7 +136,7 @@ fn details(value: &Value, native: &Value) -> Vec<String> {
             lines.push(format!(
                 "{}  {}",
                 style::dim(format!("{:<13}", check["name"].as_str().unwrap_or(""))),
-                step
+                text::printable(step)
             ));
         }
     }
