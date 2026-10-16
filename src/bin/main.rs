@@ -855,7 +855,9 @@ fn print(text: &str) {
 }
 
 /// Ctrl-C during a question or a wait puts the cursor back and says how to
-/// resume, instead of leaving a half-drawn line.
+/// resume, instead of leaving a half-drawn line. A question Ctrl-C ends
+/// (`ui::prompt`) waits a second for this to print and exit, so the person
+/// sees one message; change the two together.
 fn stop_cleanly_on_interrupt(message: &'static str) {
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {

@@ -93,9 +93,10 @@ pub fn render(view: &View, value: &Value) -> Rendered {
             {
                 out.push_str(&format!(
                     "\n  {}",
-                    style::dim(
-                        "copied first to /Users/Shared/Atlas/Open, where the helper can read it"
-                    )
+                    style::dim(format!(
+                        "copied first to {}, where the helper can read it",
+                        crate::handoff::ROOT
+                    ))
                 ));
             }
             Rendered::out(out)

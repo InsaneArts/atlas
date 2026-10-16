@@ -47,6 +47,11 @@ fn discard_typed_ahead() {
 /// A question that ended without an answer, with the cursor back. Ctrl-C
 /// raises SIGINT, whose handler reports it and exits; this only waits for
 /// that, so the person sees one message. Input that ended is a cancel.
+///
+/// The handler is `stop_cleanly_on_interrupt` in the `atlas` binary's
+/// main.rs, installed for the commands that ask questions; the second's
+/// sleep below only gives it time to print and exit. Change the two
+/// together.
 fn failed(error: dialoguer::Error) -> Error {
     let _ = console::Term::stderr().show_cursor();
     let dialoguer::Error::IO(error) = error;

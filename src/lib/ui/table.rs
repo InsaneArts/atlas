@@ -15,7 +15,7 @@ pub fn render(headers: &[&str], rows: &[Vec<String>]) -> String {
             widths[column] = widths[column].max(measure_text_width(cell));
         }
     }
-    let line = |cells: Vec<String>| {
+    let line = |cells: &[String]| {
         cells
             .iter()
             .enumerate()
@@ -28,9 +28,9 @@ pub fn render(headers: &[&str], rows: &[Vec<String>]) -> String {
             .trim_end()
             .to_owned()
     };
-    let header = line(headers.iter().map(style::dim).collect());
-    let mut lines = vec![header];
-    lines.extend(rows.iter().map(|row| line(row.clone())));
+    let header: Vec<String> = headers.iter().map(style::dim).collect();
+    let mut lines = vec![line(&header)];
+    lines.extend(rows.iter().map(|row| line(row)));
     lines.join("\n")
 }
 
