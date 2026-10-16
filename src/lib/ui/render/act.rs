@@ -74,7 +74,10 @@ pub fn run(value: &Value) -> Rendered {
         .unwrap_or_default();
     let signal = &value["signal"];
     if value["timedOut"] == true {
-        notes.push(format!("{} Timed out and was stopped{took}", style::fail()));
+        notes.push(format!(
+            "{} Timed out and was stopped{took}; --timeout gives it longer",
+            style::fail()
+        ));
     } else if !signal.is_null() {
         let name = signal
             .as_str()

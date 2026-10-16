@@ -610,7 +610,9 @@ Examples:
 ## atlas run
 
 ```text
-Run a command in the helper and print its output
+Run a command in the helper and print its output.
+
+It is stopped after --timeout seconds (20 unless given, at most 600). Start anything longer in the background and read its log later.
 
 Usage: atlas run [OPTIONS] -- <COMMAND>...
 
@@ -619,8 +621,13 @@ Arguments:
           The program and its arguments, after `--`
 
 Options:
+      --timeout <SECONDS>
+          Seconds before the command is stopped
+          
+          [default: 20]
+
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 
 Global options:
       --json
@@ -631,6 +638,7 @@ Global options:
 
 Examples:
   atlas run -- /bin/sh -c 'ls "$HOME/Documents"'
+  atlas run --timeout 300 -- xcodebuild test-without-building -xctestrun Tests.xctestrun
 ```
 
 ## atlas readiness
