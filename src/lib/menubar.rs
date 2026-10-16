@@ -54,13 +54,22 @@ pub async fn start(config: &Path, port: u16, output: &Path) -> Result<()> {
     Ok(())
 }
 
+/// [`crate::viewer::running`] off the async workers: it waits on a socket.
+async fn viewer_running(record: &Path, port: u16) -> Option<serde_json::Value> {
+    let record = record.to_owned();
+    tokio::task::spawn_blocking(move || crate::viewer::running(&record, port))
+        .await
+        .ok()
+        .flatten()
+}
+
 /// Start the menu bar unless it runs already: whether it did, and its
 /// private record (pid and viewer URL). One start runs at a time; a start
 /// that fails is stopped, never left half-running.
 pub async fn launch(config: &Path, port: u16, output: &Path) -> Result<(bool, serde_json::Value)> {
     let record = output.join(crate::viewer::MENUBAR_RECORD);
     let _starting = starting(&output.join("menubar.lock")).await?;
-    if let Some(running) = crate::viewer::running(&record, port) {
+    if let Some(running) = viewer_running(&record, port).await {
         return Ok((true, running));
     }
     let log_path = output.join("menubar.log");
@@ -92,7 +101,7 @@ pub async fn launch(config: &Path, port: u16, output: &Path) -> Result<(bool, se
             // appeared): give its record a few seconds.
             if already || code == "port-in-use" {
                 for _ in 0..25 {
-                    if let Some(running) = crate::viewer::running(&record, port) {
+                    if let Some(running) = viewer_running(&record, port).await {
                         return Ok((true, running));
                     }
                     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -111,8 +120,9 @@ pub async fn launch(config: &Path, port: u16, output: &Path) -> Result<(bool, se
                 format!("The menu bar did not start: {reason}"),
             ));
         }
-        if let Some(running) =
-            crate::viewer::running(&record, port).filter(|running| running["pid"] == pid)
+        if let Some(running) = viewer_running(&record, port)
+            .await
+            .filter(|running| running["pid"] == pid)
         {
             return Ok((false, running));
         }
