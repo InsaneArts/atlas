@@ -66,7 +66,7 @@ pub(super) fn preview(
     let store = Store::open(home, false)?;
     store.require_available(id)?;
     let ledger = store.ledger()?;
-    validate_files(&files)?;
+    validate_files(files.iter())?;
     let mut planned = Vec::new();
     let mut total = 0;
     for payload in files {
@@ -90,7 +90,7 @@ pub(super) fn preview(
             payload,
             before,
             previous,
-            operation: operation.into(),
+            operation,
         });
     }
     guard()?;
@@ -101,7 +101,10 @@ pub(super) fn preview(
         home: home.into(),
         files: planned,
     };
-    let ok = plan.files.iter().all(|file| file.operation != "conflict");
+    let ok = plan
+        .files
+        .iter()
+        .all(|file| file.operation != Operation::Conflict);
     Ok(json!({
         "ok": ok,
         "applied": false,
@@ -116,7 +119,7 @@ fn operation(
     payload: &Payload,
     current: Option<&Fingerprint>,
     previous: Option<&Entry>,
-) -> &'static str {
+) -> Operation {
     let managed_matches = match (previous, current) {
         (Some(Entry::Managed { fingerprint, .. }), Some(current)) => fingerprint == current,
         (Some(Entry::Legacy(hash)), Some(current)) => hash == &current.sha256,
@@ -124,27 +127,27 @@ fn operation(
         _ => false,
     };
     if !managed_matches {
-        return "conflict";
+        return Operation::Conflict;
     }
     match current {
-        None => "create",
+        None => Operation::Create,
         Some(current) if current.sha256 == payload.sha256 => {
             if current.mode == desired_mode(payload) {
-                "unchanged"
+                Operation::Unchanged
             } else {
-                "permissions"
+                Operation::Permissions
             }
         }
-        Some(_) if previous.is_some() => "update",
-        _ => "conflict",
+        Some(_) if previous.is_some() => Operation::Update,
+        _ => Operation::Conflict,
     }
 }
 
-fn validate_files(files: &[Payload]) -> Result<()> {
-    if files.is_empty() || files.len() > 32 {
+fn validate_files<'a>(files: impl ExactSizeIterator<Item = &'a Payload> + Clone) -> Result<()> {
+    if files.len() == 0 || files.len() > MAX_SELECTIONS {
         return Err(problem("Select 1–32 files"));
     }
-    unique_targets(files.iter().map(|file| file.target.as_path()))?;
+    unique_targets(files.clone().map(|file| file.target.as_path()))?;
     for file in files {
         if !file.source.is_absolute()
             || file.sha256.len() != 64
@@ -185,16 +188,10 @@ fn validate_plan(home: &Path, plan: &Plan) -> Result<()> {
             "Frozen plan does not belong to this helper home and UID",
         ));
     }
-    validate_files(
-        &plan
-            .files
-            .iter()
-            .map(|file| file.payload.clone())
-            .collect::<Vec<_>>(),
-    )?;
+    validate_files(plan.files.iter().map(|file| &file.payload))?;
     for file in &plan.files {
         if operation(&file.payload, file.before.as_ref(), file.previous.as_ref()) != file.operation
-            || file.operation == "conflict"
+            || file.operation == Operation::Conflict
         {
             return Err(problem(
                 "Frozen plan contains a conflict or inconsistent operation",
@@ -251,7 +248,7 @@ pub(super) fn apply_plan(
         store.finish(&plan.id)?;
         Ok(())
     })();
-    report(&transaction, result, false)
+    Ok(report(&transaction, result, false))
 }
 
 fn preconditions(home: &Path, plan: &Plan, ledger: &Ledger) -> Result<()> {
@@ -359,7 +356,7 @@ fn apply_file(
     let file = transaction.plan.files[index].clone();
     let path = destination(home, &file.payload.target)?;
     let installed = apply_state(home, transaction, index, ledger)?;
-    if !installed && file.operation != "unchanged" {
+    if !installed && file.operation != Operation::Unchanged {
         ensure_parents(home, transaction, &file.payload.target, store, guard)?;
         let candidate = candidate(&path, &transaction.plan.id, index, false);
         if transaction.progress[index].prepared.is_none() {
@@ -403,7 +400,7 @@ fn finish_file(
     let file = &transaction.plan.files[index];
     let current = fingerprint(&destination(home, &file.payload.target)?)?
         .ok_or_else(|| problem("Installed file disappeared"))?;
-    let expected = if file.operation == "unchanged" {
+    let expected = if file.operation == Operation::Unchanged {
         &file.before
     } else {
         &transaction.progress[index].prepared
@@ -428,10 +425,12 @@ fn finish_file(
 }
 
 fn candidate(path: &Path, id: &str, index: usize, rollback: bool) -> PathBuf {
-    path.parent().unwrap().join(format!(
-        ".atlas-{id}-{index}-{}",
-        if rollback { "restore" } else { "install" }
-    ))
+    path.parent()
+        .expect("a checked destination lies inside the helper home")
+        .join(format!(
+            ".atlas-{id}-{index}-{}",
+            if rollback { "restore" } else { "install" }
+        ))
 }
 
 fn prepare_inode(
@@ -462,7 +461,10 @@ fn ensure_parents(
     guard: &impl Fn() -> Result<()>,
 ) -> Result<()> {
     let mut relative = PathBuf::new();
-    for component in target.parent().unwrap().components() {
+    let parent = target
+        .parent()
+        .expect("a checked target is a non-empty relative path");
+    for component in parent.components() {
         relative.push(component);
         let path = directory_destination(home, &relative)?;
         if let Some(dir) = directory(&path, false)? {
@@ -504,14 +506,14 @@ pub(super) fn rollback(
     let mut transaction = store.transaction(id)?.ok_or_else(|| problem(MISSING))?;
     validate_plan(home, &transaction.plan)?;
     if transaction.phase == Phase::RolledBack {
-        return report(&transaction, Ok(()), true);
+        return Ok(report(&transaction, Ok(()), true));
     }
     let result = (|| -> Result<()> {
         for index in 0..transaction.plan.files.len() {
             let status = rollback_state(home, &transaction, index, &ledger)?;
             let file = &transaction.plan.files[index];
             if status == RollbackState::Installed
-                && file.operation != "unchanged"
+                && file.operation != Operation::Unchanged
                 && let Some(before) = &file.before
             {
                 if let Some(restore) = &transaction.progress[index].restore {
@@ -546,7 +548,7 @@ pub(super) fn rollback(
         store.finish(id)?;
         Ok(())
     })();
-    let mut value = report(&transaction, result, true)?;
+    let mut value = report(&transaction, result, true);
     value["preview"] = json!(!apply);
     Ok(value)
 }
@@ -578,7 +580,7 @@ fn rollback_state(
     let progress = &transaction.progress[index];
     let current = fingerprint(&destination(home, &file.payload.target)?)?;
     let entry = ledger.files.get(&file.payload.target);
-    let restored = if file.operation == "unchanged" {
+    let restored = if file.operation == Operation::Unchanged {
         file.before.as_ref()
     } else {
         progress.restore.as_ref()
@@ -636,7 +638,7 @@ fn rollback_file(
             store.save(transaction)?;
         }
     }
-    if status == RollbackState::Installed && file.operation != "unchanged" {
+    if status == RollbackState::Installed && file.operation != Operation::Unchanged {
         if let Some(before) = &file.before
             && transaction.progress[index].restore.is_none()
         {
@@ -670,14 +672,14 @@ fn rollback_file(
         } else {
             unlink(&path, false)?;
         }
-    } else if status == RollbackState::Before || file.operation == "unchanged" {
+    } else if status == RollbackState::Before || file.operation == Operation::Unchanged {
         transaction.progress[index].restore = file.before.clone();
         transaction.progress[index].reverting = true;
         store.save(transaction)?;
     }
     guard()?;
     let restored = fingerprint(&path)?;
-    let expected = if file.operation == "unchanged" {
+    let expected = if file.operation == Operation::Unchanged {
         &file.before
     } else {
         &transaction.progress[index].restore
@@ -752,35 +754,26 @@ fn cleanup_directories(
     Ok(retained)
 }
 
-fn report(transaction: &Transaction, result: Result<()>, rollback: bool) -> Result<Value> {
-    let completed = transaction
+fn report(transaction: &Transaction, result: Result<()>, rollback: bool) -> Value {
+    let (completed, pending): (Vec<_>, Vec<_>) = transaction
         .plan
         .files
         .iter()
         .zip(&transaction.progress)
-        .filter(|(_, progress)| {
+        .partition(|(_, progress)| {
             if rollback {
                 progress.restored
             } else {
                 progress.applied
             }
-        })
-        .map(|(file, _)| &file.payload.target)
-        .collect::<Vec<_>>();
-    let pending = transaction
-        .plan
-        .files
-        .iter()
-        .zip(&transaction.progress)
-        .filter(|(_, progress)| {
-            if rollback {
-                !progress.restored
-            } else {
-                !progress.applied
-            }
-        })
-        .map(|(file, _)| &file.payload.target)
-        .collect::<Vec<_>>();
+        });
+    fn targets<'a>(files: Vec<(&'a PlannedFile, &'a Progress)>) -> Vec<&'a PathBuf> {
+        files
+            .into_iter()
+            .map(|(file, _)| &file.payload.target)
+            .collect()
+    }
+    let (completed, pending) = (targets(completed), targets(pending));
     let mut value = json!({
         "ok": result.is_ok(),
         "planId": transaction.plan.id,
@@ -797,5 +790,5 @@ fn report(transaction: &Transaction, result: Result<()>, rollback: bool) -> Resu
     if let Err(error) = result {
         value["error"] = json!(error.error);
     }
-    Ok(value)
+    value
 }

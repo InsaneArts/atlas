@@ -39,8 +39,10 @@ struct Reference {
 
 /// Read, parse and validate a TOML profile.
 pub(super) fn load(path: &Path) -> Result<Profile> {
-    let profile: Profile =
-        crate::config::parse_toml(&super::files::read_limited(path, 16384)?, path)?;
+    let profile: Profile = crate::config::parse_toml(
+        &super::files::read_limited(path, super::MAX_MANIFEST)?,
+        path,
+    )?;
     validate(&profile)?;
     Ok(profile)
 }

@@ -31,6 +31,8 @@ pub use worker::worker;
 
 const MAX_FILE: u64 = 128 * 1024 * 1024;
 const MAX_RECORD: u64 = 4 * 1024 * 1024;
+/// The largest manifest or profile read.
+const MAX_MANIFEST: u64 = 16 * 1024;
 /// How many files one plan may copy.
 const MAX_SELECTIONS: usize = 32;
 const STATE: &str = ".config/atlas/provisioning";
@@ -93,7 +95,7 @@ pub(super) fn selectable_variable(name: &str) -> bool {
 /// Freeze the selected bytes, then preview or apply the resulting plan.
 pub async fn sync(client: &Client, manifest: &Path, apply_now: bool) -> Result<Value> {
     let manifest = fs::canonicalize(manifest)?;
-    let selection: Manifest = parse_toml(&read_limited(&manifest, 16384)?, &manifest)?;
+    let selection: Manifest = parse_toml(&read_limited(&manifest, MAX_MANIFEST)?, &manifest)?;
     freeze(client, &manifest, selection.files, apply_now).await
 }
 
