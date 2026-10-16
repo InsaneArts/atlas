@@ -35,6 +35,14 @@ pub struct Frame {
 /// Identity (device, inode, size, mtime) of the installed executable and its hash.
 type BuildCache = Arc<std::sync::Mutex<Option<((u64, u64, u64, i64, i64), Option<String>)>>>;
 
+/// How long `run` lets a command take unless told otherwise.
+pub const RUN_TIMEOUT: Duration = Duration::from_secs(20);
+/// The longest a command may run (the helper's own limit).
+pub const RUN_TIMEOUT_MAX: Duration = Duration::from_secs(600);
+/// Time beyond a command's timeout for the helper to stop what it left
+/// running and send its last output.
+const RUN_MARGIN: Duration = Duration::from_secs(10);
+
 /// Who recorded mutations are attributed to in the activity log.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Actor {
@@ -506,21 +514,42 @@ impl Client {
         result
     }
     pub async fn run(&self, argv: Vec<String>) -> Result<Value> {
+        self.run_within(argv, RUN_TIMEOUT).await
+    }
+    /// [`Client::run`], stopping the command after `timeout` (at most ten
+    /// minutes). Control stays held until it ends.
+    pub async fn run_within(&self, argv: Vec<String>, timeout: Duration) -> Result<Value> {
         let ownership = self.controller.acquire(false)?;
-        self.run_owned(&ownership, argv).await
+        self.run_owned_within(&ownership, argv, timeout).await
     }
     /// Execute argv in the verified hidden helper as a recorded mutation under
     /// controller ownership the caller already holds.
-    pub async fn run_owned(&self, _ownership: &Ownership, argv: Vec<String>) -> Result<Value> {
+    pub async fn run_owned(&self, ownership: &Ownership, argv: Vec<String>) -> Result<Value> {
+        self.run_owned_within(ownership, argv, RUN_TIMEOUT).await
+    }
+    /// [`Client::run_owned`], stopping the command after `timeout`.
+    pub async fn run_owned_within(
+        &self,
+        _ownership: &Ownership,
+        argv: Vec<String>,
+        timeout: Duration,
+    ) -> Result<Value> {
         if argv.is_empty() || argv[0].is_empty() || argv.iter().any(|a| a.contains('\0')) {
             return Err(Error::new(
                 "input",
                 "Provide a command and arguments after run --",
             ));
         }
+        if timeout.is_zero() || timeout > RUN_TIMEOUT_MAX {
+            return Err(Error::new(
+                "usage",
+                "A command may run for 1 second to 10 minutes",
+            ));
+        }
+        let timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
         self.identity().await?;
         self.mutate(
-            json!({"op": "run", "argv": argv, "timeoutMs": 20000}),
+            json!({"op": "run", "argv": argv, "timeoutMs": timeout_ms}),
             None,
             None,
         )
@@ -877,11 +906,21 @@ impl Client {
     ) -> Result<Value> {
         let started = Instant::now();
         // Connect without holding the lease. Release can cancel slow preflight.
-        let transport = if request["op"] == "input" {
+        let mut transport = if request["op"] == "input" {
             self.input_transport()
         } else {
             self.transport.clone()
         };
+        // A long command's reply comes after it ends, and after the helper
+        // has stopped whatever it left running.
+        if let Some(run) = request["timeoutMs"]
+            .as_u64()
+            .filter(|_| request["op"] == "run")
+        {
+            transport.timeout = transport
+                .timeout
+                .max(Duration::from_millis(run) + RUN_MARGIN);
+        }
         let connection = transport.connect().await?;
         // Serialize only final authorization and bounded byte submission.
         let mut authorization = match lease {

@@ -355,7 +355,13 @@ enum Command {
     },
 
     /// Run a command in the helper and print its output.
+    ///
+    /// It is stopped after --timeout seconds (20 unless given, at most 600).
+    /// Start anything longer in the background and read its log later.
     Run {
+        /// Seconds before the command is stopped.
+        #[arg(long, value_name = "SECONDS", default_value_t = atlas::client::RUN_TIMEOUT.as_secs(), value_parser = run_seconds)]
+        timeout: u64,
         /// The program and its arguments, after `--`.
         #[arg(last = true, required = true, value_name = "COMMAND")]
         argv: Vec<String>,
@@ -1257,7 +1263,10 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
                 .input(&serde_json::from_slice(&bytes)?, None, None)
                 .await
         }
-        Command::Run { argv } => client.run(argv).await.map(with_output),
+        Command::Run { argv, timeout } => client
+            .run_within(argv, Duration::from_secs(timeout))
+            .await
+            .map(with_output),
         Command::Restart => {
             let _spinner = Spinner::new("Restarting the helper…");
             client.restart().await
@@ -1442,6 +1451,20 @@ fn command_reference() -> String {
         ));
     }
     text
+}
+
+/// `run --timeout`: whole seconds the helper allows a command.
+fn run_seconds(value: &str) -> std::result::Result<u64, String> {
+    value
+        .parse()
+        .ok()
+        .filter(|seconds| (1..=atlas::client::RUN_TIMEOUT_MAX.as_secs()).contains(seconds))
+        .ok_or_else(|| {
+            format!(
+                "Give 1 to {} seconds.",
+                atlas::client::RUN_TIMEOUT_MAX.as_secs()
+            )
+        })
 }
 
 #[derive(Clone, Copy, ValueEnum)]

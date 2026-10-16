@@ -81,7 +81,13 @@ const EXAMPLES: &[(&str, &[&str])] = &[
             "atlas wait --title Save --gone",
         ],
     ),
-    ("run", &["atlas run -- /bin/sh -c 'ls \"$HOME/Documents\"'"]),
+    (
+        "run",
+        &[
+            "atlas run -- /bin/sh -c 'ls \"$HOME/Documents\"'",
+            "atlas run --timeout 300 -- xcodebuild test-without-building -xctestrun Tests.xctestrun",
+        ],
+    ),
     (
         "readiness",
         &[
@@ -258,6 +264,14 @@ fn explain(error: &clap::Error, name: Option<&str>) -> String {
             );
             if !valid.is_empty() {
                 text.push_str(&format!(" Use {}.", valid.join(", ")));
+            } else if error.kind() == ErrorKind::ValueValidation
+                && let Some(reason) = std::error::Error::source(error)
+            {
+                // Atlas's own parsers say what works in a sentence.
+                let reason = reason.to_string();
+                if reason.ends_with('.') {
+                    text.push_str(&format!(" {reason}"));
+                }
             }
             text
         }
@@ -348,6 +362,10 @@ mod tests {
             "atlas update has no option --forse. Did you mean --force?"
         );
         assert_eq!(said(&["type"]), "atlas type needs TEXT.");
+        assert_eq!(
+            said(&["run", "--timeout", "601", "--", "true"]),
+            "\"601\" does not work for --timeout. Give 1 to 600 seconds."
+        );
         assert_eq!(said(&["drag", "1", "2"]), "atlas drag needs TO_X and TO_Y.");
         assert_eq!(
             said(&["click", "--button", "sideways", "1", "2"]),
