@@ -131,7 +131,18 @@ pub(super) struct PlannedFile {
     pub payload: Payload,
     pub before: Option<Fingerprint>,
     pub previous: Option<Entry>,
-    pub operation: String,
+    pub operation: Operation,
+}
+
+/// What a plan does to one destination, stored by its lowercase name.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum Operation {
+    Create,
+    Update,
+    Permissions,
+    Unchanged,
+    Conflict,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

@@ -122,7 +122,7 @@ fn adopting_an_existing_file_never_makes_rollback_delete_it() {
     atomic_write(&path, b"same", 0o600).unwrap();
     let inode = fs::metadata(&path).unwrap().ino();
     let plan = sandbox.plan(vec![sandbox.payload("existing", b"same")]);
-    assert_eq!(plan.files[0].operation, "unchanged");
+    assert_eq!(plan.files[0].operation, Operation::Unchanged);
     assert_eq!(sandbox.apply(&plan)["ok"], true);
     assert_eq!(sandbox.rollback(&plan, true)["ok"], true);
     assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
@@ -906,4 +906,48 @@ async fn a_request_that_was_never_sent_leaves_nothing() {
     let refused = sandbox.root.join("refused");
     assert!(create_stage(&refused, "atlas-no-such-user-zz").is_err());
     assert!(!refused.exists());
+}
+
+/// Plans already on disk store each operation by its lowercase name.
+#[test]
+fn operations_keep_their_stored_names() {
+    for (operation, name) in [
+        (Operation::Create, "create"),
+        (Operation::Update, "update"),
+        (Operation::Permissions, "permissions"),
+        (Operation::Unchanged, "unchanged"),
+        (Operation::Conflict, "conflict"),
+    ] {
+        assert_eq!(serde_json::to_value(operation).unwrap(), json!(name));
+        assert_eq!(
+            serde_json::from_value::<Operation>(json!(name)).unwrap(),
+            operation
+        );
+    }
+    assert!(serde_json::from_value::<Operation>(json!("Create")).is_err());
+    let sandbox = Sandbox::new();
+    let plan = sandbox.plan(vec![sandbox.payload("file", b"data")]);
+    let stored = serde_json::to_value(&plan).unwrap();
+    assert_eq!(stored["files"][0]["operation"], "create");
+    assert_eq!(serde_json::from_value::<Plan>(stored).unwrap(), plan);
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn an_inherited_folder_acl_is_cleared() {
+    let sandbox = Sandbox::new();
+    let folder = sandbox.root.join("stage");
+    fs::create_dir(&folder).unwrap();
+    assert!(
+        std::process::Command::new("/bin/chmod")
+            .args(["+a", "everyone allow read"])
+            .arg(&folder)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(has_acl(&folder).unwrap());
+    remove_inherited_acl(&folder).unwrap();
+    assert!(!has_acl(&folder).unwrap());
+    assert!(remove_inherited_acl(&sandbox.root.join("missing")).is_err());
 }

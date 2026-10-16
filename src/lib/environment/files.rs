@@ -141,13 +141,19 @@ pub(super) fn node(metadata: &fs::Metadata) -> Node {
     }
 }
 
-fn component(name: &std::ffi::OsStr) -> Result<std::ffi::CString> {
-    std::ffi::CString::new(name.as_bytes()).map_err(|_| problem("Invalid filesystem component"))
+fn component(name: &std::ffi::OsStr) -> Result<CString> {
+    CString::new(name.as_bytes()).map_err(|_| problem("Invalid filesystem component"))
 }
+
+fn attribute_name(name: &[u8]) -> Result<CString> {
+    CString::new(name).map_err(|_| problem("Invalid attribute name"))
+}
+
+/// The most extended-attribute data (names and values) kept for one file.
+const MAX_ATTRIBUTES: usize = 16 * 1024;
 
 #[allow(unsafe_code)] // FFI: bounded extended-attribute reads.
 fn attributes(file: &fs::File) -> Result<std::collections::BTreeMap<String, String>> {
-    const LIMIT: usize = 16384;
     // Sizes are read first so the limit holds before anything is allocated,
     // and each read must return exactly that size: a short read (as resource
     // forks allow) is refused, never kept as a truncated value.
@@ -156,7 +162,7 @@ fn attributes(file: &fs::File) -> Result<std::collections::BTreeMap<String, Stri
     if size < 0 {
         return Err(std::io::Error::last_os_error().into());
     }
-    if size as usize > LIMIT {
+    if size as usize > MAX_ATTRIBUTES {
         return Err(problem(
             "Extended attributes exceed the supported 16 KiB limit",
         ));
@@ -179,7 +185,7 @@ fn attributes(file: &fs::File) -> Result<std::collections::BTreeMap<String, Stri
     {
         let text = std::str::from_utf8(name)
             .map_err(|_| problem("Unsupported attribute name encoding"))?;
-        let name = std::ffi::CString::new(name).map_err(|_| problem("Invalid attribute name"))?;
+        let name = attribute_name(name)?;
         // SAFETY: a live descriptor and NUL-terminated name; null buffer, size only.
         let size = unsafe {
             libc::fgetxattr(
@@ -195,7 +201,7 @@ fn attributes(file: &fs::File) -> Result<std::collections::BTreeMap<String, Stri
             return Err(std::io::Error::last_os_error().into());
         }
         total += size as usize;
-        if total > LIMIT {
+        if total > MAX_ATTRIBUTES {
             return Err(problem(
                 "Extended attributes exceed the supported 16 KiB limit",
             ));
@@ -228,8 +234,7 @@ pub(super) fn restore_attributes(
     let file = open_regular(path, false)?.ok_or_else(|| problem("Prepared restore is missing"))?;
     let current = attributes(&file)?;
     for key in current.keys().filter(|key| !expected.contains_key(*key)) {
-        let name = std::ffi::CString::new(key.as_bytes())
-            .map_err(|_| problem("Invalid attribute name"))?;
+        let name = attribute_name(key.as_bytes())?;
         // SAFETY: a live descriptor and NUL-terminated name.
         let status = unsafe { libc::fremovexattr(file.as_raw_fd(), name.as_ptr(), 0) };
         if status != 0 {
@@ -240,13 +245,12 @@ pub(super) fn restore_attributes(
     }
     let mut total = 0;
     for (key, value) in expected {
-        let name = std::ffi::CString::new(key.as_bytes())
-            .map_err(|_| problem("Invalid attribute name"))?;
+        let name = attribute_name(key.as_bytes())?;
         let value = STANDARD
             .decode(value)
             .map_err(|_| problem("Invalid stored attribute"))?;
         total += key.len() + value.len() + 1;
-        if total > 16384 {
+        if total > MAX_ATTRIBUTES {
             return Err(problem("Stored attributes exceed their limit"));
         }
         if current.get(key) == expected.get(key) {
@@ -287,12 +291,17 @@ pub(super) fn relative_directory(path: &Path) -> Result<()> {
     relative_path(path, true)
 }
 
-fn relative_path(path: &Path, directory: bool) -> Result<()> {
-    let normalized = path
-        .components()
+/// `path` with its components joined by `/` and ASCII-lowercased, so names
+/// that differ only by case compare equal.
+fn folded(path: &Path) -> String {
+    path.components()
         .map(|c| c.as_os_str().to_string_lossy().to_ascii_lowercase())
         .collect::<Vec<_>>()
-        .join("/");
+        .join("/")
+}
+
+fn relative_path(path: &Path, directory: bool) -> Result<()> {
+    let normalized = folded(path);
     if path.as_os_str().is_empty()
         || path
             .components()
@@ -317,11 +326,7 @@ pub(super) fn unique_targets<'a>(targets: impl Iterator<Item = &'a Path>) -> Res
             .to_str()
             .filter(|s| s.is_ascii())
             .ok_or_else(|| problem("Environment target names must be ASCII"))?;
-        let key = Path::new(text)
-            .components()
-            .map(|c| c.as_os_str().to_string_lossy().to_ascii_lowercase())
-            .collect::<Vec<_>>()
-            .join("/");
+        let key = folded(Path::new(text));
         if seen.iter().any(|s| {
             s == &key || s.starts_with(&(key.clone() + "/")) || key.starts_with(&(s.clone() + "/"))
         }) {
@@ -340,16 +345,12 @@ pub(super) fn has_acl(path: &Path) -> Result<bool> {
     })
 }
 
+/// Clear the ACL a new folder inherited from its parent.
 pub(super) fn remove_inherited_acl(path: &Path) -> Result<()> {
-    if !Command::new("/bin/chmod")
-        .arg("-N")
-        .arg(path)
-        .status()?
-        .success()
-    {
-        return Err(problem("Could not make provisioning data private"));
-    }
-    Ok(())
+    let folder =
+        directory(path, false)?.ok_or_else(|| problem("Missing provisioning directory"))?;
+    clear_acl(&folder)
+        .map_err(|error| problem(format!("Could not make provisioning data private: {error}")))
 }
 pub(super) fn destination(home: &Path, relative: &Path) -> Result<PathBuf> {
     relative_target(relative)?;
@@ -393,14 +394,14 @@ pub(super) fn directory(path: &Path, create: bool) -> Result<Option<fs::File>> {
         )
     };
     let mut directory = fs::File::open("/")?;
-    for component in path.components() {
-        let Component::Normal(name) = component else {
-            if component == Component::RootDir {
+    for part in path.components() {
+        let Component::Normal(name) = part else {
+            if part == Component::RootDir {
                 continue;
             }
             return Err(problem("Invalid provisioning directory"));
         };
-        let name = CString::new(name.as_bytes()).map_err(|_| problem("Invalid path"))?;
+        let name = component(name)?;
         let mut opened = open(&directory, &name);
         if create && matches!(opened, Err(Errno::ENOENT)) {
             match mkdirat(&directory, name.as_c_str(), Mode::from_bits_truncate(0o700)) {
@@ -430,21 +431,11 @@ pub(super) fn atomic_install(
         path.parent()
             .ok_or_else(|| problem("Missing parent directory"))?,
     )?;
-    let metadata = parent.metadata()?;
-    if metadata.uid() != nix::unistd::getuid().as_raw()
-        || metadata.mode() & 0o022 != 0
-        || writable_acl(&parent)?
-    {
-        return Err(problem(
-            "Installation parent must be owned by the current user and have no shared write access",
-        ));
-    }
-    let name = CString::new(
+    installation_parent(&parent)?;
+    let name = component(
         path.file_name()
-            .ok_or_else(|| problem("Missing file name"))?
-            .as_bytes(),
-    )
-    .map_err(|_| problem("Invalid path"))?;
+            .ok_or_else(|| problem("Missing file name"))?,
+    )?;
     let temporary = CString::new(format!(".atlas-{}", crate::control::token()))
         .map_err(|_| problem("Invalid path"))?;
     let mut file = fs::File::from(
@@ -487,7 +478,7 @@ pub(super) fn atomic_install(
 }
 
 /// Move a recorded prepared inode into place. No-replace is atomic for creates.
-#[allow(unsafe_code)] // FFI: renameatx_np has no safe binding.
+#[allow(unsafe_code)] // FFI: libc's renameatx_np has no safe wrapper.
 pub(super) fn install_prepared(source: &Path, target: &Path, create_only: bool) -> Result<()> {
     let missing =
         || problem("Prepared replacement and its destination need a directory and a name");
@@ -504,16 +495,7 @@ pub(super) fn install_prepared(source: &Path, target: &Path, create_only: bool) 
     // SAFETY: a live directory descriptor and two NUL-terminated single
     // components; RENAME_EXCL makes the rename refuse an existing target.
     let status = unsafe {
-        unsafe extern "C" {
-            fn renameatx_np(
-                from_fd: libc::c_int,
-                from: *const libc::c_char,
-                to_fd: libc::c_int,
-                to: *const libc::c_char,
-                flags: libc::c_uint,
-            ) -> libc::c_int;
-        }
-        renameatx_np(
+        libc::renameatx_np(
             parent.as_raw_fd(),
             source.as_ptr(),
             parent.as_raw_fd(),

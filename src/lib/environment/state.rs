@@ -29,7 +29,7 @@ fn take(lock: &fs::File, write: bool) -> Result<()> {
 
 pub(super) struct Store {
     pub path: PathBuf,
-    _lock: Option<fs::File>,
+    lock: Option<fs::File>,
 }
 
 impl Store {
@@ -41,7 +41,7 @@ impl Store {
             directory(&path, false)?
         };
         let Some(directory) = directory else {
-            return Ok(Self { path, _lock: None });
+            return Ok(Self { path, lock: None });
         };
         validate_private(&directory, true)?;
         let lock = open_regular(&path.join("lock"), write)?;
@@ -49,7 +49,7 @@ impl Store {
             validate_private(lock, false)?;
             take(lock, write)?;
         }
-        Ok(Self { path, _lock: lock })
+        Ok(Self { path, lock })
     }
 
     pub fn ledger(&self) -> Result<Ledger> {
@@ -150,7 +150,7 @@ impl Store {
     }
 
     fn write<T: Serialize>(&self, path: &Path, value: &T) -> Result<()> {
-        if self._lock.is_none() {
+        if self.lock.is_none() {
             return Err(problem("Provisioning state is read-only"));
         }
         let bytes = serde_json::to_vec_pretty(value)?;
