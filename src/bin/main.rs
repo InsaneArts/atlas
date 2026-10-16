@@ -464,16 +464,28 @@ enum OnboardingCommand {
     },
     /// Mark the window open or closed in this account.
     Window {
-        #[arg(value_parser = ["open", "closed"])]
-        state: String,
+        #[arg(value_enum)]
+        state: WindowState,
     },
     /// Back in the person's account: start input and check everything.
     Finish,
     /// Open the menu bar at login (on or off), decided once.
     Login {
-        #[arg(value_parser = ["on", "off"])]
-        state: String,
+        #[arg(value_enum)]
+        state: OnOff,
     },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum WindowState {
+    Open,
+    Closed,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum OnOff {
+    On,
+    Off,
 }
 
 #[derive(Subcommand)]
@@ -913,24 +925,35 @@ async fn input_service(_: u32, _: u32, _: PathBuf) -> Result<Value> {
 async fn doctor(client: &Client, verbose: bool) -> Value {
     let uid = client.config.helper_uid;
     let status = client.status().await;
+    let account = atlas::setup::account_with_uid(uid).ok().flatten();
     // Not answering because the helper is signed out (after a restart, or
     // a log out): only the person can sign it in again.
     let signed_out = atlas::session::signed_out(&status, || {
-        atlas::setup::account_with_uid(uid).is_ok_and(|account| account.is_some())
-            && !atlas::init::helper_logged_in(uid)
+        account.is_some() && !atlas::init::helper_logged_in(uid)
     });
     let mut report = atlas::capability::doctor(status, uid);
     if signed_out {
         let step = "The helper account is signed out (after a restart or a log out). The person \
                     signs in to it once: atlas init walks them through it.";
-        report["checks"][0]["nextStep"] = json!(step);
-        if let Some(first) = report["nextSteps"].get_mut(0) {
-            *first = json!(step);
+        // The running check's step says so, in its place among the steps.
+        let running = report["checks"].as_array_mut().and_then(|checks| {
+            checks
+                .iter_mut()
+                .find(|check| check["name"] == "Helper running")
+        });
+        if let Some(check) = running {
+            let old = std::mem::replace(&mut check["nextStep"], json!(step));
+            if let Some(listed) = report["nextSteps"]
+                .as_array_mut()
+                .and_then(|steps| steps.iter_mut().find(|listed| **listed == old))
+            {
+                *listed = json!(step);
+            }
         }
     }
     // Both states make the helper unusable; init refuses them too.
     let mut first_steps = Vec::new();
-    if let Ok(Some(account)) = atlas::setup::account_with_uid(uid) {
+    if let Some(account) = &account {
         if atlas::session::leftover_session(uid, &account.name, &account.home) {
             first_steps.push(format!(
                 "macOS still runs a session of a deleted account with {}'s user ID and mixes it \
@@ -1009,9 +1032,13 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
                     controller_uid,
                     controller_name,
                 } => onboarding::accept(controller_uid, &controller_name),
-                OnboardingCommand::Window { state } => onboarding::window(state == "open"),
+                OnboardingCommand::Window { state } => {
+                    onboarding::window(state == WindowState::Open)
+                }
                 OnboardingCommand::Finish => onboarding::finish(&config).await,
-                OnboardingCommand::Login { state } => onboarding::login(&config, state == "on"),
+                OnboardingCommand::Login { state } => {
+                    onboarding::login(&config, state == OnOff::On)
+                }
             };
         }
         Command::Agents { action } => {
@@ -1266,16 +1293,19 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             agent::wait(&client, &filter, gone, Duration::from_secs(timeout)).await
         }
         Command::Input { actions } => {
+            // The most an actions batch may take, in bytes.
+            const LIMIT: u64 = 32 * 1024;
             let bytes = if let Some(path) = actions.strip_prefix('@') {
                 let mut bytes = Vec::new();
-                std::fs::File::open(path)?
-                    .take(32769)
+                std::fs::File::open(path)
+                    .map_err(|error| Error::new("io", format!("Could not read {path}: {error}")))?
+                    .take(LIMIT + 1)
                     .read_to_end(&mut bytes)?;
                 bytes
             } else {
                 actions.into_bytes()
             };
-            if bytes.len() > 32768 {
+            if bytes.len() as u64 > LIMIT {
                 return Err(Error::new(
                     "input",
                     "Input exceeds 32 KiB; use short observed batches",
@@ -1558,12 +1588,12 @@ struct AppTarget {
     app: Option<String>,
     /// Exact process ID, for apps with several processes.
     #[arg(long)]
-    pid: Option<i64>,
+    pid: Option<i32>,
 }
 impl AppTarget {
     fn target(self) -> Option<agent::Target> {
         self.pid
-            .map(agent::Target::Pid)
+            .map(|pid| agent::Target::Pid(pid.into()))
             .or(self.app.map(agent::Target::Name))
     }
 }
