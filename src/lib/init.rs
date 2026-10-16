@@ -382,6 +382,46 @@ fn as_helper(executable: &Path, helper: &setup::Account, request: &Request) -> R
     Ok(reply)
 }
 
+/// Install the helper's background job `agent` through `run`, which runs one
+/// setup-helper request as the helper. An earlier Atlas's job (another app,
+/// another account, an older version) is set aside first, its definition
+/// kept as a backup, and comes back when the new one cannot go in.
+pub(crate) fn install_job(
+    run: impl Fn(&Request) -> Result<Value>,
+    uid: u32,
+    agent: Agent,
+    logs: &Path,
+) -> Result<Value> {
+    let inspected = run(&Request::Inspect {
+        uid,
+        labels: vec![LABEL.to_owned()],
+    })?;
+    let earlier = &inspected["jobs"][LABEL];
+    let expected = setup::helper::text_sha256(&setup::helper::plist(&agent, logs));
+    let retired = earlier["plistSha256"]
+        .as_str()
+        .filter(|sha| *sha != expected)
+        .map(str::to_owned);
+    if let Some(sha256) = &retired {
+        run(&Request::Retire {
+            uid,
+            label: LABEL.to_owned(),
+            sha256: sha256.clone(),
+            missing_ok: false,
+        })?;
+    }
+    run(&Request::Install { agent }).inspect_err(|_| {
+        // The earlier job comes back when the new one cannot go in.
+        if let Some(sha256) = retired {
+            let _ = run(&Request::Restore {
+                uid,
+                label: LABEL.to_owned(),
+                sha256,
+            });
+        }
+    })
+}
+
 /// Restart the helper daemon (launchd starts a fresh process) and wait for
 /// the new one to answer. No other controller may act meanwhile, and the
 /// restart stays pending until a new daemon is seen; if that never happens
@@ -395,7 +435,19 @@ async fn restart_daemon(client: &Client, config: &Config) -> Result<()> {
         peer_uid: config.helper_uid,
     };
     let pending = client.controller.quarantine()?;
-    transport.call(&json!({"op": "restart"})).await?;
+    let reply = transport.call(&json!({"op": "restart"})).await?;
+    if reply["ok"] != true {
+        // A refusal changed nothing, unless the helper says it may have.
+        let uncertain = reply["uncertain"] == true;
+        if !uncertain {
+            client.controller.clear_if(&pending)?;
+        }
+        let error = problem(format!(
+            "The helper did not restart: {}",
+            reply["error"].as_str().unwrap_or("no reason given")
+        ));
+        return Err(if uncertain { error.uncertain() } else { error });
+    }
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -405,9 +457,11 @@ async fn restart_daemon(client: &Client, config: &Config) -> Result<()> {
             return Ok(());
         }
         if Instant::now() >= deadline {
+            // The restart stays pending: its outcome is unknown.
             return Err(problem(
                 "The helper did not start again after a restart. Run atlas doctor.",
-            ));
+            )
+            .uncertain());
         }
     }
 }
@@ -771,27 +825,19 @@ pub async fn run(config_path: &Path) -> Result<Value> {
                 uid: helper.uid,
                 home: helper.home.clone(),
             };
-            as_helper(
-                &executable,
-                &helper,
-                &Request::Prepare {
-                    uid: helper.uid,
-                    controller: controller.name.clone(),
-                },
-            )?;
-            as_helper(
-                &executable,
-                &helper,
-                &Request::Install {
-                    agent: Agent {
-                        label: LABEL.to_owned(),
-                        program: executable.clone(),
-                        uid: helper.uid,
-                        controller_uid: controller.uid,
-                        socket: layout.socket(),
-                    },
-                },
-            )?;
+            let run = |request: &Request| as_helper(&executable, &helper, request);
+            run(&Request::Prepare {
+                uid: helper.uid,
+                controller: controller.name.clone(),
+            })?;
+            let agent = Agent {
+                label: LABEL.to_owned(),
+                program: executable.clone(),
+                uid: helper.uid,
+                controller_uid: controller.uid,
+                socket: layout.socket(),
+            };
+            install_job(run, helper.uid, agent, &layout.logs())?;
             spinner.set("Starting the helper…");
             let mut answered = false;
             for _ in 0..30 {
@@ -978,6 +1024,67 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), before);
         let leftovers = fs::read_dir(path.parent().unwrap()).unwrap().count();
         assert_eq!(leftovers, 1, "no temporary file is left behind");
+    }
+
+    /// An earlier job is retired only when its definition differs, and
+    /// restored when the new one cannot go in.
+    #[test]
+    fn an_earlier_job_is_set_aside_and_restored_on_failure() {
+        let agent = Agent {
+            label: LABEL.to_owned(),
+            program: "/Applications/Atlas.app/Contents/MacOS/atlas".into(),
+            uid: 503,
+            controller_uid: 501,
+            socket: "/Users/atlas/.atlas/helper/503.sock".into(),
+        };
+        let logs = Path::new("/Users/atlas/.atlas/logs");
+        let ours = setup::helper::text_sha256(&setup::helper::plist(&agent, logs));
+        let attempt = |earlier: Option<&str>, install_fails: bool| {
+            let actions = std::cell::RefCell::new(Vec::new());
+            let run = |request: &Request| -> Result<Value> {
+                let action = serde_json::to_value(request).unwrap()["action"].clone();
+                actions
+                    .borrow_mut()
+                    .push(action.as_str().unwrap().to_owned());
+                match request {
+                    Request::Inspect { .. } => {
+                        Ok(json!({"ok": true, "jobs": {LABEL: {"plistSha256": earlier}}}))
+                    }
+                    Request::Install { .. } if install_fails => Err(problem("refused")),
+                    _ => Ok(json!({"ok": true})),
+                }
+            };
+            let outcome = install_job(run, 503, agent.clone(), logs);
+            (outcome.is_ok(), actions.into_inner())
+        };
+        assert_eq!(
+            attempt(None, false),
+            (true, vec!["inspect".into(), "install".into()])
+        );
+        assert_eq!(
+            attempt(Some(&ours), false),
+            (true, vec!["inspect".into(), "install".into()])
+        );
+        let other = "0".repeat(64);
+        assert_eq!(
+            attempt(Some(&other), false),
+            (
+                true,
+                vec!["inspect".into(), "retire".into(), "install".into()]
+            )
+        );
+        assert_eq!(
+            attempt(Some(&other), true),
+            (
+                false,
+                vec![
+                    "inspect".into(),
+                    "retire".into(),
+                    "install".into(),
+                    "restore".into()
+                ]
+            )
+        );
     }
 
     #[test]
