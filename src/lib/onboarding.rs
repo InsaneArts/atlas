@@ -117,6 +117,9 @@ fn me() -> Result<(u32, String, Option<String>)> {
     Ok((uid, account.name, real))
 }
 
+/// This account's home as directory services record it, not `$HOME` (see
+/// [`config::home`]): the helper's layout and launchd job live there, and
+/// the window that runs these steps may have any environment.
 fn home() -> Result<PathBuf> {
     let uid = nix::unistd::getuid().as_raw();
     Ok(setup::account_with_uid(uid)?
