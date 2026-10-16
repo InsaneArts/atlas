@@ -142,26 +142,33 @@ pub async fn type_text(client: &Client, text: &str) -> Result<Value> {
         let outcome = client
             .input(&json!([{ "type": "type", "text": batch }]), None, None)
             .await;
-        let (failure, uncertain) = match outcome {
+        // Agents act on the code (busy, lease-lost, session-changed), so
+        // it is kept whichever way the batch failed.
+        let (code, failure, uncertain) = match outcome {
             Ok(reply) if reply["ok"] == true => {
                 confirmed += 1;
                 typed += batch.chars().count();
                 continue;
             }
             Ok(reply) => (
+                reply["code"]
+                    .as_str()
+                    .and_then(crate::error::code)
+                    .unwrap_or("input"),
                 reply["error"]
                     .as_str()
                     .unwrap_or("The helper did not confirm the text")
                     .to_owned(),
                 reply["uncertain"] == true,
             ),
-            Err(error) => (error.error, error.uncertain),
+            Err(error) => (error.code, error.error, error.uncertain),
         };
         return Ok(json!({
             "ok": false,
             "typed": typed,
             "batches": batches.len(),
             "confirmedBatches": confirmed,
+            "code": code,
             "error": failure,
             "uncertain": uncertain,
         }));

@@ -46,7 +46,8 @@ pub fn typed(value: &Value) -> Rendered {
                 .as_str()
                 .unwrap_or("the helper did not confirm the rest")
         );
-        return Rendered::err(card(&message, Some("input"), value["uncertain"] == true));
+        let code = value["code"].as_str().unwrap_or("input");
+        return Rendered::err(card(&message, Some(code), value["uncertain"] == true));
     }
     Rendered::out(format!(
         "{} Typed {}",
