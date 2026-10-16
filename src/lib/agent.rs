@@ -188,6 +188,12 @@ pub fn keys(keys: &[String]) -> Result<Value> {
     ))
 }
 
+/// Whether two app names name the same app: compared case-insensitively,
+/// so `textedit` and `TextEdit` (or `ÉDITEUR` and `Éditeur`) agree.
+pub(crate) fn same_app(a: &str, b: &str) -> bool {
+    a == b || a.to_lowercase() == b.to_lowercase()
+}
+
 /// Which helper windows a command is about.
 #[derive(Debug, Default, Clone)]
 pub struct WindowFilter {
@@ -201,15 +207,19 @@ pub struct WindowFilter {
 
 impl WindowFilter {
     pub fn matches(&self, window: &Window) -> bool {
-        let lower = |text: &Option<String>| text.as_deref().map(str::to_lowercase);
         // With --app, an app's floating panels and alerts count as its own.
         (self.all || window.layer == 0 || (self.app.is_some() && app_layer(window)))
-            && self
-                .app
-                .as_ref()
-                .is_none_or(|app| lower(&window.owner) == Some(app.to_lowercase()))
+            && self.app.as_ref().is_none_or(|app| {
+                window
+                    .owner
+                    .as_deref()
+                    .is_some_and(|owner| same_app(owner, app))
+            })
             && self.title.as_ref().is_none_or(|title| {
-                lower(&window.title).is_some_and(|own| own.contains(&title.to_lowercase()))
+                window
+                    .title
+                    .as_deref()
+                    .is_some_and(|own| own.to_lowercase().contains(&title.to_lowercase()))
             })
     }
 }
@@ -417,7 +427,9 @@ fn selected(
         .into_iter()
         .flatten()
         .filter(|running| match closing {
-            Closing::App(app) => running["name"] == app,
+            Closing::App(app) => running["name"]
+                .as_str()
+                .is_some_and(|name| same_app(name, app)),
             // An app someone opened: the main program of an app bundle (not
             // a helper or service inside one), with a Dock icon, or a menu
             // bar app that is not part of macOS (its own, such as Siri,
@@ -633,7 +645,7 @@ async fn no_window(client: &Client, filter: &WindowFilter) -> String {
         .find(|running| {
             running["name"]
                 .as_str()
-                .is_some_and(|name| name.eq_ignore_ascii_case(app))
+                .is_some_and(|name| same_app(name, app))
         });
     match running {
         None => format!("{app} is not running"),
@@ -779,7 +791,7 @@ fn app_pid(windows: &[Window], target: &Target) -> Result<i64> {
                 && window
                     .owner
                     .as_deref()
-                    .is_some_and(|owner| owner.eq_ignore_ascii_case(name))
+                    .is_some_and(|owner| same_app(owner, name))
         })
         .collect();
     // Its ordinary windows first, then floating panels and alerts, then open
@@ -1106,6 +1118,24 @@ mod tests {
         assert!(type_batches("").is_err());
     }
 
+    /// Every command compares app names the same way, beyond ASCII too.
+    #[test]
+    fn app_names_match_in_any_case() {
+        assert!(same_app("TextEdit", "textedit"));
+        assert!(same_app("ÉDITEUR", "éditeur"));
+        assert!(!same_app("TextEdit", "Text"));
+        let windows = [window(1, 8, "Éditeur", 0)];
+        assert_eq!(
+            app_pid(&windows, &Target::Name("éditeur".into())).unwrap(),
+            8
+        );
+        let filter = WindowFilter {
+            app: Some("ÉDITEUR".into()),
+            ..WindowFilter::default()
+        };
+        assert!(filter.matches(&windows[0]));
+    }
+
     #[test]
     fn window_filters_match_app_title_and_layer() {
         let mut edit = window(1, 2, "TextEdit", 0);
@@ -1276,6 +1306,8 @@ mod tests {
             None
         ));
         assert_eq!(names(Closing::App("Finder")), ["Finder"], "refused later");
+        assert_eq!(names(Closing::App("opie qa")), ["Opie QA"], "any case");
+        assert!(names(Closing::App("Opie")).is_empty(), "whole names only");
         assert!(selected(&apps, Closing::App("Finder"), None)[0].3);
         // A development build, outside the app, still spares the installed
         // Atlas by its identifier.
