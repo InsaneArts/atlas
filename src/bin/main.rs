@@ -357,7 +357,7 @@ enum Command {
         #[arg(long)]
         gone: bool,
         /// Seconds.
-        #[arg(long, default_value_t = 10)]
+        #[arg(long, default_value_t = 10, value_parser = wait_seconds)]
         timeout: u64,
     },
 
@@ -1497,6 +1497,18 @@ fn run_seconds(value: &str) -> std::result::Result<u64, String> {
         })
 }
 
+/// The longest `wait --timeout`: a day.
+const WAIT_MAX_SECONDS: u64 = 24 * 60 * 60;
+
+/// `wait --timeout`: whole seconds, 0 for one look.
+fn wait_seconds(value: &str) -> std::result::Result<u64, String> {
+    value
+        .parse()
+        .ok()
+        .filter(|seconds| *seconds <= WAIT_MAX_SECONDS)
+        .ok_or_else(|| format!("Give 0 to {WAIT_MAX_SECONDS} seconds."))
+}
+
 #[derive(Clone, Copy, ValueEnum)]
 enum LoginArg {
     On,
@@ -1620,5 +1632,13 @@ mod tests {
             panic!("scroll did not parse");
         };
         assert_eq!(dy, -3);
+    }
+
+    #[test]
+    fn a_wait_lasts_at_most_a_day() {
+        assert!(parse(&["wait", "--app", "A", "--timeout", "0"]).is_ok());
+        assert!(parse(&["wait", "--app", "A", "--timeout", "86400"]).is_ok());
+        assert!(parse(&["wait", "--app", "A", "--timeout", "86401"]).is_err());
+        assert!(parse(&["wait", "--app", "A", "--timeout", "18446744073709551615"]).is_err());
     }
 }
