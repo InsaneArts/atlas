@@ -988,11 +988,11 @@ async fn doctor(client: &Client, verbose: bool) -> Value {
 
 async fn execute(config: PathBuf, command: Command) -> Result<Value> {
     // Helper-side commands run inside the helper login and never read the
-    // controller's configuration.
-    let command = match command {
-        Command::EnvironmentWorker { packet, apply } => {
-            return environment::worker(&packet, apply);
-        }
+    // controller's configuration. A command that talks to the helper loads
+    // it before anything else.
+    let client = || Client::new(Config::load(&config)?);
+    match command {
+        Command::EnvironmentWorker { packet, apply } => environment::worker(&packet, apply),
         Command::AgentGuide { skill, commands } => {
             if skill {
                 print(&agent::skill());
@@ -1001,28 +1001,31 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             } else {
                 print(agent::GUIDE);
             }
-            return Ok(Value::Null);
+            Ok(Value::Null)
         }
-        Command::SessionInfo => return atlas::native::session_info(),
-        Command::PermissionsInfo => return Ok(atlas::daemon::facts::permissions_now()),
-        Command::WindowsInfo => return windows_info(),
-        Command::ElementsInfo { pid } => return elements_info(pid),
+        Command::SessionInfo => atlas::native::session_info(),
+        Command::PermissionsInfo => Ok(atlas::daemon::facts::permissions_now()),
+        Command::WindowsInfo => windows_info(),
+        Command::ElementsInfo { pid } => elements_info(pid),
+        Command::HelperServe { .. } => {
+            unreachable!("main serves the helper daemon on its own thread")
+        }
         Command::InputService {
             uid,
             controller_uid,
             socket,
-        } => return input_service(uid, controller_uid, socket).await,
-        Command::SetupHelper { request } => return atlas::setup::helper::run(&request),
+        } => input_service(uid, controller_uid, socket).await,
+        Command::SetupHelper { request } => atlas::setup::helper::run(&request),
         Command::Update {
             allow_unnotarized,
             force,
             version,
-        } => return update(&config, allow_unnotarized, force, version),
-        Command::UpdateFinish => return update_finish(&config),
-        Command::Init => return atlas::init::run(&config).await,
+        } => update(&config, allow_unnotarized, force, version),
+        Command::UpdateFinish => update_finish(&config),
+        Command::Init => atlas::init::run(&config).await,
         Command::Onboarding { step } => {
             use atlas::onboarding;
-            return match step {
+            match step {
                 OnboardingCommand::Status => onboarding::status(&config).await,
                 OnboardingCommand::Choose { account } => onboarding::choose(&config, &account),
                 OnboardingCommand::Create { account, full_name } => {
@@ -1039,10 +1042,10 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
                 OnboardingCommand::Login { state } => {
                     onboarding::login(&config, state == OnOff::On)
                 }
-            };
+            }
         }
         Command::Agents { action } => {
-            return match action.unwrap_or(AgentsCommand::Status { brief: false }) {
+            match action.unwrap_or(AgentsCommand::Status { brief: false }) {
                 AgentsCommand::Status { brief: true } => {
                     print(&format!("{}\n", atlas::agents::brief(&config).await));
                     Ok(Value::Null)
@@ -1062,48 +1065,27 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
                     let _spinner = Spinner::new("Disconnecting…");
                     atlas::agents::change(&chosen(claude, codex), true)
                 }
-            };
+            }
         }
         Command::Uninstall { keep_config, yes } => {
-            return atlas::uninstall::run(&config, keep_config, yes).await;
+            atlas::uninstall::run(&config, keep_config, yes).await
         }
         Command::Menubar {
             login: Some(login), ..
-        } => return menubar::login(login.as_str()),
+        } => menubar::login(login.as_str()),
         Command::Switch {
             account,
             lock,
             list,
             yes,
-        } => return switch(&config, account, lock, list, yes),
+        } => switch(&config, account, lock, list, yes),
         Command::Setup {
             helper,
             apply: false,
             rollback: false,
-        } => return atlas::setup::preview(&config, helper.as_deref()).await,
-        command => command,
-    };
-    let client = Client::new(Config::load(&config)?)?;
-    match command {
-        Command::InputService { .. }
-        | Command::HelperServe { .. }
-        | Command::SessionInfo
-        | Command::PermissionsInfo
-        | Command::WindowsInfo
-        | Command::ElementsInfo { .. }
-        | Command::AgentGuide { .. }
-        | Command::EnvironmentWorker { .. }
-        | Command::SetupHelper { .. }
-        | Command::Update { .. }
-        | Command::UpdateFinish
-        | Command::Init
-        | Command::Onboarding { .. }
-        | Command::Agents { .. }
-        | Command::Uninstall { .. }
-        | Command::Switch { .. } => {
-            unreachable!("these commands return above, or from main")
-        }
+        } => atlas::setup::preview(&config, helper.as_deref()).await,
         Command::Setup { apply, .. } => {
+            let client = client()?;
             // Recovery ownership: the migration settles only the pending
             // mutations its own log records and refuses any other.
             let ownership = client.controller.acquire(true)?;
@@ -1113,50 +1095,63 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
                 atlas::setup::migrate::rollback(&config, &ownership).await
             }
         }
-        Command::Config => Ok(json!({ "ok": true, "config": client.config, "path": config })),
-        Command::Status => Ok(client.status().await),
-        Command::Doctor { verbose } => Ok(doctor(&client, verbose).await),
-        Command::VerifyNative { fixture } => atlas::capability::verify(&client, &fixture).await,
+        Command::Config => {
+            let client = client()?;
+            Ok(json!({ "ok": true, "config": client.config, "path": config }))
+        }
+        Command::Status => Ok(client()?.status().await),
+        Command::Doctor { verbose } => Ok(doctor(&client()?, verbose).await),
+        Command::VerifyNative { fixture } => atlas::capability::verify(&client()?, &fixture).await,
         Command::Environment {
             manifest,
             apply,
             command,
-        } => match command {
-            Some(EnvironmentCommand::Profile { profile, apply }) => {
-                environment::profile::sync(&client, &profile, apply).await
-            }
-            Some(EnvironmentCommand::Run { argv }) => {
-                environment::run(&client, argv).await.map(with_output)
-            }
-            Some(EnvironmentCommand::Apply { plan_id }) => {
-                environment::apply(&client, &plan_id).await
-            }
-            Some(EnvironmentCommand::Rollback {
-                transaction_id,
-                apply,
-            }) => environment::rollback(&client, &transaction_id, apply).await,
-            Some(EnvironmentCommand::Discover {
-                tools,
-                apps,
-                environment,
-                references,
-            }) => {
-                environment::discovery::discover(&client, &tools, &apps, &environment, &references)
+        } => {
+            let client = client()?;
+            match command {
+                Some(EnvironmentCommand::Profile { profile, apply }) => {
+                    environment::profile::sync(&client, &profile, apply).await
+                }
+                Some(EnvironmentCommand::Run { argv }) => {
+                    environment::run(&client, argv).await.map(with_output)
+                }
+                Some(EnvironmentCommand::Apply { plan_id }) => {
+                    environment::apply(&client, &plan_id).await
+                }
+                Some(EnvironmentCommand::Rollback {
+                    transaction_id,
+                    apply,
+                }) => environment::rollback(&client, &transaction_id, apply).await,
+                Some(EnvironmentCommand::Discover {
+                    tools,
+                    apps,
+                    environment,
+                    references,
+                }) => {
+                    environment::discovery::discover(
+                        &client,
+                        &tools,
+                        &apps,
+                        &environment,
+                        &references,
+                    )
                     .await
-            }
-            None => {
-                let manifest = manifest.ok_or_else(|| {
+                }
+                None => {
+                    let manifest = manifest.ok_or_else(|| {
                     Error::new(
                         "usage",
                         "atlas environment needs a profile file, or a command such as discover or run.",
                     )
                 })?;
-                environment::sync(&client, &manifest, apply).await
+                    environment::sync(&client, &manifest, apply).await
+                }
             }
-        },
-        Command::Install => client.install(),
-        Command::StartInput => client.start_input().await,
+        }
+        Command::Install => client()?.install(),
+        Command::StartInput => client()?.start_input().await,
         Command::Monitor { port } => {
+            let client = client()?;
             viewer::monitor(&config, port, client.output_dir()?).await?;
             Ok(Value::Null)
         }
@@ -1166,6 +1161,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             serve,
             ..
         } => {
+            let client = client()?;
             let program = menubar::Program::new(&config)?;
             match render {
                 Some(directory) => viewer::render_menubar(client, &program, &directory).await,
@@ -1185,8 +1181,8 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
                 }
             }
         }
-        Command::Screenshot { max_dimension } => client.capture(max_dimension).await,
-        Command::Apps => client.apps().await,
+        Command::Screenshot { max_dimension } => client()?.capture(max_dimension).await,
+        Command::Apps => client()?.apps().await,
         Command::Click {
             x,
             y,
@@ -1196,39 +1192,52 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             button,
             count,
             modifiers,
-        } => match (x, y, target.target()) {
-            (Some(x), Some(y), None) => {
-                act(
-                    &client,
-                    agent::click(x, y, button.into(), count, &modifiers),
-                )
-                .await
-            }
-            (None, None, Some(target)) => {
-                let filter = agent::ElementFilter { role, name };
-                agent::click_element(&client, &target, &filter, button.into(), count, &modifiers)
+        } => {
+            let client = client()?;
+            match (x, y, target.target()) {
+                (Some(x), Some(y), None) => {
+                    act(
+                        &client,
+                        agent::click(x, y, button.into(), count, &modifiers),
+                    )
                     .await
+                }
+                (None, None, Some(target)) => {
+                    let filter = agent::ElementFilter { role, name };
+                    agent::click_element(
+                        &client,
+                        &target,
+                        &filter,
+                        button.into(),
+                        count,
+                        &modifiers,
+                    )
+                    .await
+                }
+                _ => Err(Error::new(
+                    "usage",
+                    "Give X Y, or --app/--pid with --name/--role",
+                )),
             }
-            _ => Err(Error::new(
-                "usage",
-                "Give X Y, or --app/--pid with --name/--role",
-            )),
-        },
+        }
         Command::Elements {
             target,
             role,
             name,
             max,
         } => {
+            let client = client()?;
             let target = target
                 .target()
                 .ok_or_else(|| Error::new("usage", "Select the app with --app or --pid"))?;
             agent::elements(&client, &target, &agent::ElementFilter { role, name }, max).await
         }
         Command::Readiness { tools, apps } => {
-            atlas::readiness::readiness(&client, &tools, &apps).await
+            atlas::readiness::readiness(&client()?, &tools, &apps).await
         }
-        Command::Move { x, y } => act(&client, json!([{ "type": "move", "x": x, "y": y }])).await,
+        Command::Move { x, y } => {
+            act(&client()?, json!([{ "type": "move", "x": x, "y": y }])).await
+        }
         Command::Drag {
             from_x,
             from_y,
@@ -1237,19 +1246,20 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             button,
         } => {
             act(
-                &client,
+                &client()?,
                 agent::drag((from_x, from_y), (to_x, to_y), button.into()),
             )
             .await
         }
         Command::Scroll { x, y, dx, dy } => {
             act(
-                &client,
+                &client()?,
                 json!([{ "type": "scroll", "x": x, "y": y, "dx": dx, "dy": dy }]),
             )
             .await
         }
         Command::Type { text, stdin } => {
+            let client = client()?;
             let text = match text {
                 Some(text) if !stdin => text,
                 _ => {
@@ -1264,16 +1274,17 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             };
             agent::type_text(&client, &text).await
         }
-        Command::Key { keys } => act(&client, agent::keys(&keys)?).await,
+        Command::Key { keys } => act(&client()?, agent::keys(&keys)?).await,
         Command::Windows { app, title, all } => {
-            agent::list(&client, &agent::WindowFilter { app, title, all }).await
+            agent::list(&client()?, &agent::WindowFilter { app, title, all }).await
         }
         Command::Open {
             app,
             targets,
             environment,
-        } => agent::open(&client, app.as_deref(), &targets, &environment).await,
+        } => agent::open(&client()?, app.as_deref(), &targets, &environment).await,
         Command::Close { app, .. } => {
+            let client = client()?;
             let closing = app
                 .as_deref()
                 .map_or(agent::Closing::All, agent::Closing::App);
@@ -1285,6 +1296,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             gone,
             timeout,
         } => {
+            let client = client()?;
             let filter = agent::WindowFilter {
                 app,
                 title,
@@ -1293,6 +1305,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             agent::wait(&client, &filter, gone, Duration::from_secs(timeout)).await
         }
         Command::Input { actions } => {
+            let client = client()?;
             // The most an actions batch may take, in bytes.
             const LIMIT: u64 = 32 * 1024;
             let bytes = if let Some(path) = actions.strip_prefix('@') {
@@ -1315,11 +1328,12 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
                 .input(&serde_json::from_slice(&bytes)?, None, None)
                 .await
         }
-        Command::Run { argv, timeout } => client
+        Command::Run { argv, timeout } => client()?
             .run_within(argv, Duration::from_secs(timeout))
             .await
             .map(with_output),
         Command::Restart => {
+            let client = client()?;
             let _spinner = Spinner::new("Restarting the helper…");
             client.restart().await
         }
