@@ -35,6 +35,7 @@ pub const CODES: &[&str] = &[
     "agents",
     "apps",
     "bad-request",
+    "blocked",
     "busy",
     "cancelled",
     "capture",

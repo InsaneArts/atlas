@@ -361,7 +361,7 @@ pub(crate) fn replace_config(path: &Path, previous: &Config, config: &Config) ->
 }
 
 /// Whether the helper's graphical session exists (it has logged in).
-pub(crate) fn helper_logged_in(uid: u32) -> bool {
+pub fn helper_logged_in(uid: u32) -> bool {
     // A signed-in desktop runs its Dock; visible without administrator rights.
     Command::new("/usr/bin/pgrep")
         .args(["-U", &uid.to_string(), "-x", "Dock"])

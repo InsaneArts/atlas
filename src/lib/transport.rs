@@ -31,7 +31,8 @@ impl Transport {
         let deadline = started + self.timeout;
         let stream = timeout_at(deadline, UnixStream::connect(&self.path))
             .await
-            .map_err(|_| Error::new("transport", "Connection timed out"))??;
+            .map_err(|_| Error::new("transport", "Connection timed out"))?
+            .map_err(refused)?;
         if stream.peer_cred()?.uid() != self.peer_uid {
             return Err(Error::new(
                 "identity",
@@ -55,6 +56,21 @@ impl Transport {
             .finish()
             .await
     }
+}
+
+/// A failed connection, said plainly. The kernel refuses with EPERM only
+/// when policy forbids the connection, which is what an agent's sandbox
+/// does to local sockets: the helper may be fine.
+fn refused(error: std::io::Error) -> Error {
+    if error.raw_os_error() == Some(libc::EPERM) {
+        return Error::new(
+            "blocked",
+            "This shell may not connect to the helper (operation not permitted). An agent's \
+             sandbox blocks local sockets: run atlas outside the sandbox. The helper itself \
+             may be fine.",
+        );
+    }
+    Error::from(error)
 }
 
 impl Pending {
@@ -178,8 +194,19 @@ pub fn with_output(mut reply: Value) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{OutputError, run_output, with_output};
+    use super::{OutputError, refused, run_output, with_output};
     use serde_json::json;
+
+    /// Only a connection policy forbids is `blocked`; a missing socket or a
+    /// permission on its folder stays what it is.
+    #[test]
+    fn a_forbidden_connection_is_blocked() {
+        let error = |code| refused(std::io::Error::from_raw_os_error(code)).code;
+        assert_eq!(error(libc::EPERM), "blocked");
+        assert_eq!(error(libc::EACCES), "io");
+        assert_eq!(error(libc::ENOENT), "io");
+        assert_eq!(error(libc::ECONNREFUSED), "io");
+    }
 
     #[test]
     fn run_output_joins_only_output_events_within_the_limit() {
