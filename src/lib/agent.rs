@@ -9,7 +9,7 @@ use crate::{
     handoff,
     native::{
         ax::{Element, Frame},
-        windows::{Bounds, MENU_LAYER, Window, unobstructed},
+        windows::{Bounds, MENU_BAR_LAYER, MENU_LAYER, Window, unobstructed},
     },
     transport::run_output,
 };
@@ -744,13 +744,16 @@ impl ElementFilter {
         .flatten()
         .max()
     }
+
     /// How `element` matches, if it does.
     pub(crate) fn match_of(&self, element: &Element) -> Option<NameMatch> {
         self.compare(element, &|_| false)
     }
+
     pub fn matches(&self, element: &Element) -> bool {
         self.match_of(element).is_some()
     }
+
     /// Whether `element` could match once attributes it failed to read are
     /// treated as unknown.
     pub(crate) fn might_match(&self, element: &Element) -> bool {
@@ -919,6 +922,32 @@ fn owning_window(windows: &[Window], pid: i64, frame: &Frame) -> Option<i64> {
     .or_else(|| unique(matching))
 }
 
+/// The menu bar where it shows the point, which is the Window Server's
+/// window rather than the app's.
+fn menu_bar_window(windows: &[Window], x: f64, y: f64) -> Option<i64> {
+    windows
+        .iter()
+        .find(|window| {
+            window.layer == MENU_BAR_LAYER
+                && window.owner.as_deref() == Some("Window Server")
+                && window.alpha > 0.0
+                && window.bounds.contains(x, y)
+        })
+        .map(|window| window.number)
+}
+
+/// The process of the active application in the helper: the one whose
+/// titles the menu bar shows.
+async fn active_pid(client: &Client) -> Result<Option<i64>> {
+    let apps = client.apps().await?;
+    Ok(apps["apps"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|app| app["active"] == true)
+        .and_then(|app| app["pid"].as_i64()))
+}
+
 /// The one element a click by name or role is for. While a menu is open
 /// only its items count (a click outside it just closes the menu). A whole
 /// name wins over the first part of a longer label, judged over every match
@@ -1014,10 +1043,22 @@ pub async fn click_element(
     };
     // A fresh list, read after the scan, judged for the element's own window.
     let windows = windows(client).await?;
-    let window = element
-        .window
-        .as_ref()
-        .and_then(|frame| owning_window(&windows, pid, frame));
+    let window = if element.role.as_deref() == Some("AXMenuBarItem") {
+        // The menu bar shows the active app's titles, and only those.
+        if active_pid(client).await? != Some(pid) {
+            return Err(Error::new(
+                "elements",
+                "The app is no longer active, so the menu bar does not show its titles",
+            ));
+        }
+
+        menu_bar_window(&windows, x, y)
+    } else {
+        element
+            .window
+            .as_ref()
+            .and_then(|frame| owning_window(&windows, pid, frame))
+    };
     if !window.is_some_and(|window| unobstructed(&windows, window, x, y, &display)) {
         return Err(Error::new(
             "elements",
@@ -1058,6 +1099,42 @@ mod tests {
                 height: 200.0,
             },
         }
+    }
+
+    /// A menu bar title is judged against the menu bar, the Window Server's
+    /// window at the point to click, and only while that is shown; an app's
+    /// own window at that layer is not the bar.
+    #[test]
+    fn the_menu_bar_is_the_window_servers() {
+        let bar = |owner: &str, alpha: f64| {
+            let mut bar = window(3, 433, owner, MENU_BAR_LAYER);
+            bar.alpha = alpha;
+            bar.bounds = Bounds {
+                x: 0.0,
+                y: 0.0,
+                width: 1512.0,
+                height: 30.0,
+            };
+            bar
+        };
+        let app = || window(9, 6, "Opie", 0);
+
+        assert_eq!(
+            menu_bar_window(&[bar("Window Server", 1.0), app()], 232.0, 12.0),
+            Some(3)
+        );
+        assert_eq!(
+            menu_bar_window(&[bar("Window Server", 1.0), app()], 232.0, 60.0),
+            None
+        );
+        assert_eq!(
+            menu_bar_window(&[bar("Window Server", 0.0), app()], 232.0, 12.0),
+            None
+        );
+        assert_eq!(
+            menu_bar_window(&[bar("Opie", 1.0), app()], 232.0, 12.0),
+            None
+        );
     }
 
     #[test]

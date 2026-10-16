@@ -29,6 +29,8 @@ unsafe extern "C-unwind" {
 
 /// Longest text reported for any one attribute, in UTF-16 units.
 const TEXT_LIMIT: CFIndex = 200;
+/// Most menu bar titles read for an app.
+const MENU_BAR_ITEMS: usize = 64;
 /// AX errors meaning the element could not be read at all: the request could
 /// not complete (timeout or unresponsive app), the element vanished, or the
 /// API is disabled. Any of these makes the whole scan incomplete.
@@ -100,6 +102,7 @@ impl Scan {
         self.incomplete |= !open;
         open
     }
+
     fn failed(&mut self, status: AXError, attribute: &str) {
         self.last_error = Some(status);
         let key = format!("{attribute}:{}", status.0);
@@ -110,6 +113,7 @@ impl Scan {
             self.unreadable.push(attribute.to_owned());
         }
     }
+
     /// Copy one attribute value.
     fn attribute(
         &mut self,
@@ -131,11 +135,13 @@ impl Scan {
         self.failed(status, attribute);
         None
     }
+
     fn text(&mut self, element: &AXUIElement, name: &'static str) -> Option<String> {
         let value = self.attribute(element, name)?;
         let text = value.downcast_ref::<CFString>().and_then(bounded_string);
         self.bounded(text, name)
     }
+
     /// Keep bounded text, noting the attribute when it was cut.
     fn bounded(&mut self, text: Option<(String, bool)>, name: &str) -> Option<String> {
         let (text, truncated) = text?;
@@ -144,10 +150,12 @@ impl Scan {
         }
         Some(text)
     }
+
     fn flag(&mut self, element: &AXUIElement, name: &'static str) -> Option<bool> {
         let value = self.attribute(element, name)?;
         value.downcast_ref::<CFBoolean>().map(CFBoolean::as_bool)
     }
+
     /// The element's value as text: strings bounded, numbers and booleans rendered.
     fn value(&mut self, element: &AXUIElement) -> Option<String> {
         let value = self.attribute(element, "AXValue")?;
@@ -162,6 +170,7 @@ impl Scan {
                 .map(|flag| flag.as_bool().to_string())
         }
     }
+
     fn frame(&mut self, element: &AXUIElement) -> Option<Frame> {
         let position = self.attribute(element, "AXPosition")?;
         let size = self.attribute(element, "AXSize")?;
@@ -182,6 +191,7 @@ impl Scan {
             height: extent.height,
         })
     }
+
     /// At most `maximum` elements from an array attribute. The value count
     /// is read first: zero is a leaf, and a count beyond what was fetched (or
     /// any failure to enumerate a non-empty array) leaves the scan incomplete
@@ -235,6 +245,7 @@ impl Scan {
             .filter_map(|value| value.downcast::<AXUIElement>().ok())
             .collect()
     }
+
     /// What the app draws in `bounds`, one of its windows at the menu layer:
     /// the element above a point inside it whose frame is the window's (an
     /// open menu, a popover, a combo box's list, a panel raised to the menu
@@ -354,6 +365,7 @@ pub struct Frame {
     pub width: f64,
     pub height: f64,
 }
+
 impl Frame {
     pub fn center(&self) -> (f64, f64) {
         (
@@ -361,6 +373,7 @@ impl Frame {
             (self.y + self.height / 2.0).round(),
         )
     }
+
     /// Whether two frames are the same within a point.
     pub fn matches(&self, other: &Frame) -> bool {
         let near = |a: f64, b: f64| (a - b).abs() <= 1.0;
@@ -420,6 +433,7 @@ pub struct Limits {
     pub count: usize,
     pub time: Duration,
 }
+
 impl Default for Limits {
     fn default() -> Self {
         Self {
@@ -430,9 +444,23 @@ impl Default for Limits {
     }
 }
 
-/// Depth-first elements of `pid`'s windows, then of the menus it has open
-/// (a menu bar, status item or context menu). Closed menus and the menu bar
-/// itself are left out: nothing in them is on screen.
+/// The window frame an element is judged visible against: a sheet's own
+/// frame for the sheet and all it holds, since a sheet is a window of its own
+/// in front of the one it hangs from; otherwise the frame it inherited.
+fn sheet_window(
+    role: Option<&str>,
+    frame: Option<&Frame>,
+    inherited: Option<Frame>,
+) -> Option<Frame> {
+    match (role, frame) {
+        (Some("AXSheet"), Some(frame)) => Some(frame.clone()),
+        _ => inherited,
+    }
+}
+
+/// Depth-first elements of `pid`'s windows, its menu bar titles when it is
+/// the active app, then the menus it has open (a menu bar, status item or
+/// context menu). Closed menus are left out: nothing in them is on screen.
 pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
     // SAFETY: plain constructors returning an owned element or null; the
     // system-wide element sets this process's global messaging timeout,
@@ -471,6 +499,27 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
     // Elements hit through a click-through window, which the scan below
     // must reach; any it does not might hold an unseen match.
     let mut unvisited: Vec<CFRetained<AXUIElement>> = Vec::new();
+    // The menu bar shows the active app's titles, which are on screen and
+    // take clicks; the closed menus under them are left out below. A bar
+    // that fails to read might hold an unseen match.
+    if scan.flag(&app, "AXFrontmost") == Some(true) {
+        scan.last_error = None;
+        let bar = scan
+            .attribute(&app, "AXMenuBar")
+            .and_then(|bar| bar.downcast::<AXUIElement>().ok());
+        match bar {
+            Some(bar) => {
+                let frame = scan.frame(&bar);
+                for item in scan.children(&bar, "AXChildren", MENU_BAR_ITEMS) {
+                    roots.push((item, frame.clone(), false));
+                }
+            }
+            None => {
+                scan.incomplete |= scan.last_error.is_some_and(|code| !ABSENT.contains(&code));
+            }
+        }
+    }
+
     // An open menu is a window of its own at the menu layer. A window there
     // that cannot be read might hold an unseen match, so it leaves the scan
     // incomplete.
@@ -541,6 +590,8 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
                 continue;
             }
         }
+        let frame = scan.frame(item);
+        let window = sheet_window(role.as_deref(), frame.as_ref(), window);
         let mut element = Element {
             index: found.len(),
             depth,
@@ -553,7 +604,7 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
             identifier: scan.text(item, "AXIdentifier"),
             enabled: scan.flag(item, "AXEnabled"),
             focused: scan.flag(item, "AXFocused"),
-            frame: scan.frame(item),
+            frame,
             unreadable: Vec::new(),
             truncated: Vec::new(),
             menu,
@@ -586,6 +637,36 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What a sheet holds is judged against the sheet, not the window it
+    /// hangs from; anything else keeps its window.
+    #[test]
+    fn a_sheet_is_the_window_of_what_it_holds() {
+        let window = Frame {
+            x: 0.0,
+            y: 0.0,
+            width: 600.0,
+            height: 400.0,
+        };
+        let sheet = Frame {
+            x: 100.0,
+            y: 50.0,
+            width: 400.0,
+            height: 300.0,
+        };
+        assert_eq!(
+            sheet_window(Some("AXSheet"), Some(&sheet), Some(window.clone())),
+            Some(sheet.clone())
+        );
+        assert_eq!(
+            sheet_window(Some("AXButton"), Some(&sheet), Some(window.clone())),
+            Some(window.clone())
+        );
+        assert_eq!(
+            sheet_window(Some("AXSheet"), None, Some(window.clone())),
+            Some(window)
+        );
+    }
 
     #[test]
     fn frames_report_whole_point_centres() {
