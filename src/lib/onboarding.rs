@@ -99,30 +99,13 @@ fn read_request(path: &Path) -> Option<Pairing> {
 
 /// Write the request, readable by every account and changed only by this one.
 fn write_request(path: &Path, request: &Pairing) -> Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| problem("The request needs a directory"))?;
-    let temporary = parent.join(format!(".onboarding.{}", crate::control::token()));
     let body = json!({
         "controllerUid": request.controller_uid,
         "controllerName": request.controller_name,
         "helperUid": request.helper_uid,
         "helperName": request.helper_name,
     });
-    let written = (|| -> Result<()> {
-        let mut file = fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .mode(0o644)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&temporary)?;
-        file.write_all(serde_json::to_string_pretty(&body)?.as_bytes())?;
-        file.sync_all()?;
-        fs::rename(&temporary, path)?;
-        Ok(())
-    })();
-    let _ = fs::remove_file(&temporary);
-    written
+    config::write_atomic(path, serde_json::to_string_pretty(&body)?.as_bytes(), 0o644)
 }
 
 /// This account's user ID, short name and full name.
@@ -497,19 +480,11 @@ fn answer_prompts(
         .stderr(Stdio::piped())
         .spawn()?;
     let mut input = child.stdin.take().ok_or_else(|| problem("No input pipe"))?;
-    let mut output = child
+    let output = child
         .stdout
         .take()
         .ok_or_else(|| problem("No output pipe"))?;
-    let (sender, receiver) = std::sync::mpsc::channel::<Vec<u8>>();
-    std::thread::spawn(move || {
-        let mut chunk = [0u8; 4096];
-        while let Ok(read @ 1..) = output.read(&mut chunk) {
-            if sender.send(chunk[..read].to_vec()).is_err() {
-                break;
-            }
-        }
-    });
+    let receiver = init::forward(output);
     let deadline = Instant::now() + patience;
     let mut seen = Vec::new();
     let mut answered = 0;

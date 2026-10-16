@@ -5,7 +5,8 @@ use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     fs,
-    io::Read,
+    io::{Read, Write},
+    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
     path::{Path, PathBuf},
 };
 
@@ -101,7 +102,6 @@ impl Config {
         })
     }
     fn read(path: &Path) -> Result<Self> {
-        let path = path.to_owned();
         // A legacy JSON twin may still drive an older running process. Refuse
         // to let new invocations silently diverge from it.
         let legacy = path.with_extension("json");
@@ -118,13 +118,13 @@ impl Config {
             ));
         }
         let mut bytes = Vec::new();
-        fs::File::open(&path)?
+        fs::File::open(path)?
             .take(LIMIT + 1)
             .read_to_end(&mut bytes)?;
         if bytes.len() as u64 > LIMIT {
             return Err(Error::new("config", "Configuration exceeds 16 KiB"));
         }
-        Self::parse(&bytes, &path)
+        Self::parse(&bytes, path)
     }
     /// Parse configuration text as if it were the file at `path`: relative
     /// paths resolve against its directory and `~/` against the home.
@@ -188,10 +188,73 @@ fn missing(path: &Path) -> Error {
     )
 }
 
+/// This process's home, from `$HOME`: where its own settings, caches and
+/// records live. (onboarding resolves the account's home through directory
+/// services instead, because there it must name the account's real home,
+/// the one launchd and the helper's layout use, whatever the environment
+/// says.)
 pub fn home() -> Result<PathBuf> {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| Error::new("config", "HOME is unavailable"))
+}
+
+/// Write a fresh file beside `path` (created with `mode`, never through a
+/// link), flush it to disk, then put it in place with `place`, which is
+/// given the temporary path. The temporary file never outlives the call.
+pub(crate) fn write_beside(
+    path: &Path,
+    mode: u32,
+    write: impl FnOnce(&mut fs::File) -> Result<()>,
+    place: impl FnOnce(&Path) -> Result<()>,
+) -> Result<()> {
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(Error::new(
+            "config",
+            format!("{} is not a file path", path.display()),
+        ));
+    };
+    let temporary = parent.join(format!(
+        ".{}.{}",
+        name.to_string_lossy(),
+        crate::control::token()
+    ));
+    let result = (|| -> Result<()> {
+        let mut file = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(mode)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&temporary)?;
+        write(&mut file)?;
+        file.sync_all()?;
+        place(&temporary)
+    })();
+    let _ = fs::remove_file(&temporary);
+    result
+}
+
+/// Replace `path` with `bytes` in one rename, so readers see the old file
+/// or the new one, never part of either.
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
+    write_beside(
+        path,
+        mode,
+        |file| Ok(file.write_all(bytes)?),
+        |temporary| Ok(fs::rename(temporary, path)?),
+    )
+}
+
+/// [`write_atomic`] for a file only this account may read, making its
+/// missing folders private (0700) first.
+pub(crate) fn save_private(path: &Path, bytes: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(parent)?;
+    }
+    write_atomic(path, bytes, 0o600)
 }
 
 /// Resolve the directory holding `path`, keeping its final entry as named.
@@ -242,5 +305,29 @@ mod tests {
         let config = Config::parse(text.as_bytes(), &dir.path().join("c.toml")).unwrap();
         let shared = fs::canonicalize(link.parent().unwrap()).unwrap();
         assert_eq!(config.identity_probe, shared.join("atlas"));
+    }
+
+    #[test]
+    fn atomic_writes_replace_whole_files_and_leave_nothing_behind() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("deep/record.json");
+        save_private(&path, b"first").unwrap();
+        save_private(&path, b"second").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"second");
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let failed = write_beside(
+            &path,
+            0o600,
+            |_| Err(Error::new("io", "no")),
+            |_| unreachable!("nothing is placed after a failed write"),
+        );
+        assert!(failed.is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"second");
+        let entries = fs::read_dir(path.parent().unwrap()).unwrap().count();
+        assert_eq!(entries, 1, "no temporary file is left behind");
     }
 }

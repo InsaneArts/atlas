@@ -13,8 +13,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
-    io::Write,
-    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
+    os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
     process::Command,
     time::{Duration, Instant},
@@ -449,26 +448,6 @@ fn prepare(layout: &Layout, controller: &str) -> Result<Value> {
     Ok(json!({ "ok": true, "root": root, "changed": changed }))
 }
 
-fn atomic_write(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
-    let temporary = path.with_extension(format!("{}.new", crate::control::token()));
-    let result = (|| -> Result<()> {
-        let mut file = fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .mode(mode)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&temporary)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        fs::rename(&temporary, path)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result
-}
-
 fn install(layout: &Layout, agent: &Agent) -> Result<Value> {
     if agent.label != LABEL || agent.uid != layout.uid || agent.socket != layout.socket() {
         return Err(problem(
@@ -488,7 +467,7 @@ fn install(layout: &Layout, agent: &Agent) -> Result<Value> {
         File::Regular(sha256) if sha256 == text_sha256(&text) => {}
         File::Absent => {
             fs::create_dir_all(path.parent().unwrap_or(&layout.home))?;
-            atomic_write(&path, text.as_bytes(), 0o644)?;
+            crate::config::write_atomic(&path, text.as_bytes(), 0o644)?;
         }
         _ => {
             return Err(problem(format!(

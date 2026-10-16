@@ -15,7 +15,7 @@ use super::{
 };
 use crate::{
     client::{Client, timestamp},
-    config::{Config, home},
+    config::{Config, home, save_private},
     control::Ownership,
     error::{Error, Result},
     session::{input_current, require_hidden},
@@ -25,8 +25,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     fs,
-    io::Write,
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
@@ -93,33 +91,6 @@ fn log_path(uid: u32) -> Result<PathBuf> {
         .join(format!("setup-{uid}.json")))
 }
 
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| problem("Path has no parent directory"))?;
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(parent)?;
-    let temporary = path.with_extension(format!("{}.new", crate::control::token()));
-    let result = (|| -> Result<()> {
-        let mut file = fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&temporary)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        fs::rename(&temporary, path)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result
-}
-
 /// Whether a setup is recorded for helper `uid` (applied, in progress or
 /// rolled back).
 pub fn recorded(uid: u32) -> bool {
@@ -162,7 +133,7 @@ fn load_log(path: &Path) -> Result<Option<Log>> {
 }
 
 fn save_log(path: &Path, log: &Log) -> Result<()> {
-    write_atomic(path, &serde_json::to_vec_pretty(log)?)
+    save_private(path, &serde_json::to_vec_pretty(log)?)
 }
 
 /// The configuration with sockets moved into the private layout.
@@ -492,7 +463,7 @@ impl Migration {
                 path.display()
             )));
         }
-        write_atomic(&path, want.as_bytes())?;
+        save_private(&path, want.as_bytes())?;
         self.note("configuration switched")
     }
     /// Both labels as launchd reports them, inspected through `through`.
