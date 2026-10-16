@@ -9,20 +9,22 @@ use crate::error::{Error, Result};
 use objc2_core_foundation::{CFMutableData, CFRetained, CFString, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{
     CGBitmapContextCreate, CGBitmapContextCreateImage, CGColorSpace, CGContext, CGDisplayBounds,
-    CGImage, CGInterpolationQuality, CGMainDisplayID, CGPreflightScreenCaptureAccess,
-    CGRequestScreenCaptureAccess,
+    CGImage, CGImageAlphaInfo, CGImageByteOrderInfo, CGInterpolationQuality, CGMainDisplayID,
+    CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess,
 };
 use objc2_image_io::CGImageDestination;
 
 /// premultipliedFirst | byteOrder32Little: the native BGRA layout.
-const BGRA: u32 = 2 | (2 << 12);
+const BGRA: u32 = CGImageAlphaInfo::PremultipliedFirst.0 | CGImageByteOrderInfo::Order32Little.0;
 
 /// One encoded screenshot.
 pub struct Shot {
     pub png: Vec<u8>,
     pub width: u32,
     pub height: u32,
-    /// Backing pixels per display point.
+    /// The display's backing pixels per point, measured before any
+    /// downscaling: an image shrunk to fit a limit holds fewer pixels per
+    /// point than this.
     pub scale: f64,
 }
 
@@ -91,15 +93,14 @@ fn png(image: &CGImage) -> Result<Vec<u8>> {
     let failed = || Error::new("capture", "The screenshot could not be encoded");
     let data = CFMutableData::new(None, 0).ok_or_else(failed)?;
     let kind = CFString::from_static_str("public.png");
-    // SAFETY: a live mutable data and type identifier, one image, and no
-    // options or properties dictionaries.
-    let finished = unsafe {
-        let destination =
-            CGImageDestination::with_data(&data, &kind, 1, None).ok_or_else(failed)?;
-        destination.add_image(image, None);
-        destination.finalize()
-    };
-    if !finished {
+    // SAFETY: a live mutable data and type identifier, room for one image,
+    // and no options dictionary.
+    let destination =
+        unsafe { CGImageDestination::with_data(&data, &kind, 1, None) }.ok_or_else(failed)?;
+    // SAFETY: a live destination and image, and no properties dictionary.
+    unsafe { destination.add_image(image, None) };
+    // SAFETY: a live destination holding the one image it was made for.
+    if !unsafe { destination.finalize() } {
         return Err(failed());
     }
     Ok(data.to_vec())
@@ -153,6 +154,11 @@ mod tests {
         assert_eq!(fit(2560, 1440, None), (2560, 1440));
         assert_eq!(fit(800, 600, Some(1600)), (800, 600), "never enlarged");
         assert_eq!(fit(5000, 1, Some(100)), (100, 1), "never a zero side");
+    }
+
+    #[test]
+    fn the_bitmap_layout_keeps_its_raw_value() {
+        assert_eq!(BGRA, 2 | (2 << 12));
     }
 
     #[test]
