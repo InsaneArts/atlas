@@ -16,6 +16,7 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::UnixStream,
+    signal::unix::{SignalKind, signal},
     sync::{Notify, Semaphore, mpsc, watch},
     task::JoinSet,
 };
@@ -28,6 +29,9 @@ const WRITE: Duration = Duration::from_secs(10);
 
 /// Longest the daemon waits for running commands to end when it stops.
 const STOP: Duration = Duration::from_secs(6);
+
+/// Longest the runtime waits for blocking work once serving has ended.
+const SHUTDOWN: Duration = Duration::from_secs(2);
 
 /// Takes a screenshot: the real display in the daemon, a synthetic image in
 /// tests, so ordinary tests never capture the desktop they run on.
@@ -124,13 +128,16 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     }));
     let slots = Arc::new(Semaphore::new(CONNECTIONS));
     let mut tasks = JoinSet::new();
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    // Both listeners exist before the loop, so a signal that arrives between
+    // two passes is still delivered.
+    let mut interrupt = signal(SignalKind::interrupt())?;
+    let mut terminate = signal(SignalKind::terminate())?;
     let outcome = loop {
         tokio::select! {
             // Stopped from outside (macOS's Quit & Reopen after a new
             // permission, say): exit unsuccessfully so launchd starts it
             // again. Uninstalling unloads the job first, so it stays down.
-            _ = tokio::signal::ctrl_c() => {
+            _ = interrupt.recv() => {
                 break Err(Error::new("restart", "Interrupted; launchd starts it again"));
             }
             _ = terminate.recv() => {
@@ -152,6 +159,12 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
                     continue;
                 }
                 let Ok(slot) = slots.clone().try_acquire_owned() else {
+                    // Nothing ran: say so, rather than hang up in a way a
+                    // client must treat as uncertain.
+                    endpoint::turn_away(stream, &failure(
+                        "busy",
+                        "The helper is serving too many requests; try again",
+                    ));
                     continue;
                 };
                 let daemon = daemon.clone();
@@ -186,7 +199,13 @@ pub fn serve_blocking(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<
         .worker_threads(2)
         .enable_all()
         .build()?;
-    let worker = std::thread::spawn(move || runtime.block_on(serve(uid, controller_uid, socket)));
+    let worker = std::thread::spawn(move || {
+        let outcome = runtime.block_on(serve(uid, controller_uid, socket));
+        // Dropping the runtime would wait for blocking work (a capture or
+        // app listing stuck in a framework call) without limit.
+        runtime.shutdown_timeout(SHUTDOWN);
+        outcome
+    });
     while !worker.is_finished() {
         CFRunLoop::run_in_mode(Some(&default_mode), 0.25, false);
     }
