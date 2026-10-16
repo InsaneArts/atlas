@@ -179,8 +179,8 @@ done"#;
     Ok(answers)
 }
 
-/// What a copy of `paths` (a path here, or not) looks like to the helper.
-pub enum Target {
+/// Something `open` hands the helper: a name or URL, or a path here.
+pub(crate) enum Target {
     /// An app name or URL, passed through.
     Name(String),
     /// A file or folder here, made absolute.
@@ -189,7 +189,7 @@ pub enum Target {
 
 /// `target` as given: a path here when one exists (made absolute, since the
 /// helper has its own working directory), otherwise a name or URL.
-pub fn resolve(target: &str) -> Target {
+pub(crate) fn resolve(target: &str) -> Target {
     match fs::canonicalize(target) {
         Ok(path) => Target::Path(path),
         Err(_) => Target::Name(target.to_owned()),
@@ -197,7 +197,7 @@ pub fn resolve(target: &str) -> Target {
 }
 
 /// A running app, as the helper lists it.
-pub struct Running {
+pub(crate) struct Running {
     pub name: String,
     pub executable: String,
 }
@@ -205,16 +205,23 @@ pub struct Running {
 /// Which app the copies are opened with, by the names it may run as.
 const OPENED_WITH: &str = ".opened-with";
 
+/// What [`hand_over`] gives the helper to open.
+pub(crate) struct Handed {
+    /// The targets as the helper can open them, in order.
+    pub paths: Vec<String>,
+    /// The copies made for it, each `{"from", "to"}`.
+    pub copied: Vec<Value>,
+}
+
 /// The paths among `targets` as the helper can open them: unchanged when it
-/// can read them (or they are copies already), otherwise copied first. The
-/// copies made are added to `copied`.
-pub async fn hand_over(
+/// can read them (or they are copies already), otherwise copied first. When
+/// one cannot be handed over, the copies already made for the others go.
+pub(crate) async fn hand_over(
     client: &Client,
     ownership: &Ownership,
     targets: Vec<Target>,
     running: &[Running],
-    copied: &mut Vec<Value>,
-) -> Result<Vec<String>> {
+) -> Result<Handed> {
     // The app the targets open with: its copies go when it is closed.
     let opened_with: Vec<String> = match targets.first() {
         Some(Target::Name(name)) if targets.len() > 1 => vec![name.clone()],
@@ -234,7 +241,47 @@ pub async fn hand_over(
             _ => None,
         })
         .collect();
-    let mut answers = readable(client, ownership, &checks).await?.into_iter();
+    let answers = readable(client, ownership, &checks).await?;
+    let mut made = Vec::new();
+    let placed = place(
+        targets,
+        answers,
+        running,
+        &opened_with,
+        client.config.helper_uid,
+        &mut made,
+    );
+    match placed {
+        Ok(paths) => Ok(Handed {
+            paths,
+            copied: made
+                .into_iter()
+                .map(|(from, to)| json!({"from": from, "to": to}))
+                .collect(),
+        }),
+        Err(error) => {
+            // Nothing has opened these copies yet: they go with the failure.
+            for folder in made.iter().filter_map(|(_, copy)| copy.parent()) {
+                let _ = fs::remove_dir_all(folder);
+            }
+            Err(error)
+        }
+    }
+}
+
+/// [`hand_over`]'s targets in order, given `answers` (whether the helper
+/// can read each path outside ROOT); each copy made is added to `made` as
+/// (original, copy) as soon as it exists.
+fn place(
+    targets: Vec<Target>,
+    answers: Vec<bool>,
+    running: &[Running],
+    opened_with: &[String],
+    helper: u32,
+    made: &mut Vec<(PathBuf, PathBuf)>,
+) -> Result<Vec<String>> {
+    let root_path = PathBuf::from(ROOT);
+    let mut answers = answers.into_iter();
     let mut root = None;
     let mut out = Vec::new();
     for target in targets {
@@ -274,16 +321,16 @@ pub async fn hand_over(
                     }
                     let root = match &root {
                         Some(root) => root,
-                        None => root.insert(self::root(client.config.helper_uid)?),
+                        None => root.insert(self::root(helper)?),
                     };
                     let copy = copy(&path, root)?;
+                    made.push((path.clone(), copy.clone()));
                     if path.extension().is_none_or(|extension| extension != "app")
                         && !opened_with.is_empty()
                         && let Some(folder) = copy.parent()
                     {
                         fs::write(folder.join(OPENED_WITH), opened_with.join("\n"))?;
                     }
-                    copied.push(json!({"from": path, "to": copy}));
                     copy
                 }
             }
