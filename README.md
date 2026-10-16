@@ -26,7 +26,7 @@ connected to the helper, and sound plays on your speakers.
 ## Set up
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/InsaneArts/atlas/main/install.sh | sh
+curl -fsSL https://atlas.insanearts.io/install.sh | sh
 ```
 
 Atlas opens and walks you through the rest in one window: choose or create the
