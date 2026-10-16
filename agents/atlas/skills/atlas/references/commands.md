@@ -458,12 +458,12 @@ Arguments:
 
 Options:
       --dx <DX>
-          Lines to scroll sideways; negative scrolls left
+          Lines to scroll sideways, at most 100; negative scrolls left
           
           [default: 0]
 
       --dy <DY>
-          Lines to scroll; negative scrolls up
+          Lines to scroll, at most 100; negative scrolls up
           
           [default: 0]
 

@@ -67,6 +67,7 @@ pub enum Action {
         ms: u32,
     },
 }
+
 #[derive(Clone, Copy, PartialEq, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Button {
@@ -75,6 +76,7 @@ pub enum Button {
     Middle,
     Right,
 }
+
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PointerPhase {
@@ -82,9 +84,11 @@ pub enum PointerPhase {
     Move,
     Up,
 }
+
 fn one() -> u8 {
     1
 }
+
 /// CoreGraphics modifier masks (`CGEventFlags`), the flags a chord sends.
 pub(crate) const SHIFT: u64 = 1 << 17;
 pub(crate) const CONTROL: u64 = 1 << 18;
@@ -256,14 +260,8 @@ const KEY_MS: u32 = 10;
 
 pub fn validate(value: &Value, display: &Display) -> Result<()> {
     let actions = Vec::<Action>::deserialize(value)?;
-    let invalid = || {
-        Error::new(
-            "input",
-            "Input exceeds the supported action, coordinate or two-second batch limits",
-        )
-    };
     if actions.is_empty() || actions.len() > 32 {
-        return Err(invalid());
+        return Err(Error::new("input", "Send between 1 and 32 actions"));
     }
     let point = |x: f64, y: f64| {
         x.is_finite()
@@ -274,7 +272,7 @@ pub fn validate(value: &Value, display: &Display) -> Result<()> {
             && y < display.height
     };
     let mut cost: u32 = 0;
-    for action in actions {
+    for (index, action) in actions.into_iter().enumerate() {
         let (valid, duration) = match action {
             Action::Pointer {
                 x,
@@ -320,11 +318,27 @@ pub fn validate(value: &Value, display: &Display) -> Result<()> {
             Action::Key { key } => (valid_key(&key), KEY_MS),
             Action::Wait { ms } => (ms <= 250, ms),
         };
+        if !valid {
+            return Err(Error::new(
+                "input",
+                format!(
+                    "Action {} is out of range: points lie on the display, a click is 1 to 5 \
+                     clicks, a scroll at most 100 lines, text 1 to 256 characters, a wait at \
+                     most 250 ms",
+                    index + 1
+                ),
+            ));
+        }
+
         cost = cost.saturating_add(duration);
-        if !valid || cost > BATCH_MS {
-            return Err(invalid());
+        if cost > BATCH_MS {
+            return Err(Error::new(
+                "input",
+                "The batch would take longer than two seconds; send it in parts",
+            ));
         }
     }
+
     Ok(())
 }
 
@@ -358,6 +372,7 @@ mod tests {
                 "cmd" | "command" | "ctrl" | "control" | "alt" | "opt" | "option" | "shift" | "fn"
             )
         }
+
         pub fn valid_key(value: &str) -> bool {
             if value.is_empty() || value.len() > 80 {
                 return false;
@@ -406,6 +421,7 @@ mod tests {
                 ))
                 && parts.into_iter().all(modifier)
         }
+
         pub fn modifier_flags(modifiers: &[String]) -> u64 {
             modifiers.iter().fold(0, |flags, m| {
                 flags
@@ -419,6 +435,7 @@ mod tests {
                     }
             })
         }
+
         fn keycode(key: &str) -> Option<u16> {
             Some(match key {
                 "a" => 0,
@@ -497,6 +514,7 @@ mod tests {
                 _ => return None,
             })
         }
+
         /// What the engine sent for a key action.
         pub fn engine(key: &str) -> Option<(u16, u64)> {
             let lower = key.to_lowercase();
