@@ -53,7 +53,7 @@ fn root(helper: u32) -> Result<PathBuf> {
     match fs::DirBuilder::new().mode(0o700).create(&root) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(error) => return Err(error.into()),
+        Err(error) => return Err(Error::writing(&root, error)),
     }
     if !private_folder(&root) {
         return Err(problem(format!(
@@ -348,7 +348,10 @@ fn copy(path: &Path, root: &Path) -> Result<PathBuf> {
         .file_name()
         .ok_or_else(|| Error::new("input", format!("Cannot open {}", path.display())))?;
     let folder = root.join(crate::control::token());
-    fs::DirBuilder::new().mode(0o700).create(&folder)?;
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&folder)
+        .map_err(|error| Error::writing(&folder, error))?;
     let copy = folder.join(name);
     let made = quiet(
         "/usr/bin/ditto",

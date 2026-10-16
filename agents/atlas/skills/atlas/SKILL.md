@@ -11,7 +11,8 @@ click and type, while the person keeps using their own desktop undisturbed.
 The person's only job was setting Atlas up; everything after that is yours.
 
 Commands print JSON whenever their output is not a terminal (as in your shell;
-add `--json` if you ever see plain text) and exit non-zero on failure. Failures
+add `--json` if you ever see plain text; only `--help` is always text) and
+exit non-zero on failure. Failures
 are `{"ok": false, "code", "error", "uncertain"}`.
 
 ## Rules
@@ -214,8 +215,8 @@ unless you looked at it in the helper.
   back to their own account; do not retry until they have.
 - `blocked`: your shell may not connect to the helper or write Atlas's own
   files (locks, screenshots), usually because your sandbox blocks them. The
-  helper is likely fine: run Atlas commands outside the sandbox, and never run
-  `atlas init` for this.
+  helper is likely fine: run Atlas commands outside the sandbox (the error
+  names the file), and never run `atlas init` for this.
 - Anything else: read `error`, and see references/troubleshooting.md.
 
 ## Limits

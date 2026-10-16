@@ -503,7 +503,10 @@ fn stage_path(client: &Client, id: &str) -> Result<PathBuf> {
 
 /// Make a private folder the helper may read, or nothing.
 fn create_stage(stage: &Path, helper: &str) -> Result<()> {
-    fs::DirBuilder::new().mode(0o700).create(stage)?;
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(stage)
+        .map_err(|error| Error::writing(stage, error))?;
     let shared = remove_inherited_acl(stage).and_then(|()| allow_helper(stage, helper, true));
     if shared.is_err() {
         let _ = fs::remove_dir(stage);
