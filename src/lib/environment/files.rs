@@ -626,19 +626,31 @@ fn descriptor_acl(file: &fs::File) -> Result<bool> {
         .transpose()?
         .is_some_and(|entries| !entries.is_empty()))
 }
-pub(super) fn allow_helper(path: &Path, uid: u32, executable: bool) -> Result<()> {
+/// The helper's short name, as an ACL entry names it. Resolved once per
+/// operation and passed to every allow_helper of it.
+pub(super) fn helper_name(uid: u32) -> Result<String> {
     let identity = Command::new("/usr/bin/id")
         .args(["-un", &uid.to_string()])
         .output()?;
     let name =
         String::from_utf8(identity.stdout).map_err(|_| problem("Invalid helper short name"))?;
     let name = name.trim();
-    if !identity.status.success()
-        || name.is_empty()
-        || !name
+    if !identity.status.success() || !acl_name(name) {
+        return Err(problem("Could not resolve helper UID to an ACL identity"));
+    }
+    Ok(name.to_owned())
+}
+
+fn acl_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
-    {
+}
+
+/// Let the helper named `helper` (from helper_name) read `path`.
+pub(super) fn allow_helper(path: &Path, helper: &str, executable: bool) -> Result<()> {
+    if !acl_name(helper) {
         return Err(problem("Could not resolve helper UID to an ACL identity"));
     }
     let rights = if executable {
@@ -647,11 +659,17 @@ pub(super) fn allow_helper(path: &Path, uid: u32, executable: bool) -> Result<()
         "read,readattr,readsecurity"
     };
     let output = Command::new("/bin/chmod")
-        .args(["+a", &format!("user:{name} allow {rights}")])
+        .args(["+a", &format!("user:{helper} allow {rights}")])
         .arg(path)
         .output()?;
     if !output.status.success() {
-        return Err(problem("Could not grant the helper access to staged files"));
+        let reason = String::from_utf8_lossy(&output.stderr);
+        let reason = reason.trim();
+        return Err(problem(if reason.is_empty() {
+            "Could not grant the helper access to staged files".to_owned()
+        } else {
+            format!("Could not grant the helper access to staged files: {reason}")
+        }));
     }
     Ok(())
 }
