@@ -51,7 +51,10 @@ impl Gate {
                 "The native input service is unavailable or already controlled",
             ));
         }
-        if owner.len() != 48 || !owner.bytes().all(|b| b.is_ascii_hexdigit()) {
+        // Owners are `control::token()`s: two hexadecimal digits a byte.
+        if owner.len() != 2 * crate::control::TOKEN_BYTES
+            || !owner.bytes().all(|b| b.is_ascii_hexdigit())
+        {
             return Err(Error::new("input", "Invalid native owner token"));
         }
         state.owner = Some(owner.to_owned());
