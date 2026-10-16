@@ -25,6 +25,8 @@ use tokio::{
 };
 
 const FRAME_LIFETIME: Duration = Duration::from_secs(8);
+/// How long control lasts without a renewal; the app is told the same.
+const LEASE_SECONDS: u64 = 10;
 #[derive(Default)]
 struct Frames {
     items: VecDeque<(String, Arc<Frame>)>,
@@ -117,23 +119,29 @@ impl Viewer {
             lease.begin_release(owner)?
         };
         if let Some(previous) = previous {
-            let pending = self.client.controller.quarantine();
-            let result = self.client.native_control("release", &previous).await;
-            let completion = match (pending, result) {
-                (Ok(generation), Ok(_)) => self.client.controller.clear_if(&generation),
-                (Err(error), _) => Err(error),
-                (_, Err(error)) => Err(Error::new(
-                    "uncertain",
-                    format!(
-                        "Control stopped accepting input, but native cleanup was not confirmed: {error}"
-                    ),
-                )
-                .uncertain()),
-            };
+            let completion = self.release_native(&previous).await;
             self.lease.lock().await.end_release();
             completion?;
         }
         Ok(())
+    }
+    /// End `owner`'s native control in the helper. The outcome is marked
+    /// pending first and cleared only once the helper confirms, so an
+    /// unconfirmed release stays an unknown outcome for recovery.
+    async fn release_native(&self, owner: &str) -> Result<()> {
+        let pending = self.client.controller.quarantine();
+        let result = self.client.native_control("release", owner).await;
+        match (pending, result) {
+            (Ok(generation), Ok(_)) => self.client.controller.clear_if(&generation),
+            (Err(error), _) => Err(error),
+            (_, Err(error)) => Err(Error::new(
+                "uncertain",
+                format!(
+                    "Control stopped accepting input, but native cleanup was not confirmed: {error}"
+                ),
+            )
+            .uncertain()),
+        }
     }
     async fn status(&self) -> Value {
         let mut status =
@@ -245,10 +253,17 @@ impl Viewer {
             }
             let authorization = self.lease.lock().await.require(&token);
             if let Err(error) = authorization {
-                let _ = self.client.native_control("release", &token).await;
-                return Err(error);
+                // The lease ended while input was being acquired: undo the
+                // acquire, and say when that could not be confirmed.
+                return Err(match self.release_native(&token).await {
+                    Ok(()) => error,
+                    Err(cleanup) => Error {
+                        error: format!("{} {}", error.error, cleanup.error),
+                        ..cleanup
+                    },
+                });
             }
-            return Ok(json!({"ok": true, "lease": token, "ttlSeconds": 10}));
+            return Ok(json!({"ok": true, "lease": token, "ttlSeconds": LEASE_SECONDS}));
         }
         if self.lease_epoch.lock().await.as_ref() != Some(&frame.epoch) {
             return Err(Error::new(
@@ -291,7 +306,7 @@ pub async fn bind(mut client: Client, port: u16) -> Result<(TcpListener, Arc<Vie
     let prefix = format!("/{}/", control::token());
     let viewer = Arc::new(Viewer {
         client,
-        lease: Arc::new(Mutex::new(Lease::default())),
+        lease: Arc::new(Mutex::new(Lease::new(Duration::from_secs(LEASE_SECONDS)))),
         lease_epoch: Mutex::new(None),
         frames: Mutex::new(Frames::default()),
         capture: Mutex::new(()),
@@ -741,8 +756,12 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
     };
     match outcome {
         Ok(result) => {
-            if result["ok"] != true {
-                let _ = viewer.release(body["lease"].as_str()).await;
+            // Only the lease this request named ends; a request without one
+            // never ends someone else's.
+            if result["ok"] != true
+                && let Some(owner) = body["lease"].as_str()
+            {
+                let _ = viewer.release(Some(owner)).await;
             }
             json_response(if result["ok"] == true { 200 } else { 409 }, result)
         }
@@ -922,6 +941,19 @@ mod tests {
         assert!(!viewer.lease.lock().await.active());
         assert_eq!(controller.unresolved().unwrap().len(), 1);
         assert_eq!(controller.acquire(false).unwrap_err().code, "uncertain");
+    }
+
+    /// Undoing an acquire whose lease was lost meanwhile is a release like
+    /// any other: unconfirmed, it stays an unknown outcome.
+    #[tokio::test]
+    async fn an_unconfirmed_native_release_stays_pending() {
+        let dir = tempfile::tempdir().unwrap();
+        let viewer = unreachable(dir.path()).await;
+        let controller = viewer.client.controller.clone();
+        let error = viewer.release_native("lost-lease").await.unwrap_err();
+        assert!(error.uncertain);
+        assert_eq!(error.code, "uncertain");
+        assert_eq!(controller.unresolved().unwrap().len(), 1);
     }
 
     #[tokio::test]
