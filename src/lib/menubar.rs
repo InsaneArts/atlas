@@ -242,7 +242,10 @@ fn development() -> Result<PathBuf> {
     if !package.join("Package.swift").is_file() {
         return Err(Error::new(
             "menubar",
-            "Run the menu bar from Atlas.app; install it with install.sh",
+            format!(
+                "Run the menu bar from Atlas.app; install it with: {}",
+                crate::update::INSTALL_COMMAND
+            ),
         ));
     }
     let swift = |args: &[&str]| {
