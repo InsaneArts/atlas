@@ -30,11 +30,11 @@ Explain that the installer downloads Atlas.app, verifies its checksum and
 Developer ID signature, and puts it in /Applications. Then, once they agree:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/InsaneArts/atlas/main/install.sh | sh
+curl -fsSL https://atlas.insanearts.io/install.sh | sh
 ```
 
-While the repository is private this needs `GITHUB_TOKEN`; ask the person to
-run it themselves if they prefer.
+If it says Atlas has no public release yet, tell the person and stop here.
+Ask the person to run it themselves if they prefer.
 
 ## 3. Guided setup (the person does it)
 
