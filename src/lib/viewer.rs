@@ -11,7 +11,7 @@ use crate::{
 };
 use axum::{
     Router,
-    body::{Body, to_bytes},
+    body::{Body, Bytes, to_bytes},
     extract::{Request, State},
     http::{HeaderMap, HeaderValue, Method, StatusCode},
     response::Response,
@@ -27,6 +27,14 @@ use tokio::{
 const FRAME_LIFETIME: Duration = Duration::from_secs(8);
 /// How long control lasts without a renewal; the app is told the same.
 const LEASE_SECONDS: u64 = 10;
+/// The widest picture of the helper the viewer asks for, in pixels.
+const FRAME_WIDTH: u32 = 1600;
+/// How many recent frames are kept for control requests to name.
+const KEPT_FRAMES: usize = 24;
+/// How many requests the viewer serves at once.
+const CONCURRENT_REQUESTS: usize = 32;
+/// The largest request body, in bytes.
+const MAX_BODY: usize = 32768;
 #[derive(Default)]
 struct Frames {
     items: VecDeque<(String, Arc<Frame>)>,
@@ -44,8 +52,9 @@ pub struct Viewer {
     pub url: String,
     prefix: String,
     authority: String,
-    /// The helper account's full name, once read.
-    account_name: std::sync::OnceLock<String>,
+    /// The helper account's short name and its full name (None when it has
+    /// none), once read.
+    account_name: std::sync::Mutex<Option<(String, Option<String>)>>,
     /// The app this viewer serves, when it serves one.
     app: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<Line>>>,
 }
@@ -79,7 +88,7 @@ impl Viewer {
                 return Ok((key.clone(), frame.clone()));
             }
         }
-        let frame = Arc::new(self.client.frame(Some(1600)).await?);
+        let frame = Arc::new(self.client.frame(Some(FRAME_WIDTH)).await?);
         if frame.at.elapsed() >= FRAME_LIFETIME {
             return Err(Error::new(
                 "stale-frame",
@@ -90,7 +99,7 @@ impl Viewer {
         let mut frames = self.frames.lock().await;
         frames.items.push_back((key.clone(), frame.clone()));
         frames.capture_revision = Some(revision);
-        while frames.items.len() > 24 {
+        while frames.items.len() > KEPT_FRAMES {
             frames.items.pop_front();
         }
         Ok((key, frame))
@@ -171,21 +180,33 @@ impl Viewer {
             &activity,
             crate::client::timestamp(),
         );
-        // The helper's full name, as people know the account; looked up
-        // (off the runtime, it asks directory services) until it is known.
+        // The helper's full name, as people know the account; looked up once
+        // per account (off the runtime, it asks directory services), also
+        // when it has none.
         if let Some(name) = status["overview"]["account"].as_str() {
-            let title = match self.account_name.get() {
-                Some(title) => Some(title.clone()),
+            let known = self
+                .account_name
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
+                .filter(|(account, _)| account == name);
+            let title = match known {
+                Some((_, title)) => title,
                 None => {
-                    let name = name.to_owned();
-                    let title = tokio::task::spawn_blocking(move || crate::setup::real_name(&name))
+                    let account = name.to_owned();
+                    match tokio::task::spawn_blocking(move || crate::setup::real_name(&account))
                         .await
-                        .ok()
-                        .flatten();
-                    if let Some(title) = &title {
-                        let _ = self.account_name.set(title.clone());
+                    {
+                        Ok(title) => {
+                            *self
+                                .account_name
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                                Some((name.to_owned(), title.clone()));
+                            title
+                        }
+                        Err(_) => None,
                     }
-                    title
                 }
             };
             status["overview"]["accountName"] = json!(title);
@@ -310,12 +331,12 @@ pub async fn bind(mut client: Client, port: u16) -> Result<(TcpListener, Arc<Vie
         lease_epoch: Mutex::new(None),
         frames: Mutex::new(Frames::default()),
         capture: Mutex::new(()),
-        requests: Semaphore::new(32),
+        requests: Semaphore::new(CONCURRENT_REQUESTS),
         url: format!("http://{authority}{prefix}"),
         prefix,
         authority,
         app: std::sync::Mutex::new(None),
-        account_name: std::sync::OnceLock::new(),
+        account_name: std::sync::Mutex::new(None),
     });
     let router = Router::new()
         .fallback(any(handle))
@@ -331,7 +352,8 @@ pub async fn serve(client: Client, port: u16, program: crate::menubar::Program) 
     let (listener, viewer, router) = match bind(client, port).await {
         Ok(bound) => bound,
         Err(error) if error.code == "port-in-use" => {
-            return already_running(&output, port, error);
+            let output = output.clone();
+            return blocking(move || already_running(&output, port, error)).await;
         }
         Err(error) => return Err(error),
     };
@@ -398,7 +420,18 @@ pub async fn serve(client: Client, port: u16, program: crate::menubar::Program) 
 /// The record of the running viewer, in the output folder.
 pub const MENUBAR_RECORD: &str = "menubar.json";
 
+/// Run `work`, which waits on the local viewer's socket (for seconds at
+/// most), off the async runtime.
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|_| Error::new("menubar", "The menu bar's viewer did not answer"))?
+}
+
 /// The viewer recorded at `record`, if it serves `port` and answers there now.
+/// It blocks for up to a second: call it off the async runtime.
 pub fn running(record: &Path, port: u16) -> Option<Value> {
     std::fs::read(record)
         .ok()
@@ -547,7 +580,8 @@ pub async fn monitor(config: &Path, port: u16, output: &Path) -> Result<()> {
     let url = record["url"]
         .as_str()
         .ok_or_else(|| Error::new("menubar", "The menu bar's record names no viewer"))?;
-    post_local(url, "app/viewer", &json!({}))?;
+    let url = url.to_owned();
+    blocking(move || post_local(&url, "app/viewer", &json!({}))).await?;
     if crate::ui::human() {
         println!(
             "{} The viewer is open. Watch the helper there, or take control.",
@@ -662,7 +696,8 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
                 Ok((key, frame)) => response(
                     200,
                     "image/png",
-                    frame.png.to_vec(),
+                    // Served from the shared frame, not copied.
+                    Body::from(Bytes::from_owner(frame.png.clone())),
                     &[
                         ("X-Frame-Id", key),
                         ("X-Display-Width", frame.display.width.to_string()),
@@ -715,25 +750,27 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
     }
     let length = header(request.headers(), "content-length")
         .and_then(|v| v.parse::<usize>().ok())
-        .filter(|n| (1..=32768).contains(n));
+        .filter(|n| (1..=MAX_BODY).contains(n));
     let Some(length) = length else {
         return json_response(
             400,
-            json!({"ok": false, "error": "Request body must contain 1–32768 bytes"}),
+            json!({"ok": false, "error": format!("Request body must contain 1–{MAX_BODY} bytes")}),
         );
     };
-    let body =
-        match tokio::time::timeout(Duration::from_secs(5), to_bytes(request.into_body(), 32768))
-            .await
-        {
-            Ok(Ok(bytes)) if bytes.len() == length => bytes,
-            _ => {
-                return json_response(
-                    400,
-                    json!({"ok": false, "error": "Incomplete or oversized body"}),
-                );
-            }
-        };
+    let body = match tokio::time::timeout(
+        Duration::from_secs(5),
+        to_bytes(request.into_body(), MAX_BODY),
+    )
+    .await
+    {
+        Ok(Ok(bytes)) if bytes.len() == length => bytes,
+        _ => {
+            return json_response(
+                400,
+                json!({"ok": false, "error": "Incomplete or oversized body"}),
+            );
+        }
+    };
     let body: Value = match serde_json::from_slice(&body) {
         Ok(value @ Value::Object(_)) => value,
         _ => {
@@ -784,15 +821,10 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
 }
 
 fn json_response(code: u16, value: Value) -> Response {
-    response(
-        code,
-        "application/json",
-        value.to_string().into_bytes(),
-        &[],
-    )
+    response(code, "application/json", Body::from(value.to_string()), &[])
 }
-fn response(code: u16, mime: &str, body: Vec<u8>, headers: &[(&str, String)]) -> Response {
-    let mut response = Response::new(Body::from(body));
+fn response(code: u16, mime: &str, body: Body, headers: &[(&str, String)]) -> Response {
+    let mut response = Response::new(body);
     *response.status_mut() =
         StatusCode::from_u16(code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     for (key, value) in [
