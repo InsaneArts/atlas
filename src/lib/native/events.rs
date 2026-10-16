@@ -4,7 +4,10 @@ use super::{
     lease::Grant,
 };
 use crate::{
-    actions::{Action, Button, PointerPhase},
+    actions::{
+        Action, Button, CLICK_GAP, DRAG_HOLD, DRAG_START, DRAG_STEP, DRAG_STEPS, PointerPhase,
+        TYPE_GAP, modifier_flags, parse_key,
+    },
     error::{Error, Result},
     native::{accessibility_trusted, session_info},
     session::InputEpoch,
@@ -25,12 +28,27 @@ fn created(event: Option<CFRetained<CGEvent>>) -> Result<CFRetained<CGEvent>> {
     event.ok_or_else(|| Error::new("native", "Could not create a native event"))
 }
 
+/// The modifier keys a finished gesture releases: command, shift, option,
+/// control and function.
+const MODIFIER_KEYS: [u16; 5] = [55, 56, 58, 59, 63];
+
+/// The engine's private event source, the one field that is not `Send` by
+/// itself.
+struct Source(CFRetained<CGEventSource>);
+// SAFETY: a CGEventSource is a CoreFoundation object: its retain and release
+// are thread-safe, and creating events from it is not tied to the thread that
+// made it (CoreGraphics posting needs no main thread). The engine holds the
+// only reference and is used only under the service's mutex, so the source
+// is never used from two threads at once.
+#[allow(unsafe_code)]
+unsafe impl Send for Source {}
+
 pub struct Engine {
     pub epoch: InputEpoch,
     pub grant: Option<Grant>,
     journal: Option<Journal>,
     journal_dirty: bool,
-    source: CFRetained<CGEventSource>,
+    source: Source,
     held: Option<Button>,
     held_keys: Vec<u16>,
     position: Point,
@@ -39,14 +57,11 @@ pub struct Engine {
     drag_started: bool,
     flags: u64,
 }
-// SAFETY: Engine is exclusively accessed under the service mutex; no event or
-// source reference escapes it. CoreGraphics posting does not require AppKit's main thread.
-#[allow(unsafe_code)]
-unsafe impl Send for Engine {}
 
 impl Engine {
     pub fn new(uid: u32) -> Result<Self> {
         let source = CGEventSource::new(CGEventSourceStateID::Private)
+            .map(Source)
             .ok_or_else(|| Error::new("native", "Could not create the event source"))?;
         let engine = Self {
             epoch: InputEpoch::from_proof(&session_info()?, std::process::id())?,
@@ -165,17 +180,17 @@ impl Engine {
     }
     fn mouse(
         &mut self,
-        kind: u32,
+        kind: CGEventType,
         point: Point,
         button: Button,
         count: u8,
         flags: u64,
     ) -> Result<()> {
         let event = created(CGEvent::new_mouse_event(
-            Some(&self.source),
-            CGEventType(kind),
+            Some(&self.source.0),
+            kind,
             point,
-            CGMouseButton(button.number()),
+            button.number(),
         ))?;
         let set = |field, value| CGEvent::set_integer_value_field(Some(&event), field, value);
         // A press, its drag events, and its release share one event number.
@@ -229,7 +244,7 @@ impl Engine {
                 if self.held.is_some() {
                     return Err(Error::new("input", "Release the held mouse button first"));
                 }
-                self.mouse(5, point, button, count, flags)?;
+                self.mouse(CGEventType::MouseMoved, point, button, count, flags)?;
                 self.position = point;
                 self.held = Some(button);
                 self.mouse_number = self.mouse_number.checked_add(1).unwrap_or(1);
@@ -258,13 +273,13 @@ impl Engine {
                     if anchor.x == point.x && anchor.y == point.y {
                         return Ok(());
                     }
-                    self.delay(Duration::from_millis(10)).await?;
+                    self.delay(DRAG_START).await?;
                 }
                 self.mouse(
                     if self.held.is_some() {
                         active.dragged()
                     } else {
-                        5
+                        CGEventType::MouseMoved
                     },
                     point,
                     active,
@@ -294,7 +309,11 @@ impl Engine {
     }
     #[allow(unsafe_code)] // FFI: key text is passed as a UTF-16 pointer.
     fn key_event(&mut self, code: u16, down: bool, flags: u64, text: Option<&[u16]>) -> Result<()> {
-        let event = created(CGEvent::new_keyboard_event(Some(&self.source), code, down))?;
+        let event = created(CGEvent::new_keyboard_event(
+            Some(&self.source.0),
+            code,
+            down,
+        ))?;
         if let Some(text) = text {
             // SAFETY: the pointer and length describe the live UTF-16 slice.
             unsafe {
@@ -307,7 +326,7 @@ impl Engine {
         if self.flags != 0 {
             // Finish the chord in CoreGraphics too. Viewer key-up events do
             // not represent remote holds, so a completed gesture must be clean.
-            for code in [55, 56, 58, 59, 63] {
+            for code in MODIFIER_KEYS {
                 self.key_event(code, false, 0, None)?;
             }
         }
@@ -373,7 +392,7 @@ impl Engine {
                     self.pointer(PointerPhase::Up, Point { x, y }, button, &modifiers, click)
                         .await?;
                     if click < count {
-                        self.delay(Duration::from_millis(60)).await?;
+                        self.delay(CLICK_GAP).await?;
                     }
                 }
             }
@@ -395,9 +414,9 @@ impl Engine {
                     1,
                 )
                 .await?;
-                self.delay(Duration::from_millis(80)).await?;
-                for step in 1..=24 {
-                    let t = f64::from(step) / 24.0;
+                self.delay(DRAG_HOLD).await?;
+                for step in 1..=DRAG_STEPS {
+                    let t = f64::from(step) / f64::from(DRAG_STEPS);
                     self.pointer(
                         PointerPhase::Move,
                         Point {
@@ -409,7 +428,7 @@ impl Engine {
                         1,
                     )
                     .await?;
-                    self.delay(Duration::from_millis(16)).await?;
+                    self.delay(DRAG_STEP).await?;
                 }
                 self.pointer(PointerPhase::Up, Point { x: to_x, y: to_y }, button, &[], 1)
                     .await?;
@@ -418,7 +437,7 @@ impl Engine {
                 self.pointer(PointerPhase::Move, Point { x, y }, Button::Left, &[], 1)
                     .await?;
                 let event = created(CGEvent::new_scroll_wheel_event2(
-                    Some(&self.source),
+                    Some(&self.source.0),
                     CGScrollEventUnit::Line,
                     2,
                     dy,
@@ -431,22 +450,13 @@ impl Engine {
                 for character in text.graphemes(true) {
                     let units: Vec<u16> = character.encode_utf16().collect();
                     self.key(0, 0, Some(&units))?;
-                    self.delay(Duration::from_millis(2)).await?;
+                    self.delay(TYPE_GAP).await?;
                 }
             }
             Action::Key { key } => {
-                let lower = key.to_lowercase();
-                let mut parts: Vec<_> = lower.split('+').map(str::to_owned).collect();
-                let mut key = parts.pop().unwrap_or_default();
-                if key.is_empty() {
-                    key = "=".into();
-                    parts.push("shift".into());
-                }
-                self.key(
-                    keycode(&key).ok_or_else(|| Error::new("input", "Unsupported key"))?,
-                    modifier_flags(&parts),
-                    None,
-                )?;
+                let (code, flags) =
+                    parse_key(&key).ok_or_else(|| Error::new("input", "Unsupported key"))?;
+                self.key(code, flags, None)?;
             }
             Action::Wait { ms } => self.delay(Duration::from_millis(ms.into())).await?,
         }
@@ -454,130 +464,63 @@ impl Engine {
     }
 }
 impl Button {
-    fn number(self) -> u32 {
+    fn number(self) -> CGMouseButton {
         match self {
-            Self::Left => 0,
-            Self::Right => 1,
-            Self::Middle => 2,
+            Self::Left => CGMouseButton::Left,
+            Self::Right => CGMouseButton::Right,
+            Self::Middle => CGMouseButton::Center,
         }
     }
-    fn down(self) -> u32 {
+    fn down(self) -> CGEventType {
         match self {
-            Self::Left => 1,
-            Self::Right => 3,
-            Self::Middle => 25,
+            Self::Left => CGEventType::LeftMouseDown,
+            Self::Right => CGEventType::RightMouseDown,
+            Self::Middle => CGEventType::OtherMouseDown,
         }
     }
-    fn up(self) -> u32 {
+    fn up(self) -> CGEventType {
         match self {
-            Self::Left => 2,
-            Self::Right => 4,
-            Self::Middle => 26,
+            Self::Left => CGEventType::LeftMouseUp,
+            Self::Right => CGEventType::RightMouseUp,
+            Self::Middle => CGEventType::OtherMouseUp,
         }
     }
-    fn dragged(self) -> u32 {
+    fn dragged(self) -> CGEventType {
         match self {
-            Self::Left => 6,
-            Self::Right => 7,
-            Self::Middle => 27,
+            Self::Left => CGEventType::LeftMouseDragged,
+            Self::Right => CGEventType::RightMouseDragged,
+            Self::Middle => CGEventType::OtherMouseDragged,
         }
     }
-}
-fn modifier_flags(modifiers: &[String]) -> u64 {
-    modifiers.iter().fold(0, |flags, m| {
-        flags
-            | match m.as_str() {
-                "cmd" | "command" => 1 << 20,
-                "ctrl" | "control" => 1 << 18,
-                "shift" => 1 << 17,
-                "alt" | "opt" | "option" => 1 << 19,
-                "fn" => 1 << 23,
-                _ => 0,
-            }
-    })
-}
-fn keycode(key: &str) -> Option<u16> {
-    Some(match key {
-        "a" => 0,
-        "s" => 1,
-        "d" => 2,
-        "f" => 3,
-        "h" => 4,
-        "g" => 5,
-        "z" => 6,
-        "x" => 7,
-        "c" => 8,
-        "v" => 9,
-        "b" => 11,
-        "q" => 12,
-        "w" => 13,
-        "e" => 14,
-        "r" => 15,
-        "y" => 16,
-        "t" => 17,
-        "1" => 18,
-        "2" => 19,
-        "3" => 20,
-        "4" => 21,
-        "6" => 22,
-        "5" => 23,
-        "=" => 24,
-        "9" => 25,
-        "7" => 26,
-        "-" => 27,
-        "8" => 28,
-        "0" => 29,
-        "]" => 30,
-        "o" => 31,
-        "u" => 32,
-        "[" => 33,
-        "i" => 34,
-        "p" => 35,
-        "return" | "enter" => 36,
-        "l" => 37,
-        "j" => 38,
-        "'" => 39,
-        "k" => 40,
-        ";" => 41,
-        "\\" => 42,
-        "," => 43,
-        "/" => 44,
-        "n" => 45,
-        "m" => 46,
-        "." => 47,
-        "tab" => 48,
-        "space" => 49,
-        "`" => 50,
-        "backspace" | "delete" => 51,
-        "escape" | "esc" => 53,
-        "f1" => 122,
-        "f2" => 120,
-        "f3" => 99,
-        "f4" => 118,
-        "f5" => 96,
-        "f6" => 97,
-        "f7" => 98,
-        "f8" => 100,
-        "f9" => 101,
-        "f10" => 109,
-        "f11" => 103,
-        "f12" => 111,
-        "home" => 115,
-        "pageup" => 116,
-        "forwarddelete" => 117,
-        "end" => 119,
-        "pagedown" => 121,
-        "left" => 123,
-        "right" => 124,
-        "down" => 125,
-        "up" => 126,
-        _ => return None,
-    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The typed event kinds, buttons and modifier masks are the raw values
+    /// input has always sent.
+    #[test]
+    fn typed_constants_keep_their_raw_values() {
+        let raw = |button: Button| {
+            (
+                button.number().0,
+                button.down().0,
+                button.up().0,
+                button.dragged().0,
+            )
+        };
+        assert_eq!(raw(Button::Left), (0, 1, 2, 6));
+        assert_eq!(raw(Button::Right), (1, 3, 4, 7));
+        assert_eq!(raw(Button::Middle), (2, 25, 26, 27));
+        assert_eq!(CGEventType::MouseMoved.0, 5);
+        use crate::actions::{COMMAND, CONTROL, FUNCTION, OPTION, SHIFT};
+        assert_eq!(COMMAND, CGEventFlags::MaskCommand.0);
+        assert_eq!(CONTROL, CGEventFlags::MaskControl.0);
+        assert_eq!(OPTION, CGEventFlags::MaskAlternate.0);
+        assert_eq!(SHIFT, CGEventFlags::MaskShift.0);
+        assert_eq!(FUNCTION, CGEventFlags::MaskSecondaryFn.0);
+    }
 
     /// The named constants are the raw values input has always used; in
     /// particular events go to the session tap (1), never the HID tap (0).
