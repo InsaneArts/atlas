@@ -465,37 +465,47 @@ async fn helper_job(client: &Client, capture_pid: u32) -> Value {
     })
 }
 
-pub async fn preview(config_path: &Path, helper: Option<&str>) -> Result<Value> {
-    let controller_uid = nix::unistd::getuid().as_raw();
-    let controller = account_with_uid(controller_uid)?;
-    let (config, config_state, config_error) = if fs::symlink_metadata(config_path).is_err() {
+/// The configuration at `config_path`, if it loads, its state (missing,
+/// present or invalid), and why it does not load.
+fn read_config(config_path: &Path) -> (Option<Config>, &'static str, Option<String>) {
+    if fs::symlink_metadata(config_path).is_err() {
         (None, "missing", None)
     } else {
         match Config::load(config_path) {
             Ok(config) => (Some(config), "present", None),
             Err(error) => (None, "invalid", Some(error.error)),
         }
-    };
-    let account = match (helper, &config) {
+    }
+}
+
+/// The helper to preview: the account named `helper`, else the one the
+/// configuration names.
+fn preview_account(helper: Option<&str>, config: Option<&Config>) -> Result<Account> {
+    match (helper, config) {
         (Some(name), _) => account_named(name)?.ok_or_else(|| {
             Error::new(
                 "setup",
                 format!("No account named {name} exists on this Mac"),
             )
-        })?,
+        }),
         (None, Some(config)) => account_with_uid(config.helper_uid)?.ok_or_else(|| {
             Error::new(
                 "setup",
                 format!("Configured helper UID {} has no account", config.helper_uid),
             )
-        })?,
-        (None, None) => {
-            return Err(Error::new(
-                "usage",
-                "No usable configuration; name the helper account with --helper NAME",
-            ));
-        }
-    };
+        }),
+        (None, None) => Err(Error::new(
+            "usage",
+            "No usable configuration; name the helper account with --helper NAME",
+        )),
+    }
+}
+
+pub async fn preview(config_path: &Path, helper: Option<&str>) -> Result<Value> {
+    let controller_uid = nix::unistd::getuid().as_raw();
+    let controller = account_with_uid(controller_uid)?;
+    let (config, config_state, config_error) = read_config(config_path);
+    let account = preview_account(helper, config.as_ref())?;
     validate_target_uid(account.uid, controller_uid)?;
     let conflict = config
         .as_ref()
@@ -541,9 +551,17 @@ pub async fn preview(config_path: &Path, helper: Option<&str>) -> Result<Value> 
         "screenSharing": screen_sharing(),
     });
     let client = Client::new(effective)?;
+    observe(&client, account.uid, &mut report).await;
+    report["nextSteps"] = json!(next_steps(&report));
+    Ok(report)
+}
+
+/// What the running helper (`uid`) reports into `report`: its session, and
+/// when it answers, its daemon, input service and launchd job.
+async fn observe(client: &Client, uid: u32, report: &mut Value) {
     let status = client.status().await;
     let reachable = status["ok"] == true;
-    let session = require_hidden(&status, account.uid).ok();
+    let session = require_hidden(&status, uid).ok();
     report["session"] = json!({
         "reachable": reachable,
         "graphical": status["session"]["managerName"],
@@ -571,11 +589,9 @@ pub async fn preview(config_path: &Path, helper: Option<&str>) -> Result<Value> 
         });
     }
     report["capture"]["job"] = match (&session, pid) {
-        (Some(_), Some(pid)) => helper_job(&client, pid).await,
+        (Some(_), Some(pid)) => helper_job(client, pid).await,
         _ => json!({"label": null, "observed": false}),
     };
-    report["nextSteps"] = json!(next_steps(&report));
-    Ok(report)
 }
 
 fn next_steps(report: &Value) -> Vec<String> {
@@ -761,6 +777,19 @@ mod tests {
             &[502, 501]
         ));
         assert!(!grants_only(&["garbage".to_owned()], &[502, 501]));
+    }
+
+    #[test]
+    fn preview_names_its_helper_or_says_how() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("atlas.toml");
+        assert_eq!(read_config(&missing), (None, "missing", None));
+        fs::write(&missing, "not = [toml").unwrap();
+        let (config, state, error) = read_config(&missing);
+        assert!(config.is_none() && state == "invalid" && error.is_some());
+        assert_eq!(preview_account(None, None).unwrap_err().code, "usage");
+        let unknown = preview_account(Some("no-such-atlas-account"), None).unwrap_err();
+        assert_eq!(unknown.code, "setup");
     }
 
     #[test]
