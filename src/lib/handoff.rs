@@ -4,6 +4,7 @@
 //! grant to the helper, and nothing there is ever replaced: a new copy gets
 //! a new folder, so a running app's files never change under it.
 use crate::{
+    agent::same_app,
     client::Client,
     control::Ownership,
     error::{Error, Result},
@@ -317,23 +318,35 @@ fn copy(path: &Path, root: &Path) -> Result<PathBuf> {
     Ok(copy)
 }
 
-/// The copies of `app`: those named so, or whose bundle calls itself so.
-fn copies_of(app: &str) -> Vec<PathBuf> {
-    folders()
-        .into_iter()
-        .filter(|folder| {
-            let with = fs::read_to_string(folder.join(OPENED_WITH)).unwrap_or_default();
-            with.lines().any(|name| name == app)
-                || entries(folder)
-                    .iter()
-                    .any(|copy| names(copy).iter().any(|name| name == app))
-        })
+/// Every name a copy folder's app may run as: its copies' names, and the
+/// app its files were opened with.
+fn folder_names(folder: &Path) -> Vec<String> {
+    let with = fs::read_to_string(folder.join(OPENED_WITH)).unwrap_or_default();
+    with.lines()
+        .map(str::to_owned)
+        .chain(entries(folder).iter().flat_map(|copy| names(copy)))
         .collect()
 }
 
-/// The copy folders under ROOT, when ROOT is Atlas's own private folder.
-fn folders() -> Vec<PathBuf> {
-    let root = Path::new(ROOT);
+/// Whether a copy folder may be in use: an app of one of its names is among
+/// `running` (the helper's app names). Such a folder is never removed.
+fn in_use(folder: &Path, running: &[&str]) -> bool {
+    folder_names(folder)
+        .iter()
+        .any(|name| running.iter().any(|app| same_app(app, name)))
+}
+
+/// The copies of `app` under `root`: those named so, or whose bundle calls
+/// itself so, or whose files it opened.
+fn copies_of(root: &Path, app: &str) -> Vec<PathBuf> {
+    folders(root)
+        .into_iter()
+        .filter(|folder| folder_names(folder).iter().any(|name| same_app(name, app)))
+        .collect()
+}
+
+/// The copy folders under `root`, when it is Atlas's own private folder.
+fn folders(root: &Path) -> Vec<PathBuf> {
     if !private_folder(root) {
         return Vec::new();
     }
@@ -390,30 +403,35 @@ fn bundle_value(bundle: &Path, key: &str) -> Option<String> {
         .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
-/// Remove the copies of `app`, which has quit; the folders removed.
-pub fn remove_copies_of(app: &str) -> Vec<String> {
-    copies_of(app)
+/// Remove the copies of `app`, which has quit, except any still in use by
+/// an app among `running` (the helper's app names); the folders removed.
+pub(crate) fn remove_copies_of(app: &str, running: &[&str]) -> Vec<String> {
+    remove_copies_in(Path::new(ROOT), app, running)
+}
+
+fn remove_copies_in(root: &Path, app: &str, running: &[&str]) -> Vec<String> {
+    copies_of(root, app)
         .into_iter()
-        .filter(|folder| fs::remove_dir_all(folder).is_ok())
+        .filter(|folder| !in_use(folder, running) && fs::remove_dir_all(folder).is_ok())
         .map(|folder| folder.to_string_lossy().into_owned())
         .collect()
 }
 
-/// Remove copies older than KEEP whose app is not running in `running`
-/// (the helper's app names), so a copy nobody closed does not stay forever.
-pub fn prune(running: &[&str]) {
-    for folder in folders() {
+/// Remove copies older than KEEP that are not in use by an app among
+/// `running` (the helper's app names), so a copy nobody closed does not
+/// stay forever.
+pub(crate) fn prune(running: &[&str]) {
+    prune_in(Path::new(ROOT), running);
+}
+
+fn prune_in(root: &Path, running: &[&str]) {
+    for folder in folders(root) {
         let old = fs::symlink_metadata(&folder)
             .and_then(|metadata| metadata.modified())
             .ok()
             .and_then(|modified| modified.elapsed().ok())
             .is_some_and(|age| age > KEEP);
-        let in_use = entries(&folder).iter().any(|copy| {
-            names(copy)
-                .iter()
-                .any(|name| running.contains(&name.as_str()))
-        });
-        if old && !in_use {
+        if old && !in_use(&folder, running) {
             let _ = fs::remove_dir_all(&folder);
         }
     }
@@ -480,16 +498,76 @@ mod tests {
         assert!(!granted(other.path(), &me));
     }
 
+    /// An app bundle at `path` that calls itself Runner (runner on disk).
+    fn runner(path: &Path) {
+        fs::create_dir_all(path.join("Contents")).unwrap();
+        fs::write(
+            path.join("Contents/Info.plist"),
+            r#"<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>runner</string><key>CFBundleName</key><string>Runner</string></dict></plist>"#,
+        )
+        .unwrap();
+    }
+
+    /// A copy folder under `root` holding `name` (an app or a file).
+    fn copy_folder(root: &Path, folder: &str, name: &str) -> PathBuf {
+        let folder = root.join(folder);
+        fs::DirBuilder::new().mode(0o700).create(&folder).unwrap();
+        if name.ends_with(".app") {
+            runner(&folder.join(name));
+        } else {
+            fs::write(folder.join(name), "hello").unwrap();
+        }
+        folder
+    }
+
+    /// Make `folder` look `days` old.
+    fn age(folder: &Path, days: u64) {
+        let then = std::time::SystemTime::now() - Duration::from_secs(days * 24 * 60 * 60);
+        fs::File::open(folder).unwrap().set_modified(then).unwrap();
+    }
+
+    /// A copy is found by every name its app may run as, in any case, and
+    /// is never removed while an app of one of those names still runs.
+    #[test]
+    fn copies_in_use_are_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        let app = copy_folder(&root, "a", "Long Runner.app");
+        let opened = copy_folder(&root, "b", "note.txt");
+        fs::write(opened.join(OPENED_WITH), "TextEdit").unwrap();
+        let other = copy_folder(&root, "c", "other.txt");
+        for name in ["runner", "long runner"] {
+            assert_eq!(copies_of(&root, name), std::slice::from_ref(&app), "{name}");
+        }
+        assert_eq!(copies_of(&root, "TEXTEDIT"), std::slice::from_ref(&opened));
+        assert!(copies_of(&root, "Preview").is_empty());
+        assert!(in_use(&app, &["RUNNER"]));
+        assert!(in_use(&opened, &["TextEdit"]), "opened with a running app");
+        assert!(!in_use(&other, &["TextEdit", "Runner"]));
+        // `close --app runner` while Runner still runs keeps its copy.
+        assert!(remove_copies_in(&root, "runner", &["Finder", "Runner"]).is_empty());
+        assert!(app.exists());
+        let removed = remove_copies_in(&root, "runner", &["Finder"]);
+        assert_eq!(removed, [app.to_string_lossy().into_owned()]);
+        assert!(!app.exists());
+        // Old copies go unless in use; new ones stay.
+        age(&opened, 8);
+        age(&other, 8);
+        let new = copy_folder(&root, "d", "new.txt");
+        prune_in(&root, &["textedit"]);
+        assert!(opened.exists(), "in use");
+        assert!(!other.exists(), "old and unused");
+        assert!(new.exists(), "recent");
+        prune_in(&root, &[]);
+        assert!(!opened.exists());
+    }
+
     #[test]
     fn names_come_from_the_file_and_the_bundle() {
         let dir = tempfile::tempdir().unwrap();
         let app = dir.path().join("Long Runner.app");
-        fs::create_dir_all(app.join("Contents")).unwrap();
-        fs::write(
-            app.join("Contents/Info.plist"),
-            r#"<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>runner</string><key>CFBundleName</key><string>Runner</string></dict></plist>"#,
-        )
-        .unwrap();
+        runner(&app);
         let names = names(&app);
         for name in ["Long Runner", "Runner", "runner"] {
             assert!(names.contains(&name.to_owned()), "{name} in {names:?}");

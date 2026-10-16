@@ -474,7 +474,8 @@ pub async fn close(client: &Client, closing: Closing<'_>) -> Result<Value> {
     }
     let ownership = client.controller.acquire(false)?;
     let atlas = atlas_bundle();
-    let processes = selected(&client.apps().await?, closing, atlas.as_deref());
+    let apps = client.apps().await?;
+    let processes = selected(&apps, closing, atlas.as_deref());
     // The helper's session and Atlas's own services are never closed.
     if let Closing::App(app) = closing
         && processes.iter().any(|(.., protected)| *protected)
@@ -486,7 +487,9 @@ pub async fn close(client: &Client, closing: Closing<'_>) -> Result<Value> {
     }
     let names_of =
         |apps: &Value| -> Vec<String> { app_names(apps).into_iter().map(str::to_owned).collect() };
-    let mut running = Vec::new();
+    // What runs in the helper once the apps are gone; with nothing to quit,
+    // what ran already.
+    let mut running = names_of(&apps);
     let mut quit = Vec::new();
     if !processes.is_empty() {
         // In the helper, each process is signalled only while it is still
@@ -550,12 +553,12 @@ exit 0"#;
         Closing::App(app) => vec![app.to_owned()],
         Closing::All => named(true),
     };
-    // Copies are removed only for apps no longer running: an app that came
-    // back may be running from its copy.
+    // A copy is never removed while an app of its names runs: an app that
+    // came back, or another one, may be running from it.
+    let running: Vec<&str> = running.iter().map(String::as_str).collect();
     let removed: Vec<String> = names
         .iter()
-        .filter(|name| !running.contains(name))
-        .flat_map(|name| handoff::remove_copies_of(name))
+        .flat_map(|name| handoff::remove_copies_of(name, &running))
         .collect();
     let mut reply = json!({
         "ok": true,
