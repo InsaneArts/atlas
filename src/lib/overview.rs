@@ -19,15 +19,18 @@ pub fn activity(directory: &Path, limit: usize) -> Vec<Value> {
         return Vec::new();
     };
     let length = file.metadata().map(|m| m.len()).unwrap_or(0);
-    let mut text = String::new();
+    let mut bytes = Vec::new();
     if file
         .seek(SeekFrom::Start(length.saturating_sub(TAIL)))
         .is_err()
-        || file.take(TAIL).read_to_string(&mut text).is_err()
+        || file.take(TAIL).read_to_end(&mut bytes).is_err()
     {
         return Vec::new();
     }
-    text.lines()
+    // The tail may start inside a character; only that first, partial line
+    // is lost.
+    String::from_utf8_lossy(&bytes)
+        .lines()
         .rev()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .filter(|row| row["operation"].is_string())
@@ -212,5 +215,23 @@ mod tests {
         assert_eq!(newest.len(), 3);
         assert_eq!(newest[0]["at"], "29");
         assert_eq!(newest[2]["at"], "27");
+    }
+
+    #[test]
+    fn a_tail_that_starts_inside_a_character_still_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut text = format!(
+            "{{\"operation\":\"old\",\"pad\":\"{}\"}}\n{{\"at\":\"1\",\"operation\":\"input\"}}\n",
+            "é".repeat(40_000)
+        );
+        let cut = |text: &str| text.as_bytes()[text.len() - TAIL as usize];
+        if cut(&text) & 0xC0 != 0x80 {
+            text.push('\n');
+        }
+        assert_eq!(cut(&text) & 0xC0, 0x80, "the tail starts inside é");
+        fs::write(dir.path().join("metadata.jsonl"), text).unwrap();
+        let rows = activity(dir.path(), 5);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["at"], "1");
     }
 }
