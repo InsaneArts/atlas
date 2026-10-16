@@ -601,17 +601,47 @@ pub async fn wait(
             }));
         }
         if timeout.is_zero() || observed >= deadline {
+            let error = if gone {
+                "The window did not close in time".to_owned()
+            } else {
+                no_window(client, filter).await
+            };
             return Ok(json!({
                 "ok": false,
                 "timedOut": true,
-                "error": if gone {
-                    "The window did not close in time"
-                } else {
-                    "No matching window appeared in time"
-                },
+                "error": error,
             }));
         }
         tokio::time::sleep((deadline - observed).min(Duration::from_millis(250))).await;
+    }
+}
+
+/// Why no window appeared: the app is not running, or it runs without a
+/// window, as a menu bar app does until its menu bar item opens one.
+async fn no_window(client: &Client, filter: &WindowFilter) -> String {
+    let fallback = "No matching window appeared in time".to_owned();
+    let Some(app) = filter.app.as_deref().filter(|_| filter.title.is_none()) else {
+        return fallback;
+    };
+    let Ok(apps) = client.apps().await else {
+        return fallback;
+    };
+    let running = apps["apps"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|running| {
+            running["name"]
+                .as_str()
+                .is_some_and(|name| name.eq_ignore_ascii_case(app))
+        });
+    match running {
+        None => format!("{app} is not running"),
+        Some(running) if running["policy"] == "accessory" => format!(
+            "{app} is running but shows no window: a menu bar app opens its windows from its \
+             menu bar item"
+        ),
+        Some(_) => format!("{app} is running but shows no window"),
     }
 }
 
