@@ -231,9 +231,46 @@ struct Fixture {
     directory: PathBuf,
 }
 
+/// The most read of one fixture record while polling it.
+const MAX_FIXTURE_RECORD: u64 = 1 << 20;
+/// The most archived of one fixture file.
+const MAX_ARCHIVED: u64 = 16 << 20;
+
+/// A regular file the fixture wrote in the helper, read whole up to `limit`
+/// bytes: links, pipes and devices are refused, and a larger file is an
+/// error rather than read without end.
+fn read_bounded(path: &Path, limit: u64) -> std::io::Result<Vec<u8>> {
+    use std::{io::Read, os::unix::fs::OpenOptionsExt};
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{} is not a regular file", path.display()),
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.take(limit + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{} exceeds {limit} bytes", path.display()),
+        ));
+    }
+    Ok(bytes)
+}
+
+/// A small text file the fixture wrote, if it is one.
+fn fixture_text(path: &Path) -> Option<String> {
+    String::from_utf8(read_bounded(path, MAX_FIXTURE_RECORD).ok()?).ok()
+}
+
 impl Fixture {
     fn read(&self, name: &str) -> Option<Value> {
-        serde_json::from_slice(&fs::read(self.directory.join(name)).ok()?).ok()
+        serde_json::from_slice(&read_bounded(&self.directory.join(name), MAX_FIXTURE_RECORD).ok()?)
+            .ok()
     }
     fn state(&self) -> Value {
         self.read("state.json").unwrap_or(Value::Null)
@@ -257,8 +294,7 @@ impl Fixture {
             .then_some(observed)
     }
     fn completion(&self, attempt: &str, kind: &str) -> Option<Value> {
-        fs::read_to_string(self.directory.join("events.jsonl"))
-            .ok()?
+        fixture_text(&self.directory.join("events.jsonl"))?
             .lines()
             .filter_map(|line| serde_json::from_str::<Value>(line).ok())
             .find(|event| {
@@ -568,7 +604,7 @@ impl Canary<'_> {
         self.capture("save-panel").await;
         self.confirm("save", &attempt, &expected).await?;
         self.at("saved bytes match");
-        if fs::read_to_string(&expected).ok().as_deref() != Some(SAVE_TEXT) {
+        if fixture_text(&expected).as_deref() != Some(SAVE_TEXT) {
             return Err(problem("The saved file does not contain the exact text"));
         }
         Ok(())
@@ -576,7 +612,7 @@ impl Canary<'_> {
     async fn open(&mut self) -> Result<()> {
         let expected = self.fixture.file("atlas-open-fixture.txt");
         self.at("open fixture file prepared");
-        if fs::read_to_string(&expected).ok().as_deref() != Some(OPEN_TEXT) {
+        if fixture_text(&expected).as_deref() != Some(OPEN_TEXT) {
             return Err(problem("The fixture did not prepare its Open file"));
         }
         let attempt = self.open_panel("open", "cmd+o").await?;
@@ -648,7 +684,7 @@ impl Canary<'_> {
             "atlas-fixture.txt",
             "atlas-open-fixture.txt",
         ] {
-            match fs::read(self.fixture.file(name)) {
+            match read_bounded(&self.fixture.file(name), MAX_ARCHIVED) {
                 Ok(bytes) => write_private(&directory.join(name), &bytes)?,
                 // Saved output exists only if Save completed.
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -938,5 +974,22 @@ mod tests {
         assert!(button(&observed, "Cancel").is_none());
         assert!(button(&observed, "Open").is_none());
         assert_eq!(sheets(&observed), 1);
+    }
+
+    /// The fixture's files are the helper's: read within a bound, and only
+    /// as regular files.
+    #[test]
+    fn fixture_files_are_read_within_a_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        fs::write(&path, b"{\"ok\":true}").unwrap();
+        assert_eq!(read_bounded(&path, 11).unwrap(), b"{\"ok\":true}");
+        assert!(read_bounded(&path, 10).is_err());
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&path, &link).unwrap();
+        assert!(read_bounded(&link, 1024).is_err());
+        assert!(read_bounded(dir.path(), 1024).is_err());
+        assert_eq!(fixture_text(&path).as_deref(), Some("{\"ok\":true}"));
+        assert_eq!(fixture_text(&dir.path().join("missing")), None);
     }
 }
