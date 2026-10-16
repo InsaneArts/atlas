@@ -119,4 +119,52 @@ mod tests {
         assert_eq!(code("busy"), Some("busy"));
         assert_eq!(code("made-up"), None);
     }
+
+    /// Every code a source file passes to the error constructor is one of
+    /// [`CODES`].
+    #[test]
+    fn every_constructed_code_is_listed() {
+        // Spelled in two parts so this file's own text never matches.
+        let call = concat!("Error::new", "(");
+        let mut directories = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+        let mut unlisted = Vec::new();
+        let mut seen = 0;
+        while let Some(directory) = directories.pop() {
+            for entry in std::fs::read_dir(directory).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    directories.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|extension| extension != "rs") {
+                    continue;
+                }
+                let source = std::fs::read_to_string(&path).unwrap();
+                for (index, _) in source.match_indices(call) {
+                    let rest = source[index + call.len()..].trim_start();
+                    // Codes are lower-case words; anything else is the call
+                    // spelled inside some other string, such as a test's.
+                    let Some(literal) = rest
+                        .strip_prefix('"')
+                        .and_then(|r| r.split('"').next())
+                        .filter(|literal| {
+                            !literal.is_empty()
+                                && literal.chars().all(|c| c.is_ascii_lowercase() || c == '-')
+                        })
+                    else {
+                        continue;
+                    };
+                    seen += 1;
+                    if code(literal).is_none() {
+                        unlisted.push(format!("{}: {literal}", path.display()));
+                    }
+                }
+            }
+        }
+        assert!(seen > 100, "only {seen} constructions found");
+        assert!(
+            unlisted.is_empty(),
+            "codes missing from CODES: {unlisted:?}"
+        );
+    }
 }
