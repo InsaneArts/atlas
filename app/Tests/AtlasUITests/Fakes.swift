@@ -3,10 +3,12 @@ import Foundation
 import Testing
 
 /// Wait until `done` holds, for code that works in the background; after
-/// two seconds the test fails with `message`.
+/// ten seconds the test fails with `message`. A condition that holds ends
+/// the wait at once, so the limit only matters on a slow machine: a shared
+/// CI runner, running every suite at once, takes well over two seconds.
 @MainActor
 func settle(_ message: String = "the condition never held", _ done: () -> Bool) async {
-    let deadline = ContinuousClock.now + .seconds(2)
+    let deadline = ContinuousClock.now + .seconds(10)
     while !done() {
         guard ContinuousClock.now < deadline else {
             Issue.record(Comment(rawValue: message))
