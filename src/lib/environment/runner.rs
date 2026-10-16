@@ -2,6 +2,10 @@
 use super::*;
 use std::{os::unix::process::CommandExt, process::Command};
 
+/// The code of the refusal when no environment profile is installed:
+/// callers fall back to the helper's PATH on it.
+pub const NO_PROFILE: &str = "no-environment";
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Environment {
@@ -26,7 +30,8 @@ pub(super) fn validate_argv(argv: &[String]) -> Result<()> {
 fn load(home: &Path) -> Result<BTreeMap<String, String>> {
     let path = home.join(".config/atlas/environment.json");
     let file = open_regular(&path, false)?.ok_or_else(|| {
-        problem(
+        Error::new(
+            NO_PROFILE,
             "No helper environment profile is installed. Use atlas run instead, or run \
              atlas environment profile to set one up.",
         )

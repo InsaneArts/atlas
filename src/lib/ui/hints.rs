@@ -29,6 +29,7 @@ pub fn fix(code: &str) -> Option<&'static str> {
         "io" => "Check the path and its permissions, then try again.",
         "lease-lost" => "Control was taken back. Take a screenshot before trying again.",
         "menubar" => "The rest of Atlas works without the menu bar.",
+        "no-environment" => "Use atlas run, or set one up with atlas environment profile.",
         "on-console" => {
             "Switch back to your own account. Atlas works while the helper is in the background."
         }

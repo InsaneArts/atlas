@@ -53,6 +53,7 @@ pub const CODES: &[&str] = &[
     "lease-lost",
     "menubar",
     "native",
+    "no-environment",
     "on-console",
     "onboarding",
     "permission",
