@@ -577,9 +577,9 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
         scan.unreadable.clear();
         scan.truncated.clear();
         let role = scan.text(item, "AXRole");
+        scan.last_error = None;
+        let frame = scan.frame(item);
         if depth > 0 && role.as_deref() == Some("AXMenu") {
-            scan.last_error = None;
-            let frame = scan.frame(item);
             // A frame that failed to read (rather than being absent) leaves
             // an open menu possible: it might hold an unseen match.
             if frame.is_none() && scan.last_error.is_some_and(|code| !ABSENT.contains(&code)) {
@@ -590,7 +590,6 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
                 continue;
             }
         }
-        let frame = scan.frame(item);
         let window = sheet_window(role.as_deref(), frame.as_ref(), window);
         let mut element = Element {
             index: found.len(),
@@ -611,7 +610,13 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
         };
         element.unreadable = std::mem::take(&mut scan.unreadable);
         element.truncated = std::mem::take(&mut scan.truncated);
+        let bar_title = element.role.as_deref() == Some("AXMenuBarItem");
         found.push(element);
+        // The menu under a menu bar title is closed, or read as a window of
+        // its own above: nothing in it is on screen here.
+        if bar_title {
+            continue;
+        }
         if depth + 1 >= limits.depth {
             scan.incomplete |= !scan.children(item, "AXChildren", 1).is_empty();
             continue;

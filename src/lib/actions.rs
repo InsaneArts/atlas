@@ -323,7 +323,8 @@ pub fn validate(value: &Value, display: &Display) -> Result<()> {
                 "input",
                 format!(
                     "Action {} is out of range: points lie on the display, a click is 1 to 5 \
-                     clicks, a scroll at most 100 lines, text 1 to 256 characters, a wait at \
+                     clicks with modifiers among cmd, ctrl, alt, shift and fn, a key a known \
+                     name, a scroll at most 100 lines, text 1 to 256 characters, a wait at \
                      most 250 ms",
                     index + 1
                 ),

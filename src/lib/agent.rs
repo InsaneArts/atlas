@@ -192,7 +192,7 @@ pub fn keys(keys: &[String]) -> Result<Value> {
 
 /// Whether two app names name the same app: compared case-insensitively,
 /// so `textedit` and `TextEdit` (or `ÉDITEUR` and `Éditeur`) agree.
-pub(crate) fn same_app(a: &str, b: &str) -> bool {
+pub(crate) fn same_text(a: &str, b: &str) -> bool {
     a == b || a.to_lowercase() == b.to_lowercase()
 }
 
@@ -215,7 +215,7 @@ impl WindowFilter {
                 window
                     .owner
                     .as_deref()
-                    .is_some_and(|owner| same_app(owner, app))
+                    .is_some_and(|owner| same_text(owner, app))
             })
             && self.title.as_ref().is_none_or(|title| {
                 window
@@ -431,7 +431,7 @@ fn selected(apps: &Value, closing: Closing, atlas: Option<&str>) -> Vec<Process>
         .filter(|running| match closing {
             Closing::App(app) => running["name"]
                 .as_str()
-                .is_some_and(|name| same_app(name, app)),
+                .is_some_and(|name| same_text(name, app)),
             // An app someone opened: the main program of an app bundle (not
             // a helper or service inside one), with a Dock icon, or a menu
             // bar app that is not part of macOS (its own, such as Siri,
@@ -659,7 +659,7 @@ async fn no_window(client: &Client, filter: &WindowFilter) -> String {
         .find(|running| {
             running["name"]
                 .as_str()
-                .is_some_and(|name| same_app(name, app))
+                .is_some_and(|name| same_text(name, app))
         });
     match running {
         None => format!("{app} is not running"),
@@ -692,20 +692,21 @@ pub(crate) enum NameMatch {
 
 /// How `text` matches `name`: whole, or as the first of its ", " parts.
 fn name_match(text: &str, name: &str) -> Option<NameMatch> {
-    if text.eq_ignore_ascii_case(name) {
+    if same_text(text, name) {
         return Some(NameMatch::Exact);
     }
+
     let first = text.split_once(", ").map(|(first, _)| first)?;
-    first
-        .eq_ignore_ascii_case(name)
-        .then_some(NameMatch::Leading)
+    same_text(first, name).then_some(NameMatch::Leading)
 }
 
 impl ElementFilter {
     /// How `element` matches, treating the attributes in `unknown` as
-    /// matching (they could not be read). An identifier is never a label,
-    /// so it only matches whole.
+    /// matching (they could not be read). An attribute shown only in part
+    /// proves nothing: a match on it is never claimed. An identifier is
+    /// never a label, so it only matches whole.
     fn compare(&self, element: &Element, unknown: &dyn Fn(&str) -> bool) -> Option<NameMatch> {
+        let cut = |attribute: &str| element.truncated.iter().any(|a| a == attribute);
         let role = self.role.as_deref().is_none_or(|role| {
             unknown("AXRole")
                 || element
@@ -723,22 +724,34 @@ impl ElementFilter {
             if unknown(attribute) {
                 return Some(NameMatch::Exact);
             }
+            if cut(attribute) {
+                return None;
+            }
             value.as_deref().and_then(|text| name_match(text, name))
         };
         let identifier = if unknown("AXIdentifier") {
             Some(NameMatch::Exact)
+        } else if cut("AXIdentifier") {
+            None
         } else {
             element
                 .identifier
                 .as_deref()
-                .filter(|identifier| identifier.eq_ignore_ascii_case(name))
+                .filter(|identifier| same_text(identifier, name))
                 .map(|_| NameMatch::Exact)
+        };
+        let label = if unknown("AXValue") {
+            label(element).map(|_| NameMatch::Exact)
+        } else if cut("AXValue") {
+            None
+        } else {
+            label(element).and_then(|text| name_match(text, name))
         };
         [
             text(&element.title, "AXTitle"),
             text(&element.description, "AXDescription"),
             identifier,
-            label(element).and_then(|text| name_match(text, name)),
+            label,
         ]
         .into_iter()
         .flatten()
@@ -754,10 +767,13 @@ impl ElementFilter {
         self.match_of(element).is_some()
     }
 
-    /// Whether `element` could match once attributes it failed to read are
-    /// treated as unknown.
+    /// Whether `element` could match once attributes it failed to read, or
+    /// read only in part, are treated as unknown.
     pub(crate) fn might_match(&self, element: &Element) -> bool {
-        let unknown = |attribute: &str| element.unreadable.iter().any(|a| a == attribute);
+        let unknown = |attribute: &str| {
+            element.unreadable.iter().any(|a| a == attribute)
+                || element.truncated.iter().any(|a| a == attribute)
+        };
         self.compare(element, &unknown).is_some()
     }
 }
@@ -808,7 +824,7 @@ fn app_pid(windows: &[Window], target: &Target) -> Result<i64> {
                 && window
                     .owner
                     .as_deref()
-                    .is_some_and(|owner| same_app(owner, name))
+                    .is_some_and(|owner| same_text(owner, name))
         })
         .collect();
     // Its ordinary windows first, then floating panels and alerts, then open
@@ -948,6 +964,12 @@ async fn active_pid(client: &Client) -> Result<Option<i64>> {
         .and_then(|app| app["pid"].as_i64()))
 }
 
+/// Whether a frame has any area to click: a collapsed element is not on
+/// screen, whatever lies under its point.
+fn drawn(frame: &Frame) -> bool {
+    frame.width > 0.0 && frame.height > 0.0
+}
+
 /// The one element a click by name or role is for. While a menu is open
 /// only its items count (a click outside it just closes the menu). A whole
 /// name wins over the first part of a longer label, judged over every match
@@ -967,9 +989,21 @@ fn choose<'a>(elements: &'a [Element], filter: &ElementFilter) -> Result<&'a Ele
     let best = matches.iter().map(|(_, kind)| *kind).max();
     let matching: Vec<&Element> = matches
         .iter()
-        .filter(|(element, kind)| Some(*kind) == best && element.frame.is_some())
+        .filter(|(element, kind)| Some(*kind) == best && element.frame.as_ref().is_some_and(drawn))
         .map(|(element, _)| *element)
         .collect();
+    // A menu bar title gives way to a window element of the same name
+    // (a Help button beside a Help menu); --role AXMenuBarItem asks for it.
+    let in_windows: Vec<&Element> = matching
+        .iter()
+        .copied()
+        .filter(|element| element.role.as_deref() != Some("AXMenuBarItem"))
+        .collect();
+    let matching = if filter.role.is_none() && in_windows.len() == 1 {
+        in_windows
+    } else {
+        matching
+    };
     let [element] = matching.as_slice() else {
         return Err(Error::new(
             "elements",
@@ -990,12 +1024,14 @@ fn choose<'a>(elements: &'a [Element], filter: &ElementFilter) -> Result<&'a Ele
     // An element whose selector attributes could not be read may be a
     // second, unseen match.
     let doubtful = elements.iter().any(|other| {
-        other.index != element.index && !other.unreadable.is_empty() && filter.might_match(other)
+        other.index != element.index
+            && (!other.unreadable.is_empty() || !other.truncated.is_empty())
+            && filter.might_match(other)
     });
     if doubtful {
         return Err(Error::new(
             "elements",
-            "Another element's name could not be read, so this match may not be unique",
+            "Another element's name could not be read whole, so this match may not be unique",
         ));
     }
     Ok(element)
@@ -1217,9 +1253,9 @@ mod tests {
     /// Every command compares app names the same way, beyond ASCII too.
     #[test]
     fn app_names_match_in_any_case() {
-        assert!(same_app("TextEdit", "textedit"));
-        assert!(same_app("ÉDITEUR", "éditeur"));
-        assert!(!same_app("TextEdit", "Text"));
+        assert!(same_text("TextEdit", "textedit"));
+        assert!(same_text("ÉDITEUR", "éditeur"));
+        assert!(!same_text("TextEdit", "Text"));
         let windows = [window(1, 8, "Éditeur", 0)];
         assert_eq!(
             app_pid(&windows, &Target::Name("éditeur".into())).unwrap(),
@@ -1531,6 +1567,53 @@ mod tests {
         unread.unreadable = vec!["AXTitle".into()];
         let error = choose(&[whole.clone(), unread.clone()], &named("delete")).unwrap_err();
         assert!(error.error.contains("could not be read"), "{}", error.error);
+    }
+
+    /// Names fold case beyond ASCII; an attribute shown only in part is never
+    /// an exact match but may hide one; a collapsed element is not on
+    /// screen; a menu bar title gives way to a window element of its name.
+    #[test]
+    fn matching_is_honest_about_what_it_cannot_see() {
+        let editer = shown(0, "AXButton", Some("Éditer"), None);
+        assert_eq!(
+            choose(std::slice::from_ref(&editer), &named("ÉDITER"))
+                .unwrap()
+                .index,
+            0
+        );
+
+        let mut cut = shown(1, "AXButton", Some("Delete"), None);
+        cut.truncated = vec!["AXTitle".into()];
+        assert!(!named("delete").matches(&cut), "a cut title proves nothing");
+        assert!(named("delete").might_match(&cut), "but it may hide a match");
+        let whole = shown(2, "AXButton", Some("Delete"), None);
+        let error = choose(&[whole.clone(), cut], &named("delete")).unwrap_err();
+        assert!(error.error.contains("could not be read"), "{}", error.error);
+
+        let mut collapsed = shown(3, "AXButton", Some("Delete"), None);
+        collapsed.frame.as_mut().unwrap().height = 0.0;
+        assert_eq!(
+            choose(&[collapsed, whole.clone()], &named("delete"))
+                .unwrap()
+                .index,
+            2,
+            "a collapsed element is not on screen"
+        );
+
+        let help = shown(4, "AXButton", Some("Help"), None);
+        let title = shown(5, "AXMenuBarItem", Some("Help"), None);
+        assert_eq!(
+            choose(&[title.clone(), help], &named("help"))
+                .unwrap()
+                .index,
+            4,
+            "the window's Help button, not the menu"
+        );
+        let by_role = ElementFilter {
+            role: Some("AXMenuBarItem".into()),
+            name: Some("help".into()),
+        };
+        assert_eq!(choose(&[title], &by_role).unwrap().index, 5);
     }
 
     #[test]

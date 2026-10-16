@@ -4,7 +4,7 @@
 //! grant to the helper, and nothing there is ever replaced: a new copy gets
 //! a new folder, so a running app's files never change under it.
 use crate::{
-    agent::same_app,
+    agent::same_text,
     client::Client,
     control::Ownership,
     error::{Error, Result},
@@ -145,6 +145,7 @@ async fn readable(client: &Client, ownership: &Ownership, paths: &[PathBuf]) -> 
     if paths.is_empty() {
         return Ok(Vec::new());
     }
+
     const CHECK: &str = r#"for p; do
   ok=1
   test -r "$p" || ok=0
@@ -380,7 +381,7 @@ fn folder_names(folder: &Path) -> Vec<String> {
 fn in_use(folder: &Path, running: &[&str]) -> bool {
     folder_names(folder)
         .iter()
-        .any(|name| running.iter().any(|app| same_app(app, name)))
+        .any(|name| running.iter().any(|app| same_text(app, name)))
 }
 
 /// The copies of `app` under `root`: those named so, or whose bundle calls
@@ -388,7 +389,7 @@ fn in_use(folder: &Path, running: &[&str]) -> bool {
 fn copies_of(root: &Path, app: &str) -> Vec<PathBuf> {
     folders(root)
         .into_iter()
-        .filter(|folder| folder_names(folder).iter().any(|name| same_app(name, app)))
+        .filter(|folder| folder_names(folder).iter().any(|name| same_text(name, app)))
         .collect()
 }
 

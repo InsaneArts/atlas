@@ -48,6 +48,9 @@ pub struct Engine {
     pub grant: Option<Grant>,
     journal: Option<Journal>,
     journal_dirty: bool,
+    /// Events posted so far: tells an action that posted some of its
+    /// events before failing from one that posted none.
+    pub(crate) posted: u64,
     source: Source,
     held: Option<Button>,
     held_keys: Vec<u16>,
@@ -68,6 +71,7 @@ impl Engine {
             grant: None,
             journal: None,
             journal_dirty: false,
+            posted: 0,
             source,
             held: None,
             held_keys: Vec::new(),
@@ -86,10 +90,12 @@ impl Engine {
         engine.check()?;
         Ok(engine)
     }
+
     /// Whether this process may use Accessibility.
     pub fn trusted() -> bool {
         accessibility_trusted()
     }
+
     pub fn check(&self) -> Result<()> {
         let current = InputEpoch::from_proof(&session_info()?, std::process::id())?;
         if current != self.epoch {
@@ -113,6 +119,7 @@ impl Engine {
         }
         Ok(())
     }
+
     pub fn recover(&mut self, path: PathBuf) -> Result<()> {
         if let Some(held) = journal::load(&path, &self.epoch)? {
             self.held = held.button;
@@ -129,6 +136,7 @@ impl Engine {
         self.journal_dirty = true;
         self.release()
     }
+
     pub fn rebind(&mut self, current: InputEpoch) -> Result<()> {
         if current.uid != self.epoch.uid
             || current.security_session_id != self.epoch.security_session_id
@@ -141,6 +149,7 @@ impl Engine {
         self.position.y = self.position.y.clamp(0.0, self.epoch.height - 1.0);
         self.release()
     }
+
     fn persist(&mut self, point: Point, flags: u64) -> Result<()> {
         if let Some(journal) = &mut self.journal {
             journal.write(Held {
@@ -175,9 +184,11 @@ impl Engine {
         self.check()?;
         CGEvent::set_flags(Some(&event), CGEventFlags(flags));
         CGEvent::post(TAP, Some(&event));
+        self.posted += 1;
         self.flags = flags;
         Ok(())
     }
+
     fn mouse(
         &mut self,
         kind: CGEventType,
@@ -206,6 +217,7 @@ impl Engine {
         );
         self.post(event, flags, point)
     }
+
     pub fn release(&mut self) -> Result<()> {
         self.grant = None;
         if !self.held_input() {
@@ -227,9 +239,11 @@ impl Engine {
         self.release_modifiers()?;
         self.commit()
     }
+
     pub fn held_input(&self) -> bool {
         self.held.is_some() || !self.held_keys.is_empty() || self.flags != 0
     }
+
     async fn pointer(
         &mut self,
         phase: PointerPhase,
@@ -307,6 +321,7 @@ impl Engine {
         }
         self.commit()
     }
+
     #[allow(unsafe_code)] // FFI: key text is passed as a UTF-16 pointer.
     fn key_event(&mut self, code: u16, down: bool, flags: u64, text: Option<&[u16]>) -> Result<()> {
         let event = created(CGEvent::new_keyboard_event(
@@ -322,16 +337,27 @@ impl Engine {
         }
         self.post(event, flags, self.position)
     }
+
     fn release_modifiers(&mut self) -> Result<()> {
-        if self.flags != 0 {
-            // Finish the chord in CoreGraphics too. Viewer key-up events do
-            // not represent remote holds, so a completed gesture must be clean.
-            for code in MODIFIER_KEYS {
-                self.key_event(code, false, 0, None)?;
+        if self.flags == 0 {
+            return Ok(());
+        }
+
+        // Finish the chord in CoreGraphics too. Viewer key-up events do
+        // not represent remote holds, so a completed gesture must be clean.
+        // Every modifier is released even when one release fails.
+        let mut first = Ok(());
+        for code in MODIFIER_KEYS {
+            if let Err(error) = self.key_event(code, false, 0, None)
+                && first.is_ok()
+            {
+                first = Err(error);
             }
         }
-        Ok(())
+
+        first
     }
+
     fn key(&mut self, code: u16, flags: u64, text: Option<&[u16]>) -> Result<()> {
         self.held_keys.push(code);
         self.key_event(code, true, flags, text)?;
@@ -341,6 +367,7 @@ impl Engine {
         self.held_keys.pop();
         self.commit()
     }
+
     async fn delay(&mut self, duration: Duration) -> Result<()> {
         let end = tokio::time::Instant::now() + duration;
         loop {
@@ -355,6 +382,7 @@ impl Engine {
             tokio::time::sleep((end - now).min(Duration::from_millis(10))).await;
         }
     }
+
     pub async fn perform(&mut self, action: Action) -> Result<()> {
         self.check()?;
         match action {
@@ -463,6 +491,7 @@ impl Engine {
         Ok(())
     }
 }
+
 impl Button {
     fn number(self) -> CGMouseButton {
         match self {
@@ -471,6 +500,7 @@ impl Button {
             Self::Middle => CGMouseButton::Center,
         }
     }
+
     fn down(self) -> CGEventType {
         match self {
             Self::Left => CGEventType::LeftMouseDown,
@@ -478,6 +508,7 @@ impl Button {
             Self::Middle => CGEventType::OtherMouseDown,
         }
     }
+
     fn up(self) -> CGEventType {
         match self {
             Self::Left => CGEventType::LeftMouseUp,
@@ -485,6 +516,7 @@ impl Button {
             Self::Middle => CGEventType::OtherMouseUp,
         }
     }
+
     fn dragged(self) -> CGEventType {
         match self {
             Self::Left => CGEventType::LeftMouseDragged,
