@@ -66,6 +66,10 @@ not test on the person's desktop instead, and do not silently skip the check.
    Copy a `missing` tool in yourself (see below) and check again; if something
    cannot be copied, stop and say so. `signIn: unknown` means look at the app
    before assuming you are signed in.
+3. `atlas screenshot` and look: an earlier session may have left windows
+   open. `atlas close --all` quits every app bundle with a Dock icon and
+   every menu bar app not made by Apple, login items included. Atlas and
+   macOS's own in /System/Library (Finder among them) stay.
 
 When you start something long, tell the person they can watch it live from
 the Atlas menu bar item, or open the viewer window with `atlas monitor`.
@@ -77,9 +81,10 @@ the Atlas menu bar item, or open the viewer window with `atlas monitor`.
 - `atlas apps` lists the running apps by name: the names `--app` takes.
 - `atlas windows [--app NAME]` lists windows front to back with bounds.
 - `atlas elements --app NAME [--role AXButton] [--name LABEL]` lists
-  accessibility elements with roles, names, values and frames. Text is cut
-  after 200 UTF-16 units; `truncated` names any attribute shown only in part,
-  so read long documents from their file instead.
+  accessibility elements with roles, names, values and frames, including the
+  items of a menu the app has open (`menu: true`). Text is cut after 200
+  UTF-16 units; `truncated` names any attribute shown only in part, so read
+  long documents from their file instead.
 
 Coordinates are display points with the origin at the top left. Convert
 screenshot pixels by multiplying by `pointsPerPixel`.
@@ -87,19 +92,29 @@ screenshot pixels by multiplying by `pointsPerPixel`.
 ## Act
 
 - Prefer `atlas click --app NAME --name LABEL [--role ROLE]`: it clicks one
-  named element only if it is visible, and refuses ambiguity.
+  named element only if it is visible, and refuses ambiguity. A label that
+  joins several parts ("QA Eject, Option-Space, 6 Slices") is also found by
+  its first part. With a menu open (menu bar, menu bar item or context menu),
+  it clicks that menu's items.
 - Otherwise `atlas click X Y [--button right] [--count 2] [--modifiers cmd]`.
 - `atlas type "text"` (or `--stdin` for long text), `atlas key cmd+s`
   (`key escape return` presses several; `cmd++` is Command and plus),
   `atlas drag FX FY TX TY`, `atlas scroll X Y --dy -3`.
-- `atlas open --app NAME [FILE|URL]`, then `atlas wait --app NAME`.
+- `atlas open --app NAME [FILE|URL]`, then `atlas wait --app NAME`, which
+  waits for a window. A menu bar app may start with none: open one from its
+  menu bar item.
 - `atlas run -- PROGRAM ARGS` runs a command as the helper, for example to
   read a file the app wrote. Your own shell expands `~` and `$HOME` before
   Atlas sees them, so for the helper's home use
   `atlas run -- /bin/sh -c 'cat "$HOME/notes.txt"'`. The reply is `ok` when
   the command ran: check its `exitCode` (and `timedOut`) for the command's own
   result. `output` holds its text, left out past 1 MiB (`outputTruncated`).
+  A command is stopped after 20 seconds; `--timeout SECONDS` allows up to
+  600.
+  Atlas stays busy while it runs, so start anything longer in the background
+  (`nohup … > "$HOME/run.log" 2>&1 &`) and read its log.
 
+A click that reports `ok` was delivered; it does not mean the app reacted.
 Work in small steps: after every action, look again before deciding the next
 one. The first click on an inactive window may only bring it forward; check,
 then click again. Autocorrect and smart punctuation are off in the helper, so
@@ -117,7 +132,8 @@ look at it before saying it works:
    `--env NAME=VALUE` for any launch variables, then `atlas wait --app NAME`.
    A build the helper cannot read is copied first into a folder the helper may
    read but not change.
-4. Check that your build is the one running: `atlas run -- pgrep -lf App.app`.
+4. Check that your build is the one running: `atlas apps` shows each app's
+   `executable` path.
 5. Exercise exactly what you changed, with the commands above, taking a
    screenshot at each state that matters. Check the edges too: empty states,
    long text, errors, a second launch.
@@ -183,6 +199,9 @@ unless you looked at it in the helper.
   Never take it from them; wait and try again, and tell the person if it lasts.
 - `on-console`: the helper is on screen right now. Ask the person to switch
   back to their own account; do not retry until they have.
+- `blocked`: your shell may not connect to the helper, usually because your
+  sandbox blocks local sockets. The helper is likely fine: run Atlas commands
+  outside the sandbox, and never run `atlas init` for this.
 - Anything else: read `error`, and see references/troubleshooting.md.
 
 ## Limits
@@ -190,9 +209,24 @@ unless you looked at it in the helper.
 - The Dock does not take Atlas's clicks; start apps with `atlas open`.
 - Native Save/Open panels work only while an authenticated Screen Sharing
   session is connected to the helper (`doctor` → `capabilities.nativeDialogs`).
-  Otherwise save existing files with Cmd+S, or create files with tools via `run`.
+  Without it, clicks in a panel report `ok` but do nothing; `atlas key escape`
+  closes it. Save existing files with Cmd+S, or create files with tools via
+  `run`; report a panel flow you could not drive as not checked.
 - Credentials and app sign-ins are never copied from the person's account.
 - Audio plays on the person's speakers.
+- Some things are shared with the person's account. The process list is the
+  whole Mac's: `pgrep -f` and `pkill -f` in `run` also match the person's
+  processes and your own command line. Match the helper's by exact name,
+  `atlas run -- /bin/sh -c 'pgrep -l -U "$(id -u)" -x NAME'`, or quit apps
+  with `atlas close`. A disk image mounted in the helper shows in /Volumes
+  for the person too: give it a distinct name and detach it.
+- The helper cannot read the unified log (`log show`); it is a standard
+  account. The log holds the helper's messages too, so read it from your own
+  shell (outside your sandbox, if it blocks this):
+  `log show --last 5m --predicate 'process == "App"'`.
+- An app's notification prompt in the helper is a permission: never answer it
+  yourself. Until the person allows it there, check a notification's effect
+  instead.
 
 ## References
 
