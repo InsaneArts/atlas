@@ -102,6 +102,65 @@ fn retire_helper_job(executable: &Path, config: &Config) -> Result<Option<Value>
 
 /// Undo install and init. `keep_config` keeps settings and logs.
 pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Value> {
+    let found = survey(config_path)?;
+    if !yes {
+        confirm(&found, config_path, keep_config)?;
+    }
+    let Found {
+        app,
+        executable,
+        client,
+        unloaded,
+        helper,
+        data,
+        leftovers,
+    } = found;
+    let mut removed = Vec::new();
+    let mut warnings = Vec::new();
+    if let Some(error) = &unloaded {
+        skipped("Helper job", "left in place: the settings do not load");
+        warnings.push(format!("Helper job left in place: {error}"));
+    }
+    if let Some(client) = &client {
+        stop_helper(client, &executable, &mut removed, &mut warnings).await?;
+    }
+    stop_menubar(client.as_ref());
+    disconnect(&executable, &mut removed)?;
+    trash(&app, &leftovers, &mut removed)?;
+    remove_settings(config_path, keep_config, &data, &mut removed)?;
+    let mut report = json!({
+        "ok": true,
+        "removed": removed,
+        "kept": {
+            "helperAccount": helper,
+            "remove": helper.as_ref().map(|name| format!("sudo sysadminctl -deleteUser {name}")),
+        },
+    });
+    if unloaded.is_some() {
+        report["kept"]["helperJob"] = json!(true);
+    }
+    if !warnings.is_empty() {
+        report["warnings"] = json!(warnings);
+    }
+    Ok(report)
+}
+
+/// What uninstall finds before it asks.
+struct Found {
+    app: PathBuf,
+    executable: PathBuf,
+    /// For the settings, when they load.
+    client: Option<Client>,
+    /// Why settings that exist do not load: they name no helper, so its
+    /// job stays.
+    unloaded: Option<String>,
+    /// The helper account's name, when it still exists.
+    helper: Option<String>,
+    data: PathBuf,
+    leftovers: Vec<PathBuf>,
+}
+
+fn survey(config_path: &Path) -> Result<Found> {
     let app = crate::update::installed_app()?;
     let executable = crate::update::installed_executable()?;
     // Settings that exist but do not load name no helper, so its job stays.
@@ -118,78 +177,102 @@ pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Val
     let leftovers = config
         .map(|config| handed_over(&config.identity_probe))
         .unwrap_or_default();
-    if !yes {
-        let mut parts = vec![
-            if unloaded.is_some() {
-                "the menu bar and the agent plugins".to_owned()
-            } else {
-                "the helper's background job, the menu bar and the agent plugins".to_owned()
-            },
-            format!("{} (to the Trash)", text::tilde(&app)),
-        ];
-        if !leftovers.is_empty() {
-            parts.push("apps and files Atlas copied for the helper to open".to_owned());
-        }
-        if !keep_config {
-            parts.push(format!(
-                "settings in {} and logs in {}",
-                text::tilde(config_path),
-                text::tilde(&data)
-            ));
-        }
-        say("This removes from this Mac:");
-        for part in parts {
-            say(&format!("  · {part}"));
-        }
-        if let Some(name) = &helper {
-            say(&format!(
-                "The helper account {name} and its files stay, including any copied into it with atlas environment."
-            ));
-        }
-        if unloaded.is_some() {
-            say(&format!(
-                "The settings in {} do not load, so the helper's background job stays.",
-                text::tilde(config_path)
-            ));
-        }
-        if !prompt::confirm("Remove Atlas?", false, "pass --yes")? {
-            return Err(prompt::cancelled());
-        }
-    }
-    let mut removed = Vec::new();
-    let mut warnings = Vec::new();
-    if let Some(error) = &unloaded {
-        skipped("Helper job", "left in place: the settings do not load");
-        warnings.push(format!("Helper job left in place: {error}"));
-    }
+    Ok(Found {
+        app,
+        executable,
+        client,
+        unloaded,
+        helper,
+        data,
+        leftovers,
+    })
+}
 
-    // Nothing may be controlling the helper while its job goes away.
-    if let Some(client) = &client {
-        let config = &client.config;
-        let _exclusion = client.controller.acquire(false)?;
-        if let Some(pid) = client.status().await["inputService"]["pid"]
-            .as_u64()
-            .and_then(|pid| u32::try_from(pid).ok())
-        {
-            let _ = client.stop_input(pid).await;
-        }
-        say("Stopping the helper's background job (macOS may ask for your password)…");
-        if retire_helper_job(&executable, config)?.is_some() {
-            removed.push(json!("helper job"));
-            done("Helper job", "stopped");
+/// Say what goes and what stays, and ask.
+fn confirm(found: &Found, config_path: &Path, keep_config: bool) -> Result<()> {
+    let Found {
+        app,
+        unloaded,
+        helper,
+        data,
+        leftovers,
+        ..
+    } = found;
+    let mut parts = vec![
+        if unloaded.is_some() {
+            "the menu bar and the agent plugins".to_owned()
         } else {
-            skipped("Helper job", "the helper account no longer exists");
-            warnings.push(format!(
-                "The helper account (user ID {}) no longer exists, so no job was stopped",
-                config.helper_uid
-            ));
-        }
-        if remove_link_to(&config.identity_probe, &executable)? {
-            removed.push(json!(config.identity_probe));
-        }
+            "the helper's background job, the menu bar and the agent plugins".to_owned()
+        },
+        format!("{} (to the Trash)", text::tilde(app)),
+    ];
+    if !leftovers.is_empty() {
+        parts.push("apps and files Atlas copied for the helper to open".to_owned());
     }
+    if !keep_config {
+        parts.push(format!(
+            "settings in {} and logs in {}",
+            text::tilde(config_path),
+            text::tilde(data)
+        ));
+    }
+    say("This removes from this Mac:");
+    for part in parts {
+        say(&format!("  · {part}"));
+    }
+    if let Some(name) = helper {
+        say(&format!(
+            "The helper account {name} and its files stay, including any copied into it with atlas environment."
+        ));
+    }
+    if unloaded.is_some() {
+        say(&format!(
+            "The settings in {} do not load, so the helper's background job stays.",
+            text::tilde(config_path)
+        ));
+    }
+    if !prompt::confirm("Remove Atlas?", false, "pass --yes")? {
+        return Err(prompt::cancelled());
+    }
+    Ok(())
+}
+
+/// Stop input and the helper's job, and remove the shared command.
+/// Nothing may be controlling the helper while its job goes away.
+async fn stop_helper(
+    client: &Client,
+    executable: &Path,
+    removed: &mut Vec<Value>,
+    warnings: &mut Vec<String>,
+) -> Result<()> {
+    let config = &client.config;
+    let _exclusion = client.controller.acquire(false)?;
+    if let Some(pid) = client.status().await["inputService"]["pid"]
+        .as_u64()
+        .and_then(|pid| u32::try_from(pid).ok())
+    {
+        let _ = client.stop_input(pid).await;
+    }
+    say("Stopping the helper's background job (macOS may ask for your password)…");
+    if retire_helper_job(executable, config)?.is_some() {
+        removed.push(json!("helper job"));
+        done("Helper job", "stopped");
+    } else {
+        skipped("Helper job", "the helper account no longer exists");
+        warnings.push(format!(
+            "The helper account (user ID {}) no longer exists, so no job was stopped",
+            config.helper_uid
+        ));
+    }
+    if remove_link_to(&config.identity_probe, executable)? {
+        removed.push(json!(config.identity_probe));
+    }
+    Ok(())
+}
+
+/// Stop a running menu bar and its opening at login.
+fn stop_menubar(client: Option<&Client>) {
     let stopped = client
-        .as_ref()
         .and_then(|client| client.output_dir().ok().map(Path::to_path_buf))
         .and_then(|output| crate::menubar::stop(&output))
         .is_some();
@@ -198,21 +281,30 @@ pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Val
     if login_off || stopped {
         done("Menu bar", "stopped and no longer opens at login");
     }
-    // Agents forget the plugin (only connected ones change).
+}
+
+/// Agents forget the plugin (only connected ones change), and `atlas`
+/// leaves the terminal.
+fn disconnect(executable: &Path, removed: &mut Vec<Value>) -> Result<()> {
     let disconnected = crate::agents::change(&[], true).ok();
     if disconnected.is_some() {
         removed.push(json!("agent plugins"));
         done("Agent plugins", "removed");
     }
     let command = config::home()?.join(".local/bin/atlas");
-    if remove_link_to(&command, &executable)? {
+    if remove_link_to(&command, executable)? {
         removed.push(json!(command));
     }
-    // The app goes to the Trash, where it can be recovered.
+    Ok(())
+}
+
+/// The app goes to the Trash, where it can be recovered; what it left for
+/// the helper goes with it.
+fn trash(app: &Path, leftovers: &[PathBuf], removed: &mut Vec<Value>) -> Result<()> {
     let trash = config::home()?
         .join(".Trash")
         .join(format!("Atlas-{}.app", crate::control::token()));
-    fs::rename(&app, &trash).map_err(|_| {
+    fs::rename(app, &trash).map_err(|_| {
         problem(format!(
             "Could not move {} to the Trash; remove it yourself",
             app.display()
@@ -221,7 +313,7 @@ pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Val
     removed.push(json!(app));
     done("Atlas.app", "moved to the Trash");
     let mut cleared = false;
-    for leftover in &leftovers {
+    for leftover in leftovers {
         if fs::remove_dir_all(leftover).is_ok() {
             removed.push(json!(leftover));
             cleared = true;
@@ -235,6 +327,16 @@ pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Val
     if remove_own_file(request).unwrap_or(false) {
         removed.push(json!(request));
     }
+    Ok(())
+}
+
+/// The installed settings and the logs and records, unless kept.
+fn remove_settings(
+    config_path: &Path,
+    keep_config: bool,
+    data: &Path,
+    removed: &mut Vec<Value>,
+) -> Result<()> {
     // Only the installed settings; a checkout's own file is never removed.
     let installed = config::installed_path().ok();
     if !keep_config
@@ -246,25 +348,11 @@ pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Val
         done("Settings", "removed");
     }
     if !keep_config && data.exists() {
-        fs::remove_dir_all(&data)?;
+        fs::remove_dir_all(data)?;
         removed.push(json!(data));
         done("Logs and records", "removed");
     }
-    let mut report = json!({
-        "ok": true,
-        "removed": removed,
-        "kept": {
-            "helperAccount": helper,
-            "remove": helper.as_ref().map(|name| format!("sudo sysadminctl -deleteUser {name}")),
-        },
-    });
-    if unloaded.is_some() {
-        report["kept"]["helperJob"] = json!(true);
-    }
-    if !warnings.is_empty() {
-        report["warnings"] = json!(warnings);
-    }
-    Ok(report)
+    Ok(())
 }
 
 /// What Atlas left for the helper: the copies `open` made, and environment
