@@ -31,6 +31,8 @@ pub use worker::worker;
 
 const MAX_FILE: u64 = 128 * 1024 * 1024;
 const MAX_RECORD: u64 = 4 * 1024 * 1024;
+/// How many files one plan may copy.
+const MAX_SELECTIONS: usize = 32;
 const STATE: &str = ".config/atlas/provisioning";
 
 #[derive(Deserialize)]
@@ -101,15 +103,16 @@ pub(super) async fn freeze(
     selections: Vec<Selection>,
     apply_now: bool,
 ) -> Result<Value> {
-    client.identity().await?;
-    prune(client).await;
-    if selections.is_empty() || selections.len() > 32 {
+    if selections.is_empty() || selections.len() > MAX_SELECTIONS {
         return Err(problem("Select 1–32 files"));
     }
     unique_targets(selections.iter().map(|file| file.target.as_path()))?;
+    client.identity().await?;
+    let helper = helper_name(client.config.helper_uid)?;
+    prune(client, &helper).await;
     let id = crate::control::token();
     let stage = stage_path(client, &id)?;
-    create_stage(&stage, client.config.helper_uid)?;
+    create_stage(&stage, &helper)?;
     let result = async {
         let mut files = Vec::new();
         let mut total = 0;
@@ -130,7 +133,7 @@ pub(super) async fn freeze(
             }
             let source = stage.join(format!("payload-{index}"));
             atomic_write(&source, &bytes, 0o600)?;
-            allow_helper(&source, client.config.helper_uid, false)?;
+            allow_helper(&source, &helper, false)?;
             files.push(Payload {
                 source,
                 target: file.target,
@@ -140,6 +143,7 @@ pub(super) async fn freeze(
         }
         let mut result = dispatch(
             client,
+            &helper,
             &stage,
             Request::Preview {
                 id: id.clone(),
@@ -169,18 +173,38 @@ pub(super) async fn freeze(
             &serde_json::to_vec_pretty(&result)?,
             0o600,
         )?;
-        if apply_now && result["ok"] == true {
-            apply(client, &id).await
-        } else {
-            Ok(result)
-        }
+        Ok(result)
     }
     .await;
-    retained(result, &id, &stage)
+    match previewed(result, &id, &stage) {
+        Ok(result) if apply_now && result["ok"] == true => apply_frozen(client, &helper, &id).await,
+        result => result,
+    }
+}
+
+/// A preview's result, with its stage kept only when it holds a plan. A
+/// preview reads and changes nothing, so a stage it never wrote a plan into
+/// (a refusal or an error on the way) can never be applied, and is removed
+/// with its copies of the selected files.
+fn previewed(result: Result<Value>, id: &str, stage: &Path) -> Result<Value> {
+    if !planned(stage) {
+        discard(stage);
+    }
+    retained(result, id, stage)
+}
+
+/// Whether `stage` holds a frozen plan.
+fn planned(stage: &Path) -> bool {
+    stage.join("plan.json").exists()
 }
 
 /// Apply or resume the same immutable snapshot. Original source files are not read.
 pub async fn apply(client: &Client, plan_id: &str) -> Result<Value> {
+    let helper = helper_name(client.config.helper_uid)?;
+    apply_frozen(client, &helper, plan_id).await
+}
+
+async fn apply_frozen(client: &Client, helper: &str, plan_id: &str) -> Result<Value> {
     let stage = stage_path(client, plan_id)?;
     if directory(&stage, false)?.is_none() {
         return Err(problem(format!(
@@ -195,7 +219,7 @@ pub async fn apply(client: &Client, plan_id: &str) -> Result<Value> {
             "Frozen plan belongs to a different helper or plan ID",
         ));
     }
-    let result = dispatch(client, &stage, Request::Apply { plan }).await;
+    let result = dispatch(client, helper, &stage, Request::Apply { plan }).await;
     // Discarded while still locked, so nothing else can start on it.
     if settled(&result, "applied") {
         discard(&stage);
@@ -207,13 +231,15 @@ pub async fn apply(client: &Client, plan_id: &str) -> Result<Value> {
 /// Preview rollback by default; restore only this transaction's unchanged files.
 pub async fn rollback(client: &Client, transaction_id: &str, apply: bool) -> Result<Value> {
     let stage = stage_path(client, transaction_id)?;
+    let helper = helper_name(client.config.helper_uid)?;
     let created = directory(&stage, false)?.is_none();
     if created {
-        create_stage(&stage, client.config.helper_uid)?;
+        create_stage(&stage, &helper)?;
     }
     let lock = lock_stage(&stage)?;
     let result = dispatch(
         client,
+        &helper,
         &stage,
         Request::Rollback {
             id: transaction_id.into(),
@@ -221,10 +247,7 @@ pub async fn rollback(client: &Client, transaction_id: &str, apply: bool) -> Res
         },
     )
     .await;
-    // An undo that finished needs no plan. A preview changes nothing, so it
-    // only removes a working folder it made itself and left empty of
-    // unconfirmed requests.
-    if (apply && settled(&result, "rolledBack")) || (created && !apply && !requests(&stage)) {
+    if rolled_back(&result, apply, created, &stage) {
         discard(&stage);
     }
     drop(lock);
@@ -232,6 +255,15 @@ pub async fn rollback(client: &Client, transaction_id: &str, apply: bool) -> Res
         retained(result, transaction_id, &stage),
         if apply { "rollback" } else { "rollbackPreview" },
     )
+}
+
+/// Whether a rollback's working folder can go. An undo that finished needs
+/// no plan. A folder the rollback made itself holds no plan either (only its
+/// lock), so it goes once no request in it is left unconfirmed, whatever
+/// the helper answered: an undo that stopped part way resumes from the
+/// helper's own records.
+fn rolled_back(result: &Result<Value>, apply: bool, created: bool, stage: &Path) -> bool {
+    (apply && settled(result, "rolledBack")) || (created && !requests(stage))
 }
 
 /// Say which step a result answers, so it is read in the right direction.
@@ -294,44 +326,28 @@ fn discard(stage: &Path) {
 /// still needed.
 const UNUSED: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 60 * 60);
 
-/// Remove frozen plans older than UNUSED that the helper no longer needs:
-/// ones it never applied, and ones applied or undone completely. A plan with
-/// a retained request (a step whose outcome is unknown), one the helper must
-/// still resume, or one it cannot answer for, stays.
-async fn prune(client: &Client) {
+/// Remove frozen plans older than UNUSED that the helper never started (it
+/// answers that nothing was copied with their ID). Plans applied or undone
+/// completely were removed when that finished; one with a retained request
+/// (a step whose outcome is unknown), one the helper started, or one it
+/// cannot answer for, stays.
+async fn prune(client: &Client, helper: &str) {
     let Some(shared) = client.config.identity_probe.parent() else {
         return;
     };
-    let old: Vec<(String, PathBuf)> = leftovers(shared)
-        .into_iter()
-        .filter_map(|stage| {
-            let name = stage.file_name()?.to_string_lossy().into_owned();
-            let id = name.strip_prefix("environment-plan-")?.to_owned();
-            let age = fs::symlink_metadata(&stage)
-                .ok()?
-                .modified()
-                .ok()?
-                .elapsed()
-                .ok()?;
-            (age > UNUSED).then_some((id, stage))
-        })
-        .collect();
-    for (id, stage) in old {
+    for (id, stage) in stale(shared, UNUSED) {
         // Everything below happens under the plan's own lock; a plan in use
         // is skipped.
         let Ok(lock) = lock_stage(&stage) else {
             continue;
         };
-        let ours = read_limited(&stage.join("plan.json"), MAX_RECORD)
-            .ok()
-            .and_then(|bytes| decode::<Plan>(&bytes).ok())
-            .is_some_and(|plan| plan.id == id && plan.uid == client.config.helper_uid);
-        if !ours || requests(&stage) {
+        if !prunable(&stage, &id, client.config.helper_uid) {
             continue;
         }
         // A read-only question: has the helper ever started this plan?
         let answer = dispatch(
             client,
+            helper,
             &stage,
             Request::Rollback {
                 id: id.clone(),
@@ -349,14 +365,43 @@ async fn prune(client: &Client) {
     }
 }
 
+/// The frozen plans beside the shared command older than `age`, with their IDs.
+fn stale(shared: &Path, age: std::time::Duration) -> Vec<(String, PathBuf)> {
+    leftovers(shared)
+        .into_iter()
+        .filter_map(|stage| {
+            let name = stage.file_name()?.to_string_lossy().into_owned();
+            let id = name.strip_prefix("environment-plan-")?.to_owned();
+            let elapsed = fs::symlink_metadata(&stage)
+                .ok()?
+                .modified()
+                .ok()?
+                .elapsed()
+                .ok()?;
+            (elapsed > age).then_some((id, stage))
+        })
+        .collect()
+}
+
+/// Whether the helper may be asked about the plan in `stage`: a readable
+/// plan for this ID and helper, with no request whose outcome is unknown.
+fn prunable(stage: &Path, id: &str, uid: u32) -> bool {
+    let ours = read_limited(&stage.join("plan.json"), MAX_RECORD)
+        .ok()
+        .and_then(|bytes| decode::<Plan>(&bytes).ok())
+        .is_some_and(|plan| plan.id == id && plan.uid == uid);
+    ours && !requests(stage)
+}
+
 /// Execute a command with the installed helper-local profile. The reply is the
 /// actual process result, including its output, status, signal and timeout.
 pub async fn run(client: &Client, argv: Vec<String>) -> Result<Value> {
     runner::validate_argv(&argv)?;
     let id = crate::control::token();
     let stage = stage_path(client, &id)?.with_file_name(format!("environment-run-{id}"));
-    create_stage(&stage, client.config.helper_uid)?;
-    let mut result = dispatch(client, &stage, Request::Run { argv }).await;
+    let helper = helper_name(client.config.helper_uid)?;
+    create_stage(&stage, &helper)?;
+    let mut result = dispatch(client, &helper, &stage, Request::Run { argv }).await;
     if delivery_uncertain(&result) {
         match &mut result {
             Ok(value) => value["retainedRequest"] = json!(stage),
@@ -411,18 +456,28 @@ fn delivery_uncertain(result: &Result<Value>) -> bool {
     }
 }
 
+/// Name what `stage` still holds: a frozen plan, or only requests whose
+/// outcome is unknown (kept as evidence), or nothing once it is gone.
 fn retained(mut result: Result<Value>, id: &str, stage: &Path) -> Result<Value> {
+    let plan = planned(stage);
     let kept = stage.exists();
     match &mut result {
         Ok(value) => {
-            value["retainedPlan"] = if kept { json!(stage) } else { Value::Null };
+            value["retainedPlan"] = if plan { json!(stage) } else { Value::Null };
+            if kept && !plan {
+                value["retainedRequest"] = json!(stage);
+            }
             value["planId"] = json!(id);
             value["transactionId"] = json!(id);
         }
-        Err(error) => error.error.push_str(&format!(
+        Err(error) if plan => error.error.push_str(&format!(
             " Frozen plan {id} retained at {}.",
             stage.display()
         )),
+        Err(error) if kept => error
+            .error
+            .push_str(&format!(" Retained request: {}.", stage.display())),
+        Err(_) => {}
     }
     result
 }
@@ -443,10 +498,14 @@ fn stage_path(client: &Client, id: &str) -> Result<PathBuf> {
     Ok(parent.join(format!("environment-plan-{id}")))
 }
 
-fn create_stage(stage: &Path, uid: u32) -> Result<()> {
+/// Make a private folder the helper may read, or nothing.
+fn create_stage(stage: &Path, helper: &str) -> Result<()> {
     fs::DirBuilder::new().mode(0o700).create(stage)?;
-    remove_inherited_acl(stage)?;
-    allow_helper(stage, uid, true)
+    let shared = remove_inherited_acl(stage).and_then(|()| allow_helper(stage, helper, true));
+    if shared.is_err() {
+        let _ = fs::remove_dir(stage);
+    }
+    shared
 }
 
 fn lock_stage(stage: &Path) -> Result<fs::File> {
@@ -464,15 +523,49 @@ fn lock_stage(stage: &Path) -> Result<fs::File> {
 }
 
 /// Each invocation gets immutable arguments and a fresh session pin. Mutating
-/// requests and their binary remain available whenever the reply is uncertain.
-async fn dispatch(client: &Client, stage: &Path, request: Request) -> Result<Value> {
+/// requests and their binary remain available whenever the reply is uncertain;
+/// a request that was never sent leaves nothing behind.
+async fn dispatch(client: &Client, helper: &str, stage: &Path, request: Request) -> Result<Value> {
     let mutating = matches!(
         &request,
         Request::Apply { .. } | Request::Rollback { apply: true, .. } | Request::Run { .. }
     );
     let raw_output = matches!(&request, Request::Run { .. });
-    let invocation = stage.join(format!("request-{}", crate::control::token()));
-    create_stage(&invocation, client.config.helper_uid)?;
+    let packet = Packet {
+        version: 1,
+        expected: Identity::from_epoch(&client.identity().await?.epoch),
+        request,
+    };
+    let name = format!("request-{}", crate::control::token());
+    let invocation = stage.join(&name);
+    create_stage(&invocation, helper)?;
+    let argv = match stage_request(&invocation, helper, &packet, mutating) {
+        Ok(argv) => argv,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&invocation);
+            return Err(error);
+        }
+    };
+    let result = match client.run(argv).await {
+        Ok(reply) if raw_output => refused(reply, &name),
+        Ok(reply) => decode_reply(&reply, mutating, &name),
+        Err(error) => Err(error),
+    };
+    if !delivery_uncertain(&result) {
+        // A complete child reply means its immutable request is no longer in use.
+        let _ = fs::remove_dir_all(&invocation);
+    }
+    result
+}
+
+/// Write one request (its packet and, for a loose build, the executable that
+/// runs it) into `invocation`: the argv that runs it in the helper.
+fn stage_request(
+    invocation: &Path,
+    helper: &str,
+    packet: &Packet,
+    mutating: bool,
+) -> Result<Vec<String>> {
     // Atlas.app's executable is sealed with its bundle, so a copy would
     // fail its signature: the helper runs the app's own executable. A loose
     // build is copied, so its request keeps the binary it was made with.
@@ -484,18 +577,12 @@ async fn dispatch(client: &Client, stage: &Path, request: Request) -> Result<Val
     } else {
         let executable = invocation.join("atlas");
         atomic_write(&executable, &read_limited(&source, MAX_FILE)?, 0o700)?;
-        allow_helper(&executable, client.config.helper_uid, true)?;
+        allow_helper(&executable, helper, true)?;
         executable
     };
-    let expected = Identity::from_epoch(&client.identity().await?.epoch);
-    let packet = Packet {
-        version: 1,
-        expected,
-        request,
-    };
     let path = invocation.join("packet.json");
-    atomic_write(&path, &serde_json::to_vec(&packet)?, 0o600)?;
-    allow_helper(&path, client.config.helper_uid, false)?;
+    atomic_write(&path, &serde_json::to_vec(packet)?, 0o600)?;
+    allow_helper(&path, helper, false)?;
     let mut argv = vec![
         executable.to_string_lossy().into_owned(),
         "environment-worker".into(),
@@ -504,23 +591,16 @@ async fn dispatch(client: &Client, stage: &Path, request: Request) -> Result<Val
     if mutating {
         argv.push("--apply".into());
     }
-    let request = invocation
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let result = match client.run(argv).await {
-        Ok(reply) if raw_output => refused(reply, &request),
-        Ok(reply) => decode_reply(&reply, mutating),
-        Err(error) => Err(error),
-    };
-    if !delivery_uncertain(&result) {
-        // A complete child reply means its immutable request is no longer in use.
-        let _ = fs::remove_dir_all(&invocation);
-    }
-    result
+    Ok(argv)
 }
 
-fn decode_reply(reply: &Value, mutating: bool) -> Result<Value> {
+/// Whether the worker of `request` refused because the helper has no
+/// transaction with that ID: nothing was started, so nothing is to resume.
+fn never_started(value: &Value, request: &str) -> bool {
+    value["ok"] == false && value["refusal"] == request && value["error"] == worker::MISSING
+}
+
+fn decode_reply(reply: &Value, mutating: bool, request: &str) -> Result<Value> {
     let invalid = |message: &str| {
         let error = problem(message);
         if mutating { error.uncertain() } else { error }
@@ -542,7 +622,8 @@ fn decode_reply(reply: &Value, mutating: bool) -> Result<Value> {
     {
         return Err(invalid("Environment worker returned an invalid result"));
     }
-    if mutating && value["ok"] == false {
+    let missing = reply["exitCode"] == WORKER_REFUSED && never_started(&value, request);
+    if mutating && value["ok"] == false && !missing {
         value["resumeRequired"] = json!(true);
     }
     Ok(value)

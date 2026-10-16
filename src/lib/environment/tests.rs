@@ -237,7 +237,11 @@ fn malformed_or_interrupted_mutation_replies_remain_uncertain() {
         json!({"timedOut": false, "signal": null, "exitCode": 0, "events": []}),
         json!({"timedOut": false, "signal": null, "exitCode": 0, "events": [{"event": "output", "data": "invalid!"}]}),
     ] {
-        assert!(decode_reply(&reply, true).unwrap_err().uncertain);
+        assert!(
+            decode_reply(&reply, true, "request-ab12")
+                .unwrap_err()
+                .uncertain
+        );
     }
 }
 
@@ -665,4 +669,241 @@ fn a_worker_refusal_is_told_from_the_command_output() {
     assert!(refused(reply(WORKER_REFUSED, lookalike), "request-ab12").is_ok());
     assert!(refused(reply(WORKER_REFUSED, refusal), "request-other").is_ok());
     assert!(refused(reply(WORKER_REFUSED, "plain text"), "request-ab12").is_ok());
+}
+
+/// A frozen-plan folder as freeze leaves it, in a private shared folder.
+fn stage_in(shared: &Path, id: &str) -> PathBuf {
+    let stage = shared.join(format!("environment-plan-{id}"));
+    fs::DirBuilder::new().mode(0o700).create(&stage).unwrap();
+    stage
+}
+
+fn write_plan(stage: &Path, id: &str, uid: u32) {
+    let plan = Plan {
+        version: 1,
+        id: id.into(),
+        uid,
+        home: "/Users/helper".into(),
+        files: Vec::new(),
+    };
+    fs::write(stage.join("plan.json"), serde_json::to_vec(&plan).unwrap()).unwrap();
+}
+
+/// A worker's reply as the helper's `run` returns it.
+fn worker_reply(exit: u8, output: &Value) -> Value {
+    json!({
+        "exitCode": exit,
+        "timedOut": false,
+        "signal": null,
+        "events": [{"event": "output", "data": STANDARD.encode(output.to_string())}],
+    })
+}
+
+#[test]
+fn only_a_confirmed_finish_settles_a_plan() {
+    let done = json!({"ok": true, "phase": "applied", "resumeRequired": false});
+    assert!(settled(&Ok(done.clone()), "applied"));
+    assert!(!settled(&Ok(done), "rolledBack"));
+    for value in [
+        json!({"ok": true, "phase": "applied", "resumeRequired": true}),
+        json!({"ok": false, "phase": "applied", "resumeRequired": false}),
+        json!({"ok": true, "phase": "applied"}),
+    ] {
+        assert!(!settled(&Ok(value.clone()), "applied"), "{value}");
+    }
+    assert!(!settled(&Err(problem("lost")), "applied"));
+}
+
+#[test]
+fn a_stage_keeps_requests_whose_outcome_is_unknown() {
+    let sandbox = Sandbox::new();
+    let stage = stage_in(&sandbox.root, &crate::control::token());
+    assert!(!requests(&stage));
+    fs::write(stage.join("controller.lock"), b"").unwrap();
+    assert!(!requests(&stage), "a lock is not a request");
+    fs::create_dir(stage.join("request-ab12")).unwrap();
+    assert!(requests(&stage));
+    assert!(!requests(&sandbox.root.join("missing")));
+}
+
+/// A rollback's own folder goes once nothing in it is unconfirmed, also
+/// after a refusal (a mistyped ID); a frozen plan's folder goes only with
+/// a finished undo.
+#[test]
+fn rollback_removes_its_own_folder_unless_a_request_is_unconfirmed() {
+    let sandbox = Sandbox::new();
+    let stage = stage_in(&sandbox.root, &crate::control::token());
+    fs::write(stage.join("controller.lock"), b"").unwrap();
+    let refused: Result<Value> = Ok(json!({"ok": false, "error": worker::MISSING}));
+    let finished: Result<Value> =
+        Ok(json!({"ok": true, "phase": "rolledBack", "resumeRequired": false}));
+    let stopped: Result<Value> =
+        Ok(json!({"ok": false, "phase": "rollingBack", "resumeRequired": true}));
+    for apply in [false, true] {
+        assert!(rolled_back(&refused, apply, true, &stage), "apply {apply}");
+        assert!(
+            !rolled_back(&refused, apply, false, &stage),
+            "apply {apply}"
+        );
+    }
+    assert!(rolled_back(&Err(problem("refused")), true, true, &stage));
+    assert!(rolled_back(&finished, true, false, &stage));
+    assert!(!rolled_back(&finished, false, false, &stage));
+    assert!(!rolled_back(&stopped, true, false, &stage));
+    fs::create_dir(stage.join("request-ab12")).unwrap();
+    assert!(!rolled_back(&refused, true, true, &stage));
+    assert!(!rolled_back(
+        &Err(problem("lost").uncertain()),
+        true,
+        true,
+        &stage
+    ));
+}
+
+/// An undo of an ID the helper never applied is a refusal, not a
+/// transaction to resume; any other failed mutation stays resumable.
+#[test]
+fn a_rollback_of_an_unknown_id_is_not_resumable() {
+    let refusal = |error: &str, request: &str| json!({"ok": false, "code": "environment", "error": error, "uncertain": false, "refusal": request});
+    let reply = worker_reply(WORKER_REFUSED, &refusal(worker::MISSING, "request-ab12"));
+    let value = decode_reply(&reply, true, "request-ab12").unwrap();
+    assert_eq!(value["ok"], false);
+    assert!(value["resumeRequired"].is_null(), "{value}");
+    for (exit, output) in [
+        (WORKER_REFUSED, refusal(worker::MISSING, "request-other")),
+        (
+            WORKER_REFUSED,
+            refusal("Transaction is busy", "request-ab12"),
+        ),
+        (1, json!({"ok": false, "error": worker::MISSING})),
+    ] {
+        let value = decode_reply(&worker_reply(exit, &output), true, "request-ab12").unwrap();
+        assert_eq!(value["resumeRequired"], true, "{output}");
+    }
+    // A preview of an unknown ID is an answer, never a resume.
+    let value = decode_reply(&reply, false, "request-ab12").unwrap();
+    assert!(value["resumeRequired"].is_null());
+}
+
+#[test]
+fn results_name_a_retained_plan_only_when_one_exists() {
+    let sandbox = Sandbox::new();
+    let id = crate::control::token();
+    let stage = stage_in(&sandbox.root, &id);
+    write_plan(&stage, &id, 501);
+    let kept = retained(Ok(json!({"ok": true})), &id, &stage).unwrap();
+    assert_eq!(kept["retainedPlan"], json!(stage));
+    assert!(kept["retainedRequest"].is_null());
+    assert_eq!(kept["planId"], id.as_str());
+    let error = retained(Err(problem("Stopped.")), &id, &stage).unwrap_err();
+    let suffix = format!(" Frozen plan {id} retained at {}.", stage.display());
+    assert!(error.error.ends_with(&suffix), "{}", error.error);
+    // Only requests left: evidence, not a plan to apply.
+    fs::remove_file(stage.join("plan.json")).unwrap();
+    fs::create_dir(stage.join("request-ab12")).unwrap();
+    let request = retained(Ok(json!({"ok": false})), &id, &stage).unwrap();
+    assert!(request["retainedPlan"].is_null());
+    assert_eq!(request["retainedRequest"], json!(stage));
+    let error = retained(Err(problem("Stopped.")), &id, &stage).unwrap_err();
+    assert!(!error.error.contains("Frozen plan"), "{}", error.error);
+    assert!(error.error.contains("Retained request"), "{}", error.error);
+    fs::remove_dir_all(&stage).unwrap();
+    let gone = retained(Ok(json!({"ok": true})), &id, &stage).unwrap();
+    assert!(gone["retainedPlan"].is_null() && gone["retainedRequest"].is_null());
+    let error = retained(Err(problem("Stopped.")), &id, &stage).unwrap_err();
+    assert_eq!(error.error, "Stopped.");
+}
+
+/// A preview that wrote no plan (a refusal, or an error on the way) leaves
+/// none of the selected files' copies behind.
+#[test]
+fn a_preview_without_a_plan_discards_its_copies() {
+    let sandbox = Sandbox::new();
+    let id = crate::control::token();
+    let stage = stage_in(&sandbox.root, &id);
+    fs::write(stage.join("payload-0"), b"secret").unwrap();
+    let refused = previewed(Ok(json!({"ok": false, "plan": null})), &id, &stage).unwrap();
+    assert!(!stage.exists());
+    assert!(refused["retainedPlan"].is_null());
+    let stage = stage_in(&sandbox.root, &id);
+    fs::write(stage.join("payload-0"), b"secret").unwrap();
+    let error = previewed(Err(problem("Unreadable source.")), &id, &stage).unwrap_err();
+    assert!(!stage.exists());
+    assert_eq!(error.error, "Unreadable source.");
+    let stage = stage_in(&sandbox.root, &id);
+    write_plan(&stage, &id, 501);
+    let planned = previewed(Ok(json!({"ok": true})), &id, &stage).unwrap();
+    assert!(stage.join("plan.json").exists());
+    assert_eq!(planned["retainedPlan"], json!(stage));
+}
+
+#[test]
+fn leftovers_are_only_atlas_folders_with_valid_ids() {
+    let sandbox = Sandbox::new();
+    let id = crate::control::token();
+    let plan = stage_in(&sandbox.root, &id);
+    let run = sandbox.root.join(format!("environment-run-{id}"));
+    fs::create_dir(&run).unwrap();
+    fs::create_dir(sandbox.root.join("environment-plan-short")).unwrap();
+    fs::create_dir(sandbox.root.join(format!("other-{id}"))).unwrap();
+    let file = crate::control::token();
+    fs::write(sandbox.root.join(format!("environment-plan-{file}")), b"").unwrap();
+    let linked = crate::control::token();
+    symlink(
+        &plan,
+        sandbox.root.join(format!("environment-plan-{linked}")),
+    )
+    .unwrap();
+    let mut found = leftovers(&sandbox.root);
+    found.sort();
+    let mut expected = vec![plan, run];
+    expected.sort();
+    assert_eq!(found, expected);
+    assert!(leftovers(&sandbox.root.join("missing")).is_empty());
+}
+
+#[test]
+fn only_old_readable_plans_without_unknown_requests_are_pruned() {
+    let sandbox = Sandbox::new();
+    let id = crate::control::token();
+    let stage = stage_in(&sandbox.root, &id);
+    fs::create_dir(sandbox.root.join(format!("environment-run-{id}"))).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    assert_eq!(
+        stale(&sandbox.root, std::time::Duration::ZERO),
+        vec![(id.clone(), stage.clone())],
+        "a command's folder is never a plan"
+    );
+    assert!(stale(&sandbox.root, UNUSED).is_empty());
+    assert!(!prunable(&stage, &id, 501), "no plan to ask about");
+    write_plan(&stage, &id, 501);
+    assert!(prunable(&stage, &id, 501));
+    assert!(!prunable(&stage, &id, 502), "another helper's plan");
+    assert!(!prunable(&stage, &crate::control::token(), 501));
+    fs::create_dir(stage.join("request-ab12")).unwrap();
+    assert!(!prunable(&stage, &id, 501));
+}
+
+/// A request that cannot be sent leaves no request folder, which would
+/// otherwise read as an unknown outcome forever.
+#[tokio::test]
+async fn a_request_that_was_never_sent_leaves_nothing() {
+    let sandbox = Sandbox::new();
+    let text = "helper_uid = 60001\nsocket_path = \"c.sock\"\noutput_dir = \"out\"\n\
+                identity_probe = \"probe\"\ninput_socket = \"i.sock\"\n";
+    let config =
+        crate::config::Config::parse(text.as_bytes(), &sandbox.root.join("u.toml")).unwrap();
+    let mut client = Client::new(config).unwrap();
+    client.controller = crate::control::Controller::at(60001, &sandbox.root.join("state"));
+    let stage = stage_in(&sandbox.root, &crate::control::token());
+    let request = Request::Rollback {
+        id: crate::control::token(),
+        apply: true,
+    };
+    assert!(dispatch(&client, "nobody", &stage, request).await.is_err());
+    assert_eq!(fs::read_dir(&stage).unwrap().count(), 0);
+    // A folder the helper cannot be given goes too.
+    let refused = sandbox.root.join("refused");
+    assert!(create_stage(&refused, "atlas-no-such-user-zz").is_err());
+    assert!(!refused.exists());
 }
