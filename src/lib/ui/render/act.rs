@@ -292,6 +292,41 @@ pub fn environment(value: &Value) -> Rendered {
 
 /// An app closed in the helper, and whether its copy went with it.
 pub fn close(value: &Value) -> String {
+    // `close --all` names every app it quit.
+    if let Some(apps) = value["apps"].as_array() {
+        let names: Vec<String> = apps
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|name| text::printable(name).into_owned())
+            .collect();
+        let mut line = if names.is_empty() {
+            format!("{} No apps were open", style::ok())
+        } else {
+            format!("{} Closed {}", style::ok(), names.join(", "))
+        };
+        if value["removed"]
+            .as_array()
+            .is_some_and(|removed| !removed.is_empty())
+        {
+            line.push_str(&style::dim(" · removed Atlas's copies"));
+        }
+        if let Some(skipped) = value["skipped"]
+            .as_array()
+            .filter(|skipped| !skipped.is_empty())
+        {
+            let skipped: Vec<String> = skipped
+                .iter()
+                .filter_map(Value::as_str)
+                .map(|name| text::printable(name).into_owned())
+                .collect();
+            line.push_str(&format!(
+                "\n{} Left {}: it changed before it could be quit",
+                style::warn(),
+                skipped.join(", ")
+            ));
+        }
+        return line;
+    }
     let name = text::printable(value["app"].as_str().unwrap_or("The app")).into_owned();
     let mut line = if value["closed"] == true {
         format!("{} Closed {name}", style::ok())

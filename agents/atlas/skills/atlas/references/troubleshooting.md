@@ -49,5 +49,5 @@ its own failure is in `exitCode`.)
 | `uninstall` | Removal was refused or incomplete. | Show `error` to the person. |
 | `update` | An update was refused or could not be verified. | Show `error`; never bypass the signature checks. |
 | `usage` | The command line was invalid. | Check `references/commands.md`. |
-| `wait-failed` | A command ran but its exit status could not be read. | Treat the outcome as unknown; check its effects. |
+| `wait-failed` | A command ran but its exit status could not be read, or an app did not quit in time. | Treat the outcome as unknown; check its effects (`atlas apps` for apps). |
 | `windows` | The helper's window list is unavailable. | Retry once; then `atlas doctor`. |

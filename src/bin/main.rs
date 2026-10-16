@@ -333,10 +333,17 @@ enum Command {
     /// Quit an app in the helper and remove the copies `open` made for it.
     ///
     /// The app quits at once, without asking to save: save first (key cmd+s).
+    /// --all quits what an earlier session may have left open: every app
+    /// bundle with a Dock icon and every menu bar app not made by Apple.
+    /// Atlas and macOS's own in /System/Library (Finder among them) stay.
+    #[command(group(clap::ArgGroup::new("which").required(true).args(["app", "all"])))]
     Close {
         /// The app's name, as `atlas apps` lists it.
         #[arg(long)]
-        app: String,
+        app: Option<String>,
+        /// Quit every app left open (not Atlas or macOS's own).
+        #[arg(long, conflicts_with = "app")]
+        all: bool,
     },
     /// Wait for a window to appear (or, with --gone, to close).
     Wait {
@@ -1229,7 +1236,12 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             targets,
             environment,
         } => agent::open(&client, app.as_deref(), &targets, &environment).await,
-        Command::Close { app } => agent::close(&client, &app).await,
+        Command::Close { app, .. } => {
+            let closing = app
+                .as_deref()
+                .map_or(agent::Closing::All, agent::Closing::App);
+            agent::close(&client, closing).await
+        }
         Command::Wait {
             app,
             title,
