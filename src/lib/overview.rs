@@ -136,16 +136,19 @@ mod tests {
                 "inputService": {"controlActive": false}},
         })
     }
+
     fn row(seconds_ago: u128) -> Value {
         json!({"at": (NOW - seconds_ago * 1_000_000_000).to_string(),
             "operation": "input", "ok": true, "actionCount": 1})
     }
+
     fn unresolved(count: usize) -> Pending {
         Pending {
             unresolved: count,
             in_flight: 0,
         }
     }
+
     fn mode(report: &Value, lease: bool, pending: usize, activity: &[Value]) -> Value {
         overview(report, lease, unresolved(pending), activity, NOW)["mode"].clone()
     }

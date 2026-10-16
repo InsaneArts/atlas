@@ -318,6 +318,7 @@ impl Login {
             _ => Err(Error::new("usage", "Open at Login takes on, off or status")),
         }
     }
+
     fn as_str(self) -> &'static str {
         match self {
             Self::On => "on",
@@ -453,6 +454,7 @@ impl App {
         });
         Ok(Self { child, writer })
     }
+
     /// Resolves when the person quits the app.
     pub async fn exited(&mut self) {
         let _ = self.child.wait().await;

@@ -58,6 +58,7 @@ pub struct Viewer {
     /// The app this viewer serves, when it serves one.
     app: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<Line>>>,
 }
+
 impl Viewer {
     /// Pass `line` to the app this viewer serves.
     fn send(&self, line: Line) -> Result<()> {
@@ -104,6 +105,7 @@ impl Viewer {
         }
         Ok((key, frame))
     }
+
     async fn observed(&self, key: &str) -> Result<Arc<Frame>> {
         let frame = self
             .frames
@@ -122,6 +124,7 @@ impl Viewer {
             })?;
         Ok(frame)
     }
+
     async fn release(&self, owner: Option<&str>) -> Result<()> {
         let previous = {
             let mut lease = self.lease.lock().await;
@@ -134,6 +137,7 @@ impl Viewer {
         }
         Ok(())
     }
+
     /// End `owner`'s native control in the helper. The outcome is marked
     /// pending first and cleared only once the helper confirms, so an
     /// unconfirmed release stays an unknown outcome for recovery.
@@ -152,6 +156,7 @@ impl Viewer {
             .uncertain()),
         }
     }
+
     async fn status(&self) -> Value {
         let mut status =
             crate::capability::doctor(self.client.status().await, self.client.config.helper_uid);
@@ -213,6 +218,7 @@ impl Viewer {
         }
         status
     }
+
     /// Explicit, person-initiated recovery: the verified restart when an
     /// outcome is unknown, otherwise starting, resetting or upgrading input.
     /// It never takes control or resumes input.
@@ -225,6 +231,7 @@ impl Viewer {
         }
         self.client.start_input().await
     }
+
     async fn control(&self, route: &str, body: &Value) -> Result<Value> {
         let owner = body["lease"].as_str().unwrap_or_default();
         // The menu bar's emergency stop: end whichever lease is held, with
@@ -823,6 +830,7 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
 fn json_response(code: u16, value: Value) -> Response {
     response(code, "application/json", Body::from(value.to_string()), &[])
 }
+
 fn response(code: u16, mime: &str, body: Body, headers: &[(&str, String)]) -> Response {
     let mut response = Response::new(body);
     *response.status_mut() =

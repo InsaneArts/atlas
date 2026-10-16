@@ -34,6 +34,7 @@ pub struct Journal {
     path: PathBuf,
     saved: Option<Held>,
 }
+
 impl Journal {
     pub fn new(path: PathBuf) -> Self {
         Self { path, saved: None }
@@ -49,6 +50,7 @@ impl Journal {
         Ok(())
     }
 }
+
 pub fn load(path: &Path, epoch: &InputEpoch) -> Result<Option<Held>> {
     let foreign = || Error::new("identity", "Held-input journal must belong to the helper");
     // A symlink is never followed (O_NOFOLLOW fails with ELOOP), and the
@@ -99,6 +101,7 @@ pub fn load(path: &Path, epoch: &InputEpoch) -> Result<Option<Held>> {
     }
     Ok(Some(held))
 }
+
 pub fn store(path: &Path, held: &Held) -> Result<()> {
     let temporary = path.with_extension("pending");
     write_private(&temporary, &serde_json::to_vec(held)?)?;

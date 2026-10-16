@@ -14,12 +14,14 @@ pub struct State {
     expires: Option<Instant>,
     closed: bool,
 }
+
 impl State {
     fn expire(&mut self) {
         if self.expires.is_some_and(|at| at <= Instant::now()) {
             self.owner = None;
         }
     }
+
     fn require(&mut self, owner: &str) -> Result<()> {
         self.expire();
         if self.closed || self.owner.as_deref() != Some(owner) {
@@ -31,17 +33,20 @@ impl State {
         Ok(())
     }
 }
+
 impl Gate {
     fn lock(&self) -> Result<MutexGuard<'_, State>> {
         self.0
             .lock()
             .map_err(|_| Error::new("native", "Input ownership failed"))
     }
+
     pub fn active(&self) -> Result<bool> {
         let mut state = self.lock()?;
         state.expire();
         Ok(state.owner.is_some())
     }
+
     pub fn acquire(self: &Arc<Self>, owner: &str) -> Result<Grant> {
         let mut state = self.lock()?;
         state.expire();
@@ -65,6 +70,7 @@ impl Gate {
             owner: owner.to_owned(),
         })
     }
+
     pub fn grant(self: &Arc<Self>, owner: &str) -> Result<Grant> {
         self.lock()?.require(owner)?;
         Ok(Grant {
@@ -72,12 +78,14 @@ impl Gate {
             owner: owner.to_owned(),
         })
     }
+
     pub fn renew(&self, owner: &str) -> Result<()> {
         let mut state = self.lock()?;
         state.require(owner)?;
         state.expires = Some(Instant::now() + TTL);
         Ok(())
     }
+
     pub fn cancel(&self, owner: Option<&str>) -> Result<()> {
         let mut state = self.lock()?;
         if let Some(owner) = owner
@@ -91,6 +99,7 @@ impl Gate {
         state.owner = None;
         Ok(())
     }
+
     pub fn close(&self) -> Result<()> {
         let mut state = self.lock()?;
         state.closed = true;
@@ -98,11 +107,13 @@ impl Gate {
         Ok(())
     }
 }
+
 #[derive(Clone)]
 pub struct Grant {
     gate: Arc<Gate>,
     owner: String,
 }
+
 impl Grant {
     pub fn authorize(&self) -> Result<MutexGuard<'_, State>> {
         let mut state = self.gate.lock()?;
@@ -118,9 +129,11 @@ mod tests {
     fn gate() -> Arc<Gate> {
         Arc::new(Gate::default())
     }
+
     fn owner(digit: char) -> String {
         digit.to_string().repeat(2 * crate::control::TOKEN_BYTES)
     }
+
     fn code<T>(result: Result<T>) -> &'static str {
         result.err().map_or("ok", |error| error.code)
     }
