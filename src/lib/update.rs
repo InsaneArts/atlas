@@ -7,7 +7,6 @@ use crate::{
     setup,
 };
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::{
     fs,
     os::unix::fs::DirBuilderExt,
@@ -91,28 +90,52 @@ fn token() -> Option<String> {
         })
 }
 
-/// Download `url` to `output`. A token travels to curl as a config line on
-/// its standard input, never in the command line other accounts can read.
+/// How long a download may take to connect, and in all.
+const CONNECT_TIMEOUT: &str = "30";
+const DOWNLOAD_TIMEOUT: &str = "900";
+
+/// Download `url` to `output` over HTTPS only (redirects too), or from a
+/// local file:// mirror. A token travels to curl as a config line on its
+/// standard input, never in the command line other accounts can read.
 fn curl(url: &str, output: &Path, accept: &str, token: Option<&str>) -> Result<()> {
-    use std::io::Write;
+    use std::{io::Write, process::Stdio};
+    let protocols = if url.starts_with("file://") {
+        "=file"
+    } else {
+        "=https"
+    };
     let mut command = Command::new("/usr/bin/curl");
-    command.args(["-fsSL", "-H", &format!("Accept: {accept}"), "-o"]);
-    command.arg(output);
+    command
+        .args(["-fsSL", "--proto", protocols, "--proto-redir", "=https"])
+        .args(["--connect-timeout", CONNECT_TIMEOUT])
+        .args(["--max-time", DOWNLOAD_TIMEOUT])
+        .args(["-H", &format!("Accept: {accept}"), "-o"])
+        .arg(output)
+        .stderr(Stdio::piped());
     if token.is_some() {
-        command
-            .args(["-K", "-"])
-            .stdin(std::process::Stdio::piped());
+        command.args(["-K", "-"]).stdin(Stdio::piped());
     }
     let mut child = command.arg(url).spawn()?;
     if let (Some(token), Some(mut stdin)) = (token, child.stdin.take()) {
         let quoted = token.replace('\\', "\\\\").replace('"', "\\\"");
-        stdin.write_all(format!("header = \"Authorization: Bearer {quoted}\"\n").as_bytes())?;
+        let written =
+            stdin.write_all(format!("header = \"Authorization: Bearer {quoted}\"\n").as_bytes());
+        drop(stdin);
+        if let Err(error) = written {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error.into());
+        }
     }
-    let status = child.wait()?;
-    status
-        .success()
-        .then_some(())
-        .ok_or_else(|| problem(format!("Could not download {url}")))
+    let finished = child.wait_with_output()?;
+    if finished.status.success() {
+        return Ok(());
+    }
+    let said = String::from_utf8_lossy(&finished.stderr);
+    Err(problem(match said.trim() {
+        "" => format!("Could not download {url}"),
+        said => format!("Could not download {url}: {said}"),
+    }))
 }
 
 /// Run a tool, failing with `why` if it does not succeed.
@@ -167,10 +190,12 @@ fn download(source: &Source, work: &Path) -> Result<String> {
                 "application/vnd.github+json",
                 token.as_deref(),
             )
-            .map_err(|_| {
-                problem(
-                    "Could not read the release; set GITHUB_TOKEN while the repository is private",
-                )
+            .map_err(|error| {
+                problem(format!(
+                    "Could not read the release ({}); set GITHUB_TOKEN while the repository is \
+                     private",
+                    error.error
+                ))
             })?;
             let release: Value = serde_json::from_slice(&fs::read(&release)?)?;
             let asset = |wanted: &dyn Fn(&str) -> bool| {
@@ -204,7 +229,9 @@ fn verify(work: &Path, name: &str, allow_unnotarized: bool) -> Result<PathBuf> {
         })
         .ok_or_else(|| problem(format!("SHA256SUMS does not list {name}")))?;
     let archive = work.join(name);
-    if format!("{:x}", Sha256::digest(fs::read(&archive)?)) != expected {
+    let actual = crate::digest::file_sha256(&archive)
+        .ok_or_else(|| problem(format!("{name} could not be read")))?;
+    if actual != expected {
         return Err(problem(format!("Checksum mismatch for {name}")));
     }
     let unpacked = work.join("unpacked");
@@ -252,7 +279,10 @@ fn verify(work: &Path, name: &str, allow_unnotarized: bool) -> Result<PathBuf> {
 }
 
 /// Exchange two paths in one atomic step (both must exist).
-#[allow(unsafe_code)] // FFI: renamex_np(RENAME_SWAP) has no safe binding.
+#[allow(
+    unsafe_code,
+    reason = "FFI: renamex_np(RENAME_SWAP) has no safe binding"
+)]
 fn exchange(first: &Path, second: &Path) -> Result<()> {
     use std::{ffi::CString, os::unix::ffi::OsStrExt};
     let path = |path: &Path| {
@@ -274,8 +304,25 @@ fn record_path() -> Result<PathBuf> {
 
 /// The update whose helper handover has not completed, if any.
 pub fn unfinished() -> Result<Option<Value>> {
-    match fs::read(record_path()?) {
-        Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
+    read_record(&record_path()?)
+}
+
+/// The record at `path`, if any. One that cannot be read is an error that
+/// asks to inspect it, never a reason to skip the handover it describes.
+fn read_record(path: &Path) -> Result<Option<Value>> {
+    match fs::read(path) {
+        Ok(bytes) => serde_json::from_slice::<Value>(&bytes)
+            .ok()
+            .filter(Value::is_object)
+            .map(Some)
+            .ok_or_else(|| {
+                problem(format!(
+                    "The record of an unfinished update, {}, cannot be read. Inspect it (it \
+                     names the previous Atlas.app, kept beside the installed one), then remove \
+                     it and run atlas update again.",
+                    crate::ui::text::tilde(path)
+                ))
+            }),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.into()),
     }
@@ -284,42 +331,74 @@ pub fn unfinished() -> Result<Option<Value>> {
 /// The helper is on the new app: drop the previous bundle and the record.
 /// A previous bundle that cannot be removed is reported, not an error.
 pub fn finished() -> Result<Value> {
-    let Some(record) = unfinished()? else {
+    finish_record(&record_path()?)
+}
+
+fn finish_record(path: &Path) -> Result<Value> {
+    let Some(record) = read_record(path)? else {
         return Ok(json!({"previous": null}));
     };
     let previous = record["previous"].as_str().map(PathBuf::from);
-    let removed = previous
-        .as_ref()
-        .is_some_and(|path| fs::remove_dir_all(path).is_ok());
-    fs::remove_file(record_path()?)?;
+    let installed = record["installed"].as_str().map(Path::new);
+    // Only a staging copy beside the installed app is ever removed.
+    let removed = previous.as_ref().is_some_and(|previous| {
+        staged_beside(previous, installed) && fs::remove_dir_all(previous).is_ok()
+    });
+    fs::remove_file(path)?;
     Ok(json!({"previous": previous, "removed": removed}))
+}
+
+/// Where the next app is staged, beside the installed one.
+const STAGED: &str = ".Atlas.app.";
+
+/// Whether `previous` is a staging copy (`.Atlas.app.*`) in the folder
+/// that holds `installed`.
+fn staged_beside(previous: &Path, installed: Option<&Path>) -> bool {
+    let named = previous
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_prefix(STAGED))
+        .is_some_and(|rest| !rest.is_empty());
+    named
+        && previous.is_absolute()
+        && installed.is_some_and(|installed| {
+            installed.is_absolute() && installed.parent() == previous.parent()
+        })
 }
 
 /// Put `new` in place of `installed` with one atomic exchange, keeping
 /// the previous app beside it (and recording where) until the helper's
 /// handover succeeds.
 fn swap(new: &Path, installed: &Path, name: &str) -> Result<()> {
+    swap_recording(new, installed, name, &record_path()?)
+}
+
+fn swap_recording(new: &Path, installed: &Path, name: &str, record: &Path) -> Result<()> {
     let parent = installed
         .parent()
         .ok_or_else(|| problem("The installed app has no parent directory"))?;
-    let staged = parent.join(format!(".Atlas.app.{}", crate::control::token()));
+    let staged = parent.join(format!("{STAGED}{}", crate::control::token()));
     check(
         "/usr/bin/ditto",
         &[new.as_os_str(), staged.as_os_str()],
         "The new app could not be staged beside the installed one",
     )?;
-    if let Err(error) = exchange(&staged, installed) {
+    // Recorded, in one rename, before the exchange: whatever happens next,
+    // the next update finds this handover and finishes it first. After the
+    // exchange `staged` holds the previous app.
+    let plan = json!({"previous": staged, "installed": installed, "to": name});
+    let recorded = serde_json::to_vec_pretty(&plan)
+        .map_err(Error::from)
+        .and_then(|bytes| crate::config::save_private(record, &bytes));
+    if let Err(error) = recorded {
         let _ = fs::remove_dir_all(&staged);
         return Err(error);
     }
-    // `staged` now holds the previous app.
-    let record = json!({"previous": staged, "installed": installed, "to": name});
-    let path = record_path()?;
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(path.parent().unwrap_or(Path::new("/")))?;
-    fs::write(&path, serde_json::to_vec_pretty(&record)?)?;
+    if let Err(error) = exchange(&staged, installed) {
+        let _ = fs::remove_dir_all(&staged);
+        let _ = fs::remove_file(record);
+        return Err(error);
+    }
     Ok(())
 }
 
@@ -425,6 +504,131 @@ mod tests {
             fs::read_to_string(installed.join("version")).unwrap(),
             "new"
         );
+    }
+
+    #[test]
+    fn a_swap_is_recorded_first_and_finishing_removes_only_the_staged_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let installed = root.join("Applications/Atlas.app");
+        let new = root.join("unpacked/Atlas.app");
+        for (app, version) in [(&installed, "old"), (&new, "new")] {
+            fs::create_dir_all(app).unwrap();
+            fs::write(app.join("version"), version).unwrap();
+        }
+        let record = root.join("Support/update.json");
+        swap_recording(&new, &installed, "Atlas-9.9.9-macos.zip", &record).unwrap();
+        assert_eq!(
+            fs::read_to_string(installed.join("version")).unwrap(),
+            "new"
+        );
+        let plan = read_record(&record).unwrap().unwrap();
+        let previous = PathBuf::from(plan["previous"].as_str().unwrap());
+        assert_eq!(previous.parent(), installed.parent());
+        assert_eq!(fs::read_to_string(previous.join("version")).unwrap(), "old");
+        let report = finish_record(&record).unwrap();
+        assert_eq!(report["removed"], true);
+        assert!(!previous.exists() && !record.exists());
+        assert_eq!(finish_record(&record).unwrap()["previous"], Value::Null);
+
+        // A swap that cannot exchange leaves no record and no staged copy.
+        let missing = root.join("Elsewhere/Atlas.app");
+        fs::create_dir_all(missing.parent().unwrap()).unwrap();
+        assert!(swap_recording(&new, &missing, "x", &record).is_err());
+        assert!(!record.exists());
+        assert_eq!(fs::read_dir(missing.parent().unwrap()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn finishing_never_removes_what_is_not_a_staged_copy_beside_the_app() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let installed = root.join("Applications/Atlas.app");
+        let record = root.join("update.json");
+        for previous in [
+            root.join("Documents"),
+            root.join("Applications/Other.app"),
+            root.join("Elsewhere/.Atlas.app.1"),
+        ] {
+            fs::create_dir_all(&previous).unwrap();
+            let plan = json!({"previous": previous, "installed": installed, "to": "x"});
+            fs::write(&record, plan.to_string()).unwrap();
+            assert_eq!(finish_record(&record).unwrap()["removed"], false);
+            assert!(previous.exists(), "{}", previous.display());
+            assert!(!record.exists());
+        }
+        let staged = root.join("Applications/.Atlas.app.1");
+        assert!(staged_beside(&staged, Some(&installed)));
+        assert!(!staged_beside(&staged, None));
+        assert!(!staged_beside(
+            &root.join("Applications/.Atlas.app."),
+            Some(&installed)
+        ));
+    }
+
+    #[test]
+    fn an_unreadable_record_asks_to_be_inspected() {
+        let dir = tempfile::tempdir().unwrap();
+        let record = dir.path().join("update.json");
+        assert!(read_record(&record).unwrap().is_none());
+        for corrupt in ["{\"previous\": ", "[]", ""] {
+            fs::write(&record, corrupt).unwrap();
+            let error = read_record(&record).unwrap_err();
+            assert_eq!(error.code, "update");
+            assert!(error.error.contains("Inspect it"), "{}", error.error);
+            assert!(finish_record(&record).is_err());
+            assert!(record.exists(), "an unreadable record is kept");
+        }
+    }
+
+    #[test]
+    fn archives_must_match_their_listed_checksum() {
+        let dir = tempfile::tempdir().unwrap();
+        let name = "Atlas-1.0.0-macos.zip";
+        fs::write(dir.path().join(name), b"archive").unwrap();
+        fs::write(dir.path().join("SHA256SUMS"), "00  Other.zip\n").unwrap();
+        let unlisted = verify(dir.path(), name, false).unwrap_err();
+        assert!(
+            unlisted.error.contains("does not list"),
+            "{}",
+            unlisted.error
+        );
+        fs::write(
+            dir.path().join("SHA256SUMS"),
+            format!("{}  {name}\n", "0".repeat(64)),
+        )
+        .unwrap();
+        let mismatch = verify(dir.path(), name, false).unwrap_err();
+        assert!(
+            mismatch.error.contains("Checksum mismatch"),
+            "{}",
+            mismatch.error
+        );
+        let sum = crate::digest::file_sha256(&dir.path().join(name)).unwrap();
+        fs::write(dir.path().join("SHA256SUMS"), format!("{sum}  {name}\n")).unwrap();
+        // The right bytes get past the checksum to unpacking, which fails here.
+        let unpacked = verify(dir.path(), name, false).unwrap_err();
+        assert!(unpacked.error.contains("unpacked"), "{}", unpacked.error);
+    }
+
+    #[test]
+    fn downloads_report_why_they_failed() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = format!("file://{}/missing", dir.path().display());
+        let error = curl(&missing, &dir.path().join("out"), "*/*", None).unwrap_err();
+        assert!(error.error.starts_with("Could not download"));
+        assert!(error.error.contains("curl"), "{}", error.error);
+        let plain = curl("http://127.0.0.1:9/x", &dir.path().join("out"), "*/*", None).unwrap_err();
+        assert!(
+            plain.error.contains("Could not download"),
+            "{}",
+            plain.error
+        );
+        let source = dir.path().join("source");
+        fs::write(&source, b"bytes").unwrap();
+        let local = format!("file://{}", source.display());
+        curl(&local, &dir.path().join("copy"), "*/*", None).unwrap();
+        assert_eq!(fs::read(dir.path().join("copy")).unwrap(), b"bytes");
     }
 
     #[test]
