@@ -42,8 +42,10 @@ const GRACE: Duration = Duration::from_secs(2);
 const LINGER: Duration = Duration::from_millis(200);
 /// Events buffered for a slow client.
 pub const EVENTS: usize = 256;
-/// Output events per run: the client accepts 1024 events per reply.
+/// Output events per run, leaving room in what the client accepts per reply
+/// for the `started` event.
 const MAX_EVENTS: usize = 1000;
+const _: () = assert!(MAX_EVENTS < crate::transport::MAX_REPLY_EVENTS);
 /// Pending output sent at once, without waiting for more.
 const FLUSH: usize = 64 * 1024;
 /// Output held back for a slow client before it is dropped.
@@ -71,7 +73,7 @@ fn resolve(program: &str, path: Option<&str>) -> Option<PathBuf> {
 }
 
 /// The conventional name of a macOS signal number, as "SIGTERM".
-pub fn signal_name(signal: i32) -> String {
+pub(crate) fn signal_name(signal: i32) -> String {
     Signal::try_from(signal)
         .map(|signal| signal.as_str().to_owned())
         .unwrap_or_else(|_| format!("SIG{signal}"))
@@ -230,11 +232,12 @@ pub async fn run(
     events: Sender<Value>,
     cancel: impl Future<Output = ()>,
 ) -> Value {
-    let Some(program) = resolve(&argv[0], std::env::var("PATH").ok().as_deref()) else {
-        return failure(
-            "spawn-failed",
-            format!("{}: command not found on PATH", argv[0]),
-        );
+    // The protocol never passes an empty argv; refuse one rather than panic.
+    let Some(name) = argv.first() else {
+        return failure("spawn-failed", "No command to run");
+    };
+    let Some(program) = resolve(name, std::env::var("PATH").ok().as_deref()) else {
+        return failure("spawn-failed", format!("{name}: command not found on PATH"));
     };
     let (reader, writer) = match std::io::pipe() {
         Ok(pair) => pair,
@@ -580,6 +583,9 @@ mod tests {
         );
         let (_, reply) = execute(&["no-such-command-atlas"], 3000).await;
         assert_eq!(reply["code"], "spawn-failed");
+        let (events, reply) = execute(&[], 3000).await;
+        assert!(events.is_empty());
+        assert_eq!(reply, failure("spawn-failed", "No command to run"));
         let (events, reply) =
             execute(&["/bin/sh", "-c", "head -c 17000000 /dev/zero"], 20000).await;
         assert_eq!(reply["outputTruncated"], true);
