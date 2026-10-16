@@ -109,6 +109,15 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
     validate_uid(uid)?;
     // The common cases in plain words; anything else is one unverified state.
     if value["ok"] != true {
+        // A shell that may not reach the helper says so: it is not down.
+        if value["code"] == "blocked" {
+            return Err(Error::new(
+                "blocked",
+                value["error"]
+                    .as_str()
+                    .unwrap_or("This shell may not connect to the helper"),
+            ));
+        }
         // A socket served by the wrong account stays an identity violation.
         if value["code"] == "identity" {
             return Err(Error::new(
@@ -283,6 +292,10 @@ pub fn diagnose(value: Value, uid: u32) -> Value {
         value["error"]
             .as_str()
             .unwrap_or("The socket belongs to another account")
+    } else if value["code"] == "blocked" {
+        value["error"]
+            .as_str()
+            .unwrap_or("This shell may not connect to the helper; run atlas outside a sandbox.")
     } else {
         "Start the helper: run atlas init (safe to run again)."
     };
@@ -302,7 +315,12 @@ pub fn diagnose(value: Value, uid: u32) -> Value {
     };
     let checks = [
         Check {
-            name: "Helper running",
+            // A blocked shell cannot tell whether the helper runs.
+            name: if value["code"] == "blocked" {
+                "Helper reachable from here"
+            } else {
+                "Helper running"
+            },
             ok: Some(reachable),
             next_step: connection.into(),
         },
@@ -399,6 +417,13 @@ pub fn diagnose(value: Value, uid: u32) -> Value {
     })
 }
 
+/// Whether a helper that did not answer is signed out: not refused by this
+/// shell or answered by another account, and `absent` (the account exists
+/// but no desktop of it runs). `absent` is only asked when the rest holds.
+pub fn signed_out(status: &Value, absent: impl FnOnce() -> bool) -> bool {
+    status["ok"] != true && status["code"] != "blocked" && status["code"] != "identity" && absent()
+}
+
 /// Whether a desktop session running as `uid` is older than the account's
 /// home folder: a deleted account's session, still signed in, that macOS
 /// now attributes to the account that reused its user ID.
@@ -469,8 +494,43 @@ fn running_for(elapsed: &str) -> Option<std::time::Duration> {
 
 #[cfg(test)]
 mod tests {
-    use super::{input_build_current, running_for, validate_target_uid};
+    use super::{
+        diagnose, input_build_current, require_hidden, running_for, signed_out, validate_target_uid,
+    };
+
+    #[test]
+    fn only_a_silent_helper_with_no_desktop_is_signed_out() {
+        let silent = json!({"ok": false, "code": "io", "error": "No such file"});
+        assert!(signed_out(&silent, || true));
+        assert!(!signed_out(&silent, || false), "its desktop runs");
+        for code in ["blocked", "identity"] {
+            let other = json!({"ok": false, "code": code});
+            assert!(!signed_out(&other, || panic!("not asked")), "{code}");
+        }
+        assert!(!signed_out(&json!({"ok": true}), || panic!("not asked")));
+    }
     use serde_json::json;
+
+    /// A shell that may not reach the helper is told so, never that the
+    /// helper stopped or that setup must run again.
+    #[test]
+    fn a_blocked_shell_is_not_a_stopped_helper() {
+        let status = json!({"ok": false, "code": "blocked", "error": "This shell may not connect"});
+        let uid = nix::unistd::getuid().as_raw() + 1;
+        let error = require_hidden(&status, uid.max(501)).unwrap_err();
+        assert_eq!(
+            (error.code, error.error.as_str()),
+            ("blocked", "This shell may not connect")
+        );
+        let report = diagnose(status, uid.max(501));
+        assert_eq!(report["checks"][0]["name"], "Helper reachable from here");
+        assert_eq!(report["nextSteps"][0], "This shell may not connect");
+        let stopped = diagnose(
+            json!({"ok": false, "code": "io", "error": "No such file"}),
+            501,
+        );
+        assert_eq!(stopped["checks"][0]["name"], "Helper running");
+    }
 
     #[test]
     fn input_pinned_to_an_earlier_same_size_display_counts_as_ready() {

@@ -889,7 +889,22 @@ async fn input_service(_: u32, _: u32, _: PathBuf) -> Result<Value> {
 /// can make (the account itself, and a leftover session of a deleted one).
 async fn doctor(client: &Client, verbose: bool) -> Value {
     let uid = client.config.helper_uid;
-    let mut report = atlas::capability::doctor(client.status().await, uid);
+    let status = client.status().await;
+    // Not answering because the helper is signed out (after a restart, or
+    // a log out): only the person can sign it in again.
+    let signed_out = atlas::session::signed_out(&status, || {
+        atlas::setup::account_with_uid(uid).is_ok_and(|account| account.is_some())
+            && !atlas::init::helper_logged_in(uid)
+    });
+    let mut report = atlas::capability::doctor(status, uid);
+    if signed_out {
+        let step = "The helper account is signed out (after a restart or a log out). The person \
+                    signs in to it once: atlas init walks them through it.";
+        report["checks"][0]["nextStep"] = json!(step);
+        if let Some(first) = report["nextSteps"].get_mut(0) {
+            *first = json!(step);
+        }
+    }
     // Both states make the helper unusable; init refuses them too.
     let mut first_steps = Vec::new();
     if let Ok(Some(account)) = atlas::setup::account_with_uid(uid) {

@@ -10,6 +10,7 @@ pub fn fix(code: &str) -> Option<&'static str> {
             "Try again. If it keeps failing, run atlas doctor."
         }
         "bad-request" | "usage" => "Add --help to the command to see what it accepts.",
+        "blocked" => "Run atlas outside the sandbox that blocks it, such as an agent's.",
         "busy" => "Someone else has control, often you in the viewer. Release it there, or wait.",
         "cancelled" | "terminal" => return None,
         "config" | "setup" => "Run atlas init to finish setting up.",
