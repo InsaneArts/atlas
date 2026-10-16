@@ -548,13 +548,16 @@ Examples:
 ```text
 Quit an app in the helper and remove the copies `open` made for it.
 
-The app quits at once, without asking to save: save first (key cmd+s).
+The app quits at once, without asking to save: save first (key cmd+s). --all quits what an earlier session may have left open: every app bundle with a Dock icon and every menu bar app not made by Apple. Atlas and macOS's own in /System/Library (Finder among them) stay.
 
-Usage: atlas close [OPTIONS] --app <APP>
+Usage: atlas close [OPTIONS] <--app <APP>|--all>
 
 Options:
       --app <APP>
           The app's name, as `atlas apps` lists it
+
+      --all
+          Quit every app left open (not Atlas or macOS's own)
 
   -h, --help
           Print help (see a summary with '-h')
@@ -568,6 +571,7 @@ Global options:
 
 Examples:
   atlas close --app TextEdit
+  atlas close --all
 ```
 
 ## atlas wait

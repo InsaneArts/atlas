@@ -461,3 +461,31 @@ fn environment_steps_say_what_changes_and_what_comes_next() {
             .ends_with(&format!("To finish: atlas environment apply {id}"))
     );
 }
+
+#[test]
+fn closing_everything_names_what_it_quit() {
+    let some = show(
+        View::Close,
+        json!({"ok": true, "closed": true, "apps": ["Calendar", "Notes"], "removed": []}),
+    );
+    assert_eq!(some.out, "✓ Closed Calendar, Notes");
+    let none = show(
+        View::Close,
+        json!({"ok": true, "closed": false, "apps": [], "removed": []}),
+    );
+    assert_eq!(none.out, "✓ No apps were open");
+    let partly = show(
+        View::Close,
+        json!({"ok": true, "closed": true, "apps": ["Notes"], "skipped": ["Safari"],
+               "removed": ["/Users/Shared/Atlas/handoff/x"]}),
+    );
+    assert_eq!(
+        partly.out,
+        "✓ Closed Notes · removed Atlas's copies\n! Left Safari: it changed before it could be quit"
+    );
+    let one = show(
+        View::Close,
+        json!({"ok": true, "closed": true, "app": "TextEdit", "removed": []}),
+    );
+    assert_eq!(one.out, "✓ Closed TextEdit");
+}

@@ -73,7 +73,10 @@ const EXAMPLES: &[(&str, &[&str])] = &[
             "atlas open https://example.com",
         ],
     ),
-    ("close", &["atlas close --app TextEdit"]),
+    (
+        "close",
+        &["atlas close --app TextEdit", "atlas close --all"],
+    ),
     (
         "wait",
         &[
@@ -226,6 +229,27 @@ pub fn usage(error: clap::Error) -> ExitCode {
     ExitCode::from(2)
 }
 
+/// The choices of a required group as clap names them, `<--app <APP>|--all>`:
+/// split on the `|` between choices, never on one inside a value name
+/// (`--login <on|off|status>`).
+fn choices(argument: &str) -> Option<Vec<&str>> {
+    let inner = argument.strip_prefix('<')?.strip_suffix('>')?;
+    let (mut depth, mut start, mut parts) = (0usize, 0, Vec::new());
+    for (index, character) in inner.char_indices() {
+        match character {
+            '<' | '[' => depth += 1,
+            '>' | ']' => depth = depth.saturating_sub(1),
+            '|' if depth == 0 => {
+                parts.push(&inner[start..index]);
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&inner[start..]);
+    (parts.len() > 1).then_some(parts)
+}
+
 /// What was wrong with the command line, in a sentence.
 fn explain(error: &clap::Error, name: Option<&str>) -> String {
     let context = |kind| match error.get(kind) {
@@ -238,11 +262,20 @@ fn explain(error: &clap::Error, name: Option<&str>) -> String {
         Some(ContextValue::String(value)) => vec![value.clone()],
         _ => Vec::new(),
     };
-    // `--tool <NAME>` as `--tool`, `<TEXT>` as TEXT.
-    let bare = |argument: String| {
-        let word = argument.split_whitespace().next().unwrap_or("").to_owned();
+    // `--tool <NAME>` as `--tool`, `<TEXT>` as TEXT, and a choice of
+    // several (`<--app <APP>|--all>`) as `--app or --all`.
+    let one = |argument: &str| {
+        let word = argument.split_whitespace().next().unwrap_or("");
         word.trim_matches(|c| c == '<' || c == '>' || c == '.' || c == '[' || c == ']')
             .to_owned()
+    };
+    let bare = |argument: String| match choices(&argument) {
+        Some(choices) => choices
+            .iter()
+            .map(|choice| one(choice))
+            .collect::<Vec<_>>()
+            .join(" or "),
+        None => one(&argument),
     };
     let command = name.map_or("atlas".to_owned(), |name| format!("atlas {name}"));
     let suggestion = |kind| {
@@ -362,6 +395,12 @@ mod tests {
             "atlas update has no option --forse. Did you mean --force?"
         );
         assert_eq!(said(&["type"]), "atlas type needs TEXT.");
+        assert_eq!(said(&["close"]), "atlas close needs --app or --all.");
+        assert_eq!(said(&["menubar", "--login"]), "--login needs a value.");
+        assert_eq!(
+            said(&["menubar", "--login", "maybe"]),
+            "\"maybe\" does not work for --login. Use on, off, status."
+        );
         assert_eq!(
             said(&["run", "--timeout", "601", "--", "true"]),
             "\"601\" does not work for --timeout. Give 1 to 600 seconds."
