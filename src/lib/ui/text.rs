@@ -42,12 +42,14 @@ pub fn clip(text: &str, width: usize) -> String {
     if text.width() <= width {
         return text.to_owned();
     }
-    let mut out = String::new();
+    let (mut out, mut used) = (String::new(), 0);
     for grapheme in text.graphemes(true) {
-        if out.width() + grapheme.width() + 1 > width {
+        let cells = grapheme.width();
+        if used + cells + 1 > width {
             break;
         }
         out.push_str(grapheme);
+        used += cells;
     }
     format!("{}…", out.trim_end())
 }
