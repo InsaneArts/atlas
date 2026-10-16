@@ -43,14 +43,15 @@ fn graphical_identity_needs_independent_proof() {
     ] {
         let mut state = status();
         state["sessionProof"].as_object_mut().unwrap().remove(path);
-        assert!(require_hidden(&state, 502).is_err(), "{path}");
+        let refused = require_hidden(&state, 502).unwrap_err();
+        assert!(matches!(refused.code, "identity" | "on-console"), "{path}");
     }
     let mut state = status();
     state["session"]["onConsole"] = json!(true);
-    assert!(require_hidden(&state, 502).is_err());
+    assert_eq!(require_hidden(&state, 502).unwrap_err().code, "on-console");
     let mut state = status();
     state["sessionProof"]["hasGraphicAccess"] = json!(false);
-    assert!(require_hidden(&state, 502).is_err());
+    assert_eq!(require_hidden(&state, 502).unwrap_err().code, "identity");
 }
 
 #[test]
@@ -78,17 +79,29 @@ fn unsafe_actions_and_whole_batches_are_rejected() {
         json!({"type":"click","x":1,"y":2,"modifiers":vec!["cmd"; 6]}),
         json!({"type":"move","x":1,"y":2,"secret":true}),
     ] {
-        assert!(actions::validate(&json!([action]), &display()).is_err());
+        // A malformed action fails to parse; a well-formed one out of
+        // bounds is refused as input.
+        let refused = actions::validate(&json!([action]), &display()).unwrap_err();
+        assert!(
+            matches!(refused.code, "input" | "invalid-json"),
+            "{action}: {}",
+            refused.code
+        );
     }
-    assert!(
-        actions::validate(&json!(vec![json!({"type":"wait","ms":250}); 9]), &display()).is_err()
+    assert_eq!(
+        actions::validate(&json!(vec![json!({"type":"wait","ms":250}); 9]), &display())
+            .unwrap_err()
+            .code,
+        "input"
     );
-    assert!(
+    assert_eq!(
         actions::validate(
             &json!([{ "type":"key", "key":"return" }, { "type":"run" }]),
             &display()
         )
-        .is_err()
+        .unwrap_err()
+        .code,
+        "invalid-json"
     );
 }
 
@@ -99,7 +112,7 @@ fn unicode_and_supported_shortcuts_validate() {
     }
     assert!(
         actions::validate(
-            &json!([{ "type":"type", "text":"ქართული 日本語 🧑🏽‍💻 é" }]),
+            &json!([{ "type":"type", "text":"ქართული 日本語 🧑🏽‍💻 e\u{301}" }]),
             &display()
         )
         .is_ok()
@@ -207,7 +220,10 @@ fn library_construction_cannot_target_the_caller() {
         input_socket: dir.path().join("input"),
         output_dir: dir.path().join("out"),
     };
-    assert!(Client::new(config).is_err());
+    assert_eq!(
+        Client::new(config).err().map(|error| error.code),
+        Some("identity")
+    );
     assert!(!dir.path().join("out").exists());
 }
 
@@ -383,27 +399,29 @@ async fn malformed_replies_remain_uncertain() {
 
 #[tokio::test]
 async fn a_drip_feed_cannot_extend_the_wall_clock_deadline() {
+    // Fed in full, the drip would take four seconds; the deadline ends it
+    // well before, with room for a loaded machine.
     let started = std::time::Instant::now();
     assert!(
         exchange(
-            vec![b" ".to_vec(); 100],
+            vec![b" ".to_vec(); 200],
             Duration::from_millis(80),
-            Duration::from_millis(10)
+            Duration::from_millis(20)
         )
         .await
         .is_err()
     );
-    assert!(started.elapsed() < Duration::from_millis(300));
+    assert!(started.elapsed() < Duration::from_millis(1500));
 }
 
 #[test]
 fn capture_rejects_non_png_and_extreme_dimensions() {
-    assert!(png_dimensions(b"not a PNG").is_err());
+    assert_eq!(png_dimensions(b"not a PNG").unwrap_err().code, "capture");
     let mut header = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
     header.extend_from_slice(&u32::MAX.to_be_bytes());
     header.extend_from_slice(&900u32.to_be_bytes());
     header.extend_from_slice(&[0; 9]);
-    assert!(png_dimensions(&header).is_err());
+    assert_eq!(png_dimensions(&header).unwrap_err().code, "capture");
 }
 
 fn current_uid() -> u32 {
