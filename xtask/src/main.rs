@@ -294,7 +294,6 @@ fn publish(staged: &Path, out: &Path) -> Result<PathBuf> {
 }
 
 fn dist(options: &Options) -> Result<()> {
-    let root = root();
     let version = atlas::VERSION;
     publishable(&options.out)?;
     // A fresh staging directory per run; nothing is published until verified.
@@ -303,6 +302,45 @@ fn dist(options: &Options) -> Result<()> {
         fs::remove_dir_all(&stage).map_err(|error| error.to_string())?;
     }
     fs::create_dir_all(&stage).map_err(|error| error.to_string())?;
+    let upload = options.out.join("notarize.zip");
+    // Verified (and notarized when asked): only now replace the previous build.
+    let published = build(options, &stage, &upload).and_then(|app| publish(&app, &options.out));
+    // The upload and the staging directory go whether or not it worked.
+    let _ = fs::remove_file(&upload);
+    let _ = fs::remove_dir_all(&stage);
+    let app = published?;
+    let name = format!("Atlas-{version}-macos.zip");
+    let zip = options.out.join(&name);
+    let sums_path = options.out.join("SHA256SUMS");
+    // Never leave sums that describe an earlier zip.
+    let _ = fs::remove_file(&sums_path);
+    let _ = fs::remove_file(&zip);
+    exec(
+        "/usr/bin/ditto",
+        &["-c", "-k", "--keepParent", text(&app)?, text(&zip)?],
+    )?;
+    let sums = format!("{}  {name}\n", sha256(&zip)?);
+    fs::write(&sums_path, &sums).map_err(|error| error.to_string())?;
+    println!("\n{}\n{sums}", zip.display());
+    if options.notarize.is_none() {
+        println!("Not notarized: pass --notarize PROFILE for a release.");
+    }
+    Ok(())
+}
+
+/// The SHA-256 of the file at `path`, read in pieces.
+fn sha256(path: &Path) -> Result<String> {
+    let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher).map_err(|error| error.to_string())?;
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Build, sign and verify Atlas.app in `stage` (notarizing it through
+/// `upload` when asked): the app, ready to publish.
+fn build(options: &Options, stage: &Path, upload: &Path) -> Result<PathBuf> {
+    let root = root();
+    let version = atlas::VERSION;
     let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     // Exactly this package's binary, into a target directory of our own.
     let manifest = root.join("Cargo.toml");
@@ -402,17 +440,16 @@ fn dist(options: &Options) -> Result<()> {
     }
 
     if let Some(profile) = &options.notarize {
-        let upload = options.out.join("notarize.zip");
         exec(
             "/usr/bin/ditto",
-            &["-c", "-k", "--keepParent", text(&app)?, text(&upload)?],
+            &["-c", "-k", "--keepParent", text(&app)?, text(upload)?],
         )?;
         exec(
             "/usr/bin/xcrun",
             &[
                 "notarytool",
                 "submit",
-                text(&upload)?,
+                text(upload)?,
                 "--keychain-profile",
                 profile,
                 "--wait",
@@ -423,27 +460,8 @@ fn dist(options: &Options) -> Result<()> {
             "/usr/sbin/spctl",
             &["--assess", "--type", "execute", "-vv", text(&app)?],
         )?;
-        let _ = fs::remove_file(upload);
     }
-
-    // Verified (and notarized when asked): only now replace the previous build.
-    let app = publish(&app, &options.out)?;
-    let _ = fs::remove_dir_all(&stage);
-    let name = format!("Atlas-{version}-macos.zip");
-    let zip = options.out.join(&name);
-    let _ = fs::remove_file(&zip);
-    exec(
-        "/usr/bin/ditto",
-        &["-c", "-k", "--keepParent", text(&app)?, text(&zip)?],
-    )?;
-    let bytes = fs::read(&zip).map_err(|error| error.to_string())?;
-    let sums = format!("{:x}  {name}\n", Sha256::digest(&bytes));
-    fs::write(options.out.join("SHA256SUMS"), &sums).map_err(|error| error.to_string())?;
-    println!("\n{}\n{sums}", zip.display());
-    if options.notarize.is_none() {
-        println!("Not notarized: pass --notarize PROFILE for a release.");
-    }
-    Ok(())
+    Ok(app)
 }
 
 #[cfg(test)]
@@ -483,6 +501,19 @@ mod tests {
                 .unwrap_err()
                 .contains("unknown")
         );
+    }
+
+    #[test]
+    fn a_streamed_hash_matches_the_whole_file_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Atlas.zip");
+        let bytes: Vec<u8> = (0..200_000).map(|i| (i % 251) as u8).collect();
+        fs::write(&path, &bytes).unwrap();
+        assert_eq!(
+            sha256(&path).unwrap(),
+            format!("{:x}", Sha256::digest(&bytes))
+        );
+        assert!(sha256(&dir.path().join("missing")).is_err());
     }
 
     #[test]
