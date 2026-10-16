@@ -11,6 +11,16 @@ use tokio::{
     time::{Instant, timeout_at},
 };
 
+/// Longest request line, without its newline: what the helper daemon reads.
+const MAX_REQUEST: usize = crate::daemon::protocol::MAX_REQUEST;
+/// Longest the request itself may take to send. A peer that is not reading
+/// leaves the outcome unknown, so this stays short.
+const DISPATCH: Duration = Duration::from_millis(500);
+/// Longest reply, every line together.
+const MAX_REPLY: usize = 64 * 1024 * 1024;
+/// Most event lines before the final reply.
+pub const MAX_REPLY_EVENTS: usize = 1024;
+
 #[derive(Clone)]
 pub struct Transport {
     pub path: PathBuf,
@@ -76,13 +86,11 @@ fn refused(error: std::io::Error) -> Error {
 impl Pending {
     pub async fn dispatch(mut self, request: &Value) -> Result<Self> {
         let mut payload = serde_json::to_vec(request)?;
-        payload.push(b'\n');
-        if payload.len() > 1024 * 1024 {
+        if payload.len() > MAX_REQUEST {
             return Err(Error::new("protocol", "Request exceeds 1 MiB"));
         }
-        let deadline = self
-            .deadline
-            .min(Instant::now() + Duration::from_millis(500));
+        payload.push(b'\n');
+        let deadline = self.deadline.min(Instant::now() + DISPATCH);
         timeout_at(deadline, self.stream.write_all(&payload))
             .await
             .map_err(|_| Error::new("transport", "Dispatch timed out").uncertain())?
@@ -115,7 +123,7 @@ impl Pending {
                 ));
             }
             total += count;
-            if total > 64 * 1024 * 1024 {
+            if total > MAX_REPLY {
                 return Err(Error::new("protocol", "Reply exceeds 64 MiB"));
             }
             // Scan incoming bytes once; large PNG lines never rescan the prefix.
@@ -141,7 +149,9 @@ impl Pending {
                     );
                     return Ok(row);
                 }
-                if object.get("event").and_then(Value::as_str).is_none() || events.len() >= 1024 {
+                if object.get("event").and_then(Value::as_str).is_none()
+                    || events.len() >= MAX_REPLY_EVENTS
+                {
                     return Err(Error::new(
                         "protocol",
                         "Malformed or excessive helper events",
@@ -196,6 +206,44 @@ pub fn with_output(mut reply: Value) -> Value {
 mod tests {
     use super::{OutputError, refused, run_output, with_output};
     use serde_json::json;
+
+    /// The client refuses exactly the requests the helper daemon would: a
+    /// line longer than its limit, not counting the newline.
+    #[tokio::test]
+    async fn the_request_limit_is_the_daemons() {
+        use super::{MAX_REQUEST, Transport};
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("t.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut sink = Vec::new();
+                    let _ = tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut sink).await;
+                });
+            }
+        });
+        let transport = Transport {
+            path: socket,
+            timeout: std::time::Duration::from_secs(10),
+            peer_uid: nix::unistd::getuid().as_raw(),
+        };
+        // A JSON string is its characters plus two quotes.
+        let request = |length: usize| json!("x".repeat(length - 2));
+        let fits = transport.connect().await.unwrap();
+        assert!(fits.dispatch(&request(MAX_REQUEST)).await.is_ok());
+        let over = transport.connect().await.unwrap();
+        let refused = over
+            .dispatch(&request(MAX_REQUEST + 1))
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(
+            (refused.code, refused.error.as_str()),
+            ("protocol", "Request exceeds 1 MiB")
+        );
+        assert!(!refused.uncertain, "nothing was sent");
+    }
 
     /// Only a connection policy forbids is `blocked`; a missing socket or a
     /// permission on its folder stays what it is.
