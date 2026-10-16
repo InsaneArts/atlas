@@ -19,6 +19,8 @@ use std::{
 
 /// The marketplace and plugin name in both agents.
 const NAME: &str = "atlas";
+/// The plugin as both agents name it: `NAME@NAME`, the plugin in its marketplace.
+const PLUGIN: &str = "atlas@atlas";
 
 /// How long a question to an agent's tool may take, and a change to it.
 const ASK: Duration = Duration::from_secs(10);
@@ -61,31 +63,29 @@ impl Agent {
     /// The argv that connect the plugin at `marketplace`.
     fn connect(self, marketplace: &Path) -> Vec<Vec<String>> {
         let path = marketplace.to_string_lossy().into_owned();
-        let plugin = format!("{NAME}@{NAME}");
         let argv = |items: &[&str]| items.iter().map(|item| (*item).to_owned()).collect();
         match self {
             Agent::Claude => vec![
                 argv(&["plugin", "marketplace", "add", &path, "--scope", "user"]),
-                argv(&["plugin", "install", &plugin, "--scope", "user"]),
+                argv(&["plugin", "install", PLUGIN, "--scope", "user"]),
             ],
             Agent::Codex => vec![
                 argv(&["plugin", "marketplace", "add", &path]),
-                argv(&["plugin", "add", &plugin]),
+                argv(&["plugin", "add", PLUGIN]),
             ],
         }
     }
 
     /// The argv that disconnect it.
     fn disconnect(self) -> Vec<Vec<String>> {
-        let plugin = format!("{NAME}@{NAME}");
         let argv = |items: &[&str]| items.iter().map(|item| (*item).to_owned()).collect();
         match self {
             Agent::Claude => vec![
-                argv(&["plugin", "uninstall", &plugin, "--scope", "user"]),
+                argv(&["plugin", "uninstall", PLUGIN, "--scope", "user"]),
                 argv(&["plugin", "marketplace", "remove", NAME]),
             ],
             Agent::Codex => vec![
-                argv(&["plugin", "remove", &plugin]),
+                argv(&["plugin", "remove", PLUGIN]),
                 argv(&["plugin", "marketplace", "remove", NAME]),
             ],
         }
@@ -111,18 +111,19 @@ impl Agent {
             Err(error) if error.code == "agents" => return Err(error.error),
             Err(_) => return Ok(None),
         };
-        Ok(Self::listed(&output.stdout, self))
+        Ok(self.listed(&output.stdout))
     }
 
-    fn listed(stdout: &[u8], agent: Agent) -> Option<bool> {
+    /// Whether the plugin list this agent printed names the Atlas plugin.
+    fn listed(self, stdout: &[u8]) -> Option<bool> {
         let list: Value = serde_json::from_slice(stdout).ok()?;
-        let plugins = match agent {
-            Agent::Claude => list.as_array().cloned(),
-            Agent::Codex => list["installed"].as_array().cloned(),
+        let plugins = match self {
+            Agent::Claude => list.as_array(),
+            Agent::Codex => list["installed"].as_array(),
         }?;
         Some(plugins.iter().any(|plugin| {
             let id = plugin["id"].as_str().or(plugin["pluginId"].as_str());
-            id == Some(&format!("{NAME}@{NAME}")) || plugin["name"] == NAME
+            id == Some(PLUGIN) || plugin["name"] == NAME
         }))
     }
 }
@@ -144,11 +145,16 @@ pub fn marketplace() -> Result<PathBuf> {
             return Ok(bundled);
         }
     }
-    let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).join("agents");
-    checkout
-        .is_dir()
-        .then_some(checkout)
-        .ok_or_else(|| problem("This Atlas carries no agent plugin; reinstall it"))
+    // Release builds ship only inside Atlas.app; the build machine's checkout
+    // means nothing on another Mac.
+    #[cfg(debug_assertions)]
+    {
+        let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).join("agents");
+        if checkout.is_dir() {
+            return Ok(checkout);
+        }
+    }
+    Err(problem("This Atlas carries no agent plugin; reinstall it"))
 }
 
 /// The process groups of agent tools running now.
@@ -189,15 +195,30 @@ fn exec(agent: Agent, argv: &[impl AsRef<std::ffi::OsStr>], limit: Duration) -> 
         .stderr(Stdio::piped())
         .process_group(0)
         .spawn()?;
-    let group = i32::try_from(child.id()).ok();
-    if let (Some(group), Ok(mut running)) = (group, RUNNING.lock()) {
-        running.push(group);
+    let _running = Running::register(&child);
+    supervise(agent, child, limit)
+}
+
+/// A process group Atlas started, listed in RUNNING while it is waited
+/// for, so stop_running reaches it.
+struct Running(Option<i32>);
+
+impl Running {
+    fn register(child: &std::process::Child) -> Self {
+        let group = i32::try_from(child.id()).ok();
+        if let (Some(group), Ok(mut running)) = (group, RUNNING.lock()) {
+            running.push(group);
+        }
+        Self(group)
     }
-    let result = supervise(agent, child, limit);
-    if let (Some(group), Ok(mut running)) = (group, RUNNING.lock()) {
-        running.retain(|running| *running != group);
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        if let (Some(group), Ok(mut running)) = (self.0, RUNNING.lock()) {
+            running.retain(|running| *running != group);
+        }
     }
-    result
 }
 
 /// The tool's executable, and the PATH to run it with. Opened from the
@@ -285,13 +306,22 @@ fn shell_path() -> &'static [PathBuf] {
         else {
             return Vec::new();
         };
+        let _running = Running::register(&child);
         let Some(mut stdout) = child.stdout.take() else {
             return Vec::new();
         };
-        let reader = std::thread::spawn(move || {
-            let mut text = Vec::new();
-            let _ = stdout.read_to_end(&mut text);
-            text
+        let collected = Arc::new(Mutex::new(Vec::new()));
+        let (finished, ended) = std::sync::mpsc::channel();
+        let sink = Arc::clone(&collected);
+        std::thread::spawn(move || {
+            let mut chunk = [0u8; 8192];
+            while let Ok(read @ 1..) = stdout.read(&mut chunk) {
+                if let Ok(mut sink) = sink.lock() {
+                    let room = (1_usize << 20).saturating_sub(sink.len()).min(read);
+                    sink.extend_from_slice(&chunk[..room]);
+                }
+            }
+            let _ = finished.send(());
         });
         let deadline = Instant::now() + Duration::from_secs(3);
         while child.try_wait().ok().flatten().is_none() {
@@ -308,7 +338,14 @@ fn shell_path() -> &'static [PathBuf] {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        let text = reader.join().unwrap_or_default();
+        // Normally the output ends with the shell. A background job it left
+        // holding the pipe open cannot keep Atlas waiting: a moment more,
+        // then what arrived.
+        let _ = ended.recv_timeout(Duration::from_millis(500));
+        let text = collected
+            .lock()
+            .map(|text| text.clone())
+            .unwrap_or_default();
         marked_path(&String::from_utf8_lossy(&text))
     })
 }
@@ -480,16 +517,25 @@ pub fn change(chosen: &[Agent], remove: bool) -> Result<Value> {
                 continue;
             }
         }
-        let steps = match &marketplace {
-            Some(path) => agent.connect(path),
-            None => agent.disconnect(),
+        let outcome = match &marketplace {
+            // Connecting stops at a failure.
+            Some(path) => agent
+                .connect(path)
+                .iter()
+                .map(|argv| run(agent, argv))
+                .find(Result::is_err)
+                .unwrap_or(Ok(())),
+            // Removing runs every step, tolerating parts already gone, then
+            // checks the plugin is gone.
+            None => {
+                let failures = agent
+                    .disconnect()
+                    .iter()
+                    .filter_map(|argv| run(agent, argv).err())
+                    .collect();
+                removed(agent, failures, agent.connected())
+            }
         };
-        // Removing tolerates parts already gone; connecting stops at a failure.
-        let outcome = steps
-            .iter()
-            .map(|argv| run(agent, argv))
-            .find(|step| step.is_err() && !remove)
-            .unwrap_or(Ok(()));
         results.push(match outcome {
             Ok(()) => json!({"agent": agent.name(), "ok": true, "connected": !remove}),
             Err(error) => json!({"agent": agent.name(), "ok": false, "error": error.error}),
@@ -497,6 +543,28 @@ pub fn change(chosen: &[Agent], remove: bool) -> Result<Value> {
     }
     let ok = results.iter().all(|result| result["ok"] == true);
     Ok(json!({"ok": ok, "agents": results}))
+}
+
+/// Whether removing from `agent` worked, from the steps that failed and
+/// whether the agent still lists the plugin afterwards. A failed step on a
+/// plugin that is gone was a part already absent; when the list cannot be
+/// read, a failed step is reported.
+fn removed(
+    agent: Agent,
+    failures: Vec<Error>,
+    connected: std::result::Result<Option<bool>, String>,
+) -> Result<()> {
+    let first = failures.into_iter().next();
+    match connected {
+        Ok(Some(false)) => Ok(()),
+        Ok(Some(true)) => Err(first.unwrap_or_else(|| {
+            problem(format!(
+                "{} still lists the Atlas plugin",
+                agent.display_name()
+            ))
+        })),
+        Ok(None) | Err(_) => first.map_or(Ok(()), Err),
+    }
 }
 
 /// The section `atlas agents project` keeps in a project's AGENTS.md: when
@@ -619,6 +687,8 @@ fn replace_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
             .mode(mode)
             .custom_flags(libc::O_NOFOLLOW)
             .open(&temporary)?;
+        // The mode given at creation is reduced by the umask.
+        file.set_permissions(std::fs::Permissions::from_mode(mode))?;
         file.write_all(bytes)?;
         file.sync_all()?;
         std::fs::rename(&temporary, &target)
@@ -636,7 +706,6 @@ pub fn refresh() -> Value {
         .into_iter()
         .filter(|agent| agent.connected() == Ok(Some(true)))
         .map(|agent| {
-            let plugin = format!("{NAME}@{NAME}");
             let steps: Vec<Vec<String>> = match agent {
                 Agent::Claude => vec![
                     vec![
@@ -645,9 +714,9 @@ pub fn refresh() -> Value {
                         "update".into(),
                         NAME.into(),
                     ],
-                    vec!["plugin".into(), "update".into(), plugin],
+                    vec!["plugin".into(), "update".into(), PLUGIN.into()],
                 ],
-                Agent::Codex => vec![vec!["plugin".into(), "add".into(), plugin]],
+                Agent::Codex => vec![vec!["plugin".into(), "add".into(), PLUGIN.into()]],
             };
             let failed = steps.iter().find_map(|argv| run(agent, argv).err());
             json!({"agent": agent.name(), "ok": failed.is_none(), "error": failed.map(|e| e.error)})
@@ -831,6 +900,48 @@ mod tests {
             std::fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap(),
             "@AGENTS.md\n"
         );
+    }
+
+    #[test]
+    fn a_replaced_file_keeps_its_exact_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("AGENTS.md");
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o664)).unwrap();
+        replace_file(&path, b"new").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o664);
+    }
+
+    #[test]
+    fn the_plugin_is_found_in_each_agents_list() {
+        assert_eq!(PLUGIN, format!("{NAME}@{NAME}"));
+        let claude = br#"[{"id":"other@x"},{"id":"atlas@atlas","version":"1"}]"#;
+        assert_eq!(Agent::Claude.listed(claude), Some(true));
+        assert_eq!(Agent::Claude.listed(br#"[{"id":"other@x"}]"#), Some(false));
+        let codex = br#"{"installed":[{"pluginId":"atlas@atlas"}]}"#;
+        assert_eq!(Agent::Codex.listed(codex), Some(true));
+        assert_eq!(Agent::Codex.listed(br#"{"installed":[]}"#), Some(false));
+        assert_eq!(Agent::Codex.listed(claude), None, "not Codex's shape");
+        assert_eq!(Agent::Claude.listed(b"not json"), None);
+    }
+
+    /// Removing reports success only when the plugin is gone, or when every
+    /// step worked and the list cannot be read.
+    #[test]
+    fn removing_checks_the_plugin_is_gone() {
+        let failed = || vec![problem("claude plugin uninstall failed: not found")];
+        assert!(removed(Agent::Claude, failed(), Ok(Some(false))).is_ok());
+        assert!(removed(Agent::Claude, Vec::new(), Ok(Some(false))).is_ok());
+        let error = removed(Agent::Claude, failed(), Ok(Some(true))).unwrap_err();
+        assert!(error.error.contains("uninstall failed"));
+        let error = removed(Agent::Codex, Vec::new(), Ok(Some(true))).unwrap_err();
+        assert_eq!(error.error, "Codex still lists the Atlas plugin");
+        assert!(removed(Agent::Claude, Vec::new(), Ok(None)).is_ok());
+        assert!(removed(Agent::Claude, failed(), Ok(None)).is_err());
+        assert!(removed(Agent::Claude, failed(), Err("silent".into())).is_err());
     }
 
     #[test]
