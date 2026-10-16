@@ -633,7 +633,7 @@ fn a_briefly_held_store_lock_is_waited_for_but_a_held_one_is_refused() {
     let sandbox = Sandbox::new();
     let first = state::Store::open(&sandbox.home, true).unwrap();
     let release = std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(40));
+        std::thread::sleep(std::time::Duration::from_millis(10));
         drop(first);
     });
     state::Store::open(&sandbox.home, true).expect("a lock released within the patience is taken");
