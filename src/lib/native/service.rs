@@ -6,6 +6,7 @@ use crate::{
     error::{Error, Result},
     session::{Display, InputEpoch},
 };
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     path::PathBuf,
@@ -38,6 +39,33 @@ struct Service {
     /// Signalled once an acknowledged shutdown has been answered.
     stopping: tokio::sync::Notify,
 }
+/// The operations the input service answers, by their `op` string.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Operation {
+    Hello,
+    Shutdown,
+    Release,
+    Reset,
+    Renew,
+    Acquire,
+    Input,
+    Unknown,
+}
+impl Operation {
+    fn of(request: &Value) -> Self {
+        match request["op"].as_str().unwrap_or_default() {
+            "hello" => Self::Hello,
+            "shutdown" => Self::Shutdown,
+            "release" => Self::Release,
+            "reset" => Self::Reset,
+            "renew" => Self::Renew,
+            "acquire" => Self::Acquire,
+            "input" => Self::Input,
+            _ => Self::Unknown,
+        }
+    }
+}
+
 /// A file by path and (device, inode).
 type Executable = (PathBuf, (u64, u64));
 
@@ -95,8 +123,8 @@ impl Service {
     }
     async fn dispatch(&self, request: &Value) -> Result<Value> {
         let owner = request["owner"].as_str().unwrap_or_default();
-        let operation = request["op"].as_str().unwrap_or_default();
-        if operation == "hello" {
+        let operation = Operation::of(request);
+        if operation == Operation::Hello {
             let held_input = self
                 .engine
                 .try_lock()
@@ -119,7 +147,7 @@ impl Service {
                 "streaming": true,
             }));
         }
-        if operation == "shutdown" {
+        if operation == Operation::Shutdown {
             // Bound to this process: a replacement that has since bound the same
             // socket never honours a request meant for its predecessor.
             if request["pid"].as_u64() != Some(std::process::id().into()) {
@@ -147,13 +175,13 @@ impl Service {
             self.gate.close()?;
             return Ok(json!({ "ok": true, "stopping": true, "pid": std::process::id() }));
         }
-        if operation == "release" {
+        if operation == Operation::Release {
             self.gate.cancel(Some(owner))?;
             self.cleanup().await?;
             return Ok(json!({ "ok": true, "released": true }));
         }
-        if operation == "reset" {
-            let expected: InputEpoch = serde_json::from_value(request["epoch"].clone())?;
+        if operation == Operation::Reset {
+            let expected = InputEpoch::deserialize(&request["epoch"])?;
             let current = InputEpoch::from_proof(&session_info()?, std::process::id())?;
             if expected != current || !Engine::trusted() {
                 return Err(Error::new(
@@ -175,11 +203,11 @@ impl Service {
             return Ok(json!({ "ok": true, "released": true }));
         }
         self.check()?;
-        if operation == "renew" {
+        if operation == Operation::Renew {
             self.gate.renew(owner)?;
             return Ok(json!({ "ok": true }));
         }
-        let expected: InputEpoch = serde_json::from_value(request["epoch"].clone())?;
+        let expected = InputEpoch::deserialize(&request["epoch"])?;
         let epoch = self.epoch()?;
         if expected != epoch {
             return Err(Error::new(
@@ -187,7 +215,7 @@ impl Service {
                 "Input coordinates belong to a different session or display",
             ));
         }
-        if operation == "acquire" {
+        if operation == Operation::Acquire {
             let mut engine = self.engine.lock().await;
             if self.gate.active()? {
                 return Err(Error::new(
@@ -200,7 +228,7 @@ impl Service {
             engine.grant = Some(self.gate.acquire(owner)?);
             return Ok(json!({ "ok": true }));
         }
-        if operation != "input" {
+        if operation != Operation::Input {
             return Err(Error::new("input", "Unknown native operation"));
         }
         let grant = self.gate.grant(owner)?;
@@ -212,7 +240,7 @@ impl Service {
                 scale: 1.0,
             },
         )?;
-        let actions: Vec<Action> = serde_json::from_value(request["actions"].clone())?;
+        let actions = Vec::<Action>::deserialize(&request["actions"])?;
         let mut engine = self.engine.lock().await;
         drop(grant.authorize()?);
         engine.grant = Some(grant);
@@ -340,7 +368,8 @@ async fn handle(mut stream: UnixStream, service: Arc<Service>) -> Result<()> {
         Ok(request) => request,
         Err(error) => return reply(&mut stream, Err(error)).await,
     };
-    let result = if request["op"] == "input" {
+    let operation = Operation::of(&request);
+    let result = if operation == Operation::Input {
         let mut dispatch = std::pin::pin!(service.dispatch(&request));
         let mut extra = [0; 1];
         tokio::select! {
@@ -355,7 +384,7 @@ async fn handle(mut stream: UnixStream, service: Arc<Service>) -> Result<()> {
     } else {
         service.dispatch(&request).await
     };
-    let stopping = request["op"] == "shutdown" && result.is_ok();
+    let stopping = operation == Operation::Shutdown && result.is_ok();
     let written = reply(&mut stream, result).await;
     if stopping {
         service.stopping.notify_one();
