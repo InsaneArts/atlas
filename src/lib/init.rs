@@ -445,11 +445,11 @@ fn finish(done_steps: &mut Vec<Value>, settings: &Path) -> Result<()> {
             ),
         );
     } else if first {
-        let status = crate::menubar::login("status").unwrap_or_default();
+        let status = crate::menubar::set_login(crate::menubar::Login::Status).unwrap_or_default();
         if status["enabled"] == true {
             crate::menubar::decide_login();
         } else if status["available"] == true {
-            match crate::menubar::login("on") {
+            match crate::menubar::set_login(crate::menubar::Login::On) {
                 Ok(login) if login["enabled"] == true => {
                     crate::menubar::decide_login();
                     done(

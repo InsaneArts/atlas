@@ -287,17 +287,50 @@ pub fn executable() -> Result<PathBuf> {
     development()
 }
 
-/// Turn "Open at Login" `on` or `off`, or report its `status`; only the
-/// app (as part of Atlas.app) can register its login agent.
+/// What to do with "Open at Login".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Login {
+    On,
+    Off,
+    Status,
+}
+
+impl Login {
+    /// The state as the command line and the app name it.
+    pub fn parse(state: &str) -> Result<Self> {
+        match state {
+            "on" => Ok(Self::On),
+            "off" => Ok(Self::Off),
+            "status" => Ok(Self::Status),
+            _ => Err(Error::new("usage", "Open at Login takes on, off or status")),
+        }
+    }
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::On => "on",
+            Self::Off => "off",
+            Self::Status => "status",
+        }
+    }
+}
+
+/// Turn "Open at Login" `on` or `off`, or report its `status`, as the
+/// command line names them.
 pub fn login(state: &str) -> Result<serde_json::Value> {
+    set_login(Login::parse(state)?)
+}
+
+/// Apply `login`; only the app (as part of Atlas.app) can register its
+/// login agent.
+pub fn set_login(login: Login) -> Result<serde_json::Value> {
     let output = std::process::Command::new(executable()?)
-        .args(["--login", state])
+        .args(["--login", login.as_str()])
         .stdin(Stdio::null())
         .output()?;
     let reply: serde_json::Value = serde_json::from_slice(&output.stdout)
         .map_err(|_| Error::new("menubar", "The menu bar did not report its login item"))?;
     // Turning it on or off is the person's choice, and init keeps it.
-    if state != "status" && reply["ok"] == true {
+    if login != Login::Status && reply["ok"] == true {
         decide_login();
     }
     Ok(reply)
@@ -342,7 +375,9 @@ impl Program {
 }
 
 /// Start the app with `args` and hand it the URL on stdin. Its commands
-/// run this very `atlas` with this configuration.
+/// run this very `atlas` with this configuration. Closing stdin asks the
+/// app to quit by itself; dropping the returned child kills it outright
+/// (`kill_on_drop`).
 async fn spawn(program: &Program, url: &str, args: &[&str]) -> Result<(Child, ChildStdin)> {
     let cli = std::env::current_exe().and_then(fs::canonicalize)?;
     let mut child = Command::new(&program.executable)
@@ -413,7 +448,9 @@ impl App {
 
 impl Drop for App {
     fn drop(&mut self) {
-        // Closes its stdin; the child is killed as it drops.
+        // The aborted writer closes stdin once the runtime drops it, but
+        // the app does not wait for that: its child handle drops right
+        // after this, and `kill_on_drop` kills it then.
         self.writer.abort();
     }
 }
@@ -483,6 +520,19 @@ mod tests {
         if installed.exists() {
             assert!(crate::setup::app_signed(&installed));
         }
+    }
+
+    #[test]
+    fn open_at_login_takes_only_its_three_states() {
+        for (state, login) in [
+            ("on", Login::On),
+            ("off", Login::Off),
+            ("status", Login::Status),
+        ] {
+            assert_eq!(Login::parse(state).unwrap(), login);
+            assert_eq!(login.as_str(), state);
+        }
+        assert_eq!(Login::parse("yes").unwrap_err().code, "usage");
     }
 
     #[test]
