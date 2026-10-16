@@ -42,6 +42,33 @@ impl Epoch {
         }
     }
 }
+/// The lowest UID macOS gives an account a person signs in to.
+const FIRST_USER_UID: u32 = 501;
+/// The largest display side, in points, a session may report.
+const MAX_SIDE: f64 = 32768.0;
+/// The largest backing scale a display may report.
+const MAX_SCALE: f64 = 8.0;
+
+/// Whether `value` is a finite measure above zero and at most `max`.
+fn within(value: f64, max: f64) -> bool {
+    value.is_finite() && value > 0.0 && value <= max
+}
+
+/// A session proof's security session and main display IDs. Both are 32-bit
+/// on macOS. Zero is no session and no display; a security session of
+/// `u32::MAX` is `callerSecuritySession`, the sentinel that asks about the
+/// caller's own session and never a real ID, so a session lies strictly
+/// between the two.
+fn session_ids(proof: &Value) -> Option<(u64, u64)> {
+    let security = proof["securitySessionID"]
+        .as_u64()
+        .filter(|n| *n > 0 && *n < u32::MAX.into())?;
+    let display = proof["displayID"]
+        .as_u64()
+        .filter(|n| *n > 0 && *n <= u32::MAX.into())?;
+    Some((security, display))
+}
+
 impl InputEpoch {
     pub fn from_proof(proof: &Value, process_id: u32) -> Result<Self> {
         let invalid = || {
@@ -50,28 +77,23 @@ impl InputEpoch {
                 "A hidden graphical session with valid geometry is required",
             )
         };
+        let (security_session_id, display_id) = session_ids(proof).ok_or_else(invalid)?;
+        let side = |key: &str| {
+            proof[key]
+                .as_f64()
+                .filter(|v| within(*v, MAX_SIDE))
+                .ok_or_else(invalid)
+        };
         let epoch = Self {
             uid: proof["uid"]
                 .as_u64()
                 .and_then(|v| u32::try_from(v).ok())
-                .filter(|v| *v >= 501)
+                .filter(|v| *v >= FIRST_USER_UID)
                 .ok_or_else(invalid)?,
-            security_session_id: proof["securitySessionID"]
-                .as_u64()
-                .filter(|v| *v > 0 && *v < u32::MAX.into())
-                .ok_or_else(invalid)?,
-            display_id: proof["displayID"]
-                .as_u64()
-                .filter(|v| *v > 0 && *v <= u32::MAX.into())
-                .ok_or_else(invalid)?,
-            width: proof["width"]
-                .as_f64()
-                .filter(|v| v.is_finite() && *v > 0.0 && *v <= 32768.0)
-                .ok_or_else(invalid)?,
-            height: proof["height"]
-                .as_f64()
-                .filter(|v| v.is_finite() && *v > 0.0 && *v <= 32768.0)
-                .ok_or_else(invalid)?,
+            security_session_id,
+            display_id,
+            width: side("width")?,
+            height: side("height")?,
             process_id,
         };
         if proof["ok"] != true
@@ -96,7 +118,7 @@ pub fn validate_uid(uid: u32) -> Result<()> {
 }
 
 pub(crate) fn validate_target_uid(uid: u32, controller_uid: u32) -> Result<()> {
-    if uid < 501 || uid == controller_uid {
+    if uid < FIRST_USER_UID || uid == controller_uid {
         return Err(Error::new(
             "identity",
             "Target must be a distinct helper account with UID >= 501",
@@ -159,28 +181,19 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
         .and_then(|pid| u32::try_from(pid).ok())
         .filter(|pid| *pid > 0)
         .ok_or_else(invalid)?;
-    let display: Display =
-        serde_json::from_value(value["display"].clone()).map_err(|_| invalid())?;
-    if value["ok"] != true
-        || value["user"]["uid"].as_u64() != Some(uid.into())
+    let display = Display::deserialize(&value["display"]).map_err(|_| invalid())?;
+    // `ok` is already known true here.
+    if value["user"]["uid"].as_u64() != Some(uid.into())
         || value["session"]["onConsole"] != false
         || value["session"]["managerName"] != "Aqua"
-        || ![display.width, display.height, display.scale]
-            .into_iter()
-            .zip([32768.0, 32768.0, 8.0])
-            .all(|(n, max)| n.is_finite() && n > 0.0 && n <= max)
+        || !within(display.width, MAX_SIDE)
+        || !within(display.height, MAX_SIDE)
+        || !within(display.scale, MAX_SCALE)
     {
         return Err(invalid());
     }
     let proof = &value["sessionProof"];
-    let security = proof["securitySessionID"]
-        .as_u64()
-        .filter(|n| *n > 0 && *n < u32::MAX.into())
-        .ok_or_else(invalid)?;
-    let display_id = proof["displayID"]
-        .as_u64()
-        .filter(|n| *n > 0 && *n <= u32::MAX.into())
-        .ok_or_else(invalid)?;
+    let (security, display_id) = session_ids(proof).ok_or_else(invalid)?;
     if proof["parentPID"].as_u64() != Some(pid.into())
         || proof["ok"] != true
         || proof["uid"].as_u64() != Some(uid.into())
@@ -395,7 +408,7 @@ pub fn diagnose(value: Value, uid: u32) -> Value {
         .map(|check| &check.next_step)
         .collect::<Vec<_>>();
     let observe = session.as_ref().is_some_and(|s| s.capture);
-    json!({
+    let mut report = json!({
         "ok": true,
         "ready": checks.iter().all(|check| check.ok == Some(true)),
         "canObserve": observe,
@@ -413,8 +426,10 @@ pub fn diagnose(value: Value, uid: u32) -> Value {
         "checks": details,
         "nextSteps": next_steps,
         "warnings": warnings,
-        "session": value,
-    })
+    });
+    // The status itself, moved in rather than copied.
+    report["session"] = value;
+    report
 }
 
 /// Whether a helper that did not answer is signed out: not refused by this
