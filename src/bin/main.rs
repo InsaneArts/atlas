@@ -846,6 +846,14 @@ fn emit(format: Format, view: &View, value: &Value) {
     }
 }
 
+/// Write `text` as it is. A reader that went away (`| head`) ends the
+/// output quietly, as in [`emit`].
+fn print(text: &str) {
+    let mut out = std::io::stdout().lock();
+    let _ = out.write_all(text.as_bytes());
+    let _ = out.flush();
+}
+
 /// Ctrl-C during a question or a wait puts the cursor back and says how to
 /// resume, instead of leaving a half-drawn line.
 fn stop_cleanly_on_interrupt(message: &'static str) {
@@ -962,11 +970,11 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
         }
         Command::AgentGuide { skill, commands } => {
             if skill {
-                print!("{}", agent::skill());
+                print(&agent::skill());
             } else if commands {
-                print!("{}", command_reference());
+                print(&command_reference());
             } else {
-                print!("{}", agent::GUIDE);
+                print(agent::GUIDE);
             }
             return Ok(Value::Null);
         }
@@ -1007,7 +1015,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
         Command::Agents { action } => {
             return match action.unwrap_or(AgentsCommand::Status { brief: false }) {
                 AgentsCommand::Status { brief: true } => {
-                    println!("{}", atlas::agents::brief(&config).await);
+                    print(&format!("{}\n", atlas::agents::brief(&config).await));
                     Ok(Value::Null)
                 }
                 AgentsCommand::Status { brief: false } => {
