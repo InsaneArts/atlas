@@ -303,6 +303,16 @@ fn typing_that_stops_part_way_says_so() {
     );
     assert!(shown.err.starts_with("✗ Typed 1 of 2 parts: No reply"));
     assert!(shown.err.contains("don't repeat it"));
+    let busy = show(
+        View::Type,
+        json!({"ok": false, "typed": 0, "batches": 1, "confirmedBatches": 0,
+               "code": "busy", "error": "Someone has control", "uncertain": false}),
+    );
+    assert!(
+        busy.err.contains("Release it there, or wait"),
+        "{}",
+        busy.err
+    );
 }
 
 #[test]
