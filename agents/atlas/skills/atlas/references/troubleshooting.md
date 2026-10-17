@@ -22,7 +22,7 @@ its own failure is in `exitCode`.)
 | `environment` | A provisioning plan was refused. | Read `error`; plans never overwrite unknown changes. |
 | `identity` | The helper session, account or display is not the configured one. | Stop and tell the person; run `atlas doctor`. |
 | `init` | Guided setup could not finish. | Show the person `error`; they can run `atlas init` again. |
-| `input` | Input could not be delivered (bad key, held button, a point off the display), or a batch was out of range: at most 32 actions, 100 lines a scroll, 256 characters a `type`, 250 ms a wait, two seconds in all. | Fix the action or split the batch; observe with a screenshot before retrying. |
+| `input` | Input could not be delivered (bad key, held button, a point off the display), or a batch was refused before anything was sent: at most 32 actions, 100 lines a scroll, 256 characters a `type`, 250 ms a wait, two seconds in all. | Fix the action or split the batch; a refused batch sent nothing, otherwise observe with a screenshot before retrying. |
 | `install` | The shared executable could not be installed. | Atlas.app must be in /Applications; tell the person. |
 | `invalid-json` | JSON passed to a command could not be read. | Fix the JSON (for example the `input` actions). |
 | `io` | A file or path could not be read or written. | Read `error`; check the path it names. |

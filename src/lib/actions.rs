@@ -244,7 +244,9 @@ pub(crate) const DRAG_HOLD: Duration = Duration::from_millis(80);
 /// The points a drag moves through, and the pause after each.
 pub(crate) const DRAG_STEPS: u32 = 24;
 pub(crate) const DRAG_STEP: Duration = Duration::from_millis(16);
-/// The pause after the one-point step that starts a drag.
+/// How far, at most, the first step of a drag goes (per axis). EXPERIMENT.
+pub(crate) const DRAG_ANCHOR: f64 = 1.0;
+/// The pause after the first step that starts a drag.
 pub(crate) const DRAG_START: Duration = Duration::from_millis(10);
 /// The pause after each typed character.
 pub(crate) const TYPE_GAP: Duration = Duration::from_millis(2);
@@ -352,7 +354,10 @@ pub fn validate(value: &Value, display: &Display) -> Result<()> {
         if let Some(problem) = problem {
             return Err(Error::new(
                 "input",
-                format!("Action {} is out of range: {problem}", index + 1),
+                format!(
+                    "Action {} was refused and nothing was sent: {problem}",
+                    index + 1
+                ),
             ));
         }
 
@@ -642,6 +647,7 @@ mod tests {
         assert!(CLICK_MS > ms(CLICK_GAP));
         assert!(DRAG_MS > ms(DRAG_HOLD + DRAG_START + DRAG_STEP * DRAG_STEPS));
         assert!(TYPE_MS > ms(TYPE_GAP));
+        assert!(SCROLL_MS > ms(SCROLL_SETTLE));
     }
 
     /// An absurd wait is refused, never added up.
@@ -658,7 +664,7 @@ mod tests {
         ]);
         assert_eq!(
             validate(&batch, &display).unwrap_err().error,
-            "Action 2 is out of range: a wait is at most 250 ms"
+            "Action 2 was refused and nothing was sent: a wait is at most 250 ms"
         );
     }
 
@@ -677,27 +683,27 @@ mod tests {
         };
         assert_eq!(
             said(serde_json::json!({"type": "key", "key": "bogus"})),
-            "Action 1 is out of range: the key is not a known name (see atlas key --help)"
+            "Action 1 was refused and nothing was sent: the key is not a known name (see atlas key --help)"
         );
         assert_eq!(
             said(serde_json::json!({"type": "scroll", "x": 1, "y": 1, "dy": 200})),
-            "Action 1 is out of range: a scroll is at most 100 lines each way"
+            "Action 1 was refused and nothing was sent: a scroll is at most 100 lines each way"
         );
         assert_eq!(
             said(serde_json::json!({"type": "click", "x": 500, "y": 1})),
-            "Action 1 is out of range: its point is off the display"
+            "Action 1 was refused and nothing was sent: its point is off the display"
         );
         assert_eq!(
             said(serde_json::json!({"type": "click", "x": 1, "y": 1, "count": 9})),
-            "Action 1 is out of range: a click is 1 to 5 clicks"
+            "Action 1 was refused and nothing was sent: a click is 1 to 5 clicks"
         );
         assert_eq!(
             said(serde_json::json!({"type": "click", "x": 1, "y": 1, "modifiers": ["hyper"]})),
-            "Action 1 is out of range: a modifier is one of cmd, ctrl, alt, shift and fn"
+            "Action 1 was refused and nothing was sent: a modifier is one of cmd, ctrl, alt, shift and fn"
         );
         assert_eq!(
             said(serde_json::json!({"type": "type", "text": ""})),
-            "Action 1 is out of range: text is 1 to 256 characters"
+            "Action 1 was refused and nothing was sent: text is 1 to 256 characters"
         );
     }
 }

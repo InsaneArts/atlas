@@ -132,7 +132,7 @@ enum Command {
     ///
     /// Exercises real Save/Open dialogs with the AppKit fixture and records the outcome.
     VerifyNative {
-        /// Compiled tests/live/DesktopFixture.swift inside a helper-readable path.
+        /// The compiled DesktopFixture test app, where the helper can run it.
         #[arg(long, default_value = atlas::capability::FIXTURE)]
         fixture: PathBuf,
     },
@@ -260,6 +260,12 @@ enum Command {
         y: f64,
     },
     /// Drag from one point to another.
+    ///
+    /// What is dragged (a window, a slider's knob, a selection) moves by
+    /// exactly the distance between the points; the button itself is released
+    /// one point past the end, in the direction of travel. Drag-and-drop onto
+    /// a target (selected text, files, list items) does not begin in the
+    /// helper: macOS starts such a drag only from a real mouse.
     Drag {
         /// Start point X.
         from_x: f64,
@@ -275,7 +281,8 @@ enum Command {
     },
     /// Scroll at a point.
     ///
-    /// Scroll at X Y by lines; negative values scroll up or left.
+    /// Scroll at X Y by lines, as a mouse wheel's notches (about 10 points
+    /// each, as the app has it); negative values scroll up or left.
     Scroll {
         /// Display point X.
         x: f64,
