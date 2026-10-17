@@ -191,7 +191,8 @@ pub(super) fn validate_id(id: &str) -> Result<()> {
             .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
     {
         return Err(problem(
-            "Expected a 48-character lowercase environment plan ID",
+            "Expected a 48-character lowercase plan ID, the planId a preview (atlas \
+             environment MANIFEST) printed",
         ));
     }
     Ok(())

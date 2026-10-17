@@ -263,7 +263,8 @@ enum Command {
     ///
     /// What is dragged (a window, a slider's knob, a selection) moves by
     /// exactly the distance between the points; the button itself is released
-    /// one point past the end, in the direction of travel. Drag-and-drop onto
+    /// up to one point past the end, in the direction of travel, never off the
+    /// display. Drag-and-drop onto
     /// a target (selected text, files, list items) does not begin in the
     /// helper: macOS starts such a drag only from a real mouse.
     Drag {
@@ -297,7 +298,10 @@ enum Command {
     },
     /// Type text.
     ///
-    /// Long text is split into batches without breaking characters.
+    /// The text is typed as given: a real newline or tab in it (in a shell,
+    /// $'one\ntwo') or on standard input is typed as that key, while the two
+    /// characters \n are typed as they are. Long text is split into batches
+    /// without breaking characters.
     Type {
         /// The text to type.
         #[arg(required_unless_present = "stdin")]
@@ -383,7 +387,7 @@ enum Command {
     /// Atlas exits 1 when the command's exit code is not 0 or it was
     /// stopped, with the reply still ok.
     Run {
-        /// Seconds before the command is stopped.
+        /// Seconds before the command is stopped, 1 to 600.
         #[arg(long, value_name = "SECONDS", default_value_t = atlas::client::RUN_TIMEOUT.as_secs(), value_parser = run_seconds)]
         timeout: u64,
         /// The program and its arguments, after `--`.
@@ -1292,6 +1296,13 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             .await
         }
         Command::Scroll { x, y, dx, dy } => {
+            if dx == 0 && dy == 0 {
+                return Err(Error::new(
+                    "usage",
+                    "Give lines to scroll with --dy (down) or --dx (right), negative for up or left",
+                ));
+            }
+
             act(
                 &client()?,
                 json!([{ "type": "scroll", "x": x, "y": y, "dx": dx, "dy": dy }]),

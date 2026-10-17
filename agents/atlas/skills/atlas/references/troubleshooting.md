@@ -26,7 +26,7 @@ its own failure is in `exitCode`.)
 | `install` | The shared executable could not be installed. | Atlas.app must be in /Applications; tell the person. |
 | `invalid-json` | JSON passed to a command could not be read. | Fix the JSON (for example the `input` actions). |
 | `io` | A file or path could not be read or written. | Read `error`; check the path it names. |
-| `lease-lost` | Control was lost mid-action: it expired, or the session changed. | Observe, then retry only if the person is not controlling. |
+| `lease-lost` | Control ended mid-action: it was released, expired, or the session changed. | Observe, then retry only if the person is not controlling. |
 | `menubar` | The menu bar companion could not start. | Not needed for your task; continue with CLI commands. |
 | `native` | A native input or dialog check failed. | Read `error`; native Save/Open needs Screen Sharing (see the guide). |
 | `no-environment` | No helper environment profile is installed for `environment run`. | Use `atlas run`, or install a profile with `atlas environment profile`. |
@@ -39,7 +39,7 @@ its own failure is in `exitCode`.)
 | `restart` | Recovery did not confirm a new helper. | Run `atlas doctor`; tell the person if it is not ready. |
 | `session-changed` | The helper session or display changed during an action. | Observe again; the previous plan may no longer apply. |
 | `setup` | Setup was refused or is unfinished. | Show `error`; the person resumes with `atlas setup --apply` or `atlas init`. |
-| `spawn-failed` | The command could not be started in the helper. | Check the program path and that it exists in the helper. |
+| `spawn-failed` | The command, or what `open` was asked to open, could not be started in the helper. | Check the program or app path and that it exists in the helper. |
 | `stale-frame` | The screenshot is older than the current display. | Take a new screenshot. |
 | `startup` | The input service did not start. | Run `atlas start-input`, then `atlas doctor`. |
 | `state` | Local control state is corrupt. | Run `atlas restart`; tell the person if it persists. |
@@ -50,5 +50,5 @@ its own failure is in `exitCode`.)
 | `uninstall` | Removal was refused or incomplete. | Show `error` to the person. |
 | `update` | An update was refused or could not be verified. | Show `error`; never bypass the signature checks. |
 | `usage` | The command line was invalid. | Check `references/commands.md`. |
-| `wait-failed` | A command ran but its exit status could not be read, or an app did not quit in time. | Treat the outcome as unknown; check its effects (`atlas apps` for apps). |
+| `wait-failed` | A window did not appear or close in time (`timedOut`), a command ran but its exit status could not be read, or an app did not quit in time. | For a window, look (`atlas windows`, a screenshot) and wait again; otherwise treat the outcome as unknown and check its effects (`atlas apps` for apps). |
 | `windows` | The helper's window list is unavailable. | Retry once; then `atlas doctor`. |

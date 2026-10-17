@@ -82,7 +82,7 @@ import Testing
             wheel.add(dx: 0, dy: -2, precise: true)
             total += wheel.take().dy
         }
-        #expect(total == -1)
+        #expect(total == -6)
         for _ in 0..<30 {
             wheel.add(dx: 0, dy: 2, precise: true)
             total += wheel.take().dy

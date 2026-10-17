@@ -40,6 +40,8 @@ done
 
 /// The most of each kind one inspection may select.
 const SELECTION_LIMIT: usize = 16;
+/// Where macOS keeps its own apps that are not in /System/Applications.
+const CORE_SERVICES: &str = "/System/Library/CoreServices";
 
 fn invalid() -> Error {
     Error::new(
@@ -259,9 +261,12 @@ pub async fn discover(
         } else {
             format!("{name}.app")
         };
+        // Where apps live: the usual folders, and macOS's own in
+        // CoreServices (Finder among them).
         let host = [
             PathBuf::from("/Applications"),
             PathBuf::from("/System/Applications"),
+            PathBuf::from(CORE_SERVICES),
             home.join("Applications"),
         ]
         .iter()
@@ -271,6 +276,7 @@ pub async fn discover(
         paths.extend([
             PathBuf::from("/Applications").join(&bundle),
             PathBuf::from("/System/Applications").join(&bundle),
+            PathBuf::from(CORE_SERVICES).join(&bundle),
             helper_home.join("Applications").join(&bundle),
         ]);
         reports.push((
