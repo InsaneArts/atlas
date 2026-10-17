@@ -47,7 +47,9 @@ pub fn fix(code: &str) -> Option<&'static str> {
         "uncertain" => "Take a screenshot to see what happened, then run atlas restart.",
         "uninstall" => "Fix what it names, then run atlas uninstall again.",
         "update" => "Try again later. Atlas never installs a build that fails its checks.",
-        "wait-failed" => "Check what the command changed before running it again.",
+        "wait-failed" => {
+            "Look at the helper first (atlas windows, a screenshot), then wait or run it again."
+        }
         _ => return None,
     })
 }

@@ -249,10 +249,14 @@ pub async fn run(
         return failure("spawn-failed", "No command to run");
     };
     let Some(program) = resolve(name, std::env::var("PATH").ok().as_deref()) else {
-        let reason = if name.contains('/') {
-            "no such program"
-        } else {
+        let reason = if !name.contains('/') {
             "command not found on PATH"
+        } else if Path::new(name).is_dir() {
+            "is a folder, not a program"
+        } else if Path::new(name).exists() {
+            "is not executable (chmod +x it)"
+        } else {
+            "no such program"
         };
         return failure("spawn-failed", format!("{name}: {reason}"));
     };
@@ -600,6 +604,21 @@ mod tests {
         assert_eq!(
             reply,
             failure("spawn-failed", "/nonexistent/binary: no such program")
+        );
+        let (_, folder) = execute(&["/tmp"], 3000).await;
+        assert_eq!(
+            folder,
+            failure("spawn-failed", "/tmp: is a folder, not a program")
+        );
+        let plain = tempfile::NamedTempFile::new().unwrap();
+        let plain_path = plain.path().to_string_lossy().into_owned();
+        let (_, not_executable) = execute(&[&plain_path], 3000).await;
+        assert_eq!(
+            not_executable,
+            failure(
+                "spawn-failed",
+                format!("{plain_path}: is not executable (chmod +x it)")
+            )
         );
         let (_, reply) = execute(&["no-such-command-atlas"], 3000).await;
         assert_eq!(reply["code"], "spawn-failed");

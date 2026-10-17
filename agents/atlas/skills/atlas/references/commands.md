@@ -273,7 +273,7 @@ Examples:
 ```text
 List an app's buttons, fields and other elements.
 
-Lists accessibility elements of the app's windows: role, name, value and frame.
+Lists accessibility elements of the app's windows: role, name, value and frame; also the items of a menu the app has open (menu: true, with a check mark as mark) and, while the app is in front, its menu bar titles.
 
 Usage: atlas elements [OPTIONS]
 
@@ -383,7 +383,7 @@ Options:
           [possible values: left, middle, right]
 
       --count <COUNT>
-          Clicks in a row: 2 for a double click
+          Clicks in a row, 1 to 5: 2 for a double click
           
           [default: 1]
 
@@ -410,7 +410,7 @@ Examples:
 ```text
 Type text.
 
-The text is typed as given: a real newline or tab in it (in a shell, $'one\ntwo') or on standard input is typed as that key, while the two characters \n are typed as they are. Long text is split into batches without breaking characters.
+The text is typed as given: a real newline or tab in it (in a shell, $'one\ntwo') or on standard input arrives as a line break or tab, while the two characters \n are typed as they are. Long text is split into batches without breaking characters.
 
 Usage: atlas type [OPTIONS] [TEXT]
 

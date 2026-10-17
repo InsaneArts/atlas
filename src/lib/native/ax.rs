@@ -425,6 +425,9 @@ pub struct Element {
     /// context menu), where a click goes while the menu is open.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub menu: bool,
+    /// A menu item's check mark (such as "✓"), when it shows one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mark: Option<String>,
 }
 
 /// One traversal's result.
@@ -626,7 +629,13 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
             unreadable: Vec::new(),
             truncated: Vec::new(),
             menu,
+            mark: None,
         };
+        if element.role.as_deref() == Some("AXMenuItem") {
+            element.mark = scan
+                .text(item, "AXMenuItemMarkChar")
+                .filter(|mark| !mark.is_empty());
+        }
         element.unreadable = std::mem::take(&mut scan.unreadable);
         element.truncated = std::mem::take(&mut scan.truncated);
         let bar_title = element.role.as_deref() == Some("AXMenuBarItem");
