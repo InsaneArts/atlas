@@ -325,8 +325,30 @@ fn publish(staged: &Path, out: &Path) -> Result<PathBuf> {
     Ok(app)
 }
 
+/// The version bump must be committed, Cargo.lock included: the builds are
+/// --locked, and a tag must build the same archive again.
+fn committed_version(root: &Path) -> Result<()> {
+    let changed = output(
+        "/usr/bin/git",
+        &[
+            "-C",
+            text(root)?,
+            "status",
+            "--porcelain",
+            "--",
+            "Cargo.toml",
+            "Cargo.lock",
+        ],
+    )?;
+    if changed.trim().is_empty() {
+        return Ok(());
+    }
+    Err("Cargo.toml or Cargo.lock has uncommitted changes; commit the version bump first".into())
+}
+
 fn dist(options: &Options) -> Result<()> {
     let version = atlas::VERSION;
+    committed_version(&root())?;
     publishable(&options.out)?;
     // A fresh staging directory per run; nothing is published until verified.
     let stage = options.out.join(format!("stage/{}", std::process::id()));
@@ -347,9 +369,18 @@ fn dist(options: &Options) -> Result<()> {
     // Never leave sums that describe an earlier zip.
     let _ = fs::remove_file(&sums_path);
     let _ = fs::remove_file(&zip);
+    // Without resource forks: unzip would otherwise leave ._ files inside the
+    // bundle and break its seal.
     exec(
         "/usr/bin/ditto",
-        &["-c", "-k", "--keepParent", text(&app)?, text(&zip)?],
+        &[
+            "-c",
+            "-k",
+            "--norsrc",
+            "--keepParent",
+            text(&app)?,
+            text(&zip)?,
+        ],
     )?;
     let sums = format!("{}  {name}\n", sha256(&zip)?);
     fs::write(&sums_path, &sums).map_err(|error| error.to_string())?;
@@ -482,7 +513,14 @@ fn build(options: &Options, stage: &Path, upload: &Path) -> Result<PathBuf> {
     if let Some(profile) = &options.notarize {
         exec(
             "/usr/bin/ditto",
-            &["-c", "-k", "--keepParent", text(&app)?, text(upload)?],
+            &[
+                "-c",
+                "-k",
+                "--norsrc",
+                "--keepParent",
+                text(&app)?,
+                text(upload)?,
+            ],
         )?;
         exec(
             "/usr/bin/xcrun",

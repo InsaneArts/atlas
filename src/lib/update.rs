@@ -150,11 +150,13 @@ fn check(program: &str, args: &[&std::ffi::OsStr], why: &str) -> Result<()> {
         .ok_or_else(|| problem(why.to_owned()))
 }
 
-/// A private scratch directory for one update.
+/// A private scratch directory for one update, emptied first: an update
+/// stopped midway leaves nothing behind for the next one to find.
 fn scratch() -> Result<PathBuf> {
-    let path = crate::config::home()?
-        .join("Library/Caches/Atlas")
-        .join(format!("update-{}", crate::control::token()));
+    let path = crate::config::home()?.join("Library/Caches/Atlas/update");
+    if path.exists() {
+        fs::remove_dir_all(&path)?;
+    }
     fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
@@ -338,6 +340,16 @@ fn swap_recording(new: &Path, installed: &Path, name: &str, record: &Path) -> Re
     let parent = installed
         .parent()
         .ok_or_else(|| problem("The installed app has no parent directory"))?;
+    let executable = crate::digest::file_sha256(&new.join(EXECUTABLE))
+        .ok_or_else(|| problem("The new app's executable could not be read"))?;
+    // A staging copy an earlier update left when it was stopped (no record
+    // names it, or this update would be finishing it) goes first.
+    for entry in fs::read_dir(parent)?.flatten() {
+        let path = entry.path();
+        if staged_beside(&path, Some(installed)) {
+            let _ = fs::remove_dir_all(&path);
+        }
+    }
     let staged = parent.join(format!("{STAGED}{}", crate::control::token()));
     check(
         "/usr/bin/ditto",
@@ -346,8 +358,14 @@ fn swap_recording(new: &Path, installed: &Path, name: &str, record: &Path) -> Re
     )?;
     // Recorded, in one rename, before the exchange: whatever happens next,
     // the next update finds this handover and finishes it first. After the
-    // exchange `staged` holds the previous app.
-    let plan = json!({"previous": staged, "installed": installed, "to": name});
+    // exchange `staged` holds the previous app. The new executable's hash
+    // tells that next update whether the exchange happened.
+    let plan = json!({
+        "previous": staged,
+        "installed": installed,
+        "to": name,
+        "executable": executable,
+    });
     let recorded = serde_json::to_vec_pretty(&plan)
         .map_err(Error::from)
         .and_then(|bytes| crate::config::save_private(record, &bytes));
@@ -359,6 +377,27 @@ fn swap_recording(new: &Path, installed: &Path, name: &str, record: &Path) -> Re
         let _ = fs::remove_dir_all(&staged);
         let _ = fs::remove_file(record);
         return Err(error);
+    }
+    Ok(())
+}
+
+/// The exchange a recorded update may have been stopped before: when the
+/// installed app is not the recorded new one but the staging copy beside it
+/// is, exchange them now, so finishing never discards the new app.
+fn resume(record: &Value, installed: &Path) -> Result<()> {
+    let Some(expected) = record["executable"].as_str() else {
+        return Ok(());
+    };
+    let previous = record["previous"].as_str().map(Path::new);
+    let Some(previous) = previous.filter(|previous| staged_beside(previous, Some(installed)))
+    else {
+        return Ok(());
+    };
+    let sha256 = |app: &Path| crate::digest::file_sha256(&app.join(EXECUTABLE));
+    if sha256(installed).as_deref() != Some(expected)
+        && sha256(previous).as_deref() == Some(expected)
+    {
+        exchange(previous, installed)?;
     }
     Ok(())
 }
@@ -382,6 +421,7 @@ pub fn install(source: &Source, allow_unnotarized: bool, force: bool) -> Result<
     let installed = installed_app()?;
     // A swap whose handover did not finish is resumed before anything else.
     if let Some(record) = unfinished()? {
+        resume(&record, &installed)?;
         return Ok(json!({"ok": true, "updated": true, "resumed": true, "record": record}));
     }
     if !reachable_by_others(&installed.join(EXECUTABLE)) {
@@ -452,10 +492,16 @@ mod tests {
 
     #[test]
     fn a_missing_newest_release_is_not_yet_published() {
-        let missing =
-            || problem("Could not download x: curl: (22) The requested URL returned error: 404");
-        assert_eq!(unpublished(missing(), true).error, NO_RELEASE);
-        assert_ne!(unpublished(missing(), false).error, NO_RELEASE);
+        // curl says (22) over HTTP/1.1 and (56) over HTTP/2; the words are the same.
+        for code in ["22", "56"] {
+            let missing = || {
+                problem(format!(
+                    "Could not download x: curl: ({code}) The requested URL returned error: 404"
+                ))
+            };
+            assert_eq!(unpublished(missing(), true).error, NO_RELEASE);
+            assert_ne!(unpublished(missing(), false).error, NO_RELEASE);
+        }
         let offline = problem("Could not download x: curl: (6) Could not resolve host");
         assert_ne!(unpublished(offline, true).error, NO_RELEASE);
     }
@@ -503,11 +549,16 @@ mod tests {
         let installed = root.join("Applications/Atlas.app");
         let new = root.join("unpacked/Atlas.app");
         for (app, version) in [(&installed, "old"), (&new, "new")] {
-            fs::create_dir_all(app).unwrap();
+            fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
             fs::write(app.join("version"), version).unwrap();
+            fs::write(app.join(EXECUTABLE), version).unwrap();
         }
+        // A staging copy a stopped update left behind is swept first.
+        let stale = root.join("Applications/.Atlas.app.stale");
+        fs::create_dir_all(&stale).unwrap();
         let record = root.join("Support/update.json");
         swap_recording(&new, &installed, "Atlas-9.9.9-macos.zip", &record).unwrap();
+        assert!(!stale.exists());
         assert_eq!(
             fs::read_to_string(installed.join("version")).unwrap(),
             "new"
@@ -515,6 +566,28 @@ mod tests {
         let plan = read_record(&record).unwrap().unwrap();
         let previous = PathBuf::from(plan["previous"].as_str().unwrap());
         assert_eq!(previous.parent(), installed.parent());
+        assert_eq!(fs::read_to_string(previous.join("version")).unwrap(), "old");
+        assert_eq!(
+            plan["executable"],
+            crate::digest::file_sha256(&installed.join(EXECUTABLE)).unwrap()
+        );
+        // The exchange happened: resuming changes nothing.
+        resume(&plan, &installed).unwrap();
+        assert_eq!(
+            fs::read_to_string(installed.join("version")).unwrap(),
+            "new"
+        );
+        // Stopped between the record and the exchange: resuming exchanges.
+        exchange(&previous, &installed).unwrap();
+        assert_eq!(
+            fs::read_to_string(installed.join("version")).unwrap(),
+            "old"
+        );
+        resume(&plan, &installed).unwrap();
+        assert_eq!(
+            fs::read_to_string(installed.join("version")).unwrap(),
+            "new"
+        );
         assert_eq!(fs::read_to_string(previous.join("version")).unwrap(), "old");
         let report = finish_record(&record).unwrap();
         assert_eq!(report["removed"], true);
