@@ -467,7 +467,7 @@ mod tests {
             ["durationMs", "exitCode", "ok", "signal", "timedOut"]
         );
         let refusal = &exchange(daemon(false), r#"{"op":"run","argv":[]}"#).await[0];
-        assert_eq!(keys(refusal), ["code", "error", "ok"]);
+        assert_eq!(keys(refusal), ["code", "error", "ok", "uncertain"]);
         let apps = &exchange(daemon(false), r#"{"op":"apps"}"#).await[0];
         assert_eq!(
             keys(&apps["apps"][0]),

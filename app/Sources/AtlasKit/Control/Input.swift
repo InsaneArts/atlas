@@ -173,6 +173,7 @@ public struct PointerGesture: Sendable {
         var last: DesktopPoint
         var moved = false
     }
+
     struct Previous {
         let button: MouseButton
         let count: Int

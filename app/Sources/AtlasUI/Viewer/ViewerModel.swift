@@ -70,6 +70,7 @@ final class ViewerModel {
     @ObservationIgnored let input = InputQueue()
     /// The time now (tests set their own).
     @ObservationIgnored var clock: @MainActor () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var statusReading = 0
     @ObservationIgnored private var loop: Task<Void, Never>?

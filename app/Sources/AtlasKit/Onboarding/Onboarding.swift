@@ -111,20 +111,24 @@ public struct OnboardingFacts: Equatable, Sendable {
             let name: String?
             let realName: String?
         }
+
         struct App: Decodable {
             let installed: Bool?
             let signed: Bool?
             let error: String?
         }
+
         struct Permissions: Decodable {
             let screenCapture: Bool?
             let accessibility: Bool?
         }
+
         struct Controller: Decodable {
             let uid: Int?
             let name: String?
             let realName: String?
         }
+
         struct Side: Decodable {
             let exists: Bool?
             let name: String?

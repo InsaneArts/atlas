@@ -13,7 +13,8 @@ The person's only job was setting Atlas up; everything after that is yours.
 Commands print JSON whenever their output is not a terminal (as in your shell;
 add `--json` if you ever see plain text; only `--help` is always text) and
 exit non-zero on failure. Failures
-are `{"ok": false, "code", "error", "uncertain"}`.
+are `{"ok": false, "code", "error", "uncertain"}`, printed on standard
+error.
 
 ## Rules
 
@@ -113,7 +114,10 @@ screenshot pixels by multiplying by `pointsPerPixel`.
   way. An app whose windows are all closed is still found by name while it
   is in front.
 - Otherwise `atlas click X Y [--button right] [--count 2] [--modifiers cmd]`.
-- `atlas type "text"` (or `--stdin` for long text), `atlas key cmd+s`
+- `atlas type "text"` (or `--stdin` for long text; about 150 characters a
+  second, so put long text on the helper's pasteboard and paste it:
+  `atlas run -- /bin/sh -c 'printf %s "$1" | pbcopy' sh "TEXT"`, then
+  `atlas key cmd+v`), `atlas key cmd+s`
   (`key escape return` presses several; `+` alone or `cmd++` is the plus key),
   `atlas drag FX FY TX TY`, `atlas scroll X Y --dy -3` (a line is a wheel
   notch, about 10 points; at most 100 lines a
@@ -122,8 +126,11 @@ screenshot pixels by multiplying by `pointsPerPixel`.
   waits for a window. A menu bar app may start with none: open one from its
   menu bar item.
 - `atlas run -- PROGRAM ARGS` runs a command as the helper, for example to
-  read a file the app wrote. Your own shell expands `~` and `$HOME` before
-  Atlas sees them, so for the helper's home use
+  read a file the app wrote. It starts in the helper's home, finds programs
+  where readiness looks (`.local/bin`, `.cargo/bin`, Homebrew and the system
+  folders) and runs in a UTF-8 locale. Your own shell expands `~` and
+  `$HOME` before Atlas sees
+  them, so for the helper's home use
   `atlas run -- /bin/sh -c 'cat "$HOME/notes.txt"'`. The reply is `ok` when
   the command ran: check its `exitCode` (and `timedOut`) for the command's own
   result; Atlas itself exits 1 when that exit code is not 0 or the command was
@@ -175,8 +182,7 @@ never ask the person to do it:
    `[[files]]` table per file, with `source` (the absolute path on this Mac),
    `target` (a plain ASCII path inside the helper's home, like
    `.config/opie/rings.toml`) and `executable = true` for tools (put them in
-   `.local/bin` and run them with
-   `atlas run -- /bin/sh -c '"$HOME/.local/bin/TOOL" ARGS'`). Copy only what
+   `.local/bin`, where `atlas run -- TOOL ARGS` finds them). Copy only what
    the app needs, never credentials, keychains or tokens.
 2. Quit the app in the helper first (`atlas close --app NAME`), so it does not
    overwrite the files while they arrive.
@@ -247,9 +253,12 @@ unless you looked at it in the helper.
 - The Dock does not take Atlas's clicks; start apps with `atlas open`.
 - Drag-and-drop onto a target (selected text, files, list items) does not
   begin in the helper: macOS starts such a drag only from a real mouse.
-  `atlas drag` still moves windows and sliders and selects text; put files
-  where they belong with `run` instead, and report a drop you could not do
-  as not checked.
+  `atlas drag` still moves windows and sliders and selects text (a slider
+  seldom takes keyboard focus from a click, so drag it rather than pressing
+  arrow keys); put files where they belong with `run` instead, and report a
+  drop you could not do as not checked.
+- `/Users/Shared/Atlas/Open` holds the copies `open` makes and is read-only
+  for the helper: save or create files in the helper's home instead.
 - Native Save/Open panels work only while an authenticated Screen Sharing
   session is connected to the helper (`doctor` → `capabilities.nativeDialogs`).
   Without it, clicks in a panel report `ok` but do nothing; `atlas key escape`

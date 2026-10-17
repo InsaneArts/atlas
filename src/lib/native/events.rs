@@ -17,12 +17,23 @@ use objc2_core_graphics::{
     CGEvent, CGEventField, CGEventFlags, CGEventSource, CGEventSourceStateID, CGEventTapLocation,
     CGEventType, CGMouseButton, CGScrollEventUnit,
 };
-use std::{path::PathBuf, time::Duration};
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// The only place events go: the helper login's own session event tap, never
 /// the global HID tap.
 const TAP: CGEventTapLocation = CGEventTapLocation::SessionEventTap;
+
+/// How long a confirmed permission to post events holds before macOS is
+/// asked again. The question is a round trip to the consent service of a
+/// few milliseconds, which asked for every event cost about half of a
+/// keystroke's time (typing ran at some 70 characters a second, now 150);
+/// consent changes by the person's hand in System Settings, never within
+/// a keystroke.
+const POST_ACCESS_TTL: Duration = Duration::from_millis(250);
 
 fn created(event: Option<CFRetained<CGEvent>>) -> Result<CFRetained<CGEvent>> {
     event.ok_or_else(|| Error::new("native", "Could not create a native event"))
@@ -59,6 +70,9 @@ pub struct Engine {
     mouse_number: i64,
     drag_started: bool,
     flags: u64,
+    /// When macOS last confirmed that this process may post events; none
+    /// until it has, or after it said no.
+    post_access: Option<Instant>,
 }
 
 impl Engine {
@@ -66,7 +80,7 @@ impl Engine {
         let source = CGEventSource::new(CGEventSourceStateID::Private)
             .map(Source)
             .ok_or_else(|| Error::new("native", "Could not create the event source"))?;
-        let engine = Self {
+        let mut engine = Self {
             epoch: InputEpoch::from_proof(&session_info()?, std::process::id())?,
             grant: None,
             journal: None,
@@ -80,6 +94,7 @@ impl Engine {
             mouse_number: 0,
             drag_started: false,
             flags: 0,
+            post_access: None,
         };
         if engine.epoch.uid != uid {
             return Err(Error::new(
@@ -96,7 +111,7 @@ impl Engine {
         accessibility_trusted()
     }
 
-    pub fn check(&self) -> Result<()> {
+    pub fn check(&mut self) -> Result<()> {
         let current = InputEpoch::from_proof(&session_info()?, std::process::id())?;
         if current != self.epoch {
             return Err(Error::new(
@@ -111,11 +126,19 @@ impl Engine {
             ));
         }
         // Without it macOS drops posted events silently: refuse instead.
-        if !objc2_core_graphics::CGPreflightPostEventAccess() {
-            return Err(Error::new(
-                "permission",
-                "The input process may not post events (Accessibility)",
-            ));
+        // The answer is trusted for a moment (see `POST_ACCESS_TTL`).
+        let confirmed = self
+            .post_access
+            .is_some_and(|at| at.elapsed() < POST_ACCESS_TTL);
+        if !confirmed {
+            if !objc2_core_graphics::CGPreflightPostEventAccess() {
+                self.post_access = None;
+                return Err(Error::new(
+                    "permission",
+                    "The input process may not post events (Accessibility)",
+                ));
+            }
+            self.post_access = Some(Instant::now());
         }
         Ok(())
     }
@@ -180,8 +203,8 @@ impl Engine {
         self.flags |= flags;
         self.journal_dirty = true;
         self.persist(point, self.flags)?;
-        let _authorization = self.grant.as_ref().map(Grant::authorize).transpose()?;
         self.check()?;
+        let _authorization = self.grant.as_ref().map(Grant::authorize).transpose()?;
         CGEvent::set_flags(Some(&event), CGEventFlags(flags));
         CGEvent::post(TAP, Some(&event));
         self.posted += 1;

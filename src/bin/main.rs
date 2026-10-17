@@ -385,10 +385,13 @@ enum Command {
 
     /// Run a command in the helper and print its output.
     ///
-    /// It is stopped after --timeout seconds (20 unless given, at most 600).
-    /// Start anything longer in the background and read its log later.
-    /// Atlas exits 1 when the command's exit code is not 0 or it was
-    /// stopped, with the reply still ok.
+    /// The command starts in the helper's home and finds programs where
+    /// readiness looks for them: the helper's .local/bin and .cargo/bin,
+    /// Homebrew, /usr/local/bin and the system folders. It is stopped after
+    /// --timeout seconds (20 unless given, at most 600). Start anything
+    /// longer in the background and read its log later. Atlas exits 1 when
+    /// the command's exit code is not 0 or it was stopped, with the reply
+    /// still ok.
     Run {
         /// Seconds before the command is stopped, 1 to 600.
         #[arg(long, value_name = "SECONDS", default_value_t = atlas::client::RUN_TIMEOUT.as_secs(), value_parser = run_seconds)]

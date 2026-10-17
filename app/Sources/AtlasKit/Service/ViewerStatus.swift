@@ -43,6 +43,7 @@ public struct ViewerStatus: Decodable, Equatable, Sendable {
 
         enum CodingKeys: String, CodingKey { case user, inputService }
         struct User: Decodable { var name: String? }
+
         struct Input: Decodable {
             var ready: Bool?
             var ok: Bool?
@@ -71,6 +72,7 @@ public struct ViewerStatus: Decodable, Equatable, Sendable {
             public init() {}
 
             enum CodingKeys: String, CodingKey { case state, reason, ageSeconds, checks }
+
             struct Stage: Decodable {
                 var stage: String?
                 var passed: Bool?
