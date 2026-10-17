@@ -4,24 +4,24 @@
 //
 //     swift app/Resources/AppIcon.swift
 //
-// The mark is Atlas's orbit, a graphite sphere with a ring passing in front
-// of it. macOS 26 and later shape and light the icon themselves, from the
-// mark alone on the paper fill AppIcon.icon/icon.json names; an icon that
-// brings its own tile is shrunk inside a second one there. Earlier macOS
-// shows AppIcon.icns: the mark on a white tile on the rounded-square grid
-// (an 824-point tile with a soft shadow in a 1024-point canvas). The account
-// picture is the same mark filling the canvas, which macOS shows in a
-// circle. The menu bar glyph in StatusImage.swift draws the same shape:
-// change them together.
+// The mark is Atlas's orbit, a flat black planet with a ring tilted across
+// it: one ink, no shading. The ring's front half passes over the sphere,
+// which is cut clear on either side of it; the ring itself is whole. The
+// mark spans 73.5% of the tile's width. macOS 26 and later shape and light
+// the icon themselves, from the mark alone on the plain white fill
+// AppIcon.icon/icon.json names; an icon that brings its own tile is shrunk
+// inside a second one there. Earlier macOS shows AppIcon.icns: the mark on
+// a white tile on the rounded-square grid (an 824-point tile with a soft
+// shadow in a 1024-point canvas). The account picture is the same mark on
+// white filling the canvas, which macOS shows in a circle. The menu bar
+// glyph (StatusImage.swift), the header mark (OrbitMark.swift), the plugin
+// logo (agents/atlas/assets/atlas.svg) and the README banner
+// (scripts/banner.mjs) draw the same shape: change them together.
 import AppKit
 
-func hex(_ value: UInt32) -> NSColor {
-    NSColor(
-        srgbRed: CGFloat((value >> 16) & 0xff) / 255, green: CGFloat((value >> 8) & 0xff) / 255,
-        blue: CGFloat(value & 0xff) / 255, alpha: 1)
-}
+let canvas = NSRect(x: 0, y: 0, width: 1024, height: 1024)
 
-func drawIcon() {
+func drawIcon(pixel: CGFloat) {
     let tileRect = NSRect(x: 100, y: 100, width: 824, height: 824)
     let tile = NSBezierPath(roundedRect: tileRect, xRadius: 185, yRadius: 185)
     NSGraphicsContext.saveGraphicsState()
@@ -30,11 +30,11 @@ func drawIcon() {
     shadow.shadowOffset = NSSize(width: 0, height: -10)
     shadow.shadowBlurRadius = 24
     shadow.set()
-    NSColor.black.setFill()
+    NSColor.white.setFill()
     tile.fill()
     NSGraphicsContext.restoreGraphicsState()
 
-    drawOrbit(on: tile, paper: paper)
+    drawOrbit(width: 0.735 * tileRect.width, pixel: pixel)
 
     let rim = NSBezierPath(
         roundedRect: tileRect.insetBy(dx: 1, dy: 1), xRadius: 184, yRadius: 184)
@@ -43,93 +43,69 @@ func drawIcon() {
     rim.stroke()
 }
 
-let canvas = NSBezierPath(rect: NSRect(x: 0, y: 0, width: 1024, height: 1024))
-let paper = NSGradient(starting: hex(0xFFFFFF), ending: hex(0xE1E4E9))!
-
-/// The account picture: the mark on paper filling the whole canvas.
-func drawPicture() {
-    drawOrbit(on: canvas, paper: paper)
+/// The account picture: the mark on white filling the whole canvas.
+func drawPicture(pixel: CGFloat) {
+    NSColor.white.setFill()
+    canvas.fill()
+    drawOrbit(width: 0.735 * canvas.width, pixel: pixel)
 }
 
-/// The Icon Composer layer: the mark alone, clear where the paper would be,
-/// so the icon's own fill shows through its gap.
-func drawMark() {
-    drawOrbit(on: canvas, paper: nil)
+/// The Icon Composer layer: the mark alone, clear around it and in its gap
+/// so the icon's own fill shows through. The canvas is the whole tile there.
+func drawMark(pixel: CGFloat) {
+    drawOrbit(width: 0.735 * canvas.width, pixel: pixel)
 }
 
-/// The orbit clipped to `surface`, on `paper` or on nothing.
-func drawOrbit(on surface: NSBezierPath, paper: NSGradient?) {
-    NSGraphicsContext.saveGraphicsState()
-    surface.addClip()
-    paper?.draw(in: surface, angle: -90)
+/// The orbit in black, `width` points wide (the ring's outer reach) and
+/// centred in the canvas, from its 64-unit drawing (y grows downward): a
+/// sphere of radius 14.6 and a ring of 25.6 by 6.9 tilted 20 degrees, right
+/// side up, drawn 2.6 units wide but never under 1.2 pixels of `pixel`
+/// points. The gap is 2.2 lines wide, along the ring's front half.
+func drawOrbit(width: CGFloat, pixel: CGFloat) {
+    let scale = width / 50.8
+    let line = max(2.6 * scale, 1.2 * pixel)
+    // Upright coordinates: flip the drawing's downward y.
+    var place = CGAffineTransform(translationX: canvas.midX, y: canvas.midY).scaledBy(x: scale, y: -scale)
+    let sphere = CGPath(ellipseIn: CGRect(x: -14.6, y: -14.6, width: 29.2, height: 29.2), transform: &place)
+    var tilt = place.rotated(by: -20 * .pi / 180).scaledBy(x: 25.6, y: 6.9)
+    let ring = CGPath(ellipseIn: CGRect(x: -1, y: -1, width: 2, height: 2), transform: &tilt)
+    // The lower half on screen, which passes in front of the sphere.
+    let front = CGMutablePath()
+    front.addArc(center: .zero, radius: 1, startAngle: 0, endAngle: .pi, clockwise: false, transform: tilt)
 
-    // Upright coordinates. The ring rises to the right; its front half is
-    // the lower one.
-    let center = NSPoint(x: 512, y: 504)
-    func ring(from start: CGFloat, to end: CGFloat) -> NSBezierPath {
-        let path = NSBezierPath()
-        path.appendArc(
-            withCenter: .zero, radius: 1, startAngle: start, endAngle: end, clockwise: false)
-        var tilt = AffineTransform(translationByX: center.x, byY: center.y)
-        tilt.rotate(byDegrees: 20)
-        tilt.scale(x: 372, y: 112)
-        path.transform(using: tilt)
-        return path
-    }
-    func stroke(_ path: NSBezierPath, width: CGFloat) -> CGPath {
-        path.cgPath.copy(strokingWithWidth: width, lineCap: .butt, lineJoin: .miter, miterLimit: 10)
-    }
-    let ink = NSGradient(colors: [hex(0x1C1C1E), hex(0x48484C), hex(0x1C1C1E)])!
     let context = NSGraphicsContext.current!.cgContext
-
-    // The back of the ring, then the sphere over it.
-    hex(0x1C1C1E).withAlphaComponent(0.9).setFill()
-    NSBezierPath(cgPath: stroke(ring(from: 0, to: 360), width: 30)).fill()
-    let sphere = NSBezierPath(
-        ovalIn: NSRect(x: center.x - 212, y: center.y - 212, width: 424, height: 424))
-    let light = NSPoint(x: 444, y: 597)
-    NSGraphicsContext.saveGraphicsState()
-    sphere.addClip()
-    NSGradient(
-        colors: [hex(0x8E8E94), hex(0x3A3A3E), hex(0x0F0F11)], atLocations: [0, 0.42, 1],
-        colorSpace: .sRGB)!
-        .draw(
-            fromCenter: light, radius: 0, toCenter: light, radius: 382,
-            options: .drawsAfterEndingLocation)
-    NSGraphicsContext.restoreGraphicsState()
-
-    // The paper shows through a gap where the ring's front crosses the sphere.
-    NSGraphicsContext.saveGraphicsState()
-    NSBezierPath(
-        ovalIn: NSRect(x: center.x - 232, y: center.y - 232, width: 464, height: 464)
-    ).addClip()
-    context.addPath(stroke(ring(from: 180, to: 360), width: 64))
-    context.clip()
-    if let paper {
-        paper.draw(in: surface, angle: -90)
-    } else {
-        context.clear(surface.bounds)
-    }
-    NSGraphicsContext.restoreGraphicsState()
-
-    // The front of the ring.
-    NSGraphicsContext.saveGraphicsState()
-    context.addPath(stroke(ring(from: 180, to: 360), width: 30))
-    context.clip()
-    ink.draw(in: NSRect(x: 130, y: 300, width: 764, height: 420), angle: 0)
-    NSGraphicsContext.restoreGraphicsState()
-    NSGraphicsContext.restoreGraphicsState()
+    context.saveGState()
+    context.setFillColor(.black)
+    context.setStrokeColor(.black)
+    context.setLineWidth(line)
+    context.addPath(ring)
+    context.strokePath()
+    // The sphere in a layer of its own, so the gap clears only it and the
+    // back of the ring stays hidden behind it.
+    context.saveGState()
+    context.beginTransparencyLayer(auxiliaryInfo: nil)
+    context.addPath(sphere)
+    context.fillPath()
+    context.setBlendMode(.clear)
+    context.setLineWidth(2.2 * line)
+    context.addPath(front)
+    context.strokePath()
+    context.endTransparencyLayer()
+    context.restoreGState()
+    context.addPath(front)
+    context.strokePath()
+    context.restoreGState()
 }
 
-func png(pixels: Int, draw: () -> Void = drawIcon) -> Data {
+func png(pixels: Int, draw: (CGFloat) -> Void = drawIcon) -> Data {
     let rep = NSBitmapImageRep(
         bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels, bitsPerSample: 8,
         samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
         bytesPerRow: 0, bitsPerPixel: 0)!
-    rep.size = NSSize(width: 1024, height: 1024)
+    rep.size = canvas.size
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-    draw()
+    draw(canvas.width / CGFloat(pixels))
     NSGraphicsContext.current?.flushGraphics()
     NSGraphicsContext.restoreGraphicsState()
     return rep.representation(using: .png, properties: [:])!

@@ -2,52 +2,31 @@ import SwiftUI
 
 /// Atlas's orbit at any size, for headers: the same shape as the menu
 /// bar glyph, drawn as vectors, in the colour of the text around it.
+/// `size` is the width of its box, which keeps the drawing's 54 by 32 crop.
 struct OrbitMark: View {
     var size: CGFloat = 22
+    @Environment(\.displayScale) private var displayScale
 
     var body: some View {
         Canvas { context, canvas in
-            let scale = canvas.width / 18
-            let center = CGPoint(x: 9 * scale, y: 8 * scale)
-            let line = max(1.3, 1.25 * scale)
-            let tilt = CGAffineTransform(translationX: center.x, y: center.y)
-                .rotated(by: -20 * .pi / 180)
-                .scaledBy(x: 8.2 * scale, y: 2.5 * scale)
-            /// Part of the ring, by angle; 0 to 180 degrees is the half in front.
-            func ring(_ start: Double, _ end: Double) -> Path {
-                var path = Path()
-                let steps = 96
-                for step in 0...steps {
-                    let angle = (start + (end - start) * Double(step) / Double(steps)) * .pi / 180
-                    let point = CGPoint(x: cos(angle), y: sin(angle)).applying(tilt)
-                    if step == 0 { path.move(to: point) } else { path.addLine(to: point) }
+            let orbit = Orbit(
+                center: CGPoint(x: canvas.width / 2, y: canvas.height / 2), width: canvas.width * 50.8 / 54,
+                pixel: 1 / displayScale)
+            // Drawn opaque as a mask, then filled once, so overlapping
+            // strokes never darken in a translucent colour. The sphere has a
+            // layer of its own, so the gap clears only it.
+            context.clipToLayer { mask in
+                mask.stroke(Path(orbit.ring), with: .color(.black), lineWidth: orbit.line)
+                mask.drawLayer { sphere in
+                    sphere.fill(Path(orbit.sphere), with: .color(.black))
+                    sphere.blendMode = .destinationOut
+                    sphere.stroke(Path(orbit.front), with: .color(.black), lineWidth: orbit.gap)
                 }
-                return path
+                mask.stroke(Path(orbit.front), with: .color(.black), lineWidth: orbit.line)
             }
-            let radius = 4.6 * scale
-            let sphere = Path(
-                ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: 2 * radius, height: 2 * radius))
-            // One layer, so overlapping strokes never darken and the gap
-            // where the ring passes in front can be cleared.
-            context.drawLayer { layer in
-                layer.stroke(ring(0, 360), with: .foreground, style: StrokeStyle(lineWidth: line))
-                layer.fill(sphere, with: .foreground)
-                layer.blendMode = .destinationOut
-                layer.stroke(ring(40, 140), with: .foreground, style: StrokeStyle(lineWidth: line + 1.3 * scale))
-                layer.blendMode = .normal
-                // The sphere again below the ring, so the gap shows only above it.
-                layer.drawLayer { below in
-                    below.clip(to: sphere)
-                    var lower = ring(0, 180)
-                    lower.addLine(to: CGPoint(x: -1, y: 10).applying(tilt))
-                    lower.addLine(to: CGPoint(x: 1, y: 10).applying(tilt))
-                    lower.closeSubpath()
-                    below.fill(lower, with: .foreground)
-                }
-                layer.stroke(ring(0, 180), with: .foreground, style: StrokeStyle(lineWidth: line))
-            }
+            context.fill(Path(CGRect(origin: .zero, size: canvas)), with: .foreground)
         }
-        .frame(width: size, height: size * 16 / 18)
+        .frame(width: size, height: size * 32 / 54)
         .accessibilityHidden(true)
     }
 }
