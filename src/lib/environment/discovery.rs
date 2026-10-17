@@ -71,15 +71,21 @@ fn selection(
         ));
     }
 
-    if let Some(name) = tools.iter().find(|name| !component(name)) {
+    if let Some((name, problem)) = tools
+        .iter()
+        .find_map(|name| Some((name, name_problem(name)?)))
+    {
         return refuse(format!(
-            "A tool is a bare command name such as cat, not a path: {name}"
+            "A tool is named by its bare command name such as cat; this one {problem}: {name:?}"
         ));
     }
 
-    if let Some(name) = apps.iter().find(|name| !component(name)) {
+    if let Some((name, problem)) = apps
+        .iter()
+        .find_map(|name| Some((name, name_problem(name)?)))
+    {
         return refuse(format!(
-            "An app is its name such as Safari, not a path: {name}"
+            "An app is named by its name such as Safari; this one {problem}: {name:?}"
         ));
     }
 
@@ -103,6 +109,21 @@ fn selection(
     }
 
     Ok(())
+}
+
+/// What is wrong with a tool or app name, if anything.
+fn name_problem(name: &str) -> Option<&'static str> {
+    if name.is_empty() {
+        Some("is empty")
+    } else if name.len() > 128 {
+        Some("is longer than 128 bytes")
+    } else if name.chars().any(char::is_control) {
+        Some("contains a control character")
+    } else if !component(name) {
+        Some("is a path")
+    } else {
+        None
+    }
 }
 
 fn component(name: &str) -> bool {
@@ -199,9 +220,10 @@ pub async fn discover(
     selection(tools, apps, environment, references)?;
     let status = client.status().await;
     let session = require_hidden(&status, client.config.helper_uid)?;
-    let helper_home = PathBuf::from(status["user"]["home"].as_str().ok_or_else(invalid)?);
+    let home_unknown = || Error::new("identity", "The helper home is unknown; run atlas doctor");
+    let helper_home = PathBuf::from(status["user"]["home"].as_str().ok_or_else(home_unknown)?);
     if !helper_home.is_absolute() {
-        return Err(invalid());
+        return Err(home_unknown());
     }
     let home = crate::config::home()?;
     let mut host_bins = std::env::var_os("PATH")
@@ -386,11 +408,19 @@ mod tests {
         );
         assert_eq!(
             said(&["/bin/sh"], &[], &[], &[]),
-            "A tool is a bare command name such as cat, not a path: /bin/sh"
+            "A tool is named by its bare command name such as cat; this one is a path: \"/bin/sh\""
+        );
+        assert_eq!(
+            said(&[""], &[], &[], &[]),
+            "A tool is named by its bare command name such as cat; this one is empty: \"\""
+        );
+        assert_eq!(
+            said(&["sh"], &["Sa\nfari"], &[], &[]),
+            "An app is named by its name such as Safari; this one contains a control character: \"Sa\\nfari\""
         );
         assert_eq!(
             said(&["sh"], &["/Applications/Safari.app"], &[], &[]),
-            "An app is its name such as Safari, not a path: /Applications/Safari.app"
+            "An app is named by its name such as Safari; this one is a path: \"/Applications/Safari.app\""
         );
         assert_eq!(
             said(&[], &[], &["1PATH"], &[]),

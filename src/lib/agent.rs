@@ -846,11 +846,10 @@ pub enum Target {
     Pid(i64),
 }
 
-fn app_pid(windows: &[Window], target: &Target) -> Result<i64> {
-    let name = match target {
-        Target::Pid(pid) => return Ok(*pid),
-        Target::Name(name) => name,
-    };
+/// The processes named `name` that have windows on screen, by the kind of
+/// window: ordinary ones first, then floating panels and alerts, then open
+/// menus. An app showing only one of those is found by it.
+fn app_pids(windows: &[Window], name: &str) -> Vec<i64> {
     let candidates: Vec<&Window> = windows
         .iter()
         .filter(|window| {
@@ -861,8 +860,6 @@ fn app_pid(windows: &[Window], target: &Target) -> Result<i64> {
                     .is_some_and(|owner| same_text(owner, name))
         })
         .collect();
-    // Its ordinary windows first, then floating panels and alerts, then open
-    // menus: an app showing only one of those is found by it.
     let tiers: [&dyn Fn(&Window) -> bool; 3] = [
         &|window| window.layer == 0,
         &|window| window.layer != MENU_LAYER,
@@ -881,7 +878,12 @@ fn app_pid(windows: &[Window], target: &Target) -> Result<i64> {
         .unwrap_or_default();
     pids.sort_unstable();
     pids.dedup();
-    match pids.as_slice() {
+    pids
+}
+
+/// The one process among `pids` a command about `name` is for.
+fn one_pid(name: &str, pids: &[i64]) -> Result<i64> {
+    match pids {
         [pid] => Ok(*pid),
         [] => Err(Error::new(
             "elements",
@@ -896,25 +898,46 @@ fn app_pid(windows: &[Window], target: &Target) -> Result<i64> {
 
 /// The process a command is about: the one with the app's windows, or,
 /// when none of its windows is open, the active app of that name (its
-/// menu bar is still on screen).
+/// menu bar is still on screen). Several apps of the name with windows
+/// stay ambiguous.
 async fn target_pid(client: &Client, target: &Target) -> Result<i64> {
-    let error = match app_pid(&windows(client).await?, target) {
-        Ok(pid) => return Ok(pid),
-        Err(error) => error,
+    let name = match target {
+        Target::Pid(pid) => return Ok(*pid),
+        Target::Name(name) => name,
     };
-    let Target::Name(name) = target else {
-        return Err(error);
-    };
+    let pids = app_pids(&windows(client).await?, name);
+    if !pids.is_empty() {
+        return one_pid(name, &pids);
+    }
+
     let apps = client.apps().await?;
     apps["apps"]
         .as_array()
         .into_iter()
         .flatten()
-        .find(|app| {
-            app["active"] == true && app["name"].as_str().is_some_and(|own| same_text(own, name))
-        })
+        .find(|app| app["active"] == true && app_named(app, name))
         .and_then(|app| app["pid"].as_i64())
-        .ok_or(error)
+        .ok_or_else(|| one_pid(name, &[]).unwrap_err())
+}
+
+/// Whether an `apps` row is the app called `name`: by the name it shows,
+/// which may be localized, or by its bundle's or executable's file name.
+fn app_named(app: &Value, name: &str) -> bool {
+    let shown = app["name"].as_str().is_some_and(|own| same_text(own, name));
+    let file_names = app["executable"]
+        .as_str()
+        .map(std::path::Path::new)
+        .into_iter()
+        .flat_map(|path| {
+            path.ancestors()
+                .enumerate()
+                .filter(|(depth, ancestor)| {
+                    *depth == 0 || ancestor.extension().is_some_and(|ext| ext == "app")
+                })
+                .filter_map(|(_, ancestor)| ancestor.file_stem())
+        })
+        .filter_map(|stem| stem.to_str());
+    shown || file_names.into_iter().any(|own| same_text(own, name))
 }
 
 async fn app_elements(client: &Client, pid: i64) -> Result<(Vec<Element>, bool)> {
@@ -1168,6 +1191,30 @@ pub async fn click_element(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The process a name resolves to from the window list alone.
+    fn app_pid(windows: &[Window], target: &Target) -> Result<i64> {
+        match target {
+            Target::Pid(pid) => Ok(*pid),
+            Target::Name(name) => one_pid(name, &app_pids(windows, name)),
+        }
+    }
+
+    /// An `apps` row is found by its shown name or its bundle's file name.
+    #[test]
+    fn an_app_row_is_named_by_its_shown_or_file_name() {
+        let row = json!({
+            "name": "Éditeur de texte",
+            "executable": "/System/Applications/TextEdit.app/Contents/MacOS/TextEdit",
+        });
+        assert!(app_named(&row, "éditeur de texte"));
+        assert!(app_named(&row, "TextEdit"));
+        assert!(
+            !app_named(&row, "Contents"),
+            "a folder on the way is not a name"
+        );
+        assert!(!app_named(&json!({"name": "Finder"}), "TextEdit"));
+    }
     use crate::session::Display;
 
     fn display() -> Display {

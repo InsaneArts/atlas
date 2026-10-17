@@ -199,17 +199,15 @@ pub fn run_output(reply: &Value, limit: usize) -> std::result::Result<Vec<u8>, O
 /// The most output `with_output` keeps as text.
 pub const OUTPUT_LIMIT: usize = 1 << 20;
 
-/// The first `limit` bytes of a reply's output, read event by event until
-/// one does not decode.
-fn output_prefix(reply: &Value, limit: usize) -> Vec<u8> {
+/// The first `limit` bytes of a reply's output, read event by event; None
+/// when an event before the limit does not decode.
+fn output_prefix(reply: &Value, limit: usize) -> Option<Vec<u8>> {
     let mut output = Vec::new();
     for event in reply["events"].as_array().into_iter().flatten() {
         if event["event"] != "output" {
             continue;
         }
-        let Some(decoded) = event["data"].as_str().and_then(|d| STANDARD.decode(d).ok()) else {
-            break;
-        };
+        let decoded = STANDARD.decode(event["data"].as_str()?).ok()?;
         let room = limit.saturating_sub(output.len());
         output.extend_from_slice(&decoded[..decoded.len().min(room)]);
         if output.len() >= limit {
@@ -217,7 +215,7 @@ fn output_prefix(reply: &Value, limit: usize) -> Vec<u8> {
         }
     }
 
-    output
+    Some(output)
 }
 
 /// A helper `run` reply with its output decoded into an `output` string
@@ -228,7 +226,10 @@ fn output_prefix(reply: &Value, limit: usize) -> Vec<u8> {
 pub fn with_output(mut reply: Value) -> Value {
     let (output, cut) = match run_output(&reply, OUTPUT_LIMIT) {
         Ok(output) => (output, false),
-        Err(OutputError::Oversized) => (output_prefix(&reply, OUTPUT_LIMIT), true),
+        Err(OutputError::Oversized) => match output_prefix(&reply, OUTPUT_LIMIT) {
+            Some(prefix) => (prefix, true),
+            None => return reply,
+        },
         Err(OutputError::Malformed) => return reply,
     };
     let pid = reply["events"]

@@ -113,7 +113,7 @@ screenshot pixels by multiplying by `pointsPerPixel`.
   is in front.
 - Otherwise `atlas click X Y [--button right] [--count 2] [--modifiers cmd]`.
 - `atlas type "text"` (or `--stdin` for long text), `atlas key cmd+s`
-  (`key escape return` presses several; `cmd++` is Command and plus),
+  (`key escape return` presses several; `+` alone or `cmd++` is the plus key),
   `atlas drag FX FY TX TY`, `atlas scroll X Y --dy -3` (at most 100 lines a
   call). `atlas input` sends up to 32 actions that finish within two seconds.
 - `atlas open --app NAME [FILE|URL]`, then `atlas wait --app NAME`, which

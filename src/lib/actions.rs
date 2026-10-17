@@ -207,13 +207,18 @@ pub(crate) fn parse_key(value: &str) -> Option<(u16, u64)> {
         return None;
     }
     let lower = value.to_lowercase();
-    // "cmd++" is the plus key: shift and the = key. A chord ending in a bare
-    // "+" ("cmd+") names no key at all.
+    // "+" and "cmd++" are the plus key: shift and the = key. A chord ending
+    // in a bare "+" ("cmd+") names no key at all.
+    let bare_plus = lower == "+";
     let (chord, plus) = match lower.strip_suffix("++") {
         Some(rest) => (rest, true),
-        None => (lower.as_str(), false),
+        None => (lower.as_str(), bare_plus),
     };
-    let mut parts: Vec<_> = chord.split('+').collect();
+    let mut parts: Vec<_> = if bare_plus {
+        Vec::new()
+    } else {
+        chord.split('+').collect()
+    };
     let key = if plus {
         "="
     } else {
@@ -243,6 +248,8 @@ pub(crate) const DRAG_STEP: Duration = Duration::from_millis(16);
 pub(crate) const DRAG_START: Duration = Duration::from_millis(10);
 /// The pause after each typed character.
 pub(crate) const TYPE_GAP: Duration = Duration::from_millis(2);
+/// The pause between moving the pointer to a point and scrolling there.
+pub(crate) const SCROLL_SETTLE: Duration = Duration::from_millis(50);
 
 /// The batch budget and each action's share of it, in milliseconds. Each
 /// share covers the engine's pauses for that action plus posting time.
@@ -253,7 +260,8 @@ const CLICK_MS: u32 = 70;
 /// [`DRAG_HOLD`], [`DRAG_START`] and [`DRAG_STEPS`] × [`DRAG_STEP`], and
 /// their events.
 const DRAG_MS: u32 = 650;
-const SCROLL_MS: u32 = 10;
+/// [`SCROLL_SETTLE`] and its events.
+const SCROLL_MS: u32 = 60;
 /// Per character: [`TYPE_GAP`] and its events.
 const TYPE_MS: u32 = 3;
 const KEY_MS: u32 = 10;
@@ -271,9 +279,15 @@ pub fn validate(value: &Value, display: &Display) -> Result<()> {
             && x < display.width
             && y < display.height
     };
+
+    const OFF_DISPLAY: &str = "its point is off the display";
+    const CLICKS: &str = "a click is 1 to 5 clicks";
+    const MODIFIERS: &str = "a modifier is one of cmd, ctrl, alt, shift and fn";
     let mut cost: u32 = 0;
     for (index, action) in actions.into_iter().enumerate() {
-        let (valid, duration) = match action {
+        // What is wrong with the action, if anything, and its share of the
+        // batch budget.
+        let (problem, duration) = match action {
             Action::Pointer {
                 x,
                 y,
@@ -281,10 +295,13 @@ pub fn validate(value: &Value, display: &Display) -> Result<()> {
                 modifiers,
                 ..
             } => (
-                point(x, y) && (1..=5).contains(&count) && modifiers_valid(&modifiers),
+                (!point(x, y))
+                    .then_some(OFF_DISPLAY)
+                    .or((!(1..=5).contains(&count)).then_some(CLICKS))
+                    .or((!modifiers_valid(&modifiers)).then_some(MODIFIERS)),
                 POINTER_MS,
             ),
-            Action::Move { x, y } => (point(x, y), 0),
+            Action::Move { x, y } => ((!point(x, y)).then_some(OFF_DISPLAY), 0),
             Action::Click {
                 x,
                 y,
@@ -292,7 +309,10 @@ pub fn validate(value: &Value, display: &Display) -> Result<()> {
                 modifiers,
                 ..
             } => (
-                point(x, y) && (1..=5).contains(&count) && modifiers_valid(&modifiers),
+                (!point(x, y))
+                    .then_some(OFF_DISPLAY)
+                    .or((!(1..=5).contains(&count)).then_some(CLICKS))
+                    .or((!modifiers_valid(&modifiers)).then_some(MODIFIERS)),
                 u32::from(count) * CLICK_MS,
             ),
             Action::Drag {
@@ -301,33 +321,38 @@ pub fn validate(value: &Value, display: &Display) -> Result<()> {
                 to_x,
                 to_y,
                 ..
-            } => (point(from_x, from_y) && point(to_x, to_y), DRAG_MS),
+            } => (
+                (!(point(from_x, from_y) && point(to_x, to_y))).then_some(OFF_DISPLAY),
+                DRAG_MS,
+            ),
             Action::Scroll { x, y, dx, dy } => (
-                point(x, y) && (-100..=100).contains(&dx) && (-100..=100).contains(&dy),
+                (!point(x, y))
+                    .then_some(OFF_DISPLAY)
+                    .or(
+                        (!((-100..=100).contains(&dx) && (-100..=100).contains(&dy)))
+                            .then_some("a scroll is at most 100 lines each way"),
+                    ),
                 SCROLL_MS,
             ),
             Action::Type { text } => {
                 let characters = text.chars().count();
                 (
-                    (1..=256).contains(&characters),
+                    (!(1..=256).contains(&characters)).then_some("text is 1 to 256 characters"),
                     u32::try_from(characters)
                         .unwrap_or(u32::MAX)
                         .saturating_mul(TYPE_MS),
                 )
             }
-            Action::Key { key } => (valid_key(&key), KEY_MS),
-            Action::Wait { ms } => (ms <= 250, ms),
+            Action::Key { key } => (
+                (!valid_key(&key)).then_some("the key is not a known name (see atlas key --help)"),
+                KEY_MS,
+            ),
+            Action::Wait { ms } => ((ms > 250).then_some("a wait is at most 250 ms"), ms),
         };
-        if !valid {
+        if let Some(problem) = problem {
             return Err(Error::new(
                 "input",
-                format!(
-                    "Action {} is out of range: points lie on the display, a click is 1 to 5 \
-                     clicks with modifiers among cmd, ctrl, alt, shift and fn, a key a known \
-                     name, a scroll at most 100 lines, text 1 to 256 characters, a wait at \
-                     most 250 ms",
-                    index + 1
-                ),
+                format!("Action {} is out of range: {problem}", index + 1),
             ));
         }
 
@@ -357,10 +382,12 @@ mod tests {
             "cmd++",
             "ctrl+alt+delete",
             "=",
+            "+",
         ] {
             assert!(valid_key(key), "{key}");
         }
-        for key in ["foo", "cmd+zz", "cmd+", "+", "cmd+bogus+s", "f13", ""] {
+        assert_eq!(parse_key("+"), parse_key("shift+="), "the plus key");
+        for key in ["foo", "cmd+zz", "cmd+", "++", "cmd+bogus+s", "f13", ""] {
             assert!(!valid_key(key), "{key}");
         }
     }
@@ -590,6 +617,11 @@ mod tests {
         let mut valid = 0;
         for chord in chords.iter().flat_map(|c| [c.clone(), c.to_uppercase()]) {
             let parsed = parse_key(&chord);
+            // The one deliberate difference: "+" on its own is the plus key.
+            if chord == "+" {
+                assert_eq!(parsed, before::engine("shift+="));
+                continue;
+            }
             assert_eq!(before::valid_key(&chord), parsed.is_some(), "{chord:?}");
             if parsed.is_some() {
                 valid += 1;
@@ -624,6 +656,48 @@ mod tests {
             {"type": "wait", "ms": 1},
             {"type": "wait", "ms": u32::MAX},
         ]);
-        assert!(validate(&batch, &display).is_err());
+        assert_eq!(
+            validate(&batch, &display).unwrap_err().error,
+            "Action 2 is out of range: a wait is at most 250 ms"
+        );
+    }
+
+    /// A refused action says which of its fields is wrong.
+    #[test]
+    fn a_refused_action_names_its_problem() {
+        let display = Display {
+            width: 100.0,
+            height: 100.0,
+            scale: 1.0,
+        };
+        let said = |action: serde_json::Value| {
+            validate(&serde_json::json!([action]), &display)
+                .unwrap_err()
+                .error
+        };
+        assert_eq!(
+            said(serde_json::json!({"type": "key", "key": "bogus"})),
+            "Action 1 is out of range: the key is not a known name (see atlas key --help)"
+        );
+        assert_eq!(
+            said(serde_json::json!({"type": "scroll", "x": 1, "y": 1, "dy": 200})),
+            "Action 1 is out of range: a scroll is at most 100 lines each way"
+        );
+        assert_eq!(
+            said(serde_json::json!({"type": "click", "x": 500, "y": 1})),
+            "Action 1 is out of range: its point is off the display"
+        );
+        assert_eq!(
+            said(serde_json::json!({"type": "click", "x": 1, "y": 1, "count": 9})),
+            "Action 1 is out of range: a click is 1 to 5 clicks"
+        );
+        assert_eq!(
+            said(serde_json::json!({"type": "click", "x": 1, "y": 1, "modifiers": ["hyper"]})),
+            "Action 1 is out of range: a modifier is one of cmd, ctrl, alt, shift and fn"
+        );
+        assert_eq!(
+            said(serde_json::json!({"type": "type", "text": ""})),
+            "Action 1 is out of range: text is 1 to 256 characters"
+        );
     }
 }
