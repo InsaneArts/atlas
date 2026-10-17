@@ -1491,13 +1491,15 @@ fn update(
     report["ok"] = finished["ok"].clone();
     report["helper"] = finished;
     if report["ok"] == true {
-        report["previous"] = atlas::update::finished()?;
-        // A running menu bar moves onto the new version too.
+        // A running menu bar moves onto the new version too. It stops before
+        // the previous app, the bundle it still runs from, is removed.
         let output = Config::load(config)
             .ok()
             .and_then(|loaded| Client::new(loaded).ok())
             .and_then(|client| client.output_dir().ok().map(std::path::Path::to_path_buf));
-        if let Some(port) = output.and_then(|output| atlas::menubar::stop(&output)) {
+        let port = output.and_then(|output| atlas::menubar::stop(&output));
+        report["previous"] = atlas::update::finished()?;
+        if let Some(port) = port {
             spinner.set("Restarting the menu bar…");
             let restarted = std::process::Command::new(&executable)
                 .arg("menubar")

@@ -6,6 +6,7 @@
 # Downloads the latest release, verifies its checksum and its Developer ID
 # signature, installs Atlas.app into /Applications (where the helper
 # account can run it too) and links the `atlas` command into ~/.local/bin.
+# An Atlas that is already set up updates itself instead, with atlas update.
 #
 # Releases are served from https://atlas.insanearts.io/releases/<version>/,
 # each a directory holding SHA256SUMS and the Atlas-<version>-macos.zip it
@@ -30,24 +31,49 @@ fail() {
 }
 
 [ "$(uname -s)" = Darwin ] || fail "Atlas runs on macOS only."
+[ "$(id -u)" -ne 0 ] || fail "run this as your own administrator account, not with sudo"
+
+# The helper account runs the app too, so it lives where every account can
+# reach it.
+target=/Applications
+dest="$target/Atlas.app"
+installed="$dest/Contents/MacOS/atlas"
+
+# An Atlas that is set up updates itself: it swaps the app atomically, moves
+# the helper, the menu bar and the agent plugins onto the new version, and
+# keeps the previous app until that has succeeded.
+if [ -x "$installed" ] && ls "$HOME/Library/Application Support/Atlas"/setup-*.json >/dev/null 2>&1; then
+	set -- update
+	[ -z "${ATLAS_VERSION:-}" ] || set -- "$@" --version "$ATLAS_VERSION"
+	[ "${ATLAS_ALLOW_UNNOTARIZED:-}" != 1 ] || set -- "$@" --allow-unnotarized
+	say "Atlas is installed and set up; updating it"
+	exec "$installed" "$@"
+fi
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/atlas-install.XXXXXX")
 trap 'rm -rf "$work"' EXIT INT TERM
 
-fetch() { # url output
-	curl -fsSL -o "$2" "$1"
-}
-
 base=${ATLAS_DOWNLOAD_BASE:-$SITE/releases/${ATLAS_VERSION:-latest}}
 base=${base%/}
-status=$(curl -sSL -o "$work/SHA256SUMS" -w '%{http_code}' "$base/SHA256SUMS" 2>/dev/null) || status=000
-case $status in
+# Over https (a local rehearsal may use http), following redirects only to
+# https, and never waiting forever.
+case $base in
+http://*) protocols='=http,https' ;;
+*) protocols='=https' ;;
+esac
+fetch() { # url output
+	curl -fsSL --proto "$protocols" --proto-redir =https --connect-timeout 30 --max-time 900 -o "$2" "$1"
+}
+
+code=$(curl -sSL --proto "$protocols" --proto-redir =https --connect-timeout 30 --max-time 900 \
+	-o "$work/SHA256SUMS" -w '%{http_code}' "$base/SHA256SUMS" 2>/dev/null) || code=000
+case $code in
 200) ;;
 404)
 	[ -n "${ATLAS_DOWNLOAD_BASE:-}${ATLAS_VERSION:-}" ] || fail "Atlas has no public release yet. Check $SITE for news."
 	fail "there is no release at $base"
 	;;
-*) fail "could not reach $base (HTTP $status)" ;;
+*) fail "could not reach $base (HTTP $code)" ;;
 esac
 name=$(awk 'NR == 1 { print $2 }' "$work/SHA256SUMS")
 case $name in
@@ -71,11 +97,7 @@ if ! spctl --assess --type execute "$app" 2>/dev/null; then
 	say "Note: this build is signed but not notarized."
 fi
 
-# The helper account runs the app too, so it lives where every account can
-# reach it.
-target=/Applications
 [ -w "$target" ] || fail "Atlas.app goes in /Applications; run this as an administrator"
-dest="$target/Atlas.app"
 # Stage beside the destination, then swap by rename: never copy over the
 # executable a running helper daemon may be using.
 staged="$target/.Atlas.app.$$"
@@ -92,17 +114,18 @@ fi
 
 bin="$HOME/.local/bin"
 mkdir -p "$bin"
-ln -sf "$dest/Contents/MacOS/atlas" "$bin/atlas"
+ln -sf "$installed" "$bin/atlas"
 
-version=$("$dest/Contents/MacOS/atlas" --version 2>/dev/null || true)
+version=$("$installed" --version 2>/dev/null || true)
 say "Installed ${version:-Atlas} at $dest"
 case ":$PATH:" in
 *":$bin:"*) ;;
 *) say "Add $bin to your PATH, for example: echo 'export PATH=\"$bin:\$PATH\"' >> ~/.zprofile" ;;
 esac
 if ls "$HOME/Library/Application Support/Atlas"/setup-*.json >/dev/null 2>&1; then
-	# The helper still runs the previous executable: restart the daemon, then
-	# the input service, then let setup verify the new build.
+	# Set up, but the app was gone: the helper still runs the previous
+	# executable. Restart the daemon, then the input service, then let setup
+	# verify the new build.
 	say "Next: atlas restart && atlas start-input && atlas setup --apply"
 elif [ -z "${SSH_CONNECTION:-}" ] && [ -z "${ATLAS_NO_OPEN:-}" ]; then
 	# The setup window walks the person through the rest.
