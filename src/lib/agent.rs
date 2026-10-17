@@ -621,7 +621,12 @@ exit 0"#;
         "removed": removed,
     });
     match closing {
-        Closing::App(app) => reply["app"] = json!(app),
+        Closing::App(app) => {
+            reply["app"] = json!(app);
+            if processes.is_empty() {
+                reply["reason"] = json!(format!("{app} is not running"));
+            }
+        }
         Closing::All => {
             reply["closed"] = json!(!names.is_empty());
             reply["apps"] = json!(names);

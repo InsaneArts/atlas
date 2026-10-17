@@ -230,7 +230,7 @@ pub async fn readiness(client: &Client, tools: &[String], apps: &[String]) -> Re
                 "kind": kind,
                 "name": name,
                 "status": "missing",
-                "detail": "Not present where the helper looks; provision it or install it system-wide",
+                "detail": "Not found where the helper looks; copy it in with atlas environment, or install it for every account",
             }),
             _ => json!({ "kind": kind, "name": name, "status": "unknown" }),
         };

@@ -208,11 +208,13 @@ final class DesktopCanvasView: NSView, @preconcurrency NSTextInputClient {
     }
 
     func hasMarkedText() -> Bool { marked.length > 0 }
+
     func markedRange() -> NSRange {
         hasMarkedText() ? NSRange(location: 0, length: marked.length) : NSRange(location: NSNotFound, length: 0)
     }
     func selectedRange() -> NSRange { markedSelection }
     func validAttributesForMarkedText() -> [NSAttributedString.Key] { [] }
+
     func attributedSubstring(forProposedRange range: NSRange, actualRange: NSRangePointer?) -> NSAttributedString? {
         nil
     }

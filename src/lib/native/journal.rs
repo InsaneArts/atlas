@@ -2,7 +2,7 @@
 //! release an interrupted press before accepting another controller.
 use crate::{
     actions::Button,
-    control::write_private,
+    control::{Durability, write_private_with},
     error::{Error, Result},
     session::InputEpoch,
 };
@@ -102,9 +102,12 @@ pub fn load(path: &Path, epoch: &InputEpoch) -> Result<Option<Held>> {
     Ok(Some(held))
 }
 
+/// Replace the journal in one step. It is written as far as the kernel: it
+/// is for a service that crashed, and a power cut releases every key by
+/// itself.
 pub fn store(path: &Path, held: &Held) -> Result<()> {
     let temporary = path.with_extension("pending");
-    write_private(&temporary, &serde_json::to_vec(held)?)?;
+    write_private_with(&temporary, &serde_json::to_vec(held)?, Durability::Kernel)?;
     fs::rename(temporary, path)?;
     Ok(())
 }
@@ -139,7 +142,12 @@ mod tests {
             "count": 2,
             "flags": 1 << 20,
         });
-        write_private(&path, &serde_json::to_vec(&legacy).unwrap()).unwrap();
+        write_private_with(
+            &path,
+            &serde_json::to_vec(&legacy).unwrap(),
+            Durability::Disk,
+        )
+        .unwrap();
         epoch.process_id = 2;
         let recovered = load(&path, &epoch).unwrap().unwrap();
         assert_eq!(recovered.mouse_number, 0);

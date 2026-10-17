@@ -10,6 +10,7 @@ func onboardingScreens() -> [(name: String, model: OnboardingModel, size: NSSize
         let data = (try? JSONSerialization.data(withJSONObject: reply)) ?? Data()
         return OnboardingFacts(json: data) ?? OnboardingFacts()
     }
+
     func controller(_ helper: [String: Any]?, finished: Bool = false) -> OnboardingFacts {
         var reply: [String: Any] = [
             "role": "controller", "me": ["name": "theiskaa", "realName": "Ismayil"],
@@ -20,6 +21,7 @@ func onboardingScreens() -> [(name: String, model: OnboardingModel, size: NSSize
         if let helper { reply["helper"] = helper }
         return facts(reply)
     }
+
     func helper(
         signedIn: Bool = true, answering: Bool = true, hidden: Bool = true, allowed: Bool = true
     ) -> [String: Any] {
@@ -30,6 +32,7 @@ func onboardingScreens() -> [(name: String, model: OnboardingModel, size: NSSize
             "permissions": ["screenCapture": allowed, "accessibility": allowed],
         ]
     }
+
     func asker(running: Bool, ax: Bool, screen: Bool) -> OnboardingFacts {
         facts([
             "role": "helper", "me": ["name": "atlas", "realName": "Atlas"],

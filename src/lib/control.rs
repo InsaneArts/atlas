@@ -28,7 +28,28 @@ pub fn token() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// How far a private file is written before the call returns.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Durability {
+    /// To the disk itself: the file outlives a power cut.
+    Disk,
+    /// To the kernel, ordered before whatever is written next: the file
+    /// outlives the process that wrote it, and a power cut leaves it whole
+    /// or absent, never half written. On macOS a write to the disk itself
+    /// takes milliseconds, too slow for a record kept up to date between
+    /// keystrokes.
+    Kernel,
+}
+
+/// Write `bytes` as a file only this account can read, all the way to the
+/// disk.
 pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_private_with(path, bytes, Durability::Disk)
+}
+
+/// Write `bytes` as a file only this account can read, as far as
+/// `durability` asks.
+pub fn write_private_with(path: &Path, bytes: &[u8], durability: Durability) -> Result<()> {
     // Emptied only once it is known to be ours.
     let mut file = OpenOptions::new()
         .create(true)
@@ -41,7 +62,13 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     own_private(&file, path)?;
     file.set_len(0)?;
     file.write_all(bytes)?;
-    file.sync_all()?;
+    match durability {
+        Durability::Disk => file.sync_all()?,
+        Durability::Kernel => {
+            nix::fcntl::fcntl(&file, nix::fcntl::FcntlArg::F_BARRIERFSYNC)
+                .map_err(std::io::Error::from)?;
+        }
+    }
     Ok(())
 }
 
@@ -217,7 +244,7 @@ impl Controller {
         FileExt::try_lock_exclusive(&lock).map_err(|_| {
             Error::new(
                 "busy",
-                "Another Atlas controller is active. Release it first.",
+                "Another Atlas controller is active: wait for it to finish, or release it in the viewer.",
             )
         })?;
         if !recovery {

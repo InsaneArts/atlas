@@ -104,6 +104,7 @@ public struct ActivityItem: Equatable, Sendable, Identifiable {
 /// One check in the viewer sidebar's Ready card.
 public struct StatusRow: Equatable, Sendable, Identifiable {
     public enum State: Sendable { case ready, unknown, bad }
+
     public let name: String
     public let state: State
     public let text: String

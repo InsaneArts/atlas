@@ -52,7 +52,21 @@ const FLUSH: usize = 64 * 1024;
 const HELD: usize = 1024 * 1024;
 /// How long the last output waits for a slow client.
 const FINISH: Duration = Duration::from_secs(2);
+/// The daemon's own PATH, for a daemon without a home.
 const PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
+/// The locale a command gets when the daemon has none: a daemon's child
+/// inherits launchd's bare environment, in which tools print every
+/// non-ASCII character as a question mark.
+const LANG: &str = "en_US.UTF-8";
+
+/// The PATH a command searches: the helper's, the same places readiness and
+/// `environment run` look in (`.local/bin` and Homebrew among them), or the
+/// daemon's own without a home.
+fn search_path(home: Option<&Path>) -> String {
+    home.and_then(|home| std::env::join_paths(crate::environment::helper_search_path(home)).ok())
+        .and_then(|path| path.into_string().ok())
+        .unwrap_or_else(|| PATH.to_owned())
+}
 
 /// The executable for `program`: as given when it contains a slash, else the
 /// first match on `PATH`.
@@ -248,7 +262,12 @@ pub async fn run(
     let Some(name) = argv.first() else {
         return failure("spawn-failed", "No command to run");
     };
-    let Some(program) = resolve(name, std::env::var("PATH").ok().as_deref()) else {
+    // The command runs in the helper's home, as a shell there would.
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|home| home.is_dir());
+    let path = search_path(home.as_deref());
+    let Some(program) = resolve(name, Some(&path)) else {
         let reason = if !name.contains('/') {
             "command not found on PATH"
         } else if Path::new(name).is_dir() {
@@ -270,11 +289,18 @@ pub async fn run(
         command
             .arg0(&argv[0])
             .args(&argv[1..])
+            .env("PATH", &path)
             .stdin(Stdio::null())
             .stdout(Stdio::from(OwnedFd::from(writer)))
             .stderr(Stdio::from(OwnedFd::from(errors)))
             .process_group(0)
             .kill_on_drop(false);
+        if std::env::var_os("LANG").is_none_or(|lang| lang.is_empty()) {
+            command.env("LANG", LANG);
+        }
+        if let Some(home) = &home {
+            command.current_dir(home);
+        }
         command.spawn()
     })();
     let mut child = match spawned {
@@ -388,6 +414,43 @@ mod tests {
     use super::*;
     use nix::sys::signal::kill;
     use tokio::sync::mpsc;
+
+    #[test]
+    fn commands_search_where_readiness_looks() {
+        let path = search_path(Some(Path::new("/Users/helper")));
+        assert!(
+            path.starts_with(
+                "/Users/helper/.local/bin:/Users/helper/.cargo/bin:/opt/homebrew/bin:"
+            ),
+            "{path}"
+        );
+        assert!(path.ends_with(":/usr/bin:/bin:/usr/sbin:/sbin"), "{path}");
+        assert_eq!(search_path(None), PATH, "a daemon without a home");
+    }
+
+    #[tokio::test]
+    async fn a_command_runs_at_home_in_a_utf8_locale() {
+        let (events, _) = execute(
+            &["/bin/sh", "-c", "pwd -P; echo \"$LANG\"; echo \"$PATH\""],
+            5000,
+        )
+        .await;
+        let output = output(&events);
+        let mut lines = output.lines();
+        let home = std::fs::canonicalize(std::env::var("HOME").unwrap()).unwrap();
+        assert_eq!(lines.next(), home.to_str());
+        let lang = std::env::var("LANG")
+            .ok()
+            .filter(|lang| !lang.is_empty())
+            .unwrap_or_else(|| LANG.to_owned());
+        assert_eq!(lines.next(), Some(lang.as_str()), "{output}");
+        assert!(
+            lines
+                .next()
+                .is_some_and(|path| path.contains("/.local/bin:")),
+            "{output}"
+        );
+    }
 
     async fn execute(argv: &[&str], timeout_ms: u64) -> (Vec<Value>, Value) {
         let argv: Vec<String> = argv.iter().map(|a| (*a).to_owned()).collect();

@@ -27,8 +27,10 @@ pub enum Request {
 }
 
 /// An error reply.
+/// A refusal in the shape every Atlas failure has, so a reader needs one
+/// parser. Nothing here is of unknown outcome: the request never ran.
 pub fn failure(code: &str, error: impl Into<String>) -> Value {
-    json!({"ok": false, "code": code, "error": error.into()})
+    json!({"ok": false, "code": code, "error": error.into(), "uncertain": false})
 }
 
 fn bad(error: impl Into<String>) -> Value {
@@ -145,15 +147,15 @@ mod tests {
     fn refusals_keep_their_wording() {
         assert_eq!(
             refused(r#"{"notAnOp":true}"#),
-            json!({"ok": false, "code": "bad-request", "error": "request is missing an \"op\" string"})
+            json!({"ok": false, "code": "bad-request", "error": "request is missing an \"op\" string", "uncertain": false})
         );
         assert_eq!(
             refused(r#"{"op":"nope"}"#),
-            json!({"ok": false, "code": "bad-request", "error": "unknown op 'nope'"})
+            json!({"ok": false, "code": "bad-request", "error": "unknown op 'nope'", "uncertain": false})
         );
         assert_eq!(
             refused(r#"{"op":"run","argv":[],"timeoutMs":3000}"#),
-            json!({"ok": false, "code": "bad-request", "error": "run requires a non-empty \"argv\" array"})
+            json!({"ok": false, "code": "bad-request", "error": "run requires a non-empty \"argv\" array", "uncertain": false})
         );
     }
 
