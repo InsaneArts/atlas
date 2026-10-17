@@ -14,7 +14,8 @@ pub struct State {
     expires: Option<Instant>,
     closed: bool,
     /// The last ownership ended by a cancel (the person's or the
-    /// controller's doing), not by expiry or the gate closing.
+    /// controller's doing), not by expiry or the gate closing; reported
+    /// once.
     cancelled: bool,
 }
 
@@ -28,7 +29,8 @@ impl State {
     fn require(&mut self, owner: &str) -> Result<()> {
         self.expire();
         if self.closed || self.owner.as_deref() != Some(owner) {
-            if self.cancelled && !self.closed && self.owner.is_none() {
+            // Told once, to what was under way; later callers find it lost.
+            if std::mem::take(&mut self.cancelled) && !self.closed && self.owner.is_none() {
                 return Err(Error::new("cancelled", "Native control was stopped"));
             }
 
@@ -220,7 +222,7 @@ mod tests {
         drop(grant.authorize().unwrap());
         gate.cancel(None).unwrap();
         assert_eq!(code(grant.authorize()), "cancelled");
-        assert_eq!(code(gate.grant(&owner('a'))), "cancelled");
+        assert_eq!(code(gate.grant(&owner('a'))), "lease-lost", "said once");
         let _again = gate.acquire(&owner('a')).unwrap();
         gate.revoke().unwrap();
         assert_eq!(

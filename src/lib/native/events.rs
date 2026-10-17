@@ -6,7 +6,7 @@ use super::{
 use crate::{
     actions::{
         Action, Button, CLICK_GAP, DRAG_HOLD, DRAG_START, DRAG_STEP, DRAG_STEPS, PointerPhase,
-        TYPE_GAP, modifier_flags, parse_key,
+        SCROLL_SETTLE, TYPE_GAP, modifier_flags, parse_key,
     },
     error::{Error, Result},
     native::{accessibility_trusted, session_info},
@@ -273,9 +273,11 @@ impl Engine {
                     && (point.x != self.position.x || point.y != self.position.y)
                 {
                     // AppKit establishes native window tracking at the first
-                    // dragged location. Bound that initial step to one point
-                    // so a sparse viewer stream does not lose its first jump.
-                    // A stationary click never enters this path.
+                    // dragged location that has moved, and what is dragged
+                    // then follows the pointer from there. Bound that initial
+                    // step to one point so a sparse viewer stream does not
+                    // lose its first jump. A stationary click never enters
+                    // this path.
                     let anchor = Point {
                         x: self.position.x + (point.x - self.position.x).clamp(-1.0, 1.0),
                         y: self.position.y + (point.y - self.position.y).clamp(-1.0, 1.0),
@@ -437,13 +439,31 @@ impl Engine {
                 )
                 .await?;
                 self.delay(DRAG_HOLD).await?;
+                // What is dragged follows the pointer from the first moved
+                // step (see the move phase), so the pointer travels that
+                // step past the target, releases there, and then rests on
+                // the target: the window or item moves exactly as asked.
+                let step = Point {
+                    x: (to_x - from_x).clamp(-1.0, 1.0),
+                    y: (to_y - from_y).clamp(-1.0, 1.0),
+                };
+                let anchor = Point {
+                    x: from_x + step.x,
+                    y: from_y + step.y,
+                };
+                let end = Point {
+                    x: to_x + step.x,
+                    y: to_y + step.y,
+                };
+                self.pointer(PointerPhase::Move, anchor, button, &[], 1)
+                    .await?;
                 for step in 1..=DRAG_STEPS {
                     let t = f64::from(step) / f64::from(DRAG_STEPS);
                     self.pointer(
                         PointerPhase::Move,
                         Point {
-                            x: from_x + (to_x - from_x) * t,
-                            y: from_y + (to_y - from_y) * t,
+                            x: anchor.x + (end.x - anchor.x) * t,
+                            y: anchor.y + (end.y - anchor.y) * t,
                         },
                         button,
                         &[],
@@ -452,18 +472,30 @@ impl Engine {
                     .await?;
                     self.delay(DRAG_STEP).await?;
                 }
-                self.pointer(PointerPhase::Up, Point { x: to_x, y: to_y }, button, &[], 1)
-                    .await?;
+                self.pointer(PointerPhase::Up, end, button, &[], 1).await?;
+                self.pointer(
+                    PointerPhase::Move,
+                    Point { x: to_x, y: to_y },
+                    button,
+                    &[],
+                    1,
+                )
+                .await?;
             }
             Action::Scroll { x, y, dx, dy } => {
                 self.pointer(PointerPhase::Move, Point { x, y }, Button::Left, &[], 1)
                     .await?;
+                // The app learns where the pointer is from that move; the
+                // wheel turn reaches the view under it only once it has.
+                self.delay(SCROLL_SETTLE).await?;
+                // A wheel's positive turn scrolls up and left; the command's
+                // positive lines scroll down and right, as documented.
                 let event = created(CGEvent::new_scroll_wheel_event2(
                     Some(&self.source.0),
                     CGScrollEventUnit::Line,
                     2,
-                    dy,
-                    dx,
+                    -dy,
+                    -dx,
                     0,
                 ))?;
                 self.post(event, 0, self.position)?;

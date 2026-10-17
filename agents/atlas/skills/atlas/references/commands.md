@@ -60,7 +60,7 @@ Usage: atlas agents [OPTIONS] [COMMAND]
 
 Commands:
   status   Which agents are on this Mac and whether Atlas is connected
-  project  Tell a project's agents to test with Atlas: adds a short section to its AGENTS.md (and to a separate CLAUDE.md)
+  project  Tell a project's agents to test with Atlas: adds a short section to its AGENTS.md, and to a CLAUDE.md it has that does not include AGENTS.md
   install  Connect the plugin to Claude Code and/or Codex (all installed by default)
   remove   Disconnect the plugin from Claude Code and/or Codex
   help     Print this message or the help of the given subcommand(s)
@@ -107,7 +107,7 @@ Global options:
 ## atlas agents project
 
 ```text
-Tell a project's agents to test with Atlas: adds a short section to its AGENTS.md (and to a separate CLAUDE.md)
+Tell a project's agents to test with Atlas: adds a short section to its AGENTS.md, and to a CLAUDE.md it has that does not include AGENTS.md
 
 Usage: atlas agents project [OPTIONS] [DIR]
 
@@ -240,7 +240,7 @@ Global options:
 ```text
 List the helper's windows, front to back.
 
-Document windows only, unless --all.
+Document windows only, unless --all; with --app, that app's panels and alerts as well.
 
 Usage: atlas windows [OPTIONS]
 
@@ -279,7 +279,7 @@ Usage: atlas elements [OPTIONS]
 
 Options:
       --app <APP>
-          Application name; must resolve to one process with a window
+          Application name: the one process of that name with a window, or the app in front
 
       --pid <PID>
           Exact process ID, for apps with several processes
@@ -365,7 +365,7 @@ Arguments:
 
 Options:
       --app <APP>
-          Application name; must resolve to one process with a window
+          Application name: the one process of that name with a window, or the app in front
 
       --pid <PID>
           Exact process ID, for apps with several processes
@@ -441,7 +441,7 @@ Examples:
 ```text
 Press keys, for example cmd+s or escape.
 
-Keys are pressed in order: `key cmd+s` or `key escape return`.
+Keys are pressed in order: `key cmd+s` or `key escape return`. A key is a letter, digit or punctuation mark, or one of return, tab, space, escape, backspace, forwarddelete, left, right, up, down, home, end, pageup, pagedown and f1 to f12; the plus key is written + on its own or at the end of a chord (cmd++).
 
 Usage: atlas key [OPTIONS] <KEYS>...
 
@@ -581,7 +581,7 @@ Examples:
 ```text
 Send several actions at once (a JSON array, or @path/to/actions.json).
 
-Each action is an object with a "type": move {x, y}; click {x, y, button?, count?, modifiers?}; drag {fromX, fromY, toX, toY, button?}; scroll {x, y, dx?, dy?}; type {text}; key {key}; wait {ms}. Up to 32 actions that finish within two seconds; coordinates are display points. Example: [{"type":"click","x":200,"y":120},{"type":"type","text":"hi"}]
+Each action is an object with a "type": move {x, y}; click {x, y, button?, count?, modifiers?}; drag {fromX, fromY, toX, toY, button?}; scroll {x, y, dx?, dy?}; type {text}; key {key}; wait {ms}. Up to 32 actions that finish within two seconds; coordinates are display points, a click is 1 to 5 clicks, a scroll at most 100 lines, text at most 256 characters, a wait at most 250 ms. Example: [{"type":"click","x":200,"y":120},{"type":"type","text":"hi"}]
 
 Usage: atlas input [OPTIONS] <ACTIONS>
 
@@ -913,10 +913,10 @@ Usage: atlas environment discover [OPTIONS]
 
 Options:
       --tool <TOOLS>
-          
+          A tool by its bare command name, such as cat
 
       --app <APPS>
-          
+          An app by its name, such as Safari
 
       --env <ENVIRONMENT>
           Report only whether the named variable is defined, never its value

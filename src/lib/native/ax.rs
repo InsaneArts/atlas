@@ -40,14 +40,17 @@ const INCOMPLETE: [AXError; 3] = [
     AXError::APIDisabled,
 ];
 /// AX errors meaning the element simply lacks the attribute: no value,
-/// unsupported, not implemented, or its app's own getter failing (an AppKit
-/// text view answers Failure for its description every time).
-const ABSENT: [AXError; 4] = [
+/// unsupported, not implemented.
+const ABSENT: [AXError; 3] = [
     AXError::NoValue,
     AXError::AttributeUnsupported,
     AXError::NotImplemented,
-    AXError::Failure,
 ];
+/// Text attributes an app's own getter may fail for (an AppKit text view
+/// answers Failure for its description every time); the text is then as
+/// good as absent. A tree read that fails so still leaves the scan
+/// incomplete.
+const TEXT_SELECTORS: [&str; 4] = ["AXTitle", "AXDescription", "AXValue", "AXIdentifier"];
 /// Attributes a selector matches on; an element whose selector attribute
 /// fails to read (other than being absent) may be an unseen match.
 const SELECTORS: [&str; 5] = [
@@ -115,9 +118,10 @@ impl Scan {
         self.last_error = Some(status);
         let key = format!("{attribute}:{}", status.0);
         *self.errors.entry(key).or_default() += 1;
+        let getter_failed = status == AXError::Failure && TEXT_SELECTORS.contains(&attribute);
         if INCOMPLETE.contains(&status) {
             self.incomplete = true;
-        } else if !ABSENT.contains(&status) && SELECTORS.contains(&attribute) {
+        } else if !ABSENT.contains(&status) && !getter_failed && SELECTORS.contains(&attribute) {
             self.unreadable.push(attribute.to_owned());
         }
     }
@@ -782,7 +786,8 @@ mod tests {
     #[test]
     fn ax_error_lists_keep_their_codes() {
         assert_eq!(INCOMPLETE.map(|e| e.0), [-25204, -25202, -25211]);
-        assert_eq!(ABSENT.map(|e| e.0), [-25212, -25205, -25208, -25200]);
+        assert_eq!(ABSENT.map(|e| e.0), [-25212, -25205, -25208]);
+        assert_eq!(AXError::Failure.0, -25200);
     }
 
     /// Past the deadline nothing more is asked and the scan is incomplete.

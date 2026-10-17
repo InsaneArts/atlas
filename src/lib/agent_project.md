@@ -16,5 +16,5 @@ and test apps without touching my desktop, windows, keyboard or mouse.
   yourself with `atlas environment`, and roll the copy back when you are done.
   Never ask me to copy anything.
 - Never test on my own desktop and never change privacy permissions. If an
-  action's outcome is unknown, never repeat it: run `atlas restart`, look
-  again, and tell me.
+  action's outcome is unknown, never repeat it: take a screenshot, run
+  `atlas restart`, look again, and tell me.

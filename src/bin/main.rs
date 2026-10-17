@@ -182,7 +182,9 @@ enum Command {
     /// Each action is an object with a "type": move {x, y}; click {x, y,
     /// button?, count?, modifiers?}; drag {fromX, fromY, toX, toY, button?};
     /// scroll {x, y, dx?, dy?}; type {text}; key {key}; wait {ms}. Up to 32
-    /// actions that finish within two seconds; coordinates are display points.
+    /// actions that finish within two seconds; coordinates are display points,
+    /// a click is 1 to 5 clicks, a scroll at most 100 lines, text at most 256
+    /// characters, a wait at most 250 ms.
     /// Example: [{"type":"click","x":200,"y":120},{"type":"type","text":"hi"}]
     Input {
         /// A JSON array of actions, or @path/to/actions.json.
@@ -299,7 +301,11 @@ enum Command {
     },
     /// Press keys, for example cmd+s or escape.
     ///
-    /// Keys are pressed in order: `key cmd+s` or `key escape return`.
+    /// Keys are pressed in order: `key cmd+s` or `key escape return`. A key is
+    /// a letter, digit or punctuation mark, or one of return, tab, space,
+    /// escape, backspace, forwarddelete, left, right, up, down, home, end,
+    /// pageup, pagedown and f1 to f12; the plus key is written + on its own or
+    /// at the end of a chord (cmd++).
     Key {
         /// Keys or chords such as cmd+s, escape, return, shift+tab.
         #[arg(required = true)]
@@ -307,7 +313,8 @@ enum Command {
     },
     /// List the helper's windows, front to back.
     ///
-    /// Document windows only, unless --all.
+    /// Document windows only, unless --all; with --app, that app's panels
+    /// and alerts as well.
     Windows {
         /// Only windows of this app.
         #[arg(long)]
@@ -500,7 +507,7 @@ enum AgentsCommand {
         brief: bool,
     },
     /// Tell a project's agents to test with Atlas: adds a short section to
-    /// its AGENTS.md (and to a separate CLAUDE.md).
+    /// its AGENTS.md, and to a CLAUDE.md it has that does not include AGENTS.md.
     Project {
         /// The project folder (default: this one).
         dir: Option<PathBuf>,
@@ -567,8 +574,10 @@ enum EnvironmentCommand {
     },
     /// Inspect selected tools, apps, variables and reference paths without launching them.
     Discover {
+        /// A tool by its bare command name, such as cat.
         #[arg(long = "tool")]
         tools: Vec<String>,
+        /// An app by its name, such as Safari.
         #[arg(long = "app")]
         apps: Vec<String>,
         /// Report only whether the named variable is defined, never its value.
@@ -1639,7 +1648,8 @@ async fn act(client: &Client, actions: Value) -> Result<Value> {
 #[derive(clap::Args)]
 #[group(multiple = false)]
 struct AppTarget {
-    /// Application name; must resolve to one process with a window.
+    /// Application name: the one process of that name with a window, or
+    /// the app in front.
     #[arg(long)]
     app: Option<String>,
     /// Exact process ID, for apps with several processes.
