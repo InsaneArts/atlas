@@ -524,3 +524,36 @@ fn closing_everything_names_what_it_quit() {
     );
     assert_eq!(one.out, "✓ Closed TextEdit");
 }
+
+/// An open says what it opened and where the copy went; a failed one still
+/// says where the copy went, since close is what removes it.
+#[test]
+fn an_open_names_its_copy_whether_or_not_it_launched() {
+    let copied = json!(["/Users/Shared/Atlas/Open/abc/App.app"]);
+    let opened = show(
+        View::Open("App.app".into()),
+        json!({"ok": true, "opened": true, "copied": copied}),
+    );
+    assert!(opened.out.starts_with("✓ Opened App.app"), "{}", opened.out);
+    assert!(opened.out.contains("copied first to"), "{}", opened.out);
+    let refused = show(
+        View::Open("App.app".into()),
+        json!({"ok": false, "opened": false, "code": "spawn-failed",
+           "error": "Unable to find application named 'App'", "copied": copied,
+           "uncertain": false}),
+    );
+    assert!(
+        refused
+            .err
+            .starts_with("✗ Unable to find application named 'App'"),
+        "{}",
+        refused.err
+    );
+    assert!(refused.err.contains("copied first to"), "{}", refused.err);
+    let plain = show(
+        View::Open("Calculator".into()),
+        json!({"ok": false, "opened": false, "code": "spawn-failed",
+           "error": "Unable to find application named 'Calculator'", "uncertain": false}),
+    );
+    assert!(!plain.err.contains("copied"), "{}", plain.err);
+}
