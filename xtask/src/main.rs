@@ -141,6 +141,8 @@ fn info_plist(version: &str) -> String {
 	<string>atlas</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -157,6 +159,35 @@ fn info_plist(version: &str) -> String {
 </plist>
 "#
     )
+}
+
+/// Compile the Icon Composer icon `icon` into the app's asset catalog, the
+/// icon macOS 26 and later shape and light themselves. The partial plist
+/// actool writes names only the icon keys Info.plist already carries.
+fn compile_icon(icon: &Path, app: &Path, stage: &Path) -> Result<()> {
+    let resources = app.join("Contents/Resources");
+    exec(
+        "/usr/bin/xcrun",
+        &[
+            "actool",
+            text(icon)?,
+            "--compile",
+            text(&resources)?,
+            "--platform",
+            "macosx",
+            "--minimum-deployment-target",
+            MINIMUM_MACOS,
+            "--app-icon",
+            "AppIcon",
+            "--output-partial-info-plist",
+            text(&stage.join("AppIcon.plist"))?,
+        ],
+    )?;
+    resources
+        .join("Assets.car")
+        .is_file()
+        .then_some(())
+        .ok_or_else(|| "actool wrote no Assets.car".to_owned())
 }
 
 /// No slice of `binary` may require a newer macOS than the advertised one.
@@ -391,8 +422,10 @@ fn build(options: &Options, stage: &Path, upload: &Path) -> Result<PathBuf> {
     universal(&cli, &macos.join("atlas"))?;
     fs::copy(&executable, macos.join(APP_EXECUTABLE)).map_err(|error| error.to_string())?;
     check_universal(&macos.join(APP_EXECUTABLE))?;
-    // The app icon and the helper account's picture, both drawn by
-    // app/Resources/AppIcon.swift.
+    compile_icon(&package.join("Resources/AppIcon.icon"), &app, stage)?;
+    // The app icon for macOS before 26 and the helper account's picture,
+    // both drawn by app/Resources/AppIcon.swift. The icon replaces the flat
+    // one actool rendered from the Icon Composer icon.
     for file in ["AppIcon.icns", "HelperPicture.png"] {
         fs::copy(
             package.join("Resources").join(file),
@@ -583,10 +616,20 @@ mod tests {
             root().join("app/Resources/HelperPicture.png").is_file(),
             "the helper's account picture is checked in"
         );
+        for file in ["icon.json", "Assets/Mark.png"] {
+            assert!(
+                root()
+                    .join("app/Resources/AppIcon.icon")
+                    .join(file)
+                    .is_file(),
+                "the Icon Composer icon the plist names is checked in: {file}"
+            );
+        }
         for expected in [
             r#""CFBundleIdentifier":"com.insanearts.atlas""#,
             r#""CFBundleExecutable":"atlas""#,
             r#""CFBundleIconFile":"AppIcon""#,
+            r#""CFBundleIconName":"AppIcon""#,
             r#""CFBundleShortVersionString":"1.2.3""#,
             r#""LSUIElement":true"#,
             r#""LSMinimumSystemVersion":"14.0""#,
