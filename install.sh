@@ -101,7 +101,9 @@ case ":$PATH:" in
 *) say "Add $bin to your PATH, for example: echo 'export PATH=\"$bin:\$PATH\"' >> ~/.zprofile" ;;
 esac
 if ls "$HOME/Library/Application Support/Atlas"/setup-*.json >/dev/null 2>&1; then
-	say "Next: atlas restart && atlas setup --apply"
+	# The helper still runs the previous executable: restart the daemon, then
+	# the input service, then let setup verify the new build.
+	say "Next: atlas restart && atlas start-input && atlas setup --apply"
 elif [ -z "${SSH_CONNECTION:-}" ] && [ -z "${ATLAS_NO_OPEN:-}" ]; then
 	# The setup window walks the person through the rest.
 	say "Opening Atlas to finish setting up (or run atlas init in a terminal)."
