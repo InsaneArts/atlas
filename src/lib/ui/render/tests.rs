@@ -445,7 +445,7 @@ fn environment_steps_say_what_changes_and_what_comes_next() {
     let id = "a".repeat(48);
     let preview = show(
         View::Environment,
-        json!({"ok": true, "applied": false, "transactionId": id,
+        json!({"ok": true, "applied": false, "planId": id,
                "files": [{"operation": "create", "target": "Notes/note.txt"}]}),
     );
     assert!(preview.out.contains("Would copy into the helper (1 file):"));
@@ -458,7 +458,7 @@ fn environment_steps_say_what_changes_and_what_comes_next() {
     let applied = show(
         View::Environment,
         json!({"ok": true, "applied": true, "phase": "applied", "resumeRequired": false,
-               "transactionId": id, "files": [{"operation": "create", "target": "Notes/note.txt"}]}),
+               "planId": id, "files": [{"operation": "create", "target": "Notes/note.txt"}]}),
     );
     assert!(applied.out.starts_with("✓ Copied into the helper"));
     assert!(
@@ -468,13 +468,13 @@ fn environment_steps_say_what_changes_and_what_comes_next() {
     );
     let undone = show(
         View::Environment,
-        json!({"ok": true, "rolledBack": true, "transactionId": id,
+        json!({"ok": true, "rolledBack": true, "planId": id,
                "completedTargets": ["Notes/note.txt"], "files": []}),
     );
     assert_eq!(undone.out, "✓ Undone in the helper\n  ~/Notes/note.txt");
     let conflict = show(
         View::Environment,
-        json!({"ok": false, "applied": false, "transactionId": id,
+        json!({"ok": false, "applied": false, "planId": id,
                "files": [{"operation": "conflict", "target": "Notes/note.txt"}]}),
     );
     assert!(conflict.err.starts_with(
@@ -483,7 +483,7 @@ fn environment_steps_say_what_changes_and_what_comes_next() {
     let stopped = show(
         View::Environment,
         json!({"ok": false, "error": "Disk full", "phase": "applying", "resumeRequired": true,
-               "transactionId": id, "files": [{"operation": "create", "target": "a"}]}),
+               "planId": id, "files": [{"operation": "create", "target": "a"}]}),
     );
     assert!(
         stopped

@@ -168,7 +168,7 @@ pub fn environment(value: &Value) -> Rendered {
     let Some(files) = value["files"].as_array() else {
         return failed(value).unwrap_or_else(|| Rendered::out(super::generic(value)));
     };
-    let id = value["transactionId"].as_str().unwrap_or("ID");
+    let id = value["planId"].as_str().unwrap_or("ID");
     let next = |what: &str, command: String| {
         format!("  {} {what}: {}", style::dim("→"), style::cmd(command))
     };

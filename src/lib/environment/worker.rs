@@ -109,7 +109,6 @@ pub(super) fn preview(
         "ok": ok,
         "applied": false,
         "planId": id,
-        "transactionId": id,
         "files": file_report(&plan),
         "plan": plan,
     }))
@@ -777,7 +776,6 @@ fn report(transaction: &Transaction, result: Result<()>, rollback: bool) -> Valu
     let mut value = json!({
         "ok": result.is_ok(),
         "planId": transaction.plan.id,
-        "transactionId": transaction.plan.id,
         "applied": transaction.phase == Phase::Applied,
         "rolledBack": transaction.phase == Phase::RolledBack,
         "phase": transaction.phase,

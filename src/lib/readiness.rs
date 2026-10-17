@@ -3,7 +3,9 @@
 //! Presence comes from environment discovery. A present tool is then invoked
 //! with `--version` in the helper's selected environment (or, when none is
 //! installed, its own PATH), so a binary that exists but cannot run is
-//! reported as failing rather than ready. An app reports its bundle and
+//! reported as failing rather than ready. A tool that runs but does not
+//! understand `--version` (macOS's own cat and sleep among them) has shown
+//! it can run, which is what readiness asks. An app reports its bundle and
 //! whether the helper has its own state for it. Launching apps and sign-ins
 //! are not verified: credentials are never copied, so only the app can tell.
 use crate::{
@@ -33,8 +35,8 @@ fn first_line(output: &[u8]) -> String {
 }
 
 /// Classify a present tool from its `--version` invocation. Completion is
-/// judged before the exit status; a probe the tool does not understand is
-/// unknown, not a failure of the tool.
+/// judged before the exit status; a probe the tool does not understand
+/// still shows the tool runs, which is what matters.
 pub(crate) fn tool_status(reply: &Value, output: &[u8]) -> (&'static str, String) {
     let text = String::from_utf8_lossy(output).to_lowercase();
     if reply["timedOut"] == true || !reply["signal"].is_null() {
@@ -62,7 +64,7 @@ pub(crate) fn tool_status(reply: &Value, output: &[u8]) -> (&'static str, String
         .iter()
         .any(|hint| text.contains(hint))
     {
-        ("unknown", "The tool does not support --version".into())
+        ("ready", "Runs, though it does not answer --version".into())
     } else {
         ("failing", first_line(output))
     }
@@ -200,7 +202,8 @@ fn usable_bundle(item: &Value) -> Option<&str> {
 }
 
 /// Report readiness for the selected tools and apps. `ready` means every
-/// tool ran and every app is installed; it does not cover `NOT_VERIFIED`.
+/// tool ran and every app is installed; for apps it does not cover
+/// `NOT_VERIFIED`.
 pub async fn readiness(client: &Client, tools: &[String], apps: &[String]) -> Result<Value> {
     if tools.is_empty() && apps.is_empty() {
         return Err(Error::new(
@@ -239,7 +242,7 @@ pub async fn readiness(client: &Client, tools: &[String], apps: &[String]) -> Re
     Ok(json!({
         "ok": true,
         "ready": ready,
-        "notVerified": NOT_VERIFIED,
+        "notVerified": if apps.is_empty() { &[][..] } else { &NOT_VERIFIED[..] },
         "items": reports,
     }))
 }
@@ -277,7 +280,7 @@ mod tests {
             "failing",
             "present but broken, not missing"
         );
-        assert_eq!(tool_status(&reply(2), b"usage: tool [-x]").0, "unknown");
+        assert_eq!(tool_status(&reply(2), b"usage: tool [-x]").0, "ready");
         assert_eq!(tool_status(&reply(1), b"error: no config").0, "failing");
         assert_eq!(first_line(&[b'x'; 500]).len(), 200);
     }
