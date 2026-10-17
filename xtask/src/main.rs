@@ -1,7 +1,8 @@
 //! Release tooling. `cargo xtask dist` builds Atlas.app for both Mac
 //! architectures, signs it inside out with a Developer ID, checks it against
 //! the same requirement setup enforces, optionally notarizes and staples it,
-//! and writes a zip with its SHA-256 sum.
+//! and writes a zip with its SHA-256 sum. The website repository's
+//! scripts/publish-release.sh puts both on atlas.insanearts.io.
 use atlas::{
     menubar::{APP_EXECUTABLE, LOGIN_JOB},
     setup::IDENTIFIER,
@@ -356,6 +357,12 @@ fn dist(options: &Options) -> Result<()> {
     if options.notarize.is_none() {
         println!("Not notarized: pass --notarize PROFILE for a release.");
     }
+    // Absolute, so the line pastes into the website repository as it is.
+    let out = fs::canonicalize(&options.out).map_err(|error| error.to_string())?;
+    println!(
+        "Publish it from the website repository: sh scripts/publish-release.sh {}",
+        out.display()
+    );
     Ok(())
 }
 
