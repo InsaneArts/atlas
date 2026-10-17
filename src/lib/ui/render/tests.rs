@@ -311,7 +311,7 @@ fn waits_name_the_window_or_its_closing() {
     assert_eq!(closed.out, "✓ The window closed after 5 ms");
     let late = show(
         View::Wait { gone: false },
-        json!({"ok": false, "timedOut": true, "error": "No matching window appeared in time"}),
+        json!({"ok": false, "code": "wait-failed", "timedOut": true, "error": "No matching window appeared in time", "uncertain": false}),
     );
     assert!(
         late.err

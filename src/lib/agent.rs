@@ -343,16 +343,18 @@ pub async fn open(
         value["copied"] = json!(copied);
     }
     if !opened {
+        // Said with its code, and with the copies made for it, which stay
+        // reported: the launch may still be on its way (a Gatekeeper
+        // question, say), and close removes them.
         let output = run_output(&reply, 4096).unwrap_or_default();
         let said = String::from_utf8_lossy(&output).trim().to_owned();
-        return Err(Error::new(
-            "spawn-failed",
-            if said.is_empty() {
-                "macOS could not open that in the helper".to_owned()
-            } else {
-                said
-            },
-        ));
+        value["code"] = json!("spawn-failed");
+        value["error"] = json!(if said.is_empty() {
+            "macOS could not open that in the helper".to_owned()
+        } else {
+            said
+        });
+        value["uncertain"] = json!(false);
     }
 
     Ok(value)
@@ -923,7 +925,9 @@ async fn target_pid(client: &Client, target: &Target) -> Result<i64> {
             if !running {
                 return Err(Error::new(
                     "elements",
-                    format!("No app in the helper has the process ID {pid}; atlas apps lists them"),
+                    format!(
+                        "No app in the helper has the process ID {pid}; run atlas apps to see them"
+                    ),
                 ));
             }
 
@@ -937,13 +941,30 @@ async fn target_pid(client: &Client, target: &Target) -> Result<i64> {
     }
 
     let apps = client.apps().await?;
-    apps["apps"]
+    let named: Vec<&Value> = apps["apps"]
         .as_array()
         .into_iter()
         .flatten()
-        .find(|app| app["active"] == true && app_named(app, name))
+        .filter(|app| app_named(app, name))
+        .collect();
+    if let Some(pid) = named
+        .iter()
+        .find(|app| app["active"] == true)
         .and_then(|app| app["pid"].as_i64())
-        .ok_or_else(|| one_pid(name, &[]).unwrap_err())
+    {
+        return Ok(pid);
+    }
+
+    Err(Error::new(
+        "elements",
+        if named.is_empty() {
+            format!("{name} is not running: run atlas open --app {name}")
+        } else {
+            format!(
+                "No window of {name} is on screen: open one in it, or run atlas wait --app {name}"
+            )
+        },
+    ))
 }
 
 /// Whether an `apps` row is the app called `name`: by the name it shows,
@@ -1450,6 +1471,7 @@ mod tests {
             unreadable: Vec::new(),
             truncated: Vec::new(),
             menu: false,
+            mark: None,
         }
     }
 

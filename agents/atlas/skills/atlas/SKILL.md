@@ -93,8 +93,9 @@ the Atlas menu bar item, or open the viewer window with `atlas monitor`.
 - `atlas windows [--app NAME]` lists windows front to back with bounds.
 - `atlas elements --app NAME [--role AXButton] [--name LABEL]` lists
   accessibility elements with roles, names, values and frames, including the
-  items of a menu the app has open (`menu: true`) and, while the app is in
-  front, its menu bar titles (role `AXMenuBarItem`). Text is cut after 200
+  items of a menu the app has open (`menu: true`, a checked one has `mark`)
+  and, while the app is in front, its menu bar titles (role
+  `AXMenuBarItem`). Text is cut after 200
   UTF-16 units; `truncated` names any attribute shown only in part, so read
   long documents from their file instead.
 

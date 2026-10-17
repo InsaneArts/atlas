@@ -211,7 +211,7 @@ enum Command {
         /// Which mouse button.
         #[arg(long, value_enum, default_value_t)]
         button: ButtonArg,
-        /// Clicks in a row: 2 for a double click.
+        /// Clicks in a row, 1 to 5: 2 for a double click.
         #[arg(long, default_value_t = 1)]
         count: u8,
         /// Comma-separated: cmd, ctrl, alt, shift, fn.
@@ -220,7 +220,10 @@ enum Command {
     },
     /// List an app's buttons, fields and other elements.
     ///
-    /// Lists accessibility elements of the app's windows: role, name, value and frame.
+    /// Lists accessibility elements of the app's windows: role, name, value
+    /// and frame; also the items of a menu the app has open (menu: true, with
+    /// a check mark as mark) and, while the app is in front, its menu bar
+    /// titles.
     Elements {
         #[command(flatten)]
         target: AppTarget,
@@ -299,9 +302,9 @@ enum Command {
     /// Type text.
     ///
     /// The text is typed as given: a real newline or tab in it (in a shell,
-    /// $'one\ntwo') or on standard input is typed as that key, while the two
-    /// characters \n are typed as they are. Long text is split into batches
-    /// without breaking characters.
+    /// $'one\ntwo') or on standard input arrives as a line break or tab,
+    /// while the two characters \n are typed as they are. Long text is split
+    /// into batches without breaking characters.
     Type {
         /// The text to type.
         #[arg(required_unless_present = "stdin")]
