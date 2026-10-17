@@ -249,7 +249,12 @@ pub async fn run(
         return failure("spawn-failed", "No command to run");
     };
     let Some(program) = resolve(name, std::env::var("PATH").ok().as_deref()) else {
-        return failure("spawn-failed", format!("{name}: command not found on PATH"));
+        let reason = if name.contains('/') {
+            "no such program"
+        } else {
+            "command not found on PATH"
+        };
+        return failure("spawn-failed", format!("{name}: {reason}"));
     };
     let (reader, writer) = match std::io::pipe() {
         Ok(pair) => pair,
@@ -594,10 +599,7 @@ mod tests {
         assert!(events.is_empty());
         assert_eq!(
             reply,
-            failure(
-                "spawn-failed",
-                "/nonexistent/binary: command not found on PATH"
-            )
+            failure("spawn-failed", "/nonexistent/binary: no such program")
         );
         let (_, reply) = execute(&["no-such-command-atlas"], 3000).await;
         assert_eq!(reply["code"], "spawn-failed");

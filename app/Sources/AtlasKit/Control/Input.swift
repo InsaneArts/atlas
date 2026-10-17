@@ -135,9 +135,10 @@ public struct WheelAccumulator: Sendable {
 
     /// Add one scroll event's deltas: points for a trackpad (`precise`),
     /// lines for a wheel. Positive moves content down and right, as AppKit
-    /// has it; the sender turns that into Atlas's lines down the page.
+    /// has it; the sender turns that into Atlas's lines down the page. A
+    /// line is a wheel notch, about ten points in the apps measured.
     public mutating func add(dx: Double, dy: Double, precise: Bool) {
-        let factor = precise ? 1.0 / 40 : 1
+        let factor = precise ? 1.0 / 10 : 1
         x += dx * factor
         y += dy * factor
     }

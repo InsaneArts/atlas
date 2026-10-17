@@ -95,7 +95,8 @@ pub(super) fn selectable_variable(name: &str) -> bool {
 
 /// Freeze the selected bytes, then preview or apply the resulting plan.
 pub async fn sync(client: &Client, manifest: &Path, apply_now: bool) -> Result<Value> {
-    let manifest = fs::canonicalize(manifest)?;
+    let manifest = fs::canonicalize(manifest)
+        .map_err(|error| Error::new("io", format!("{}: {error}", manifest.display())))?;
     let selection: Manifest = parse_toml(&read_limited(&manifest, MAX_MANIFEST)?, &manifest)?;
     freeze(client, &manifest, selection.files, apply_now).await
 }

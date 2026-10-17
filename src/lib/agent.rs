@@ -178,8 +178,8 @@ pub fn keys(keys: &[String]) -> Result<Value> {
             "usage",
             format!(
                 "{unknown} is not a key Atlas knows. Use a letter, digit or symbol, a name such \
-                 as return, tab, escape, space, delete, up or f5, with modifiers like cmd+s or \
-                 cmd+shift+z."
+                 as return, tab, escape, space, backspace, up or f5, with modifiers like cmd+s \
+                 or cmd+shift+z."
             ),
         ));
     }
@@ -344,8 +344,17 @@ pub async fn open(
     }
     if !opened {
         let output = run_output(&reply, 4096).unwrap_or_default();
-        value["error"] = json!(String::from_utf8_lossy(&output).trim());
+        let said = String::from_utf8_lossy(&output).trim().to_owned();
+        return Err(Error::new(
+            "spawn-failed",
+            if said.is_empty() {
+                "macOS could not open that in the helper".to_owned()
+            } else {
+                said
+            },
+        ));
     }
+
     Ok(value)
 }
 
@@ -660,8 +669,10 @@ pub async fn wait(
             };
             return Ok(json!({
                 "ok": false,
+                "code": "wait-failed",
                 "timedOut": true,
                 "error": error,
+                "uncertain": false,
             }));
         }
         tokio::time::sleep((deadline - observed).min(Duration::from_millis(250))).await;
@@ -902,7 +913,22 @@ fn one_pid(name: &str, pids: &[i64]) -> Result<i64> {
 /// stay ambiguous.
 async fn target_pid(client: &Client, target: &Target) -> Result<i64> {
     let name = match target {
-        Target::Pid(pid) => return Ok(*pid),
+        Target::Pid(pid) => {
+            let apps = client.apps().await?;
+            let running = apps["apps"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|app| app["pid"] == *pid);
+            if !running {
+                return Err(Error::new(
+                    "elements",
+                    format!("No app in the helper has the process ID {pid}; atlas apps lists them"),
+                ));
+            }
+
+            return Ok(*pid);
+        }
         Target::Name(name) => name,
     };
     let pids = app_pids(&windows(client).await?, name);

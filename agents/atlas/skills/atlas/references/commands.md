@@ -410,7 +410,7 @@ Examples:
 ```text
 Type text.
 
-Long text is split into batches without breaking characters.
+The text is typed as given: a real newline or tab in it (in a shell, $'one\ntwo') or on standard input is typed as that key, while the two characters \n are typed as they are. Long text is split into batches without breaking characters.
 
 Usage: atlas type [OPTIONS] [TEXT]
 
@@ -499,7 +499,7 @@ Examples:
 ```text
 Drag from one point to another.
 
-What is dragged (a window, a slider's knob, a selection) moves by exactly the distance between the points; the button itself is released one point past the end, in the direction of travel. Drag-and-drop onto a target (selected text, files, list items) does not begin in the helper: macOS starts such a drag only from a real mouse.
+What is dragged (a window, a slider's knob, a selection) moves by exactly the distance between the points; the button itself is released up to one point past the end, in the direction of travel, never off the display. Drag-and-drop onto a target (selected text, files, list items) does not begin in the helper: macOS starts such a drag only from a real mouse.
 
 Usage: atlas drag [OPTIONS] <FROM_X> <FROM_Y> <TO_X> <TO_Y>
 
@@ -723,7 +723,7 @@ Arguments:
 
 Options:
       --timeout <SECONDS>
-          Seconds before the command is stopped
+          Seconds before the command is stopped, 1 to 600
           
           [default: 20]
 

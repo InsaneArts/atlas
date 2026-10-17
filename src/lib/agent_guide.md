@@ -178,7 +178,8 @@ you found it:
 
 1. Save anything you need first (Cmd+S), then `atlas close --app NAME` for
    every app you opened: it quits the app at once, without asking to save, and
-   removes the copies Atlas made for it.
+   removes the copies Atlas made for it. Finder is never quit: close Finder
+   windows you opened with `key cmd+w`.
 2. `atlas environment rollback PLAN_ID --apply` for every copy you applied,
    newest first, and check each reply says `rolledBack`. Files you added are
    removed and replaced ones come back. If it reports a file changed in the
@@ -229,7 +230,8 @@ unless you looked at it in the helper.
   session is connected to the helper (`doctor` → `capabilities.nativeDialogs`).
   Without it, clicks in a panel report `ok` but do nothing; `atlas key escape`
   closes it. The sheet asking whether to keep a new document (Save As, Where,
-  Delete) is one: `key cmd+backspace` deletes it, `key escape` cancels. Save
+  Delete) is one: `key cmd+backspace` deletes it, `key escape` cancels
+  (again if it stays). Save
   existing files with Cmd+S, or create files with tools via `run`; report a
   panel flow you could not drive as not checked.
 - The helper's Desktop, Documents and Downloads are protected by macOS: `run`

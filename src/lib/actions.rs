@@ -244,7 +244,8 @@ pub(crate) const DRAG_HOLD: Duration = Duration::from_millis(80);
 /// The points a drag moves through, and the pause after each.
 pub(crate) const DRAG_STEPS: u32 = 24;
 pub(crate) const DRAG_STEP: Duration = Duration::from_millis(16);
-/// How far, at most, the first step of a drag goes (per axis). EXPERIMENT.
+/// How far, at most, the first step of a drag goes on each axis: what is
+/// dragged follows the pointer from there.
 pub(crate) const DRAG_ANCHOR: f64 = 1.0;
 /// The pause after the first step that starts a drag.
 pub(crate) const DRAG_START: Duration = Duration::from_millis(10);
