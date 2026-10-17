@@ -86,22 +86,32 @@ pub fn render(view: &View, value: &Value) -> Rendered {
         View::Action(done) => act::action(done, value),
         View::Type => act::typed(value),
         View::Run => act::run(value),
-        View::Open(what) => failed(value).unwrap_or_else(|| {
-            let mut out = format!("{} Opened {}", style::ok(), text::printable(what));
-            if value["copied"]
+        View::Open(what) => {
+            // The copies made for it are said either way: a failed launch
+            // leaves them where close removes them.
+            let copied = if value["copied"]
                 .as_array()
                 .is_some_and(|copied| !copied.is_empty())
             {
-                out.push_str(&format!(
+                format!(
                     "\n  {}",
                     style::dim(format!(
                         "copied first to {}, where the helper can read it",
                         crate::handoff::ROOT
                     ))
-                ));
+                )
+            } else {
+                String::new()
+            };
+            match failed(value) {
+                Some(failure) => Rendered::err(format!("{}{copied}", failure.err)),
+                None => Rendered::out(format!(
+                    "{} Opened {}{copied}",
+                    style::ok(),
+                    text::printable(what)
+                )),
             }
-            Rendered::out(out)
-        }),
+        }
         View::Wait { gone } => {
             failed(value).unwrap_or_else(|| Rendered::out(act::wait(value, *gone)))
         }

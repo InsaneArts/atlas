@@ -39,7 +39,7 @@ pub fn fix(code: &str) -> Option<&'static str> {
         }
         "platform" => "Atlas runs on macOS only.",
         "session-changed" => "The helper changed meanwhile. Take a new screenshot and try again.",
-        "spawn-failed" => "Check that the program exists in the helper account.",
+        "spawn-failed" => "Check that the program or app exists in the helper account.",
         "stale-frame" => "Take a new screenshot.",
         "startup" => "Run atlas start-input, then atlas doctor.",
         "switch" => "Use the Apple menu: Lock Screen, then Switch User.",

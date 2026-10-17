@@ -348,12 +348,21 @@ pub async fn open(
         // question, say), and close removes them.
         let output = run_output(&reply, 4096).unwrap_or_default();
         let said = String::from_utf8_lossy(&output).trim().to_owned();
-        value["code"] = json!("spawn-failed");
-        value["error"] = json!(if said.is_empty() {
-            "macOS could not open that in the helper".to_owned()
+        if reply["timedOut"] == true {
+            value["code"] = json!("wait-failed");
+            value["timedOut"] = json!(true);
+            value["error"] = json!(
+                "macOS did not finish opening that in time; it may still be launching: \
+                 run atlas wait --app NAME, or look with atlas apps"
+            );
         } else {
-            said
-        });
+            value["code"] = json!("spawn-failed");
+            value["error"] = json!(if said.is_empty() {
+                "macOS could not open that in the helper".to_owned()
+            } else {
+                said
+            });
+        }
         value["uncertain"] = json!(false);
     }
 
