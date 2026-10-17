@@ -1,13 +1,18 @@
-// Draws Atlas's app icon and builds AppIcon.icns beside this script, and
+// Draws Atlas's app icon and builds, beside this script, AppIcon.icns, the
+// mark layer of the Icon Composer icon AppIcon.icon/Assets/Mark.png, and
 // the helper account's picture, HelperPicture.png:
 //
 //     swift app/Resources/AppIcon.swift
 //
 // The mark is Atlas's orbit, a graphite sphere with a ring passing in front
-// of it, on a white tile on the macOS rounded-square grid (an 824-point tile
-// with a soft shadow in a 1024-point canvas). The account picture is the
-// same mark filling the canvas, which macOS shows in a circle. The menu bar
-// glyph in StatusImage.swift draws the same shape: change them together.
+// of it. macOS 26 and later shape and light the icon themselves, from the
+// mark alone on the paper fill AppIcon.icon/icon.json names; an icon that
+// brings its own tile is shrunk inside a second one there. Earlier macOS
+// shows AppIcon.icns: the mark on a white tile on the rounded-square grid
+// (an 824-point tile with a soft shadow in a 1024-point canvas). The account
+// picture is the same mark filling the canvas, which macOS shows in a
+// circle. The menu bar glyph in StatusImage.swift draws the same shape:
+// change them together.
 import AppKit
 
 func hex(_ value: UInt32) -> NSColor {
@@ -29,7 +34,7 @@ func drawIcon() {
     tile.fill()
     NSGraphicsContext.restoreGraphicsState()
 
-    drawOrbit(on: tile)
+    drawOrbit(on: tile, paper: paper)
 
     let rim = NSBezierPath(
         roundedRect: tileRect.insetBy(dx: 1, dy: 1), xRadius: 184, yRadius: 184)
@@ -38,17 +43,25 @@ func drawIcon() {
     rim.stroke()
 }
 
+let canvas = NSBezierPath(rect: NSRect(x: 0, y: 0, width: 1024, height: 1024))
+let paper = NSGradient(starting: hex(0xFFFFFF), ending: hex(0xE1E4E9))!
+
 /// The account picture: the mark on paper filling the whole canvas.
 func drawPicture() {
-    drawOrbit(on: NSBezierPath(rect: NSRect(x: 0, y: 0, width: 1024, height: 1024)))
+    drawOrbit(on: canvas, paper: paper)
 }
 
-/// The orbit on a paper gradient, clipped to `surface`.
-func drawOrbit(on surface: NSBezierPath) {
-    let paper = NSGradient(starting: hex(0xFFFFFF), ending: hex(0xE1E4E9))!
+/// The Icon Composer layer: the mark alone, clear where the paper would be,
+/// so the icon's own fill shows through its gap.
+func drawMark() {
+    drawOrbit(on: canvas, paper: nil)
+}
+
+/// The orbit clipped to `surface`, on `paper` or on nothing.
+func drawOrbit(on surface: NSBezierPath, paper: NSGradient?) {
     NSGraphicsContext.saveGraphicsState()
     surface.addClip()
-    paper.draw(in: surface, angle: -90)
+    paper?.draw(in: surface, angle: -90)
 
     // Upright coordinates. The ring rises to the right; its front half is
     // the lower one.
@@ -92,7 +105,11 @@ func drawOrbit(on surface: NSBezierPath) {
     ).addClip()
     context.addPath(stroke(ring(from: 180, to: 360), width: 64))
     context.clip()
-    paper.draw(in: surface, angle: -90)
+    if let paper {
+        paper.draw(in: surface, angle: -90)
+    } else {
+        context.clear(surface.bounds)
+    }
     NSGraphicsContext.restoreGraphicsState()
 
     // The front of the ring.
@@ -137,4 +154,6 @@ iconutil.waitUntilExit()
 try? FileManager.default.removeItem(at: iconset)
 // The size macOS keeps for account pictures.
 try png(pixels: 512, draw: drawPicture).write(to: here.appendingPathComponent("HelperPicture.png"))
+try png(pixels: 1024, draw: drawMark).write(
+    to: here.appendingPathComponent("AppIcon.icon/Assets/Mark.png"))
 exit(iconutil.terminationStatus)

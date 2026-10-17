@@ -110,6 +110,7 @@ impl fmt::Display for Error {
 }
 
 impl StdError for Error {}
+
 impl From<std::io::Error> for Error {
     fn from(value: std::io::Error) -> Self {
         Self::new("io", value.to_string())
