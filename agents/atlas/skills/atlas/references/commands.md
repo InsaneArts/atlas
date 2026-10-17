@@ -82,6 +82,101 @@ Examples:
   atlas agents project
 ```
 
+## atlas agents status
+
+```text
+Which agents are on this Mac and whether Atlas is connected
+
+Usage: atlas agents status [OPTIONS]
+
+Options:
+      --brief
+          One plain line for an agent's session start
+
+  -h, --help
+          Print help
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --config <FILE>
+          Use another settings file
+```
+
+## atlas agents project
+
+```text
+Tell a project's agents to test with Atlas: adds a short section to its AGENTS.md (and to a separate CLAUDE.md)
+
+Usage: atlas agents project [OPTIONS] [DIR]
+
+Arguments:
+  [DIR]
+          The project folder (default: this one)
+
+Options:
+  -h, --help
+          Print help
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --config <FILE>
+          Use another settings file
+```
+
+## atlas agents install
+
+```text
+Connect the plugin to Claude Code and/or Codex (all installed by default)
+
+Usage: atlas agents install [OPTIONS]
+
+Options:
+      --claude
+          Only Claude Code
+
+      --codex
+          Only Codex
+
+  -h, --help
+          Print help
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --config <FILE>
+          Use another settings file
+```
+
+## atlas agents remove
+
+```text
+Disconnect the plugin from Claude Code and/or Codex
+
+Usage: atlas agents remove [OPTIONS]
+
+Options:
+      --claude
+          Only Claude Code
+
+      --codex
+          Only Codex
+
+  -h, --help
+          Print help
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --config <FILE>
+          Use another settings file
+```
+
 ## atlas menubar
 
 ```text
@@ -616,7 +711,7 @@ Examples:
 ```text
 Run a command in the helper and print its output.
 
-It is stopped after --timeout seconds (20 unless given, at most 600). Start anything longer in the background and read its log later.
+It is stopped after --timeout seconds (20 unless given, at most 600). Start anything longer in the background and read its log later. Atlas exits 1 when the command's exit code is not 0 or it was stopped, with the reply still ok.
 
 Usage: atlas run [OPTIONS] -- <COMMAND>...
 
@@ -702,6 +797,135 @@ Options:
 
   -h, --help
           Print help (see a summary with '-h')
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --config <FILE>
+          Use another settings file
+```
+
+## atlas environment profile
+
+```text
+Freeze selected files, exported variables and readiness requirements
+
+Usage: atlas environment profile [OPTIONS] <PROFILE>
+
+Arguments:
+  <PROFILE>
+          TOML profile (version = 2) of files, tools, applications, environment and references
+
+Options:
+      --apply
+          Apply it; otherwise only preview
+
+  -h, --help
+          Print help
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --config <FILE>
+          Use another settings file
+```
+
+## atlas environment run
+
+```text
+Run a command with the selected helper environment and helper tool paths
+
+Usage: atlas environment run [OPTIONS] -- <COMMAND>...
+
+Arguments:
+  <COMMAND>...
+          The program and its arguments, after `--`
+
+Options:
+  -h, --help
+          Print help
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --config <FILE>
+          Use another settings file
+```
+
+## atlas environment apply
+
+```text
+Copy a previewed plan into the helper (or finish one that stopped)
+
+Usage: atlas environment apply [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+          The ID the preview printed
+
+Options:
+  -h, --help
+          Print help
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --config <FILE>
+          Use another settings file
+```
+
+## atlas environment rollback
+
+```text
+Show what undoing a copy would do, or undo it with --apply
+
+Usage: atlas environment rollback [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+          The ID the copy printed
+
+Options:
+      --apply
+          Undo the copy; otherwise show what undoing it would do
+
+  -h, --help
+          Print help
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --config <FILE>
+          Use another settings file
+```
+
+## atlas environment discover
+
+```text
+Inspect selected tools, apps, variables and reference paths without launching them
+
+Usage: atlas environment discover [OPTIONS]
+
+Options:
+      --tool <TOOLS>
+          
+
+      --app <APPS>
+          
+
+      --env <ENVIRONMENT>
+          Report only whether the named variable is defined, never its value
+
+      --reference <REFERENCES>
+          Check existing access without changing permissions
+
+  -h, --help
+          Print help
 
 Global options:
       --json

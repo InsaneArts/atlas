@@ -38,11 +38,71 @@ for item do
 done
 "#;
 
+/// The most of each kind one inspection may select.
+const SELECTION_LIMIT: usize = 16;
+
 fn invalid() -> Error {
     Error::new(
         "environment",
-        "Invalid discovery selection; use at most 16 tools, apps, variable names and absolute reference paths each",
+        "The helper's discovery answer could not be read; run atlas doctor",
     )
+}
+
+/// Refuse a selection with a sentence that names the item at fault, so an
+/// agent corrects its command rather than guessing.
+fn selection(
+    tools: &[String],
+    apps: &[String],
+    environment: &[String],
+    references: &[impl AsRef<Path>],
+) -> Result<()> {
+    let refuse = |message: String| Err(Error::new("environment", message));
+    if tools.len() + apps.len() + environment.len() + references.len() == 0 {
+        return refuse("Select at least one tool, app, variable or reference path".into());
+    }
+
+    if [tools.len(), apps.len(), environment.len(), references.len()]
+        .into_iter()
+        .any(|len| len > SELECTION_LIMIT)
+    {
+        return refuse(format!(
+            "Select at most {SELECTION_LIMIT} tools, {SELECTION_LIMIT} apps, \
+             {SELECTION_LIMIT} variables and {SELECTION_LIMIT} reference paths at a time"
+        ));
+    }
+
+    if let Some(name) = tools.iter().find(|name| !component(name)) {
+        return refuse(format!(
+            "A tool is a bare command name such as cat, not a path: {name}"
+        ));
+    }
+
+    if let Some(name) = apps.iter().find(|name| !component(name)) {
+        return refuse(format!(
+            "An app is its name such as Safari, not a path: {name}"
+        ));
+    }
+
+    if let Some(name) = environment.iter().find(|name| !variable(name)) {
+        return refuse(format!(
+            "A variable name is letters, digits and underscores, not starting with a digit: {name}"
+        ));
+    }
+
+    if let Some(path) = references.iter().map(AsRef::as_ref).find(|path: &&Path| {
+        !path.is_absolute()
+            || path
+                .to_str()
+                .is_none_or(|p| p.len() > 4096 || p.contains('\0'))
+            || path.components().any(|c| matches!(c, Component::ParentDir))
+    }) {
+        return refuse(format!(
+            "A reference path is absolute, without ..: {}",
+            path.display()
+        ));
+    }
+
+    Ok(())
 }
 
 fn component(name: &str) -> bool {
@@ -136,22 +196,7 @@ pub async fn discover(
     environment: &[String],
     references: &[PathBuf],
 ) -> Result<Value> {
-    if [tools.len(), apps.len(), environment.len(), references.len()]
-        .into_iter()
-        .any(|len| len > 16)
-        || tools.len() + apps.len() + environment.len() + references.len() == 0
-        || tools.iter().chain(apps).any(|name| !component(name))
-        || environment.iter().any(|name| !variable(name))
-        || references.iter().any(|path| {
-            !path.is_absolute()
-                || path
-                    .to_str()
-                    .is_none_or(|p| p.len() > 4096 || p.contains('\0'))
-                || path.components().any(|c| matches!(c, Component::ParentDir))
-        })
-    {
-        return Err(invalid());
-    }
+    selection(tools, apps, environment, references)?;
     let status = client.status().await;
     let session = require_hidden(&status, client.config.helper_uid)?;
     let helper_home = PathBuf::from(status["user"]["home"].as_str().ok_or_else(invalid)?);
@@ -318,5 +363,50 @@ mod tests {
         assert!(variable("OLLAMA_MODELS"));
         assert!(Access::from_flags("-frx").unwrap().executable);
         assert!(Access::from_flags("unexpected content").is_err());
+    }
+
+    /// A refused selection names the item at fault and what was expected.
+    #[test]
+    fn a_refused_selection_names_the_item_at_fault() {
+        let names = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let paths = |items: &[&str]| items.iter().map(PathBuf::from).collect::<Vec<_>>();
+        let said = |tools: &[&str], apps: &[&str], variables: &[&str], references: &[&str]| {
+            selection(
+                &names(tools),
+                &names(apps),
+                &names(variables),
+                &paths(references),
+            )
+            .unwrap_err()
+            .error
+        };
+        assert_eq!(
+            said(&[], &[], &[], &[]),
+            "Select at least one tool, app, variable or reference path"
+        );
+        assert_eq!(
+            said(&["/bin/sh"], &[], &[], &[]),
+            "A tool is a bare command name such as cat, not a path: /bin/sh"
+        );
+        assert_eq!(
+            said(&["sh"], &["/Applications/Safari.app"], &[], &[]),
+            "An app is its name such as Safari, not a path: /Applications/Safari.app"
+        );
+        assert_eq!(
+            said(&[], &[], &["1PATH"], &[]),
+            "A variable name is letters, digits and underscores, not starting with a digit: 1PATH"
+        );
+        assert_eq!(
+            said(&[], &[], &[], &["/tmp/../etc"]),
+            "A reference path is absolute, without ..: /tmp/../etc"
+        );
+        let many: Vec<String> = (0..17).map(|i| format!("tool{i}")).collect();
+        assert!(
+            selection(&many, &[], &[], &paths(&[]))
+                .unwrap_err()
+                .error
+                .starts_with("Select at most 16 tools")
+        );
+        assert!(selection(&names(&["cat"]), &[], &[], &paths(&["/usr/bin"])).is_ok());
     }
 }

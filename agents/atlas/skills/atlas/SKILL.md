@@ -67,8 +67,11 @@ not test on the person's desktop instead, and do not silently skip the check.
 2. `atlas readiness --tool NAME --app NAME` checks the tools and installed apps
    the task depends on (not the app you are building: open that by its path).
    Copy a `missing` tool in yourself (see below) and check again; if something
-   cannot be copied, stop and say so. `signIn: unknown` means look at the app
-   before assuming you are signed in.
+   cannot be copied, stop and say so. Name tools by their bare command name
+   (`cat`, not `/bin/cat`); a found tool's `context` says where it was found,
+   `path` (the helper's PATH, `.local/bin` included) or `environment` (a
+   profile). `signIn: unknown` means look at the app before assuming you are
+   signed in.
 3. `atlas screenshot` and look: an earlier session may have left windows
    open. `atlas close --all` quits every app bundle with a Dock icon and
    every menu bar app not made by Apple, login items included. Atlas and
@@ -119,7 +122,8 @@ screenshot pixels by multiplying by `pointsPerPixel`.
   Atlas sees them, so for the helper's home use
   `atlas run -- /bin/sh -c 'cat "$HOME/notes.txt"'`. The reply is `ok` when
   the command ran: check its `exitCode` (and `timedOut`) for the command's own
-  result. `output` holds its text, left out past 1 MiB (`outputTruncated`);
+  result; Atlas itself exits 1 when that exit code is not 0 or the command was
+  stopped. `output` holds its text, left out past 1 MiB (`outputTruncated`);
   `outputUnfinished` means something the command started still held the
   output, so its end may be missing. `pid` is the command's process.
   A command is stopped after 20 seconds; `--timeout SECONDS` allows up to
@@ -180,6 +184,10 @@ never ask the person to do it:
    (`resumeRequired`, with `pendingTargets`), run the same apply again to
    finish, or roll it back.
 
+`atlas environment discover`, `profile` and `environment run` inspect or
+freeze a selected set of tools and variables (see commands.md); a test seldom
+needs them.
+
 Nothing is ever copied back to the person's account.
 
 ## Clean up
@@ -193,7 +201,13 @@ you found it:
 2. `atlas environment rollback PLAN_ID --apply` for every copy you applied,
    newest first, and check each reply says `rolledBack`. Files you added are
    removed and replaced ones come back. If it reports a file changed in the
-   helper, leave it and tell the person.
+   helper, leave it and tell the person. Without `--apply` it only previews:
+   `pendingTargets` lists what would be undone, and each file's `operation`
+   still names what the copy did (`create` is undone by removing the file,
+   the others by putting the earlier file back). Folders the copy made go
+   too, unless something else now uses them (`retainedDirectories`).
+3. Delete files you made with `atlas run -- /bin/rm FILE...` rather than an
+   `rm` inside `sh -c`, so a reviewer of your commands can see what goes.
 
 Screenshots are deleted by Atlas after a week; you need not remove them.
 
@@ -232,12 +246,13 @@ unless you looked at it in the helper.
 - The helper's Desktop, Documents and Downloads are protected by macOS: `run`
   gets "Operation not permitted" there. Keep files elsewhere in its home, such
   as `$HOME/atlas-work`.
-- Web pages do not draw in the helper: Safari and every other WebKit view
-  (Dictionary, help windows, apps built on web views) show a blank area and
-  list no elements, because macOS reports the hidden login's windows as not
-  visible and WebKit then stops drawing (`doctor` →
-  `capabilities.webContent`). Native windows are unaffected. Test a web app's
-  pages another way, and report them as not checked.
+- Web pages do not draw in the helper unless a Screen Sharing session is
+  connected to it: Safari and every other WebKit view (Dictionary, help
+  windows, apps built on web views) show a blank area and list no elements,
+  because macOS reports the hidden login's windows as not visible and WebKit
+  then stops drawing (`doctor` → `capabilities.webContent`). Native windows
+  are unaffected. Test a web app's pages another way, and report them as not
+  checked.
 - Credentials and app sign-ins are never copied from the person's account.
 - Audio plays on the person's speakers.
 - Some things are shared with the person's account. The process list is the

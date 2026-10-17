@@ -366,6 +366,8 @@ enum Command {
     ///
     /// It is stopped after --timeout seconds (20 unless given, at most 600).
     /// Start anything longer in the background and read its log later.
+    /// Atlas exits 1 when the command's exit code is not 0 or it was
+    /// stopped, with the reply still ok.
     Run {
         /// Seconds before the command is stopped.
         #[arg(long, value_name = "SECONDS", default_value_t = atlas::client::RUN_TIMEOUT.as_secs(), value_parser = run_seconds)]
@@ -559,6 +561,7 @@ enum EnvironmentCommand {
         /// The ID the copy printed.
         #[arg(value_name = "ID")]
         transaction_id: String,
+        /// Undo the copy; otherwise show what undoing it would do.
         #[arg(long)]
         apply: bool,
     },
@@ -1536,18 +1539,34 @@ fn command_reference() -> String {
     // With each command's examples, as `--help` shows them.
     let mut root = help::command().bin_name("atlas");
     root.build();
-    // In the order of `atlas --help`.
+    // In the order of `atlas --help`, each command followed by its own
+    // subcommands (such as environment rollback).
     for name in help::GROUPS.iter().flat_map(|(_, names)| names.iter()) {
         let Some(command) = root.find_subcommand_mut(name) else {
             continue;
         };
-        let help = command.render_long_help().to_string();
-        text.push_str(&format!(
-            "\n## atlas {name}\n\n```text\n{}\n```\n",
-            help.trim_end()
-        ));
+        reference_section(&mut text, &format!("atlas {name}"), command);
+        let nested: Vec<String> = command
+            .get_subcommands()
+            .filter(|sub| !sub.is_hide_set() && sub.get_name() != "help")
+            .map(|sub| sub.get_name().to_owned())
+            .collect();
+        for sub in nested {
+            if let Some(subcommand) = command.find_subcommand_mut(&sub) {
+                reference_section(&mut text, &format!("atlas {name} {sub}"), subcommand);
+            }
+        }
     }
     text
+}
+
+/// One command's section of the reference: its long help, verbatim.
+fn reference_section(text: &mut String, title: &str, command: &mut clap::Command) {
+    let help = command.render_long_help().to_string();
+    text.push_str(&format!(
+        "\n## {title}\n\n```text\n{}\n```\n",
+        help.trim_end()
+    ));
 }
 
 /// `run --timeout`: whole seconds the helper allows a command.

@@ -471,7 +471,6 @@ fn retained(mut result: Result<Value>, id: &str, stage: &Path) -> Result<Value> 
                 value["retainedRequest"] = json!(stage);
             }
             value["planId"] = json!(id);
-            value["transactionId"] = json!(id);
         }
         Err(error) if plan => error.error.push_str(&format!(
             " Frozen plan {id} retained at {}.",
