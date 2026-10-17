@@ -261,7 +261,7 @@ func png(width: Int = 4, height: Int = 3) -> Data {
         for _ in 0..<3 { model.scrolled(dx: 0, dy: 10, precise: false, at: CGPoint(x: 200, y: 150), in: size) }
         await settle { service.actions.count == 1 }
         #expect(service.actions.first?.count == 3)
-        #expect(service.actions.first?.last == .scroll(x: 756, y: 491, dx: 0, dy: 30))
+        #expect(service.actions.first?.last == .scroll(x: 756, y: 491, dx: 0, dy: -30))
         model.close()
     }
 

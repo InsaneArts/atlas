@@ -13,10 +13,10 @@ pub struct State {
     previous: Option<String>,
     expires: Option<Instant>,
     closed: bool,
-    /// The last ownership ended by a cancel (the person's or the
-    /// controller's doing), not by expiry or the gate closing; reported
-    /// once.
-    cancelled: bool,
+    /// The owner whose control a cancel ended (the person's or the
+    /// controller's doing, not expiry or the gate closing); told once, to
+    /// that owner's action under way.
+    cancelled: Option<String>,
 }
 
 impl State {
@@ -26,11 +26,14 @@ impl State {
         }
     }
 
-    fn require(&mut self, owner: &str) -> Result<()> {
+    /// Refuse unless `owner` holds control. An action under way (`acting`)
+    /// whose owner was cancelled is told so, once; anything else that finds
+    /// control gone is told it was lost.
+    fn require(&mut self, owner: &str, acting: bool) -> Result<()> {
         self.expire();
         if self.closed || self.owner.as_deref() != Some(owner) {
-            // Told once, to what was under way; later callers find it lost.
-            if std::mem::take(&mut self.cancelled) && !self.closed && self.owner.is_none() {
+            if acting && !self.closed && self.cancelled.as_deref() == Some(owner) {
+                self.cancelled = None;
                 return Err(Error::new("cancelled", "Native control was stopped"));
             }
 
@@ -75,7 +78,7 @@ impl Gate {
         state.owner = Some(owner.to_owned());
         state.previous = state.owner.clone();
         state.expires = Some(Instant::now() + TTL);
-        state.cancelled = false;
+        state.cancelled = None;
         Ok(Grant {
             gate: self.clone(),
             owner: owner.to_owned(),
@@ -83,7 +86,7 @@ impl Gate {
     }
 
     pub fn grant(self: &Arc<Self>, owner: &str) -> Result<Grant> {
-        self.lock()?.require(owner)?;
+        self.lock()?.require(owner, false)?;
         Ok(Grant {
             gate: self.clone(),
             owner: owner.to_owned(),
@@ -92,7 +95,7 @@ impl Gate {
 
     pub fn renew(&self, owner: &str) -> Result<()> {
         let mut state = self.lock()?;
-        state.require(owner)?;
+        state.require(owner, false)?;
         state.expires = Some(Instant::now() + TTL);
         Ok(())
     }
@@ -110,8 +113,10 @@ impl Gate {
             ));
         }
 
-        state.cancelled |= state.owner.is_some();
-        state.owner = None;
+        if let Some(owner) = state.owner.take() {
+            state.cancelled = Some(owner);
+        }
+
         Ok(())
     }
 
@@ -120,7 +125,7 @@ impl Gate {
     pub fn revoke(&self) -> Result<()> {
         let mut state = self.lock()?;
         state.owner = None;
-        state.cancelled = false;
+        state.cancelled = None;
         Ok(())
     }
 
@@ -141,7 +146,7 @@ pub struct Grant {
 impl Grant {
     pub fn authorize(&self) -> Result<MutexGuard<'_, State>> {
         let mut state = self.gate.lock()?;
-        state.require(&self.owner)?;
+        state.require(&self.owner, true)?;
         Ok(state)
     }
 }
@@ -221,8 +226,22 @@ mod tests {
         let grant = gate.grant(&owner('a')).unwrap();
         drop(grant.authorize().unwrap());
         gate.cancel(None).unwrap();
-        assert_eq!(code(grant.authorize()), "cancelled");
-        assert_eq!(code(gate.grant(&owner('a'))), "lease-lost", "said once");
+        assert_eq!(
+            code(gate.renew(&owner('a'))),
+            "lease-lost",
+            "a keep-alive is not told"
+        );
+        assert_eq!(
+            code(gate.grant(&owner('b'))),
+            "lease-lost",
+            "nor a stranger"
+        );
+        assert_eq!(
+            code(grant.authorize()),
+            "cancelled",
+            "the action under way is"
+        );
+        assert_eq!(code(grant.authorize()), "lease-lost", "once");
         let _again = gate.acquire(&owner('a')).unwrap();
         gate.revoke().unwrap();
         assert_eq!(

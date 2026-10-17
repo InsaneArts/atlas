@@ -921,23 +921,21 @@ async fn target_pid(client: &Client, target: &Target) -> Result<i64> {
 }
 
 /// Whether an `apps` row is the app called `name`: by the name it shows,
-/// which may be localized, or by its bundle's or executable's file name.
+/// which may be localized, or by the file name of its executable or of its
+/// own (innermost) bundle.
 fn app_named(app: &Value, name: &str) -> bool {
     let shown = app["name"].as_str().is_some_and(|own| same_text(own, name));
-    let file_names = app["executable"]
-        .as_str()
-        .map(std::path::Path::new)
-        .into_iter()
-        .flat_map(|path| {
-            path.ancestors()
-                .enumerate()
-                .filter(|(depth, ancestor)| {
-                    *depth == 0 || ancestor.extension().is_some_and(|ext| ext == "app")
-                })
-                .filter_map(|(_, ancestor)| ancestor.file_stem())
-        })
-        .filter_map(|stem| stem.to_str());
-    shown || file_names.into_iter().any(|own| same_text(own, name))
+    let executable = app["executable"].as_str().map(std::path::Path::new);
+    let bundle = executable.and_then(|path| {
+        path.ancestors()
+            .find(|ancestor| ancestor.extension().is_some_and(|ext| ext == "app"))
+    });
+    shown
+        || [executable, bundle]
+            .into_iter()
+            .flatten()
+            .filter_map(|path| path.file_stem()?.to_str())
+            .any(|own| same_text(own, name))
 }
 
 async fn app_elements(client: &Client, pid: i64) -> Result<(Vec<Element>, bool)> {
@@ -1192,6 +1190,8 @@ pub async fn click_element(
 mod tests {
     use super::*;
 
+    use crate::session::Display;
+
     /// The process a name resolves to from the window list alone.
     fn app_pid(windows: &[Window], target: &Target) -> Result<i64> {
         match target {
@@ -1214,8 +1214,15 @@ mod tests {
             "a folder on the way is not a name"
         );
         assert!(!app_named(&json!({"name": "Finder"}), "TextEdit"));
+        let nested = json!({
+            "name": "Simulator",
+            "executable": "/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app/Contents/MacOS/Simulator",
+        });
+        assert!(
+            !app_named(&nested, "Xcode"),
+            "the bundle it lives in is not its name"
+        );
     }
-    use crate::session::Display;
 
     fn display() -> Display {
         Display {

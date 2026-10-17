@@ -175,9 +175,11 @@ extension ViewerModel {
             wheelSending = nil
             let delta = wheel.take()
             guard let at = wheelAt, delta.dx != 0 || delta.dy != 0 else { return }
+            // AppKit's positive delta moves content down (towards the top of
+            // the page); Atlas's positive lines scroll down the page.
             enqueue([
                 .move(x: at.x, y: at.y), .wait(milliseconds: 80),
-                .scroll(x: at.x, y: at.y, dx: delta.dx, dy: delta.dy),
+                .scroll(x: at.x, y: at.y, dx: -delta.dx, dy: -delta.dy),
             ])
         }
     }

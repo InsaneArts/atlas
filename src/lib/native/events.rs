@@ -5,8 +5,8 @@ use super::{
 };
 use crate::{
     actions::{
-        Action, Button, CLICK_GAP, DRAG_HOLD, DRAG_START, DRAG_STEP, DRAG_STEPS, PointerPhase,
-        SCROLL_SETTLE, TYPE_GAP, modifier_flags, parse_key,
+        Action, Button, CLICK_GAP, DRAG_ANCHOR, DRAG_HOLD, DRAG_START, DRAG_STEP, DRAG_STEPS,
+        PointerPhase, SCROLL_SETTLE, TYPE_GAP, modifier_flags, parse_key,
     },
     error::{Error, Result},
     native::{accessibility_trusted, session_info},
@@ -279,8 +279,10 @@ impl Engine {
                     // lose its first jump. A stationary click never enters
                     // this path.
                     let anchor = Point {
-                        x: self.position.x + (point.x - self.position.x).clamp(-1.0, 1.0),
-                        y: self.position.y + (point.y - self.position.y).clamp(-1.0, 1.0),
+                        x: self.position.x
+                            + (point.x - self.position.x).clamp(-DRAG_ANCHOR, DRAG_ANCHOR),
+                        y: self.position.y
+                            + (point.y - self.position.y).clamp(-DRAG_ANCHOR, DRAG_ANCHOR),
                     };
                     self.mouse(active.dragged(), anchor, active, self.click_count, flags)?;
                     self.position = anchor;
@@ -444,19 +446,20 @@ impl Engine {
                 // step past the target, releases there, and then rests on
                 // the target: the window or item moves exactly as asked.
                 let step = Point {
-                    x: (to_x - from_x).clamp(-1.0, 1.0),
-                    y: (to_y - from_y).clamp(-1.0, 1.0),
+                    x: (to_x - from_x).clamp(-DRAG_ANCHOR, DRAG_ANCHOR),
+                    y: (to_y - from_y).clamp(-DRAG_ANCHOR, DRAG_ANCHOR),
                 };
                 let anchor = Point {
                     x: from_x + step.x,
                     y: from_y + step.y,
                 };
                 let end = Point {
-                    x: to_x + step.x,
-                    y: to_y + step.y,
+                    x: (to_x + step.x).clamp(0.0, self.epoch.width - 1.0),
+                    y: (to_y + step.y).clamp(0.0, self.epoch.height - 1.0),
                 };
                 self.pointer(PointerPhase::Move, anchor, button, &[], 1)
                     .await?;
+                self.delay(DRAG_START).await?;
                 for step in 1..=DRAG_STEPS {
                     let t = f64::from(step) / f64::from(DRAG_STEPS);
                     self.pointer(

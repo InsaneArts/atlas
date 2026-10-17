@@ -497,7 +497,9 @@ Examples:
 ## atlas drag
 
 ```text
-Drag from one point to another
+Drag from one point to another.
+
+What is dragged (a window, a slider's knob, a selection) moves by exactly the distance between the points; the button itself is released one point past the end, in the direction of travel. Drag-and-drop onto a target (selected text, files, list items) does not begin in the helper: macOS starts such a drag only from a real mouse.
 
 Usage: atlas drag [OPTIONS] <FROM_X> <FROM_Y> <TO_X> <TO_Y>
 
@@ -522,7 +524,7 @@ Options:
           [possible values: left, middle, right]
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 
 Global options:
       --json
@@ -540,7 +542,7 @@ Examples:
 ```text
 Scroll at a point.
 
-Scroll at X Y by lines; negative values scroll up or left.
+Scroll at X Y by lines, as a mouse wheel's notches (about 10 points each, as the app has it); negative values scroll up or left.
 
 Usage: atlas scroll [OPTIONS] <X> <Y>
 
@@ -946,7 +948,7 @@ Usage: atlas verify-native [OPTIONS]
 
 Options:
       --fixture <FIXTURE>
-          Compiled tests/live/DesktopFixture.swift inside a helper-readable path
+          The compiled DesktopFixture test app, where the helper can run it
           
           [default: /Users/Shared/AtlasTests/DesktopFixture]
 

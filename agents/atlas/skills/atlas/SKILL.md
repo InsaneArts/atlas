@@ -114,7 +114,8 @@ screenshot pixels by multiplying by `pointsPerPixel`.
 - Otherwise `atlas click X Y [--button right] [--count 2] [--modifiers cmd]`.
 - `atlas type "text"` (or `--stdin` for long text), `atlas key cmd+s`
   (`key escape return` presses several; `+` alone or `cmd++` is the plus key),
-  `atlas drag FX FY TX TY`, `atlas scroll X Y --dy -3` (at most 100 lines a
+  `atlas drag FX FY TX TY`, `atlas scroll X Y --dy -3` (a line is a wheel
+  notch, about 10 points; at most 100 lines a
   call). `atlas input` sends up to 32 actions that finish within two seconds.
 - `atlas open --app NAME [FILE|URL]`, then `atlas wait --app NAME`, which
   waits for a window. A menu bar app may start with none: open one from its
@@ -209,8 +210,9 @@ you found it:
    still names what the copy did (`create` is undone by removing the file,
    the others by putting the earlier file back). Folders the copy made go
    too, unless something else now uses them (`retainedDirectories`).
-3. Delete files you made with `atlas run -- /bin/rm FILE...` rather than an
-   `rm` inside `sh -c`, so a reviewer of your commands can see what goes.
+3. Delete files you made with `atlas run -- /bin/rm FILE...`, one command
+   on its own rather than an `rm` inside `sh -c` or beside other commands,
+   so a reviewer of your commands can see what goes.
 
 Screenshots are deleted by Atlas after a week; you need not remove them.
 
@@ -241,6 +243,11 @@ unless you looked at it in the helper.
 ## Limits
 
 - The Dock does not take Atlas's clicks; start apps with `atlas open`.
+- Drag-and-drop onto a target (selected text, files, list items) does not
+  begin in the helper: macOS starts such a drag only from a real mouse.
+  `atlas drag` still moves windows and sliders and selects text; put files
+  where they belong with `run` instead, and report a drop you could not do
+  as not checked.
 - Native Save/Open panels work only while an authenticated Screen Sharing
   session is connected to the helper (`doctor` → `capabilities.nativeDialogs`).
   Without it, clicks in a panel report `ok` but do nothing; `atlas key escape`
