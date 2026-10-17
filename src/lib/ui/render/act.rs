@@ -65,13 +65,13 @@ pub fn run(value: &Value) -> Rendered {
     let mut notes = Vec::new();
     if value["output"].is_null() && value["events"].is_array() {
         notes.push(format!(
-            "{} The output is over 1 MB; --json has all of it.",
+            "{} The output could not be decoded; --json shows it as sent.",
             style::warn()
         ));
     }
     if value["outputTruncated"] == true {
         notes.push(format!(
-            "{} The output was cut at 1 MB; the rest was not kept.",
+            "{} The output was cut at 1 MB; write longer output to a file and read parts of it.",
             style::warn()
         ));
     }

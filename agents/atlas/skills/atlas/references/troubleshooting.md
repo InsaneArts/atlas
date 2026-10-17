@@ -13,7 +13,7 @@ its own failure is in `exitCode`.)
 | `bad-request` | The helper daemon rejected a malformed request. | Check the command's arguments against `references/commands.md`. |
 | `blocked` | This shell may not connect to the helper or write Atlas's own files, usually because an agent sandbox blocks local sockets or writes outside its folder. The helper may be fine. | Run Atlas commands outside the sandbox (ask for that permission), or have the sandbox allow the helper socket and the folders Atlas writes: `~/Library/Caches/Atlas`, `~/Library/Application Support/Atlas/runs` and `/Users/Shared/Atlas`. Do not run `atlas init` for this. |
 | `busy` | Another controller (often the person, in the viewer) has control. | Wait and retry later; never take control from the person. |
-| `cancelled` | The person stopped at a question (Esc). | That step did not happen, but earlier steps may have; check with `atlas doctor`, and ask the person before trying again. |
+| `cancelled` | The person stopped: at a question (Esc), or an input part way (`partial` says some of it landed). | Earlier steps may have happened; look, then ask the person before trying again. |
 | `capture` | A screenshot could not be taken or encoded. | Retry once; then `atlas doctor`. |
 | `config` | Atlas is not set up (no settings file). | Use the setup skill (`atlas init`). |
 | `config-invalid` | The settings file exists but could not be read. | Show `error` to the person; they fix or move the file, then run `atlas init`. |
@@ -26,7 +26,7 @@ its own failure is in `exitCode`.)
 | `install` | The shared executable could not be installed. | Atlas.app must be in /Applications; tell the person. |
 | `invalid-json` | JSON passed to a command could not be read. | Fix the JSON (for example the `input` actions). |
 | `io` | A file or path could not be read or written. | Read `error`; check the path it names. |
-| `lease-lost` | Control was released (by the person or a timeout) mid-action. | Observe, then retry only if the person is not controlling. |
+| `lease-lost` | Control was lost mid-action: it expired, or the session changed. | Observe, then retry only if the person is not controlling. |
 | `menubar` | The menu bar companion could not start. | Not needed for your task; continue with CLI commands. |
 | `native` | A native input or dialog check failed. | Read `error`; native Save/Open needs Screen Sharing (see the guide). |
 | `no-environment` | No helper environment profile is installed for `environment run`. | Use `atlas run`, or install a profile with `atlas environment profile`. |

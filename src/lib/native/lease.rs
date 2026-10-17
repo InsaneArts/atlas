@@ -13,6 +13,9 @@ pub struct State {
     previous: Option<String>,
     expires: Option<Instant>,
     closed: bool,
+    /// The last ownership ended by a cancel (the person's or the
+    /// controller's doing), not by expiry or the gate closing.
+    cancelled: bool,
 }
 
 impl State {
@@ -25,11 +28,16 @@ impl State {
     fn require(&mut self, owner: &str) -> Result<()> {
         self.expire();
         if self.closed || self.owner.as_deref() != Some(owner) {
+            if self.cancelled && !self.closed && self.owner.is_none() {
+                return Err(Error::new("cancelled", "Native control was stopped"));
+            }
+
             return Err(Error::new(
                 "lease-lost",
                 "Native control was released or expired",
             ));
         }
+
         Ok(())
     }
 }
@@ -65,6 +73,7 @@ impl Gate {
         state.owner = Some(owner.to_owned());
         state.previous = state.owner.clone();
         state.expires = Some(Instant::now() + TTL);
+        state.cancelled = false;
         Ok(Grant {
             gate: self.clone(),
             owner: owner.to_owned(),
@@ -86,6 +95,8 @@ impl Gate {
         Ok(())
     }
 
+    /// End ownership on purpose: the person stopped, or the controller
+    /// released it. What was under way then reads as cancelled.
     pub fn cancel(&self, owner: Option<&str>) -> Result<()> {
         let mut state = self.lock()?;
         if let Some(owner) = owner
@@ -96,7 +107,18 @@ impl Gate {
                 "This token cannot release another controller",
             ));
         }
+
+        state.cancelled |= state.owner.is_some();
         state.owner = None;
+        Ok(())
+    }
+
+    /// End ownership for a cause that is nobody's doing (the session
+    /// changed, an action failed). What was under way reads as lost.
+    pub fn revoke(&self) -> Result<()> {
+        let mut state = self.lock()?;
+        state.owner = None;
+        state.cancelled = false;
         Ok(())
     }
 
@@ -197,8 +219,15 @@ mod tests {
         let grant = gate.grant(&owner('a')).unwrap();
         drop(grant.authorize().unwrap());
         gate.cancel(None).unwrap();
-        assert_eq!(code(grant.authorize()), "lease-lost");
-        assert_eq!(code(gate.grant(&owner('a'))), "lease-lost");
+        assert_eq!(code(grant.authorize()), "cancelled");
+        assert_eq!(code(gate.grant(&owner('a'))), "cancelled");
+        let _again = gate.acquire(&owner('a')).unwrap();
+        gate.revoke().unwrap();
+        assert_eq!(
+            code(gate.grant(&owner('a'))),
+            "lease-lost",
+            "nobody stopped it"
+        );
     }
 
     #[test]

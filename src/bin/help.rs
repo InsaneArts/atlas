@@ -87,7 +87,7 @@ const EXAMPLES: &[(&str, &[&str])] = &[
     (
         "run",
         &[
-            "atlas run -- /bin/sh -c 'ls \"$HOME/Documents\"'",
+            "atlas run -- /bin/sh -c 'ls \"$HOME/atlas-work\"'",
             "atlas run --timeout 300 -- xcodebuild test-without-building -xctestrun Tests.xctestrun",
         ],
     ),
