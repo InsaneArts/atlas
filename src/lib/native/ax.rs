@@ -40,11 +40,13 @@ const INCOMPLETE: [AXError; 3] = [
     AXError::APIDisabled,
 ];
 /// AX errors meaning the element simply lacks the attribute: no value,
-/// unsupported, not implemented.
-const ABSENT: [AXError; 3] = [
+/// unsupported, not implemented, or its app's own getter failing (an AppKit
+/// text view answers Failure for its description every time).
+const ABSENT: [AXError; 4] = [
     AXError::NoValue,
     AXError::AttributeUnsupported,
     AXError::NotImplemented,
+    AXError::Failure,
 ];
 /// Attributes a selector matches on; an element whose selector attribute
 /// fails to read (other than being absent) may be an unseen match.
@@ -407,8 +409,8 @@ pub struct Element {
     pub enabled: Option<bool>,
     pub focused: Option<bool>,
     pub frame: Option<Frame>,
-    /// Selector attributes (role, title, description, identifier) that could
-    /// not be read, so this element might match a selector unseen.
+    /// Selector attributes (role, title, description, value, identifier)
+    /// that could not be read, so this element might match a selector unseen.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unreadable: Vec<String>,
     /// Text attributes reported only in part (their first 200 UTF-16 units,
@@ -506,9 +508,16 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
     // must reach; any it does not might hold an unseen match.
     let mut unvisited: Vec<CFRetained<AXUIElement>> = Vec::new();
     // The menu bar shows the active app's titles, which are on screen and
-    // take clicks; the closed menus under them are left out below. A bar
-    // that fails to read might hold an unseen match.
-    if scan.flag(&app, "AXFrontmost") == Some(true) {
+    // take clicks; the closed menus under them are left out below. A bar,
+    // or the flag that says whether it is this app's, that fails to read
+    // might hide an unseen match.
+    scan.last_error = None;
+    let frontmost = scan.flag(&app, "AXFrontmost");
+    if frontmost.is_none() {
+        scan.incomplete |= scan.last_error.is_some_and(|code| !ABSENT.contains(&code));
+    }
+
+    if frontmost == Some(true) {
         scan.last_error = None;
         let bar = scan
             .attribute(&app, "AXMenuBar")
@@ -773,7 +782,7 @@ mod tests {
     #[test]
     fn ax_error_lists_keep_their_codes() {
         assert_eq!(INCOMPLETE.map(|e| e.0), [-25204, -25202, -25211]);
-        assert_eq!(ABSENT.map(|e| e.0), [-25212, -25205, -25208]);
+        assert_eq!(ABSENT.map(|e| e.0), [-25212, -25205, -25208, -25200]);
     }
 
     /// Past the deadline nothing more is asked and the scan is incomplete.

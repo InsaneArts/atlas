@@ -386,6 +386,7 @@ impl Client {
                 match result["code"].as_str() {
                     Some("busy") => "busy",
                     Some("lease-lost") => "lease-lost",
+                    Some("cancelled") => "cancelled",
                     Some("identity") => "identity",
                     Some("session-changed") => "session-changed",
                     Some("permission") => "permission",

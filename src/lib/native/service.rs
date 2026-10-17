@@ -253,7 +253,7 @@ impl Service {
         for (performed, action) in actions.into_iter().enumerate() {
             let before = engine.posted;
             if let Err(error) = engine.perform(action).await {
-                let _ = self.gate.cancel(Some(owner));
+                let _ = self.gate.revoke();
                 // An action that posted some of its events before failing
                 // (a few typed characters, one click of two) had part of
                 // its effect, and nobody can say which part.
@@ -321,7 +321,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
             _ = service.stopping.notified() => break Ok(()),
             _ = timer.tick() => {
                 if service.check().is_err() {
-                    let _ = service.gate.cancel(None);
+                    let _ = service.gate.revoke();
                 }
                 match service.gate.active() {
                     Ok(true) => {}

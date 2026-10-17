@@ -199,6 +199,20 @@ pub(crate) fn same_text(a: &str, b: &str) -> bool {
             .eq(b.chars().flat_map(char::to_lowercase))
 }
 
+/// How text shown only in part matches `name`. Its first ", " part is
+/// whole, so it is judged like any other; the rest proves nothing, unless
+/// `unknown` lets a possible match count.
+fn cut_match(shown: Option<&str>, name: &str, unknown: bool) -> Option<NameMatch> {
+    let shown = shown?;
+    if let Some((first, _)) = shown.split_once(", ")
+        && same_text(first, name)
+    {
+        return Some(NameMatch::Leading);
+    }
+
+    (unknown && could_begin(shown, name)).then_some(NameMatch::Exact)
+}
+
 /// Whether `text`, which is only the start of a longer value, could begin
 /// a value named `name`: the part shown must begin the name.
 fn could_begin(text: &str, name: &str) -> bool {
@@ -714,15 +728,11 @@ fn name_match(text: &str, name: &str) -> Option<NameMatch> {
 
 impl ElementFilter {
     /// How `element` matches, treating the attributes in `unknown` as
-    /// matching (they could not be read). An attribute shown only in part
-    /// proves nothing: a match on it is never claimed. An identifier is
-    /// never a label, so it only matches whole.
+    /// matching (they could not be read). Of an attribute shown only in
+    /// part, only its whole first part is judged. An identifier is never a
+    /// label, so it only matches whole.
     fn compare(&self, element: &Element, unknown: &dyn Fn(&str) -> bool) -> Option<NameMatch> {
         let cut = |attribute: &str| element.truncated.iter().any(|a| a == attribute);
-        // What is shown of a cut attribute can still rule a name out.
-        let could_hide = |value: &Option<String>, name: &str| {
-            value.as_deref().is_some_and(|text| could_begin(text, name))
-        };
         let role = self.role.as_deref().is_none_or(|role| {
             unknown("AXRole")
                 || element
@@ -738,7 +748,7 @@ impl ElementFilter {
         };
         let text = |value: &Option<String>, attribute: &str| {
             if cut(attribute) {
-                return (unknown(attribute) && could_hide(value, name)).then_some(NameMatch::Exact);
+                return cut_match(value.as_deref(), name, unknown(attribute));
             }
             if unknown(attribute) {
                 return Some(NameMatch::Exact);
@@ -746,8 +756,13 @@ impl ElementFilter {
             value.as_deref().and_then(|text| name_match(text, name))
         };
         let identifier = if cut("AXIdentifier") {
-            (unknown("AXIdentifier") && could_hide(&element.identifier, name))
-                .then_some(NameMatch::Exact)
+            // What is shown of a cut identifier can still rule a name out.
+            (unknown("AXIdentifier")
+                && element
+                    .identifier
+                    .as_deref()
+                    .is_some_and(|text| could_begin(text, name)))
+            .then_some(NameMatch::Exact)
         } else if unknown("AXIdentifier") {
             Some(NameMatch::Exact)
         } else {
@@ -758,10 +773,11 @@ impl ElementFilter {
                 .map(|_| NameMatch::Exact)
         };
         let label = if cut("AXValue") {
-            (unknown("AXValue") && label(element).is_some_and(|text| could_begin(text, name)))
-                .then_some(NameMatch::Exact)
+            cut_match(label(element), name, unknown("AXValue"))
         } else if unknown("AXValue") {
-            label(element).map(|_| NameMatch::Exact)
+            // A static text whose value failed to read may be the label.
+            (element.role.as_deref() == Some("AXStaticText") || unknown("AXRole"))
+                .then_some(NameMatch::Exact)
         } else {
             label(element).and_then(|text| name_match(text, name))
         };
@@ -878,6 +894,29 @@ fn app_pid(windows: &[Window], target: &Target) -> Result<i64> {
     }
 }
 
+/// The process a command is about: the one with the app's windows, or,
+/// when none of its windows is open, the active app of that name (its
+/// menu bar is still on screen).
+async fn target_pid(client: &Client, target: &Target) -> Result<i64> {
+    let error = match app_pid(&windows(client).await?, target) {
+        Ok(pid) => return Ok(pid),
+        Err(error) => error,
+    };
+    let Target::Name(name) = target else {
+        return Err(error);
+    };
+    let apps = client.apps().await?;
+    apps["apps"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|app| {
+            app["active"] == true && app["name"].as_str().is_some_and(|own| same_text(own, name))
+        })
+        .and_then(|app| app["pid"].as_i64())
+        .ok_or(error)
+}
+
 async fn app_elements(client: &Client, pid: i64) -> Result<(Vec<Element>, bool)> {
     let probe = client.config.identity_probe.to_string_lossy().into_owned();
     let reply = client
@@ -908,7 +947,7 @@ pub async fn elements(
     filter: &ElementFilter,
     max: usize,
 ) -> Result<Value> {
-    let pid = app_pid(&windows(client).await?, target)?;
+    let pid = target_pid(client, target).await?;
     let (all, incomplete) = app_elements(client, pid).await?;
     let total = all.len();
     let matching: Vec<_> = all
@@ -1040,10 +1079,11 @@ fn choose<'a>(elements: &'a [Element], filter: &ElementFilter) -> Result<&'a Ele
         ));
     };
     // An element whose selector attributes could not be read may be a
-    // second, unseen match.
+    // second, unseen match, unless it is collapsed and could never be chosen.
     let doubtful = elements.iter().any(|other| {
         other.index != element.index
             && (!other.unreadable.is_empty() || !other.truncated.is_empty())
+            && other.frame.as_ref().is_none_or(drawn)
             && filter.might_match(other)
     });
     if doubtful {
@@ -1075,7 +1115,7 @@ pub async fn click_element(
     }
     let ownership = client.controller.acquire(false)?;
     let epoch = client.identity().await?.epoch;
-    let pid = app_pid(&windows(client).await?, target)?;
+    let pid = target_pid(client, target).await?;
     let (elements, incomplete) = app_elements(client, pid).await?;
     if incomplete {
         return Err(Error::new(
@@ -1624,11 +1664,37 @@ mod tests {
         message.value = Some("This document explains what the button does".into());
         message.truncated = vec!["AXValue".into()];
         let ok = shown(7, "AXButton", Some("OK"), None);
-        assert_eq!(choose(&[message, ok], &named("ok")).unwrap().index, 7);
+        assert_eq!(
+            choose(&[message, ok.clone()], &named("ok")).unwrap().index,
+            7
+        );
         let mut long = shown(8, "AXButton", Some("Delete every"), None);
         long.truncated = vec!["AXTitle".into()];
         assert!(named("delete everything").might_match(&long));
         assert!(!named("delete").might_match(&long));
+
+        // The whole first part of a cut label is still judged.
+        let mut parts = shown(
+            9,
+            "AXMenuItem",
+            Some("QA Eject, Option-Space, 6 Slices"),
+            None,
+        );
+        parts.truncated = vec!["AXTitle".into()];
+        assert!(matches!(
+            named("qa eject").match_of(&parts),
+            Some(NameMatch::Leading)
+        ));
+        assert!(!named("eject").might_match(&parts));
+
+        // A static text whose value failed to read may be the label, unless
+        // it is collapsed.
+        let mut unread = shown(10, "AXStaticText", None, None);
+        unread.unreadable = vec!["AXValue".into()];
+        assert!(named("ok").might_match(&unread));
+        assert!(choose(&[unread.clone(), ok.clone()], &named("ok")).is_err());
+        unread.frame.as_mut().unwrap().width = 0.0;
+        assert_eq!(choose(&[unread, ok], &named("ok")).unwrap().index, 7);
 
         let help = shown(4, "AXButton", Some("Help"), None);
         let title = shown(5, "AXMenuBarItem", Some("Help"), None);

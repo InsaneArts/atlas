@@ -196,25 +196,56 @@ pub fn run_output(reply: &Value, limit: usize) -> std::result::Result<Vec<u8>, O
     Ok(output)
 }
 
-/// A helper `run` reply with its output decoded into an `output` string (lossy
-/// UTF-8, at most 1 MiB) and the command's `pid` in place of the events they
-/// came in, so callers need not decode them and never read them twice.
-/// Events stay only when they could not be decoded.
+/// The most output `with_output` keeps as text.
+pub const OUTPUT_LIMIT: usize = 1 << 20;
+
+/// The first `limit` bytes of a reply's output, read event by event until
+/// one does not decode.
+fn output_prefix(reply: &Value, limit: usize) -> Vec<u8> {
+    let mut output = Vec::new();
+    for event in reply["events"].as_array().into_iter().flatten() {
+        if event["event"] != "output" {
+            continue;
+        }
+        let Some(decoded) = event["data"].as_str().and_then(|d| STANDARD.decode(d).ok()) else {
+            break;
+        };
+        let room = limit.saturating_sub(output.len());
+        output.extend_from_slice(&decoded[..decoded.len().min(room)]);
+        if output.len() >= limit {
+            break;
+        }
+    }
+
+    output
+}
+
+/// A helper `run` reply with its output decoded into an `output` string
+/// (lossy UTF-8) and the command's `pid` in place of the events they came
+/// in, so callers need not decode them and never read them twice. Output
+/// past [`OUTPUT_LIMIT`] is cut and said to be (`outputTruncated`). Events
+/// stay only when they could not be decoded.
 pub fn with_output(mut reply: Value) -> Value {
-    if let Ok(output) = run_output(&reply, 1 << 20) {
-        let pid = reply["events"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .find(|event| event["event"] == "started")
-            .and_then(|event| event["pid"].as_i64());
-        reply["output"] = json!(String::from_utf8_lossy(&output));
-        if let Some(pid) = pid {
-            reply["pid"] = json!(pid);
-        }
-        if let Some(object) = reply.as_object_mut() {
-            object.remove("events");
-        }
+    let (output, cut) = match run_output(&reply, OUTPUT_LIMIT) {
+        Ok(output) => (output, false),
+        Err(OutputError::Oversized) => (output_prefix(&reply, OUTPUT_LIMIT), true),
+        Err(OutputError::Malformed) => return reply,
+    };
+    let pid = reply["events"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|event| event["event"] == "started")
+        .and_then(|event| event["pid"].as_i64());
+    reply["output"] = json!(String::from_utf8_lossy(&output));
+    if cut {
+        reply["outputTruncated"] = json!(true);
+    }
+    if let Some(pid) = pid {
+        reply["pid"] = json!(pid);
+    }
+    if let Some(object) = reply.as_object_mut() {
+        object.remove("events");
     }
 
     reply
@@ -222,7 +253,8 @@ pub fn with_output(mut reply: Value) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{OutputError, refused, run_output, with_output};
+    use super::{OUTPUT_LIMIT, OutputError, refused, run_output, with_output};
+    use base64::{Engine, engine::general_purpose::STANDARD};
     use serde_json::json;
 
     /// The client refuses exactly the requests the helper daemon would: a
@@ -304,5 +336,16 @@ mod tests {
             undecodable.get("events").is_some(),
             "what could not be decoded stays"
         );
+
+        let chunk = STANDARD.encode("x".repeat(600_000));
+        let long = with_output(json!({"events": [
+            {"event": "started", "pid": 9},
+            {"event": "output", "data": chunk},
+            {"event": "output", "data": chunk},
+        ]}));
+        assert_eq!(long["output"].as_str().unwrap().len(), OUTPUT_LIMIT);
+        assert_eq!(long["outputTruncated"], true, "the cut is said");
+        assert_eq!(long["pid"], 9);
+        assert!(long.get("events").is_none());
     }
 }

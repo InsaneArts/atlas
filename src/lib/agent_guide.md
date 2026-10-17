@@ -38,7 +38,8 @@ not test on the person's desktop instead, and do not silently skip the check.
 1. `atlas doctor`: continue when `ready` is true (while it is not, doctor
    still answers `ok` but exits 1). Otherwise do the
    `nextSteps` that are Atlas commands (such as `atlas start-input` or
-   `atlas restart`) and check again. Tell the person only what needs them: a
+   `atlas restart`) and check again; do the same for a `warnings` entry that
+   names one. Tell the person only what needs them: a
    password, allowing a permission, switching accounts. Never change
    permissions yourself. (`doctor --verbose` adds the full status.)
 2. `atlas readiness --tool NAME --app NAME` checks the tools and installed apps
@@ -85,7 +86,8 @@ screenshot pixels by multiplying by `pointsPerPixel`.
   its first part. It opens a menu by its title (`--name Format
   --role AXMenuBarItem`) and, with a menu open (menu bar, menu bar item or
   context menu), clicks that menu's items. Buttons in a sheet work the same
-  way.
+  way. An app whose windows are all closed is still found by name while it
+  is in front.
 - Otherwise `atlas click X Y [--button right] [--count 2] [--modifiers cmd]`.
 - `atlas type "text"` (or `--stdin` for long text), `atlas key cmd+s`
   (`key escape return` presses several; `cmd++` is Command and plus),
@@ -100,7 +102,8 @@ screenshot pixels by multiplying by `pointsPerPixel`.
   `atlas run -- /bin/sh -c 'cat "$HOME/notes.txt"'`. The reply is `ok` when
   the command ran: check its `exitCode` (and `timedOut`) for the command's own
   result; Atlas itself exits 1 when that exit code is not 0 or the command was
-  stopped. `output` holds its text, left out past 1 MiB (`outputTruncated`);
+  stopped. `output` holds its text, cut at 1 MiB (`outputTruncated`: write
+  longer output to a file in the helper and read parts of it);
   `outputUnfinished` means something the command started still held the
   output, so its end may be missing. `pid` is the command's process.
   A command is stopped after 20 seconds; `--timeout SECONDS` allows up to
@@ -199,7 +202,9 @@ unless you looked at it in the helper.
 - `"uncertain": true` or the code `uncertain`: the action may or may not have
   happened. Never repeat it. Take a screenshot, run `atlas restart` (input is
   refused until it succeeds), look again, then decide; clean up as usual.
-  `partial: true` on a failed input says some of its events were posted first.
+  `partial: true` on a failed input says some of its events were posted first;
+  when the code is `cancelled` the person stopped it and saw what landed, so
+  it is not uncertain.
 - `busy`: the person (or another agent) has control, perhaps from the viewer.
   Never take it from them; wait and try again, and tell the person if it lasts.
 - `on-console`: the helper is on screen right now. Ask the person to switch
