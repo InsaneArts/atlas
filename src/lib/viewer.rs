@@ -57,6 +57,8 @@ pub struct Viewer {
     account_name: std::sync::Mutex<Option<(String, Option<String>)>>,
     /// The app this viewer serves, when it serves one.
     app: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<Line>>>,
+    /// The helper daemon input was last started for, so it starts once.
+    input_started: std::sync::Mutex<Option<u64>>,
 }
 
 impl Viewer {
@@ -158,8 +160,21 @@ impl Viewer {
     }
 
     async fn status(&self) -> Value {
-        let mut status =
-            crate::capability::doctor(self.client.status().await, self.client.config.helper_uid);
+        let uid = self.client.config.helper_uid;
+        let reply = self.client.status().await;
+        // Why a silent helper is down, asked off the runtime (and only then).
+        let absence = if crate::session::silent(&reply) {
+            blocking(move || Ok(crate::session::absence(uid)))
+                .await
+                .ok()
+                .flatten()
+        } else {
+            None
+        };
+        let mut status = crate::capability::doctor(reply, uid);
+        if let Some(absence) = &absence {
+            absence.explain(&mut status);
+        }
         if status["ready"] != true {
             let _ = self.release(None).await;
         }
@@ -173,6 +188,7 @@ impl Viewer {
             unresolved,
             in_flight: total.saturating_sub(unresolved),
         };
+        self.start_input_after_login(&status["session"], total == 0 && !active);
         let activity = self
             .client
             .output_dir()
@@ -217,6 +233,30 @@ impl Viewer {
             status["overview"]["accountName"] = json!(title);
         }
         status
+    }
+
+    /// A helper just logged in has no input service yet. It starts once per
+    /// helper daemon, as Recover would, so agents carry on by themselves:
+    /// only in the background, with Accessibility on and nothing pending.
+    fn start_input_after_login(&self, session: &Value, settled: bool) {
+        let starts = settled
+            && session["inputService"]["ok"] != true
+            && session["permissions"]["accessibility"] == true
+            && crate::session::require_hidden(session, self.client.config.helper_uid).is_ok();
+        let Some(daemon) = session["daemon"]["pid"].as_u64().filter(|_| starts) else {
+            return;
+        };
+        let first = self
+            .input_started
+            .lock()
+            .map(|mut started| started.replace(daemon) != Some(daemon))
+            .unwrap_or(false);
+        if first {
+            let client = self.client.clone();
+            tokio::spawn(async move {
+                let _ = client.start_input().await;
+            });
+        }
     }
 
     /// Explicit, person-initiated recovery: the verified restart when an
@@ -344,6 +384,7 @@ pub async fn bind(mut client: Client, port: u16) -> Result<(TcpListener, Arc<Vie
         authority,
         app: std::sync::Mutex::new(None),
         account_name: std::sync::Mutex::new(None),
+        input_started: std::sync::Mutex::new(None),
     });
     let router = Router::new()
         .fallback(any(handle))

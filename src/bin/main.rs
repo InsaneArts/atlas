@@ -404,9 +404,20 @@ enum Command {
     ///
     /// Confirms a new hidden helper before clearing an action of unknown outcome.
     Restart,
+    /// Log the helper out.
+    ///
+    /// Its apps quit as at any log-out; one asking to save holds it up. --force ends the session anyway. You log in to the helper again to use it.
+    Logout {
+        /// End the helper's session without asking its apps.
+        #[arg(long)]
+        force: bool,
+        /// Log out without asking first.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Lock the screen so you can switch to the helper.
     ///
-    /// You sign in on the lock screen; Atlas never sees a password.
+    /// You log in on the lock screen; Atlas never sees a password.
     Switch {
         /// The account you will choose on the lock screen (the helper by default).
         account: Option<String>,
@@ -665,7 +676,9 @@ fn main() -> ExitCode {
     // Ctrl-C, saying what that means for each.
     let interrupted = match command {
         Command::Init => Some("Stopped. Run atlas init again to continue."),
-        Command::Switch { .. } | Command::Uninstall { .. } => Some("Stopped."),
+        Command::Switch { .. } | Command::Uninstall { .. } | Command::Logout { .. } => {
+            Some("Stopped.")
+        }
         Command::Update { .. } => Some("Stopped. Run atlas update again to finish."),
         _ => None,
     };
@@ -679,9 +692,10 @@ fn main() -> ExitCode {
                 if let Some(message) = interrupted.filter(|_| ui::interactive()) {
                     stop_cleanly_on_interrupt(message);
                 }
-                execute(config, command).await
+                execute(config.clone(), command).await
             })
-        });
+        })
+        .map_err(|error| or_logged_out(error, &config));
     match result {
         Ok(result) => {
             emit(format, &view, &result);
@@ -708,6 +722,24 @@ fn main() -> ExitCode {
             }
             ExitCode::FAILURE
         }
+    }
+}
+
+/// A helper that did not answer because it is logged out says so, in place
+/// of "not answering": an agent cannot fix that, but the person can.
+fn or_logged_out(error: Error, config: &std::path::Path) -> Error {
+    if error.code != "transport" || error.uncertain {
+        return error;
+    }
+    let Ok(config) = Config::load(config) else {
+        return error;
+    };
+    match atlas::session::absence(config.helper_uid) {
+        Some(atlas::session::Absence::LoggedOut(_)) => Error::new(
+            "logged-out",
+            "The helper is logged out (after a restart or a log-out)",
+        ),
+        _ => error,
     }
 }
 
@@ -842,6 +874,7 @@ fn view(command: &Command) -> View {
         ),
         Command::Wait { gone, .. } => View::Wait { gone: *gone },
         Command::Restart => View::Restart,
+        Command::Logout { .. } => View::Logout,
         Command::StartInput => View::StartInput,
         Command::Install => View::Install,
         Command::Agents {
@@ -960,31 +993,20 @@ async fn doctor(client: &Client, verbose: bool) -> Value {
     let uid = client.config.helper_uid;
     let status = client.status().await;
     let account = atlas::setup::account_with_uid(uid).ok().flatten();
-    // Not answering because the helper is signed out (after a restart, or
-    // a log out): only the person can sign it in again.
-    let signed_out = atlas::session::signed_out(&status, || {
-        account.is_some() && !atlas::init::helper_logged_in(uid)
-    });
+    // Not answering because the helper is logged out or gone: only the
+    // person can log it in again.
+    let absence = if atlas::session::silent(&status) {
+        tokio::task::spawn_blocking(move || atlas::session::absence(uid))
+            .await
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
     let shell_blocked = status["code"] == "blocked";
     let mut report = atlas::capability::doctor(status, uid);
-    if signed_out {
-        let step = "The helper account is signed out (after a restart or a log out). The person \
-                    signs in to it once: atlas init walks them through it.";
-        // The running check's step says so, in its place among the steps.
-        let running = report["checks"].as_array_mut().and_then(|checks| {
-            checks
-                .iter_mut()
-                .find(|check| check["name"] == "Helper running")
-        });
-        if let Some(check) = running {
-            let old = std::mem::replace(&mut check["nextStep"], json!(step));
-            if let Some(listed) = report["nextSteps"]
-                .as_array_mut()
-                .and_then(|steps| steps.iter_mut().find(|listed| **listed == old))
-            {
-                *listed = json!(step);
-            }
-        }
+    if let Some(absence) = &absence {
+        absence.explain(&mut report);
     }
     // Both states make the helper unusable; init refuses them too.
     let mut first_steps = Vec::new();
@@ -1040,7 +1062,18 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
     // Helper-side commands run inside the helper login and never read the
     // controller's configuration. A command that talks to the helper loads
     // it before anything else.
-    let client = || Client::new(Config::load(&config)?);
+    // What the person does from the app is recorded as theirs, not an agent's.
+    let actor = if std::env::var_os("ATLAS_ACTOR").is_some_and(|actor| actor == "viewer") {
+        atlas::client::Actor::Viewer
+    } else {
+        atlas::client::Actor::Agent
+    };
+    let client = || {
+        Client::new(Config::load(&config)?).map(|mut client| {
+            client.actor = actor;
+            client
+        })
+    };
     match command {
         Command::EnvironmentWorker { packet, apply } => environment::worker(&packet, apply),
         Command::AgentGuide { skill, commands } => {
@@ -1393,6 +1426,21 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             let client = client()?;
             let _spinner = Spinner::new("Restarting the helper…");
             client.restart().await
+        }
+        Command::Logout { force, yes } => {
+            let client = client()?;
+            if !yes
+                && !ui::prompt::confirm(
+                    "Log out the helper? Its apps quit, and agents can't use it until you log in \
+                     to it again.",
+                    false,
+                    "pass --yes",
+                )?
+            {
+                return Err(ui::prompt::cancelled());
+            }
+            let _spinner = Spinner::new("Logging out the helper…");
+            client.logout(force).await
         }
     }
 }

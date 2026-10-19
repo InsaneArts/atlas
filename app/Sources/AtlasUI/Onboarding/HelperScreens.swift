@@ -138,7 +138,7 @@ struct HelperDoneScreen: View {
             .padding(.top, 6)
             Lede(
                 text:
-                    "You won't need to set anything up here again. Atlas starts in this account by itself whenever it is signed in, and finishes setting up in your own account."
+                    "You won't need to set anything up here again. Atlas starts in this account by itself whenever it is logged in, and finishes setting up in your own account."
             )
             Button("Switch Back") { Task { await model.switchBack() } }.atlas(large: true)
                 .keyboardShortcut(.defaultAction)

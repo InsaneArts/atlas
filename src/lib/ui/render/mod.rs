@@ -36,6 +36,7 @@ pub enum View {
         gone: bool,
     },
     Restart,
+    Logout,
     StartInput,
     Install,
     Agents,
@@ -122,6 +123,7 @@ pub fn render(view: &View, value: &Value) -> Rendered {
         }
         View::Close => failed(value).unwrap_or_else(|| Rendered::out(act::close(value))),
         View::Restart => failed(value).unwrap_or_else(|| Rendered::out(act::restart(value))),
+        View::Logout => failed(value).unwrap_or_else(|| Rendered::out(act::logout(value))),
         View::StartInput => failed(value).unwrap_or_else(|| Rendered::out(act::start_input(value))),
         View::Install => failed(value).unwrap_or_else(|| Rendered::out(act::install(value))),
         View::Agents => Rendered::out(manage::agents(value)),

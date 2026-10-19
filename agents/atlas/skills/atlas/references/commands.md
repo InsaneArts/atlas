@@ -968,7 +968,7 @@ Global options:
 ```text
 Lock the screen so you can switch to the helper.
 
-You sign in on the lock screen; Atlas never sees a password.
+You log in on the lock screen; Atlas never sees a password.
 
 Usage: atlas switch [OPTIONS] [ACCOUNT]
 
@@ -1046,6 +1046,37 @@ Global options:
 
       --config <FILE>
           Use another settings file
+```
+
+## atlas logout
+
+```text
+Log the helper out.
+
+Its apps quit as at any log-out; one asking to save holds it up. --force ends the session anyway. You log in to the helper again to use it.
+
+Usage: atlas logout [OPTIONS]
+
+Options:
+      --force
+          End the helper's session without asking its apps
+
+      --yes
+          Log out without asking first
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --config <FILE>
+          Use another settings file
+
+Examples:
+  atlas logout
+  atlas logout --force
 ```
 
 ## atlas start-input

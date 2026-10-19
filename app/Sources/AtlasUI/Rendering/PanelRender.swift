@@ -5,8 +5,9 @@ import SwiftUI
 /// Draw the panel and its menu bar glyph, as a person would see them, to a
 /// PNG at `path`, from what the viewer service reports now. For design
 /// checks, `ATLAS_RENDER_PREVIEW=1` shows every action as on a set-up Mac,
-/// `ATLAS_RENDER_MODE` overrides the mode and `ATLAS_RENDER_MESSAGE` shows
-/// a feedback line.
+/// `ATLAS_RENDER_MODE` overrides the mode, `ATLAS_RENDER_MESSAGE` shows
+/// a feedback line and `ATLAS_RENDER_LOGOUT` (`ask` or `held`) shows the
+/// log-out confirmation or the offer to force one.
 @MainActor
 public func renderPanel(service: any ViewerService, to path: String, appearance name: NSAppearance.Name) async -> Bool {
     let environment = ProcessInfo.processInfo.environment
@@ -17,9 +18,12 @@ public func renderPanel(service: any ViewerService, to path: String, appearance 
         status.overview.mode = mode
     }
     let message = environment["ATLAS_RENDER_MESSAGE"].flatMap { $0.isEmpty ? nil : $0 }
+    let shown = await picture.flatMap { NSImage(data: $0.png) }
+    let logOut = environment["ATLAS_RENDER_LOGOUT"]
     let model = PanelModel.still(
-        status, image: await picture.flatMap { NSImage(data: $0.png) }, message: message,
-        everything: environment["ATLAS_RENDER_PREVIEW"] == "1")
+        status, image: shown, message: message,
+        everything: logOut != nil || environment["ATLAS_RENDER_PREVIEW"] == "1",
+        confirming: logOut == "ask", forceOffered: logOut == "held")
     let content = NSHostingView(rootView: PanelView(model: model))
     let size = content.fittingSize
     let bar: CGFloat = 28

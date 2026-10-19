@@ -948,6 +948,88 @@ impl Client {
             })?
     }
 
+    /// Log the helper out (`atlas logout`) while it is in the background
+    /// (`identity` refuses it on screen). Its apps quit as at any log-out.
+    /// Like a restart, it holds its own claim until the outcome is known:
+    /// cleared once the desktop is gone or macOS refused, kept pending when
+    /// it may still happen (an app holding it up, an unconfirmed request).
+    /// `force` ends the session without asking the apps, and may run with
+    /// outcomes still unknown: it is the person's way out of one.
+    pub async fn logout(&self, force: bool) -> Result<Value> {
+        let _ownership = self.controller.acquire(force)?;
+        self.identity().await?;
+        let claim = self.controller.quarantine()?;
+        match self
+            .mutate(json!({"op": "logout", "force": force}), None, None)
+            .await
+        {
+            Ok(reply) if reply["ok"] == true => {}
+            // Refused before anything happened: nothing is pending.
+            Ok(reply) if reply["uncertain"] != true => {
+                self.controller.clear_if(&claim)?;
+                return Ok(reply);
+            }
+            Ok(reply) => return Ok(reply),
+            Err(error) => {
+                if !error.uncertain {
+                    self.controller.clear_if(&claim)?;
+                }
+                return Err(error);
+            }
+        }
+        if self.desktop_gone(if force { 15 } else { 30 }).await {
+            self.controller.clear_if(&claim)?;
+            return Ok(json!({"ok": true, "loggedOut": true}));
+        }
+        if force {
+            return Err(Error::new(
+                "logout",
+                "macOS took the request but the helper is still logged in",
+            )
+            .uncertain());
+        }
+        let open = self
+            .apps()
+            .await
+            .map(|reply| crate::agent::left_open(&reply))
+            .unwrap_or_default();
+        let still = if open.is_empty() {
+            String::new()
+        } else {
+            format!(" Still open: {}.", open.join(", "))
+        };
+        Err(Error::new(
+            "logout-held",
+            format!("The helper has not logged out yet; an app may be asking to save.{still}"),
+        )
+        .uncertain())
+    }
+
+    /// Whether the helper's desktop goes away within `seconds`: no Dock, seen
+    /// twice in a row (a Dock that restarts is not a log-out), and its
+    /// daemon no longer answering. A look that fails counts as present.
+    async fn desktop_gone(&self, seconds: u64) -> bool {
+        let uid = self.config.helper_uid;
+        let gone = async {
+            let mut absent = 0;
+            while absent < 2 {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                let desktop = tokio::task::spawn_blocking(move || crate::session::logged_in(uid));
+                absent = if desktop.await.ok().flatten() == Some(false) {
+                    absent + 1
+                } else {
+                    0
+                };
+            }
+            while self.transport.call(&json!({"op": "hello"})).await.is_ok() {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(seconds), gone)
+            .await
+            .is_ok()
+    }
+
     async fn mutate(
         &self,
         request: Value,
@@ -986,9 +1068,9 @@ impl Client {
                 "The observation expired before dispatch",
             ));
         }
-        // A restart runs under the claim its caller holds through
+        // A restart or log-out runs under the claim its caller holds through
         // verification; every other mutation claims its own generation.
-        let generation = (request["op"] != "restart")
+        let generation = (request["op"] != "restart" && request["op"] != "logout")
             .then(|| self.controller.quarantine())
             .transpose()?;
         let pending = match connection.dispatch(&request).await {

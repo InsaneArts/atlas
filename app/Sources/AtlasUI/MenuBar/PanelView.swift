@@ -16,20 +16,33 @@ struct PanelView: View {
         let mode = model.mode
         VStack(spacing: 12) {
             header(mode)
-            Desktop(image: model.image, placeholder: model.placeholder)
+            // Logged out, there is no desktop to show: logging in takes its place.
+            if model.loggedOut {
+                LogInCard { Task { await model.logIn() } }
+                    .disabled(model.working)
+            } else {
+                Desktop(image: model.image, placeholder: model.placeholder)
+            }
             if model.recovering {
                 RecoveryCard(reason: model.status.overview.reason) { Task { await model.recover() } }
             }
             facts
             HStack(spacing: 8) {
-                Button("Open Viewer") { model.openViewer?() }.atlas(fill: true)
+                Button("Open Viewer") { model.openViewer?() }.atlas(model.loggedOut ? .glass : .primary, fill: true)
                     .keyboardShortcut(.defaultAction)
                 if model.controlling {
                     Button("Release Control") { Task { await model.releaseControl() } }.atlas(.glass, fill: true)
-                } else {
+                } else if !model.loggedOut {
                     Button("Switch to Helper…") { Task { await model.switchToHelper() } }.atlas(.glass, fill: true)
                         .disabled(model.helper == nil || model.working)
                 }
+            }
+            if model.confirmingLogOut {
+                ConfirmLogOut(
+                    cancel: model.cancelLogOut,
+                    logOut: { Task { await model.logOut() } }
+                )
+                .disabled(model.working || !model.logOutAllowed)
             }
             if let message = model.message {
                 HStack(spacing: 8) {
@@ -39,6 +52,10 @@ struct PanelView: View {
                     Spacer(minLength: 0)
                 }
                 .accessibilityElement(children: .combine)
+            }
+            if model.forceOffered {
+                Button("Log Out Anyway") { Task { await model.logOut(force: true) } }.atlas(.glass, fill: true)
+                    .disabled(model.working || !model.forceAllowed)
             }
             Rule()
             VStack(spacing: 1) {
@@ -53,9 +70,13 @@ struct PanelView: View {
                     .frame(height: 30)
                 }
                 MenuRow(title: "Getting Started…") { model.gettingStarted?() }
-                if !model.recovering {
+                if !model.recovering && !model.loggedOut {
                     MenuRow(title: "Recover") { Task { await model.recover() } }
                         .disabled(model.working)
+                }
+                if !model.loggedOut {
+                    MenuRow(title: "Log Out Helper…", action: model.askToLogOut)
+                        .disabled(model.working || !model.logOutAllowed || model.confirmingLogOut)
                 }
                 MenuRow(title: "Quit Atlas", detail: "⌘Q") { NSApp.terminate(nil) }
                     .keyboardShortcut("q", modifiers: .command)
@@ -85,7 +106,7 @@ struct PanelView: View {
                 .accessibilityElement(children: .combine)
             }
             let reason = model.status.overview.reason
-            if !reason.isEmpty && !model.recovering {
+            if !reason.isEmpty && !model.recovering && !model.loggedOut {
                 Text(reason).font(.system(size: 11.5)).foregroundStyle(AtlasStyle.ink2)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
@@ -146,19 +167,65 @@ struct RecoveryCard: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("The last action didn't finish").font(.system(size: 12.5, weight: .semibold))
-                Text(reason.isEmpty ? "Recover before anything else runs." : reason)
-                    .font(.system(size: 11.5)).foregroundStyle(AtlasStyle.ink2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            CardText(
+                title: "The last action didn't finish",
+                text: reason.isEmpty ? "Recover before anything else runs." : reason)
             Spacer(minLength: 6)
             Button("Recover", action: recover).atlas()
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(RoundedRectangle(cornerRadius: 12).fill(AtlasStyle.orange.opacity(0.10)))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(AtlasStyle.orange.opacity(0.35), lineWidth: 0.5))
+        .cardStyle(AtlasStyle.orange)
+    }
+}
+
+/// Shown while the helper is logged out, in place of its desktop: logging
+/// in to it is the way back.
+struct LogInCard: View {
+    let logIn: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            CardText(title: "The helper is logged out", text: Words.loggedOut)
+            Button("Log In…", action: logIn).atlas(fill: true)
+        }
+        .padding(12)
+        .cardStyle()
+    }
+}
+
+/// Asks before logging the helper out: only the person can log it back in.
+struct ConfirmLogOut: View {
+    let cancel: () -> Void
+    let logOut: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            CardText(
+                title: "Log out the helper?",
+                text: "Its apps quit, and agents can't use it until you log in to it again.")
+            HStack(spacing: 8) {
+                Button("Cancel", action: cancel).atlas(.glass, fill: true)
+                    .keyboardShortcut(.cancelAction)
+                Button("Log Out", action: logOut).atlas(fill: true)
+            }
+        }
+        .padding(12)
+        .cardStyle()
+    }
+}
+
+/// A card's title and what it means, as the panel's cards set them.
+struct CardText: View {
+    let title: String
+    let text: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.system(size: 12.5, weight: .semibold))
+            Text(text).font(.system(size: 11.5)).foregroundStyle(AtlasStyle.ink2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 

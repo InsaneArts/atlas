@@ -447,15 +447,152 @@ pub fn diagnose(value: Value, uid: u32) -> Value {
     report
 }
 
-/// Whether a helper that did not answer is signed out: not refused by this
-/// shell or answered by another account, and `absent` (the account exists
-/// but no desktop of it runs). `absent` is only asked when the rest holds.
-pub fn signed_out(status: &Value, absent: impl FnOnce() -> bool) -> bool {
-    status["ok"] != true && status["code"] != "blocked" && status["code"] != "identity" && absent()
+/// Why a helper that did not answer is down, when this side can tell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Absence {
+    /// The configured account no longer exists.
+    Missing,
+    /// The account (named here) exists but no desktop of it runs: it was
+    /// logged out, or the Mac restarted.
+    LoggedOut(String),
+}
+
+/// The doctor's step for a logged-out helper.
+pub const LOGGED_OUT: &str = "The helper is logged out (after a restart or a log-out). Log in \
+     to it once, then switch back: atlas switch locks the screen for that.";
+
+impl Absence {
+    /// Its name in a report, as the overview reads it.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Missing => "missing",
+            Self::LoggedOut(_) => "loggedOut",
+        }
+    }
+
+    /// Put this in a doctor report: `absence` and `account` for the
+    /// overview, and the running check's step (in its place among the
+    /// next steps) in words for the command line.
+    pub fn explain(&self, report: &mut Value) {
+        report["absence"] = json!(self.as_str());
+        let step = match self {
+            Self::Missing => {
+                "The helper account no longer exists. Run atlas init to set up a new one."
+            }
+            Self::LoggedOut(name) => {
+                report["account"] = json!(name);
+                LOGGED_OUT
+            }
+        };
+        let running = report["checks"].as_array_mut().and_then(|checks| {
+            checks
+                .iter_mut()
+                .find(|check| check["name"] == "Helper running")
+        });
+        if let Some(check) = running {
+            let old = std::mem::replace(&mut check["nextStep"], json!(step));
+            if let Some(listed) = report["nextSteps"]
+                .as_array_mut()
+                .and_then(|steps| steps.iter_mut().find(|listed| **listed == old))
+            {
+                *listed = json!(step);
+            }
+        }
+    }
+}
+
+/// Whether `status` is a helper that did not answer, which this side may
+/// explain: not refused by this shell, and not answered by another account.
+pub fn silent(status: &Value) -> bool {
+    status["ok"] != true && status["code"] != "blocked" && status["code"] != "identity"
+}
+
+/// Why the silent helper `uid` is down, if this side can tell. It asks
+/// directory services and the process list, so call it off the async
+/// runtime.
+pub fn absence(uid: u32) -> Option<Absence> {
+    match crate::setup::account_with_uid(uid) {
+        Ok(None) => Some(Absence::Missing),
+        Ok(Some(account)) => {
+            (logged_in(uid) == Some(false)).then_some(Absence::LoggedOut(account.name))
+        }
+        Err(_) => None,
+    }
+}
+
+/// One process, as `ps` lists it.
+#[derive(Debug, Clone, PartialEq)]
+struct Process {
+    uid: u32,
+    pid: u32,
+    running: std::time::Duration,
+    command: String,
+}
+
+/// Every process on this Mac, or `None` when they could not be listed.
+fn processes() -> Option<Vec<Process>> {
+    let output = std::process::Command::new("/bin/ps")
+        .args(["-axo", "uid=,pid=,etime=,comm="])
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| parse_processes(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// `ps -o uid=,pid=,etime=,comm=` lines; the command is the rest of a line.
+fn parse_processes(listing: &str) -> Vec<Process> {
+    listing
+        .lines()
+        .filter_map(|line| {
+            let mut words = line.split_whitespace();
+            let uid = words.next()?.parse().ok()?;
+            let pid = words.next()?.parse().ok()?;
+            let running = running_for(words.next()?)?;
+            let command = words.collect::<Vec<_>>().join(" ");
+            Some(Process {
+                uid,
+                pid,
+                running,
+                command,
+            })
+        })
+        .collect()
+}
+
+/// Whether `uid` is logged in to a desktop (its Dock runs); `None` when the
+/// process list could not be read, which is never "logged out".
+pub fn logged_in(uid: u32) -> Option<bool> {
+    let listed = processes()?;
+    Some(
+        listed
+            .iter()
+            .any(|process| process.uid == uid && process.command.ends_with("/Dock")),
+    )
+}
+
+/// A desktop login: its loginwindow, which starts when the person logs in
+/// and lasts until they log out (unlike the Dock, which may restart).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Login {
+    pub pid: u32,
+    pub age: std::time::Duration,
+}
+
+/// The desktop login of `uid`, if it has one.
+pub fn login(uid: u32) -> Option<Login> {
+    processes()?
+        .into_iter()
+        .find(|process| process.uid == uid && process.command.ends_with("/loginwindow"))
+        .map(|process| Login {
+            pid: process.pid,
+            age: process.running,
+        })
 }
 
 /// Whether a desktop session running as `uid` is older than the account's
-/// home folder: a deleted account's session, still signed in, that macOS
+/// home folder: a deleted account's session, still logged in, that macOS
 /// now attributes to the account that reused its user ID.
 pub fn leftover_session(uid: u32, name: &str, home: &std::path::Path) -> bool {
     // How long ago the account was made: its record's creation time, or
@@ -468,26 +605,10 @@ pub fn leftover_session(uid: u32, name: &str, home: &std::path::Path) -> bool {
     }) else {
         return false;
     };
-    let Ok(output) = std::process::Command::new("/bin/ps")
-        .args(["-axo", "uid=,etime=,comm="])
-        .output()
-    else {
-        return false;
-    };
     // A session cannot start before its account exists; a few seconds of
     // slack cover clock rounding.
     let slack = std::time::Duration::from_secs(10);
-    String::from_utf8_lossy(&output.stdout).lines().any(|line| {
-        let mut words = line.split_whitespace();
-        let (Some(owner), Some(elapsed), Some(command)) =
-            (words.next(), words.next(), words.next())
-        else {
-            return false;
-        };
-        owner == uid.to_string()
-            && command.ends_with("/loginwindow")
-            && running_for(elapsed).is_some_and(|running| running > age + slack)
-    })
+    login(uid).is_some_and(|login| login.age > age + slack)
 }
 
 /// How long ago account `name` was created, from its directory record.
@@ -525,19 +646,52 @@ fn running_for(elapsed: &str) -> Option<std::time::Duration> {
 #[cfg(test)]
 mod tests {
     use super::{
-        diagnose, input_build_current, require_hidden, running_for, signed_out, validate_target_uid,
+        Absence, LOGGED_OUT, diagnose, input_build_current, parse_processes, require_hidden,
+        running_for, silent, validate_target_uid,
     };
 
     #[test]
-    fn only_a_silent_helper_with_no_desktop_is_signed_out() {
-        let silent = json!({"ok": false, "code": "io", "error": "No such file"});
-        assert!(signed_out(&silent, || true));
-        assert!(!signed_out(&silent, || false), "its desktop runs");
+    fn only_a_helper_that_did_not_answer_is_explained() {
+        assert!(silent(
+            &json!({"ok": false, "code": "io", "error": "No such file"})
+        ));
+        assert!(silent(&json!({"ok": false, "code": "transport"})));
         for code in ["blocked", "identity"] {
-            let other = json!({"ok": false, "code": code});
-            assert!(!signed_out(&other, || panic!("not asked")), "{code}");
+            assert!(!silent(&json!({"ok": false, "code": code})), "{code}");
         }
-        assert!(!signed_out(&json!({"ok": true}), || panic!("not asked")));
+        assert!(!silent(&json!({"ok": true})));
+    }
+
+    #[test]
+    fn processes_are_read_from_ps_lines() {
+        let listing = "  505  1158 04-00:04:57 /System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow\n\
+                       501   700       05:32 /Applications/Some App.app/Contents/MacOS/Some App\n\
+                       not a process line\n";
+        let listed = parse_processes(listing);
+        assert_eq!(listed.len(), 2);
+        assert_eq!((listed[0].uid, listed[0].pid), (505, 1158));
+        assert_eq!(
+            listed[0].running,
+            std::time::Duration::from_secs(4 * 86_400 + 4 * 60 + 57)
+        );
+        assert_eq!(
+            listed[1].command, "/Applications/Some App.app/Contents/MacOS/Some App",
+            "a command keeps its spaces"
+        );
+    }
+
+    #[test]
+    fn a_logged_out_helper_says_how_to_log_it_in() {
+        let mut report = diagnose(json!({"ok": false, "code": "io"}), 501);
+        Absence::LoggedOut("atlas".into()).explain(&mut report);
+        assert_eq!(report["absence"], "loggedOut");
+        assert_eq!(report["account"], "atlas");
+        assert_eq!(report["checks"][0]["nextStep"], LOGGED_OUT);
+        assert_eq!(report["nextSteps"][0], LOGGED_OUT);
+        let mut gone = diagnose(json!({"ok": false, "code": "io"}), 501);
+        Absence::Missing.explain(&mut gone);
+        assert_eq!(gone["absence"], "missing");
+        assert!(gone.get("account").is_none());
     }
     use serde_json::json;
 

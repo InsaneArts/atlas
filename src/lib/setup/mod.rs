@@ -642,7 +642,7 @@ fn next_steps(report: &Value) -> Vec<String> {
     }
     if report["session"]["reachable"] != true {
         steps.push(
-            "The helper is not running. Sign in to the helper account once, then switch back \
+            "The helper is not running. Log in to the helper account once, then switch back \
              without logging it out."
                 .to_owned(),
         );

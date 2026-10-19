@@ -25,6 +25,8 @@ final class ViewerModel {
     private(set) var recovering = false
     /// One line about the last thing that happened, until the next.
     private(set) var notice: String?
+    /// Locks the screen so the person can log in to the helper (set by the app).
+    @ObservationIgnored var logIn: (@MainActor () -> Void)?
 
     /// Seconds between pictures while watching.
     var rate: Double = 2 {
@@ -99,11 +101,12 @@ final class ViewerModel {
 
     var overview: Overview { Overview(status) }
     var holdingControl: Bool { lease != nil }
+    var loggedOut: Bool { status.overview.mode == .loggedOut }
 
     var mode: Mode {
         if paused { return Mode(label: "Paused", tone: .quiet, mark: .dimmed) }
         let mode = Mode.seen(by: status.overview, holdingControl: holdingControl)
-        if unavailable != nil && mode.tone != .attention {
+        if unavailable != nil && mode.tone != .attention && !loggedOut {
             return Mode(label: "Reconnecting", tone: .quiet, mark: .dimmed)
         }
         return hasStatus || unavailable != nil ? mode : Mode(label: "Connecting", tone: .quiet, mark: .dimmed)
@@ -226,6 +229,10 @@ final class ViewerModel {
             guard current() else { return }
             show(reply)
             guard reply.canObserve else {
+                // A silent helper is explained in the app's words, not commands.
+                if !reply.overview.mode.answers, reply.error == nil {
+                    throw ServiceError(reply.overview.reason)
+                }
                 let steps = reply.nextSteps.isEmpty ? [reply.error ?? "Helper unavailable"] : reply.nextSteps
                 throw ServiceError(steps.joined(separator: " "))
             }

@@ -7,11 +7,14 @@ public struct Outcome: Sendable {
     /// The reply as the command printed it (JSON), for decoding.
     public let reply: Data
     public let message: String
+    /// The failure's kind (`logout-held`, say), when it names one.
+    public let code: String?
 
-    public init(ok: Bool, reply: Data, message: String) {
+    public init(ok: Bool, reply: Data, message: String, code: String? = nil) {
         self.ok = ok
         self.reply = reply
         self.message = message
+        self.code = code
     }
 
     /// The reply decoded as `type`, if it is one.
@@ -24,22 +27,20 @@ public struct Outcome: Sendable {
         struct Reply: Decodable {
             let ok: Bool?
             let error: String?
+            let code: String?
         }
         let decoder = JSONDecoder()
-        if let reply = try? decoder.decode(Reply.self, from: stdout), !stdout.isEmpty {
-            return finish(status, reply.ok, reply.error, stdout)
-        }
-        if let reply = try? decoder.decode(Reply.self, from: stderr), !stderr.isEmpty {
-            return finish(status, reply.ok, reply.error, stderr)
+        for data in [stdout, stderr] where !data.isEmpty {
+            if let reply = try? decoder.decode(Reply.self, from: data) {
+                let worked = status == 0 && reply.ok != false
+                return Outcome(
+                    ok: worked, reply: data, message: worked ? "Done" : (reply.error ?? "It did not work"),
+                    code: worked ? nil : reply.code)
+            }
         }
         let text = String(decoding: stderr, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return Outcome(ok: false, reply: Data(), message: text.isEmpty ? "Atlas did not answer" : text)
-    }
-
-    private static func finish(_ status: Int32, _ ok: Bool?, _ error: String?, _ data: Data) -> Outcome {
-        let worked = status == 0 && ok != false
-        return Outcome(ok: worked, reply: data, message: worked ? "Done" : (error ?? "It did not work"))
     }
 }
 
@@ -104,6 +105,8 @@ public struct Commands: CommandRunning {
         let process = Process()
         process.executableURL = executable
         process.arguments = ["--json"] + arguments
+        // What the person does from the app is recorded as theirs, not an agent's.
+        process.environment = ProcessInfo.processInfo.environment.merging(["ATLAS_ACTOR": "viewer"]) { $1 }
         let stdout = Pipe()
         let stderr = Pipe()
         process.standardOutput = stdout
@@ -172,14 +175,18 @@ public struct Commands: CommandRunning {
 
 /// What the panel's actions run.
 public enum Action: Sendable, Equatable {
-    case switchToHelper(String)
+    /// Lock the screen to switch to this account (the helper, or back).
+    case switchTo(String)
     case recover
+    case logOut(force: Bool)
 
     public var arguments: [String] {
         switch self {
         // The person clicked Switch: that is the confirmation.
-        case .switchToHelper(let account): ["switch", account, "--yes"]
+        case .switchTo(let account): ["switch", account, "--yes"]
         case .recover: ["restart"]
+        // The person confirmed in the panel.
+        case .logOut(let force): ["logout", "--yes"] + (force ? ["--force"] : [])
         }
     }
 }

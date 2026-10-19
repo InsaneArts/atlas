@@ -130,7 +130,7 @@ struct CreateScreen: View {
             }
             Note(
                 text:
-                    "You sign in to the helper with this password, now and after each restart. Atlas hands it to macOS and never keeps it."
+                    "You log in to the helper with this password, now and after each restart. Atlas hands it to macOS and never keeps it."
             )
         }
     }
@@ -170,7 +170,7 @@ struct SwitchScreen: View {
         let rows = switchRows(helper)
         Column(width: 460) {
             Eyebrow(text: "Helper account")
-            Headline(title: "Now sign in to \(helper.title).", tail: "Just this once, to set Atlas up there.")
+            Headline(title: "Now log in to \(helper.title).", tail: "Just this once, to set Atlas up there.")
             VStack(spacing: 8) {
                 StepRow(
                     index: 1, title: "Lock and switch", detail: "Choose \(helper.title) on the lock screen",
@@ -199,7 +199,7 @@ struct SwitchScreen: View {
     }
 
     private func waiting(_ helper: OnboardingFacts.Helper, _ rows: [RowState]) -> String {
-        if !helper.signedIn { return "Next: Lock and Switch, then sign in to \(helper.title)." }
+        if !helper.signedIn { return "Next: Lock and Switch, then log in to \(helper.title)." }
         if !helper.answering {
             return helper.onConsole
                 ? "Waiting for Atlas to open in \(helper.title)…" : "Next: Lock and Switch, then open Atlas there."
@@ -219,7 +219,7 @@ struct FinishingScreen: View {
                 title: model.finish == .passed ? "Everything works." : "Checking everything",
                 tail: model.finish == .passed ? "Your agents have a Mac now." : "end to end.")
             Card {
-                CheckLine(text: "\(model.facts.helper.title) is signed in", state: .done, note: "in the background")
+                CheckLine(text: "\(model.facts.helper.title) is logged in", state: .done, note: "in the background")
                 Rule()
                 CheckLine(text: "Atlas runs in the helper", state: .done, note: "starts by itself")
                 Rule()
@@ -390,7 +390,7 @@ struct DoneScreen: View {
             Headline(title: "You're set.").padding(.top, 8)
             Lede(
                 text:
-                    "That was the whole setup. Atlas lives in your menu bar: ask your agent to check something on screen, and watch it work from there. After a restart, just sign in to \(model.facts.helper.title) again; Atlas does the rest."
+                    "That was the whole setup. Atlas lives in your menu bar: ask your agent to check something on screen, and watch it work from there. After a restart, just log in to \(model.facts.helper.title) again; Atlas does the rest."
             )
             Card {
                 HStack(spacing: 12) {

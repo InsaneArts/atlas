@@ -28,7 +28,7 @@ pub const GROUPS: &[(&str, &[&str])] = &[
     ),
     (
         "Take over or recover",
-        &["switch", "monitor", "restart", "start-input"],
+        &["switch", "monitor", "restart", "logout", "start-input"],
     ),
     (
         "Look after Atlas",
@@ -99,6 +99,7 @@ const EXAMPLES: &[(&str, &[&str])] = &[
         ],
     ),
     ("monitor", &["atlas monitor", "atlas monitor --port 8800"]),
+    ("logout", &["atlas logout", "atlas logout --force"]),
     (
         "agents",
         &[

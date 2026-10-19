@@ -25,6 +25,7 @@ public struct Mode: Equatable, Sendable {
         case .recovering: Mode(label: "Needs you", tone: .attention, mark: .alert)
         case .blocked: Mode(label: "Not ready", tone: .attention, mark: .dash)
         case .unavailable: Mode(label: "Unavailable", tone: .quiet, mark: .dimmed)
+        case .loggedOut: Mode(label: "Logged out", tone: .quiet, mark: .dimmed)
         }
     }
 
@@ -32,7 +33,7 @@ public struct Mode: Equatable, Sendable {
     /// holds control; a viewer knows whether it is that one.
     public static func seen(by overview: ViewerStatus.Overview, holdingControl: Bool) -> Mode {
         let mode = overview.mode
-        if holdingControl && mode != .recovering && mode != .unavailable {
+        if holdingControl && mode != .recovering && mode.answers {
             return Mode(label: "You have control", tone: .active, mark: .filled)
         }
         if mode == .controlling && !holdingControl {
@@ -44,6 +45,10 @@ public struct Mode: Equatable, Sendable {
 
 /// Words for times, operations and facts, shared by the panel and viewer.
 public enum Words {
+    /// What a logged-out helper means, and the way back.
+    public static let loggedOut =
+        "Agents can't use it until you log in to it again. Then switch back here; Atlas carries on by itself."
+
     /// Seconds ago as a short relative time.
     public static func ago(_ seconds: Double) -> String {
         if seconds < 5 { return "just now" }
@@ -60,6 +65,7 @@ public enum Words {
         case "input" where count > 0: return "sent \(count) action\(count == 1 ? "" : "s")"
         case "run": return "ran a command"
         case "restart": return "recovered"
+        case "logout": return "logged out the helper"
         default: return row.operation
         }
     }
@@ -170,6 +176,7 @@ public struct Overview: Equatable, Sendable {
         case .recovering: "After recovery"
         case .blocked: "Not ready"
         case .unavailable: "Unavailable"
+        case .loggedOut: "Logged out"
         }
     }
 
@@ -186,7 +193,7 @@ public struct Overview: Equatable, Sendable {
     /// The sidebar's sentence: why the helper is in its mode.
     public func reason(holdingControl: Bool) -> String {
         let mode = status.overview.mode
-        if holdingControl && mode != .recovering && mode != .unavailable {
+        if holdingControl && mode != .recovering && mode.answers {
             return "You have mouse and keyboard control"
         }
         if mode == .controlling { return "Another viewer has control" }
@@ -196,8 +203,12 @@ public struct Overview: Equatable, Sendable {
     /// Each readiness check, then the native Save and Open check, which
     /// never counts as ready. An unknown check is unobservable, not failed.
     public var statusRows: [StatusRow] {
+        // A silent helper's steps name commands; the overview says it in the app's words.
+        let silent = !status.overview.mode.answers
         var rows = status.checks.map { check in
             switch check.ok {
+            case false? where silent: StatusRow(name: check.name, state: .bad, text: status.overview.reason)
+            case nil where silent: StatusRow(name: check.name, state: .unknown, text: "Unknown")
             case true: StatusRow(name: check.name, state: .ready, text: "Ready")
             case nil: StatusRow(name: check.name, state: .unknown, text: "Unknown. \(check.nextStep ?? "")")
             default: StatusRow(name: check.name, state: .bad, text: check.nextStep ?? "Not ready")

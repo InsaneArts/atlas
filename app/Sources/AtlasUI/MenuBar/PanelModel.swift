@@ -23,6 +23,10 @@ final class PanelModel {
     private(set) var helper: String?
     private(set) var atLogin = false
     private(set) var loginAvailable = false
+    /// Log Out Helper was chosen and waits for the person to confirm.
+    private(set) var confirmingLogOut = false
+    /// The last log-out was held up by an app in the helper.
+    private(set) var forceOffered = false
 
     /// Opens the setup window (set by the app).
     @ObservationIgnored var gettingStarted: (@MainActor () -> Void)?
@@ -49,6 +53,12 @@ final class PanelModel {
     var overview: Overview { Overview(status) }
     var controlling: Bool { status.overview.mode == .controlling }
     var recovering: Bool { status.overview.mode == .recovering }
+    var loggedOut: Bool { status.overview.mode == .loggedOut }
+
+    /// Logging out needs a helper that answers with nothing left to settle.
+    var logOutAllowed: Bool { [.observing, .controlling, .blocked].contains(status.overview.mode) }
+    /// Logging out anyway also settles a log-out that an app held up.
+    var forceAllowed: Bool { logOutAllowed || recovering }
 
     // MARK: Reading
 
@@ -102,6 +112,11 @@ final class PanelModel {
         let latest = try? await service.status()
         guard number == statusReading, !Task.isCancelled else { return }
         status = latest ?? ViewerStatus()
+        // A log-out asked for, or offered again, only while it still may run.
+        if !working {
+            confirmingLogOut = confirmingLogOut && logOutAllowed
+            forceOffered = forceOffered && forceAllowed
+        }
     }
 
     /// Read the desktop, under the same rule.
@@ -123,12 +138,14 @@ final class PanelModel {
         self.working = working
     }
 
-    private func perform(_ action: Action, working: String, done: String) async {
-        guard let commands, !self.working else { return }
+    @discardableResult
+    private func perform(_ action: Action, working: String, done: String) async -> Outcome? {
+        guard let commands, !self.working else { return nil }
         say(working, working: true)
         let outcome = await commands.run(action.arguments)
         say(outcome.ok ? done : outcome.message)
         await readStatus()
+        return outcome
     }
 
     /// The emergency stop: never waits for anything else.
@@ -146,7 +163,48 @@ final class PanelModel {
 
     func switchToHelper() async {
         guard let helper else { return }
-        await perform(.switchToHelper(helper), working: "Switching…", done: "Switched")
+        await perform(.switchTo(helper), working: "Switching…", done: "Switched")
+    }
+
+    /// Lock the screen so the person can log in to the helper there.
+    func logIn() async {
+        if helper == nil { await findHelper() }
+        guard let helper else {
+            say("Atlas couldn't find the helper account. Open Getting Started to check it.")
+            return
+        }
+        await perform(
+            .switchTo(helper), working: "Locking the screen…",
+            done: "Log in to \(status.overview.title ?? helper), then switch back.")
+    }
+
+    func askToLogOut() {
+        say(nil)
+        forceOffered = false
+        confirmingLogOut = true
+    }
+
+    func cancelLogOut() {
+        confirmingLogOut = false
+    }
+
+    /// Log the helper out; with `force`, even past an app that holds it up.
+    func logOut(force: Bool = false) async {
+        guard force ? forceAllowed : logOutAllowed else { return }
+        confirmingLogOut = false
+        forceOffered = false
+        // Control ends first: nothing of the person's stays held in the helper.
+        if controlling, let service {
+            do {
+                try await service.revoke()
+            } catch {
+                say(error.localizedDescription)
+                return
+            }
+        }
+        let outcome = await perform(
+            .logOut(force: force), working: "Logging out the helper…", done: "The helper is logged out.")
+        forceOffered = outcome?.code == "logout-held"
     }
 
     func recover() async {
@@ -164,14 +222,18 @@ final class PanelModel {
 
     // MARK: Drawing
 
-    /// A panel fixed at one state, for drawing it.
+    /// A panel fixed at one state, for drawing it; `everything` shows every
+    /// action as on a set-up Mac.
     static func still(
-        _ status: ViewerStatus, image: NSImage?, message: String? = nil, everything: Bool = false
+        _ status: ViewerStatus, image: NSImage?, message: String? = nil, everything: Bool = false,
+        confirming: Bool = false, forceOffered: Bool = false
     ) -> PanelModel {
         let model = PanelModel(service: nil, commands: nil, loginItem: nil)
         model.status = status
         model.image = image
         model.message = message
+        model.confirmingLogOut = confirming
+        model.forceOffered = forceOffered
         if everything {
             model.helper = "helper"
             model.loginAvailable = true

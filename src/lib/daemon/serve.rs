@@ -123,9 +123,12 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     .await?;
     // A Screen Recording grant reaches this process only through a restart.
     let restarter = daemon.clone();
-    let consent = tokio::spawn(facts::request_consent_on_arrival(move || {
-        restarter.restarting.notify_one();
-    }));
+    let consent = tokio::spawn(facts::request_consent_on_arrival(
+        controller_uid,
+        move || {
+            restarter.restarting.notify_one();
+        },
+    ));
     let slots = Arc::new(Semaphore::new(CONNECTIONS));
     let mut tasks = JoinSet::new();
     // Both listeners exist before the loop, so a signal that arrives between
@@ -236,13 +239,73 @@ fn refused(error: Error) -> Value {
 /// captures never run while the helper is on the console, where they would
 /// act on a desktop a person is using.
 fn allowed(request: &Request, on_console: bool) -> Option<Value> {
-    let acts = matches!(request, Request::Run { .. } | Request::Screenshot { .. });
+    let acts = matches!(
+        request,
+        Request::Run { .. } | Request::Screenshot { .. } | Request::Logout { .. }
+    );
     (acts && on_console).then(|| {
         failure(
             "on-console",
             "The helper is on the screen; switch back to your own account first",
         )
     })
+}
+
+/// Ask macOS to log this login out, as its Apple menu's Log Out does but
+/// without the confirmation: apps quit as at any log-out, and one may hold
+/// it up (asking to save). loginwindow answers at once; only its error is a
+/// refusal. A request that never got an answer may still be carried out.
+async fn ask_to_log_out() -> Value {
+    let asked = tokio::process::Command::new("/usr/bin/osascript")
+        .args(["-e", "tell application \"loginwindow\" to «event aevtrlgo»"])
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let unanswered = |why: &str| {
+        let mut reply = failure(
+            "logout",
+            format!("macOS did not answer the log-out request ({why})"),
+        );
+        reply["uncertain"] = json!(true);
+        reply
+    };
+    match tokio::time::timeout(Duration::from_secs(5), asked).await {
+        Ok(Ok(output)) if output.status.success() => json!({"ok": true, "op": "logout"}),
+        // Stopped by a signal: the log-out itself may have ended it.
+        Ok(Ok(output)) if output.status.code().is_none() => unanswered("it was stopped"),
+        Ok(Ok(output)) => {
+            eprintln!(
+                "osascript refused the log-out: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            failure("logout", "macOS refused to log the helper out")
+        }
+        Ok(Err(_)) => failure("logout", "The log-out request could not start"),
+        Err(_) => unanswered("it may be asking in the helper"),
+    }
+}
+
+/// End this login at once, without asking its apps. Its process goes with
+/// the session, so how it went is only logged.
+fn force_log_out() {
+    let uid = nix::unistd::getuid().as_raw();
+    let started = std::process::Command::new("/bin/launchctl")
+        .args(["bootout", &format!("gui/{uid}")])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .spawn();
+    match started {
+        Ok(mut child) => {
+            std::thread::spawn(move || {
+                if let Ok(status) = child.wait()
+                    && !status.success()
+                {
+                    eprintln!("launchctl bootout gui/{uid} failed: {status}");
+                }
+            });
+        }
+        Err(error) => eprintln!("launchctl bootout gui/{uid} did not start: {error}"),
+    }
 }
 
 /// Windows that lie entirely outside the main display.
@@ -330,6 +393,13 @@ async fn handle(stream: UnixStream, daemon: Arc<Daemon>) -> Result<()> {
             daemon.restarting.notify_one();
             return written;
         }
+        // Answered before the log-out ends this process with the session.
+        Ok(Request::Logout { force: true }) => {
+            let written = write(&mut writer, &json!({"ok": true, "op": "logout"})).await;
+            force_log_out();
+            return written;
+        }
+        Ok(Request::Logout { force: false }) => ask_to_log_out().await,
     };
     write(&mut writer, &reply).await
 }

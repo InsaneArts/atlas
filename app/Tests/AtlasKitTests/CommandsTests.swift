@@ -49,9 +49,22 @@ import Testing
         #expect(ContinuousClock.now - started < .seconds(10))
     }
 
+    @Test func aFailureCarriesItsCode() {
+        let held = Outcome.parse(
+            status: 1, stdout: Data(),
+            stderr: Data(#"{"ok": false, "code": "logout-held", "error": "Not yet"}"#.utf8))
+        #expect(!held.ok)
+        #expect(held.code == "logout-held")
+        #expect(held.message == "Not yet")
+        let done = Outcome.parse(status: 0, stdout: Data(#"{"ok": true}"#.utf8), stderr: Data())
+        #expect(done.ok && done.code == nil)
+    }
+
     @Test func actionsMapToCommands() {
-        #expect(Action.switchToHelper("atlastest").arguments == ["switch", "atlastest", "--yes"])
+        #expect(Action.switchTo("atlastest").arguments == ["switch", "atlastest", "--yes"])
         #expect(Action.recover.arguments == ["restart"])
+        #expect(Action.logOut(force: false).arguments == ["logout", "--yes"])
+        #expect(Action.logOut(force: true).arguments == ["logout", "--yes", "--force"])
         #expect(
             Commands.beside(URL(fileURLWithPath: "/A.app/Contents/MacOS/AtlasApp")).executable.path
                 == "/A.app/Contents/MacOS/atlas")

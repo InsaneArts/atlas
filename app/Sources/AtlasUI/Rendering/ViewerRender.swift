@@ -60,6 +60,10 @@ func viewerScreens() -> [(name: String, model: ViewerModel)] {
         return (try? JSONDecoder().decode(ViewerStatus.self, from: data)) ?? ViewerStatus()
     }
     let desktop = sampleDesktop()
+    let loggedOutReason = "The helper is logged out, so agents can't use it"
+    let loggedOut = ViewerModel.still(
+        status("loggedOut", reason: loggedOutReason), image: nil, unavailable: loggedOutReason)
+    loggedOut.logIn = {}
     return [
         ("01-watching", .still(status("agent"), image: desktop)),
         (
@@ -82,10 +86,11 @@ func viewerScreens() -> [(name: String, model: ViewerModel)] {
         (
             "07-unavailable",
             .still(
-                status("unavailable", reason: "The helper is signed out"), image: nil,
-                unavailable: "Sign in to Atlas, then switch back.")
+                status("unavailable", reason: "Atlas isn't answering in the helper"), image: nil,
+                unavailable: "Atlas isn't answering in the helper. Open Getting Started if this lasts.")
         ),
         ("08-notice", .still(status("observing"), image: desktop, notice: "Control released.")),
+        ("09-logged-out", loggedOut),
     ]
 }
 

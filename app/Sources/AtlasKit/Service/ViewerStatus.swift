@@ -3,7 +3,10 @@ import Foundation
 /// What the helper is doing, as the service names it. A name this app does
 /// not know reads as unavailable.
 public enum HelperMode: String, Decodable, Sendable {
-    case observing, agent, controlling, recovering, blocked, unavailable
+    case observing, agent, controlling, recovering, blocked, unavailable, loggedOut
+
+    /// The helper answers: control, readiness steps and recovery apply.
+    public var answers: Bool { self != .unavailable && self != .loggedOut }
 }
 
 /// The viewer service's `status.json`: the helper's readiness, its session
@@ -104,6 +107,8 @@ public struct ViewerStatus: Decodable, Equatable, Sendable {
         public var account: String?
         /// The account's full name ("Atlas"), when it has one.
         public var accountName: String?
+        /// The helper as people know it: its full name, else its short one.
+        public var title: String? { accountName ?? account }
         public var display: Size?
         /// Actions of unknown outcome, waiting for recovery.
         public var pending = 0

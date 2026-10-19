@@ -279,6 +279,11 @@ impl Service {
     }
 }
 
+/// How often the service looks for its desktop, and how many looks in a
+/// row must miss it before the service exits.
+const SESSION_CHECK: Duration = Duration::from_secs(1);
+const SESSION_GONE_CHECKS: u32 = 3;
+
 pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()> {
     let (build, executable) = started_from();
     crate::session::validate_target_uid(uid, controller_uid)?;
@@ -306,6 +311,13 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
         gate: Arc::new(Gate::default()),
     });
     let mut timer = tokio::time::interval(Duration::from_millis(50));
+    // Once its login ends (a log-out) the service can never act again, yet
+    // would keep the socket from the next login's service: it exits after
+    // its desktop has been gone for a few checks in a row.
+    let mut session_checks = tokio::time::interval(SESSION_CHECK);
+    // A stalled loop must not take its missed looks all at once.
+    session_checks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut session_gone = 0u32;
     let slots = Arc::new(Semaphore::new(16));
     let mut tasks = JoinSet::new();
     // Both listeners exist before the loop, so a signal that arrives between
@@ -319,6 +331,12 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
             _ = interrupt.recv() => break Ok(()),
             _ = terminate.recv() => break Ok(()),
             _ = service.stopping.notified() => break Ok(()),
+            _ = session_checks.tick() => {
+                session_gone = if super::cf::session().is_none() { session_gone + 1 } else { 0 };
+                if session_gone >= SESSION_GONE_CHECKS {
+                    break Ok(());
+                }
+            }
             _ = timer.tick() => {
                 if service.check().is_err() {
                     let _ = service.gate.revoke();

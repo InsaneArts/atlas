@@ -89,13 +89,38 @@ func png(width: Int = 4, height: Int = 3) -> Data {
 
     @Test func aStatusThatCannotObserveSaysWhy() async {
         let service = FakeService()
-        service.reply = ["canObserve": false, "nextSteps": ["Sign in to the helper."]]
+        service.reply = [
+            "canObserve": false, "nextSteps": ["Allow Screen Recording."], "overview": ["mode": "blocked"],
+        ]
         let model = ViewerModel(service: service)
         model.visible(true)
         await settle { model.unavailable != nil }
-        #expect(model.unavailable == "Sign in to the helper.")
+        #expect(model.unavailable == "Allow Screen Recording.")
+        model.close()
+    }
+
+    /// A helper that does not answer is explained in the app's words, never
+    /// the command line's.
+    @Test func aSilentHelperSaysWhyWithoutCommands() async {
+        let service = FakeService()
+        service.reply = [
+            "canObserve": false, "nextSteps": ["Run atlas init."],
+            "overview": ["mode": "unavailable", "reason": "Atlas isn't answering in the helper."],
+        ]
+        let model = ViewerModel(service: service)
+        model.visible(true)
+        await settle { model.unavailable != nil }
+        #expect(model.unavailable == "Atlas isn't answering in the helper.")
         #expect(model.mode.label == "Reconnecting")
         model.close()
+
+        service.reply = ["canObserve": false, "overview": ["mode": "loggedOut", "reason": "The helper is logged out"]]
+        let loggedOut = ViewerModel(service: service)
+        loggedOut.visible(true)
+        await settle { loggedOut.unavailable != nil }
+        #expect(loggedOut.loggedOut)
+        #expect(loggedOut.mode.label == "Logged out")
+        loggedOut.close()
     }
 
     @Test func takingControlHoldsALeaseAndGivingItBackReleasesIt() async {
