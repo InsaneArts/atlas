@@ -163,7 +163,7 @@ pub fn to(account: &Account) -> Result<Value> {
     let name = account.real_name.as_deref().unwrap_or(&account.name);
     reply["choose"] = json!(name);
     reply["next"] = json!(format!(
-        "On the lock screen, click Switch User, choose {name} and sign in."
+        "On the lock screen, click Switch User, choose {name} and log in."
     ));
     Ok(reply)
 }

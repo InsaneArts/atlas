@@ -157,9 +157,16 @@ struct Card<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        VStack(spacing: 0) { content }
-            .background(RoundedRectangle(cornerRadius: 12).fill(AtlasStyle.card))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(AtlasStyle.line, lineWidth: 0.5))
+        VStack(spacing: 0) { content }.cardStyle()
+    }
+}
+
+extension View {
+    /// A card's ground and edge: neutral, or tinted for what needs the person.
+    func cardStyle(_ tint: Color? = nil) -> some View {
+        background(RoundedRectangle(cornerRadius: 12).fill(tint?.opacity(0.10) ?? AtlasStyle.card))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12).strokeBorder(tint?.opacity(0.35) ?? AtlasStyle.line, lineWidth: 0.5))
     }
 }
 

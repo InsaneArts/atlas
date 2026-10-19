@@ -43,7 +43,8 @@ const SKILL_RULES: &str = "## Rules
   needs them (or use the setup skill).
 - Never take control from the person: on `busy`, wait.
 - Ask the person before `atlas switch`, and before anything that locks, sleeps
-  or logs out.
+  or logs out. Run `atlas logout` only when the person asks for it: only they
+  can log the helper back in.
 - After an `uncertain` result, never repeat the action: take a screenshot, run
   `atlas restart`, and look again before going on.
 - Leave the helper as you found it: close what you opened, roll back what you
@@ -505,6 +506,16 @@ fn selected(apps: &Value, closing: Closing, atlas: Option<&str>) -> Vec<Process>
                 protected: protected(running, atlas),
             })
         })
+        .collect()
+}
+
+/// The apps someone opened in the helper and left open, by name: what
+/// `close --all` would quit.
+pub(crate) fn left_open(apps: &Value) -> Vec<String> {
+    selected(apps, Closing::All, atlas_bundle().as_deref())
+        .into_iter()
+        .filter(|process| !process.protected)
+        .map(|process| process.name)
         .collect()
 }
 
@@ -1580,6 +1591,12 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(names(Closing::All), ["Calendar", "Safari", "Opie QA"]);
+        let open = json!({"apps": [apps["apps"][0], apps["apps"][7], apps["apps"][8]]});
+        assert_eq!(
+            left_open(&open),
+            ["Safari", "Opie QA"],
+            "a held log-out names what close --all would quit"
+        );
         let services = json!({"apps": [
             app("Raycast Web Content", "accessory", "/Users/me/com.apple.WebKit.WebContent"),
             app("Slack Helper", "accessory", "/Applications/Slack.app/Contents/Frameworks/Slack Helper.app/Contents/MacOS/Slack Helper"),

@@ -24,6 +24,10 @@ import Testing
         #expect(Mode.of(.controlling).mark == .filled)
         #expect(Mode.of(.recovering).tone == .attention)
         #expect(Mode.of(.unavailable).label == "Unavailable")
+        #expect(Mode.of(.loggedOut).label == "Logged out")
+        var overview = ViewerStatus.Overview()
+        overview.mode = .loggedOut
+        #expect(Mode.seen(by: overview, holdingControl: true).label == "Logged out", "no control without a helper")
     }
 
     @Test func aViewerKnowsWhetherItHoldsControl() {
@@ -51,6 +55,11 @@ import Testing
         #expect(captions.map(\.line) == ["Agent ran a command", "Agent sent 2 actions"])
     }
 
+    @Test func aLogOutReadsAsOne() throws {
+        let reading = try status(["overview": ["activity": [["operation": "logout", "ok": true, "ageSeconds": 3.0]]]])
+        #expect(Overview(reading).lastAction == "Agent logged out the helper · just now")
+    }
+
     @Test func controlWaitsForAgentsRecoveryAndOtherViewers() throws {
         func overview(_ mode: String) throws -> Overview { Overview(try status(["overview": ["mode": mode]])) }
         #expect(try overview("agent").controlBlocked(holdingControl: false) == "An agent is acting in the helper")
@@ -70,6 +79,7 @@ import Testing
                 ["name": "Input permission", "ok": NSNull(), "nextStep": "Run start-input."],
                 ["name": "Screen recording", "ok": false, "nextStep": "Enable it."],
             ],
+            "overview": ["mode": "blocked"],
             "capabilities": [
                 "nativeDialogs": [
                     "state": "failed", "ageSeconds": 300, "reason": "Native Save/Open did not complete in this session",
@@ -111,7 +121,7 @@ import Testing
         #expect(overview.facts(holdingControl: true)[2].1 == "This window")
         for (mode, expected) in [
             ("agent", "Agent working"), ("recovering", "After recovery"), ("blocked", "Not ready"),
-            ("unavailable", "Unavailable"),
+            ("unavailable", "Unavailable"), ("loggedOut", "Logged out"),
         ] {
             let reading = try status(["overview": ["mode": mode]])
             #expect(Overview(reading).facts(holdingControl: false)[2].1 == expected)
@@ -155,5 +165,22 @@ import Testing
         #expect(watching.recovery(holdingControl: false, recovering: true) != nil)
         #expect(watching.recovery(holdingControl: false, recovering: false) == nil)
         #expect(needs.recovery(holdingControl: true, recovering: false) == nil, "never while holding control")
+    }
+
+    @Test func aSilentHelpersChecksUseTheAppsWords() throws {
+        let reading = try status([
+            "checks": [
+                [
+                    "name": "Helper running", "ok": false,
+                    "nextStep": "Log in to it once: atlas switch locks the screen.",
+                ],
+                ["name": "Accessibility allowed", "nextStep": "Unknown until the helper is running."],
+            ],
+            "overview": ["mode": "loggedOut", "reason": "The helper is logged out, so agents can't use it"],
+        ])
+        let rows = Overview(reading).statusRows
+        #expect(rows[0].text == "The helper is logged out, so agents can't use it")
+        #expect(rows[1].text == "Unknown")
+        #expect(rows.allSatisfy { !$0.text.contains("atlas ") })
     }
 }

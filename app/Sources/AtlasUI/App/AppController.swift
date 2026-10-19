@@ -48,6 +48,7 @@ public final class AppController: NSObject, NSApplicationDelegate {
             return
         }
         let model = ViewerModel(service: service)
+        model.logIn = { [weak self] in Task { await self?.panel?.logIn() } }
         if let panel { model.begin(with: panel.status, image: panel.image) }
         let window = ViewerWindow(model: model) { [weak self] closed in
             guard let self, viewer === closed else { return }

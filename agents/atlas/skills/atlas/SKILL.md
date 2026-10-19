@@ -5,7 +5,7 @@ description: "See and use macOS GUIs in a hidden second login (the helper) witho
 
 # Atlas
 
-Atlas gives you a Mac screen of your own: a separate, signed-in macOS login
+Atlas gives you a Mac screen of your own: a separate, logged-in macOS login
 (the helper) running in the background. You open apps there, look at them,
 click and type, while the person keeps using their own desktop undisturbed.
 The person's only job was setting Atlas up; everything after that is yours.
@@ -28,7 +28,8 @@ error.
   needs them (or use the setup skill).
 - Never take control from the person: on `busy`, wait.
 - Ask the person before `atlas switch`, and before anything that locks, sleeps
-  or logs out.
+  or logs out. Run `atlas logout` only when the person asks for it: only they
+  can log the helper back in.
 - After an `uncertain` result, never repeat the action: take a screenshot, run
   `atlas restart`, and look again before going on.
 - Leave the helper as you found it: close what you opened, roll back what you

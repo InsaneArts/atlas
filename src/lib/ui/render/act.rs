@@ -132,6 +132,14 @@ pub fn restart(value: &Value) -> String {
     line
 }
 
+pub fn logout(_: &Value) -> String {
+    format!(
+        "{} The helper is logged out  {}",
+        style::ok(),
+        style::dim("atlas switch to log in to it again")
+    )
+}
+
 pub fn start_input(value: &Value) -> String {
     let how = if value["alreadyRunning"] == true {
         "was already running"

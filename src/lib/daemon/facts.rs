@@ -33,13 +33,16 @@ fn request_accessibility() {
 /// Recording, with its System Settings page opened so its switch is there
 /// even when macOS shows no prompt. Nothing is granted here; the person
 /// decides, in the normal way.
-pub async fn request_consent_on_arrival(restart: impl Fn()) {
+///
+/// With nothing to ask right after the person logged in (after a restart
+/// or a log-out), they are told they can switch back to `controller`.
+pub async fn request_consent_on_arrival(controller: u32, restart: impl Fn()) {
     let shown = || console_state() == Some(true);
     let mut present = false;
     loop {
         let now = shown();
         if now && !present {
-            ask(&shown, &restart).await;
+            ask(&shown, &restart, controller).await;
         }
         // Leaving while being asked counts as never having arrived.
         present = now && shown();
@@ -47,11 +50,25 @@ pub async fn request_consent_on_arrival(restart: impl Fn()) {
     }
 }
 
+/// A login younger than this has only just happened.
+const FRESH_LOGIN: Duration = Duration::from_secs(90);
+
+/// Whether this login has only just happened (asked of `ps`, off the
+/// runtime).
+async fn just_logged_in() -> bool {
+    let uid = nix::unistd::getuid().as_raw();
+    tokio::task::spawn_blocking(move || crate::session::login(uid))
+        .await
+        .ok()
+        .flatten()
+        .is_some_and(|login| login.age < FRESH_LOGIN)
+}
+
 /// One arrival's requests, given up as soon as the helper leaves the screen.
 /// When the person has turned on what was asked for, Atlas says so here, so
 /// they know to switch back, and restarts this process if it cannot yet use
 /// Screen Recording (macOS applies that grant to new processes only).
-async fn ask(shown: &impl Fn() -> bool, restart: &impl Fn()) {
+async fn ask(shown: &impl Fn() -> bool, restart: &impl Fn(), controller: u32) {
     // Let the desktop settle after the switch, and let macOS finish a new
     // account's setup screens: a prompt raised behind them is never seen.
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -67,6 +84,8 @@ async fn ask(shown: &impl Fn() -> bool, restart: &impl Fn()) {
     if accessibility() && recording().await {
         if asked(false) {
             done_notice();
+        } else if just_logged_in().await {
+            back_notice(controller);
         }
         if !capture::permitted() {
             restart();
@@ -166,33 +185,73 @@ fn asked(remember: bool) -> bool {
 }
 
 /// Tell the person, in the helper, that it is set up and they can go back.
-/// The notice runs on its own; its process is collected when it closes.
 fn done_notice() {
+    notice(
+        "Atlas is set up here",
+        "Screen Recording and Accessibility are on. Switch back to your own account; Atlas \
+         carries on there by itself.",
+        None,
+    );
+}
+
+/// Tell the person, just logged in to the helper, that Atlas runs here
+/// again, with a button that switches back to `controller`.
+fn back_notice(controller: u32) {
+    let Some(account) = crate::setup::account_with_uid(controller).ok().flatten() else {
+        return;
+    };
+    let title = crate::setup::real_name(&account.name).unwrap_or_else(|| account.name.clone());
+    notice(
+        "Atlas is running here again",
+        &format!("Switch back to {title}; Atlas carries on there by itself."),
+        Some(&account.name),
+    );
+}
+
+/// Where the login a notice was last shown in is kept: a daemon restarted
+/// to pick up Screen Recording never repeats what its predecessor showed.
+fn notice_record(home: &std::path::Path) -> std::path::PathBuf {
+    home.join(crate::setup::helper::ROOT).join("notice-shown")
+}
+
+/// Whether a notice was shown already in the login with this loginwindow.
+fn shown_in(home: &std::path::Path, login: u32) -> bool {
+    std::fs::read_to_string(notice_record(home)).is_ok_and(|shown| shown == login.to_string())
+}
+
+/// Tell the person something in the helper, at most once a login, with a
+/// Switch Back button to `switch_back` when given. The notice runs on its
+/// own; its process is collected when it closes.
+fn notice(title: &str, message: &str, switch_back: Option<&str>) {
+    let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
+        return;
+    };
+    let login = crate::session::login(nix::unistd::getuid().as_raw()).map(|login| login.pid);
     // The onboarding window, when open here, tells the person itself.
-    if std::env::var_os("HOME")
-        .is_some_and(|home| crate::onboarding::window_open(std::path::Path::new(&home)))
-    {
+    if crate::onboarding::window_open(&home) || login.is_some_and(|pid| shown_in(&home, pid)) {
         return;
     }
     let Ok(app) = crate::menubar::executable() else {
         return;
     };
+    let mut arguments = vec!["--notice", title, message];
+    if let Some(account) = switch_back {
+        arguments.extend(["--switch-back", account]);
+    }
     use std::os::unix::process::CommandExt;
     // Its own process group: restarting this daemon (to pick up Screen
     // Recording) must not close the notice the person is reading.
     let shown = std::process::Command::new(app)
         .process_group(0)
-        .args([
-            "--notice",
-            "Atlas is set up here",
-            "Screen Recording and Accessibility are on. Switch back to your own account; \
-             Atlas carries on there by itself.",
-        ])
+        .args(arguments)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
     if let Ok(mut child) = shown {
+        if let Some(pid) = login {
+            let _ = std::fs::write(notice_record(&home), pid.to_string());
+        }
         std::thread::spawn(move || {
             let _ = child.wait();
         });
@@ -365,6 +424,16 @@ mod tests {
         // SAFETY: reading an immutable framework constant in a test.
         let key = unsafe { objc2_application_services::kAXTrustedCheckOptionPrompt };
         assert_eq!(key.to_string(), "AXTrustedCheckOptionPrompt");
+    }
+
+    #[test]
+    fn a_notice_is_remembered_for_its_login_only() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(!shown_in(home.path(), 1158), "none shown yet");
+        std::fs::create_dir_all(home.path().join(crate::setup::helper::ROOT)).unwrap();
+        std::fs::write(notice_record(home.path()), "1158").unwrap();
+        assert!(shown_in(home.path(), 1158));
+        assert!(!shown_in(home.path(), 2001), "a later login shows its own");
     }
 
     #[test]

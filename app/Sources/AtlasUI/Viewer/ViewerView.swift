@@ -274,7 +274,14 @@ struct NoPicture: View {
 
     var body: some View {
         VStack(spacing: 14) {
-            if let reason = model.unavailable {
+            if model.loggedOut {
+                Eyebrow(text: "Logged out")
+                Headline(title: "The helper is", tail: "logged out.", size: 24)
+                Lede(text: Words.loggedOut)
+                if let logIn = model.logIn {
+                    Button("Log In…", action: logIn).atlas(large: true).padding(.top, 4)
+                }
+            } else if let reason = model.unavailable {
                 Eyebrow(text: "Can't show the helper", color: AtlasStyle.orange)
                 Headline(title: "The helper is", tail: "out of sight.", size: 24)
                 Lede(text: reason).textSelection(.enabled)
@@ -288,7 +295,8 @@ struct NoPicture: View {
             }
         }
         .padding(28)
-        .accessibilityElement(children: .combine)
+        // Read as one, unless it holds a button to reach.
+        .accessibilityElement(children: model.loggedOut ? .contain : .combine)
     }
 }
 

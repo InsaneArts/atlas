@@ -207,7 +207,7 @@ pub async fn status(config_path: &Path) -> Result<Value> {
     // the helper runs already (as after `atlas init`).
     let paired = request()
         .is_some_and(|pairing| pairing.controller_uid == uid && pairing.helper_uid == helper.uid);
-    let signed_in = init::helper_logged_in(helper.uid);
+    let signed_in = crate::session::logged_in(helper.uid) == Some(true);
     let client = Client::new(config.clone())?;
     let reply = client.status().await;
     let hidden = crate::session::require_hidden(&reply, config.helper_uid).is_ok();
@@ -636,7 +636,7 @@ pub fn accept(controller_uid: u32, controller_name: &str) -> Result<Value> {
             .output()?;
         if !output.status.success() {
             return Err(problem(
-                "Atlas was set up here but did not start; sign out of this account, sign in again and open Atlas",
+                "Atlas was set up here but did not start; log out of this account, log in again and open Atlas",
             ));
         }
     }

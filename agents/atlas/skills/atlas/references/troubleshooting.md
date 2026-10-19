@@ -27,6 +27,9 @@ its own failure is in `exitCode`.)
 | `invalid-json` | JSON passed to a command could not be read. | Fix the JSON (for example the `input` actions). |
 | `io` | A file or path could not be read or written. | Read `error`; check the path it names. |
 | `lease-lost` | Control ended mid-action: it was released, expired, or the session changed. | Observe, then retry only if the person is not controlling. |
+| `logged-out` | The helper is logged out (after a restart or a log-out). | Stop and ask the person to log in to the helper once, then switch back (`atlas switch` locks the screen for that). Do not run `atlas init` for this. |
+| `logout` | macOS refused or did not answer the log-out request. When `uncertain`, it may still happen. | Tell the person. When uncertain, take a screenshot and run `atlas restart` if the helper is still logged in. |
+| `logout-held` | The helper has not logged out yet: an app may be asking to save. It is uncertain; the log-out may still finish. | Take a screenshot and show the person; log out with `--force` only if they agree, since unsaved work is lost. |
 | `menubar` | The menu bar companion could not start. | Not needed for your task; continue with CLI commands. |
 | `native` | A native input or dialog check failed. | Read `error`; native Save/Open needs Screen Sharing (see the guide). |
 | `no-environment` | No helper environment profile is installed for `environment run`. | Use `atlas run`, or install a profile with `atlas environment profile`. |

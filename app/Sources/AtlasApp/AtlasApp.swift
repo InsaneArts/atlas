@@ -17,7 +17,10 @@ enum AtlasApp {
         // the app: writes to its closed pipe fail with an error instead.
         signal(SIGPIPE, SIG_IGN)
         if let index = arguments.firstIndex(of: "--notice"), index + 2 < arguments.count {
-            notice(title: arguments[index + 1], message: arguments[index + 2])
+            let back = arguments.firstIndex(of: "--switch-back").flatMap {
+                $0 + 1 < arguments.count ? arguments[$0 + 1] : nil
+            }
+            notice(title: arguments[index + 1], message: arguments[index + 2], switchBack: back)
         }
         if let index = arguments.firstIndex(of: "--login"), index + 1 < arguments.count {
             login(arguments[index + 1])
@@ -46,21 +49,38 @@ enum AtlasApp {
         withExtendedLifetime(controller) { app.run() }
     }
 
-    /// `--notice TITLE MESSAGE`: tell the person something in this session
-    /// (the helper's, when its daemon asks), wait for OK, then exit.
-    static func notice(title: String, message: String) -> Never {
+    /// `--notice TITLE MESSAGE [--switch-back ACCOUNT]`: tell the person
+    /// something in this session (the helper's, when its daemon asks), wait
+    /// for OK, then exit. With an account, its default button locks this
+    /// session so they can switch back to that account.
+    static func notice(title: String, message: String, switchBack: String? = nil) -> Never {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = message
-        alert.addButton(withTitle: "OK")
+        if switchBack != nil {
+            alert.addButton(withTitle: "Switch Back")
+            alert.addButton(withTitle: "Stay Here").keyEquivalent = "\u{1b}"
+        } else {
+            alert.addButton(withTitle: "OK")
+        }
         // Finish launching first, so the request to come forward is honoured
         // and the notice has keyboard focus (Return closes it).
         app.finishLaunching()
         app.activate(ignoringOtherApps: true)
         alert.window.level = .floating
-        alert.runModal()
+        if alert.runModal() == .alertFirstButtonReturn, let switchBack {
+            let process = Process()
+            process.executableURL = commands.executable
+            process.arguments = ["--json"] + Action.switchTo(switchBack).arguments
+            // Should it not start, the person switches back from the menu bar
+            // as usual; the notice has nothing more to say.
+            do {
+                try process.run()
+                process.waitUntilExit()
+            } catch {}
+        }
         exit(0)
     }
 

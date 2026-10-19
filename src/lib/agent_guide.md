@@ -1,6 +1,6 @@
 # Atlas: guide for agents
 
-Atlas gives you a Mac screen of your own: a separate, signed-in macOS login
+Atlas gives you a Mac screen of your own: a separate, logged-in macOS login
 (the helper) running in the background. You open apps there, look at them,
 click and type, while the person keeps using their own desktop undisturbed.
 The person's only job was setting Atlas up; everything after that is yours.

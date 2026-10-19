@@ -357,7 +357,7 @@ impl Migration {
             }
         }
         Err(problem(
-            "The helper is not running in the background. Sign in to the helper account \
+            "The helper is not running in the background. Log in to the helper account \
              once, switch back, then run atlas init again.",
         ))
     }

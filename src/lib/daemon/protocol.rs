@@ -24,6 +24,10 @@ pub enum Request {
         timeout: Duration,
     },
     Restart,
+    /// Log this helper out; `force` ends its session without asking its apps.
+    Logout {
+        force: bool,
+    },
 }
 
 /// An error reply.
@@ -54,6 +58,14 @@ pub fn parse(line: &[u8]) -> Result<Request, Value> {
         "hello" => Ok(Request::Hello),
         "apps" => Ok(Request::Apps),
         "restart" => Ok(Request::Restart),
+        "logout" => Ok(Request::Logout {
+            force: match &request["force"] {
+                Value::Null => false,
+                value => value
+                    .as_bool()
+                    .ok_or_else(|| bad("\"force\" must be true or false"))?,
+            },
+        }),
         "screenshot" => {
             let max_dimension = match &request["maxDimension"] {
                 Value::Null => None,
@@ -117,6 +129,18 @@ mod tests {
         assert_eq!(parse(br#"{"op":"hello"}"#), Ok(Request::Hello));
         assert_eq!(parse(br#"{"op":"apps"}"#), Ok(Request::Apps));
         assert_eq!(parse(br#"{"op":"restart"}"#), Ok(Request::Restart));
+        assert_eq!(
+            parse(br#"{"op":"logout"}"#),
+            Ok(Request::Logout { force: false })
+        );
+        assert_eq!(
+            parse(br#"{"op":"logout","force":true}"#),
+            Ok(Request::Logout { force: true })
+        );
+        assert_eq!(
+            refused(r#"{"op":"logout","force":"yes"}"#)["error"],
+            "\"force\" must be true or false"
+        );
         assert_eq!(
             parse(br#"{"op":"screenshot","maxDimension":320}"#),
             Ok(Request::Screenshot {

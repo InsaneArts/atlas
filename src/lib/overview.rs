@@ -76,8 +76,30 @@ pub fn overview(
         .find(|row| row["actor"] != "viewer" && row["operation"] != "restart")
         .and_then(|row| age(row, now))
         .is_some_and(|age| age < ACTIVE_NANOS);
+    // A silent helper in the app's words: the panel and viewer offer buttons,
+    // never commands.
     let (mode, reason) = if !reachable {
-        ("unavailable", first_step)
+        match report["absence"].as_str() {
+            Some("loggedOut") => (
+                "loggedOut",
+                "The helper is logged out, so agents can't use it".to_owned(),
+            ),
+            Some("missing") => (
+                "unavailable",
+                "The helper account no longer exists. Open Getting Started to set up a new one."
+                    .to_owned(),
+            ),
+            _ if session["code"] == "identity" => (
+                "unavailable",
+                "Another account answered for the helper. Open Getting Started to check it."
+                    .to_owned(),
+            ),
+            _ => (
+                "unavailable",
+                "Atlas isn't answering in the helper. Open Getting Started if this lasts."
+                    .to_owned(),
+            ),
+        }
     } else if pending.unresolved > 0 {
         (
             "recovering",
@@ -102,7 +124,7 @@ pub fn overview(
     json!({
         "mode": mode,
         "reason": reason,
-        "account": session["user"]["name"],
+        "account": if reachable { &session["user"]["name"] } else { &report["account"] },
         "display": session["display"],
         "pending": pending.unresolved,
         "inFlight": pending.in_flight,
@@ -203,6 +225,23 @@ mod tests {
             overview(&ready, false, unresolved(0), &[row(30)], NOW)["activity"][0]["ageSeconds"],
             30
         );
+    }
+
+    #[test]
+    fn a_silent_helper_is_explained_without_commands() {
+        let mut silent = report(false, false);
+        silent["absence"] = json!("loggedOut");
+        silent["account"] = json!("atlas");
+        let logged_out = overview(&silent, false, unresolved(1), &[], NOW);
+        assert_eq!(logged_out["mode"], "loggedOut", "before any recovery");
+        assert_eq!(logged_out["account"], "atlas");
+        silent["absence"] = json!("missing");
+        assert_eq!(mode(&silent, false, 0, &[]), "unavailable");
+        for absence in [json!("missing"), Value::Null] {
+            silent["absence"] = absence;
+            let reason = overview(&silent, false, unresolved(0), &[], NOW)["reason"].clone();
+            assert!(!reason.as_str().unwrap().contains("atlas "), "{reason}");
+        }
     }
 
     #[test]

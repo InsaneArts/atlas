@@ -26,7 +26,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// How long init waits for the person to sign in or click Allow.
+/// How long init waits for the person to log in or click Allow.
 const PATIENCE: Duration = Duration::from_secs(30 * 60);
 
 fn problem(message: impl Into<String>) -> Error {
@@ -347,15 +347,6 @@ pub(crate) fn replace_config(path: &Path, previous: &Config, config: &Config) ->
             Ok(fs::rename(temporary, path)?)
         },
     )
-}
-
-/// Whether the helper's graphical session exists (it has logged in).
-pub fn helper_logged_in(uid: u32) -> bool {
-    // A signed-in desktop runs its Dock; visible without administrator rights.
-    Command::new("/usr/bin/pgrep")
-        .args(["-U", &uid.to_string(), "-x", "Dock"])
-        .output()
-        .is_ok_and(|output| output.status.success())
 }
 
 /// Keep the administrator rights from `sudo -v` fresh while init waits
@@ -739,7 +730,7 @@ fn helper_step(config_path: &Path) -> Result<(Config, setup::Account)> {
             )));
         }
     }
-    // An older account with the same user ID was deleted while signed in:
+    // An older account with the same user ID was deleted while logged in:
     // its session still runs and would be mistaken for the helper's.
     if crate::session::leftover_session(helper.uid, &helper.name, &helper.home) {
         return Err(problem(format!(
@@ -811,16 +802,17 @@ async fn start_helper(
         admin(&mut sudo_ready)?;
     }
 
-    if !helper_logged_in(helper.uid) {
-        heading(&format!("Sign in to {name} once"));
+    let logged_in = || crate::session::logged_in(helper.uid) == Some(true);
+    if !logged_in() {
+        heading(&format!("Log in to {name} once"));
         if installed {
             say(&format!(
-                "  {name} is signed out (after a restart, say). Switch to {name}, sign in,\n  \
+                "  {name} is logged out (after a restart or a log-out). Switch to {name}, log in,\n  \
                      then switch back here."
             ));
         } else {
             say(&format!(
-                "  Switch to {name}, sign in and finish macOS's setup questions. If macOS then\n  \
+                "  Switch to {name}, log in and finish macOS's setup questions. If macOS then\n  \
                      asks about Accessibility or Screen Recording for Atlas, turn Atlas on.\n  \
                      Then switch back here."
             ));
@@ -828,14 +820,11 @@ async fn start_helper(
         offer_lock(name)?;
         {
             let _spinner = Spinner::new(format!(
-                "Waiting for {name} to sign in… (Ctrl-C to stop; run atlas init again later)"
+                "Waiting for {name} to log in… (Ctrl-C to stop; run atlas init again later)"
             ));
-            wait_for("the helper to sign in", async || {
-                helper_logged_in(helper.uid).then_some(())
-            })
-            .await?;
+            wait_for("the helper to log in", async || logged_in().then_some(())).await?;
         }
-        done(&format!("{name} signed in"), "");
+        done(&format!("{name} logged in"), "");
     }
 
     let mut started = false;
@@ -935,7 +924,7 @@ async fn permissions_step(client: &Client, config: &Config, name: &str) -> Resul
             "  Atlas needs two macOS permissions there:\n    \
              · Screen Recording, to see {name}'s screen\n    \
              · Accessibility, to click and type there\n  \
-             1. Switch to {name} (sign in if asked).\n  \
+             1. Switch to {name} (log in if asked).\n  \
              2. macOS asks about Accessibility: click Open System Settings and turn Atlas on.\n  \
              3. System Settings then shows Screen & System Audio Recording: turn Atlas on\n     \
              there too. If macOS offers to quit and reopen Atlas, either choice is fine.\n  \

@@ -28,6 +28,15 @@ pub fn fix(code: &str) -> Option<&'static str> {
         "port-in-use" => "Pass --port with a free port, or stop what is using it.",
         "io" => "Check the path and its permissions, then try again.",
         "lease-lost" => "Control was taken back. Take a screenshot before trying again.",
+        "logged-out" => {
+            "Log in to it once, then switch back: atlas switch locks the screen for that."
+        }
+        "logout" => {
+            "Look at the helper in the viewer. If it is still logged in, run atlas restart."
+        }
+        "logout-held" => {
+            "Run atlas logout --force to end it anyway (unsaved work is lost), or atlas restart, then answer the app in the viewer."
+        }
         "menubar" => "The rest of Atlas works without the menu bar.",
         "no-environment" => "Use atlas run, or set one up with atlas environment profile.",
         "on-console" => {
