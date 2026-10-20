@@ -38,15 +38,8 @@ package struct WheelAccumulator: Sendable {
   /// - Returns: The whole lines each way.
   package mutating func take() -> (dx: Int, dy: Int) {
     func whole(_ value: Double) -> Int {
-      Int(
-        max(
-          -100,
-          min(
-            100,
-            (value + (value < 0 ? -Self.roundingSlack : value > 0 ? Self.roundingSlack : 0)).rounded(.towardZero)
-          )
-        )
-      )
+      let lines = (value + (value < 0 ? -Self.roundingSlack : Self.roundingSlack)).rounded(.towardZero)
+      return Int(min(100, max(-100, lines)))
     }
     let dx = whole(x)
     let dy = whole(y)
