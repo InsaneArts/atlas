@@ -62,6 +62,8 @@ dependencies = [
  "console",
  "dialoguer",
  "fs2",
+ "hyper",
+ "hyper-util",
  "indicatif",
  "libc",
  "nix",

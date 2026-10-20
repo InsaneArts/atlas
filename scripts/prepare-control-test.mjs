@@ -68,6 +68,11 @@ const fixturePID = Number(
   ]),
 );
 if (!Number.isSafeInteger(fixturePID) || fixturePID < 1) throw new Error('Fixture PID unavailable');
+// The checks read the fixture's state at once: return only once it has written it.
+for (let attempt = 0; !fs.existsSync(path.join(logDirectory, 'state.json')); attempt++) {
+  if (attempt === 100) throw new Error('The fixture never wrote its state');
+  spawnSync('/bin/sleep', ['0.1']);
+}
 const record = { fixturePID, logDirectory, session: readiness.session, config };
 fs.mkdirSync(output, { recursive: true, mode: 0o700 });
 fs.writeFileSync(

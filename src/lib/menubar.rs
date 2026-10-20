@@ -192,8 +192,9 @@ fn last_reply(log: &Path) -> Option<serde_json::Value> {
 }
 
 /// Stop a running menu bar (as `uninstall` and `update` must): the port it
-/// was serving, so it can be started again there. Only a process that is
-/// Atlas itself is signalled; a stale record naming anything else is not.
+/// was serving, so it can be started again there. Only the process its
+/// viewer answers as, which must be the one its record names and Atlas
+/// itself, is signalled; a stale record naming anything else is not.
 pub fn stop(output: &Path) -> Option<u16> {
     let record = output.join(crate::viewer::MENUBAR_RECORD);
     let port = fs::read(&record)

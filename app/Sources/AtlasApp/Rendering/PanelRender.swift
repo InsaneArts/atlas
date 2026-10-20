@@ -34,7 +34,11 @@ enum PanelRender {
     let status = await reading ?? ViewerStatus()
     let frame = await picture
     let snapshot = overrides.applied(
-      to: PanelSnapshot(status: status, picture: frame.flatMap { DesktopPicture(frame: $0) })
+      to: PanelSnapshot(
+        status: status,
+        picture: frame.flatMap { DesktopPicture(frame: $0) },
+        helper: status.overview.account
+      )
     )
     let content = NSHostingView(rootView: PanelView(state: PanelPresenter.state(snapshot)) { _ in })
     let size = content.fittingSize

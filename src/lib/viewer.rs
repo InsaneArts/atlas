@@ -4,24 +4,28 @@
 //! directory so `atlas monitor` and the login item can find it.
 use crate::{
     client::{Client, Frame},
+    config::Config,
     control::{self, ActionPermit, Lease, SharedLease},
     error::{Error, Result},
     menubar::{App, Line},
     session::Epoch,
 };
 use axum::{
-    Router,
     body::{Body, Bytes, to_bytes},
-    extract::{Request, State},
+    extract::Request,
     http::{HeaderMap, HeaderValue, Method, StatusCode},
     response::Response,
-    routing::any,
 };
 use serde_json::{Value, json};
-use std::{collections::VecDeque, path::Path, sync::Arc, time::Duration};
+use std::{
+    collections::VecDeque,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 use tokio::{
-    net::TcpListener,
-    sync::{Mutex, Semaphore},
+    net::{TcpListener, TcpStream},
+    sync::{Mutex, OwnedSemaphorePermit, Semaphore, watch},
 };
 
 const FRAME_LIFETIME: Duration = Duration::from_secs(8);
@@ -33,8 +37,21 @@ const FRAME_WIDTH: u32 = 1600;
 const KEPT_FRAMES: usize = 24;
 /// How many requests the viewer serves at once.
 const CONCURRENT_REQUESTS: usize = 32;
+/// Requests kept for ending control, so a busy viewer still lets go.
+const URGENT_REQUESTS: usize = 8;
+/// How many connections are open at once; more wait to be accepted.
+const CONNECTIONS: usize = 64;
+/// How long a connection may take to send a request's headers. An idle
+/// connection closes after as long.
+const HEADER_DEADLINE: Duration = Duration::from_secs(15);
+/// How long reading the status or a frame may take: less than the app
+/// waits (8 seconds), so it hears why rather than giving up.
+const READ_DEADLINE: Duration = Duration::from_secs(5);
 /// The largest request body, in bytes.
 const MAX_BODY: usize = 32768;
+/// What the viewer's own address answers, so it is told apart from any
+/// other program on its port.
+const SERVICE: &str = "atlas-viewer";
 
 #[derive(Default)]
 struct Frames {
@@ -43,13 +60,40 @@ struct Frames {
     capture_revision: Option<u64>,
 }
 
+/// A frame capture in progress: the input it shows, and its outcome once
+/// known, which every request waiting on it shares.
+struct Capture {
+    revision: u64,
+    outcome: watch::Receiver<Option<Captured>>,
+}
+
+/// A capture's outcome as each request waiting on it reads it.
+type Captured = std::result::Result<(String, Arc<Frame>), (&'static str, String)>;
+
+/// Empties the capture slot when the capture that filled it ends, however
+/// it ends.
+struct Capturing<'a>(&'a std::sync::Mutex<Option<Capture>>);
+
+impl Drop for Capturing<'_> {
+    fn drop(&mut self) {
+        *unpoisoned(self.0) = None;
+    }
+}
+
 pub struct Viewer {
-    client: Client,
+    /// The helper this viewer serves. It follows the settings when they
+    /// name another one.
+    client: std::sync::Mutex<Arc<Client>>,
+    /// The settings file the client was made from, when it follows one.
+    settings: Option<PathBuf>,
+    /// That file's text when last found to match the client.
+    settings_text: std::sync::Mutex<Option<Vec<u8>>>,
     lease: SharedLease,
     lease_epoch: Mutex<Option<Epoch>>,
     frames: Mutex<Frames>,
-    capture: Mutex<()>,
+    capture: std::sync::Mutex<Option<Capture>>,
     requests: Semaphore,
+    urgent: Semaphore,
     pub url: String,
     prefix: String,
     authority: String,
@@ -61,9 +105,95 @@ pub struct Viewer {
     /// The helper daemon and display input was last started or re-pinned
     /// for, so each gets one try.
     input_started: std::sync::Mutex<Option<String>>,
+    /// Where this viewer's record is kept and what it says, once written.
+    record: std::sync::Mutex<Option<(PathBuf, Value)>>,
 }
 
 impl Viewer {
+    /// The helper this viewer serves right now.
+    fn client(&self) -> Arc<Client> {
+        unpoisoned(&self.client).clone()
+    }
+
+    /// Follow the settings file: once it names another helper (Getting
+    /// Started set one up, say), serve that one without a restart. Only a
+    /// change to the file's text is read. Control held in the previous
+    /// helper ends there first; while control is still held the move waits
+    /// for a later read.
+    async fn follow_settings(&self) {
+        let Some(path) = self.settings.clone() else {
+            return;
+        };
+
+        let read = path.clone();
+        let Ok(Ok(text)) = tokio::task::spawn_blocking(move || std::fs::read(read)).await else {
+            return;
+        };
+
+        if unpoisoned(&self.settings_text).as_deref() == Some(text.as_slice()) {
+            return;
+        }
+
+        let Ok(Ok(config)) = tokio::task::spawn_blocking(move || Config::load(&path)).await else {
+            return;
+        };
+
+        let current = self.client();
+        if config == current.config {
+            *unpoisoned(&self.settings_text) = Some(text);
+            return;
+        }
+
+        let Ok(mut next) = Client::new(config) else {
+            return;
+        };
+        next.actor = current.actor;
+
+        let _ = self.release(None).await;
+
+        {
+            let mut lease = self.lease.lock().await;
+            let mut client = unpoisoned(&self.client);
+            if lease.active() || client.config == next.config {
+                return;
+            }
+
+            *client = Arc::new(next);
+            *unpoisoned(&self.settings_text) = Some(text);
+        }
+
+        self.frames.lock().await.items.clear();
+        *unpoisoned(&self.input_started) = None;
+        self.move_record();
+    }
+
+    /// Keep this viewer's record in the output folder the settings name
+    /// now, so commands reading them still find the menu bar.
+    fn move_record(&self) {
+        let client = self.client();
+        let mut kept = unpoisoned(&self.record);
+        let Some((path, record)) = kept.clone() else {
+            return;
+        };
+
+        let Ok(output) = client.output_dir() else {
+            return;
+        };
+
+        let moved = output.join(MENUBAR_RECORD);
+        if moved == path {
+            return;
+        }
+
+        let written = serde_json::to_vec_pretty(&record)
+            .map_err(Error::from)
+            .and_then(|bytes| control::write_private(&moved, &bytes));
+        if written.is_ok() {
+            remove_record(&path);
+            *kept = Some((moved, record));
+        }
+    }
+
     /// Pass `line` to the app this viewer serves.
     fn send(&self, line: Line) -> Result<()> {
         unpoisoned(&self.app)
@@ -73,9 +203,62 @@ impl Viewer {
             .map_err(|_| Error::new("menubar", "The menu bar is not running"))
     }
 
+    /// A current frame of the helper. One capture runs at a time and every
+    /// request asking meanwhile shares it; one started before the latest
+    /// input is waited out, then a fresh one taken.
     async fn frame(&self) -> Result<(String, Arc<Frame>)> {
-        let _capture = self.capture.lock().await;
-        let current = self.client.identity().await?.epoch;
+        loop {
+            let revision = self.frames.lock().await.input_revision;
+
+            // Either this request captures, or it waits on the one running.
+            let ours = {
+                let mut slot = unpoisoned(&self.capture);
+                match slot.as_ref() {
+                    Some(running) => Err((running.outcome.clone(), running.revision >= revision)),
+                    None => {
+                        let (sender, outcome) = watch::channel(None);
+                        *slot = Some(Capture { revision, outcome });
+                        Ok(sender)
+                    }
+                }
+            };
+
+            let sender = match ours {
+                Ok(sender) => sender,
+                Err((mut outcome, current)) => {
+                    let shared = outcome
+                        .wait_for(Option::is_some)
+                        .await
+                        .ok()
+                        .and_then(|outcome| outcome.clone());
+                    match shared {
+                        Some(captured) if current => {
+                            return captured.map_err(|(code, message)| Error::new(code, message));
+                        }
+                        _ => continue,
+                    }
+                }
+            };
+
+            let _clear = Capturing(&self.capture);
+            let outcome = tokio::time::timeout(READ_DEADLINE, self.take_frame())
+                .await
+                .unwrap_or_else(|_| Err(late()));
+            let shared = match &outcome {
+                Ok(frame) => Ok(frame.clone()),
+                Err(error) => Err((error.code, error.error.clone())),
+            };
+            let _ = sender.send(Some(shared));
+
+            return outcome;
+        }
+    }
+
+    /// Take a frame, or reuse the last one when it is recent and no input
+    /// came since.
+    async fn take_frame(&self) -> Result<(String, Arc<Frame>)> {
+        let client = self.client();
+        let current = client.identity().await?.epoch;
         let revision;
 
         {
@@ -93,7 +276,7 @@ impl Viewer {
             }
         }
 
-        let frame = Arc::new(self.client.frame(Some(FRAME_WIDTH)).await?);
+        let frame = Arc::new(client.frame(Some(FRAME_WIDTH)).await?);
         if frame.at.elapsed() >= FRAME_LIFETIME {
             return Err(Error::new(
                 "stale-frame",
@@ -148,10 +331,11 @@ impl Viewer {
     /// pending first and cleared only once the helper confirms, so an
     /// unconfirmed release stays an unknown outcome for recovery.
     async fn release_native(&self, owner: &str) -> Result<()> {
-        let pending = self.client.controller.quarantine();
-        let result = self.client.native_control("release", owner).await;
+        let client = self.client();
+        let pending = client.controller.quarantine();
+        let result = client.native_control("release", owner).await;
         match (pending, result) {
-            (Ok(generation), Ok(_)) => self.client.controller.clear_if(&generation),
+            (Ok(generation), Ok(_)) => client.controller.clear_if(&generation),
             (Err(error), _) => Err(error),
             (_, Err(error)) => Err(Error::new(
                 "uncertain",
@@ -163,14 +347,23 @@ impl Viewer {
         }
     }
 
-    async fn status(&self) -> Value {
-        let uid = self.client.config.helper_uid;
-        let reply = self.client.status().await;
+    async fn status(self: &Arc<Self>) -> Value {
+        self.follow_settings().await;
+
+        // Reading waits on the helper, for a few seconds at most.
+        let until = tokio::time::Instant::now() + READ_DEADLINE;
+        let client = self.client();
+        let uid = client.config.helper_uid;
+        let reply = tokio::time::timeout_at(until, client.status())
+            .await
+            .unwrap_or_else(|_| json!(late()));
+
         // Why a silent helper is down, asked off the runtime (and only then).
         let absence = if crate::session::silent(&reply) {
-            blocking(move || Ok(crate::session::absence(uid)))
+            tokio::time::timeout_at(until, blocking(move || Ok(crate::session::absence(uid))))
                 .await
                 .ok()
+                .and_then(Result::ok)
                 .flatten()
         } else {
             None
@@ -182,15 +375,21 @@ impl Viewer {
             absence.explain(&mut status);
         }
 
+        // Ending control waits on the helper too: it finishes by itself
+        // when that takes longer than a moment.
         if status["ready"] != true {
-            let _ = self.release(None).await;
+            let viewer = self.clone();
+            let ending = tokio::spawn(async move {
+                let _ = viewer.release(None).await;
+            });
+            let _ = tokio::time::timeout(Duration::from_secs(1), ending).await;
         }
 
         let active = self.lease.lock().await.active();
         status["controlActive"] = json!(active);
 
         // An unreadable marker is unknown, so it counts as unresolved.
-        let controller = &self.client.controller;
+        let controller = &client.controller;
         let total = controller.pending().map_or(1, |pending| pending.len());
         let unresolved = controller.unresolved().map_or(1, |pending| pending.len());
         let pending = crate::overview::Pending {
@@ -198,10 +397,9 @@ impl Viewer {
             in_flight: total.saturating_sub(unresolved),
         };
 
-        self.start_input_after_login(&status["session"], total == 0 && !active);
+        self.start_input_after_login(&client, &status["session"], total == 0 && !active);
 
-        let activity = self
-            .client
+        let activity = client
             .output_dir()
             .map(|directory| crate::overview::activity(directory, 12))
             .unwrap_or_default();
@@ -249,14 +447,14 @@ impl Viewer {
     /// helper daemon and display, as Recover would, so agents and viewers
     /// carry on by themselves: only in the background, with Accessibility on
     /// and nothing pending or held.
-    fn start_input_after_login(&self, session: &Value, settled: bool) {
+    fn start_input_after_login(&self, client: &Arc<Client>, session: &Value, settled: bool) {
         let native = &session["inputService"];
         let starts = settled
             && native["controlActive"] != true
             && native["heldInput"] != true
             && session["permissions"]["accessibility"] == true;
         let Some(hidden) = starts
-            .then(|| crate::session::require_hidden(session, self.client.config.helper_uid).ok())
+            .then(|| crate::session::require_hidden(session, client.config.helper_uid).ok())
             .flatten()
             .filter(|hidden| !hidden.input)
         else {
@@ -279,7 +477,7 @@ impl Viewer {
             .map(|mut started| started.replace(key.clone()) != Some(key))
             .unwrap_or(false);
         if first {
-            let client = self.client.clone();
+            let client = client.clone();
             tokio::spawn(async move {
                 let _ = client.start_input().await;
             });
@@ -290,19 +488,23 @@ impl Viewer {
     /// outcome is unknown, otherwise starting, resetting or upgrading input.
     /// It never takes control or resumes input.
     async fn recover(&self) -> Result<Value> {
+        self.follow_settings().await;
+
         if self.lease.lock().await.active() {
             return Err(Error::new("busy", "Release control before recovering"));
         }
 
-        if !self.client.controller.pending()?.is_empty() {
-            return self.client.restart().await;
+        let client = self.client();
+        if !client.controller.pending()?.is_empty() {
+            return client.restart().await;
         }
 
-        self.client.start_input().await
+        client.start_input().await
     }
 
     async fn control(&self, route: &str, body: &Value) -> Result<Value> {
         let owner = body["lease"].as_str().unwrap_or_default();
+        let client = self.client();
 
         // The menu bar's emergency stop: end whichever lease is held, with
         // the same cleanup as any release. Nothing is resumed.
@@ -326,7 +528,7 @@ impl Viewer {
             .await?;
 
         if route == "control/acquire" {
-            let current = self.client.identity().await?;
+            let current = client.identity().await?;
             if current.epoch != frame.epoch {
                 return Err(Error::new(
                     "session-changed",
@@ -343,11 +545,20 @@ impl Viewer {
 
             let token = {
                 let mut lease = self.lease.lock().await;
-                let token = lease.acquire(&self.client.controller)?;
+
+                // Settings that moved to another helper meanwhile refuse it.
+                if !Arc::ptr_eq(&client, &self.client()) {
+                    return Err(Error::new(
+                        "session-changed",
+                        "Wait for a fresh frame from the current helper",
+                    ));
+                }
+
+                let token = lease.acquire(&client.controller)?;
                 *self.lease_epoch.lock().await = Some(frame.epoch.clone());
                 token
             };
-            if let Err(error) = self.client.acquire_input(&token, &frame.epoch).await {
+            if let Err(error) = client.acquire_input(&token, &frame.epoch).await {
                 if error.uncertain {
                     let _ = self.release(Some(&token)).await;
                 } else {
@@ -381,13 +592,12 @@ impl Viewer {
 
         if route == "control/renew" {
             self.lease.lock().await.renew(owner)?;
-            self.client.native_control("renew", owner).await?;
+            client.native_control("renew", owner).await?;
             return Ok(json!({"ok": true}));
         }
 
         let _permit = ActionPermit::begin(self.lease.clone(), owner).await?;
-        let result = self
-            .client
+        let result = client
             .input(
                 &body["actions"],
                 Some((&frame.epoch, frame.at)),
@@ -400,7 +610,13 @@ impl Viewer {
     }
 }
 
-pub async fn bind(mut client: Client, port: u16) -> Result<(TcpListener, Arc<Viewer>, Router)> {
+/// Bind the viewer for `client` on `port` (0 picks a free one). With
+/// `settings`, it follows that file when it names another helper.
+pub async fn bind(
+    mut client: Client,
+    port: u16,
+    settings: Option<&Path>,
+) -> Result<(TcpListener, Arc<Viewer>)> {
     // Everything this viewer does in the helper is the person's doing.
     client.actor = crate::client::Actor::Viewer;
 
@@ -417,34 +633,116 @@ pub async fn bind(mut client: Client, port: u16) -> Result<(TcpListener, Arc<Vie
     let authority = listener.local_addr()?.to_string();
     let prefix = format!("/{}/", control::token());
     let viewer = Arc::new(Viewer {
-        client,
+        client: std::sync::Mutex::new(Arc::new(client)),
+        settings: settings.map(Path::to_path_buf),
+        settings_text: std::sync::Mutex::new(None),
         lease: Arc::new(Mutex::new(Lease::new(Duration::from_secs(LEASE_SECONDS)))),
         lease_epoch: Mutex::new(None),
         frames: Mutex::new(Frames::default()),
-        capture: Mutex::new(()),
+        capture: std::sync::Mutex::new(None),
         requests: Semaphore::new(CONCURRENT_REQUESTS),
+        urgent: Semaphore::new(URGENT_REQUESTS),
         url: format!("http://{authority}{prefix}"),
         prefix,
         authority,
         app: std::sync::Mutex::new(None),
         account_name: std::sync::Mutex::new(None),
         input_started: std::sync::Mutex::new(None),
+        record: std::sync::Mutex::new(None),
     });
 
-    let router = Router::new()
-        .fallback(any(handle))
-        .with_state(viewer.clone());
+    Ok((listener, viewer))
+}
 
-    Ok((listener, viewer, router))
+/// Answer requests on `listener` until `shutdown` resolves. A connection
+/// must send each request's headers within [`HEADER_DEADLINE`], and at most
+/// `connections` are open at once; more wait to be accepted.
+async fn accept(
+    listener: TcpListener,
+    viewer: Arc<Viewer>,
+    connections: usize,
+    shutdown: impl std::future::Future<Output = ()>,
+) {
+    let open = Arc::new(Semaphore::new(connections));
+    let (closing, closed) = watch::channel(());
+    let mut http = hyper::server::conn::http1::Builder::new();
+    http.timer(hyper_util::rt::TokioTimer::new())
+        .header_read_timeout(HEADER_DEADLINE);
+    tokio::pin!(shutdown);
+
+    loop {
+        let next = tokio::select! {
+            () = &mut shutdown => break,
+            next = connection(&listener, &open) => next,
+        };
+        let Some((stream, permit)) = next else {
+            continue;
+        };
+
+        let service = hyper::service::service_fn({
+            let viewer = viewer.clone();
+            move |request: hyper::Request<hyper::body::Incoming>| {
+                let viewer = viewer.clone();
+                async move {
+                    Ok::<_, std::convert::Infallible>(handle(viewer, request.map(Body::new)).await)
+                }
+            }
+        });
+        let served = http.serve_connection(hyper_util::rt::TokioIo::new(stream), service);
+        let mut closed = closed.clone();
+
+        tokio::spawn(async move {
+            let _permit = permit;
+            tokio::pin!(served);
+
+            tokio::select! {
+                _ = served.as_mut() => return,
+                _ = closed.changed() => {}
+            }
+
+            // Closing: the request in progress finishes, then it closes.
+            served.as_mut().graceful_shutdown();
+            let _ = served.await;
+        });
+    }
+
+    drop(listener);
+    drop(closing);
+
+    // Requests in progress finish, within a few seconds.
+    let _ = tokio::time::timeout(
+        Duration::from_secs(5),
+        open.acquire_many(u32::try_from(connections).unwrap_or(u32::MAX)),
+    )
+    .await;
+}
+
+/// The next connection, once a place is open for it. None
+/// when accepting failed (too many open files, say); it pauses first.
+async fn connection(
+    listener: &TcpListener,
+    open: &Arc<Semaphore>,
+) -> Option<(TcpStream, OwnedSemaphorePermit)> {
+    let permit = open.clone().acquire_owned().await.ok()?;
+
+    match listener.accept().await {
+        Ok((stream, _)) => Some((stream, permit)),
+        Err(_) => {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            None
+        }
+    }
 }
 
 /// Serve the viewer for the menu bar app until the person quits it, or
-/// until interrupted.
+/// until interrupted, terminated or hung up.
 pub async fn serve(client: Client, port: u16, program: crate::menubar::Program) -> Result<()> {
+    use tokio::signal::unix::{SignalKind, signal};
+
     let output = client.output_dir()?.to_path_buf();
     let path = output.join(MENUBAR_RECORD);
 
-    let (listener, viewer, router) = match bind(client, port).await {
+    let (listener, viewer) = match bind(client, port, Some(&program.config)).await {
         Ok(bound) => bound,
         Err(error) if error.code == "port-in-use" => {
             let output = output.clone();
@@ -452,6 +750,10 @@ pub async fn serve(client: Client, port: u16, program: crate::menubar::Program) 
         }
         Err(error) => return Err(error),
     };
+
+    // Stopping it any of these ways releases control and removes its record.
+    let mut terminated = signal(SignalKind::terminate())?;
+    let mut hung_up = signal(SignalKind::hangup())?;
 
     let (lines, receiver) = tokio::sync::mpsc::unbounded_channel();
     *unpoisoned(&viewer.app) = Some(lines);
@@ -465,6 +767,7 @@ pub async fn serve(client: Client, port: u16, program: crate::menubar::Program) 
         "startedAt": crate::client::timestamp().to_string(),
     });
     control::write_private(&path, &serde_json::to_vec_pretty(&record)?)?;
+    *unpoisoned(&viewer.record) = Some((path, record.clone()));
 
     // The URL is a bearer capability: it stays in the private record and
     // with the app, never in output.
@@ -494,29 +797,37 @@ pub async fn serve(client: Client, port: u16, program: crate::menubar::Program) 
     });
 
     let shutdown_view = viewer.clone();
-    let result = axum::serve(listener, router)
-        .with_graceful_shutdown(async move {
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {}
-                () = app.exited() => {}
-            }
-            let _ = shutdown_view.release(None).await;
-        })
-        .await;
+    accept(listener, viewer.clone(), CONNECTIONS, async move {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = terminated.recv() => {}
+            _ = hung_up.recv() => {}
+            () = app.exited() => {}
+        }
+        let _ = shutdown_view.release(None).await;
+    })
+    .await;
 
     expiry.abort();
     let _ = viewer.release(None).await;
 
     // The record goes with this viewer, unless another has replaced it.
-    let ours = std::fs::read(&path)
+    if let Some((path, _)) = unpoisoned(&viewer.record).take() {
+        remove_record(&path);
+    }
+
+    Ok(())
+}
+
+/// Remove the record at `path` when it names this process.
+fn remove_record(path: &Path) {
+    let ours = std::fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         .is_some_and(|record| record["pid"] == std::process::id());
     if ours {
-        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path);
     }
-
-    result.map_err(Error::from)
 }
 
 /// The record of the running viewer, in the output folder.
@@ -529,6 +840,11 @@ fn unpoisoned<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// A read of the helper that took longer than the app waits.
+fn late() -> Error {
+    Error::new("transport", "The helper did not answer in time")
+}
+
 /// Run `work`, which waits on the local viewer's socket (for seconds at
 /// most), off the async runtime.
 async fn blocking<T: Send + 'static>(
@@ -539,21 +855,32 @@ async fn blocking<T: Send + 'static>(
         .map_err(|_| Error::new("menubar", "The menu bar's viewer did not answer"))?
 }
 
-/// The viewer recorded at `record`, if it serves `port` and answers there now.
-/// It blocks for up to a second: call it off the async runtime.
+/// The viewer recorded at `record`, if it serves `port` and answers there
+/// now as the very process the record names. It blocks for up to a second:
+/// call it off the async runtime.
 pub fn running(record: &Path, port: u16) -> Option<Value> {
     std::fs::read(record)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         .filter(|running| {
             let url = running["url"].as_str().unwrap_or("");
-            url.starts_with(&format!("http://127.0.0.1:{port}/")) && answers(url)
+            url.starts_with(&format!("http://127.0.0.1:{port}/"))
+                && answering(url).is_some_and(|pid| running["pid"] == pid)
         })
 }
 
-/// Whether a viewer answers at `url` (its private address) right now.
-fn answers(url: &str) -> bool {
-    exchange(url, "GET", "", None, Duration::from_secs(1)).is_ok_and(|(status, _)| status == 200)
+/// The process of the viewer answering at `url` (its private address)
+/// right now, if a viewer does.
+fn answering(url: &str) -> Option<u32> {
+    let (status, body) = exchange(url, "GET", "", None, Duration::from_secs(1)).ok()?;
+    let reply: Value = serde_json::from_slice(&body).ok()?;
+    if status != 200 || reply["service"] != SERVICE {
+        return None;
+    }
+
+    reply["pid"]
+        .as_u64()
+        .and_then(|pid| u32::try_from(pid).ok())
 }
 
 /// One request to the local viewer at `url`, as its own origin, within
@@ -762,8 +1089,13 @@ pub async fn render_menubar(
     program: &crate::menubar::Program,
     directory: &Path,
 ) -> Result<Value> {
-    let (listener, viewer, router) = bind(client, 0).await?;
-    let server = tokio::spawn(async move { axum::serve(listener, router).await });
+    let (listener, viewer) = bind(client, 0, None).await?;
+    let server = tokio::spawn(accept(
+        listener,
+        viewer.clone(),
+        CONNECTIONS,
+        std::future::pending(),
+    ));
     let mut paths = Vec::new();
     let mut outcome = Ok(());
 
@@ -787,10 +1119,10 @@ fn header<'a>(headers: &'a HeaderMap, key: &str) -> Option<&'a str> {
     headers.get(key)?.to_str().ok()
 }
 
-/// A client can abort any request. Axum drops the handler future when that
-/// happens, which could stop between a quarantine or lease change and its
+/// A client can abort any request. Its connection drops the request's
+/// future when that happens, which could stop between a quarantine or lease change and its
 /// matching cleanup. Each request therefore runs to completion in its own task.
-async fn handle(State(viewer): State<Arc<Viewer>>, request: Request) -> Response {
+async fn handle(viewer: Arc<Viewer>, request: Request) -> Response {
     tokio::spawn(respond(viewer, request))
         .await
         .unwrap_or_else(|_| {
@@ -799,10 +1131,6 @@ async fn handle(State(viewer): State<Arc<Viewer>>, request: Request) -> Response
 }
 
 async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
-    let Ok(_slot) = viewer.requests.try_acquire() else {
-        return json_response(503, json!({"ok": false, "error": "Viewer is busy"}));
-    };
-
     let method = request.method().clone();
     let origin = format!("http://{}", viewer.authority);
     if header(request.headers(), "host") != Some(&viewer.authority)
@@ -824,12 +1152,28 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
         return json_response(404, json!({"ok": false, "error": "Unknown viewer address"}));
     };
 
-    if method == Method::GET {
-        // The address itself answers, so a running viewer can be found.
-        if route.is_empty() {
-            return json_response(200, json!({"ok": true, "service": "atlas-viewer"}));
-        }
+    // The address itself answers, with the process serving it, so a
+    // running viewer can be found and stopped however busy it is.
+    if method == Method::GET && route.is_empty() {
+        return json_response(
+            200,
+            json!({"ok": true, "service": SERVICE, "pid": std::process::id()}),
+        );
+    }
 
+    // Ending control has slots of its own, so a busy viewer still lets go.
+    let urgent =
+        method == Method::POST && matches!(route.as_str(), "control/release" | "control/revoke");
+    let slots = if urgent {
+        &viewer.urgent
+    } else {
+        &viewer.requests
+    };
+    let Ok(_slot) = slots.try_acquire() else {
+        return json_response(503, json!({"ok": false, "error": "Viewer is busy"}));
+    };
+
+    if method == Method::GET {
         if route == "status.json" {
             return json_response(200, viewer.status().await);
         }
@@ -862,7 +1206,11 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
                     ],
                 ),
                 Err(error) => {
-                    let _ = viewer.release(None).await;
+                    // Ending control finishes by itself; the answer is not held.
+                    let ending = viewer.clone();
+                    tokio::spawn(async move {
+                        let _ = ending.release(None).await;
+                    });
                     json_response(503, json!(error))
                 }
             };
@@ -1014,20 +1362,47 @@ fn response(code: u16, mime: &str, body: Body, headers: &[(&str, String)]) -> Re
 mod tests {
     use super::*;
 
-    /// A viewer bound to a free port, for a helper that is not there, with
-    /// controller state private to the test.
-    async fn bound(dir: &std::path::Path) -> (tokio::net::TcpListener, Arc<Viewer>, Router) {
-        let text = "helper_uid = 60001\nsocket_path = \"c.sock\"\noutput_dir = \"out\"\n\
-                    identity_probe = \"probe\"\ninput_socket = \"i.sock\"\n";
-        let config = crate::config::Config::parse(text.as_bytes(), &dir.join("u.toml")).unwrap();
+    const SETTINGS: &str = "helper_uid = 60001\nsocket_path = \"c.sock\"\noutput_dir = \"out\"\n\
+                            identity_probe = \"probe\"\ninput_socket = \"i.sock\"\n";
+
+    /// A client for a helper that is not there, with controller state
+    /// private to the test.
+    fn client(dir: &Path) -> Client {
+        let config = Config::parse(SETTINGS.as_bytes(), &dir.join("u.toml")).unwrap();
         let mut client = Client::new(config).unwrap();
         client.controller = control::Controller::at(60001, &dir.join("state"));
-
-        bind(client, 0).await.unwrap()
+        client
     }
 
-    async fn unreachable(dir: &std::path::Path) -> Arc<Viewer> {
+    /// A viewer bound to a free port, for a helper that is not there.
+    async fn bound(dir: &Path) -> (TcpListener, Arc<Viewer>) {
+        bind(client(dir), 0, None).await.unwrap()
+    }
+
+    async fn unreachable(dir: &Path) -> Arc<Viewer> {
         bound(dir).await.1
+    }
+
+    /// A viewer answering on its own port, at most `connections` at once,
+    /// and the task serving it.
+    async fn served(dir: &Path, connections: usize) -> (Arc<Viewer>, tokio::task::JoinHandle<()>) {
+        let (listener, viewer) = bound(dir).await;
+        let server = tokio::spawn(accept(
+            listener,
+            viewer.clone(),
+            connections,
+            std::future::pending(),
+        ));
+
+        (viewer, server)
+    }
+
+    /// [`answering`] off the runtime.
+    async fn answering_off(url: &str) -> Option<u32> {
+        let url = url.to_owned();
+        tokio::task::spawn_blocking(move || answering(&url))
+            .await
+            .unwrap()
     }
 
     #[test]
@@ -1055,8 +1430,7 @@ mod tests {
     #[tokio::test]
     async fn post_local_reads_the_viewers_answer_in_its_own_words() {
         let dir = tempfile::tempdir().unwrap();
-        let (listener, viewer, router) = bound(dir.path()).await;
-        let server = tokio::spawn(async move { axum::serve(listener, router).await });
+        let (viewer, server) = served(dir.path(), CONNECTIONS).await;
         let url = viewer.url.clone();
         let refused = tokio::task::spawn_blocking({
             let url = url.clone();
@@ -1078,11 +1452,7 @@ mod tests {
         .unwrap();
         assert_eq!(opened["viewer"], "open");
         assert_eq!(received.recv().await, Some(Line::Viewer));
-        assert!(
-            tokio::task::spawn_blocking(move || answers(&url))
-                .await
-                .unwrap()
-        );
+        assert_eq!(answering_off(&url).await, Some(std::process::id()));
 
         server.abort();
     }
@@ -1105,7 +1475,7 @@ mod tests {
     async fn recovery_is_refused_while_control_is_held() {
         let dir = tempfile::tempdir().unwrap();
         let viewer = unreachable(dir.path()).await;
-        let controller = viewer.client.controller.clone();
+        let controller = viewer.client().controller.clone();
         viewer.lease.lock().await.acquire(&controller).unwrap();
         let refused = viewer.recover().await.unwrap_err();
         assert_eq!(refused.code, "busy");
@@ -1116,7 +1486,7 @@ mod tests {
     async fn revoking_ends_any_lease_and_keeps_unconfirmed_cleanup_pending() {
         let dir = tempfile::tempdir().unwrap();
         let viewer = unreachable(dir.path()).await;
-        let controller = viewer.client.controller.clone();
+        let controller = viewer.client().controller.clone();
         let idle = viewer.control("control/revoke", &json!({})).await.unwrap();
         assert_eq!(idle, json!({"ok": true, "released": false}));
         viewer.lease.lock().await.acquire(&controller).unwrap();
@@ -1139,7 +1509,7 @@ mod tests {
     async fn an_unconfirmed_native_release_stays_pending() {
         let dir = tempfile::tempdir().unwrap();
         let viewer = unreachable(dir.path()).await;
-        let controller = viewer.client.controller.clone();
+        let controller = viewer.client().controller.clone();
         let error = viewer.release_native("lost-lease").await.unwrap_err();
         assert!(error.uncertain);
         assert_eq!(error.code, "uncertain");
@@ -1150,7 +1520,7 @@ mod tests {
     async fn failed_recovery_keeps_unknown_outcomes_pending() {
         let dir = tempfile::tempdir().unwrap();
         let viewer = unreachable(dir.path()).await;
-        let controller = viewer.client.controller.clone();
+        let controller = viewer.client().controller.clone();
 
         // Without a pending outcome recovery only starts input, adding nothing.
         assert!(viewer.recover().await.is_err());
@@ -1166,5 +1536,245 @@ mod tests {
         let status = viewer.status().await;
         assert_eq!(status["overview"]["mode"], "unavailable");
         assert_eq!(status["overview"]["pending"], 1);
+    }
+
+    /// Only the viewer process a record names counts as running: not
+    /// another process, and not another program answering on the port.
+    #[tokio::test]
+    async fn a_running_viewer_is_the_process_its_record_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let (viewer, server) = served(dir.path(), CONNECTIONS).await;
+        let port = viewer
+            .authority
+            .rsplit(':')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let record = dir.path().join(MENUBAR_RECORD);
+        let check = |record: std::path::PathBuf| {
+            tokio::task::spawn_blocking(move || running(&record, port))
+        };
+
+        let write = |pid: u32, url: &str| {
+            std::fs::write(&record, json!({"url": url, "pid": pid}).to_string()).unwrap();
+        };
+
+        write(std::process::id(), &viewer.url);
+        assert!(check(record.clone()).await.unwrap().is_some());
+
+        write(1, &viewer.url);
+        assert!(
+            check(record.clone()).await.unwrap().is_none(),
+            "another process"
+        );
+
+        // A program that answers anything with a 200.
+        let other = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/secret/", other.local_addr().unwrap());
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+
+            for mut stream in other.incoming().flatten() {
+                let _ = stream.read(&mut [0u8; 1024]);
+                let _ =
+                    stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 11\r\n\r\n{\"ok\":true}");
+            }
+        });
+        assert_eq!(answering_off(&url).await, None);
+
+        server.abort();
+    }
+
+    /// With every request slot taken, the viewer can still be found and
+    /// control can still be ended.
+    #[tokio::test]
+    async fn finding_the_viewer_and_ending_control_never_wait_for_a_slot() {
+        let dir = tempfile::tempdir().unwrap();
+        let (viewer, server) = served(dir.path(), CONNECTIONS).await;
+        let _busy = viewer
+            .requests
+            .try_acquire_many(CONCURRENT_REQUESTS as u32)
+            .unwrap();
+        let url = viewer.url.clone();
+
+        let status = tokio::task::spawn_blocking({
+            let url = url.clone();
+            move || exchange(&url, "GET", "status.json", None, Duration::from_secs(5))
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(status.0, 503, "reads wait for a slot");
+
+        assert_eq!(answering_off(&url).await, Some(std::process::id()));
+
+        let ended = tokio::task::spawn_blocking(move || {
+            let revoked = post_local(&url, "control/revoke", &json!({}))?;
+            let released = post_local(&url, "control/release", &json!({"lease": "gone"}))?;
+            Ok::<_, Error>((revoked, released))
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(ended.0, json!({"ok": true, "released": false}));
+        assert_eq!(ended.1, json!({"ok": true}));
+
+        server.abort();
+    }
+
+    /// Connections past the limit wait to be accepted, and are once others
+    /// close.
+    #[tokio::test]
+    async fn connections_past_the_limit_wait_their_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let (viewer, server) = served(dir.path(), 4).await;
+        let address: std::net::SocketAddr = viewer.authority.parse().unwrap();
+        let idle: Vec<_> = (0..4)
+            .map(|_| std::net::TcpStream::connect(address).unwrap())
+            .collect();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        assert_eq!(answering_off(&viewer.url).await, None, "all are taken");
+
+        drop(idle);
+        assert_eq!(answering_off(&viewer.url).await, Some(std::process::id()));
+
+        server.abort();
+    }
+
+    /// Requests asking for a frame while one is taken share it, and a
+    /// helper that never answers ends the capture before the app gives up.
+    /// The status read ends in time too.
+    #[tokio::test]
+    async fn frames_asked_together_share_one_capture_that_ends_in_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("s.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let (accepted, mut connections) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+
+            while let Ok((stream, _)) = listener.accept().await {
+                held.push(stream);
+                let _ = accepted.send(());
+            }
+        });
+
+        let mut client = client(dir.path());
+        client.transport.path = socket;
+        client.transport.peer_uid = nix::unistd::getuid().as_raw();
+        let (_, viewer) = bind(client, 0, None).await.unwrap();
+
+        let started = std::time::Instant::now();
+        let (first, second, status) = tokio::join!(viewer.frame(), viewer.frame(), viewer.status());
+        assert!(started.elapsed() < Duration::from_secs(7));
+        assert_ne!(status["ready"], true);
+
+        for outcome in [first, second] {
+            let error = outcome.err().unwrap();
+            assert_eq!(
+                (error.code, error.error.as_str()),
+                ("transport", "The helper did not answer in time")
+            );
+        }
+
+        let mut asked = 0;
+
+        while connections.try_recv().is_ok() {
+            asked += 1;
+        }
+
+        assert_eq!(asked, 2, "one capture and one status read");
+    }
+
+    /// A capture taken since the latest input is shared; one started
+    /// before it is waited out and a fresh one taken.
+    #[tokio::test]
+    async fn a_capture_from_before_the_latest_input_is_not_shared() {
+        let dir = tempfile::tempdir().unwrap();
+        let viewer = unreachable(dir.path()).await;
+        let running = |revision| {
+            let (sender, outcome) = watch::channel(None);
+            *viewer.capture.lock().unwrap() = Some(Capture { revision, outcome });
+            sender
+        };
+
+        let ask = || {
+            let viewer = viewer.clone();
+            tokio::spawn(async move { viewer.frame().await })
+        };
+
+        let current = running(0);
+        let shared = ask();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        current
+            .send(Some(Err(("capture", "the shared picture".into()))))
+            .unwrap();
+        *viewer.capture.lock().unwrap() = None;
+        assert_eq!(
+            shared.await.unwrap().err().unwrap().error,
+            "the shared picture"
+        );
+
+        let old = running(0);
+        viewer.frames.lock().await.input_revision = 1;
+        let fresh = ask();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!fresh.is_finished(), "it waits out the running capture");
+
+        *viewer.capture.lock().unwrap() = None;
+        old.send(Some(Err(("capture", "an old picture".into()))))
+            .unwrap();
+        assert_ne!(
+            fresh.await.unwrap().err().unwrap().error,
+            "an old picture",
+            "it took its own"
+        );
+    }
+
+    /// Once the settings name another helper, the running viewer serves it:
+    /// control held in the previous one ends (unconfirmed, it stays pending
+    /// there), and the record moves to the new output folder.
+    #[tokio::test]
+    async fn a_settings_change_moves_the_viewer_to_the_new_helper() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(dir.path()).unwrap();
+        let settings = base.join("u.toml");
+        std::fs::write(&settings, SETTINGS).unwrap();
+
+        let mut client = Client::new(Config::load(&settings).unwrap()).unwrap();
+        let controller = control::Controller::at(60001, &base.join("state"));
+        client.controller = controller.clone();
+        let (_, viewer) = bind(client, 0, Some(&settings)).await.unwrap();
+
+        let record = base.join("out").join(MENUBAR_RECORD);
+        std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+        let written = json!({"url": viewer.url, "pid": std::process::id()});
+        std::fs::write(&record, written.to_string()).unwrap();
+        *viewer.record.lock().unwrap() = Some((record.clone(), written));
+        viewer.lease.lock().await.acquire(&controller).unwrap();
+
+        viewer.follow_settings().await;
+        assert_eq!(viewer.client().config.helper_uid, 60001, "unchanged");
+        assert!(viewer.lease.lock().await.active());
+
+        std::fs::write(
+            &settings,
+            SETTINGS
+                .replace("60001", "60002")
+                .replace("\"out\"", "\"moved\""),
+        )
+        .unwrap();
+        viewer.follow_settings().await;
+
+        assert_eq!(viewer.client().config.helper_uid, 60002);
+        assert!(!viewer.lease.lock().await.active());
+        assert_eq!(controller.unresolved().unwrap().len(), 1);
+
+        let moved = base.join("moved").join(MENUBAR_RECORD);
+        assert!(moved.exists());
+        assert!(!record.exists());
+        assert_eq!(viewer.record.lock().unwrap().as_ref().unwrap().0, moved);
     }
 }
