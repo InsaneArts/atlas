@@ -31,8 +31,12 @@ final class OnboardingController {
   @ObservationIgnored private var readAgain = false
   /// Whether the helper's "set up here" notice was last told the window is open.
   @ObservationIgnored private var markedOpen = false
-  /// The mark being set now, if any.
+  /// Setting that mark, while it runs.
   @ObservationIgnored private var marking: Task<Void, Never>?
+  /// The end-to-end check, while it runs: one at a time, stopped when the window closes.
+  @ObservationIgnored private var finishing: Task<Void, Never>?
+  /// Reading which agents are installed and connected, while it runs.
+  @ObservationIgnored private var loadingAgents: Task<Void, Never>?
   /// The window closed: nothing new starts, and late replies are dropped.
   @ObservationIgnored private var closed = false
 
@@ -183,11 +187,15 @@ final class OnboardingController {
     return outcome
   }
 
-  /// The window is closing: stop reading, start nothing new, and clear the helper's mark once a mark under way has
-  /// settled, so the clearing lands last.
+  /// The window is closing: stop reading, stop the check and the agents' reading, start nothing new, and clear the
+  /// helper's mark once a mark under way has settled, so the clearing lands last.
   func close() async {
     closed = true
     stop()
+    finishing?.cancel()
+    finishing = nil
+    loadingAgents?.cancel()
+    loadingAgents = nil
     await marking?.value
     if snapshot.facts.role == .helper {
       _ = await commands.run(.markWindow(open: false))
@@ -234,12 +242,15 @@ final class OnboardingController {
     secret.resetBytes(in: 0..<secret.count)
   }
 
-  /// Runs the end-to-end check, then reads the facts again.
+  /// Runs the end-to-end check, then reads the facts again; never a second one while one runs, and a check the
+  /// closing window stopped shows nothing.
   private func runFinish() {
+    guard finishing == nil, !closed else { return }
     snapshot.finish = .running
-    Task {
+    finishing = Task {
       let outcome = await commands.run(.finishSetup)
-      guard !closed else { return }
+      guard !Task.isCancelled, !closed else { return }
+      finishing = nil
       snapshot.finish = outcome.ok ? .passed : .failed(outcome.message)
       refresh()
     }
@@ -247,17 +258,21 @@ final class OnboardingController {
 
   /// Try Again after a failed check.
   private func retryFinish() {
+    guard finishing == nil else { return }
     snapshot.finish = .idle
     runFinish()
   }
 
   /// Lists the agents Atlas can connect, then asks `atlas agents status` which are installed and connected. A reading
-  /// that fails says why, and the next reading of the facts asks again.
+  /// that fails says why, and the next reading of the facts asks again; one that ends after the window closed is
+  /// dropped.
   func loadAgents() {
+    guard loadingAgents == nil, !closed else { return }
     snapshot.agents = AgentChoice.all
-    Task {
+    loadingAgents = Task {
       let outcome = await commands.run(.agentsStatus)
-      guard !closed else { return }
+      guard !Task.isCancelled, !closed else { return }
+      loadingAgents = nil
       guard outcome.ok, let status = outcome.decode(AgentsStatus.self) else {
         snapshot.problem = outcome.ok ? OnboardingWords.notUnderstood : outcome.message
         snapshot.agents = []
@@ -289,13 +304,21 @@ final class OnboardingController {
   }
 
   /// Connects the chosen agents, then teaches each chosen project; a project that cannot be taught is named, and the
-  /// rest still follow.
+  /// rest still follow. Agents that cannot be connected are each named with why, and the window stays.
   func connectAgents() async {
     let chosen = AgentChoice.toConnect(snapshot.agents)
     if !chosen.isEmpty {
-      guard let outcome = await act(.installAgents(chosen), OnboardingWords.connecting), outcome.ok else { return }
-      for index in snapshot.agents.indices where chosen.contains(snapshot.agents[index].id) {
+      guard let outcome = await act(.installAgents(chosen), OnboardingWords.connecting) else { return }
+      let change = outcome.decode(AgentsChange.self)
+      // A reply that names no agent connected them all when it worked.
+      let connected = outcome.ok ? chosen : change?.connected ?? []
+      for index in snapshot.agents.indices where connected.contains(snapshot.agents[index].id) {
         snapshot.agents[index].connected = true
+      }
+      guard outcome.ok else {
+        let failures = (change?.failures ?? []).map { OnboardingWords.notConnected($0.agent, $0.error) }
+        if !failures.isEmpty { snapshot.problem = failures.joined(separator: " ") }
+        return
       }
     }
     var failed: [String] = []

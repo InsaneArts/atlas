@@ -85,6 +85,19 @@ struct ViewerControllerTests {
     viewer.close()
   }
 
+  @Test("a status the service refuses to give, as a busy one does, leaves the picture and status as they were")
+  func aRefusedStatusChangesNothing() async throws {
+    let service = ScriptedService()
+    let viewer = try await ViewerController.watching(service, nap: ViewerController.untilCancelled)
+    let before = viewer.reading.status
+    service.busy = true
+    await viewer.read(viewer.generation)
+    #expect(viewer.reading.unavailable == nil)
+    #expect(viewer.reading.frame != nil)
+    #expect(viewer.reading.status == before)
+    viewer.close()
+  }
+
   @Test("a picture that does not decode reads as a screen of unknown size")
   func anUndecodablePictureIsUnknownSize() async throws {
     let service = ScriptedService()

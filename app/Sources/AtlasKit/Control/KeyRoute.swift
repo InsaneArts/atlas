@@ -29,6 +29,18 @@ package enum KeyRoute: Equatable, Sendable {
     }
   }
 
+  /// Whether a key down is a repeat of Control-Shift-Escape, held down: the press itself gives control back or takes
+  /// it, and its repeats do nothing at all, so holding the chord never takes back the control it just gave.
+  ///
+  /// - Parameters:
+  ///   - keyCode: The Mac virtual key code pressed.
+  ///   - modifiers: The modifier keys held.
+  ///   - repeating: Whether the key down repeats a key held down.
+  /// - Returns: Whether the key down is swallowed.
+  package static func swallows(keyCode: UInt16, modifiers: Modifiers, repeating: Bool) -> Bool {
+    repeating && KeyMap.isRelease(keyCode: keyCode, modifiers: modifiers)
+  }
+
   /// Whether a key sent to the helper still goes on to this Mac afterwards: one the helper did not take as a key
   /// goes on as text, unless it is a shortcut, which is kept from this app.
   ///

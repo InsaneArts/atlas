@@ -95,19 +95,32 @@ struct PanelControllerTests {
     controller.watch(open: false)
   }
 
-  @Test("logging in locks the screen for the helper and says what to do next")
+  @Test("logging in locks the screen for the helper the service reports and says what to do next")
   func loggingInLocksTheScreen() async {
     let service = ScriptedService()
     service.reply = ["overview": ["mode": "loggedOut", "account": "atlas", "accountName": "Atlas"]]
-    let commands = ScriptedCommands([
-      "switch --list": #"{"ok": true, "accounts": [{"name": "atlas", "helper": true}]}"#,
-      "switch": #"{"ok": true}"#,
-    ])
+    let commands = ScriptedCommands(["switch": #"{"ok": true}"#])
     let controller = Self.panel(service, commands: commands)
     await controller.readStatus()
     await controller.logIn()
-    #expect(commands.ran == [Action.listAccounts.arguments, Action.switchTo("atlas").arguments])
+    #expect(commands.ran == [Action.switchTo("atlas").arguments])
     #expect(controller.feedback == PanelWords.logInThenSwitchBack(to: "Atlas"))
+  }
+
+  @Test("each opening lists the helper again, so a listing that failed at launch never disables the switch for good")
+  func theHelperIsListedAgainOnOpening() async throws {
+    let commands = ScriptedCommands([:])
+    let controller = Self.panel(commands: commands)
+    await controller.findHelper()
+    #expect(controller.helper == nil)
+    commands.answer("switch --list", #"{"ok": true, "accounts": [{"name": "atlas", "helper": true}]}"#)
+    controller.watch(open: true)
+    try await settle("the helper was never listed again") { controller.helper == "atlas" }
+    // A listing that fails afterwards keeps the helper known.
+    commands.answer("switch --list", #"{"ok": false, "error": "No"}"#)
+    await controller.findHelper()
+    #expect(controller.helper == "atlas")
+    controller.watch(open: false)
   }
 
   @Test("logging in with no helper account found says where to look")
@@ -217,15 +230,17 @@ struct PanelControllerTests {
   @Test("a message said while a command runs never ends it: the panel stays working, its spinner on, until it ends")
   func aMessageNeverEndsARunningCommand() async {
     let service = ScriptedService()
-    let commands = ScriptedCommands(["restart": #"{"ok": true}"#])
+    let commands = ScriptedCommands([
+      "start-input": #"{"ok": true}"#, "menubar --login": #"{"ok": false, "error": "Not allowed"}"#,
+    ])
     let loginItem = ScriptedLoginItem(available: true)
-    loginItem.refusal = ServiceError("Not allowed")
     let controller = Self.panel(service, commands: commands, loginItem: loginItem)
     let seen = PanelWorkObservation()
-    commands.whileRunning { _ in
+    commands.whileRunning { arguments in
+      guard arguments == Action.startInput.arguments else { return }
       await controller.revokeControl()
       seen.feedback = controller.state.feedback
-      controller.setOpenAtLogin(true)
+      await controller.setOpenAtLogin(true)
       seen.working = controller.working
     }
     await controller.recover()
@@ -235,16 +250,49 @@ struct PanelControllerTests {
     #expect(controller.state.feedback?.isWorking == false)
   }
 
-  @Test("Open at Login follows the system, and a refusal says why")
-  func openAtLoginFollowsTheSystem() {
+  @Test("Open at Login goes through atlas, which records the choice, then follows the system; a refusal says why")
+  func openAtLoginFollowsTheSystem() async {
     let loginItem = ScriptedLoginItem(available: true)
-    let controller = Self.panel(loginItem: loginItem)
-    controller.setOpenAtLogin(true)
+    let commands = ScriptedCommands(["menubar --login": #"{"ok": true}"#])
+    // The command turns the login item on or off, as the app's own --login does.
+    commands.whileRunning { arguments in loginItem.enabled = arguments.last == "on" }
+    let controller = Self.panel(commands: commands, loginItem: loginItem)
+    await controller.setOpenAtLogin(true)
+    #expect(commands.ran == [Action.openAtLogin(true).arguments])
     #expect(controller.opensAtLogin == OpenAtLogin.State(isAvailable: true, isEnabled: true))
-    loginItem.refusal = ServiceError("Not allowed")
-    controller.setOpenAtLogin(false)
+    commands.whileRunning { _ in }
+    commands.answer("menubar --login", #"{"ok": false, "error": "Not allowed"}"#)
+    await controller.setOpenAtLogin(false)
     #expect(controller.opensAtLogin.isEnabled, "the system kept it on")
     #expect(controller.feedback == "Not allowed")
+  }
+
+  @Test("Recover starts the helper's input when nothing is pending, and restarts it while an outcome is unknown")
+  func recoverMirrorsTheService() async {
+    let service = ScriptedService()
+    let commands = ScriptedCommands(["start-input": #"{"ok": true}"#, "restart": #"{"ok": true}"#])
+    let controller = Self.panel(service, commands: commands)
+    service.reply = ["overview": ["mode": "blocked", "recoverable": true]]
+    await controller.readStatus()
+    await controller.recover()
+    #expect(commands.ran.last == Action.startInput.arguments)
+    #expect(controller.feedback == Words.readyAgain)
+    service.reply = ["overview": ["mode": "recovering", "pending": 1]]
+    await controller.readStatus()
+    await controller.recover()
+    #expect(commands.ran.last == Action.restart.arguments)
+    #expect(controller.feedback == Words.recovered)
+  }
+
+  @Test("a status the service refuses to give, as a busy one does, leaves the last one standing")
+  func aRefusedStatusLeavesTheLastOne() async {
+    let service = ScriptedService()
+    let controller = Self.panel(service)
+    await controller.readStatus()
+    service.busy = true
+    await controller.readStatus()
+    #expect(controller.status.overview.mode == .observing)
+    #expect(controller.answer != nil)
   }
 
   @Test("each opening reads Open at Login again, so a change made elsewhere meanwhile shows in its switch")

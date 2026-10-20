@@ -75,8 +75,8 @@ enum ViewerWords {
 
   /// The helper's session or display changed, which ended control.
   static let helperChanged = "The helper changed. Take control again when ready."
-  /// The status said input is not ready, which ended control.
-  static let inputUnavailable = "Mouse and keyboard permission is unavailable."
+  /// The status said input is not ready, which ended control, when it gives no reason.
+  static let notReady = "The helper isn't ready for mouse and keyboard."
   /// A stale picture ended control.
   static let stalePicture = "The picture stopped updating. Wait for a fresh one, then take control again."
   /// Typed text held a grapheme longer than the helper takes in one go.
@@ -88,6 +88,15 @@ enum ViewerWords {
   /// - Returns: "Paste is limited to 2,048 characters at a time; an emoji or an accent can count as more than one."
   static func pasteTooLong(_ limit: Int) -> String {
     "Paste is limited to \(limit.formatted()) characters at a time; an emoji or an accent can count as more than one."
+  }
+
+  /// Control ended because the status said input is not ready, in the status's own words.
+  ///
+  /// - Parameter reason: The status's reason; empty, or the placeholder before any reason, for none.
+  /// - Returns: "Control ended. The helper's input stopped. Recover starts it again."
+  static func controlEnded(_ reason: String) -> String {
+    let known = reason.isEmpty || reason == Words.connecting ? notReady : reason
+    return "Control ended. \(known.hasSuffix(".") ? known : known + ".")"
   }
 
   /// The header's line after the status: the helper, then how fresh its picture is.

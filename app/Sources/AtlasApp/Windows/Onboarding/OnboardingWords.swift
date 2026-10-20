@@ -48,6 +48,17 @@ enum OnboardingWords {
     "\(project): \(message)."
   }
 
+  /// An agent that could not be connected.
+  ///
+  /// - Parameters:
+  ///   - agent: The agent.
+  ///   - message: Why, in one line; empty when the command gave no reason.
+  /// - Returns: "Codex: not installed."
+  static func notConnected(_ agent: AgentID, _ message: String) -> String {
+    let reason = message.isEmpty ? "it didn't connect" : message
+    return "\(agentTitle(agent)): \(reason.hasSuffix(".") ? String(reason.dropLast()) : reason)."
+  }
+
   // MARK: The account choice and form
 
   /// The form's tail while the account is made.

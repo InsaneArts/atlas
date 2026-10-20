@@ -7,8 +7,12 @@ package struct ViewerClient: ViewerService {
   /// How long a request may take, in seconds: 8, well beyond a picture's capture, short enough that a silent helper
   /// reads as unavailable soon.
   static let timeout: TimeInterval = 8
-  /// How long recovery may take, in seconds: 20, since it may restart the helper's input service.
-  static let recoveryTimeout: TimeInterval = 20
+  /// How long recovery may take, in seconds: 60, beyond the service's worst case of about 50 s. Its restart may
+  /// start input first (a 3 s launch, then up to 6 s until ready), clean it up (up to 5 s), wait up to 20 s for the new
+  /// helper, and read the status between steps (a few seconds each when the helper is slow).
+  static let recoveryTimeout: TimeInterval = 60
+  /// What a request that timed out says.
+  static let lateReply = "The helper did not answer in time."
 
   /// The capability URL every route is under.
   let base: URL
@@ -54,9 +58,25 @@ package struct ViewerClient: ViewerService {
   /// Reads `status.json`.
   ///
   /// - Returns: The status, every missing field at its safe default.
-  /// - Throws: A transport error, or `DecodingError` when the reply is not an object.
+  /// - Throws: ``StatusRefused`` when the service answered without a status, a transport error, or `DecodingError`
+  ///   when the reply is not an object.
   package func status() async throws -> ViewerStatus {
-    let (data, _) = try await session.data(for: request("status.json"))
+    let (data, response) = try await session.data(for: request("status.json"))
+    return try Self.status(data, response: response)
+  }
+
+  /// A `status.json` reply read: only a 200 carries a status; any other answer, such as a busy service's 503, is a
+  /// refusal, never a status of empty defaults.
+  ///
+  /// - Parameters:
+  ///   - data: The reply's body.
+  ///   - response: The reply's response.
+  /// - Returns: The status, every missing field at its safe default.
+  /// - Throws: ``StatusRefused`` when the reply is not a 200, or `DecodingError` when its body is not an object.
+  static func status(_ data: Data, response: URLResponse) throws -> ViewerStatus {
+    guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+      throw StatusRefused(failure(data, fallback: "No status").message)
+    }
     let decoder = JSONDecoder()
     return try decoder.decode(ViewerStatus.self, from: data)
   }
@@ -143,26 +163,36 @@ package struct ViewerClient: ViewerService {
   /// Recover the helper; whether it restarted (rather than starting input).
   ///
   /// - Returns: Whether the helper restarted.
-  /// - Throws: ``ServiceError`` when recovery did not run.
+  /// - Throws: ``ServiceError`` when recovery did not run, or says it still runs when no answer came in time: the
+  ///   service carries on, so the caller reads the status rather than offering Recover again.
   package func recover() async throws -> Bool {
     struct Body: Encodable {}
     struct Reply: Decodable { let restarted: Bool? }
-    let data = try await post("recover", Body(), timeout: Self.recoveryTimeout)
+    let data = try await post("recover", Body(), timeout: Self.recoveryTimeout, late: Words.stillRecovering)
     return Self.decoded(Reply.self, from: data)?.restarted == true
   }
 
   /// POST `body` to `route`; the reply when it says `ok`, else its error.
+  ///
+  /// - Parameters:
+  ///   - route: The route, under the capability URL.
+  ///   - body: The request's JSON body.
+  ///   - timeout: How long the reply may take, in seconds.
+  ///   - late: What to say when no reply came in time.
+  /// - Returns: The reply's body.
+  /// - Throws: ``ServiceError`` with the service's error, or `late` when no reply came in time.
   func post(
     _ route: String,
     _ body: some Encodable & Sendable,
-    timeout: TimeInterval = ViewerClient.timeout
+    timeout: TimeInterval = ViewerClient.timeout,
+    late: String = ViewerClient.lateReply
   ) async throws -> Data {
     let data: Data
     let response: URLResponse
     do {
       (data, response) = try await session.data(for: request(route, body: body, timeout: timeout))
     } catch let error as URLError where error.code == .timedOut {
-      throw ServiceError("The helper did not answer in time.")
+      throw ServiceError(late)
     }
     let ok = Self.decoded(Acknowledgement.self, from: data)?.ok == true
     guard (response as? HTTPURLResponse)?.statusCode == 200, ok else {

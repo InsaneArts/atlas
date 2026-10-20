@@ -138,10 +138,10 @@ package struct StatusReading: Equatable, Sendable {
     return rows
   }
 
-  /// Recovery is offered only without control, when something needs it and Recover can fix it.
+  /// Recovery is offered only without control, when Recover can help: an action's outcome is unknown, or the helper
+  /// is not ready for a reason Recover fixes. The panel's recovery card follows the same rule.
   func recoveryOffered(holdingControl: Bool) -> Bool {
-    let overview = status.overview
-    return !holdingControl && (overview.mode == .recovering || (overview.mode == .blocked && overview.recoverable))
+    !holdingControl && status.overview.recoveryHelps
   }
 
   /// The recovery alert, if any: while recovering, or when offered.

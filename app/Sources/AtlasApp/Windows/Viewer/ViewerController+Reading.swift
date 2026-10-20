@@ -51,7 +51,8 @@ extension ViewerController {
   }
 
   /// The status, then a picture. A reading overtaken by a newer one, or by
-  /// a pause or close, has no effect at all, failures included.
+  /// a pause or close, has no effect at all, failures included, and so has a
+  /// status the service refused to give (it was busy, say): what shows stays.
   ///
   /// - Parameter number: The loop's generation.
   func read(_ number: Int) async {
@@ -76,6 +77,8 @@ extension ViewerController {
       // Decoded once: the view draws its pixels, and input is mapped through its size.
       guard let decoded = DesktopPicture.decode(next) else { throw ServiceError.unknownScreenSize }
       show(next, decoded: decoded, ready: reply.ready)
+    } catch is StatusRefused {
+      return
     } catch {
       if current() { lost(error) }
     }

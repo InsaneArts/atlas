@@ -357,10 +357,10 @@ final class ViewerController {
   func show(_ reply: ViewerStatus) {
     reading.status = reply
     reading.hasStatus = true
-    // Input not ready: control ends now, not with the next picture.
+    // Input not ready: control ends now, not with the next picture, saying why in the status's own words.
     if !reply.ready {
       reading.ready = false
-      if holdingControl || session.acquiring { releaseControl(ViewerWords.inputUnavailable) }
+      if holdingControl || session.acquiring { releaseControl(ViewerWords.controlEnded(reply.overview.reason)) }
     }
     // Not Now covers one incident: once nothing needs recovery, a later one alerts again.
     if snapshot.offeredRecovery == nil { session.recoveryLater = nil }

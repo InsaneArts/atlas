@@ -19,6 +19,9 @@ private let finishedMac = """
               "answering": true, "hidden": true, "permissions": {"screenCapture": true, "accessibility": true}}}
   """
 
+/// A Mac whose helper is chosen, allowed and answering, but not checked yet: the end-to-end check runs next.
+private let checkingMac = finishedMac.replacingOccurrences(of: #""finished": true"#, with: #""finished": false"#)
+
 @MainActor
 @Suite("OnboardingController")
 struct OnboardingControllerTests {
@@ -190,6 +193,21 @@ struct OnboardingControllerTests {
     #expect(controller.snapshot.finish == .running, "the closed window took the check's outcome")
   }
 
+  @Test("the check runs once at a time: Try Again while it runs starts no second one")
+  func theCheckRunsOnceAtATime() async throws {
+    let commands = ScriptedCommands([
+      "onboarding status": checkingMac, "onboarding finish": #"{"ok": false, "error": "The helper did not answer"}"#,
+    ])
+    let controller = Self.controller(commands)
+    commands.whileRunning { arguments in
+      if arguments == Action.finishSetup.arguments { controller.send(.retryFinish) }
+    }
+    controller.refresh()
+    try await settle("the check never ended") { controller.snapshot.finish == .failed("The helper did not answer") }
+    #expect(commands.ran.filter { $0 == Action.finishSetup.arguments }.count == 1)
+    await controller.close()
+  }
+
   @Test("agents read once the window has closed change nothing")
   func lateAgentsAreDropped() async throws {
     let commands = ScriptedCommands([
@@ -253,6 +271,28 @@ struct OnboardingControllerTests {
     try await settle("the check never ran again") {
       commands.ran.filter { $0 == Action.finishSetup.arguments }.count == 2
     }
+  }
+
+  @Test("agents that cannot be connected are each named with why, and the window stays")
+  func agentsThatCannotBeConnectedAreNamed() async throws {
+    let commands = ScriptedCommands([
+      "onboarding status": finishedMac,
+      "agents status": """
+      {"ok": true, "agents": [{"agent": "claude", "installed": true, "connected": false},
+                              {"agent": "codex", "installed": true, "connected": false}]}
+      """,
+      "agents install": """
+      {"ok": false, "agents": [{"agent": "claude", "ok": true, "connected": true},
+                               {"agent": "codex", "ok": false, "error": "codex plugin install failed"}]}
+      """,
+    ])
+    let controller = try await Self.loaded(commands)
+    try await settle("the agents were never read") { controller.snapshot.agentsLoaded }
+    await controller.connectAgents()
+    #expect(commands.ran.contains(Action.installAgents([.claude, .codex]).arguments))
+    #expect(controller.snapshot.problem == OnboardingWords.notConnected(.codex, "codex plugin install failed"))
+    #expect(controller.snapshot.agents.first { $0.id == .claude }?.connected == true)
+    #expect(!controller.snapshot.choices.agentsDone)
   }
 
   @Test("Open at Login starts from what the login item says once the person has chosen")

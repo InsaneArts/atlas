@@ -9,7 +9,7 @@ import AtlasKit
 final class DesktopCanvasView: NSView {
   /// The window's controller, which every input goes to.
   weak var controller: ViewerController?
-  /// The key monitor, while in control.
+  /// The key monitor, while the view is in a window.
   private var keys: Any?
   /// The text the input method is composing.
   var marked = NSAttributedString()
@@ -40,8 +40,8 @@ final class DesktopCanvasView: NSView {
     )
   }
 
-  /// Stops intercepting keys when the view leaves its window or the window closes, so the key monitor never outlives
-  /// the window, whichever goes first.
+  /// Intercepts keys while the view is in a window, and stops when it leaves its window or the window closes, so the
+  /// key monitor never outlives the window, whichever goes first.
   override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
     let center = NotificationCenter.default
@@ -53,6 +53,7 @@ final class DesktopCanvasView: NSView {
       name: NSWindow.willCloseNotification,
       object: window
     )
+    startIntercepting()
   }
 
   /// The window is closing: the key monitor goes.
@@ -62,17 +63,15 @@ final class DesktopCanvasView: NSView {
   func follow() {
     guard let window, let controller else { return }
     if controller.holdingControl {
-      startIntercepting()
       if window.firstResponder !== self { window.makeFirstResponder(self) }
     } else {
-      stopIntercepting()
       if hasMarkedText() { unmarkText() }
       if window.firstResponder === self { window.makeFirstResponder(nil) }
     }
   }
 
-  /// While in control, keys are seen before menus and the window's own
-  /// shortcuts, so a shortcut reaches the helper rather than this app.
+  /// Keys are seen before menus and the window's own shortcuts: while in control, so a shortcut reaches the helper
+  /// rather than this app, and always, so a held Control-Shift-Escape's repeats reach neither.
   private func startIntercepting() {
     guard keys == nil else { return }
     keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -113,14 +112,17 @@ final class DesktopCanvasView: NSView {
     return resigned
   }
 
-  /// What the key monitor does with a key down while in control.
+  /// What the key monitor does with a key down in this window.
   ///
   /// - Parameter event: The key down.
   /// - Returns: The event to pass on, or nil when handled here.
   private func intercept(_ event: NSEvent) -> NSEvent? {
-    guard let controller, controller.holdingControl, let window, window.isKeyWindow, window.firstResponder === self
-    else { return event }
+    guard let window, window.isKeyWindow else { return event }
     let modifiers = event.heldModifiers
+    // Giving control back by holding ⌃⇧⎋ ends the key monitor's control here, and the control button's shortcut would
+    // take each repeat as Take Control: the repeats go nowhere, in control or not.
+    if KeyRoute.swallows(keyCode: event.keyCode, modifiers: modifiers, repeating: event.isARepeat) { return nil }
+    guard let controller, controller.holdingControl, window.firstResponder === self else { return event }
     let route = KeyRoute(
       keyCode: event.keyCode,
       modifiers: modifiers,

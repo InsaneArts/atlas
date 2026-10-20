@@ -43,7 +43,8 @@ struct ViewerFooter: View {
         .disabled(!state.keysEnabled)
         .help("Send a key the Mac would keep for itself, such as ⌘⇥")
         // While in control the desktop's key monitor answers ⌃⇧⎋ first and swallows it; this shortcut takes over
-        // only when the desktop does not have the keyboard, or while watching.
+        // only when the desktop does not have the keyboard, or while watching. The monitor swallows a held chord's
+        // repeats, so this shortcut never sees them.
         Button {
           send(state.control.event)
         } label: {

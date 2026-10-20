@@ -18,6 +18,8 @@ final class ScriptedService: ViewerService {
   var held: [String: CheckedContinuation<Void, Never>] = [:]
   /// Requests that fail every time.
   var fail: Set<String> = []
+  /// Whether the service is there but refuses to give its status, as a busy one does.
+  var busy = false
   /// Status requests made.
   var statusCalls = 0
   /// Status requests answered, held or failed ones included.
@@ -55,6 +57,7 @@ final class ScriptedService: ViewerService {
     statusCalls += 1
     defer { answered += 1 }
     try await pause("status")
+    if busy { throw StatusRefused("Viewer is busy") }
     return try AtlasAppTests.status(reply)
   }
 

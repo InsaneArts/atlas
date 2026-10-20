@@ -13,7 +13,7 @@ struct PanelSnapshot {
   var feedback: String?
   /// Whether an action still runs, so every button that starts one waits and the feedback's spinner shows.
   var working = false
-  /// The helper's short name, once `atlas switch --list` reports it.
+  /// The helper's short name: the service's account, else the one `atlas switch --list` reported.
   var helper: String?
   /// Where Open at Login stands; nil when unknown, as in a render.
   var opensAtLogin: OpenAtLogin.State?

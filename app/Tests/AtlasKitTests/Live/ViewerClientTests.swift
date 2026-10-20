@@ -38,4 +38,15 @@ struct ViewerClientTests {
       #expect(printed.contains(ViewerClient.redacted))
     }
   }
+
+  @Test("a status reply other than a 200, such as a busy service's 503, is refused, never read as a status")
+  func onlyA200IsAStatus() throws {
+    let url = try #require(URL(string: "http://127.0.0.1:8765/abc/status.json"))
+    let busy = try #require(HTTPURLResponse(url: url, statusCode: 503, httpVersion: nil, headerFields: nil))
+    let refusal = Data(#"{"ok": false, "error": "Viewer is busy"}"#.utf8)
+    #expect(throws: StatusRefused("Viewer is busy")) { try ViewerClient.status(refusal, response: busy) }
+    let answered = try #require(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil))
+    let reply = Data(#"{"ready": true, "overview": {"mode": "observing"}}"#.utf8)
+    #expect(try ViewerClient.status(reply, response: answered).overview.mode == .observing)
+  }
 }

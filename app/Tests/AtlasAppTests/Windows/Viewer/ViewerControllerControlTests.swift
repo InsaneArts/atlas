@@ -98,15 +98,18 @@ struct ViewerControllerControlTests {
     viewer.close()
   }
 
-  @Test("a status that is not ready ends control at once")
+  @Test("a status that is not ready ends control at once, saying why in the status's own words")
   func aStatusThatIsNotReadyEndsControlAtOnce() async throws {
     let service = ScriptedService()
     let viewer = try await ViewerController.watching(service)
     await viewer.takeControl()
-    service.reply = ["ready": false, "canObserve": true, "overview": ["mode": "observing"]]
+    service.reply = [
+      "ready": false, "canObserve": true,
+      "overview": ["mode": "loggedOut", "reason": "The helper is logged out, so agents can't use it"],
+    ]
     await viewer.readStatus()
     #expect(viewer.session.lease == nil)
-    #expect(viewer.session.notice == ViewerWords.inputUnavailable)
+    #expect(viewer.session.notice == "Control ended. The helper is logged out, so agents can't use it.")
     viewer.close()
   }
 
@@ -176,6 +179,18 @@ struct ViewerControllerControlTests {
     viewer.refresh()
     try await settle("the changed picture never showed") { viewer.reading.frame?.revision == "r2" }
     #expect(viewer.session.notice == nil, "no control was held, so none ended")
+    viewer.close()
+  }
+
+  @Test("a changed helper without control shows its picture and keeps the notice, such as Recover's")
+  func aChangedHelperWithoutControlKeepsTheNotice() async throws {
+    let service = ScriptedService()
+    let viewer = try await ViewerController.watching(service)
+    viewer.say(Words.recovered)
+    service.revision = "r2"
+    viewer.refresh()
+    try await settle("the changed picture never showed") { viewer.reading.frame?.revision == "r2" }
+    #expect(viewer.session.notice == Words.recovered)
     viewer.close()
   }
 

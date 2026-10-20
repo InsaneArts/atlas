@@ -29,4 +29,16 @@ struct KeyRouteTests {
     #expect(!KeyRoute.passesOn(handled: false, modifiers: .command))
     #expect(!KeyRoute.passesOn(handled: true, modifiers: []))
   }
+
+  @Test(
+    "a held Control-Shift-Escape acts once: its repeats are swallowed, so it never takes back the control it gave",
+    arguments: [
+      (53, [.control, .shift], true, true),
+      (53, [.control, .shift], false, false),
+      (53, [], true, false),
+    ] as [(UInt16, Modifiers, Bool, Bool)]
+  )
+  func heldReleaseActsOnce(keyCode: UInt16, modifiers: Modifiers, repeating: Bool, swallowed: Bool) {
+    #expect(KeyRoute.swallows(keyCode: keyCode, modifiers: modifiers, repeating: repeating) == swallowed)
+  }
 }

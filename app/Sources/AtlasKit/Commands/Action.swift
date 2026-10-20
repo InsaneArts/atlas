@@ -6,8 +6,10 @@ package enum Action: Sendable, Equatable {
   case lockScreen
   /// List this Mac's accounts and which one is the helper.
   case listAccounts
-  /// Recover the helper.
-  case recover
+  /// Restart the helper, settling an action of unknown outcome.
+  case restart
+  /// Start, reset or update the helper's input.
+  case startInput
   /// Log the helper out; with `force`, even past an app that holds it up.
   case logOut(force: Bool)
   /// Read what the setup window needs to choose its step.
@@ -20,6 +22,8 @@ package enum Action: Sendable, Equatable {
   case finishSetup
   /// Turn Open at Login on or off at the end of setup.
   case setOpensAtLogin(Bool)
+  /// Turn Open at Login on or off from the menu bar, recorded as the person's choice.
+  case openAtLogin(Bool)
   /// Open Atlas in the menu bar.
   case openMenuBar
   /// In the helper: allow the account that asked, exactly as shown.
@@ -33,6 +37,15 @@ package enum Action: Sendable, Equatable {
   /// Teach the project in this folder.
   case teachProject(path: String)
 
+  /// Recover as the viewer service's own Recover does: restart the helper while an action's outcome is unknown or
+  /// under way, else start its input, which never needs the full restart.
+  ///
+  /// - Parameter overview: The service's latest overview.
+  /// - Returns: ``restart`` or ``startInput``.
+  package static func recover(_ overview: ViewerStatus.Overview) -> Action {
+    overview.recoveryRestarts ? .restart : .startInput
+  }
+
   /// The `atlas` arguments the action runs, after `--json`.
   package var arguments: [String] {
     switch self {
@@ -40,7 +53,8 @@ package enum Action: Sendable, Equatable {
     case .switchTo(let account): ["switch", account, "--yes"]
     case .lockScreen: ["switch", "--lock", "--yes"]
     case .listAccounts: ["switch", "--list"]
-    case .recover: ["restart"]
+    case .restart: ["restart"]
+    case .startInput: ["start-input"]
     // The person confirmed in the panel.
     case .logOut(let force): ["logout", "--yes"] + (force ? ["--force"] : [])
     case .onboardingStatus: ["onboarding", "status"]
@@ -50,6 +64,7 @@ package enum Action: Sendable, Equatable {
     case .finishSetup: ["onboarding", "finish"]
     case .setOpensAtLogin(let on): ["onboarding", "login", on ? "on" : "off"]
     case .openMenuBar: ["menubar"]
+    case .openAtLogin(let on): ["menubar", "--login", on ? "on" : "off"]
     case .allow(let uid, let name):
       ["onboarding", "accept", "--controller-uid", String(uid), "--controller-name", name]
     case .markWindow(let open): ["onboarding", "window", open ? "open" : "closed"]

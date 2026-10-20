@@ -38,6 +38,19 @@ struct StatusReadingTests {
     #expect(try !overview("recovering").recoveryOffered(holdingControl: true))
   }
 
+  @Test(
+    "the viewer offers Recover only when it can help, as the panel does: an unknown outcome, or input Recover starts",
+    arguments: [
+      ("recovering", false, true),
+      ("blocked", true, true),
+      ("blocked", false, false),
+    ]
+  )
+  func recoveryOnlyWhenItHelps(mode: String, recoverable: Bool, offered: Bool) throws {
+    let reading = StatusReading(try status(["overview": ["mode": mode, "recoverable": recoverable]]))
+    #expect((reading.recovery(holdingControl: false, recovering: false) != nil) == offered)
+  }
+
   @Test("an unknown check stays unknown and native dialogs show as their own row")
   func statusRows() throws {
     let reading = try status([

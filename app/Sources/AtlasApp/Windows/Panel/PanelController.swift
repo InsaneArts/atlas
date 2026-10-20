@@ -34,8 +34,9 @@ final class PanelController {
   /// waits for it, and before a log-out. Kept apart from ``feedback``, so a message never ends an action still
   /// running.
   private(set) var running = 0
-  /// The helper's short name, once `atlas switch --list` reports it.
-  private(set) var helper: String?
+  /// The helper's short name as `atlas switch --list` last reported it: read at launch, each time the panel opens and
+  /// when Getting Started closes. A listing that fails keeps the last one.
+  private(set) var listedHelper: String?
   /// Where Open at Login stands, as last read: at launch, each time the panel opens, and after it is set here.
   private(set) var opensAtLogin: OpenAtLogin.State
   /// Where logging out stands.
@@ -59,6 +60,8 @@ final class PanelController {
   @ObservationIgnored private var statusReading = 0
   /// Numbers each desktop reading, under the same rule.
   @ObservationIgnored private var frameReading = 0
+  /// Numbers each change to Open at Login, so only the newest one shows what the system then reports.
+  @ObservationIgnored private var loginChange = 0
 
   /// Creates a panel that has read nothing yet.
   ///
@@ -107,6 +110,10 @@ final class PanelController {
   /// The panel as it should look now.
   var state: PanelState { PanelPresenter.state(snapshot) }
 
+  /// The helper to switch to: the account the service reports, which follows a helper set up meanwhile, else the one
+  /// `atlas switch --list` last reported.
+  var helper: String? { status.overview.account ?? listedHelper }
+
   /// The helper's mode, as the menu bar glyph shows it.
   var mode: Mode { Mode.of(status.overview.mode) }
 
@@ -117,14 +124,15 @@ final class PanelController {
 
   /// Reads the status now and then at the open or closed rate, and the desktop at the open rate while open, until
   /// called again. The two run apart, so a slow capture never holds the status back. Opening also reads Open at
-  /// Login again, since Getting Started or the system may have changed it meanwhile, and looks for a helper not found
-  /// yet.
+  /// Login and the helper's account again, since Getting Started or the system may have changed them meanwhile.
   ///
   /// - Parameter open: Whether the panel is open.
   func watch(open: Bool) {
     stop()
-    if open { readOpenAtLogin() }
-    if open, helper == nil { Task { await findHelper() } }
+    if open {
+      readOpenAtLogin()
+      polling.append(Task { [weak self] in await self?.findHelper() })
+    }
     polling.append(repeating(every: open ? Self.openEvery : Self.closedEvery) { await $0.readStatus() })
     if open { polling.append(repeating(every: Self.openEvery) { await $0.readFrame() }) }
   }
@@ -162,18 +170,27 @@ final class PanelController {
     opensAtLogin = loginItem.state
   }
 
-  /// Learns the helper to switch to: whichever account `atlas` reports.
+  /// Learns the helper to switch to: whichever account `atlas` reports. A listing that fails, or was cancelled,
+  /// keeps the one known, so one failure never disables Switch to Helper… for good.
   func findHelper() async {
-    helper = await commands.run(.listAccounts)
-      .decode(AccountList.self)?
-      .helper
+    let listing = await commands.run(.listAccounts)
+    guard !Task.isCancelled, listing.ok, let accounts = listing.decode(AccountList.self) else { return }
+    listedHelper = accounts.helper
   }
 
-  /// Reads the status. A reading that was cancelled, or overtaken by a newer one, shows nothing.
+  /// Reads the status. A reading that was cancelled, or overtaken by a newer one, shows nothing, and so does a status
+  /// the service refused to give (it was busy, say): the last one stands rather than reading as unavailable.
   func readStatus() async {
     statusReading += 1
     let number = statusReading
-    let latest = try? await service.status()
+    let latest: ViewerStatus?
+    do {
+      latest = try await service.status()
+    } catch is StatusRefused {
+      return
+    } catch {
+      latest = nil
+    }
     guard number == statusReading, !Task.isCancelled else { return }
     status = latest ?? ViewerStatus()
     answered = latest != nil
@@ -212,7 +229,7 @@ final class PanelController {
     case .cancelLogOut: cancelLogOut()
     case .logOut: Task { await logOut() }
     case .forceLogOut: Task { await logOut(force: true) }
-    case .setOpenAtLogin(let on): setOpenAtLogin(on)
+    case .setOpenAtLogin(let on): Task { await setOpenAtLogin(on) }
     case .gettingStarted: gettingStarted()
     case .quit: quit()
     }
@@ -323,20 +340,23 @@ final class PanelController {
     if outcome.isLogOutHeld, logOutStage == .idle { logOutStage = .held }
   }
 
-  /// Recovers the helper.
+  /// Recovers the helper as the viewer service does: a restart while an action's outcome is unknown or under way,
+  /// else starting its input.
   func recover() async {
-    await perform(.recover, working: Words.recovering, done: Words.readyAgain)
+    let action = Action.recover(status.overview)
+    await perform(action, working: Words.recovering, done: action == .restart ? Words.recovered : Words.readyAgain)
   }
 
-  /// Turns Open at Login on or off, and shows what the system then reports.
+  /// Turns Open at Login on or off through `atlas`, which records the person's choice so setup keeps it. The switch
+  /// follows the click at once; once the command ends, it shows what the system then reports, and a refusal says why.
   ///
   /// - Parameter on: Whether the app should open at login.
-  func setOpenAtLogin(_ on: Bool) {
-    do {
-      try loginItem.set(on)
-    } catch {
-      say(error.localizedDescription)
-    }
-    readOpenAtLogin()
+  func setOpenAtLogin(_ on: Bool) async {
+    loginChange += 1
+    let change = loginChange
+    opensAtLogin.isEnabled = on
+    let outcome = await commands.run(.openAtLogin(on))
+    if !outcome.ok { say(outcome.message) }
+    if change == loginChange { readOpenAtLogin() }
   }
 }

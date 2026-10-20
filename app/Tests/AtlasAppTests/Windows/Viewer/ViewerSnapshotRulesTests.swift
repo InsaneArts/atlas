@@ -22,17 +22,15 @@ struct ViewerSnapshotRulesTests {
   @Test(
     "a recovery set aside alerts again once its reason or the helper's mode changes while recovery is still offered",
     arguments: [
-      ["mode": "recovering", "reason": "The helper's input stopped"],
-      ["mode": "blocked", "reason": "Unknown outcome"],
+      ("recovering", "The helper's input stopped"),
+      ("blocked", "Unknown outcome"),
     ]
   )
-  func aChangedRecoveryAlertsAgain(changed: [String: String]) throws {
+  func aChangedRecoveryAlertsAgain(mode: String, reason: String) throws {
     var snapshot = try Self.setAside(["overview": ["mode": "recovering", "reason": "Unknown outcome"]])
     try #require(snapshot.recovery == .setAside, "the same reason stays set aside")
-    // A block is offered only when Recover can fix it.
-    var overview: [String: Any] = changed
-    overview["recoverable"] = true
-    snapshot.reading.status = try status(["overview": overview])
+    // Recover fixes what keeps a blocked helper not ready, so it is still offered.
+    snapshot.reading.status = try status(["overview": ["mode": mode, "reason": reason, "recoverable": true]])
     let offered = try #require(snapshot.offeredRecovery, "recovery is still offered")
     #expect(snapshot.recovery == .alert(offered))
   }

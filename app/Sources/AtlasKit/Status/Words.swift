@@ -16,6 +16,8 @@ package enum Words {
   package static let anotherViewer = "Another viewer has control"
   /// While the helper is recovered, from the panel or the viewer.
   package static let recovering = "Recovering the helper…"
+  /// Recovery gave no answer in time and may still be under way.
+  package static let stillRecovering = "The helper is still recovering. This can take a minute."
   /// Once recovery ran without restarting the helper, from the panel or the viewer.
   package static let readyAgain = "The helper is ready again."
   /// Once recovery restarted the helper, which ended any control.

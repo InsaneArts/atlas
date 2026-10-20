@@ -3,16 +3,13 @@ import Foundation
 
 @testable import AtlasApp
 
-/// A stand-in login item: available or not, on or off, and refusing to change when told, so no test registers the
-/// real one.
+/// A stand-in login item: available or not, on or off, so no test registers the real one.
 @MainActor
 final class ScriptedLoginItem {
   /// Whether the app can open at login.
   var available: Bool
   /// Whether it opens at login now.
   var enabled: Bool
-  /// Why the system refuses a change, when it does.
-  var refusal: ServiceError?
 
   /// A login item as given.
   ///
@@ -29,10 +26,7 @@ final class ScriptedLoginItem {
     OpenAtLogin(
       isAvailable: { self.available },
       isEnabled: { self.enabled },
-      set: { on in
-        if let refusal = self.refusal { throw refusal }
-        self.enabled = on
-      }
+      set: { self.enabled = $0 }
     )
   }
 }
