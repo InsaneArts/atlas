@@ -89,7 +89,6 @@ final class OnboardingController {
   /// Reads the facts now and then every ``readEvery`` until ``stop()``.
   func watch() {
     guard polling == nil else { return }
-    closed = false
     polling = Task { [weak self] in
       // Ends once cancelled, or once the controller is gone.
       while !Task.isCancelled, let controller = self {
