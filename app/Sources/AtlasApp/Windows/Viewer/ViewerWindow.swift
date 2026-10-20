@@ -9,6 +9,12 @@ import SwiftUI
 final class ViewerWindow: NSObject, NSWindowDelegate {
   /// The name its frame is saved under. Shipped, so it never changes.
   static let autosaveName = "AtlasViewer"
+  /// 1200 by 800: the window's size the first time, until the person moves or resizes it; wide enough for the
+  /// sidebar beside the desktop (`ViewerLayout.sidebarRoom`, 1000).
+  static let firstSize = NSSize(width: 1200, height: 800)
+  /// 760 by 520: the least the window shrinks to, where the stage, the footer's controls and the header still fit
+  /// side by side.
+  static let leastSize = NSSize(width: 760, height: 520)
 
   /// The window's controller.
   let controller: ViewerController
@@ -27,10 +33,8 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
   init(controller: ViewerController, closed: @escaping @MainActor (ViewerWindow) -> Void) {
     self.controller = controller
     self.closed = closed
-    // 1200 by 800 the first time, until the person moves or resizes it; at least 760 by 520, where the stage, the
-    // footer's controls and the header still fit side by side.
     window = NSWindow(
-      contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
+      contentRect: NSRect(origin: .zero, size: Self.firstSize),
       styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
       backing: .buffered,
       defer: false
@@ -47,7 +51,7 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
     window.isReleasedWhenClosed = false
     window.appearance = NSAppearance(named: .darkAqua)
     window.backgroundColor = .ground
-    window.contentMinSize = NSSize(width: 760, height: 520)
+    window.contentMinSize = Self.leastSize
     window.collectionBehavior.insert(.fullScreenPrimary)
     window.delegate = self
     let host = NSHostingView(

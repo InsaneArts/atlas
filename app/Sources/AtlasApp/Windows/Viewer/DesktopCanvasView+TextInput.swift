@@ -4,6 +4,15 @@ import AppKit
 // `@preconcurrency`: NSTextInputClient predates Swift concurrency and is not main-actor bound, but AppKit calls it on
 // the main thread only, as it does every responder, so the view's main-actor methods conform as they are.
 extension DesktopCanvasView: @preconcurrency NSTextInputClient {
+  /// 16: how far in from the desktop's left edge the input method's candidate window opens, clear of the stage's
+  /// rounded corner.
+  static let candidateInset: CGFloat = 16
+  /// 48: how far up from the desktop's bottom edge the candidate window's line sits, clear of the stage's rounded
+  /// corner.
+  static let candidateRise: CGFloat = 48
+  /// 20: the height of the line the candidate window opens under, one line of text.
+  static let candidateLineHeight: CGFloat = 20
+
   /// Committed text: the composition ends and the text is typed.
   ///
   /// - Parameters:
@@ -90,8 +99,12 @@ extension DesktopCanvasView: @preconcurrency NSTextInputClient {
   ///   - actualRange: Unchanged.
   /// - Returns: A rect in screen coordinates near the bottom left.
   func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
-    // 16 in from the left and 48 up from the bottom, clear of the stage's rounded corner; a 20-point line high.
-    let corner = NSRect(x: bounds.minX + 16, y: bounds.maxY - 48, width: 1, height: 20)
+    let corner = NSRect(
+      x: bounds.minX + Self.candidateInset,
+      y: bounds.maxY - Self.candidateRise,
+      width: 1,
+      height: Self.candidateLineHeight
+    )
     return window?.convertToScreen(convert(corner, to: nil)) ?? .zero
   }
 }

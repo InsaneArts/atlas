@@ -12,7 +12,7 @@ extension InputAction {
   }
 
   /// A pointer or plain move, which a newer one may replace while queued.
-  package var isMove: Bool {
+  var isMove: Bool {
     switch self {
     case .move: true
     case .pointer(let phase, _, _, _, _, _): phase == .move

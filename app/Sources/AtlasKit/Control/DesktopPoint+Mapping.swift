@@ -1,6 +1,11 @@
 import Foundation
 
 extension DesktopPoint {
+  /// 0.001 of a view point: how far inside the picture's right and bottom edges a clamped point stays. A point
+  /// exactly on those edges lies outside the picture, which ends there, and a thousandth of a point is far less than
+  /// one of the display's pixels at any size the view draws it.
+  static let edgeInset = 0.001
+
   /// Where a point in the view showing the desktop falls on the helper's
   /// display. The view shows the picture letterboxed at its own shape; a
   /// point outside the picture is nowhere, unless `clamp`ed to its edge (a
@@ -29,8 +34,8 @@ extension DesktopPoint {
     var x = location.x - (view.width - width) / 2
     var y = location.y - (view.height - height) / 2
     if clamp {
-      x = max(0, min(width - 0.001, x))
-      y = max(0, min(height - 0.001, y))
+      x = max(0, min(width - Self.edgeInset, x))
+      y = max(0, min(height - Self.edgeInset, y))
     } else if x < 0 || y < 0 || x >= width || y >= height {
       return nil
     }
