@@ -157,20 +157,24 @@ final class OnboardingController {
     }
   }
 
-  /// Runs one command, with its words shown while it runs; one at a time.
+  /// Runs one command, with its words shown while it runs; one at a time, and none once the window has closed.
+  ///
+  /// A command already running when the window closes settles, but its outcome is dropped, so a workflow awaiting it
+  /// stops there and starts no further command.
   ///
   /// - Parameters:
   ///   - action: The command.
   ///   - words: What to show while it runs.
   ///   - input: What to write to its standard input, if anything: a secret travels this way.
-  /// - Returns: The command's outcome, or nil when another one runs.
+  /// - Returns: The command's outcome, or nil when another one runs or the window has closed.
   @discardableResult
   func act(_ action: Action, _ words: String, input: Data? = nil) async -> Outcome? {
-    guard snapshot.working == nil else { return nil }
+    guard !closed, snapshot.working == nil else { return nil }
     snapshot.working = words
     snapshot.problem = nil
     let outcome = await commands.run(action, input: input)
     snapshot.working = nil
+    guard !closed else { return nil }
     if !outcome.ok { snapshot.problem = outcome.message }
     refresh()
     return outcome

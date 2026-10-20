@@ -22,7 +22,7 @@ extension OnboardingPresenter {
   }
 
   /// The account form: its tail says to confirm in macOS's dialog while the account is made, and a password problem
-  /// shows in place of the work note.
+  /// takes the line under the form in place of the work note, which shows only once the password is right.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The form's screen.
@@ -30,7 +30,8 @@ extension OnboardingPresenter {
     let working = snapshot.working != nil
     return OnboardingCreateScreenState(
       tail: working ? OnboardingWords.confirmInDialog : OnboardingWords.passwordNext,
-      passwordProblem: PasswordRule.problem(password: snapshot.form.password, verify: snapshot.form.verify),
+      note: PasswordRule.problem(password: snapshot.form.password, verify: snapshot.form.verify)
+        .map(WorkNote.problem) ?? note(snapshot),
       isFormEnabled: !working
     )
   }

@@ -70,11 +70,15 @@
       var state = onboardingCreate
       state.content = .screen(
         .create(
-          OnboardingCreateScreenState(tail: "Confirm in the macOS dialog.", passwordProblem: nil, isFormEnabled: false)
+          OnboardingCreateScreenState(
+            tail: "Confirm in the macOS dialog.",
+            note: .working("Creating the account…"),
+            isFormEnabled: false
+          )
         )
       )
       state.footer.back?.isEnabled = false
-      state.note = .working("Creating the account… Confirm in the macOS dialog.")
+      state.note = .working("Creating the account…")
       state.isBusy = true
       return state
     }()
@@ -231,7 +235,7 @@
     /// The form ready to fill.
     @MainActor static let onboardingCreateScreen = OnboardingCreateScreenState(
       tail: "macOS asks for your password next.",
-      passwordProblem: nil,
+      note: .none,
       isFormEnabled: true
     )
 

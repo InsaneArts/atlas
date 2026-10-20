@@ -19,13 +19,6 @@ private let finishedMac = """
               "answering": true, "hidden": true, "permissions": {"screenCapture": true, "accessibility": true}}}
   """
 
-/// The URLs a controller asked to open.
-@MainActor
-private final class OpenedURLs {
-  /// In the order asked.
-  var urls: [URL] = []
-}
-
 @MainActor
 @Suite("OnboardingController")
 struct OnboardingControllerTests {
@@ -59,10 +52,11 @@ struct OnboardingControllerTests {
   ///   - commands: The scripted command line, answering `onboarding status`.
   ///   - folders: What the folder chooser answers.
   /// - Returns: The controller, loaded.
-  private static func loaded(_ commands: ScriptedCommands, folders: [URL] = []) async -> OnboardingController {
+  /// - Throws: The failed requirement, when the facts are never read.
+  private static func loaded(_ commands: ScriptedCommands, folders: [URL] = []) async throws -> OnboardingController {
     let controller = controller(commands, folders: folders)
     controller.refresh()
-    await settle("the facts were never read") { controller.snapshot.loaded }
+    try await settle("the facts were never read") { controller.snapshot.loaded }
     return controller
   }
 
@@ -82,8 +76,8 @@ struct OnboardingControllerTests {
   }
 
   @Test("a fresh Mac with no candidates picks a new account, and Continue opens the form")
-  func aFreshMacPicksANewAccount() async {
-    let controller = await Self.loaded(ScriptedCommands(["onboarding status": freshMac]))
+  func aFreshMacPicksANewAccount() async throws {
+    let controller = try await Self.loaded(ScriptedCommands(["onboarding status": freshMac]))
     #expect(controller.snapshot.step == .welcome)
     #expect(controller.snapshot.picked == .newAccount, "no candidates: a new account is picked")
     controller.send(.begin)
@@ -92,8 +86,8 @@ struct OnboardingControllerTests {
   }
 
   @Test("Back leaves the form for the account choice, and the choice for the welcome")
-  func backStepsBack() async {
-    let controller = await Self.loaded(ScriptedCommands(["onboarding status": freshMac]))
+  func backStepsBack() async throws {
+    let controller = try await Self.loaded(ScriptedCommands(["onboarding status": freshMac]))
     controller.send(.begin)
     await controller.useHelper()
     controller.send(.back)
@@ -138,13 +132,35 @@ struct OnboardingControllerTests {
     #expect(!controller.snapshot.loaded)
   }
 
+  @Test("closing setup while a command runs lets it settle and starts no further command")
+  func closingWhileACommandRunsStartsNoMore() async throws {
+    let opie = URL(fileURLWithPath: "/Users/me/dev/Opie")
+    let commands = ScriptedCommands([
+      "onboarding status": finishedMac,
+      "agents status": #"{"ok": true, "agents": [{"agent": "claude", "installed": true, "connected": false}]}"#,
+      "agents install": #"{"ok": true}"#,
+      "agents project": #"{"ok": true}"#,
+    ])
+    let controller = try await Self.loaded(commands, folders: [opie])
+    try await settle("the agents were never read") { controller.snapshot.agentsLoaded }
+    controller.send(.chooseProject)
+    // The window closes while the agents are installed, before the project would be taught.
+    commands.whileRunning { arguments in
+      if arguments.starts(with: ["agents", "install"]) { await controller.close() }
+    }
+    await controller.connectAgents()
+    #expect(commands.ran.contains(Action.installAgents([.claude]).arguments), "the running command settled")
+    #expect(!commands.ran.contains(Action.teachProject(path: opie.path).arguments))
+    #expect(!controller.snapshot.choices.agentsDone, "the closed window moved on to nothing")
+  }
+
   @Test("Open at Login starts from what the login item says once the person has chosen")
-  func openAtLoginStartsFromTheEarlierChoice() async {
+  func openAtLoginStartsFromTheEarlierChoice() async throws {
     let decided = freshMac.replacingOccurrences(
       of: #""configured": false"#,
       with: #""menubarLogin": true, "configured": false"#
     )
-    let controller = await Self.loaded(ScriptedCommands(["onboarding status": decided]))
+    let controller = try await Self.loaded(ScriptedCommands(["onboarding status": decided]))
     #expect(!controller.snapshot.opensAtLogin, "the login item is off, as the person left it")
   }
 
@@ -168,19 +184,19 @@ struct OnboardingControllerTests {
   }
 
   @Test("the agents step lists every agent with what atlas agents status reports")
-  func theAgentsAreLoaded() async {
+  func theAgentsAreLoaded() async throws {
     let commands = ScriptedCommands([
       "onboarding status": finishedMac,
       "agents status": #"{"ok": true, "agents": [{"agent": "claude", "installed": true, "connected": false}]}"#,
     ])
-    let controller = await Self.loaded(commands)
-    await settle("the agents were never read") { controller.snapshot.agentsLoaded }
+    let controller = try await Self.loaded(commands)
+    try await settle("the agents were never read") { controller.snapshot.agentsLoaded }
     #expect(controller.snapshot.agents.map(\.id) == AgentID.allCases)
     #expect(controller.snapshot.agents.first?.on == true, "a found agent is switched on")
   }
 
   @Test("Continue connects the chosen agents, then teaches each project, naming one that cannot be taught")
-  func continueConnectsAgentsAndTeachesProjects() async {
+  func continueConnectsAgentsAndTeachesProjects() async throws {
     let opie = URL(fileURLWithPath: "/Users/me/dev/Opie")
     let commands = ScriptedCommands([
       "onboarding status": finishedMac,
@@ -188,8 +204,8 @@ struct OnboardingControllerTests {
       "agents install": #"{"ok": true}"#,
       "agents project": #"{"ok": false, "error": "No AGENTS.md here"}"#,
     ])
-    let controller = await Self.loaded(commands, folders: [opie])
-    await settle("the agents were never read") { controller.snapshot.agentsLoaded }
+    let controller = try await Self.loaded(commands, folders: [opie])
+    try await settle("the agents were never read") { controller.snapshot.agentsLoaded }
     controller.send(.chooseProject)
     await controller.connectAgents()
     #expect(commands.ran.contains(Action.installAgents([.claude]).arguments))
@@ -223,19 +239,19 @@ struct OnboardingControllerTests {
     "switching back locks for the account that asked, or with none named when no one did",
     arguments: [("me", Action.switchTo("me")), (nil, .lockScreen)] as [(String?, Action)]
   )
-  func switchingBack(asker: String?, action: Action) async {
+  func switchingBack(asker: String?, action: Action) async throws {
     let commands = ScriptedCommands([
       "onboarding status": Self.helperReply(asker: asker, accessibility: true), "onboarding window": #"{"ok": true}"#,
       "switch": #"{"ok": true}"#,
     ])
-    let controller = await Self.loaded(commands)
+    let controller = try await Self.loaded(commands)
     await controller.switchBack()
     #expect(commands.ran.contains(action.arguments))
     #expect(controller.closeRequested)
   }
 
   @Test("the helper allows exactly the account it showed")
-  func theHelperAllowsTheAccountShown() async {
+  func theHelperAllowsTheAccountShown() async throws {
     let commands = ScriptedCommands([
       "onboarding status": """
       {"ok": true, "role": "helper", "me": {"name": "atlas"}, "app": {"installed": true, "signed": true},
@@ -244,38 +260,40 @@ struct OnboardingControllerTests {
       "onboarding accept": #"{"ok": true}"#,
       "onboarding window": #"{"ok": true}"#,
     ])
-    let controller = await Self.loaded(commands)
+    let controller = try await Self.loaded(commands)
     #expect(controller.snapshot.step == .allow)
     await controller.allow()
     #expect(commands.ran.contains(Action.allow(uid: 501, name: "me").arguments))
   }
 
   @Test("a permission's button opens its own Privacy & Security page, with the guide beside it")
-  func allowingAPermissionOpensItsPage() async {
+  func allowingAPermissionOpensItsPage() async throws {
     let opened = OpenedURLs()
     let commands = ScriptedCommands([
       "onboarding status": Self.helperReply(accessibility: false), "onboarding window": #"{"ok": true}"#,
     ])
     let controller = Self.controller(commands, opened: opened)
     controller.refresh()
-    await settle { controller.snapshot.loaded }
+    try await settle("the facts were never read") { controller.snapshot.loaded }
     controller.send(.openSettings(id: Permission.screenRecording.id))
     #expect(opened.urls == [Permission.screenRecording.settingsURL].compactMap { $0 })
     #expect(controller.snapshot.guiding == .screenRecording)
   }
 
   @Test("the guide panel steps aside once its switch is on")
-  func theGuideStepsAside() async {
+  func theGuideStepsAside() async throws {
     let commands = ScriptedCommands([
       "onboarding status": Self.helperReply(accessibility: false), "onboarding window": #"{"ok": true}"#,
     ])
-    let controller = await Self.loaded(commands)
+    let controller = try await Self.loaded(commands)
     controller.send(.openSettings(id: Permission.accessibility.id))
     controller.refresh()
-    await settle { commands.ran.filter { $0 == Action.onboardingStatus.arguments }.count == 2 }
+    try await settle("the facts were never read again") {
+      commands.ran.filter { $0 == Action.onboardingStatus.arguments }.count == 2
+    }
     #expect(controller.snapshot.guiding == .accessibility, "still waiting for the switch")
     commands.answer("onboarding status", Self.helperReply(accessibility: true))
     controller.refresh()
-    await settle { controller.snapshot.guiding == nil }
+    try await settle("the guide never stepped aside") { controller.snapshot.guiding == nil }
   }
 }
