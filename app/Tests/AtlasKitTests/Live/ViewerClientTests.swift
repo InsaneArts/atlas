@@ -27,4 +27,15 @@ struct ViewerClientTests {
     #expect(request.value(forHTTPHeaderField: "Origin") == "http://127.0.0.1:8765")
     #expect(request.httpMethod == "POST")
   }
+
+  @Test("the capability URL's secret never prints, however the client is printed")
+  func theSecretNeverPrints() throws {
+    let client = try #require(ViewerClient("http://127.0.0.1:8765/s3cret/"))
+    var dumped = ""
+    dump(client, to: &dumped)
+    for printed in [String(describing: client), String(reflecting: client), dumped] {
+      #expect(!printed.contains("s3cret"))
+      #expect(printed.contains(ViewerClient.redacted))
+    }
+  }
 }
