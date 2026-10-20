@@ -9,14 +9,18 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [.executable(name: "AtlasApp", targets: ["AtlasApp"])],
     targets: [
-        // Models, the service client and every decision: Foundation only.
+        // Level 0. Models, the service client and every rule: Foundation only
+        // (ServiceManagement only in Live/LoginItem.swift).
         .target(name: "AtlasKit"),
-        // Windows and views: AppKit and SwiftUI.
-        .target(name: "AtlasUI", dependencies: ["AtlasKit"]),
-        // The executable shipped beside `atlas` in Atlas.app.
+        // Level 0. The design system, components, each window's state and
+        // events, its views and previews: SwiftUI alone, never AtlasKit.
+        .target(name: "AtlasUI"),
+        // Level 1. The executable shipped beside `atlas` in Atlas.app: AppKit
+        // windows, one controller and presenter per window, rendering, launch.
         .executableTarget(name: "AtlasApp", dependencies: ["AtlasKit", "AtlasUI"]),
         .testTarget(name: "AtlasKitTests", dependencies: ["AtlasKit"]),
-        .testTarget(name: "AtlasUITests", dependencies: ["AtlasKit", "AtlasUI"]),
+        .testTarget(name: "AtlasUITests", dependencies: ["AtlasUI"]),
+        .testTarget(name: "AtlasAppTests", dependencies: ["AtlasApp", "AtlasKit", "AtlasUI"]),
     ],
     swiftLanguageModes: [.v6]
 )

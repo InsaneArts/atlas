@@ -1,154 +1,119 @@
-import AppKit
-import AtlasKit
 import SwiftUI
 
-/// The window's content: one screen at a time, chosen by the model. The
-/// screens themselves are in ControllerScreens.swift (the person's account)
-/// and HelperScreens.swift (the helper's).
-struct OnboardingView: View {
-    let model: OnboardingModel
+/// The setup window's content: the first reading, the guide panel beside System Settings, or one screen at a time.
+/// It draws its state and sends what the person does; it decides nothing. The account form is the one value it edits
+/// in place.
+package struct OnboardingView: View {
+  /// What the window shows.
+  private let state: OnboardingState
+  /// The new helper account's form.
+  private let form: Binding<OnboardingAccountForm>
+  /// Receives what the person does.
+  private let send: @MainActor (OnboardingEvent) -> Void
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    var body: some View {
-        ZStack {
-            AtlasStyle.ground.ignoresSafeArea()
-            if let permission = model.guiding {
-                GuidePanel(model: model, permission: permission)
-                    .transition(.opacity)
-            } else if !model.loaded {
-                VStack(spacing: 12) {
-                    Spinner(size: 18)
-                    if let problem = model.problem { Note(text: problem, color: AtlasStyle.orange) }
-                }
-            } else {
-                Screen(model: model)
-                    .id(model.step)
-                    .transition(
-                        .asymmetric(
-                            insertion: .opacity.combined(with: .offset(y: 14)).animation(
-                                .easeOut(duration: 0.4).delay(0.08)),
-                            removal: .opacity.combined(with: .offset(y: -10)).animation(.easeOut(duration: 0.2))))
-            }
-        }
-        .foregroundStyle(AtlasStyle.ink)
-        .environment(\.colorScheme, .dark)
+  /// Creates the window's content.
+  ///
+  /// - Parameters:
+  ///   - state: What the window shows.
+  ///   - form: The new helper account's form, which the account screen edits.
+  ///   - send: Receives what the person does.
+  package init(
+    state: OnboardingState,
+    form: Binding<OnboardingAccountForm>,
+    send: @escaping @MainActor (OnboardingEvent) -> Void
+  ) {
+    self.state = state
+    self.form = form
+    self.send = send
+  }
+
+  /// What the window shows now, on the dark ground.
+  package var body: some View {
+    content
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .windowSurface()
+  }
+
+  /// The guide panel, the first reading, or a screen, each screen arriving as the last one leaves.
+  @ViewBuilder private var content: some View {
+    switch state.content {
+    case .guide(let guide):
+      GuidePanel(state: guide, send: send)
+        .transition(.opacity)
+    case .loading(let problem):
+      LoadingScreen(problem: problem)
+    case .screen(let screen):
+      OnboardingScreenContent(
+        screen: screen,
+        footer: state.footer,
+        note: state.note,
+        isBusy: state.isBusy,
+        form: form,
+        send: send
+      )
+      .id(screen.id)
+      .transition(reduceMotion ? .opacity : screenTransition)
     }
+  }
+
+  /// A screen rises into place just after the last one starts to rise away.
+  private var screenTransition: AnyTransition {
+    .asymmetric(
+      insertion: .opacity
+        .combined(with: .offset(y: OnboardingLayout.entryOffset))
+        .animation(
+          Motion.entry
+            .delay(OnboardingLayout.entryDelay)
+        ),
+      removal: .opacity
+        .combined(with: .offset(y: OnboardingLayout.exitOffset))
+        .animation(Motion.fade)
+    )
+  }
 }
 
-/// One full screen: its content above, its footer below.
-struct Screen: View {
-    let model: OnboardingModel
+#if DEBUG
+  #Preview("Welcome") {
+    OnboardingView(state: PreviewStates.onboardingWelcome, form: .constant(PreviewStates.onboardingForm)) { _ in }
+      .onboardingSample()
+  }
 
-    var body: some View {
-        VStack(spacing: 0) {
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.top, 36)
-            footer
+  #Preview("Choose") {
+    OnboardingView(state: PreviewStates.onboardingChoose, form: .constant(PreviewStates.onboardingForm)) { _ in }
+      .onboardingSample()
+  }
+
+  #Preview("Create, working") {
+    OnboardingView(state: PreviewStates.onboardingCreateWorking, form: .constant(PreviewStates.onboardingForm)) { _ in }
+      .onboardingSample()
+  }
+
+  #Preview("Helper guide") {
+    OnboardingView(state: PreviewStates.onboardingGuide, form: .constant(PreviewStates.onboardingForm)) { _ in }
+      .onboardingSample(OnboardingLayout.side)
+  }
+
+  #Preview("Loading") {
+    OnboardingView(state: PreviewStates.onboardingLoading, form: .constant(PreviewStates.onboardingForm)) { _ in }
+      .onboardingSample()
+  }
+
+  #Preview("Interactive") {
+    @Previewable @State var state = PreviewStates.onboardingWelcome
+    @Previewable @State var form = PreviewStates.onboardingForm
+    InteractivePreview {
+      Menu(String("State")) {
+        ForEach(PreviewStates.onboarding) { preview in
+          Button(preview.name) { state = preview.value }
         }
+      }
+      .fixedSize()
+    } content: {
+      OnboardingView(state: state, form: $form) { event in
+        state = PreviewStates.onboarding(state, applying: event)
+      }
+      .frame(width: OnboardingLayout.card.width, height: OnboardingLayout.card.height)
     }
-
-    @ViewBuilder private var content: some View {
-        switch model.step {
-        case .welcome: WelcomeScreen(model: model)
-        case .chooseHelper: ChooseScreen(model: model)
-        case .createAccount: CreateScreen(model: model)
-        case .switchToHelper: SwitchScreen(model: model)
-        case .finishing: FinishingScreen(model: model)
-        case .agents: AgentsScreen(model: model)
-        case .done: DoneScreen(model: model)
-        case .allow: AllowScreen(model: model)
-        case .permissions: PermissionsScreen(model: model)
-        case .helperDone: HelperDoneScreen(model: model)
-        case .blocked(let why): BlockedScreen(model: model, why: why)
-        }
-    }
-
-    private var footer: some View {
-        ZStack {
-            if let dots = model.step.dots { Dots(index: dots.index, count: dots.count) }
-            HStack {
-                back
-                Spacer()
-                next
-            }
-        }
-        .padding(.horizontal, 22)
-        .frame(height: 76)
-        .overlay(alignment: .top) { Rule() }
-    }
-
-    @ViewBuilder private var back: some View {
-        switch model.step {
-        case .chooseHelper where !model.facts.configured:
-            Button("Back") { model.choices.started = false }.atlas(.plain)
-                .disabled(model.working != nil)
-        case .createAccount:
-            Button("Back") { model.choices.creating = false }.atlas(.plain)
-                .disabled(model.working != nil)
-        case .done:
-            Button("Back") { model.choices.agentsDone = false }.atlas(.plain)
-                .disabled(model.working != nil)
-        default: EmptyView()
-        }
-    }
-
-    @ViewBuilder private var next: some View {
-        switch model.step {
-        case .chooseHelper:
-            Button("Continue") { Task { await model.useHelper() } }.atlas()
-                .disabled(model.picked == nil || model.working != nil)
-                .keyboardShortcut(.defaultAction)
-        case .createAccount:
-            Button("Create Account") { Task { await model.createAccount() } }.atlas()
-                .disabled(!model.canCreate || model.working != nil)
-                .keyboardShortcut(.defaultAction)
-        case .finishing:
-            Button("Continue") { model.refresh() }.atlas()
-                .disabled(model.finish != .passed)
-        case .agents:
-            Button("Continue") { Task { await model.connectAgents() } }.atlas()
-                .disabled(model.working != nil || !model.agentsLoaded)
-                .keyboardShortcut(.defaultAction)
-        case .done:
-            Button("Done") { Task { await model.complete() } }.atlas()
-                .disabled(model.working != nil)
-                .keyboardShortcut(.defaultAction)
-        default: EmptyView()
-        }
-    }
-}
-
-/// The centred column every screen uses.
-struct Column<Content: View>: View {
-    var width: CGFloat = 440
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        VStack(spacing: 14) { content }
-            .frame(maxWidth: width)
-            .padding(.horizontal, 24)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-/// The line under the controls: what is running, or what went wrong.
-struct Working: View {
-    let model: OnboardingModel
-
-    var body: some View {
-        Group {
-            if let working = model.working {
-                HStack(spacing: 8) {
-                    Spinner()
-                    Text(working).font(.system(size: 12.5)).foregroundStyle(AtlasStyle.ink2)
-                }
-            } else if let problem = model.problem {
-                Note(text: problem, color: AtlasStyle.orange)
-            } else {
-                Color.clear.frame(width: 1, height: 1)
-            }
-        }
-        .frame(minHeight: 20)
-        .accessibilityElement(children: .combine)
-    }
-}
+  }
+#endif

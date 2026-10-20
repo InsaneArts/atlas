@@ -1,0 +1,128 @@
+import AtlasKit
+import AtlasUI
+
+/// Builds the setup window's state from what its controller holds. Pure: every choice the window shows is made here,
+/// from the snapshot and AtlasKit's rules (the step rule, ``PasswordRule``, the switch progress and ``Permission``).
+enum OnboardingPresenter {
+  /// The window as it should look now.
+  ///
+  /// - Parameter snapshot: What the controller holds.
+  /// - Returns: Everything the window draws.
+  static func state(_ snapshot: OnboardingSnapshot) -> OnboardingState {
+    let step = snapshot.step
+    let content = content(snapshot, step: step)
+    let footer: OnboardingFooterState =
+      switch content {
+      case .screen: footer(snapshot, step: step)
+      case .loading, .guide: OnboardingFooterState()
+      }
+    return OnboardingState(
+      content: content,
+      footer: footer,
+      note: note(snapshot),
+      isBusy: snapshot.working != nil
+    )
+  }
+
+  /// The guide panel while a switch is turned on, the first reading until it lands, or the step's screen.
+  ///
+  /// - Parameters:
+  ///   - snapshot: What the controller holds.
+  ///   - step: The screen the facts and choices lead to.
+  /// - Returns: What fills the window.
+  private static func content(_ snapshot: OnboardingSnapshot, step: OnboardingStep) -> OnboardingContent {
+    if let permission = snapshot.guiding {
+      return .guide(guide(permission, asker: snapshot.facts.asker))
+    }
+    guard snapshot.loaded else { return .loading(problem: snapshot.problem) }
+    return .screen(screen(snapshot, step: step))
+  }
+
+  /// The step's screen and what it shows.
+  ///
+  /// - Parameters:
+  ///   - snapshot: What the controller holds.
+  ///   - step: The screen the facts and choices lead to.
+  /// - Returns: The screen.
+  private static func screen(_ snapshot: OnboardingSnapshot, step: OnboardingStep) -> OnboardingScreen {
+    switch step {
+    case .welcome: .welcome
+    case .chooseHelper: .choose(choose(snapshot))
+    case .createAccount: .create(create(snapshot))
+    case .switchToHelper: .switchToHelper(switchToHelper(snapshot))
+    case .finishing: .finishing(finishing(snapshot))
+    case .agents: .agents(agents(snapshot))
+    case .done: .done(done(snapshot))
+    case .allow: .allow(allow(snapshot.facts))
+    case .permissions: .permissions(permissions(snapshot.facts.asker))
+    case .helperDone: .helperDone(helperDone(snapshot.facts.asker))
+    case .blocked(let reason): .blocked(reason)
+    }
+  }
+
+  /// The footer's buttons and dots. Back shows on the account choice (before a helper is set up), on the form and on
+  /// Done; the next step's button waits while a command runs, and each also for its own condition: an account
+  /// picked, a form that can be sent, a passed check, the agents read. The finishing check's Continue is the one
+  /// that Return does not press.
+  ///
+  /// - Parameters:
+  ///   - snapshot: What the controller holds.
+  ///   - step: The screen the facts and choices lead to.
+  /// - Returns: The footer.
+  private static func footer(_ snapshot: OnboardingSnapshot, step: OnboardingStep) -> OnboardingFooterState {
+    let idle = snapshot.working == nil
+    let back = OnboardingFooterAction(title: .back, event: .back, isEnabled: idle, isDefault: false)
+    let next: OnboardingFooterAction? =
+      switch step {
+      case .chooseHelper:
+        OnboardingFooterAction(
+          title: .continue,
+          event: .continueChoice,
+          isEnabled: snapshot.picked != nil && idle,
+          isDefault: true
+        )
+      case .createAccount:
+        OnboardingFooterAction(
+          title: .createAccount,
+          event: .createAccount,
+          isEnabled: snapshot.form.canCreate && idle,
+          isDefault: true
+        )
+      case .finishing:
+        OnboardingFooterAction(
+          title: .continue,
+          event: .continueFinishing,
+          isEnabled: snapshot.finish == .passed,
+          isDefault: false
+        )
+      case .agents:
+        OnboardingFooterAction(
+          title: .continue,
+          event: .connectAgents,
+          isEnabled: idle && snapshot.agentsLoaded,
+          isDefault: true
+        )
+      case .done:
+        OnboardingFooterAction(title: .done, event: .complete, isEnabled: idle, isDefault: true)
+      case .welcome, .switchToHelper, .allow, .permissions, .helperDone, .blocked:
+        nil
+      }
+    let hasBack =
+      switch step {
+      case .chooseHelper: !snapshot.facts.configured
+      case .createAccount, .done: true
+      case .welcome, .switchToHelper, .finishing, .agents, .allow, .permissions, .helperDone, .blocked: false
+      }
+    return OnboardingFooterState(back: hasBack ? back : nil, next: next, dots: step.dots)
+  }
+
+  /// The line under a screen's controls: what runs, else what went wrong, else nothing.
+  ///
+  /// - Parameter snapshot: What the controller holds.
+  /// - Returns: The work note.
+  private static func note(_ snapshot: OnboardingSnapshot) -> WorkNote {
+    if let working = snapshot.working { return .working(working) }
+    if let problem = snapshot.problem { return .problem(problem) }
+    return .none
+  }
+}
