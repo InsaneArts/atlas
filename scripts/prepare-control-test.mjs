@@ -20,11 +20,7 @@ function cli(args) {
 const { config } = cli(['config']);
 const output = config.output_dir;
 function run(argv) {
-  return (cli(['run', '--', ...argv]).events || [])
-    .filter((event) => event.event === 'output')
-    .map((event) => Buffer.from(event.data, 'base64').toString('utf8'))
-    .join('')
-    .trim();
+  return (cli(['run', '--', ...argv]).output || '').trim();
 }
 const readiness = cli(['doctor', '--verbose']);
 if (!readiness.ready) throw new Error(readiness.nextSteps.join(' '));

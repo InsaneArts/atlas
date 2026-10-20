@@ -336,7 +336,7 @@ enum Command {
         /// Only windows whose title contains this.
         #[arg(long)]
         title: Option<String>,
-        /// Include panels, menus and other non-document windows.
+        /// Include menus, the menu bar, the Dock and other system layers.
         #[arg(long)]
         all: bool,
     },

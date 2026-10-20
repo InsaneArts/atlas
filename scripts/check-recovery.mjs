@@ -130,7 +130,8 @@ try {
   await release();
   const reply = await action;
   assert.equal(reply.ok, false);
-  assert.equal(reply.code, 'lease-lost');
+  // The owner stopped it: a stop, not a lost lease, and not uncertain.
+  assert.equal(reply.code, 'cancelled');
   results.checks.cancelDuringBatch = {
     passed: true,
     releaseToNativeUpMs: performance.now() - releaseAt,

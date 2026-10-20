@@ -258,8 +258,9 @@ pub struct WindowFilter {
 
 impl WindowFilter {
     pub fn matches(&self, window: &Window) -> bool {
-        // With --app, an app's floating panels and alerts count as its own.
-        (self.all || window.layer == 0 || (self.app.is_some() && app_layer(window)))
+        // An app's floating panels and alerts count as its windows, so a
+        // system alert in front of everything is listed too.
+        (self.all || app_layer(window))
             && self.app.as_ref().is_none_or(|app| {
                 window
                     .owner
@@ -371,7 +372,33 @@ pub async fn open(
         argv.extend(given);
     }
 
-    let reply = client.run_owned(&ownership, argv).await?;
+    let mut reply = client.run_owned(&ownership, argv.clone()).await?;
+
+    // An app opened again just as it quit can leave launchd holding its
+    // finished job, and every later launch fails until that job is gone.
+    if reply["exitCode"] != 0 {
+        let output = run_output(&reply, 4096).unwrap_or_default();
+
+        if let Some(bundle) = stale_launch(&String::from_utf8_lossy(&output)) {
+            let cleared = client
+                .run_owned(
+                    &ownership,
+                    vec![
+                        "/bin/sh".to_owned(),
+                        "-c".to_owned(),
+                        CLEAR_STALE_JOB.to_owned(),
+                        "sh".to_owned(),
+                        bundle.to_owned(),
+                    ],
+                )
+                .await?;
+
+            if !run_output(&cleared, 4096).unwrap_or_default().is_empty() {
+                reply = client.run_owned(&ownership, argv).await?;
+            }
+        }
+    }
+
     let opened = reply["exitCode"] == 0;
     let mut value = json!({ "ok": opened, "opened": opened });
 
@@ -407,6 +434,31 @@ pub async fn open(
 
     Ok(value)
 }
+
+/// The app whose launch launchd refused because it still holds that app's
+/// finished job (error 37, "Operation already in progress"), from what
+/// `open` said.
+fn stale_launch(said: &str) -> Option<&str> {
+    if !said.contains("OSLaunchdErrorDomain Code=37") {
+        return None;
+    }
+
+    let rest = said.split_once("The application ")?.1;
+    let end = rest.find(".app ")? + ".app".len();
+
+    rest[..end].starts_with('/').then(|| &rest[..end])
+}
+
+/// In the helper, remove launchd's jobs for the app at `$1` that are not
+/// running (none of its windows or processes go with them); it prints each
+/// one removed. The next launch submits a fresh job.
+const CLEAR_STALE_JOB: &str = r#"id=$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$1/Contents/Info.plist") || exit 0
+/bin/launchctl list | /usr/bin/awk -v prefix="application.$id." \
+  '$1 == "-" && index(tolower($3), tolower(prefix)) == 1 { print $3 }' |
+while read -r label; do
+  /bin/launchctl remove "$label" && echo "$label"
+done
+exit 0"#;
 
 fn app_names(apps: &Value) -> Vec<&str> {
     apps["apps"]
@@ -1264,7 +1316,7 @@ fn choose<'a>(elements: &'a [Element], filter: &ElementFilter) -> Result<&'a Ele
                     .to_owned(),
                 count => format!(
                     "{count} elements match. Run atlas elements with the same --name to \
-                     tell them apart, then add --role."
+                     tell them apart, then add --role, or click the one you mean at its point."
                 ),
             },
         ));
@@ -1605,6 +1657,16 @@ mod tests {
         };
         assert!(by_title.matches(&edit));
         assert!(!WindowFilter::default().matches(&menu));
+
+        let alert = window(7, 8, "CoreServicesUIAgent", 8);
+        assert!(
+            WindowFilter::default().matches(&alert),
+            "an alert is listed"
+        );
+        assert!(
+            !WindowFilter::default().matches(&window(9, 10, "Dock", 20)),
+            "the Dock is not"
+        );
         assert!(
             WindowFilter {
                 all: true,
@@ -2033,7 +2095,7 @@ mod tests {
     }
 
     #[test]
-    fn an_apps_own_windows_include_visible_floating_ones_only() {
+    fn an_apps_visible_floating_windows_are_listed_and_hidden_ones_are_not() {
         let name = Target::Name("Opie".into());
         let mut hidden = window(4, 6, "Opie", 3);
         hidden.alpha = 0.0;
@@ -2071,7 +2133,29 @@ mod tests {
             filter.matches(&panel),
             "windows --app shows its floating panel"
         );
-        assert!(!WindowFilter::default().matches(&panel));
+        assert!(
+            WindowFilter::default().matches(&panel),
+            "windows shows it too"
+        );
+    }
+
+    #[test]
+    fn a_launch_refused_for_a_finished_job_names_its_app() {
+        let said = "The application /System/Applications/Calculator.app cannot be opened for an \
+                    unexpected reason, error=Error Domain=RBSRequestErrorDomain Code=5 \"Launch \
+                    failed.\" UserInfo={NSUnderlyingError=0x7482c10990 {Error \
+                    Domain=OSLaunchdErrorDomain Code=37 \"Operation already in progress\"}}";
+        assert_eq!(
+            stale_launch(said),
+            Some("/System/Applications/Calculator.app")
+        );
+
+        let other = said.replace("Code=37", "Code=3");
+        assert_eq!(stale_launch(&other), None, "only error 37");
+        assert_eq!(
+            stale_launch("Unable to find application named 'Nope'"),
+            None
+        );
     }
 
     #[test]

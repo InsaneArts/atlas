@@ -252,7 +252,7 @@ Options:
           Only windows whose title contains this
 
       --all
-          Include panels, menus and other non-document windows
+          Include menus, the menu bar, the Dock and other system layers
 
   -h, --help
           Print help (see a summary with '-h')
