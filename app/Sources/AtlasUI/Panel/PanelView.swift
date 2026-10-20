@@ -24,7 +24,7 @@ package struct PanelView: View {
       PanelHeader(status: state.status, reason: state.reason)
       stage
       if let recovery = state.recovery {
-        RecoveryCard(recovery: recovery) { send(.recover) }
+        RecoveryCard(recovery: recovery, isEnabled: state.feedback?.isWorking != true) { send(.recover) }
       }
       PanelFacts(facts: state.facts)
       PanelButtons(viewerLook: state.viewerLook, secondary: state.secondary, send: send)

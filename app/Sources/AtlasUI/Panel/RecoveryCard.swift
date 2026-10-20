@@ -4,6 +4,8 @@ import SwiftUI
 struct RecoveryCard: View {
   /// Why recovery is needed.
   let recovery: PanelRecovery
+  /// Whether Recover can run now: no other action runs.
+  var isEnabled = true
   /// What Recover does.
   let recover: @MainActor () -> Void
 
@@ -19,6 +21,7 @@ struct RecoveryCard: View {
       Spacer(minLength: Spacing.s)
       Button("Recover", action: recover)
         .buttonStyle(.capsule())
+        .disabled(!isEnabled)
     }
     .padding(.horizontal, Spacing.l)
     .padding(.vertical, Spacing.ml)
