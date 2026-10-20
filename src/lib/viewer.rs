@@ -237,10 +237,11 @@ impl Viewer {
     }
 
     /// A helper just logged in has no input service yet, and switching
-    /// accounts can leave one pinned to a display that is gone. Input starts
-    /// or re-pins once per helper daemon and display, as Recover would, so
-    /// agents carry on by themselves: only in the background, with
-    /// Accessibility on and nothing pending or held.
+    /// accounts can leave one pinned to a display that is gone or renumbered
+    /// (which taking control refuses). Input starts or re-pins once per
+    /// helper daemon and display, as Recover would, so agents and viewers
+    /// carry on by themselves: only in the background, with Accessibility on
+    /// and nothing pending or held.
     fn start_input_after_login(&self, session: &Value, settled: bool) {
         let native = &session["inputService"];
         let starts = settled
@@ -250,7 +251,7 @@ impl Viewer {
         let Some(hidden) = starts
             .then(|| crate::session::require_hidden(session, self.client.config.helper_uid).ok())
             .flatten()
-            .filter(|hidden| !hidden.input && !crate::session::repinnable(session, hidden))
+            .filter(|hidden| !hidden.input)
         else {
             return;
         };
