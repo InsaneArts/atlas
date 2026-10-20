@@ -31,8 +31,8 @@ final class OnboardingController {
   @ObservationIgnored private var readAgain = false
   /// Whether the helper's "set up here" notice was last told the window is open.
   @ObservationIgnored private var markedOpen = false
-  /// Whether that mark is being set now.
-  @ObservationIgnored private var marking = false
+  /// The mark being set now, if any.
+  @ObservationIgnored private var marking: Task<Void, Never>?
   /// The window closed: nothing new starts, and late replies are dropped.
   @ObservationIgnored private var closed = false
 
@@ -180,10 +180,12 @@ final class OnboardingController {
     return outcome
   }
 
-  /// The window is closing: stop reading, start nothing new, and clear the helper's mark.
+  /// The window is closing: stop reading, start nothing new, and clear the helper's mark once a mark under way has
+  /// settled, so the clearing lands last.
   func close() async {
     closed = true
     stop()
+    await marking?.value
     if snapshot.facts.role == .helper {
       _ = await commands.run(.markWindow(open: false))
     }
@@ -233,6 +235,7 @@ final class OnboardingController {
     snapshot.finish = .running
     Task {
       let outcome = await commands.run(.finishSetup)
+      guard !closed else { return }
       snapshot.finish = outcome.ok ? .passed : .failed(outcome.message)
       refresh()
     }
@@ -252,6 +255,7 @@ final class OnboardingController {
         await commands.run(.agentsStatus)
         .decode(AgentsStatus.self)?
         .agents ?? []
+      guard !closed else { return }
       snapshot.agents = AgentChoice.merged(snapshot.agents, with: rows)
       snapshot.agentsLoaded = true
     }
@@ -340,11 +344,10 @@ final class OnboardingController {
   ///
   /// - Parameter open: Whether the window is open.
   private func markWindow(open: Bool) {
-    guard snapshot.facts.role == .helper, !closed, !marking, open != markedOpen else { return }
-    marking = true
-    Task {
+    guard snapshot.facts.role == .helper, !closed, marking == nil, open != markedOpen else { return }
+    marking = Task {
       let marked = await commands.run(.markWindow(open: open)).ok
-      marking = false
+      marking = nil
       if marked { markedOpen = open }
     }
   }
