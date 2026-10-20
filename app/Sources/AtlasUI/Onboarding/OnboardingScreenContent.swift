@@ -33,7 +33,7 @@ struct OnboardingScreenContent: View {
     case .choose(let state):
       ChooseScreen(state: state, note: note, send: send)
     case .create(let state):
-      CreateScreen(state: state, note: note, form: $form)
+      CreateScreen(state: state, form: $form)
     case .switchToHelper(let state):
       SwitchScreen(state: state, note: note, isBusy: isBusy, send: send)
     case .finishing(let state):

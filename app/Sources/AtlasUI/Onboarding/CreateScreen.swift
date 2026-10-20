@@ -4,12 +4,10 @@ import SwiftUI
 struct CreateScreen: View {
   /// What the screen shows around the form.
   let state: OnboardingCreateScreenState
-  /// The line under the form, unless the password has a problem to show.
-  let note: WorkNote
   /// The account's names and password.
   @Binding var form: OnboardingAccountForm
 
-  /// The form, then the password's problem or the work note.
+  /// The form, then the line under it.
   var body: some View {
     ScreenColumn {
       Eyebrow(text: "New account")
@@ -26,11 +24,7 @@ struct CreateScreen: View {
       .disabled(!state.isFormEnabled)
       .opacity(state.isFormEnabled ? 1 : Opacity.busy)
       .padding(.top, Spacing.s)
-      if let problem = state.passwordProblem {
-        Note(text: problem, tone: .attention)
-      } else {
-        WorkNoteLine(note: note)
-      }
+      WorkNoteLine(note: state.note)
       Note(
         text:
           "You log in to the helper with this password, now and after each restart. Atlas hands it to macOS and never keeps it."
@@ -42,7 +36,7 @@ struct CreateScreen: View {
 #if DEBUG
   #Preview("Create") {
     @Previewable @State var form = PreviewStates.onboardingForm
-    CreateScreen(state: PreviewStates.onboardingCreateScreen, note: .none, form: $form)
+    CreateScreen(state: PreviewStates.onboardingCreateScreen, form: $form)
       .onboardingSample()
   }
 #endif

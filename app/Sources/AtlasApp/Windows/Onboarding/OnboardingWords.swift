@@ -12,7 +12,7 @@ enum OnboardingWords {
   /// The first reading gave a reply that is not a status.
   static let notUnderstood = "Atlas gave an answer this window does not understand"
   /// While the account is made.
-  static let creating = "Creating the account… Confirm in the macOS dialog."
+  static let creating = "Creating the account…"
   /// While the chosen agents are connected.
   static let connecting = "Connecting your agents…"
   /// While Open at Login is set.

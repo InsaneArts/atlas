@@ -120,7 +120,7 @@ enum OnboardingPresenter {
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The work note.
-  private static func note(_ snapshot: OnboardingSnapshot) -> WorkNote {
+  static func note(_ snapshot: OnboardingSnapshot) -> WorkNote {
     if let working = snapshot.working { return .working(working) }
     if let problem = snapshot.problem { return .problem(problem) }
     return .none

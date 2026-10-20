@@ -309,16 +309,18 @@ struct OnboardingPresenterTests {
     #expect(unasked.tail == "Switch back to your own account.")
   }
 
-  @Test("a password problem replaces the work note on the form")
+  @Test("a password problem replaces the work note on the form, and the work note shows once the password is right")
   func passwordProblem() throws {
     var snapshot = Self.snapshot(try Self.person(nil), Self.choices(creating: true))
+    snapshot.problem = "The account could not be created."
     snapshot.form.password = "one"
     snapshot.form.verify = "two"
-    #expect(OnboardingPresenter.create(snapshot).passwordProblem == "The two passwords are different.")
+    #expect(OnboardingPresenter.create(snapshot).note == .problem("The two passwords are different."))
     snapshot.form.verify = "one"
-    #expect(OnboardingPresenter.create(snapshot).passwordProblem == nil)
-    snapshot.working = "Creating the account… Confirm in the macOS dialog."
+    #expect(OnboardingPresenter.create(snapshot).note == .problem("The account could not be created."))
+    snapshot.working = "Creating the account…"
     let working = OnboardingPresenter.create(snapshot)
+    #expect(working.note == .working("Creating the account…"))
     #expect(working.tail == "Confirm in the macOS dialog." && !working.isFormEnabled)
   }
 
