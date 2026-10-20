@@ -54,7 +54,7 @@ enum Command {
     /// Copy selected settings and files into the helper.
     #[command(
         args_conflicts_with_subcommands = true,
-        long_about = "Copy selected settings and files into the helper.\n\nPreview an explicit one-way snapshot into an existing hidden login. The TOML manifest lists [[files]] tables: source (absolute or relative to the manifest), target (ASCII relative path inside the helper home), and optional executable. Stop applications that write these selected settings before applying. Existing untracked differences and helper-side edits are conflicts; managed updates keep backups. This does not create accounts, copy logins, or synchronize running application databases."
+        long_about = "Copy selected settings and files into the helper.\n\nPreview a one-way copy into the helper. The TOML manifest lists [[files]] tables: source (absolute or relative to the manifest), target (an ASCII path inside the helper's home) and optional executable. Quit apps that write these files before applying. A different file already in the helper, or one changed there after Atlas copied it, is a conflict; a target inside, around or differing only in case from another, or from a file copied earlier, is refused. Rollback undoes it and deletes the copies Atlas kept for it. Accounts, sign-ins and running apps' databases are never copied."
     )]
     Environment {
         /// TOML manifest listing only the files to provision.
@@ -303,8 +303,9 @@ enum Command {
     ///
     /// The text is typed as given: a real newline or tab in it (in a shell,
     /// $'one\ntwo') or on standard input arrives as a line break or tab,
-    /// while the two characters \n are typed as they are. Long text is split
-    /// into batches without breaking characters.
+    /// while the two characters \n are typed as they are. Long text is typed
+    /// in parts without breaking characters, and Atlas keeps control until the
+    /// last part, so no other input lands in between.
     Type {
         /// The text to type.
         #[arg(required_unless_present = "stdin", allow_hyphen_values = true)]
@@ -327,8 +328,8 @@ enum Command {
     },
     /// List the helper's windows, front to back.
     ///
-    /// Document windows only, unless --all; with --app, that app's panels
-    /// and alerts as well.
+    /// Every app's windows, floating panels and alerts. --all adds menus,
+    /// the menu bar, the Dock and other system layers.
     Windows {
         /// Only windows of this app.
         #[arg(long)]
@@ -378,7 +379,7 @@ enum Command {
         /// Wait for the window to close instead.
         #[arg(long)]
         gone: bool,
-        /// Seconds.
+        /// Seconds, at most 86400 (a day).
         #[arg(long, default_value_t = 10, value_parser = wait_seconds)]
         timeout: u64,
     },
@@ -432,7 +433,7 @@ enum Command {
     },
     /// Update Atlas, checking its signature first.
     ///
-    /// Verifies the release's checksum and Developer ID signature, then moves the helper onto it.
+    /// Verifies the release's checksum, Developer ID signature and version, then moves the helper onto it.
     Update {
         /// Accept a signed release that is not notarized.
         #[arg(long)]

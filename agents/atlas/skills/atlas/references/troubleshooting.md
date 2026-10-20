@@ -39,7 +39,7 @@ its own failure is in `exitCode`.)
 | `platform` | Atlas runs on macOS only. | Stop. |
 | `port-in-use` | The viewer's port is taken by another program. | Tell the person; pass `--port` with a free port. |
 | `protocol` | A reply was malformed or too large. | Retry once; then `atlas doctor`. |
-| `restart` | Recovery did not confirm a new helper. | Run `atlas doctor`; tell the person if it is not ready. |
+| `restart` | Recovery did not confirm a new helper, or the helper stopped while `atlas run` ran (uncertain). | After `run`: take a screenshot, run `atlas restart`, and check what the command did before running it again. Otherwise run `atlas doctor`; tell the person if it is not ready. |
 | `session-changed` | The helper session or display changed during an action. | Observe again; the previous plan may no longer apply. |
 | `setup` | Setup was refused or is unfinished. | Show `error`; the person resumes with `atlas setup --apply` or `atlas init`. |
 | `spawn-failed` | The command, or what `open` was asked to open, could not be started in the helper. | Check the program or app path and that it exists in the helper. |

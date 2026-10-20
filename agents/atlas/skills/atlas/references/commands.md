@@ -240,7 +240,7 @@ Global options:
 ```text
 List the helper's windows, front to back.
 
-Document windows only, unless --all; with --app, that app's panels and alerts as well.
+Every app's windows, floating panels and alerts. --all adds menus, the menu bar, the Dock and other system layers.
 
 Usage: atlas windows [OPTIONS]
 
@@ -410,7 +410,7 @@ Examples:
 ```text
 Type text.
 
-The text is typed as given: a real newline or tab in it (in a shell, $'one\ntwo') or on standard input arrives as a line break or tab, while the two characters \n are typed as they are. Long text is split into batches without breaking characters.
+The text is typed as given: a real newline or tab in it (in a shell, $'one\ntwo') or on standard input arrives as a line break or tab, while the two characters \n are typed as they are. Long text is typed in parts without breaking characters, and Atlas keeps control until the last part, so no other input lands in between.
 
 Usage: atlas type [OPTIONS] [TEXT]
 
@@ -689,7 +689,7 @@ Options:
           Wait for the window to close instead
 
       --timeout <TIMEOUT>
-          Seconds
+          Seconds, at most 86400 (a day)
           
           [default: 10]
 
@@ -776,7 +776,7 @@ Examples:
 ```text
 Copy selected settings and files into the helper.
 
-Preview an explicit one-way snapshot into an existing hidden login. The TOML manifest lists [[files]] tables: source (absolute or relative to the manifest), target (ASCII relative path inside the helper home), and optional executable. Stop applications that write these selected settings before applying. Existing untracked differences and helper-side edits are conflicts; managed updates keep backups. This does not create accounts, copy logins, or synchronize running application databases.
+Preview a one-way copy into the helper. The TOML manifest lists [[files]] tables: source (absolute or relative to the manifest), target (an ASCII path inside the helper's home) and optional executable. Quit apps that write these files before applying. A different file already in the helper, or one changed there after Atlas copied it, is a conflict; a target inside, around or differing only in case from another, or from a file copied earlier, is refused. Rollback undoes it and deletes the copies Atlas kept for it. Accounts, sign-ins and running apps' databases are never copied.
 
 Usage: atlas environment [OPTIONS] [MANIFEST]
        atlas environment <COMMAND>
@@ -1103,7 +1103,7 @@ Global options:
 ```text
 Update Atlas, checking its signature first.
 
-Verifies the release's checksum and Developer ID signature, then moves the helper onto it.
+Verifies the release's checksum, Developer ID signature and version, then moves the helper onto it.
 
 Usage: atlas update [OPTIONS]
 

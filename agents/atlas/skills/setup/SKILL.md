@@ -34,6 +34,8 @@ curl -fsSL https://atlas.insanearts.io/install.sh | sh
 ```
 
 If it says Atlas has no public release yet, tell the person and stop here.
+If it says `~/.local/bin/atlas` is another program, tell the person: they move
+it aside, then run the installer again.
 Ask the person to run it themselves if they prefer.
 
 ## 3. Guided setup (the person does it)

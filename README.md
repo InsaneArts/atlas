@@ -109,8 +109,8 @@ and takes them away again:
 - **Menu bar:** what the agent is doing, a live thumbnail, Open Viewer and
   Recover.
 - **Viewer** (Open Viewer, or `atlas monitor`): the helper's screen in its own
-  window, with each action as it happens. **Control** takes the mouse and
-  keyboard; **Watch** or Control–Shift–Esc gives them back.
+  window, with each action as it happens. **Take Control** takes the mouse and
+  keyboard; **Give Back** or Control–Shift–Esc gives them back.
 
 ## Update and remove
 

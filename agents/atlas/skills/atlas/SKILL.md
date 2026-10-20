@@ -92,7 +92,8 @@ the Atlas menu bar item, or open the viewer window with `atlas monitor`.
 - `atlas apps` lists the running apps by name: the names `--app` takes. The
   ordinary apps are those with `policy: "regular"`; the rest are background
   processes.
-- `atlas windows [--app NAME]` lists windows front to back with bounds.
+- `atlas windows [--app NAME]` lists windows front to back with bounds,
+  alerts and floating panels included.
 - `atlas elements --app NAME [--role AXButton] [--name LABEL]` lists
   accessibility elements with roles, names, values and frames, including the
   items of a menu the app has open (`menu: true`, a checked one has `mark`)
@@ -116,7 +117,8 @@ screenshot pixels by multiplying by `pointsPerPixel`.
   is in front.
 - Otherwise `atlas click X Y [--button right] [--count 2] [--modifiers cmd]`.
 - `atlas type "text"` (or `--stdin` for long text; about 150 characters a
-  second, so put long text on the helper's pasteboard and paste it:
+  second, and other input waits until it is done, so put long text on the
+  helper's pasteboard and paste it:
   `atlas run -- /bin/sh -c 'printf %s "$1" | pbcopy' sh "TEXT"`, then
   `atlas key cmd+v`), `atlas key cmd+s`
   (`key escape return` presses several; `+` alone or `cmd++` is the plus key),
@@ -140,7 +142,8 @@ screenshot pixels by multiplying by `pointsPerPixel`.
   `outputUnfinished` means something the command started still held the
   output, so its end may be missing. `pid` is the command's process.
   A command is stopped after 20 seconds; `--timeout SECONDS` allows up to
-  600.
+  600. If the helper stops while it runs, it fails with the code `restart`,
+  uncertain.
   Atlas stays busy while it runs, so start anything longer in the background
   (`nohup … > "$HOME/run.log" 2>&1 &`) and read its log.
 
@@ -190,7 +193,8 @@ never ask the person to do it:
 3. `atlas environment MANIFEST` previews without changing anything. Read each
    file's `operation`: `conflict` means the helper already has a file Atlas
    did not put there, so stop and tell the person rather than working around
-   it. Keep the `planId`.
+   it. A target inside, around or differing only in case from a file copied
+   earlier is refused: roll that copy back first. Keep the `planId`.
 4. `atlas environment apply PLAN_ID` copies exactly what was previewed, as a
    one-time snapshot. Keep every `planId` you apply. If it stops partway
    (`resumeRequired`, with `pendingTargets`), run the same apply again to
@@ -214,7 +218,8 @@ you found it:
 2. `atlas environment rollback PLAN_ID --apply` for every copy you applied,
    newest first, and check each reply says `rolledBack`. Files you added are
    removed and replaced ones come back. If it reports a file changed in the
-   helper, leave it and tell the person. Without `--apply` it only previews:
+   helper, leave it and tell the person. A file a stopped copy never put in
+   place stays as the helper has it. Without `--apply` it only previews:
    `pendingTargets` lists what would be undone, and each file's `operation`
    still names what the copy did (`create` is undone by removing the file,
    the others by putting the earlier file back). Folders the copy made go
