@@ -9,6 +9,9 @@ extension ViewerController {
   /// The pause between the move to where scrolling happens and the scroll: 80 ms, so the app under the pointer sees
   /// the pointer arrive before the wheel turns.
   static let scrollSettle = 80
+  /// A wheel's pause this long ends its gesture: 500 ms, far longer than the gap between a slow wheel's notches, so
+  /// the fraction a slow turn gathers is kept. A trackpad says itself when a gesture begins.
+  static let newScrollAfter: Duration = .milliseconds(500)
 
   /// The display point under `location` in a view of `size`.
   ///
@@ -93,7 +96,8 @@ extension ViewerController {
   }
 
   /// Scrolling is gathered for a moment and sent as whole lines. A new gesture, one the trackpad says begins or one
-  /// after a pause longer than the gathering, drops the fraction of a line the last one left.
+  /// after a wheel's pause of ``newScrollAfter``, drops the fraction of a line the last one left. While a scroll
+  /// still waits to be sent, more lines gather here instead of queueing behind it.
   ///
   /// - Parameters:
   ///   - dx: AppKit's horizontal delta.
@@ -105,21 +109,23 @@ extension ViewerController {
   func scrolled(dx: Double, dy: Double, precise: Bool, began: Bool, at location: CGPoint, in size: CGSize) {
     guard canInput, let point = point(location, in: size) else { return }
     let now = clock()
-    let quiet = wheelHeardAt.map { Duration.seconds(now - $0) > Self.scrollGathering } ?? true
-    if began || quiet { wheel.beginGesture() }
+    let paused = wheelHeardAt.map { Duration.seconds(now - $0) > Self.newScrollAfter } ?? true
+    if began || (!precise && paused) { wheel.beginGesture() }
     wheelHeardAt = now
     wheel.add(dx: dx, dy: dy, precise: precise)
     wheelAt = point
     sendWheelSoon()
   }
 
-  /// Sends the gathered scrolling once the gathering ends, unless a send already waits.
+  /// Sends the gathered scrolling once the gathering ends, unless a send already waits; while a scroll batch is still
+  /// queued, it waits another gathering, so steady scrolling never piles batches up.
   private func sendWheelSoon() {
     guard wheelSending == nil else { return }
     wheelSending = Task { [weak self] in
       try? await Task.sleep(for: Self.scrollGathering)
       guard let self, !Task.isCancelled else { return }
       wheelSending = nil
+      if input.holdsScroll { return sendWheelSoon() }
       sendWheel()
     }
   }

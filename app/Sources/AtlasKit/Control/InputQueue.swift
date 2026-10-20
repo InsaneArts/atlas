@@ -21,6 +21,11 @@ package final class InputQueue {
   private(set) var pending: [Item] = []
   private var sending = false
 
+  /// Whether a batch that scrolls still waits to be sent.
+  package var holdsScroll: Bool {
+    pending.contains { item in item.actions.contains { $0.kind == "scroll" } }
+  }
+
   /// Creates a queue that owns no lease yet.
   package init() {}
 

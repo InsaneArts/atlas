@@ -40,6 +40,22 @@ struct InputQueueTests {
     sink.hold?.resume()
   }
 
+  @Test("a scroll waiting to be sent is known, so more scrolling gathers instead of queueing behind it")
+  func aWaitingScrollIsKnown() async throws {
+    let sink = RecordingSink()
+    sink.holdLease = "lease"
+    let queue = InputQueue()
+    queue.sink = sink
+    queue.activate("lease")
+    queue.enqueue([.key("a")], frame: "f")
+    try await settle("the batch was never sent") { sink.hold != nil }
+    #expect(!queue.holdsScroll)
+    queue.enqueue([.move(x: 1, y: 1), .scroll(x: 1, y: 1, dx: 0, dy: 3)], frame: "f")
+    #expect(queue.holdsScroll)
+    sink.hold?.resume()
+    try await settle("the scroll was never sent") { !queue.holdsScroll }
+  }
+
   @Test("more than the queue's limit waiting ends control")
   func limit() async throws {
     let sink = RecordingSink()

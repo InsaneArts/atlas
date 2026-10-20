@@ -73,21 +73,37 @@ struct ViewerControllerInputTests {
   }
 
   @Test(
-    "a scroll gesture the trackpad begins, or one after a pause, drops the fraction the last one left",
+    "a scroll gesture the trackpad begins, or a wheel's turn after a pause, drops the fraction the last one left",
     arguments: [true, false]
   )
-  func aNewScrollGestureDropsTheLastFraction(began: Bool) async throws {
+  func aNewScrollGestureDropsTheLastFraction(trackpad: Bool) async throws {
     let clock = TestClock()
     let service = ScriptedService()
     let viewer = try await ViewerController.watching(service, clock: clock.read)
     await viewer.takeControl()
     // A line and a half, then another: three lines in one gesture, two in two.
-    viewer.scrolled(dx: 0, dy: 15, precise: true, began: false, at: middle, in: size)
+    let half = trackpad ? 15.0 : 1.5
+    viewer.scrolled(dx: 0, dy: half, precise: trackpad, began: false, at: middle, in: size)
     try await settle("the first gesture was never sent") { service.actions.count == 1 }
-    if !began { clock.now += 1 }
-    viewer.scrolled(dx: 0, dy: 15, precise: true, began: began, at: middle, in: size)
+    if !trackpad { clock.now += 1 }
+    viewer.scrolled(dx: 0, dy: half, precise: trackpad, began: trackpad, at: middle, in: size)
     try await settle("the second gesture was never sent") { service.actions.count == 2 }
     #expect(service.actions.map(\.last) == [scroll(-1), scroll(-1)])
+    viewer.close()
+  }
+
+  @Test("a slow trackpad's fractions add up across pauses within one gesture")
+  func aSlowTrackpadsFractionsAddUp() async throws {
+    let clock = TestClock()
+    let service = ScriptedService()
+    let viewer = try await ViewerController.watching(service, clock: clock.read)
+    await viewer.takeControl()
+    viewer.scrolled(dx: 0, dy: 15, precise: true, began: true, at: middle, in: size)
+    try await settle("the first part was never sent") { service.actions.count == 1 }
+    clock.now += 1
+    viewer.scrolled(dx: 0, dy: 15, precise: true, began: false, at: middle, in: size)
+    try await settle("the second part was never sent") { service.actions.count == 2 }
+    #expect(service.actions.map(\.last) == [scroll(-1), scroll(-2)])
     viewer.close()
   }
 
