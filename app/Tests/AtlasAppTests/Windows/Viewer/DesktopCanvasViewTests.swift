@@ -12,9 +12,9 @@ struct DesktopCanvasViewTests {
   let none = NSRange(location: NSNotFound, length: 0)
 
   @Test("composed text shows until committed, then is typed")
-  func composedTextIsShownUntilCommittedThenTyped() async {
+  func composedTextIsShownUntilCommittedThenTyped() async throws {
     let service = ScriptedService()
-    let viewer = await ViewerController.watching(service)
+    let viewer = try await ViewerController.watching(service)
     await viewer.takeControl()
     let canvas = DesktopCanvasView()
     canvas.controller = viewer
@@ -27,14 +27,14 @@ struct DesktopCanvasViewTests {
     canvas.setMarkedText("n", selectedRange: NSRange(location: 1, length: 0), replacementRange: none)
     canvas.insertText("你", replacementRange: none)
     #expect(viewer.session.composing.isEmpty)
-    await settle { service.actions.count == 1 }
+    try await settle("the committed text was never sent") { service.actions.count == 1 }
     #expect(service.actions.first == [.type(text: "你")])
     viewer.close()
   }
 
   @Test("the canvas leaving ends a composition under way, and its chip goes once SwiftUI's update has finished")
-  func dismantlingEndsTheComposition() async {
-    let viewer = await ViewerController.watching(ScriptedService())
+  func dismantlingEndsTheComposition() async throws {
+    let viewer = try await ViewerController.watching(ScriptedService())
     await viewer.takeControl()
     let canvas = DesktopCanvasView()
     canvas.controller = viewer
@@ -42,7 +42,7 @@ struct DesktopCanvasViewTests {
     DesktopInput.dismantleNSView(canvas, coordinator: ())
     #expect(!canvas.hasMarkedText())
     #expect(viewer.session.composing == "ni", "nothing the window draws changes during the update")
-    await settle("the chip never went") { viewer.session.composing.isEmpty }
+    try await settle("the chip never went") { viewer.session.composing.isEmpty }
     viewer.close()
   }
 }

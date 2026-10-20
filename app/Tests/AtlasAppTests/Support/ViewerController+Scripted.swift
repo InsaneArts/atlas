@@ -1,5 +1,6 @@
 import AtlasKit
 import Foundation
+import Testing
 
 @testable import AtlasApp
 
@@ -44,17 +45,18 @@ extension ViewerController {
   ///   - heartbeat: One heartbeat tick.
   ///   - nap: The pause between readings.
   /// - Returns: The viewer, open and watching.
+  /// - Throws: The failed requirement, when the first picture never arrives.
   static func watching(
     _ service: ScriptedService,
     rate: Double = 0,
     clock: @escaping @MainActor () -> TimeInterval = { 0 },
     heartbeat: Duration = ViewerController.heartbeatEvery,
     nap: @escaping @Sendable (Duration) async -> Void = ViewerController.sleep
-  ) async -> ViewerController {
+  ) async throws -> ViewerController {
     service.picture = png()
     let viewer = scripted(service, rate: rate, clock: clock, heartbeat: heartbeat, nap: nap)
     viewer.setVisible(true)
-    await settle("the first picture never arrived") { viewer.reading.frame != nil }
+    try await settle("the first picture never arrived") { viewer.reading.frame != nil }
     return viewer
   }
 }

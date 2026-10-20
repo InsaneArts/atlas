@@ -11,8 +11,8 @@ import os
 @Suite("ViewerController")
 struct ViewerControllerTests {
   @Test("a reading shows the status and the picture, and control can be taken")
-  func aReadingShowsTheStatusAndThePicture() async {
-    let viewer = await ViewerController.watching(ScriptedService())
+  func aReadingShowsTheStatusAndThePicture() async throws {
+    let viewer = try await ViewerController.watching(ScriptedService())
     #expect(viewer.reading.frame != nil)
     #expect(viewer.reading.picture != nil)
     #expect(viewer.reading.ready)
@@ -31,42 +31,42 @@ struct ViewerControllerTests {
     #expect(viewer.reading.picture != nil)
     #expect(!viewer.snapshot.canTakeControl, "a picture from the panel names no frame")
     viewer.setVisible(true)
-    await settle { viewer.reading.frame != nil }
+    try await settle("the window's own first picture never arrived") { viewer.reading.frame != nil }
     #expect(viewer.snapshot.canTakeControl)
     viewer.close()
   }
 
   @Test("pausing drops a reading under way, and resuming reads once")
-  func pausingDropsAReadingStillUnderWayAndResumingReadsOnce() async {
+  func pausingDropsAReadingStillUnderWayAndResumingReadsOnce() async throws {
     let service = ScriptedService()
     service.hold = ["status"]
     service.picture = png()
     let viewer = ViewerController.scripted(service)
     viewer.setVisible(true)
-    await settle { service.held["status"] != nil }
+    try await settle("the first reading never started") { service.held["status"] != nil }
     viewer.togglePause()
     viewer.togglePause()
     viewer.togglePause()
     service.resume("status")
-    await settle { service.answered == 1 }
+    try await settle("the held reading never ended") { service.answered == 1 }
     #expect(viewer.reading.frame == nil, "the paused window shows no late picture")
     #expect(viewer.session.paused)
     viewer.togglePause()
-    await settle { viewer.reading.frame != nil }
+    try await settle("no picture arrived after resuming") { viewer.reading.frame != nil }
     viewer.close()
   }
 
   @Test("a failure that arrives late never overwrites a paused viewer")
-  func aLateFailureCannotOverwriteAPausedViewer() async {
+  func aLateFailureCannotOverwriteAPausedViewer() async throws {
     let service = ScriptedService()
     service.hold = ["status"]
     service.fail = ["status"]
     let viewer = ViewerController.scripted(service)
     viewer.setVisible(true)
-    await settle { service.held["status"] != nil }
+    try await settle("the first reading never started") { service.held["status"] != nil }
     viewer.togglePause()
     service.resume("status")
-    await settle { service.answered == 1 }
+    try await settle("the held reading never ended") { service.answered == 1 }
     #expect(viewer.reading.unavailable == nil)
     viewer.close()
   }
@@ -79,30 +79,30 @@ struct ViewerControllerTests {
     ]
     let viewer = ViewerController.scripted(service)
     viewer.setVisible(true)
-    await settle { viewer.reading.unavailable != nil }
+    try await settle("the picture was never found unavailable") { viewer.reading.unavailable != nil }
     #expect(viewer.reading.unavailable == viewer.reading.status.unobservableReason)
     #expect(viewer.reading.frame == nil)
     viewer.close()
   }
 
   @Test("a picture that does not decode reads as a screen of unknown size")
-  func anUndecodablePictureIsUnknownSize() async {
+  func anUndecodablePictureIsUnknownSize() async throws {
     let service = ScriptedService()
     service.picture = Data("not a png".utf8)
     let viewer = ViewerController.scripted(service)
     viewer.setVisible(true)
-    await settle { viewer.reading.unavailable != nil }
+    try await settle("the picture was never found unavailable") { viewer.reading.unavailable != nil }
     #expect(viewer.reading.unavailable == ServiceError.unknownScreenSize.message)
     viewer.close()
   }
 
   @Test("recovering clears a recovery set aside and says the helper was recovered")
-  func recoveringSaysSo() async {
+  func recoveringSaysSo() async throws {
     let service = ScriptedService()
     service.reply = [
       "ready": true, "canObserve": true, "overview": ["mode": "recovering", "reason": "Unknown outcome"],
     ]
-    let viewer = await ViewerController.watching(service)
+    let viewer = try await ViewerController.watching(service)
     viewer.recoverLater()
     #expect(viewer.snapshot.recovery == .setAside)
     await viewer.recover()
@@ -113,12 +113,12 @@ struct ViewerControllerTests {
   }
 
   @Test("a recovery set aside is forgotten once nothing needs it, so a later one alerts again")
-  func aRecoverySetAsideIsForgotten() async {
+  func aRecoverySetAsideIsForgotten() async throws {
     let service = ScriptedService()
     service.reply = [
       "ready": true, "canObserve": true, "overview": ["mode": "recovering", "reason": "Unknown outcome"],
     ]
-    let viewer = await ViewerController.watching(service)
+    let viewer = try await ViewerController.watching(service)
     viewer.recoverLater()
     service.reply = ["ready": true, "canObserve": true, "overview": ["mode": "observing"]]
     await viewer.readStatus()
@@ -127,12 +127,12 @@ struct ViewerControllerTests {
   }
 
   @Test("Not Now dismisses the recovery alert at once, not at the next reading")
-  func notNowDismissesAtOnce() async {
+  func notNowDismissesAtOnce() async throws {
     let service = ScriptedService()
     service.reply = [
       "ready": true, "canObserve": true, "overview": ["mode": "recovering", "reason": "Unknown outcome"],
     ]
-    let viewer = await ViewerController.watching(service)
+    let viewer = try await ViewerController.watching(service)
     let redrawn = OSAllocatedUnfairLock(initialState: false)
     withObservationTracking {
       _ = viewer.state.recovery
@@ -145,9 +145,9 @@ struct ViewerControllerTests {
   }
 
   @Test("the clock's tick moves the picture's age in the status line, and redraws nothing else")
-  func theTickRedrawsTheStatusLineAlone() async {
+  func theTickRedrawsTheStatusLineAlone() async throws {
     let clock = TestClock()
-    let viewer = await ViewerController.watching(ScriptedService(), clock: clock.read)
+    let viewer = try await ViewerController.watching(ScriptedService(), clock: clock.read)
     let window = OSAllocatedUnfairLock(initialState: false)
     let line = OSAllocatedUnfairLock(initialState: false)
     withObservationTracking {
