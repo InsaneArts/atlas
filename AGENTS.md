@@ -21,6 +21,12 @@
 - Run cargo fmt --all --check, cargo clippy --all-targets -- -D warnings,
   cargo test, npm run format:check and npm test after relevant changes; in
   app/, swift test and swift format lint -rs Sources Tests (Swift 6 mode).
+- Write app/ Swift as ../jolt-v2's chapters 13 and 14 say. AtlasKit holds rules
+  and the service client; AtlasUI holds the design system, components, each
+  window's state and events, views and previews, and never imports AtlasKit;
+  AtlasApp holds the AppKit shells, one controller and presenter per window.
+  A view draws its state and sends events. Use tokens, never literal sizes;
+  one type per file; one chained call per line; sentence-named tests.
 - Unit checks are not desktop evidence. Exercise changed input behavior against
   the real helper and distinguish native windows/dialogs from custom test views.
 - Coordinate physical lock, sleep and user-switch transitions with the person.
