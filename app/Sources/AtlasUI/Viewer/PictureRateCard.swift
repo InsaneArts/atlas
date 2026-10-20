@@ -17,7 +17,7 @@ struct PictureRateCard: View {
           .font(Typography.font(.body))
           .foregroundStyle(Color.textSecondary)
       } control: {
-        Picker("Refresh", selection: Binding(get: { rate }, set: pick)) {
+        Picker("Refresh", selection: Binding(get: { rate }, set: { pick($0) })) {
           ForEach(ViewerPictureRate.allCases, id: \.self) { rate in
             Text(rate.title)
               .tag(rate)
