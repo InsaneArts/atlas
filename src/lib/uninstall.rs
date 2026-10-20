@@ -140,7 +140,7 @@ pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Val
         stop_helper(client, &executable, &mut removed, &mut warnings).await?;
     }
 
-    stop_menubar(client.as_ref());
+    stop_menubar(client.as_ref(), &data);
     disconnect(&executable, &mut removed, &mut warnings)?;
     trash(&app, &leftovers, &mut removed)?;
     remove_settings(config_path, keep_config, &data, &mut removed)?;
@@ -270,8 +270,23 @@ fn confirm(found: &Found, config_path: &Path, keep_config: bool) -> Result<()> {
     Ok(())
 }
 
+/// Why the helper cannot settle an action whose outcome is unknown: its
+/// account is gone, or Atlas does not answer there. None when it answers.
+fn cannot_settle(account_exists: bool, status: &Value) -> Option<&'static str> {
+    if !account_exists {
+        Some("the helper account no longer exists")
+    } else if !status["daemon"]["pid"].is_number() {
+        Some("the helper is not answering")
+    } else {
+        None
+    }
+}
+
 /// Stop input and the helper's job, and remove the shared command.
-/// Nothing may be controlling the helper while its job goes away.
+/// Nothing may be controlling the helper while its job goes away. An
+/// action whose outcome is unknown must be settled first (atlas restart),
+/// unless the helper cannot settle it: retiring its job then replays
+/// nothing, and the report says so.
 async fn stop_helper(
     client: &Client,
     executable: &Path,
@@ -279,9 +294,21 @@ async fn stop_helper(
     warnings: &mut Vec<String>,
 ) -> Result<()> {
     let config = &client.config;
-    let _exclusion = client.controller.acquire(false)?;
+    let exists = setup::account_with_uid(config.helper_uid)?.is_some();
+    let status = client.status().await;
+    let cannot_settle = cannot_settle(exists, &status);
+    let _exclusion = client.controller.acquire(cannot_settle.is_some())?;
 
-    if let Some(pid) = client.status().await["inputService"]["pid"]
+    if let Some(why) = cannot_settle
+        && client.controller.require_known().is_err()
+    {
+        skipped("Last action", &format!("outcome unknown; {why}"));
+        warnings.push(format!(
+            "The last action's outcome is unknown and {why}, so it was not checked"
+        ));
+    }
+
+    if let Some(pid) = status["inputService"]["pid"]
         .as_u64()
         .and_then(|pid| u32::try_from(pid).ok())
     {
@@ -307,14 +334,26 @@ async fn stop_helper(
     Ok(())
 }
 
-/// Stop a running menu bar and its opening at login.
-fn stop_menubar(client: Option<&Client>) {
+/// Stop a running menu bar and its opening at login. Turning it off here is
+/// not the person's choice: unless they had turned it off themselves, the
+/// record of a choice goes, so setting Atlas up again turns it on again
+/// (settings kept with --keep-config keep that record otherwise).
+fn stop_menubar(client: Option<&Client>, data: &Path) {
     let stopped = client
         .and_then(|client| client.output_dir().ok().map(Path::to_path_buf))
         .and_then(|output| crate::menubar::stop(&output))
         .is_some();
+
+    let decided = crate::menubar::login_decided();
+    let enabled = crate::menubar::set_login(crate::menubar::Login::Status)
+        .ok()
+        .and_then(|reply| reply["enabled"].as_bool());
     let login_off = crate::menubar::set_login(crate::menubar::Login::Off)
         .is_ok_and(|reply| reply["ok"] == true);
+
+    if login_off && !keeps_login_choice(decided, enabled) {
+        let _ = fs::remove_file(data.join(LOGIN_RECORD));
+    }
 
     let said = match (stopped, login_off) {
         (true, true) => "stopped and no longer opens at login",
@@ -325,8 +364,18 @@ fn stop_menubar(client: Option<&Client>) {
     done("Menu bar", said);
 }
 
-/// Agents forget the plugin (only connected ones change), and `atlas`
-/// leaves the terminal.
+/// Where the menu bar remembers that Open at Login was decided, in the
+/// data folder (see `menubar::login_decided`).
+const LOGIN_RECORD: &str = "menubar-login";
+
+/// Whether the record of an Open at Login choice stays once uninstall turns
+/// it off: only when the person had decided it, and decided off.
+fn keeps_login_choice(decided: bool, enabled: Option<bool>) -> bool {
+    decided && enabled == Some(false)
+}
+
+/// Agents forget the plugin (only those using a marketplace of Atlas's
+/// own change), and `atlas` leaves the terminal.
 fn disconnect(
     executable: &Path,
     removed: &mut Vec<Value>,
@@ -334,9 +383,17 @@ fn disconnect(
 ) -> Result<()> {
     // An error here means no agent is installed, so there is nothing to remove.
     if let Ok(reply) = crate::agents::change(&[], true) {
+        let changed = reply["agents"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|agent| agent["changed"] == true);
+
         if reply["ok"] == true {
-            removed.push(json!("agent plugins"));
-            done("Agent plugins", "removed");
+            if changed {
+                removed.push(json!("agent plugins"));
+                done("Agent plugins", "removed");
+            }
         } else {
             let failed = failed_agents(&reply);
             skipped(
@@ -505,5 +562,36 @@ mod tests {
         assert!(!remove_own_file(dir.path()).unwrap(), "only a file");
         // A file another account owns (here root's) stays.
         assert!(!remove_own_file(Path::new("/etc/hosts")).unwrap());
+    }
+
+    /// An unknown outcome blocks uninstall only while the helper can
+    /// settle it: its account exists and Atlas answers there.
+    #[test]
+    fn only_a_helper_that_answers_must_settle_an_unknown_outcome() {
+        let answering = json!({"daemon": {"pid": 123}});
+        let silent = json!({"ok": false, "error": "not answering"});
+        assert_eq!(cannot_settle(true, &answering), None);
+        assert_eq!(
+            cannot_settle(true, &silent),
+            Some("the helper is not answering")
+        );
+        assert_eq!(
+            cannot_settle(false, &answering),
+            Some("the helper account no longer exists")
+        );
+    }
+
+    /// Uninstall's own "off" is never kept as the person's choice; one
+    /// they made to turn it off is.
+    #[test]
+    fn only_a_choice_to_keep_it_off_survives_uninstall() {
+        assert!(keeps_login_choice(true, Some(false)));
+        assert!(!keeps_login_choice(true, Some(true)), "it was on");
+        assert!(!keeps_login_choice(false, Some(false)), "never decided");
+        assert!(!keeps_login_choice(false, None));
+        assert!(
+            !keeps_login_choice(true, None),
+            "unknown: setup decides again"
+        );
     }
 }

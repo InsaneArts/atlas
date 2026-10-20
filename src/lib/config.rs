@@ -263,12 +263,19 @@ pub(crate) fn write_beside(
 }
 
 /// Replace `path` with `bytes` in one rename, so readers see the old file
-/// or the new one, never part of either.
+/// or the new one, never part of either. The file gets exactly `mode`:
+/// the umask would otherwise narrow it, and a file shared with the helper
+/// (such as the onboarding request) must stay readable there.
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
     write_beside(
         path,
         mode,
-        |file| Ok(file.write_all(bytes)?),
+        |file| {
+            file.set_permissions(fs::Permissions::from_mode(mode))?;
+            Ok(file.write_all(bytes)?)
+        },
         |temporary| Ok(fs::rename(temporary, path)?),
     )
 }
@@ -358,5 +365,24 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), b"second");
         let entries = fs::read_dir(path.parent().unwrap()).unwrap().count();
         assert_eq!(entries, 1, "no temporary file is left behind");
+    }
+
+    /// The umask (022 at least, in tests) never narrows the mode asked for.
+    #[test]
+    fn atomic_writes_get_exactly_the_mode_asked_for() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shared.json");
+        let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+
+        write_atomic(&path, b"{}", 0o666).unwrap();
+        assert_eq!(mode(&path), 0o666);
+
+        write_atomic(&path, b"{}", 0o644).unwrap();
+        assert_eq!(mode(&path), 0o644);
+
+        write_atomic(&path, b"{}", 0o600).unwrap();
+        assert_eq!(mode(&path), 0o600, "a private file stays private");
     }
 }

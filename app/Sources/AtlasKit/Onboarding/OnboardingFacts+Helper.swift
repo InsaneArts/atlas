@@ -11,7 +11,7 @@ extension OnboardingFacts {
     package var administrator: Bool?
     /// Whether macOS still runs a session of a deleted account with its user ID.
     package var leftoverSession = false
-    /// This account's request names this helper.
+    /// This account asked this helper: its request names it, or a setup with it is recorded.
     package var paired = false
     /// Whether it is logged in.
     package var signedIn = false

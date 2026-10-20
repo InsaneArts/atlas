@@ -682,15 +682,22 @@ fn main() -> ExitCode {
     let view = view(&command);
 
     // Commands that ask questions or wait for the person stop cleanly on
-    // Ctrl-C, saying what that means for each.
+    // Ctrl-C, saying what that means for each. Those that run agent tools
+    // (each in a process group of its own) stop them whenever they are
+    // stopped, a person watching or not.
     let interrupted = match command {
         Command::Init => Some("Stopped. Run atlas init again to continue."),
-        Command::Switch { .. } | Command::Uninstall { .. } | Command::Logout { .. } => {
-            Some("Stopped.")
-        }
+        Command::Switch { .. }
+        | Command::Uninstall { .. }
+        | Command::Logout { .. }
+        | Command::Agents { .. } => Some("Stopped."),
         Command::Update { .. } => Some("Stopped. Run atlas update again to finish."),
         _ => None,
     };
+    let runs_agents = matches!(
+        command,
+        Command::Init | Command::Uninstall { .. } | Command::Agents { .. } | Command::UpdateFinish
+    );
 
     let result = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -699,7 +706,8 @@ fn main() -> ExitCode {
         .map_err(Error::from)
         .and_then(|runtime| {
             runtime.block_on(async {
-                if let Some(message) = interrupted.filter(|_| ui::interactive()) {
+                let message = interrupted.filter(|_| ui::interactive());
+                if message.is_some() || runs_agents {
                     stop_cleanly_on_interrupt(message);
                 }
                 execute(config.clone(), command).await
@@ -951,19 +959,39 @@ fn print(text: &str) {
 }
 
 /// Ctrl-C during a question or a wait puts the cursor back and says how to
-/// resume, instead of leaving a half-drawn line. A question Ctrl-C ends
-/// (`ui::prompt`) waits a second for this to print and exit, so the person
-/// sees one message; change the two together.
-fn stop_cleanly_on_interrupt(message: &'static str) {
+/// resume (`message`, when a person is asked), instead of leaving a
+/// half-drawn line. A question Ctrl-C ends (`ui::prompt`) waits a second
+/// for this to print and exit, so the person sees one message; change the
+/// two together. Being told to stop (SIGTERM) or losing the terminal
+/// (SIGHUP) stops the same way, without a message.
+fn stop_cleanly_on_interrupt(message: Option<&'static str>) {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let (Ok(mut terminate), Ok(mut hangup)) = (
+        signal(SignalKind::terminate()),
+        signal(SignalKind::hangup()),
+    ) else {
+        return;
+    };
+
     tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            // An agent tool Atlas started in its own process group does not
-            // see the terminal's Ctrl-C: stop it too, before saying stopped.
-            atlas::agents::stop_running();
+        let (code, said) = tokio::select! {
+            Ok(()) = tokio::signal::ctrl_c() => (130, message),
+            Some(()) = terminate.recv() => (143, None),
+            Some(()) = hangup.recv() => (129, None),
+            else => return,
+        };
+
+        // An agent tool Atlas started in its own process group does not see
+        // the terminal's Ctrl-C: stop it too, before saying stopped.
+        atlas::agents::stop_running();
+
+        if let Some(message) = said {
             let _ = console::Term::stderr().show_cursor();
             eprintln!("\n{} {message}", style::unknown());
-            std::process::exit(130);
         }
+
+        std::process::exit(code);
     });
 }
 

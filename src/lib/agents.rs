@@ -21,6 +21,9 @@ use std::{
 const NAME: &str = "atlas";
 /// The plugin as both agents name it: `NAME@NAME`, the plugin in its marketplace.
 const PLUGIN: &str = "atlas@atlas";
+/// The homepage Atlas's plugin manifests give, which marks a marketplace
+/// folder as Atlas's own wherever it is.
+const HOMEPAGE: &str = "https://github.com/InsaneArts/atlas";
 
 /// How long a question to an agent's tool may take, and a change to it.
 const ASK: Duration = Duration::from_secs(10);
@@ -76,6 +79,41 @@ impl Agent {
         }
     }
 
+    /// The argv that connect it to `marketplace`, given where its atlas
+    /// marketplace comes from now (unknown when `None`). One from another
+    /// folder of Atlas's own gives way first (Codex refuses to add over it;
+    /// Claude Code replaces it itself); anyone else's is never touched.
+    fn connecting(self, marketplace: &Path, now: Option<&Source>) -> Result<Vec<Vec<String>>> {
+        let mut steps = Vec::new();
+
+        match now {
+            Some(Source::Folder(folder)) if same_folder(folder, marketplace) => {}
+            Some(Source::Folder(folder)) if atlas_folder(folder) => {
+                if self == Agent::Codex {
+                    steps.push(argv(&["plugin", "marketplace", "remove", NAME]));
+                }
+            }
+            Some(Source::Folder(folder)) => {
+                return Err(self.another(&folder.display().to_string()));
+            }
+            Some(Source::Elsewhere(place)) => return Err(self.another(place)),
+            Some(Source::Absent) | None => {}
+        }
+
+        steps.extend(self.connect(marketplace));
+        Ok(steps)
+    }
+
+    /// Its marketplace named atlas is someone else's, from `place`.
+    fn another(self, place: &str) -> Error {
+        problem(format!(
+            "{} has another marketplace named atlas, from {place}. Remove it with {} plugin \
+             marketplace remove atlas, then connect again",
+            self.display_name(),
+            self.name()
+        ))
+    }
+
     /// The argv that disconnect it.
     fn disconnect(self) -> Vec<Vec<String>> {
         match self {
@@ -113,9 +151,25 @@ impl Agent {
         }
     }
 
-    /// Whether the Atlas plugin is installed in this agent (unknown when
-    /// its list cannot be read); an error when it does not answer.
+    /// Whether this agent uses the Atlas plugin from this Atlas's own
+    /// marketplace (unknown when its lists cannot be read); an error when it
+    /// does not answer.
     fn connected(self) -> std::result::Result<Option<bool>, String> {
+        match self.installed()? {
+            Some(true) => {}
+            other => return Ok(other),
+        }
+
+        Ok(self.source()?.map(|source| match source {
+            Source::Folder(folder) => this_atlas(&folder),
+            Source::Absent | Source::Elsewhere(_) => false,
+        }))
+    }
+
+    /// Whether the Atlas plugin is installed in this agent, from whichever
+    /// marketplace (unknown when its list cannot be read); an error when it
+    /// does not answer.
+    fn installed(self) -> std::result::Result<Option<bool>, String> {
         // Codex's whole list asks its remote marketplaces too, which can
         // take longer than ASK; Atlas's own marketplace answers at once.
         let list: &[&str] = match self {
@@ -145,6 +199,103 @@ impl Agent {
             id == Some(PLUGIN) || plugin["name"] == NAME
         }))
     }
+
+    /// Where its marketplace named atlas comes from (unknown when its list
+    /// cannot be read); an error when it does not answer.
+    fn source(self) -> std::result::Result<Option<Source>, String> {
+        match exec(self, &["plugin", "marketplace", "list", "--json"], ASK) {
+            Ok(output) => Ok(self.source_in(&output.stdout)),
+            Err(error) if error.code == "agents" => Err(error.error),
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// Where the marketplace named atlas comes from, in the marketplace list
+    /// this agent printed.
+    fn source_in(self, stdout: &[u8]) -> Option<Source> {
+        let list: Value = serde_json::from_slice(stdout).ok()?;
+        let marketplaces = match self {
+            Agent::Claude => list.as_array(),
+            Agent::Codex => list["marketplaces"].as_array(),
+        }?;
+
+        let Some(found) = marketplaces.iter().find(|entry| entry["name"] == NAME) else {
+            return Some(Source::Absent);
+        };
+
+        // Claude Code: {"source": "directory", "path": …}, or a repository
+        // or URL. Codex: {"marketplaceSource": {"sourceType": "local", "source": …}}.
+        let (kind, place) = match self {
+            Agent::Claude => (
+                found["source"].as_str(),
+                ["path", "repo", "url"]
+                    .into_iter()
+                    .find_map(|key| found[key].as_str()),
+            ),
+            Agent::Codex => (
+                found["marketplaceSource"]["sourceType"].as_str(),
+                found["marketplaceSource"]["source"].as_str(),
+            ),
+        };
+
+        Some(match (kind, place) {
+            (Some("directory" | "local"), Some(folder)) => Source::Folder(PathBuf::from(folder)),
+            (_, place) => Source::Elsewhere(place.unwrap_or("somewhere else").to_owned()),
+        })
+    }
+}
+
+/// Where an agent's marketplace named atlas comes from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Source {
+    /// It has none.
+    Absent,
+    /// A folder on this Mac.
+    Folder(PathBuf),
+    /// Somewhere else, such as a Git repository.
+    Elsewhere(String),
+}
+
+/// Whether `a` and `b` are the same folder, links resolved when they exist.
+fn same_folder(a: &Path, b: &Path) -> bool {
+    match (fs::canonicalize(a), fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
+/// Whether `folder` is this Atlas's marketplace, or (when this Atlas
+/// carries none) a marketplace of Atlas's own.
+fn this_atlas(folder: &Path) -> bool {
+    match marketplace() {
+        Ok(ours) => same_folder(folder, &ours),
+        Err(_) => atlas_folder(folder),
+    }
+}
+
+/// Whether `folder` is a marketplace of Atlas's own: this Atlas's, one
+/// inside an Atlas.app (even one since removed), or a checkout's, whose
+/// plugin manifest gives Atlas's homepage.
+fn atlas_folder(folder: &Path) -> bool {
+    if marketplace().is_ok_and(|ours| same_folder(folder, &ours)) {
+        return true;
+    }
+
+    let in_app = folder.ends_with("Contents/Resources/agents")
+        && folder
+            .ancestors()
+            .nth(3)
+            .and_then(Path::file_name)
+            .is_some_and(|name| name == "Atlas.app");
+    if in_app {
+        return true;
+    }
+
+    [".claude-plugin/plugin.json", ".codex-plugin/plugin.json"]
+        .iter()
+        .filter_map(|manifest| fs::read(folder.join(NAME).join(manifest)).ok())
+        .filter_map(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .any(|manifest| manifest["name"] == NAME && manifest["homepage"] == HOMEPAGE)
 }
 
 /// One argv of owned words.
@@ -326,12 +477,19 @@ fn install_places() -> Vec<PathBuf> {
 }
 
 /// The PATH the person's shell sets up, asked once and for a few seconds
-/// at most; nothing when the shell does not answer.
+/// at most; nothing when the shell does not answer. Never asked from a
+/// terminal: Atlas then has the shell's PATH already, and an interactive
+/// shell started there in a process group of its own would be stopped
+/// for reading the terminal (SIGTTIN) until the time ran out.
 fn shell_path() -> &'static [PathBuf] {
     static SHELL_PATH: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
 
     SHELL_PATH.get_or_init(|| {
         use std::os::unix::process::CommandExt;
+
+        if from_terminal() {
+            return Vec::new();
+        }
 
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_owned());
         // An interactive shell may print other things: the answer is marked.
@@ -369,6 +527,12 @@ fn shell_path() -> &'static [PathBuf] {
         // Atlas waiting.
         marked_path(&String::from_utf8_lossy(&take(output)))
     })
+}
+
+/// Whether Atlas has a controlling terminal: it was started from a shell
+/// (its output may still go elsewhere). Only opened, never read.
+fn from_terminal() -> bool {
+    fs::File::open("/dev/tty").is_ok()
 }
 
 /// The PATH between the markers in a shell's output, split into places.
@@ -520,6 +684,9 @@ fn probe(agent: Agent) -> Value {
 }
 
 /// Connect (or `remove` from) the chosen agents, or every installed one.
+/// Only a marketplace named atlas that is Atlas's own is replaced or
+/// removed; an agent whose is someone else's is refused when connecting and
+/// left alone when removing.
 pub fn change(chosen: &[Agent], remove: bool) -> Result<Value> {
     let marketplace = if remove { None } else { Some(marketplace()?) };
 
@@ -555,34 +722,65 @@ pub fn change(chosen: &[Agent], remove: bool) -> Result<Value> {
             }
         }
 
+        // Where its marketplace named atlas comes from now decides what may
+        // change: never one that is someone else's.
+        let source = agent.source();
+
         let outcome = match &marketplace {
             // Connecting stops at a failure.
             Some(path) => agent
-                .connect(path)
-                .iter()
-                .map(|argv| run(agent, argv))
-                .find(Result::is_err)
-                .unwrap_or(Ok(())),
-            // Removing runs every step, tolerating parts already gone, then
-            // checks the plugin is gone.
-            None => {
-                let failures = agent
-                    .disconnect()
-                    .iter()
-                    .filter_map(|argv| run(agent, argv).err())
-                    .collect();
-                removed(agent, failures, agent.connected())
-            }
+                .connecting(path, source.as_ref().ok().and_then(Option::as_ref))
+                .and_then(|steps| {
+                    steps
+                        .iter()
+                        .map(|argv| run(agent, argv))
+                        .find(Result::is_err)
+                        .unwrap_or(Ok(()))
+                })
+                .map(|()| true),
+            None => disconnecting(agent, source),
         };
 
         results.push(match outcome {
-            Ok(()) => json!({"agent": agent.name(), "ok": true, "connected": !remove}),
+            Ok(changed) => json!({
+                "agent": agent.name(),
+                "ok": true,
+                "connected": !remove,
+                "changed": changed,
+            }),
             Err(error) => json!({"agent": agent.name(), "ok": false, "error": error.error}),
         });
     }
 
     let ok = results.iter().all(|result| result["ok"] == true);
     Ok(json!({"ok": ok, "agents": results}))
+}
+
+/// Disconnect `agent` when its marketplace named atlas (from `source`) is
+/// Atlas's own: every step runs, tolerating parts already gone, then the
+/// plugin must be gone. Whether anything changed.
+fn disconnecting(
+    agent: Agent,
+    source: std::result::Result<Option<Source>, String>,
+) -> Result<bool> {
+    match source.map_err(problem)? {
+        Some(Source::Folder(folder)) if atlas_folder(&folder) => {}
+        Some(_) => return Ok(false),
+        None => {
+            return Err(problem(format!(
+                "{}'s marketplaces could not be read",
+                agent.display_name()
+            )));
+        }
+    }
+
+    let failures = agent
+        .disconnect()
+        .iter()
+        .filter_map(|argv| run(agent, argv).err())
+        .collect();
+
+    removed(agent, failures, agent.installed()).map(|()| true)
 }
 
 /// Whether removing from `agent` worked, from the steps that failed and
@@ -1047,6 +1245,139 @@ mod tests {
             Agent::Claude.disconnect()[1],
             ["plugin", "marketplace", "remove", "atlas"]
         );
+    }
+
+    #[test]
+    fn the_marketplace_source_is_read_from_each_agents_list() {
+        let claude = br#"[{"name":"other","source":"github","repo":"o/r"},
+            {"name":"atlas","source":"directory","path":"/a/agents","installLocation":"/a/agents"}]"#;
+        assert_eq!(
+            Agent::Claude.source_in(claude),
+            Some(Source::Folder("/a/agents".into()))
+        );
+        let repository = br#"[{"name":"atlas","source":"github","repo":"someone/atlas"}]"#;
+        assert_eq!(
+            Agent::Claude.source_in(repository),
+            Some(Source::Elsewhere("someone/atlas".into()))
+        );
+        assert_eq!(Agent::Claude.source_in(b"[]"), Some(Source::Absent));
+
+        let codex = br#"{"marketplaces":[{"name":"atlas","root":"/a/agents",
+            "marketplaceSource":{"sourceType":"local","source":"/a/agents"}}]}"#;
+        assert_eq!(
+            Agent::Codex.source_in(codex),
+            Some(Source::Folder("/a/agents".into()))
+        );
+        let git = br#"{"marketplaces":[{"name":"atlas","root":"/cache",
+            "marketplaceSource":{"sourceType":"git","source":"https://example.com/atlas.git"}}]}"#;
+        assert_eq!(
+            Agent::Codex.source_in(git),
+            Some(Source::Elsewhere("https://example.com/atlas.git".into()))
+        );
+        assert_eq!(
+            Agent::Codex.source_in(br#"{"marketplaces":[]}"#),
+            Some(Source::Absent)
+        );
+        assert_eq!(Agent::Codex.source_in(claude), None, "not Codex's shape");
+        assert_eq!(Agent::Claude.source_in(b"not json"), None);
+    }
+
+    #[test]
+    fn only_atlas_own_folders_count_as_its_marketplace() {
+        let dir = tempfile::tempdir().unwrap();
+        let checkout = dir.path().join("checkout/agents");
+        let manifest = checkout.join("atlas/.claude-plugin");
+        fs::create_dir_all(&manifest).unwrap();
+        fs::write(
+            manifest.join("plugin.json"),
+            format!(r#"{{"name":"atlas","homepage":"{HOMEPAGE}"}}"#),
+        )
+        .unwrap();
+        assert!(atlas_folder(&checkout), "a checkout's, by its homepage");
+
+        let someone = dir.path().join("someone/agents");
+        let manifest = someone.join("atlas/.claude-plugin");
+        fs::create_dir_all(&manifest).unwrap();
+        fs::write(
+            manifest.join("plugin.json"),
+            r#"{"name":"atlas","homepage":"https://example.com"}"#,
+        )
+        .unwrap();
+        assert!(!atlas_folder(&someone));
+        assert!(!atlas_folder(&dir.path().join("missing")));
+
+        assert!(atlas_folder(Path::new(
+            "/Volumes/Old/Atlas.app/Contents/Resources/agents"
+        )));
+        assert!(!atlas_folder(Path::new(
+            "/Applications/Other.app/Contents/Resources/agents"
+        )));
+    }
+
+    #[test]
+    fn the_manifests_give_the_homepage_that_marks_atlas_own() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("agents");
+        assert!(atlas_folder(&root));
+
+        for manifest in [".claude-plugin/plugin.json", ".codex-plugin/plugin.json"] {
+            let text = std::fs::read_to_string(root.join("atlas").join(manifest)).unwrap();
+            let value: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(value["homepage"], HOMEPAGE, "{manifest}");
+        }
+    }
+
+    /// Codex will not add over a marketplace of the same name, so another
+    /// of Atlas's own goes first; anyone else's stops the connection.
+    #[test]
+    fn connecting_replaces_only_a_marketplace_of_atlas_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Atlas.app/Contents/Resources/agents");
+        fs::create_dir_all(&path).unwrap();
+        let old = Source::Folder("/Volumes/Old/Atlas.app/Contents/Resources/agents".into());
+        let remove = argv(&["plugin", "marketplace", "remove", "atlas"]);
+
+        for agent in Agent::ALL {
+            for now in [
+                None,
+                Some(&Source::Absent),
+                Some(&Source::Folder(path.clone())),
+            ] {
+                assert_eq!(
+                    agent.connecting(&path, now).unwrap(),
+                    agent.connect(&path),
+                    "{agent:?} {now:?}"
+                );
+            }
+
+            let someone = Source::Folder(dir.path().join("someone"));
+            let error = agent.connecting(&path, Some(&someone)).unwrap_err();
+            assert!(error.error.contains("another marketplace named atlas"));
+            let elsewhere = Source::Elsewhere("someone/atlas".into());
+            assert!(agent.connecting(&path, Some(&elsewhere)).is_err());
+        }
+
+        let mut codex = vec![remove];
+        codex.extend(Agent::Codex.connect(&path));
+        assert_eq!(Agent::Codex.connecting(&path, Some(&old)).unwrap(), codex);
+        assert_eq!(
+            Agent::Claude.connecting(&path, Some(&old)).unwrap(),
+            Agent::Claude.connect(&path),
+            "Claude Code replaces it itself"
+        );
+    }
+
+    /// Removing leaves an agent alone unless its marketplace named atlas is
+    /// Atlas's own (these cases run no tool).
+    #[test]
+    fn removing_never_touches_someone_elses_marketplace() {
+        let dir = tempfile::tempdir().unwrap();
+        let someone = Some(Source::Folder(dir.path().to_owned()));
+        assert!(!disconnecting(Agent::Claude, Ok(someone)).unwrap());
+        let elsewhere = Some(Source::Elsewhere("someone/atlas".into()));
+        assert!(!disconnecting(Agent::Codex, Ok(elsewhere)).unwrap());
+        assert!(!disconnecting(Agent::Codex, Ok(Some(Source::Absent))).unwrap());
+        assert!(disconnecting(Agent::Claude, Ok(None)).is_err());
+        assert!(disconnecting(Agent::Claude, Err("silent".into())).is_err());
     }
 
     /// The plugin's manifests describe this version, and its skill and

@@ -364,8 +364,21 @@ fn committed_version(root: &Path) -> Result<()> {
     Err("Cargo.toml or Cargo.lock has uncommitted changes; commit the version bump first".into())
 }
 
+/// A release's version must be plain numbers (`0.2.0`, not `0.2.0-beta`):
+/// `atlas update` reads it from the archive's name and refuses any other.
+fn release_version(version: &str) -> Result<()> {
+    if version.split('.').all(|part| part.parse::<u64>().is_ok()) {
+        return Ok(());
+    }
+
+    Err(format!(
+        "Version {version} is not plain numbers such as 0.2.0, so atlas update would refuse it"
+    ))
+}
+
 fn dist(options: &Options) -> Result<()> {
     let version = atlas::VERSION;
+    release_version(version)?;
     committed_version(&root())?;
     publishable(&options.out)?;
 
@@ -640,6 +653,17 @@ mod tests {
             format!("{:x}", Sha256::digest(&bytes))
         );
         assert!(sha256(&dir.path().join("missing")).is_err());
+    }
+
+    #[test]
+    fn only_plain_numbered_versions_are_released() {
+        for version in ["0.2.0", "1.10.3", atlas::VERSION] {
+            assert!(release_version(version).is_ok(), "{version}");
+        }
+
+        for version in ["0.2.0-beta", "0.2.0+build", "0.2.", "v0.2.0", ""] {
+            assert!(release_version(version).is_err(), "{version}");
+        }
     }
 
     #[test]

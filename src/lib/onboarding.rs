@@ -214,10 +214,9 @@ pub async fn status(config_path: &Path) -> Result<Value> {
     let admin = setup::administrator(&helper.name);
     let leftover = crate::session::leftover_session(helper.uid, &helper.name, &helper.home);
 
-    // This account's request names this helper (set up by the window), or
-    // the helper runs already (as after `atlas init`).
-    let paired = request()
-        .is_some_and(|pairing| pairing.controller_uid == uid && pairing.helper_uid == helper.uid);
+    // This account asked this helper: its request names it (the window), or
+    // a setup with it is recorded (`atlas init`, or the window's finish).
+    let paired = asked(uid, helper.uid);
     let signed_in = crate::session::logged_in(helper.uid) == Some(true);
 
     let client = Client::new(config.clone())?;
@@ -228,8 +227,9 @@ pub async fn status(config_path: &Path) -> Result<Value> {
     let finished =
         ready && setup::migrate::settled(helper.uid) && crate::session::input_build_current(&reply);
 
-    // Not asked yet (a choice cut short, or an interrupted `atlas init`):
-    // the window offers the choice again.
+    // Never asked and silent (a choice cut short, or an `atlas init` stopped
+    // once it wrote settings): the window offers the choice again, and
+    // choosing another account replaces these settings.
     let candidates = if !paired && !answering {
         candidates()?
     } else {
@@ -329,9 +329,60 @@ fn candidates() -> Result<Vec<Value>> {
         .collect())
 }
 
+/// The settings at `config_path`, when there are any.
+fn settings(config_path: &Path) -> Result<Option<Config>> {
+    match Config::load(config_path) {
+        Ok(settings) => Ok(Some(settings)),
+        Err(_) if !config_path.exists() => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Whether this account (`controller`) asked `helper` to be its helper: its
+/// request names it, or a setup with it is recorded.
+fn asked(controller: u32, helper: u32) -> bool {
+    request()
+        .is_some_and(|pairing| pairing.controller_uid == controller && pairing.helper_uid == helper)
+        || setup::migrate::in_effect(helper)
+}
+
+/// Whether something answers at the helper socket `config` names. Checked
+/// without waiting: a helper never asked has no socket at all.
+fn answers(config: &Config) -> bool {
+    std::os::unix::net::UnixStream::connect(&config.socket_path).is_ok()
+}
+
+/// Refuse to replace settings that name another helper still in use: one
+/// this account asked, or one that answers. Settings for an account that
+/// is gone, or one never asked that is silent (an `atlas init` stopped once
+/// it wrote them), give way, as the window offers the choice again then.
+fn keep_other_helper(uid: u32, previous: &Config) -> Result<()> {
+    match setup::account_with_uid(previous.helper_uid)? {
+        Some(other) if asked(uid, other.uid) || answers(previous) => Err(problem(format!(
+            "Atlas already uses {} as its helper; choose {} again",
+            other.name, other.name
+        ))),
+        _ => Ok(()),
+    }
+}
+
+/// What choosing any helper needs that does not depend on the account:
+/// this Atlas.app signed by its developer, settings that name no other
+/// helper in use, and `atlas` in a terminal. The app's executable.
+fn ready_to_choose(config_path: &Path, uid: u32) -> Result<PathBuf> {
+    let executable = signed_executable()?;
+
+    if let Some(previous) = settings(config_path)? {
+        keep_other_helper(uid, &previous)?;
+    }
+
+    init::link_command(&executable)?;
+    Ok(executable)
+}
+
 /// Make `name`, an existing standard account, the helper: the shared
 /// executable, the request Atlas in the helper reads, and the settings.
-/// Settings for another helper that still exists are never replaced.
+/// Settings for another helper in use are never replaced.
 pub fn choose(config_path: &Path, name: &str) -> Result<Value> {
     let helper = setup::account_named(name)?
         .ok_or_else(|| problem(format!("There is no account {name}")))?;
@@ -362,17 +413,11 @@ pub fn choose(config_path: &Path, name: &str) -> Result<Value> {
     }
 
     let executable = signed_executable()?;
-
-    let previous = match Config::load(config_path) {
-        Ok(previous) => Some(previous),
-        Err(_) if !config_path.exists() => None,
-        Err(error) => return Err(error),
-    };
-
+    let previous = settings(config_path)?;
     let fresh = init::proposed(&helper)?;
 
     // As `atlas init` does: the settings for this same helper stay (only
-    // their sockets follow its home); another existing helper is kept.
+    // their sockets follow its home); another helper in use is kept.
     let config = match &previous {
         Some(previous) if previous.helper_uid == helper.uid => {
             if previous.socket_path.starts_with(&helper.home) {
@@ -385,16 +430,10 @@ pub fn choose(config_path: &Path, name: &str) -> Result<Value> {
                 }
             }
         }
-        Some(previous) => match setup::account_with_uid(previous.helper_uid)? {
-            Some(other) => {
-                return Err(problem(format!(
-                    "Atlas already uses {} as its helper. Choose {} again, or remove Atlas \
-                     with atlas uninstall first.",
-                    other.name, other.name
-                )));
-            }
-            None => fresh,
-        },
+        Some(previous) => {
+            keep_other_helper(uid, previous)?;
+            fresh
+        }
         None => fresh,
     };
 
@@ -449,6 +488,11 @@ pub fn create(config_path: &Path, name: &str, full_name: &str) -> Result<Value> 
     if setup::account_named(name)?.is_some() {
         return Err(problem(format!("{name} already exists; choose it instead")));
     }
+
+    // Choosing it checks these too, but only once macOS has made the
+    // account: a refusal then would leave an account nothing uses.
+    let (uid, _, _) = me()?;
+    ready_to_choose(config_path, uid)?;
 
     let mut password = read_secret(std::io::stdin())?;
     let mut args = init::add_user_args(name, full_name, init::free_uid()?);
@@ -915,6 +959,29 @@ mod tests {
         let link = dir.path().join("link.json");
         std::os::unix::fs::symlink(&path, &link).unwrap();
         assert_eq!(read_request(&link), None);
+    }
+
+    /// A helper answers only while something listens at its socket; a
+    /// socket file left behind, or none, is silent.
+    #[test]
+    fn a_helper_answers_only_while_its_socket_listens() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("atlas.sock");
+        let config = Config {
+            helper_uid: 502,
+            socket_path: socket.clone(),
+            identity_probe: dir.path().join("atlas"),
+            input_socket: dir.path().join("input.sock"),
+            output_dir: dir.path().join("runs"),
+        };
+        assert!(!answers(&config), "no socket");
+
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        assert!(answers(&config));
+
+        drop(listener);
+        assert!(socket.exists());
+        assert!(!answers(&config), "a socket nothing listens at");
     }
 
     #[test]

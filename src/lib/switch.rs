@@ -146,22 +146,16 @@ fn locked_within(seconds: u64) -> bool {
 }
 
 /// Lock the screen now, so the person can choose another account from the
-/// lock screen; confirmed from the window server, not assumed.
+/// lock screen; confirmed from the window server, not assumed. Only the
+/// lock asked for: the display is never put to sleep instead.
 pub fn lock_screen() -> Result<Value> {
-    let _ = login_call(c"SACLockScreenImmediate");
+    login_call(c"SACLockScreenImmediate")?;
 
-    if !locked_within(3) {
-        // Sleeping the display locks it when a password is required on wake.
-        let _ = Command::new("/usr/bin/pmset")
-            .arg("displaysleepnow")
-            .status();
-
-        if !locked_within(3) {
-            return Err(Error::new(
-                "switch",
-                "The screen could not be locked from here",
-            ));
-        }
+    if !locked_within(5) {
+        return Err(Error::new(
+            "switch",
+            "The screen could not be locked from here; lock it from the Apple menu",
+        ));
     }
 
     Ok(json!({"ok": true, "locked": true}))
