@@ -29,7 +29,10 @@ struct ViewerSnapshotRulesTests {
   func aChangedRecoveryAlertsAgain(changed: [String: String]) throws {
     var snapshot = try Self.setAside(["overview": ["mode": "recovering", "reason": "Unknown outcome"]])
     try #require(snapshot.recovery == .setAside, "the same reason stays set aside")
-    snapshot.reading.status = try status(["overview": changed])
+    // A block is offered only when Recover can fix it.
+    var overview: [String: Any] = changed
+    overview["recoverable"] = true
+    snapshot.reading.status = try status(["overview": overview])
     let offered = try #require(snapshot.offeredRecovery, "recovery is still offered")
     #expect(snapshot.recovery == .alert(offered))
   }
