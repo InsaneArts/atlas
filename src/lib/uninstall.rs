@@ -140,7 +140,7 @@ pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Val
         stop_helper(client, &executable, &mut removed, &mut warnings).await?;
     }
 
-    stop_menubar(client.as_ref(), &data);
+    stop_menubar(client.as_ref());
     disconnect(&executable, &mut removed, &mut warnings)?;
     trash(&app, &leftovers, &mut removed)?;
     remove_settings(config_path, keep_config, &data, &mut removed)?;
@@ -338,7 +338,7 @@ async fn stop_helper(
 /// not the person's choice: unless they had turned it off themselves, the
 /// record of a choice goes, so setting Atlas up again turns it on again
 /// (settings kept with --keep-config keep that record otherwise).
-fn stop_menubar(client: Option<&Client>, data: &Path) {
+fn stop_menubar(client: Option<&Client>) {
     let stopped = client
         .and_then(|client| client.output_dir().ok().map(Path::to_path_buf))
         .and_then(|output| crate::menubar::stop(&output))
@@ -352,7 +352,7 @@ fn stop_menubar(client: Option<&Client>, data: &Path) {
         .is_ok_and(|reply| reply["ok"] == true);
 
     if login_off && !keeps_login_choice(decided, enabled) {
-        let _ = fs::remove_file(data.join(LOGIN_RECORD));
+        crate::menubar::forget_login();
     }
 
     let said = match (stopped, login_off) {
@@ -363,10 +363,6 @@ fn stop_menubar(client: Option<&Client>, data: &Path) {
     };
     done("Menu bar", said);
 }
-
-/// Where the menu bar remembers that Open at Login was decided, in the
-/// data folder (see `menubar::login_decided`).
-const LOGIN_RECORD: &str = "menubar-login";
 
 /// Whether the record of an Open at Login choice stays once uninstall turns
 /// it off: only when the person had decided it, and decided off.

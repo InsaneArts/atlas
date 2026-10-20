@@ -327,6 +327,16 @@ impl Viewer {
         Ok(())
     }
 
+    /// End whichever control is held in a task of its own, which finishes
+    /// however long the helper takes; the caller may wait on it or not.
+    fn release_in_background(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+        let viewer = self.clone();
+
+        tokio::spawn(async move {
+            let _ = viewer.release(None).await;
+        })
+    }
+
     /// End `owner`'s native control in the helper. The outcome is marked
     /// pending first and cleared only once the helper confirms, so an
     /// unconfirmed release stays an unknown outcome for recovery.
@@ -378,10 +388,7 @@ impl Viewer {
         // Ending control waits on the helper too: it finishes by itself
         // when that takes longer than a moment.
         if status["ready"] != true {
-            let viewer = self.clone();
-            let ending = tokio::spawn(async move {
-                let _ = viewer.release(None).await;
-            });
+            let ending = self.release_in_background();
             let _ = tokio::time::timeout(Duration::from_secs(1), ending).await;
         }
 
@@ -679,31 +686,7 @@ async fn accept(
             continue;
         };
 
-        let service = hyper::service::service_fn({
-            let viewer = viewer.clone();
-            move |request: hyper::Request<hyper::body::Incoming>| {
-                let viewer = viewer.clone();
-                async move {
-                    Ok::<_, std::convert::Infallible>(handle(viewer, request.map(Body::new)).await)
-                }
-            }
-        });
-        let served = http.serve_connection(hyper_util::rt::TokioIo::new(stream), service);
-        let mut closed = closed.clone();
-
-        tokio::spawn(async move {
-            let _permit = permit;
-            tokio::pin!(served);
-
-            tokio::select! {
-                _ = served.as_mut() => return,
-                _ = closed.changed() => {}
-            }
-
-            // Closing: the request in progress finishes, then it closes.
-            served.as_mut().graceful_shutdown();
-            let _ = served.await;
-        });
+        serve_connection(&http, stream, permit, &viewer, closed.clone());
     }
 
     drop(listener);
@@ -717,8 +700,44 @@ async fn accept(
     .await;
 }
 
-/// The next connection, once a place is open for it. None
-/// when accepting failed (too many open files, say); it pauses first.
+/// Answer requests on `stream` in a task of its own, which holds `permit`
+/// until the connection closes. Once `closed` changes, the request in
+/// progress finishes and the connection closes.
+fn serve_connection(
+    http: &hyper::server::conn::http1::Builder,
+    stream: TcpStream,
+    permit: OwnedSemaphorePermit,
+    viewer: &Arc<Viewer>,
+    mut closed: watch::Receiver<()>,
+) {
+    let service = hyper::service::service_fn({
+        let viewer = viewer.clone();
+        move |request: hyper::Request<hyper::body::Incoming>| {
+            let viewer = viewer.clone();
+            async move {
+                Ok::<_, std::convert::Infallible>(handle(viewer, request.map(Body::new)).await)
+            }
+        }
+    });
+    let served = http.serve_connection(hyper_util::rt::TokioIo::new(stream), service);
+
+    tokio::spawn(async move {
+        let _permit = permit;
+        tokio::pin!(served);
+
+        tokio::select! {
+            _ = served.as_mut() => return,
+            _ = closed.changed() => {}
+        }
+
+        // Closing: the request in progress finishes, then it closes.
+        served.as_mut().graceful_shutdown();
+        let _ = served.await;
+    });
+}
+
+/// The next connection, once a place is open for it. None when accepting
+/// failed (too many open files, say); it pauses first.
 async fn connection(
     listener: &TcpListener,
     open: &Arc<Semaphore>,
@@ -1120,8 +1139,9 @@ fn header<'a>(headers: &'a HeaderMap, key: &str) -> Option<&'a str> {
 }
 
 /// A client can abort any request. Its connection drops the request's
-/// future when that happens, which could stop between a quarantine or lease change and its
-/// matching cleanup. Each request therefore runs to completion in its own task.
+/// future when that happens, which could stop between a quarantine or
+/// lease change and its matching cleanup. Each request therefore runs to
+/// completion in its own task.
 async fn handle(viewer: Arc<Viewer>, request: Request) -> Response {
     tokio::spawn(respond(viewer, request))
         .await
@@ -1207,10 +1227,7 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
                 ),
                 Err(error) => {
                     // Ending control finishes by itself; the answer is not held.
-                    let ending = viewer.clone();
-                    tokio::spawn(async move {
-                        let _ = ending.release(None).await;
-                    });
+                    viewer.release_in_background();
                     json_response(503, json!(error))
                 }
             };

@@ -13,6 +13,9 @@ package struct WheelAccumulator: Sendable {
   var x = 0.0
   var y = 0.0
 
+  /// Whether at least one whole line waits, as one that ``take()`` capped leaves.
+  package var holdsWholeLines: Bool { Self.whole(x) != 0 || Self.whole(y) != 0 }
+
   /// Creates an accumulator holding nothing.
   package init() {}
 
@@ -43,9 +46,6 @@ package struct WheelAccumulator: Sendable {
     x = Self.whole(x)
     y = Self.whole(y)
   }
-
-  /// Whether at least one whole line waits, as one that ``take()`` capped leaves.
-  package var holdsWholeLines: Bool { Self.whole(x) != 0 || Self.whole(y) != 0 }
 
   /// The whole lines to send now (at most ``mostLines`` each way); the rest stays.
   ///

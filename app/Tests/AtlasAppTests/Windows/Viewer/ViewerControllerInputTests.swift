@@ -52,13 +52,12 @@ struct ViewerControllerInputTests {
     let service = ScriptedService()
     let viewer = try await ViewerController.watching(service)
     await viewer.takeControl()
-    let size = CGSize(width: 400, height: 300)
     for _ in 0..<3 {
-      viewer.scrolled(dx: 0, dy: 10, precise: false, began: false, at: CGPoint(x: 200, y: 150), in: size)
+      viewer.scrolled(dx: 0, dy: 10, precise: false, began: false, at: middle, in: size)
     }
     try await settle("the gathered scroll was never sent") { service.actions.count == 1 }
     #expect(service.actions.first?.count == 3)
-    #expect(service.actions.first?.last == .scroll(x: 756, y: 491, dx: 0, dy: -30))
+    #expect(service.actions.first?.last == scroll(-30))
     viewer.close()
   }
 

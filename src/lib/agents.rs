@@ -87,7 +87,7 @@ impl Agent {
         let mut steps = Vec::new();
 
         match now {
-            Some(Source::Folder(folder)) if same_folder(folder, marketplace) => {}
+            Some(Source::Folder(folder)) if same_place(folder, marketplace) => {}
             Some(Source::Folder(folder)) if atlas_folder(folder) => {
                 if self == Agent::Codex {
                     steps.push(argv(&["plugin", "marketplace", "remove", NAME]));
@@ -256,8 +256,9 @@ enum Source {
     Elsewhere(String),
 }
 
-/// Whether `a` and `b` are the same folder, links resolved when they exist.
-fn same_folder(a: &Path, b: &Path) -> bool {
+/// Whether `a` and `b` are the same file or folder, links resolved when
+/// they exist.
+fn same_place(a: &Path, b: &Path) -> bool {
     match (fs::canonicalize(a), fs::canonicalize(b)) {
         (Ok(a), Ok(b)) => a == b,
         _ => a == b,
@@ -268,7 +269,7 @@ fn same_folder(a: &Path, b: &Path) -> bool {
 /// carries none) a marketplace of Atlas's own.
 fn this_atlas(folder: &Path) -> bool {
     match marketplace() {
-        Ok(ours) => same_folder(folder, &ours),
+        Ok(ours) => same_place(folder, &ours),
         Err(_) => atlas_folder(folder),
     }
 }
@@ -277,7 +278,7 @@ fn this_atlas(folder: &Path) -> bool {
 /// inside an Atlas.app (even one since removed), or a checkout's, whose
 /// plugin manifest gives Atlas's homepage.
 fn atlas_folder(folder: &Path) -> bool {
-    if marketplace().is_ok_and(|ours| same_folder(folder, &ours)) {
+    if marketplace().is_ok_and(|ours| same_place(folder, &ours)) {
         return true;
     }
 
@@ -727,18 +728,8 @@ pub fn change(chosen: &[Agent], remove: bool) -> Result<Value> {
         let source = agent.source();
 
         let outcome = match &marketplace {
-            // Connecting stops at a failure.
-            Some(path) => agent
-                .connecting(path, source.as_ref().ok().and_then(Option::as_ref))
-                .and_then(|steps| {
-                    steps
-                        .iter()
-                        .map(|argv| run(agent, argv))
-                        .find(Result::is_err)
-                        .unwrap_or(Ok(()))
-                })
-                .map(|()| true),
-            None => disconnecting(agent, source),
+            Some(path) => connect_agent(agent, path, &source),
+            None => disconnect_agent(agent, source),
         };
 
         results.push(match outcome {
@@ -756,10 +747,28 @@ pub fn change(chosen: &[Agent], remove: bool) -> Result<Value> {
     Ok(json!({"ok": ok, "agents": results}))
 }
 
+/// Connect `agent` to `marketplace`, given where its marketplace named
+/// atlas comes from (`source`, unknown when unreadable): the steps stop at
+/// a failure. Whether anything changed, which connecting always does.
+fn connect_agent(
+    agent: Agent,
+    marketplace: &Path,
+    source: &std::result::Result<Option<Source>, String>,
+) -> Result<bool> {
+    let steps = agent.connecting(marketplace, source.as_ref().ok().and_then(Option::as_ref))?;
+
+    steps
+        .iter()
+        .map(|argv| run(agent, argv))
+        .find(Result::is_err)
+        .unwrap_or(Ok(()))
+        .map(|()| true)
+}
+
 /// Disconnect `agent` when its marketplace named atlas (from `source`) is
 /// Atlas's own: every step runs, tolerating parts already gone, then the
 /// plugin must be gone. Whether anything changed.
-fn disconnecting(
+fn disconnect_agent(
     agent: Agent,
     source: std::result::Result<Option<Source>, String>,
 ) -> Result<bool> {
@@ -825,14 +834,11 @@ pub fn project(dir: &Path) -> Result<Value> {
     let claude = dir.join("CLAUDE.md");
     let mut plans = vec![(agents.clone(), read_instructions(&agents)?)];
 
-    if let Some(text) = read_instructions(&claude)? {
-        let same = match (claude.canonicalize(), agents.canonicalize()) {
-            (Ok(a), Ok(b)) => a == b,
-            _ => false,
-        };
-        if !same && !text.contains("@AGENTS.md") {
-            plans.push((claude, Some(text)));
-        }
+    if let Some(text) = read_instructions(&claude)?
+        && !same_place(&claude, &agents)
+        && !text.contains("@AGENTS.md")
+    {
+        plans.push((claude, Some(text)));
     }
 
     // Check every file before changing any.
@@ -1372,12 +1378,12 @@ mod tests {
     fn removing_never_touches_someone_elses_marketplace() {
         let dir = tempfile::tempdir().unwrap();
         let someone = Some(Source::Folder(dir.path().to_owned()));
-        assert!(!disconnecting(Agent::Claude, Ok(someone)).unwrap());
+        assert!(!disconnect_agent(Agent::Claude, Ok(someone)).unwrap());
         let elsewhere = Some(Source::Elsewhere("someone/atlas".into()));
-        assert!(!disconnecting(Agent::Codex, Ok(elsewhere)).unwrap());
-        assert!(!disconnecting(Agent::Codex, Ok(Some(Source::Absent))).unwrap());
-        assert!(disconnecting(Agent::Claude, Ok(None)).is_err());
-        assert!(disconnecting(Agent::Claude, Err("silent".into())).is_err());
+        assert!(!disconnect_agent(Agent::Codex, Ok(elsewhere)).unwrap());
+        assert!(!disconnect_agent(Agent::Codex, Ok(Some(Source::Absent))).unwrap());
+        assert!(disconnect_agent(Agent::Claude, Ok(None)).is_err());
+        assert!(disconnect_agent(Agent::Claude, Err("silent".into())).is_err());
     }
 
     /// The plugin's manifests describe this version, and its skill and

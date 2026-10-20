@@ -368,8 +368,8 @@ fn keep_other_helper(uid: u32, previous: &Config) -> Result<()> {
 
 /// What choosing any helper needs that does not depend on the account:
 /// this Atlas.app signed by its developer, settings that name no other
-/// helper in use, and `atlas` in a terminal. The app's executable.
-fn ready_to_choose(config_path: &Path, uid: u32) -> Result<PathBuf> {
+/// helper in use, and `atlas` in a terminal.
+fn ready_to_choose(config_path: &Path, uid: u32) -> Result<()> {
     let executable = signed_executable()?;
 
     if let Some(previous) = settings(config_path)? {
@@ -377,7 +377,7 @@ fn ready_to_choose(config_path: &Path, uid: u32) -> Result<PathBuf> {
     }
 
     init::link_command(&executable)?;
-    Ok(executable)
+    Ok(())
 }
 
 /// Make `name`, an existing standard account, the helper: the shared

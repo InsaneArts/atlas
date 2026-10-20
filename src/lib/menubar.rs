@@ -403,6 +403,14 @@ pub fn decide_login() {
     }
 }
 
+/// Forget that opening at login was decided, so setting Atlas up again
+/// decides it afresh.
+pub fn forget_login() {
+    if let Some(path) = login_record() {
+        let _ = fs::remove_file(path);
+    }
+}
+
 /// The app to run, and the configuration its commands must use.
 pub struct Program {
     pub executable: PathBuf,
