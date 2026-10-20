@@ -125,6 +125,50 @@ impl Store {
         ))
     }
 
+    /// Delete a rolled-back transaction's file copies, which may hold
+    /// secrets, and keep its small record. A copy that cannot be removed
+    /// now is tried again by the next rollback of the same ID.
+    pub fn discard_copies(&self, transaction: &Transaction) {
+        if self.lock.is_none() {
+            return;
+        }
+
+        for index in 0..transaction.plan.files.len() {
+            for before in [true, false] {
+                let _ = unlink(&self.blob(&transaction.plan.id, index, before), false);
+            }
+        }
+    }
+
+    /// Delete the folders of transactions whose record was never written:
+    /// copies a preparation left when it stopped part way. Only called
+    /// under the write lock, so no preparation is running.
+    pub fn discard_unstarted(&self) {
+        if self.lock.is_none() {
+            return;
+        }
+
+        let Ok(entries) = fs::read_dir(&self.path) else {
+            return;
+        };
+
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let started = !matches!(
+                fs::symlink_metadata(entry.path().join("transaction.json")),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound
+            );
+            let folder = name
+                .strip_prefix("transaction-")
+                .is_some_and(|id| validate_id(id).is_ok())
+                && fs::symlink_metadata(entry.path()).is_ok_and(|metadata| metadata.is_dir());
+
+            if folder && !started {
+                let _ = fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+
     pub fn require_available(&self, id: &str) -> Result<()> {
         if let Some(active) = self.read::<String>(&self.path.join("active.json"))? {
             validate_id(&active)?;

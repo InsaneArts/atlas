@@ -137,14 +137,24 @@ pub(crate) fn type_batches(text: &str) -> Result<Vec<String>> {
 
 /// Type `text` batch by batch, stopping at the first batch that is not
 /// confirmed. The report says exactly how much was confirmed typed and, on
-/// failure, whether the failed batch's delivery is uncertain.
+/// failure, whether the failed batch's delivery is uncertain. The whole
+/// text is typed under one ownership into the helper as it was at the
+/// start: no other input lands between batches, and a helper that restarts
+/// midway is refused rather than typed into.
 pub async fn type_text(client: &Client, text: &str) -> Result<Value> {
     let batches = type_batches(text)?;
     let (mut typed, mut confirmed) = (0, 0);
 
+    let ownership = client.controller.acquire(false)?;
+    let epoch = client.identity().await?.epoch;
+
     for batch in &batches {
         let outcome = client
-            .input(&json!([{ "type": "type", "text": batch }]), None, None)
+            .input_owned(
+                &ownership,
+                &json!([{ "type": "type", "text": batch }]),
+                &epoch,
+            )
             .await;
 
         // Agents act on the code (busy, lease-lost, session-changed), so
@@ -701,8 +711,9 @@ exit 0"#;
 }
 
 /// Poll the window list until a matching window appears (or, with `gone`,
-/// until none remains). The timeout is a deadline: an observation counts only
-/// if it completed before it, and a zero timeout means one observation.
+/// until none remains). The timeout is a deadline for starting a look; the
+/// last look counts even when it finishes after it, and a zero timeout
+/// means one observation.
 pub async fn wait(
     client: &Client,
     filter: &WindowFilter,
@@ -720,12 +731,13 @@ pub async fn wait(
 
     loop {
         // Each observation gets what is left of the deadline (at least half
-        // a second); a zero timeout is exactly one observation.
+        // a second, at most what the helper lets a command take); a zero
+        // timeout is exactly one observation.
         let remaining = deadline.saturating_duration_since(Instant::now());
         let budget = if timeout.is_zero() {
             PROBE_LIMIT
         } else {
-            remaining.max(Duration::from_millis(500))
+            probe_budget(remaining)
         };
 
         let matching: Vec<_> = windows_within(client, budget)
@@ -734,7 +746,7 @@ pub async fn wait(
             .filter(|window| filter.matches(window))
             .collect();
         let observed = Instant::now();
-        if matching.is_empty() == gone && (timeout.is_zero() || observed <= deadline) {
+        if matching.is_empty() == gone {
             return Ok(json!({
                 "ok": true,
                 "waitedMs": u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -760,6 +772,14 @@ pub async fn wait(
 
         tokio::time::sleep((deadline - observed).min(Duration::from_millis(250))).await;
     }
+}
+
+/// How long one look at the window list may take with `remaining` left to
+/// wait: at least half a second, and no longer than the helper allows.
+fn probe_budget(remaining: Duration) -> Duration {
+    remaining
+        .max(Duration::from_millis(500))
+        .min(crate::client::RUN_TIMEOUT_MAX)
 }
 
 /// Why no window appeared: the app is not running, or it runs without a
@@ -1529,6 +1549,24 @@ mod tests {
     }
 
     /// Every command compares app names the same way, beyond ASCII too.
+    /// A look never asks the helper for longer than it allows a command,
+    /// however long the wait.
+    #[test]
+    fn a_look_stays_within_the_helpers_limit() {
+        assert_eq!(probe_budget(Duration::ZERO), Duration::from_millis(500));
+        assert_eq!(probe_budget(Duration::from_secs(9)), Duration::from_secs(9));
+        assert_eq!(
+            probe_budget(Duration::from_secs(86_400)),
+            crate::client::RUN_TIMEOUT_MAX
+        );
+        let longest = crate::client::RUN_TIMEOUT_MAX.as_millis();
+        let request = json!({"op": "run", "argv": ["x"], "timeoutMs": longest}).to_string();
+        assert!(
+            crate::daemon::protocol::parse(request.as_bytes()).is_ok(),
+            "the helper accepts the longest look"
+        );
+    }
+
     #[test]
     fn app_names_match_in_any_case() {
         assert!(same_text("TextEdit", "textedit"));

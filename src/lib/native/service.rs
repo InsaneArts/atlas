@@ -180,8 +180,16 @@ impl Service {
             }
 
             // Release held input first; only an acknowledged release closes the
-            // gate for good. Holding the engine lock keeps acquire out meanwhile.
+            // gate for good. Holding the engine lock keeps acquire out meanwhile,
+            // and one that took the lock first is seen once it is held.
             let mut engine = self.engine.lock().await;
+            if self.gate.active()? {
+                return Err(Error::new(
+                    "busy",
+                    "The input service has an active controller",
+                ));
+            }
+
             if let Err(error) = engine.release() {
                 return Err(Error::new(
                     "uncertain",
@@ -389,7 +397,11 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
                 match service.gate.active() {
                     Ok(true) => {}
                     Ok(false) => {
-                        if let Ok(mut engine) = service.engine.try_lock() {
+                        // A controller may have acquired (and pressed) since
+                        // the look above: look again once the engine is held.
+                        if let Ok(mut engine) = service.engine.try_lock()
+                            && matches!(service.gate.active(), Ok(false))
+                        {
                             let _ = engine.release();
                         }
                     }

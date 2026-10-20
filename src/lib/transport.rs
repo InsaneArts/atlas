@@ -16,6 +16,8 @@ const MAX_REQUEST: usize = crate::daemon::protocol::MAX_REQUEST;
 /// Longest the request itself may take to send. A peer that is not reading
 /// leaves the outcome unknown, so this stays short.
 const DISPATCH: Duration = Duration::from_millis(500);
+/// How long a failed send looks for a refusal the peer already sent.
+const WAITING: Duration = Duration::from_millis(100);
 /// Longest reply, every line together.
 const MAX_REPLY: usize = 64 * 1024 * 1024;
 /// Most event lines before the final reply.
@@ -96,12 +98,28 @@ impl Pending {
 
         payload.push(b'\n');
         let deadline = self.deadline.min(Instant::now() + DISPATCH);
-        timeout_at(deadline, self.stream.write_all(&payload))
+        let written = timeout_at(deadline, self.stream.write_all(&payload))
             .await
-            .map_err(|_| Error::new("transport", "Dispatch timed out").uncertain())?
-            .map_err(|e| Error::new("transport", e.to_string()).uncertain())?;
+            .map_err(|_| Error::new("transport", "Dispatch timed out").uncertain())?;
+
+        // The request never arrived whole, so the peer cannot have acted on
+        // it; a refusal it already sent (busy, say) makes that certain.
+        if let Err(error) = written {
+            return Err(self
+                .waiting_refusal()
+                .await
+                .unwrap_or_else(|| Error::new("transport", error.to_string()).uncertain()));
+        }
 
         Ok(self)
+    }
+
+    /// A definite refusal the peer sent before it hung up, if one is waiting.
+    async fn waiting_refusal(&mut self) -> Option<Error> {
+        let deadline = self.deadline.min(Instant::now() + WAITING);
+        let reply = timeout_at(deadline, self.receive()).await.ok()?.ok()?;
+
+        (reply["ok"] == false && reply["uncertain"] != true).then(|| refusal(&reply))
     }
 
     pub async fn finish(mut self) -> Result<Value> {
@@ -179,6 +197,26 @@ impl Pending {
 
             pending.extend_from_slice(&buffer[offset..count]);
         }
+    }
+}
+
+/// A helper's refusal as an error: its code when it is one of Atlas's, its
+/// words, and whether what it refused may have happened anyway.
+pub(crate) fn refusal(reply: &Value) -> Error {
+    let error = Error::new(
+        reply["code"]
+            .as_str()
+            .and_then(crate::error::code)
+            .unwrap_or("daemon"),
+        reply["error"]
+            .as_str()
+            .unwrap_or("The helper refused the request"),
+    );
+
+    if reply["uncertain"] == true {
+        error.uncertain()
+    } else {
+        error
     }
 }
 
@@ -326,6 +364,58 @@ mod tests {
             ("protocol", "Request exceeds 1 MiB")
         );
         assert!(!refused.uncertain, "nothing was sent");
+    }
+
+    /// A peer that refused and hung up before the request was sent is
+    /// heard: nothing ran, so the outcome is known.
+    #[tokio::test]
+    async fn a_refusal_sent_before_the_request_is_heard() {
+        use super::Transport;
+
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("t.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                crate::native::endpoint::turn_away(
+                    stream,
+                    &crate::daemon::protocol::failure("busy", "Too many requests"),
+                );
+            }
+        });
+
+        let transport = Transport {
+            path: socket,
+            timeout: std::time::Duration::from_secs(10),
+            peer_uid: nix::unistd::getuid().as_raw(),
+        };
+        let pending = transport.connect().await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        let refused = pending
+            .dispatch(&json!({"op": "run", "pad": "x".repeat(512 * 1024)}))
+            .await
+            .err()
+            .unwrap();
+
+        assert_eq!(
+            (refused.code, refused.error.as_str()),
+            ("busy", "Too many requests")
+        );
+        assert!(!refused.uncertain, "nothing ran");
+    }
+
+    #[test]
+    fn a_refusal_keeps_its_code_and_doubt() {
+        let refused = super::refusal(
+            &json!({"ok": false, "code": "bad-request", "error": "no", "uncertain": false}),
+        );
+        assert_eq!((refused.code, refused.uncertain), ("bad-request", false));
+
+        let unknown = super::refusal(
+            &json!({"ok": false, "code": "something-new", "error": "?", "uncertain": true}),
+        );
+        assert_eq!((unknown.code, unknown.uncertain), ("daemon", true));
     }
 
     /// Only a connection policy forbids is `blocked`; a missing socket or a

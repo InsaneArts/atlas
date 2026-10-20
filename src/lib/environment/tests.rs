@@ -1049,3 +1049,144 @@ fn an_inherited_folder_acl_is_cleared() {
     assert!(!has_acl(&folder).unwrap());
     assert!(remove_inherited_acl(&sandbox.root.join("missing")).is_err());
 }
+
+#[test]
+fn rollback_keeps_a_helper_edit_to_a_file_the_plan_never_installed() {
+    // Stop once the first file is in place: before the second is prepared,
+    // and after its copy waits beside it.
+    for prepared in [false, true] {
+        let sandbox = Sandbox::new();
+        let plan = sandbox.plan(vec![
+            sandbox.payload("first", b"one"),
+            sandbox.payload("second", b"two"),
+        ]);
+        let waiting = sandbox.home.join(format!(".atlas-{}-1-install", plan.id));
+
+        let stopped = Cell::new(false);
+        let result = worker::apply_plan(&sandbox.home, &plan, &|| {
+            let ready = if prepared {
+                waiting.exists()
+            } else {
+                sandbox.home.join("first").exists()
+            };
+            if ready && !stopped.replace(true) {
+                return Err(problem("session changed"));
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(result["ok"], false, "{result}");
+        assert_eq!(waiting.exists(), prepared);
+
+        fs::write(sandbox.home.join("second"), b"helper edit").unwrap();
+
+        let resumed = sandbox.apply(&plan);
+        assert_eq!(resumed["ok"], false);
+        assert!(
+            resumed["error"]
+                .as_str()
+                .unwrap()
+                .contains("atlas environment rollback"),
+            "{resumed}"
+        );
+
+        let result = sandbox.rollback(&plan, true);
+        assert_eq!(result["ok"], true, "{result}");
+        assert_eq!(result["rolledBack"], true);
+        assert!(!sandbox.home.join("first").exists());
+        assert_eq!(
+            fs::read(sandbox.home.join("second")).unwrap(),
+            b"helper edit"
+        );
+        assert!(!waiting.exists());
+
+        let next = sandbox.plan(vec![sandbox.payload("next", b"next")]);
+        assert_eq!(sandbox.apply(&next)["ok"], true);
+    }
+}
+
+#[test]
+fn a_target_inside_or_around_a_copied_file_is_refused_before_it_wedges_the_ledger() {
+    let sandbox = Sandbox::new();
+    let nested = sandbox.plan(vec![sandbox.payload("x/y", b"nested")]);
+    let around = sandbox.plan(vec![sandbox.payload("x", b"file")]);
+    assert_eq!(sandbox.apply(&nested)["ok"], true);
+
+    fs::remove_dir_all(sandbox.home.join("x")).unwrap();
+    let result = worker::preview(
+        &sandbox.home,
+        nix::unistd::getuid().as_raw(),
+        &crate::control::token(),
+        vec![sandbox.payload("x", b"file")],
+        &|| Ok(()),
+    );
+    assert!(result.unwrap_err().error.contains("overlaps x/y"));
+
+    assert!(worker::apply_plan(&sandbox.home, &around, &|| Ok(())).is_err());
+    assert!(!sandbox.home.join("x").exists());
+
+    let next = sandbox.plan(vec![sandbox.payload("next", b"next")]);
+    assert_eq!(sandbox.apply(&next)["ok"], true);
+}
+
+#[test]
+fn a_finished_rollback_keeps_only_its_record() {
+    let sandbox = Sandbox::new();
+    let first = sandbox.plan(vec![sandbox.payload("secret", b"old token")]);
+    assert_eq!(sandbox.apply(&first)["ok"], true);
+
+    let plan = sandbox.plan(vec![sandbox.payload("secret", b"new token")]);
+    assert_eq!(sandbox.apply(&plan)["ok"], true);
+
+    let folder = sandbox
+        .home
+        .join(STATE)
+        .join(format!("transaction-{}", plan.id));
+    let names = || {
+        let mut names: Vec<_> = fs::read_dir(&folder)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        names
+    };
+    assert_eq!(names(), ["after-0", "before-0", "transaction.json"]);
+
+    assert_eq!(sandbox.rollback(&plan, true)["ok"], true);
+    assert_eq!(fs::read(sandbox.home.join("secret")).unwrap(), b"old token");
+    assert_eq!(names(), ["transaction.json"]);
+    assert_eq!(sandbox.rollback(&plan, true)["rolledBack"], true);
+}
+
+#[test]
+fn copies_of_a_preparation_that_stopped_part_way_are_removed() {
+    let sandbox = Sandbox::new();
+    let plan = sandbox.plan(vec![
+        sandbox.payload("first", b"one"),
+        sandbox.payload("second", b"two"),
+    ]);
+    let folder = sandbox
+        .home
+        .join(STATE)
+        .join(format!("transaction-{}", plan.id));
+
+    let result = worker::apply_plan(&sandbox.home, &plan, &|| {
+        if folder.join("after-0").exists() {
+            return Err(problem("session changed"));
+        }
+        Ok(())
+    });
+    assert!(result.is_err());
+    assert!(!folder.exists());
+
+    // A preparation killed outright leaves its folder until the next one.
+    let orphan = sandbox
+        .home
+        .join(STATE)
+        .join(format!("transaction-{}", crate::control::token()));
+    fs::create_dir(&orphan).unwrap();
+    fs::write(orphan.join("before-0"), b"secret").unwrap();
+
+    assert_eq!(sandbox.apply(&plan)["ok"], true);
+    assert!(!orphan.exists());
+}

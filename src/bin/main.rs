@@ -307,7 +307,7 @@ enum Command {
     /// into batches without breaking characters.
     Type {
         /// The text to type.
-        #[arg(required_unless_present = "stdin")]
+        #[arg(required_unless_present = "stdin", allow_hyphen_values = true)]
         text: Option<String>,
         /// Read the text from standard input instead.
         #[arg(long, conflicts_with = "text")]
@@ -322,7 +322,7 @@ enum Command {
     /// at the end of a chord (cmd++).
     Key {
         /// Keys or chords such as cmd+s, escape, return, shift+tab.
-        #[arg(required = true)]
+        #[arg(required = true, allow_hyphen_values = true)]
         keys: Vec<String>,
     },
     /// List the helper's windows, front to back.
@@ -1642,7 +1642,7 @@ fn update_finish(config: &std::path::Path) -> Result<Value> {
     // input service it already runs is cleaned up by the restart itself.
     let mut steps: Vec<&[&str]> = vec![&["install"], &["restart"], &["start-input"]];
 
-    if atlas::setup::migrate::recorded(loaded.helper_uid) {
+    if atlas::setup::migrate::in_effect(loaded.helper_uid) {
         steps.push(&["setup", "--apply"]);
     }
 
@@ -1877,6 +1877,42 @@ mod tests {
         };
 
         assert_eq!(dy, -3);
+    }
+
+    /// Text and keys that begin with a hyphen are typed and pressed, not
+    /// read as options.
+    #[test]
+    fn text_and_keys_may_begin_with_a_hyphen() {
+        let Ok(Cli {
+            command: Some(Command::Type { text, stdin }),
+            ..
+        }) = parse(&["type", "-hi there"])
+        else {
+            panic!("type did not parse");
+        };
+
+        assert_eq!((text.as_deref(), stdin), (Some("-hi there"), false));
+
+        let Ok(Cli {
+            command: Some(Command::Key { keys }),
+            ..
+        }) = parse(&["key", "-", "cmd+-"])
+        else {
+            panic!("key did not parse");
+        };
+
+        assert_eq!(keys, ["-", "cmd+-"]);
+        assert!(matches!(
+            parse(&["type", "--stdin"]),
+            Ok(Cli {
+                command: Some(Command::Type {
+                    text: None,
+                    stdin: true
+                }),
+                ..
+            })
+        ));
+        assert!(parse(&["type", "--help"]).is_err(), "help still shows");
     }
 
     #[test]

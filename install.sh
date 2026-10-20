@@ -39,10 +39,24 @@ target=/Applications
 dest="$target/Atlas.app"
 installed="$dest/Contents/MacOS/atlas"
 
+# Whether Atlas was set up on this Mac: a live setup record, setup-<uid>.json.
+# Archived records carry a timestamp in their name and do not count.
+set_up() {
+	for record in "$HOME/Library/Application Support/Atlas"/setup-*.json; do
+		uid=${record##*/setup-}
+		uid=${uid%.json}
+		case $uid in
+		'' | *[!0-9]*) ;;
+		*) [ -f "$record" ] && return 0 ;;
+		esac
+	done
+	return 1
+}
+
 # An Atlas that is set up updates itself: it swaps the app atomically, moves
 # the helper, the menu bar and the agent plugins onto the new version, and
 # keeps the previous app until that has succeeded.
-if [ -x "$installed" ] && ls "$HOME/Library/Application Support/Atlas"/setup-*.json >/dev/null 2>&1; then
+if [ -x "$installed" ] && set_up; then
 	set -- update
 	[ -z "${ATLAS_VERSION:-}" ] || set -- "$@" --version "$ATLAS_VERSION"
 	[ "${ATLAS_ALLOW_UNNOTARIZED:-}" != 1 ] || set -- "$@" --allow-unnotarized
@@ -50,8 +64,35 @@ if [ -x "$installed" ] && ls "$HOME/Library/Application Support/Atlas"/setup-*.j
 	exec "$installed" "$@"
 fi
 
+# The command goes in ~/.local/bin/atlas. Only a link into an Atlas.app, a
+# link to nothing or nothing at all may be replaced there.
+bin="$HOME/.local/bin"
+link="$bin/atlas"
+if [ -e "$link" ] || [ -L "$link" ]; then
+	case $(readlink "$link" 2>/dev/null) in
+	*/Atlas.app/*) ;;
+	*)
+		[ -L "$link" ] && [ ! -e "$link" ] ||
+			fail "$link is another program, so it was left alone. Move it aside, then run this again."
+		;;
+	esac
+fi
+
 work=$(mktemp -d "${TMPDIR:-/tmp}/atlas-install.XXXXXX")
-trap 'rm -rf "$work"' EXIT INT TERM
+staged=""
+previous=""
+# On any exit, an app swap stopped half way puts the previous app back.
+cleanup() {
+	if [ -n "$previous" ] && [ -d "$previous" ] && [ ! -e "$dest" ]; then
+		mv "$previous" "$dest" || say "Your previous Atlas.app is at $previous"
+	fi
+	[ -z "$staged" ] || rm -rf "$staged"
+	rm -rf "$work"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 base=${ATLAS_DOWNLOAD_BASE:-$SITE/releases/${ATLAS_VERSION:-latest}}
 base=${base%/}
@@ -106,15 +147,16 @@ ditto "$app" "$staged"
 if [ -d "$dest" ]; then
 	previous="$target/.Atlas.app.previous.$$"
 	mv "$dest" "$previous"
-	mv "$staged" "$dest"
+fi
+mv "$staged" "$dest"
+staged=""
+if [ -n "$previous" ]; then
 	rm -rf "$previous"
-else
-	mv "$staged" "$dest"
+	previous=""
 fi
 
-bin="$HOME/.local/bin"
 mkdir -p "$bin"
-ln -sf "$installed" "$bin/atlas"
+ln -sfh "$installed" "$link"
 
 version=$("$installed" --version 2>/dev/null || true)
 say "Installed ${version:-Atlas} at $dest"
@@ -122,7 +164,7 @@ case ":$PATH:" in
 *":$bin:"*) ;;
 *) say "Add $bin to your PATH, for example: echo 'export PATH=\"$bin:\$PATH\"' >> ~/.zprofile" ;;
 esac
-if ls "$HOME/Library/Application Support/Atlas"/setup-*.json >/dev/null 2>&1; then
+if set_up; then
 	# Set up, but the app was gone: the helper still runs the previous
 	# executable. Restart the daemon, then the input service, then let setup
 	# verify the new build.

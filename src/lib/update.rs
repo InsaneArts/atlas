@@ -87,11 +87,41 @@ pub(crate) fn app_of(executable: &Path) -> Option<PathBuf> {
 
 /// The version in a release archive's name, `Atlas-X.Y.Z-macos.zip`.
 fn archive_version(name: &str) -> Option<Vec<u64>> {
-    name.strip_prefix("Atlas-")?
-        .strip_suffix("-macos.zip")?
-        .split('.')
-        .map(|part| part.parse().ok())
-        .collect()
+    exact_version(name.strip_prefix("Atlas-")?.strip_suffix("-macos.zip")?)
+}
+
+/// `X.Y.Z` as numbers, only when every part is one.
+fn exact_version(text: &str) -> Option<Vec<u64>> {
+    text.split('.').map(|part| part.parse().ok()).collect()
+}
+
+/// The version an app says it is in its Info.plist.
+fn bundle_version(app: &Path) -> Option<String> {
+    let output = Command::new("/usr/libexec/PlistBuddy")
+        .args(["-c", "Print :CFBundleShortVersionString"])
+        .arg(app.join("Contents/Info.plist"))
+        .output()
+        .ok()?;
+
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+/// Refuse an app whose own version is not the one its archive is named
+/// for: which release is newer is judged from that name.
+fn require_named_version(app: &Path, name: &str) -> Result<()> {
+    let says = bundle_version(app);
+    let named = archive_version(name);
+    if named.is_some() && says.as_deref().and_then(exact_version) == named {
+        return Ok(());
+    }
+
+    Err(problem(format!(
+        "The app in {name} says it is version {}, not the one its name gives",
+        says.as_deref().unwrap_or("unknown")
+    )))
 }
 
 fn version(text: &str) -> Vec<u64> {
@@ -233,6 +263,8 @@ fn verify(work: &Path, name: &str, allow_unnotarized: bool) -> Result<PathBuf> {
         return Err(problem("The app is not Atlas signed by its Developer ID"));
     }
 
+    require_named_version(&app, name)?;
+
     let notarized = check(
         "/usr/sbin/spctl",
         &[
@@ -347,6 +379,22 @@ fn staged_beside(previous: &Path, installed: Option<&Path>) -> bool {
         })
 }
 
+/// The staging copies (`.Atlas.app.*`) beside `installed`.
+pub(crate) fn staged_copies(installed: &Path) -> Vec<PathBuf> {
+    let Some(entries) = installed
+        .parent()
+        .and_then(|parent| fs::read_dir(parent).ok())
+    else {
+        return Vec::new();
+    };
+
+    entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| staged_beside(path, Some(installed)))
+        .collect()
+}
+
 /// Put `new` in place of `installed` with one atomic exchange, keeping
 /// the previous app beside it (and recording where) until the helper's
 /// handover succeeds.
@@ -363,11 +411,8 @@ fn swap_recording(new: &Path, installed: &Path, name: &str, record: &Path) -> Re
 
     // A staging copy an earlier update left when it was stopped (no record
     // names it, or this update would be finishing it) goes first.
-    for entry in fs::read_dir(parent)?.flatten() {
-        let path = entry.path();
-        if staged_beside(&path, Some(installed)) {
-            let _ = fs::remove_dir_all(&path);
-        }
+    for path in staged_copies(installed) {
+        let _ = fs::remove_dir_all(&path);
     }
 
     let staged = parent.join(format!("{STAGED}{}", crate::control::token()));
@@ -502,6 +547,32 @@ mod tests {
         assert_eq!(archive_version("Atlas-x-macos.zip"), None);
         assert_eq!(archive_version("SHA256SUMS"), None);
         assert!(archive_version("Atlas-0.10.0-macos.zip").unwrap() > version("0.9.9"));
+    }
+
+    #[test]
+    fn an_app_must_be_the_version_its_archive_is_named_for() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join("Atlas.app");
+        fs::create_dir_all(app.join("Contents")).unwrap();
+        let name = "Atlas-1.2.3-macos.zip";
+        assert!(require_named_version(&app, name).is_err(), "no Info.plist");
+
+        for (version, matches) in [("1.2.3", true), ("1.2.4", false), ("1.2.3-beta", false)] {
+            fs::write(
+                app.join("Contents/Info.plist"),
+                format!(
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict>\
+                     <key>CFBundleShortVersionString</key><string>{version}</string>\
+                     </dict></plist>\n"
+                ),
+            )
+            .unwrap();
+            assert_eq!(
+                require_named_version(&app, name).is_ok(),
+                matches,
+                "{version}"
+            );
+        }
     }
 
     #[test]

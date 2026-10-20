@@ -148,11 +148,21 @@ pub(crate) fn app_executable() -> Result<PathBuf> {
 
 /// `~/.local/bin/atlas` → the app, so `atlas` works in a terminal.
 pub(crate) fn link_command(executable: &Path) -> Result<Value> {
-    let bin = config::home()?.join(".local/bin");
-    fs::create_dir_all(&bin)?;
+    link_command_in(&config::home()?.join(".local/bin"), executable)
+}
+
+fn link_command_in(bin: &Path, executable: &Path) -> Result<Value> {
+    fs::create_dir_all(bin)?;
     let link = bin.join("atlas");
     if fs::canonicalize(&link).ok().as_deref() == Some(executable) {
         return Ok(json!({"linked": link, "changed": false}));
+    }
+
+    if !replaceable(&link) {
+        return Err(problem(format!(
+            "{} is another program, so it was left alone. Move it aside, then try again.",
+            crate::ui::text::tilde(&link)
+        )));
     }
 
     let temporary = bin.join(format!(".atlas.{}", crate::control::token()));
@@ -160,6 +170,25 @@ pub(crate) fn link_command(executable: &Path) -> Result<Value> {
     fs::rename(&temporary, &link)?;
 
     Ok(json!({"linked": link, "changed": true}))
+}
+
+/// Whether `link` may become Atlas's command: nothing there, a link to
+/// nothing, or a link into an Atlas.app.
+fn replaceable(link: &Path) -> bool {
+    let Ok(metadata) = fs::symlink_metadata(link) else {
+        return true;
+    };
+
+    if !metadata.file_type().is_symlink() {
+        return false;
+    }
+
+    match fs::canonicalize(link) {
+        Err(_) => true,
+        Ok(target) => target
+            .ancestors()
+            .any(|folder| folder.file_name().is_some_and(|name| name == "Atlas.app")),
+    }
 }
 
 /// Whether `name` can be a new account's short name.
@@ -430,16 +459,40 @@ pub(crate) fn install_job(
         })?;
     }
 
-    run(&Request::Install { agent }).inspect_err(|_| {
-        // The earlier job comes back when the new one cannot go in.
-        if let Some(sha256) = retired {
-            let _ = run(&Request::Restore {
-                uid,
-                label: LABEL.to_owned(),
-                sha256,
-            });
-        }
+    let mut error = match run(&Request::Install { agent }) {
+        Ok(installed) => return Ok(installed),
+        Err(error) => error,
+    };
+
+    let Some(sha256) = retired else {
+        return Err(error);
+    };
+
+    // The earlier job comes back when the new one cannot go in. The new
+    // definition install may have written goes first, or it would block
+    // that return.
+    let restored = run(&Request::Retire {
+        uid,
+        label: LABEL.to_owned(),
+        sha256: expected,
+        missing_ok: true,
     })
+    .and_then(|_| {
+        run(&Request::Restore {
+            uid,
+            label: LABEL.to_owned(),
+            sha256,
+        })
+    });
+
+    if let Err(lost) = restored {
+        error.error = format!(
+            "{}; the earlier helper job could not be put back: {}",
+            error.error, lost.error
+        );
+    }
+
+    Err(error)
 }
 
 /// Restart the helper daemon (launchd starts a fresh process) and wait for
@@ -1171,7 +1224,7 @@ mod tests {
         let logs = Path::new("/Users/atlas/.atlas/logs");
         let ours = setup::helper::text_sha256(&setup::helper::plist(&agent, logs));
 
-        let attempt = |earlier: Option<&str>, install_fails: bool| {
+        let attempt_with = |earlier: Option<&str>, install_fails: bool, restore_fails: bool| {
             let actions = std::cell::RefCell::new(Vec::new());
             let run = |request: &Request| -> Result<Value> {
                 let action = serde_json::to_value(request).unwrap()["action"].clone();
@@ -1184,11 +1237,16 @@ mod tests {
                         Ok(json!({"ok": true, "jobs": {LABEL: {"plistSha256": earlier}}}))
                     }
                     Request::Install { .. } if install_fails => Err(problem("refused")),
+                    Request::Restore { .. } if restore_fails => Err(problem("no backup")),
                     _ => Ok(json!({"ok": true})),
                 }
             };
             let outcome = install_job(run, 503, agent.clone(), logs);
-            (outcome.is_ok(), actions.into_inner())
+            (outcome.map_err(|error| error.error), actions.into_inner())
+        };
+        let attempt = |earlier: Option<&str>, install_fails: bool| {
+            let (outcome, actions) = attempt_with(earlier, install_fails, false);
+            (outcome.is_ok(), actions)
         };
 
         assert_eq!(
@@ -1216,10 +1274,59 @@ mod tests {
                     "inspect".into(),
                     "retire".into(),
                     "install".into(),
+                    "retire".into(),
                     "restore".into()
                 ]
             )
         );
+
+        // A job that cannot be put back is said, not dropped.
+        let (outcome, _) = attempt_with(Some(&other), true, true);
+        let error = outcome.unwrap_err();
+        assert!(error.starts_with("refused;"), "{error}");
+        assert!(
+            error.ends_with("could not be put back: no backup"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn the_command_replaces_only_a_missing_dead_or_atlas_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let bin = root.join("bin");
+        let executable = root.join("Applications/Atlas.app/Contents/MacOS/atlas");
+        let older = root.join("Old/Atlas.app/Contents/MacOS/atlas");
+        for path in [&executable, &older] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"").unwrap();
+        }
+        let link = bin.join("atlas");
+
+        assert_eq!(link_command_in(&bin, &executable).unwrap()["changed"], true);
+        assert_eq!(
+            link_command_in(&bin, &executable).unwrap()["changed"],
+            false
+        );
+
+        for target in [older.clone(), root.join("gone")] {
+            fs::remove_file(&link).unwrap();
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            assert_eq!(link_command_in(&bin, &executable).unwrap()["changed"], true);
+            assert_eq!(fs::canonicalize(&link).unwrap(), executable);
+        }
+
+        let other = root.join("other-atlas");
+        fs::write(&other, b"another program").unwrap();
+        fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(&other, &link).unwrap();
+        assert!(link_command_in(&bin, &executable).is_err());
+        assert_eq!(fs::canonicalize(&link).unwrap(), other);
+
+        fs::remove_file(&link).unwrap();
+        fs::write(&link, b"a script").unwrap();
+        assert!(link_command_in(&bin, &executable).is_err());
+        assert_eq!(fs::read(&link).unwrap(), b"a script");
     }
 
     #[test]

@@ -358,30 +358,37 @@ fn relative_path(path: &Path, directory: bool) -> Result<()> {
 }
 
 pub(super) fn unique_targets<'a>(targets: impl Iterator<Item = &'a Path>) -> Result<()> {
-    let mut seen = Vec::<String>::new();
+    let mut seen = Vec::<&Path>::new();
 
     for path in targets {
         relative_target(path)?;
 
         // Configuration destinations use portable ASCII names. Conservatively
         // reject case aliases even on case-sensitive volumes.
-        let text = path
-            .to_str()
-            .filter(|s| s.is_ascii())
-            .ok_or_else(|| problem("Environment target names must be ASCII"))?;
-        let key = folded(Path::new(text));
-        if seen.iter().any(|s| {
-            s == &key || s.starts_with(&(key.clone() + "/")) || key.starts_with(&(s.clone() + "/"))
-        }) {
+        if !path.to_str().is_some_and(|text| text.is_ascii()) {
+            return Err(problem("Environment target names must be ASCII"));
+        }
+
+        if seen.iter().any(|other| overlap(other, path)) {
             return Err(problem(
                 "Environment targets overlap or differ only by case",
             ));
         }
 
-        seen.push(key);
+        seen.push(path);
     }
 
     Ok(())
+}
+
+/// Whether two targets name the same file up to case, or one lies inside
+/// the other.
+pub(super) fn overlap(first: &Path, second: &Path) -> bool {
+    let (first, second) = (folded(first), folded(second));
+
+    first == second
+        || first.starts_with(&format!("{second}/"))
+        || second.starts_with(&format!("{first}/"))
 }
 
 pub(super) fn has_acl(path: &Path) -> Result<bool> {

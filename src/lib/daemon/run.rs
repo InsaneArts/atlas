@@ -6,7 +6,9 @@
 //! Supervision never waits on the client: events go to a bounded channel that
 //! a separate writer drains. Output is coalesced into a bounded number of
 //! events; what the client cannot take is dropped and reported as truncated.
-//! A client that goes away, or a daemon that stops, ends the command.
+//! A client that goes away, or a daemon that stops, ends the command. Any
+//! failure once the command has started is uncertain: it may have done some
+//! of its work.
 use crate::daemon::protocol::failure;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use nix::{
@@ -176,6 +178,22 @@ struct Output {
 /// The client went away; nothing more can be delivered.
 struct Gone;
 
+/// Why a command was ended before it finished.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cancel {
+    /// The client hung up.
+    Left,
+    /// The daemon is stopping.
+    Stopping,
+}
+
+/// A failure after the command started: it may have done some of its work.
+fn interrupted(code: &str, error: impl Into<String>) -> Value {
+    let mut reply = failure(code, error);
+    reply["uncertain"] = json!(true);
+    reply
+}
+
 impl Output {
     fn new() -> Self {
         Self {
@@ -281,7 +299,7 @@ pub async fn run(
     argv: &[String],
     timeout: Duration,
     events: Sender<Value>,
-    cancel: impl Future<Output = ()>,
+    cancel: impl Future<Output = Cancel>,
 ) -> Value {
     // The protocol never passes an empty argv; refuse one rather than panic.
     let Some(name) = argv.first() else {
@@ -343,7 +361,7 @@ pub async fn run(
     let started = Instant::now();
 
     let Some(group) = child.id().and_then(|pid| i32::try_from(pid).ok()) else {
-        return failure(
+        return interrupted(
             "spawn-failed",
             "The command exited before it could be observed",
         );
@@ -358,7 +376,7 @@ pub async fn run(
         Err(error) => {
             signal_group(group, Signal::SIGKILL);
             let _ = child.wait().await;
-            return failure("spawn-failed", error.to_string());
+            return interrupted("spawn-failed", error.to_string());
         }
     };
 
@@ -377,6 +395,7 @@ pub async fn run(
     let mut open = true;
     let mut unfinished = false;
     let mut linger = None;
+    let mut cancelled = None;
 
     if abandoned {
         signal_group(group, Signal::SIGTERM);
@@ -421,7 +440,10 @@ pub async fn run(
 
                 deadline.as_mut().reset(tokio::time::Instant::now() + GRACE);
             }
-            () = &mut cancel, if !abandoned => abandoned = true,
+            cause = &mut cancel, if !abandoned => {
+                abandoned = true;
+                cancelled = Some(cause);
+            }
             () = tokio::time::sleep_until(linger.unwrap_or_else(tokio::time::Instant::now)),
                 if linger.is_some() && open => {
                 open = false;
@@ -441,13 +463,17 @@ pub async fn run(
         end_group(group).await;
     }
 
+    if cancelled == Some(Cancel::Stopping) {
+        return interrupted("restart", "The helper stopped while the command ran");
+    }
+
     if abandoned || output.finish(&events).await.is_err() {
-        return failure("transport", "The client went away");
+        return interrupted("transport", "The client went away");
     }
 
     match status {
         Some(Ok(status)) => ended(status, timed_out, started, output.truncated, unfinished),
-        _ => failure("wait-failed", "The command's exit status could not be read"),
+        _ => interrupted("wait-failed", "The command's exit status could not be read"),
     }
 }
 
@@ -510,7 +536,7 @@ mod tests {
             &argv,
             Duration::from_millis(timeout_ms),
             sender,
-            std::future::pending(),
+            std::future::pending::<Cancel>(),
         )
         .await;
 
@@ -613,7 +639,7 @@ mod tests {
             &argv,
             Duration::from_millis(300),
             sender,
-            std::future::pending(),
+            std::future::pending::<Cancel>(),
         )
         .await;
 
@@ -630,7 +656,7 @@ mod tests {
             &argv,
             Duration::from_secs(30),
             sender,
-            std::future::pending(),
+            std::future::pending::<Cancel>(),
         )
         .await;
 
@@ -650,14 +676,37 @@ mod tests {
             "(trap '' TERM; sleep 30) & sleep 30".to_owned(),
         ];
         let started = Instant::now();
-        let cancel = tokio::time::sleep(Duration::from_millis(300));
+        let cancel = async {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            Cancel::Left
+        };
         let reply = run(&argv, Duration::from_secs(60), sender, cancel).await;
 
         assert!(started.elapsed() < Duration::from_secs(8));
         assert_eq!(reply["code"], "transport");
+        assert_eq!(reply["uncertain"], true, "the command had started");
 
         let group = receiver.recv().await.unwrap()["pid"].as_i64().unwrap();
         assert!(!group_alive(group), "nothing the command started survives");
+    }
+
+    /// A daemon that stops mid-command says so, and that the outcome is
+    /// unknown.
+    #[tokio::test]
+    async fn a_stopping_daemon_leaves_the_outcome_unknown() {
+        let (sender, _receiver) = mpsc::channel(EVENTS);
+        let argv = ["/bin/sleep".to_owned(), "30".to_owned()];
+        let cancel = async {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            Cancel::Stopping
+        };
+
+        let reply = run(&argv, Duration::from_secs(60), sender, cancel).await;
+        assert_eq!(
+            reply,
+            interrupted("restart", "The helper stopped while the command ran")
+        );
+        assert_eq!(reply["uncertain"], true);
     }
 
     /// The last output waits for a slow client instead of being dropped, and
@@ -684,7 +733,7 @@ mod tests {
             &argv,
             Duration::from_secs(10),
             sender,
-            std::future::pending(),
+            std::future::pending::<Cancel>(),
         )
         .await;
 
@@ -697,7 +746,7 @@ mod tests {
             &argv,
             Duration::from_secs(20),
             sender,
-            std::future::pending(),
+            std::future::pending::<Cancel>(),
         )
         .await;
         assert_eq!(reply["outputTruncated"], true);

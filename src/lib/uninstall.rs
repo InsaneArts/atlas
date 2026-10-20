@@ -141,7 +141,7 @@ pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Val
     }
 
     stop_menubar(client.as_ref());
-    disconnect(&executable, &mut removed)?;
+    disconnect(&executable, &mut removed, &mut warnings)?;
     trash(&app, &leftovers, &mut removed)?;
     remove_settings(config_path, keep_config, &data, &mut removed)?;
 
@@ -215,6 +215,7 @@ fn survey(config_path: &Path) -> Result<Found> {
 fn confirm(found: &Found, config_path: &Path, keep_config: bool) -> Result<()> {
     let Found {
         app,
+        client,
         unloaded,
         helper,
         data,
@@ -222,11 +223,12 @@ fn confirm(found: &Found, config_path: &Path, keep_config: bool) -> Result<()> {
         ..
     } = found;
 
+    // The helper's job is stopped only through settings that load.
     let mut parts = vec![
-        if unloaded.is_some() {
-            "the menu bar and the agent plugins".to_owned()
-        } else {
+        if client.is_some() {
             "the helper's background job, the menu bar and the agent plugins".to_owned()
+        } else {
+            "the menu bar and the agent plugins".to_owned()
         },
         format!("{} (to the Trash)", text::tilde(app)),
     ];
@@ -313,18 +315,38 @@ fn stop_menubar(client: Option<&Client>) {
         .is_some();
     let login_off = crate::menubar::set_login(crate::menubar::Login::Off)
         .is_ok_and(|reply| reply["ok"] == true);
-    if login_off || stopped {
-        done("Menu bar", "stopped and no longer opens at login");
-    }
+
+    let said = match (stopped, login_off) {
+        (true, true) => "stopped and no longer opens at login",
+        (true, false) => "stopped",
+        (false, true) => "no longer opens at login",
+        (false, false) => return,
+    };
+    done("Menu bar", said);
 }
 
 /// Agents forget the plugin (only connected ones change), and `atlas`
 /// leaves the terminal.
-fn disconnect(executable: &Path, removed: &mut Vec<Value>) -> Result<()> {
-    let disconnected = crate::agents::change(&[], true).ok();
-    if disconnected.is_some() {
-        removed.push(json!("agent plugins"));
-        done("Agent plugins", "removed");
+fn disconnect(
+    executable: &Path,
+    removed: &mut Vec<Value>,
+    warnings: &mut Vec<String>,
+) -> Result<()> {
+    // An error here means no agent is installed, so there is nothing to remove.
+    if let Ok(reply) = crate::agents::change(&[], true) {
+        if reply["ok"] == true {
+            removed.push(json!("agent plugins"));
+            done("Agent plugins", "removed");
+        } else {
+            let failed = failed_agents(&reply);
+            skipped(
+                "Agent plugins",
+                &format!("not removed from {failed}; run atlas agents remove"),
+            );
+            warnings.push(format!(
+                "The plugin was not removed from {failed}; run atlas agents remove"
+            ));
+        }
     }
 
     let command = config::home()?.join(".local/bin/atlas");
@@ -333,6 +355,24 @@ fn disconnect(executable: &Path, removed: &mut Vec<Value>) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// The agents a plugin change failed for, as "Claude Code and Codex".
+fn failed_agents(reply: &Value) -> String {
+    let names: Vec<&str> = reply["agents"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|agent| agent["ok"] != true)
+        .filter_map(|agent| agent["agent"].as_str())
+        .map(|name| crate::agents::Agent::named(name).map_or(name, |agent| agent.display_name()))
+        .collect();
+
+    if names.is_empty() {
+        "an agent".to_owned()
+    } else {
+        names.join(" and ")
+    }
 }
 
 /// The app goes to the Trash, where it can be recovered; what it left for
@@ -350,6 +390,13 @@ fn trash(app: &Path, leftovers: &[PathBuf], removed: &mut Vec<Value>) -> Result<
 
     removed.push(json!(app));
     done("Atlas.app", "moved to the Trash");
+
+    // Earlier apps an unfinished update kept beside it.
+    for staged in crate::update::staged_copies(app) {
+        if fs::remove_dir_all(&staged).is_ok() {
+            removed.push(json!(staged));
+        }
+    }
 
     let mut cleared = false;
     for leftover in leftovers {

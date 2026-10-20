@@ -654,21 +654,25 @@ impl Client {
 
     /// Execute argv in the verified hidden helper as part of a mutation the
     /// caller holds ownership for and has already recorded as pending. The
-    /// caller settles that record once the outcome is established.
+    /// caller settles that record once the outcome is established. A
+    /// refusal is an error with the helper's code, uncertain when the
+    /// command may have started.
     pub async fn run_pending(&self, argv: Vec<String>, timeout: Duration) -> Result<Value> {
         self.identity().await?;
 
         let timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
         let request = json!({"op": "run", "argv": argv, "timeoutMs": timeout_ms});
-        let reply = self
-            .transport
-            .connect()
-            .await?
-            .dispatch(&request)
-            .await?
-            .finish()
-            .await?;
+
+        // The reply comes after the command ends, as for any other run.
+        let mut transport = self.transport.clone();
+        transport.timeout = transport.timeout.max(timeout + RUN_MARGIN);
+
+        let reply = transport.call(&request).await?;
         validate_completion(&request, &reply)?;
+
+        if reply["ok"] != true {
+            return Err(crate::transport::refusal(&reply));
+        }
 
         Ok(reply)
     }
@@ -961,8 +965,24 @@ impl Client {
         }
 
         // Held through verification, so the restart reads as in progress.
-        let _recovery = self.controller.quarantine()?;
+        // A refusal that changed nothing clears it, as for a log-out.
+        let claim = self.controller.quarantine()?;
+        let outcome = self.restart_claimed(&before).await;
 
+        let refused = match &outcome {
+            Ok(reply) => reply["ok"] != true && reply["uncertain"] != true,
+            Err(error) => !error.uncertain,
+        };
+        if refused {
+            self.controller.clear_if(&claim)?;
+        }
+
+        outcome
+    }
+
+    /// The restart itself, under the claim [`Client::restart`] holds: input
+    /// cleared first, then the helper restarted and confirmed new.
+    async fn restart_claimed(&self, before: &Session) -> Result<Value> {
         // Input has its own process. Clear held state there before restarting
         // the capture/command helper; a new capture PID alone proves nothing
         // about an uncertain mouse or keyboard action.

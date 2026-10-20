@@ -102,19 +102,61 @@ pub fn load(path: &Path, epoch: &InputEpoch) -> Result<Option<Held>> {
             return Ok(None);
         }
 
-        return Err(Error::new(
-            "identity",
-            "Held input belongs to an earlier login. Archive its journal after inspecting \
-             that session; it will not be replayed into this login.",
-        ));
+        // That login ended (a restart or a forced log-out) and its held
+        // input with it; nothing is replayed into this one. The journal is
+        // kept beside this one as evidence, and this service starts clean.
+        let kept = set_aside(path, &held)?;
+        eprintln!(
+            "Held input from an earlier login (session {}) was not replayed; its journal is \
+             kept at {}",
+            held.epoch.security_session_id,
+            kept.display()
+        );
+
+        return Ok(None);
     }
 
     Ok(Some(held))
 }
 
+/// Move an earlier login's journal aside, never over an earlier one, and
+/// say where it went.
+fn set_aside(path: &Path, held: &Held) -> Result<PathBuf> {
+    let session = held.epoch.security_session_id;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    for attempt in 0..100u32 {
+        let kept = path.with_extension(format!("{session}.{stamp}-{attempt}.json"));
+        if fs::symlink_metadata(&kept).is_ok() {
+            continue;
+        }
+
+        return match fs::rename(path, &kept) {
+            Ok(()) => Ok(kept),
+            Err(error) => Err(Error::new(
+                "identity",
+                format!(
+                    "Held input from an earlier login could not be set aside ({error}); it \
+                     will not be replayed into this login"
+                ),
+            )),
+        };
+    }
+
+    Err(Error::new(
+        "identity",
+        "Held input from an earlier login could not be set aside; it will not be replayed \
+         into this login",
+    ))
+}
+
 /// Replace the journal in one step. It is written as far as the kernel: it
-/// is for a service that crashed, and a power cut releases every key by
-/// itself.
+/// is for a service that crashed. A power cut ends the login whose input
+/// was held, and a journal from an earlier login is set aside, not
+/// replayed.
 pub fn store(path: &Path, held: &Held) -> Result<()> {
     let temporary = path.with_extension("pending");
     write_private_with(&temporary, &serde_json::to_vec(held)?, Durability::Kernel)?;
@@ -256,7 +298,27 @@ mod tests {
 
         held.button = Some(Button::Left);
         store(&path, &held).unwrap();
-        assert!(load(&path, &epoch).is_err());
+        assert!(
+            load(&path, &epoch).unwrap().is_none(),
+            "nothing is replayed"
+        );
+        assert!(!path.exists(), "the next login starts clean");
+
+        let kept: Vec<_> = fs::read_dir(directory.path())
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().into_string().unwrap())
+            .filter(|name| name.starts_with("held.10.") && name.ends_with(".json"))
+            .collect();
+        assert_eq!(kept.len(), 1, "the earlier login's journal is kept");
+
+        let evidence: Held =
+            serde_json::from_slice(&fs::read(directory.path().join(&kept[0])).unwrap()).unwrap();
+        assert!(evidence == held);
+
+        store(&path, &held).unwrap();
+        assert!(load(&path, &epoch).unwrap().is_none());
+        assert!(!path.exists(), "a second one never replaces the first");
     }
 
     /// Only the journal file itself is read: never a link to one, even a

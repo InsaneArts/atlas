@@ -270,8 +270,11 @@ const CLICK_MS: u32 = 70;
 const DRAG_MS: u32 = 650;
 /// [`SCROLL_SETTLE`] and its events.
 const SCROLL_MS: u32 = 60;
-/// Per character: [`TYPE_GAP`] and its events.
-const TYPE_MS: u32 = 3;
+/// Per character: [`TYPE_GAP`], its key-down and key-up events, the
+/// session checks and the journal write before them: close to 7 ms in all.
+const TYPE_MS: u32 = 7;
+// The longest text one action types fits one batch.
+const _: () = assert!(TYPE_MS * 256 <= BATCH_MS);
 const KEY_MS: u32 = 10;
 
 pub fn validate(value: &Value, display: &Display) -> Result<()> {

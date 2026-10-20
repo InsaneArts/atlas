@@ -408,8 +408,8 @@ async fn handle(stream: UnixStream, daemon: Arc<Daemon>) -> Result<()> {
             let cancel = async {
                 let mut byte = [0; 1];
                 tokio::select! {
-                    _ = reader.read(&mut byte) => {}
-                    () = daemon.stopped() => {}
+                    _ = reader.read(&mut byte) => run::Cancel::Left,
+                    () = daemon.stopped() => run::Cancel::Stopping,
                 }
             };
 
@@ -641,6 +641,15 @@ mod tests {
                 "client" => drop(lines),
                 _ => {
                     daemon.stopping.send_replace(true);
+
+                    // The client still listens: it hears that the command
+                    // was cut short, with an outcome nobody can know.
+                    let reply: Value =
+                        serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+                    assert_eq!(
+                        (&reply["code"], &reply["uncertain"]),
+                        (&json!("restart"), &json!(true))
+                    );
                 }
             }
 

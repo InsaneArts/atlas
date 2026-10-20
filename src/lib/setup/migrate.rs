@@ -91,10 +91,20 @@ fn log_path(uid: u32) -> Result<PathBuf> {
         .join(format!("setup-{uid}.json")))
 }
 
-/// Whether a setup is recorded for helper `uid` (applied, in progress or
-/// rolled back).
-pub fn recorded(uid: u32) -> bool {
-    log_path(uid).is_ok_and(|path| path.exists())
+/// Whether helper `uid`'s setup is applied or still being applied, so an
+/// update carries it over to the new app. A setup rolled back (or being
+/// rolled back) is the person's choice and stays as it is; a record that
+/// cannot be read counts, so the step that carries it over says why.
+pub fn in_effect(uid: u32) -> bool {
+    log_path(uid).is_ok_and(|path| carried_over(load_log(&path)))
+}
+
+fn carried_over(log: Result<Option<Log>>) -> bool {
+    match log {
+        Ok(Some(log)) => matches!(log.state, State::Applying | State::Applied),
+        Ok(None) => false,
+        Err(_) => true,
+    }
 }
 
 /// Archive helper `uid`'s setup record if it belongs to another account
@@ -1051,9 +1061,10 @@ pub async fn apply(config_path: &Path, _ownership: &Ownership) -> Result<Value> 
 
     // An applied setup re-verifies. An updated Atlas.app is accepted if it
     // is still validly signed as Atlas: its new hash is recorded, and the
-    // running daemon's executable must be that binary.
-    let applied = log.state == State::Applied;
-    carry_out(path, log, applied).await
+    // running daemon's executable must be that binary. A first setup
+    // accepts it however far it got, as atlas init does.
+    let recheck = log.state == State::Applied || log.plan.fresh;
+    carry_out(path, log, recheck).await
 }
 
 /// Undo an applied or interrupted migration recorded in the log.
@@ -1370,6 +1381,20 @@ mod tests {
                 Start::Plan(Some(replanned))
             );
         }
+    }
+
+    #[test]
+    fn an_update_carries_over_only_a_setup_still_in_effect() {
+        for state in [State::Applying, State::Applied] {
+            assert!(carried_over(Ok(Some(recorded(state, LABEL, true, 1)))));
+        }
+
+        for state in [State::RollingBack, State::RolledBack] {
+            assert!(!carried_over(Ok(Some(recorded(state, LABEL, false, 1)))));
+        }
+
+        assert!(!carried_over(Ok(None)));
+        assert!(carried_over(Err(problem("unreadable"))));
     }
 
     #[test]
