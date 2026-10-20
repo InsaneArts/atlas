@@ -11,7 +11,7 @@ struct ViewerStatusTests {
       "ready": true,
       "session": ["user": ["name": "atlastest"], "inputService": ["ok": true, "ready": true]],
       "overview": [
-        "mode": "controlling", "account": "atlastest", "accountName": "Atlas Test",
+        "mode": "controlling", "recoverable": true, "account": "atlastest", "accountName": "Atlas Test",
         "display": ["width": 2560.0, "height": 1440.0], "pending": 0,
         "activity": [
           ["operation": "input", "actor": "viewer", "ok": true, "actionCount": 3, "ageSeconds": 42.0]
@@ -22,6 +22,7 @@ struct ViewerStatusTests {
     #expect(reading.session.userName == "atlastest")
     #expect(reading.session.inputReady)
     #expect(reading.overview.mode == .controlling)
+    #expect(reading.overview.recoverable)
     #expect(reading.overview.accountName == "Atlas Test")
     #expect(reading.overview.display == .init(width: 2560, height: 1440))
     #expect(
@@ -35,6 +36,7 @@ struct ViewerStatusTests {
   func defaults() throws {
     let empty = try status([:])
     #expect(empty.overview.mode == .unavailable)
+    #expect(!empty.overview.recoverable)
     #expect(!empty.ready)
     #expect(StatusReading(empty).lastAction == "No recent actions")
     let odd = try status(["ready": "yes", "overview": ["mode": 3, "activity": "none"]])

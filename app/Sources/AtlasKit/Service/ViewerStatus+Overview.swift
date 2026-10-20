@@ -5,6 +5,8 @@ extension ViewerStatus {
     package var mode = HelperMode.unavailable
     /// Why the helper is in its mode, in the service's words.
     package var reason = Words.connecting
+    /// Whether Recover fixes what keeps the helper not ready: its input stopped or lost its display.
+    package var recoverable = false
     /// The helper's short account name.
     package var account: String?
     /// The account's full name ("Atlas"), when it has one.
@@ -23,7 +25,7 @@ extension ViewerStatus {
 
     /// The fields of the `overview` object.
     enum CodingKeys: String, CodingKey {
-      case mode, reason, account, accountName, display, pending, activity
+      case mode, reason, recoverable, account, accountName, display, pending, activity
     }
 
     /// Decodes an overview, keeping the default of anything missing or of the wrong type.
@@ -34,6 +36,7 @@ extension ViewerStatus {
       let container = try decoder.container(keyedBy: CodingKeys.self)
       mode = (try? container.decodeIfPresent(HelperMode.self, forKey: .mode)) ?? .unavailable
       reason = (try? container.decodeIfPresent(String.self, forKey: .reason)) ?? reason
+      recoverable = (try? container.decodeIfPresent(Bool.self, forKey: .recoverable)) ?? false
       account = try? container.decodeIfPresent(String.self, forKey: .account)
       accountName = try? container.decodeIfPresent(String.self, forKey: .accountName)
       display = try? container.decodeIfPresent(Size.self, forKey: .display)

@@ -24,7 +24,7 @@ package struct PanelView: View {
       PanelHeader(status: state.status, reason: state.reason)
       stage
       if let recovery = state.recovery {
-        RecoveryCard(detail: recovery) { send(.recover) }
+        RecoveryCard(recovery: recovery) { send(.recover) }
       }
       PanelFacts(facts: state.facts)
       PanelButtons(viewerLook: state.viewerLook, secondary: state.secondary, send: send)
@@ -93,6 +93,10 @@ package struct PanelView: View {
 
   #Preview("Recovering") {
     PanelView(state: PreviewStates.panelRecovering) { _ in }
+  }
+
+  #Preview("Input stopped") {
+    PanelView(state: PreviewStates.panelInputStopped) { _ in }
   }
 
   #Preview("Logged out") {
