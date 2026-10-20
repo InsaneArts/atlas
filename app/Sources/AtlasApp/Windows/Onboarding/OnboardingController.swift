@@ -215,15 +215,15 @@ final class OnboardingController {
   /// Creates the account. The password reaches macOS on standard input, never in the arguments, and leaves the form
   /// as it is handed over.
   func createAccount() async {
-    let form = snapshot.form
-    guard form.canCreate, snapshot.working == nil else { return }
-    var secret = Data(form.password.utf8)
+    guard snapshot.form.canCreate, snapshot.working == nil else { return }
+    let action = Action.createAccount(account: snapshot.form.accountName, fullName: snapshot.form.fullName)
+    var secret = Data(snapshot.form.password.utf8)
     secret.append(0x0A)
     // Cleared from the window as soon as it is handed to macOS.
     snapshot.form.password = ""
     snapshot.form.verify = ""
     await act(
-      .createAccount(account: form.accountName, fullName: form.fullName),
+      action,
       OnboardingWords.creating,
       input: secret
     )
