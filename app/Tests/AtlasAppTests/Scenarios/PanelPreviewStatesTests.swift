@@ -55,6 +55,8 @@
         opensAtLogin: OpenAtLogin.State(isAvailable: true, isEnabled: false)
       )
       unavailable.helper = nil
+      var inputStopped = try snapshot("blocked", reason: "The helper's input stopped. Recover starts it again.")
+      inputStopped.status.overview.recoverable = true
       let presented: [String: PanelSnapshot] = [
         "Watching": try snapshot("observing"),
         "Agent working": try snapshot("agent", reason: "An agent is acting in the helper"),
@@ -63,6 +65,7 @@
           "recovering",
           reason: "An action's outcome is unknown. Recover the helper before anything else runs."
         ),
+        "Input stopped": inputStopped,
         "Logged out": try snapshot("loggedOut", reason: "The helper is logged out"),
         "No picture": noPicture,
         "Confirm log-out": confirming,

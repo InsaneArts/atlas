@@ -87,9 +87,26 @@ struct PanelPresenterTests {
   @Test("a recovering helper shows the recovery card with its reason, or a fallback when it gives none")
   func recoveryCard() {
     #expect(PanelPresenter.state(Self.snapshot(.observing)).recovery == nil)
-    #expect(PanelPresenter.state(Self.snapshot(.recovering, reason: "Unknown outcome")).recovery == "Unknown outcome")
+    #expect(
+      PanelPresenter.state(Self.snapshot(.recovering, reason: "Unknown outcome")).recovery
+        == .unfinished("Unknown outcome")
+    )
     let fallback = PanelPresenter.state(Self.snapshot(.recovering, reason: "")).recovery
-    #expect(fallback == "Recover before anything else runs.")
+    #expect(fallback == .unfinished("Recover before anything else runs."))
+  }
+
+  @Test("input Recover starts again shows the not-ready card in place of the reason and the Recover row")
+  func inputStoppedOffersRecover() {
+    var stopped = Self.snapshot(.blocked, reason: "The helper's input stopped. Recover starts it again.")
+    stopped.status.overview.recoverable = true
+    let state = PanelPresenter.state(stopped)
+    #expect(state.recovery == .notReady("The helper's input stopped. Recover starts it again."))
+    #expect(state.reason == nil)
+    #expect(state.menu.recover == .hidden)
+    let settings = PanelPresenter.state(Self.snapshot(.blocked, reason: "Turn on Accessibility."))
+    #expect(settings.recovery == nil)
+    #expect(settings.reason == "Turn on Accessibility.")
+    #expect(settings.menu.recover == .enabled)
   }
 
   @Test("the facts read a dash for an unknown helper and display")

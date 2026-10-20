@@ -9,6 +9,7 @@
         PreviewState(name: "Agent working", value: panelAgentWorking),
         PreviewState(name: "In control", value: panelInControl),
         PreviewState(name: "Recovering", value: panelRecovering),
+        PreviewState(name: "Input stopped", value: panelInputStopped),
         PreviewState(name: "Logged out", value: panelLoggedOut),
         PreviewState(name: "No picture", value: panelNoPicture),
         PreviewState(name: "Confirm log-out", value: panelConfirmLogOut),
@@ -59,8 +60,18 @@
       var state = panelWatching
       state.status = StatusSummary(label: "Needs you", tone: .attention)
       state.reason = nil
-      state.recovery = "An action's outcome is unknown. Recover the helper before anything else runs."
+      state.recovery = .unfinished("An action's outcome is unknown. Recover the helper before anything else runs.")
       state.menu = PanelMenu(opensAtLogin: false, recover: .hidden, logOut: .disabled)
+      return state
+    }()
+
+    /// The helper's input stopped after an account switch: the card offers Recover, and Recover leaves the menu.
+    @MainActor static let panelInputStopped: PanelState = {
+      var state = panelWatching
+      state.status = StatusSummary(label: "Not ready", tone: .attention)
+      state.reason = nil
+      state.recovery = .notReady("The helper's input stopped. Recover starts it again.")
+      state.menu.recover = .hidden
       return state
     }()
 

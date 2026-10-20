@@ -30,8 +30,16 @@ enum PanelPresenter {
   /// - Parameter overview: The service's overview.
   /// - Returns: The reason, or nil to hide the line.
   private static func reason(_ overview: ViewerStatus.Overview) -> String? {
-    let hidden = overview.reason.isEmpty || overview.mode == .recovering || overview.mode == .loggedOut
+    let hidden = overview.reason.isEmpty || offersRecovery(overview) || overview.mode == .loggedOut
     return hidden ? nil : overview.reason
+  }
+
+  /// Whether the recovery card shows: while recovering, or when Recover fixes what keeps the helper not ready.
+  ///
+  /// - Parameter overview: The service's overview.
+  /// - Returns: Whether the card offers Recover.
+  private static func offersRecovery(_ overview: ViewerStatus.Overview) -> Bool {
+    overview.mode == .recovering || (overview.mode == .blocked && overview.recoverable)
   }
 
   /// What fills the space under the header: logged out, the way to log in; else the desktop or why there is none.
@@ -45,13 +53,16 @@ enum PanelPresenter {
     return snapshot.picture.map(PanelStage.picture) ?? .placeholder(snapshot.placeholder)
   }
 
-  /// The recovery card's detail, while the helper needs recovering.
+  /// Why the recovery card offers Recover: an unknown outcome, or input Recover starts again.
   ///
   /// - Parameter overview: The service's overview.
   /// - Returns: The reason, a fallback when it is empty, or nil to hide the card.
-  private static func recovery(_ overview: ViewerStatus.Overview) -> String? {
-    guard overview.mode == .recovering else { return nil }
-    return overview.reason.isEmpty ? PanelWords.recoverFirst : overview.reason
+  private static func recovery(_ overview: ViewerStatus.Overview) -> PanelRecovery? {
+    guard offersRecovery(overview) else { return nil }
+    if overview.mode == .blocked {
+      return .notReady(overview.reason.isEmpty ? PanelWords.inputStopped : overview.reason)
+    }
+    return .unfinished(overview.reason.isEmpty ? PanelWords.recoverFirst : overview.reason)
   }
 
   /// The helper, its display and the newest action, with a dash for what is unknown.
@@ -94,7 +105,7 @@ enum PanelPresenter {
     }
   }
 
-  /// The menu rows: Open at Login when the app carries the login item; Recover unless recovering or logged out; Log
+  /// The menu rows: Open at Login when the app carries the login item; Recover unless the card offers it or logged out; Log
   /// Out Helper… unless logged out, waiting while a command runs, the mode forbids it or the person is asked.
   ///
   /// - Parameter snapshot: What the controller holds.
@@ -103,7 +114,7 @@ enum PanelPresenter {
     let mode = snapshot.status.overview.mode
     let opensAtLogin = snapshot.opensAtLogin.flatMap { $0.isAvailable ? $0.isEnabled : nil }
     let recover: PanelMenuItem =
-      mode == .recovering || mode == .loggedOut ? .hidden : snapshot.working ? .disabled : .enabled
+      offersRecovery(snapshot.status.overview) || mode == .loggedOut ? .hidden : snapshot.working ? .disabled : .enabled
     let asking = snapshot.logOutStage == .confirming
     let logOut: PanelMenuItem =
       mode == .loggedOut ? .hidden : !snapshot.working && mode.allowsLogOut && !asking ? .enabled : .disabled
