@@ -192,10 +192,11 @@ pub fn assess(record: Option<&Record>, current: Option<&Generation>, at: u64) ->
 
 /// What doctor says of web content. WebKit stops drawing a page whose
 /// window macOS reports as not visible, which is every window of a hidden
-/// login; a page then shows blank and has no accessibility elements.
-const WEB_CONTENT: &str = "Web pages (Safari and other WebKit views) are known to draw only \
-                           while a Screen Sharing session is connected to the helper; \
-                           otherwise they stay blank and out of elements.";
+/// login; a page then shows blank and has no accessibility elements. Chrome
+/// and Firefox keep drawing there.
+const WEB_CONTENT: &str = "Google Chrome and Firefox draw web pages in the helper. Safari and \
+                           other WebKit views are known to draw only while a Screen Sharing \
+                           session is connected to the helper; otherwise they stay blank.";
 
 /// Doctor's native-dialog assessment for a status snapshot.
 pub fn native_dialogs(status: &Value, uid: u32) -> Value {
