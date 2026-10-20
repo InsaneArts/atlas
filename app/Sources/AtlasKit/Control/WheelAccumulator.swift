@@ -37,20 +37,35 @@ package struct WheelAccumulator: Sendable {
     y += dy * factor
   }
 
+  /// A new scroll gesture begins: the fraction of a line the last one left goes, so it never rides along with
+  /// scrolling the person did later and elsewhere. Whole lines not yet sent stay, as the person did scroll them.
+  package mutating func beginGesture() {
+    x = Self.whole(x)
+    y = Self.whole(y)
+  }
+
+  /// Whether at least one whole line waits, as one that ``take()`` capped leaves.
+  package var holdsWholeLines: Bool { Self.whole(x) != 0 || Self.whole(y) != 0 }
+
   /// The whole lines to send now (at most ``mostLines`` each way); the rest stays.
   ///
   /// - Returns: The whole lines each way.
   package mutating func take() -> (dx: Int, dy: Int) {
-    func whole(_ value: Double) -> Int {
-      let slack = value < 0 ? -Self.roundingSlack : Self.roundingSlack
-      let lines = (value + slack)
-        .rounded(.towardZero)
-      return Int(max(-Self.mostLines, min(Self.mostLines, lines)))
-    }
-    let dx = whole(x)
-    let dy = whole(y)
+    func capped(_ value: Double) -> Int { Int(max(-Self.mostLines, min(Self.mostLines, Self.whole(value)))) }
+    let dx = capped(x)
+    let dy = capped(y)
     x -= Double(dx)
     y -= Double(dy)
     return (dx, dy)
+  }
+
+  /// The whole lines in `value`, towards zero, with ``roundingSlack``.
+  ///
+  /// - Parameter value: Lines, with any fraction.
+  /// - Returns: Its whole lines.
+  private static func whole(_ value: Double) -> Double {
+    let slack = value < 0 ? -roundingSlack : roundingSlack
+    return (value + slack)
+      .rounded(.towardZero)
   }
 }

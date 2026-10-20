@@ -22,6 +22,15 @@ extension ViewerController {
     return DesktopPoint(location: location, in: size, image: pictureSize, display: frame.display, clamp: clamp)
   }
 
+  /// View points per point of the helper's display in a view of `size`; 1 with no picture to measure by.
+  ///
+  /// - Parameter size: The view's size.
+  /// - Returns: The view's scale.
+  func scale(in size: CGSize) -> Double {
+    guard let frame = reading.frame, let pictureSize = reading.pictureSize else { return 1 }
+    return DesktopPoint.scale(in: size, image: pictureSize, display: frame.display) ?? 1
+  }
+
   /// A button went down over the desktop.
   ///
   /// - Parameters:
@@ -31,7 +40,14 @@ extension ViewerController {
   ///   - modifiers: The modifier keys held.
   func pointerDown(_ button: MouseButton, at location: CGPoint, in size: CGSize, modifiers: Modifiers) {
     guard canInput, let point = point(location, in: size),
-      let action = gesture.start(button, at: point, modifiers: modifiers, now: clock())
+      let action = gesture.start(
+        button,
+        at: point,
+        scale: scale(in: size),
+        modifiers: modifiers,
+        now: clock(),
+        repeatWithin: doubleClickInterval()
+      )
     else { return }
     enqueue([action])
   }
@@ -45,12 +61,14 @@ extension ViewerController {
   ///   - modifiers: The modifier keys held.
   func pointerDragged(_ button: MouseButton, to location: CGPoint, in size: CGSize, modifiers: Modifiers) {
     guard canInput, let point = point(location, in: size, clamp: true),
-      let action = gesture.move(button, to: point, modifiers: modifiers)
+      let action = gesture.move(button, to: point, scale: scale(in: size), modifiers: modifiers)
     else { return }
     enqueue([action])
   }
 
-  /// The button comes up where it is, or where the gesture last was.
+  /// The button comes up where it is, or where the gesture last was. The release is cleanup, so it goes whenever
+  /// control is held, over a stale picture too: dropped, it would leave the helper's button down, and later moves
+  /// would drag.
   ///
   /// - Parameters:
   ///   - button: The button.
@@ -59,11 +77,9 @@ extension ViewerController {
   ///   - modifiers: The modifier keys held.
   func pointerUp(_ button: MouseButton, at location: CGPoint, in size: CGSize, modifiers: Modifiers) {
     guard let point = point(location, in: size, clamp: true) ?? gesture.last else { return }
-    let movement = gesture.move(button, to: point, modifiers: modifiers)
-    guard let action = gesture.finish(button, at: point, modifiers: modifiers, now: clock()), canInput else {
-      return
-    }
-    enqueue([movement, action].compactMap { $0 })
+    let movement = gesture.move(button, to: point, scale: scale(in: size), modifiers: modifiers)
+    guard let action = gesture.finish(button, at: point, modifiers: modifiers, now: clock()) else { return }
+    enqueueCleanup([movement, action].compactMap { $0 })
   }
 
   /// The pointer moved with no button held.
@@ -76,32 +92,50 @@ extension ViewerController {
     enqueue([.move(x: point.x, y: point.y)])
   }
 
-  /// Scrolling is gathered for a moment and sent as whole lines.
+  /// Scrolling is gathered for a moment and sent as whole lines. A new gesture, one the trackpad says begins or one
+  /// after a pause longer than the gathering, drops the fraction of a line the last one left.
   ///
   /// - Parameters:
   ///   - dx: AppKit's horizontal delta.
   ///   - dy: AppKit's vertical delta.
   ///   - precise: Whether it came from a trackpad, in points, rather than a wheel's lines.
+  ///   - began: Whether the trackpad says this event begins a gesture.
   ///   - location: Where, in the view.
   ///   - size: The view's size.
-  func scrolled(dx: Double, dy: Double, precise: Bool, at location: CGPoint, in size: CGSize) {
+  func scrolled(dx: Double, dy: Double, precise: Bool, began: Bool, at location: CGPoint, in size: CGSize) {
     guard canInput, let point = point(location, in: size) else { return }
+    let now = clock()
+    let quiet = wheelHeardAt.map { Duration.seconds(now - $0) > Self.scrollGathering } ?? true
+    if began || quiet { wheel.beginGesture() }
+    wheelHeardAt = now
     wheel.add(dx: dx, dy: dy, precise: precise)
     wheelAt = point
+    sendWheelSoon()
+  }
+
+  /// Sends the gathered scrolling once the gathering ends, unless a send already waits.
+  private func sendWheelSoon() {
     guard wheelSending == nil else { return }
     wheelSending = Task { [weak self] in
       try? await Task.sleep(for: Self.scrollGathering)
       guard let self, !Task.isCancelled else { return }
       wheelSending = nil
-      let delta = wheel.take()
-      guard let at = wheelAt, delta.dx != 0 || delta.dy != 0 else { return }
-      // AppKit's positive delta moves content down (towards the top of
-      // the page); Atlas's positive lines scroll down the page.
-      enqueue([
-        .move(x: at.x, y: at.y), .wait(milliseconds: Self.scrollSettle),
-        .scroll(x: at.x, y: at.y, dx: -delta.dx, dy: -delta.dy),
-      ])
+      sendWheel()
     }
+  }
+
+  /// Sends the whole lines gathered; lines past one send's most go with the next, which is not left waiting for
+  /// another scroll event.
+  private func sendWheel() {
+    let delta = wheel.take()
+    guard let at = wheelAt, delta.dx != 0 || delta.dy != 0 else { return }
+    // AppKit's positive delta moves content down (towards the top of
+    // the page); Atlas's positive lines scroll down the page.
+    enqueue([
+      .move(x: at.x, y: at.y), .wait(milliseconds: Self.scrollSettle),
+      .scroll(x: at.x, y: at.y, dx: -delta.dx, dy: -delta.dy),
+    ])
+    if wheel.holdsWholeLines { sendWheelSoon() }
   }
 
   /// A key press: release, paste, a key, or nil when it is text for the

@@ -1,11 +1,12 @@
 /// A mouse button held and moved: down, moves while held, up. Repeated
 /// clicks in the same place soon after count up to a triple click.
+///
+/// Distances are the person's: points on the view showing the desktop, whatever size it draws the helper's display
+/// at, so a viewer drawn at half size still double-clicks; each call gives the view's scale for that.
 package struct PointerGesture: Sendable {
-  /// A click this soon after the last, in seconds, counts as a repeat.
-  static let repeatWithin = 0.5
-  /// A click this close to the last, in points, counts as a repeat.
+  /// A click this close to the last, in view points, counts as a repeat.
   static let repeatNear = 10.0
-  /// Moving further than this, in points, makes a press a drag.
+  /// Moving further than this, in view points, makes a press a drag.
   static let dragFrom = 3.0
   /// 3: the most clicks a repeat counts up to, a triple click; a repeat after it is a triple click still.
   static let mostClicks = 3
@@ -43,21 +44,26 @@ package struct PointerGesture: Sendable {
   /// - Parameters:
   ///   - button: The button pressed.
   ///   - point: Where, on the helper's display.
+  ///   - scale: View points per point of the helper's display, as the view draws it now.
   ///   - modifiers: The modifier keys held.
   ///   - now: The time, in seconds.
+  ///   - repeatWithin: How soon after the last click, in seconds, a click counts as a repeat: the Mac's
+  ///     double-click speed.
   /// - Returns: The press with its click count, or `nil` while another button is held.
   package mutating func start(
     _ button: MouseButton,
     at point: DesktopPoint,
+    scale: Double,
     modifiers: Modifiers,
-    now: Double
+    now: Double,
+    repeatWithin: Double
   )
     -> InputAction?
   {
     guard active == nil else { return nil }
     var count = 1
-    if let previous, previous.button == button, now - previous.at < Self.repeatWithin,
-      previous.point.distance(to: point) < Self.repeatNear
+    if let previous, previous.button == button, now - previous.at < repeatWithin,
+      previous.point.distance(to: point) * scale < Self.repeatNear
     {
       count = min(Self.mostClicks, previous.count + 1)
     }
@@ -70,12 +76,20 @@ package struct PointerGesture: Sendable {
   /// - Parameters:
   ///   - button: The button that moved.
   ///   - point: Where it is now, on the helper's display.
+  ///   - scale: View points per point of the helper's display, as the view draws it now.
   ///   - modifiers: The modifier keys held.
   /// - Returns: The move, or `nil` for another button or no movement.
-  package mutating func move(_ button: MouseButton, to point: DesktopPoint, modifiers: Modifiers) -> InputAction? {
+  package mutating func move(
+    _ button: MouseButton,
+    to point: DesktopPoint,
+    scale: Double,
+    modifiers: Modifiers
+  )
+    -> InputAction?
+  {
     guard var current = active, current.button == button, point != current.last else { return nil }
     current.last = point
-    current.moved = current.moved || point.distance(to: current.from) > Self.dragFrom
+    current.moved = current.moved || point.distance(to: current.from) * scale > Self.dragFrom
     active = current
     // Only the press carries the click count, as the service expects.
     return .pointer(

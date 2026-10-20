@@ -26,6 +26,18 @@ struct KeyMapTests {
     #expect(KeyMap.action(keyCode: keyCode, modifiers: .command) == .key("cmd+\(key)"))
   }
 
+  @Test(
+    "a keypad shortcut names the main-row key that types the same, as the service names no keypad key",
+    arguments: [
+      (UInt16(82), "cmd+0"), (83, "cmd+1"), (84, "cmd+2"), (85, "cmd+3"), (86, "cmd+4"), (87, "cmd+5"),
+      (88, "cmd+6"), (89, "cmd+7"), (91, "cmd+8"), (92, "cmd+9"), (65, "cmd+."), (75, "cmd+/"), (78, "cmd+-"),
+      (81, "cmd+="), (67, "cmd+shift+8"), (69, "cmd+shift+="), (76, "cmd+return"),
+    ]
+  )
+  func keypad(keyCode: UInt16, chord: String) {
+    #expect(KeyMap.action(keyCode: keyCode, modifiers: .command) == .key(chord))
+  }
+
   @Test("only Command-V pastes this Mac's clipboard")
   func paste() {
     #expect(KeyMap.isPaste(keyCode: 9, modifiers: .command))

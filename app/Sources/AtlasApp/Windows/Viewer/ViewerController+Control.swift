@@ -71,4 +71,15 @@ extension ViewerController {
     guard canInput, let frame = reading.frame else { return }
     input.enqueue(actions, frame: frame.id)
   }
+
+  /// Queues input that undoes what earlier input holds down, a button's release, whenever control is held: over a
+  /// stale picture too, which the service may refuse, and then control ends. With no picture to aim at, control
+  /// ends at once, and the service's release lifts what is held.
+  ///
+  /// - Parameter actions: The actions, in order.
+  func enqueueCleanup(_ actions: [InputAction]) {
+    guard session.lease != nil else { return }
+    guard let frame = reading.frame else { return releaseControl() }
+    input.enqueue(actions, frame: frame.id)
+  }
 }

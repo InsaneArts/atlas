@@ -18,7 +18,15 @@ package enum KeyMap {
     29: "0", 18: "1", 19: "2", 20: "3", 21: "4", 23: "5", 22: "6", 26: "7", 28: "8", 25: "9",
     33: "[", 30: "]", 42: "\\", 44: "/", 27: "-", 24: "=", 41: ";", 39: "'", 50: "`", 43: ",",
     47: ".", 49: "space",
+    // The keypad, as the main-row keys that type the same: the service names no keypad key, and keypad Enter is
+    // Return, above. Keypad Clear, and the § key of ISO keyboards, have no name the service knows: they send nothing.
+    82: "0", 83: "1", 84: "2", 85: "3", 86: "4", 87: "5", 88: "6", 89: "7", 91: "8", 92: "9",
+    65: ".", 75: "/", 78: "-", 81: "=",
   ]
+
+  /// The keypad keys whose character is a main-row key's shifted one on a US layout: * is Shift-8 and + is
+  /// Shift-=, as the service itself reads `cmd++`.
+  static let shiftedPositions: [UInt16: String] = [67: "8", 69: "="]
 
   /// 9: the key labelled V on a US layout, the paste gesture's key at any layout's same position.
   static let vKey: UInt16 = 9
@@ -33,12 +41,20 @@ package enum KeyMap {
   ///   - modifiers: The modifier keys held.
   /// - Returns: A `key` action such as `cmd+a`, or `nil` when the press is text or no key.
   package static func action(keyCode: UInt16, modifiers: Modifiers) -> InputAction? {
-    var key = named[keyCode]
-    if key == nil && (modifiers.contains(.command) || modifiers.contains(.control)) {
-      key = positions[keyCode]
-    }
-    guard let key else { return nil }
-    return .key((modifiers.names + [key]).joined(separator: "+"))
+    if let key = named[keyCode] { return chord(key, modifiers) }
+    guard modifiers.contains(.command) || modifiers.contains(.control) else { return nil }
+    if let key = shiftedPositions[keyCode] { return chord(key, modifiers.union(.shift)) }
+    return positions[keyCode].map { chord($0, modifiers) }
+  }
+
+  /// A key with the modifiers held, as the service names the chord.
+  ///
+  /// - Parameters:
+  ///   - key: The key's name.
+  ///   - modifiers: The modifier keys held.
+  /// - Returns: The `key` action, such as `cmd+shift+8`.
+  private static func chord(_ key: String, _ modifiers: Modifiers) -> InputAction {
+    .key((modifiers.names + [key]).joined(separator: "+"))
   }
 
   /// Only Command-V is the paste gesture: it sends this Mac's clipboard

@@ -10,7 +10,8 @@ extension ViewerController {
   static let untilCancelled: @Sendable (Duration) async -> Void = { _ in try? await Task.sleep(for: .seconds(86_400)) }
 
   /// A viewer over a scripted service, reaching nothing else: its preferences in memory, a fixed clock unless given
-  /// one, a heartbeat and a pause between readings as the app's unless given others, and no Keys menu.
+  /// one, a heartbeat and a pause between readings as the app's unless given others, the Mac's double-click speed
+  /// out of the box unless given another, and no Keys menu.
   ///
   /// - Parameters:
   ///   - service: The scripted service.
@@ -18,13 +19,15 @@ extension ViewerController {
   ///   - clock: The time now; by default a fixed one, so pictures never age however slowly the tests run.
   ///   - heartbeat: One heartbeat tick.
   ///   - nap: The pause between readings.
+  ///   - doubleClick: The double-click speed, in seconds.
   /// - Returns: The viewer, closed until it is shown.
   static func scripted(
     _ service: ScriptedService,
     rate: Double = 0,
     clock: @escaping @MainActor () -> TimeInterval = { 0 },
     heartbeat: Duration = ViewerController.heartbeatEvery,
-    nap: @escaping @Sendable (Duration) async -> Void = ViewerController.sleep
+    nap: @escaping @Sendable (Duration) async -> Void = ViewerController.sleep,
+    doubleClick: TimeInterval = 0.5
   ) -> ViewerController {
     ViewerController(
       service: service,
@@ -32,7 +35,8 @@ extension ViewerController {
       clock: clock,
       heartbeatInterval: heartbeat,
       nap: nap,
-      showKeys: { _ in }
+      showKeys: { _ in },
+      doubleClickInterval: { doubleClick }
     )
   }
 
@@ -44,6 +48,7 @@ extension ViewerController {
   ///   - clock: The time now; by default a fixed one.
   ///   - heartbeat: One heartbeat tick.
   ///   - nap: The pause between readings.
+  ///   - doubleClick: The double-click speed, in seconds.
   /// - Returns: The viewer, open and watching.
   /// - Throws: The failed requirement, when the first picture never arrives.
   static func watching(
@@ -51,10 +56,11 @@ extension ViewerController {
     rate: Double = 0,
     clock: @escaping @MainActor () -> TimeInterval = { 0 },
     heartbeat: Duration = ViewerController.heartbeatEvery,
-    nap: @escaping @Sendable (Duration) async -> Void = ViewerController.sleep
+    nap: @escaping @Sendable (Duration) async -> Void = ViewerController.sleep,
+    doubleClick: TimeInterval = 0.5
   ) async throws -> ViewerController {
     service.picture = png()
-    let viewer = scripted(service, rate: rate, clock: clock, heartbeat: heartbeat, nap: nap)
+    let viewer = scripted(service, rate: rate, clock: clock, heartbeat: heartbeat, nap: nap, doubleClick: doubleClick)
     viewer.setVisible(true)
     try await settle("the first picture never arrived") { viewer.reading.frame != nil }
     return viewer

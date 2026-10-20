@@ -1,6 +1,11 @@
 import AtlasKit
 
 extension ViewerController: InputSink {
+  /// The least time between the readings input asks for: 200 ms. Each batch sent asks to read again, and a reading
+  /// is a fresh capture and a PNG, so a moving mouse would otherwise keep them running back to back; five a second
+  /// still shows what the input did.
+  static let inputReadEvery: Duration = .milliseconds(200)
+
   /// Sends queued input to the service.
   ///
   /// - Parameters:
@@ -12,8 +17,24 @@ extension ViewerController: InputSink {
     try await service.input(lease: lease, frame: frame, actions: actions)
   }
 
-  /// Input went: read again soon, to show its effect.
-  func inputSent() { refresh() }
+  /// Input went: read again, to show its effect. At once after a quiet spell; while input keeps coming, as a moving
+  /// mouse sends it, at most once each ``inputReadEvery``.
+  func inputSent() {
+    guard inputReading == nil else { return }
+    let now = clock()
+    let wait = inputReadAt.map { Self.inputReadEvery - .seconds(now - $0) } ?? .zero
+    guard wait > .zero else {
+      inputReadAt = now
+      return refresh()
+    }
+    inputReading = Task { [weak self] in
+      try? await Task.sleep(for: wait)
+      guard let self, !Task.isCancelled else { return }
+      inputReading = nil
+      inputReadAt = clock()
+      refresh()
+    }
+  }
 
   /// Input failed: control ends, saying why.
   ///

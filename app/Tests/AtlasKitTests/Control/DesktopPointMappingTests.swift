@@ -37,6 +37,16 @@ struct DesktopPointMappingTests {
     #expect(point.distance(to: edge) < 1e-9)
   }
 
+  @Test("the view's scale is the letterboxed picture's width over the display's, whatever the picture's pixels")
+  func scale() {
+    let image = CGSize(width: 1600, height: 900)
+    let display = ViewerStatus.Size(width: 1280, height: 720)
+    // Letterboxed to 400 wide in a square view, and held to 320 wide by a short one: 1280 display points either way.
+    #expect(DesktopPoint.scale(in: CGSize(width: 400, height: 400), image: image, display: display) == 0.3125)
+    #expect(DesktopPoint.scale(in: CGSize(width: 800, height: 180), image: image, display: display) == 0.25)
+    #expect(DesktopPoint.scale(in: CGSize(width: 0, height: 0), image: image, display: display) == nil)
+  }
+
   @Test("an empty size maps nowhere")
   func emptySize() {
     #expect(

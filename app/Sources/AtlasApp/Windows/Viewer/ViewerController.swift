@@ -53,6 +53,8 @@ final class ViewerController {
   @ObservationIgnored let logIn: (@MainActor () -> Void)?
   /// Offers the keys the Mac keeps for itself, each sent to this controller.
   @ObservationIgnored let showKeys: @MainActor (ViewerController) -> Void
+  /// The Mac's double-click speed, in seconds, read at each click so a change in System Settings counts at once.
+  @ObservationIgnored let doubleClickInterval: @MainActor () -> TimeInterval
   /// The time the header last read, in seconds of uptime: refreshed each ``tickEvery`` while pictures arrive.
   /// Unobserved: the window redraws with each reading and the time of the last tick, and the status line follows
   /// ``ticks``.
@@ -76,6 +78,8 @@ final class ViewerController {
   @ObservationIgnored var wheel = WheelAccumulator()
   /// Where the gathered scrolling happens.
   @ObservationIgnored var wheelAt: DesktopPoint?
+  /// When the last scroll event came, in seconds of uptime; a long gap starts a new gesture.
+  @ObservationIgnored var wheelHeardAt: TimeInterval?
   /// Sends the gathered scrolling once the gathering ends.
   @ObservationIgnored var wheelSending: Task<Void, Never>?
   /// The input waiting to go to the helper, in order.
@@ -95,6 +99,10 @@ final class ViewerController {
   @ObservationIgnored var readAgain = false
   /// Refreshes ``now`` while readings run.
   @ObservationIgnored var ticking: Task<Void, Never>?
+  /// When input last asked for a reading, in seconds of uptime.
+  @ObservationIgnored var inputReadAt: TimeInterval?
+  /// Asks for the reading input asked for too soon after the last, once its pause ends.
+  @ObservationIgnored var inputReading: Task<Void, Never>?
 
   /// Creates a viewer that has read nothing yet, with the person's saved rate and sidebar.
   ///
@@ -107,6 +115,7 @@ final class ViewerController {
   ///   - nap: The pause between readings, which must end early when cancelled; the app passes ``sleep``.
   ///   - logIn: Locks the screen so the person can log in to the helper; nil when the app cannot.
   ///   - showKeys: Offers the keys the Mac keeps for itself, each sent to the controller it is given.
+  ///   - doubleClickInterval: The Mac's double-click speed, in seconds; the app passes `NSEvent`'s.
   init(
     service: any ViewerService,
     preferences: ViewerPreferences,
@@ -114,7 +123,8 @@ final class ViewerController {
     heartbeatInterval: Duration,
     nap: @escaping @Sendable (Duration) async -> Void,
     logIn: (@MainActor () -> Void)? = nil,
-    showKeys: @escaping @MainActor (ViewerController) -> Void
+    showKeys: @escaping @MainActor (ViewerController) -> Void,
+    doubleClickInterval: @escaping @MainActor () -> TimeInterval
   ) {
     self.service = service
     self.preferences = preferences
@@ -123,6 +133,7 @@ final class ViewerController {
     self.nap = nap
     self.logIn = logIn
     self.showKeys = showKeys
+    self.doubleClickInterval = doubleClickInterval
     rate = ViewerPictureRate(rawValue: preferences.loadRate()) ?? .everyTwoSeconds
     sidebarShown = preferences.loadSidebar()
     input.sink = self
@@ -332,8 +343,11 @@ final class ViewerController {
     wheel.reset()
     gesture.cancel()
     wheelAt = nil
+    wheelHeardAt = nil
     wheelSending?.cancel()
     wheelSending = nil
+    inputReading?.cancel()
+    inputReading = nil
   }
 
   // MARK: Readings

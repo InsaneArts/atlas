@@ -41,4 +41,21 @@ extension DesktopPoint {
     }
     self.init(x: x / width * display.width, y: y / height * display.height)
   }
+
+  /// View points per point of the helper's display, where a view of `view`'s size shows the picture letterboxed at
+  /// its own shape: how far a move on the view is, as the person's hand moved it.
+  ///
+  /// Fails when any size is empty or not finite.
+  ///
+  /// - Parameters:
+  ///   - view: The view's size.
+  ///   - image: The picture's size, in pixels.
+  ///   - display: The helper's display, in points.
+  /// - Returns: The view points in one display point.
+  package static func scale(in view: CGSize, image: CGSize, display: ViewerStatus.Size) -> Double? {
+    let sizes = [view.width, view.height, image.width, image.height, display.width, display.height]
+    guard sizes.allSatisfy({ $0.isFinite && $0 > 0 }) else { return nil }
+    let shown = image.width * min(view.width / image.width, view.height / image.height)
+    return shown / display.width
+  }
 }

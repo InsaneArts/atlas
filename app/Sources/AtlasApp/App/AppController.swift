@@ -79,7 +79,8 @@ final class AppController: NSObject, NSApplicationDelegate {
       heartbeatInterval: ViewerController.heartbeatEvery,
       nap: ViewerController.sleep,
       logIn: { [weak self] in Task { await self?.panel?.logIn() } },
-      showKeys: KeysMenu.show(for:)
+      showKeys: KeysMenu.show(for:),
+      doubleClickInterval: { NSEvent.doubleClickInterval }
     )
     if let panel { controller.begin(with: panel.answer, picture: panel.picture) }
     let window = ViewerWindow(controller: controller) { [weak self] closed in

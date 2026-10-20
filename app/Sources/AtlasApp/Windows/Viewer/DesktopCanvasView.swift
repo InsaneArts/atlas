@@ -250,6 +250,7 @@ final class DesktopCanvasView: NSView {
       dx: event.scrollingDeltaX,
       dy: event.scrollingDeltaY,
       precise: event.hasPreciseScrollingDeltas,
+      began: event.phase.contains(.began),
       at: location(event),
       in: bounds.size
     )

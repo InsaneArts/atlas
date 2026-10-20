@@ -71,7 +71,8 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
   var isKey: Bool { window.isKeyWindow }
 
   /// Brings the window forward, where it was left, and reads while it is on screen. The app shows its Dock icon
-  /// first (``DockIcon``).
+  /// first (``DockIcon``). Ordered front is not on screen: while the screen is locked or asleep the window is
+  /// occluded, and reading starts with the occlusion change once it shows.
   func show() {
     if !isOpen && !window.setFrameUsingName(Self.autosaveName) { window.center() }
     isOpen = true
@@ -79,7 +80,13 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
     window.makeKeyAndOrderFront(nil)
     NSApp.activate()
     if window.isKeyWindow { controller.gainedFocus() } else { controller.lostFocus() }
-    controller.setVisible(true)
+    followScreen()
+  }
+
+  /// Reads only while the window is on screen: off screen (minimised, covered, on another Space, or behind a locked
+  /// or sleeping screen) it stops reading and gives control back; on screen again, it reads again.
+  func followScreen() {
+    controller.setVisible(window.occlusionState.contains(.visible) && window.isVisible)
   }
 
   /// Full screen hides the window buttons the header keeps clear of.
@@ -95,13 +102,10 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
   /// Closes the window.
   func close() { window.close() }
 
-  /// Reads only while the window is on screen: off screen (minimised, covered, or on another Space) it stops reading
-  /// and gives control back; on screen again, it reads again.
+  /// The window went on or off screen: reading follows (``followScreen()``).
   ///
   /// - Parameter notification: The window's notification.
-  func windowDidChangeOcclusionState(_ notification: Notification) {
-    controller.setVisible(window.occlusionState.contains(.visible) && window.isVisible)
-  }
+  func windowDidChangeOcclusionState(_ notification: Notification) { followScreen() }
 
   /// The window takes the keyboard.
   ///
