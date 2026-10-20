@@ -682,11 +682,11 @@ impl Client {
             return Ok((session.epoch.input_pid, "alreadyRunning"));
         }
         if status["inputService"]["ok"] == true {
-            self.native_request(json!({
+            let reset = self.native_request(json!({
                 "op": "reset",
                 "epoch": session.epoch.input_epoch(),
-            }))
-            .await?;
+            }));
+            self.pending_until_known(reset).await?;
             if !self.identity().await?.input {
                 return Err(Error::new(
                     "startup",
@@ -698,19 +698,23 @@ impl Client {
         // Without Accessibility a new service can never become ready, and a
         // start that cannot be confirmed would stay pending; refuse plainly.
         require_accessibility(status)?;
+        let pid = self.pending_until_known(self.spawn_input()).await?;
+        Ok((pid, "started"))
+    }
+
+    /// Carry out a change to the input service as a pending mutation: it
+    /// stays pending when its outcome is unknown, and clears once it is
+    /// known, done or refused.
+    async fn pending_until_known<T>(&self, change: impl Future<Output = Result<T>>) -> Result<T> {
         let generation = self.controller.quarantine()?;
-        match self.spawn_input().await {
-            Ok(pid) => {
-                self.controller.clear_if(&generation)?;
-                Ok((pid, "started"))
-            }
-            Err(error) => {
-                if !error.uncertain {
-                    self.controller.clear_if(&generation)?;
-                }
-                Err(error)
-            }
+        let outcome = change.await;
+        if outcome
+            .as_ref()
+            .map_or_else(|error| !error.uncertain, |_| true)
+        {
+            self.controller.clear_if(&generation)?;
         }
+        outcome
     }
 
     /// Replace a running service whose build differs from the installed
@@ -1227,6 +1231,44 @@ fn require_accessibility(status: &Value) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn an_input_change_stays_pending_only_while_its_outcome_is_unknown() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = "helper_uid = 60001\nsocket_path = \"c.sock\"\noutput_dir = \"out\"\n\
+                    identity_probe = \"probe\"\ninput_socket = \"i.sock\"\n";
+        let config =
+            crate::config::Config::parse(text.as_bytes(), &dir.path().join("u.toml")).unwrap();
+        let mut client = Client::new(config).unwrap();
+        client.controller = crate::control::Controller::at(60001, &dir.path().join("state"));
+        assert_eq!(
+            client.pending_until_known(async { Ok(1) }).await.unwrap(),
+            1
+        );
+        let refused = Error::new("native", "refused");
+        assert!(
+            client
+                .pending_until_known(async { Err::<(), _>(refused) })
+                .await
+                .is_err()
+        );
+        assert!(
+            client.controller.pending().unwrap().is_empty(),
+            "known outcomes clear"
+        );
+        let lost = Error::new("transport", "reply lost").uncertain();
+        assert!(
+            client
+                .pending_until_known(async { Err::<(), _>(lost) })
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            client.controller.unresolved().unwrap().len(),
+            1,
+            "an unknown one stays"
+        );
+    }
 
     #[test]
     fn process_existence_ignores_ownership() {
