@@ -129,6 +129,8 @@ final class OnboardingController {
       snapshot.facts = facts
       if !snapshot.loaded {
         snapshot.opensAtLogin = facts.opensAtLogin(enabledNow: dependencies.loginItem.isEnabled())
+        // A failed first reading's message goes with it.
+        snapshot.problem = nil
       }
       snapshot.loaded = true
       if snapshot.picked == nil { snapshot.picked = facts.defaultPick.map(OnboardingAccountPick.init(name:)) }
@@ -152,6 +154,8 @@ final class OnboardingController {
     case .allow, .permissions, .helperDone: markWindow(open: true)
     default: break
     }
+    // A check's outcome holds for this visit to the step alone: coming back runs it again.
+    if step != .finishing, snapshot.finish != .running { snapshot.finish = .idle }
     if let permission = snapshot.guiding, !permission.guideStays(on: step, asker: snapshot.facts.asker) {
       snapshot.guiding = nil
     }
@@ -247,16 +251,20 @@ final class OnboardingController {
     runFinish()
   }
 
-  /// Lists the agents Atlas can connect, then asks `atlas agents status` which are installed and connected.
+  /// Lists the agents Atlas can connect, then asks `atlas agents status` which are installed and connected. A reading
+  /// that fails says why, and the next reading of the facts asks again.
   func loadAgents() {
     snapshot.agents = AgentChoice.all
     Task {
-      let rows =
-        await commands.run(.agentsStatus)
-        .decode(AgentsStatus.self)?
-        .agents ?? []
+      let outcome = await commands.run(.agentsStatus)
       guard !closed else { return }
-      snapshot.agents = AgentChoice.merged(snapshot.agents, with: rows)
+      guard outcome.ok, let status = outcome.decode(AgentsStatus.self) else {
+        snapshot.problem = outcome.ok ? OnboardingWords.notUnderstood : outcome.message
+        snapshot.agents = []
+        return
+      }
+      snapshot.problem = nil
+      snapshot.agents = AgentChoice.merged(snapshot.agents, with: status.agents)
       snapshot.agentsLoaded = true
     }
   }
