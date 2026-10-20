@@ -6,7 +6,7 @@ extension String {
   ///
   /// - Parameter size: The most code points in one chunk; ``TypedText`` passes its ``TypedText/chunkSize``.
   /// - Returns: The chunks, in order; none for empty text.
-  package func typedChunks(size: Int) -> [String] {
+  func typedChunks(size: Int) -> [String] {
     var chunks: [String] = []
     var current = ""
     var length = 0

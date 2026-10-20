@@ -1,6 +1,11 @@
 /// Scrolling kept in fractions across sends: rounding each event would drop
 /// slow trackpad movement before the helper ever saw it.
 package struct WheelAccumulator: Sendable {
+  /// 1e-9 of a line: the slack added away from zero before a sum is cut to whole lines, so a sum that floating
+  /// point leaves a hair short of a whole line, as ten trackpad tenths add up to 0.9999999999999999, still sends
+  /// that line. Far below any real scroll's fraction, so it never invents one.
+  static let roundingSlack = 1e-9
+
   var x = 0.0
   var y = 0.0
 
@@ -33,7 +38,15 @@ package struct WheelAccumulator: Sendable {
   /// - Returns: The whole lines each way.
   package mutating func take() -> (dx: Int, dy: Int) {
     func whole(_ value: Double) -> Int {
-      Int(max(-100, min(100, (value + (value < 0 ? -1e-9 : value > 0 ? 1e-9 : 0)).rounded(.towardZero))))
+      Int(
+        max(
+          -100,
+          min(
+            100,
+            (value + (value < 0 ? -Self.roundingSlack : value > 0 ? Self.roundingSlack : 0)).rounded(.towardZero)
+          )
+        )
+      )
     }
     let dx = whole(x)
     let dy = whole(y)
