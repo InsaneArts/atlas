@@ -40,7 +40,7 @@ struct CardSurface: ViewModifier {
         .opacity(Opacity.tint)
     case .attention:
       Color.attention
-        .opacity(Layout.attentionFill)
+        .opacity(Opacity.tint)
     }
   }
 
@@ -55,10 +55,4 @@ struct CardSurface: ViewModifier {
         .opacity(Opacity.tintEdgeQuiet)
     }
   }
-}
-
-/// The card's own measures.
-private enum Layout {
-  /// [R] 0.10: the attention wash, kept exact until Phase 3b rounds it to `Opacity.tint` (0.12).
-  static let attentionFill = 0.10
 }

@@ -29,7 +29,7 @@ struct PanelPicture: View {
           .padding(Spacing.m)
       case .placeholder(let text):
         Text(text)
-          .font(Typography.font(.note))
+          .font(Typography.font(.caption))
           .foregroundStyle(Color.textTertiary)
           .multilineTextAlignment(.center)
           .frame(maxWidth: .infinity, maxHeight: .infinity)

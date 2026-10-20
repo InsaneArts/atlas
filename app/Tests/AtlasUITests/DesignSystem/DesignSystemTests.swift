@@ -20,15 +20,12 @@ struct DesignSystemTests {
     }
   }
 
-  @Test("the type scale descends, and only the label and note sizes kept for the rounding phase are fractional")
+  @Test("the type scale descends in whole sizes")
   func typeScaleDescendsWithWholeSizes() {
     let sizes = TextStyle.allCases.map(\.pointSize)
     #expect(sizes == sizes.sorted(by: >))
     #expect(Set(sizes).count == sizes.count)
-    // The [R] steps keep today's sizes until the rounding phase (3b): label's 12.5 and note's 11.5 are the only
-    // fractional ones (largeTitle's 27 is [R] too, but whole). Once 3b lands, this set is empty.
-    let fractional = Set(TextStyle.allCases.filter { $0.pointSize != $0.pointSize.rounded() })
-    #expect(fractional == [.label, .note])
+    #expect(sizes.allSatisfy { $0 == $0.rounded() })
   }
 
   @Test("radii, strokes, icon sizes, control heights and durations ascend")

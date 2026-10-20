@@ -15,7 +15,7 @@ struct SidebarAccount: View {
         .font(Typography.font(.title3, weight: .semibold))
         .tracking(LetterSpacing.title)
       Text(reason)
-        .font(Typography.font(.label))
+        .font(Typography.font(.callout))
         .foregroundStyle(Color.textSecondary)
         .fixedSize(horizontal: false, vertical: true)
     }

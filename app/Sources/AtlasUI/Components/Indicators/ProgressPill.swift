@@ -10,7 +10,7 @@ struct ProgressPill: View {
   var body: some View {
     HStack(spacing: Spacing.m) {
       if done {
-        CheckMark(size: Layout.check)
+        CheckMark(size: IconSize.glyph)
       } else {
         Spinner(size: IconSize.glyph)
       }
@@ -26,12 +26,6 @@ struct ProgressPill: View {
     )
     .accessibilityElement(children: .combine)
   }
-}
-
-/// The pill's own measures.
-private enum Layout {
-  /// [R] 13: the done check, kept exact until Phase 3b rounds it to `IconSize.glyph` (12) beside the spinner.
-  static let check: CGFloat = 13
 }
 
 #if DEBUG

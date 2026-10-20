@@ -9,7 +9,7 @@ struct Note: View {
 
   var body: some View {
     Text(text)
-      .font(Typography.font(.note))
+      .font(Typography.font(.caption))
       .foregroundStyle(tone.color)
       .multilineTextAlignment(.center)
       .fixedSize(horizontal: false, vertical: true)

@@ -105,7 +105,7 @@ struct Disc: View {
     case .avatar: .fillAvatar
     case .success: .success
     case .attention: .attention
-    case .waiting: Layout.waiting
+    case .waiting: .fillControl
     }
   }
 
@@ -125,9 +125,6 @@ struct Disc: View {
 private enum Layout {
   /// 0.2: the soft accent under the person's own initial, stronger than a tint so it reads at disc size.
   static let accentSoft = 0.2
-  /// [R] White at 0.10: a waiting step's disc, kept exact until Phase 3b uses `fillControl` (0.08).
-  static let waiting = Color.white
-    .opacity(0.1)
 }
 
 #if DEBUG

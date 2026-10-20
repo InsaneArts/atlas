@@ -21,7 +21,7 @@ struct ActivityRow: View {
           .foregroundStyle(lineTone.color)
           .fixedSize(horizontal: false, vertical: true)
         Text(when)
-          .font(Typography.font(.note))
+          .font(Typography.font(.caption))
           .foregroundStyle(Color.textTertiary)
           .monospacedDigit()
       }

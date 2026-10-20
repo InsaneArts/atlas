@@ -12,7 +12,7 @@ struct PanelFeedbackLine: View {
         Spinner(size: IconSize.glyph)
       }
       Text(feedback.text)
-        .font(Typography.font(.note))
+        .font(Typography.font(.caption))
         .foregroundStyle(Color.textSecondary)
         .fixedSize(horizontal: false, vertical: true)
       Spacer(minLength: 0)
