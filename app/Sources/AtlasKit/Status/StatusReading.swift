@@ -138,9 +138,10 @@ package struct StatusReading: Equatable, Sendable {
     return rows
   }
 
-  /// Recovery is offered only without control, when something needs it.
+  /// Recovery is offered only without control, when something needs it and Recover can fix it.
   func recoveryOffered(holdingControl: Bool) -> Bool {
-    !holdingControl && (status.overview.mode == .recovering || status.overview.mode == .blocked)
+    let overview = status.overview
+    return !holdingControl && (overview.mode == .recovering || (overview.mode == .blocked && overview.recoverable))
   }
 
   /// The recovery alert, if any: while recovering, or when offered.
