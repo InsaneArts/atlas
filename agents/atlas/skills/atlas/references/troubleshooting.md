@@ -33,7 +33,7 @@ its own failure is in `exitCode`.)
 | `menubar` | The menu bar companion could not start. | Not needed for your task; continue with CLI commands. |
 | `native` | A native input or dialog check failed. | Read `error`; native Save/Open needs Screen Sharing (see the guide). |
 | `no-environment` | No helper environment profile is installed for `environment run`. | Use `atlas run`, or install a profile with `atlas environment profile`. |
-| `on-console` | The helper is on screen right now. | Ask the person to switch back to their own account. Do not retry. |
+| `on-console` | The helper is on screen right now, or came on screen while `atlas run` ran (uncertain: the command was stopped). | Ask the person to switch back to their own account. Do not retry. After `run`: once they are back, take a screenshot, run `atlas restart`, and check what the command did before running it again. |
 | `onboarding` | A setup step from the Atlas window could not finish. | Show `error` to the person; they open Atlas again (or run `atlas init`) to carry on. |
 | `permission` | Screen Recording or Accessibility is not allowed in the helper. | Tell the person; they allow it in the helper's System Settings (setup skill). |
 | `platform` | Atlas runs on macOS only. | Stop. |

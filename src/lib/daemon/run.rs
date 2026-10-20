@@ -79,16 +79,25 @@ fn search_path(home: Option<&Path>) -> String {
         .unwrap_or_else(|| PATH.to_owned())
 }
 
-/// The executable for `program`: as given when it contains a slash, else the
-/// first match on `PATH`.
-fn resolve(program: &str, path: Option<&str>) -> Option<PathBuf> {
+/// Where a `program` with a slash is: a relative one starts at `home`, where
+/// the command runs, as it would in a shell there.
+fn locate(program: &str, home: Option<&Path>) -> PathBuf {
+    match home {
+        Some(home) if Path::new(program).is_relative() => home.join(program),
+        _ => PathBuf::from(program),
+    }
+}
+
+/// The executable for `program`: where [`locate`] puts it when it contains a
+/// slash, else the first match on `PATH`.
+fn resolve(program: &str, path: Option<&str>, home: Option<&Path>) -> Option<PathBuf> {
     let executable = |candidate: &Path| {
         std::fs::metadata(candidate)
             .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
     };
 
     if program.contains('/') {
-        let candidate = PathBuf::from(program);
+        let candidate = locate(program, home);
         return executable(&candidate).then_some(candidate);
     }
 
@@ -290,13 +299,32 @@ pub enum Cancel {
     Left,
     /// The daemon is stopping.
     Stopping,
+    /// The helper came on screen, where a person may be using it.
+    OnConsole,
 }
 
 /// Run `argv`, sending its events to `events`, and return the final reply.
-/// When `cancel` completes — the client left or the daemon is stopping — or
-/// the client stops taking events, the group is ended before returning.
+/// When `cancel` completes (the client left, the daemon is stopping or the
+/// helper came on screen) or the client stops taking events, the group is
+/// ended before returning.
 pub async fn run(
     argv: &[String],
+    timeout: Duration,
+    events: Sender<Value>,
+    cancel: impl Future<Output = Cancel>,
+) -> Value {
+    // The command runs in the helper's home, as a shell there would.
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|home| home.is_dir());
+
+    run_at(argv, home, timeout, events, cancel).await
+}
+
+/// [`run`] with `home` as the helper's home.
+async fn run_at(
+    argv: &[String],
+    home: Option<PathBuf>,
     timeout: Duration,
     events: Sender<Value>,
     cancel: impl Future<Output = Cancel>,
@@ -306,17 +334,14 @@ pub async fn run(
         return failure("spawn-failed", "No command to run");
     };
 
-    // The command runs in the helper's home, as a shell there would.
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .filter(|home| home.is_dir());
     let path = search_path(home.as_deref());
-    let Some(program) = resolve(name, Some(&path)) else {
+    let Some(program) = resolve(name, Some(&path), home.as_deref()) else {
+        let located = locate(name, home.as_deref());
         let reason = if !name.contains('/') {
             "command not found on PATH"
-        } else if Path::new(name).is_dir() {
+        } else if located.is_dir() {
             "is a folder, not a program"
-        } else if Path::new(name).exists() {
+        } else if located.exists() {
             "is not executable (chmod +x it)"
         } else {
             "no such program"
@@ -463,8 +488,17 @@ pub async fn run(
         end_group(group).await;
     }
 
-    if cancelled == Some(Cancel::Stopping) {
-        return interrupted("restart", "The helper stopped while the command ran");
+    match cancelled {
+        Some(Cancel::Stopping) => {
+            return interrupted("restart", "The helper stopped while the command ran");
+        }
+        Some(Cancel::OnConsole) => {
+            return interrupted(
+                "on-console",
+                "The helper came on screen, so the command was stopped",
+            );
+        }
+        _ => {}
     }
 
     if abandoned || output.finish(&events).await.is_err() {
@@ -819,6 +853,90 @@ mod tests {
             })
             .sum();
         assert!(forwarded <= MAX_OUTPUT);
+    }
+
+    /// A relative path with a slash starts at the helper's home, for the
+    /// checks and the command alike, however the daemon itself was started.
+    #[tokio::test]
+    async fn a_relative_program_starts_at_home() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+
+        let script = bin.join("build.sh");
+        std::fs::write(&script, "#!/bin/sh\necho \"built $1\"\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(home.path().join("notes"), "plain\n").unwrap();
+
+        let execute = |argv: &[&str]| {
+            let argv: Vec<String> = argv.iter().map(|a| (*a).to_owned()).collect();
+            let home = home.path().to_owned();
+            async move {
+                let (sender, mut receiver) = mpsc::channel(EVENTS);
+                let reply = run_at(
+                    &argv,
+                    Some(home),
+                    Duration::from_secs(5),
+                    sender,
+                    std::future::pending::<Cancel>(),
+                )
+                .await;
+
+                let mut events = Vec::new();
+                while let Some(event) = receiver.recv().await {
+                    events.push(event);
+                }
+
+                (events, reply)
+            }
+        };
+
+        let (events, reply) = execute(&["./bin/build.sh", "now"]).await;
+        assert_eq!(reply["exitCode"], 0, "{reply}");
+        assert_eq!(output(&events), "built now\n");
+
+        let (events, reply) = execute(&["bin/build.sh"]).await;
+        assert_eq!(reply["exitCode"], 0, "{reply}");
+        assert_eq!(output(&events), "built \n");
+
+        let (_, folder) = execute(&["./bin"]).await;
+        assert_eq!(
+            folder,
+            failure("spawn-failed", "./bin: is a folder, not a program")
+        );
+
+        let (_, plain) = execute(&["./notes"]).await;
+        assert_eq!(
+            plain,
+            failure("spawn-failed", "./notes: is not executable (chmod +x it)")
+        );
+
+        let (_, missing) = execute(&["./missing"]).await;
+        assert_eq!(
+            missing,
+            failure("spawn-failed", "./missing: no such program")
+        );
+    }
+
+    /// A helper that comes on screen stops the command, and its outcome is
+    /// unknown.
+    #[tokio::test]
+    async fn coming_on_screen_stops_the_command() {
+        let (sender, mut receiver) = mpsc::channel(EVENTS);
+        let argv = ["/bin/sleep".to_owned(), "30".to_owned()];
+        let cancel = async {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            Cancel::OnConsole
+        };
+
+        let reply = run(&argv, Duration::from_secs(60), sender, cancel).await;
+        assert_eq!(
+            (&reply["code"], &reply["uncertain"]),
+            (&json!("on-console"), &json!(true))
+        );
+
+        let group = receiver.recv().await.unwrap()["pid"].as_i64().unwrap();
+        assert!(!group_alive(group), "the command was ended");
     }
 
     #[test]

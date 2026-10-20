@@ -13,8 +13,8 @@ use tokio::{
 
 /// Longest request line, without its newline: what the helper daemon reads.
 const MAX_REQUEST: usize = crate::daemon::protocol::MAX_REQUEST;
-/// Longest the request itself may take to send. A peer that is not reading
-/// leaves the outcome unknown, so this stays short.
+/// Longest the request itself may take to send. Both helper-side servers act
+/// only on a whole line, so a request cut short changed nothing.
 const DISPATCH: Duration = Duration::from_millis(500);
 /// How long a failed send looks for a refusal the peer already sent.
 const WAITING: Duration = Duration::from_millis(100);
@@ -96,22 +96,26 @@ impl Pending {
             return Err(Error::new("protocol", "Request exceeds 1 MiB"));
         }
 
+        // The newline goes last, in the same write: JSON escapes any newline
+        // inside a string, and the peer acts only once it reads this one.
         payload.push(b'\n');
+
         let deadline = self.deadline.min(Instant::now() + DISPATCH);
-        let written = timeout_at(deadline, self.stream.write_all(&payload))
+        let written = timeout_at(deadline, self.stream.write_all(&payload)).await;
+
+        // A write that failed or ran out of time never sent the newline, so
+        // the peer cannot have acted on the request. A refusal it already
+        // sent (busy, say) says why.
+        let failed = match written {
+            Ok(Ok(())) => return Ok(self),
+            Ok(Err(error)) => error.to_string(),
+            Err(_) => "The helper did not take the request in time".to_owned(),
+        };
+
+        Err(self
+            .waiting_refusal()
             .await
-            .map_err(|_| Error::new("transport", "Dispatch timed out").uncertain())?;
-
-        // The request never arrived whole, so the peer cannot have acted on
-        // it; a refusal it already sent (busy, say) makes that certain.
-        if let Err(error) = written {
-            return Err(self
-                .waiting_refusal()
-                .await
-                .unwrap_or_else(|| Error::new("transport", error.to_string()).uncertain()));
-        }
-
-        Ok(self)
+            .unwrap_or_else(|| Error::new("transport", failed)))
     }
 
     /// A definite refusal the peer sent before it hung up, if one is waiting.
@@ -403,6 +407,78 @@ mod tests {
             ("busy", "Too many requests")
         );
         assert!(!refused.uncertain, "nothing ran");
+    }
+
+    /// A request the peer never reads whole was never acted on: both servers
+    /// wait for its newline, which is the last byte sent.
+    #[tokio::test]
+    async fn a_request_never_sent_whole_is_certain() {
+        use super::{DISPATCH, Transport};
+
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("t.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((stream, _)) = listener.accept().await {
+                held.push(stream);
+            }
+        });
+
+        let transport = Transport {
+            path: socket,
+            timeout: std::time::Duration::from_secs(10),
+            peer_uid: nix::unistd::getuid().as_raw(),
+        };
+        let started = std::time::Instant::now();
+        let stalled = transport
+            .connect()
+            .await
+            .unwrap()
+            .dispatch(&json!({"op": "run", "pad": "x".repeat(1000 * 1024)}))
+            .await
+            .err()
+            .unwrap();
+
+        assert!(started.elapsed() < DISPATCH * 4);
+        assert_eq!(stalled.code, "transport");
+        assert!(!stalled.uncertain, "the newline was never sent");
+    }
+
+    /// A peer that reads part of the request and hangs up without a word
+    /// never saw its newline either.
+    #[tokio::test]
+    async fn a_peer_that_hangs_up_mid_request_changed_nothing() {
+        use super::Transport;
+        use tokio::io::AsyncReadExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("t.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut start = [0; 16];
+                let _ = stream.read_exact(&mut start).await;
+                drop(stream);
+            }
+        });
+
+        let transport = Transport {
+            path: socket,
+            timeout: std::time::Duration::from_secs(10),
+            peer_uid: nix::unistd::getuid().as_raw(),
+        };
+        let cut = transport
+            .connect()
+            .await
+            .unwrap()
+            .dispatch(&json!({"op": "run", "pad": "x".repeat(1000 * 1024)}))
+            .await
+            .err()
+            .unwrap();
+
+        assert_eq!(cut.code, "transport");
+        assert!(!cut.uncertain, "the newline was never sent");
     }
 
     #[test]

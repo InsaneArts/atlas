@@ -179,7 +179,8 @@ done"#;
     ];
     argv.extend(paths.iter().map(|path| path.to_string_lossy().into_owned()));
 
-    let reply = client.run_owned(ownership, argv).await?;
+    // Only reads: a failed check leaves nothing pending.
+    let reply = client.inspect_owned(ownership, argv).await?;
     let output = run_output(&reply, 65536).unwrap_or_default();
     let answers: Vec<bool> = String::from_utf8_lossy(&output)
         .lines()

@@ -5,8 +5,9 @@ use super::{
 };
 use crate::{
     actions::{
-        Action, Button, CLICK_GAP, DRAG_ANCHOR, DRAG_HOLD, DRAG_START, DRAG_STEP, DRAG_STEPS,
-        PointerPhase, SCROLL_SETTLE, TYPE_GAP, modifier_flags, parse_key,
+        Action, Button, CLICK_GAP, COMMAND, CONTROL, DRAG_ANCHOR, DRAG_HOLD, DRAG_START, DRAG_STEP,
+        DRAG_STEPS, FUNCTION, OPTION, PointerPhase, SCROLL_SETTLE, SHIFT, TYPE_GAP, modifier_flags,
+        parse_key,
     },
     error::{Error, Result},
     native::{accessibility_trusted, session_info},
@@ -39,9 +40,43 @@ fn created(event: Option<CFRetained<CGEvent>>) -> Result<CFRetained<CGEvent>> {
     event.ok_or_else(|| Error::new("native", "Could not create a native event"))
 }
 
-/// The modifier keys a finished gesture releases: command, shift, option,
-/// control and function.
-const MODIFIER_KEYS: [u16; 5] = [55, 56, 58, 59, 63];
+/// The modifier keys a finished gesture releases, each with its flag:
+/// command, shift, option, control and function.
+const MODIFIER_KEYS: [(u16, u64); 5] = [
+    (55, COMMAND),
+    (56, SHIFT),
+    (58, OPTION),
+    (59, CONTROL),
+    (63, FUNCTION),
+];
+
+/// Release each held modifier in `held` through `post`, given its key code
+/// and the flags still held once it is up. A modifier's flag is cleared only
+/// once its own release has posted, so after a failure the ones not yet
+/// released stay held and the next release tries them again.
+fn release_each(held: &mut u64, mut post: impl FnMut(u16, u64) -> Result<()>) -> Result<()> {
+    for (code, mask) in MODIFIER_KEYS {
+        if *held & mask == 0 {
+            continue;
+        }
+
+        post(code, *held & !mask)?;
+        *held &= !mask;
+    }
+
+    // Every modifier key is up, so nothing the flags still carry is held.
+    *held = 0;
+    Ok(())
+}
+
+/// Where a held button comes up when its gesture is abandoned (cancelled,
+/// expired, or cleaned up after a failure): where it went down, if the
+/// pointer has moved since. A drag dropped there puts what it carried back
+/// where it was, never onto whatever lay partway along its path, such as a
+/// folder or the Trash.
+fn abandoned_at(press: Option<Point>, position: Point) -> Option<Point> {
+    press.filter(|press| press.x != position.x || press.y != position.y)
+}
 
 /// The engine's private event source, the one field that is not `Send` by
 /// itself.
@@ -65,6 +100,8 @@ pub struct Engine {
     pub(crate) posted: u64,
     source: Source,
     held: Option<Button>,
+    /// Where the held button went down.
+    press: Option<Point>,
     held_keys: Vec<u16>,
     position: Point,
     click_count: u8,
@@ -89,6 +126,7 @@ impl Engine {
             posted: 0,
             source,
             held: None,
+            press: None,
             held_keys: Vec::new(),
             position: Point { x: 0.0, y: 0.0 },
             click_count: 1,
@@ -157,10 +195,11 @@ impl Engine {
             self.flags = held.flags;
             self.click_count = held.count;
             self.mouse_number = held.mouse_number;
-            self.position = Point {
-                x: held.x.clamp(0.0, self.epoch.width - 1.0),
-                y: held.y.clamp(0.0, self.epoch.height - 1.0),
-            };
+            self.position = self.on_display(Point {
+                x: held.x,
+                y: held.y,
+            });
+            self.press = held.press.map(|[x, y]| self.on_display(Point { x, y }));
         }
 
         self.journal = Some(Journal::new(path));
@@ -178,10 +217,18 @@ impl Engine {
 
         self.epoch = current;
         self.journal_dirty = true;
-        self.position.x = self.position.x.clamp(0.0, self.epoch.width - 1.0);
-        self.position.y = self.position.y.clamp(0.0, self.epoch.height - 1.0);
+        self.position = self.on_display(self.position);
+        self.press = self.press.map(|press| self.on_display(press));
 
         self.release()
+    }
+
+    /// `point`, moved onto the display if it lies past an edge.
+    fn on_display(&self, point: Point) -> Point {
+        Point {
+            x: point.x.clamp(0.0, self.epoch.width - 1.0),
+            y: point.y.clamp(0.0, self.epoch.height - 1.0),
+        }
     }
 
     fn persist(&mut self, point: Point, flags: u64) -> Result<()> {
@@ -189,6 +236,7 @@ impl Engine {
             journal.write(Held {
                 epoch: self.epoch.clone(),
                 button: self.held,
+                press: self.press.map(|press| [press.x, press.y]),
                 keys: self.held_keys.clone(),
                 x: point.x,
                 y: point.y,
@@ -218,6 +266,8 @@ impl Engine {
 
         self.check()?;
         let _authorization = self.grant.as_ref().map(Grant::authorize).transpose()?;
+        // Exactly the modifiers asked for: an arrow key's own numeric pad and
+        // function flags would leave macOS reading function as held.
         CGEvent::set_flags(Some(&event), CGEventFlags(flags));
         CGEvent::post(TAP, Some(&event));
 
@@ -270,8 +320,16 @@ impl Engine {
         }
 
         if let Some(button) = self.held {
+            // Taken back to where it went down first (see `abandoned_at`),
+            // still held, through the session tap like every event.
+            if let Some(press) = abandoned_at(self.press, self.position) {
+                self.mouse(button.dragged(), press, button, self.click_count, 0)?;
+                self.position = press;
+            }
+
             self.mouse(button.up(), self.position, button, self.click_count, 0)?;
             self.held = None;
+            self.press = None;
             self.drag_started = false;
         }
 
@@ -308,6 +366,7 @@ impl Engine {
                 self.position = point;
 
                 self.held = Some(button);
+                self.press = Some(point);
                 self.mouse_number = self.mouse_number.checked_add(1).unwrap_or(1);
                 self.drag_started = false;
                 self.click_count = count;
@@ -370,6 +429,7 @@ impl Engine {
 
                 self.mouse(button.up(), point, button, self.click_count, flags)?;
                 self.held = None;
+                self.press = None;
                 self.drag_started = false;
                 self.position = point;
                 self.release_modifiers()?;
@@ -398,17 +458,22 @@ impl Engine {
     }
 
     fn release_modifiers(&mut self) -> Result<()> {
-        if self.flags != 0 {
-            // Finish the chord in CoreGraphics too. Viewer key-up events do
-            // not represent remote holds, so a completed gesture must be clean.
-            // A failed release stops here, leaving the flags held so that
-            // the next release tries again.
-            for code in MODIFIER_KEYS {
-                self.key_event(code, false, 0, None)?;
-            }
+        if self.flags == 0 {
+            return Ok(());
         }
 
-        Ok(())
+        // Finish the chord in CoreGraphics too. Viewer key-up events do not
+        // represent remote holds, so a completed gesture must be clean. A
+        // failed release stops here, leaving it and the ones after it held
+        // so that the next release tries them again.
+        let mut held = self.flags;
+        let released = release_each(&mut held, |code, rest| {
+            self.key_event(code, false, rest, None)
+        });
+
+        self.flags = held;
+        self.journal_dirty = true;
+        released
     }
 
     fn key(&mut self, code: u16, flags: u64, text: Option<&[u16]>) -> Result<()> {
@@ -652,6 +717,66 @@ mod tests {
         assert_eq!(OPTION, CGEventFlags::MaskAlternate.0);
         assert_eq!(SHIFT, CGEventFlags::MaskShift.0);
         assert_eq!(FUNCTION, CGEventFlags::MaskSecondaryFn.0);
+    }
+
+    /// Each modifier is released with the flags still held after it, and
+    /// one that fails keeps itself and the rest held for the next try.
+    #[test]
+    fn a_failed_modifier_release_is_retried_with_the_rest() {
+        let mut held = COMMAND | SHIFT | CONTROL;
+        let mut posted = Vec::new();
+
+        let failed = release_each(&mut held, |code, rest| {
+            if code == 56 {
+                return Err(Error::new("native", "Could not post"));
+            }
+
+            posted.push((code, rest));
+            Ok(())
+        });
+
+        assert!(failed.is_err());
+        assert_eq!(posted, [(55, SHIFT | CONTROL)]);
+        assert_eq!(held, SHIFT | CONTROL, "shift and control are still held");
+
+        posted.clear();
+        release_each(&mut held, |code, rest| {
+            posted.push((code, rest));
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(posted, [(56, CONTROL), (59, 0)]);
+        assert_eq!(held, 0);
+    }
+
+    /// Flags no modifier key stands for do not stay held once every
+    /// modifier key is up.
+    #[test]
+    fn nothing_stays_held_once_every_modifier_is_up() {
+        let mut held = CGEventFlags::MaskAlphaShift.0;
+        let mut posted = 0;
+
+        release_each(&mut held, |_, _| {
+            posted += 1;
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!((held, posted), (0, 0));
+    }
+
+    /// An abandoned drag comes up where it went down; a button that never
+    /// moved comes up where it is.
+    #[test]
+    fn an_abandoned_drag_is_released_where_it_began() {
+        let press = Point { x: 10.0, y: 20.0 };
+        let along = Point { x: 300.0, y: 20.0 };
+
+        let back = abandoned_at(Some(press), along).unwrap();
+        assert_eq!((back.x, back.y), (10.0, 20.0));
+        assert!(abandoned_at(Some(press), press).is_none());
+        assert!(abandoned_at(None, along).is_none());
     }
 
     /// The named constants are the raw values input has always used; in

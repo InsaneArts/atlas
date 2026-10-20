@@ -517,6 +517,41 @@ fn sheet_window(
     }
 }
 
+/// Why an app answered nothing, from the last AX error its reads returned,
+/// whether this process may use Accessibility, and whether the process
+/// exists. Only a missing permission is reported as one.
+fn unreachable(error: Option<AXError>, trusted: bool, exists: bool) -> Error {
+    if !trusted || error == Some(AXError::APIDisabled) {
+        return Error::new(
+            "permission",
+            "The app's accessibility tree is unavailable; check Accessibility for the helper",
+        );
+    }
+
+    if !exists || error == Some(AXError::InvalidUIElement) {
+        return Error::new("elements", "No app is running with that process ID");
+    }
+
+    if error == Some(AXError::CannotComplete) {
+        return Error::new(
+            "elements",
+            "The app is not responding to Accessibility (it may be busy, or not an app with \
+             windows); try again",
+        );
+    }
+
+    match error {
+        Some(error) => Error::new(
+            "elements",
+            format!(
+                "The app's accessibility tree could not be read (error {})",
+                error.0
+            ),
+        ),
+        None => Error::new("elements", "The app shows no accessibility tree"),
+    }
+}
+
 /// Depth-first elements of `pid`'s windows, its menu bar titles when it is
 /// the active app, then the menus it has open (a menu bar, status item or
 /// context menu). Closed menus are left out: nothing in them is on screen.
@@ -534,14 +569,19 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
 
     let mut scan = Scan::new(Instant::now() + limits.time);
     let windows = scan.children(&app, "AXWindows", limits.count);
+    let windows_error = scan.last_error.take();
 
-    // An app that answers nothing at all, not even its role, is unreachable
-    // (no Accessibility trust, or not a GUI process); report it, not "empty".
+    // An app that answers nothing at all, not even its role, is unreachable;
+    // report why, not "empty".
     if windows.is_empty() && scan.text(&app, "AXRole").is_none() {
-        return Err(Error::new(
-            "permission",
-            "The app's accessibility tree is unavailable; check Accessibility for the helper",
-        ));
+        let error = scan.last_error.or(windows_error);
+        let exists = pid > 0
+            && !matches!(
+                nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None),
+                Err(nix::errno::Errno::ESRCH)
+            );
+
+        return Err(unreachable(error, super::accessibility_trusted(), exists));
     }
 
     let mut roots: Vec<(CFRetained<AXUIElement>, Option<Frame>, bool)> = windows
@@ -908,6 +948,42 @@ mod tests {
         assert_eq!(text, "a".repeat(199));
         let (text, _) = bound(&format!("{}e\u{301}tail", "a".repeat(198)));
         assert_eq!(text, format!("{}e\u{301}", "a".repeat(198)));
+    }
+
+    /// Only a missing permission is called one: a busy app, or a process ID
+    /// with no app, is named as such.
+    #[test]
+    fn an_unreachable_app_is_reported_for_what_it_is() {
+        let failed = |error, trusted, exists| {
+            let error = unreachable(error, trusted, exists);
+            (error.code, error.error)
+        };
+
+        assert_eq!(
+            failed(Some(AXError::APIDisabled), true, true).0,
+            "permission"
+        );
+        assert_eq!(
+            failed(Some(AXError::CannotComplete), false, true).0,
+            "permission"
+        );
+
+        let (code, message) = failed(Some(AXError::CannotComplete), true, true);
+        assert_eq!(code, "elements");
+        assert!(message.contains("not responding"));
+
+        let (code, message) = failed(Some(AXError::InvalidUIElement), true, true);
+        assert_eq!(code, "elements");
+        assert!(message.contains("No app"));
+        assert!(
+            failed(Some(AXError::CannotComplete), true, false)
+                .1
+                .contains("No app")
+        );
+
+        let (code, message) = failed(Some(AXError::Failure), true, true);
+        assert_eq!(code, "elements");
+        assert!(message.contains("-25200"));
     }
 
     #[test]

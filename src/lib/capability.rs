@@ -472,9 +472,14 @@ impl Canary<'_> {
 
     /// The helper's on-screen windows, front to back.
     async fn windows(&self) -> Result<Vec<Window>> {
+        // Only reads: a failed listing leaves nothing pending.
         let probe = self.client.config.identity_probe.to_string_lossy();
         let reply = self
-            .run(vec![probe.into_owned(), "windows-info".into()])
+            .client
+            .inspect_owned(
+                self.ownership,
+                vec![probe.into_owned(), "windows-info".into()],
+            )
             .await?;
 
         crate::native::windows::from_probe(&reply)

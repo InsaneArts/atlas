@@ -656,6 +656,17 @@ impl Client {
         })
     }
 
+    /// [`Client::inspect_within`] with a run's usual limit, under controller
+    /// ownership the caller already holds. Only for commands that cannot
+    /// change the helper: nothing is left pending when it fails.
+    pub(crate) async fn inspect_owned(
+        &self,
+        _ownership: &Ownership,
+        argv: Vec<String>,
+    ) -> Result<Value> {
+        self.inspect_within(argv, RUN_TIMEOUT).await
+    }
+
     /// Execute argv in the verified hidden helper as part of a mutation the
     /// caller holds ownership for and has already recorded as pending. The
     /// caller settles that record once the outcome is established. A

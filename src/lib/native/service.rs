@@ -417,10 +417,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
                     continue;
                 };
 
-                let Ok(peer) = stream.peer_cred() else {
-                    continue;
-                };
-                if peer.uid() != controller_uid && peer.uid() != uid {
+                if !admitted(&stream, controller_uid) {
                     continue;
                 }
 
@@ -449,6 +446,16 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     let cleanup = service.cleanup().await;
 
     outcome.and(closed).and(cleanup)
+}
+
+/// Whether the peer on `stream` is the controller, the only account the
+/// service answers. Nothing Atlas runs in the helper asks the input service
+/// anything; an app there (the one under test, an installer) must not cancel
+/// the controller's actions, take control or stop the service.
+fn admitted(stream: &UnixStream, controller_uid: u32) -> bool {
+    stream
+        .peer_cred()
+        .is_ok_and(|peer| peer.uid() == controller_uid)
 }
 
 /// One JSON request of at most `MAX_REQUEST` bytes.
@@ -505,8 +512,22 @@ async fn reply(stream: &mut UnixStream, result: Result<Value>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_REQUEST, read_request};
-    use tokio::io::AsyncWriteExt;
+    use super::{MAX_REQUEST, admitted, read_request};
+    use tokio::{io::AsyncWriteExt, net::UnixStream};
+
+    /// Only the controller is answered: a process in the helper's own
+    /// account, where the apps under test run, is turned away.
+    #[tokio::test]
+    async fn only_the_controller_is_admitted() {
+        let me = nix::unistd::getuid().as_raw();
+        let (_client, server) = UnixStream::pair().unwrap();
+
+        assert!(admitted(&server, me), "the controller");
+        assert!(
+            !admitted(&server, me.wrapping_add(1)),
+            "the helper's own account, or any other"
+        );
+    }
 
     /// Deliver `line` in `chunk`-byte writes and parse it as the service would.
     async fn deliver(line: Vec<u8>, chunk: usize) -> crate::error::Result<serde_json::Value> {

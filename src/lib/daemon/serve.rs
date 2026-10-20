@@ -34,6 +34,9 @@ const STOP: Duration = Duration::from_secs(6);
 /// Longest the runtime waits for blocking work once serving has ended.
 const SHUTDOWN: Duration = Duration::from_secs(2);
 
+/// How often a running command checks that the helper is still off screen.
+const CONSOLE_CHECK: Duration = Duration::from_secs(1);
+
 /// Takes a screenshot: the real display in the daemon, a synthetic image in
 /// tests, so ordinary tests never capture the desktop they run on.
 type Capture = fn(Option<u32>) -> Result<capture::Shot>;
@@ -67,6 +70,18 @@ impl Daemon {
             .subscribe()
             .wait_for(|stopping| *stopping)
             .await;
+    }
+
+    /// Completes once the helper is on the console, checked about once a
+    /// second.
+    async fn on_screen(&self) {
+        loop {
+            tokio::time::sleep(CONSOLE_CHECK).await;
+
+            if (self.on_console)() {
+                return;
+            }
+        }
     }
 }
 
@@ -187,9 +202,10 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
                 };
 
                 let daemon = daemon.clone();
+                let controller = peer.uid() == controller_uid;
                 tasks.spawn(async move {
                     let _slot = slot;
-                    let _ = handle(stream, daemon).await;
+                    let _ = handle(stream, daemon, controller).await;
                 });
             }
         }
@@ -372,12 +388,27 @@ async fn screenshot(daemon: &Daemon, max_dimension: Option<u32>) -> Value {
     }
 }
 
-async fn handle(stream: UnixStream, daemon: Arc<Daemon>) -> Result<()> {
+/// Serve one request. `controller` says whether it came from the controller:
+/// the helper's own processes (an app under test among them) may only say
+/// hello, as the setup window does there, never act with Atlas's
+/// permissions.
+async fn handle(stream: UnixStream, daemon: Arc<Daemon>, controller: bool) -> Result<()> {
     let (mut reader, mut writer) = stream.into_split();
     let request = match endpoint::read_line(&mut reader, MAX_REQUEST).await {
         Ok(line) => protocol::parse(&line),
         Err(error) => Err(refused(error)),
     };
+
+    let request = request.and_then(|request| {
+        if controller || matches!(request, Request::Hello) {
+            Ok(request)
+        } else {
+            Err(failure(
+                "permission",
+                "Only the account Atlas works for may ask the helper that",
+            ))
+        }
+    });
 
     let request = request.and_then(|request| match allowed(&request, (daemon.on_console)()) {
         Some(refusal) => Err(refusal),
@@ -404,12 +435,14 @@ async fn handle(stream: UnixStream, daemon: Arc<Daemon>) -> Result<()> {
             });
 
             // The client never sends after its request, so any read result
-            // means it left.
+            // means it left. A command never goes on while a person may be
+            // using the helper's desktop.
             let cancel = async {
                 let mut byte = [0; 1];
                 tokio::select! {
                     _ = reader.read(&mut byte) => run::Cancel::Left,
                     () = daemon.stopped() => run::Cancel::Stopping,
+                    () = daemon.on_screen() => run::Cancel::OnConsole,
                 }
             };
 
@@ -471,8 +504,13 @@ mod tests {
 
     /// Send one request line over a socket pair and collect every reply line.
     async fn exchange(daemon: Arc<Daemon>, request: &str) -> Vec<Value> {
+        exchange_as(daemon, request, true).await
+    }
+
+    /// [`exchange`] from the controller, or from the helper's own account.
+    async fn exchange_as(daemon: Arc<Daemon>, request: &str, controller: bool) -> Vec<Value> {
         let (mut client, server) = UnixStream::pair().unwrap();
-        let served = tokio::spawn(handle(server, daemon));
+        let served = tokio::spawn(handle(server, daemon, controller));
 
         client
             .write_all(format!("{request}\n").as_bytes())
@@ -493,6 +531,24 @@ mod tests {
 
         served.await.unwrap().unwrap();
         replies
+    }
+
+    #[tokio::test]
+    async fn the_helpers_own_processes_may_only_say_hello() {
+        let hello = exchange_as(daemon(false), r#"{"op":"hello"}"#, false).await;
+        assert_eq!(hello[0]["op"], "hello");
+
+        for request in [
+            r#"{"op":"run","argv":["/bin/echo","hi"]}"#,
+            r#"{"op":"screenshot"}"#,
+            r#"{"op":"apps"}"#,
+            r#"{"op":"restart"}"#,
+            r#"{"op":"logout","force":true}"#,
+        ] {
+            let reply = &exchange_as(daemon(false), request, false).await[0];
+            assert_eq!(reply["code"], "permission", "{request}");
+            assert_eq!(reply["uncertain"], false, "{request}");
+        }
     }
 
     #[tokio::test]
@@ -623,7 +679,7 @@ mod tests {
         for leave in ["client", "daemon"] {
             let daemon = daemon(false);
             let (mut client, server) = UnixStream::pair().unwrap();
-            let served = tokio::spawn(handle(server, daemon.clone()));
+            let served = tokio::spawn(handle(server, daemon.clone(), true));
 
             client
                 .write_all(
@@ -664,6 +720,47 @@ mod tests {
         }
     }
 
+    /// A running command stops when the helper comes on screen, and the
+    /// client hears that its outcome is unknown.
+    #[tokio::test]
+    async fn a_command_stops_when_the_helper_comes_on_screen() {
+        static SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+        let daemon = Arc::new(Daemon::new("Aqua".into(), synthetic, || {
+            SHOWN.load(std::sync::atomic::Ordering::SeqCst)
+        }));
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let served = tokio::spawn(handle(server, daemon, true));
+
+        client
+            .write_all(b"{\"op\":\"run\",\"argv\":[\"/bin/sleep\",\"30\"],\"timeoutMs\":60000}\n")
+            .await
+            .unwrap();
+
+        let mut lines = BufReader::new(client).lines();
+        let started: Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        let group = started["pid"].as_i64().unwrap() as i32;
+
+        SHOWN.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let line = tokio::time::timeout(Duration::from_secs(8), lines.next_line())
+            .await
+            .expect("the command was stopped")
+            .unwrap()
+            .unwrap();
+        let reply: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(
+            (&reply["code"], &reply["uncertain"]),
+            (&json!("on-console"), &json!(true))
+        );
+
+        served.await.unwrap().unwrap();
+
+        let group = nix::unistd::Pid::from_raw(group);
+        assert!(nix::sys::signal::killpg(group, None).is_err());
+    }
+
     /// The client's own transport reads this daemon's replies.
     #[tokio::test]
     async fn the_client_transport_understands_the_daemon() {
@@ -674,7 +771,7 @@ mod tests {
 
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
-                tokio::spawn(handle(stream, daemon.clone()));
+                tokio::spawn(handle(stream, daemon.clone(), true));
             }
         });
 
