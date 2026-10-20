@@ -36,14 +36,14 @@ struct TitleDetail: View {
   private var titleStyle: TextStyle {
     switch size {
     case .regular: .body
-    case .compact: .label
+    case .compact: .callout
     }
   }
 
   private var detailStyle: TextStyle {
     switch size {
     case .regular: .callout
-    case .compact: .note
+    case .compact: .caption
     }
   }
 }

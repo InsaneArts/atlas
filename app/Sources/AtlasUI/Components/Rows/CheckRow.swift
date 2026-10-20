@@ -23,7 +23,7 @@ struct CheckRow: View {
       }
     }
     .padding(.horizontal, Spacing.xl)
-    .padding(.vertical, Layout.verticalInset)
+    .padding(.vertical, Spacing.l)
     .accessibilityElement(children: .combine)
     .accessibilityValue(state.spokenValue)
   }
@@ -40,12 +40,6 @@ struct CheckRow: View {
         .foregroundStyle(Color.attention)
     }
   }
-}
-
-/// The row's own measures.
-private enum Layout {
-  /// [R] 11: above and below the line, kept exact until Phase 3b rounds it to `Spacing.l` (12).
-  static let verticalInset: CGFloat = 11
 }
 
 #if DEBUG

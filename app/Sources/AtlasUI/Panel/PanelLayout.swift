@@ -11,7 +11,6 @@ enum PanelLayout {
   static let menuOutset: CGFloat = -6
   /// 24: the orbit mark beside the title.
   static let mark: CGFloat = 24
-  /// [R] White at 0.14: the picture's edge, kept exact until Phase 3b uses `strokeStrong` (0.16).
-  static let pictureEdge = Color.white
-    .opacity(0.14)
+  /// The picture's edge.
+  static let pictureEdge = Color.strokeStrong
 }

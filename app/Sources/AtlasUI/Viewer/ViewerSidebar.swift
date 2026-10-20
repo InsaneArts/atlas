@@ -43,7 +43,7 @@ struct ViewerSidebar: View {
     if state.recent.isEmpty {
       CardGroup {
         Text("Nothing yet. Actions appear here as they happen.")
-          .font(Typography.font(.label))
+          .font(Typography.font(.callout))
           .foregroundStyle(Color.textTertiary)
           .padding(Spacing.xl)
           .frame(maxWidth: .infinity, alignment: .leading)

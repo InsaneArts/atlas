@@ -19,7 +19,7 @@ struct PanelHeader: View {
       }
       if let reason {
         Text(reason)
-          .font(Typography.font(.note))
+          .font(Typography.font(.caption))
           .foregroundStyle(Color.textSecondary)
           .lineLimit(2)
           .fixedSize(horizontal: false, vertical: true)

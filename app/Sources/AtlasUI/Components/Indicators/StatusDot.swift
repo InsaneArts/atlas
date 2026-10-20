@@ -4,11 +4,9 @@ import SwiftUI
 struct StatusDot: View {
   /// How large the dot is.
   enum Size: Sendable {
-    /// [R] 5: beside a badge's word, such as Live, kept exact until Phase 3b rounds it to `IconSize.dot` (6).
-    case live
-    /// 6: beside a caption.
+    /// 6: beside a caption or a badge's word, such as Live.
     case small
-    /// [R] 7: beside a status, kept exact until Phase 3b rounds it to 6 or 8.
+    /// 8: beside a status.
     case regular
   }
 
@@ -34,7 +32,6 @@ struct StatusDot: View {
 
   private var side: CGFloat {
     switch size {
-    case .live: Layout.live
     case .small: IconSize.dot
     case .regular: Layout.regular
     }
@@ -52,10 +49,8 @@ struct StatusDot: View {
 
 /// The dot's own measures.
 private enum Layout {
-  /// [R] 5: the live dot, kept exact until Phase 3b rounds it to `IconSize.dot` (6).
-  static let live: CGFloat = 5
-  /// [R] 7: a status dot, kept exact until Phase 3b rounds it to 6 or 8.
-  static let regular: CGFloat = 7
+  /// 8: a status dot.
+  static let regular: CGFloat = 8
   /// 0.35: the low point of a breath.
   static let dimmed = 0.35
 }
@@ -72,8 +67,6 @@ private enum Layout {
     InteractivePreview {
       Toggle(String("Pulsing"), isOn: $pulsing)
       Picker(String("Size"), selection: $size) {
-        Text(verbatim: "Live")
-          .tag(StatusDot.Size.live)
         Text(verbatim: "Small")
           .tag(StatusDot.Size.small)
         Text(verbatim: "Regular")

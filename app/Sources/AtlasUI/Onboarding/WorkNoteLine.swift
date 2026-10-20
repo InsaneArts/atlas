@@ -14,7 +14,7 @@ struct WorkNoteLine: View {
         HStack(spacing: Spacing.m) {
           Spinner()
           Text(text)
-            .font(Typography.font(.label))
+            .font(Typography.font(.callout))
             .foregroundStyle(Color.textSecondary)
         }
       case .problem(let text):

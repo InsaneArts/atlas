@@ -11,7 +11,7 @@ struct StatusBadge: View {
     HStack(spacing: Spacing.s) {
       StatusDot(tone: tone)
       Text(label)
-        .font(Typography.font(.note, weight: .medium))
+        .font(Typography.font(.caption, weight: .medium))
     }
     .padding(.horizontal, Spacing.ml)
     .frame(height: ControlHeight.pill)

@@ -9,7 +9,7 @@ struct FloatingChip<Content: View>: View {
     HStack(spacing: Spacing.m) {
       content
     }
-    .font(Typography.font(.label))
+    .font(Typography.font(.callout))
     .lineLimit(1)
     .padding(.horizontal, Spacing.xl)
     .frame(height: ControlHeight.compactRow)

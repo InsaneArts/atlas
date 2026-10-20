@@ -64,7 +64,7 @@
             StatusDot(tone: .active, pulsing: true)
             StatusDot(tone: .attention, size: .small)
             StatusDot(tone: .active, pulsing: true, size: .small)
-            StatusDot(tone: .ready, size: .live)
+            StatusDot(tone: .ready, size: .small)
           }
         case .pageDots:
           PageDots(index: 0, count: 6)

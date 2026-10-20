@@ -13,13 +13,13 @@ struct ReadinessRow: View {
   var body: some View {
     HStack(alignment: alignment, spacing: Spacing.l) {
       mark
-      VStack(alignment: .leading, spacing: Layout.gap) {
+      VStack(alignment: .leading, spacing: Spacing.xxs) {
         Text(name)
           .font(Typography.font(.body))
           .fixedSize(horizontal: false, vertical: true)
         if state != .ready {
           Text(text)
-            .font(Typography.font(.note))
+            .font(Typography.font(.caption))
             .foregroundStyle(textTone.color)
             .fixedSize(horizontal: false, vertical: true)
             .textSelection(.enabled)
@@ -58,12 +58,6 @@ struct ReadinessRow: View {
   private var textTone: TextTone {
     state == .notReady ? .attention : .secondary
   }
-}
-
-/// The row's own measures.
-private enum Layout {
-  /// [R] 3: between the name and its text, kept exact until Phase 3b rounds it to `Spacing.xxs` (2).
-  static let gap: CGFloat = 3
 }
 
 #if DEBUG
