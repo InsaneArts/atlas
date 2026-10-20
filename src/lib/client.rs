@@ -647,9 +647,13 @@ impl Client {
         self.inspect_within(argv, Duration::from_secs(5)).await
     }
 
-    /// [`Client::inspect`] bounded by `limit`.
+    /// [`Client::inspect`] bounded by `limit`. A read changes nothing, so
+    /// its failure is never uncertain.
     pub(crate) async fn inspect_within(&self, argv: Vec<String>, limit: Duration) -> Result<Value> {
-        self.run_pending(argv, limit).await
+        self.run_pending(argv, limit).await.map_err(|error| Error {
+            uncertain: false,
+            ..error
+        })
     }
 
     /// Execute argv in the verified hidden helper as part of a mutation the
@@ -1012,6 +1016,8 @@ impl Client {
             return Ok(reply);
         }
 
+        // The helper was told to restart: from here on, every failure leaves
+        // the outcome unknown, so the claim stays until recovery.
         let recovery = async {
             loop {
                 tokio::time::sleep(Duration::from_millis(150)).await;
@@ -1028,7 +1034,7 @@ impl Client {
                 }
 
                 if input_settled(&status, self.config.helper_uid, input_pid) {
-                    self.controller.clear()?;
+                    self.controller.clear().map_err(Error::uncertain)?;
                     return Ok(json!({"ok": true, "restarted": true, "session": status}));
                 }
 
@@ -1038,8 +1044,10 @@ impl Client {
                     && status["inputService"]["pid"] == input_pid
                     && status["inputService"]["ready"] == false
                 {
-                    self.upgrade_input(&status).await?;
-                    self.controller.clear()?;
+                    self.upgrade_input(&status)
+                        .await
+                        .map_err(Error::uncertain)?;
+                    self.controller.clear().map_err(Error::uncertain)?;
                     let status = self.status().await;
 
                     return Ok(json!({

@@ -459,13 +459,17 @@ fn stale_launch(said: &str) -> Option<&str> {
 }
 
 /// In the helper, remove launchd's jobs for the app at `$1` that are not
-/// running (none of its windows or processes go with them); it prints each
-/// one removed. The next launch submits a fresh job.
-const CLEAR_STALE_JOB: &str = r#"id=$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$1/Contents/Info.plist") || exit 0
-/bin/launchctl list | /usr/bin/awk -v prefix="application.$id." \
-  '$1 == "-" && index(tolower($3), tolower(prefix)) == 1 { print $3 }' |
+/// running (none of its windows or processes go with them): exactly the
+/// labels `application.<its bundle id>.<n>.<n>`, never an app whose bundle
+/// id merely begins with it. It prints only the labels it removed. The next
+/// launch submits a fresh job.
+const CLEAR_STALE_JOB: &str = r#"id=$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$1/Contents/Info.plist" 2>/dev/null) || exit 0
+case "$id" in *[!A-Za-z0-9.-]*|'') exit 0;; esac
+/bin/launchctl list | /usr/bin/awk -v prefix="application.$id." '
+  $1 == "-" && index(tolower($3), tolower(prefix)) == 1 &&
+  substr($3, length(prefix) + 1) ~ /^[0-9]+\.[0-9]+$/ { print $3 }' |
 while read -r label; do
-  /bin/launchctl remove "$label" && echo "$label"
+  /bin/launchctl remove "$label" 2>/dev/null && echo "$label"
 done
 exit 0"#;
 

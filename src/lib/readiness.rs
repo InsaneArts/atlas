@@ -158,6 +158,7 @@ async fn app(client: &Client, name: &str, bundle: &str) -> Result<Value> {
         "[ -d \"$HOME/Library/Containers/$id\" ] && printf 'state=container\\n'; true",
     );
 
+    // One app the helper could not look at leaves the others' report whole.
     let reply = client
         .inspect(vec![
             "/bin/sh".into(),
@@ -166,7 +167,8 @@ async fn app(client: &Client, name: &str, bundle: &str) -> Result<Value> {
             "sh".into(),
             bundle.into(),
         ])
-        .await?;
+        .await
+        .unwrap_or(Value::Null);
 
     let facts = (reply["exitCode"] == 0)
         .then(|| run_output(&reply, 4096).ok())

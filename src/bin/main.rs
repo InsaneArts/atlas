@@ -322,7 +322,7 @@ enum Command {
     /// at the end of a chord (cmd++).
     Key {
         /// Keys or chords such as cmd+s, escape, return, shift+tab.
-        #[arg(required = true, allow_hyphen_values = true)]
+        #[arg(required = true)]
         keys: Vec<String>,
     },
     /// List the helper's windows, front to back.
@@ -1882,7 +1882,7 @@ mod tests {
     /// Text and keys that begin with a hyphen are typed and pressed, not
     /// read as options.
     #[test]
-    fn text_and_keys_may_begin_with_a_hyphen() {
+    fn text_may_begin_with_a_hyphen_and_keys_may_be_one() {
         let Ok(Cli {
             command: Some(Command::Type { text, stdin }),
             ..
@@ -1902,6 +1902,17 @@ mod tests {
         };
 
         assert_eq!(keys, ["-", "cmd+-"]);
+        assert!(
+            matches!(
+                parse(&["key", "cmd+s", "--json"]),
+                Ok(Cli {
+                    json: true,
+                    command: Some(Command::Key { .. }),
+                    ..
+                })
+            ),
+            "an option after the keys stays an option"
+        );
         assert!(matches!(
             parse(&["type", "--stdin"]),
             Ok(Cli {
