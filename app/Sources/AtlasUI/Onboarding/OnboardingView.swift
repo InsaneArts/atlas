@@ -40,7 +40,8 @@ package struct OnboardingView: View {
     switch state.content {
     case .guide(let guide):
       GuidePanel(state: guide, send: send)
-        .transition(.opacity)
+        // No window animates its state, so the fade carries its own animation.
+        .transition(.opacity.animation(Motion.fade))
     case .loading(let problem):
       LoadingScreen(problem: problem)
     case .screen(let screen):
@@ -53,7 +54,7 @@ package struct OnboardingView: View {
         send: send
       )
       .id(screen.id)
-      .transition(reduceMotion ? .opacity : screenTransition)
+      .transition(reduceMotion ? .opacity.animation(Motion.fade) : screenTransition)
     }
   }
 
