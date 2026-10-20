@@ -83,18 +83,6 @@ struct PanelControllerTests {
     #expect(controller.feedback == PanelWords.switched)
   }
 
-  @Test("a helper not found at launch is looked for again when the panel opens")
-  func theHelperIsLookedForAgain() async throws {
-    let commands = ScriptedCommands([:])
-    let controller = Self.panel(commands: commands)
-    await controller.findHelper()
-    #expect(controller.helper == nil)
-    commands.answer("switch --list", #"{"ok": true, "accounts": [{"name": "atlas", "helper": true}]}"#)
-    controller.watch(open: true)
-    try await settle("the helper was never looked for again") { controller.helper == "atlas" }
-    controller.watch(open: false)
-  }
-
   @Test("logging in locks the screen for the helper the service reports and says what to do next")
   func loggingInLocksTheScreen() async {
     let service = ScriptedService()
@@ -107,7 +95,7 @@ struct PanelControllerTests {
     #expect(controller.feedback == PanelWords.logInThenSwitchBack(to: "Atlas"))
   }
 
-  @Test("each opening lists the helper again, so a listing that failed at launch never disables the switch for good")
+  @Test("a helper not found at launch is listed again when the panel opens, and a later failed listing keeps it known")
   func theHelperIsListedAgainOnOpening() async throws {
     let commands = ScriptedCommands([:])
     let controller = Self.panel(commands: commands)
@@ -233,8 +221,7 @@ struct PanelControllerTests {
     let commands = ScriptedCommands([
       "start-input": #"{"ok": true}"#, "menubar --login": #"{"ok": false, "error": "Not allowed"}"#,
     ])
-    let loginItem = ScriptedLoginItem(available: true)
-    let controller = Self.panel(service, commands: commands, loginItem: loginItem)
+    let controller = Self.panel(service, commands: commands)
     let seen = PanelWorkObservation()
     commands.whileRunning { arguments in
       guard arguments == Action.startInput.arguments else { return }

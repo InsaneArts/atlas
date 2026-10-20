@@ -16,9 +16,11 @@ enum AtlasApp {
     // the app: writes to its closed pipe fail with an error instead.
     signal(SIGPIPE, SIG_IGN)
     let arguments = CommandLine.arguments
+    let executable = URL(fileURLWithPath: arguments[0])
+      .resolvingSymlinksInPath()
     let configuration = AppConfiguration(
       environment: ProcessInfo.processInfo.environment,
-      executable: URL(fileURLWithPath: arguments[0]).resolvingSymlinksInPath()
+      executable: executable
     )
     let loginItem = OpenAtLogin.live(LoginItem())
     var render: String?

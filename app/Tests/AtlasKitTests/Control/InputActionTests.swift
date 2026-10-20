@@ -20,7 +20,8 @@ struct InputActionTests {
     ] as [(InputAction, String)]
   )
   func encoding(action: InputAction, payload: String) throws {
-    let encoded = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(action)) as? NSDictionary)
+    let encoder = JSONEncoder()
+    let encoded = try #require(try JSONSerialization.jsonObject(with: encoder.encode(action)) as? NSDictionary)
     let expected = try #require(try JSONSerialization.jsonObject(with: Data(payload.utf8)) as? NSDictionary)
     #expect(encoded == expected)
   }

@@ -181,8 +181,7 @@ struct OnboardingControllerTests {
 
   @Test("a check that ends once the window has closed changes nothing")
   func aLateCheckIsDropped() async throws {
-    let unfinished = finishedMac.replacingOccurrences(of: #""finished": true"#, with: #""finished": false"#)
-    let commands = ScriptedCommands(["onboarding status": unfinished, "onboarding finish": #"{"ok": true}"#])
+    let commands = ScriptedCommands(["onboarding status": checkingMac, "onboarding finish": #"{"ok": true}"#])
     let controller = Self.controller(commands)
     commands.whileRunning { arguments in
       if arguments == Action.finishSetup.arguments { await controller.close() }
@@ -254,10 +253,9 @@ struct OnboardingControllerTests {
 
   @Test("leaving the check and coming back runs it again")
   func theCheckRunsAgainOnReturn() async throws {
-    let unfinished = finishedMac.replacingOccurrences(of: #""finished": true"#, with: #""finished": false"#)
-    let shown = unfinished.replacingOccurrences(of: #""hidden": true"#, with: #""hidden": false"#)
+    let shown = checkingMac.replacingOccurrences(of: #""hidden": true"#, with: #""hidden": false"#)
     let commands = ScriptedCommands([
-      "onboarding status": unfinished, "onboarding finish": #"{"ok": false, "error": "no answer"}"#,
+      "onboarding status": checkingMac, "onboarding finish": #"{"ok": false, "error": "no answer"}"#,
     ])
     let controller = try await Self.loaded(commands)
     try await settle("the check never failed") {
@@ -266,7 +264,7 @@ struct OnboardingControllerTests {
     commands.answer("onboarding status", shown)
     controller.refresh()
     try await settle("the check was never left") { controller.snapshot.step == .switchToHelper }
-    commands.answer("onboarding status", unfinished)
+    commands.answer("onboarding status", checkingMac)
     controller.refresh()
     try await settle("the check never ran again") {
       commands.ran.filter { $0 == Action.finishSetup.arguments }.count == 2

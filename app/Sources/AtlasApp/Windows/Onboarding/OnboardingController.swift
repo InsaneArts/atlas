@@ -33,7 +33,7 @@ final class OnboardingController {
   @ObservationIgnored private var markedOpen = false
   /// Setting that mark, while it runs.
   @ObservationIgnored private var marking: Task<Void, Never>?
-  /// The end-to-end check, while it runs: one at a time, stopped when the window closes.
+  /// The end-to-end check, while it runs: one at a time.
   @ObservationIgnored private var finishing: Task<Void, Never>?
   /// Reading which agents are installed and connected, while it runs.
   @ObservationIgnored private var loadingAgents: Task<Void, Never>?
@@ -187,15 +187,12 @@ final class OnboardingController {
     return outcome
   }
 
-  /// The window is closing: stop reading, stop the check and the agents' reading, start nothing new, and clear the
-  /// helper's mark once a mark under way has settled, so the clearing lands last.
+  /// The window is closing: stop reading, start nothing new, and clear the helper's mark once a mark under way has
+  /// settled, so the clearing lands last. A check or an agents reading under way runs to its end, since stopping
+  /// `atlas` partway could leave a restart or setup half done; its reply is dropped.
   func close() async {
     closed = true
     stop()
-    finishing?.cancel()
-    finishing = nil
-    loadingAgents?.cancel()
-    loadingAgents = nil
     await marking?.value
     if snapshot.facts.role == .helper {
       _ = await commands.run(.markWindow(open: false))
@@ -249,7 +246,7 @@ final class OnboardingController {
     snapshot.finish = .running
     finishing = Task {
       let outcome = await commands.run(.finishSetup)
-      guard !Task.isCancelled, !closed else { return }
+      guard !closed else { return }
       finishing = nil
       snapshot.finish = outcome.ok ? .passed : .failed(outcome.message)
       refresh()
@@ -271,7 +268,7 @@ final class OnboardingController {
     snapshot.agents = AgentChoice.all
     loadingAgents = Task {
       let outcome = await commands.run(.agentsStatus)
-      guard !Task.isCancelled, !closed else { return }
+      guard !closed else { return }
       loadingAgents = nil
       guard outcome.ok, let status = outcome.decode(AgentsStatus.self) else {
         snapshot.problem = outcome.ok ? OnboardingWords.notUnderstood : outcome.message

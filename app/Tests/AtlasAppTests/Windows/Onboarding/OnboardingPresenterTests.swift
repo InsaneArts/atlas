@@ -161,7 +161,6 @@ struct OnboardingPresenterTests {
     choose.working = "Setting up qa…"
     #expect(OnboardingPresenter.state(choose).footer.next?.isEnabled == false)
     #expect(OnboardingPresenter.state(choose).footer.back?.isEnabled == false)
-
     var create = Self.snapshot(try Self.person(nil), Self.choices(creating: true))
     #expect(OnboardingPresenter.state(create).footer.next?.isEnabled == false, "no password yet")
     create.form.password = "secret"
@@ -169,21 +168,18 @@ struct OnboardingPresenterTests {
     #expect(OnboardingPresenter.state(create).footer.next?.isEnabled == true)
     create.working = "Creating the account…"
     #expect(OnboardingPresenter.state(create).footer.next?.isEnabled == false)
-
     var finishing = Self.snapshot(try Self.person(Self.helper()))
     finishing.finish = .running
     #expect(OnboardingPresenter.state(finishing).footer.next?.isEnabled == false)
     finishing.finish = .passed
     let passed = try #require(OnboardingPresenter.state(finishing).footer.next)
     #expect(passed.isEnabled && !passed.isDefault, "Return does not skip the check's result")
-
     var agents = Self.snapshot(try Self.person(Self.helper(), finished: true))
     #expect(OnboardingPresenter.state(agents).footer.next?.isEnabled == false, "agents not read yet")
     agents.agentsLoaded = true
     #expect(OnboardingPresenter.state(agents).footer.next?.isEnabled == true)
     agents.working = "Connecting your agents…"
     #expect(OnboardingPresenter.state(agents).footer.next?.isEnabled == false)
-
     var done = Self.snapshot(try Self.person(Self.helper(), finished: true), Self.choices(agentsDone: true))
     #expect(OnboardingPresenter.state(done).footer.next?.event == .complete)
     #expect(OnboardingPresenter.state(done).footer.next?.isEnabled == true)

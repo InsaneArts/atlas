@@ -51,7 +51,9 @@ final class ScriptedCommands: CommandRunning {
   func run(_ arguments: [String], input: Data?) async -> Outcome {
     log.append((arguments, input))
     await step?(arguments)
-    let reply = answers[arguments.prefix(2).joined(separator: " ")] ?? answers[arguments.first ?? ""]
+    let command = arguments.prefix(2)
+      .joined(separator: " ")
+    let reply = answers[command] ?? answers[arguments.first ?? ""]
     guard let reply else { return Outcome(ok: false, reply: Data(), message: "unknown command") }
     return Outcome.parse(status: 0, stdout: Data(reply.utf8), stderr: Data())
   }

@@ -348,7 +348,8 @@ final class PanelController {
   }
 
   /// Turns Open at Login on or off through `atlas`, which records the person's choice so setup keeps it. The switch
-  /// follows the click at once; once the command ends, it shows what the system then reports, and a refusal says why.
+  /// follows the click at once; each command that ends reads back what the system then reports, so quick clicks
+  /// settle on the system's state, and the newest refusal says why.
   ///
   /// - Parameter on: Whether the app should open at login.
   func setOpenAtLogin(_ on: Bool) async {
@@ -356,7 +357,7 @@ final class PanelController {
     let change = loginChange
     opensAtLogin.isEnabled = on
     let outcome = await commands.run(.openAtLogin(on))
-    if !outcome.ok { say(outcome.message) }
-    if change == loginChange { readOpenAtLogin() }
+    if !outcome.ok, change == loginChange { say(outcome.message) }
+    readOpenAtLogin()
   }
 }

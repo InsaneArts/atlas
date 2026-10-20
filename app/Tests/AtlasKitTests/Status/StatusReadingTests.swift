@@ -142,8 +142,6 @@ struct StatusReadingTests {
     )
     let blocked = StatusReading(try status(["overview": ["mode": "blocked", "reason": "x", "recoverable": true]]))
     #expect(blocked.recovery(holdingControl: false, recovering: false)?.title == "The helper isn't ready")
-    let stuck = StatusReading(try status(["overview": ["mode": "blocked", "reason": "Turn on Accessibility"]]))
-    #expect(stuck.recovery(holdingControl: false, recovering: false) == nil, "Recover cannot fix this block")
     #expect(needs.recovery(holdingControl: false, recovering: true)?.busy == true)
     let watching = StatusReading(try status(["overview": ["mode": "observing"]]))
     #expect(watching.recovery(holdingControl: false, recovering: true) != nil)

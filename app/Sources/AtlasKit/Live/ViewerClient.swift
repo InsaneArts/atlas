@@ -11,6 +11,8 @@ package struct ViewerClient: ViewerService {
   /// start input first (a 3 s launch, then up to 6 s until ready), clean it up (up to 5 s), wait up to 20 s for the new
   /// helper, and read the status between steps (a few seconds each when the helper is slow).
   static let recoveryTimeout: TimeInterval = 60
+  /// The status the service answers while it is busy for a moment.
+  static let busy = 503
   /// What a request that timed out says.
   static let lateReply = "The helper did not answer in time."
 
@@ -72,10 +74,14 @@ package struct ViewerClient: ViewerService {
   ///   - data: The reply's body.
   ///   - response: The reply's response.
   /// - Returns: The status, every missing field at its safe default.
-  /// - Throws: ``StatusRefused`` when the reply is not a 200, or `DecodingError` when its body is not an object.
+  /// - Throws: ``StatusRefused`` when the service is busy for a moment (a 503), the service's error for any other
+  ///   reply that is not a 200, or `DecodingError` when its body is not an object.
   static func status(_ data: Data, response: URLResponse) throws -> ViewerStatus {
-    guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-      throw StatusRefused(failure(data, fallback: "No status").message)
+    let code = (response as? HTTPURLResponse)?.statusCode
+    guard code == 200 else {
+      let refusal = failure(data, fallback: "No status")
+      guard code == busy else { throw refusal }
+      throw StatusRefused(refusal.message)
     }
     let decoder = JSONDecoder()
     return try decoder.decode(ViewerStatus.self, from: data)

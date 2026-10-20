@@ -171,26 +171,15 @@ struct ViewerControllerControlTests {
     viewer.close()
   }
 
-  @Test("a changed helper says nothing to a viewer that only watches")
+  @Test("a changed helper says nothing to a viewer that only watches, and its notice, such as Recover's, stays")
   func aChangedHelperLeavesWatchingQuiet() async throws {
-    let service = ScriptedService()
-    let viewer = try await ViewerController.watching(service)
-    service.revision = "r2"
-    viewer.refresh()
-    try await settle("the changed picture never showed") { viewer.reading.frame?.revision == "r2" }
-    #expect(viewer.session.notice == nil, "no control was held, so none ended")
-    viewer.close()
-  }
-
-  @Test("a changed helper without control shows its picture and keeps the notice, such as Recover's")
-  func aChangedHelperWithoutControlKeepsTheNotice() async throws {
     let service = ScriptedService()
     let viewer = try await ViewerController.watching(service)
     viewer.say(Words.recovered)
     service.revision = "r2"
     viewer.refresh()
     try await settle("the changed picture never showed") { viewer.reading.frame?.revision == "r2" }
-    #expect(viewer.session.notice == Words.recovered)
+    #expect(viewer.session.notice == Words.recovered, "no control was held, so none ended")
     viewer.close()
   }
 

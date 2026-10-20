@@ -18,7 +18,10 @@ struct ProjectChip: View {
             .font(Typography.font(.footnote, weight: .bold))
             // The glyph is 9 points; its hit area reaches past it, over the chip's height and its trailing inset,
             // without moving or growing what is drawn.
-            .contentShape(Rectangle().inset(by: -Layout.hitOutset))
+            .contentShape(
+              Rectangle()
+                .inset(by: -Layout.hitOutset)
+            )
         }
         .buttonStyle(.plain)
         .accessibilityLabel(project.removeLabel)

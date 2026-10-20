@@ -29,7 +29,8 @@ package struct OnboardingFacts: Equatable, Sendable {
   ///
   /// - Parameter json: The reply as `atlas onboarding status` printed it.
   package init?(json: Data) {
-    guard let raw = try? JSONDecoder().decode(Reply.self, from: json) else { return nil }
+    let decoder = JSONDecoder()
+    guard let raw = try? decoder.decode(Reply.self, from: json) else { return nil }
     role = raw.role ?? .controller
     myName = raw.me?.realName ?? raw.me?.name ?? ""
     if raw.app?.installed == false {

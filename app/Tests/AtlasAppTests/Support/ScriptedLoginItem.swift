@@ -1,4 +1,3 @@
-import AtlasKit
 import Foundation
 
 @testable import AtlasApp

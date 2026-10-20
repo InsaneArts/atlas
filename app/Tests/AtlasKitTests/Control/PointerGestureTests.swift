@@ -81,8 +81,9 @@ struct PointerGestureTests {
     _ = gesture.start(.left, at: point, modifiers: [.shift], now: 0.05)
     let up = gesture.finish(.left, at: point, modifiers: [.shift], now: 0.06)
     #expect(count(up) == 1)
+    let encoder = JSONEncoder()
     let json = try #require(
-      try JSONSerialization.jsonObject(with: JSONEncoder().encode(up)) as? [String: Any]
+      try JSONSerialization.jsonObject(with: encoder.encode(up)) as? [String: Any]
     )
     #expect(json["modifiers"] as? [String] == ["shift"])
   }
