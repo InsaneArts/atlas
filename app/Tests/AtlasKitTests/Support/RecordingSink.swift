@@ -15,6 +15,8 @@ final class RecordingSink: InputSink {
       try await withCheckedThrowingContinuation { hold = $0 }
     }
   }
+
   func inputSent() {}
+
   func inputFailed(_ error: any Error) { failures.append(error.localizedDescription) }
 }

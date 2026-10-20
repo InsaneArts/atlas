@@ -45,7 +45,8 @@
 
     @Test("the viewer previews show every placeholder and chip")
     func viewerPreviewsCoverEveryPiece() {
-      let stages = PreviewStates.viewer.map(\.value.stage)
+      let stages = PreviewStates.viewer
+        .map(\.value.stage)
       let placeholders = Set(
         stages.compactMap { stage in
           stage.placeholder.map { placeholder in

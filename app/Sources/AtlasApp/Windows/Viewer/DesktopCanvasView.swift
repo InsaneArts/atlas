@@ -44,9 +44,10 @@ final class DesktopCanvasView: NSView {
   /// the window, whichever goes first.
   override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
-    NotificationCenter.default.removeObserver(self, name: NSWindow.willCloseNotification, object: nil)
+    let center = NotificationCenter.default
+    center.removeObserver(self, name: NSWindow.willCloseNotification, object: nil)
     guard let window else { return stopIntercepting() }
-    NotificationCenter.default.addObserver(
+    center.addObserver(
       self,
       selector: #selector(windowWillClose),
       name: NSWindow.willCloseNotification,
@@ -136,7 +137,8 @@ final class DesktopCanvasView: NSView {
     case .send(let endingComposition):
       if endingComposition { unmarkText() }
       let handled = controller.keyPressed(keyCode: event.keyCode, modifiers: modifiers) {
-        NSPasteboard.general.string(forType: .string)
+        NSPasteboard.general
+          .string(forType: .string)
       }
       return KeyRoute.passesOn(handled: handled, modifiers: modifiers) ? event : nil
     }

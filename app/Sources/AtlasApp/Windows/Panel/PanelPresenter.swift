@@ -10,7 +10,6 @@ enum PanelPresenter {
   /// - Returns: Everything the panel draws.
   static func state(_ snapshot: PanelSnapshot) -> PanelState {
     let mode = snapshot.status.overview.mode
-    // The spinner shows while any action runs, whichever said the words.
     return PanelState(
       status: Mode.of(mode).summary,
       reason: reason(snapshot.status.overview),
@@ -20,6 +19,7 @@ enum PanelPresenter {
       isViewerPrimary: mode != .loggedOut,
       secondary: secondary(snapshot),
       logOut: logOut(snapshot),
+      // The spinner shows while any action runs, whichever said the words.
       feedback: snapshot.feedback.map { Feedback(text: $0, isWorking: snapshot.working) },
       menu: menu(snapshot)
     )
@@ -78,8 +78,8 @@ enum PanelPresenter {
     ]
   }
 
-  /// The button beside Open Viewer: Release Control, which revokes it, while a viewer holds control; Switch to Helper… unless the
-  /// helper is logged out, waiting for a known helper and an idle panel.
+  /// The button beside Open Viewer: Release Control, which revokes it, while a viewer holds control; Switch to
+  /// Helper… unless the helper is logged out, waiting for a known helper and an idle panel.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The button, or nil for none.
@@ -105,8 +105,9 @@ enum PanelPresenter {
     }
   }
 
-  /// The menu rows: Open at Login when the app carries the login item; Recover unless the card offers it or logged out; Log
-  /// Out Helper… unless logged out, waiting while a command runs, the mode forbids it or the person is asked.
+  /// The menu rows: Open at Login when the app carries the login item; Recover unless the card offers it or logged
+  /// out; Log Out Helper… unless logged out, waiting while a command runs, the mode forbids it or the person is
+  /// asked.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The menu.
@@ -114,10 +115,22 @@ enum PanelPresenter {
     let mode = snapshot.status.overview.mode
     let opensAtLogin = snapshot.opensAtLogin.flatMap { $0.isAvailable ? $0.isEnabled : nil }
     let recover: PanelMenuItem =
-      offersRecovery(snapshot.status.overview) || mode == .loggedOut ? .hidden : snapshot.working ? .disabled : .enabled
+      if offersRecovery(snapshot.status.overview) || mode == .loggedOut {
+        .hidden
+      } else if snapshot.working {
+        .disabled
+      } else {
+        .enabled
+      }
     let asking = snapshot.logOutStage == .confirming
     let logOut: PanelMenuItem =
-      mode == .loggedOut ? .hidden : !snapshot.working && mode.allowsLogOut && !asking ? .enabled : .disabled
+      if mode == .loggedOut {
+        .hidden
+      } else if !snapshot.working && mode.allowsLogOut && !asking {
+        .enabled
+      } else {
+        .disabled
+      }
     return PanelMenu(opensAtLogin: opensAtLogin, recover: recover, logOut: logOut)
   }
 }

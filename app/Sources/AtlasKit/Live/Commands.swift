@@ -48,7 +48,8 @@ package struct Commands: CommandRunning {
     let running = RunningProcess()
     return await withTaskCancellationHandler {
       await withCheckedContinuation { continuation in
-        DispatchQueue.global(qos: .userInitiated).async {
+        let queue = DispatchQueue.global(qos: .userInitiated)
+        queue.async {
           continuation.resume(returning: Self.runToEnd(executable, environment, arguments, input, running))
         }
       }
@@ -114,7 +115,8 @@ package struct Commands: CommandRunning {
     let errors = CollectedOutput()
     let reading = DispatchGroup()
     reading.enter()
-    DispatchQueue.global(qos: .userInitiated).async {
+    let queue = DispatchQueue.global(qos: .userInitiated)
+    queue.async {
       errors.data = stderr.fileHandleForReading.readDataToEndOfFile()
       reading.leave()
     }

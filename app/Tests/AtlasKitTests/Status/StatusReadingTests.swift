@@ -16,7 +16,8 @@ struct StatusReadingTests {
         ]
       ]
     ])
-    let captions = StatusReading(reading).captions()
+    let captions = StatusReading(reading)
+      .captions()
     #expect(captions.map(\.line) == ["Agent ran a command", "Agent sent 2 actions"])
   }
 
@@ -93,7 +94,7 @@ struct StatusReadingTests {
 
   @Test("activity reads as who did what and when")
   func activity() throws {
-    let items = StatusReading(
+    let reading = StatusReading(
       try status([
         "overview": [
           "activity": [
@@ -104,7 +105,8 @@ struct StatusReadingTests {
           ]
         ]
       ])
-    ).activity()
+    )
+    let items = reading.activity()
     #expect(
       items.map(\.line) == ["Agent sent 3 actions", "Agent ran a command", "You recovered", "Agent input failed"]
     )

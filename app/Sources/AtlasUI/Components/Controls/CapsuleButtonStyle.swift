@@ -35,11 +35,11 @@ struct CapsuleButtonStyle: ButtonStyle {
   /// - Returns: The styled button.
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
-      .font(Typography.font(size == .large ? .headline : .body, weight: look == .plain ? .regular : .semibold))
+      .font(Typography.font(textStyle, weight: weight))
       .lineLimit(1)
       .padding(.horizontal, inset)
       .frame(maxWidth: fill ? .infinity : nil)
-      .frame(height: size == .large ? ControlHeight.large : ControlHeight.button)
+      .frame(height: height)
       .foregroundStyle(foreground)
       .background(
         Capsule()
@@ -53,6 +53,27 @@ struct CapsuleButtonStyle: ButtonStyle {
       .modifier(PressScale(isPressed: configuration.isPressed, scale: Layout.pressedScale))
       .opacity(enabled ? 1 : Opacity.disabled)
       .animation(Motion.press, value: configuration.isPressed)
+  }
+
+  /// The label's size: a step larger on a large capsule.
+  private var textStyle: TextStyle {
+    switch size {
+    case .regular: .body
+    case .large: .headline
+    }
+  }
+
+  /// The label's weight: regular for plain text, semibold on a capsule.
+  private var weight: Font.Weight {
+    look == .plain ? .regular : .semibold
+  }
+
+  /// The capsule's height.
+  private var height: CGFloat {
+    switch size {
+    case .regular: ControlHeight.button
+    case .large: ControlHeight.large
+    }
   }
 
   /// The space on each side of the label: wide for a large capsule, narrow for plain text or a capsule sharing

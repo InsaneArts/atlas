@@ -16,12 +16,14 @@ func withScriptedAtlas<Result>(
   environment: [String: String] = [:],
   _ body: (Commands) async throws -> Result
 ) async throws -> Result {
-  let directory = FileManager.default.temporaryDirectory
+  let files = FileManager.default
+  let directory = files.temporaryDirectory
     .appendingPathComponent("atlas-kit-\(UUID().uuidString)")
-  try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-  defer { try? FileManager.default.removeItem(at: directory) }
+  try files.createDirectory(at: directory, withIntermediateDirectories: true)
+  defer { try? files.removeItem(at: directory) }
   let file = directory.appendingPathComponent("atlas")
-  try ("#!/bin/sh\n" + script).write(to: file, atomically: true, encoding: .utf8)
-  try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
+  let contents = "#!/bin/sh\n" + script
+  try contents.write(to: file, atomically: true, encoding: .utf8)
+  try files.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
   return try await body(Commands(executable: file, environment: environment))
 }

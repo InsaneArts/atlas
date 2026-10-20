@@ -1,5 +1,5 @@
 /// Where one step of a sequence stands: done, current or waiting.
-package enum StepProgress: String, Sendable {
+package enum StepProgress: Sendable {
   /// Not reached yet.
   case waiting
   /// The step to do now.

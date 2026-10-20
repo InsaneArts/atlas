@@ -17,7 +17,7 @@ struct OnboardingScreenContent: View {
 
   /// The screen's content, filling the window above the footer.
   var body: some View {
-    VStack(spacing: 0) {
+    VStack(spacing: .zero) {
       content
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.top, OnboardingLayout.contentTop)

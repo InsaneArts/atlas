@@ -26,9 +26,25 @@ struct ControlRow<Label: View, Control: View>: View {
       Spacer(minLength: Spacing.m)
       control
     }
-    .padding(.horizontal, size == .menu ? Spacing.m : Spacing.xl)
+    .padding(.horizontal, inset)
     .frame(height: height)
-    .padding(.vertical, size == .tall ? Spacing.l : 0)
+    .padding(.vertical, verticalInset)
+  }
+
+  /// The space on each side of the row.
+  private var inset: CGFloat {
+    switch size {
+    case .menu: Spacing.m
+    case .regular, .tall: Spacing.xl
+    }
+  }
+
+  /// The space above and below a tall row's label; none for a row of fixed height.
+  private var verticalInset: CGFloat {
+    switch size {
+    case .menu, .regular: .zero
+    case .tall: Spacing.l
+    }
   }
 
   /// The row's height, or nil for a tall row, which takes its label's.

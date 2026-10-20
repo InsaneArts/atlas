@@ -92,12 +92,13 @@
       var failed = finishing
       failed.finish = .failed("The test screenshot never arrived.")
       var agents = loaded(try person(helper(), finished: true))
-      agents.agents = AgentID.allCases.map { id in
-        var agent = AgentChoice(id: id)
-        agent.found = true
-        agent.on = true
-        return agent
-      }
+      agents.agents = AgentID.allCases
+        .map { id in
+          var agent = AgentChoice(id: id)
+          agent.found = true
+          agent.on = true
+          return agent
+        }
       agents.projects = [URL(fileURLWithPath: "/Users/me/dev/Opie")]
       var done = loaded(try person(helper(), finished: true))
       done.choices.agentsDone = true

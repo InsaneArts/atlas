@@ -7,6 +7,8 @@ package struct PointerGesture: Sendable {
   static let repeatNear = 10.0
   /// Moving further than this, in points, makes a press a drag.
   static let dragFrom = 3.0
+  /// 3: the most clicks a repeat counts up to, a triple click; a repeat after it is a triple click still.
+  static let mostClicks = 3
 
   /// The button held now.
   struct Active {
@@ -57,7 +59,7 @@ package struct PointerGesture: Sendable {
     if let previous, previous.button == button, now - previous.at < Self.repeatWithin,
       previous.point.distance(to: point) < Self.repeatNear
     {
-      count = min(3, previous.count + 1)
+      count = min(Self.mostClicks, previous.count + 1)
     }
     active = Active(button: button, count: count, from: point, last: point)
     return .pointer(phase: .down, x: point.x, y: point.y, button: button, count: count, modifiers: modifiers.names)

@@ -263,8 +263,8 @@ final class ViewerController {
 
   // MARK: Control
 
-  // `reading`, `session`, `now` and `ticks` are written in this file alone, so the window's shells change them only through
-  // the methods above; control and the reading loop in their own files call the ones below.
+  // `reading`, `session`, `now` and `ticks` are written in this file alone, so the window's shells change them only
+  // through the methods above; control and the reading loop in their own files call the ones below.
 
   /// Take control with the picture on screen. A reply that arrives after
   /// the person changed their mind, or left the window, is given back.

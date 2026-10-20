@@ -18,7 +18,7 @@ struct ChoiceRow: View {
       HStack(spacing: Spacing.l) {
         disc
         TitleDetail(title: title, detail: detail)
-        Spacer(minLength: 0)
+        Spacer(minLength: .zero)
         Circle()
           .strokeBorder(
             selected ? Color.accent : Color.strokeControl,

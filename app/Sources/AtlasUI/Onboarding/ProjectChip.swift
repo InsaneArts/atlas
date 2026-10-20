@@ -29,8 +29,15 @@ struct ProjectChip: View {
     .foregroundStyle(project.isTaught ? Color.textSuccess : Color.textPrimary)
     .background(
       Capsule()
-        .fill(project.isTaught ? Color.success.opacity(Opacity.tint) : Color.fillControl)
+        .fill(fill)
     )
+  }
+
+  /// The chip's ground: a green tint once taught, a control's fill until then.
+  private var fill: Color {
+    guard project.isTaught else { return .fillControl }
+    return Color.success
+      .opacity(Opacity.tint)
   }
 }
 

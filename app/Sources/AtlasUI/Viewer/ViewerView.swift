@@ -40,12 +40,12 @@ package struct ViewerView<Input: View>: View {
     GeometryReader { proxy in
       let room = ViewerLayout.showsSidebar(width: proxy.size.width, wanted: true)
       let sidebar = ViewerLayout.showsSidebar(width: proxy.size.width, wanted: state.header.sidebar.isOn)
-      VStack(spacing: 0) {
+      VStack(spacing: .zero) {
         // The header fills the title bar, whatever its height.
         ViewerHeader(state: state.header, detail: detail, hasRoom: room, send: send)
           .frame(height: max(proxy.safeAreaInsets.top, ViewerLayout.headerHeight))
-        HStack(spacing: 0) {
-          VStack(spacing: 0) {
+        HStack(spacing: .zero) {
+          VStack(spacing: .zero) {
             StageView(state: ViewerLayout.stage(state.stage, besideSidebar: sidebar), send: send, input: input)
               .padding(.horizontal, Spacing.section)
               .padding(.top, Spacing.ml)
@@ -59,7 +59,7 @@ package struct ViewerView<Input: View>: View {
             }
           }
           if sidebar {
-            HStack(spacing: 0) {
+            HStack(spacing: .zero) {
               SeparatorLine(axis: .vertical)
               ViewerSidebar(state: state.sidebar, send: send)
             }

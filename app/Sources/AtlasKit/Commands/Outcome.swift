@@ -34,7 +34,8 @@ package struct Outcome: Sendable {
   /// - Parameter type: The reply's expected shape.
   /// - Returns: The decoded reply, or `nil` when the reply is not one.
   package func decode<T: Decodable>(_ type: T.Type) -> T? {
-    try? JSONDecoder().decode(type, from: reply)
+    let decoder = JSONDecoder()
+    return try? decoder.decode(type, from: reply)
   }
 
   /// Read a command's output: replies go to stdout, errors to stderr.

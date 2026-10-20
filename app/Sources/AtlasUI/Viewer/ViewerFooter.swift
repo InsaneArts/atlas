@@ -9,7 +9,7 @@ struct ViewerFooter: View {
 
   /// The hint, then Recover… when set aside, pause, Keys and the control capsule.
   var body: some View {
-    VStack(spacing: 0) {
+    VStack(spacing: .zero) {
       SeparatorLine()
       HStack(spacing: Spacing.ml) {
         Text(state.hint)

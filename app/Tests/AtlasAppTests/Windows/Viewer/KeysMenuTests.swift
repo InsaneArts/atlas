@@ -33,7 +33,8 @@ struct KeysMenuTests {
     let viewer = try await ViewerController.watching(service)
     let menu = KeysMenu.menu(for: viewer)
     let items = menu.items.compactMap { $0 as? KeyItem }
-    try #require(items.first { $0.title == "Switch App" }).fire()
+    let switchApp = try #require(items.first { $0.title == "Switch App" })
+    switchApp.fire()
     // Input is queued as it is sent and leaves the queue only later, so an empty queue now means nothing was sent.
     #expect(viewer.input.pending.isEmpty)
     viewer.close()

@@ -8,10 +8,8 @@ import AtlasUI
 /// beside it, as the system's own indicators do, so only those two are not
 /// templates; they draw in the menu bar's label colour instead.
 ///
-/// Its numbers (the 18 by 16 box, the tile's 4-point corners, the orbit's
-/// 17.4 and 14 widths, the dot at 19.25 and 4.5 across, the 0.4 dimming)
-/// are the glyph's drawing geometry, sized to the menu bar, not design
-/// tokens, so they stay here as they are.
+/// Its numbers (`Layout`) are the glyph's drawing geometry, sized to the
+/// menu bar, not design tokens, so they stay here as they are.
 enum StatusGlyph {
   /// The glyph for a mode.
   ///
@@ -24,7 +22,8 @@ enum StatusGlyph {
       case .alert, .dash: .systemOrange
       default: nil
       }
-    let image = NSImage(size: NSSize(width: dot == nil ? 18 : 25, height: 16), flipped: true) { _ in
+    let size = NSSize(width: dot == nil ? Layout.box.width : Layout.boxWithDot, height: Layout.box.height)
+    let image = NSImage(size: size, flipped: true) { _ in
       let pixel = 1 / Self.pixelScale()
       // Drawn opaque in one layer, then faded as a whole, so overlapping
       // strokes never darken: by the label colour's own alpha, and more
@@ -35,29 +34,29 @@ enum StatusGlyph {
         .set()
       guard let context = NSGraphicsContext.current?.cgContext else { return false }
       context.saveGState()
-      context.setAlpha(ink.alphaComponent * (mode.mark == .dimmed ? 0.4 : 1))
+      context.setAlpha(ink.alphaComponent * (mode.mark == .dimmed ? Layout.dimmed : 1))
       context.beginTransparencyLayer(auxiliaryInfo: nil)
       // The ring a little bolder than the drawing's, so it and the gap
       // beside it stay clear on Retina displays.
-      let center = CGPoint(x: 9, y: 8)
+      let center = CGPoint(x: Layout.box.width / 2, y: Layout.box.height / 2)
       if mode.mark == .filled {
         NSBezierPath(
-          roundedRect: NSRect(x: 0, y: 0, width: 18, height: 16),
-          xRadius: 4,
-          yRadius: 4
+          roundedRect: NSRect(origin: .zero, size: Layout.box),
+          xRadius: Layout.tileCorner,
+          yRadius: Layout.tileCorner
         )
         .fill()
-        Orbit(center: center, width: 14, pixel: pixel, least: 0.8)
+        Orbit(center: center, width: Layout.tileOrbit, pixel: pixel, least: Layout.tileOrbitLeast)
           .draw(in: context, cutOut: true)
       } else {
-        Orbit(center: center, width: 17.4, pixel: pixel, least: 1)
+        Orbit(center: center, width: Layout.orbit, pixel: pixel, least: Layout.orbitLeast)
           .draw(in: context, cutOut: false)
       }
       context.endTransparencyLayer()
       context.restoreGState()
       if let dot {
         dot.setFill()
-        NSBezierPath(ovalIn: NSRect(x: 19.25, y: 5.75, width: 4.5, height: 4.5))
+        NSBezierPath(ovalIn: Layout.dot)
           .fill()
       }
       return true
@@ -70,14 +69,38 @@ enum StatusGlyph {
   /// Device pixels per point of the context being drawn into, so lines stay
   /// crisp on both standard and Retina displays.
   ///
-  /// - Returns: 2 when no context is current.
+  /// - Returns: `Layout.fallbackScale` when no context is current.
   private static func pixelScale() -> CGFloat {
-    guard let t = NSGraphicsContext.current?.cgContext.userSpaceToDeviceSpaceTransform else {
-      return 2
+    guard let transform = NSGraphicsContext.current?.cgContext.userSpaceToDeviceSpaceTransform else {
+      return Layout.fallbackScale
     }
-    let scale = (t.a * t.a + t.b * t.b)
+    let scale = (transform.a * transform.a + transform.b * transform.b)
       .squareRoot()
       .rounded()
     return max(1, scale)
   }
+}
+
+/// The glyph's drawing geometry, in points of the menu bar.
+private enum Layout {
+  /// 18 by 16: the orbit's box, and the solid tile in control.
+  static let box = NSSize(width: 18, height: 16)
+  /// 25: the box's width with a dot beside the orbit.
+  static let boxWithDot: CGFloat = 25
+  /// 4: the solid tile's corners.
+  static let tileCorner: CGFloat = 4
+  /// 17.4: the orbit's width, the ring's outer reach.
+  static let orbit: CGFloat = 17.4
+  /// 1: the thinnest the orbit's line draws.
+  static let orbitLeast: CGFloat = 1
+  /// 14: the orbit's width cut out of the solid tile.
+  static let tileOrbit: CGFloat = 14
+  /// 0.8: the thinnest the cut-out orbit's line draws.
+  static let tileOrbitLeast: CGFloat = 0.8
+  /// The dot beside the orbit: 4.5 across, at 19.25, centred on the box's height.
+  static let dot = NSRect(x: 19.25, y: 5.75, width: 4.5, height: 4.5)
+  /// 0.4: how strongly the glyph draws while the helper cannot be reached.
+  static let dimmed: CGFloat = 0.4
+  /// 2: the pixels a point is taken to have when no context is current, a Retina display's.
+  static let fallbackScale: CGFloat = 2
 }

@@ -20,6 +20,11 @@ package enum KeyMap {
     47: ".", 49: "space",
   ]
 
+  /// 9: the key labelled V on a US layout, the paste gesture's key at any layout's same position.
+  static let vKey: UInt16 = 9
+  /// 53: Escape.
+  static let escapeKey: UInt16 = 53
+
   /// The key action for a key press, or nil when it is text (which
   /// arrives committed, through the input method) or nothing at all.
   ///
@@ -44,7 +49,7 @@ package enum KeyMap {
   ///   - modifiers: The modifier keys held.
   /// - Returns: Whether the press pastes this Mac's clipboard.
   package static func isPaste(keyCode: UInt16, modifiers: Modifiers) -> Bool {
-    modifiers == .command && keyCode == 9
+    modifiers == .command && keyCode == vKey
   }
 
   /// Control-Shift-Escape as a menu writes it, the shortcut ``isRelease(keyCode:modifiers:)`` matches: the viewer's
@@ -58,6 +63,6 @@ package enum KeyMap {
   ///   - modifiers: The modifier keys held.
   /// - Returns: Whether the press gives control back.
   package static func isRelease(keyCode: UInt16, modifiers: Modifiers) -> Bool {
-    keyCode == 53 && modifiers.contains(.control) && modifiers.contains(.shift)
+    keyCode == escapeKey && modifiers.contains(.control) && modifiers.contains(.shift)
   }
 }

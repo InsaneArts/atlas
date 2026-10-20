@@ -27,10 +27,34 @@ struct FactRow: View {
         .truncationMode(.tail)
         .help(value)
     }
-    .font(Typography.font(size == .compact ? .callout : .body))
-    .padding(.horizontal, size == .compact ? Spacing.l : Spacing.xl)
-    .frame(height: size == .compact ? ControlHeight.compactRow : ControlHeight.large)
+    .font(Typography.font(textStyle))
+    .padding(.horizontal, inset)
+    .frame(height: height)
     .accessibilityElement(children: .combine)
+  }
+
+  /// The row's text size.
+  private var textStyle: TextStyle {
+    switch size {
+    case .compact: .callout
+    case .regular: .body
+    }
+  }
+
+  /// The space on each side of the row.
+  private var inset: CGFloat {
+    switch size {
+    case .compact: Spacing.l
+    case .regular: Spacing.xl
+    }
+  }
+
+  /// The row's height.
+  private var height: CGFloat {
+    switch size {
+    case .compact: ControlHeight.compactRow
+    case .regular: ControlHeight.large
+    }
   }
 }
 

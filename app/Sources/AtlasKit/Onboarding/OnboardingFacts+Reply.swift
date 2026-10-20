@@ -44,6 +44,7 @@ extension OnboardingFacts {
       let installed: Bool?
       let running: Bool?
     }
+
     let role: Role?
     let me: Me?
     let app: App?

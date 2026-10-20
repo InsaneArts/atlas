@@ -36,7 +36,8 @@ final class ScriptedService: ViewerService {
   ///
   /// - Parameter route: The request's route.
   func resume(_ route: String) {
-    held.removeValue(forKey: route)?.resume()
+    let continuation = held.removeValue(forKey: route)
+    continuation?.resume()
   }
 
   /// Holds a request when asked to, then fails it when asked to.

@@ -83,7 +83,10 @@ struct CommandsTests {
         .deletingLastPathComponent()
         .appendingPathComponent("started")
       let running = Task { await commands.run(["status"]) }
-      try await settle("the command never started") { FileManager.default.fileExists(atPath: started.path) }
+      try await settle("the command never started") {
+        FileManager.default
+          .fileExists(atPath: started.path)
+      }
       running.cancel()
       return try await running.value("the cancelled command never ended")
     }

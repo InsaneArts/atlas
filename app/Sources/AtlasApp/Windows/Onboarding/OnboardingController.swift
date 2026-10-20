@@ -221,6 +221,7 @@ final class OnboardingController {
     guard snapshot.form.canCreate, snapshot.working == nil else { return }
     let action = Action.createAccount(account: snapshot.form.accountName, fullName: snapshot.form.fullName)
     var secret = Data(snapshot.form.password.utf8)
+    // One line: the command reads the password up to its newline.
     secret.append(0x0A)
     // Cleared from the window as soon as it is handed to macOS.
     snapshot.form.password = ""

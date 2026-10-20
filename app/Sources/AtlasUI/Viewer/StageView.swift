@@ -48,15 +48,9 @@ struct StageView<Input: View>: View {
     .clipShape(RoundedRectangle(cornerRadius: Radius.large))
     .overlay {
       RoundedRectangle(cornerRadius: Radius.large)
-        .strokeBorder(
-          state.isInControl ? Color.accent.opacity(ViewerLayout.controlEdge) : Color.separator,
-          lineWidth: state.isInControl ? Stroke.emphasis : Stroke.hairline
-        )
+        .strokeBorder(edge, lineWidth: edgeWidth)
     }
-    .shadow(
-      color: state.isInControl ? Color.accent.opacity(ViewerLayout.controlGlow) : .clear,
-      radius: ViewerLayout.controlGlowRadius
-    )
+    .shadow(color: glow, radius: ViewerLayout.controlGlowRadius)
     .elevation(.stage)
     .animation(Motion.fade, value: state.notice)
     .animation(Motion.fade, value: state.isInControl)
@@ -68,6 +62,25 @@ struct StageView<Input: View>: View {
   private var aspect: CGSize {
     guard let picture = state.picture else { return ViewerLayout.placeholderAspect }
     return CGSize(width: picture.image.width, height: picture.image.height)
+  }
+
+  /// The stage's edge: the accent while this window holds control, a quiet line otherwise.
+  private var edge: Color {
+    guard state.isInControl else { return .separator }
+    return Color.accent
+      .opacity(ViewerLayout.controlEdge)
+  }
+
+  /// The edge's width: firmer while in control.
+  private var edgeWidth: CGFloat {
+    state.isInControl ? Stroke.emphasis : Stroke.hairline
+  }
+
+  /// The accent glowing around the stage while in control; none otherwise.
+  private var glow: Color {
+    guard state.isInControl else { return .clear }
+    return Color.accent
+      .opacity(ViewerLayout.controlGlow)
   }
 
   /// The chip at the top: what is being typed, control, or a paused picture.

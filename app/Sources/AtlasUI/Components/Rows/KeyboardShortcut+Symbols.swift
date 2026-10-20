@@ -8,6 +8,8 @@ extension KeyboardShortcut {
     ]
     let held = marks.filter { modifiers.contains($0.modifier) }
       .map(\.symbol)
-    return held.joined() + String(key.character).uppercased()
+    let letter = String(key.character)
+      .uppercased()
+    return held.joined() + letter
   }
 }

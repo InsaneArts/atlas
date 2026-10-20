@@ -21,7 +21,8 @@ enum NoticeAlert {
     alert.informativeText = message
     if switchBack != nil {
       alert.addButton(withTitle: "Switch Back")
-      alert.addButton(withTitle: "Stay Here").keyEquivalent = "\u{1b}"
+      let stay = alert.addButton(withTitle: "Stay Here")
+      stay.keyEquivalent = "\u{1b}"
     } else {
       alert.addButton(withTitle: "OK")
     }

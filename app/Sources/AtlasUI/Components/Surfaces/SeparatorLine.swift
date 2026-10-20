@@ -11,12 +11,17 @@ struct SeparatorLine: View {
     case .horizontal:
       Rectangle()
         .fill(Color.separator)
-        .frame(height: 1 / max(scale, 1))
+        .frame(height: thickness)
     case .vertical:
       Rectangle()
         .fill(Color.separator)
-        .frame(width: 1 / max(scale, 1))
+        .frame(width: thickness)
     }
+  }
+
+  /// One device pixel, in points: a point on a standard display, half of one on Retina.
+  private var thickness: CGFloat {
+    1 / max(scale, 1)
   }
 }
 

@@ -28,14 +28,16 @@ struct PanelRenderOverridesTests {
 
   @Test("a log-out step shows its stage and every action, as on a set-up Mac", arguments: ["ask", "held"])
   func aLogOutStepShowsEveryAction(step: String) {
-    let shown = PanelRenderOverrides(environment: ["ATLAS_RENDER_LOGOUT": step]).applied(to: PanelSnapshot())
+    let overrides = PanelRenderOverrides(environment: ["ATLAS_RENDER_LOGOUT": step])
+    let shown = overrides.applied(to: PanelSnapshot())
     #expect(shown.logOutStage == (step == "ask" ? .confirming : .held))
     #expect(shown.helper != nil && shown.opensAtLogin?.isAvailable == true)
   }
 
   @Test("the preview flag shows every action with no log-out step")
   func thePreviewShowsEveryAction() {
-    let shown = PanelRenderOverrides(environment: ["ATLAS_RENDER_PREVIEW": "1"]).applied(to: PanelSnapshot())
+    let overrides = PanelRenderOverrides(environment: ["ATLAS_RENDER_PREVIEW": "1"])
+    let shown = overrides.applied(to: PanelSnapshot())
     #expect(shown.helper != nil && shown.opensAtLogin?.isAvailable == true)
     #expect(shown.logOutStage == .idle)
   }

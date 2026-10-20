@@ -22,7 +22,8 @@ struct DesignSystemTests {
 
   @Test("the type scale descends in whole sizes")
   func typeScaleDescendsWithWholeSizes() {
-    let sizes = TextStyle.allCases.map(\.pointSize)
+    let sizes = TextStyle.allCases
+      .map(\.pointSize)
     #expect(sizes == sizes.sorted(by: >))
     #expect(Set(sizes).count == sizes.count)
     #expect(sizes.allSatisfy { $0 == $0.rounded() })

@@ -25,7 +25,7 @@ struct ActivityRow: View {
           .foregroundStyle(Color.textTertiary)
           .monospacedDigit()
       }
-      Spacer(minLength: 0)
+      Spacer(minLength: .zero)
     }
     .padding(.horizontal, Spacing.xl)
     .padding(.vertical, Spacing.ml)

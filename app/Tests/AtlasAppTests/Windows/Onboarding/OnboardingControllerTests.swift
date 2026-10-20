@@ -267,13 +267,14 @@ struct OnboardingControllerTests {
 
   @Test("a chosen folder is added once, however it is spelled or linked to, and removed by its path")
   func chosenFoldersAreAddedOnce() throws {
-    let home = FileManager.default.temporaryDirectory
+    let files = FileManager.default
+    let home = files.temporaryDirectory
       .appendingPathComponent("atlas-projects-\(UUID().uuidString)")
     let opie = home.appendingPathComponent("Opie", isDirectory: true)
-    try FileManager.default.createDirectory(at: opie, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: home) }
+    try files.createDirectory(at: opie, withIntermediateDirectories: true)
+    defer { try? files.removeItem(at: home) }
     let link = home.appendingPathComponent("Opie link")
-    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: opie)
+    try files.createSymbolicLink(at: link, withDestinationURL: opie)
     let spellings = [opie, URL(fileURLWithPath: home.path + "/./Opie"), link]
     let controller = Self.controller(ScriptedCommands([:]), folders: spellings)
     controller.send(.chooseProject)

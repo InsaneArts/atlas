@@ -20,7 +20,7 @@ struct Headline: View {
   var size = Size.hero
 
   var body: some View {
-    VStack(spacing: 0) {
+    VStack(spacing: .zero) {
       Text(title)
         .foregroundStyle(Color.textPrimary)
       if let tail {

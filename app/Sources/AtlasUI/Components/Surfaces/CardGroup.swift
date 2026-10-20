@@ -6,7 +6,7 @@ struct CardGroup<Content: View>: View {
   @ViewBuilder let content: Content
 
   var body: some View {
-    VStack(spacing: 0) {
+    VStack(spacing: .zero) {
       content
     }
     .cardSurface()

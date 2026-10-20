@@ -104,12 +104,18 @@ extension OnboardingPresenter {
   static func agents(_ snapshot: OnboardingSnapshot) -> OnboardingAgentsScreenState {
     OnboardingAgentsScreenState(
       agents: snapshot.agents.map { agent in
-        OnboardingAgentItem(
+        let detail =
+          if agent.connected {
+            OnboardingWords.agentConnected
+          } else if agent.found {
+            OnboardingWords.agentFound
+          } else {
+            OnboardingWords.agentMissing
+          }
+        return OnboardingAgentItem(
           id: agent.id.rawValue,
           title: OnboardingWords.agentTitle(agent.id),
-          detail: agent.connected
-            ? OnboardingWords.agentConnected
-            : agent.found ? OnboardingWords.agentFound : OnboardingWords.agentMissing,
+          detail: detail,
           isOn: agent.on || agent.connected,
           isEnabled: agent.found && !agent.connected
         )

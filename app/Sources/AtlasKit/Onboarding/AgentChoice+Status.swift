@@ -1,6 +1,9 @@
 extension AgentChoice {
   /// Every agent Atlas can connect, in the screen's order, before `atlas agents status` has said anything.
-  package static var all: [AgentChoice] { AgentID.allCases.map(AgentChoice.init(id:)) }
+  package static var all: [AgentChoice] {
+    AgentID.allCases
+      .map(AgentChoice.init(id:))
+  }
 
   /// The agents with what `atlas agents status` reported: each found one is switched on, ready to connect. A row
   /// for an agent this app does not know is passed over.

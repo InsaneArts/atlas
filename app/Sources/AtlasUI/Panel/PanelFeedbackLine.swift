@@ -15,7 +15,7 @@ struct PanelFeedbackLine: View {
         .font(Typography.font(.caption))
         .foregroundStyle(Color.textSecondary)
         .fixedSize(horizontal: false, vertical: true)
-      Spacer(minLength: 0)
+      Spacer(minLength: .zero)
     }
     .accessibilityElement(children: .combine)
   }

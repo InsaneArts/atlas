@@ -21,12 +21,11 @@ package struct LoginItem: Sendable {
   /// not). The service reports "not found" until first registered, so the
   /// bundle is checked instead.
   package var available: Bool {
-    FileManager.default.fileExists(
-      atPath: Bundle.main.bundleURL
-        .appendingPathComponent("Contents/Library/LaunchAgents")
-        .appendingPathComponent(Self.plist)
-        .path
-    )
+    let agent = Bundle.main.bundleURL
+      .appendingPathComponent("Contents/Library/LaunchAgents")
+      .appendingPathComponent(Self.plist)
+    return FileManager.default
+      .fileExists(atPath: agent.path)
   }
 
   /// Turns opening at login on or off.

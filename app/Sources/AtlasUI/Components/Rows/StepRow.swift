@@ -15,7 +15,7 @@ struct StepRow: View {
     HStack(spacing: Spacing.l) {
       Disc(content: disc, tone: discTone)
       TitleDetail(title: title, detail: detail, titleTone: state == .waiting ? .secondary : .primary)
-      Spacer(minLength: 0)
+      Spacer(minLength: .zero)
     }
     .padding(.horizontal, Spacing.xl)
     .padding(.vertical, Spacing.l)

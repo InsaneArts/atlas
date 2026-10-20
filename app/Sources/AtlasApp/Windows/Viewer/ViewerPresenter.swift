@@ -46,8 +46,10 @@ enum ViewerPresenter {
     if reading.unavailable != nil && mode.tone != .attention && !reading.loggedOut {
       return Mode(label: ViewerWords.reconnecting, tone: .quiet, mark: .dimmed)
     }
-    return reading.hasStatus || reading.unavailable != nil
-      ? mode : Mode(label: ViewerWords.connecting, tone: .quiet, mark: .dimmed)
+    guard reading.hasStatus || reading.unavailable != nil else {
+      return Mode(label: ViewerWords.connecting, tone: .quiet, mark: .dimmed)
+    }
+    return mode
   }
 
   /// The helper as people know it: its full name, the session's user, its short name, or "Helper".

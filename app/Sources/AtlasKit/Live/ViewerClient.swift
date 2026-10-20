@@ -45,7 +45,8 @@ package struct ViewerClient: ViewerService {
     if let body {
       request.httpMethod = "POST"
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-      request.httpBody = try JSONEncoder().encode(body)
+      let encoder = JSONEncoder()
+      request.httpBody = try encoder.encode(body)
     }
     return request
   }
@@ -56,7 +57,8 @@ package struct ViewerClient: ViewerService {
   /// - Throws: A transport error, or `DecodingError` when the reply is not an object.
   package func status() async throws -> ViewerStatus {
     let (data, _) = try await session.data(for: request("status.json"))
-    return try JSONDecoder().decode(ViewerStatus.self, from: data)
+    let decoder = JSONDecoder()
+    return try decoder.decode(ViewerStatus.self, from: data)
   }
 
   /// Reads `frame.png`, with what it was taken of from its headers.
@@ -85,7 +87,7 @@ package struct ViewerClient: ViewerService {
     struct Body: Encodable { let frame: String }
     struct Reply: Decodable { let lease: String }
     let data = try await post("control/acquire", Body(frame: frame))
-    guard let reply = try? JSONDecoder().decode(Reply.self, from: data) else {
+    guard let reply = Self.decoded(Reply.self, from: data) else {
       throw ServiceError("Control was not granted")
     }
     return reply.lease
@@ -146,7 +148,7 @@ package struct ViewerClient: ViewerService {
     struct Body: Encodable {}
     struct Reply: Decodable { let restarted: Bool? }
     let data = try await post("recover", Body(), timeout: Self.recoveryTimeout)
-    return (try? JSONDecoder().decode(Reply.self, from: data))?.restarted == true
+    return Self.decoded(Reply.self, from: data)?.restarted == true
   }
 
   /// POST `body` to `route`; the reply when it says `ok`, else its error.
@@ -162,7 +164,7 @@ package struct ViewerClient: ViewerService {
     } catch let error as URLError where error.code == .timedOut {
       throw ServiceError("The helper did not answer in time.")
     }
-    let ok = (try? JSONDecoder().decode(Acknowledgement.self, from: data))?.ok == true
+    let ok = Self.decoded(Acknowledgement.self, from: data)?.ok == true
     guard (response as? HTTPURLResponse)?.statusCode == 200, ok else {
       throw Self.failure(data, fallback: "Request was refused")
     }
@@ -175,7 +177,18 @@ package struct ViewerClient: ViewerService {
   /// The service's own error in `data`, else `fallback`.
   static func failure(_ data: Data, fallback: String) -> ServiceError {
     struct Reply: Decodable { let error: String? }
-    let reply = try? JSONDecoder().decode(Reply.self, from: data)
+    let reply = decoded(Reply.self, from: data)
     return ServiceError(reply?.error ?? fallback)
+  }
+
+  /// A reply decoded as `type`, or nil when it is not one.
+  ///
+  /// - Parameters:
+  ///   - type: The reply's expected shape.
+  ///   - data: The reply's body.
+  /// - Returns: The decoded reply, or nil.
+  private static func decoded<T: Decodable>(_ type: T.Type, from data: Data) -> T? {
+    let decoder = JSONDecoder()
+    return try? decoder.decode(type, from: data)
   }
 }

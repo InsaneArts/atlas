@@ -10,5 +10,5 @@
 /// interpolated, chosen by a condition or derived from facts, arrives final from the app's presenters, and a list
 /// row's fixed name travels with its value.
 /// Seams: none. The app passes each window's state in, takes its events, fills the viewer's input slot with its own
-/// AppKit view, and hands the viewer the status line's detail to read as it draws. Only what the app reaches is `package`: each window's root view, its state and events, and the
-/// few tokens its AppKit shells share.
+/// AppKit view, and hands the viewer the status line's detail to read as it draws. Only what the app reaches is
+/// `package`: each window's root view, its state and events, and the few tokens its AppKit shells share.

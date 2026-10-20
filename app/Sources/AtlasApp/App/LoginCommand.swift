@@ -30,6 +30,7 @@ enum LoginCommand {
   ///
   /// - Parameter reply: The reply.
   private static func answer(_ reply: LoginReply) {
-    FileHandle.standardOutput.write(reply.json + Data("\n".utf8))
+    FileHandle.standardOutput
+      .write(reply.json + Data("\n".utf8))
   }
 }
