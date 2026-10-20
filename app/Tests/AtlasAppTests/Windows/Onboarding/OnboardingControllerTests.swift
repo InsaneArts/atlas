@@ -154,6 +154,58 @@ struct OnboardingControllerTests {
     #expect(!controller.snapshot.choices.agentsDone, "the closed window moved on to nothing")
   }
 
+  @Test("closing the helper's window clears its mark only once a mark under way has settled")
+  func closingClearsTheMarkLast() async throws {
+    let open = Action.markWindow(open: true).arguments
+    let closed = Action.markWindow(open: false).arguments
+    let commands = ScriptedCommands([
+      "onboarding status": Self.helperReply(accessibility: false), "onboarding window": #"{"ok": true}"#,
+    ])
+    let controller = Self.controller(commands)
+    var overlapped: Bool?
+    // The person closes the window while the open mark runs.
+    commands.whileRunning { arguments in
+      guard arguments == open else { return }
+      Task { await controller.close() }
+      try? await Task.sleep(for: Ceiling.absence)
+      overlapped = commands.ran.contains(closed)
+    }
+    controller.refresh()
+    try await settle("the mark was never cleared") { overlapped != nil && commands.ran.contains(closed) }
+    #expect(overlapped == false, "the window was marked closed while the open mark still ran")
+    #expect(commands.ran.last == closed)
+  }
+
+  @Test("a check that ends once the window has closed changes nothing")
+  func aLateCheckIsDropped() async throws {
+    let unfinished = finishedMac.replacingOccurrences(of: #""finished": true"#, with: #""finished": false"#)
+    let commands = ScriptedCommands(["onboarding status": unfinished, "onboarding finish": #"{"ok": true}"#])
+    let controller = Self.controller(commands)
+    commands.whileRunning { arguments in
+      if arguments == Action.finishSetup.arguments { await controller.close() }
+    }
+    controller.refresh()
+    try await settle("the check never ran") { commands.ran.contains(Action.finishSetup.arguments) }
+    try? await Task.sleep(for: Ceiling.absence)
+    #expect(controller.snapshot.finish == .running, "the closed window took the check's outcome")
+  }
+
+  @Test("agents read once the window has closed change nothing")
+  func lateAgentsAreDropped() async throws {
+    let commands = ScriptedCommands([
+      "onboarding status": finishedMac,
+      "agents status": #"{"ok": true, "agents": [{"agent": "claude", "installed": true, "connected": false}]}"#,
+    ])
+    let controller = Self.controller(commands)
+    commands.whileRunning { arguments in
+      if arguments == Action.agentsStatus.arguments { await controller.close() }
+    }
+    controller.refresh()
+    try await settle("the agents were never asked for") { commands.ran.contains(Action.agentsStatus.arguments) }
+    try? await Task.sleep(for: Ceiling.absence)
+    #expect(!controller.snapshot.agentsLoaded, "the closed window took the agents' reply")
+  }
+
   @Test("Open at Login starts from what the login item says once the person has chosen")
   func openAtLoginStartsFromTheEarlierChoice() async throws {
     let decided = freshMac.replacingOccurrences(
