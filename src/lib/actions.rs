@@ -206,24 +206,29 @@ pub(crate) fn parse_key(value: &str) -> Option<(u16, u64)> {
     if value.is_empty() || value.len() > 80 {
         return None;
     }
+
     let lower = value.to_lowercase();
     // "+" and "cmd++" are the plus key: shift and the = key. A chord ending
     // in a bare "+" ("cmd+") names no key at all.
     let bare_plus = lower == "+";
+
     let (chord, plus) = match lower.strip_suffix("++") {
         Some(rest) => (rest, true),
         None => (lower.as_str(), bare_plus),
     };
+
     let mut parts: Vec<_> = if bare_plus {
         Vec::new()
     } else {
         chord.split('+').collect()
     };
+
     let key = if plus {
         "="
     } else {
         parts.pop().unwrap_or_default()
     };
+
     let code = keycode(key)?;
     parts
         .into_iter()
@@ -274,6 +279,7 @@ pub fn validate(value: &Value, display: &Display) -> Result<()> {
     if actions.is_empty() || actions.len() > 32 {
         return Err(Error::new("input", "Send between 1 and 32 actions"));
     }
+
     let point = |x: f64, y: f64| {
         x.is_finite()
             && y.is_finite()
@@ -286,7 +292,17 @@ pub fn validate(value: &Value, display: &Display) -> Result<()> {
     const OFF_DISPLAY: &str = "its point is off the display";
     const CLICKS: &str = "a click is 1 to 5 clicks";
     const MODIFIERS: &str = "a modifier is one of cmd, ctrl, alt, shift and fn";
+
+    // A pointer press and a click are checked alike.
+    let press = |x: f64, y: f64, count: u8, modifiers: &[String]| {
+        (!point(x, y))
+            .then_some(OFF_DISPLAY)
+            .or((!(1..=5).contains(&count)).then_some(CLICKS))
+            .or((!modifiers_valid(modifiers)).then_some(MODIFIERS))
+    };
+
     let mut cost: u32 = 0;
+
     for (index, action) in actions.into_iter().enumerate() {
         // What is wrong with the action, if anything, and its share of the
         // batch budget.
@@ -297,13 +313,7 @@ pub fn validate(value: &Value, display: &Display) -> Result<()> {
                 count,
                 modifiers,
                 ..
-            } => (
-                (!point(x, y))
-                    .then_some(OFF_DISPLAY)
-                    .or((!(1..=5).contains(&count)).then_some(CLICKS))
-                    .or((!modifiers_valid(&modifiers)).then_some(MODIFIERS)),
-                POINTER_MS,
-            ),
+            } => (press(x, y, count, &modifiers), POINTER_MS),
             Action::Move { x, y } => ((!point(x, y)).then_some(OFF_DISPLAY), 0),
             Action::Click {
                 x,
@@ -311,13 +321,7 @@ pub fn validate(value: &Value, display: &Display) -> Result<()> {
                 count,
                 modifiers,
                 ..
-            } => (
-                (!point(x, y))
-                    .then_some(OFF_DISPLAY)
-                    .or((!(1..=5).contains(&count)).then_some(CLICKS))
-                    .or((!modifiers_valid(&modifiers)).then_some(MODIFIERS)),
-                u32::from(count) * CLICK_MS,
-            ),
+            } => (press(x, y, count, &modifiers), u32::from(count) * CLICK_MS),
             Action::Drag {
                 from_x,
                 from_y,
@@ -352,6 +356,7 @@ pub fn validate(value: &Value, display: &Display) -> Result<()> {
             ),
             Action::Wait { ms } => ((ms > 250).then_some("a wait is at most 250 ms"), ms),
         };
+
         if let Some(problem) = problem {
             return Err(Error::new(
                 "input",
@@ -363,6 +368,7 @@ pub fn validate(value: &Value, display: &Display) -> Result<()> {
         }
 
         cost = cost.saturating_add(duration);
+
         if cost > BATCH_MS {
             return Err(Error::new(
                 "input",
@@ -392,7 +398,9 @@ mod tests {
         ] {
             assert!(valid_key(key), "{key}");
         }
+
         assert_eq!(parse_key("+"), parse_key("shift+="), "the plus key");
+
         for key in ["foo", "cmd+zz", "cmd+", "++", "cmd+bogus+s", "f13", ""] {
             assert!(!valid_key(key), "{key}");
         }
@@ -411,26 +419,32 @@ mod tests {
             if value.is_empty() || value.len() > 80 {
                 return false;
             }
+
             let lower = value.to_lowercase();
             let (chord, plus) = match lower.strip_suffix("++") {
                 Some(rest) => (rest, true),
                 None => (lower.as_str(), false),
             };
+
             let mut parts: Vec<_> = chord.split('+').collect();
+
             let key = if plus {
                 "="
             } else {
                 parts.pop().unwrap_or_default()
             };
+
             if plus && parts.iter().any(|part| part.is_empty()) {
                 return false;
             }
+
             let printable =
                 key.len() == 1 && "abcdefghijklmnopqrstuvwxyz0123456789=-][;'\\,/`.".contains(key);
             let function = key
                 .strip_prefix('f')
                 .and_then(|n| n.parse::<u8>().ok())
                 .is_some_and(|n| (1..=12).contains(&n) && key == format!("f{n}"));
+
             (printable
                 || function
                 || matches!(
@@ -558,6 +572,7 @@ mod tests {
                 key = "=".into();
                 parts.push("shift".into());
             }
+
             Some((keycode(&key)?, modifier_flags(&parts)))
         }
     }
@@ -600,15 +615,18 @@ mod tests {
             ]
             .map(String::from),
         );
+
         let modifiers = [
             "cmd", "command", "ctrl", "control", "alt", "opt", "option", "shift", "fn", "", "meta",
             "super",
         ];
         let mut chords = Vec::new();
+
         for key in &keys {
             chords.push(key.clone());
             chords.push(format!("{key}+"));
             chords.push(format!("{key}++"));
+
             for first in modifiers {
                 chords.push(format!("{first}+{key}"));
                 chords.push(format!("{first}++"));
@@ -618,23 +636,30 @@ mod tests {
                 }
             }
         }
+
         chords.push("x".repeat(81));
         chords.push(format!("{}+a", "cmd+".repeat(19)));
+
         let mut valid = 0;
         for chord in chords.iter().flat_map(|c| [c.clone(), c.to_uppercase()]) {
             let parsed = parse_key(&chord);
+
             // The one deliberate difference: "+" on its own is the plus key.
             if chord == "+" {
                 assert_eq!(parsed, before::engine("shift+="));
                 continue;
             }
+
             assert_eq!(before::valid_key(&chord), parsed.is_some(), "{chord:?}");
+
             if parsed.is_some() {
                 valid += 1;
                 assert_eq!(parsed, before::engine(&chord), "{chord:?}");
             }
         }
+
         assert!(valid > 10_000, "{valid} valid chords compared");
+
         for list in [&["cmd", "shift"][..], &["opt", "fn", "bogus"], &[]] {
             let list: Vec<String> = list.iter().map(|m| (*m).to_owned()).collect();
             assert_eq!(modifier_flags(&list), before::modifier_flags(&list));
@@ -659,10 +684,12 @@ mod tests {
             height: 100.0,
             scale: 1.0,
         };
+
         let batch = serde_json::json!([
             {"type": "wait", "ms": 1},
             {"type": "wait", "ms": u32::MAX},
         ]);
+
         assert_eq!(
             validate(&batch, &display).unwrap_err().error,
             "Action 2 was refused and nothing was sent: a wait is at most 250 ms"
@@ -677,11 +704,13 @@ mod tests {
             height: 100.0,
             scale: 1.0,
         };
+
         let said = |action: serde_json::Value| {
             validate(&serde_json::json!([action]), &display)
                 .unwrap_err()
                 .error
         };
+
         assert_eq!(
             said(serde_json::json!({"type": "key", "key": "bogus"})),
             "Action 1 was refused and nothing was sent: the key is not a known name (see atlas key --help)"

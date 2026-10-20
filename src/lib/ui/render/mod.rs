@@ -104,6 +104,7 @@ pub fn render(view: &View, value: &Value) -> Rendered {
             } else {
                 String::new()
             };
+
             match failed(value) {
                 Some(failure) => Rendered::err(format!("{}{copied}", failure.err)),
                 None => Rendered::out(format!(
@@ -145,10 +146,12 @@ fn failed(value: &Value) -> Option<Rendered> {
     if value["ok"] != false {
         return None;
     }
+
     let message = value["error"]
         .as_str()
         .or_else(|| value["failure"]["error"].as_str())
         .unwrap_or("It did not finish. Run it again with --json to see why.");
+
     Some(Rendered::err(card(
         message,
         value["code"].as_str(),
@@ -175,6 +178,7 @@ pub fn card(message: &str, code: Option<&str>, uncertain: bool) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     let mut lines = vec![format!("{} {message}", style::fail())];
+
     let fix = if uncertain {
         Some(
             "It may or may not have happened, so don't repeat it. Take a screenshot, then run atlas restart.",
@@ -185,9 +189,11 @@ pub fn card(message: &str, code: Option<&str>, uncertain: bool) -> String {
     } else {
         code.and_then(hints::fix)
     };
+
     if let Some(fix) = fix {
         lines.push(format!("  {} {fix}", style::dim("→")));
     }
+
     lines.join("\n")
 }
 
@@ -204,18 +210,21 @@ fn element_name(element: &Value) -> Option<&str> {
 fn role_word(role: &str) -> String {
     let word = role.strip_prefix("AX").unwrap_or(role);
     let mut out = String::new();
+
     for (index, character) in word.chars().enumerate() {
         if character.is_uppercase() && index > 0 {
             out.push(' ');
         }
         out.extend(character.to_lowercase());
     }
+
     text::printable(&out).into_owned()
 }
 
 /// The top-level facts of a result, for commands without a view.
 fn generic(value: &Value) -> String {
     let mut lines = vec![format!("{} Done", style::ok())];
+
     if let Some(object) = value.as_object() {
         let facts: Vec<(String, String)> = object
             .iter()
@@ -231,10 +240,12 @@ fn generic(value: &Value) -> String {
             })
             .collect();
         let width = facts.iter().map(|(key, _)| key.len()).max().unwrap_or(0);
+
         for (key, shown) in facts {
             lines.push(format!("  {key:width$}  {shown}"));
         }
     }
+
     lines.push(style::dim("  --json shows everything."));
     lines.join("\n")
 }
@@ -242,6 +253,7 @@ fn generic(value: &Value) -> String {
 /// `planId` as `Plan id`.
 fn words(key: &str) -> String {
     let mut out = String::new();
+
     for (index, character) in key.chars().enumerate() {
         if index == 0 {
             out.extend(character.to_uppercase());
@@ -252,6 +264,7 @@ fn words(key: &str) -> String {
             out.push(character);
         }
     }
+
     out
 }
 

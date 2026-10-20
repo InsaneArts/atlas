@@ -65,6 +65,7 @@ fn grant_search(directory: &Path, controller: u32) -> Result<()> {
             "The controller could not be given access to the socket directory",
         ));
     }
+
     Ok(())
 }
 
@@ -74,15 +75,18 @@ fn prepare(parent: &Path, uid: u32, role: &str, policy: Directory) -> Result<()>
         Directory::Shared(mode) => mode,
         Directory::Private { .. } => 0o700,
     };
+
     match fs::create_dir(parent) {
         Ok(()) => fs::set_permissions(parent, fs::Permissions::from_mode(mode))?,
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(error) => return Err(error.into()),
     }
+
     let metadata = fs::symlink_metadata(parent)?;
     if !metadata.is_dir() || metadata.uid() != uid {
         return Err(refuse(role, "be a directory"));
     }
+
     match policy {
         // An ACL may grant writes the mode bits do not show.
         Directory::Shared(_) => {
@@ -94,6 +98,7 @@ fn prepare(parent: &Path, uid: u32, role: &str, policy: Directory) -> Result<()>
             if metadata.mode() & 0o077 != 0 {
                 return Err(refuse(role, "give no access by mode to others"));
             }
+
             let lines = crate::setup::helper::acl_lines(parent)?;
             match crate::setup::helper::acl_policy(&lines, Some(controller)) {
                 Ok(true) => {}
@@ -102,6 +107,7 @@ fn prepare(parent: &Path, uid: u32, role: &str, policy: Directory) -> Result<()>
             }
         }
     }
+
     Ok(())
 }
 
@@ -117,6 +123,7 @@ pub(crate) async fn bind(
         .parent()
         .ok_or_else(|| Error::new("config", "Socket needs a parent directory"))?;
     prepare(parent, uid, role, policy)?;
+
     let lock = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -125,12 +132,14 @@ pub(crate) async fn bind(
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
         .open(parent.join("service.lock"))?;
+
     FileExt::try_lock_exclusive(&lock).map_err(|_| {
         Error::new(
             "busy",
             format!("Another {role} already owns this directory"),
         )
     })?;
+
     if let Ok(metadata) = fs::symlink_metadata(socket) {
         if metadata.uid() != uid || !metadata.file_type().is_socket() {
             return Err(Error::new(
@@ -138,6 +147,7 @@ pub(crate) async fn bind(
                 format!("The existing {role} endpoint is not a helper-owned socket"),
             ));
         }
+
         match tokio::time::timeout(Duration::from_millis(250), UnixStream::connect(socket)).await {
             Ok(Err(error))
                 if matches!(
@@ -157,13 +167,16 @@ pub(crate) async fn bind(
             }
         }
     }
+
     let listener = UnixListener::bind(socket)?;
     fs::set_permissions(socket, fs::Permissions::from_mode(0o666))?;
+
     let endpoint = Endpoint {
         socket: socket.to_owned(),
         inode: fs::symlink_metadata(socket)?.ino(),
         _lock: lock,
     };
+
     Ok((listener, endpoint))
 }
 
@@ -172,10 +185,12 @@ pub(crate) async fn bind(
 /// it), so turning a client away never stalls the accept loop.
 pub(crate) fn turn_away(stream: UnixStream, reply: &serde_json::Value) {
     use std::io::Write;
+
     let Ok(mut line) = serde_json::to_vec(reply) else {
         return;
     };
     line.push(b'\n');
+
     // The descriptor stays non-blocking once taken from the runtime.
     if let Ok(mut stream) = stream.into_std() {
         let _ = stream.write(&line);
@@ -191,13 +206,16 @@ pub(crate) async fn read_line<R: AsyncRead + Unpin>(
     tokio::time::timeout(Duration::from_secs(3), async {
         let mut body = Vec::new();
         let mut buffer = [0; 4096];
+
         loop {
             let n = stream.read(&mut buffer).await?;
             if n == 0 {
                 return Err(Error::new("protocol", "Incomplete request"));
             }
+
             let scanned = body.len();
             body.extend_from_slice(&buffer[..n]);
+
             let end = body[scanned..]
                 .iter()
                 .position(|b| *b == b'\n')
@@ -208,6 +226,7 @@ pub(crate) async fn read_line<R: AsyncRead + Unpin>(
                     format!("Request exceeds {} KiB", limit / 1024),
                 ));
             }
+
             if let Some(end) = end {
                 body.truncate(end);
                 return Ok(body);
@@ -227,9 +246,11 @@ mod tests {
     async fn a_fragmented_line_is_reassembled_and_bounded() {
         let (mut client, mut server) = tokio::io::duplex(64);
         let reader = tokio::spawn(async move { read_line(&mut server, 1024).await });
+
         client.write_all(b"{\"op\":").await.unwrap();
         client.write_all(b"\"hello\"}\nextra").await.unwrap();
         assert_eq!(reader.await.unwrap().unwrap(), b"{\"op\":\"hello\"}");
+
         let (mut client, mut server) = tokio::io::duplex(4096);
         client.write_all(&[b'x'; 2048]).await.unwrap();
         let error = read_line(&mut server, 1024).await.unwrap_err();
@@ -244,15 +265,18 @@ mod tests {
         let (_listener, endpoint) = bind(&socket, uid, "test service", Directory::Shared(0o700))
             .await
             .unwrap();
+
         assert_eq!(
             fs::metadata(socket.parent().unwrap()).unwrap().mode() & 0o777,
             0o700
         );
+
         let second = bind(&socket, uid, "test service", Directory::Shared(0o700))
             .await
             .err()
             .unwrap();
         assert_eq!(second.code, "busy");
+
         drop(endpoint);
         assert!(!socket.exists(), "the endpoint removes its own socket");
     }
@@ -264,6 +288,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("run/s.sock");
         let uid = nix::unistd::getuid().as_raw();
+
         fs::create_dir(socket.parent().unwrap()).unwrap();
         fs::set_permissions(socket.parent().unwrap(), fs::Permissions::from_mode(0o700)).unwrap();
         drop(std::os::unix::net::UnixListener::bind(&socket).unwrap());
@@ -271,10 +296,13 @@ mod tests {
         let (_listener, endpoint) = bind(&socket, uid, "test service", Directory::Shared(0o700))
             .await
             .unwrap();
+
         assert_ne!(fs::symlink_metadata(&socket).unwrap().ino(), stale);
         UnixStream::connect(&socket).await.unwrap();
+
         drop((_listener, endpoint));
         fs::write(&socket, b"not a socket").unwrap();
+
         let refused = bind(&socket, uid, "test service", Directory::Shared(0o700))
             .await
             .err()
@@ -286,8 +314,10 @@ mod tests {
     #[tokio::test]
     async fn a_turned_away_client_reads_why() {
         use tokio::io::AsyncReadExt;
+
         let (mut client, server) = UnixStream::pair().unwrap();
         turn_away(server, &serde_json::json!({"ok": false, "code": "busy"}));
+
         let mut reply = String::new();
         client.read_to_string(&mut reply).await.unwrap();
         let line = reply.strip_suffix('\n').unwrap();
@@ -301,6 +331,7 @@ mod tests {
         let run = dir.path().join("run");
         fs::create_dir(&run).unwrap();
         fs::set_permissions(&run, fs::Permissions::from_mode(0o700)).unwrap();
+
         let user = std::env::var("USER").unwrap();
         let granted = std::process::Command::new("/bin/chmod")
             .args(["+a", &format!("user:{user} allow add_file")])
@@ -308,6 +339,7 @@ mod tests {
             .status()
             .unwrap();
         assert!(granted.success());
+
         let uid = nix::unistd::getuid().as_raw();
         let refused = bind(
             &run.join("s.sock"),
@@ -332,16 +364,19 @@ mod tests {
         let (listener, endpoint) = bind(&run.join("s.sock"), uid, "test", private)
             .await
             .unwrap();
+
         assert_eq!(fs::metadata(&run).unwrap().mode() & 0o777, 0o700);
         let lines = crate::setup::helper::acl_lines(&run).unwrap();
         assert_eq!(
             crate::setup::helper::acl_policy(&lines, Some(uid)),
             Ok(true)
         );
+
         drop((listener, endpoint));
         fs::set_permissions(&run, fs::Permissions::from_mode(0o755)).unwrap();
         let open = bind(&run.join("s.sock"), uid, "test", private).await;
         assert_eq!(open.err().unwrap().code, "identity");
+
         fs::set_permissions(&run, fs::Permissions::from_mode(0o700)).unwrap();
         let user = std::env::var("USER").unwrap();
         std::process::Command::new("/bin/chmod")
@@ -349,6 +384,7 @@ mod tests {
             .arg(&run)
             .status()
             .unwrap();
+
         let extra = bind(&run.join("s.sock"), uid, "test", private).await;
         assert_eq!(extra.err().unwrap().code, "identity");
     }

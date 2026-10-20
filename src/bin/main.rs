@@ -267,9 +267,9 @@ enum Command {
     /// What is dragged (a window, a slider's knob, a selection) moves by
     /// exactly the distance between the points; the button itself is released
     /// up to one point past the end, in the direction of travel, never off the
-    /// display. Drag-and-drop onto
-    /// a target (selected text, files, list items) does not begin in the
-    /// helper: macOS starts such a drag only from a real mouse.
+    /// display. Drag-and-drop onto a target (selected text, files, list items)
+    /// does not begin in the helper: macOS starts such a drag only from a real
+    /// mouse.
     Drag {
         /// Start point X.
         from_x: f64,
@@ -382,7 +382,6 @@ enum Command {
         #[arg(long, default_value_t = 10, value_parser = wait_seconds)]
         timeout: u64,
     },
-
     /// Run a command in the helper and print its output.
     ///
     /// The command starts in the helper's home and finds programs where
@@ -563,6 +562,7 @@ enum AgentsCommand {
 /// The agents named by --claude/--codex (none means every installed one).
 fn chosen(claude: bool, codex: bool) -> Vec<atlas::agents::Agent> {
     use atlas::agents::Agent;
+
     [(claude, Agent::Claude), (codex, Agent::Codex)]
         .into_iter()
         .filter_map(|(on, agent)| on.then_some(agent))
@@ -622,8 +622,10 @@ fn main() -> ExitCode {
         Ok(matches) => matches,
         Err(error) => return help::usage(error),
     };
+
     let mut cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
     let config = atlas::config::effective(cli.config.take());
+
     // `atlas` alone shows what it can do; opened as an app (Finder,
     // Launchpad, `open`), it shows the window instead.
     let Some(command) = cli.command.take() else {
@@ -633,6 +635,7 @@ fn main() -> ExitCode {
         let _ = help::command().print_help();
         return ExitCode::SUCCESS;
     };
+
     // Commands run by Atlas itself always answer in JSON.
     let format = if machine_only(&command) {
         Format::Json
@@ -643,7 +646,9 @@ fn main() -> ExitCode {
             std::io::stdout().is_terminal(),
         )
     };
+
     ui::set(format);
+
     // The helper daemon keeps this thread for the Core Foundation run loop.
     if let Command::HelperServe {
         uid,
@@ -659,6 +664,7 @@ fn main() -> ExitCode {
             }
         };
     }
+
     // A refusing environment worker exits distinctly, so its caller can tell
     // the refusal from the command it would have run.
     let worker = match &command {
@@ -671,7 +677,9 @@ fn main() -> ExitCode {
         ),
         _ => None,
     };
+
     let view = view(&command);
+
     // Commands that ask questions or wait for the person stop cleanly on
     // Ctrl-C, saying what that means for each.
     let interrupted = match command {
@@ -682,6 +690,7 @@ fn main() -> ExitCode {
         Command::Update { .. } => Some("Stopped. Run atlas update again to finish."),
         _ => None,
     };
+
     let result = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -699,6 +708,7 @@ fn main() -> ExitCode {
     match result {
         Ok(result) => {
             emit(format, &view, &result);
+
             if result["ok"] == false
                 || result["ready"] == false
                 || result["timedOut"] == true
@@ -716,10 +726,12 @@ fn main() -> ExitCode {
                 eprintln!("{refusal}");
                 return ExitCode::from(atlas::environment::WORKER_REFUSED);
             }
+
             match format {
                 Format::Json => eprintln!("{}", json!(error)),
                 Format::Human => eprintln!("{}", render::error(&error)),
             }
+
             ExitCode::FAILURE
         }
     }
@@ -731,9 +743,11 @@ fn or_logged_out(error: Error, config: &std::path::Path) -> Error {
     if error.code != "transport" || error.uncertain {
         return error;
     }
+
     let Ok(config) = Config::load(config) else {
         return error;
     };
+
     match atlas::session::absence(config.helper_uid) {
         Some(atlas::session::Absence::LoggedOut(_)) => Error::new(
             "logged-out",
@@ -754,9 +768,11 @@ fn opened_as_app() -> bool {
 /// replaces this process, so the app stays the one the person opened.
 fn open_app(config: &std::path::Path) -> ExitCode {
     use std::os::unix::process::CommandExt;
+
     let Ok(executable) = std::env::current_exe() else {
         return ExitCode::FAILURE;
     };
+
     let me = nix::unistd::getuid().as_raw();
     let helper_here = atlas::onboarding::request().is_some_and(|pairing| pairing.helper_uid == me);
     let finished = !helper_here
@@ -784,6 +800,7 @@ fn open_app(config: &std::path::Path) -> ExitCode {
             }
         }
     };
+
     eprintln!("Atlas could not open: {error}");
     ExitCode::FAILURE
 }
@@ -809,6 +826,7 @@ fn machine_only(command: &Command) -> bool {
 /// How a command's result reads for a person.
 fn view(command: &Command) -> View {
     let at = |x: f64, y: f64| format!("{}, {}", text::number(x), text::number(y));
+
     match command {
         Command::Doctor { verbose } => View::Doctor { verbose: *verbose },
         Command::Status => View::Status,
@@ -899,6 +917,7 @@ fn emit(format: Format, view: &View, value: &Value) {
     if value.is_null() {
         return;
     }
+
     match format {
         Format::Json => {
             let text = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
@@ -914,6 +933,7 @@ fn emit(format: Format, view: &View, value: &Value) {
                 }
                 let _ = out.flush();
             }
+
             if !shown.err.is_empty() {
                 eprintln!("{}", shown.err);
             }
@@ -993,6 +1013,7 @@ async fn doctor(client: &Client, verbose: bool) -> Value {
     let uid = client.config.helper_uid;
     let status = client.status().await;
     let account = atlas::setup::account_with_uid(uid).ok().flatten();
+
     // Not answering because the helper is logged out or gone: only the
     // person can log it in again.
     let absence = if atlas::session::silent(&status) {
@@ -1003,13 +1024,17 @@ async fn doctor(client: &Client, verbose: bool) -> Value {
     } else {
         None
     };
+
     let shell_blocked = status["code"] == "blocked";
     let mut report = atlas::capability::doctor(status, uid);
+
     if let Some(absence) = &absence {
         absence.explain(&mut report);
     }
+
     // Both states make the helper unusable; init refuses them too.
     let mut first_steps = Vec::new();
+
     if let Some(account) = &account {
         if atlas::session::leftover_session(uid, &account.name, &account.home) {
             first_steps.push(format!(
@@ -1049,6 +1074,7 @@ async fn doctor(client: &Client, verbose: bool) -> Value {
             }
         }
     }
+
     // People see the summary either way; programs get the full status
     // only when they ask for it.
     if verbose || ui::human() {
@@ -1059,21 +1085,23 @@ async fn doctor(client: &Client, verbose: bool) -> Value {
 }
 
 async fn execute(config: PathBuf, command: Command) -> Result<Value> {
-    // Helper-side commands run inside the helper login and never read the
-    // controller's configuration. A command that talks to the helper loads
-    // it before anything else.
     // What the person does from the app is recorded as theirs, not an agent's.
     let actor = if std::env::var_os("ATLAS_ACTOR").is_some_and(|actor| actor == "viewer") {
         atlas::client::Actor::Viewer
     } else {
         atlas::client::Actor::Agent
     };
+
+    // Helper-side commands run inside the helper login and never read the
+    // controller's configuration. A command that talks to the helper loads
+    // it before anything else.
     let client = || {
         Client::new(Config::load(&config)?).map(|mut client| {
             client.actor = actor;
             client
         })
     };
+
     match command {
         Command::EnvironmentWorker { packet, apply } => environment::worker(&packet, apply),
         Command::AgentGuide { skill, commands } => {
@@ -1108,6 +1136,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
         Command::Init => atlas::init::run(&config).await,
         Command::Onboarding { step } => {
             use atlas::onboarding;
+
             match step {
                 OnboardingCommand::Status => onboarding::status(&config).await,
                 OnboardingCommand::Choose { account } => onboarding::choose(&config, &account),
@@ -1172,6 +1201,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             // Recovery ownership: the migration settles only the pending
             // mutations its own log records and refuses any other.
             let ownership = client.controller.acquire(true)?;
+
             if apply {
                 atlas::setup::migrate::apply(&config, &ownership).await
             } else {
@@ -1191,6 +1221,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             command,
         } => {
             let client = client()?;
+
             match command {
                 Some(EnvironmentCommand::Profile { profile, apply }) => {
                     environment::profile::sync(&client, &profile, apply).await
@@ -1246,6 +1277,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
         } => {
             let client = client()?;
             let program = menubar::Program::new(&config)?;
+
             match render {
                 Some(directory) => viewer::render_menubar(client, &program, &directory).await,
                 None if serve || menubar::started_at_login() => {
@@ -1277,6 +1309,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             modifiers,
         } => {
             let client = client()?;
+
             match (x, y, target.target()) {
                 (Some(x), Some(y), None) => {
                     act(
@@ -1350,6 +1383,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
         }
         Command::Type { text, stdin } => {
             let client = client()?;
+
             let text = match text {
                 Some(text) if !stdin => text,
                 _ => {
@@ -1362,6 +1396,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
                     text
                 }
             };
+
             agent::type_text(&client, &text).await
         }
         Command::Key { keys } => act(&client()?, agent::keys(&keys)?).await,
@@ -1398,6 +1433,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             let client = client()?;
             // The most an actions batch may take, in bytes.
             const LIMIT: u64 = 32 * 1024;
+
             let bytes = if let Some(path) = actions.strip_prefix('@') {
                 let mut bytes = Vec::new();
                 std::fs::File::open(path)
@@ -1408,12 +1444,14 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             } else {
                 actions.into_bytes()
             };
+
             if bytes.len() as u64 > LIMIT {
                 return Err(Error::new(
                     "input",
                     "Input exceeds 32 KiB; use short observed batches",
                 ));
             }
+
             client
                 .input(&serde_json::from_slice(&bytes)?, None, None)
                 .await
@@ -1429,6 +1467,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
         }
         Command::Logout { force, yes } => {
             let client = client()?;
+
             if !yes
                 && !ui::prompt::confirm(
                     "Log out the helper? Its apps quit, and agents can't use it until you log in \
@@ -1439,6 +1478,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             {
                 return Err(ui::prompt::cancelled());
             }
+
             let _spinner = Spinner::new("Logging out the helper…");
             client.logout(force).await
         }
@@ -1456,11 +1496,14 @@ fn switch(
     yes: bool,
 ) -> Result<Value> {
     use atlas::switch;
+
     let helper = Config::load(config).ok().map(|config| config.helper_uid);
     let accounts = switch::accounts(helper)?;
+
     if list {
         return Ok(json!({"ok": true, "accounts": accounts}));
     }
+
     let target = match account {
         Some(name) => Some(
             accounts
@@ -1474,6 +1517,7 @@ fn switch(
         None if lock => None,
         None => accounts.iter().find(|candidate| candidate.helper).cloned(),
     };
+
     if !yes {
         let question = match &target {
             Some(account) => format!(
@@ -1482,10 +1526,12 @@ fn switch(
             ),
             None => "Lock the screen now?".to_owned(),
         };
+
         if !ui::prompt::confirm(&question, true, "pass --yes")? {
             return Err(ui::prompt::cancelled());
         }
     }
+
     match target {
         Some(account) => switch::to(&account),
         None => switch::lock_screen(),
@@ -1511,6 +1557,7 @@ fn update(
     version: Option<String>,
 ) -> Result<Value> {
     let source = atlas::update::Source::from_env(version);
+
     // Nothing else may control the helper while its app is replaced: no
     // viewer or agent, and no action of unknown outcome. The new version's
     // steps take control again one by one.
@@ -1518,14 +1565,19 @@ fn update(
         Some(loaded) => Some(Client::new(loaded)?.controller.acquire(false)?),
         None => None,
     };
+
     let spinner = Spinner::new("Checking for an update…");
     let mut report = atlas::update::install(&source, allow_unnotarized, force)?;
+
     drop(exclusion);
+
     if report["updated"] != true {
         return Ok(report);
     }
+
     spinner.set("Moving the helper onto the new version…");
     let executable = atlas::update::installed_executable()?;
+
     // update-finish always answers in JSON; no flag, so a release that
     // predates --json can finish too.
     let output = std::process::Command::new(&executable)
@@ -1538,6 +1590,7 @@ fn update(
         .unwrap_or_else(|_| json!({"ok": false, "error": "The new version did not report"}));
     report["ok"] = finished["ok"].clone();
     report["helper"] = finished;
+
     if report["ok"] == true {
         // A running menu bar moves onto the new version too. It stops before
         // the previous app, the bundle it still runs from, is removed.
@@ -1546,9 +1599,12 @@ fn update(
             .and_then(|loaded| Client::new(loaded).ok())
             .and_then(|client| client.output_dir().ok().map(std::path::Path::to_path_buf));
         let port = output.and_then(|output| atlas::menubar::stop(&output));
+
         report["previous"] = atlas::update::finished()?;
+
         if let Some(port) = port {
             spinner.set("Restarting the menu bar…");
+
             let restarted = std::process::Command::new(&executable)
                 .arg("menubar")
                 .arg("--port")
@@ -1566,6 +1622,7 @@ fn update(
     } else {
         report["next"] = json!("Fix the failed step, then run atlas update again to resume");
     }
+
     Ok(report)
 }
 
@@ -1577,15 +1634,20 @@ fn update_finish(config: &std::path::Path) -> Result<Value> {
     let Some(loaded) = set_up(config)? else {
         return Ok(json!({"ok": true, "next": "atlas init"}));
     };
+
     let executable = std::env::current_exe()?;
+
     // The daemon restarts first: a daemon whose app was swapped under it can
     // no longer vouch (to TCC) for a new input service it starts, while the
     // input service it already runs is cleaned up by the restart itself.
     let mut steps: Vec<&[&str]> = vec![&["install"], &["restart"], &["start-input"]];
+
     if atlas::setup::migrate::recorded(loaded.helper_uid) {
         steps.push(&["setup", "--apply"]);
     }
+
     let mut done = Vec::new();
+
     for step in steps {
         let output = std::process::Command::new(&executable)
             .args(step)
@@ -1605,8 +1667,10 @@ fn update_finish(config: &std::path::Path) -> Result<Value> {
                 "completedSteps": done,
             }));
         }
+
         done.push(step.join(" "));
     }
+
     let agents = atlas::agents::refresh();
     Ok(json!({"ok": true, "completedSteps": done, "agents": agents}))
 }
@@ -1619,16 +1683,20 @@ fn command_reference() -> String {
          JSON when its output is not a terminal (or with `--json`) and exits non-zero on \
          failure.\n",
     );
+
     // With each command's examples, as `--help` shows them.
     let mut root = help::command().bin_name("atlas");
     root.build();
+
     // In the order of `atlas --help`, each command followed by its own
     // subcommands (such as environment rollback).
     for name in help::GROUPS.iter().flat_map(|(_, names)| names.iter()) {
         let Some(command) = root.find_subcommand_mut(name) else {
             continue;
         };
+
         reference_section(&mut text, &format!("atlas {name}"), command);
+
         let nested: Vec<String> = command
             .get_subcommands()
             .filter(|sub| !sub.is_hide_set() && sub.get_name() != "help")
@@ -1640,6 +1708,7 @@ fn command_reference() -> String {
             }
         }
     }
+
     text
 }
 
@@ -1778,6 +1847,7 @@ mod tests {
         else {
             panic!("menubar did not parse");
         };
+
         assert_eq!((port, render), (8765, Some(PathBuf::from("out"))));
         assert!(parse(&["menubar", "--port", "9000"]).is_ok());
     }
@@ -1789,6 +1859,7 @@ mod tests {
         let missing = dir.path().join("config.toml");
         let finished = update_finish(&missing).unwrap();
         assert_eq!(finished, json!({"ok": true, "next": "atlas init"}));
+
         let broken = dir.path().join("broken.toml");
         std::fs::write(&broken, "helper_uid = [").unwrap();
         let error = update_finish(&broken).unwrap_err();
@@ -1804,6 +1875,7 @@ mod tests {
         else {
             panic!("scroll did not parse");
         };
+
         assert_eq!(dy, -3);
     }
 

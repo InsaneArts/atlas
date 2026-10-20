@@ -63,7 +63,7 @@ impl Agent {
     /// The argv that connect the plugin at `marketplace`.
     fn connect(self, marketplace: &Path) -> Vec<Vec<String>> {
         let path = marketplace.to_string_lossy().into_owned();
-        let argv = |items: &[&str]| items.iter().map(|item| (*item).to_owned()).collect();
+
         match self {
             Agent::Claude => vec![
                 argv(&["plugin", "marketplace", "add", &path, "--scope", "user"]),
@@ -78,7 +78,6 @@ impl Agent {
 
     /// The argv that disconnect it.
     fn disconnect(self) -> Vec<Vec<String>> {
-        let argv = |items: &[&str]| items.iter().map(|item| (*item).to_owned()).collect();
         match self {
             Agent::Claude => vec![
                 argv(&["plugin", "uninstall", PLUGIN, "--scope", "user"]),
@@ -88,6 +87,17 @@ impl Agent {
                 argv(&["plugin", "remove", PLUGIN]),
                 argv(&["plugin", "marketplace", "remove", NAME]),
             ],
+        }
+    }
+
+    /// The argv that bring its copy of the plugin up to date.
+    fn update(self) -> Vec<Vec<String>> {
+        match self {
+            Agent::Claude => vec![
+                argv(&["plugin", "marketplace", "update", NAME]),
+                argv(&["plugin", "update", PLUGIN]),
+            ],
+            Agent::Codex => vec![argv(&["plugin", "add", PLUGIN])],
         }
     }
 
@@ -118,6 +128,7 @@ impl Agent {
             Err(error) if error.code == "agents" => return Err(error.error),
             Err(_) => return Ok(None),
         };
+
         Ok(self.listed(&output.stdout))
     }
 
@@ -128,11 +139,17 @@ impl Agent {
             Agent::Claude => list.as_array(),
             Agent::Codex => list["installed"].as_array(),
         }?;
+
         Some(plugins.iter().any(|plugin| {
             let id = plugin["id"].as_str().or(plugin["pluginId"].as_str());
             id == Some(PLUGIN) || plugin["name"] == NAME
         }))
     }
+}
+
+/// One argv of owned words.
+fn argv(items: &[&str]) -> Vec<String> {
+    items.iter().map(|item| (*item).to_owned()).collect()
 }
 
 /// Whether an agent's tool is on this Mac.
@@ -152,6 +169,7 @@ pub fn marketplace() -> Result<PathBuf> {
             return Ok(bundled);
         }
     }
+
     // Release builds ship only inside Atlas.app; the build machine's checkout
     // means nothing on another Mac.
     #[cfg(debug_assertions)]
@@ -161,6 +179,7 @@ pub fn marketplace() -> Result<PathBuf> {
             return Ok(checkout);
         }
     }
+
     Err(problem("This Atlas carries no agent plugin; reinstall it"))
 }
 
@@ -176,11 +195,13 @@ pub fn stop_running() {
     if groups.is_empty() {
         return;
     }
+
     let signal = |signal| {
         for group in &groups {
             let _ = nix::sys::signal::killpg(nix::unistd::Pid::from_raw(*group), signal);
         }
     };
+
     signal(nix::sys::signal::Signal::SIGTERM);
     // A tool that ignores the request is stopped outright.
     std::thread::sleep(Duration::from_millis(300));
@@ -192,8 +213,10 @@ pub fn stop_running() {
 /// its output open cannot keep Atlas waiting.
 fn exec(agent: Agent, argv: &[impl AsRef<std::ffi::OsStr>], limit: Duration) -> Result<Output> {
     use std::os::unix::process::CommandExt;
-    // Its own process group, so a timeout stops whatever it started too.
+
     let (executable, path) = executable(agent);
+
+    // Its own process group, so a timeout stops whatever it started too.
     let child = Command::new(executable)
         .args(argv)
         .env("PATH", path)
@@ -203,6 +226,7 @@ fn exec(agent: Agent, argv: &[impl AsRef<std::ffi::OsStr>], limit: Duration) -> 
         .process_group(0)
         .spawn()?;
     let _running = Running::register(&child);
+
     supervise(agent, child, limit)
 }
 
@@ -216,6 +240,7 @@ impl Running {
         if let (Some(group), Ok(mut running)) = (group, RUNNING.lock()) {
             running.push(group);
         }
+
         Self(group)
     }
 }
@@ -242,10 +267,12 @@ fn executable(agent: Agent) -> (PathBuf, std::ffi::OsString) {
         places.extend(install_places());
         found = find(name, &places);
     }
+
     if found.is_none() {
         places.extend(shell_path().iter().cloned());
         found = find(name, &places);
     }
+
     let path = std::env::join_paths(&places).unwrap_or(original);
     (found.unwrap_or_else(|| PathBuf::from(name)), path)
 }
@@ -253,6 +280,7 @@ fn executable(agent: Agent) -> (PathBuf, std::ffi::OsString) {
 /// `name` as a runnable file in the first of `places` that has it.
 fn find(name: &str, places: &[PathBuf]) -> Option<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
+
     places
         .iter()
         .map(|place| place.join(name))
@@ -266,6 +294,7 @@ fn find(name: &str, places: &[PathBuf]) -> Option<PathBuf> {
 /// the global bin of npm and the Node version managers.
 fn install_places() -> Vec<PathBuf> {
     let mut places = Vec::new();
+
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
         for relative in [
             ".local/bin",
@@ -278,6 +307,7 @@ fn install_places() -> Vec<PathBuf> {
         ] {
             places.push(home.join(relative));
         }
+
         // Every Node that nvm or fnm manages, newest first.
         for (root, tail) in [
             (".nvm/versions/node", "bin"),
@@ -290,6 +320,7 @@ fn install_places() -> Vec<PathBuf> {
             places.extend(versions.into_iter().rev().map(|version| version.join(tail)));
         }
     }
+
     places.extend(["/opt/homebrew/bin", "/usr/local/bin"].map(PathBuf::from));
     places
 }
@@ -298,8 +329,10 @@ fn install_places() -> Vec<PathBuf> {
 /// at most; nothing when the shell does not answer.
 fn shell_path() -> &'static [PathBuf] {
     static SHELL_PATH: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
+
     SHELL_PATH.get_or_init(|| {
         use std::os::unix::process::CommandExt;
+
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_owned());
         // An interactive shell may print other things: the answer is marked.
         let script = "printf '\\n<atlas-path>%s</atlas-path>\\n' \"$PATH\"";
@@ -313,47 +346,28 @@ fn shell_path() -> &'static [PathBuf] {
         else {
             return Vec::new();
         };
+
         let _running = Running::register(&child);
-        let Some(mut stdout) = child.stdout.take() else {
+
+        let Some(stdout) = child.stdout.take() else {
             return Vec::new();
         };
-        let collected = Arc::new(Mutex::new(Vec::new()));
-        let (finished, ended) = std::sync::mpsc::channel();
-        let sink = Arc::clone(&collected);
-        std::thread::spawn(move || {
-            let mut chunk = [0u8; 8192];
-            while let Ok(read @ 1..) = stdout.read(&mut chunk) {
-                if let Ok(mut sink) = sink.lock() {
-                    let room = (1_usize << 20).saturating_sub(sink.len()).min(read);
-                    sink.extend_from_slice(&chunk[..room]);
-                }
-            }
-            let _ = finished.send(());
-        });
+
+        let output = collect(Some(stdout));
         let deadline = Instant::now() + Duration::from_secs(3);
+
         while child.try_wait().ok().flatten().is_none() {
             if Instant::now() >= deadline {
-                if let Ok(group) = i32::try_from(child.id()) {
-                    let _ = nix::sys::signal::killpg(
-                        nix::unistd::Pid::from_raw(group),
-                        nix::sys::signal::Signal::SIGKILL,
-                    );
-                }
-                let _ = child.kill();
-                let _ = child.wait();
+                kill_group(&mut child);
                 break;
             }
+
             std::thread::sleep(Duration::from_millis(20));
         }
-        // Normally the output ends with the shell. A background job it left
-        // holding the pipe open cannot keep Atlas waiting: a moment more,
-        // then what arrived.
-        let _ = ended.recv_timeout(Duration::from_millis(500));
-        let text = collected
-            .lock()
-            .map(|text| text.clone())
-            .unwrap_or_default();
-        marked_path(&String::from_utf8_lossy(&text))
+
+        // A background job the shell left holding the pipe open cannot keep
+        // Atlas waiting.
+        marked_path(&String::from_utf8_lossy(&take(output)))
     })
 }
 
@@ -367,72 +381,82 @@ fn marked_path(output: &str) -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
+/// The most of a stream that is kept; the rest is read and dropped, so the
+/// writer never blocks on a full pipe.
+const KEEP: usize = 1 << 20;
+
+/// A stream being collected, and the signal that it ended.
+type Collected = (Arc<Mutex<Vec<u8>>>, std::sync::mpsc::Receiver<()>);
+
+/// Collect `stream` on a thread of its own as it arrives, up to KEEP bytes.
+fn collect(stream: Option<impl Read + Send + 'static>) -> Collected {
+    let collected = Arc::new(Mutex::new(Vec::new()));
+    let (finished, ended) = std::sync::mpsc::channel();
+
+    if let Some(mut stream) = stream {
+        let sink = Arc::clone(&collected);
+        std::thread::spawn(move || {
+            let mut chunk = [0u8; 8192];
+            while let Ok(read @ 1..) = stream.read(&mut chunk) {
+                if let Ok(mut sink) = sink.lock() {
+                    let room = KEEP.saturating_sub(sink.len()).min(read);
+                    sink.extend_from_slice(&chunk[..room]);
+                }
+            }
+
+            let _ = finished.send(());
+        });
+    }
+
+    (collected, ended)
+}
+
+/// What a collected stream gave. Normally it ends with its process; a
+/// moment more, then what arrived.
+fn take((collected, ended): Collected) -> Vec<u8> {
+    let _ = ended.recv_timeout(Duration::from_millis(500));
+    collected
+        .lock()
+        .map(|bytes| bytes.clone())
+        .unwrap_or_default()
+}
+
+/// Stop `child` and everything in its process group, and reap it.
+fn kill_group(child: &mut std::process::Child) {
+    if let Ok(group) = i32::try_from(child.id()) {
+        let _ = nix::sys::signal::killpg(
+            nix::unistd::Pid::from_raw(group),
+            nix::sys::signal::Signal::SIGKILL,
+        );
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// Wait for `child` within `limit`, collecting its output.
 fn supervise(agent: Agent, mut child: std::process::Child, limit: Duration) -> Result<Output> {
-    // Output is collected as it arrives, up to a limit (the rest is read
-    // and dropped, so the tool never blocks on a full pipe).
-    const KEEP: usize = 1 << 20;
-    let collect = |stream: Option<Box<dyn Read + Send>>| {
-        let collected = Arc::new(Mutex::new(Vec::new()));
-        let (finished, ended) = std::sync::mpsc::channel();
-        if let Some(mut stream) = stream {
-            let sink = Arc::clone(&collected);
-            std::thread::spawn(move || {
-                let mut chunk = [0u8; 8192];
-                while let Ok(read @ 1..) = stream.read(&mut chunk) {
-                    if let Ok(mut sink) = sink.lock() {
-                        let room = KEEP.saturating_sub(sink.len()).min(read);
-                        sink.extend_from_slice(&chunk[..room]);
-                    }
-                }
-                let _ = finished.send(());
-            });
-        }
-        (collected, ended)
-    };
-    let stdout = collect(
-        child
-            .stdout
-            .take()
-            .map(|s| Box::new(s) as Box<dyn Read + Send>),
-    );
-    let stderr = collect(
-        child
-            .stderr
-            .take()
-            .map(|s| Box::new(s) as Box<dyn Read + Send>),
-    );
+    let stdout = collect(child.stdout.take());
+    let stderr = collect(child.stderr.take());
     let deadline = Instant::now() + limit;
+
     let status = loop {
         if let Some(status) = child.try_wait()? {
             break status;
         }
+
         if Instant::now() >= deadline {
-            if let Ok(group) = i32::try_from(child.id()) {
-                let _ = nix::sys::signal::killpg(
-                    nix::unistd::Pid::from_raw(group),
-                    nix::sys::signal::Signal::SIGKILL,
-                );
-            }
-            let _ = child.kill();
-            let _ = child.wait();
+            kill_group(&mut child);
             return Err(problem(format!(
                 "{} did not answer within {} seconds",
                 agent.display_name(),
                 limit.as_secs()
             )));
         }
+
         std::thread::sleep(Duration::from_millis(20));
     };
-    // Normally the output ends with the tool; a moment more, then keep
-    // what arrived.
-    let take = |(collected, ended): (Arc<Mutex<Vec<u8>>>, std::sync::mpsc::Receiver<()>)| {
-        let _ = ended.recv_timeout(Duration::from_millis(500));
-        collected
-            .lock()
-            .map(|bytes| bytes.clone())
-            .unwrap_or_default()
-    };
+
     Ok(Output {
         status,
         stdout: take(stdout),
@@ -445,6 +469,7 @@ fn run(agent: Agent, argv: &[String]) -> Result<()> {
     if output.status.success() {
         return Ok(());
     }
+
     Err(problem(format!(
         "{} {} failed: {}",
         agent.name(),
@@ -465,6 +490,7 @@ pub fn status() -> Value {
             .map(|probe| probe.join().unwrap_or(Value::Null))
             .collect()
     });
+
     json!({"ok": true, "agents": agents, "plugin": marketplace().ok()})
 }
 
@@ -496,6 +522,7 @@ fn probe(agent: Agent) -> Value {
 /// Connect (or `remove` from) the chosen agents, or every installed one.
 pub fn change(chosen: &[Agent], remove: bool) -> Result<Value> {
     let marketplace = if remove { None } else { Some(marketplace()?) };
+
     let present: Vec<(Agent, Presence)> = if chosen.is_empty() {
         Agent::ALL
             .into_iter()
@@ -508,10 +535,13 @@ pub fn change(chosen: &[Agent], remove: bool) -> Result<Value> {
             .map(|agent| (*agent, agent.presence()))
             .collect()
     };
+
     if present.is_empty() {
         return Err(problem("Neither Claude Code nor Codex is installed"));
     }
+
     let mut results = Vec::new();
+
     for (agent, presence) in present {
         match presence {
             Presence::Installed(_) => {}
@@ -524,6 +554,7 @@ pub fn change(chosen: &[Agent], remove: bool) -> Result<Value> {
                 continue;
             }
         }
+
         let outcome = match &marketplace {
             // Connecting stops at a failure.
             Some(path) => agent
@@ -543,11 +574,13 @@ pub fn change(chosen: &[Agent], remove: bool) -> Result<Value> {
                 removed(agent, failures, agent.connected())
             }
         };
+
         results.push(match outcome {
             Ok(()) => json!({"agent": agent.name(), "ok": true, "connected": !remove}),
             Err(error) => json!({"agent": agent.name(), "ok": false, "error": error.error}),
         });
     }
+
     let ok = results.iter().all(|result| result["ok"] == true);
     Ok(json!({"ok": ok, "agents": results}))
 }
@@ -562,6 +595,7 @@ fn removed(
     connected: std::result::Result<Option<bool>, String>,
 ) -> Result<()> {
     let first = failures.into_iter().next();
+
     match connected {
         Ok(Some(false)) => Ok(()),
         Ok(Some(true)) => Err(first.unwrap_or_else(|| {
@@ -588,9 +622,11 @@ pub fn project(dir: &Path) -> Result<Value> {
     if !dir.is_dir() {
         return Err(problem(format!("{} is not a folder", dir.display())));
     }
+
     let agents = dir.join("AGENTS.md");
     let claude = dir.join("CLAUDE.md");
     let mut plans = vec![(agents.clone(), read_instructions(&agents)?)];
+
     if let Some(text) = read_instructions(&claude)? {
         let same = match (claude.canonicalize(), agents.canonicalize()) {
             (Ok(a), Ok(b)) => a == b,
@@ -600,8 +636,10 @@ pub fn project(dir: &Path) -> Result<Value> {
             plans.push((claude, Some(text)));
         }
     }
+
     // Check every file before changing any.
     let mut changes = Vec::new();
+
     for (path, before) in plans {
         let before = before.unwrap_or_default();
         let after = with_section(&before).ok_or_else(|| {
@@ -613,7 +651,9 @@ pub fn project(dir: &Path) -> Result<Value> {
         })?;
         changes.push((path, before, after));
     }
+
     let mut files = Vec::new();
+
     for (path, before, after) in changes {
         let change = if before == after {
             "unchanged"
@@ -622,12 +662,15 @@ pub fn project(dir: &Path) -> Result<Value> {
         } else {
             "added"
         };
+
         if before != after {
             replace_file(&path, after.as_bytes())
                 .map_err(|error| problem(format!("Could not write {}: {error}", path.display())))?;
         }
+
         files.push(json!({"path": path, "change": change}));
     }
+
     Ok(json!({"ok": true, "files": files}))
 }
 
@@ -647,6 +690,7 @@ fn read_instructions(path: &Path) -> Result<Option<String>> {
 /// None when the markers are not exactly one pair in order.
 fn with_section(text: &str) -> Option<String> {
     let block = format!("{SECTION_START}\n{PROJECT_SECTION}{SECTION_END}\n");
+
     match (
         text.matches(SECTION_START).count(),
         text.matches(SECTION_END).count(),
@@ -664,12 +708,14 @@ fn with_section(text: &str) -> Option<String> {
         }
         _ => return None,
     }
+
     let gap = match text {
         "" => "",
         _ if text.ends_with("\n\n") => "",
         _ if text.ends_with('\n') => "\n",
         _ => "\n\n",
     };
+
     Some(format!("{text}{gap}{block}"))
 }
 
@@ -678,6 +724,7 @@ fn with_section(text: &str) -> Option<String> {
 /// file keeps its permissions.
 fn replace_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::{io::Write, os::unix::fs::OpenOptionsExt, os::unix::fs::PermissionsExt};
+
     let target = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let mode = std::fs::metadata(&target).map_or(0o644, |m| m.permissions().mode() & 0o777);
     let temporary = target.with_file_name(format!(
@@ -687,6 +734,7 @@ fn replace_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
             .map_or("instructions".into(), |n| n.to_string_lossy()),
         crate::control::token()
     ));
+
     let result = (|| {
         let mut file = std::fs::OpenOptions::new()
             .write(true)
@@ -698,11 +746,13 @@ fn replace_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         file.set_permissions(std::fs::Permissions::from_mode(mode))?;
         file.write_all(bytes)?;
         file.sync_all()?;
+
         std::fs::rename(&temporary, &target)
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&temporary);
     }
+
     result
 }
 
@@ -713,36 +763,31 @@ pub fn refresh() -> Value {
         .into_iter()
         .filter(|agent| agent.connected() == Ok(Some(true)))
         .map(|agent| {
-            let steps: Vec<Vec<String>> = match agent {
-                Agent::Claude => vec![
-                    vec![
-                        "plugin".into(),
-                        "marketplace".into(),
-                        "update".into(),
-                        NAME.into(),
-                    ],
-                    vec!["plugin".into(), "update".into(), PLUGIN.into()],
-                ],
-                Agent::Codex => vec![vec!["plugin".into(), "add".into(), PLUGIN.into()]],
-            };
-            let failed = steps.iter().find_map(|argv| run(agent, argv).err());
+            let failed = agent
+                .update()
+                .iter()
+                .find_map(|argv| run(agent, argv).err());
             json!({"agent": agent.name(), "ok": failed.is_none(), "error": failed.map(|e| e.error)})
         })
         .collect();
+
     json!({"agents": refreshed})
 }
 
 /// One line for an agent's session start: local, bounded, never failing.
 pub async fn brief(config_path: &Path) -> String {
     let version = crate::VERSION;
+
     let Ok(config) = Config::load(config_path) else {
         return "Atlas is installed but not set up. If the person wants GUI testing, \
                 offer the atlas setup skill (the person opens Atlas)."
             .to_owned();
     };
+
     let Ok(client) = Client::new(config.clone()) else {
         return format!("Atlas {version}: run atlas doctor before using it.");
     };
+
     if client
         .controller
         .pending()
@@ -752,10 +797,12 @@ pub async fn brief(config_path: &Path) -> String {
             "Atlas {version}: an action's outcome is unknown; run atlas restart first."
         );
     }
+
     let Ok(status) = tokio::time::timeout(Duration::from_millis(1500), client.status()).await
     else {
         return format!("Atlas {version}: the helper is not answering; run atlas doctor.");
     };
+
     let ready = crate::capability::doctor(status, config.helper_uid)["ready"] == true;
     if ready {
         format!(
@@ -773,6 +820,8 @@ mod tests {
 
     #[test]
     fn a_tool_is_found_where_it_can_run() {
+        use std::os::unix::fs::PermissionsExt;
+
         let dir = tempfile::tempdir().unwrap();
         let (first, second) = (dir.path().join("first"), dir.path().join("second"));
         fs::create_dir_all(&first).unwrap();
@@ -780,17 +829,18 @@ mod tests {
         fs::write(first.join("claude"), b"").unwrap();
         let places = vec![dir.path().join("missing"), first.clone(), second.clone()];
         assert_eq!(find("claude", &places), None, "not runnable yet");
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(second.join("claude"), fs::Permissions::from_mode(0o755)).ok();
+
         fs::write(second.join("claude"), b"").unwrap();
         fs::set_permissions(second.join("claude"), fs::Permissions::from_mode(0o755)).unwrap();
         assert_eq!(find("claude", &places), Some(second.join("claude")));
+
         fs::set_permissions(first.join("claude"), fs::Permissions::from_mode(0o755)).unwrap();
         assert_eq!(
             find("claude", &places),
             Some(first.join("claude")),
             "first place wins"
         );
+
         fs::create_dir_all(second.join("codex")).unwrap();
         assert_eq!(find("codex", &places), None, "a folder is not a tool");
     }
@@ -833,17 +883,20 @@ mod tests {
             with_section("# Rules\n").unwrap(),
             format!("# Rules\n\n{block}")
         );
+
         let once = with_section("# Rules\n\nKeep this.\n").unwrap();
         assert_eq!(
             with_section(&once).unwrap(),
             once,
             "a second run changes nothing"
         );
+
         let old = format!("# Rules\n{SECTION_START}\nold words\n{SECTION_END}\nAfter.\n");
         assert_eq!(
             with_section(&old).unwrap(),
             format!("# Rules\n{block}After.\n")
         );
+
         // An unpaired or reversed marker is refused, never guessed at.
         for broken in [
             format!("{SECTION_START}\nKeep this.\n"),
@@ -884,10 +937,12 @@ mod tests {
             .map(|file| file["change"].as_str().unwrap())
             .collect();
         assert_eq!(changes, ["added", "added"]);
+
         for name in ["AGENTS.md", "CLAUDE.md"] {
             let text = std::fs::read_to_string(dir.path().join(name)).unwrap();
             assert!(text.contains(PROJECT_SECTION), "{name}");
         }
+
         assert_eq!(
             project(dir.path()).unwrap()["files"][0]["change"],
             "unchanged"
@@ -896,6 +951,7 @@ mod tests {
         // A CLAUDE.md that already includes AGENTS.md is left alone.
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("CLAUDE.md"), "@AGENTS.md\n").unwrap();
+
         assert_eq!(
             project(dir.path()).unwrap()["files"]
                 .as_array()
@@ -912,6 +968,7 @@ mod tests {
     #[test]
     fn a_replaced_file_keeps_its_exact_permissions() {
         use std::os::unix::fs::PermissionsExt;
+
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("AGENTS.md");
         std::fs::write(&path, "old").unwrap();
@@ -928,6 +985,7 @@ mod tests {
         let claude = br#"[{"id":"other@x"},{"id":"atlas@atlas","version":"1"}]"#;
         assert_eq!(Agent::Claude.listed(claude), Some(true));
         assert_eq!(Agent::Claude.listed(br#"[{"id":"other@x"}]"#), Some(false));
+
         let codex = br#"{"installed":[{"pluginId":"atlas@atlas"}]}"#;
         assert_eq!(Agent::Codex.listed(codex), Some(true));
         assert_eq!(Agent::Codex.listed(br#"{"installed":[]}"#), Some(false));
@@ -996,12 +1054,14 @@ mod tests {
     #[test]
     fn the_plugin_matches_this_cli() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("agents");
+
         for manifest in [".claude-plugin/plugin.json", ".codex-plugin/plugin.json"] {
             let text = std::fs::read_to_string(root.join("atlas").join(manifest)).unwrap();
             let value: Value = serde_json::from_str(&text).unwrap();
             assert_eq!(value["name"], NAME, "{manifest}");
             assert_eq!(value["version"], crate::VERSION, "{manifest}");
         }
+
         for marketplace in [
             ".claude-plugin/marketplace.json",
             ".agents/plugins/marketplace.json",
@@ -1010,6 +1070,7 @@ mod tests {
             let value: Value = serde_json::from_str(&text).unwrap();
             assert_eq!(value["name"], NAME, "{marketplace}");
         }
+
         let skill = std::fs::read_to_string(root.join("atlas/skills/atlas/SKILL.md")).unwrap();
         assert_eq!(
             skill,
@@ -1026,6 +1087,7 @@ mod tests {
             root.join("agents/atlas/skills/atlas/references/troubleshooting.md"),
         )
         .unwrap();
+
         let mut sources = Vec::new();
         let mut directories = vec![root.join("src")];
         while let Some(directory) = directories.pop() {
@@ -1038,7 +1100,9 @@ mod tests {
                 }
             }
         }
+
         let mut missing = Vec::new();
+
         for source in &sources {
             for start in ["Error::new(", "failure("] {
                 for (index, _) in source.match_indices(start) {
@@ -1049,6 +1113,7 @@ mod tests {
                     else {
                         continue;
                     };
+
                     let documented = format!("| `{code}` |");
                     if !code.is_empty()
                         && code.chars().all(|c| c.is_ascii_lowercase() || c == '-')
@@ -1060,6 +1125,7 @@ mod tests {
                 }
             }
         }
+
         // Codes reached through each module's own problem() helper.
         for code in ["agents", "init", "setup", "uninstall", "update"] {
             if !reference.contains(&format!("| `{code}` |")) && !missing.contains(&code.to_owned())
@@ -1067,6 +1133,7 @@ mod tests {
                 missing.push(code.to_owned());
             }
         }
+
         assert!(missing.is_empty(), "undocumented error codes: {missing:?}");
     }
 }

@@ -17,6 +17,7 @@ impl Sandbox {
         let root = fs::canonicalize(temp.path()).unwrap();
         let home = root.join("home");
         fs::create_dir(&home).unwrap();
+
         Self {
             _root: temp,
             root,
@@ -69,16 +70,20 @@ fn preview_is_read_only_and_create_apply_rollback_is_idempotent() {
     let plan = sandbox.plan(vec![payload]);
     assert!(!sandbox.home.join(STATE).exists());
     assert!(!sandbox.home.join(".local").exists());
+
     assert_eq!(sandbox.apply(&plan)["ok"], true);
     let path = sandbox.home.join(".local/bin/proof");
     assert_eq!(fs::read(&path).unwrap(), b"frozen executable");
     assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o700);
+
     let inode = fs::metadata(&path).unwrap().ino();
     assert_eq!(sandbox.apply(&plan)["ok"], true);
     assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
+
     let preview = sandbox.rollback(&plan, false);
     assert_eq!(preview["ok"], true, "{preview}");
     assert!(path.exists());
+
     let result = sandbox.rollback(&plan, true);
     assert_eq!(result["ok"], true, "{result}");
     assert!(!sandbox.home.join(".local").exists());
@@ -91,6 +96,7 @@ fn rollback_restores_observed_bytes_and_mode_without_inventing_legacy_metadata()
     let path = sandbox.home.join("config");
     fs::write(&path, b"old").unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+
     let state = state::Store::open(&sandbox.home, true).unwrap();
     let legacy = json!({"files": {"config": digest(b"old")}});
     atomic_write(
@@ -100,14 +106,17 @@ fn rollback_restores_observed_bytes_and_mode_without_inventing_legacy_metadata()
     )
     .unwrap();
     drop(state);
+
     let plan = sandbox.plan(vec![sandbox.payload("config", b"new")]);
     assert!(matches!(plan.files[0].previous, Some(Entry::Legacy(_))));
     assert_eq!(sandbox.apply(&plan)["ok"], true);
     assert_eq!(fs::read(&path).unwrap(), b"new");
+
     let result = sandbox.rollback(&plan, true);
     assert_eq!(result["ok"], true, "{result}");
     assert_eq!(fs::read(&path).unwrap(), b"old");
     assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o640);
+
     let state = state::Store::open(&sandbox.home, false).unwrap();
     assert!(matches!(
         state.ledger().unwrap().files[Path::new("config")],
@@ -123,6 +132,7 @@ fn adopting_an_existing_file_never_makes_rollback_delete_it() {
     let inode = fs::metadata(&path).unwrap().ino();
     let plan = sandbox.plan(vec![sandbox.payload("existing", b"same")]);
     assert_eq!(plan.files[0].operation, Operation::Unchanged);
+
     assert_eq!(sandbox.apply(&plan)["ok"], true);
     assert_eq!(sandbox.rollback(&plan, true)["ok"], true);
     assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
@@ -132,6 +142,7 @@ fn adopting_an_existing_file_never_makes_rollback_delete_it() {
 fn every_destination_is_preflighted_and_helper_edits_are_preserved() {
     let sandbox = Sandbox::new();
     fs::write(sandbox.home.join("existing"), b"mine").unwrap();
+
     let result = sandbox.preview(vec![
         sandbox.payload("new", b"incoming"),
         sandbox.payload("existing", b"incoming"),
@@ -139,6 +150,7 @@ fn every_destination_is_preflighted_and_helper_edits_are_preserved() {
     assert_eq!(result["ok"], false);
     assert!(!sandbox.home.join("new").exists());
     assert!(!sandbox.home.join(STATE).exists());
+
     let plan = sandbox.plan(vec![sandbox.payload("new", b"incoming")]);
     fs::write(sandbox.home.join("new"), b"new helper edit").unwrap();
     assert!(worker::apply_plan(&sandbox.home, &plan, &|| Ok(())).is_err());
@@ -154,10 +166,13 @@ fn metadata_drift_and_later_same_content_generations_block_older_rollback() {
     let sandbox = Sandbox::new();
     let first = sandbox.plan(vec![sandbox.payload("file", b"same")]);
     assert_eq!(sandbox.apply(&first)["ok"], true);
+
     let second = sandbox.plan(vec![sandbox.payload("file", b"same")]);
     assert_eq!(sandbox.apply(&second)["ok"], true);
+
     assert_eq!(sandbox.rollback(&first, false)["ok"], false);
     assert_eq!(sandbox.rollback(&second, true)["ok"], true);
+
     fs::set_permissions(sandbox.home.join("file"), fs::Permissions::from_mode(0o644)).unwrap();
     assert_eq!(sandbox.rollback(&first, true)["ok"], false);
     assert_eq!(fs::read(sandbox.home.join("file")).unwrap(), b"same");
@@ -170,6 +185,7 @@ fn interrupted_batch_resumes_frozen_helper_payloads() {
         sandbox.payload("first", b"one"),
         sandbox.payload("second", b"two"),
     ]);
+
     let interrupted = Cell::new(false);
     let result = worker::apply_plan(&sandbox.home, &plan, &|| {
         if sandbox.home.join("first").exists() && !interrupted.replace(true) {
@@ -181,10 +197,12 @@ fn interrupted_batch_resumes_frozen_helper_payloads() {
     assert_eq!(result["ok"], false);
     assert_eq!(result["resumeRequired"], true);
     assert!(!sandbox.home.join("second").exists());
+
     // Resume uses the helper's durable snapshot, not even the controller stage.
     for file in &plan.files {
         fs::remove_file(&file.payload.source).unwrap();
     }
+
     assert_eq!(sandbox.apply(&plan)["ok"], true);
     assert_eq!(fs::read(sandbox.home.join("first")).unwrap(), b"one");
     assert_eq!(fs::read(sandbox.home.join("second")).unwrap(), b"two");
@@ -198,6 +216,7 @@ fn unsupported_metadata_and_links_are_refused_without_modification() {
     fs::write(&path, b"same").unwrap();
     fs::hard_link(&path, sandbox.home.join("alias")).unwrap();
     assert!(snapshot(&path).is_err());
+
     fs::remove_file(sandbox.home.join("alias")).unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o4600)).unwrap();
     assert!(snapshot(&path).is_err());
@@ -213,16 +232,20 @@ fn aliases_reserved_state_and_special_files_are_rejected() {
     ] {
         assert!(unique_targets([Path::new(target)].into_iter()).is_err());
     }
+
     assert!(
         unique_targets([Path::new(".config/Tool"), Path::new(".CONFIG/tool")].into_iter()).is_err()
     );
     assert!(unique_targets([Path::new("tool"), Path::new("tool/child")].into_iter()).is_err());
+
     let sandbox = Sandbox::new();
     let path = sandbox.root.join("data");
     fs::write(&path, b"too long").unwrap();
     assert!(read_limited(&path, 2).is_err());
+
     symlink(&path, sandbox.root.join("link")).unwrap();
     assert!(read_limited(&sandbox.root.join("link"), MAX_FILE).is_err());
+
     symlink(&sandbox.root, sandbox.home.join("escape")).unwrap();
     assert!(atomic_install(&sandbox.home.join("escape/file"), b"data", 0o600, true).is_err());
     assert!(atomic_install(&path, b"replacement", 0o600, true).is_err());
@@ -253,6 +276,7 @@ fn rollback_retains_a_created_directory_it_cannot_inspect() {
         assert_eq!(sandbox.apply(&plan)["ok"], true);
         (sandbox, plan)
     };
+
     // On an identical rollback, the last guard call made while a/b still exists
     // is the one authorizing its removal.
     let (twin, twin_plan) = applied();
@@ -266,6 +290,7 @@ fn rollback_retains_a_created_directory_it_cannot_inspect() {
     })
     .unwrap();
     assert!(!twin.home.join("a").exists());
+
     let swap_at = swap_at.get();
     let (sandbox, plan) = applied();
     let (home, seen) = (sandbox.home.clone(), Cell::new(0));
@@ -279,11 +304,13 @@ fn rollback_retains_a_created_directory_it_cannot_inspect() {
         }
         Ok(())
     };
+
     let result = worker::rollback(&sandbox.home, &plan.id, true, &guard).unwrap();
     assert_eq!(result["ok"], true, "{result}");
     assert_eq!(result["rolledBack"], true);
     assert_eq!(result["retainedDirectories"], json!(["a/b", "a"]));
     assert!(sandbox.home.join("moved/b").is_dir());
+
     let next = sandbox.plan(vec![sandbox.payload("next", b"next")]);
     assert_eq!(sandbox.apply(&next)["ok"], true);
 }
@@ -293,11 +320,13 @@ fn rollback_preserves_generated_outputs_and_unblocks_later_operations() {
     let sandbox = Sandbox::new();
     let plan = sandbox.plan(vec![sandbox.payload("project/input.md", b"input")]);
     assert_eq!(sandbox.apply(&plan)["ok"], true);
+
     fs::write(
         sandbox.home.join("project/output.pdf"),
         b"legitimate output",
     )
     .unwrap();
+
     let result = sandbox.rollback(&plan, true);
     assert_eq!(result["ok"], true, "{result}");
     assert_eq!(result["rolledBack"], true);
@@ -307,6 +336,7 @@ fn rollback_preserves_generated_outputs_and_unblocks_later_operations() {
         fs::read(sandbox.home.join("project/output.pdf")).unwrap(),
         b"legitimate output"
     );
+
     let next = sandbox.plan(vec![sandbox.payload("next", b"next")]);
     assert_eq!(sandbox.apply(&next)["ok"], true);
 }
@@ -319,6 +349,7 @@ fn bounded_extended_attributes_are_preserved_and_compared_exactly() {
     let mut attributes = fingerprint(&path).unwrap().unwrap().xattrs;
     attributes.insert("user.atlas-test".into(), STANDARD.encode([0_u8, 1, 255, 3]));
     restore_attributes(&path, &attributes).unwrap();
+
     let state = state::Store::open(&sandbox.home, true).unwrap();
     state
         .save_ledger(&Ledger {
@@ -327,10 +358,12 @@ fn bounded_extended_attributes_are_preserved_and_compared_exactly() {
         })
         .unwrap();
     drop(state);
+
     let plan = sandbox.plan(vec![sandbox.payload("config", b"new")]);
     let result = sandbox.apply(&plan);
     assert_eq!(result["ok"], true, "{result}");
     assert_eq!(fingerprint(&path).unwrap().unwrap().xattrs, attributes);
+
     let result = sandbox.rollback(&plan, true);
     assert_eq!(result["ok"], true, "{result}");
     assert_eq!(fingerprint(&path).unwrap().unwrap().xattrs, attributes);
@@ -351,6 +384,7 @@ fn large_extended_attributes_are_read_whole_and_bounded() {
     restore_attributes(&path, &attributes).unwrap();
     let read = fingerprint(&path).unwrap().unwrap().xattrs;
     assert_eq!(STANDARD.decode(&read["user.atlas-large"]).unwrap(), value);
+
     attributes.insert(
         "user.atlas-larger".into(),
         STANDARD.encode(vec![7_u8; 8_000]),
@@ -376,12 +410,14 @@ fn every_apply_guard_failure_can_resume_then_restore_the_original_files() {
         .unwrap()["ok"],
         true
     );
+
     for fail_at in 1..=calls.get() {
         let sandbox = Sandbox::new();
         let plan = sandbox.plan(vec![
             sandbox.payload("nested/first", b"one"),
             sandbox.payload("second", b"two"),
         ]);
+
         let current = Cell::new(0);
         let result = worker::apply_plan(&sandbox.home, &plan, &|| {
             current.set(current.get() + 1);
@@ -395,10 +431,12 @@ fn every_apply_guard_failure_can_resume_then_restore_the_original_files() {
             result.is_err() || result.unwrap()["ok"] == false,
             "guard {fail_at}"
         );
+
         let result = sandbox.apply(&plan);
         assert_eq!(result["ok"], true, "guard {fail_at}: {result}");
         assert_eq!(fs::read(sandbox.home.join("nested/first")).unwrap(), b"one");
         assert_eq!(fs::read(sandbox.home.join("second")).unwrap(), b"two");
+
         let result = sandbox.rollback(&plan, true);
         assert_eq!(result["ok"], true, "guard {fail_at}: {result}");
         assert!(!sandbox.home.join("nested/first").exists());
@@ -420,10 +458,12 @@ fn every_rollback_guard_failure_is_resumable() {
         .unwrap()["ok"],
         true
     );
+
     for fail_at in 1..=calls.get() {
         let sandbox = Sandbox::new();
         let plan = sandbox.plan(vec![sandbox.payload("nested/file", b"one")]);
         assert_eq!(sandbox.apply(&plan)["ok"], true);
+
         let current = Cell::new(0);
         let result = worker::rollback(&sandbox.home, &plan.id, true, &|| {
             current.set(current.get() + 1);
@@ -437,6 +477,7 @@ fn every_rollback_guard_failure_is_resumable() {
             result.is_err() || result.unwrap()["ok"] == false,
             "guard {fail_at}"
         );
+
         let result = sandbox.rollback(&plan, true);
         assert_eq!(result["ok"], true, "guard {fail_at}: {result}");
         assert!(!sandbox.home.join("nested").exists());
@@ -450,6 +491,7 @@ fn lost_install_acknowledgement_uses_the_prepared_inode_not_just_its_hash() {
     assert_eq!(sandbox.apply(&plan)["ok"], true);
     let path = sandbox.home.join("file");
     let installed_inode = fs::metadata(&path).unwrap().ino();
+
     let store = state::Store::open(&sandbox.home, true).unwrap();
     let mut transaction = store.transaction(&plan.id).unwrap().unwrap();
     // This is the on-disk boundary after rename and before ledger acknowledgement.
@@ -459,8 +501,10 @@ fn lost_install_acknowledgement_uses_the_prepared_inode_not_just_its_hash() {
     store.save_ledger(&Ledger::default()).unwrap();
     store.activate(&plan.id).unwrap();
     drop(store);
+
     assert_eq!(sandbox.apply(&plan)["ok"], true);
     assert_eq!(fs::metadata(&path).unwrap().ino(), installed_inode);
+
     // An uncooperative replacement with identical bytes is still a new inode.
     atomic_write(&path, b"one", 0o600).unwrap();
     assert_eq!(sandbox.rollback(&plan, true)["ok"], false);
@@ -472,6 +516,7 @@ fn rollback_of_an_unacknowledged_prepared_file_leaves_no_owned_candidate() {
     let sandbox = Sandbox::new();
     let plan = sandbox.plan(vec![sandbox.payload("file", b"one")]);
     assert_eq!(sandbox.apply(&plan)["ok"], true);
+
     let candidate = sandbox.home.join(format!(".atlas-{}-0-install", plan.id));
     fs::rename(sandbox.home.join("file"), &candidate).unwrap();
     let store = state::Store::open(&sandbox.home, true).unwrap();
@@ -482,6 +527,7 @@ fn rollback_of_an_unacknowledged_prepared_file_leaves_no_owned_candidate() {
     store.save_ledger(&Ledger::default()).unwrap();
     store.activate(&plan.id).unwrap();
     drop(store);
+
     let result = sandbox.rollback(&plan, true);
     assert_eq!(result["ok"], true, "{result}");
     assert!(!candidate.exists());
@@ -493,6 +539,7 @@ fn exact_worker_identity_includes_capture_parent_and_display_geometry() {
     let proof = json!({"ok": true, "uid": 502, "parentPID": 321, "securitySessionID": 456,
         "displayID": 50, "width": 1440, "height": 900, "onConsole": false, "hasGraphicAccess": true});
     let expected = Identity::from_proof(&proof).unwrap();
+
     for (key, value) in [
         ("uid", json!(503)),
         ("parentPID", json!(322)),
@@ -505,6 +552,7 @@ fn exact_worker_identity_includes_capture_parent_and_display_geometry() {
         changed[key] = value;
         assert_ne!(Identity::from_proof(&changed).unwrap(), expected, "{key}");
     }
+
     for (key, value) in [
         ("parentPID", json!(0)),
         ("onConsole", json!(true)),
@@ -524,14 +572,17 @@ fn rollback_checks_every_backup_before_restoring_any_selected_file() {
         sandbox.payload("second", b"old two"),
     ]);
     assert_eq!(sandbox.apply(&first)["ok"], true);
+
     let second = sandbox.plan(vec![
         sandbox.payload("first", b"new one"),
         sandbox.payload("second", b"new two"),
     ]);
     assert_eq!(sandbox.apply(&second)["ok"], true);
+
     let store = state::Store::open(&sandbox.home, true).unwrap();
     fs::write(store.blob(&second.id, 0, true), b"corrupt").unwrap();
     drop(store);
+
     assert_eq!(sandbox.rollback(&second, false)["ok"], false);
     assert_eq!(sandbox.rollback(&second, true)["ok"], false);
     assert_eq!(fs::read(sandbox.home.join("first")).unwrap(), b"new one");
@@ -543,10 +594,13 @@ fn nested_rollbacks_restore_predecessor_provenance_with_the_new_inode() {
     let sandbox = Sandbox::new();
     let first = sandbox.plan(vec![sandbox.payload("file", b"first")]);
     assert_eq!(sandbox.apply(&first)["ok"], true);
+
     let second = sandbox.plan(vec![sandbox.payload("file", b"second")]);
     assert_eq!(sandbox.apply(&second)["ok"], true);
+
     assert_eq!(sandbox.rollback(&second, true)["ok"], true);
     assert_eq!(fs::read(sandbox.home.join("file")).unwrap(), b"first");
+
     assert_eq!(sandbox.rollback(&first, true)["ok"], true);
     assert!(!sandbox.home.join("file").exists());
 }
@@ -566,6 +620,7 @@ fn aliases_of_existing_managed_targets_are_rejected() {
         )
         .is_err()
     );
+
     for path in [".config", ".config/atlas"] {
         assert!(unique_targets([Path::new(path)].into_iter()).is_err());
     }
@@ -577,6 +632,7 @@ fn an_existing_acl_is_refused_without_removing_its_entries() {
     let sandbox = Sandbox::new();
     let path = sandbox.home.join("acl-file");
     atomic_write(&path, b"owned test data", 0o600).unwrap();
+
     assert!(
         std::process::Command::new("/bin/chmod")
             .args(["+a", "everyone allow read"])
@@ -602,10 +658,13 @@ fn selected_files_under_config_atlas_share_ancestors_with_private_state() {
         ),
         sandbox.payload(".config/atlas/proof/subfolder/input", b"selected"),
     ]);
+
     assert!(!sandbox.home.join(".config").exists());
+
     let result = sandbox.apply(&plan);
     assert_eq!(result["ok"], true, "{result}");
     assert_eq!(sandbox.apply(&plan)["ok"], true);
+
     let result = sandbox.rollback(&plan, true);
     assert_eq!(result["ok"], true, "{result}");
     assert!(!sandbox.home.join(".config/atlas/environment.json").exists());
@@ -621,8 +680,10 @@ fn shipped_manifest_and_profile_examples_parse_as_toml() {
         crate::config::parse_toml(&fs::read(&manifest).unwrap(), &manifest).unwrap();
     assert_eq!(parsed.files.len(), 2);
     assert!(parsed.files[0].executable);
+
     let profile = root.join("examples/profile.toml");
     profile::load(&profile).unwrap();
+
     let json = br#"{"files": []}"#;
     let refused = crate::config::parse_toml::<Manifest>(json, &manifest);
     assert!(refused.is_err_and(|error| error.code == "config"));
@@ -636,8 +697,10 @@ fn a_briefly_held_store_lock_is_waited_for_but_a_held_one_is_refused() {
         std::thread::sleep(std::time::Duration::from_millis(10));
         drop(first);
     });
+
     state::Store::open(&sandbox.home, true).expect("a lock released within the patience is taken");
     release.join().unwrap();
+
     let held = state::Store::open(&sandbox.home, true).unwrap();
     let started = std::time::Instant::now();
     let refused = state::Store::open(&sandbox.home, true).err().unwrap();
@@ -658,6 +721,7 @@ fn a_worker_refusal_is_told_from_the_command_output() {
             "events": [{"event": "output", "data": STANDARD.encode(text)}],
         })
     };
+
     let refusal = r#"{"ok":false,"code":"environment","error":"No helper environment profile is installed","uncertain":false,"refusal":"request-ab12"}"#;
     let error = refused(reply(WORKER_REFUSED, refusal), "request-ab12").unwrap_err();
     assert!(error.error.contains("No helper environment profile"));
@@ -665,10 +729,12 @@ fn a_worker_refusal_is_told_from_the_command_output() {
         refused(reply(1, refusal), "request-ab12").is_ok(),
         "exit 1 is the command's"
     );
+
     let lookalike = r#"{"ok":false,"error":"No helper environment profile is installed"}"#;
     assert!(refused(reply(WORKER_REFUSED, lookalike), "request-ab12").is_ok());
     assert!(refused(reply(WORKER_REFUSED, refusal), "request-other").is_ok());
     assert!(refused(reply(WORKER_REFUSED, "plain text"), "request-ab12").is_ok());
+
     // A missing profile keeps its own code across the process boundary, so
     // readiness can fall back to the helper's PATH on it.
     let missing = format!(
@@ -711,6 +777,7 @@ fn only_a_confirmed_finish_settles_a_plan() {
     let done = json!({"ok": true, "phase": "applied", "resumeRequired": false});
     assert!(settled(&Ok(done.clone()), "applied"));
     assert!(!settled(&Ok(done), "rolledBack"));
+
     for value in [
         json!({"ok": true, "phase": "applied", "resumeRequired": true}),
         json!({"ok": false, "phase": "applied", "resumeRequired": false}),
@@ -718,6 +785,7 @@ fn only_a_confirmed_finish_settles_a_plan() {
     ] {
         assert!(!settled(&Ok(value.clone()), "applied"), "{value}");
     }
+
     assert!(!settled(&Err(problem("lost")), "applied"));
 }
 
@@ -726,8 +794,10 @@ fn a_stage_keeps_requests_whose_outcome_is_unknown() {
     let sandbox = Sandbox::new();
     let stage = stage_in(&sandbox.root, &crate::control::token());
     assert!(!requests(&stage));
+
     fs::write(stage.join("controller.lock"), b"").unwrap();
     assert!(!requests(&stage), "a lock is not a request");
+
     fs::create_dir(stage.join("request-ab12")).unwrap();
     assert!(requests(&stage));
     assert!(!requests(&sandbox.root.join("missing")));
@@ -746,6 +816,7 @@ fn rollback_removes_its_own_folder_unless_a_request_is_unconfirmed() {
         Ok(json!({"ok": true, "phase": "rolledBack", "resumeRequired": false}));
     let stopped: Result<Value> =
         Ok(json!({"ok": false, "phase": "rollingBack", "resumeRequired": true}));
+
     for apply in [false, true] {
         assert!(rolled_back(&refused, apply, true, &stage), "apply {apply}");
         assert!(
@@ -753,10 +824,12 @@ fn rollback_removes_its_own_folder_unless_a_request_is_unconfirmed() {
             "apply {apply}"
         );
     }
+
     assert!(rolled_back(&Err(problem("refused")), true, true, &stage));
     assert!(rolled_back(&finished, true, false, &stage));
     assert!(!rolled_back(&finished, false, false, &stage));
     assert!(!rolled_back(&stopped, true, false, &stage));
+
     fs::create_dir(stage.join("request-ab12")).unwrap();
     assert!(!rolled_back(&refused, true, true, &stage));
     assert!(!rolled_back(
@@ -776,6 +849,7 @@ fn a_rollback_of_an_unknown_id_is_not_resumable() {
     let value = decode_reply(&reply, true, "request-ab12").unwrap();
     assert_eq!(value["ok"], false);
     assert!(value["resumeRequired"].is_null(), "{value}");
+
     for (exit, output) in [
         (WORKER_REFUSED, refusal(worker::MISSING, "request-other")),
         (
@@ -787,6 +861,7 @@ fn a_rollback_of_an_unknown_id_is_not_resumable() {
         let value = decode_reply(&worker_reply(exit, &output), true, "request-ab12").unwrap();
         assert_eq!(value["resumeRequired"], true, "{output}");
     }
+
     // A preview of an unknown ID is an answer, never a resume.
     let value = decode_reply(&reply, false, "request-ab12").unwrap();
     assert!(value["resumeRequired"].is_null());
@@ -802,9 +877,11 @@ fn results_name_a_retained_plan_only_when_one_exists() {
     assert_eq!(kept["retainedPlan"], json!(stage));
     assert!(kept["retainedRequest"].is_null());
     assert_eq!(kept["planId"], id.as_str());
+
     let error = retained(Err(problem("Stopped.")), &id, &stage).unwrap_err();
     let suffix = format!(" Frozen plan {id} retained at {}.", stage.display());
     assert!(error.error.ends_with(&suffix), "{}", error.error);
+
     // Only requests left: evidence, not a plan to apply.
     fs::remove_file(stage.join("plan.json")).unwrap();
     fs::create_dir(stage.join("request-ab12")).unwrap();
@@ -814,6 +891,7 @@ fn results_name_a_retained_plan_only_when_one_exists() {
     let error = retained(Err(problem("Stopped.")), &id, &stage).unwrap_err();
     assert!(!error.error.contains("Frozen plan"), "{}", error.error);
     assert!(error.error.contains("Retained request"), "{}", error.error);
+
     fs::remove_dir_all(&stage).unwrap();
     let gone = retained(Ok(json!({"ok": true})), &id, &stage).unwrap();
     assert!(gone["retainedPlan"].is_null() && gone["retainedRequest"].is_null());
@@ -832,11 +910,13 @@ fn a_preview_without_a_plan_discards_its_copies() {
     let refused = previewed(Ok(json!({"ok": false, "plan": null})), &id, &stage).unwrap();
     assert!(!stage.exists());
     assert!(refused["retainedPlan"].is_null());
+
     let stage = stage_in(&sandbox.root, &id);
     fs::write(stage.join("payload-0"), b"secret").unwrap();
     let error = previewed(Err(problem("Unreadable source.")), &id, &stage).unwrap_err();
     assert!(!stage.exists());
     assert_eq!(error.error, "Unreadable source.");
+
     let stage = stage_in(&sandbox.root, &id);
     write_plan(&stage, &id, 501);
     let planned = previewed(Ok(json!({"ok": true})), &id, &stage).unwrap();
@@ -855,12 +935,14 @@ fn leftovers_are_only_atlas_folders_with_valid_ids() {
     fs::create_dir(sandbox.root.join(format!("other-{id}"))).unwrap();
     let file = crate::control::token();
     fs::write(sandbox.root.join(format!("environment-plan-{file}")), b"").unwrap();
+
     let linked = crate::control::token();
     symlink(
         &plan,
         sandbox.root.join(format!("environment-plan-{linked}")),
     )
     .unwrap();
+
     let mut found = leftovers(&sandbox.root);
     found.sort();
     let mut expected = vec![plan, run];
@@ -874,8 +956,10 @@ fn only_old_readable_plans_without_unknown_requests_are_pruned() {
     let sandbox = Sandbox::new();
     let id = crate::control::token();
     let stage = stage_in(&sandbox.root, &id);
+
     fs::create_dir(sandbox.root.join(format!("environment-run-{id}"))).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(20));
+
     assert_eq!(
         stale(&sandbox.root, std::time::Duration::ZERO),
         vec![(id.clone(), stage.clone())],
@@ -883,10 +967,12 @@ fn only_old_readable_plans_without_unknown_requests_are_pruned() {
     );
     assert!(stale(&sandbox.root, UNUSED).is_empty());
     assert!(!prunable(&stage, &id, 501), "no plan to ask about");
+
     write_plan(&stage, &id, 501);
     assert!(prunable(&stage, &id, 501));
     assert!(!prunable(&stage, &id, 502), "another helper's plan");
     assert!(!prunable(&stage, &crate::control::token(), 501));
+
     fs::create_dir(stage.join("request-ab12")).unwrap();
     assert!(!prunable(&stage, &id, 501));
 }
@@ -902,6 +988,7 @@ async fn a_request_that_was_never_sent_leaves_nothing() {
         crate::config::Config::parse(text.as_bytes(), &sandbox.root.join("u.toml")).unwrap();
     let mut client = Client::new(config).unwrap();
     client.controller = crate::control::Controller::at(60001, &sandbox.root.join("state"));
+
     let stage = stage_in(&sandbox.root, &crate::control::token());
     let request = Request::Rollback {
         id: crate::control::token(),
@@ -909,6 +996,7 @@ async fn a_request_that_was_never_sent_leaves_nothing() {
     };
     assert!(dispatch(&client, "nobody", &stage, request).await.is_err());
     assert_eq!(fs::read_dir(&stage).unwrap().count(), 0);
+
     // A folder the helper cannot be given goes too.
     let refused = sandbox.root.join("refused");
     assert!(create_stage(&refused, "atlas-no-such-user-zz").is_err());
@@ -931,7 +1019,9 @@ fn operations_keep_their_stored_names() {
             operation
         );
     }
+
     assert!(serde_json::from_value::<Operation>(json!("Create")).is_err());
+
     let sandbox = Sandbox::new();
     let plan = sandbox.plan(vec![sandbox.payload("file", b"data")]);
     let stored = serde_json::to_value(&plan).unwrap();
@@ -945,6 +1035,7 @@ fn an_inherited_folder_acl_is_cleared() {
     let sandbox = Sandbox::new();
     let folder = sandbox.root.join("stage");
     fs::create_dir(&folder).unwrap();
+
     assert!(
         std::process::Command::new("/bin/chmod")
             .args(["+a", "everyone allow read"])

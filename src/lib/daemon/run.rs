@@ -35,25 +35,34 @@ use tokio::{
 
 /// Output forwarded per run; the rest is drained and reported as truncated.
 const MAX_OUTPUT: usize = 16 * 1024 * 1024;
+
 /// How long a timed-out group has between SIGTERM and SIGKILL.
 const GRACE: Duration = Duration::from_secs(2);
+
 /// How long output is still collected after the command itself exits, when
 /// something it left running keeps the pipe open.
 const LINGER: Duration = Duration::from_millis(200);
+
 /// Events buffered for a slow client.
 pub const EVENTS: usize = 256;
+
 /// Output events per run, leaving room in what the client accepts per reply
 /// for the `started` event.
 const MAX_EVENTS: usize = 1000;
 const _: () = assert!(MAX_EVENTS < crate::transport::MAX_REPLY_EVENTS);
+
 /// Pending output sent at once, without waiting for more.
 const FLUSH: usize = 64 * 1024;
+
 /// Output held back for a slow client before it is dropped.
 const HELD: usize = 1024 * 1024;
+
 /// How long the last output waits for a slow client.
 const FINISH: Duration = Duration::from_secs(2);
+
 /// The daemon's own PATH, for a daemon without a home.
 const PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
+
 /// The locale a command gets when the daemon has none: a daemon's child
 /// inherits launchd's bare environment, in which tools print every
 /// non-ASCII character as a question mark.
@@ -75,10 +84,12 @@ fn resolve(program: &str, path: Option<&str>) -> Option<PathBuf> {
         std::fs::metadata(candidate)
             .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
     };
+
     if program.contains('/') {
         let candidate = PathBuf::from(program);
         return executable(&candidate).then_some(candidate);
     }
+
     path.unwrap_or(PATH)
         .split(':')
         .filter(|directory| !directory.is_empty())
@@ -108,9 +119,11 @@ fn ended(
         "timedOut": timed_out,
         "durationMs": u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
     });
+
     if truncated {
         reply["outputTruncated"] = json!(true);
     }
+
     // Something the command started still held its output when collection
     // stopped, or the pipe failed: the end of the output may be missing.
     if unfinished {
@@ -132,11 +145,14 @@ async fn end_group(group: Pid) {
     if !signal_group(group, Signal::SIGTERM) {
         return;
     }
+
     let deadline = Instant::now() + GRACE;
+
     while signal_group(group, None) {
         if Instant::now() >= deadline {
             signal_group(group, Signal::SIGKILL);
         }
+
         tokio::time::sleep(Duration::from_millis(20)).await;
         if Instant::now() >= deadline + GRACE {
             break;
@@ -177,6 +193,7 @@ impl Output {
         let kept = bytes.len().min(room);
         self.truncated |= kept < bytes.len();
         self.pending.extend_from_slice(&bytes[..kept]);
+
         if self.due.is_none() && !self.pending.is_empty() {
             // Early output streams promptly; a long trickle is batched.
             let wait = if self.sent < MAX_EVENTS / 2 {
@@ -192,19 +209,30 @@ impl Output {
         self.pending.len() >= FLUSH
     }
 
+    /// The pending output as one event; None when nothing is pending, or
+    /// when the event budget is spent and the output is dropped as truncated.
+    fn event(&mut self) -> Option<Value> {
+        if self.pending.is_empty() {
+            return None;
+        }
+
+        if self.sent >= MAX_EVENTS {
+            self.truncated = true;
+            self.pending.clear();
+            return None;
+        }
+
+        Some(json!({"event": "output", "data": STANDARD.encode(&self.pending)}))
+    }
+
     /// Send what is pending as one event. A slow client leaves it pending
     /// until it grows past what is held back, then it is dropped.
     fn flush(&mut self, events: &Sender<Value>) -> Result<(), Gone> {
         self.due = None;
-        if self.pending.is_empty() {
+        let Some(event) = self.event() else {
             return Ok(());
-        }
-        if self.sent >= MAX_EVENTS {
-            self.truncated = true;
-            self.pending.clear();
-            return Ok(());
-        }
-        let event = json!({"event": "output", "data": STANDARD.encode(&self.pending)});
+        };
+
         match events.try_send(event) {
             Ok(()) => {
                 self.forwarded += self.pending.len();
@@ -220,6 +248,7 @@ impl Output {
             }
             Err(TrySendError::Closed(_)) => return Err(Gone),
         }
+
         Ok(())
     }
 
@@ -227,15 +256,10 @@ impl Output {
     /// client; whatever cannot be delivered is reported as truncated.
     async fn finish(&mut self, events: &Sender<Value>) -> Result<(), Gone> {
         self.due = None;
-        if self.pending.is_empty() {
+        let Some(event) = self.event() else {
             return Ok(());
-        }
-        if self.sent >= MAX_EVENTS {
-            self.truncated = true;
-            self.pending.clear();
-            return Ok(());
-        }
-        let event = json!({"event": "output", "data": STANDARD.encode(&self.pending)});
+        };
+
         match events.send_timeout(event, FINISH).await {
             Ok(()) => {
                 self.forwarded += self.pending.len();
@@ -244,6 +268,7 @@ impl Output {
             Err(SendTimeoutError::Timeout(_)) => self.truncated = true,
             Err(SendTimeoutError::Closed(_)) => return Err(Gone),
         }
+
         self.pending.clear();
         Ok(())
     }
@@ -262,6 +287,7 @@ pub async fn run(
     let Some(name) = argv.first() else {
         return failure("spawn-failed", "No command to run");
     };
+
     // The command runs in the helper's home, as a shell there would.
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -277,12 +303,15 @@ pub async fn run(
         } else {
             "no such program"
         };
+
         return failure("spawn-failed", format!("{name}: {reason}"));
     };
+
     let (reader, writer) = match std::io::pipe() {
         Ok(pair) => pair,
         Err(error) => return failure("spawn-failed", error.to_string()),
     };
+
     let spawned = (|| {
         let errors = writer.try_clone()?;
         let mut command = Command::new(&program);
@@ -295,27 +324,34 @@ pub async fn run(
             .stderr(Stdio::from(OwnedFd::from(errors)))
             .process_group(0)
             .kill_on_drop(false);
+
         if std::env::var_os("LANG").is_none_or(|lang| lang.is_empty()) {
             command.env("LANG", LANG);
         }
+
         if let Some(home) = &home {
             command.current_dir(home);
         }
+
         command.spawn()
     })();
     let mut child = match spawned {
         Ok(child) => child,
         Err(error) => return failure("spawn-failed", format!("{}: {error}", argv[0])),
     };
+
     let started = Instant::now();
+
     let Some(group) = child.id().and_then(|pid| i32::try_from(pid).ok()) else {
         return failure(
             "spawn-failed",
             "The command exited before it could be observed",
         );
     };
+
     let pid = group;
     let group = Pid::from_raw(group);
+
     // Checks that this is a pipe and makes it non-blocking.
     let mut pipe = match pipe::Receiver::from_owned_fd(OwnedFd::from(reader)) {
         Ok(receiver) => receiver,
@@ -325,11 +361,13 @@ pub async fn run(
             return failure("spawn-failed", error.to_string());
         }
     };
+
     let mut abandoned = events
         .try_send(json!({"event": "started", "pid": pid}))
         .is_err();
     let deadline = tokio::time::sleep(timeout);
     tokio::pin!(deadline, cancel);
+
     let mut buffer = vec![0; FLUSH];
     let mut output = Output::new();
     let mut status = None;
@@ -339,11 +377,13 @@ pub async fn run(
     let mut open = true;
     let mut unfinished = false;
     let mut linger = None;
+
     if abandoned {
         signal_group(group, Signal::SIGTERM);
         stopping = true;
         deadline.as_mut().reset(tokio::time::Instant::now() + GRACE);
     }
+
     while status.is_none() || open {
         tokio::select! {
             read = pipe.read(&mut buffer), if open => match read {
@@ -378,6 +418,7 @@ pub async fn run(
                     stopping = true;
                     timed_out = true;
                 }
+
                 deadline.as_mut().reset(tokio::time::Instant::now() + GRACE);
             }
             () = &mut cancel, if !abandoned => abandoned = true,
@@ -387,22 +428,23 @@ pub async fn run(
                 unfinished = true;
             }
         }
+
         if abandoned && !stopping && status.is_none() {
             signal_group(group, Signal::SIGTERM);
             stopping = true;
             deadline.as_mut().reset(tokio::time::Instant::now() + GRACE);
         }
     }
+
     // A command that already finished keeps whatever it left running.
     if stopping {
         end_group(group).await;
     }
-    if abandoned {
+
+    if abandoned || output.finish(&events).await.is_err() {
         return failure("transport", "The client went away");
     }
-    if output.finish(&events).await.is_err() {
-        return failure("transport", "The client went away");
-    }
+
     match status {
         Some(Ok(status)) => ended(status, timed_out, started, output.truncated, unfinished),
         _ => failure("wait-failed", "The command's exit status could not be read"),
@@ -439,6 +481,7 @@ mod tests {
         let mut lines = output.lines();
         let home = std::fs::canonicalize(std::env::var("HOME").unwrap()).unwrap();
         assert_eq!(lines.next(), home.to_str());
+
         let lang = std::env::var("LANG")
             .ok()
             .filter(|lang| !lang.is_empty())
@@ -462,6 +505,7 @@ mod tests {
             }
             events
         });
+
         let reply = run(
             &argv,
             Duration::from_millis(timeout_ms),
@@ -469,6 +513,7 @@ mod tests {
             std::future::pending(),
         )
         .await;
+
         (collected.await.unwrap(), reply)
     }
 
@@ -478,6 +523,7 @@ mod tests {
             .filter(|event| event["event"] == "output")
             .flat_map(|event| STANDARD.decode(event["data"].as_str().unwrap()).unwrap())
             .collect();
+
         String::from_utf8(bytes).unwrap()
     }
 
@@ -496,6 +542,7 @@ mod tests {
         assert_eq!(reply["exitCode"], 3);
         assert_eq!(reply["signal"], Value::Null);
         assert_eq!(reply["timedOut"], false);
+
         let (events, reply) = execute(&["echo", "on", "path"], 5000).await;
         assert_eq!(
             (output(&events).as_str(), &reply["exitCode"]),
@@ -507,12 +554,15 @@ mod tests {
     async fn a_timeout_ends_the_whole_group_with_sigterm() {
         let started = Instant::now();
         let (events, reply) = execute(&["/bin/sh", "-c", "sleep 30 & sleep 30"], 300).await;
+
         assert!(started.elapsed() < Duration::from_secs(5));
         assert_eq!(reply["timedOut"], true);
         assert_eq!(reply["exitCode"], Value::Null);
         assert_eq!(reply["signal"], "SIGTERM");
+
         let group = events[0]["pid"].as_i64().unwrap();
         assert!(!group_alive(group), "no member of the group survives");
+
         let (_, reply) = execute(&["/bin/sh", "-c", "kill -TERM $$"], 5000).await;
         assert_eq!(
             (&reply["signal"], &reply["timedOut"]),
@@ -537,16 +587,19 @@ mod tests {
     async fn something_left_running_does_not_hold_the_reply() {
         let started = Instant::now();
         let (events, reply) = execute(&["/bin/sh", "-c", "sleep 5 & echo $!"], 5000).await;
+
         assert!(
             started.elapsed() < Duration::from_secs(2),
             "returned after the shell exited"
         );
         assert_eq!(reply["exitCode"], 0);
+
         let child = Pid::from_raw(output(&events).trim().parse().unwrap());
         assert!(
             kill(child, None).is_ok(),
             "a background process outlives the run"
         );
+
         kill(child, Signal::SIGKILL).unwrap();
     }
 
@@ -563,13 +616,16 @@ mod tests {
             std::future::pending(),
         )
         .await;
+
         assert!(started.elapsed() < Duration::from_secs(5));
         assert_eq!(
             (&reply["timedOut"], &reply["outputTruncated"]),
             (&json!(true), &json!(true))
         );
+
         let (sender, receiver) = mpsc::channel(1);
         drop(receiver);
+
         let gone = run(
             &argv,
             Duration::from_secs(30),
@@ -577,6 +633,7 @@ mod tests {
             std::future::pending(),
         )
         .await;
+
         assert_eq!(
             gone["code"], "transport",
             "a departed client ends the command"
@@ -595,8 +652,10 @@ mod tests {
         let started = Instant::now();
         let cancel = tokio::time::sleep(Duration::from_millis(300));
         let reply = run(&argv, Duration::from_secs(60), sender, cancel).await;
+
         assert!(started.elapsed() < Duration::from_secs(8));
         assert_eq!(reply["code"], "transport");
+
         let group = receiver.recv().await.unwrap()["pid"].as_i64().unwrap();
         assert!(!group_alive(group), "nothing the command started survives");
     }
@@ -620,6 +679,7 @@ mod tests {
             }
             events
         });
+
         let reply = run(
             &argv,
             Duration::from_secs(10),
@@ -627,9 +687,11 @@ mod tests {
             std::future::pending(),
         )
         .await;
+
         let events = slow.await.unwrap();
         assert_eq!(output(&events), "onetwo");
         assert_eq!(reply.get("outputTruncated"), None);
+
         let (sender, _never) = mpsc::channel(1);
         let reply = run(
             &argv,
@@ -668,11 +730,13 @@ mod tests {
             reply,
             failure("spawn-failed", "/nonexistent/binary: no such program")
         );
+
         let (_, folder) = execute(&["/tmp"], 3000).await;
         assert_eq!(
             folder,
             failure("spawn-failed", "/tmp: is a folder, not a program")
         );
+
         let plain = tempfile::NamedTempFile::new().unwrap();
         let plain_path = plain.path().to_string_lossy().into_owned();
         let (_, not_executable) = execute(&[&plain_path], 3000).await;
@@ -683,14 +747,18 @@ mod tests {
                 format!("{plain_path}: is not executable (chmod +x it)")
             )
         );
+
         let (_, reply) = execute(&["no-such-command-atlas"], 3000).await;
         assert_eq!(reply["code"], "spawn-failed");
+
         let (events, reply) = execute(&[], 3000).await;
         assert!(events.is_empty());
         assert_eq!(reply, failure("spawn-failed", "No command to run"));
+
         let (events, reply) =
             execute(&["/bin/sh", "-c", "head -c 17000000 /dev/zero"], 20000).await;
         assert_eq!(reply["outputTruncated"], true);
+
         let forwarded: usize = events
             .iter()
             .filter(|event| event["event"] == "output")

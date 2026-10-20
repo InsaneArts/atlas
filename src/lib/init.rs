@@ -57,6 +57,7 @@ pub(crate) fn forward(
             }
         }
     });
+
     receiver
 }
 
@@ -68,11 +69,13 @@ fn quietly_attended(program: &str, args: &[&str], why: &str) -> Result<()> {
         .args(args)
         .stderr(std::process::Stdio::piped())
         .spawn()?;
+
     let stream = child
         .stderr
         .take()
         .ok_or_else(|| problem("The command has no error output"))?;
     let receiver = forward(stream);
+
     let log_line = |bytes: &[u8]| {
         // "2026-10-11 14:28:19.767 sysadminctl[…]": a date, then a time.
         bytes.len() > 20
@@ -81,13 +84,16 @@ fn quietly_attended(program: &str, args: &[&str], why: &str) -> Result<()> {
             && bytes[10] == b' '
             && bytes[13] == b':'
     };
+
     let mut dropped = Vec::new();
     let mut pending = Vec::new();
     let mut terminal = std::io::stderr();
+
     loop {
         match receiver.recv_timeout(Duration::from_millis(250)) {
             Ok(bytes) => {
                 pending.extend(bytes);
+
                 while let Some(end) = pending.iter().position(|&byte| byte == b'\n') {
                     let line: Vec<u8> = pending.drain(..=end).collect();
                     if log_line(&line) {
@@ -108,12 +114,15 @@ fn quietly_attended(program: &str, args: &[&str], why: &str) -> Result<()> {
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
+
     let status = child.wait()?;
     if status.success() {
         return Ok(());
     }
+
     let _ = terminal.write_all(&dropped);
     let _ = terminal.write_all(&pending);
+
     Err(problem(why.to_owned()))
 }
 
@@ -133,6 +142,7 @@ pub(crate) fn app_executable() -> Result<PathBuf> {
             "Atlas.app must be in /Applications so the helper account can run it",
         ));
     }
+
     Ok(executable)
 }
 
@@ -144,9 +154,11 @@ pub(crate) fn link_command(executable: &Path) -> Result<Value> {
     if fs::canonicalize(&link).ok().as_deref() == Some(executable) {
         return Ok(json!({"linked": link, "changed": false}));
     }
+
     let temporary = bin.join(format!(".atlas.{}", crate::control::token()));
     std::os::unix::fs::symlink(executable, &temporary)?;
     fs::rename(&temporary, &link)?;
+
     Ok(json!({"linked": link, "changed": true}))
 }
 
@@ -155,6 +167,7 @@ pub(crate) fn valid_account_name(name: &str) -> std::result::Result<(), String> 
     if name.is_empty() || name.len() > 31 {
         return Err("Use 1 to 31 characters.".into());
     }
+
     if !name
         .bytes()
         .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
@@ -162,6 +175,7 @@ pub(crate) fn valid_account_name(name: &str) -> std::result::Result<(), String> 
     {
         return Err("Use letters, digits, '.', '_' and '-'.".into());
     }
+
     Ok(())
 }
 
@@ -177,16 +191,19 @@ fn choose_helper() -> Result<setup::Account> {
         })
         .collect();
     items.push("Create a new account…".to_owned());
+
     let choice = if candidates.is_empty() {
         say("There is no other standard account yet, so Atlas will make one.");
         items.len() - 1
     } else {
         prompt::select("Which account should be the helper?", &items, 0, "")?
     };
+
     if let Some(account) = candidates.get(choice) {
         return setup::account_named(&account.name)?
             .ok_or_else(|| problem("That account disappeared"));
     }
+
     let name = prompt::input(
         "Short name for the new account",
         "atlas",
@@ -201,6 +218,7 @@ fn choose_helper() -> Result<setup::Account> {
         },
         "",
     )?;
+
     if !prompt::confirm(
         &format!("Create a standard account named {name}?"),
         true,
@@ -210,6 +228,7 @@ fn choose_helper() -> Result<setup::Account> {
             "No account was created; run atlas init again to choose",
         ));
     }
+
     say("macOS asks for your administrator password, then a password for the new account.");
     // sysadminctl logs every step to the terminal; only its questions show.
     let mut args = vec![SYSADMINCTL.to_owned()];
@@ -220,6 +239,7 @@ fn choose_helper() -> Result<setup::Account> {
         &args,
         "The helper account could not be created",
     )?;
+
     setup::account_named(&name)?.ok_or_else(|| problem("The new account was not found"))
 }
 
@@ -245,9 +265,11 @@ pub(crate) fn add_user_args(name: &str, full_name: &str, uid: u32) -> Vec<String
     ]
     .map(str::to_owned)
     .to_vec();
+
     if let Some(picture) = helper_picture() {
         args.extend(["-picture".to_owned(), picture]);
     }
+
     args
 }
 
@@ -280,8 +302,10 @@ pub(crate) fn free_uid() -> Result<u32> {
             .filter_map(|word| word.parse().ok())
             .collect())
     };
+
     let accounts = taken("/usr/bin/dscl", &[".", "-list", "/Users", "UniqueID"])?;
     let running = taken("/bin/ps", &["-axo", "uid="])?;
+
     (setup::FIRST_USER_UID..600)
         .find(|uid| !accounts.contains(uid) && !running.contains(uid))
         .ok_or_else(|| problem("No free user ID for the helper account"))
@@ -293,6 +317,7 @@ pub(crate) fn proposed(helper: &setup::Account) -> Result<Config> {
         uid: helper.uid,
         home: helper.home.clone(),
     };
+
     Ok(Config {
         helper_uid: helper.uid,
         socket_path: layout.socket(),
@@ -311,6 +336,7 @@ pub(crate) fn write_config(path: &Path, config: &Config) -> Result<()> {
         .recursive(true)
         .mode(0o700)
         .create(parent)?;
+
     let toml = config.to_toml()?;
     config::write_beside(
         path,
@@ -332,6 +358,7 @@ pub(crate) fn replace_config(path: &Path, previous: &Config, config: &Config) ->
             text::tilde(path)
         )));
     }
+
     let toml = config.to_toml()?;
     config::write_beside(
         path,
@@ -370,6 +397,7 @@ fn as_helper(executable: &Path, helper: &setup::Account, request: &Request) -> R
             reply["error"].as_str().unwrap_or("no reply")
         )));
     }
+
     Ok(reply)
 }
 
@@ -401,6 +429,7 @@ pub(crate) fn install_job(
             missing_ok: false,
         })?;
     }
+
     run(&Request::Install { agent }).inspect_err(|_| {
         // The earlier job comes back when the new one cannot go in.
         if let Some(sha256) = retired {
@@ -425,6 +454,7 @@ async fn restart_daemon(client: &Client, config: &Config) -> Result<()> {
         timeout: Duration::from_secs(10),
         peer_uid: config.helper_uid,
     };
+
     let pending = client.controller.quarantine()?;
     let reply = transport.call(&json!({"op": "restart"})).await?;
     if reply["ok"] != true {
@@ -433,13 +463,17 @@ async fn restart_daemon(client: &Client, config: &Config) -> Result<()> {
         if !uncertain {
             client.controller.clear_if(&pending)?;
         }
+
         let error = problem(format!(
             "The helper did not restart: {}",
             reply["error"].as_str().unwrap_or("no reason given")
         ));
+
         return Err(if uncertain { error.uncertain() } else { error });
     }
+
     let deadline = Instant::now() + Duration::from_secs(30);
+
     loop {
         tokio::time::sleep(Duration::from_millis(500)).await;
         let pid = client.status().await["daemon"]["pid"].clone();
@@ -447,6 +481,7 @@ async fn restart_daemon(client: &Client, config: &Config) -> Result<()> {
             client.controller.clear_if(&pending)?;
             return Ok(());
         }
+
         if Instant::now() >= deadline {
             // The restart stays pending: its outcome is unknown.
             return Err(problem(
@@ -460,15 +495,18 @@ async fn restart_daemon(client: &Client, config: &Config) -> Result<()> {
 /// Poll `ready` every few seconds until it holds or patience runs out.
 async fn wait_for<T>(what: &str, mut ready: impl AsyncFnMut() -> Option<T>) -> Result<T> {
     let deadline = Instant::now() + PATIENCE;
+
     loop {
         if let Some(value) = ready().await {
             return Ok(value);
         }
+
         if Instant::now() >= deadline {
             return Err(problem(format!(
                 "Gave up waiting for {what}; run atlas init again"
             )));
         }
+
         tokio::time::sleep(Duration::from_secs(3)).await;
     }
 }
@@ -507,6 +545,7 @@ fn finish(done_steps: &mut Vec<Value>, settings: &Path) -> Result<()> {
             }
         }
     }
+
     let agents = crate::agents::status();
     let found: Vec<crate::agents::Agent> = agents["agents"]
         .as_array()
@@ -545,8 +584,10 @@ fn finish(done_steps: &mut Vec<Value>, settings: &Path) -> Result<()> {
                 "not every agent connected; run atlas agents install later",
             );
         }
+
         done_steps.push(json!({"step": "agents", "result": connected}));
     }
+
     Ok(())
 }
 
@@ -578,6 +619,7 @@ fn offer_lock(name: &str) -> Result<()> {
             "  To switch: Apple menu › Lock Screen, then Switch User and choose {name}."
         ));
     }
+
     Ok(())
 }
 
@@ -598,7 +640,9 @@ pub async fn run(config_path: &Path) -> Result<Value> {
     if !ui::interactive() {
         return Err(problem("init is a guided setup; run it in a terminal"));
     }
+
     let mut done_steps = Vec::new();
+
     say(&format!(
         "{}\n{}",
         style::bold("Atlas setup"),
@@ -614,6 +658,7 @@ pub async fn run(config_path: &Path) -> Result<Value> {
     // Whether an earlier run already finished setup (decides the first-run steps).
     let settled_before = setup::migrate::settled(helper.uid);
     let client = Client::new(config.clone())?;
+
     // Only a helper that answers in the background with Accessibility can
     // be recovered now; otherwise the steps below start it first.
     let status = client.status().await;
@@ -622,6 +667,7 @@ pub async fn run(config_path: &Path) -> Result<Value> {
     {
         recover(&client).await?;
     }
+
     // Ready now, set up before, and running this very build throughout.
     let status = client.status().await;
     if crate::capability::doctor(status.clone(), config.helper_uid)["ready"] == true
@@ -632,8 +678,10 @@ pub async fn run(config_path: &Path) -> Result<Value> {
         done_steps.push(json!({"step": "verified"}));
         finish(&mut done_steps, config_path)?;
         ready();
+
         return Ok(json!({"ok": true, "ready": true, "alreadySetUp": true, "steps": done_steps}));
     }
+
     done_steps.push(json!({"step": "config", "path": config_path, "helper": name}));
 
     if !daemon_answers(&client, config.helper_uid).await {
@@ -649,6 +697,7 @@ pub async fn run(config_path: &Path) -> Result<Value> {
 
     finish(&mut done_steps, config_path)?;
     ready();
+
     Ok(json!({"ok": true, "ready": true, "steps": done_steps, "config": config_path}))
 }
 
@@ -664,9 +713,11 @@ fn app_step(done_steps: &mut Vec<Value>) -> Result<PathBuf> {
             crate::update::INSTALL_COMMAND
         )));
     }
+
     let linked = link_command(&executable)?;
     done("Atlas.app", &text::tilde(crate::update::installed_app()?));
     done_steps.push(json!({"step": "app", "command": linked}));
+
     Ok(executable)
 }
 
@@ -689,6 +740,7 @@ fn helper_step(config_path: &Path) -> Result<(Config, setup::Account)> {
     } else {
         Config::load(config_path)?
     };
+
     // The account the settings name was deleted: choose (or create) another.
     if setup::account_with_uid(config.helper_uid)?.is_none() {
         say(&format!(
@@ -696,13 +748,16 @@ fn helper_step(config_path: &Path) -> Result<(Config, setup::Account)> {
             text::tilde(config_path),
             config.helper_uid
         ));
+
         let helper = choose_helper()?;
         let replacement = proposed(&helper)?;
         replace_config(config_path, &config, &replacement)?;
         config = replacement;
     }
+
     let helper = setup::account_with_uid(config.helper_uid)?
         .ok_or_else(|| problem("The helper account was not created"))?;
+
     // Another account now has the user ID (with its own home): every path
     // in the settings follows the account that is there now.
     if !config.socket_path.starts_with(&helper.home) {
@@ -715,8 +770,9 @@ fn helper_step(config_path: &Path) -> Result<(Config, setup::Account)> {
         replace_config(config_path, &config, &current)?;
         config = current;
     }
-    let name = helper.name.clone();
-    match setup::administrator(&name) {
+
+    let name = &helper.name;
+    match setup::administrator(name) {
         Some(false) => {}
         Some(true) => {
             return Err(problem(format!(
@@ -730,6 +786,7 @@ fn helper_step(config_path: &Path) -> Result<(Config, setup::Account)> {
             )));
         }
     }
+
     // An older account with the same user ID was deleted while logged in:
     // its session still runs and would be mistaken for the helper's.
     if crate::session::leftover_session(helper.uid, &helper.name, &helper.home) {
@@ -738,13 +795,16 @@ fn helper_step(config_path: &Path) -> Result<(Config, setup::Account)> {
              mixes it up with {name}. Restart the Mac, then run atlas init again."
         )));
     }
+
     done(
         "Helper account",
         &format!("{name} · settings in {}", text::tilde(config_path)),
     );
+
     if setup::migrate::archive_foreign(helper.uid, &helper.home)? {
         say("  Set aside a setup record left by an earlier account with the same ID.");
     }
+
     Ok((config, helper))
 }
 
@@ -758,6 +818,7 @@ async fn recover(client: &Client) -> Result<()> {
         drop(spinner);
         done("Recovered an unfinished action", "");
     }
+
     Ok(())
 }
 
@@ -765,6 +826,19 @@ async fn recover(client: &Client) -> Result<()> {
 async fn daemon_answers(client: &Client, uid: u32) -> bool {
     let status = client.status().await;
     crate::session::require_hidden(&status, uid).is_ok() || status["daemon"]["pid"].is_number()
+}
+
+/// Whether the helper's daemon answers within 30 tries, `pause` apart.
+async fn daemon_answers_within(client: &Client, uid: u32, pause: Duration) -> bool {
+    for _ in 0..30 {
+        if daemon_answers(client, uid).await {
+            return true;
+        }
+
+        tokio::time::sleep(pause).await;
+    }
+
+    false
 }
 
 /// Bring up a helper daemon that does not answer: the person signs the
@@ -781,23 +855,29 @@ async fn start_helper(
     // Set up before: the helper's job is installed and starts by itself
     // once the helper signs in (after a restart, say). No password then.
     let installed = setup::migrate::settled(helper.uid);
+
     let mut sudo_ready = false;
     let admin = |sudo_ready: &mut bool| -> Result<()> {
         if *sudo_ready {
             return Ok(());
         }
+
         heading("Administrator rights");
         say("  macOS asks for your password once, to install the helper's background job.");
+
         attended(
             "/usr/bin/sudo",
             &["-v"],
             "Administrator rights were not granted",
         )?;
+
         keep_sudo_alive();
         done("Administrator rights", "");
         *sudo_ready = true;
+
         Ok(())
     };
+
     if !installed {
         admin(&mut sudo_ready)?;
     }
@@ -805,6 +885,7 @@ async fn start_helper(
     let logged_in = || crate::session::logged_in(helper.uid) == Some(true);
     if !logged_in() {
         heading(&format!("Log in to {name} once"));
+
         if installed {
             say(&format!(
                 "  {name} is logged out (after a restart or a log-out). Switch to {name}, log in,\n  \
@@ -817,29 +898,29 @@ async fn start_helper(
                      Then switch back here."
             ));
         }
+
         offer_lock(name)?;
+
         {
             let _spinner = Spinner::new(format!(
                 "Waiting for {name} to log in… (Ctrl-C to stop; run atlas init again later)"
             ));
             wait_for("the helper to log in", async || logged_in().then_some(())).await?;
         }
+
         done(&format!("{name} logged in"), "");
     }
 
     let mut started = false;
+
     if installed {
         let _spinner = Spinner::new("Waiting for the helper to start…");
-        for _ in 0..30 {
-            if daemon_answers(client, config.helper_uid).await {
-                started = true;
-                break;
-            }
-            tokio::time::sleep(Duration::from_secs(2)).await;
-        }
+        started = daemon_answers_within(client, config.helper_uid, Duration::from_secs(2)).await;
     }
+
     if !started {
         admin(&mut sudo_ready)?;
+
         // The rights may have lapsed during a long wait: ask again then.
         if !sudo(&["-v"]).is_ok_and(|output| output.status.success()) {
             say("  Your administrator rights expired while Atlas waited.");
@@ -849,6 +930,7 @@ async fn start_helper(
                 "Administrator rights were not granted",
             )?;
         }
+
         let spinner = Spinner::new("Installing the helper's background job…");
         let controller = setup::account_with_uid(nix::unistd::getuid().as_raw())?
             .ok_or_else(|| problem("This account cannot be resolved"))?;
@@ -856,11 +938,13 @@ async fn start_helper(
             uid: helper.uid,
             home: helper.home.clone(),
         };
+
         let run = |request: &Request| as_helper(executable, helper, request);
         run(&Request::Prepare {
             uid: helper.uid,
             controller: controller.name.clone(),
         })?;
+
         let agent = Agent {
             label: LABEL.to_owned(),
             program: executable.to_path_buf(),
@@ -869,16 +953,12 @@ async fn start_helper(
             socket: layout.socket(),
         };
         install_job(run, helper.uid, agent, &layout.logs())?;
+
         spinner.set("Starting the helper…");
-        let mut answered = false;
-        for _ in 0..30 {
-            if daemon_answers(client, config.helper_uid).await {
-                answered = true;
-                break;
-            }
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        }
+        let answered =
+            daemon_answers_within(client, config.helper_uid, Duration::from_secs(1)).await;
         drop(spinner);
+
         if !answered {
             return Err(problem(format!(
                 "The helper's background job was installed but did not start. Its log is \
@@ -886,9 +966,11 @@ async fn start_helper(
                 layout.logs().join(format!("{LABEL}.log")).display()
             )));
         }
+
         done("Helper job", "installed and running");
         done_steps.push(json!({"step": "daemon", "label": LABEL}));
     }
+
     Ok(())
 }
 
@@ -903,6 +985,7 @@ async fn wait_until_back(client: &Client, uid: u32, status: &Value) -> Result<()
         })
         .await?;
     }
+
     Ok(())
 }
 
@@ -920,6 +1003,7 @@ async fn permissions_step(client: &Client, config: &Config, name: &str) -> Resul
         wait_until_back(client, config.helper_uid, &status).await?;
     } else {
         heading(&format!("Allow Atlas in {name}'s account"));
+
         say(&format!(
             "  Atlas needs two macOS permissions there:\n    \
              · Screen Recording, to see {name}'s screen\n    \
@@ -930,11 +1014,13 @@ async fn permissions_step(client: &Client, config: &Config, name: &str) -> Resul
              there too. If macOS offers to quit and reopen Atlas, either choice is fine.\n  \
              4. When Atlas says it is set up there, switch back here. Atlas carries on by itself."
         ));
+
         loop {
             // The person is here, in their own account: offer the way over.
             if client.status().await["session"]["onConsole"] != true {
                 offer_lock(name)?;
             }
+
             // Done once the helper has been on screen and is hidden again (or
             // everything is already granted).
             {
@@ -945,35 +1031,42 @@ async fn permissions_step(client: &Client, config: &Config, name: &str) -> Resul
                     if status["session"]["onConsole"] == true {
                         visited = true;
                     }
+
                     let mark = |key: &str| style::mark(status["permissions"][key].as_bool());
                     spinner.set(format!(
                         "Waiting for you to allow and come back…  Screen Recording {}  Accessibility {}",
                         mark("screenCapture"),
                         mark("accessibility")
                     ));
+
                     let back = crate::session::require_hidden(&status, config.helper_uid).is_ok();
                     (missing(&status).is_empty() || (visited && back)).then_some(())
                 })
                 .await?;
             }
+
             // macOS applies a new Screen Recording grant to new processes
             // only, so the helper restarts to pick up what the person allowed.
             if !missing(&client.status().await).is_empty() {
                 let _spinner = Spinner::new("Restarting the helper to pick up the permissions…");
                 restart_daemon(client, config).await?;
             }
+
             let lacking = missing(&client.status().await);
             if lacking.is_empty() {
                 break;
             }
+
             say(&format!(
                 "{} Atlas is still off. In {name}'s session, open System Settings ›\n  \
                  Privacy & Security and turn Atlas on in:",
                 style::fail()
             ));
+
             for pane in &lacking {
                 say(&format!("    · {pane}"));
             }
+
             if !prompt::confirm("Go back and turn it on now?", true, "")? {
                 return Err(problem(format!(
                     "Atlas is still off in {name}'s {}. Turn it on there, switch back \
@@ -982,17 +1075,20 @@ async fn permissions_step(client: &Client, config: &Config, name: &str) -> Resul
                 )));
             }
         }
+
         done("Permissions", "Screen Recording · Accessibility");
         // Both can be on while the person is still in the helper: the checks
         // below need it in the background again.
         wait_until_back(client, config.helper_uid, &client.status().await).await?;
     }
+
     Ok(())
 }
 
 /// Recover, start input, record the setup and check it end to end.
 async fn verify_step(client: &Client, config: &Config, config_path: &Path) -> Result<()> {
     recover(client).await?;
+
     {
         let _spinner = Spinner::new("Starting input and checking everything…");
         client.start_input().await?;
@@ -1004,6 +1100,7 @@ async fn verify_step(client: &Client, config: &Config, config_path: &Path) -> Re
                 recorded["error"].as_str().unwrap_or("unknown")
             )));
         }
+
         drop(ownership);
         let doctor = crate::capability::doctor(client.status().await, config.helper_uid);
         if doctor["ready"] != true {
@@ -1012,6 +1109,7 @@ async fn verify_step(client: &Client, config: &Config, config_path: &Path) -> Re
             ));
         }
     }
+
     Ok(())
 }
 
@@ -1024,6 +1122,7 @@ mod tests {
         let script = "echo '2026-10-11 14:28:19.767 sysadminctl[1:2] noise' >&2; \
                       printf 'User password:' >&2; sleep 0.4; echo >&2; exit $0";
         assert!(quietly_attended("/bin/sh", &["-c", script, "0"], "failed").is_ok());
+
         let failed = quietly_attended("/bin/sh", &["-c", script, "3"], "it failed").unwrap_err();
         assert_eq!(failed.error, "it failed");
     }
@@ -1032,6 +1131,7 @@ mod tests {
     #[test]
     fn a_configuration_is_never_written_over_another() {
         use std::os::unix::fs::PermissionsExt;
+
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("Atlas/atlas.toml");
         let helper = setup::Account {
@@ -1041,10 +1141,12 @@ mod tests {
         };
         let config = proposed(&helper).unwrap();
         write_config(&path, &config).unwrap();
+
         assert_eq!(
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
         );
+
         let before = fs::read(&path).unwrap();
         assert!(
             write_config(&path, &config).is_err(),
@@ -1068,6 +1170,7 @@ mod tests {
         };
         let logs = Path::new("/Users/atlas/.atlas/logs");
         let ours = setup::helper::text_sha256(&setup::helper::plist(&agent, logs));
+
         let attempt = |earlier: Option<&str>, install_fails: bool| {
             let actions = std::cell::RefCell::new(Vec::new());
             let run = |request: &Request| -> Result<Value> {
@@ -1075,6 +1178,7 @@ mod tests {
                 actions
                     .borrow_mut()
                     .push(action.as_str().unwrap().to_owned());
+
                 match request {
                     Request::Inspect { .. } => {
                         Ok(json!({"ok": true, "jobs": {LABEL: {"plistSha256": earlier}}}))
@@ -1086,6 +1190,7 @@ mod tests {
             let outcome = install_job(run, 503, agent.clone(), logs);
             (outcome.is_ok(), actions.into_inner())
         };
+
         assert_eq!(
             attempt(None, false),
             (true, vec!["inspect".into(), "install".into()])
@@ -1094,6 +1199,7 @@ mod tests {
             attempt(Some(&ours), false),
             (true, vec!["inspect".into(), "install".into()])
         );
+
         let other = "0".repeat(64);
         assert_eq!(
             attempt(Some(&other), false),

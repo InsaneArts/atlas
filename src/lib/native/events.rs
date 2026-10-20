@@ -46,6 +46,7 @@ const MODIFIER_KEYS: [u16; 5] = [55, 56, 58, 59, 63];
 /// The engine's private event source, the one field that is not `Send` by
 /// itself.
 struct Source(CFRetained<CGEventSource>);
+
 // SAFETY: a CGEventSource is a CoreFoundation object: its retain and release
 // are thread-safe, and creating events from it is not tied to the thread that
 // made it (CoreGraphics posting needs no main thread). The engine holds the
@@ -96,12 +97,14 @@ impl Engine {
             flags: 0,
             post_access: None,
         };
+
         if engine.epoch.uid != uid {
             return Err(Error::new(
                 "identity",
                 "Input service UID differs from its configuration",
             ));
         }
+
         engine.check()?;
         Ok(engine)
     }
@@ -119,12 +122,14 @@ impl Engine {
                 "Native input requires the configured hidden graphical session",
             ));
         }
+
         if !Self::trusted() {
             return Err(Error::new(
                 "permission",
                 "The input process does not have Accessibility permission",
             ));
         }
+
         // Without it macOS drops posted events silently: refuse instead.
         // The answer is trusted for a moment (see `POST_ACCESS_TTL`).
         let confirmed = self
@@ -138,8 +143,10 @@ impl Engine {
                     "The input process may not post events (Accessibility)",
                 ));
             }
+
             self.post_access = Some(Instant::now());
         }
+
         Ok(())
     }
 
@@ -155,8 +162,10 @@ impl Engine {
                 y: held.y.clamp(0.0, self.epoch.height - 1.0),
             };
         }
+
         self.journal = Some(Journal::new(path));
         self.journal_dirty = true;
+
         self.release()
     }
 
@@ -166,10 +175,12 @@ impl Engine {
         {
             return Err(Error::new("identity", "Input recovery cannot cross logins"));
         }
+
         self.epoch = current;
         self.journal_dirty = true;
         self.position.x = self.position.x.clamp(0.0, self.epoch.width - 1.0);
         self.position.y = self.position.y.clamp(0.0, self.epoch.height - 1.0);
+
         self.release()
     }
 
@@ -186,6 +197,7 @@ impl Engine {
                 flags,
             })?;
         }
+
         Ok(())
     }
 
@@ -203,12 +215,15 @@ impl Engine {
         self.flags |= flags;
         self.journal_dirty = true;
         self.persist(point, self.flags)?;
+
         self.check()?;
         let _authorization = self.grant.as_ref().map(Grant::authorize).transpose()?;
         CGEvent::set_flags(Some(&event), CGEventFlags(flags));
         CGEvent::post(TAP, Some(&event));
+
         self.posted += 1;
         self.flags = flags;
+
         Ok(())
     }
 
@@ -226,6 +241,7 @@ impl Engine {
             point,
             button.number(),
         ))?;
+
         let set = |field, value| CGEvent::set_integer_value_field(Some(&event), field, value);
         // A press, its drag events, and its release share one event number.
         set(CGEventField::MouseEventNumber, self.mouse_number);
@@ -238,11 +254,13 @@ impl Engine {
             CGEventField::MouseEventDeltaY,
             (point.y.round() - self.position.y.round()) as i64,
         );
+
         self.post(event, flags, point)
     }
 
     pub fn release(&mut self) -> Result<()> {
         self.grant = None;
+
         if !self.held_input() {
             return if self.journal_dirty {
                 self.commit()
@@ -250,15 +268,18 @@ impl Engine {
                 Ok(())
             };
         }
+
         if let Some(button) = self.held {
             self.mouse(button.up(), self.position, button, self.click_count, 0)?;
             self.held = None;
             self.drag_started = false;
         }
+
         while let Some(&code) = self.held_keys.last() {
             self.key_event(code, false, 0, None)?;
             self.held_keys.pop();
         }
+
         self.release_modifiers()?;
         self.commit()
     }
@@ -276,13 +297,16 @@ impl Engine {
         count: u8,
     ) -> Result<()> {
         let flags = modifier_flags(modifiers);
+
         match phase {
             PointerPhase::Down => {
                 if self.held.is_some() {
                     return Err(Error::new("input", "Release the held mouse button first"));
                 }
+
                 self.mouse(CGEventType::MouseMoved, point, button, count, flags)?;
                 self.position = point;
+
                 self.held = Some(button);
                 self.mouse_number = self.mouse_number.checked_add(1).unwrap_or(1);
                 self.drag_started = false;
@@ -291,6 +315,7 @@ impl Engine {
             }
             PointerPhase::Move => {
                 let active = self.held.unwrap_or(button);
+
                 if self.held.is_some()
                     && !self.drag_started
                     && (point.x != self.position.x || point.y != self.position.y)
@@ -311,11 +336,14 @@ impl Engine {
                     self.position = anchor;
                     self.drag_started = true;
                     self.commit()?;
+
                     if anchor.x == point.x && anchor.y == point.y {
                         return Ok(());
                     }
+
                     self.delay(DRAG_START).await?;
                 }
+
                 self.mouse(
                     if self.held.is_some() {
                         active.dragged()
@@ -339,6 +367,7 @@ impl Engine {
                         "Mouse button does not match the active gesture",
                     ));
                 }
+
                 self.mouse(button.up(), point, button, self.click_count, flags)?;
                 self.held = None;
                 self.drag_started = false;
@@ -346,6 +375,7 @@ impl Engine {
                 self.release_modifiers()?;
             }
         }
+
         self.commit()
     }
 
@@ -356,12 +386,14 @@ impl Engine {
             code,
             down,
         ))?;
+
         if let Some(text) = text {
             // SAFETY: the pointer and length describe the live UTF-16 slice.
             unsafe {
                 CGEvent::keyboard_set_unicode_string(Some(&event), text.len() as _, text.as_ptr())
             };
         }
+
         self.post(event, flags, self.position)
     }
 
@@ -386,26 +418,32 @@ impl Engine {
         // while the viewer keeps control and waits for the next action.
         self.key_event(code, false, 0, text)?;
         self.held_keys.pop();
+
         self.commit()
     }
 
     async fn delay(&mut self, duration: Duration) -> Result<()> {
         let end = tokio::time::Instant::now() + duration;
+
         loop {
             self.check()?;
+
             if let Some(grant) = &self.grant {
                 drop(grant.authorize()?);
             }
+
             let now = tokio::time::Instant::now();
             if now >= end {
                 return Ok(());
             }
+
             tokio::time::sleep((end - now).min(Duration::from_millis(10))).await;
         }
     }
 
     pub async fn perform(&mut self, action: Action) -> Result<()> {
         self.check()?;
+
         match action {
             Action::Pointer {
                 phase,
@@ -440,6 +478,7 @@ impl Engine {
                     .await?;
                     self.pointer(PointerPhase::Up, Point { x, y }, button, &modifiers, click)
                         .await?;
+
                     if click < count {
                         self.delay(CLICK_GAP).await?;
                     }
@@ -463,6 +502,7 @@ impl Engine {
                     1,
                 )
                 .await?;
+
                 self.delay(DRAG_HOLD).await?;
                 // What is dragged follows the pointer from the first moved
                 // step (see the move phase), so the pointer travels that
@@ -480,9 +520,11 @@ impl Engine {
                     x: (to_x + step.x).clamp(0.0, self.epoch.width - 1.0),
                     y: (to_y + step.y).clamp(0.0, self.epoch.height - 1.0),
                 };
+
                 self.pointer(PointerPhase::Move, anchor, button, &[], 1)
                     .await?;
                 self.delay(DRAG_START).await?;
+
                 for step in 1..=DRAG_STEPS {
                     let t = f64::from(step) / f64::from(DRAG_STEPS);
                     self.pointer(
@@ -498,6 +540,7 @@ impl Engine {
                     .await?;
                     self.delay(DRAG_STEP).await?;
                 }
+
                 self.pointer(PointerPhase::Up, end, button, &[], 1).await?;
                 self.pointer(
                     PointerPhase::Move,
@@ -514,6 +557,7 @@ impl Engine {
                 // The app learns where the pointer is from that move; the
                 // wheel turn reaches the view under it only once it has.
                 self.delay(SCROLL_SETTLE).await?;
+
                 // A wheel's positive turn scrolls up and left; the command's
                 // positive lines scroll down and right, as documented.
                 let event = created(CGEvent::new_scroll_wheel_event2(
@@ -540,6 +584,7 @@ impl Engine {
             }
             Action::Wait { ms } => self.delay(Duration::from_millis(ms.into())).await?,
         }
+
         Ok(())
     }
 }
@@ -586,6 +631,8 @@ mod tests {
     /// input has always sent.
     #[test]
     fn typed_constants_keep_their_raw_values() {
+        use crate::actions::{COMMAND, CONTROL, FUNCTION, OPTION, SHIFT};
+
         let raw = |button: Button| {
             (
                 button.number().0,
@@ -594,11 +641,12 @@ mod tests {
                 button.dragged().0,
             )
         };
+
         assert_eq!(raw(Button::Left), (0, 1, 2, 6));
         assert_eq!(raw(Button::Right), (1, 3, 4, 7));
         assert_eq!(raw(Button::Middle), (2, 25, 26, 27));
         assert_eq!(CGEventType::MouseMoved.0, 5);
-        use crate::actions::{COMMAND, CONTROL, FUNCTION, OPTION, SHIFT};
+
         assert_eq!(COMMAND, CGEventFlags::MaskCommand.0);
         assert_eq!(CONTROL, CGEventFlags::MaskControl.0);
         assert_eq!(OPTION, CGEventFlags::MaskAlternate.0);

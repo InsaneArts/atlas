@@ -34,6 +34,7 @@ pub fn windows(options: CGWindowListOption) -> Option<Vec<CFRetained<Record>>> {
     // SAFETY: a CoreGraphics array holds CF objects; each is checked to be a
     // dictionary before it is read.
     let list = unsafe { CFRetained::cast_unchecked::<CFArray<CFType>>(list) };
+
     Some(
         list.iter()
             .filter_map(|entry| entry.downcast::<CFDictionary>().ok())
@@ -90,6 +91,7 @@ mod tests {
             CFString::from_static_str("count"),
             CFString::from_static_str("name"),
         ];
+
         let flag = CFBoolean::new(true);
         let count = CFNumber::new_i64(42);
         let name = CFString::from_static_str("helper");
@@ -100,6 +102,7 @@ mod tests {
         );
         // SAFETY: built from typed CF values.
         let record = unsafe { record(dictionary.as_opaque().retain()) };
+
         assert_eq!(boolean(&record, "flag"), Some(true));
         assert_eq!(integer(&record, "count"), Some(42));
         assert_eq!(float(&record, "count"), Some(42.0));

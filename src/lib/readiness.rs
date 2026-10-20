@@ -39,12 +39,15 @@ fn first_line(output: &[u8]) -> String {
 /// still shows the tool runs, which is what matters.
 pub(crate) fn tool_status(reply: &Value, output: &[u8]) -> (&'static str, String) {
     let text = String::from_utf8_lossy(output).to_lowercase();
+
     if reply["timedOut"] == true || !reply["signal"].is_null() {
         return ("unknown", "The --version probe did not complete".into());
     }
+
     if reply["exitCode"] == 0 {
         return ("ready", first_line(output));
     }
+
     if text.contains("library not loaded") || text.contains("image not found") {
         (
             "failing",
@@ -89,6 +92,7 @@ async fn probe(client: &Client, home: &str, name: &str) -> Result<(Value, &'stat
                 name.to_owned(),
                 "--version".to_owned(),
             ];
+
             Ok((client.run(argv).await?, "path"))
         }
         Err(error) => Err(error),
@@ -104,6 +108,7 @@ async fn tool(client: &Client, home: &str, name: &str) -> Result<Value> {
             "The --version output was malformed or too long".into(),
         ),
     };
+
     Ok(json!({
         "kind": "tool",
         "name": name,
@@ -127,6 +132,7 @@ fn bundle_identifier(text: &str) -> bool {
 pub(crate) fn app_facts(output: &str) -> Option<(String, Vec<String>)> {
     let mut identifier = None;
     let mut state = Vec::new();
+
     for line in output.lines() {
         match line.split_once('=')? {
             ("id", id) if identifier.is_none() && bundle_identifier(id) => {
@@ -136,6 +142,7 @@ pub(crate) fn app_facts(output: &str) -> Option<(String, Vec<String>)> {
             _ => return None,
         }
     }
+
     Some((identifier?, state))
 }
 
@@ -150,6 +157,7 @@ async fn app(client: &Client, name: &str, bundle: &str) -> Result<Value> {
         "[ -e \"$HOME/Library/Preferences/$id.plist\" ] && printf 'state=preferences\\n'; ",
         "[ -d \"$HOME/Library/Containers/$id\" ] && printf 'state=container\\n'; true",
     );
+
     let reply = client
         .inspect(vec![
             "/bin/sh".into(),
@@ -159,6 +167,7 @@ async fn app(client: &Client, name: &str, bundle: &str) -> Result<Value> {
             bundle.into(),
         ])
         .await?;
+
     let facts = (reply["exitCode"] == 0)
         .then(|| run_output(&reply, 4096).ok())
         .flatten()
@@ -172,6 +181,7 @@ async fn app(client: &Client, name: &str, bundle: &str) -> Result<Value> {
             "detail": "The bundle could not be inspected in the helper",
         }));
     };
+
     Ok(json!({
         "kind": "application",
         "name": name,
@@ -211,12 +221,14 @@ pub async fn readiness(client: &Client, tools: &[String], apps: &[String]) -> Re
             "Select tools with --tool and apps with --app",
         ));
     }
+
     let found = discover(client, tools, apps, &[], &[]).await?;
     let home = client.status().await["user"]["home"]
         .as_str()
         .map(str::to_owned)
         .ok_or_else(|| Error::new("identity", "The helper home is unknown"))?;
     let mut reports = Vec::new();
+
     for item in found["selections"].as_array().into_iter().flatten() {
         let name = item["name"].as_str().unwrap_or_default();
         let kind = item["kind"].as_str();
@@ -234,11 +246,14 @@ pub async fn readiness(client: &Client, tools: &[String], apps: &[String]) -> Re
             }),
             _ => json!({ "kind": kind, "name": name, "status": "unknown" }),
         };
+
         reports.push(report);
     }
+
     let ready = reports
         .iter()
         .all(|report| matches!(report["status"].as_str(), Some("ready" | "installed")));
+
     Ok(json!({
         "ok": true,
         "ready": ready,
@@ -261,6 +276,7 @@ mod tests {
             tool_status(&reply(0), b"\nmarkdown2pdf 1.6.1\nmore"),
             ("ready", "markdown2pdf 1.6.1".into())
         );
+
         let timed_out = json!({"exitCode": 0, "timedOut": true, "signal": "SIGKILL"});
         assert_eq!(
             tool_status(&timed_out, b"x").0,
@@ -298,6 +314,7 @@ mod tests {
             app_facts("id=com.apple.Chess\n"),
             Some(("com.apple.Chess".into(), vec![]))
         );
+
         for output in [
             "",
             "state=preferences\n",

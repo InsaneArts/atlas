@@ -7,13 +7,16 @@ use std::{fs, io::Read, path::Path};
 /// account. Any other link is not followed.
 pub fn probe_executable(path: &Path) -> Option<std::path::PathBuf> {
     use std::os::unix::fs::MetadataExt;
+
     let metadata = fs::symlink_metadata(path).ok()?;
     if metadata.is_file() {
         return Some(path.to_owned());
     }
+
     if !metadata.file_type().is_symlink() || metadata.uid() != nix::unistd::getuid().as_raw() {
         return None;
     }
+
     let target = fs::canonicalize(path).ok()?;
     let in_app = target
         .parent()
@@ -23,6 +26,7 @@ pub fn probe_executable(path: &Path) -> Option<std::path::PathBuf> {
             .nth(3)
             .and_then(Path::extension)
             .is_some_and(|extension| extension == "app");
+
     in_app.then_some(target)
 }
 
@@ -37,11 +41,13 @@ pub fn file_sha256(path: &Path) -> Option<String> {
 /// reads of a regular file are unaffected.
 pub(crate) fn open_regular(path: &Path) -> Option<fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
+
     let file = fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
         .ok()?;
+
     file.metadata().ok()?.is_file().then_some(file)
 }
 
@@ -49,6 +55,7 @@ pub(crate) fn open_regular(path: &Path) -> Option<fs::File> {
 pub(crate) fn sha256(mut file: &fs::File) -> Option<String> {
     let mut hasher = Sha256::new();
     let mut buffer = vec![0; 1 << 16];
+
     loop {
         let count = file.read(&mut buffer).ok()?;
         if count == 0 {
@@ -56,6 +63,7 @@ pub(crate) fn sha256(mut file: &fs::File) -> Option<String> {
         }
         hasher.update(&buffer[..count]);
     }
+
     Some(format!("{:x}", hasher.finalize()))
 }
 
@@ -68,14 +76,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("file");
         std::fs::write(&file, b"abc").unwrap();
+
         assert_eq!(
             file_sha256(&file).as_deref(),
             Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
         );
+
         let link = dir.path().join("link");
         std::os::unix::fs::symlink(&file, &link).unwrap();
         assert_eq!(file_sha256(&link), None);
         assert_eq!(file_sha256(dir.path()), None);
+
         let fifo = dir.path().join("fifo");
         nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).unwrap();
         assert_eq!(file_sha256(&fifo), None, "never waits for a writer");
@@ -84,15 +95,18 @@ mod tests {
     #[test]
     fn a_probe_follows_only_its_own_link_into_an_app() {
         use super::probe_executable;
+
         let dir = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(dir.path()).unwrap();
         let app = root.join("Atlas.app/Contents/MacOS/atlas");
         std::fs::create_dir_all(app.parent().unwrap()).unwrap();
         std::fs::write(&app, b"x").unwrap();
+
         let link = root.join("probe");
         std::os::unix::fs::symlink(&app, &link).unwrap();
         assert_eq!(probe_executable(&link), Some(app.clone()));
         assert_eq!(probe_executable(&app), Some(app.clone()), "a plain file");
+
         let elsewhere = root.join("other");
         std::fs::write(&elsewhere, b"y").unwrap();
         let stray = root.join("stray");

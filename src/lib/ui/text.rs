@@ -12,7 +12,9 @@ pub fn printable(text: &str) -> Cow<'_, str> {
     if !text.chars().any(misleading) {
         return Cow::Borrowed(text);
     }
+
     let mut escaped = String::with_capacity(text.len() + 8);
+
     for character in text.chars() {
         if misleading(character) {
             escaped.extend(character.escape_debug());
@@ -20,6 +22,7 @@ pub fn printable(text: &str) -> Cow<'_, str> {
             escaped.push(character);
         }
     }
+
     Cow::Owned(escaped)
 }
 
@@ -42,7 +45,9 @@ pub fn clip(text: &str, width: usize) -> String {
     if text.width() <= width {
         return text.to_owned();
     }
+
     let (mut out, mut used) = (String::new(), 0);
+
     for grapheme in text.graphemes(true) {
         let cells = grapheme.width();
         if used + cells + 1 > width {
@@ -51,6 +56,7 @@ pub fn clip(text: &str, width: usize) -> String {
         out.push_str(grapheme);
         used += cells;
     }
+
     format!("{}…", out.trim_end())
 }
 

@@ -72,6 +72,7 @@ pub fn request() -> Option<Pairing> {
 
 fn read_request(path: &Path) -> Option<Pairing> {
     let folder = fs::symlink_metadata(path.parent()?).ok()?;
+
     // Opened without following a link, and checked as opened.
     let mut file = fs::OpenOptions::new()
         .read(true)
@@ -82,6 +83,7 @@ fn read_request(path: &Path) -> Option<Pairing> {
     if !metadata.is_file() || metadata.mode() & 0o022 != 0 {
         return None;
     }
+
     let mut body = Vec::new();
     (&mut file).take(64 * 1024).read_to_end(&mut body).ok()?;
     let value: Value = serde_json::from_slice(&body).ok()?;
@@ -94,6 +96,7 @@ fn read_request(path: &Path) -> Option<Pairing> {
     let folder_safe = folder.is_dir()
         && (folder.uid() == request.controller_uid || folder.uid() == 0)
         && folder.mode() & 0o022 == 0;
+
     (folder_safe && metadata.uid() == request.controller_uid).then_some(request)
 }
 
@@ -105,6 +108,7 @@ fn write_request(path: &Path, request: &Pairing) -> Result<()> {
         "helperUid": request.helper_uid,
         "helperName": request.helper_name,
     });
+
     config::write_atomic(path, serde_json::to_string_pretty(&body)?.as_bytes(), 0o644)
 }
 
@@ -114,6 +118,7 @@ fn me() -> Result<(u32, String, Option<String>)> {
     let account =
         setup::account_with_uid(uid)?.ok_or_else(|| problem("This account cannot be resolved"))?;
     let real = setup::real_name(&account.name);
+
     Ok((uid, account.name, real))
 }
 
@@ -144,6 +149,7 @@ fn app() -> Value {
             let linked = link
                 .and_then(|link| fs::canonicalize(link).ok())
                 .is_some_and(|target| target == executable);
+
             json!({
                 "installed": true,
                 "path": executable.parent().and_then(Path::parent).and_then(Path::parent),
@@ -164,6 +170,7 @@ pub async fn status(config_path: &Path) -> Result<Value> {
         fs::symlink_metadata(config_path),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound
     );
+
     // Atlas opened in an account another one chose as its helper (an
     // account with Atlas settings of its own is a controller, whatever a
     // shared file says).
@@ -178,6 +185,7 @@ pub async fn status(config_path: &Path) -> Result<Value> {
                 "helper": helper_side(uid, pairing.as_ref()).await,
             }));
         }
+
         return Ok(json!({
             "ok": true,
             "role": "controller",
@@ -188,6 +196,7 @@ pub async fn status(config_path: &Path) -> Result<Value> {
             "menubarLogin": crate::menubar::login_decided(),
         }));
     }
+
     let config = Config::load(config_path)?;
     let Some(helper) = setup::account_with_uid(config.helper_uid)? else {
         return Ok(json!({
@@ -201,13 +210,16 @@ pub async fn status(config_path: &Path) -> Result<Value> {
             "menubarLogin": crate::menubar::login_decided(),
         }));
     };
+
     let admin = setup::administrator(&helper.name);
     let leftover = crate::session::leftover_session(helper.uid, &helper.name, &helper.home);
+
     // This account's request names this helper (set up by the window), or
     // the helper runs already (as after `atlas init`).
     let paired = request()
         .is_some_and(|pairing| pairing.controller_uid == uid && pairing.helper_uid == helper.uid);
     let signed_in = crate::session::logged_in(helper.uid) == Some(true);
+
     let client = Client::new(config.clone())?;
     let reply = client.status().await;
     let hidden = crate::session::require_hidden(&reply, config.helper_uid).is_ok();
@@ -215,6 +227,7 @@ pub async fn status(config_path: &Path) -> Result<Value> {
     let ready = crate::capability::doctor(reply.clone(), config.helper_uid)["ready"] == true;
     let finished =
         ready && setup::migrate::settled(helper.uid) && crate::session::input_build_current(&reply);
+
     // Not asked yet (a choice cut short, or an interrupted `atlas init`):
     // the window offers the choice again.
     let candidates = if !paired && !answering {
@@ -222,6 +235,7 @@ pub async fn status(config_path: &Path) -> Result<Value> {
     } else {
         Vec::new()
     };
+
     Ok(json!({
         "ok": true,
         "role": "controller",
@@ -256,6 +270,7 @@ pub async fn status(config_path: &Path) -> Result<Value> {
 /// the process that uses them, reports them.
 async fn helper_side(uid: u32, pairing: Option<&Pairing>) -> Value {
     let layout = home().map(|home| Layout { uid, home });
+
     // Installed for the account asking now: a job left by an earlier Atlas
     // (another app, another account) needs Allow again.
     let installed = layout.as_ref().is_ok_and(|layout| {
@@ -270,6 +285,7 @@ async fn helper_side(uid: u32, pairing: Option<&Pairing>) -> Value {
     let running = layout
         .as_ref()
         .is_ok_and(|layout| setup::helper::job_pid(layout, LABEL).is_some());
+
     // macOS counts a process the window starts as the window's own, so only
     // the job's answer tells what Atlas itself may do here.
     let mut permissions = json!({"screenCapture": false, "accessibility": false});
@@ -286,6 +302,7 @@ async fn helper_side(uid: u32, pairing: Option<&Pairing>) -> Value {
             });
         }
     }
+
     let controller = pairing.map_or(json!(null), |pairing| {
         json!({
             "uid": pairing.controller_uid,
@@ -293,6 +310,7 @@ async fn helper_side(uid: u32, pairing: Option<&Pairing>) -> Value {
             "realName": setup::real_name(&pairing.controller_name),
         })
     });
+
     json!({
         "controller": controller,
         "installed": installed,
@@ -321,6 +339,7 @@ pub fn choose(config_path: &Path, name: &str) -> Result<Value> {
     if helper.uid == uid {
         return Err(problem("The helper must be another account than yours"));
     }
+
     match setup::administrator(&helper.name) {
         Some(false) => {}
         Some(true) => {
@@ -334,24 +353,24 @@ pub fn choose(config_path: &Path, name: &str) -> Result<Value> {
             )));
         }
     }
+
     if crate::session::leftover_session(helper.uid, &helper.name, &helper.home) {
         return Err(problem(format!(
             "macOS still runs a session of a deleted account with {name}'s user ID. Restart \
              the Mac, then choose {name} again."
         )));
     }
-    let executable = init::app_executable()?;
-    if !setup::developer_id(&executable) {
-        return Err(problem(
-            "This Atlas.app is not signed by Atlas's developer; install it again",
-        ));
-    }
+
+    let executable = signed_executable()?;
+
     let previous = match Config::load(config_path) {
         Ok(previous) => Some(previous),
         Err(_) if !config_path.exists() => None,
         Err(error) => return Err(error),
     };
+
     let fresh = init::proposed(&helper)?;
+
     // As `atlas init` does: the settings for this same helper stay (only
     // their sockets follow its home); another existing helper is kept.
     let config = match &previous {
@@ -378,13 +397,17 @@ pub fn choose(config_path: &Path, name: &str) -> Result<Value> {
         },
         None => fresh,
     };
+
     let linked = init::link_command(&executable)?;
+
     // A setup record left by an earlier account with this user ID.
     setup::migrate::archive_foreign(helper.uid, &helper.home)?;
+
     // The shared executable (which also makes /Users/Shared/Atlas) and the
     // request first, the settings last: a choice cut short leaves no
     // settings that point at a helper that was never asked.
     Client::new(config.clone())?.install()?;
+
     write_request(
         Path::new(REQUEST),
         &Pairing {
@@ -394,11 +417,13 @@ pub fn choose(config_path: &Path, name: &str) -> Result<Value> {
             helper_name: helper.name.clone(),
         },
     )?;
+
     match previous {
         Some(previous) if previous == config => {}
         Some(previous) => init::replace_config(config_path, &previous, &config)?,
         None => init::write_config(config_path, &config)?,
     }
+
     Ok(json!({
         "ok": true,
         "helper": {"name": helper.name, "uid": helper.uid},
@@ -413,21 +438,25 @@ pub fn choose(config_path: &Path, name: &str) -> Result<Value> {
 /// for an administrator's approval in its own dialog.
 pub fn create(config_path: &Path, name: &str, full_name: &str) -> Result<Value> {
     init::valid_account_name(name).map_err(problem)?;
+
     if full_name.is_empty()
         || full_name.chars().count() > 64
         || full_name.chars().any(|c| c.is_control())
     {
         return Err(problem("Use a full name of 1 to 64 characters"));
     }
+
     if setup::account_named(name)?.is_some() {
         return Err(problem(format!("{name} already exists; choose it instead")));
     }
+
     let mut password = read_secret(std::io::stdin())?;
     let mut args = init::add_user_args(name, full_name, init::free_uid()?);
     args.push("interactive".to_owned());
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let result = answer_prompts(init::SYSADMINCTL, &args, &password, APPROVAL);
     password.fill(0);
+
     // sysadminctl reports success even when it did nothing: the account
     // itself is the answer.
     let created = setup::account_named(name)?;
@@ -439,11 +468,13 @@ pub fn create(config_path: &Path, name: &str, full_name: &str) -> Result<Value> 
             format!("The account was not created: {detail}")
         }));
     };
+
     if setup::administrator(&account.name) != Some(false) {
         return Err(problem(format!(
             "{name} was created, but not as a standard account"
         )));
     }
+
     let chosen = choose(config_path, &account.name)?;
     Ok(json!({"ok": true, "created": {"name": account.name, "uid": account.uid}, "chosen": chosen}))
 }
@@ -454,9 +485,11 @@ pub fn create(config_path: &Path, name: &str, full_name: &str) -> Result<Value> 
 fn read_secret(input: impl Read) -> Result<Vec<u8>> {
     let mut secret = Vec::new();
     input.take(258).read_to_end(&mut secret)?;
+
     if secret.last() == Some(&b'\n') {
         secret.pop();
     }
+
     if secret.is_empty()
         || secret.len() > 256
         || secret.iter().any(|byte| *byte < 0x20 || *byte == 0x7F)
@@ -466,6 +499,7 @@ fn read_secret(input: impl Read) -> Result<Vec<u8>> {
             "Give one password of 1 to 256 characters, without control characters",
         ));
     }
+
     Ok(secret)
 }
 
@@ -485,6 +519,7 @@ fn answer_prompts(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
+
     let mut input = child.stdin.take().ok_or_else(|| problem("No input pipe"))?;
     let output = child
         .stdout
@@ -494,18 +529,21 @@ fn answer_prompts(
         .stderr
         .take()
         .ok_or_else(|| problem("No error pipe"))?;
+
     let receiver = init::forward(output);
     // Drained as it comes, so a chatty program never blocks on it.
     let complaints = init::forward(errors);
     let deadline = Instant::now() + patience;
     let mut seen = Vec::new();
     let mut answered = 0;
+
     loop {
         match receiver.recv_timeout(Duration::from_millis(100)) {
             Ok(bytes) => seen.extend(bytes),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
+
         // A question ends without a newline: "User password:".
         let asked = seen
             .windows(PROMPT.len())
@@ -514,6 +552,7 @@ fn answer_prompts(
         if asked > answered && answered < MAX_ANSWERS {
             // Let the prompt turn echo off before typing.
             std::thread::sleep(Duration::from_millis(150));
+
             let typed = input
                 .write_all(secret)
                 .and_then(|()| input.write_all(b"\n"))
@@ -524,22 +563,28 @@ fn answer_prompts(
                 seen.fill(0);
                 return Err(error.into());
             }
+
             answered += 1;
         }
+
         if Instant::now() >= deadline {
             let _ = child.kill();
             break;
         }
     }
+
     drop(input);
     let status = child.wait()?;
+
     // The secret is cut out byte for byte, never copied into a string.
     let kept = without(&seen, secret);
     seen.fill(0);
     let text = String::from_utf8_lossy(&kept).into_owned();
+
     if status.success() {
         return Ok(text);
     }
+
     let complained: Vec<u8> = complaints.try_iter().flatten().collect();
     let last = |text: &str| {
         text.lines()
@@ -550,6 +595,7 @@ fn answer_prompts(
     let summary = last(&text)
         .or_else(|| last(&String::from_utf8_lossy(&without(&complained, secret))))
         .unwrap_or_default();
+
     Err(problem(summary))
 }
 
@@ -565,6 +611,7 @@ fn without(bytes: &[u8], secret: &[u8]) -> Vec<u8> {
     if secret.is_empty() {
         return bytes.to_vec();
     }
+
     let mut kept = Vec::with_capacity(bytes.len());
     let mut rest = bytes;
     while !rest.is_empty() {
@@ -575,6 +622,7 @@ fn without(bytes: &[u8], secret: &[u8]) -> Vec<u8> {
             rest = &rest[1..];
         }
     }
+
     kept
 }
 
@@ -584,11 +632,13 @@ fn without(bytes: &[u8], secret: &[u8]) -> Vec<u8> {
 /// request changed meanwhile is refused.
 pub fn accept(controller_uid: u32, controller_name: &str) -> Result<Value> {
     let (uid, my_name, _) = me()?;
+
     if config::installed_path().is_ok_and(|path| path.exists()) {
         return Err(problem(
             "This account has Atlas settings of its own, so it cannot be a helper",
         ));
     }
+
     let request = request()
         .filter(|request| request.helper_uid == uid && request.helper_name == my_name)
         .ok_or_else(|| problem("No account has chosen this one as its helper"))?;
@@ -597,20 +647,18 @@ pub fn accept(controller_uid: u32, controller_name: &str) -> Result<Value> {
             "The account asking changed since this window showed it; open Atlas again",
         ));
     }
+
     if setup::administrator(&my_name) != Some(false) {
         return Err(problem(
             "This account administers the Mac; a helper must be a standard account",
         ));
     }
+
     let controller = setup::account_with_uid(request.controller_uid)?
         .filter(|account| account.name == request.controller_name)
         .ok_or_else(|| problem("The account that asked no longer exists"))?;
-    let executable = init::app_executable()?;
-    if !setup::developer_id(&executable) {
-        return Err(problem(
-            "This Atlas.app is not signed by Atlas's developer; install it again",
-        ));
-    }
+    signed_executable()?;
+
     let layout = Layout { uid, home: home()? };
     let run = |request: &Request| -> Result<Value> {
         let reply = setup::helper::run(&serde_json::to_string(request)?)?;
@@ -620,14 +668,18 @@ pub fn accept(controller_uid: u32, controller_name: &str) -> Result<Value> {
                 reply["error"].as_str().unwrap_or("no reply")
             )));
         }
+
         Ok(reply)
     };
+
     run(&Request::Prepare {
         uid,
         controller: controller.name.clone(),
     })?;
+
     let agent = expected_agent(&layout, controller.uid)?;
     let installed = init::install_job(run, uid, agent, &layout.logs())?;
+
     // Install waits for the job to load, not to run; a job launchd has not
     // started yet (or gave up on earlier) is started now.
     if installed["pid"].is_null() {
@@ -640,7 +692,20 @@ pub fn accept(controller_uid: u32, controller_name: &str) -> Result<Value> {
             ));
         }
     }
+
     Ok(json!({"ok": true, "controller": controller.name, "installed": installed}))
+}
+
+/// This Atlas.app's executable, refused unless Atlas's developer signed it.
+fn signed_executable() -> Result<PathBuf> {
+    let executable = init::app_executable()?;
+    if !setup::developer_id(&executable) {
+        return Err(problem(
+            "This Atlas.app is not signed by Atlas's developer; install it again",
+        ));
+    }
+
+    Ok(executable)
 }
 
 /// The background job Atlas installs in this account for `controller_uid`.
@@ -657,6 +722,7 @@ fn expected_agent(layout: &Layout, controller_uid: u32) -> Result<Agent> {
 /// Mark (`true`) or clear the onboarding window being open in this account.
 pub fn window(open: bool) -> Result<Value> {
     let path = home()?.join(setup::helper::ROOT).join(WINDOW_MARKER);
+
     if open {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -665,6 +731,7 @@ pub fn window(open: bool) -> Result<Value> {
     } else {
         let _ = fs::remove_file(&path);
     }
+
     Ok(json!({"ok": true, "open": open}))
 }
 
@@ -678,9 +745,11 @@ pub fn window_open(home: &Path) -> bool {
     else {
         return false;
     };
+
     if nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_err() {
         return false;
     }
+
     Command::new("/bin/ps")
         .args(["-o", "comm=", "-p", &pid.to_string()])
         .output()
@@ -697,34 +766,42 @@ pub async fn finish(config_path: &Path) -> Result<Value> {
     let client = Client::new(config.clone())?;
     let status = client.status().await;
     crate::session::require_hidden(&status, config.helper_uid)?;
+
     if !init::missing(&status).is_empty() {
         return Err(problem(
             "Screen Recording or Accessibility is still off in the helper",
         ));
     }
+
     if !client.controller.pending()?.is_empty() {
         client.restart().await?;
     }
+
     if let Some(helper) = setup::account_with_uid(config.helper_uid)? {
         setup::migrate::archive_foreign(helper.uid, &helper.home)?;
     }
+
     client.install()?;
     client.start_input().await?;
+
     let ownership = client.controller.acquire(true)?;
     let recorded = setup::migrate::apply_fresh(config_path, &ownership).await?;
     drop(ownership);
+
     if recorded["ok"] != true {
         return Err(problem(format!(
             "Setup could not be verified: {}",
             recorded["error"].as_str().unwrap_or("unknown")
         )));
     }
+
     let doctor = crate::capability::doctor(client.status().await, config.helper_uid);
     if doctor["ready"] != true {
         return Err(problem(
             "Setup finished but is not ready; run atlas doctor to see why",
         ));
     }
+
     Ok(json!({"ok": true, "ready": true, "doctor": doctor}))
 }
 
@@ -742,6 +819,7 @@ pub fn login(config_path: &Path, on: bool) -> Result<Value> {
             config_path.display()
         )));
     }
+
     crate::menubar::set_login(if on {
         crate::menubar::Login::On
     } else {
@@ -783,6 +861,7 @@ mod tests {
         .unwrap();
         assert!(text.contains("matched"), "{text}");
         assert!(!text.contains("se cret"), "{text}");
+
         let wrong = "printf 'Password:'; read p; exit 3";
         let failed = answer_prompts("/bin/sh", &["-c", wrong], b"abc", Duration::from_secs(10));
         assert!(failed.is_err());
@@ -808,24 +887,30 @@ mod tests {
     #[test]
     fn a_request_is_trusted_only_from_its_controller() {
         use std::os::unix::fs::PermissionsExt;
+
         let dir = tempfile::tempdir().unwrap();
         fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
         let path = dir.path().join("onboarding.json");
         let me = nix::unistd::getuid().as_raw();
+
         write_request(&path, &pairing(me)).unwrap();
         assert_eq!(read_request(&path), Some(pairing(me)));
+
         // Written by someone else than the controller it names: ignored.
         write_request(&path, &pairing(me + 7)).unwrap();
         assert_eq!(read_request(&path), None);
+
         // Writable by others: ignored.
         write_request(&path, &pairing(me)).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
         assert_eq!(read_request(&path), None);
+
         // In a folder others can change: ignored.
         write_request(&path, &pairing(me)).unwrap();
         fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o777)).unwrap();
         assert_eq!(read_request(&path), None);
         fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
+
         // A link to a request: ignored.
         let link = dir.path().join("link.json");
         std::os::unix::fs::symlink(&path, &link).unwrap();
@@ -837,6 +922,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join(setup::helper::ROOT);
         fs::create_dir_all(&root).unwrap();
+
         // A living process that is not Atlas's window does not count.
         fs::write(
             root.join(WINDOW_MARKER),
@@ -844,8 +930,10 @@ mod tests {
         )
         .unwrap();
         assert!(!window_open(dir.path()));
+
         fs::write(root.join(WINDOW_MARKER), "999999\n").unwrap();
         assert!(!window_open(dir.path()));
+
         fs::remove_file(root.join(WINDOW_MARKER)).unwrap();
         assert!(!window_open(dir.path()));
     }

@@ -139,6 +139,7 @@ mod tests {
             .filter_map(|line| line.strip_prefix("| `"))
             .filter_map(|rest| rest.split('`').next())
             .collect();
+
         assert_eq!(
             documented, CODES,
             "keep CODES and troubleshooting.md in step"
@@ -156,6 +157,7 @@ mod tests {
         let mut directories = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
         let mut unlisted = Vec::new();
         let mut seen = 0;
+
         while let Some(directory) = directories.pop() {
             for entry in std::fs::read_dir(directory).unwrap().flatten() {
                 let path = entry.path();
@@ -163,9 +165,11 @@ mod tests {
                     directories.push(path);
                     continue;
                 }
+
                 if path.extension().is_none_or(|extension| extension != "rs") {
                     continue;
                 }
+
                 let source = std::fs::read_to_string(&path).unwrap();
                 for (index, _) in source.match_indices(call) {
                     let rest = source[index + call.len()..].trim_start();
@@ -181,6 +185,7 @@ mod tests {
                     else {
                         continue;
                     };
+
                     seen += 1;
                     if code(literal).is_none() {
                         unlisted.push(format!("{}: {literal}", path.display()));
@@ -188,6 +193,7 @@ mod tests {
                 }
             }
         }
+
         assert!(seen > 100, "only {seen} constructions found");
         assert!(
             unlisted.is_empty(),

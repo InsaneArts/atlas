@@ -45,13 +45,16 @@ pub struct Spinner {
 impl Spinner {
     pub fn new(message: impl Into<String>) -> Self {
         let message = message.into();
+
         if !human() {
             return Self { bar: None };
         }
+
         if !std::io::stderr().is_terminal() {
             eprintln!("{message}");
             return Self { bar: None };
         }
+
         let bar = ProgressBar::new_spinner();
         bar.set_style(
             // The message is cut to the terminal's width: a wrapped line
@@ -60,8 +63,10 @@ impl Spinner {
                 .unwrap_or_else(|_| ProgressStyle::default_spinner())
                 .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
         );
+
         bar.set_message(message);
         bar.enable_steady_tick(Duration::from_millis(90));
+
         Self { bar: Some(bar) }
     }
 

@@ -11,6 +11,7 @@ pub fn worker(path: &Path, apply: bool) -> Result<Value> {
     if packet.version != 1 {
         return Err(problem("Unsupported environment packet version"));
     }
+
     let guard = || {
         let current = Identity::from_proof(&crate::native::session_info()?)?;
         if current != packet.expected {
@@ -20,6 +21,7 @@ pub fn worker(path: &Path, apply: bool) -> Result<Value> {
         }
         Ok(())
     };
+
     guard()?;
     let home = account_home(packet.expected.uid)?;
     let mutating = matches!(
@@ -29,6 +31,7 @@ pub fn worker(path: &Path, apply: bool) -> Result<Value> {
     if apply != mutating {
         return Err(problem("Worker apply flag does not match its request"));
     }
+
     match packet.request {
         Request::Preview { id, files } => preview(&home, packet.expected.uid, &id, files, &guard),
         Request::Apply { plan } => apply_plan(&home, &plan, &guard),
@@ -45,12 +48,15 @@ fn account_home(uid: u32) -> Result<PathBuf> {
     if account.uid != uid {
         return Err(problem("Invalid helper account record"));
     }
+
     let home = fs::canonicalize(&account.home)?;
     let directory = directory(&home, false)?.ok_or_else(|| problem("Helper home is missing"))?;
     installation_parent(&directory)?;
+
     if directory.metadata()?.uid() != uid {
         return Err(problem("Helper home ownership mismatch"));
     }
+
     Ok(home)
 }
 
@@ -63,12 +69,15 @@ pub(super) fn preview(
 ) -> Result<Value> {
     validate_id(id)?;
     guard()?;
+
     let store = Store::open(home, false)?;
     store.require_available(id)?;
     let ledger = store.ledger()?;
     validate_files(files.iter())?;
+
     let mut planned = Vec::new();
     let mut total = 0;
+
     for payload in files {
         guard()?;
         let key = payload.target.to_string_lossy().to_ascii_lowercase();
@@ -79,10 +88,12 @@ pub(super) fn preview(
                 "Selected target is a case alias of a previously managed target",
             ));
         }
+
         let bytes = payload_bytes(&payload)?;
         let current = snapshot(&destination(home, &payload.target)?)?;
         total += bytes.len() as u64 + current.as_ref().map_or(0, |(_, bytes)| bytes.len() as u64);
         memory_limit(total)?;
+
         let before = current.map(|(fingerprint, _)| fingerprint);
         let previous = ledger.files.get(&payload.target).cloned();
         let operation = operation(&payload, before.as_ref(), previous.as_ref());
@@ -93,6 +104,7 @@ pub(super) fn preview(
             operation,
         });
     }
+
     guard()?;
     let plan = Plan {
         version: 1,
@@ -101,10 +113,12 @@ pub(super) fn preview(
         home: home.into(),
         files: planned,
     };
+
     let ok = plan
         .files
         .iter()
         .all(|file| file.operation != Operation::Conflict);
+
     Ok(json!({
         "ok": ok,
         "applied": false,
@@ -125,9 +139,11 @@ fn operation(
         (None, _) => true,
         _ => false,
     };
+
     if !managed_matches {
         return Operation::Conflict;
     }
+
     match current {
         None => Operation::Create,
         Some(current) if current.sha256 == payload.sha256 => {
@@ -146,7 +162,9 @@ fn validate_files<'a>(files: impl ExactSizeIterator<Item = &'a Payload> + Clone)
     if files.len() == 0 || files.len() > MAX_SELECTIONS {
         return Err(problem("Select 1–32 files"));
     }
+
     unique_targets(files.clone().map(|file| file.target.as_path()))?;
+
     for file in files {
         if !file.source.is_absolute()
             || file.sha256.len() != 64
@@ -158,6 +176,7 @@ fn validate_files<'a>(files: impl ExactSizeIterator<Item = &'a Payload> + Clone)
             return Err(problem("Invalid frozen file selection"));
         }
     }
+
     Ok(())
 }
 
@@ -166,6 +185,7 @@ fn payload_bytes(payload: &Payload) -> Result<Vec<u8>> {
     if digest(&bytes) != payload.sha256 {
         return Err(problem("Frozen payload changed"));
     }
+
     Ok(bytes)
 }
 
@@ -182,12 +202,15 @@ fn desired_mode(payload: &Payload) -> u32 {
 
 fn validate_plan(home: &Path, plan: &Plan) -> Result<()> {
     validate_id(&plan.id)?;
+
     if plan.version != 1 || plan.home != home || plan.uid != nix::unistd::getuid().as_raw() {
         return Err(problem(
             "Frozen plan does not belong to this helper home and UID",
         ));
     }
+
     validate_files(plan.files.iter().map(|file| &file.payload))?;
+
     for file in &plan.files {
         if operation(&file.payload, file.before.as_ref(), file.previous.as_ref()) != file.operation
             || file.operation == Operation::Conflict
@@ -197,6 +220,7 @@ fn validate_plan(home: &Path, plan: &Plan) -> Result<()> {
             ));
         }
     }
+
     Ok(())
 }
 
@@ -207,17 +231,21 @@ pub(super) fn apply_plan(
 ) -> Result<Value> {
     validate_plan(home, plan)?;
     guard()?;
+
     {
         let store = Store::open(home, false)?;
         store.require_available(&plan.id)?;
+
         if store.transaction(&plan.id)?.is_none() {
             preconditions(home, plan, &store.ledger()?)?;
         }
     }
+
     guard()?;
     let store = Store::open(home, true)?;
     store.require_available(&plan.id)?;
     let mut ledger = store.ledger()?;
+
     let mut transaction = match store.transaction(&plan.id)? {
         Some(transaction) => {
             if transaction.plan != *plan {
@@ -227,26 +255,33 @@ pub(super) fn apply_plan(
         }
         None => prepare(home, plan, &store, &ledger, guard)?,
     };
+
     if matches!(transaction.phase, Phase::RollingBack | Phase::RolledBack) {
         return Err(problem(
             "This transaction was rolled back or is being rolled back",
         ));
     }
+
     let result = (|| -> Result<()> {
         for index in 0..plan.files.len() {
             apply_state(home, &transaction, index, &ledger)?;
         }
+
         guard()?;
         store.activate(&plan.id)?;
+
         for index in 0..plan.files.len() {
             apply_file(home, &mut transaction, index, &store, &mut ledger, guard)?;
         }
+
         guard()?;
         transaction.phase = Phase::Applied;
         store.save(&transaction)?;
         store.finish(&plan.id)?;
+
         Ok(())
     })();
+
     Ok(report(&transaction, result, false))
 }
 
@@ -260,6 +295,7 @@ fn preconditions(home: &Path, plan: &Plan, ledger: &Ledger) -> Result<()> {
             ));
         }
     }
+
     Ok(())
 }
 
@@ -273,6 +309,7 @@ fn prepare(
     preconditions(home, plan, ledger)?;
     let mut contents = Vec::new();
     let mut total = 0;
+
     for file in &plan.files {
         let after = payload_bytes(&file.payload)?;
         let before = snapshot(&destination(home, &file.payload.target)?)?;
@@ -283,8 +320,10 @@ fn prepare(
         memory_limit(total)?;
         contents.push((before.map(|(_, bytes)| bytes), after));
     }
+
     guard()?;
     private_directory(&store.folder(&plan.id))?;
+
     for (index, (before, after)) in contents.iter().enumerate() {
         guard()?;
         if let Some(before) = before {
@@ -292,6 +331,7 @@ fn prepare(
         }
         atomic_write(&store.blob(&plan.id, index, false), after, 0o600)?;
     }
+
     let transaction = Transaction {
         version: 1,
         plan: plan.clone(),
@@ -300,8 +340,10 @@ fn prepare(
         directories: Vec::new(),
         retained_directories: Vec::new(),
     };
+
     guard()?;
     store.save(&transaction)?;
+
     Ok(transaction)
 }
 
@@ -330,6 +372,7 @@ fn apply_state(
     {
         return Ok(true);
     }
+
     if entry == file.previous.as_ref() {
         if current == file.before && !progress.applied {
             return Ok(false);
@@ -338,6 +381,7 @@ fn apply_state(
             return Ok(true);
         }
     }
+
     Err(problem(
         "Destination or ownership changed during this transaction; it was preserved",
     ))
@@ -352,18 +396,21 @@ fn apply_file(
     guard: &impl Fn() -> Result<()>,
 ) -> Result<()> {
     guard()?;
+
     let file = transaction.plan.files[index].clone();
     let path = destination(home, &file.payload.target)?;
     let installed = apply_state(home, transaction, index, ledger)?;
     if !installed && file.operation != Operation::Unchanged {
         ensure_parents(home, transaction, &file.payload.target, store, guard)?;
         let candidate = candidate(&path, &transaction.plan.id, index, false);
+
         if transaction.progress[index].prepared.is_none() {
             guard()?;
             let bytes = read_limited(&store.blob(&transaction.plan.id, index, false), MAX_FILE)?;
             if digest(&bytes) != file.payload.sha256 {
                 return Err(problem("Transaction payload changed"));
             }
+
             let prepared = prepare_inode(
                 &candidate,
                 &bytes,
@@ -373,18 +420,23 @@ fn apply_file(
             transaction.progress[index].prepared = Some(prepared);
             store.save(transaction)?;
         }
+
         guard()?;
         if apply_state(home, transaction, index, ledger)? {
             return finish_file(home, transaction, index, store, ledger);
         }
+
         if fingerprint(&candidate)? != transaction.progress[index].prepared {
             return Err(problem("Prepared replacement changed or disappeared"));
         }
+
         install_prepared(&candidate, &path, file.before.is_none())?;
+
         if fingerprint(&path)? != transaction.progress[index].prepared {
             return Err(problem("Installed file did not match its prepared inode"));
         }
     }
+
     guard()?;
     finish_file(home, transaction, index, store, ledger)
 }
@@ -399,17 +451,20 @@ fn finish_file(
     let file = &transaction.plan.files[index];
     let current = fingerprint(&destination(home, &file.payload.target)?)?
         .ok_or_else(|| problem("Installed file disappeared"))?;
+
     let expected = if file.operation == Operation::Unchanged {
         &file.before
     } else {
         &transaction.progress[index].prepared
     };
+
     if expected
         .as_ref()
         .is_some_and(|expected| !current.same_contents_and_metadata(expected))
     {
         return Err(problem("Installed file metadata changed"));
     }
+
     ledger.version = 1;
     ledger.files.insert(
         file.payload.target.clone(),
@@ -418,8 +473,10 @@ fn finish_file(
             fingerprint: current,
         },
     );
+
     store.save_ledger(ledger)?;
     transaction.progress[index].applied = true;
+
     store.save(transaction)
 }
 
@@ -441,14 +498,17 @@ fn prepare_inode(
     if fingerprint(path)?.is_none() {
         atomic_install(path, bytes, mode, true)?;
     }
+
     let current = fingerprint(path)?.ok_or_else(|| problem("Prepared file disappeared"))?;
     if current.sha256 != digest(bytes) || current.mode != mode {
         return Err(problem("Prepared file contents or permissions changed"));
     }
+
     if let Some(previous) = previous {
         set_group(path, previous.gid)?;
         restore_attributes(path, &previous.xattrs)?;
     }
+
     fingerprint(path)?.ok_or_else(|| problem("Prepared file disappeared"))
 }
 
@@ -462,7 +522,8 @@ fn ensure_parents(
     let mut relative = PathBuf::new();
     let parent = target
         .parent()
-        .expect("a checked target is a non-empty relative path");
+        .ok_or_else(|| problem("Missing target parent"))?;
+
     for component in parent.components() {
         relative.push(component);
         let path = directory_destination(home, &relative)?;
@@ -470,6 +531,7 @@ fn ensure_parents(
             installation_parent(&dir)?;
             continue;
         }
+
         guard()?;
         let index = transaction
             .directories
@@ -482,12 +544,14 @@ fn ensure_parents(
                 });
                 transaction.directories.len() - 1
             });
+
         store.save(transaction)?;
         guard()?;
         let dir = create_private_directory(&path)?;
         transaction.directories[index].node = Some(node(&dir.metadata()?));
         store.save(transaction)?;
     }
+
     Ok(())
 }
 
@@ -499,14 +563,17 @@ pub(super) fn rollback(
 ) -> Result<Value> {
     validate_id(id)?;
     guard()?;
+
     let store = Store::open(home, apply)?;
     store.require_available(id)?;
     let mut ledger = store.ledger()?;
     let mut transaction = store.transaction(id)?.ok_or_else(|| problem(MISSING))?;
     validate_plan(home, &transaction.plan)?;
+
     if transaction.phase == Phase::RolledBack {
         return Ok(report(&transaction, Ok(()), true));
     }
+
     let result = (|| -> Result<()> {
         for index in 0..transaction.plan.files.len() {
             let status = rollback_state(home, &transaction, index, &ledger)?;
@@ -530,25 +597,32 @@ pub(super) fn rollback(
                 }
             }
         }
+
         if !apply {
             return Ok(());
         }
+
         guard()?;
         store.activate(id)?;
         transaction.phase = Phase::RollingBack;
         store.save(&transaction)?;
+
         for index in (0..transaction.plan.files.len()).rev() {
             rollback_file(home, &mut transaction, index, &store, &mut ledger, guard)?;
         }
+
         transaction.retained_directories = cleanup_directories(home, &transaction, guard)?;
         guard()?;
         transaction.phase = Phase::RolledBack;
         store.save(&transaction)?;
         store.finish(id)?;
+
         Ok(())
     })();
+
     let mut value = report(&transaction, result, true);
     value["preview"] = json!(!apply);
+
     Ok(value)
 }
 
@@ -579,11 +653,13 @@ fn rollback_state(
     let progress = &transaction.progress[index];
     let current = fingerprint(&destination(home, &file.payload.target)?)?;
     let entry = ledger.files.get(&file.payload.target);
+
     let restored = if file.operation == Operation::Unchanged {
         file.before.as_ref()
     } else {
         progress.restore.as_ref()
     };
+
     let previous = previous_entry(file, restored);
     if progress.reverting
         && current.as_ref() == restored
@@ -592,17 +668,21 @@ fn rollback_state(
     {
         return Ok(RollbackState::Restored);
     }
+
     if progress.restored {
         return Err(problem(
             "A rolled-back destination changed; it was preserved",
         ));
     }
+
     if current == file.before && entry == file.previous.as_ref() {
         return Ok(RollbackState::Before);
     }
+
     if apply_state(home, transaction, index, ledger)? {
         return Ok(RollbackState::Installed);
     }
+
     Err(problem(
         "Rollback requires this transaction's latest unchanged file generation",
     ))
@@ -617,9 +697,11 @@ fn rollback_file(
     guard: &impl Fn() -> Result<()>,
 ) -> Result<()> {
     guard()?;
+
     let file = transaction.plan.files[index].clone();
     let path = destination(home, &file.payload.target)?;
     let status = rollback_state(home, transaction, index, ledger)?;
+
     // The randomized candidate name is reserved in this durable transaction.
     // A crash can leave its inode prepared before the fingerprint was recorded.
     if transaction.progress[index].prepared.is_none() {
@@ -632,11 +714,13 @@ fn rollback_file(
                     "Unrecorded transaction candidate changed; it was preserved",
                 ));
             }
+
             transaction.progress[index].prepared = Some(prepared);
             guard()?;
             store.save(transaction)?;
         }
     }
+
     if status == RollbackState::Installed && file.operation != Operation::Unchanged {
         if let Some(before) = &file.before
             && transaction.progress[index].restore.is_none()
@@ -645,6 +729,7 @@ fn rollback_file(
             if digest(&bytes) != before.sha256 {
                 return Err(problem("Transaction backup changed"));
             }
+
             let candidate = candidate(&path, &transaction.plan.id, index, true);
             guard()?;
             transaction.progress[index].restore = Some(prepare_inode(
@@ -655,13 +740,16 @@ fn rollback_file(
             )?);
             store.save(transaction)?;
         }
+
         transaction.progress[index].reverting = true;
         guard()?;
         store.save(transaction)?;
         guard()?;
+
         if rollback_state(home, transaction, index, ledger)? != RollbackState::Installed {
             return Err(problem("Destination changed before rollback"));
         }
+
         if file.before.is_some() {
             let candidate = candidate(&path, &transaction.plan.id, index, true);
             if fingerprint(&candidate)? != transaction.progress[index].restore {
@@ -676,26 +764,32 @@ fn rollback_file(
         transaction.progress[index].reverting = true;
         store.save(transaction)?;
     }
+
     guard()?;
     let restored = fingerprint(&path)?;
+
     let expected = if file.operation == Operation::Unchanged {
         &file.before
     } else {
         &transaction.progress[index].restore
     };
+
     if &restored != expected {
         return Err(problem("Restored file does not match its recorded inode"));
     }
+
     let previous = previous_entry(&file, restored.as_ref());
     if let Some(previous) = previous {
         ledger.files.insert(file.payload.target.clone(), previous);
     } else {
         ledger.files.remove(&file.payload.target);
     }
+
     ledger.version = 1;
     store.save_ledger(ledger)?;
     transaction.progress[index].restored = true;
     store.save(transaction)?;
+
     for restore in [false, true] {
         let candidate = candidate(&path, &transaction.plan.id, index, restore);
         if let Some(current) = fingerprint(&candidate)? {
@@ -704,15 +798,18 @@ fn rollback_file(
             } else {
                 &transaction.progress[index].prepared
             };
+
             if expected.as_ref() != Some(&current) {
                 return Err(problem(
                     "An unrecorded prepared file remains; resume or inspect before cleanup",
                 ));
             }
+
             guard()?;
             unlink(&candidate, false)?;
         }
     }
+
     Ok(())
 }
 
@@ -735,7 +832,9 @@ fn cleanup_directories(
             && fs::read_dir(&path)?.next().is_none();
         Ok(Some((path, removable)))
     };
+
     let mut retained = Vec::new();
+
     for record in transaction.directories.iter().rev() {
         let path = match inspect(record) {
             Ok(None) => continue,
@@ -745,11 +844,13 @@ fn cleanup_directories(
                 continue;
             }
         };
+
         guard()?;
         if unlink(&path, true).is_err() {
             retained.push(record.target.clone());
         }
     }
+
     Ok(retained)
 }
 
@@ -766,12 +867,14 @@ fn report(transaction: &Transaction, result: Result<()>, rollback: bool) -> Valu
                 progress.applied
             }
         });
+
     fn targets<'a>(files: Vec<(&'a PlannedFile, &'a Progress)>) -> Vec<&'a PathBuf> {
         files
             .into_iter()
             .map(|(file, _)| &file.payload.target)
             .collect()
     }
+
     let (completed, pending) = (targets(completed), targets(pending));
     let mut value = json!({
         "ok": result.is_ok(),
@@ -785,8 +888,10 @@ fn report(transaction: &Transaction, result: Result<()>, rollback: bool) -> Valu
         "completedTargets": completed,
         "pendingTargets": pending,
     });
+
     if let Err(error) = result {
         value["error"] = json!(error.error);
     }
+
     value
 }

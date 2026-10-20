@@ -70,6 +70,7 @@ fn session_ids(proof: &Value) -> Option<(u64, u64)> {
     let display = proof["displayID"]
         .as_u64()
         .filter(|n| *n > 0 && *n <= u32::MAX.into())?;
+
     Some((security, display))
 }
 
@@ -88,6 +89,7 @@ impl InputEpoch {
                 .filter(|v| within(*v, MAX_SIDE))
                 .ok_or_else(invalid)
         };
+
         let epoch = Self {
             uid: proof["uid"]
                 .as_u64()
@@ -100,6 +102,7 @@ impl InputEpoch {
             height: side("height")?,
             process_id,
         };
+
         if proof["ok"] != true
             || proof["onConsole"] != false
             || proof["hasGraphicAccess"] != true
@@ -107,6 +110,7 @@ impl InputEpoch {
         {
             return Err(invalid());
         }
+
         Ok(epoch)
     }
 }
@@ -129,11 +133,13 @@ pub(crate) fn validate_target_uid(uid: u32, controller_uid: u32) -> Result<()> {
             "Target must be a distinct helper account with UID >= 501",
         ));
     }
+
     Ok(())
 }
 
 pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
     validate_uid(uid)?;
+
     // The common cases in plain words; anything else is one unverified state.
     if value["ok"] != true {
         // A shell that may not reach the helper says so: it is not down.
@@ -145,6 +151,7 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
                     .unwrap_or("This shell may not connect to the helper"),
             ));
         }
+
         // A socket served by the wrong account stays an identity violation.
         if value["code"] == "identity" {
             return Err(Error::new(
@@ -154,11 +161,13 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
                     .unwrap_or("The helper socket belongs to another account"),
             ));
         }
+
         return Err(Error::new(
             "transport",
             "The helper is not answering. Run atlas doctor.",
         ));
     }
+
     if value["user"]["uid"]
         .as_u64()
         .is_some_and(|other| other != u64::from(uid))
@@ -168,6 +177,7 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
             "A different account answered than the configured helper. Run atlas doctor.",
         ));
     }
+
     if value["session"]["onConsole"] == true || value["sessionProof"]["onConsole"] == true {
         return Err(Error::new(
             "on-console",
@@ -175,18 +185,21 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
              background: switch back to your own account.",
         ));
     }
+
     let invalid = || {
         Error::new(
             "identity",
             "The helper's session could not be verified. Run atlas doctor.",
         )
     };
+
     let pid = value["daemon"]["pid"]
         .as_u64()
         .and_then(|pid| u32::try_from(pid).ok())
         .filter(|pid| *pid > 0)
         .ok_or_else(invalid)?;
     let display = Display::deserialize(&value["display"]).map_err(|_| invalid())?;
+
     // `ok` is already known true here.
     if value["user"]["uid"].as_u64() != Some(uid.into())
         || value["session"]["onConsole"] != false
@@ -197,8 +210,10 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
     {
         return Err(invalid());
     }
+
     let proof = &value["sessionProof"];
     let (security, display_id) = session_ids(proof).ok_or_else(invalid)?;
+
     if proof["parentPID"].as_u64() != Some(pid.into())
         || proof["ok"] != true
         || proof["uid"].as_u64() != Some(uid.into())
@@ -209,6 +224,7 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
     {
         return Err(invalid());
     }
+
     let input_pid = value["inputService"]["pid"]
         .as_u64()
         .and_then(|v| u32::try_from(v).ok())
@@ -224,6 +240,7 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
         input_pid,
     };
     let native_matches = native_epoch.as_ref() == Some(&epoch.input_epoch());
+
     Ok(Session {
         epoch,
         capture: value["permissions"]["screenCapture"] == true,
@@ -241,6 +258,7 @@ pub fn pinned_to_session(value: &Value, session: &Session) -> bool {
     let native = &value["inputService"];
     let pinned = &native["enforcedEpoch"];
     let epoch = &session.epoch;
+
     native["ok"] == true
         && native["protocolVersion"] == 1
         && native["accessibility"] == true
@@ -256,6 +274,7 @@ pub fn pinned_to_session(value: &Value, session: &Session) -> bool {
 pub fn repinnable(value: &Value, session: &Session) -> bool {
     let pinned = &value["inputService"]["enforcedEpoch"];
     let epoch = &session.epoch;
+
     pinned_to_session(value, session)
         && pinned["width"].as_f64() == Some(epoch.display.width)
         && pinned["height"].as_f64() == Some(epoch.display.height)
@@ -307,6 +326,7 @@ pub fn diagnose(value: Value, uid: u32) -> Value {
 
     // A blocked shell says nothing of the helper, so it may well be running.
     let blocked = "Unknown until this shell can reach the helper.";
+
     let (unknown, not_queried) = if value["code"] == "blocked" {
         (blocked, blocked)
     } else {
@@ -327,6 +347,7 @@ pub fn diagnose(value: Value, uid: u32) -> Value {
     } else {
         "Start the helper: run atlas init (safe to run again)."
     };
+
     let hidden_guidance = if value["user"]["uid"]
         .as_u64()
         .is_some_and(|v| v != u64::from(uid))
@@ -341,6 +362,7 @@ pub fn diagnose(value: Value, uid: u32) -> Value {
              run atlas init.",
         )
     };
+
     let checks = [
         Check {
             // A blocked shell cannot tell whether the helper runs.
@@ -401,12 +423,15 @@ pub fn diagnose(value: Value, uid: u32) -> Value {
             .into(),
         },
     ];
+
     let mut warnings = Vec::new();
+
     if native_reachable && !input_build_current(&value) {
         warnings.push(
             "The input service is from an older build; atlas start-input replaces it.".to_owned(),
         );
     }
+
     let details = checks
         .iter()
         .map(|check| {
@@ -417,11 +442,13 @@ pub fn diagnose(value: Value, uid: u32) -> Value {
             })
         })
         .collect::<Vec<_>>();
+
     let next_steps = checks
         .iter()
         .filter(|check| check.ok == Some(false))
         .map(|check| &check.next_step)
         .collect::<Vec<_>>();
+
     let observe = session.as_ref().is_some_and(|s| s.capture);
     let mut report = json!({
         "ok": true,
@@ -442,8 +469,10 @@ pub fn diagnose(value: Value, uid: u32) -> Value {
         "nextSteps": next_steps,
         "warnings": warnings,
     });
+
     // The status itself, moved in rather than copied.
     report["session"] = value;
+
     report
 }
 
@@ -479,6 +508,7 @@ impl Absence {
     /// next steps) in words for the command line.
     pub fn explain(&self, report: &mut Value) {
         report["absence"] = json!(self.as_str());
+
         let step = match self {
             Self::Missing => {
                 "The helper account no longer exists. Run atlas init to set up a new one."
@@ -488,6 +518,7 @@ impl Absence {
                 LOGGED_OUT
             }
         };
+
         let running = report["checks"].as_array_mut().and_then(|checks| {
             checks
                 .iter_mut()
@@ -539,6 +570,7 @@ fn processes() -> Option<Vec<Process>> {
         .args(["-axo", "uid=,pid=,etime=,comm="])
         .output()
         .ok()?;
+
     output
         .status
         .success()
@@ -555,6 +587,7 @@ fn parse_processes(listing: &str) -> Vec<Process> {
             let pid = words.next()?.parse().ok()?;
             let running = running_for(words.next()?)?;
             let command = words.collect::<Vec<_>>().join(" ");
+
             Some(Process {
                 uid,
                 pid,
@@ -609,6 +642,7 @@ pub fn leftover_session(uid: u32, name: &str, home: &std::path::Path) -> bool {
     }) else {
         return false;
     };
+
     // A session cannot start before its account exists; a few seconds of
     // slack cover clock rounding.
     let slack = std::time::Duration::from_secs(10);
@@ -626,6 +660,7 @@ fn account_age(name: &str) -> Option<std::time::Duration> {
     let value = after.split("<real>").nth(1)?.split("</real>").next()?;
     let created =
         std::time::UNIX_EPOCH + std::time::Duration::from_secs_f64(value.trim().parse().ok()?);
+
     created.elapsed().ok()
 }
 
@@ -635,6 +670,7 @@ fn running_for(elapsed: &str) -> Option<std::time::Duration> {
         Some((days, clock)) => (days.parse::<u64>().ok()?, clock),
         None => (0, elapsed),
     };
+
     let parts: Vec<u64> = clock
         .split(':')
         .map(|part| part.parse().ok())
@@ -644,6 +680,7 @@ fn running_for(elapsed: &str) -> Option<std::time::Duration> {
         [hours, minutes, seconds] => hours * 3600 + minutes * 60 + seconds,
         _ => return None,
     };
+
     Some(std::time::Duration::from_secs(days * 86_400 + seconds))
 }
 
@@ -653,6 +690,7 @@ mod tests {
         Absence, LOGGED_OUT, diagnose, input_build_current, parse_processes, require_hidden,
         running_for, silent, validate_target_uid,
     };
+    use serde_json::json;
 
     #[test]
     fn only_a_helper_that_did_not_answer_is_explained() {
@@ -660,9 +698,11 @@ mod tests {
             &json!({"ok": false, "code": "io", "error": "No such file"})
         ));
         assert!(silent(&json!({"ok": false, "code": "transport"})));
+
         for code in ["blocked", "identity"] {
             assert!(!silent(&json!({"ok": false, "code": code})), "{code}");
         }
+
         assert!(!silent(&json!({"ok": true})));
     }
 
@@ -692,12 +732,12 @@ mod tests {
         assert_eq!(report["account"], "atlas");
         assert_eq!(report["checks"][0]["nextStep"], LOGGED_OUT);
         assert_eq!(report["nextSteps"][0], LOGGED_OUT);
+
         let mut gone = diagnose(json!({"ok": false, "code": "io"}), 501);
         Absence::Missing.explain(&mut gone);
         assert_eq!(gone["absence"], "missing");
         assert!(gone.get("account").is_none());
     }
-    use serde_json::json;
 
     /// A shell that may not reach the helper is told so, never that the
     /// helper stopped or that setup must run again.
@@ -710,9 +750,11 @@ mod tests {
             (error.code, error.error.as_str()),
             ("blocked", "This shell may not connect")
         );
+
         let report = diagnose(status, uid.max(501));
         assert_eq!(report["checks"][0]["name"], "Helper reachable from here");
         assert_eq!(report["nextSteps"][0], "This shell may not connect");
+
         for check in report["checks"].as_array().unwrap().iter().skip(1) {
             assert_eq!(
                 check["nextStep"],
@@ -730,6 +772,7 @@ mod tests {
     #[test]
     fn input_pinned_to_an_earlier_same_size_display_counts_as_ready() {
         use super::{Display, Epoch, Session, repinnable};
+
         let session = Session {
             epoch: Epoch {
                 uid: 503,
@@ -746,6 +789,7 @@ mod tests {
             capture: true,
             input: false,
         };
+
         let status = |width: f64| {
             json!({"inputService": {"ok": true, "protocolVersion": 1,
             "accessibility": true, "enforcedEpoch": {"uid": 503, "securitySessionId": 100135,
@@ -756,6 +800,7 @@ mod tests {
             !repinnable(&status(1440.0), &session),
             "a new size needs a new look"
         );
+
         let mut other = status(1512.0);
         other["inputService"]["enforcedEpoch"]["securitySessionId"] = json!(1);
         assert!(!repinnable(&other, &session), "never across sessions");
@@ -764,6 +809,7 @@ mod tests {
     #[test]
     fn elapsed_times_read_like_ps_writes_them() {
         use std::time::Duration;
+
         assert_eq!(running_for("05:09"), Some(Duration::from_secs(309)));
         assert_eq!(running_for("12:05:09"), Some(Duration::from_secs(43_509)));
         assert_eq!(
@@ -784,9 +830,11 @@ mod tests {
         };
         assert!(input_build_current(&status(false)));
         assert!(!input_build_current(&status(true)));
+
         let mut older = status(false);
         older["inputService"]["build"] = json!("old");
         assert!(!input_build_current(&older));
+
         let mut legacy = status(false);
         legacy["inputService"]
             .as_object_mut()

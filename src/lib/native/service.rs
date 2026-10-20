@@ -76,15 +76,18 @@ type Executable = (PathBuf, (u64, u64));
 /// if the path is replaced meanwhile.
 fn started_from() -> (Option<String>, Option<Executable>) {
     use std::os::unix::fs::MetadataExt;
+
     // Started through the shared link, the executable is the file it names.
     let Some(path) = std::env::current_exe().and_then(std::fs::canonicalize).ok() else {
         return (None, None);
     };
+
     let Some((file, metadata)) = crate::digest::open_regular(&path)
         .and_then(|file| file.metadata().ok().map(|metadata| (file, metadata)))
     else {
         return (None, None);
     };
+
     let build = crate::digest::sha256(&file);
     (build, Some((path, (metadata.dev(), metadata.ino()))))
 }
@@ -93,6 +96,7 @@ impl Service {
     /// Whether the file this process started from has been replaced.
     fn replaced(&self) -> bool {
         use std::os::unix::fs::MetadataExt;
+
         self.executable.as_ref().is_none_or(|(path, identity)| {
             std::fs::metadata(path).map_or(true, |metadata| {
                 (metadata.dev(), metadata.ino()) != *identity
@@ -116,14 +120,17 @@ impl Service {
                 "The input session or permission changed; release control",
             ));
         }
+
         Ok(())
     }
 
     async fn cleanup(&self) -> Result<()> {
         let mut engine = self.engine.lock().await;
+
         if !self.gate.active()? {
             engine.release()?;
         }
+
         Ok(())
     }
 
@@ -136,6 +143,7 @@ impl Service {
                 .try_lock()
                 .ok()
                 .map(|engine| engine.held_input());
+
             return Ok(json!({
                 "ok": true,
                 "protocolVersion": 1,
@@ -153,6 +161,7 @@ impl Service {
                 "streaming": true,
             }));
         }
+
         if operation == Operation::Shutdown {
             // Bound to this process: a replacement that has since bound the same
             // socket never honours a request meant for its predecessor.
@@ -162,12 +171,14 @@ impl Service {
                     "Shutdown names a different input service process",
                 ));
             }
+
             if self.gate.active()? {
                 return Err(Error::new(
                     "busy",
                     "The input service has an active controller",
                 ));
             }
+
             // Release held input first; only an acknowledged release closes the
             // gate for good. Holding the engine lock keeps acquire out meanwhile.
             let mut engine = self.engine.lock().await;
@@ -178,14 +189,17 @@ impl Service {
                 )
                 .uncertain());
             }
+
             self.gate.close()?;
             return Ok(json!({ "ok": true, "stopping": true, "pid": std::process::id() }));
         }
+
         if operation == Operation::Release {
             self.gate.cancel(Some(owner))?;
             self.cleanup().await?;
             return Ok(json!({ "ok": true, "released": true }));
         }
+
         if operation == Operation::Reset {
             let expected = InputEpoch::deserialize(&request["epoch"])?;
             let current = InputEpoch::from_proof(&session_info()?, std::process::id())?;
@@ -195,9 +209,11 @@ impl Service {
                     "Recovery requires the current hidden session and permission",
                 ));
             }
+
             self.gate.cancel(None)?;
             let mut engine = self.engine.lock().await;
             let rebound = engine.rebind(current);
+
             // Enforce whatever epoch the engine now holds, even when its
             // release failed: the two never disagree, and the timer keeps
             // retrying that release against the display it was bound to.
@@ -205,14 +221,18 @@ impl Service {
                 .epoch
                 .write()
                 .map_err(|_| Error::new("native", "Input identity failed"))? = engine.epoch.clone();
+
             rebound?;
             return Ok(json!({ "ok": true, "released": true }));
         }
+
         self.check()?;
+
         if operation == Operation::Renew {
             self.gate.renew(owner)?;
             return Ok(json!({ "ok": true }));
         }
+
         let expected = InputEpoch::deserialize(&request["epoch"])?;
         let epoch = self.epoch()?;
         if expected != epoch {
@@ -221,22 +241,28 @@ impl Service {
                 "Input coordinates belong to a different session or display",
             ));
         }
+
         if operation == Operation::Acquire {
             let mut engine = self.engine.lock().await;
+
             if self.gate.active()? {
                 return Err(Error::new(
                     "busy",
                     "The native input service already has a controller",
                 ));
             }
+
             engine.check()?;
             engine.release()?;
             engine.grant = Some(self.gate.acquire(owner)?);
+
             return Ok(json!({ "ok": true }));
         }
+
         if operation != Operation::Input {
             return Err(Error::new("input", "Unknown native operation"));
         }
+
         let grant = self.gate.grant(owner)?;
         actions::validate(
             &request["actions"],
@@ -246,32 +272,42 @@ impl Service {
                 scale: 1.0,
             },
         )?;
+
         let actions = Vec::<Action>::deserialize(&request["actions"])?;
         let mut engine = self.engine.lock().await;
+
         drop(grant.authorize()?);
         engine.grant = Some(grant);
+
         for (performed, action) in actions.into_iter().enumerate() {
             let before = engine.posted;
+
             if let Err(error) = engine.perform(action).await {
                 let _ = self.gate.revoke();
+
                 // An action that posted some of its events before failing
                 // (a few typed characters, one click of two) had part of
                 // its effect, and nobody can say which part.
                 let partial = engine.posted > before;
                 let cleanup = engine.release();
+
                 let mut reply = json!(error);
                 reply["performed"] = json!(performed);
                 reply["partial"] = json!(partial);
+
                 // A cancellation is the person's doing and tells them what
                 // landed; any other break mid-action leaves that unknown.
                 let unknown = partial && error.code != "cancelled";
                 reply["uncertain"] = json!(cleanup.is_err() || unknown || error.uncertain);
+
                 if let Err(error) = cleanup {
                     reply["cleanupError"] = json!(error.error);
                 }
+
                 return Ok(reply);
             }
         }
+
         Ok(json!({
             "ok": true,
             "performed": request["actions"].as_array().map(Vec::len),
@@ -287,12 +323,14 @@ const SESSION_GONE_CHECKS: u32 = 3;
 pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()> {
     let (build, executable) = started_from();
     crate::session::validate_target_uid(uid, controller_uid)?;
+
     if controller_uid == 0 {
         return Err(Error::new(
             "identity",
             "The input service must run in a distinct helper account",
         ));
     }
+
     let mut engine = Engine::new(uid)?;
     let (listener, _endpoint) = super::endpoint::bind(
         &socket,
@@ -301,7 +339,9 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
         super::endpoint::Directory::Shared(0o755),
     )
     .await?;
+
     engine.recover(socket.with_extension("held.json"))?;
+
     let service = Arc::new(Service {
         build,
         executable,
@@ -311,6 +351,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
         gate: Arc::new(Gate::default()),
     });
     let mut timer = tokio::time::interval(Duration::from_millis(50));
+
     // Once its login ends (a log-out) the service can never act again, yet
     // would keep the socket from the next login's service: it exits after
     // its desktop has been gone for a few checks in a row.
@@ -318,12 +359,15 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     // A stalled loop must not take its missed looks all at once.
     session_checks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut session_gone = 0u32;
+
     let slots = Arc::new(Semaphore::new(16));
     let mut tasks = JoinSet::new();
+
     // Both listeners exist before the loop, so a signal that arrives between
     // two passes is still delivered.
     let mut interrupt = signal(SignalKind::interrupt())?;
     let mut terminate = signal(SignalKind::terminate())?;
+
     // Every exit path, including an internal failure, closes ownership and
     // releases held input before returning.
     let outcome = loop {
@@ -341,6 +385,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
                 if service.check().is_err() {
                     let _ = service.gate.revoke();
                 }
+
                 match service.gate.active() {
                     Ok(true) => {}
                     Ok(false) => {
@@ -359,12 +404,14 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
                     tokio::time::sleep(Duration::from_millis(10)).await;
                     continue;
                 };
+
                 let Ok(peer) = stream.peer_cred() else {
                     continue;
                 };
                 if peer.uid() != controller_uid && peer.uid() != uid {
                     continue;
                 }
+
                 let Ok(slot) = slots.clone().try_acquire_owned() else {
                     // Nothing was dispatched: say so, rather than hang up in
                     // a way the controller must treat as uncertain.
@@ -374,6 +421,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
                     )));
                     continue;
                 };
+
                 let service = service.clone();
                 tasks.spawn(async move {
                     let _slot = slot;
@@ -382,10 +430,12 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
             }
         }
     };
+
     let closed = service.gate.close();
     tasks.abort_all();
     while tasks.join_next().await.is_some() {}
     let cleanup = service.cleanup().await;
+
     outcome.and(closed).and(cleanup)
 }
 
@@ -402,6 +452,7 @@ async fn handle(mut stream: UnixStream, service: Arc<Service>) -> Result<()> {
         Ok(request) => request,
         Err(error) => return reply(&mut stream, Err(error)).await,
     };
+
     let operation = Operation::of(&request);
     let result = if operation == Operation::Input {
         let mut dispatch = std::pin::pin!(service.dispatch(&request));
@@ -418,20 +469,25 @@ async fn handle(mut stream: UnixStream, service: Arc<Service>) -> Result<()> {
     } else {
         service.dispatch(&request).await
     };
+
     let stopping = operation == Operation::Shutdown && result.is_ok();
     let written = reply(&mut stream, result).await;
+
     if stopping {
         service.stopping.notify_one();
     }
+
     written
 }
 
 async fn reply(stream: &mut UnixStream, result: Result<Value>) -> Result<()> {
     let mut bytes = serde_json::to_vec(&result.unwrap_or_else(|e| json!(e)))?;
     bytes.push(b'\n');
+
     tokio::time::timeout(Duration::from_secs(1), stream.write_all(&bytes))
         .await
         .map_err(|_| Error::new("transport", "Native reply timed out"))??;
+
     Ok(())
 }
 
@@ -450,6 +506,7 @@ mod tests {
                 }
             }
         });
+
         let result = read_request(&mut server).await;
         writer.abort();
         result

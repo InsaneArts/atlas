@@ -134,6 +134,7 @@ pub fn plist(agent: &Agent, logs: &Path) -> String {
     .map(|argument| format!("\t\t{}\n", string(argument)))
     .collect::<String>();
     let log = logs.join(format!("{}.log", agent.label));
+
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
@@ -209,11 +210,13 @@ pub fn run(request: &str) -> Result<Value> {
             "setup-helper must run as the requested helper account",
         ));
     }
+
     let account = account_with_uid(uid)?.ok_or_else(|| problem("Helper account not found"))?;
     let layout = Layout {
         uid,
         home: account.home,
     };
+
     match request {
         Request::Inspect { labels, .. } => inspect(&layout, &labels),
         Request::Prepare { controller, .. } => prepare(&layout, &controller),
@@ -244,6 +247,7 @@ fn parse_job(text: &str) -> Result<Job> {
     let path = field("path = ")
         .filter(|path| path.starts_with('/'))
         .ok_or_else(|| problem("launchctl reported a job without a definition path"))?;
+
     Ok(Job::Loaded {
         pid: field("pid = ").and_then(|pid| pid.parse().ok()),
         path: PathBuf::from(path),
@@ -303,6 +307,7 @@ fn wait_for<T>(
     wanted: impl Fn(Job) -> Option<T>,
 ) -> Result<T> {
     let deadline = Instant::now() + Duration::from_secs(5);
+
     loop {
         if let Some(value) = wanted(job(layout, label)?) {
             return Ok(value);
@@ -343,15 +348,18 @@ fn file(path: &Path) -> Result<File> {
 
 fn job_report(layout: &Layout, label: &str) -> Result<Value> {
     let plist = layout.agent_plist(label);
+
     let (loaded, pid, path) = match job(layout, label)? {
         Job::Absent => (false, None, None),
         Job::Loaded { pid, path } => (true, pid, Some(path)),
     };
+
     let (kind, sha256) = match file(&plist)? {
         File::Absent => ("absent", None),
         File::Regular(sha256) => ("regular", Some(sha256)),
         File::Other => ("other", None),
     };
+
     Ok(json!({
         "loaded": loaded,
         "pid": pid,
@@ -364,10 +372,12 @@ fn job_report(layout: &Layout, label: &str) -> Result<Value> {
 
 fn inspect(layout: &Layout, labels: &[String]) -> Result<Value> {
     let mut jobs = serde_json::Map::new();
+
     for label in labels {
         require_name(label)?;
         jobs.insert(label.clone(), job_report(layout, label)?);
     }
+
     Ok(json!({ "ok": true, "home": layout.home, "jobs": jobs }))
 }
 
@@ -383,6 +393,7 @@ fn search_only(rights: &str) -> bool {
 /// whether the controller entry is present; anything else is refused.
 pub fn acl_policy(lines: &[String], controller: Option<u32>) -> std::result::Result<bool, String> {
     let mut granted = false;
+
     for line in lines {
         let fields: Vec<&str> = line.split(':').collect();
         match (fields.as_slice(), controller) {
@@ -394,6 +405,7 @@ pub fn acl_policy(lines: &[String], controller: Option<u32>) -> std::result::Res
             _ => return Err(format!("unexpected access entry {line}")),
         }
     }
+
     Ok(granted)
 }
 
@@ -412,6 +424,7 @@ fn prepare(layout: &Layout, controller: &str) -> Result<Value> {
     if controller_uid == layout.uid {
         return Err(problem("The controller must be a different account"));
     }
+
     let root = layout.root();
     let directories = [
         (root.clone(), true),
@@ -420,6 +433,7 @@ fn prepare(layout: &Layout, controller: &str) -> Result<Value> {
         (root.join(LOGS), false),
         (root.join(BACKUP), false),
     ];
+
     // Validate everything that exists before changing anything.
     let mut grants = Vec::new();
     for (path, shared) in &directories {
@@ -433,25 +447,31 @@ fn prepare(layout: &Layout, controller: &str) -> Result<Value> {
                         path.display()
                     )));
                 }
+
                 acl_policy(&acl_lines(path)?, shared.then_some(controller_uid)).map_err(
                     |reason| problem(format!("{}: {reason}; it was not changed", path.display())),
                 )?
             }
         };
+
         grants.push(granted);
     }
+
     let mut changed = Vec::new();
+
     for ((path, shared), granted) in directories.iter().zip(grants) {
         match fs::DirBuilder::new().mode(0o700).create(path) {
             Ok(()) => changed.push(path.clone()),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(error.into()),
         }
+
         if fs::symlink_metadata(path)?.mode() & 0o7777 != 0o700 {
             // A deleted socket directory comes back 0755 from the capture daemon.
             fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
             changed.push(path.clone());
         }
+
         if *shared && !granted {
             let status = Command::new("/bin/chmod")
                 .args(["+a", &format!("user:{controller} allow search")])
@@ -463,9 +483,11 @@ fn prepare(layout: &Layout, controller: &str) -> Result<Value> {
                     path.display()
                 )));
             }
+
             changed.push(path.clone());
         }
     }
+
     changed.dedup();
     Ok(json!({ "ok": true, "root": root, "changed": changed }))
 }
@@ -476,6 +498,7 @@ fn install(layout: &Layout, agent: &Agent) -> Result<Value> {
             "Only the managed helper daemon in the private layout can be installed",
         ));
     }
+
     if !fs::symlink_metadata(&agent.program).is_ok_and(|metadata| metadata.is_file())
         || !agent.program.is_absolute()
     {
@@ -483,6 +506,7 @@ fn install(layout: &Layout, agent: &Agent) -> Result<Value> {
             "The helper daemon program must be an absolute regular file",
         ));
     }
+
     let text = plist(agent, &layout.logs());
     let path = layout.agent_plist(LABEL);
     match file(&path)? {
@@ -498,6 +522,7 @@ fn install(layout: &Layout, agent: &Agent) -> Result<Value> {
             )));
         }
     }
+
     let pid = loaded(layout, LABEL, &path)?;
     Ok(json!({ "ok": true, "plist": path, "pid": pid, "sha256": text_sha256(&text) }))
 }
@@ -512,21 +537,25 @@ fn loaded(layout: &Layout, label: &str, path: &Path) -> Result<Option<u32>> {
             wait_for(layout, label, "loaded", as_loaded)?
         }
     };
+
     if from != path {
         return Err(problem(format!(
             "{label} is loaded from {}",
             from.display()
         )));
     }
+
     Ok(pid)
 }
 
 fn retire(layout: &Layout, label: &str, sha256: &str, missing_ok: bool) -> Result<Value> {
     require_name(label)?;
     require_sha256(sha256)?;
+
     let path = layout.agent_plist(label);
     let backup = layout.backup(label, sha256);
     let plist = file(&path)?;
+
     // Validate the definition before unloading anything.
     match &plist {
         File::Regular(current) if current == sha256 => {}
@@ -542,6 +571,7 @@ fn retire(layout: &Layout, label: &str, sha256: &str, missing_ok: bool) -> Resul
             )));
         }
     }
+
     if let Job::Loaded { pid, path: loaded } = job(layout, label)? {
         // Unloading the job that runs this worker would sever its own reply.
         if pid == u32::try_from(nix::unistd::getppid().as_raw()).ok() {
@@ -549,17 +579,20 @@ fn retire(layout: &Layout, label: &str, sha256: &str, missing_ok: bool) -> Resul
                 "Refusing to unload {label} through its own capture daemon"
             )));
         }
+
         if loaded != path {
             return Err(problem(format!(
                 "{label} is loaded from {}; it was not changed",
                 loaded.display()
             )));
         }
+
         launchctl(&["bootout", &format!("{}/{label}", layout.domain())])?;
         wait_for(layout, label, "unloaded", |job| {
             (job == Job::Absent).then_some(())
         })?;
     }
+
     if let File::Regular(_) = plist {
         match file(&backup)? {
             File::Absent => fs::rename(&path, &backup)?,
@@ -573,12 +606,14 @@ fn retire(layout: &Layout, label: &str, sha256: &str, missing_ok: bool) -> Resul
             }
         }
     }
+
     Ok(json!({ "ok": true, "label": label, "backup": backup, "sha256": sha256 }))
 }
 
 fn restore(layout: &Layout, label: &str, sha256: &str) -> Result<Value> {
     require_name(label)?;
     require_sha256(sha256)?;
+
     let path = layout.agent_plist(label);
     let backup = layout.backup(label, sha256);
     match file(&path)? {
@@ -595,6 +630,7 @@ fn restore(layout: &Layout, label: &str, sha256: &str) -> Result<Value> {
             )));
         }
     }
+
     let pid = loaded(layout, label, &path)?;
     Ok(json!({ "ok": true, "plist": path, "pid": pid }))
 }
@@ -608,6 +644,7 @@ mod tests {
         for name in ["dev.atlas.capture", "theiskaa", "a_b-c.1"] {
             assert!(valid_name(name), "{name}");
         }
+
         for name in [
             "",
             ".hidden",
@@ -633,16 +670,19 @@ mod tests {
         };
         let text = plist(&agent, Path::new("/Users/h/.atlas/logs"));
         assert!(text.contains("<string>/Users/Shared/A&amp;B &lt;x&gt;/sessiond</string>"));
+
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent.plist");
         fs::write(&path, &text).unwrap();
         assert_eq!(file(&path).unwrap(), File::Regular(text_sha256(&text)));
+
         let lint = Command::new("/usr/bin/plutil")
             .arg("-lint")
             .arg(&path)
             .output()
             .unwrap();
         assert!(lint.status.success());
+
         let json = Command::new("/usr/bin/plutil")
             .args(["-convert", "json", "-o", "-"])
             .arg(&path)
@@ -671,11 +711,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("p");
         assert_eq!(file(&path).unwrap(), File::Absent);
+
         fs::write(&path, "abc").unwrap();
         assert!(matches!(file(&path).unwrap(), File::Regular(_)));
+
         let link = dir.path().join("l");
         std::os::unix::fs::symlink(&path, &link).unwrap();
         assert_eq!(file(&link).unwrap(), File::Other);
+
         let dangling = dir.path().join("d");
         std::os::unix::fs::symlink(dir.path().join("missing"), &dangling).unwrap();
         assert_eq!(file(&dangling).unwrap(), File::Other);
@@ -709,6 +752,7 @@ mod tests {
             acl_policy(&[entry(501, "allow", "execute")], Some(501)),
             Ok(true)
         );
+
         for lines in [
             vec![entry(501, "allow", "list")],
             vec![entry(501, "allow", "search,list")],
@@ -720,6 +764,7 @@ mod tests {
         ] {
             assert!(acl_policy(&lines, Some(501)).is_err(), "{lines:?}");
         }
+
         assert!(acl_policy(&[entry(501, "allow", "search")], None).is_err());
     }
 
@@ -752,6 +797,7 @@ mod tests {
             uid: nix::unistd::getuid().as_raw(),
             home: "/nonexistent-home".into(),
         };
+
         let agent = |label: &str, socket: PathBuf| Agent {
             label: label.into(),
             program: "/bin/sh".into(),
@@ -778,6 +824,7 @@ mod tests {
         fs::create_dir_all(layout.home.join("Library/LaunchAgents")).unwrap();
         // A label launchd has never seen: inspection is real and read-only.
         let label = format!("dev.atlas.test.{}", &crate::control::token()[..12]);
+
         (dir, layout, label)
     }
 
@@ -788,8 +835,10 @@ mod tests {
         let path = layout.agent_plist(&label);
         fs::write(&path, "definition").unwrap();
         let sha256 = text_sha256("definition");
+
         assert!(retire(&layout, &label, &"0".repeat(64), false).is_err());
         assert!(path.exists(), "a mismatched plist is left in place");
+
         let first = retire(&layout, &label, &sha256, false).unwrap();
         assert!(!path.exists());
         assert_eq!(
@@ -797,6 +846,7 @@ mod tests {
             "definition"
         );
         assert_eq!(retire(&layout, &label, &sha256, false).unwrap(), first);
+
         let other = format!("{label}.other");
         assert!(
             retire(&layout, &other, &sha256, false).is_err(),
@@ -817,6 +867,7 @@ mod tests {
         fs::write(&target, "definition").unwrap();
         std::os::unix::fs::symlink(&target, &path).unwrap();
         let sha256 = text_sha256("definition");
+
         assert!(retire(&layout, &label, &sha256, true).is_err());
         assert!(restore(&layout, &label, &sha256).is_err());
         assert!(
@@ -825,11 +876,13 @@ mod tests {
                 .file_type()
                 .is_symlink()
         );
+
         fs::remove_file(&path).unwrap();
         assert!(
             restore(&layout, &label, &sha256).is_err(),
             "no backup to restore"
         );
+
         fs::write(&path, "changed").unwrap();
         assert!(restore(&layout, &label, &sha256).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), "changed");
@@ -844,6 +897,7 @@ mod tests {
         assert_eq!(mode(&capture), 0o700);
         assert_eq!(acl_policy(&acl_lines(&capture).unwrap(), Some(0)), Ok(true));
         assert!(acl_lines(&layout.logs()).unwrap().is_empty());
+
         fs::set_permissions(&capture, fs::Permissions::from_mode(0o755)).unwrap();
         let repaired = prepare(&layout, "root").unwrap();
         assert_eq!(repaired["changed"], json!([capture]));
@@ -853,6 +907,7 @@ mod tests {
             1,
             "the grant is not duplicated"
         );
+
         let user = std::env::var("USER").unwrap();
         Command::new("/bin/chmod")
             .args(["+a", &format!("user:{user} allow list")])

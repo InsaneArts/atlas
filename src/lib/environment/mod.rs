@@ -110,16 +110,21 @@ pub(super) async fn freeze(
     if selections.is_empty() || selections.len() > MAX_SELECTIONS {
         return Err(problem("Select 1–32 files"));
     }
+
     unique_targets(selections.iter().map(|file| file.target.as_path()))?;
     client.identity().await?;
+
     let helper = helper_name(client.config.helper_uid)?;
     prune(client, &helper).await;
+
     let id = crate::control::token();
     let stage = stage_path(client, &id)?;
     create_stage(&stage, &helper)?;
+
     let result = async {
         let mut files = Vec::new();
         let mut total = 0;
+
         for (index, file) in selections.into_iter().enumerate() {
             let source = if file.source.is_absolute() {
                 file.source
@@ -129,15 +134,19 @@ pub(super) async fn freeze(
                     .ok_or_else(|| problem("Missing manifest parent"))?
                     .join(file.source)
             };
+
             let source = fs::canonicalize(source)?;
             let bytes = read_limited(&source, MAX_FILE)?;
             total += bytes.len() as u64;
+
             if total > MAX_FILE {
                 return Err(problem("Selected files exceed the aggregate 128 MiB limit"));
             }
+
             let source = stage.join(format!("payload-{index}"));
             atomic_write(&source, &bytes, 0o600)?;
             allow_helper(&source, &helper, false)?;
+
             files.push(Payload {
                 source,
                 target: file.target,
@@ -145,6 +154,7 @@ pub(super) async fn freeze(
                 executable: file.executable,
             });
         }
+
         let mut result = dispatch(
             client,
             &helper,
@@ -158,28 +168,34 @@ pub(super) async fn freeze(
         if result["ok"] == false && result["plan"].is_null() {
             return Ok(result);
         }
+
         let plan: Plan = decode(&serde_json::to_vec(&result["plan"])?)?;
         if plan.id != id || plan.uid != client.config.helper_uid {
             return Err(problem("Preview returned a different plan identity"));
         }
+
         atomic_write(
             &stage.join("plan.json"),
             &serde_json::to_vec_pretty(&plan)?,
             0o600,
         )?;
+
         result
             .as_object_mut()
             .ok_or_else(|| problem("Invalid preview result"))?
             .remove("plan");
+
         result["retainedPlan"] = json!(stage);
         atomic_write(
             &stage.join("last-result.json"),
             &serde_json::to_vec_pretty(&result)?,
             0o600,
         )?;
+
         Ok(result)
     }
     .await;
+
     match previewed(result, &id, &stage) {
         Ok(result) if apply_now && result["ok"] == true => apply_frozen(client, &helper, &id).await,
         result => result,
@@ -216,6 +232,7 @@ async fn apply_frozen(client: &Client, helper: &str, plan_id: &str) -> Result<Va
              To undo an applied plan, run atlas environment rollback {plan_id} --apply."
         )));
     }
+
     let lock = lock_stage(&stage)?;
     let plan: Plan = decode(&read_limited(&stage.join("plan.json"), MAX_RECORD)?)?;
     if plan.id != plan_id || plan.uid != client.config.helper_uid {
@@ -223,11 +240,13 @@ async fn apply_frozen(client: &Client, helper: &str, plan_id: &str) -> Result<Va
             "Frozen plan belongs to a different helper or plan ID",
         ));
     }
+
     let result = dispatch(client, helper, &stage, Request::Apply { plan }).await;
     // Discarded while still locked, so nothing else can start on it.
     if settled(&result, "applied") {
         discard(&stage);
     }
+
     drop(lock);
     operation(retained(result, plan_id, &stage), "apply")
 }
@@ -240,6 +259,7 @@ pub async fn rollback(client: &Client, transaction_id: &str, apply: bool) -> Res
     if created {
         create_stage(&stage, &helper)?;
     }
+
     let lock = lock_stage(&stage)?;
     let result = dispatch(
         client,
@@ -254,6 +274,7 @@ pub async fn rollback(client: &Client, transaction_id: &str, apply: bool) -> Res
     if rolled_back(&result, apply, created, &stage) {
         discard(&stage);
     }
+
     drop(lock);
     operation(
         retained(result, transaction_id, &stage),
@@ -304,6 +325,7 @@ pub fn leftovers(shared: &Path) -> Vec<PathBuf> {
     let Ok(entries) = fs::read_dir(shared) else {
         return Vec::new();
     };
+
     entries
         .flatten()
         .filter(|entry| {
@@ -311,6 +333,7 @@ pub fn leftovers(shared: &Path) -> Vec<PathBuf> {
             let id = name
                 .strip_prefix("environment-plan-")
                 .or_else(|| name.strip_prefix("environment-run-"));
+
             id.is_some_and(|id| validate_id(id).is_ok())
                 && fs::symlink_metadata(entry.path()).is_ok_and(|metadata| {
                     metadata.file_type().is_dir()
@@ -339,15 +362,18 @@ async fn prune(client: &Client, helper: &str) {
     let Some(shared) = client.config.identity_probe.parent() else {
         return;
     };
+
     for (id, stage) in stale(shared, UNUSED) {
         // Everything below happens under the plan's own lock; a plan in use
         // is skipped.
         let Ok(lock) = lock_stage(&stage) else {
             continue;
         };
+
         if !prunable(&stage, &id, client.config.helper_uid) {
             continue;
         }
+
         // A read-only question: has the helper ever started this plan?
         let answer = dispatch(
             client,
@@ -365,6 +391,7 @@ async fn prune(client: &Client, helper: &str) {
         if never && !requests(&stage) {
             discard(&stage);
         }
+
         drop(lock);
     }
 }
@@ -382,6 +409,7 @@ fn stale(shared: &Path, age: std::time::Duration) -> Vec<(String, PathBuf)> {
                 .ok()?
                 .elapsed()
                 .ok()?;
+
             (elapsed > age).then_some((id, stage))
         })
         .collect()
@@ -394,6 +422,7 @@ fn prunable(stage: &Path, id: &str, uid: u32) -> bool {
         .ok()
         .and_then(|bytes| decode::<Plan>(&bytes).ok())
         .is_some_and(|plan| plan.id == id && plan.uid == uid);
+
     ours && !requests(stage)
 }
 
@@ -401,10 +430,12 @@ fn prunable(stage: &Path, id: &str, uid: u32) -> bool {
 /// actual process result, including its output, status, signal and timeout.
 pub async fn run(client: &Client, argv: Vec<String>) -> Result<Value> {
     runner::validate_argv(&argv)?;
+
     let id = crate::control::token();
     let stage = stage_path(client, &id)?.with_file_name(format!("environment-run-{id}"));
     let helper = helper_name(client.config.helper_uid)?;
     create_stage(&stage, &helper)?;
+
     let mut result = dispatch(client, &helper, &stage, Request::Run { argv }).await;
     if delivery_uncertain(&result) {
         match &mut result {
@@ -416,6 +447,7 @@ pub async fn run(client: &Client, argv: Vec<String>) -> Result<Value> {
     } else {
         let _ = fs::remove_dir_all(&stage);
     }
+
     result
 }
 
@@ -432,6 +464,7 @@ fn refused(reply: Value, request: &str) -> Result<Value> {
     if reply["exitCode"] != WORKER_REFUSED {
         return Ok(reply);
     }
+
     let error = run_output(&reply, 65536)
         .ok()
         .and_then(|output| serde_json::from_slice::<Value>(&output).ok())
@@ -465,6 +498,7 @@ fn delivery_uncertain(result: &Result<Value>) -> bool {
 fn retained(mut result: Result<Value>, id: &str, stage: &Path) -> Result<Value> {
     let plan = planned(stage);
     let kept = stage.exists();
+
     match &mut result {
         Ok(value) => {
             value["retainedPlan"] = if plan { json!(stage) } else { Value::Null };
@@ -482,11 +516,13 @@ fn retained(mut result: Result<Value>, id: &str, stage: &Path) -> Result<Value> 
             .push_str(&format!(" Retained request: {}.", stage.display())),
         Err(_) => {}
     }
+
     result
 }
 
 fn stage_path(client: &Client, id: &str) -> Result<PathBuf> {
     validate_id(id)?;
+
     let parent = client
         .config
         .identity_probe
@@ -495,9 +531,11 @@ fn stage_path(client: &Client, id: &str) -> Result<PathBuf> {
     let directory =
         directory(parent, false)?.ok_or_else(|| problem("Shared staging directory is missing"))?;
     installation_parent(&directory)?;
+
     if has_acl(parent)? {
         return Err(problem("Shared staging parent must not have an ACL"));
     }
+
     Ok(parent.join(format!("environment-plan-{id}")))
 }
 
@@ -507,24 +545,29 @@ fn create_stage(stage: &Path, helper: &str) -> Result<()> {
         .mode(0o700)
         .create(stage)
         .map_err(|error| Error::writing(stage, error))?;
+
     let shared = remove_inherited_acl(stage).and_then(|()| allow_helper(stage, helper, true));
     if shared.is_err() {
         let _ = fs::remove_dir(stage);
     }
+
     shared
 }
 
 fn lock_stage(stage: &Path) -> Result<fs::File> {
     let directory = directory(stage, false)?.ok_or_else(|| problem("Frozen plan is missing"))?;
     installation_parent(&directory)?;
+
     if directory.metadata()?.mode() & 0o7777 != 0o700 {
         return Err(problem("Frozen plan directory is not private"));
     }
+
     let lock = open_regular(&stage.join("controller.lock"), true)?
         .ok_or_else(|| problem("Plan lock is missing"))?;
     validate_private(&lock, false)?;
     lock.try_lock_exclusive()
         .map_err(|_| problem("This environment plan is already running"))?;
+
     Ok(lock)
 }
 
@@ -542,9 +585,11 @@ async fn dispatch(client: &Client, helper: &str, stage: &Path, request: Request)
         expected: Identity::from_epoch(&client.identity().await?.epoch),
         request,
     };
+
     let name = format!("request-{}", crate::control::token());
     let invocation = stage.join(&name);
     create_stage(&invocation, helper)?;
+
     let argv = match stage_request(&invocation, helper, &packet, mutating) {
         Ok(argv) => argv,
         Err(error) => {
@@ -552,15 +597,18 @@ async fn dispatch(client: &Client, helper: &str, stage: &Path, request: Request)
             return Err(error);
         }
     };
+
     let result = match client.run(argv).await {
         Ok(reply) if raw_output => refused(reply, &name),
         Ok(reply) => decode_reply(&reply, mutating, &name),
         Err(error) => Err(error),
     };
+
     if !delivery_uncertain(&result) {
         // A complete child reply means its immutable request is no longer in use.
         let _ = fs::remove_dir_all(&invocation);
     }
+
     result
 }
 
@@ -586,17 +634,21 @@ fn stage_request(
         allow_helper(&executable, helper, true)?;
         executable
     };
+
     let path = invocation.join("packet.json");
     atomic_write(&path, &serde_json::to_vec(packet)?, 0o600)?;
     allow_helper(&path, helper, false)?;
+
     let mut argv = vec![
         executable.to_string_lossy().into_owned(),
         "environment-worker".into(),
         path.to_string_lossy().into_owned(),
     ];
+
     if mutating {
         argv.push("--apply".into());
     }
+
     Ok(argv)
 }
 
@@ -611,11 +663,13 @@ fn decode_reply(reply: &Value, mutating: bool, request: &str) -> Result<Value> {
         let error = problem(message);
         if mutating { error.uncertain() } else { error }
     };
+
     if reply["timedOut"] == true || !reply["signal"].is_null() {
         return Err(invalid(
             "Environment worker was interrupted; retain the plan and inspect or resume its transaction",
         ));
     }
+
     let output = run_output(reply, MAX_RECORD as usize).map_err(|error| match error {
         OutputError::Malformed => invalid("Malformed environment output"),
         OutputError::Oversized => invalid("Environment output exceeded its limit"),
@@ -628,9 +682,11 @@ fn decode_reply(reply: &Value, mutating: bool, request: &str) -> Result<Value> {
     {
         return Err(invalid("Environment worker returned an invalid result"));
     }
+
     let missing = reply["exitCode"] == WORKER_REFUSED && never_started(&value, request);
     if mutating && value["ok"] == false && !missing {
         value["resumeRequired"] = json!(true);
     }
+
     Ok(value)
 }

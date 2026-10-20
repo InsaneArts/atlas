@@ -25,10 +25,12 @@ pub fn agents(value: &Value) -> String {
             } else {
                 format!("{} not connected", style::unknown())
             };
+
             let version = agent["version"]
                 .as_str()
                 .and_then(|version| version.split_whitespace().find(|word| word.contains('.')))
                 .unwrap_or("");
+
             vec![
                 agent_name(agent["agent"].as_str().unwrap_or("?")).to_owned(),
                 version.to_owned(),
@@ -36,7 +38,9 @@ pub fn agents(value: &Value) -> String {
             ]
         })
         .collect();
+
     let mut lines = vec![table::render(&["AGENT", "VERSION", "ATLAS"], &rows)];
+
     if agents.iter().any(|agent| {
         agent["installed"] == true && agent["connected"] != true && agent["error"].is_null()
     }) {
@@ -45,6 +49,7 @@ pub fn agents(value: &Value) -> String {
             style::cmd("atlas agents install")
         ));
     }
+
     lines.join("\n")
 }
 
@@ -52,24 +57,29 @@ pub fn agents(value: &Value) -> String {
 pub fn agents_project(value: &Value) -> String {
     let mut lines = Vec::new();
     let mut changed = false;
+
     for file in value["files"].as_array().into_iter().flatten() {
         let path = file["path"].as_str().unwrap_or("?");
         let name = std::path::Path::new(path)
             .file_name()
             .map_or(path.into(), |name| name.to_string_lossy());
+
         let line = match file["change"].as_str() {
             Some("added") => format!("Added Atlas to {name}"),
             Some("updated") => format!("Updated Atlas in {name}"),
             _ => format!("{name} already has Atlas"),
         };
+
         changed |= file["change"] != "unchanged";
         lines.push(format!("{} {}", style::ok(), text::printable(&line)));
     }
+
     if changed {
         lines.push(style::dim(
             "Agents working here will now test changes in the helper.",
         ));
     }
+
     lines.join("\n")
 }
 
@@ -77,8 +87,10 @@ pub fn agents_change(value: &Value) -> Rendered {
     let mut out = Vec::new();
     let mut err = Vec::new();
     let mut connected = false;
+
     for agent in value["agents"].as_array().into_iter().flatten() {
         let name = agent_name(agent["agent"].as_str().unwrap_or("?"));
+
         if agent["ok"] == true {
             connected |= agent["connected"] == true;
             let state = if agent["connected"] == true {
@@ -95,6 +107,7 @@ pub fn agents_change(value: &Value) -> Rendered {
             ));
         }
     }
+
     if connected {
         out.push(style::dim("New sessions know how to use Atlas."));
         out.push(format!(
@@ -102,6 +115,7 @@ pub fn agents_change(value: &Value) -> Rendered {
             style::cmd("atlas agents project")
         ));
     }
+
     Rendered {
         out: out.join("\n"),
         err: err.join("\n"),
@@ -113,6 +127,7 @@ pub fn switch(value: &Value) -> String {
         if accounts.is_empty() {
             return "No other account to switch to.".to_owned();
         }
+
         let rows: Vec<Vec<String>> = accounts
             .iter()
             .map(|account| {
@@ -128,8 +143,10 @@ pub fn switch(value: &Value) -> String {
                 ]
             })
             .collect();
+
         return table::render(&["NAME", "ACCOUNT", ""], &rows);
     }
+
     match value["choose"].as_str() {
         Some(name) => format!(
             "{} Screen locked. Click Switch User and choose {}.",
@@ -159,12 +176,15 @@ pub fn update(value: &Value) -> Rendered {
                 style::ok()
             )
         };
+
         return Rendered {
             out,
             err: String::new(),
         };
     }
+
     let helper = &value["helper"];
+
     if value["ok"] != true {
         let step = match helper["failedStep"].as_str() {
             Some("install") => "installing the shared command",
@@ -173,11 +193,13 @@ pub fn update(value: &Value) -> Rendered {
             Some("setup --apply") => "checking the setup",
             _ => "moving the helper onto it",
         };
+
         let reason = helper["failure"]["error"]
             .as_str()
             .or_else(|| helper["error"].as_str())
             .or_else(|| value["error"].as_str())
             .unwrap_or("it did not finish");
+
         return Rendered {
             out: String::new(),
             err: format!(
@@ -191,7 +213,9 @@ pub fn update(value: &Value) -> Rendered {
             ),
         };
     }
+
     let to = version(value["to"].as_str().unwrap_or(""));
+
     // Nothing was set up yet, so there was no helper to move.
     if helper["next"] == "atlas init" {
         return Rendered {
@@ -203,20 +227,25 @@ pub fn update(value: &Value) -> Rendered {
             err: String::new(),
         };
     }
+
     let mut lines = vec![if value["resumed"] == true {
         format!("{} Finished the earlier update", style::ok())
     } else {
         format!("{} Updated Atlas to {to}", style::ok())
     }];
+
     let refreshed = helper["agents"]["refreshed"]
         .as_array()
         .map(Vec::len)
         .unwrap_or(0);
     let mut facts = vec!["the helper runs it now".to_owned()];
+
     if refreshed > 0 {
         facts.push("agent plugins refreshed".to_owned());
     }
+
     lines.push(format!("  {}", style::dim(facts.join(" · "))));
+
     Rendered {
         out: lines.join("\n"),
         err: String::new(),
@@ -225,6 +254,7 @@ pub fn update(value: &Value) -> Rendered {
 
 pub fn uninstall(value: &Value) -> String {
     let mut lines = vec![format!("{} Atlas is removed", style::ok())];
+
     if let (Some(name), Some(command)) = (
         value["kept"]["helperAccount"].as_str(),
         value["kept"]["remove"].as_str(),
@@ -235,6 +265,7 @@ pub fn uninstall(value: &Value) -> String {
             style::cmd(command)
         ));
     }
+
     lines.join("\n")
 }
 
@@ -245,6 +276,7 @@ pub fn login(value: &Value) -> String {
             style::unknown()
         );
     }
+
     if value["enabled"] == true {
         format!("{} The menu bar opens at login", style::ok())
     } else {

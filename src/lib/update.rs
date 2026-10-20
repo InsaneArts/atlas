@@ -112,6 +112,7 @@ fn curl(url: &str, output: &Path) -> Result<()> {
     } else {
         "=https"
     };
+
     let finished = Command::new("/usr/bin/curl")
         .args(["-fsSL", "--proto", protocols, "--proto-redir", "=https"])
         .args(["--connect-timeout", CONNECT_TIMEOUT])
@@ -123,6 +124,7 @@ fn curl(url: &str, output: &Path) -> Result<()> {
     if finished.status.success() {
         return Ok(());
     }
+
     let said = String::from_utf8_lossy(&finished.stderr);
     Err(problem(match said.trim() {
         "" => format!("Could not download {url}"),
@@ -147,7 +149,7 @@ fn check(program: &str, args: &[&std::ffi::OsStr], why: &str) -> Result<()> {
         .status
         .success()
         .then_some(())
-        .ok_or_else(|| problem(why.to_owned()))
+        .ok_or_else(|| problem(why))
 }
 
 /// A private scratch directory for one update, emptied first: an update
@@ -157,10 +159,12 @@ fn scratch() -> Result<PathBuf> {
     if path.exists() {
         fs::remove_dir_all(&path)?;
     }
+
     fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
         .create(&path)?;
+
     Ok(path)
 }
 
@@ -170,6 +174,7 @@ fn download(source: &Source, work: &Path) -> Result<String> {
     let sums = work.join("SHA256SUMS");
     curl(&format!("{base}/SHA256SUMS"), &sums)
         .map_err(|error| unpublished(error, source.latest))?;
+
     // The name becomes a path: accept only a plain archive name.
     let name = fs::read_to_string(&sums)?
         .lines()
@@ -179,6 +184,7 @@ fn download(source: &Source, work: &Path) -> Result<String> {
         .map(str::to_owned)
         .ok_or_else(|| problem("SHA256SUMS does not name an Atlas archive"))?;
     curl(&format!("{base}/{name}"), &work.join(&name))?;
+
     Ok(name)
 }
 
@@ -191,12 +197,14 @@ fn verify(work: &Path, name: &str, allow_unnotarized: bool) -> Result<PathBuf> {
             (file == name).then(|| sum.to_owned())
         })
         .ok_or_else(|| problem(format!("SHA256SUMS does not list {name}")))?;
+
     let archive = work.join(name);
     let actual = crate::digest::file_sha256(&archive)
         .ok_or_else(|| problem(format!("{name} could not be read")))?;
     if actual != expected {
         return Err(problem(format!("Checksum mismatch for {name}")));
     }
+
     let unpacked = work.join("unpacked");
     check(
         "/usr/bin/ditto",
@@ -208,6 +216,7 @@ fn verify(work: &Path, name: &str, allow_unnotarized: bool) -> Result<PathBuf> {
         ],
         "The archive could not be unpacked",
     )?;
+
     let app = unpacked.join("Atlas.app");
     check(
         "/usr/bin/codesign",
@@ -219,9 +228,11 @@ fn verify(work: &Path, name: &str, allow_unnotarized: bool) -> Result<PathBuf> {
         ],
         "The app's signature is invalid",
     )?;
+
     if !setup::developer_id(&app.join(EXECUTABLE)) {
         return Err(problem("The app is not Atlas signed by its Developer ID"));
     }
+
     let notarized = check(
         "/usr/sbin/spctl",
         &[
@@ -238,6 +249,7 @@ fn verify(work: &Path, name: &str, allow_unnotarized: bool) -> Result<PathBuf> {
             "The release is not notarized; --allow-unnotarized accepts it",
         ));
     }
+
     Ok(app)
 }
 
@@ -248,15 +260,18 @@ fn verify(work: &Path, name: &str, allow_unnotarized: bool) -> Result<PathBuf> {
 )]
 fn exchange(first: &Path, second: &Path) -> Result<()> {
     use std::{ffi::CString, os::unix::ffi::OsStrExt};
+
     let path = |path: &Path| {
         CString::new(path.as_os_str().as_bytes()).map_err(|_| problem("Invalid app path"))
     };
     let (first, second) = (path(first)?, path(second)?);
+
     // SAFETY: two NUL-terminated paths; RENAME_SWAP exchanges them or fails
     // leaving both in place.
     if unsafe { libc::renamex_np(first.as_ptr(), second.as_ptr(), libc::RENAME_SWAP) } != 0 {
         return Err(std::io::Error::last_os_error().into());
     }
+
     Ok(())
 }
 
@@ -301,12 +316,14 @@ fn finish_record(path: &Path) -> Result<Value> {
     let Some(record) = read_record(path)? else {
         return Ok(json!({"previous": null}));
     };
+
     let previous = record["previous"].as_str().map(PathBuf::from);
     let installed = record["installed"].as_str().map(Path::new);
     // Only a staging copy beside the installed app is ever removed.
     let removed = previous.as_ref().is_some_and(|previous| {
         staged_beside(previous, installed) && fs::remove_dir_all(previous).is_ok()
     });
+
     fs::remove_file(path)?;
     Ok(json!({"previous": previous, "removed": removed}))
 }
@@ -322,6 +339,7 @@ fn staged_beside(previous: &Path, installed: Option<&Path>) -> bool {
         .and_then(|name| name.to_str())
         .and_then(|name| name.strip_prefix(STAGED))
         .is_some_and(|rest| !rest.is_empty());
+
     named
         && previous.is_absolute()
         && installed.is_some_and(|installed| {
@@ -342,6 +360,7 @@ fn swap_recording(new: &Path, installed: &Path, name: &str, record: &Path) -> Re
         .ok_or_else(|| problem("The installed app has no parent directory"))?;
     let executable = crate::digest::file_sha256(&new.join(EXECUTABLE))
         .ok_or_else(|| problem("The new app's executable could not be read"))?;
+
     // A staging copy an earlier update left when it was stopped (no record
     // names it, or this update would be finishing it) goes first.
     for entry in fs::read_dir(parent)?.flatten() {
@@ -350,12 +369,14 @@ fn swap_recording(new: &Path, installed: &Path, name: &str, record: &Path) -> Re
             let _ = fs::remove_dir_all(&path);
         }
     }
+
     let staged = parent.join(format!("{STAGED}{}", crate::control::token()));
     check(
         "/usr/bin/ditto",
         &[new.as_os_str(), staged.as_os_str()],
         "The new app could not be staged beside the installed one",
     )?;
+
     // Recorded, in one rename, before the exchange: whatever happens next,
     // the next update finds this handover and finishes it first. After the
     // exchange `staged` holds the previous app. The new executable's hash
@@ -373,11 +394,13 @@ fn swap_recording(new: &Path, installed: &Path, name: &str, record: &Path) -> Re
         let _ = fs::remove_dir_all(&staged);
         return Err(error);
     }
+
     if let Err(error) = exchange(&staged, installed) {
         let _ = fs::remove_dir_all(&staged);
         let _ = fs::remove_file(record);
         return Err(error);
     }
+
     Ok(())
 }
 
@@ -388,17 +411,20 @@ fn resume(record: &Value, installed: &Path) -> Result<()> {
     let Some(expected) = record["executable"].as_str() else {
         return Ok(());
     };
+
     let previous = record["previous"].as_str().map(Path::new);
     let Some(previous) = previous.filter(|previous| staged_beside(previous, Some(installed)))
     else {
         return Ok(());
     };
+
     let sha256 = |app: &Path| crate::digest::file_sha256(&app.join(EXECUTABLE));
     if sha256(installed).as_deref() != Some(expected)
         && sha256(previous).as_deref() == Some(expected)
     {
         exchange(previous, installed)?;
     }
+
     Ok(())
 }
 
@@ -407,6 +433,7 @@ fn resume(record: &Value, installed: &Path) -> Result<()> {
 /// by others. ACLs are not counted, so this errs on the side of refusing.
 pub fn reachable_by_others(executable: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
+
     let mode = |path: &Path| fs::metadata(path).map(|metadata| metadata.permissions().mode());
     mode(executable).is_ok_and(|mode| mode & 0o005 == 0o005)
         && executable
@@ -419,16 +446,19 @@ pub fn reachable_by_others(executable: &Path) -> bool {
 /// (or `force`). Reports whether it changed and the versions involved.
 pub fn install(source: &Source, allow_unnotarized: bool, force: bool) -> Result<Value> {
     let installed = installed_app()?;
+
     // A swap whose handover did not finish is resumed before anything else.
     if let Some(record) = unfinished()? {
         resume(&record, &installed)?;
         return Ok(json!({"ok": true, "updated": true, "resumed": true, "record": record}));
     }
+
     if !reachable_by_others(&installed.join(EXECUTABLE)) {
         return Err(problem(
             "Atlas.app must be where the helper account can run it: install it in /Applications",
         ));
     }
+
     let work = scratch()?;
     let outcome = (|| {
         let name = download(source, &work)?;
@@ -442,8 +472,10 @@ pub fn install(source: &Source, allow_unnotarized: bool, force: bool) -> Result<
                 "available": name,
             }));
         }
+
         let app = verify(&work, &name, allow_unnotarized)?;
         swap(&app, &installed, &name)?;
+
         Ok(json!({
             "ok": true,
             "updated": true,
@@ -452,6 +484,7 @@ pub fn install(source: &Source, allow_unnotarized: bool, force: bool) -> Result<
             "app": installed,
         }))
     })();
+
     let _ = fs::remove_dir_all(&work);
     outcome
 }
@@ -502,6 +535,7 @@ mod tests {
             assert_eq!(unpublished(missing(), true).error, NO_RELEASE);
             assert_ne!(unpublished(missing(), false).error, NO_RELEASE);
         }
+
         let offline = problem("Could not download x: curl: (6) Could not resolve host");
         assert_ne!(unpublished(offline, true).error, NO_RELEASE);
     }
@@ -521,11 +555,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let installed = dir.path().join("Atlas.app");
         let new = dir.path().join(".Atlas.app.new");
+
         fs::create_dir_all(&installed).unwrap();
         fs::write(installed.join("version"), "old").unwrap();
         fs::create_dir_all(&new).unwrap();
         fs::write(new.join("version"), "new").unwrap();
+
         exchange(&new, &installed).unwrap();
+
         assert_eq!(
             fs::read_to_string(installed.join("version")).unwrap(),
             "new"
@@ -535,6 +572,7 @@ mod tests {
             "old",
             "kept"
         );
+
         assert!(exchange(&dir.path().join("missing"), &installed).is_err());
         assert_eq!(
             fs::read_to_string(installed.join("version")).unwrap(),
@@ -553,6 +591,7 @@ mod tests {
             fs::write(app.join("version"), version).unwrap();
             fs::write(app.join(EXECUTABLE), version).unwrap();
         }
+
         // A staging copy a stopped update left behind is swept first.
         let stale = root.join("Applications/.Atlas.app.stale");
         fs::create_dir_all(&stale).unwrap();
@@ -563,6 +602,7 @@ mod tests {
             fs::read_to_string(installed.join("version")).unwrap(),
             "new"
         );
+
         let plan = read_record(&record).unwrap().unwrap();
         let previous = PathBuf::from(plan["previous"].as_str().unwrap());
         assert_eq!(previous.parent(), installed.parent());
@@ -571,24 +611,28 @@ mod tests {
             plan["executable"],
             crate::digest::file_sha256(&installed.join(EXECUTABLE)).unwrap()
         );
+
         // The exchange happened: resuming changes nothing.
         resume(&plan, &installed).unwrap();
         assert_eq!(
             fs::read_to_string(installed.join("version")).unwrap(),
             "new"
         );
+
         // Stopped between the record and the exchange: resuming exchanges.
         exchange(&previous, &installed).unwrap();
         assert_eq!(
             fs::read_to_string(installed.join("version")).unwrap(),
             "old"
         );
+
         resume(&plan, &installed).unwrap();
         assert_eq!(
             fs::read_to_string(installed.join("version")).unwrap(),
             "new"
         );
         assert_eq!(fs::read_to_string(previous.join("version")).unwrap(), "old");
+
         let report = finish_record(&record).unwrap();
         assert_eq!(report["removed"], true);
         assert!(!previous.exists() && !record.exists());
@@ -608,6 +652,7 @@ mod tests {
         let root = fs::canonicalize(dir.path()).unwrap();
         let installed = root.join("Applications/Atlas.app");
         let record = root.join("update.json");
+
         for previous in [
             root.join("Documents"),
             root.join("Applications/Other.app"),
@@ -620,6 +665,7 @@ mod tests {
             assert!(previous.exists(), "{}", previous.display());
             assert!(!record.exists());
         }
+
         let staged = root.join("Applications/.Atlas.app.1");
         assert!(staged_beside(&staged, Some(&installed)));
         assert!(!staged_beside(&staged, None));
@@ -634,6 +680,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let record = dir.path().join("update.json");
         assert!(read_record(&record).unwrap().is_none());
+
         for corrupt in ["{\"previous\": ", "[]", ""] {
             fs::write(&record, corrupt).unwrap();
             let error = read_record(&record).unwrap_err();
@@ -656,6 +703,7 @@ mod tests {
             "{}",
             unlisted.error
         );
+
         fs::write(
             dir.path().join("SHA256SUMS"),
             format!("{}  {name}\n", "0".repeat(64)),
@@ -667,6 +715,7 @@ mod tests {
             "{}",
             mismatch.error
         );
+
         let sum = crate::digest::file_sha256(&dir.path().join(name)).unwrap();
         fs::write(dir.path().join("SHA256SUMS"), format!("{sum}  {name}\n")).unwrap();
         // The right bytes get past the checksum to unpacking, which fails here.
@@ -681,12 +730,14 @@ mod tests {
         let error = curl(&missing, &dir.path().join("out")).unwrap_err();
         assert!(error.error.starts_with("Could not download"));
         assert!(error.error.contains("curl"), "{}", error.error);
+
         let plain = curl("http://127.0.0.1:9/x", &dir.path().join("out")).unwrap_err();
         assert!(
             plain.error.contains("Could not download"),
             "{}",
             plain.error
         );
+
         let source = dir.path().join("source");
         fs::write(&source, b"bytes").unwrap();
         let local = format!("file://{}", source.display());
@@ -697,6 +748,7 @@ mod tests {
     #[test]
     fn only_paths_others_can_reach_are_runnable_by_the_helper() {
         use std::os::unix::fs::PermissionsExt;
+
         let dir = tempfile::tempdir().unwrap();
         let private = dir.path().join("home");
         let file = private.join("Applications/atlas");
@@ -704,6 +756,7 @@ mod tests {
         fs::write(&file, b"").unwrap();
         fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).unwrap();
         fs::set_permissions(&private, fs::Permissions::from_mode(0o700)).unwrap();
+
         assert!(
             !reachable_by_others(&file),
             "a private home blocks the helper"

@@ -66,6 +66,7 @@ fn options(args: &[String], root: &Path) -> Result<Options> {
                 .cloned()
                 .ok_or_else(|| format!("{flag} needs a value"))
         };
+
         match flag.as_str() {
             "--sign" => sign = Some(value()?),
             "--notarize" => notarize = Some(value()?),
@@ -73,6 +74,7 @@ fn options(args: &[String], root: &Path) -> Result<Options> {
             _ => return Err(format!("unknown argument {flag}\n\n{USAGE}")),
         }
     }
+
     Ok(Options {
         sign: sign.ok_or_else(|| format!("--sign is required\n\n{USAGE}"))?,
         notarize,
@@ -94,11 +96,13 @@ fn root() -> PathBuf {
 /// host's proc-macro builds).
 fn exec(program: &str, args: &[&str]) -> Result<()> {
     println!("+ {program} {}", args.join(" "));
+
     let status = Command::new(program)
         .env_remove("MACOSX_DEPLOYMENT_TARGET")
         .args(args)
         .status()
         .map_err(|error| format!("{program}: {error}"))?;
+
     status
         .success()
         .then_some(())
@@ -117,6 +121,7 @@ fn output(program: &str, args: &[&str]) -> Result<String> {
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
+
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
@@ -184,6 +189,7 @@ fn compile_icon(icon: &Path, app: &Path, stage: &Path) -> Result<()> {
             text(&stage.join("AppIcon.plist"))?,
         ],
     )?;
+
     resources
         .join("Assets.car")
         .is_file()
@@ -198,6 +204,7 @@ fn check_minimum(binary: &Path) -> Result<()> {
             "/usr/bin/xcrun",
             &["vtool", "-arch", arch, "-show-build", text(binary)?],
         )?;
+
         // LC_BUILD_VERSION reports `minos`; the older LC_VERSION_MIN_MACOSX
         // (low deployment targets) reports `version`.
         let minimum = build
@@ -216,6 +223,7 @@ fn check_minimum(binary: &Path) -> Result<()> {
             ));
         }
     }
+
     Ok(())
 }
 
@@ -261,9 +269,11 @@ fn menubar_agent() -> String {
 /// Merge per-architecture builds of one executable into a universal one.
 fn universal(parts: &[PathBuf], output: &Path) -> Result<()> {
     let mut args = vec!["-create", "-output", text(output)?];
+
     for part in parts {
         args.push(text(part)?);
     }
+
     exec("/usr/bin/lipo", &args)?;
     check_universal(output)
 }
@@ -275,6 +285,7 @@ fn check_universal(output: &Path) -> Result<()> {
     if !(found.contains(&"arm64") && found.contains(&"x86_64")) {
         return Err(format!("{} is not universal: {archs}", output.display()));
     }
+
     check_minimum(output)
 }
 
@@ -285,12 +296,14 @@ fn publishable(out: &Path) -> Result<()> {
     if resolved == Path::new("/Applications") || resolved == Path::new(&home).join("Applications") {
         return Err("--out must be a build directory, not an Applications folder".into());
     }
+
     if out.join("Atlas.app").exists() && !out.join(MARKER).exists() {
         return Err(format!(
             "{} holds an Atlas.app this tool did not build; choose another --out",
             out.display()
         ));
     }
+
     Ok(())
 }
 
@@ -298,6 +311,7 @@ fn publishable(out: &Path) -> Result<()> {
 #[allow(unsafe_code)] // FFI: renamex_np(RENAME_SWAP) has no safe binding.
 fn exchange(first: &Path, second: &Path) -> Result<()> {
     use std::{ffi::CString, os::unix::ffi::OsStrExt};
+
     let path = |path: &Path| CString::new(path.as_os_str().as_bytes()).map_err(|e| e.to_string());
     let (first, second) = (path(first)?, path(second)?);
     // SAFETY: two NUL-terminated paths; RENAME_SWAP exchanges them or fails
@@ -305,6 +319,7 @@ fn exchange(first: &Path, second: &Path) -> Result<()> {
     if unsafe { libc::renamex_np(first.as_ptr(), second.as_ptr(), libc::RENAME_SWAP) } != 0 {
         return Err(std::io::Error::last_os_error().to_string());
     }
+
     Ok(())
 }
 
@@ -315,6 +330,7 @@ fn publish(staged: &Path, out: &Path) -> Result<PathBuf> {
     let app = out.join("Atlas.app");
     fs::write(out.join(MARKER), "Built by cargo xtask dist\n")
         .map_err(|error| error.to_string())?;
+
     if app.exists() {
         exchange(staged, &app)?;
         // `staged` now holds the previous build; failing to remove it is harmless.
@@ -322,6 +338,7 @@ fn publish(staged: &Path, out: &Path) -> Result<PathBuf> {
     } else {
         fs::rename(staged, &app).map_err(|error| error.to_string())?;
     }
+
     Ok(app)
 }
 
@@ -343,6 +360,7 @@ fn committed_version(root: &Path) -> Result<()> {
     if changed.trim().is_empty() {
         return Ok(());
     }
+
     Err("Cargo.toml or Cargo.lock has uncommitted changes; commit the version bump first".into())
 }
 
@@ -350,25 +368,30 @@ fn dist(options: &Options) -> Result<()> {
     let version = atlas::VERSION;
     committed_version(&root())?;
     publishable(&options.out)?;
+
     // A fresh staging directory per run; nothing is published until verified.
     let stage = options.out.join(format!("stage/{}", std::process::id()));
     if stage.exists() {
         fs::remove_dir_all(&stage).map_err(|error| error.to_string())?;
     }
+
     fs::create_dir_all(&stage).map_err(|error| error.to_string())?;
     let upload = options.out.join("notarize.zip");
+
     // Verified (and notarized when asked): only now replace the previous build.
     let published = build(options, &stage, &upload).and_then(|app| publish(&app, &options.out));
     // The upload and the staging directory go whether or not it worked.
     let _ = fs::remove_file(&upload);
     let _ = fs::remove_dir_all(&stage);
     let app = published?;
+
     let name = format!("Atlas-{version}-macos.zip");
     let zip = options.out.join(&name);
     let sums_path = options.out.join("SHA256SUMS");
     // Never leave sums that describe an earlier zip.
     let _ = fs::remove_file(&sums_path);
     let _ = fs::remove_file(&zip);
+
     // Without resource forks: unzip would otherwise leave ._ files inside the
     // bundle and break its seal.
     exec(
@@ -382,18 +405,22 @@ fn dist(options: &Options) -> Result<()> {
             text(&zip)?,
         ],
     )?;
+
     let sums = format!("{}  {name}\n", sha256(&zip)?);
     fs::write(&sums_path, &sums).map_err(|error| error.to_string())?;
     println!("\n{}\n{sums}", zip.display());
+
     if options.notarize.is_none() {
         println!("Not notarized: pass --notarize PROFILE for a release.");
     }
+
     // Absolute, so the line pastes into the website repository as it is.
     let out = fs::canonicalize(&options.out).map_err(|error| error.to_string())?;
     println!(
         "Publish it from the website repository: sh scripts/publish-release.sh {}",
         out.display()
     );
+
     Ok(())
 }
 
@@ -415,6 +442,7 @@ fn build(options: &Options, stage: &Path, upload: &Path) -> Result<PathBuf> {
     let manifest = root.join("Cargo.toml");
     let target_dir = root.join("target/xtask");
     let mut cli = Vec::new();
+
     for (rust, _) in TARGETS {
         exec(
             &cargo,
@@ -434,18 +462,23 @@ fn build(options: &Options, stage: &Path, upload: &Path) -> Result<PathBuf> {
                 text(&target_dir)?,
             ],
         )?;
+
         cli.push(target_dir.join(format!("{rust}/release/atlas")));
     }
+
     // The Swift app package, for both architectures in one build.
     let package = root.join("app");
     let mut swift = vec!["build", "-c", "release", "--package-path", text(&package)?];
+
     for (_, arch) in TARGETS {
         swift.extend(["--arch", arch]);
     }
+
     exec(
         "/usr/bin/swift",
         &[swift.as_slice(), &["--product", APP_EXECUTABLE]].concat(),
     )?;
+
     let bin = output(
         "/usr/bin/swift",
         &[swift.as_slice(), &["--show-bin-path"]].concat(),
@@ -453,14 +486,17 @@ fn build(options: &Options, stage: &Path, upload: &Path) -> Result<PathBuf> {
     let executable = PathBuf::from(bin.trim()).join(APP_EXECUTABLE);
     let app = stage.join("Atlas.app");
     let macos = app.join("Contents/MacOS");
+
     fs::create_dir_all(&macos).map_err(|error| error.to_string())?;
     fs::create_dir_all(app.join("Contents/Resources")).map_err(|error| error.to_string())?;
     fs::write(app.join("Contents/Info.plist"), info_plist(version))
         .map_err(|error| error.to_string())?;
+
     universal(&cli, &macos.join("atlas"))?;
     fs::copy(&executable, macos.join(APP_EXECUTABLE)).map_err(|error| error.to_string())?;
     check_universal(&macos.join(APP_EXECUTABLE))?;
     compile_icon(&package.join("Resources/AppIcon.icon"), &app, stage)?;
+
     // The app icon for macOS before 26 and the helper account's picture,
     // both drawn by app/Resources/AppIcon.swift. The icon replaces the flat
     // one actool rendered from the Icon Composer icon.
@@ -471,6 +507,7 @@ fn build(options: &Options, stage: &Path, upload: &Path) -> Result<PathBuf> {
         )
         .map_err(|error| error.to_string())?;
     }
+
     // The agent plugin (Claude Code and Codex), matching this CLI's version.
     exec(
         "/usr/bin/ditto",
@@ -479,6 +516,7 @@ fn build(options: &Options, stage: &Path, upload: &Path) -> Result<PathBuf> {
             text(&app.join("Contents/Resources/agents"))?,
         ],
     )?;
+
     // "Open at login": the menu bar registers this agent with SMAppService.
     let agents = app.join("Contents/Library/LaunchAgents");
     fs::create_dir_all(&agents).map_err(|error| error.to_string())?;
@@ -495,15 +533,18 @@ fn build(options: &Options, stage: &Path, upload: &Path) -> Result<PathBuf> {
         args.extend(["--sign", &options.sign, text(path)?]);
         exec("/usr/bin/codesign", &args)
     };
+
     sign(
         Some(atlas::setup::APP_IDENTIFIER),
         &macos.join(APP_EXECUTABLE),
     )?;
     sign(None, &app)?;
+
     exec(
         "/usr/bin/codesign",
         &["--verify", "--strict", "--deep", text(&app)?],
     )?;
+
     if !atlas::setup::developer_id(&macos.join("atlas")) {
         return Err(
             "the app does not satisfy setup's Developer ID requirement (identity and team)".into(),
@@ -522,6 +563,7 @@ fn build(options: &Options, stage: &Path, upload: &Path) -> Result<PathBuf> {
                 text(upload)?,
             ],
         )?;
+
         exec(
             "/usr/bin/xcrun",
             &[
@@ -533,12 +575,14 @@ fn build(options: &Options, stage: &Path, upload: &Path) -> Result<PathBuf> {
                 "--wait",
             ],
         )?;
+
         exec("/usr/bin/xcrun", &["stapler", "staple", text(&app)?])?;
         exec(
             "/usr/sbin/spctl",
             &["--assess", "--type", "execute", "-vv", text(&app)?],
         )?;
     }
+
     Ok(app)
 }
 
@@ -558,6 +602,7 @@ mod tests {
                 .unwrap_err()
                 .contains("--sign is required")
         );
+
         let parsed = options(&args(&["--sign", "Developer ID", "--notarize", "p"]), root).unwrap();
         assert_eq!(
             parsed,
@@ -567,8 +612,10 @@ mod tests {
                 out: root.join("target/dist"),
             }
         );
+
         let out = options(&args(&["--sign", "x", "--out", "/tmp/o"]), root).unwrap();
         assert_eq!(out.out, PathBuf::from("/tmp/o"));
+
         assert!(
             options(&args(&["--sign"]), root)
                 .unwrap_err()
@@ -587,6 +634,7 @@ mod tests {
         let path = dir.path().join("Atlas.zip");
         let bytes: Vec<u8> = (0..200_000).map(|i| (i % 251) as u8).collect();
         fs::write(&path, &bytes).unwrap();
+
         assert_eq!(
             sha256(&path).unwrap(),
             format!("{:x}", Sha256::digest(&bytes))
@@ -608,15 +656,18 @@ mod tests {
         let dir = out.path();
         fs::create_dir_all(dir.join("Atlas.app")).unwrap();
         assert!(publishable(dir).unwrap_err().contains("did not build"));
+
         fs::write(dir.join(MARKER), "").unwrap();
         assert!(publishable(dir).is_ok());
         assert!(publishable(Path::new("/Applications")).is_err());
+
         let staged = dir.join("stage/1/Atlas.app");
         fs::create_dir_all(&staged).unwrap();
         fs::write(staged.join("new"), "").unwrap();
         let app = publish(&staged, dir).unwrap();
         assert!(app.join("new").exists());
         assert!(!staged.exists(), "the previous build is cleared");
+
         let again = dir.join("stage/2/Atlas.app");
         fs::create_dir_all(&again).unwrap();
         fs::write(again.join("newer"), "").unwrap();
@@ -629,6 +680,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("file.plist");
         fs::write(&path, text).unwrap();
+
         output(
             "/usr/bin/plutil",
             &["-convert", "json", "-o", "-", path.to_str().unwrap()],
@@ -639,6 +691,7 @@ mod tests {
     #[test]
     fn the_login_agent_runs_the_menu_bar_from_inside_the_app() {
         let json = plist_json(&menubar_agent());
+
         for expected in [
             r#""Label":"com.insanearts.atlas.menubar""#,
             r#""BundleProgram":"Contents\/MacOS\/atlas""#,
@@ -647,12 +700,14 @@ mod tests {
         ] {
             assert!(json.contains(expected), "{expected} in {json}");
         }
+
         assert!(!json.contains("KeepAlive"), "quitting keeps it quit");
     }
 
     #[test]
     fn the_info_plist_is_valid_and_names_the_consented_executable() {
         let json = plist_json(&info_plist("1.2.3"));
+
         assert!(
             root().join("app/Resources/AppIcon.icns").is_file(),
             "the icon the plist names is checked in"
@@ -661,6 +716,7 @@ mod tests {
             root().join("app/Resources/HelperPicture.png").is_file(),
             "the helper's account picture is checked in"
         );
+
         for file in ["icon.json", "Assets/Mark.png"] {
             assert!(
                 root()
@@ -670,6 +726,7 @@ mod tests {
                 "the Icon Composer icon the plist names is checked in: {file}"
             );
         }
+
         for expected in [
             r#""CFBundleIdentifier":"com.insanearts.atlas""#,
             r#""CFBundleExecutable":"atlas""#,

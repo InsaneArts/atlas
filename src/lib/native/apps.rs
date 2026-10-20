@@ -46,6 +46,7 @@ mod tests {
     fn this_session_lists_running_applications() {
         let apps = running();
         assert!(!apps.is_empty(), "a logged-in session always runs apps");
+
         for app in &apps {
             assert!(app["pid"].as_i64().is_some_and(|pid| pid > 0));
             assert!(

@@ -35,15 +35,19 @@ pub(super) fn read_limited(path: &Path, limit: u64) -> Result<Vec<u8>> {
 
 pub(super) fn read_file(file: fs::File, limit: u64) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
+
     if !file.metadata()?.is_file() {
         return Err(problem(
             "Environment files must be regular files, not links or devices",
         ));
     }
+
     file.take(limit + 1).read_to_end(&mut bytes)?;
+
     if bytes.len() as u64 > limit {
         return Err(problem("Environment file exceeds its size limit"));
     }
+
     Ok(bytes)
 }
 
@@ -55,15 +59,18 @@ pub(super) fn open_regular(path: &Path, create: bool) -> Result<Option<fs::File>
     else {
         return Ok(None);
     };
+
     let name = component(
         path.file_name()
             .ok_or_else(|| problem("Missing file name"))?,
     )?;
+
     let flags = if create {
         OFlag::O_RDWR | OFlag::O_CREAT
     } else {
         OFlag::O_RDONLY
     };
+
     let opened = openat(
         &parent,
         name.as_c_str(),
@@ -75,9 +82,11 @@ pub(super) fn open_regular(path: &Path, create: bool) -> Result<Option<fs::File>
         Err(Errno::ENOENT) => return Ok(None),
         Err(error) => return Err(std::io::Error::from(error).into()),
     };
+
     if !file.metadata()?.is_file() {
         return Err(problem("Expected a regular environment file"));
     }
+
     Ok(Some(file))
 }
 
@@ -85,10 +94,12 @@ pub(super) fn snapshot(path: &Path) -> Result<Option<(Fingerprint, Vec<u8>)>> {
     let Some(file) = open_regular(path, false)? else {
         return Ok(None);
     };
+
     let metadata = file.metadata()?;
     let acl = descriptor_acl(&file)?;
     let xattrs = attributes(&file)?;
     let flags = metadata.st_flags();
+
     // Replacing these files could silently discard information or affect aliases.
     if metadata.uid() != nix::unistd::getuid().as_raw()
         || metadata.nlink() != 1
@@ -105,6 +116,7 @@ pub(super) fn snapshot(path: &Path) -> Result<Option<(Fingerprint, Vec<u8>)>> {
             metadata.mode() & 0o7777
         )));
     }
+
     let bytes = read_file(file.try_clone()?, super::MAX_FILE)?;
     let after = file.metadata()?;
     if metadata.len() != after.len()
@@ -115,6 +127,7 @@ pub(super) fn snapshot(path: &Path) -> Result<Option<(Fingerprint, Vec<u8>)>> {
     {
         return Err(problem("Environment file changed while being read"));
     }
+
     Ok(Some((
         Fingerprint {
             node: node(&metadata),
@@ -163,12 +176,15 @@ fn attributes(file: &fs::File) -> Result<std::collections::BTreeMap<String, Stri
     if size < 0 {
         return Err(std::io::Error::last_os_error().into());
     }
+
     if size as usize > MAX_ATTRIBUTES {
         return Err(problem(
             "Extended attributes exceed the supported 16 KiB limit",
         ));
     }
+
     let mut names = vec![0_u8; size as usize];
+
     if size > 0 {
         // SAFETY: the buffer is writable for the length passed.
         let read = unsafe {
@@ -178,8 +194,10 @@ fn attributes(file: &fs::File) -> Result<std::collections::BTreeMap<String, Stri
             return Err(problem("Extended attributes changed while being read"));
         }
     }
+
     let mut result = std::collections::BTreeMap::new();
     let mut total = names.len();
+
     for name in names
         .split(|byte| *byte == 0)
         .filter(|name| !name.is_empty())
@@ -187,6 +205,7 @@ fn attributes(file: &fs::File) -> Result<std::collections::BTreeMap<String, Stri
         let text = std::str::from_utf8(name)
             .map_err(|_| problem("Unsupported attribute name encoding"))?;
         let name = attribute_name(name)?;
+
         // SAFETY: a live descriptor and NUL-terminated name; null buffer, size only.
         let size = unsafe {
             libc::fgetxattr(
@@ -198,16 +217,21 @@ fn attributes(file: &fs::File) -> Result<std::collections::BTreeMap<String, Stri
                 0,
             )
         };
+
         if size < 0 {
             return Err(std::io::Error::last_os_error().into());
         }
+
         total += size as usize;
+
         if total > MAX_ATTRIBUTES {
             return Err(problem(
                 "Extended attributes exceed the supported 16 KiB limit",
             ));
         }
+
         let mut value = vec![0_u8; size as usize];
+
         // SAFETY: the buffer is writable for the length passed.
         let read = unsafe {
             libc::fgetxattr(
@@ -219,11 +243,14 @@ fn attributes(file: &fs::File) -> Result<std::collections::BTreeMap<String, Stri
                 0,
             )
         };
+
         if read != size {
             return Err(problem("Extended attribute changed while being read"));
         }
+
         result.insert(text.into(), STANDARD.encode(value));
     }
+
     Ok(result)
 }
 
@@ -244,19 +271,24 @@ pub(super) fn restore_attributes(
             ));
         }
     }
+
     let mut total = 0;
+
     for (key, value) in expected {
         let name = attribute_name(key.as_bytes())?;
         let value = STANDARD
             .decode(value)
             .map_err(|_| problem("Invalid stored attribute"))?;
         total += key.len() + value.len() + 1;
+
         if total > MAX_ATTRIBUTES {
             return Err(problem("Stored attributes exceed their limit"));
         }
+
         if current.get(key) == expected.get(key) {
             continue;
         }
+
         // SAFETY: a live descriptor, NUL-terminated name, and a value buffer
         // readable for the length passed.
         let status = unsafe {
@@ -269,16 +301,20 @@ pub(super) fn restore_attributes(
                 0,
             )
         };
+
         if status != 0 {
             return Err(problem(
                 "Cannot restore an extended attribute; destination was preserved",
             ));
         }
     }
+
     file.sync_all()?;
+
     if attributes(&file)? != *expected {
         return Err(problem("Extended attributes could not be restored exactly"));
     }
+
     Ok(())
 }
 
@@ -317,13 +353,16 @@ fn relative_path(path: &Path, directory: bool) -> Result<()> {
             "Targets must be relative files inside the helper home, outside provisioning state",
         ));
     }
+
     Ok(())
 }
 
 pub(super) fn unique_targets<'a>(targets: impl Iterator<Item = &'a Path>) -> Result<()> {
     let mut seen = Vec::<String>::new();
+
     for path in targets {
         relative_target(path)?;
+
         // Configuration destinations use portable ASCII names. Conservatively
         // reject case aliases even on case-sensitive volumes.
         let text = path
@@ -338,8 +377,10 @@ pub(super) fn unique_targets<'a>(targets: impl Iterator<Item = &'a Path>) -> Res
                 "Environment targets overlap or differ only by case",
             ));
         }
+
         seen.push(key);
     }
+
     Ok(())
 }
 
@@ -370,8 +411,10 @@ pub(super) fn directory_destination(home: &Path, relative: &Path) -> Result<Path
 
 fn checked_path(home: &Path, relative: &Path) -> Result<PathBuf> {
     let mut path = home.to_owned();
+
     for part in relative.components() {
         path.push(part);
+
         match fs::symlink_metadata(&path) {
             Ok(meta) if meta.file_type().is_symlink() => {
                 return Err(problem(format!("Refusing symlink: {}", path.display())));
@@ -381,6 +424,7 @@ fn checked_path(home: &Path, relative: &Path) -> Result<PathBuf> {
             Err(e) => return Err(e.into()),
         }
     }
+
     Ok(path)
 }
 
@@ -392,6 +436,7 @@ pub(super) fn directory(path: &Path, create: bool) -> Result<Option<fs::File>> {
     if !path.is_absolute() {
         return Err(problem("Provisioning paths must be absolute"));
     }
+
     let open = |directory: &fs::File, name: &CStr| {
         openat(
             directory,
@@ -401,6 +446,7 @@ pub(super) fn directory(path: &Path, create: bool) -> Result<Option<fs::File>> {
         )
     };
     let mut directory = fs::File::open("/")?;
+
     for part in path.components() {
         let Component::Normal(name) = part else {
             if part == Component::RootDir {
@@ -408,6 +454,7 @@ pub(super) fn directory(path: &Path, create: bool) -> Result<Option<fs::File>> {
             }
             return Err(problem("Invalid provisioning directory"));
         };
+
         let name = component(name)?;
         let mut opened = open(&directory, &name);
         if create && matches!(opened, Err(Errno::ENOENT)) {
@@ -417,12 +464,14 @@ pub(super) fn directory(path: &Path, create: bool) -> Result<Option<fs::File>> {
             }
             opened = open(&directory, &name);
         }
+
         directory = match opened {
             Ok(fd) => fs::File::from(fd),
             Err(Errno::ENOENT) => return Ok(None),
             Err(error) => return Err(std::io::Error::from(error).into()),
         };
     }
+
     Ok(Some(directory))
 }
 
@@ -441,6 +490,7 @@ pub(super) fn atomic_install(
             .ok_or_else(|| problem("Missing parent directory"))?,
     )?;
     installation_parent(&parent)?;
+
     let name = component(
         path.file_name()
             .ok_or_else(|| problem("Missing file name"))?,
@@ -456,12 +506,14 @@ pub(super) fn atomic_install(
         )
         .map_err(std::io::Error::from)?,
     );
+
     let discard = || unlinkat(&parent, temporary.as_c_str(), UnlinkatFlags::NoRemoveDir);
     let result = (|| -> Result<()> {
         clear_acl(&file)?;
         file.set_permissions(fs::Permissions::from_mode(mode))?;
         file.write_all(bytes)?;
         file.sync_all()?;
+
         if create_only {
             // Linking the new inode refuses an existing destination atomically.
             linkat(
@@ -472,17 +524,20 @@ pub(super) fn atomic_install(
                 AtFlags::empty(),
             )
             .map_err(std::io::Error::from)?;
+
             let _ = discard();
         } else {
             renameat(&parent, temporary.as_c_str(), &parent, name.as_c_str())
                 .map_err(std::io::Error::from)?;
         }
+
         parent.sync_all()?;
         Ok(())
     })();
     if result.is_err() {
         let _ = discard();
     }
+
     result
 }
 
@@ -491,16 +546,19 @@ pub(super) fn atomic_install(
 pub(super) fn install_prepared(source: &Path, target: &Path, create_only: bool) -> Result<()> {
     let missing =
         || problem("Prepared replacement and its destination need a directory and a name");
+
     if source.parent() != target.parent() {
         return Err(problem(
             "Prepared replacement must share its destination directory",
         ));
     }
+
     let parent = directory(target.parent().ok_or_else(missing)?, false)?
         .ok_or_else(|| problem("Destination parent disappeared"))?;
     installation_parent(&parent)?;
     let source = component(source.file_name().ok_or_else(missing)?)?;
     let target = component(target.file_name().ok_or_else(missing)?)?;
+
     // SAFETY: a live directory descriptor and two NUL-terminated single
     // components; RENAME_EXCL makes the rename refuse an existing target.
     let status = unsafe {
@@ -512,9 +570,11 @@ pub(super) fn install_prepared(source: &Path, target: &Path, create_only: bool) 
             if create_only { libc::RENAME_EXCL } else { 0 },
         )
     };
+
     if status != 0 {
         return Err(std::io::Error::last_os_error().into());
     }
+
     parent.sync_all()?;
     Ok(())
 }
@@ -525,24 +585,34 @@ pub(super) fn set_group(path: &Path, gid: u32) -> Result<()> {
         fchown(&file, None, Some(Gid::from_raw(gid))).map_err(std::io::Error::from)?;
         file.sync_all()?;
     }
+
     Ok(())
 }
 
-pub(super) fn unlink(path: &Path, is_directory: bool) -> Result<()> {
+/// The existing, installable parent of `path`, and `path`'s own name in it.
+fn parent_entry(path: &Path) -> Result<(fs::File, CString)> {
     let parent = directory(
         path.parent().ok_or_else(|| problem("Missing parent"))?,
         false,
     )?
     .ok_or_else(|| problem("Parent directory disappeared"))?;
     installation_parent(&parent)?;
+
     let name = component(path.file_name().ok_or_else(|| problem("Missing name"))?)?;
+    Ok((parent, name))
+}
+
+pub(super) fn unlink(path: &Path, is_directory: bool) -> Result<()> {
+    let (parent, name) = parent_entry(path)?;
     let kind = if is_directory {
         UnlinkatFlags::RemoveDir
     } else {
         UnlinkatFlags::NoRemoveDir
     };
+
     unlinkat(&parent, name.as_c_str(), kind).map_err(std::io::Error::from)?;
     parent.sync_all()?;
+
     Ok(())
 }
 
@@ -551,6 +621,7 @@ pub(super) fn private_directory(path: &Path) -> Result<fs::File> {
         validate_private(&dir, true)?;
         return Ok(dir);
     }
+
     open_directory(path.parent().ok_or_else(|| problem("Missing parent"))?)?;
     create_private_directory(path)
 }
@@ -558,21 +629,17 @@ pub(super) fn private_directory(path: &Path) -> Result<fs::File> {
 /// Unlike the idempotent state-directory opener, this never claims an existing
 /// user directory as one created by the transaction.
 pub(super) fn create_private_directory(path: &Path) -> Result<fs::File> {
-    let parent = directory(
-        path.parent().ok_or_else(|| problem("Missing parent"))?,
-        false,
-    )?
-    .ok_or_else(|| problem("Parent directory disappeared"))?;
-    installation_parent(&parent)?;
-    let name = component(path.file_name().ok_or_else(|| problem("Missing name"))?)?;
+    let (parent, name) = parent_entry(path)?;
     mkdirat(&parent, name.as_c_str(), Mode::from_bits_truncate(0o700))
         .map_err(std::io::Error::from)?;
+
     let dir = directory(path, false)?.ok_or_else(|| problem("New directory disappeared"))?;
     clear_acl(&dir)?;
     dir.set_permissions(fs::Permissions::from_mode(0o700))?;
     validate_private(&dir, true)?;
     dir.sync_all()?;
     parent.sync_all()?;
+
     Ok(dir)
 }
 
@@ -589,6 +656,7 @@ pub(super) fn validate_private(file: &fs::File, directory: bool) -> Result<()> {
             "Provisioning state must be private and owned by the current user",
         ));
     }
+
     Ok(())
 }
 
@@ -602,6 +670,7 @@ pub(super) fn installation_parent(directory: &fs::File) -> Result<()> {
             "Installation parent must be owned by the current user and have no shared write access",
         ));
     }
+
     Ok(())
 }
 
@@ -630,6 +699,7 @@ pub(super) fn helper_name(uid: u32) -> Result<String> {
     if !identity.status.success() || !acl_name(name) {
         return Err(problem("Could not resolve helper UID to an ACL identity"));
     }
+
     Ok(name.to_owned())
 }
 
@@ -645,11 +715,13 @@ pub(super) fn allow_helper(path: &Path, helper: &str, executable: bool) -> Resul
     if !acl_name(helper) {
         return Err(problem("Could not resolve helper UID to an ACL identity"));
     }
+
     let rights = if executable {
         "read,execute,readattr,readsecurity"
     } else {
         "read,readattr,readsecurity"
     };
+
     let output = Command::new("/bin/chmod")
         .args(["+a", &format!("user:{helper} allow {rights}")])
         .arg(path)
@@ -663,6 +735,7 @@ pub(super) fn allow_helper(path: &Path, helper: &str, executable: bool) -> Resul
             format!("Could not grant the helper access to staged files: {reason}")
         }));
     }
+
     Ok(())
 }
 

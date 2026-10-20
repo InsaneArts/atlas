@@ -5,8 +5,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 const TTL: Duration = Duration::from_secs(6);
+
 #[derive(Default)]
 pub struct Gate(Mutex<State>);
+
 #[derive(Default)]
 pub struct State {
     owner: Option<String>,
@@ -31,6 +33,7 @@ impl State {
     /// control gone is told it was lost.
     fn require(&mut self, owner: &str, acting: bool) -> Result<()> {
         self.expire();
+
         if self.closed || self.owner.as_deref() != Some(owner) {
             if acting && !self.closed && self.cancelled.as_deref() == Some(owner) {
                 self.cancelled = None;
@@ -63,22 +66,26 @@ impl Gate {
     pub fn acquire(self: &Arc<Self>, owner: &str) -> Result<Grant> {
         let mut state = self.lock()?;
         state.expire();
+
         if state.closed || state.owner.is_some() {
             return Err(Error::new(
                 "busy",
                 "The native input service is unavailable or already controlled",
             ));
         }
+
         // Owners are `control::token()`s: two hexadecimal digits a byte.
         if owner.len() != 2 * crate::control::TOKEN_BYTES
             || !owner.bytes().all(|b| b.is_ascii_hexdigit())
         {
             return Err(Error::new("input", "Invalid native owner token"));
         }
+
         state.owner = Some(owner.to_owned());
         state.previous = state.owner.clone();
         state.expires = Some(Instant::now() + TTL);
         state.cancelled = None;
+
         Ok(Grant {
             gate: self.clone(),
             owner: owner.to_owned(),
@@ -171,6 +178,7 @@ mod tests {
     fn a_second_controller_is_busy() {
         let gate = gate();
         let _grant = gate.acquire(&owner('a')).unwrap();
+
         assert!(gate.active().unwrap());
         assert_eq!(code(gate.acquire(&owner('b'))), "busy");
         assert_eq!(code(gate.acquire(&owner('a'))), "busy", "even the owner");
@@ -180,6 +188,7 @@ mod tests {
     fn owners_are_control_tokens() {
         let gate = gate();
         assert_eq!(owner('a').len(), crate::control::token().len());
+
         for bad in [
             String::new(),
             "a".repeat(47),
@@ -188,6 +197,7 @@ mod tests {
         ] {
             assert_eq!(code(gate.acquire(&bad)), "input", "{bad:?}");
         }
+
         assert!(!gate.active().unwrap());
         assert_eq!(code(gate.acquire(&crate::control::token())), "ok");
     }
@@ -196,8 +206,10 @@ mod tests {
     fn ownership_expires_unless_renewed() {
         let gate = gate();
         let grant = gate.acquire(&owner('a')).unwrap();
+
         gate.renew(&owner('a')).unwrap();
         assert_eq!(code(gate.renew(&owner('b'))), "lease-lost");
+
         gate.lock().unwrap().expires = Some(Instant::now());
         assert!(!gate.active().unwrap());
         assert_eq!(code(gate.renew(&owner('a'))), "lease-lost");
@@ -210,10 +222,12 @@ mod tests {
     fn a_stale_token_cannot_end_a_newer_controller() {
         let gate = gate();
         let _first = gate.acquire(&owner('a')).unwrap();
+
         gate.cancel(Some(&owner('a'))).unwrap();
         let _second = gate.acquire(&owner('b')).unwrap();
         assert_eq!(code(gate.cancel(Some(&owner('a')))), "lease-lost");
         assert!(gate.active().unwrap());
+
         gate.grant(&owner('b')).unwrap();
         gate.cancel(Some(&owner('b'))).unwrap();
         assert!(!gate.active().unwrap());
@@ -226,6 +240,7 @@ mod tests {
         let grant = gate.grant(&owner('a')).unwrap();
         drop(grant.authorize().unwrap());
         gate.cancel(None).unwrap();
+
         assert_eq!(
             code(gate.renew(&owner('a'))),
             "lease-lost",
@@ -242,8 +257,10 @@ mod tests {
             "the action under way is"
         );
         assert_eq!(code(grant.authorize()), "lease-lost", "once");
+
         let _again = gate.acquire(&owner('a')).unwrap();
         gate.revoke().unwrap();
+
         assert_eq!(
             code(gate.grant(&owner('a'))),
             "lease-lost",
@@ -255,10 +272,12 @@ mod tests {
     fn a_closed_gate_stays_closed() {
         let gate = gate();
         let grant = gate.acquire(&owner('a')).unwrap();
+
         gate.close().unwrap();
         assert!(!gate.active().unwrap());
         assert_eq!(code(grant.authorize()), "lease-lost");
         assert_eq!(code(gate.acquire(&owner('b'))), "busy");
+
         gate.cancel(None).unwrap();
         assert_eq!(code(gate.acquire(&owner('b'))), "busy", "for good");
     }

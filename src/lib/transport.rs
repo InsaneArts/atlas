@@ -53,6 +53,7 @@ impl Transport {
                 ),
             ));
         }
+
         Ok(Pending {
             stream,
             deadline,
@@ -82,6 +83,7 @@ fn refused(error: std::io::Error) -> Error {
              may be fine.",
         );
     }
+
     Error::from(error)
 }
 
@@ -91,12 +93,14 @@ impl Pending {
         if payload.len() > MAX_REQUEST {
             return Err(Error::new("protocol", "Request exceeds 1 MiB"));
         }
+
         payload.push(b'\n');
         let deadline = self.deadline.min(Instant::now() + DISPATCH);
         timeout_at(deadline, self.stream.write_all(&payload))
             .await
             .map_err(|_| Error::new("transport", "Dispatch timed out").uncertain())?
             .map_err(|e| Error::new("transport", e.to_string()).uncertain())?;
+
         Ok(self)
     }
 
@@ -117,6 +121,7 @@ impl Pending {
         // Keep the receive storage out of every enclosing async future. A stack
         // array multiplies through the HTTP/session futures in debug builds.
         let mut buffer = vec![0; 65536];
+
         loop {
             let count = self.stream.read(&mut buffer).await?;
             if count == 0 {
@@ -125,17 +130,21 @@ impl Pending {
                     "Connection ended without a final reply",
                 ));
             }
+
             total += count;
             if total > MAX_REPLY {
                 return Err(Error::new("protocol", "Reply exceeds 64 MiB"));
             }
+
             // Scan incoming bytes once; large PNG lines never rescan the prefix.
             let mut offset = 0;
+
             for end in (0..count).filter(|i| buffer[*i] == b'\n') {
                 pending.extend_from_slice(&buffer[offset..end]);
                 let mut row: Value = serde_json::from_slice(&pending)?;
                 pending.clear();
                 offset = end + 1;
+
                 let object = row
                     .as_object_mut()
                     .ok_or_else(|| Error::new("protocol", "Reply must be a JSON object"))?;
@@ -143,15 +152,19 @@ impl Pending {
                     if !ok.is_boolean() {
                         return Err(Error::new("protocol", "Invalid success flag"));
                     }
+
                     if !events.is_empty() {
                         object.insert("events".into(), json!(events));
                     }
+
                     object.insert(
                         "elapsedMs".into(),
                         json!(self.started.elapsed().as_secs_f64() * 1000.0),
                     );
+
                     return Ok(row);
                 }
+
                 if object.get("event").and_then(Value::as_str).is_none()
                     || events.len() >= MAX_REPLY_EVENTS
                 {
@@ -160,8 +173,10 @@ impl Pending {
                         "Malformed or excessive helper events",
                     ));
                 }
+
                 events.push(row);
             }
+
             pending.extend_from_slice(&buffer[offset..count]);
         }
     }
@@ -178,21 +193,26 @@ pub enum OutputError {
 /// `limit` (by at most a padding remainder) is refused after decoding.
 pub fn run_output(reply: &Value, limit: usize) -> std::result::Result<Vec<u8>, OutputError> {
     let mut output = Vec::new();
+
     for event in reply["events"].as_array().into_iter().flatten() {
         if event["event"] != "output" {
             continue;
         }
+
         let encoded = event["data"].as_str().ok_or(OutputError::Malformed)?;
         if output.len() + (encoded.len() / 4 * 3).saturating_sub(2) > limit {
             return Err(OutputError::Oversized);
         }
+
         STANDARD
             .decode_vec(encoded, &mut output)
             .map_err(|_| OutputError::Malformed)?;
+
         if output.len() > limit {
             return Err(OutputError::Oversized);
         }
     }
+
     Ok(output)
 }
 
@@ -203,13 +223,16 @@ pub const OUTPUT_LIMIT: usize = 1 << 20;
 /// when an event before the limit does not decode.
 fn output_prefix(reply: &Value, limit: usize) -> Option<Vec<u8>> {
     let mut output = Vec::new();
+
     for event in reply["events"].as_array().into_iter().flatten() {
         if event["event"] != "output" {
             continue;
         }
+
         let decoded = STANDARD.decode(event["data"].as_str()?).ok()?;
         let room = limit.saturating_sub(output.len());
         output.extend_from_slice(&decoded[..decoded.len().min(room)]);
+
         if output.len() >= limit {
             break;
         }
@@ -232,19 +255,24 @@ pub fn with_output(mut reply: Value) -> Value {
         },
         Err(OutputError::Malformed) => return reply,
     };
+
     let pid = reply["events"]
         .as_array()
         .into_iter()
         .flatten()
         .find(|event| event["event"] == "started")
         .and_then(|event| event["pid"].as_i64());
+
     reply["output"] = json!(String::from_utf8_lossy(&output));
+
     if cut {
         reply["outputTruncated"] = json!(true);
     }
+
     if let Some(pid) = pid {
         reply["pid"] = json!(pid);
     }
+
     if let Some(object) = reply.as_object_mut() {
         object.remove("events");
     }
@@ -263,6 +291,7 @@ mod tests {
     #[tokio::test]
     async fn the_request_limit_is_the_daemons() {
         use super::{MAX_REQUEST, Transport};
+
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("t.sock");
         let listener = tokio::net::UnixListener::bind(&socket).unwrap();
@@ -274,6 +303,7 @@ mod tests {
                 });
             }
         });
+
         let transport = Transport {
             path: socket,
             timeout: std::time::Duration::from_secs(10),
@@ -283,12 +313,14 @@ mod tests {
         let request = |length: usize| json!("x".repeat(length - 2));
         let fits = transport.connect().await.unwrap();
         assert!(fits.dispatch(&request(MAX_REQUEST)).await.is_ok());
+
         let over = transport.connect().await.unwrap();
         let refused = over
             .dispatch(&request(MAX_REQUEST + 1))
             .await
             .err()
             .unwrap();
+
         assert_eq!(
             (refused.code, refused.error.as_str()),
             ("protocol", "Request exceeds 1 MiB")
@@ -317,12 +349,15 @@ mod tests {
         assert_eq!(run_output(&reply, 5).unwrap(), b"hello");
         assert_eq!(run_output(&reply, 4), Err(OutputError::Oversized));
         assert_eq!(run_output(&json!({}), 0).unwrap(), b"");
+
         for data in [json!(7), json!("not base64!")] {
             let reply = json!({"events": [{"event": "output", "data": data}]});
             assert_eq!(run_output(&reply, 64), Err(OutputError::Malformed));
         }
+
         let huge = json!({"events": [{"event": "output", "data": "A".repeat(4096)}]});
         assert_eq!(run_output(&huge, 16), Err(OutputError::Oversized));
+
         let decoded = with_output(reply.clone());
         assert_eq!(decoded["output"], "hello");
         assert_eq!(decoded["pid"], 4, "the process is still named");

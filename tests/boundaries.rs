@@ -22,6 +22,7 @@ fn status() -> Value {
         "sessionProof": {"ok": true,"uid":502,"hasGraphicAccess":true,"parentPID":123,"onConsole":false,
         "securitySessionID":100384,"displayID":28,"width":2560,"height":1440}})
 }
+
 fn display() -> Display {
     Display {
         width: 2560.0,
@@ -33,6 +34,7 @@ fn display() -> Display {
 #[test]
 fn graphical_identity_needs_independent_proof() {
     assert!(require_hidden(&status(), 502).is_ok());
+
     for path in [
         "onConsole",
         "hasGraphicAccess",
@@ -46,9 +48,11 @@ fn graphical_identity_needs_independent_proof() {
         let refused = require_hidden(&state, 502).unwrap_err();
         assert!(matches!(refused.code, "identity" | "on-console"), "{path}");
     }
+
     let mut state = status();
     state["session"]["onConsole"] = json!(true);
     assert_eq!(require_hidden(&state, 502).unwrap_err().code, "on-console");
+
     let mut state = status();
     state["sessionProof"]["hasGraphicAccess"] = json!(false);
     assert_eq!(require_hidden(&state, 502).unwrap_err().code, "identity");
@@ -57,6 +61,7 @@ fn graphical_identity_needs_independent_proof() {
 #[test]
 fn identities_change_when_security_session_or_display_changes() {
     let original = require_hidden(&status(), 502).unwrap().epoch;
+
     for field in ["securitySessionID", "displayID"] {
         let mut state = status();
         state["sessionProof"][field] = json!(99);
@@ -88,6 +93,7 @@ fn unsafe_actions_and_whole_batches_are_rejected() {
             refused.code
         );
     }
+
     assert_eq!(
         actions::validate(&json!(vec![json!({"type":"wait","ms":250}); 9]), &display())
             .unwrap_err()
@@ -110,6 +116,7 @@ fn unicode_and_supported_shortcuts_validate() {
     for key in ["cmd+[", "cmd+shift+/", "cmd+a", "ctrl+alt+forwarddelete"] {
         assert!(actions::valid_key(key));
     }
+
     assert!(
         actions::validate(
             &json!([{ "type":"type", "text":"ქართული 日本語 🧑🏽‍💻 e\u{301}" }]),
@@ -122,6 +129,7 @@ fn unicode_and_supported_shortcuts_validate() {
 #[test]
 fn signal_timeout_and_exit_are_distinct_completed_outcomes() {
     let request = json!({"op":"run"});
+
     for reply in [
         json!({"ok":true,"exitCode":0,"timedOut":false,"signal":null}),
         json!({"ok":true,"exitCode":null,"timedOut":false,"signal":"SIGTERM"}),
@@ -129,12 +137,14 @@ fn signal_timeout_and_exit_are_distinct_completed_outcomes() {
     ] {
         validate_completion(&request, &reply).unwrap();
     }
+
     for reply in [
         json!({"ok":true}),
         json!({"ok":true,"exitCode":null,"timedOut":false,"signal":15}),
     ] {
         assert!(validate_completion(&request, &reply).unwrap_err().uncertain);
     }
+
     assert!(
         validate_completion(
             &json!({"op":"input","actions":[{}]}),
@@ -157,6 +167,7 @@ fn config_paths_are_relative_and_unknown_fields_fail() {
         config.socket_path,
         std::fs::canonicalize(dir.path()).unwrap().join("sock")
     );
+
     std::fs::write(&path, format!("{text}unexpected = true\n")).unwrap();
     let error = Config::load(&path).unwrap_err();
     assert_eq!(
@@ -164,6 +175,7 @@ fn config_paths_are_relative_and_unknown_fields_fail() {
         "an existing file that does not load"
     );
     assert!(error.error.contains("unexpected"), "{}", error.error);
+
     std::fs::write(&path, "helper_uid = \"502\"\n").unwrap();
     assert!(
         Config::load(&path)
@@ -178,6 +190,7 @@ fn shipped_example_configuration_parses_and_round_trips() {
     let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/config.toml");
     let config = Config::load(&example).unwrap();
     assert_eq!(config.helper_uid, 502);
+
     let dir = tempfile::tempdir().unwrap();
     let saved = dir.path().join("saved.toml");
     std::fs::write(&saved, config.to_toml().unwrap()).unwrap();
@@ -194,6 +207,7 @@ fn a_missing_configuration_points_at_a_legacy_json_file() {
             .error
             .contains("no longer read")
     );
+
     std::fs::write(dir.path().join("atlas.local.json"), "{}").unwrap();
     assert!(
         Config::load(&path)
@@ -206,6 +220,7 @@ fn a_missing_configuration_points_at_a_legacy_json_file() {
     let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/config.toml");
     std::fs::copy(example, &path).unwrap();
     assert!(Config::load(&path).unwrap_err().error.contains("Both"));
+
     std::fs::remove_file(dir.path().join("atlas.local.json")).unwrap();
     Config::load(&path).unwrap();
 }
@@ -220,6 +235,7 @@ fn library_construction_cannot_target_the_caller() {
         input_socket: dir.path().join("input"),
         output_dir: dir.path().join("out"),
     };
+
     assert_eq!(
         Client::new(config).err().map(|error| error.code),
         Some("identity")
@@ -233,10 +249,13 @@ fn controllers_for_one_helper_share_the_lock_and_pending_marker() {
     let first = Controller::at(502, dir.path());
     let second = Controller::at(502, dir.path());
     let held = first.acquire(false).unwrap();
+
     assert_eq!(second.acquire(false).unwrap_err().code, "busy");
+
     drop(first.quarantine().unwrap());
     drop(held);
     assert_eq!(second.acquire(false).unwrap_err().code, "uncertain");
+
     let recovery = second.acquire(true).unwrap();
     second.clear().unwrap();
     drop(recovery);
@@ -250,11 +269,14 @@ async fn lease_expiry_keeps_flock_until_the_action_settles() {
     let lease = Arc::new(Mutex::new(Lease::new(Duration::from_millis(10))));
     let owner = lease.lock().await.acquire(&controller).unwrap();
     let permit = ActionPermit::begin(lease.clone(), &owner).await.unwrap();
+
     tokio::time::sleep(Duration::from_millis(20)).await;
     assert!(lease.lock().await.require(&owner).is_err());
     assert_eq!(controller.acquire(false).unwrap_err().code, "busy");
+
     drop(permit);
     assert_eq!(controller.acquire(false).unwrap_err().code, "busy");
+
     let retiring = lease.lock().await.begin_release(None).unwrap();
     assert_eq!(retiring.as_deref(), Some(owner.as_str()));
     lease.lock().await.end_release();
@@ -267,10 +289,12 @@ fn cleanup_completion_cannot_clear_unknown_input_delivery() {
     let controller = Controller::at(502, dir.path());
     let input = controller.quarantine().unwrap();
     let cleanup = controller.quarantine().unwrap();
+
     controller.clear_if(&cleanup).unwrap();
     assert_eq!(controller.require_known().unwrap_err().code, "uncertain");
     controller.clear_if(&input).unwrap();
     controller.require_known().unwrap();
+
     let older = controller.quarantine().unwrap();
     let newer = controller.quarantine().unwrap();
     controller.clear_if(&older).unwrap();
@@ -300,11 +324,14 @@ async fn old_owner_cannot_release_a_new_lease() {
     let controller = Controller::at(502, dir.path());
     let mut lease = Lease::default();
     let old = lease.acquire(&controller).unwrap();
+
     lease.release();
     let new = lease.acquire(&controller).unwrap();
+
     if lease.require(&old).is_ok() {
         lease.release();
     }
+
     lease.require(&new).unwrap();
 }
 
@@ -326,6 +353,7 @@ fn delayed_acquire_failure_cannot_release_a_replacement_owner() {
         lease.begin_release(Some(&current)).unwrap(),
         Some(current.clone())
     );
+
     lease.abandon_acquire(&current);
     assert_eq!(controller.acquire(false).unwrap_err().code, "busy");
     lease.end_release();
@@ -347,6 +375,7 @@ async fn exchange(
         let (mut peer, _) = listener.accept().await.unwrap();
         let mut request = [0; 1024];
         let _ = peer.read(&mut request).await;
+
         for chunk in chunks {
             tokio::time::sleep(pause).await;
             if peer.write_all(&chunk).await.is_err() {
@@ -354,6 +383,7 @@ async fn exchange(
             }
         }
     });
+
     let result = Transport {
         path: socket,
         timeout,
@@ -361,6 +391,7 @@ async fn exchange(
     }
     .call(&json!({"op":"input","actions":[]}))
     .await;
+
     worker.abort();
     result
 }
@@ -402,6 +433,7 @@ async fn a_drip_feed_cannot_extend_the_wall_clock_deadline() {
     // Fed in full, the drip would take four seconds; the deadline ends it
     // well before, with room for a loaded machine.
     let started = std::time::Instant::now();
+
     assert!(
         exchange(
             vec![b" ".to_vec(); 200],
@@ -417,6 +449,7 @@ async fn a_drip_feed_cannot_extend_the_wall_clock_deadline() {
 #[test]
 fn capture_rejects_non_png_and_extreme_dimensions() {
     assert_eq!(png_dimensions(b"not a PNG").unwrap_err().code, "capture");
+
     let mut header = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
     header.extend_from_slice(&u32::MAX.to_be_bytes());
     header.extend_from_slice(&900u32.to_be_bytes());
@@ -442,6 +475,7 @@ async fn transport_refuses_a_socket_served_by_another_account_before_writing() {
         peer.read_to_end(&mut received).await.unwrap();
         received
     });
+
     let error = Transport {
         path: socket,
         timeout: Duration::from_secs(1),
@@ -470,6 +504,7 @@ fn constructing_a_client_writes_nothing() {
     let dir = tempfile::tempdir().unwrap();
     Client::new(config(dir.path())).unwrap();
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+
     let state = dir.path().join("state");
     Controller::at(502, &state);
     assert!(!state.exists());
@@ -478,17 +513,20 @@ fn constructing_a_client_writes_nothing() {
 #[test]
 fn output_directory_is_created_private_and_never_repermissioned() {
     use std::os::unix::fs::PermissionsExt;
+
     let dir = tempfile::tempdir().unwrap();
     let client = Client::new(config(dir.path())).unwrap();
     let output = client.output_dir().unwrap().to_owned();
     let mode = |path: &std::path::Path| std::fs::metadata(path).unwrap().permissions().mode();
     assert_eq!(mode(&output) & 0o777, 0o700);
+
     std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert_eq!(client.output_dir().unwrap_err().code, "config");
     assert_eq!(mode(&output) & 0o777, 0o755);
 
     let mut nested = config(dir.path());
     nested.output_dir = dir.path().join("artifacts/runs");
+
     let output = Client::new(nested)
         .unwrap()
         .output_dir()
@@ -504,8 +542,10 @@ fn ready_status() -> Value {
         "accessibility": true, "pid": 77, "version": env!("CARGO_PKG_VERSION"),
         "session": {"ok": true, "uid": 502, "securitySessionID": 100384, "displayID": 28,
         "width": 2560, "height": 1440, "onConsole": false, "hasGraphicAccess": true}});
+
     state
 }
+
 fn check(report: &Value, name: &str) -> Value {
     report["checks"]
         .as_array()
@@ -524,6 +564,7 @@ fn doctor_reports_unobservable_facts_as_unknown_not_missing() {
     );
     assert_eq!(report["ready"], false);
     assert_eq!(check(&report, "Helper running"), false);
+
     for name in [
         "Helper in the background",
         "Screen Recording allowed",
@@ -532,6 +573,7 @@ fn doctor_reports_unobservable_facts_as_unknown_not_missing() {
     ] {
         assert_eq!(check(&report, name), Value::Null, "{name}");
     }
+
     assert_eq!(report["nextSteps"].as_array().unwrap().len(), 1);
 }
 
@@ -550,6 +592,7 @@ fn doctor_reads_input_permission_from_the_input_service() {
     let report = diagnose(state, 502);
     assert_eq!(check(&report, "Accessibility allowed"), false);
     assert_eq!(report["ready"], false);
+
     let mut state = ready_status();
     state["permissions"]["accessibility"] = json!(false);
     assert_eq!(diagnose(state, 502)["ready"], true);
@@ -566,12 +609,15 @@ fn doctor_distinguishes_on_console_from_wrong_account() {
             .collect::<Vec<_>>()
             .join(" ")
     };
+
     let mut console = ready_status();
     console["session"]["onConsole"] = json!(true);
     assert!(guidance(console).contains("Switch back to your own account"));
+
     let mut other = ready_status();
     other["user"]["uid"] = json!(503);
     assert!(guidance(other).contains("different account"));
+
     // Hidden, but its session could not be verified: switching back is no help.
     let mut unproven = ready_status();
     unproven["sessionProof"]["ok"] = json!(false);
@@ -597,6 +643,7 @@ fn exclusion_is_per_helper_account() {
     let moved = Controller::at(502, dir.path());
     let other = Controller::at(503, dir.path());
     let held = first.acquire(false).unwrap();
+
     assert_eq!(moved.acquire(false).unwrap_err().code, "busy");
     drop(other.acquire(false).unwrap());
     drop(first.quarantine().unwrap());
@@ -612,6 +659,7 @@ fn doctor_warns_when_the_input_service_build_is_not_the_installed_one() {
         state["installedBuild"] = installed;
         diagnose(state, 502)["warnings"].as_array().unwrap().len()
     };
+
     assert_eq!(warnings(json!("abc"), json!("abc")), 0);
     assert_eq!(warnings(json!("abc"), json!("def")), 1);
     assert_eq!(warnings(Value::Null, json!("def")), 1, "pre-build services");
@@ -628,8 +676,10 @@ fn a_replacement_counts_only_when_ready_current_idle_and_expected() {
         state["installedBuild"] = json!("b");
         state
     };
+
     assert!(input_current(&current(), 502, 77));
     assert!(!input_current(&current(), 502, 78), "another PID");
+
     for (field, value) in [
         ("heldInput", json!(true)),
         ("controlActive", json!(true)),
@@ -640,6 +690,7 @@ fn a_replacement_counts_only_when_ready_current_idle_and_expected() {
         state["inputService"][field] = value;
         assert!(!input_current(&state, 502, 77), "{field}");
     }
+
     let mut state = current();
     state["sessionProof"]["onConsole"] = json!(true);
     assert!(!input_current(&state, 502, 77), "visible helper");
@@ -648,13 +699,16 @@ fn a_replacement_counts_only_when_ready_current_idle_and_expected() {
 #[test]
 fn an_unreadable_installed_build_is_retried_not_cached() {
     use std::os::unix::fs::PermissionsExt;
+
     let dir = tempfile::tempdir().unwrap();
     let client = Client::new(config(dir.path())).unwrap();
     assert_eq!(client.installed_build(), None);
-    std::fs::write(dir.path().join("probe"), b"abc").unwrap();
+
     let probe = dir.path().join("probe");
+    std::fs::write(&probe, b"abc").unwrap();
     std::fs::set_permissions(&probe, std::fs::Permissions::from_mode(0o000)).unwrap();
     assert_eq!(client.installed_build(), None);
+
     std::fs::set_permissions(&probe, std::fs::Permissions::from_mode(0o600)).unwrap();
     assert_eq!(
         client.installed_build().as_deref(),
@@ -671,8 +725,10 @@ fn a_settled_service_need_not_be_current_but_a_current_one_must_be_settled() {
     state["installedBuild"] = json!("new");
     assert!(input_settled(&state, 502, 77));
     assert!(!input_current(&state, 502, 77));
+
     state["inputService"]["heldInput"] = json!(true);
     assert!(!input_settled(&state, 502, 77));
+
     state["inputService"]["heldInput"] = json!(false);
     assert!(!input_settled(&state, 502, 76), "another PID");
 }
@@ -682,12 +738,14 @@ fn pending_generations_are_listed_until_settled() {
     let dir = tempfile::tempdir().unwrap();
     let controller = Controller::at(502, dir.path());
     assert!(controller.pending().unwrap().is_empty());
+
     let first = controller.quarantine().unwrap();
     let second = controller.quarantine().unwrap();
     assert_eq!(
         controller.pending().unwrap(),
         vec![first.to_string(), second.to_string()]
     );
+
     controller.clear_if(&first).unwrap();
     assert_eq!(controller.pending().unwrap(), vec![second.to_string()]);
 }
@@ -700,11 +758,13 @@ fn only_generations_nothing_will_settle_are_unresolved() {
     // file locks, so it sees exactly what a separate process would.
     let observer = Controller::at(502, dir.path());
     let working = controller.quarantine().unwrap();
+
     assert_eq!(observer.pending().unwrap().len(), 1);
     assert!(
         observer.unresolved().unwrap().is_empty(),
         "work in progress is not an unknown outcome"
     );
+
     let abandoned = controller.quarantine().unwrap();
     let lost = abandoned.to_string();
     drop(abandoned);
@@ -718,8 +778,10 @@ fn only_generations_nothing_will_settle_are_unresolved() {
         "busy",
         "a generation is claimed once"
     );
+
     controller.clear_if(&working).unwrap();
     drop(working);
+
     // A crashed writer leaves its claim file behind, unlocked.
     let crashed = atlas::control::token();
     let claim = controller.quarantine_as(&crashed).unwrap();
@@ -734,12 +796,14 @@ fn only_generations_nothing_will_settle_are_unresolved() {
     std::fs::hard_link(&live, dir.path().join("kept")).unwrap();
     drop(claim);
     std::fs::rename(dir.path().join("kept"), &live).unwrap();
+
     // An entry this version did not write is never taken as in progress.
     let marker = find(".uncertain.json");
     let mut entries: Vec<String> =
         serde_json::from_slice(&std::fs::read(&marker).unwrap()).unwrap();
     entries.push("1234.legacy".into());
     std::fs::write(&marker, serde_json::to_vec(&entries).unwrap()).unwrap();
+
     assert_eq!(
         observer.unresolved().unwrap(),
         vec![lost, crashed.clone(), "1234.legacy".to_owned()]
@@ -748,9 +812,11 @@ fn only_generations_nothing_will_settle_are_unresolved() {
         controller.quarantine_as("not/a token").unwrap_err().code,
         "state"
     );
+
     // Settling one generation removes its abandoned claim file too.
     controller.clear_if(&crashed).unwrap();
     assert!(!live.exists(), "settling removes an abandoned claim file");
+
     // A writer that crashed before publishing leaves an unlisted claim file;
     // recovery sweeps it but never a claim a live mutation holds.
     let name = marker
@@ -762,6 +828,7 @@ fn only_generations_nothing_will_settle_are_unresolved() {
         .path()
         .join(format!("{name}.{}.live", atlas::control::token()));
     std::fs::write(&orphan, b"").unwrap();
+
     let held = controller.quarantine().unwrap();
     controller.clear().unwrap();
     assert!(controller.pending().unwrap().is_empty());
@@ -773,6 +840,7 @@ fn only_generations_nothing_will_settle_are_unresolved() {
         find(&format!(".{}.live", &*held)).exists(),
         "a held claim is never swept"
     );
+
     // A claim whose file was replaced never removes the replacement.
     let path = find(&format!(".{}.live", &*held));
     std::fs::remove_file(&path).unwrap();
@@ -780,6 +848,7 @@ fn only_generations_nothing_will_settle_are_unresolved() {
     drop(held);
     assert!(path.exists(), "the replacement claim survives");
     assert!(observer.unresolved().unwrap().is_empty());
+
     drop(replacement);
     assert!(!path.exists());
 }
@@ -790,10 +859,12 @@ fn a_stale_release_is_a_no_op_but_never_ends_another_lease() {
     let controller = Controller::at(502, dir.path());
     let mut lease = Lease::default();
     let old = lease.acquire(&controller).unwrap();
+
     // Revoked elsewhere (the menu bar); the viewer's own release follows.
     assert_eq!(lease.begin_release(None).unwrap(), Some(old.clone()));
     lease.end_release();
     assert_eq!(lease.begin_release(Some(&old)).unwrap(), None);
+
     let current = lease.acquire(&controller).unwrap();
     assert_eq!(
         lease.begin_release(Some(&old)).unwrap_err().code,
@@ -806,13 +877,17 @@ fn a_stale_release_is_a_no_op_but_never_ends_another_lease() {
 #[test]
 fn unusable_helpers_say_why_with_their_own_codes() {
     let code = |state: Value| require_hidden(&state, 502).unwrap_err().code;
+
     let mut console = status();
     console["session"]["onConsole"] = json!(true);
     assert_eq!(code(console), "on-console");
+
     let other = json!({"ok": false, "code": "identity", "error": "Socket owned by 503"});
     assert_eq!(code(other), "identity");
+
     let silent = json!({"ok": false, "code": "transport", "error": "No answer"});
     assert_eq!(code(silent), "transport");
+
     let mut wrong = status();
     wrong["user"]["uid"] = json!(503);
     assert_eq!(code(wrong), "identity");

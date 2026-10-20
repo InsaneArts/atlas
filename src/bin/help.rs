@@ -120,13 +120,17 @@ fn examples(name: &str) -> &'static [&'static str] {
 /// The command line with the grouped help.
 pub fn command() -> clap::Command {
     let mut root = Cli::command();
+
     for (name, examples) in EXAMPLES {
         let text = format!("Examples:\n  {}", examples.join("\n  "));
         root = root.mut_subcommand(name, |command| command.after_help(text));
     }
+
     let mut groups = String::new();
+
     for (title, names) in GROUPS {
         groups.push_str(&format!("{title}:\n"));
+
         for name in *names {
             let about = root
                 .find_subcommand(name)
@@ -136,8 +140,10 @@ pub fn command() -> clap::Command {
             let first = about.lines().next().unwrap_or("").trim_end_matches('.');
             groups.push_str(&format!("  {name:<14} {first}\n"));
         }
+
         groups.push('\n');
     }
+
     root.help_template(format!(
         "{{about-with-newline}}\n{{usage-heading}} {{usage}}\n\n{groups}Global options:\n{{options}}\n\nRun atlas COMMAND --help for details. Without a terminal, every command prints JSON."
     ))
@@ -155,16 +161,19 @@ pub fn usage(error: clap::Error) -> ExitCode {
     ) {
         error.exit();
     }
+
     // Lossy: an argument need not be UTF-8, and this only shows it.
     let arguments: Vec<String> = std::env::args_os()
         .skip(1)
         .map(|argument| argument.to_string_lossy().into_owned())
         .collect();
+
     // The command on the line, with its subcommand (`environment rollback`);
     // commands Atlas runs itself are never suggested.
     let root = Cli::command();
     let mut current = &root;
     let mut path = Vec::new();
+
     for argument in arguments
         .iter()
         .take_while(|argument| argument.as_str() != "--")
@@ -178,13 +187,16 @@ pub fn usage(error: clap::Error) -> ExitCode {
             current = command;
         }
     }
+
     let name = (!path.is_empty()).then(|| path.join(" "));
     let message = explain(&error, name.as_deref());
+
     // An example that uses the option that went wrong, when there is one.
     let option = match error.get(ContextKind::InvalidArg) {
         Some(ContextValue::String(value)) => value.split_whitespace().next().map(str::to_owned),
         _ => None,
     };
+
     let example = match path.as_slice() {
         [command] => {
             let list = examples(command);
@@ -200,12 +212,14 @@ pub fn usage(error: clap::Error) -> ExitCode {
         }
         _ => None,
     };
+
     let format = ui::detect(
         arguments.iter().any(|argument| argument == "--json"),
         std::env::var("ATLAS_JSON").ok().as_deref(),
         std::io::stdout().is_terminal(),
     );
     ui::set(format);
+
     match format {
         Format::Json => {
             eprintln!(
@@ -218,15 +232,18 @@ pub fn usage(error: clap::Error) -> ExitCode {
                 Some(name) => format!("atlas {name} --help"),
                 None => "atlas --help".to_owned(),
             };
+
             let fix = match example {
                 Some(example) => {
                     format!("Try {}, or see {}.", style::cmd(example), style::cmd(help))
                 }
                 None => format!("See {}.", style::cmd(help)),
             };
+
             eprintln!("{} {message}\n  {} {fix}", style::fail(), style::dim("→"));
         }
     }
+
     ExitCode::from(2)
 }
 
@@ -236,6 +253,7 @@ pub fn usage(error: clap::Error) -> ExitCode {
 fn choices(argument: &str) -> Option<Vec<&str>> {
     let inner = argument.strip_prefix('<')?.strip_suffix('>')?;
     let (mut depth, mut start, mut parts) = (0usize, 0, Vec::new());
+
     for (index, character) in inner.char_indices() {
         match character {
             '<' | '[' => depth += 1,
@@ -247,6 +265,7 @@ fn choices(argument: &str) -> Option<Vec<&str>> {
             _ => {}
         }
     }
+
     parts.push(&inner[start..]);
     (parts.len() > 1).then_some(parts)
 }
@@ -258,11 +277,13 @@ fn explain(error: &clap::Error, name: Option<&str>) -> String {
         Some(ContextValue::Strings(values)) => Some(values.join(", ")),
         _ => None,
     };
+
     let list = |kind| match error.get(kind) {
         Some(ContextValue::Strings(values)) => values.clone(),
         Some(ContextValue::String(value)) => vec![value.clone()],
         _ => Vec::new(),
     };
+
     // `--tool <NAME>` as `--tool`, `<TEXT>` as TEXT, and a choice of
     // several (`<--app <APP>|--all>`) as `--app or --all`.
     let one = |argument: &str| {
@@ -270,6 +291,7 @@ fn explain(error: &clap::Error, name: Option<&str>) -> String {
         word.trim_matches(|c| c == '<' || c == '>' || c == '.' || c == '[' || c == ']')
             .to_owned()
     };
+
     let bare = |argument: String| match choices(&argument) {
         Some(choices) => choices
             .iter()
@@ -278,6 +300,7 @@ fn explain(error: &clap::Error, name: Option<&str>) -> String {
             .join(" or "),
         None => one(&argument),
     };
+
     let command = name.map_or("atlas".to_owned(), |name| format!("atlas {name}"));
     let suggestion = |kind| {
         let suggested = list(kind);
@@ -285,6 +308,7 @@ fn explain(error: &clap::Error, name: Option<&str>) -> String {
     };
     let invalid = context(ContextKind::InvalidArg).map(bare);
     let value = context(ContextKind::InvalidValue);
+
     match error.kind() {
         ErrorKind::InvalidValue if value.as_deref() == Some("") => {
             format!("{} needs a value.", invalid.unwrap_or_default())
@@ -296,6 +320,7 @@ fn explain(error: &clap::Error, name: Option<&str>) -> String {
                 value.unwrap_or_default(),
                 invalid.unwrap_or_default()
             );
+
             if !valid.is_empty() {
                 text.push_str(&format!(" Use {}.", valid.join(", ")));
             } else if error.kind() == ErrorKind::ValueValidation
@@ -307,6 +332,7 @@ fn explain(error: &clap::Error, name: Option<&str>) -> String {
                     text.push_str(&format!(" {reason}"));
                 }
             }
+
             text
         }
         ErrorKind::InvalidSubcommand => format!(
@@ -375,6 +401,7 @@ mod tests {
                 .count();
             assert_eq!(homes, 1, "{name} should be in one group");
         }
+
         for (_, names) in GROUPS {
             for name in *names {
                 assert!(visible.contains(name), "{name} is not a visible command");
@@ -390,6 +417,7 @@ mod tests {
                 .expect_err("should not parse");
             explain(&error, Some(line[0]))
         };
+
         assert_eq!(said(&["readiness", "--tool"]), "--tool needs a value.");
         assert_eq!(
             said(&["update", "--forse"]),
@@ -417,8 +445,10 @@ mod tests {
     #[test]
     fn every_example_is_for_a_command_and_parses() {
         let root = command();
+
         for (name, examples) in EXAMPLES {
             assert!(root.find_subcommand(name).is_some(), "{name}");
+
             for example in *examples {
                 let words = example
                     .split_whitespace()
@@ -434,9 +464,11 @@ mod tests {
     #[test]
     fn the_help_shows_each_group_with_one_line_per_command() {
         let help = command().render_help().to_string();
+
         for (title, _) in GROUPS {
             assert!(help.contains(&format!("{title}:")), "{title}");
         }
+
         assert!(help.contains("  screenshot     Save a screenshot of the helper's screen\n"));
         assert!(help.contains("Global options:"));
     }

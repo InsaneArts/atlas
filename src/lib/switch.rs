@@ -42,6 +42,7 @@ pub fn accounts(helper: Option<u32>) -> Result<Vec<Account>> {
     let output = Command::new("/usr/bin/dscl")
         .args([".", "-list", "/Users", "UniqueID"])
         .output()?;
+
     // A failed listing is an error, never "no other accounts".
     if !output.status.success() {
         return Err(Error::new(
@@ -52,6 +53,7 @@ pub fn accounts(helper: Option<u32>) -> Result<Vec<Account>> {
             ),
         ));
     }
+
     let me = nix::unistd::getuid().as_raw();
     Ok(listed(
         &String::from_utf8_lossy(&output.stdout),
@@ -98,17 +100,21 @@ pub fn standard_accounts() -> Result<Vec<Account>> {
 fn login_symbol(symbol: &std::ffi::CStr) -> Result<extern "C" fn() -> i32> {
     const FRAMEWORK: &std::ffi::CStr =
         c"/System/Library/PrivateFrameworks/login.framework/Versions/A/login";
+
     let unavailable = || Error::new("switch", "This macOS cannot lock the screen from here");
+
     // SAFETY: a NUL-terminated path; the handle stays open for the process.
     let handle = unsafe { libc::dlopen(FRAMEWORK.as_ptr(), libc::RTLD_LAZY) };
     if handle.is_null() {
         return Err(unavailable());
     }
+
     // SAFETY: a live handle and a NUL-terminated symbol name.
     let function = unsafe { libc::dlsym(handle, symbol.as_ptr()) };
     if function.is_null() {
         return Err(unavailable());
     }
+
     // SAFETY: the login calls used here take no arguments and return a
     // status (as Chromium's login_util declares them).
     Ok(unsafe { std::mem::transmute::<*mut std::ffi::c_void, extern "C" fn() -> i32>(function) })
@@ -135,6 +141,7 @@ fn locked_within(seconds: u64) -> bool {
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
+
     false
 }
 
@@ -142,11 +149,13 @@ fn locked_within(seconds: u64) -> bool {
 /// lock screen; confirmed from the window server, not assumed.
 pub fn lock_screen() -> Result<Value> {
     let _ = login_call(c"SACLockScreenImmediate");
+
     if !locked_within(3) {
         // Sleeping the display locks it when a password is required on wake.
         let _ = Command::new("/usr/bin/pmset")
             .arg("displaysleepnow")
             .status();
+
         if !locked_within(3) {
             return Err(Error::new(
                 "switch",
@@ -154,6 +163,7 @@ pub fn lock_screen() -> Result<Value> {
             ));
         }
     }
+
     Ok(json!({"ok": true, "locked": true}))
 }
 
@@ -165,6 +175,7 @@ pub fn to(account: &Account) -> Result<Value> {
     reply["next"] = json!(format!(
         "On the lock screen, click Switch User, choose {name} and log in."
     ));
+
     Ok(reply)
 }
 
@@ -190,12 +201,14 @@ mod tests {
             .iter()
             .map(|account| (account.name.as_str(), account.helper))
             .collect();
+
         assert_eq!(
             order,
             [("atlas", true), ("ann", false), ("zed", false)],
             "the helper first, then by user ID, never this login"
         );
         assert_eq!(accounts[0].real_name.as_deref(), Some("Atlas"));
+
         let without = listed(listing, 501, None, |_| None);
         assert!(without.iter().all(|account| !account.helper));
         assert_eq!(without[0].uid, 502);

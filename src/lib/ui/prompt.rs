@@ -23,6 +23,7 @@ fn needs_terminal(instead: &str) -> Error {
     } else {
         format!(", or {instead}")
     };
+
     Error::new(
         "terminal",
         format!("This asks you a question, so run it in a terminal{instead}."),
@@ -38,6 +39,7 @@ pub fn cancelled() -> Error {
 /// wait) must not answer it.
 fn discard_typed_ahead() {
     use std::os::fd::AsFd;
+
     let _ = nix::sys::termios::tcflush(
         std::io::stdin().as_fd(),
         nix::sys::termios::FlushArg::TCIFLUSH,
@@ -70,6 +72,7 @@ pub fn confirm(question: &str, default: bool, instead: &str) -> Result<bool> {
     if !interactive() {
         return Err(needs_terminal(instead));
     }
+
     discard_typed_ahead();
     Confirm::with_theme(&theme())
         .with_prompt(question)
@@ -84,6 +87,7 @@ pub fn select(question: &str, items: &[String], default: usize, instead: &str) -
     if !interactive() {
         return Err(needs_terminal(instead));
     }
+
     discard_typed_ahead();
     Select::with_theme(&theme())
         .with_prompt(question)
@@ -104,6 +108,7 @@ pub fn input(
     if !interactive() {
         return Err(needs_terminal(instead));
     }
+
     discard_typed_ahead();
     Input::<String>::with_theme(&theme())
         .with_prompt(question)

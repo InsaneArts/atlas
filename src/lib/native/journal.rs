@@ -44,15 +44,18 @@ impl Journal {
         if self.saved.as_ref() == Some(&held) {
             return Ok(());
         }
+
         self.saved = None;
         store(&self.path, &held)?;
         self.saved = Some(held);
+
         Ok(())
     }
 }
 
 pub fn load(path: &Path, epoch: &InputEpoch) -> Result<Option<Held>> {
     let foreign = || Error::new("identity", "Held-input journal must belong to the helper");
+
     // A symlink is never followed (O_NOFOLLOW fails with ELOOP), and the
     // checks are made on the opened descriptor, so the file read is the file
     // checked. Opening never blocks on a FIFO.
@@ -66,15 +69,19 @@ pub fn load(path: &Path, epoch: &InputEpoch) -> Result<Option<Held>> {
         Err(error) if error.raw_os_error() == Some(libc::ELOOP) => return Err(foreign()),
         Err(error) => return Err(error.into()),
     };
+
     let metadata = file.metadata()?;
     if !metadata.is_file() || metadata.uid() != epoch.uid {
         return Err(foreign());
     }
+
     let mut bytes = Vec::new();
     (&mut file).take(4097).read_to_end(&mut bytes)?;
+
     if bytes.len() > 4096 {
         return Err(Error::new("native", "Held-input journal is invalid"));
     }
+
     let held: Held = serde_json::from_slice(&bytes)?;
     if held.epoch.uid != epoch.uid
         || !held.x.is_finite()
@@ -89,16 +96,19 @@ pub fn load(path: &Path, epoch: &InputEpoch) -> Result<Option<Held>> {
             "Held-input journal belongs to a different login or is invalid",
         ));
     }
+
     if held.epoch.security_session_id != epoch.security_session_id {
         if held.button.is_none() && held.keys.is_empty() && held.flags == 0 {
             return Ok(None);
         }
+
         return Err(Error::new(
             "identity",
             "Held input belongs to an earlier login. Archive its journal after inspecting \
              that session; it will not be replayed into this login.",
         ));
     }
+
     Ok(Some(held))
 }
 
@@ -142,14 +152,17 @@ mod tests {
             "count": 2,
             "flags": 1 << 20,
         });
+
         write_private_with(
             &path,
             &serde_json::to_vec(&legacy).unwrap(),
             Durability::Disk,
         )
         .unwrap();
+
         epoch.process_id = 2;
         let recovered = load(&path, &epoch).unwrap().unwrap();
+
         assert_eq!(recovered.mouse_number, 0);
         assert_eq!(recovered.button, Some(Button::Left));
         assert_eq!(recovered.keys, vec![55]);
@@ -186,6 +199,7 @@ mod tests {
         recovered.button = None;
         recovered.keys.clear();
         recovered.flags = 0;
+
         Journal::new(path.clone()).write(recovered.clone()).unwrap();
         let clean = load(&path, &epoch).unwrap().unwrap();
         assert!(clean == recovered);
@@ -209,11 +223,14 @@ mod tests {
         };
         store(&path, &held).unwrap();
         assert!(load(&path, &epoch).unwrap().is_some());
+
         held.mouse_number = -1;
         store(&path, &held).unwrap();
+
         let Err(error) = load(&path, &epoch) else {
             panic!("A negative mouse event number was accepted for recovery");
         };
+
         assert_eq!(error.code, "identity");
     }
 
@@ -221,14 +238,7 @@ mod tests {
     fn clean_journals_survive_login_changes_but_held_input_does_not_cross() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("held.json");
-        let mut epoch = InputEpoch {
-            uid: nix::unistd::getuid().as_raw(),
-            security_session_id: 10,
-            display_id: 1,
-            width: 1600.0,
-            height: 900.0,
-            process_id: 1,
-        };
+        let mut epoch = test_epoch();
         let mut held = Held {
             epoch: epoch.clone(),
             button: None,
@@ -240,8 +250,10 @@ mod tests {
             flags: 0,
         };
         store(&path, &held).unwrap();
+
         epoch.security_session_id = 20;
         assert!(load(&path, &epoch).unwrap().is_none());
+
         held.button = Some(Button::Left);
         store(&path, &held).unwrap();
         assert!(load(&path, &epoch).is_err());
@@ -268,7 +280,9 @@ mod tests {
             },
         )
         .unwrap();
+
         assert!(load(&real, &epoch).unwrap().is_some());
+
         let link = directory.path().join("held.json");
         std::os::unix::fs::symlink(&real, &link).unwrap();
         assert_eq!(load(&link, &epoch).err().unwrap().code, "identity");
@@ -276,6 +290,7 @@ mod tests {
             load(directory.path(), &epoch).err().unwrap().code,
             "identity"
         );
+
         let fifo = directory.path().join("fifo.json");
         nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).unwrap();
         assert_eq!(load(&fifo, &epoch).err().unwrap().code, "identity");
@@ -290,14 +305,7 @@ mod tests {
     fn failed_clean_commit_is_retried_without_losing_the_held_record() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("held.json");
-        let epoch = InputEpoch {
-            uid: nix::unistd::getuid().as_raw(),
-            security_session_id: 10,
-            display_id: 1,
-            width: 1600.0,
-            height: 900.0,
-            process_id: 1,
-        };
+        let epoch = test_epoch();
         let mut held = Held {
             epoch: epoch.clone(),
             button: None,
@@ -310,6 +318,7 @@ mod tests {
         };
         let mut journal = Journal::new(path.clone());
         journal.write(held.clone()).unwrap();
+
         held.keys.clear();
         held.flags = 0;
 
@@ -321,6 +330,7 @@ mod tests {
         let interrupted = load(&path, &epoch).unwrap().unwrap();
         assert_eq!(interrupted.keys, vec![0]);
         assert_eq!(interrupted.flags, 1 << 20);
+
         fs::remove_dir(pending).unwrap();
         journal.write(held).unwrap();
         let clean = load(&path, &epoch).unwrap().unwrap();

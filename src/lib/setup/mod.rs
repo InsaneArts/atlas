@@ -51,10 +51,12 @@ fn lookup(key: Lookup) -> Result<Option<Account>> {
     let mut found = std::ptr::null_mut();
     let mut buffer = Vec::new();
     let mut status = libc::ERANGE;
+
     // Directory-service records can exceed any fixed buffer; grow on ERANGE.
     // The error is the return value: macOS need not set errno here.
     for size in [16 << 10, 64 << 10, 256 << 10, 1 << 20] {
         buffer.resize(size, 0);
+
         // SAFETY: valid entry, buffer and result pointers that outlive the call;
         // the strings in `entry` point into `buffer` and are copied before return.
         status = unsafe {
@@ -75,16 +77,20 @@ fn lookup(key: Lookup) -> Result<Option<Account>> {
                 ),
             }
         };
+
         if status != libc::ERANGE {
             break;
         }
     }
+
     if status != 0 {
         return Err(std::io::Error::from_raw_os_error(status).into());
     }
+
     if found.is_null() {
         return Ok(None);
     }
+
     // SAFETY: getpw*_r succeeded, so both fields are NUL-terminated strings.
     let text = |field| {
         // SAFETY: see above.
@@ -92,6 +98,7 @@ fn lookup(key: Lookup) -> Result<Option<Account>> {
             .to_string_lossy()
             .into_owned()
     };
+
     Ok(Some(Account {
         name: text(entry.pw_name),
         uid: entry.pw_uid,
@@ -119,6 +126,7 @@ pub fn real_name(name: &str) -> Option<String> {
         .ok()?;
     let text = String::from_utf8(output.stdout).ok()?;
     let value = text.strip_prefix("RealName:")?.trim().to_owned();
+
     (!value.is_empty()).then_some(value)
 }
 
@@ -133,9 +141,11 @@ pub(crate) fn request_as_helper(
     cached_rights: bool,
 ) -> Result<(bool, Value)> {
     let mut command = Command::new("/usr/bin/sudo");
+
     if cached_rights {
         command.arg("-n");
     }
+
     let output = command
         .args([
             "/bin/launchctl",
@@ -152,6 +162,7 @@ pub(crate) fn request_as_helper(
     let reply = serde_json::from_slice(&output.stdout)
         .or_else(|_| serde_json::from_slice(&output.stderr))
         .unwrap_or(Value::Null);
+
     Ok((output.status.success(), reply))
 }
 
@@ -173,6 +184,7 @@ pub fn parse_signature(text: &str) -> Signature {
             .filter(|value| !value.is_empty())
             .map(str::to_owned)
     };
+
     Signature {
         identifier: field("Identifier="),
         cdhash: field("CDHash="),
@@ -187,6 +199,7 @@ fn signature(path: &Path) -> Option<Signature> {
         .arg(path)
         .output()
         .ok()?;
+
     output
         .status
         .success()
@@ -200,13 +213,8 @@ pub const TEAM: &str = "A474HM679A";
 /// The identifier the app's executable inside Atlas.app is signed as.
 pub const APP_IDENTIFIER: &str = "com.insanearts.atlas.bar";
 
-/// The code requirement for Atlas: a Developer ID Application
-/// signature by its team, under its identifier. install.sh checks the same.
-pub fn requirement() -> String {
-    requirement_for(IDENTIFIER)
-}
-
-/// The same requirement for code signed as `identifier`.
+/// The code requirement for code signed as `identifier`: a Developer ID
+/// Application signature by Atlas's team. install.sh checks the same.
 fn requirement_for(identifier: &str) -> String {
     format!(
         "anchor apple generic and identifier \"{identifier}\" \
@@ -304,11 +312,13 @@ fn running_developer_id(pid: u32) -> bool {
 fn executable_of(pid: u32) -> Option<PathBuf> {
     let size = u32::try_from(libc::PROC_PIDPATHINFO_MAXSIZE).ok()?;
     let mut buffer = vec![0_u8; usize::try_from(size).ok()?];
+
     // SAFETY: the buffer is writable for the length passed.
     let length =
         unsafe { libc::proc_pidpath(i32::try_from(pid).ok()?, buffer.as_mut_ptr().cast(), size) };
     let length = usize::try_from(length).ok().filter(|length| *length > 0)?;
     buffer.truncate(length);
+
     Some(PathBuf::from(String::from_utf8_lossy(&buffer).into_owned()))
 }
 
@@ -337,6 +347,7 @@ fn screen_sharing() -> Value {
                 "com.apple.screensharing",
             )
         });
+
     json!({
         "service": match disabled {
             Some(true) => "disabled",
@@ -389,6 +400,7 @@ fn endpoint(path: &Path, helper: u32, controller: u32) -> Endpoint {
             .map(|text| text.lines().skip(1).map(str::to_owned).collect()),
         Err(_) => None,
     });
+
     // Private: helper-owned, no group/other mode bits, and explicit grants
     // only to the helper or this controller. Unknown if either is unreadable.
     let private = directory.as_ref().zip(acl.as_ref()).map(|(metadata, acl)| {
@@ -446,6 +458,7 @@ async fn read(client: &Client, argv: &[&str]) -> Option<String> {
         .call(&json!({"op": "run", "argv": argv, "timeoutMs": 3000}))
         .await
         .ok()?;
+
     (reply["ok"] == true && reply["exitCode"] == 0)
         .then(|| run_output(&reply, 65536).ok())
         .flatten()
@@ -457,12 +470,15 @@ async fn read(client: &Client, argv: &[&str]) -> Option<String> {
 /// the file launchd itself recorded, and must name the same label.
 async fn helper_job(client: &Client, capture_pid: u32) -> Value {
     let unobserved = json!({"label": null, "observed": false});
+
     let Some(list) = read(client, &["/bin/launchctl", "list"]).await else {
         return unobserved;
     };
+
     let Some(label) = job_label(&list, capture_pid) else {
         return json!({"label": null, "observed": true});
     };
+
     let print = "exec /bin/launchctl print \"gui/$(/usr/bin/id -u)/$1\"";
     let plist = read(client, &["/bin/sh", "-c", print, "sh", &label])
         .await
@@ -485,6 +501,7 @@ async fn helper_job(client: &Client, capture_pid: u32) -> Value {
         .filter(|definition| definition["Label"] == label.as_str()),
         None => None,
     };
+
     json!({
         "label": label,
         "observed": true,
@@ -538,21 +555,25 @@ pub async fn preview(config_path: &Path, helper: Option<&str>) -> Result<Value> 
     let (config, config_state, config_error) = read_config(config_path);
     let account = preview_account(helper, config.as_ref())?;
     validate_target_uid(account.uid, controller_uid)?;
+
     let conflict = config
         .as_ref()
         .is_some_and(|config| config.helper_uid != account.uid);
+
     // Otherwise the configuration atlas init would write; shown, never
     // written, by preview.
     let effective = match &config {
         Some(config) if !conflict => config.clone(),
         _ => crate::init::proposed(&account)?,
     };
+
     let current = std::env::current_exe()
         .and_then(fs::canonicalize)
         .ok()
         .and_then(|path| file_sha256(&path));
     let installed = crate::digest::probe_executable(&effective.identity_probe)
         .and_then(|path| file_sha256(&path));
+
     let mut report = json!({
         "ok": true,
         "preview": true,
@@ -581,9 +602,11 @@ pub async fn preview(config_path: &Path, helper: Option<&str>) -> Result<Value> 
         },
         "screenSharing": screen_sharing(),
     });
+
     let client = Client::new(effective)?;
     observe(&client, account.uid, &mut report).await;
     report["nextSteps"] = json!(next_steps(&report));
+
     Ok(report)
 }
 
@@ -593,6 +616,7 @@ async fn observe(client: &Client, uid: u32, report: &mut Value) {
     let status = client.status().await;
     let reachable = status["ok"] == true;
     let session = require_hidden(&status, uid).ok();
+
     report["session"] = json!({
         "reachable": reachable,
         "graphical": status["session"]["managerName"],
@@ -600,15 +624,18 @@ async fn observe(client: &Client, uid: u32, report: &mut Value) {
         "hidden": reachable.then_some(session.is_some()),
         "error": (!reachable).then(|| status["error"].clone()),
     });
+
     let pid = status["daemon"]["pid"]
         .as_u64()
         .and_then(|p| u32::try_from(p).ok());
+
     if reachable {
         report["capture"]["daemon"] = json!({
             "pid": pid,
             "binary": pid.and_then(executable_of).map(|path| binary(&path)),
             "screenRecording": status["permissions"]["screenCapture"],
         });
+
         report["input"]["service"] = json!({
             "pid": status["inputService"]["pid"],
             "version": status["inputService"]["version"],
@@ -619,6 +646,7 @@ async fn observe(client: &Client, uid: u32, report: &mut Value) {
             "error": status["inputService"]["error"],
         });
     }
+
     report["capture"]["job"] = match (&session, pid) {
         (Some(_), Some(pid)) => helper_job(client, pid).await,
         _ => json!({"label": null, "observed": false}),
@@ -627,6 +655,7 @@ async fn observe(client: &Client, uid: u32, report: &mut Value) {
 
 fn next_steps(report: &Value) -> Vec<String> {
     let mut steps = Vec::new();
+
     match report["config"]["state"].as_str() {
         Some("missing") => steps.push(
             "No configuration exists. Review the proposed configuration and save it at the \
@@ -640,6 +669,7 @@ fn next_steps(report: &Value) -> Vec<String> {
         ),
         _ => {}
     }
+
     if report["session"]["reachable"] != true {
         steps.push(
             "The helper is not running. Log in to the helper account once, then switch back \
@@ -649,6 +679,7 @@ fn next_steps(report: &Value) -> Vec<String> {
     } else if report["session"]["hidden"] != true {
         steps.push("Switch back to your own account without logging the helper out.".to_owned());
     }
+
     if report["capture"]["endpoint"]["private"] == false {
         steps.push(
             "The capture socket directory is accessible beyond the helper and its explicit \
@@ -656,6 +687,7 @@ fn next_steps(report: &Value) -> Vec<String> {
                 .to_owned(),
         );
     }
+
     if report["capture"]["daemon"]["screenRecording"] == false {
         steps.push(
             "In the helper's System Settings › Privacy & Security › Screen & System Audio Recording, \
@@ -663,10 +695,12 @@ fn next_steps(report: &Value) -> Vec<String> {
                 .to_owned(),
         );
     }
+
     if report["input"]["service"]["accessibility"] == false {
         steps
             .push("Grant Accessibility to the input service inside the helper account.".to_owned());
     }
+
     if report["input"]["service"]["current"] == false {
         steps.push(
             "The input service runs a different build than the installed executable; run \
@@ -674,11 +708,13 @@ fn next_steps(report: &Value) -> Vec<String> {
                 .to_owned(),
         );
     }
+
     if report["rustExecutable"]["matchesThisBuild"] == false {
         steps.push(
             "The shared Rust executable differs from this build; run atlas install.".to_owned(),
         );
     }
+
     // Whether Save/Open panels work is doctor's native-dialog report, not a step.
     steps
 }
@@ -696,11 +732,12 @@ mod tests {
             .find_map(|line| line.strip_prefix("REQUIREMENT=\""))
             .and_then(|line| line.strip_suffix('"'))
             .expect("install.sh sets REQUIREMENT");
+
         let expanded = line
             .replace("\\\"", "\"")
             .replace("$IDENTIFIER", IDENTIFIER)
             .replace("$TEAM", TEAM);
-        assert_eq!(expanded, requirement());
+        assert_eq!(expanded, requirement_for(IDENTIFIER));
         assert!(script.contains(&format!("IDENTIFIER=\"{IDENTIFIER}\"")));
         assert!(script.contains(&format!("TEAM=\"{TEAM}\"")));
     }
@@ -713,6 +750,7 @@ mod tests {
             !developer_id(Path::new("/bin/ls")),
             "Apple-signed, not ours"
         );
+
         let test = std::env::current_exe().unwrap();
         assert!(!developer_id(&test), "ad-hoc signed test build");
         assert!(
@@ -768,16 +806,19 @@ mod tests {
 
     #[test]
     fn endpoint_privacy_reflects_owner_mode_and_acl() {
-        let dir = tempfile::tempdir().unwrap();
         use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
         fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let socket = dir.path().join("socket");
         let me = nix::unistd::getuid().as_raw();
+
         let report = endpoint(&socket, me, me + 7);
         assert!(!report.present);
         assert_eq!(report.private, Some(true));
         assert_eq!(report.directory_acl, Some(Vec::new()));
         assert_eq!(endpoint(&socket, me + 1, me + 7).private, Some(false));
+
         fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
         assert_eq!(endpoint(&socket, me, me + 7).private, Some(false));
     }
@@ -793,6 +834,7 @@ mod tests {
         assert_eq!(job_label(list, 6815).as_deref(), Some("other"));
         assert_eq!(job_label(list, 1), None);
         assert_eq!(job_label("68151\t0\ta\tb\n", 68151), None);
+
         let print = "gui/502/dev.atlas.live-sessiond = {\n\tactive count = 1\n\t\
                      path = /Users/atlastest/Library/LaunchAgents/dev.atlas.live-sessiond.plist\n}";
         assert_eq!(
@@ -825,9 +867,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("atlas.toml");
         assert_eq!(read_config(&missing), (None, "missing", None));
+
         fs::write(&missing, "not = [toml").unwrap();
         let (config, state, error) = read_config(&missing);
         assert!(config.is_none() && state == "invalid" && error.is_some());
+
         assert_eq!(preview_account(None, None).unwrap_err().code, "usage");
         let unknown = preview_account(Some("no-such-atlas-account"), None).unwrap_err();
         assert_eq!(unknown.code, "setup");

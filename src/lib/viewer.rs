@@ -35,6 +35,7 @@ const KEPT_FRAMES: usize = 24;
 const CONCURRENT_REQUESTS: usize = 32;
 /// The largest request body, in bytes.
 const MAX_BODY: usize = 32768;
+
 #[derive(Default)]
 struct Frames {
     items: VecDeque<(String, Arc<Frame>)>,
@@ -65,11 +66,8 @@ pub struct Viewer {
 impl Viewer {
     /// Pass `line` to the app this viewer serves.
     fn send(&self, line: Line) -> Result<()> {
-        let app = self
-            .app
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        app.as_ref()
+        unpoisoned(&self.app)
+            .as_ref()
             .ok_or_else(|| Error::new("menubar", "No menu bar is attached to this viewer"))?
             .send(line)
             .map_err(|_| Error::new("menubar", "The menu bar is not running"))
@@ -79,12 +77,14 @@ impl Viewer {
         let _capture = self.capture.lock().await;
         let current = self.client.identity().await?.epoch;
         let revision;
+
         {
             let mut frames = self.frames.lock().await;
             frames
                 .items
                 .retain(|(_, frame)| frame.at.elapsed() < FRAME_LIFETIME && frame.epoch == current);
             revision = frames.input_revision;
+
             if frames.capture_revision == Some(revision)
                 && let Some((key, frame)) = frames.items.back()
                 && frame.at.elapsed() < Duration::from_millis(400)
@@ -92,6 +92,7 @@ impl Viewer {
                 return Ok((key.clone(), frame.clone()));
             }
         }
+
         let frame = Arc::new(self.client.frame(Some(FRAME_WIDTH)).await?);
         if frame.at.elapsed() >= FRAME_LIFETIME {
             return Err(Error::new(
@@ -99,19 +100,21 @@ impl Viewer {
                 "Capture became stale while checking its session",
             ));
         }
+
         let key = control::token();
         let mut frames = self.frames.lock().await;
         frames.items.push_back((key.clone(), frame.clone()));
         frames.capture_revision = Some(revision);
+
         while frames.items.len() > KEPT_FRAMES {
             frames.items.pop_front();
         }
+
         Ok((key, frame))
     }
 
     async fn observed(&self, key: &str) -> Result<Arc<Frame>> {
-        let frame = self
-            .frames
+        self.frames
             .lock()
             .await
             .items
@@ -124,8 +127,7 @@ impl Viewer {
                     "stale-frame",
                     "Wait for a fresh frame before taking control",
                 )
-            })?;
-        Ok(frame)
+            })
     }
 
     async fn release(&self, owner: Option<&str>) -> Result<()> {
@@ -138,6 +140,7 @@ impl Viewer {
             self.lease.lock().await.end_release();
             completion?;
         }
+
         Ok(())
     }
 
@@ -172,15 +175,20 @@ impl Viewer {
         } else {
             None
         };
+
         let mut status = crate::capability::doctor(reply, uid);
+
         if let Some(absence) = &absence {
             absence.explain(&mut status);
         }
+
         if status["ready"] != true {
             let _ = self.release(None).await;
         }
+
         let active = self.lease.lock().await.active();
         status["controlActive"] = json!(active);
+
         // An unreadable marker is unknown, so it counts as unresolved.
         let controller = &self.client.controller;
         let total = controller.pending().map_or(1, |pending| pending.len());
@@ -189,7 +197,9 @@ impl Viewer {
             unresolved,
             in_flight: total.saturating_sub(unresolved),
         };
+
         self.start_input_after_login(&status["session"], total == 0 && !active);
+
         let activity = self
             .client
             .output_dir()
@@ -202,14 +212,12 @@ impl Viewer {
             &activity,
             crate::client::timestamp(),
         );
+
         // The helper's full name, as people know the account; looked up once
         // per account (off the runtime, it asks directory services), also
         // when it has none.
         if let Some(name) = status["overview"]["account"].as_str() {
-            let known = self
-                .account_name
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
+            let known = unpoisoned(&self.account_name)
                 .clone()
                 .filter(|(account, _)| account == name);
             let title = match known {
@@ -220,10 +228,7 @@ impl Viewer {
                         .await
                     {
                         Ok(title) => {
-                            *self
-                                .account_name
-                                .lock()
-                                .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                            *unpoisoned(&self.account_name) =
                                 Some((name.to_owned(), title.clone()));
                             title
                         }
@@ -231,8 +236,10 @@ impl Viewer {
                     }
                 }
             };
+
             status["overview"]["accountName"] = json!(title);
         }
+
         status
     }
 
@@ -255,14 +262,17 @@ impl Viewer {
         else {
             return;
         };
+
         let Some(daemon) = session["daemon"]["pid"].as_u64() else {
             return;
         };
+
         let display = &hidden.epoch.display;
         let key = format!(
             "{daemon}:{}:{}x{}",
             hidden.epoch.display_id, display.width, display.height
         );
+
         let first = self
             .input_started
             .lock()
@@ -283,14 +293,17 @@ impl Viewer {
         if self.lease.lock().await.active() {
             return Err(Error::new("busy", "Release control before recovering"));
         }
+
         if !self.client.controller.pending()?.is_empty() {
             return self.client.restart().await;
         }
+
         self.client.start_input().await
     }
 
     async fn control(&self, route: &str, body: &Value) -> Result<Value> {
         let owner = body["lease"].as_str().unwrap_or_default();
+
         // The menu bar's emergency stop: end whichever lease is held, with
         // the same cleanup as any release. Nothing is resumed.
         if route == "control/revoke" {
@@ -298,16 +311,20 @@ impl Viewer {
             self.release(None).await?;
             return Ok(json!({"ok": true, "released": held}));
         }
+
         if route == "control/release" {
             self.release(Some(owner)).await?;
             return Ok(json!({"ok": true}));
         }
+
         if route != "control/acquire" {
             self.lease.lock().await.require(owner)?;
         }
+
         let frame = self
             .observed(body["frame"].as_str().unwrap_or_default())
             .await?;
+
         if route == "control/acquire" {
             let current = self.client.identity().await?;
             if current.epoch != frame.epoch {
@@ -316,12 +333,14 @@ impl Viewer {
                     "Wait for a fresh frame from the current helper",
                 ));
             }
+
             if !current.input {
                 return Err(Error::new(
                     "permission",
                     "Accessibility permission is unavailable",
                 ));
             }
+
             let token = {
                 let mut lease = self.lease.lock().await;
                 let token = lease.acquire(&self.client.controller)?;
@@ -336,6 +355,7 @@ impl Viewer {
                 }
                 return Err(error);
             }
+
             let authorization = self.lease.lock().await.require(&token);
             if let Err(error) = authorization {
                 // The lease ended while input was being acquired: undo the
@@ -348,19 +368,23 @@ impl Viewer {
                     },
                 });
             }
+
             return Ok(json!({"ok": true, "lease": token, "ttlSeconds": LEASE_SECONDS}));
         }
+
         if self.lease_epoch.lock().await.as_ref() != Some(&frame.epoch) {
             return Err(Error::new(
                 "session-changed",
                 "The controlled session changed",
             ));
         }
+
         if route == "control/renew" {
             self.lease.lock().await.renew(owner)?;
             self.client.native_control("renew", owner).await?;
             return Ok(json!({"ok": true}));
         }
+
         let _permit = ActionPermit::begin(self.lease.clone(), owner).await?;
         let result = self
             .client
@@ -370,6 +394,7 @@ impl Viewer {
                 Some((&self.lease, owner)),
             )
             .await;
+
         self.frames.lock().await.input_revision += 1;
         result
     }
@@ -378,6 +403,7 @@ impl Viewer {
 pub async fn bind(mut client: Client, port: u16) -> Result<(TcpListener, Arc<Viewer>, Router)> {
     // Everything this viewer does in the helper is the person's doing.
     client.actor = crate::client::Actor::Viewer;
+
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))
         .await
         .map_err(|error| match error.kind() {
@@ -387,6 +413,7 @@ pub async fn bind(mut client: Client, port: u16) -> Result<(TcpListener, Arc<Vie
             ),
             _ => error.into(),
         })?;
+
     let authority = listener.local_addr()?.to_string();
     let prefix = format!("/{}/", control::token());
     let viewer = Arc::new(Viewer {
@@ -403,9 +430,11 @@ pub async fn bind(mut client: Client, port: u16) -> Result<(TcpListener, Arc<Vie
         account_name: std::sync::Mutex::new(None),
         input_started: std::sync::Mutex::new(None),
     });
+
     let router = Router::new()
         .fallback(any(handle))
         .with_state(viewer.clone());
+
     Ok((listener, viewer, router))
 }
 
@@ -414,6 +443,7 @@ pub async fn bind(mut client: Client, port: u16) -> Result<(TcpListener, Arc<Vie
 pub async fn serve(client: Client, port: u16, program: crate::menubar::Program) -> Result<()> {
     let output = client.output_dir()?.to_path_buf();
     let path = output.join(MENUBAR_RECORD);
+
     let (listener, viewer, router) = match bind(client, port).await {
         Ok(bound) => bound,
         Err(error) if error.code == "port-in-use" => {
@@ -422,11 +452,10 @@ pub async fn serve(client: Client, port: u16, program: crate::menubar::Program) 
         }
         Err(error) => return Err(error),
     };
+
     let (lines, receiver) = tokio::sync::mpsc::unbounded_channel();
-    *viewer
-        .app
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(lines);
+    *unpoisoned(&viewer.app) = Some(lines);
+
     // The record names a viewer with an app; none is left when the app
     // does not start.
     let mut app = App::launch(&program, &viewer.url, receiver).await?;
@@ -436,19 +465,23 @@ pub async fn serve(client: Client, port: u16, program: crate::menubar::Program) 
         "startedAt": crate::client::timestamp().to_string(),
     });
     control::write_private(&path, &serde_json::to_vec_pretty(&record)?)?;
+
     // The URL is a bearer capability: it stays in the private record and
     // with the app, never in output.
     let mut shown = record.clone();
     shown["url"] = json!("held by the menu bar");
+
     if crate::ui::human() {
         println!("The menu bar is running. Quit it from its menu, or press Ctrl-C here.");
     } else {
         println!("{}", serde_json::to_string_pretty(&shown)?);
     }
+
     let timer_view = viewer.clone();
     let expiry = tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_millis(100)).await;
+
             let expired = {
                 let mut lease = timer_view.lease.lock().await;
                 lease.expire();
@@ -459,6 +492,7 @@ pub async fn serve(client: Client, port: u16, program: crate::menubar::Program) 
             }
         }
     });
+
     let shutdown_view = viewer.clone();
     let result = axum::serve(listener, router)
         .with_graceful_shutdown(async move {
@@ -469,8 +503,10 @@ pub async fn serve(client: Client, port: u16, program: crate::menubar::Program) 
             let _ = shutdown_view.release(None).await;
         })
         .await;
+
     expiry.abort();
     let _ = viewer.release(None).await;
+
     // The record goes with this viewer, unless another has replaced it.
     let ours = std::fs::read(&path)
         .ok()
@@ -479,11 +515,19 @@ pub async fn serve(client: Client, port: u16, program: crate::menubar::Program) 
     if ours {
         let _ = std::fs::remove_file(&path);
     }
+
     result.map_err(Error::from)
 }
 
 /// The record of the running viewer, in the output folder.
 pub const MENUBAR_RECORD: &str = "menubar.json";
+
+/// A lock that a panicked holder left poisoned still guards plain data.
+fn unpoisoned<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 /// Run `work`, which waits on the local viewer's socket (for seconds at
 /// most), off the async runtime.
@@ -523,12 +567,15 @@ fn exchange(
     deadline: Duration,
 ) -> Result<(u16, Vec<u8>)> {
     use std::io::{Read, Write};
+
     let refused = || Error::new("menubar", "The menu bar's viewer did not answer");
     // Any trouble on the wire reads the same to the person.
     let io = |_: std::io::Error| refused();
+
     let rest = url.strip_prefix("http://").ok_or_else(refused)?;
     let (authority, path) = rest.split_at(rest.find('/').ok_or_else(refused)?);
     let address: std::net::SocketAddr = authority.parse().map_err(|_| refused())?;
+
     let until = std::time::Instant::now() + deadline;
     let left = || {
         until
@@ -536,37 +583,47 @@ fn exchange(
             .filter(|left| !left.is_zero())
             .ok_or_else(refused)
     };
+
     let mut stream = std::net::TcpStream::connect_timeout(&address, left()?).map_err(io)?;
     stream.set_write_timeout(Some(left()?)).map_err(io)?;
     let mut head =
         format!("{method} {path}{route} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n");
+
     if let Some(body) = body {
         head.push_str(&format!(
             "Origin: http://{authority}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n",
             body.len()
         ));
     }
+
     head.push_str("\r\n");
     stream.write_all(head.as_bytes()).map_err(io)?;
+
     if let Some(body) = body {
         stream.write_all(body).map_err(io)?;
     }
+
     let mut reply = Vec::new();
     let mut chunk = [0u8; 4096];
+
     loop {
         stream.set_read_timeout(Some(left()?)).map_err(io)?;
         let read = stream.read(&mut chunk).map_err(io)?;
         if read == 0 {
             break;
         }
+
         reply.extend_from_slice(&chunk[..read]);
+
         if reply.len() > 1 << 16 {
             return Err(refused());
         }
+
         if let Some(parsed) = parse_response(&reply) {
             return Ok(parsed);
         }
     }
+
     parse_response(&reply).ok_or_else(refused)
 }
 
@@ -583,8 +640,10 @@ fn parse_response(reply: &[u8]) -> Option<(u16, Vec<u8>)> {
         .get(..3)?
         .parse::<u16>()
         .ok()?;
+
     let mut length = None;
     let mut chunked = false;
+
     for line in lines {
         let (name, value) = line.split_once(':')?;
         let value = value.trim();
@@ -594,9 +653,11 @@ fn parse_response(reply: &[u8]) -> Option<(u16, Vec<u8>)> {
             chunked = value.eq_ignore_ascii_case("chunked");
         }
     }
+
     if chunked {
         let mut body = Vec::new();
         let mut at = rest;
+
         loop {
             let end = at.windows(2).position(|window| window == b"\r\n")?;
             let size = std::str::from_utf8(&at[..end])
@@ -606,13 +667,16 @@ fn parse_response(reply: &[u8]) -> Option<(u16, Vec<u8>)> {
                 .trim();
             let size = usize::from_str_radix(size, 16).ok()?;
             at = &at[end + 2..];
+
             if size == 0 {
                 return Some((status, body));
             }
+
             body.extend_from_slice(at.get(..size)?);
             at = at.get(size + 2..)?;
         }
     }
+
     let length = length?;
     Some((status, rest.get(..length)?.to_vec()))
 }
@@ -622,6 +686,7 @@ fn already_running(output: &Path, port: u16, taken: Error) -> Result<()> {
     let Some(bar) = running(&output.join(MENUBAR_RECORD), port) else {
         return Err(taken);
     };
+
     if crate::ui::human() {
         println!(
             "{} The menu bar is already running. Click Atlas at the top of the screen; quit it from its menu.",
@@ -635,6 +700,7 @@ fn already_running(output: &Path, port: u16, taken: Error) -> Result<()> {
             )?
         );
     }
+
     Ok(())
 }
 
@@ -644,9 +710,10 @@ pub async fn monitor(config: &Path, port: u16, output: &Path) -> Result<()> {
     let (_, record) = crate::menubar::launch(config, port, output).await?;
     let url = record["url"]
         .as_str()
+        .map(str::to_owned)
         .ok_or_else(|| Error::new("menubar", "The menu bar's record names no viewer"))?;
-    let url = url.to_owned();
     blocking(move || post_local(&url, "app/viewer", &json!({}))).await?;
+
     if crate::ui::human() {
         println!(
             "{} The viewer is open. Watch the helper there, or take control.",
@@ -658,6 +725,7 @@ pub async fn monitor(config: &Path, port: u16, output: &Path) -> Result<()> {
             serde_json::to_string_pretty(&json!({"ok": true, "viewer": "open"}))?
         );
     }
+
     Ok(())
 }
 
@@ -673,6 +741,7 @@ fn post_local(url: &str, route: &str, body: &Value) -> Result<Value> {
     )?;
     let reply: Value = serde_json::from_slice(&reply)
         .map_err(|_| Error::new("menubar", "The menu bar's viewer did not answer"))?;
+
     if status != 200 {
         return Err(Error::new(
             "menubar",
@@ -682,6 +751,7 @@ fn post_local(url: &str, route: &str, body: &Value) -> Result<Value> {
                 .to_owned(),
         ));
     }
+
     Ok(reply)
 }
 
@@ -696,6 +766,7 @@ pub async fn render_menubar(
     let server = tokio::spawn(async move { axum::serve(listener, router).await });
     let mut paths = Vec::new();
     let mut outcome = Ok(());
+
     for (name, dark) in [("light", false), ("dark", true)] {
         let path = directory.join(format!("menubar-{name}.png"));
         outcome = crate::menubar::render(program, &viewer.url, &path, dark).await;
@@ -704,9 +775,11 @@ pub async fn render_menubar(
         }
         paths.push(path);
     }
+
     server.abort();
     let _ = viewer.release(None).await;
     outcome?;
+
     Ok(json!({"ok": true, "paths": paths}))
 }
 
@@ -729,6 +802,7 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
     let Ok(_slot) = viewer.requests.try_acquire() else {
         return json_response(503, json!({"ok": false, "error": "Viewer is busy"}));
     };
+
     let method = request.method().clone();
     let origin = format!("http://{}", viewer.authority);
     if header(request.headers(), "host") != Some(&viewer.authority)
@@ -740,6 +814,7 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
             json!({"ok": false, "error": "Local same-origin access only"}),
         );
     }
+
     let Some(route) = request
         .uri()
         .path()
@@ -748,14 +823,17 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
     else {
         return json_response(404, json!({"ok": false, "error": "Unknown viewer address"}));
     };
+
     if method == Method::GET {
         // The address itself answers, so a running viewer can be found.
         if route.is_empty() {
             return json_response(200, json!({"ok": true, "service": "atlas-viewer"}));
         }
+
         if route == "status.json" {
             return json_response(200, viewer.status().await);
         }
+
         if route == "frame.png" {
             return match viewer.frame().await {
                 Ok((key, frame)) => response(
@@ -790,6 +868,7 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
             };
         }
     }
+
     if method != Method::POST
         || !matches!(
             route.as_str(),
@@ -804,6 +883,7 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
     {
         return json_response(404, json!({"ok": false, "error": "Unknown operation"}));
     }
+
     if request.headers().contains_key("transfer-encoding")
         || header(request.headers(), "content-type").and_then(|v| v.split(';').next())
             != Some("application/json")
@@ -813,6 +893,7 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
             json!({"ok": false, "error": "Send JSON with Content-Length"}),
         );
     }
+
     let length = header(request.headers(), "content-length")
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|n| (1..=MAX_BODY).contains(n));
@@ -822,6 +903,7 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
             json!({"ok": false, "error": format!("Request body must contain 1–{MAX_BODY} bytes")}),
         );
     };
+
     let body = match tokio::time::timeout(
         Duration::from_secs(5),
         to_bytes(request.into_body(), MAX_BODY),
@@ -836,6 +918,7 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
             );
         }
     };
+
     let body: Value = match serde_json::from_slice(&body) {
         Ok(value @ Value::Object(_)) => value,
         _ => {
@@ -845,17 +928,20 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
             );
         }
     };
+
     if route == "app/viewer" {
         return match viewer.send(Line::Viewer) {
             Ok(()) => json_response(200, json!({"ok": true, "viewer": "open"})),
             Err(error) => json_response(409, json!(error)),
         };
     }
+
     let outcome = if route == "recover" {
         viewer.recover().await
     } else {
         viewer.control(&route, &body).await
     };
+
     match outcome {
         Ok(result) => {
             // Only the lease this request named ends; a request without one
@@ -865,6 +951,7 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
             {
                 let _ = viewer.release(Some(owner)).await;
             }
+
             json_response(if result["ok"] == true { 200 } else { 409 }, result)
         }
         Err(error) => {
@@ -873,6 +960,7 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
             {
                 let _ = viewer.release(Some(owner)).await;
             }
+
             json_response(
                 if matches!(error.code, "invalid-json" | "input") {
                     400
@@ -893,7 +981,8 @@ fn response(code: u16, mime: &str, body: Body, headers: &[(&str, String)]) -> Re
     let mut response = Response::new(body);
     *response.status_mut() =
         StatusCode::from_u16(code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    for (key, value) in [
+
+    let fixed = [
         ("Content-Type", mime),
         ("Cache-Control", "no-store"),
         ("Referrer-Policy", "no-referrer"),
@@ -906,7 +995,10 @@ fn response(code: u16, mime: &str, body: Body, headers: &[(&str, String)]) -> Re
                 "base-uri 'none'; form-action 'none'",
             ),
         ),
-    ] {
+    ];
+    let given = headers.iter().map(|(key, value)| (*key, value.as_str()));
+
+    for (key, value) in fixed.into_iter().chain(given) {
         if let (Ok(key), Ok(value)) = (
             axum::http::HeaderName::try_from(key),
             HeaderValue::from_str(value),
@@ -914,14 +1006,7 @@ fn response(code: u16, mime: &str, body: Body, headers: &[(&str, String)]) -> Re
             response.headers_mut().insert(key, value);
         }
     }
-    for (key, value) in headers {
-        if let (Ok(key), Ok(value)) = (
-            axum::http::HeaderName::try_from(*key),
-            HeaderValue::from_str(value),
-        ) {
-            response.headers_mut().insert(key, value);
-        }
-    }
+
     response
 }
 
@@ -937,6 +1022,7 @@ mod tests {
         let config = crate::config::Config::parse(text.as_bytes(), &dir.join("u.toml")).unwrap();
         let mut client = Client::new(config).unwrap();
         client.controller = control::Controller::at(60001, &dir.join("state"));
+
         bind(client, 0).await.unwrap()
     }
 
@@ -956,6 +1042,7 @@ mod tests {
             None,
             "not all here yet"
         );
+
         let chunked = b"HTTP/1.1 409 Conflict\r\nTransfer-Encoding: chunked\r\n\r\n4\r\n{\"ok\r\n8\r\n\":false}\r\n0\r\n\r\n";
         assert_eq!(
             parse_response(chunked),
@@ -978,8 +1065,10 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(refused.unwrap_err().code, "menubar", "no menu bar attached");
+
         let (lines, mut received) = tokio::sync::mpsc::unbounded_channel();
         *viewer.app.lock().unwrap() = Some(lines);
+
         let opened = tokio::task::spawn_blocking({
             let url = url.clone();
             move || post_local(&url, "app/viewer", &json!({}))
@@ -994,6 +1083,7 @@ mod tests {
                 .await
                 .unwrap()
         );
+
         server.abort();
     }
 
@@ -1002,6 +1092,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let viewer = unreachable(dir.path()).await;
         assert_eq!(viewer.send(Line::Viewer).unwrap_err().code, "menubar");
+
         let (lines, mut received) = tokio::sync::mpsc::unbounded_channel();
         *viewer.app.lock().unwrap() = Some(lines);
         viewer.send(Line::Viewer).unwrap();
@@ -1029,6 +1120,7 @@ mod tests {
         let idle = viewer.control("control/revoke", &json!({})).await.unwrap();
         assert_eq!(idle, json!({"ok": true, "released": false}));
         viewer.lease.lock().await.acquire(&controller).unwrap();
+
         // The helper cannot confirm native cleanup, so control ends but the
         // release stays an unknown outcome for recovery.
         let error = viewer
@@ -1059,15 +1151,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let viewer = unreachable(dir.path()).await;
         let controller = viewer.client.controller.clone();
+
         // Without a pending outcome recovery only starts input, adding nothing.
         assert!(viewer.recover().await.is_err());
         assert!(controller.pending().unwrap().is_empty());
+
         drop(controller.quarantine().unwrap());
         // With one it takes the verified restart, which cannot confirm an
         // unreachable helper, so the outcome stays unknown.
         assert!(viewer.recover().await.is_err());
         assert_eq!(controller.unresolved().unwrap().len(), 1);
         assert_eq!(controller.require_known().unwrap_err().code, "uncertain");
+
         let status = viewer.status().await;
         assert_eq!(status["overview"]["mode"], "unavailable");
         assert_eq!(status["overview"]["pending"], 1);

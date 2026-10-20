@@ -18,6 +18,7 @@ pub fn activity(directory: &Path, limit: usize) -> Vec<Value> {
     let Ok(mut file) = fs::File::open(directory.join("metadata.jsonl")) else {
         return Vec::new();
     };
+
     let length = file.metadata().map(|m| m.len()).unwrap_or(0);
     let mut bytes = Vec::new();
     if file
@@ -27,6 +28,7 @@ pub fn activity(directory: &Path, limit: usize) -> Vec<Value> {
     {
         return Vec::new();
     }
+
     // The tail may start inside a character; only that first, partial line
     // is lost.
     String::from_utf8_lossy(&bytes)
@@ -70,14 +72,17 @@ pub fn overview(
         .as_str()
         .unwrap_or("The helper is not ready")
         .to_owned();
+
     // Recover fixes it: the panel offers the button beside the reason.
     let recoverable = report["ready"] != true && first_step == crate::session::START_INPUT;
+
     // The person's own viewer input and explicit recovery are not an agent.
     let recent = activity
         .iter()
         .find(|row| row["actor"] != "viewer" && row["operation"] != "restart")
         .and_then(|row| age(row, now))
         .is_some_and(|age| age < ACTIVE_NANOS);
+
     // A silent helper in the app's words: the panel and viewer offer buttons,
     // never commands.
     let (mode, reason) = if !reachable {
@@ -128,6 +133,7 @@ pub fn overview(
     } else {
         ("observing", "Watching the helper desktop".to_owned())
     };
+
     json!({
         "mode": mode,
         "reason": reason,
@@ -191,6 +197,7 @@ mod tests {
         assert_eq!(summary["mode"], "blocked");
         assert_eq!(summary["recoverable"], true);
         assert!(!summary["reason"].as_str().unwrap().contains("atlas "));
+
         let mut settings = report(true, false);
         settings["nextSteps"] = json!(["Turn on Accessibility for Atlas in the helper first."]);
         let summary = overview(&settings, false, unresolved(0), &[], NOW);
@@ -211,23 +218,28 @@ mod tests {
         assert_eq!(mode(&ready, true, 0, &[]), "controlling");
         assert_eq!(mode(&ready, false, 0, &[row(2)]), "agent");
         assert_eq!(mode(&ready, false, 0, &[row(30)]), "observing");
+
         let mut own = row(1);
         own["actor"] = json!("viewer");
         let mut restart = row(1);
         restart["operation"] = json!("restart");
+
         assert_eq!(
             mode(&ready, false, 0, &[own.clone(), restart, row(30)]),
             "observing",
             "the person's input and recovery are not an agent"
         );
         assert_eq!(mode(&ready, false, 0, &[own, row(2)]), "agent");
+
         let mut native = report(true, true);
         native["session"]["inputService"]["controlActive"] = json!(true);
         assert_eq!(mode(&native, false, 0, &[]), "agent");
+
         let working = Pending {
             unresolved: 0,
             in_flight: 1,
         };
+
         assert_eq!(
             overview(&ready, false, working, &[], NOW)["mode"],
             "agent",
@@ -242,6 +254,7 @@ mod tests {
             "agent",
             "an input start or upgrade in progress is not a blocked helper"
         );
+
         let blocked = overview(&report(true, false), false, unresolved(0), &[], NOW);
         assert_eq!(blocked["reason"], "Run atlas start-input");
         assert_eq!(
@@ -258,8 +271,10 @@ mod tests {
         let logged_out = overview(&silent, false, unresolved(1), &[], NOW);
         assert_eq!(logged_out["mode"], "loggedOut", "before any recovery");
         assert_eq!(logged_out["account"], "atlas");
+
         silent["absence"] = json!("missing");
         assert_eq!(mode(&silent, false, 0, &[]), "unavailable");
+
         for absence in [json!("missing"), Value::Null] {
             silent["absence"] = absence;
             let reason = overview(&silent, false, unresolved(0), &[], NOW)["reason"].clone();
@@ -271,6 +286,7 @@ mod tests {
     fn activity_reads_the_newest_rows_from_the_log_tail() {
         let dir = tempfile::tempdir().unwrap();
         assert!(activity(dir.path(), 5).is_empty());
+
         let rows: String = (0..30)
             .map(|i| format!("{{\"at\":\"{i}\",\"operation\":\"input\",\"ok\":true}}\n"))
             .chain(["not json\n".to_owned()])
@@ -293,6 +309,7 @@ mod tests {
         if cut(&text) & 0xC0 != 0x80 {
             text.push('\n');
         }
+
         assert_eq!(cut(&text) & 0xC0, 0x80, "the tail starts inside é");
         fs::write(dir.path().join("metadata.jsonl"), text).unwrap();
         let rows = activity(dir.path(), 5);

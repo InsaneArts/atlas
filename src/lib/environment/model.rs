@@ -195,6 +195,7 @@ pub(super) fn validate_id(id: &str) -> Result<()> {
              environment MANIFEST) printed",
         ));
     }
+
     Ok(())
 }
 

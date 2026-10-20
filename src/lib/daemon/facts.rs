@@ -17,6 +17,7 @@ fn request_accessibility() {
     if accessibility() {
         return;
     }
+
     let key = CFString::from_static_str("AXTrustedCheckOptionPrompt");
     let options =
         CFDictionary::<CFString, CFBoolean>::from_slices(&[&key], &[CFBoolean::new(true)]);
@@ -39,11 +40,13 @@ fn request_accessibility() {
 pub async fn request_consent_on_arrival(controller: u32, restart: impl Fn()) {
     let shown = || console_state() == Some(true);
     let mut present = false;
+
     loop {
         let now = shown();
         if now && !present {
             ask(&shown, &restart, controller).await;
         }
+
         // Leaving while being asked counts as never having arrived.
         present = now && shown();
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -72,13 +75,17 @@ async fn ask(shown: &impl Fn() -> bool, restart: &impl Fn(), controller: u32) {
     // Let the desktop settle after the switch, and let macOS finish a new
     // account's setup screens: a prompt raised behind them is never seen.
     tokio::time::sleep(Duration::from_secs(2)).await;
+
     while shown() && setting_up().await {
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
+
     if !shown() {
         return;
     }
+
     let recording = || async { capture::permitted() || screen_recording_now().await };
+
     // Asked on an earlier visit, or before a restart, and everything is on
     // now: say so (and pick up the grant).
     if accessibility() && recording().await {
@@ -87,39 +94,51 @@ async fn ask(shown: &impl Fn() -> bool, restart: &impl Fn(), controller: u32) {
         } else if just_logged_in().await {
             back_notice(controller);
         }
+
         if !capture::permitted() {
             restart();
         }
+
         return;
     }
+
     asked(true);
+
     if !accessibility() {
         request_accessibility();
         // As long as the person stays, however long they take. Should the
         // prompt not appear, its System Settings page opens instead.
         let mut second = 0u32;
+
         while !accessibility() {
             tokio::time::sleep(Duration::from_secs(1)).await;
             if !shown() {
                 return;
             }
+
             second += 1;
             if second == 15 {
                 open_settings("Privacy_Accessibility");
             }
         }
+
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
+
     if !recording().await {
         if !shown() {
             return;
         }
+
         capture::request();
         tokio::time::sleep(Duration::from_secs(1)).await;
+
         if !shown() {
             return;
         }
+
         open_settings("Privacy_ScreenCapture");
+
         while !screen_recording_now().await {
             tokio::time::sleep(Duration::from_secs(2)).await;
             if !shown() {
@@ -127,6 +146,7 @@ async fn ask(shown: &impl Fn() -> bool, restart: &impl Fn(), controller: u32) {
             }
         }
     }
+
     if shown() {
         asked(false);
         done_notice();
@@ -142,6 +162,7 @@ async fn screen_recording_now() -> bool {
     let Ok(executable) = std::env::current_exe() else {
         return false;
     };
+
     let run = tokio::process::Command::new(executable)
         .arg("permissions-info")
         .stdin(std::process::Stdio::null())
@@ -171,16 +192,20 @@ fn asked(remember: bool) -> bool {
     let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
         return false;
     };
+
     let path = home.join(crate::setup::helper::ROOT).join("consent-asked");
     let was = path.exists();
+
     if remember {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
+
         let _ = std::fs::write(&path, b"asked\n");
     } else {
         let _ = std::fs::remove_file(&path);
     }
+
     was
 }
 
@@ -200,6 +225,7 @@ fn back_notice(controller: u32) {
     let Some(account) = crate::setup::account_with_uid(controller).ok().flatten() else {
         return;
     };
+
     let title = crate::setup::real_name(&account.name).unwrap_or_else(|| account.name.clone());
     notice(
         "Atlas is running here again",
@@ -223,22 +249,28 @@ fn shown_in(home: &std::path::Path, login: u32) -> bool {
 /// Switch Back button to `switch_back` when given. The notice runs on its
 /// own; its process is collected when it closes.
 fn notice(title: &str, message: &str, switch_back: Option<&str>) {
+    use std::os::unix::process::CommandExt;
+
     let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
         return;
     };
+
     let login = crate::session::login(nix::unistd::getuid().as_raw()).map(|login| login.pid);
     // The onboarding window, when open here, tells the person itself.
     if crate::onboarding::window_open(&home) || login.is_some_and(|pid| shown_in(&home, pid)) {
         return;
     }
+
     let Ok(app) = crate::menubar::executable() else {
         return;
     };
+
     let mut arguments = vec!["--notice", title, message];
+
     if let Some(account) = switch_back {
         arguments.extend(["--switch-back", account]);
     }
-    use std::os::unix::process::CommandExt;
+
     // Its own process group: restarting this daemon (to pick up Screen
     // Recording) must not close the notice the person is reading.
     let shown = std::process::Command::new(app)
@@ -252,6 +284,7 @@ fn notice(title: &str, message: &str, switch_back: Option<&str>) {
         if let Some(pid) = login {
             let _ = std::fs::write(notice_record(&home), pid.to_string());
         }
+
         std::thread::spawn(move || {
             let _ = child.wait();
         });
@@ -268,6 +301,7 @@ async fn setting_up() -> bool {
         .stderr(std::process::Stdio::null())
         .output()
         .await;
+
     listed.is_ok_and(|output| {
         String::from_utf8_lossy(&output.stdout).lines().any(|line| {
             let line = line.trim_start();
@@ -381,6 +415,7 @@ fn display() -> Value {
     } else {
         1.0
     };
+
     json!({"width": bounds.size.width, "height": bounds.size.height, "scale": scale})
 }
 
@@ -430,6 +465,7 @@ mod tests {
     fn a_notice_is_remembered_for_its_login_only() {
         let home = tempfile::tempdir().unwrap();
         assert!(!shown_in(home.path(), 1158), "none shown yet");
+
         std::fs::create_dir_all(home.path().join(crate::setup::helper::ROOT)).unwrap();
         std::fs::write(notice_record(home.path()), "1158").unwrap();
         assert!(shown_in(home.path(), 1158));

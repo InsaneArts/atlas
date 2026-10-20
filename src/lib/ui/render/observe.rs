@@ -17,6 +17,7 @@ fn display(value: &Value) -> Option<String> {
     } else {
         &value["session"]["display"]
     };
+
     Some(text::dimensions(
         display["width"].as_f64()?,
         display["height"].as_f64()?,
@@ -33,7 +34,9 @@ pub fn doctor(value: &Value, verbose: bool) -> String {
     .into_iter()
     .flatten()
     .collect();
+
     let mut lines = Vec::new();
+
     if value["ready"] == true {
         let detail = if facts.is_empty() {
             String::new()
@@ -44,10 +47,12 @@ pub fn doctor(value: &Value, verbose: bool) -> String {
     } else {
         lines.push(format!("{} Atlas is not ready", style::fail()));
         lines.push(String::new());
+
         for check in value["checks"].as_array().into_iter().flatten() {
             let name = check["name"].as_str().unwrap_or("Check");
             lines.push(format!("  {} {name}", style::mark(check["ok"].as_bool())));
         }
+
         let steps: Vec<&str> = value["nextSteps"]
             .as_array()
             .into_iter()
@@ -62,11 +67,13 @@ pub fn doctor(value: &Value, verbose: bool) -> String {
             }
         }
     }
+
     for warning in value["warnings"].as_array().into_iter().flatten() {
         if let Some(warning) = warning.as_str() {
             lines.push(format!("{} {}", style::warn(), text::printable(warning)));
         }
     }
+
     let native = &value["capabilities"]["nativeDialogs"];
     if native["state"] == "failed" {
         lines.push(format!(
@@ -74,10 +81,12 @@ pub fn doctor(value: &Value, verbose: bool) -> String {
             style::warn()
         ));
     }
+
     if verbose {
         lines.push(String::new());
         lines.extend(details(value, native));
     }
+
     lines.join("\n")
 }
 
@@ -89,6 +98,7 @@ fn details(value: &Value, native: &Value) -> Vec<String> {
         Value::String(text) => text::printable(text).into_owned(),
         other => other.to_string(),
     };
+
     let rows = [
         (
             "Helper",
@@ -127,10 +137,12 @@ fn details(value: &Value, native: &Value) -> Vec<String> {
             format!("{} · {}", fact(&native["state"]), fact(&native["reason"])),
         ),
     ];
+
     let mut lines: Vec<String> = rows
         .iter()
         .map(|(label, shown)| format!("{}  {shown}", style::dim(format!("{label:<13}"))))
         .collect();
+
     for check in value["checks"].as_array().into_iter().flatten() {
         if let Some(step) = check["nextStep"].as_str() {
             lines.push(format!(
@@ -140,7 +152,9 @@ fn details(value: &Value, native: &Value) -> Vec<String> {
             ));
         }
     }
+
     lines.push(style::dim("--json --verbose has everything."));
+
     lines
 }
 
@@ -154,12 +168,14 @@ pub fn status(value: &Value) -> Rendered {
         }))
         .unwrap_or_default();
     }
+
     let name = helper_name(value).unwrap_or("helper");
     let place = match value["session"]["onConsole"].as_bool() {
         Some(true) => "on screen",
         Some(false) => "in the background",
         None => "unknown",
     };
+
     let allowed = |key: &str| style::mark(value["permissions"][key].as_bool());
     let input = &value["inputService"];
     let input = if input["ready"] == true {
@@ -169,6 +185,7 @@ pub fn status(value: &Value) -> Rendered {
     } else {
         "not running".to_owned()
     };
+
     let rows = [
         ("Helper", format!("{} · {place}", text::printable(name))),
         (
@@ -192,6 +209,7 @@ pub fn status(value: &Value) -> Rendered {
                 .to_owned(),
         ),
     ];
+
     Rendered::out(
         rows.iter()
             .map(|(label, shown)| format!("{}  {shown}", style::dim(format!("{label:<8}"))))
@@ -211,6 +229,7 @@ pub fn config(value: &Value) -> String {
         ("Helper socket", path(&config["socket_path"])),
         ("Input socket", path(&config["input_socket"])),
     ];
+
     rows.iter()
         .map(|(label, shown)| format!("{}  {shown}", style::dim(format!("{label:<14}"))))
         .collect::<Vec<_>>()
@@ -231,9 +250,11 @@ pub fn capture(value: &Value) -> String {
         path(&value["path"])
     )];
     let mut facts = Vec::new();
+
     if let (Some(width), Some(height)) = (value["width"].as_f64(), value["height"].as_f64()) {
         facts.push(format!("{} pixels", text::dimensions(width, height)));
     }
+
     if let Some(ratio) = value["pointsPerPixel"].as_f64() {
         facts.push(if ratio == 1.0 {
             "1 point per pixel".to_owned()
@@ -241,9 +262,11 @@ pub fn capture(value: &Value) -> String {
             format!("{} points per pixel", text::number(ratio))
         });
     }
+
     if !facts.is_empty() {
         lines.push(format!("  {}", style::dim(facts.join(" · "))));
     }
+
     lines.join("\n")
 }
 
@@ -255,6 +278,7 @@ pub fn apps(value: &Value) -> String {
         .filter(|app| app["policy"] == "regular")
         .collect();
     let mut lines = Vec::new();
+
     if shown.is_empty() {
         lines.push("No apps are open in the helper.".to_owned());
     } else {
@@ -268,6 +292,7 @@ pub fn apps(value: &Value) -> String {
                 } else {
                     ""
                 };
+
                 vec![
                     text::printable(app["name"].as_str().unwrap_or("?")).into_owned(),
                     app["pid"].to_string(),
@@ -277,6 +302,7 @@ pub fn apps(value: &Value) -> String {
             .collect();
         lines.push(table::render(&["APP", "PID", "STATE"], &rows));
     }
+
     let background = apps.len() - shown.len();
     if background > 0 {
         let what = if background == 1 {
@@ -286,6 +312,7 @@ pub fn apps(value: &Value) -> String {
         };
         lines.push(style::dim(format!("{what} not shown; --json lists them.")));
     }
+
     lines.join("\n")
 }
 
@@ -294,6 +321,7 @@ pub fn windows(value: &Value) -> String {
     if windows.is_empty() {
         return "No windows. --all includes panels and menus.".to_owned();
     }
+
     let rows: Vec<Vec<String>> = windows
         .iter()
         .map(|window| {
@@ -311,6 +339,7 @@ pub fn windows(value: &Value) -> String {
             ]
         })
         .collect();
+
     format!(
         "{}\n{}",
         table::render(&["APP", "TITLE", "PID", "POSITION", "SIZE"], &rows),
@@ -337,6 +366,7 @@ pub fn elements(value: &Value) -> String {
             value["pid"]
         )
     }];
+
     if !elements.is_empty() {
         let rows: Vec<Vec<String>> = elements
             .iter()
@@ -347,6 +377,7 @@ pub fn elements(value: &Value) -> String {
                     (Some(x), Some(y)) => format!("{}, {}", text::number(x), text::number(y)),
                     _ => String::new(),
                 };
+
                 vec![
                     element["index"].to_string(),
                     text::clip(&text::printable(element["role"].as_str().unwrap_or("")), 24),
@@ -359,26 +390,31 @@ pub fn elements(value: &Value) -> String {
                 ]
             })
             .collect();
+
         lines.push(String::new());
         lines.push(table::render(&["#", "ROLE", "NAME", "VALUE", "AT"], &rows));
     }
+
     if (elements.len() as u64) < matching {
         lines.push(style::dim(format!(
             "Showing {} of {matching}; --max shows more.",
             elements.len()
         )));
     }
+
     if value["scanIncomplete"] == true {
         lines.push(format!(
             "{} The scan stopped early, so some elements may be missing.",
             style::warn()
         ));
     }
+
     lines.join("\n")
 }
 
 pub fn readiness(value: &Value) -> String {
     let mut lines = Vec::new();
+
     for item in value["items"].as_array().into_iter().flatten() {
         let status = item["status"].as_str().unwrap_or("unknown");
         let mark = match status {
@@ -386,18 +422,21 @@ pub fn readiness(value: &Value) -> String {
             "missing" | "failing" => style::fail(),
             _ => style::unknown(),
         };
+
         let detail = item["detail"].as_str().unwrap_or("");
         let detail = if detail.is_empty() {
             status.to_owned()
         } else {
             format!("{status} · {}", text::printable(detail))
         };
+
         lines.push(format!(
             "{mark} {}  {}",
             text::printable(item["name"].as_str().unwrap_or("?")),
             style::dim(detail)
         ));
     }
+
     let unchecked: Vec<&str> = value["notVerified"]
         .as_array()
         .into_iter()
@@ -410,5 +449,6 @@ pub fn readiness(value: &Value) -> String {
             unchecked.join(", ")
         )));
     }
+
     lines.join("\n")
 }

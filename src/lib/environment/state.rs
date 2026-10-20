@@ -11,18 +11,22 @@ const LOCK_PATIENCE: std::time::Duration = std::time::Duration::from_millis(250)
 /// Take the store lock without blocking on a real holder.
 fn take(lock: &fs::File, write: bool) -> Result<()> {
     let deadline = std::time::Instant::now() + LOCK_PATIENCE;
+
     loop {
         let taken = if write {
             lock.try_lock_exclusive()
         } else {
             FileExt::try_lock_shared(lock)
         };
+
         if taken.is_ok() {
             return Ok(());
         }
+
         if std::time::Instant::now() >= deadline {
             return Err(problem("Another environment operation is running"));
         }
+
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
@@ -35,20 +39,24 @@ pub(super) struct Store {
 impl Store {
     pub fn open(home: &Path, write: bool) -> Result<Self> {
         let path = home.join(STATE);
+
         let directory = if write {
             Some(private_directory(&path)?)
         } else {
             directory(&path, false)?
         };
+
         let Some(directory) = directory else {
             return Ok(Self { path, lock: None });
         };
+
         validate_private(&directory, true)?;
         let lock = open_regular(&path.join("lock"), write)?;
         if let Some(lock) = &lock {
             validate_private(lock, false)?;
             take(lock, write)?;
         }
+
         Ok(Self { path, lock })
     }
 
@@ -59,6 +67,7 @@ impl Store {
         if ledger.version > 1 {
             return Err(problem("Unsupported provisioning ledger version"));
         }
+
         unique_targets(ledger.files.keys().map(PathBuf::as_path))?;
         Ok(ledger)
     }
@@ -81,6 +90,7 @@ impl Store {
             {
                 return Err(problem("Invalid transaction record"));
             }
+
             unique_targets(
                 transaction
                     .plan
@@ -88,10 +98,12 @@ impl Store {
                     .iter()
                     .map(|file| file.payload.target.as_path()),
             )?;
+
             for directory in &transaction.directories {
                 relative_directory(&directory.target)?;
             }
         }
+
         Ok(transaction)
     }
 
@@ -122,6 +134,7 @@ impl Store {
                 )));
             }
         }
+
         Ok(())
     }
 
@@ -138,6 +151,7 @@ impl Store {
             }
             unlink(&path, false)?;
         }
+
         Ok(())
     }
 
@@ -145,6 +159,7 @@ impl Store {
         let Some(file) = open_regular(path, false)? else {
             return Ok(None);
         };
+
         validate_private(&file, false)?;
         Ok(Some(decode(&read_file(file, MAX_RECORD)?)?))
     }
@@ -153,10 +168,12 @@ impl Store {
         if self.lock.is_none() {
             return Err(problem("Provisioning state is read-only"));
         }
+
         let bytes = serde_json::to_vec_pretty(value)?;
         if bytes.len() as u64 > MAX_RECORD {
             return Err(problem("Provisioning record exceeds its 4 MiB limit"));
         }
+
         atomic_write(path, &bytes, 0o600)
     }
 }

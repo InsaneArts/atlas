@@ -62,6 +62,7 @@ pub fn write_private_with(path: &Path, bytes: &[u8], durability: Durability) -> 
     own_private(&file, path)?;
     file.set_len(0)?;
     file.write_all(bytes)?;
+
     match durability {
         Durability::Disk => file.sync_all()?,
         Durability::Kernel => {
@@ -69,6 +70,7 @@ pub fn write_private_with(path: &Path, bytes: &[u8], durability: Durability) -> 
                 .map_err(std::io::Error::from)?;
         }
     }
+
     Ok(())
 }
 
@@ -77,6 +79,7 @@ pub fn write_private_with(path: &Path, bytes: &[u8], durability: Durability) -> 
 /// is already there would prove nothing about the next one.
 pub fn probe_write(directory: &Path) -> Result<()> {
     fs::create_dir_all(directory).map_err(|error| Error::writing(directory, error))?;
+
     // A probe an interrupted run left behind is litter; one of a process
     // still running is its own, about to be removed.
     if let Ok(entries) = fs::read_dir(directory) {
@@ -86,6 +89,7 @@ pub fn probe_write(directory: &Path) -> Result<()> {
             let Some(rest) = name.strip_prefix(".probe-") else {
                 continue;
             };
+
             let alive = rest
                 .split('-')
                 .next()
@@ -110,6 +114,7 @@ pub fn probe_write(directory: &Path) -> Result<()> {
         .custom_flags(libc::O_NOFOLLOW)
         .open(&path)
         .map_err(|error| Error::writing(&path, error))?;
+
     match fs::remove_file(&path) {
         Ok(()) => Ok(()),
         // Another process's cleanup may have taken it: it was written.
@@ -143,6 +148,7 @@ fn own_private(file: &File, path: &Path) -> Result<()> {
             format!("{} is not a plain file of this account", path.display()),
         ));
     }
+
     if metadata.mode() & 0o077 != 0 {
         file.set_permissions(fs::Permissions::from_mode(0o600))?;
     }
@@ -240,6 +246,7 @@ impl Controller {
     pub fn acquire(&self, recovery: bool) -> Result<Ownership> {
         fs::create_dir_all(&self.directory)
             .map_err(|error| Error::writing(&self.directory, error))?;
+
         let lock = open_lock(&self.lock)?;
         FileExt::try_lock_exclusive(&lock).map_err(|_| {
             Error::new(
@@ -247,9 +254,11 @@ impl Controller {
                 "Another Atlas controller is active: wait for it to finish, or release it in the viewer.",
             )
         })?;
+
         if !recovery {
             self.require_known()?;
         }
+
         Ok(Ownership { _lock: lock })
     }
 
@@ -260,6 +269,7 @@ impl Controller {
                 "The last action's outcome is unknown. Observe the desktop, then run 'atlas restart'.",
             ));
         }
+
         Ok(())
     }
 
@@ -268,6 +278,7 @@ impl Controller {
             .map_err(|error| Error::writing(&self.directory, error))?;
         let file = open_lock(&self.marker_lock)?;
         FileExt::lock_exclusive(&file)?;
+
         Ok(file)
     }
 
@@ -304,6 +315,7 @@ impl Controller {
         let Some(live) = self.live(generation) else {
             return false;
         };
+
         OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NOFOLLOW)
@@ -324,30 +336,35 @@ impl Controller {
         let live = self
             .live(generation)
             .ok_or_else(|| Error::new("state", "Pending generations are hexadecimal tokens"))?;
+
         fs::create_dir_all(&self.directory)
             .map_err(|error| Error::writing(&self.directory, error))?;
         let file = open_lock(&live)?;
         FileExt::try_lock_exclusive(&file)
             .map_err(|_| Error::new("busy", "That generation is already being carried out"))?;
+
         let claim = Pending {
             generation: generation.to_owned(),
             live,
             lock: file,
         };
-        let _lock = self.lock_marker()?;
+
         // Claim files are only unlinked under the marker lock or by their
         // holder, so if the path still names the locked file here, it will
         // until the claim is dropped.
+        let _lock = self.lock_marker()?;
         if !claim.names_own_file() {
             return Err(Error::new(
                 "busy",
                 "That generation's claim changed while it was taken",
             ));
         }
+
         let mut pending = pending(&self.marker)?;
         if !pending.iter().any(|entry| entry == generation) {
             pending.push(generation.to_owned());
         }
+
         write_private(&self.marker, &serde_json::to_vec(&pending)?)?;
         Ok(claim)
     }
@@ -355,13 +372,16 @@ impl Controller {
     /// Settle one acknowledged mutation; others stay pending.
     pub fn clear_if(&self, generation: &str) -> Result<()> {
         let _lock = self.lock_marker()?;
+
         if let Some(live) = self.live(generation)
             && !self.in_progress(generation)
         {
             let _ = fs::remove_file(live);
         }
+
         let mut pending = pending(&self.marker)?;
         pending.retain(|entry| entry != generation);
+
         if pending.is_empty() {
             remove_marker(&self.marker)
         } else {
@@ -374,6 +394,7 @@ impl Controller {
     pub fn clear(&self) -> Result<()> {
         let _lock = self.lock_marker()?;
         let prefix = format!("{}.", self.name);
+
         for entry in fs::read_dir(&self.directory)?.flatten() {
             let name = entry.file_name();
             let generation = name
@@ -386,6 +407,7 @@ impl Controller {
                 let _ = fs::remove_file(entry.path());
             }
         }
+
         remove_marker(&self.marker)
     }
 }
@@ -442,6 +464,7 @@ impl Lease {
             self.retired = self.owner.take();
             self.cleaning = true;
         }
+
         if self.owner.is_none() && !self.inflight && !self.cleaning {
             self.descriptor = None;
         }
@@ -449,18 +472,22 @@ impl Lease {
 
     pub fn acquire(&mut self, controller: &Controller) -> Result<String> {
         self.expire();
+
         if self.descriptor.is_some() {
             return Err(Error::new("busy", "Another viewer has control"));
         }
+
         self.descriptor = Some(controller.acquire(false)?);
         let token = token();
         self.owner = Some(token.clone());
         self.expires = Instant::now() + self.ttl;
+
         Ok(token)
     }
 
     pub fn require(&mut self, token: &str) -> Result<()> {
         self.expire();
+
         // Tokens are fixed-length random strings; compare without an early byte exit.
         let matches = self.owner.as_ref().is_some_and(|owner| {
             owner.len() == token.len()
@@ -476,6 +503,7 @@ impl Lease {
                 "Control was released or expired. Take control again.",
             ));
         }
+
         Ok(())
     }
 
@@ -501,23 +529,27 @@ impl Lease {
     pub fn begin_release(&mut self, requested: Option<&str>) -> Result<Option<String>> {
         self.expire();
         let current = self.owner.as_ref().or(self.retired.as_ref());
+
         // Releasing a lease that already ended is a no-op; a token can
         // never end a different controller's lease.
         if requested.is_some() && current.is_none() {
             return Ok(None);
         }
+
         if requested.is_some() && requested != current.map(String::as_str) {
             return Err(Error::new(
                 "lease-lost",
                 "This token cannot release another controller",
             ));
         }
+
         // Both the live and any retired token end here.
         let retired = self.retired.take();
         let previous = self.owner.take().or(retired);
         if previous.is_some() {
             self.cleaning = true;
         }
+
         Ok(previous)
     }
 
@@ -533,7 +565,8 @@ impl Lease {
 }
 
 pub type SharedLease = Arc<Mutex<Lease>>;
-// Holds the controller flock until an acknowledged or uncertain operation settles.
+
+/// Holds the controller flock until an acknowledged or uncertain operation settles.
 pub struct ActionPermit {
     lease: SharedLease,
 }
@@ -543,11 +576,14 @@ impl ActionPermit {
         {
             let mut state = lease.lock().await;
             state.require(token)?;
+
             if state.inflight {
                 return Err(Error::new("busy", "Wait for the current input to finish"));
             }
+
             state.inflight = true;
         }
+
         Ok(Self { lease })
     }
 }
@@ -558,6 +594,7 @@ impl Drop for ActionPermit {
             state.inflight = false;
             state.expire();
         };
+
         if let Ok(mut state) = self.lease.try_lock() {
             finish(&mut state);
         } else if let Ok(runtime) = tokio::runtime::Handle::try_current() {
@@ -596,23 +633,27 @@ mod tests {
     fn a_permit_settles_without_a_runtime() {
         let lease: SharedLease = Arc::new(Mutex::new(Lease::new(Duration::from_secs(60))));
         let token = token();
+
         {
             let mut state = lease.blocking_lock();
             state.owner = Some(token.clone());
             state.expires = Instant::now() + Duration::from_secs(60);
         }
+
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
         let permit = runtime
             .block_on(ActionPermit::begin(lease.clone(), &token))
             .unwrap();
+
         drop(runtime);
         let held = lease.clone().blocking_lock_owned();
         let holder = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(50));
             drop(held);
         });
+
         drop(permit);
         holder.join().unwrap();
         assert!(!lease.blocking_lock().inflight);
@@ -624,8 +665,10 @@ mod tests {
         lease.owner = Some("a".repeat(48));
         lease.expires = Instant::now() + Duration::from_secs(60);
         lease.retired = Some("b".repeat(48));
+
         assert_eq!(lease.begin_release(None).unwrap(), Some("a".repeat(48)));
         assert_eq!((lease.owner.clone(), lease.retired.clone()), (None, None));
+
         lease.retired = Some("b".repeat(48));
         assert_eq!(lease.begin_release(None).unwrap(), Some("b".repeat(48)));
         assert_eq!(lease.retired, None);

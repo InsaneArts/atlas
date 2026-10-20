@@ -72,9 +72,11 @@ pub struct Client {
 /// Screenshots are kept for a week; older ones are removed as new ones come.
 fn prune_captures(output: &Path) {
     const WEEK: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
     let Ok(entries) = fs::read_dir(output) else {
         return;
     };
+
     for entry in entries.flatten() {
         let old = entry
             .metadata()
@@ -82,6 +84,7 @@ fn prune_captures(output: &Path) {
             .ok()
             .and_then(|modified| modified.elapsed().ok())
             .is_some_and(|age| age > WEEK);
+
         let capture = entry
             .file_name()
             .to_str()
@@ -96,7 +99,6 @@ fn prune_captures(output: &Path) {
 /// can pass through it, whatever this terminal's umask. Only a folder of
 /// this account is changed; anyone else's is left for the checks to refuse.
 fn shared_folder(folder: &Path) -> Result<()> {
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
     match fs::symlink_metadata(folder) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             fs::create_dir_all(folder)?;
@@ -104,6 +106,7 @@ fn shared_folder(folder: &Path) -> Result<()> {
         Err(error) => return Err(error.into()),
         Ok(_) => {}
     }
+
     let metadata = fs::symlink_metadata(folder)?;
     let me = nix::unistd::getuid().as_raw();
     // Any account can make folders in /Users/Shared: one another account
@@ -121,9 +124,11 @@ fn shared_folder(folder: &Path) -> Result<()> {
             ),
         ));
     }
+
     if metadata.uid() == me && metadata.mode() & 0o777 != 0o755 {
         fs::set_permissions(folder, fs::Permissions::from_mode(0o755))?;
     }
+
     Ok(())
 }
 
@@ -138,6 +143,7 @@ impl Client {
     pub fn install(&self) -> Result<Value> {
         let source = fs::canonicalize(std::env::current_exe()?)?;
         let target = &self.config.identity_probe;
+
         // Only Atlas's own shared folder is repaired; a custom location keeps
         // the permissions its owner chose.
         if let Some(parent) = target.parent()
@@ -145,20 +151,25 @@ impl Client {
         {
             shared_folder(parent)?;
         }
+
         // A link already pointing at this executable (or this executable
         // itself) changes nothing, so it needs no exclusion and works while
         // an earlier action still awaits recovery. A copy is always replaced.
         if fs::canonicalize(target).ok().as_ref() == Some(&source) {
             return Ok(json!({ "ok": true, "path": target, "alreadyInstalled": true }));
         }
+
         let _ownership = self.controller.acquire(false)?;
+
         if fs::canonicalize(target).ok().as_ref() == Some(&source) {
             return Ok(json!({ "ok": true, "path": target, "alreadyInstalled": true }));
         }
+
         let parent = target
             .parent()
             .ok_or_else(|| Error::new("config", "Shared executable needs a parent directory"))?;
         fs::create_dir_all(parent)?;
+
         // Atlas.app's executable is sealed with its bundle: a copy would
         // fail its signature, so the shared path links to it instead, and
         // follows the app through updates.
@@ -169,15 +180,18 @@ impl Client {
                     "The helper account cannot reach Atlas.app here; install it in /Applications",
                 ));
             }
+
             let temporary = target.with_extension(format!("{}.new", crate::control::token()));
             let linked = std::os::unix::fs::symlink(&source, &temporary)
                 .and_then(|()| fs::rename(&temporary, target));
             if linked.is_err() {
                 let _ = fs::remove_file(&temporary);
             }
+
             linked?;
             return Ok(json!({ "ok": true, "path": target, "linkedTo": source }));
         }
+
         crate::config::write_beside(
             target,
             0o755,
@@ -190,10 +204,13 @@ impl Client {
             // a fresh inode avoids modifying its code-signed pages in place.
             |temporary| Ok(fs::rename(temporary, target)?),
         )?;
+
         Ok(json!({ "ok": true, "path": target }))
     }
 
-    /// Construction only validates; reads such as status never write; doctor only probes that Atlas's own folders can be written, making them when missing.
+    /// Construction only validates; reads such as status never write; doctor
+    /// only probes that Atlas's own folders can be written, making them when
+    /// missing.
     pub fn new(config: Config) -> Result<Self> {
         crate::session::validate_uid(config.helper_uid)?;
         Ok(Self {
@@ -221,6 +238,7 @@ impl Client {
                 .create(path)
                 .map_err(|error| Error::writing(path, error))?;
         }
+
         let metadata = fs::symlink_metadata(path)?;
         if !metadata.is_dir()
             || metadata.uid() != nix::unistd::getuid().as_raw()
@@ -234,6 +252,7 @@ impl Client {
                 ),
             ));
         }
+
         Ok(path)
     }
 
@@ -243,6 +262,7 @@ impl Client {
 
     async fn verified_status(&self) -> Result<Value> {
         let mut hello = self.transport.call(&json!({"op": "hello"})).await?;
+
         // Do not launch the probe into an unverified UID or the visible desktop.
         if hello["ok"] != true
             || hello["user"]["uid"].as_u64() != Some(self.config.helper_uid.into())
@@ -250,17 +270,18 @@ impl Client {
         {
             return Ok(hello);
         }
+
         hello["inputService"] = self
             .input_transport()
             .call(&json!({ "op": "hello" }))
             .await
             .unwrap_or_else(|error| json!(error));
         hello["installedBuild"] = json!(self.installed_build());
-        let proof = self
+        hello["sessionProof"] = self
             .session_proof()
             .await
             .unwrap_or_else(|error| json!(error));
-        hello["sessionProof"] = proof;
+
         Ok(hello)
     }
 
@@ -281,8 +302,10 @@ impl Client {
                 ),
             ));
         }
+
         let output = run_output(&reply, 4096)
             .map_err(|_| Error::new("identity", "Malformed or oversized identity output"))?;
+
         Ok(serde_json::from_slice(&output)?)
     }
 
@@ -294,11 +317,14 @@ impl Client {
         if maximum.is_some_and(|m| m == 0 || m > 8192) {
             return Err(Error::new("input", "Maximum dimension must be 1–8192"));
         }
+
         let before = self.identity().await?;
         let mut request = json!({"op": "screenshot"});
+
         if let Some(max) = maximum {
             request["maxDimension"] = json!(max);
         }
+
         let reply = self.transport.call(&request).await?;
         if reply["ok"] != true {
             return Err(Error::new(
@@ -306,6 +332,7 @@ impl Client {
                 reply["error"].as_str().unwrap_or("Capture failed"),
             ));
         }
+
         let at = Instant::now();
         let encoded = reply["png"]
             .as_str()
@@ -322,6 +349,7 @@ impl Client {
                 "PNG dimensions disagree with metadata",
             ));
         }
+
         let after = self.identity().await?;
         if before.epoch != after.epoch {
             return Err(Error::new(
@@ -329,6 +357,7 @@ impl Client {
                 "Session changed during capture; observe again",
             ));
         }
+
         Ok(Frame {
             png: png.into(),
             width,
@@ -346,6 +375,7 @@ impl Client {
             .join(format!("{}-capture.png", timestamp()));
         write_private(&path, &frame.png)?;
         prune_captures(self.output_dir()?);
+
         Ok(json!({
             "ok": true,
             "path": path,
@@ -396,6 +426,7 @@ impl Client {
                     .as_str()
                     .unwrap_or("Native control request failed"),
             );
+
             // The service reports when a failure may already have changed state.
             return Err(if result["uncertain"] == true {
                 error.uncertain()
@@ -403,6 +434,7 @@ impl Client {
                 error
             });
         }
+
         Ok(result)
     }
 
@@ -417,6 +449,7 @@ impl Client {
         } else {
             None
         };
+
         self.input_inner(actions, expected, lease).await
     }
 
@@ -448,22 +481,26 @@ impl Client {
         if !crate::session::pinned_to_session(&status, &session) {
             return Err(unavailable());
         }
+
         let epoch = &session.epoch;
         let pinned = &status["inputService"]["enforcedEpoch"];
         let same_size = pinned["width"].as_f64() == Some(epoch.display.width)
             && pinned["height"].as_f64() == Some(epoch.display.height);
+
         self.native_request(json!({"op": "reset", "epoch": epoch.input_epoch()}))
             .await?;
         let current = self.identity().await?;
         if !current.input {
             return Err(unavailable());
         }
+
         if !same_size {
             return Err(Error::new(
                 "session-changed",
                 "The helper's display changed size. Take a new screenshot, then try again.",
             ));
         }
+
         Ok(current)
     }
 
@@ -474,6 +511,7 @@ impl Client {
         lease: Option<(&SharedLease, &str)>,
     ) -> Result<Value> {
         self.controller.require_known()?;
+
         // A viewer's fresh observation is already tied to its acquired lease.
         // The native process validates that exact epoch again before every event.
         let session = match (expected, lease) {
@@ -484,18 +522,22 @@ impl Client {
             },
             _ => self.identity().await?,
         };
+
         if expected.is_some_and(|(epoch, _)| *epoch != session.epoch) {
             return Err(Error::new(
                 "session-changed",
                 "The helper changed since this frame",
             ));
         }
+
         let session = if session.input || lease.is_some() {
             session
         } else {
             self.repin(session).await?
         };
+
         actions::validate(actions, &session.epoch.display)?;
+
         let standalone = crate::control::token();
         let owner = lease.map(|(_, token)| token).unwrap_or(&standalone);
         if lease.is_none()
@@ -509,8 +551,10 @@ impl Client {
                     self.controller.clear_if(&pending)?;
                 }
             }
+
             return Err(error);
         }
+
         let result = self
             .mutate(
                 json!({
@@ -523,6 +567,7 @@ impl Client {
                 expected.map(|(_, at)| at),
             )
             .await;
+
         if lease.is_none() {
             let cleanup = self.native_control("release", owner).await;
             if cleanup.is_err() {
@@ -542,6 +587,7 @@ impl Client {
                 .uncertain());
             }
         }
+
         result
     }
 
@@ -575,14 +621,17 @@ impl Client {
                 "Provide a command and arguments after run --",
             ));
         }
+
         if timeout.is_zero() || timeout > RUN_TIMEOUT_MAX {
             return Err(Error::new(
                 "usage",
                 "A command may run for 1 second to 10 minutes",
             ));
         }
+
         let timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
         self.identity().await?;
+
         self.mutate(
             json!({"op": "run", "argv": argv, "timeoutMs": timeout_ms}),
             None,
@@ -608,6 +657,7 @@ impl Client {
     /// caller settles that record once the outcome is established.
     pub async fn run_pending(&self, argv: Vec<String>, timeout: Duration) -> Result<Value> {
         self.identity().await?;
+
         let timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
         let request = json!({"op": "run", "argv": argv, "timeoutMs": timeout_ms});
         let reply = self
@@ -619,6 +669,7 @@ impl Client {
             .finish()
             .await?;
         validate_completion(&request, &reply)?;
+
         Ok(reply)
     }
 
@@ -651,13 +702,16 @@ impl Client {
         {
             return build.clone();
         }
+
         // Hashed without the lock, so other callers are not held up. A
         // failed read is not cached: permissions may be repaired without
         // changing the identity key.
         let build = crate::digest::probe_executable(path).and_then(|path| file_sha256(&path))?;
+
         if let Ok(mut cache) = self.installed.lock() {
             *cache = Some((key, Some(build.clone())));
         }
+
         Some(build)
     }
 
@@ -665,11 +719,13 @@ impl Client {
     async fn launch_input(&self) -> Result<Value> {
         let status = self.status().await;
         require_hidden(&status, self.config.helper_uid)?;
+
         let native = &status["inputService"];
         let current = crate::session::input_build_current(&status);
         if native["ok"] == true && !current {
             return self.upgrade_input(&status).await;
         }
+
         let (pid, outcome) = self.ensure_input(&status).await?;
         Ok(json!({ "ok": true, outcome: true, "pid": pid }))
     }
@@ -681,24 +737,29 @@ impl Client {
         if session.input {
             return Ok((session.epoch.input_pid, "alreadyRunning"));
         }
+
         if status["inputService"]["ok"] == true {
             let reset = self.native_request(json!({
                 "op": "reset",
                 "epoch": session.epoch.input_epoch(),
             }));
             self.pending_until_known(reset).await?;
+
             if !self.identity().await?.input {
                 return Err(Error::new(
                     "startup",
                     "Native input did not become ready after reset",
                 ));
             }
+
             return Ok((session.epoch.input_pid, "recovered"));
         }
+
         // Without Accessibility a new service can never become ready, and a
         // start that cannot be confirmed would stay pending; refuse plainly.
         require_accessibility(status)?;
         let pid = self.pending_until_known(self.spawn_input()).await?;
+
         Ok((pid, "started"))
     }
 
@@ -714,6 +775,7 @@ impl Client {
         {
             self.controller.clear_if(&generation)?;
         }
+
         outcome
     }
 
@@ -722,12 +784,14 @@ impl Client {
     /// a pending mutation until it is ready, current and holds nothing.
     async fn upgrade_input(&self, status: &Value) -> Result<Value> {
         let native = &status["inputService"];
+
         if !status["installedBuild"].is_string() {
             return Err(Error::new(
                 "startup",
                 "The installed executable cannot be read; refusing to replace the running service",
             ));
         }
+
         let stoppable = native["capabilities"]
             .as_array()
             .is_some_and(|capabilities| capabilities.iter().any(|c| c == "shutdown"));
@@ -739,24 +803,28 @@ impl Client {
                  helper out and in), then run atlas start-input.",
             ));
         }
+
         if native["controlActive"] != false {
             return Err(Error::new(
                 "busy",
                 "The input service has an active controller; release it before upgrading",
             ));
         }
+
         let previous = native["pid"]
             .as_u64()
             .and_then(|pid| u32::try_from(pid).ok())
             .filter(|pid| *pid > 1)
             .ok_or_else(|| Error::new("startup", "The running input service has no valid PID"))?;
         let generation = self.controller.quarantine()?;
+
         if let Err(error) = self.stop_input(previous).await {
             if !error.uncertain {
                 self.controller.clear_if(&generation)?;
             }
             return Err(error);
         }
+
         let pid = self.spawn_input().await?;
         let state = self.status().await;
         if !input_current(&state, self.config.helper_uid, pid) {
@@ -766,7 +834,9 @@ impl Client {
             )
             .uncertain());
         }
+
         self.controller.clear_if(&generation)?;
+
         Ok(json!({
             "ok": true,
             "upgraded": true,
@@ -792,7 +862,9 @@ impl Client {
                     )
                 }
             })?;
+
         let deadline = Instant::now() + Duration::from_secs(5);
+
         loop {
             let closed = matches!(
                 tokio::net::UnixStream::connect(&self.config.input_socket).await,
@@ -804,6 +876,7 @@ impl Client {
             if closed && !process_exists(pid) {
                 return Ok(());
             }
+
             if Instant::now() >= deadline {
                 return Err(Error::new(
                     "uncertain",
@@ -811,6 +884,7 @@ impl Client {
                 )
                 .uncertain());
             }
+
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
@@ -836,6 +910,7 @@ impl Client {
             "timeoutMs": 3000,
         });
         let reply = self.transport.call(&request).await?;
+
         // The launch prints the child PID; only that process may satisfy readiness.
         let child = (reply["ok"] == true && reply["exitCode"] == 0)
             .then(|| run_output(&reply, 32).ok())
@@ -850,7 +925,9 @@ impl Client {
                 )
                 .uncertain()
             })?;
+
         let deadline = Instant::now() + Duration::from_secs(6);
+
         loop {
             let state = self.status().await;
             if require_hidden(&state, self.config.helper_uid)
@@ -858,6 +935,7 @@ impl Client {
             {
                 return Ok(child);
             }
+
             if Instant::now() >= deadline {
                 return Err(Error::new(
                     "startup",
@@ -866,6 +944,7 @@ impl Client {
                 )
                 .uncertain());
             }
+
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
@@ -873,14 +952,17 @@ impl Client {
     pub async fn restart(&self) -> Result<Value> {
         let _ownership = self.controller.acquire(true)?;
         let before = self.identity().await?;
+
         // Recovery goes through the input service; with none running and no
         // Accessibility to start one, it cannot finish, so nothing is marked.
         let current = self.status().await;
         if current["inputService"]["ok"] != true {
             require_accessibility(&current)?;
         }
+
         // Held through verification, so the restart reads as in progress.
         let _recovery = self.controller.quarantine()?;
+
         // Input has its own process. Clear held state there before restarting
         // the capture/command helper; a new capture PID alone proves nothing
         // about an uncertain mouse or keyboard action.
@@ -895,6 +977,7 @@ impl Client {
                 Error::new("uncertain", "The input service changed while recovering").uncertain(),
             );
         }
+
         let cleanup = self
             .native_request(json!({ "op": "reset", "epoch": session.epoch.input_epoch() }))
             .await?;
@@ -903,26 +986,32 @@ impl Client {
                 Error::new("uncertain", "Native input cleanup was not confirmed").uncertain(),
             );
         }
+
         let reply = self.mutate(json!({"op": "restart"}), None, None).await?;
         if reply["ok"] != true {
             return Ok(reply);
         }
+
         let recovery = async {
             loop {
                 tokio::time::sleep(Duration::from_millis(150)).await;
                 let status = self.status().await;
+
                 // Settle only with a new capture process and the same input
                 // service whose cleanup was acknowledged, idle and empty.
                 let Ok(session) = require_hidden(&status, self.config.helper_uid) else {
                     continue;
                 };
+
                 if session.epoch.capture_pid == before.epoch.capture_pid {
                     continue;
                 }
+
                 if input_settled(&status, self.config.helper_uid, input_pid) {
                     self.controller.clear()?;
                     return Ok(json!({"ok": true, "restarted": true, "session": status}));
                 }
+
                 // Its cleanup was confirmed above, so nothing is held: a stale
                 // service that is not ready under the new helper is replaced.
                 if stale
@@ -932,6 +1021,7 @@ impl Client {
                     self.upgrade_input(&status).await?;
                     self.controller.clear()?;
                     let status = self.status().await;
+
                     return Ok(json!({
                         "ok": true,
                         "restarted": true,
@@ -941,6 +1031,7 @@ impl Client {
                 }
             }
         };
+
         tokio::time::timeout(Duration::from_secs(20), recovery)
             .await
             .map_err(|_| {
@@ -963,6 +1054,7 @@ impl Client {
         let _ownership = self.controller.acquire(force)?;
         self.identity().await?;
         let claim = self.controller.quarantine()?;
+
         match self
             .mutate(json!({"op": "logout", "force": force}), None, None)
             .await
@@ -981,10 +1073,12 @@ impl Client {
                 return Err(error);
             }
         }
+
         if self.desktop_gone(if force { 15 } else { 30 }).await {
             self.controller.clear_if(&claim)?;
             return Ok(json!({"ok": true, "loggedOut": true}));
         }
+
         if force {
             return Err(Error::new(
                 "logout",
@@ -992,6 +1086,7 @@ impl Client {
             )
             .uncertain());
         }
+
         let open = self
             .apps()
             .await
@@ -1002,6 +1097,7 @@ impl Client {
         } else {
             format!(" Still open: {}.", open.join(", "))
         };
+
         Err(Error::new(
             "logout-held",
             format!("The helper has not logged out yet; an app may be asking to save.{still}"),
@@ -1025,10 +1121,12 @@ impl Client {
                     0
                 };
             }
+
             while self.transport.call(&json!({"op": "hello"})).await.is_ok() {
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
         };
+
         tokio::time::timeout(Duration::from_secs(seconds), gone)
             .await
             .is_ok()
@@ -1041,12 +1139,14 @@ impl Client {
         observed_at: Option<Instant>,
     ) -> Result<Value> {
         let started = Instant::now();
+
         // Connect without holding the lease. Release can cancel slow preflight.
         let mut transport = if request["op"] == "input" {
             self.input_transport()
         } else {
             self.transport.clone()
         };
+
         // A long command's reply comes after it ends, and after the helper
         // has stopped whatever it left running.
         if let Some(run) = request["timeoutMs"]
@@ -1057,26 +1157,32 @@ impl Client {
                 .timeout
                 .max(Duration::from_millis(run) + RUN_MARGIN);
         }
+
         let connection = transport.connect().await?;
+
         // Serialize only final authorization and bounded byte submission.
         let mut authorization = match lease {
             Some((state, _)) => Some(state.lock().await),
             None => None,
         };
+
         if let (Some(state), Some((_, owner))) = (&mut authorization, lease) {
             state.require(owner)?;
         }
+
         if observed_at.is_some_and(|at| at.elapsed() >= Duration::from_secs(8)) {
             return Err(Error::new(
                 "stale-frame",
                 "The observation expired before dispatch",
             ));
         }
+
         // A restart or log-out runs under the claim its caller holds through
         // verification; every other mutation claims its own generation.
         let generation = (request["op"] != "restart" && request["op"] != "logout")
             .then(|| self.controller.quarantine())
             .transpose()?;
+
         let pending = match connection.dispatch(&request).await {
             Ok(pending) => pending,
             Err(error) => {
@@ -1088,9 +1194,11 @@ impl Client {
                 return Err(error);
             }
         };
+
         drop(authorization);
         let mut reply = pending.finish().await?;
         validate_completion(&request, &reply)?;
+
         let mut warnings = Vec::new();
         if let Some(generation) = &generation
             && reply["uncertain"] != true
@@ -1100,13 +1208,16 @@ impl Client {
                 "Operation completed, but its pending marker could not be cleared: {error}"
             ));
         }
+
         if self.record(&request, &reply, started.elapsed()).is_err() {
             warnings
                 .push("Operation result is valid; local metadata could not be recorded".to_owned());
         }
+
         if !warnings.is_empty() {
             reply["warnings"] = json!(warnings);
         }
+
         Ok(reply)
     }
 
@@ -1139,16 +1250,19 @@ impl Client {
             .custom_flags(libc::O_NOFOLLOW)
             .open(directory.join("metadata.lock"))?;
         FileExt::lock_exclusive(&lock)?;
+
         let path = directory.join("metadata.jsonl");
         if fs::metadata(&path).is_ok_and(|m| m.len() > 1024 * 1024) {
             fs::rename(&path, directory.join("metadata.previous.jsonl"))?;
         }
+
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
             .mode(0o600)
             .custom_flags(libc::O_NOFOLLOW)
             .open(path)?;
+
         // No input text, argv, window titles, output or image payloads in metadata.
         let row = json!({
             "at": timestamp().to_string(),
@@ -1158,6 +1272,7 @@ impl Client {
             "actionCount": request["actions"].as_array().map(Vec::len),
             "actor": self.actor.as_str(),
         });
+
         writeln!(file, "{row}")?;
         Ok(())
     }
@@ -1167,6 +1282,7 @@ pub fn validate_completion(request: &Value, reply: &Value) -> Result<()> {
     if reply["ok"] != true {
         return Ok(());
     }
+
     let valid = match request["op"].as_str() {
         Some("input") => {
             reply["performed"].as_u64() == request["actions"].as_array().map(|v| v.len() as u64)
@@ -1183,6 +1299,7 @@ pub fn validate_completion(request: &Value, reply: &Value) -> Result<()> {
         }
         _ => true,
     };
+
     if valid {
         Ok(())
     } else {
@@ -1192,14 +1309,17 @@ pub fn validate_completion(request: &Value, reply: &Value) -> Result<()> {
 
 pub fn png_dimensions(png: &[u8]) -> Result<(u32, u32)> {
     let invalid = || Error::new("capture", "Invalid PNG header or dimensions");
+
     if png.len() < 33 || &png[..16] != b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR" {
         return Err(invalid());
     }
+
     let width = u32::from_be_bytes(png[16..20].try_into().map_err(|_| invalid())?);
     let height = u32::from_be_bytes(png[20..24].try_into().map_err(|_| invalid())?);
     if width == 0 || height == 0 || width > 32768 || height > 32768 {
         return Err(invalid());
     }
+
     Ok((width, height))
 }
 
@@ -1208,6 +1328,7 @@ fn process_exists(pid: u32) -> bool {
     let Ok(pid) = i32::try_from(pid) else {
         return false;
     };
+
     matches!(
         nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None),
         Ok(()) | Err(nix::errno::Errno::EPERM)
@@ -1225,6 +1346,7 @@ fn require_accessibility(status: &Value) -> Result<()> {
              (atlas init guides this).",
         ));
     }
+
     Ok(())
 }
 
@@ -1232,19 +1354,25 @@ fn require_accessibility(status: &Value) -> Result<()> {
 mod tests {
     use super::*;
 
+    /// A client for a configuration kept in `dir`.
+    fn client_in(dir: &Path) -> Client {
+        let text = "helper_uid = 60001\nsocket_path = \"c.sock\"\noutput_dir = \"out\"\n\
+                    identity_probe = \"probe\"\ninput_socket = \"i.sock\"\n";
+        let config = Config::parse(text.as_bytes(), &dir.join("u.toml")).unwrap();
+        Client::new(config).unwrap()
+    }
+
     #[tokio::test]
     async fn an_input_change_stays_pending_only_while_its_outcome_is_unknown() {
         let dir = tempfile::tempdir().unwrap();
-        let text = "helper_uid = 60001\nsocket_path = \"c.sock\"\noutput_dir = \"out\"\n\
-                    identity_probe = \"probe\"\ninput_socket = \"i.sock\"\n";
-        let config =
-            crate::config::Config::parse(text.as_bytes(), &dir.path().join("u.toml")).unwrap();
-        let mut client = Client::new(config).unwrap();
+        let mut client = client_in(dir.path());
         client.controller = crate::control::Controller::at(60001, &dir.path().join("state"));
+
         assert_eq!(
             client.pending_until_known(async { Ok(1) }).await.unwrap(),
             1
         );
+
         let refused = Error::new("native", "refused");
         assert!(
             client
@@ -1256,6 +1384,7 @@ mod tests {
             client.controller.pending().unwrap().is_empty(),
             "known outcomes clear"
         );
+
         let lost = Error::new("transport", "reply lost").uncertain();
         assert!(
             client
@@ -1280,12 +1409,10 @@ mod tests {
     #[test]
     fn recorded_rows_name_the_actor_and_carry_no_payload() {
         let dir = tempfile::tempdir().unwrap();
-        let text = "helper_uid = 60001\nsocket_path = \"c.sock\"\noutput_dir = \"out\"\n\
-                    identity_probe = \"probe\"\ninput_socket = \"i.sock\"\n";
-        let config = Config::parse(text.as_bytes(), &dir.path().join("u.toml")).unwrap();
-        let mut client = Client::new(config).unwrap();
+        let mut client = client_in(dir.path());
         let typed = json!({"op": "input", "actions": [{"type": "type", "text": "secret"}]});
         let ok = json!({"ok": true});
+
         client
             .record(&typed, &ok, Duration::from_millis(5))
             .unwrap();
@@ -1293,6 +1420,7 @@ mod tests {
         client
             .record(&json!({"op": "restart"}), &ok, Duration::ZERO)
             .unwrap();
+
         let directory = client.output_dir().unwrap();
         let rows = crate::overview::activity(directory, 5);
         assert_eq!(
@@ -1303,6 +1431,7 @@ mod tests {
             (&rows[1]["actor"], &rows[1]["actionCount"]),
             (&json!("agent"), &json!(1))
         );
+
         let log = fs::read_to_string(directory.join("metadata.jsonl")).unwrap();
         assert!(!log.contains("secret"), "no typed text is recorded");
     }

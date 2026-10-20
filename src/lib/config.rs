@@ -27,6 +27,7 @@ pub fn effective(given: Option<PathBuf>) -> PathBuf {
     if let Some(path) = given {
         return path;
     }
+
     let path = PathBuf::from(DEFAULT_PATH);
     let installed = std::env::current_exe()
         .and_then(fs::canonicalize)
@@ -38,6 +39,7 @@ pub fn effective(given: Option<PathBuf>) -> PathBuf {
     if installed || !local {
         return installed_path().unwrap_or(path);
     }
+
     path
 }
 
@@ -63,6 +65,7 @@ fn default_output() -> PathBuf {
 pub fn parse_toml<T: DeserializeOwned>(bytes: &[u8], origin: &Path) -> Result<T> {
     let text = std::str::from_utf8(bytes)
         .map_err(|_| Error::new("config", format!("{} is not UTF-8 text", origin.display())))?;
+
     toml::from_str(text).map_err(|error| {
         Error::new(
             "config",
@@ -90,6 +93,7 @@ impl Config {
                 )
             }
         })?;
+
         // A file that exists but does not load is never "not set up": init
         // would refuse to replace it, so say which file and why.
         Self::read(&path).map_err(|error| {
@@ -120,13 +124,16 @@ impl Config {
                 ),
             ));
         }
+
         let mut bytes = Vec::new();
         fs::File::open(path)?
             .take(LIMIT + 1)
             .read_to_end(&mut bytes)?;
+
         if bytes.len() as u64 > LIMIT {
             return Err(Error::new("config", "Configuration exceeds 16 KiB"));
         }
+
         Self::parse(&bytes, path)
     }
 
@@ -135,9 +142,11 @@ impl Config {
     pub fn parse(bytes: &[u8], path: &Path) -> Result<Self> {
         let mut config: Self = parse_toml(bytes, path)?;
         crate::session::validate_uid(config.helper_uid)?;
+
         let parent = path
             .parent()
             .ok_or_else(|| Error::new("config", "Configuration has no parent directory"))?;
+
         for (value, whole) in [
             (&mut config.socket_path, true),
             (&mut config.output_dir, true),
@@ -152,18 +161,22 @@ impl Config {
                     "Paths must be nonempty and contain no NUL",
                 ));
             }
+
             if let Some(rest) = value.to_string_lossy().strip_prefix("~/") {
                 *value = home()?.join(rest);
             }
+
             if value.is_relative() {
                 *value = parent.join(&*value);
             }
+
             *value = if whole {
                 resolve_path(value)?
             } else {
                 resolve_parent(value)?
             };
         }
+
         Ok(config)
     }
 
@@ -184,6 +197,7 @@ fn missing(path: &Path) -> Error {
     } else {
         String::new()
     };
+
     Error::new(
         "config",
         format!(
@@ -224,11 +238,13 @@ pub(crate) fn write_beside(
             format!("{} is not a file path", path.display()),
         ));
     };
+
     let temporary = parent.join(format!(
         ".{}.{}",
         name.to_string_lossy(),
         crate::control::token()
     ));
+
     let result = (|| -> Result<()> {
         let mut file = fs::OpenOptions::new()
             .create_new(true)
@@ -238,9 +254,11 @@ pub(crate) fn write_beside(
             .open(&temporary)?;
         write(&mut file)?;
         file.sync_all()?;
+
         place(&temporary)
     })();
     let _ = fs::remove_file(&temporary);
+
     result
 }
 
@@ -264,6 +282,7 @@ pub(crate) fn save_private(path: &Path, bytes: &[u8]) -> Result<()> {
             .mode(0o700)
             .create(parent)?;
     }
+
     write_atomic(path, bytes, 0o600)
 }
 
@@ -275,21 +294,18 @@ pub fn resolve_parent(path: &Path) -> Result<PathBuf> {
     let name = path
         .file_name()
         .ok_or_else(|| Error::new("config", "Cannot resolve path name"))?;
+
     Ok(resolve_path(parent)?.join(name))
 }
 
-// Resolve existing ancestors too, so aliases of an absent socket share a lock.
+/// Resolve `path`, and its existing ancestors when it does not exist yet, so
+/// aliases of an absent socket share a lock.
 pub fn resolve_path(path: &Path) -> Result<PathBuf> {
     if path.exists() {
         return Ok(fs::canonicalize(path)?);
     }
-    let parent = path
-        .parent()
-        .ok_or_else(|| Error::new("config", "Cannot resolve path"))?;
-    let name = path
-        .file_name()
-        .ok_or_else(|| Error::new("config", "Cannot resolve path name"))?;
-    Ok(resolve_path(parent)?.join(name))
+
+    resolve_parent(path)
 }
 
 #[cfg(test)]
@@ -307,6 +323,7 @@ mod tests {
         let link = dir.path().join("shared/atlas");
         fs::create_dir_all(link.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(&real, &link).unwrap();
+
         let text = format!(
             "helper_uid = 502\nsocket_path = \"s.sock\"\nidentity_probe = \"{}\"\n\
              input_socket = \"i.sock\"\noutput_dir = \"out\"\n",
@@ -320,6 +337,7 @@ mod tests {
     #[test]
     fn atomic_writes_replace_whole_files_and_leave_nothing_behind() {
         use std::os::unix::fs::PermissionsExt;
+
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("deep/record.json");
         save_private(&path, b"first").unwrap();
@@ -329,6 +347,7 @@ mod tests {
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
         );
+
         let failed = write_beside(
             &path,
             0o600,

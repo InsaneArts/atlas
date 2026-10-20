@@ -83,6 +83,7 @@ impl Acl {
         if !acl.is_null() {
             return Ok(Some(Self(acl)));
         }
+
         let error = io::Error::last_os_error();
         // macOS reports ENOENT for an existing object without an extended ACL.
         if error.raw_os_error() == Some(libc::ENOENT) {
@@ -103,6 +104,7 @@ impl Acl {
         let mut entries = Vec::new();
         let mut index = ACL_FIRST_ENTRY;
         let mut entry = std::ptr::null_mut();
+
         loop {
             // SAFETY: live ACL handle; entries borrow from it and the out
             // pointer is valid for writes.
@@ -113,6 +115,7 @@ impl Acl {
                 }
                 return Err(error);
             }
+
             index = ACL_NEXT_ENTRY;
             let (mut tag, mut mask) = (0, 0);
             // SAFETY: `entry` was just returned for this live ACL; both
@@ -123,11 +126,13 @@ impl Acl {
             {
                 return Err(io::Error::last_os_error());
             }
+
             entries.push(Entry {
                 allow: tag == ACL_EXTENDED_ALLOW,
                 mask,
             });
         }
+
         Ok(entries)
     }
 
@@ -138,12 +143,15 @@ impl Acl {
         if text.is_null() {
             return Err(io::Error::last_os_error());
         }
+
         // SAFETY: acl_to_text returned a NUL-terminated string (checked non-null).
         let owned = unsafe { CStr::from_ptr(text) }
             .to_string_lossy()
             .into_owned();
+
         // SAFETY: frees the string acl_to_text allocated, once, after its last use.
         unsafe { acl_free(text.cast()) };
+
         Ok(owned)
     }
 }
@@ -153,10 +161,7 @@ pub fn present(path: &Path) -> io::Result<bool> {
     match Acl::of_path(path)? {
         None => Ok(false),
         Some(acl) if acl.is_valid() => Ok(!acl.entries()?.is_empty()),
-        Some(_) => Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Invalid filesystem ACL",
-        )),
+        Some(_) => Err(invalid()),
     }
 }
 
@@ -169,11 +174,12 @@ pub fn allows_write(path: &Path) -> io::Result<bool> {
             .entries()?
             .iter()
             .any(|entry| entry.allow && entry.mask & WRITE_RIGHTS != 0)),
-        Some(_) => Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Invalid filesystem ACL",
-        )),
+        Some(_) => Err(invalid()),
     }
+}
+
+fn invalid() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, "Invalid filesystem ACL")
 }
 
 /// Replace an open file's extended ACL with an empty one.
@@ -181,10 +187,12 @@ pub fn clear(file: &File) -> io::Result<()> {
     // SAFETY: acl_init returns an owned handle, freed by Acl's Drop.
     let empty = Acl::wrap(unsafe { acl_init(0) })?
         .ok_or_else(|| io::Error::other("Could not allocate an ACL"))?;
+
     // SAFETY: live descriptor and ACL handle.
     if unsafe { acl_set_fd(file.as_raw_fd(), empty.0) } != 0 {
         return Err(io::Error::last_os_error());
     }
+
     Ok(())
 }
 
@@ -200,6 +208,7 @@ mod tests {
         std::fs::write(&path, b"x").unwrap();
         assert!(!present(&path).unwrap());
         let user = std::env::var("USER").unwrap();
+
         assert!(
             Command::new("/bin/chmod")
                 .args(["+a", &format!("user:{user} allow write")])
@@ -208,11 +217,13 @@ mod tests {
                 .unwrap()
                 .success()
         );
+
         let acl = Acl::of_path(&path).unwrap().unwrap();
         let entries = acl.entries().unwrap();
         assert_eq!(entries.len(), 1);
         assert!(entries[0].allow && entries[0].mask & WRITE_RIGHTS != 0);
         assert!(acl.text().unwrap().contains(&format!(":{user}:")));
+
         let file = File::open(&path).unwrap();
         clear(&file).unwrap();
         assert!(!present(&path).unwrap());

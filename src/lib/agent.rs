@@ -60,6 +60,7 @@ pub fn skill() -> String {
         .map_or(GUIDE, |(_, rest)| rest)
         .trim_start();
     let (introduction, sections) = guide.split_once("## ").unwrap_or(("", guide));
+
     format!(
         "---\nname: atlas\ndescription: \"{SKILL_DESCRIPTION}\"\n---\n\n# Atlas\n\n\
 {introduction}{SKILL_RULES}## {sections}\n\
@@ -104,6 +105,7 @@ pub(crate) fn type_batches(text: &str) -> Result<Vec<String>> {
     let mut batches = Vec::new();
     let mut chunk = String::new();
     let mut length = 0;
+
     for grapheme in text.graphemes(true) {
         let size = grapheme.chars().count();
         if size > TYPE_LIMIT {
@@ -112,19 +114,24 @@ pub(crate) fn type_batches(text: &str) -> Result<Vec<String>> {
                 "A single character cluster is too long to type",
             ));
         }
+
         if length + size > TYPE_LIMIT {
             batches.push(std::mem::take(&mut chunk));
             length = 0;
         }
+
         chunk.push_str(grapheme);
         length += size;
     }
+
     if !chunk.is_empty() {
         batches.push(chunk);
     }
+
     if batches.is_empty() {
         return Err(Error::new("input", "Provide text to type"));
     }
+
     Ok(batches)
 }
 
@@ -134,10 +141,12 @@ pub(crate) fn type_batches(text: &str) -> Result<Vec<String>> {
 pub async fn type_text(client: &Client, text: &str) -> Result<Value> {
     let batches = type_batches(text)?;
     let (mut typed, mut confirmed) = (0, 0);
+
     for batch in &batches {
         let outcome = client
             .input(&json!([{ "type": "type", "text": batch }]), None, None)
             .await;
+
         // Agents act on the code (busy, lease-lost, session-changed), so
         // it is kept whichever way the batch failed.
         let (code, failure, uncertain) = match outcome {
@@ -159,6 +168,7 @@ pub async fn type_text(client: &Client, text: &str) -> Result<Value> {
             ),
             Err(error) => (error.code, error.error, error.uncertain),
         };
+
         return Ok(json!({
             "ok": false,
             "typed": typed,
@@ -169,6 +179,7 @@ pub async fn type_text(client: &Client, text: &str) -> Result<Value> {
             "uncertain": uncertain,
         }));
     }
+
     Ok(json!({ "ok": true, "typed": typed, "batches": batches.len() }))
 }
 
@@ -184,6 +195,7 @@ pub fn keys(keys: &[String]) -> Result<Value> {
             ),
         ));
     }
+
     Ok(Value::Array(
         keys.iter()
             .map(|key| json!({ "type": "key", "key": key }))
@@ -264,6 +276,7 @@ async fn windows_within(client: &Client, limit: Duration) -> Result<Vec<Window>>
     let reply = client
         .inspect_within(vec![probe, "windows-info".into()], limit)
         .await?;
+
     crate::native::windows::from_probe(&reply)
         .ok_or_else(|| Error::new("windows", "The helper window list is unavailable"))
 }
@@ -274,6 +287,7 @@ pub async fn list(client: &Client, filter: &WindowFilter) -> Result<Value> {
         .into_iter()
         .filter(|window| filter.matches(window))
         .collect();
+
     Ok(json!({ "ok": true, "windows": matching }))
 }
 
@@ -290,7 +304,9 @@ pub async fn open(
             "Name an app with --app, a file or URL, or both",
         ));
     }
+
     let mut argv = vec!["/usr/bin/open".to_owned()];
+
     for variable in environment {
         if variable
             .split_once('=')
@@ -301,13 +317,16 @@ pub async fn open(
                 format!("--env takes NAME=VALUE, not {variable}"),
             ));
         }
+
         argv.extend(["--env".to_owned(), variable.clone()]);
     }
+
     // Copying, launching and pruning happen under one ownership, so no other
     // open, close or controller interleaves.
     let ownership = client.controller.acquire(false)?;
     let apps = client.apps().await?;
     handoff::prune(&app_names(&apps));
+
     let running: Vec<handoff::Running> = apps["apps"]
         .as_array()
         .into_iter()
@@ -317,6 +336,7 @@ pub async fn open(
             executable: app["executable"].as_str().unwrap_or("").to_owned(),
         })
         .collect();
+
     // A name is the helper's to look up; a path is this side's file.
     let app_target = app.map(|app| {
         if app.contains('/') {
@@ -327,28 +347,35 @@ pub async fn open(
     });
     let mut wanted: Vec<handoff::Target> = app_target.into_iter().collect();
     wanted.extend(targets.iter().map(|target| handoff::resolve(target)));
+
     let handed = handoff::hand_over(client, &ownership, wanted, &running).await?;
     let copied = handed.copied;
     let mut given = handed.paths.into_iter();
+
     if app.is_some() {
         argv.extend(["-a".to_owned(), given.next().unwrap_or_default()]);
     }
+
     if !targets.is_empty() {
         argv.push("--".to_owned());
         argv.extend(given);
     }
+
     let reply = client.run_owned(&ownership, argv).await?;
     let opened = reply["exitCode"] == 0;
     let mut value = json!({ "ok": opened, "opened": opened });
+
     if !copied.is_empty() {
         value["copied"] = json!(copied);
     }
+
     if !opened {
         // Said with its code, and with the copies made for it, which stay
         // reported: the launch may still be on its way (a Gatekeeper
         // question, say), and close removes them.
         let output = run_output(&reply, 4096).unwrap_or_default();
         let said = String::from_utf8_lossy(&output).trim().to_owned();
+
         if reply["timedOut"] == true {
             value["code"] = json!("wait-failed");
             value["timedOut"] = json!(true);
@@ -364,6 +391,7 @@ pub async fn open(
                 said
             });
         }
+
         value["uncertain"] = json!(false);
     }
 
@@ -405,6 +433,7 @@ fn app_program(executable: &str) -> bool {
     let Some((bundle, program)) = executable.rsplit_once(".app/Contents/MacOS/") else {
         return false;
     };
+
     executable.starts_with('/')
         && !program.is_empty()
         && !program.contains('/')
@@ -430,6 +459,7 @@ fn names_by_quit(processes: &[Process], signalled: &[u64], quit: bool) -> Vec<St
         .collect();
     names.sort();
     names.dedup();
+
     names
 }
 
@@ -489,6 +519,7 @@ fn selected(apps: &Value, closing: Closing, atlas: Option<&str>) -> Vec<Process>
                 let apple = running["bundleId"]
                     .as_str()
                     .is_some_and(|id| id.starts_with("com.apple."));
+
                 app_program(executable)
                     && !protected(running, atlas)
                     && match running["policy"].as_str() {
@@ -534,10 +565,12 @@ pub async fn close(client: &Client, closing: Closing<'_>) -> Result<Value> {
             "close takes the app's name as atlas apps lists it, not a path",
         ));
     }
+
     let ownership = client.controller.acquire(false)?;
     let atlas = atlas_bundle();
     let apps = client.apps().await?;
     let processes = selected(&apps, closing, atlas.as_deref());
+
     // The helper's session and Atlas's own services are never closed.
     if let Closing::App(app) = closing
         && processes.iter().any(|process| process.protected)
@@ -547,12 +580,14 @@ pub async fn close(client: &Client, closing: Closing<'_>) -> Result<Value> {
             format!("Atlas does not close {app}: it is part of macOS or of Atlas"),
         ));
     }
+
     let names_of =
         |apps: &Value| -> Vec<String> { app_names(apps).into_iter().map(str::to_owned).collect() };
     // What runs in the helper once the apps are gone; with nothing to quit,
     // what ran already.
     let mut running = names_of(&apps);
     let mut quit = Vec::new();
+
     if !processes.is_empty() {
         // In the helper, each process is signalled only while it is still
         // the executable listed, so a reused process ID is left alone.
@@ -562,15 +597,18 @@ pub async fn close(client: &Client, closing: Closing<'_>) -> Result<Value> {
   [ -n "$exe" ] && [ "$(/bin/ps -o comm= -p "$pid")" = "$exe" ] && /bin/kill "$pid" && echo "$pid"
 done
 exit 0"#;
+
         let mut argv = vec![
             "/bin/sh".to_owned(),
             "-c".to_owned(),
             QUIT.to_owned(),
             "sh".to_owned(),
         ];
+
         for process in &processes {
             argv.extend([process.pid.to_string(), process.executable.clone()]);
         }
+
         let reply = client.run_owned(&ownership, argv).await?;
         if reply["ok"] != true || reply["timedOut"] == true || reply["exitCode"] != 0 {
             return Err(Error::new(
@@ -578,13 +616,16 @@ exit 0"#;
                 "The helper did not finish quitting the apps; run atlas apps to see what is open",
             ));
         }
+
         // Only the processes signalled are waited for: one whose program
         // did not check out was left alone.
         quit = signalled(&run_output(&reply, 64 * 1024).unwrap_or_default());
         let pids = &quit;
         let deadline = Instant::now() + QUIT_WAIT;
+
         loop {
             let apps = client.apps().await?;
+
             // One app is closed once no process of its name is left (a
             // relaunch counts); everything once each process signalled is
             // gone, whatever started since.
@@ -595,10 +636,12 @@ exit 0"#;
                 .collect();
             left.sort();
             left.dedup();
+
             if left.is_empty() {
                 running = names_of(&apps);
                 break;
             }
+
             if Instant::now() >= deadline {
                 return Err(Error::new(
                     "wait-failed",
@@ -609,16 +652,20 @@ exit 0"#;
                     ),
                 ));
             }
+
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
     }
+
     // What was quit, and (for --all) what was left because its process had
     // already changed by the time it would have been signalled.
     let named = |signalled: bool| names_by_quit(&processes, &quit, signalled);
+
     let names = match closing {
         Closing::App(app) => vec![app.to_owned()],
         Closing::All => named(true),
     };
+
     // A copy is never removed while an app of its names runs: an app that
     // came back, or another one, may be running from it.
     let running: Vec<&str> = running.iter().map(String::as_str).collect();
@@ -626,11 +673,13 @@ exit 0"#;
         .iter()
         .flat_map(|name| handoff::remove_copies_of(name, &running))
         .collect();
+
     let mut reply = json!({
         "ok": true,
         "closed": !processes.is_empty(),
         "removed": removed,
     });
+
     match closing {
         Closing::App(app) => {
             reply["app"] = json!(app);
@@ -647,6 +696,7 @@ exit 0"#;
             }
         }
     }
+
     Ok(reply)
 }
 
@@ -662,10 +712,12 @@ pub async fn wait(
     if filter.app.is_none() && filter.title.is_none() {
         return Err(Error::new("usage", "Wait for --app, --title, or both"));
     }
+
     let started = Instant::now();
     let deadline = started
         .checked_add(timeout)
         .ok_or_else(|| Error::new("usage", "That --timeout is too long to wait"))?;
+
     loop {
         // Each observation gets what is left of the deadline (at least half
         // a second); a zero timeout is exactly one observation.
@@ -675,6 +727,7 @@ pub async fn wait(
         } else {
             remaining.max(Duration::from_millis(500))
         };
+
         let matching: Vec<_> = windows_within(client, budget)
             .await?
             .into_iter()
@@ -688,12 +741,14 @@ pub async fn wait(
                 "windows": matching,
             }));
         }
+
         if timeout.is_zero() || observed >= deadline {
             let error = if gone {
                 "The window did not close in time".to_owned()
             } else {
                 no_window(client, filter).await
             };
+
             return Ok(json!({
                 "ok": false,
                 "code": "wait-failed",
@@ -702,6 +757,7 @@ pub async fn wait(
                 "uncertain": false,
             }));
         }
+
         tokio::time::sleep((deadline - observed).min(Duration::from_millis(250))).await;
     }
 }
@@ -710,12 +766,15 @@ pub async fn wait(
 /// window, as a menu bar app does until its menu bar item opens one.
 async fn no_window(client: &Client, filter: &WindowFilter) -> String {
     let fallback = "No matching window appeared in time".to_owned();
+
     let Some(app) = filter.app.as_deref().filter(|_| filter.title.is_none()) else {
         return fallback;
     };
+
     let Ok(apps) = client.apps().await else {
         return fallback;
     };
+
     let running = apps["apps"]
         .as_array()
         .into_iter()
@@ -781,9 +840,11 @@ impl ElementFilter {
         if !role {
             return None;
         }
+
         let Some(name) = self.name.as_deref() else {
             return Some(NameMatch::Exact);
         };
+
         let text = |value: &Option<String>, attribute: &str| {
             if cut(attribute) {
                 return cut_match(value.as_deref(), name, unknown(attribute));
@@ -793,6 +854,7 @@ impl ElementFilter {
             }
             value.as_deref().and_then(|text| name_match(text, name))
         };
+
         let identifier = if cut("AXIdentifier") {
             // What is shown of a cut identifier can still rule a name out.
             (unknown("AXIdentifier")
@@ -810,6 +872,7 @@ impl ElementFilter {
                 .filter(|identifier| same_text(identifier, name))
                 .map(|_| NameMatch::Exact)
         };
+
         let label = if cut("AXValue") {
             cut_match(label(element), name, unknown("AXValue"))
         } else if unknown("AXValue") {
@@ -819,6 +882,7 @@ impl ElementFilter {
         } else {
             label(element).and_then(|text| name_match(text, name))
         };
+
         [
             text(&element.title, "AXTitle"),
             text(&element.description, "AXDescription"),
@@ -846,6 +910,7 @@ impl ElementFilter {
             element.unreadable.iter().any(|a| a == attribute)
                 || element.truncated.iter().any(|a| a == attribute)
         };
+
         self.compare(element, &unknown).is_some()
     }
 }
@@ -898,11 +963,13 @@ fn app_pids(windows: &[Window], name: &str) -> Vec<i64> {
                     .is_some_and(|owner| same_text(owner, name))
         })
         .collect();
+
     let tiers: [&dyn Fn(&Window) -> bool; 3] = [
         &|window| window.layer == 0,
         &|window| window.layer != MENU_LAYER,
         &|_| true,
     ];
+
     let mut pids: Vec<i64> = tiers
         .iter()
         .map(|tier| {
@@ -916,6 +983,7 @@ fn app_pids(windows: &[Window], name: &str) -> Vec<i64> {
         .unwrap_or_default();
     pids.sort_unstable();
     pids.dedup();
+
     pids
 }
 
@@ -960,6 +1028,7 @@ async fn target_pid(client: &Client, target: &Target) -> Result<i64> {
         }
         Target::Name(name) => name,
     };
+
     let pids = app_pids(&windows(client).await?, name);
     if !pids.is_empty() {
         return one_pid(name, &pids);
@@ -1002,6 +1071,7 @@ fn app_named(app: &Value, name: &str) -> bool {
         path.ancestors()
             .find(|ancestor| ancestor.extension().is_some_and(|ext| ext == "app"))
     });
+
     shown
         || [executable, bundle]
             .into_iter()
@@ -1028,8 +1098,10 @@ async fn app_elements(client: &Client, pid: i64) -> Result<(Vec<Element>, bool)>
                 .to_owned(),
         ));
     }
+
     let elements = serde_json::from_value(value["elements"].take())
         .map_err(|_| Error::new("elements", "Malformed accessibility elements"))?;
+
     Ok((elements, value["truncated"] == true))
 }
 
@@ -1048,6 +1120,7 @@ pub async fn elements(
         .filter(|element| filter.matches(element))
         .collect();
     let count = matching.len();
+
     Ok(json!({
         "ok": true,
         "pid": pid,
@@ -1073,11 +1146,13 @@ fn owning_window(windows: &[Window], pid: i64, frame: &Frame) -> Option<i64> {
                 && near(window.bounds.height, frame.height)
         })
         .collect();
+
     // An ordinary window wins over a same-sized overlay of the same app.
     let unique = |windows: Vec<&Window>| match windows.as_slice() {
         [window] => Some(window.number),
         _ => None,
     };
+
     unique(
         matching
             .iter()
@@ -1132,6 +1207,7 @@ fn choose<'a>(elements: &'a [Element], filter: &ElementFilter) -> Result<&'a Ele
         .iter()
         .filter(|element| element.menu || !menu_open)
         .collect();
+
     let matches: Vec<(&Element, NameMatch)> = elements
         .iter()
         .filter_map(|element| Some((*element, filter.match_of(element)?)))
@@ -1142,6 +1218,7 @@ fn choose<'a>(elements: &'a [Element], filter: &ElementFilter) -> Result<&'a Ele
         .filter(|(element, kind)| Some(*kind) == best && element.frame.as_ref().is_some_and(drawn))
         .map(|(element, _)| *element)
         .collect();
+
     // A menu bar title gives way to a window element of the same name
     // (a Help button beside a Help menu); --role AXMenuBarItem asks for it.
     let in_windows: Vec<&Element> = matching
@@ -1154,6 +1231,7 @@ fn choose<'a>(elements: &'a [Element], filter: &ElementFilter) -> Result<&'a Ele
     } else {
         matching
     };
+
     let [element] = matching.as_slice() else {
         return Err(Error::new(
             "elements",
@@ -1171,6 +1249,7 @@ fn choose<'a>(elements: &'a [Element], filter: &ElementFilter) -> Result<&'a Ele
             },
         ));
     };
+
     // An element whose selector attributes could not be read may be a
     // second, unseen match, unless it is collapsed and could never be chosen.
     let doubtful = elements.iter().any(|other| {
@@ -1185,6 +1264,7 @@ fn choose<'a>(elements: &'a [Element], filter: &ElementFilter) -> Result<&'a Ele
             "Another element's name could not be read whole, so this match may not be unique",
         ));
     }
+
     Ok(element)
 }
 
@@ -1206,6 +1286,7 @@ pub async fn click_element(
             "Select the element with --name, --role or both",
         ));
     }
+
     let ownership = client.controller.acquire(false)?;
     let epoch = client.identity().await?.epoch;
     let pid = target_pid(client, target).await?;
@@ -1216,18 +1297,21 @@ pub async fn click_element(
             "The accessibility scan was incomplete, so a unique match cannot be established",
         ));
     }
+
     let element = choose(&elements, filter)?;
     let (x, y) = element
         .frame
         .as_ref()
         .map(Frame::center)
         .unwrap_or_default();
+
     let display = Bounds {
         x: 0.0,
         y: 0.0,
         width: epoch.display.width,
         height: epoch.display.height,
     };
+
     // A fresh list, read after the scan, judged for the element's own window.
     let windows = windows(client).await?;
     let window = if element.role.as_deref() == Some("AXMenuBarItem") {
@@ -1246,22 +1330,24 @@ pub async fn click_element(
             .as_ref()
             .and_then(|frame| owning_window(&windows, pid, frame))
     };
+
     if !window.is_some_and(|window| unobstructed(&windows, window, x, y, &display)) {
         return Err(Error::new(
             "elements",
             "The element is not visible in its window: covered, moved or off screen",
         ));
     }
+
     let actions = click(x, y, which, count, modifiers);
     let mut result = client.input_owned(&ownership, &actions, &epoch).await?;
     result["element"] = json!(element);
+
     Ok(result)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::session::Display;
 
     /// The process a name resolves to from the window list alone.
@@ -1286,10 +1372,12 @@ mod tests {
             "a folder on the way is not a name"
         );
         assert!(!app_named(&json!({"name": "Finder"}), "TextEdit"));
+
         let nested = json!({
             "name": "Simulator",
             "executable": "/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app/Contents/MacOS/Simulator",
         });
+
         assert!(
             !app_named(&nested, "Xcode"),
             "the bundle it lives in is not its name"
@@ -1335,6 +1423,7 @@ mod tests {
                 width: 1512.0,
                 height: 30.0,
             };
+
             bar
         };
         let app = || window(9, 6, "Opie", 0);
@@ -1397,6 +1486,7 @@ mod tests {
             drag((1.0, 2.0), (3.0, 4.0), Button::Middle)[0]["button"],
             "middle"
         );
+
         for actions in [
             click(
                 10.0,
@@ -1417,20 +1507,24 @@ mod tests {
         let family = "👨‍👩‍👧‍👦";
         let text = format!("{}{family}{}", "a".repeat(250), "b".repeat(300));
         let batches = type_batches(&text).unwrap();
+
         assert_eq!(batches.concat(), text);
         assert!(batches.iter().all(|t| t.chars().count() <= TYPE_LIMIT));
         assert!(
             batches.iter().any(|t| t.contains(family)),
             "cluster kept whole"
         );
+
         for batch in &batches {
             crate::actions::validate(&json!([{ "type": "type", "text": batch }]), &display())
                 .unwrap();
         }
+
         let decomposed = "e\u{301}".repeat(200);
         let batches = type_batches(&decomposed).unwrap();
         assert!(batches.iter().all(|t| !t.starts_with('\u{301}')));
         assert_eq!(batches.concat(), decomposed);
+
         assert!(type_batches("").is_err());
     }
 
@@ -1440,11 +1534,13 @@ mod tests {
         assert!(same_text("TextEdit", "textedit"));
         assert!(same_text("ÉDITEUR", "éditeur"));
         assert!(!same_text("TextEdit", "Text"));
+
         let windows = [window(1, 8, "Éditeur", 0)];
         assert_eq!(
             app_pid(&windows, &Target::Name("éditeur".into())).unwrap(),
             8
         );
+
         let filter = WindowFilter {
             app: Some("ÉDITEUR".into()),
             ..WindowFilter::default()
@@ -1458,11 +1554,13 @@ mod tests {
         edit.title = Some("Untitled — Edited".into());
         let mut menu = window(3, 4, "Window Server", 24);
         menu.title = Some("Menubar".into());
+
         let by_app = WindowFilter {
             app: Some("textedit".into()),
             ..Default::default()
         };
         assert!(by_app.matches(&edit));
+
         let by_title = WindowFilter {
             title: Some("untitled".into()),
             ..Default::default()
@@ -1509,6 +1607,7 @@ mod tests {
             role: role.map(Into::into),
             name: name.map(Into::into),
         };
+
         assert!(filter(Some("axbutton"), Some("save")).matches(&save));
         assert!(!filter(Some("AXButton"), Some("Save")).matches(&label));
         assert!(
@@ -1517,6 +1616,7 @@ mod tests {
         );
         assert!(!filter(None, Some("Sav")).matches(&save), "names are exact");
         assert!(filter(None, None).matches(&label));
+
         let mut unread = element("AXButton", None, None);
         unread.unreadable = vec!["AXTitle".into()];
         assert!(!filter(Some("AXButton"), Some("Save")).matches(&unread));
@@ -1533,6 +1633,7 @@ mod tests {
         let mut label = element("AXStaticText", None, None);
         label.value = Some("Main".into());
         assert!(filter.matches(&label) && filter.might_match(&label));
+
         let mut field = element("AXTextField", None, None);
         field.value = Some("Main".into());
         assert!(!filter.matches(&field), "typed text is not a name");
@@ -1551,6 +1652,7 @@ mod tests {
         let whole = element("AXButton", Some("QA Eject"), None);
         assert_eq!(filter.match_of(&whole), Some(NameMatch::Exact));
         assert!(NameMatch::Exact > NameMatch::Leading);
+
         for other in [
             "QA Ejected, 6 Slices",
             "Eject, QA Eject",
@@ -1561,9 +1663,11 @@ mod tests {
                 "{other}"
             );
         }
+
         let mut field = element("AXTextField", None, None);
         field.value = Some("QA Eject, typed".into());
         assert!(!filter.matches(&field), "typed text is still not a name");
+
         let mut identified = element("AXButton", None, None);
         identified.identifier = Some("QA Eject, more".into());
         assert!(!filter.matches(&identified), "identifiers match whole");
@@ -1584,12 +1688,14 @@ mod tests {
             app("Safari", "regular", "/Applications/Safari.app/Contents/MacOS/Safari"),
             app("Opie QA", "accessory", "/Users/Shared/Opie QA.app/Contents/MacOS/Opie QA"),
         ]});
+
         let names = |closing| {
             selected(&apps, closing, Some("/Applications/Atlas.app"))
                 .into_iter()
                 .map(|process| process.name)
                 .collect::<Vec<_>>()
         };
+
         assert_eq!(names(Closing::All), ["Calendar", "Safari", "Opie QA"]);
         let open = json!({"apps": [apps["apps"][0], apps["apps"][7], apps["apps"][8]]});
         assert_eq!(
@@ -1597,28 +1703,34 @@ mod tests {
             ["Safari", "Opie QA"],
             "a held log-out names what close --all would quit"
         );
+
         let services = json!({"apps": [
             app("Raycast Web Content", "accessory", "/Users/me/com.apple.WebKit.WebContent"),
             app("Slack Helper", "accessory", "/Applications/Slack.app/Contents/Frameworks/Slack Helper.app/Contents/MacOS/Slack Helper"),
             app("Updater", "accessory", "/Applications/Opie.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app/Contents/MacOS/Updater"),
             app("Nameless", "regular", ""),
         ]});
+
         assert!(
             selected(&services, Closing::All, None).is_empty(),
             "helpers, services and apps without a program are not apps left open"
         );
+
         assert!(app_program("/Applications/Notes.app/Contents/MacOS/Notes"));
         assert!(app_program(
             "/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app/Contents/MacOS/Simulator"
         ));
         assert!(!app_program("Notes.app/Contents/MacOS/Notes"));
+
         assert_eq!(signalled(b"12\n 34 \nnot a pid\n"), [12, 34]);
+
         let process = |pid, name: &str| Process {
             pid,
             executable: format!("/{pid}"),
             name: name.to_owned(),
             protected: false,
         };
+
         let processes = [
             process(1, "Notes"),
             process(2, "Notes"),
@@ -1626,6 +1738,7 @@ mod tests {
         ];
         assert_eq!(names_by_quit(&processes, &[1, 2], true), ["Notes"]);
         assert_eq!(names_by_quit(&processes, &[1, 2], false), ["Safari"]);
+
         assert!(!protected(
             &json!({"executable": "/usr/local/Cellar/emacs/Emacs.app/Contents/MacOS/Emacs"}),
             None
@@ -1634,10 +1747,12 @@ mod tests {
             &json!({"executable": "/usr/libexec/sharingd"}),
             None
         ));
+
         assert_eq!(names(Closing::App("Finder")), ["Finder"], "refused later");
         assert_eq!(names(Closing::App("opie qa")), ["Opie QA"], "any case");
         assert!(names(Closing::App("Opie")).is_empty(), "whole names only");
         assert!(selected(&apps, Closing::App("Finder"), None)[0].protected);
+
         // A development build, outside the app, still spares the installed
         // Atlas by its identifier.
         let installed = json!({"executable": "/Applications/Atlas.app/Contents/MacOS/atlas",
@@ -1660,6 +1775,7 @@ mod tests {
             6,
             "a menu bar app with only its menu open"
         );
+
         let frame = Frame {
             x: 10.0,
             y: 20.0,
@@ -1670,11 +1786,13 @@ mod tests {
             owning_window(std::slice::from_ref(&menu), 6, &frame),
             Some(9)
         );
+
         menu.alpha = 0.0;
         assert!(
             app_pid(&[menu], &name).is_err(),
             "a closed menu is no window"
         );
+
         // Two processes of one name: the one with a panel wins over one
         // showing only a menu, and a same-sized ordinary window over a menu.
         let panel = window(4, 7, "Opie", 3);
@@ -1682,21 +1800,25 @@ mod tests {
             app_pid(&[window(9, 6, "Opie", MENU_LAYER), panel], &name).unwrap(),
             7
         );
+
         let ordinary = window(5, 6, "Opie", 0);
         assert_eq!(
             owning_window(&[window(9, 6, "Opie", MENU_LAYER), ordinary], 6, &frame),
             Some(5)
         );
+
         let menubar = window(1, 2, "Window Server", 24);
         assert!(
             !app_or_menu_layer(&menubar),
             "the menu bar is not the app's"
         );
+
         let open = window(9, 6, "Opie", MENU_LAYER);
         let filter = WindowFilter {
             app: Some("opie".into()),
             ..WindowFilter::default()
         };
+
         assert!(
             !filter.matches(&open),
             "wait and windows never take an open menu for a window"
@@ -1713,6 +1835,7 @@ mod tests {
             width: 20.0,
             height: 20.0,
         });
+
         element
     }
 
@@ -1737,6 +1860,7 @@ mod tests {
             1,
             "a first part alone is enough"
         );
+
         // A whole match without a frame does not hand the click to a row
         // named only in part.
         let mut hidden = whole.clone();
@@ -1747,6 +1871,7 @@ mod tests {
             "{}",
             error.error
         );
+
         let other = shown(2, "AXButton", None, Some("Delete, 9 files"));
         let error = choose(&[row.clone(), other], &named("delete")).unwrap_err();
         assert!(
@@ -1754,6 +1879,7 @@ mod tests {
             "{}",
             error.error
         );
+
         let mut unread = shown(3, "AXButton", None, None);
         unread.unreadable = vec!["AXTitle".into()];
         let error = choose(&[whole.clone(), unread.clone()], &named("delete")).unwrap_err();
@@ -1777,6 +1903,7 @@ mod tests {
         cut.truncated = vec!["AXTitle".into()];
         assert!(!named("delete").matches(&cut), "a cut title proves nothing");
         assert!(named("delete").might_match(&cut), "but it may hide a match");
+
         let whole = shown(2, "AXButton", Some("Delete"), None);
         let error = choose(&[whole.clone(), cut], &named("delete")).unwrap_err();
         assert!(error.error.contains("could not be read"), "{}", error.error);
@@ -1801,6 +1928,7 @@ mod tests {
             choose(&[message, ok.clone()], &named("ok")).unwrap().index,
             7
         );
+
         let mut long = shown(8, "AXButton", Some("Delete every"), None);
         long.truncated = vec!["AXTitle".into()];
         assert!(named("delete everything").might_match(&long));
@@ -1826,6 +1954,7 @@ mod tests {
         unread.unreadable = vec!["AXValue".into()];
         assert!(named("ok").might_match(&unread));
         assert!(choose(&[unread.clone(), ok.clone()], &named("ok")).is_err());
+
         unread.frame.as_mut().unwrap().width = 0.0;
         assert_eq!(choose(&[unread, ok], &named("ok")).unwrap().index, 7);
 
@@ -1838,6 +1967,7 @@ mod tests {
             4,
             "the window's Help button, not the menu"
         );
+
         let by_role = ElementFilter {
             role: Some("AXMenuBarItem".into()),
             name: Some("help".into()),
@@ -1852,12 +1982,14 @@ mod tests {
         unread.unreadable = vec!["AXDescription".into()];
         let mut item = shown(2, "AXMenuItem", Some("Copy"), None);
         item.menu = true;
+
         let elements = [button.clone(), unread.clone(), item.clone()];
         assert_eq!(
             choose(&elements, &named("copy")).unwrap().index,
             2,
             "the window's button and its unreadable neighbour are out of play"
         );
+
         let error = choose(&[button, unread, item], &named("paste")).unwrap_err();
         assert!(error.error.contains("open menu"), "{}", error.error);
     }
@@ -1871,8 +2003,10 @@ mod tests {
             app_pid(&[hidden], &name).is_err(),
             "an invisible panel is no window"
         );
+
         let panel = window(5, 6, "Opie", 3);
         assert_eq!(app_pid(std::slice::from_ref(&panel), &name).unwrap(), 6);
+
         let frame = Frame {
             x: 10.0,
             y: 20.0,
@@ -1889,10 +2023,12 @@ mod tests {
             owning_window(std::slice::from_ref(&panel), 6, &frame),
             Some(5)
         );
+
         let filter = WindowFilter {
             app: Some("opie".into()),
             ..WindowFilter::default()
         };
+
         assert!(
             filter.matches(&panel),
             "windows --app shows its floating panel"
@@ -1910,12 +2046,14 @@ mod tests {
             "only document windows"
         );
         assert!(app_pid(&windows, &name("Preview")).is_err());
+
         let alert = [window(3, 5, "Atlas", 8), window(1, 7, "Dock", 20)];
         assert_eq!(
             app_pid(&alert, &name("Atlas")).unwrap(),
             5,
             "a floating alert"
         );
+
         let twice = [window(1, 8, "TextEdit", 0), window(2, 9, "TextEdit", 0)];
         let error = app_pid(&twice, &name("TextEdit")).unwrap_err();
         assert!(error.error.contains("--pid"), "{}", error.error);
@@ -1929,6 +2067,7 @@ mod tests {
             other.bounds.x = 400.0;
             other
         }];
+
         let frame = |x: f64| Frame {
             x,
             y: 20.0,
@@ -1943,6 +2082,7 @@ mod tests {
             "other process"
         );
         assert_eq!(owning_window(&windows, 8, &frame(200.0)), None);
+
         let twins = [window(4, 8, "TextEdit", 0), window(5, 8, "TextEdit", 0)];
         assert_eq!(
             owning_window(&twins, 8, &frame(10.0)),

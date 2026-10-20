@@ -7,6 +7,7 @@ use console::measure_text_width;
 /// A header row over one row per entry.
 pub fn render(headers: &[&str], rows: &[Vec<String>]) -> String {
     let mut widths: Vec<usize> = headers.iter().map(|h| measure_text_width(h)).collect();
+
     for row in rows {
         for (column, cell) in row.iter().enumerate() {
             if column >= widths.len() {
@@ -15,6 +16,7 @@ pub fn render(headers: &[&str], rows: &[Vec<String>]) -> String {
             widths[column] = widths[column].max(measure_text_width(cell));
         }
     }
+
     let line = |cells: &[String]| {
         cells
             .iter()
@@ -28,9 +30,11 @@ pub fn render(headers: &[&str], rows: &[Vec<String>]) -> String {
             .trim_end()
             .to_owned()
     };
+
     let header: Vec<String> = headers.iter().map(style::dim).collect();
     let mut lines = vec![line(&header)];
     lines.extend(rows.iter().map(|row| line(row)));
+
     lines.join("\n")
 }
 
@@ -41,10 +45,12 @@ mod tests {
     #[test]
     fn columns_line_up_under_their_headers() {
         console::set_colors_enabled(false);
+
         let rows = vec![
             vec!["TextEdit".to_owned(), "Untitled".to_owned()],
             vec!["Safari".to_owned(), "Docs".to_owned()],
         ];
+
         assert_eq!(
             render(&["APP", "TITLE"], &rows),
             "APP       TITLE\nTextEdit  Untitled\nSafari    Docs"

@@ -46,12 +46,15 @@ pub fn fit(width: usize, height: usize, limit: Option<u32>) -> (usize, usize) {
     let Some(limit) = limit.map(|l| l as usize) else {
         return (width, height);
     };
+
     let longest = width.max(height);
     if longest <= limit || longest == 0 {
         return (width, height);
     }
+
     let scale = limit as f64 / longest as f64;
     let side = |n: usize| ((n as f64 * scale).round() as usize).max(1);
+
     (side(width), side(height))
 }
 
@@ -63,6 +66,7 @@ fn srgb() -> Option<CFRetained<CGColorSpace>> {
 /// An empty `width`×`height` BGRA sRGB bitmap context.
 fn bitmap(width: usize, height: usize) -> Option<CFRetained<CGContext>> {
     let space = srgb()?;
+
     // SAFETY: a null data pointer asks CoreGraphics to allocate and own the
     // pixel buffer; the other arguments describe a standard BGRA layout.
     unsafe {
@@ -82,9 +86,11 @@ fn bitmap(width: usize, height: usize) -> Option<CFRetained<CGContext>> {
 fn scaled(image: &CGImage, width: usize, height: usize) -> Result<CFRetained<CGImage>> {
     let failed = || Error::new("capture", "The screenshot could not be scaled");
     let context = bitmap(width, height).ok_or_else(failed)?;
+
     CGContext::set_interpolation_quality(Some(&context), CGInterpolationQuality::High);
     let rect = CGRect::new(CGPoint::ZERO, CGSize::new(width as f64, height as f64));
     CGContext::draw_image(Some(&context), rect, Some(image));
+
     CGBitmapContextCreateImage(Some(&context)).ok_or_else(failed)
 }
 
@@ -99,10 +105,12 @@ fn png(image: &CGImage) -> Result<Vec<u8>> {
         unsafe { CGImageDestination::with_data(&data, &kind, 1, None) }.ok_or_else(failed)?;
     // SAFETY: a live destination and image, and no properties dictionary.
     unsafe { destination.add_image(image, None) };
+
     // SAFETY: a live destination holding the one image it was made for.
     if !unsafe { destination.finalize() } {
         return Err(failed());
     }
+
     Ok(data.to_vec())
 }
 
@@ -114,6 +122,7 @@ pub fn main_display(limit: Option<u32>) -> Result<Shot> {
             "Screen Recording is not allowed for Atlas in the helper account",
         ));
     }
+
     let display = CGMainDisplayID();
     let points = CGDisplayBounds(display).size;
     // Deprecated for ScreenCaptureKit, but still a synchronous, consent-gated
@@ -121,20 +130,24 @@ pub fn main_display(limit: Option<u32>) -> Result<Shot> {
     #[allow(deprecated)]
     let image = objc2_core_graphics::CGDisplayCreateImage(display)
         .ok_or_else(|| Error::new("capture", "The display could not be captured"))?;
+
     let (width, height) = (CGImage::width(Some(&image)), CGImage::height(Some(&image)));
     let scale = if points.width > 0.0 {
         width as f64 / points.width
     } else {
         1.0
     };
+
     let (target_width, target_height) = fit(width, height, limit);
     let image = if (target_width, target_height) == (width, height) {
         image
     } else {
         scaled(&image, target_width, target_height)?
     };
+
     let size =
         |side: usize| u32::try_from(side).map_err(|_| Error::new("capture", "Image too large"));
+
     Ok(Shot {
         png: png(&image)?,
         width: size(target_width)?,
@@ -164,12 +177,14 @@ mod tests {
     #[test]
     fn a_bitmap_scales_and_encodes_as_png() {
         assert!(srgb().is_some(), "the sRGB name resolves");
+
         // A real image from a bitmap context stands in for a display capture.
         let context = bitmap(64, 36).unwrap();
         let image = CGBitmapContextCreateImage(Some(&context)).unwrap();
         let small = scaled(&image, 32, 18).unwrap();
         let encoded = png(&small).unwrap();
         let (width, height) = crate::client::png_dimensions(&encoded).unwrap();
+
         assert_eq!((width, height), (32, 18));
     }
 }

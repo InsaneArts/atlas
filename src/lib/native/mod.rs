@@ -10,18 +10,22 @@ pub fn session_info() -> Result<Value> {
     use objc2_core_graphics::{CGDisplayBounds, CGMainDisplayID};
     use objc2_security::{SessionAttributeBits, SessionGetInfo, callerSecuritySession};
     use serde_json::json;
+
     let mut security_id = 0;
     let mut attributes = SessionAttributeBits(0);
+
     // SAFETY: both outputs are valid for writes; the sentinel asks about this
     // process's own security session.
     let status =
         unsafe { SessionGetInfo(callerSecuritySession, &mut security_id, &mut attributes) };
+
     if status != 0 {
         return Err(Error::new(
             "identity",
             format!("SessionGetInfo failed: {status}"),
         ));
     }
+
     let record =
         cf::session().ok_or_else(|| Error::new("identity", "No graphical session dictionary"))?;
     let on_console = cf::boolean(&record, "kCGSSessionOnConsoleKey")
@@ -29,6 +33,7 @@ pub fn session_info() -> Result<Value> {
         .ok_or_else(|| Error::new("identity", "Missing console-session state"))?;
     let display_id = CGMainDisplayID();
     let bounds = CGDisplayBounds(display_id);
+
     Ok(json!({
         "ok": true,
         "uid": nix::unistd::getuid().as_raw(),

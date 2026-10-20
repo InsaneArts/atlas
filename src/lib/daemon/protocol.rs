@@ -30,7 +30,6 @@ pub enum Request {
     },
 }
 
-/// An error reply.
 /// A refusal in the shape every Atlas failure has, so a reader needs one
 /// parser. Nothing here is of unknown outcome: the request never ran.
 pub fn failure(code: &str, error: impl Into<String>) -> Value {
@@ -46,11 +45,13 @@ pub fn parse(line: &[u8]) -> Result<Request, Value> {
     if line.len() > MAX_REQUEST {
         return Err(bad("request exceeds 1 MiB"));
     }
+
     let request: Value =
         serde_json::from_slice(line).map_err(|_| bad("request is not a JSON object"))?;
     if !request.is_object() {
         return Err(bad("request is not a JSON object"));
     }
+
     let op = request["op"]
         .as_str()
         .ok_or_else(|| bad("request is missing an \"op\" string"))?;
@@ -77,6 +78,7 @@ pub fn parse(line: &[u8]) -> Result<Request, Value> {
                         .ok_or_else(|| bad("\"maxDimension\" must be 1–8192"))?,
                 ),
             };
+
             Ok(Request::Screenshot { max_dimension })
         }
         "run" => {
@@ -87,6 +89,7 @@ pub fn parse(line: &[u8]) -> Result<Request, Value> {
             if argv.len() > MAX_ARGUMENTS {
                 return Err(bad("run accepts at most 4096 arguments"));
             }
+
             let argv = argv
                 .iter()
                 .map(|argument| {
@@ -100,6 +103,7 @@ pub fn parse(line: &[u8]) -> Result<Request, Value> {
             if argv[0].is_empty() {
                 return Err(bad("run requires a non-empty \"argv\" array"));
             }
+
             let timeout = match &request["timeoutMs"] {
                 Value::Null => DEFAULT_TIMEOUT_MS,
                 value => value
@@ -107,6 +111,7 @@ pub fn parse(line: &[u8]) -> Result<Request, Value> {
                     .filter(|n| (1..=MAX_TIMEOUT_MS).contains(n))
                     .ok_or_else(|| bad("\"timeoutMs\" must be 1–600000"))?,
             };
+
             Ok(Request::Run {
                 argv,
                 timeout: Duration::from_millis(timeout),
@@ -160,9 +165,11 @@ mod tests {
                 timeout: Duration::from_millis(3000)
             })
         );
+
         let Ok(Request::Run { timeout, .. }) = parse(br#"{"op":"run","argv":["true"]}"#) else {
             panic!("run without a timeout");
         };
+
         assert_eq!(timeout, Duration::from_secs(30));
     }
 
@@ -202,11 +209,13 @@ mod tests {
         ] {
             assert_eq!(refused(line)["code"], "bad-request", "{line}");
         }
+
         let many = format!(
             r#"{{"op":"run","argv":[{}]}}"#,
             vec!["\"x\""; MAX_ARGUMENTS + 1].join(",")
         );
         assert_eq!(refused(&many)["code"], "bad-request");
+
         let huge = vec![b' '; MAX_REQUEST + 1];
         assert_eq!(parse(&huge).unwrap_err()["error"], "request exceeds 1 MiB");
     }

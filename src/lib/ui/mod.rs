@@ -27,6 +27,7 @@ pub fn detect(json: bool, variable: Option<&str>, terminal: bool) -> Format {
     if json {
         return Format::Json;
     }
+
     match variable
         .map(|value| value.trim().to_ascii_lowercase())
         .as_deref()
@@ -69,6 +70,7 @@ pub fn suggestions() -> Vec<String> {
         ("atlas doctor", "check that it is ready"),
         ("atlas --help", "every command"),
     ];
+
     commands
         .iter()
         .map(|(command, what)| format!("  {}  {what}", style::cmd(format!("{command:<21}"))))

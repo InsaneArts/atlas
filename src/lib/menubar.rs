@@ -33,12 +33,14 @@ pub fn started_at_login() -> bool {
 /// terminal closes, and report once it is up. It quits from its own menu.
 pub async fn start(config: &Path, port: u16, output: &Path) -> Result<()> {
     let (already, record) = launch(config, port, output).await?;
+
     if crate::ui::human() {
         let what = if already {
             "is already running"
         } else {
             "is running"
         };
+
         println!(
             "{} The menu bar {what}. Click Atlas at the top of the screen; quit it from its menu.",
             crate::ui::style::ok()
@@ -51,6 +53,7 @@ pub async fn start(config: &Path, port: u16, output: &Path) -> Result<()> {
             )?
         );
     }
+
     Ok(())
 }
 
@@ -69,9 +72,11 @@ async fn viewer_running(record: &Path, port: u16) -> Option<serde_json::Value> {
 pub async fn launch(config: &Path, port: u16, output: &Path) -> Result<(bool, serde_json::Value)> {
     let record = output.join(crate::viewer::MENUBAR_RECORD);
     let _starting = starting(&output.join("menubar.lock")).await?;
+
     if let Some(running) = viewer_running(&record, port).await {
         return Ok((true, running));
     }
+
     let log_path = output.join("menubar.log");
     let log = fs::File::create(&log_path)?;
     let mut child = std::process::Command::new(std::env::current_exe()?)
@@ -86,8 +91,10 @@ pub async fn launch(config: &Path, port: u16, output: &Path) -> Result<(bool, se
         .stdout(log.try_clone()?)
         .stderr(log)
         .spawn()?;
+
     let pid = child.id();
     let deadline = std::time::Instant::now() + Duration::from_secs(20);
+
     loop {
         if let Some(status) = child.try_wait()? {
             let reply = last_reply(&log_path).unwrap_or_default();
@@ -96,6 +103,7 @@ pub async fn launch(config: &Path, port: u16, output: &Path) -> Result<(bool, se
                 .as_str()
                 .and_then(crate::error::code)
                 .unwrap_or("menubar");
+
             // Another menu bar holds the port (the one that just stopped said
             // so, or the login item took it a moment before its record
             // appeared): give its record a few seconds.
@@ -107,6 +115,7 @@ pub async fn launch(config: &Path, port: u16, output: &Path) -> Result<(bool, se
                     tokio::time::sleep(Duration::from_millis(200)).await;
                 }
             }
+
             let reason = if already {
                 format!("another menu bar holds port {port} but did not answer")
             } else {
@@ -115,17 +124,20 @@ pub async fn launch(config: &Path, port: u16, output: &Path) -> Result<(bool, se
                     .map(str::to_owned)
                     .unwrap_or_else(|| format!("it stopped; see {}", log_path.display()))
             };
+
             return Err(Error::new(
                 code,
                 format!("The menu bar did not start: {reason}"),
             ));
         }
+
         if let Some(running) = viewer_running(&record, port)
             .await
             .filter(|running| running["pid"] == pid)
         {
             return Ok((false, running));
         }
+
         if std::time::Instant::now() >= deadline {
             // Never leave a half-started menu bar behind.
             let _ = child.kill();
@@ -138,6 +150,7 @@ pub async fn launch(config: &Path, port: u16, output: &Path) -> Result<(bool, se
                 ),
             ));
         }
+
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
@@ -146,18 +159,21 @@ pub async fn launch(config: &Path, port: u16, output: &Path) -> Result<(bool, se
 async fn starting(path: &Path) -> Result<fs::File> {
     use fs2::FileExt;
     use std::os::unix::fs::OpenOptionsExt;
+
     let lock = fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
         .mode(0o600)
         .open(path)?;
+
     for _ in 0..300 {
         if lock.try_lock_exclusive().is_ok() {
             return Ok(lock);
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+
     Err(Error::new(
         "busy",
         "Another menu bar start is still running",
@@ -171,6 +187,7 @@ fn last_reply(log: &Path) -> Option<serde_json::Value> {
         .rfind("\n{")
         .map(|at| at + 1)
         .or_else(|| said.find('{'))?;
+
     serde_json::from_str(said[start..].trim()).ok()
 }
 
@@ -189,6 +206,7 @@ pub fn stop(output: &Path) -> Option<u16> {
                 .to_owned();
             url.split('/').next()?.parse::<u16>().ok()
         })?;
+
     let running = crate::viewer::running(&record, port)?;
     let pid = running["pid"]
         .as_i64()
@@ -196,14 +214,17 @@ pub fn stop(output: &Path) -> Option<u16> {
     if !is_atlas(pid) {
         return None;
     }
+
     let pid = nix::unistd::Pid::from_raw(pid);
     nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGINT).ok()?;
+
     for _ in 0..50 {
         if nix::sys::signal::kill(pid, None).is_err() {
             break;
         }
         std::thread::sleep(Duration::from_millis(100));
     }
+
     Some(port)
 }
 
@@ -215,6 +236,7 @@ fn is_atlas(pid: i32) -> bool {
     else {
         return false;
     };
+
     std::process::Command::new("/bin/ps")
         .args(["-o", "comm=", "-p", &pid.to_string()])
         .stdin(Stdio::null())
@@ -248,6 +270,7 @@ fn development() -> Result<PathBuf> {
             ),
         ));
     }
+
     let swift = |args: &[&str]| {
         std::process::Command::new("/usr/bin/swift")
             .args(args)
@@ -262,6 +285,7 @@ fn development() -> Result<PathBuf> {
                 )
             })
     };
+
     let built = swift(&["build", "-c", "release", "--product", APP_EXECUTABLE])?;
     if !built.status.success() {
         return Err(Error::new(
@@ -273,8 +297,10 @@ fn development() -> Result<PathBuf> {
             ),
         ));
     }
+
     let bin = swift(&["build", "-c", "release", "--show-bin-path"])?;
     let directory = String::from_utf8_lossy(&bin.stdout).trim().to_owned();
+
     Ok(Path::new(&directory).join(APP_EXECUTABLE))
 }
 
@@ -295,8 +321,10 @@ pub fn executable() -> Result<PathBuf> {
                 "The app inside Atlas.app is not signed by Atlas",
             ));
         }
+
         return Ok(app);
     }
+
     development()
 }
 
@@ -343,10 +371,12 @@ pub fn set_login(login: Login) -> Result<serde_json::Value> {
         .output()?;
     let reply: serde_json::Value = serde_json::from_slice(&output.stdout)
         .map_err(|_| Error::new("menubar", "The menu bar did not report its login item"))?;
+
     // Turning it on or off is the person's choice, and init keeps it.
     if login != Login::Status && reply["ok"] == true {
         decide_login();
     }
+
     Ok(reply)
 }
 
@@ -402,12 +432,14 @@ async fn spawn(program: &Program, url: &str, args: &[&str]) -> Result<(Child, Ch
         .stdout(Stdio::null())
         .kill_on_drop(true)
         .spawn()?;
+
     let mut stdin = child
         .stdin
         .take()
         .ok_or_else(|| Error::new("menubar", "The menu bar has no input"))?;
     stdin.write_all(format!("{url}\n").as_bytes()).await?;
     stdin.flush().await?;
+
     Ok((child, stdin))
 }
 
@@ -449,9 +481,11 @@ impl App {
                     return;
                 }
             }
+
             // Its stdin stays open until the app is dropped.
             std::future::pending::<()>().await;
         });
+
         Ok(Self { child, writer })
     }
 
@@ -473,9 +507,11 @@ impl Drop for App {
 /// The arguments that render the panel to `path` in one appearance.
 fn render_args(path: &str, dark: bool) -> Vec<&str> {
     let mut args = vec!["--render", path];
+
     if dark {
         args.push("--dark");
     }
+
     args
 }
 
@@ -494,6 +530,7 @@ pub async fn render(program: &Program, url: &str, path: &Path, dark: bool) -> Re
             format!("The menu bar could not render ({status})"),
         ));
     }
+
     Ok(())
 }
 
@@ -520,10 +557,12 @@ mod tests {
         assert_eq!(bundled(&executable), None, "no app yet");
         fs::write(macos.join(APP_EXECUTABLE), b"").unwrap();
         assert_eq!(bundled(&executable), Some(macos.join(APP_EXECUTABLE)));
+
         let loose = dir.path().join("bin");
         fs::create_dir_all(&loose).unwrap();
         fs::write(loose.join(APP_EXECUTABLE), b"").unwrap();
         assert_eq!(bundled(&loose.join("atlas")), None, "only inside the app");
+
         fs::remove_file(macos.join(APP_EXECUTABLE)).unwrap();
         std::os::unix::fs::symlink(loose.join(APP_EXECUTABLE), macos.join(APP_EXECUTABLE)).unwrap();
         assert_eq!(bundled(&executable), None, "never through a link");
@@ -531,6 +570,7 @@ mod tests {
             !crate::setup::app_signed(&loose.join(APP_EXECUTABLE)),
             "an unsigned file is not the app"
         );
+
         let installed = Path::new("/Applications/Atlas.app/Contents/MacOS").join(APP_EXECUTABLE);
         if installed.exists() {
             assert!(crate::setup::app_signed(&installed));
@@ -547,6 +587,7 @@ mod tests {
             assert_eq!(Login::parse(state).unwrap(), login);
             assert_eq!(login.as_str(), state);
         }
+
         assert_eq!(Login::parse("yes").unwrap_err().code, "usage");
     }
 

@@ -59,6 +59,7 @@ fn selection(
     references: &[impl AsRef<Path>],
 ) -> Result<()> {
     let refuse = |message: String| Err(Error::new("environment", message));
+
     if tools.len() + apps.len() + environment.len() + references.len() == 0 {
         return refuse("Select at least one tool, app, variable or reference path".into());
     }
@@ -157,6 +158,7 @@ impl Access {
                 "Invalid discovery probe response",
             ));
         }
+
         Ok(Self {
             file: flags.contains('f'),
             directory: flags.contains('d'),
@@ -169,8 +171,10 @@ impl Access {
 
 fn access(path: &Path) -> Access {
     use nix::unistd::AccessFlags;
+
     let metadata = fs::metadata(path).ok();
     let permits = |mode| nix::unistd::access(path, mode).is_ok();
+
     Access {
         file: metadata.as_ref().is_some_and(|m| m.is_file()),
         directory: metadata.as_ref().is_some_and(|m| m.is_dir()),
@@ -184,8 +188,10 @@ async fn probe(client: &Client, script: &str, args: &[String]) -> Result<Vec<Str
     if args.is_empty() {
         return Ok(Vec::new());
     }
+
     let mut argv = vec!["/bin/sh".into(), "-c".into(), script.into(), "sh".into()];
     argv.extend_from_slice(args);
+
     let reply = client.run(argv).await?;
     if reply["exitCode"] != 0 || reply["timedOut"] == true || !reply["signal"].is_null() {
         return Err(Error::new(
@@ -193,10 +199,12 @@ async fn probe(client: &Client, script: &str, args: &[String]) -> Result<Vec<Str
             "Helper discovery did not complete",
         ));
     }
+
     let output = run_output(&reply, 16384).map_err(|error| match error {
         OutputError::Malformed => invalid(),
         OutputError::Oversized => Error::new("environment", "Discovery output exceeded its limit"),
     })?;
+
     let lines = String::from_utf8(output)
         .map_err(|_| invalid())?
         .lines()
@@ -208,6 +216,7 @@ async fn probe(client: &Client, script: &str, args: &[String]) -> Result<Vec<Str
             "Incomplete discovery probe response",
         ));
     }
+
     Ok(lines)
 }
 
@@ -220,6 +229,7 @@ pub async fn discover(
     references: &[PathBuf],
 ) -> Result<Value> {
     selection(tools, apps, environment, references)?;
+
     let status = client.status().await;
     let session = require_hidden(&status, client.config.helper_uid)?;
     let home_unknown = || Error::new("identity", "The helper home is unknown; run atlas doctor");
@@ -227,6 +237,7 @@ pub async fn discover(
     if !helper_home.is_absolute() {
         return Err(home_unknown());
     }
+
     let home = crate::config::home()?;
     let mut host_bins = std::env::var_os("PATH")
         .map(|value| {
@@ -239,28 +250,33 @@ pub async fn discover(
     host_bins.extend([home.join(".local/bin"), home.join(".cargo/bin")]);
     host_bins.extend(SHARED_BIN.iter().map(PathBuf::from));
     let helper_bins = helper_search_path(&helper_home);
+
     // Every helper-side path is probed in one run; each report remembers
     // which of them are its candidates.
     let mut paths = Vec::<PathBuf>::new();
     let mut reports: Vec<(Value, Range<usize>)> = Vec::new();
+
     for name in tools {
         let host = host_bins.iter().map(|dir| dir.join(name)).find(|path| {
             let metadata = access(path);
             metadata.file && metadata.executable
         });
         let start = paths.len();
+
         paths.extend(helper_bins.iter().map(|dir| dir.join(name)));
         reports.push((
             json!({"kind": "tool", "name": name, "host": host, "executed": false}),
             start..paths.len(),
         ));
     }
+
     for name in apps {
         let bundle = if name.ends_with(".app") {
             name.clone()
         } else {
             format!("{name}.app")
         };
+
         // Where apps live: the usual folders, and macOS's own in
         // CoreServices (Finder among them).
         let host = [
@@ -273,6 +289,7 @@ pub async fn discover(
         .map(|dir| dir.join(&bundle))
         .find(|path| path.is_dir());
         let start = paths.len();
+
         paths.extend([
             PathBuf::from("/Applications").join(&bundle),
             PathBuf::from("/System/Applications").join(&bundle),
@@ -291,17 +308,21 @@ pub async fn discover(
             start..paths.len(),
         ));
     }
+
     let reference_start = paths.len();
     paths.extend_from_slice(references);
+
     let args = paths
         .iter()
         .map(|p| p.to_str().map(str::to_owned).ok_or_else(invalid))
         .collect::<Result<Vec<_>>>()?;
+
     let observed = probe(client, PATH_PROBE, &args)
         .await?
         .iter()
         .map(|s| Access::from_flags(s))
         .collect::<Result<Vec<_>>>()?;
+
     let selections: Vec<Value> = reports
         .into_iter()
         .map(|(mut report, range)| {
@@ -318,19 +339,23 @@ pub async fn discover(
                     .map(|i| json!({"path": paths[i], "access": observed[i]}))
                     .collect::<Vec<_>>()
             );
+
             report
         })
         .collect();
+
     let defined = probe(client, ENV_PROBE, environment).await?;
     if defined.iter().any(|s| s != "defined" && s != "undefined") {
         return Err(invalid());
     }
+
     if client.identity().await?.epoch != session.epoch {
         return Err(Error::new(
             "identity",
             "Helper changed during discovery; repeat the inspection",
         ));
     }
+
     let variables: Vec<Value> = environment
         .iter()
         .zip(defined)
@@ -342,6 +367,7 @@ pub async fn discover(
             })
         })
         .collect();
+
     let references: Vec<Value> = references
         .iter()
         .enumerate()
@@ -349,6 +375,7 @@ pub async fn discover(
             json!({"path": path, "host": access(path), "helper": observed[reference_start + i]})
         })
         .collect();
+
     Ok(json!({
         "ok": true,
         "readOnly": true,
@@ -408,6 +435,7 @@ mod tests {
             .unwrap_err()
             .error
         };
+
         assert_eq!(
             said(&[], &[], &[], &[]),
             "Select at least one tool, app, variable or reference path"
@@ -436,6 +464,7 @@ mod tests {
             said(&[], &[], &[], &["/tmp/../etc"]),
             "A reference path is absolute, without ..: /tmp/../etc"
         );
+
         let many: Vec<String> = (0..17).map(|i| format!("tool{i}")).collect();
         assert!(
             selection(&many, &[], &[], &paths(&[]))

@@ -50,21 +50,26 @@ fn root(helper: u32) -> Result<PathBuf> {
             parent.display()
         )));
     }
+
     match fs::DirBuilder::new().mode(0o700).create(&root) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(error) => return Err(Error::writing(&root, error)),
     }
+
     if !private_folder(&root) {
         return Err(problem(format!(
             "{ROOT} is not a private folder of this account; remove it and try again"
         )));
     }
+
     fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
+
     let account = nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(helper))
         .ok()
         .flatten()
         .ok_or_else(|| Error::new("identity", "The helper account was not found"))?;
+
     // The grant is set once; it is replaced only when it names someone else,
     // so the helper is never shut out of copies it is using.
     if !granted(&root, &account.name) {
@@ -77,6 +82,7 @@ fn root(helper: u32) -> Result<PathBuf> {
                 .map_err(|_| problem(format!("Could not let the helper into {ROOT}")))?;
         }
     }
+
     Ok(root)
 }
 
@@ -91,12 +97,14 @@ fn granted(folder: &Path, account: &str) -> bool {
     else {
         return false;
     };
+
     let listing = String::from_utf8_lossy(&output.stdout);
     let entries: Vec<&str> = listing
         .lines()
         .skip(1)
         .filter(|line| !line.trim().is_empty())
         .collect();
+
     // Exactly the read-only grant: on a folder, read and execute are listed
     // as list and search. Any other right (writing, deleting) disqualifies it.
     let expected = [
@@ -108,6 +116,7 @@ fn granted(folder: &Path, account: &str) -> bool {
         "file_inherit",
         "directory_inherit",
     ];
+
     let Some(rights) = entries
         .first()
         .and_then(|entry| entry.split_once(&format!("user:{account} allow ")))
@@ -115,14 +124,16 @@ fn granted(folder: &Path, account: &str) -> bool {
     else {
         return false;
     };
+
     let mut rights: Vec<&str> = rights.split(',').map(str::trim).collect();
     rights.sort_unstable();
     let mut wanted = expected.to_vec();
     wanted.sort_unstable();
+
     entries.len() == 1 && rights == wanted
 }
 
-/// Run a system tool on `path`, quietly; whether it succeeded.
+/// Run a system tool on `path`, quietly, failing when the tool does.
 fn quiet(tool: &str, args: &[&str], path: &Path) -> Result<()> {
     let status = Command::new(tool)
         .args(args)
@@ -131,6 +142,7 @@ fn quiet(tool: &str, args: &[&str], path: &Path) -> Result<()> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()?;
+
     if status.success() {
         Ok(())
     } else {
@@ -158,6 +170,7 @@ async fn readable(client: &Client, ownership: &Ownership, paths: &[PathBuf]) -> 
   fi
   echo "$ok"
 done"#;
+
     let mut argv = vec![
         "/bin/sh".to_owned(),
         "-c".to_owned(),
@@ -165,6 +178,7 @@ done"#;
         "sh".to_owned(),
     ];
     argv.extend(paths.iter().map(|path| path.to_string_lossy().into_owned()));
+
     let reply = client.run_owned(ownership, argv).await?;
     let output = run_output(&reply, 65536).unwrap_or_default();
     let answers: Vec<bool> = String::from_utf8_lossy(&output)
@@ -177,6 +191,7 @@ done"#;
             "The helper could not check what it can read",
         ));
     }
+
     Ok(answers)
 }
 
@@ -234,6 +249,7 @@ pub(crate) async fn hand_over(
         }
         _ => Vec::new(),
     };
+
     let root_path = PathBuf::from(ROOT);
     let checks: Vec<PathBuf> = targets
         .iter()
@@ -243,6 +259,7 @@ pub(crate) async fn hand_over(
         })
         .collect();
     let answers = readable(client, ownership, &checks).await?;
+
     let mut made = Vec::new();
     let placed = place(
         targets,
@@ -252,6 +269,7 @@ pub(crate) async fn hand_over(
         client.config.helper_uid,
         &mut made,
     );
+
     match placed {
         Ok(paths) => Ok(Handed {
             paths,
@@ -285,6 +303,7 @@ fn place(
     let mut answers = answers.into_iter();
     let mut root = None;
     let mut out = Vec::new();
+
     for target in targets {
         let path = match target {
             Target::Name(name) => {
@@ -320,24 +339,30 @@ fn place(
                             ),
                         ));
                     }
+
                     let root = match &root {
                         Some(root) => root,
                         None => root.insert(self::root(helper)?),
                     };
+
                     let copy = copy(&path, root)?;
                     made.push((path.clone(), copy.clone()));
+
                     if path.extension().is_none_or(|extension| extension != "app")
                         && !opened_with.is_empty()
                         && let Some(folder) = copy.parent()
                     {
                         fs::write(folder.join(OPENED_WITH), opened_with.join("\n"))?;
                     }
+
                     copy
                 }
             }
         };
+
         out.push(path.to_string_lossy().into_owned());
     }
+
     Ok(out)
 }
 
@@ -352,6 +377,7 @@ fn copy(path: &Path, root: &Path) -> Result<PathBuf> {
         .mode(0o700)
         .create(&folder)
         .map_err(|error| Error::writing(&folder, error))?;
+
     let copy = folder.join(name);
     let made = quiet(
         "/usr/bin/ditto",
@@ -366,6 +392,7 @@ fn copy(path: &Path, root: &Path) -> Result<PathBuf> {
             path.display()
         )));
     }
+
     Ok(copy)
 }
 
@@ -401,6 +428,7 @@ fn folders(root: &Path) -> Vec<PathBuf> {
     if !private_folder(root) {
         return Vec::new();
     }
+
     entries(root)
         .into_iter()
         .filter(|folder| private_folder(folder))
@@ -428,6 +456,7 @@ fn names(copy: &Path) -> Vec<String> {
         .map(|stem| stem.to_string_lossy().into_owned())
         .into_iter()
         .collect();
+
     if copy.extension().is_some_and(|extension| extension == "app") {
         names.extend(
             ["CFBundleDisplayName", "CFBundleName", "CFBundleExecutable"]
@@ -435,6 +464,7 @@ fn names(copy: &Path) -> Vec<String> {
                 .filter_map(|key| bundle_value(copy, key)),
         );
     }
+
     names
 }
 
@@ -448,6 +478,7 @@ fn bundle_value(bundle: &Path, key: &str) -> Option<String> {
         .stderr(Stdio::null())
         .output()
         .ok()?;
+
     output
         .status
         .success()
@@ -504,8 +535,10 @@ mod tests {
         let folder = dir.path().join("own");
         fs::DirBuilder::new().mode(0o700).create(&folder).unwrap();
         assert!(private_folder(&folder));
+
         fs::set_permissions(&folder, fs::Permissions::from_mode(0o777)).unwrap();
         assert!(!private_folder(&folder), "writable by others");
+
         let link = dir.path().join("link");
         std::os::unix::fs::symlink(&folder, &link).unwrap();
         assert!(!private_folder(&link), "a link is never followed");
@@ -520,6 +553,7 @@ mod tests {
         let source = dir.path().join("note.txt");
         fs::write(&source, "hello").unwrap();
         fs::set_permissions(&source, fs::Permissions::from_mode(0o666)).unwrap();
+
         let first = copy(&source, &root).unwrap();
         let second = copy(&source, &root).unwrap();
         assert_ne!(first.parent(), second.parent(), "never replaced");
@@ -536,13 +570,16 @@ mod tests {
             .unwrap()
             .name;
         assert!(!granted(dir.path(), &me));
+
         let grant = format!(
             "{me} allow list,search,readattr,readextattr,readsecurity,read,execute,file_inherit,directory_inherit"
         );
         let grant_with_write = format!("{grant},write,add_file");
+
         quiet("/bin/chmod", &["+a", &grant], dir.path()).unwrap();
         assert!(granted(dir.path(), &me));
         assert!(!granted(dir.path(), "someone-else"));
+
         // A grant that also lets the helper write is not the one wanted.
         let other = tempfile::tempdir().unwrap();
         quiet("/bin/chmod", &["+a", &grant_with_write], other.path()).unwrap();
@@ -563,11 +600,13 @@ mod tests {
     fn copy_folder(root: &Path, folder: &str, name: &str) -> PathBuf {
         let folder = root.join(folder);
         fs::DirBuilder::new().mode(0o700).create(&folder).unwrap();
+
         if name.ends_with(".app") {
             runner(&folder.join(name));
         } else {
             fs::write(folder.join(name), "hello").unwrap();
         }
+
         folder
     }
 
@@ -588,20 +627,24 @@ mod tests {
         let opened = copy_folder(&root, "b", "note.txt");
         fs::write(opened.join(OPENED_WITH), "TextEdit").unwrap();
         let other = copy_folder(&root, "c", "other.txt");
+
         for name in ["runner", "long runner"] {
             assert_eq!(copies_of(&root, name), std::slice::from_ref(&app), "{name}");
         }
+
         assert_eq!(copies_of(&root, "TEXTEDIT"), std::slice::from_ref(&opened));
         assert!(copies_of(&root, "Preview").is_empty());
         assert!(in_use(&app, &["RUNNER"]));
         assert!(in_use(&opened, &["TextEdit"]), "opened with a running app");
         assert!(!in_use(&other, &["TextEdit", "Runner"]));
+
         // `close --app runner` while Runner still runs keeps its copy.
         assert!(remove_copies_in(&root, "runner", &["Finder", "Runner"]).is_empty());
         assert!(app.exists());
         let removed = remove_copies_in(&root, "runner", &["Finder"]);
         assert_eq!(removed, [app.to_string_lossy().into_owned()]);
         assert!(!app.exists());
+
         // Old copies go unless in use; new ones stay.
         age(&opened, 8);
         age(&other, 8);
@@ -620,6 +663,7 @@ mod tests {
         let app = dir.path().join("Long Runner.app");
         runner(&app);
         let names = names(&app);
+
         for name in ["Long Runner", "Runner", "runner"] {
             assert!(names.contains(&name.to_owned()), "{name} in {names:?}");
         }

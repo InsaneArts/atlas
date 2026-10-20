@@ -95,6 +95,7 @@ impl Record {
                 first
             }
         };
+
         match (self.checks.len(), outcome("save"), outcome("open")) {
             (2, Some(save), Some(open)) => self.passed == (save && open),
             _ => false,
@@ -129,6 +130,7 @@ fn boot_time() -> Option<u64> {
     };
     let mut size = std::mem::size_of::<libc::timeval>();
     let mut name = [libc::CTL_KERN, libc::KERN_BOOTTIME];
+
     // SAFETY: valid MIB, output buffer and size for kern.boottime.
     let status = unsafe {
         libc::sysctl(
@@ -140,13 +142,19 @@ fn boot_time() -> Option<u64> {
             0,
         )
     };
+
     (status == 0).then(|| u64::try_from(boot.tv_sec).unwrap_or_default())
 }
 
 /// The generation a status snapshot describes, if it shows a ready helper.
 pub fn generation(status: &Value, uid: u32) -> Option<Generation> {
+    generation_at(status, uid, boot_time()?)
+}
+
+/// The generation a status snapshot describes on a machine booted at `boot`.
+fn generation_at(status: &Value, uid: u32, boot: u64) -> Option<Generation> {
     let session = require_hidden(status, uid).ok().filter(|s| s.input)?;
-    Some(Generation::of(&session.epoch, boot_time()?))
+    Some(Generation::of(&session.epoch, boot))
 }
 
 /// Doctor's view of native dialogs: unknown, stale, passed or failed.
@@ -158,6 +166,7 @@ pub fn assess(record: Option<&Record>, current: Option<&Generation>, at: u64) ->
                        Sharing session is connected to the helper.",
         });
     };
+
     let (state, reason) = if !record.consistent() {
         (
             "unknown",
@@ -180,6 +189,7 @@ pub fn assess(record: Option<&Record>, current: Option<&Generation>, at: u64) ->
             "Native Save/Open did not complete in this session",
         )
     };
+
     json!({
         "state": state,
         "reason": reason,
@@ -204,6 +214,7 @@ pub fn native_dialogs(status: &Value, uid: u32) -> Value {
         .ok()
         .and_then(|path| fs::read(path).ok())
         .and_then(|bytes| serde_json::from_slice::<Record>(&bytes).ok());
+
     assess(record.as_ref(), generation(status, uid).as_ref(), now())
 }
 
@@ -213,10 +224,12 @@ pub fn doctor(status: Value, uid: u32) -> Value {
     let native = native_dialogs(&status, uid);
     let mut report = crate::session::diagnose(status, uid);
     report["capabilities"]["nativeDialogs"] = native;
+
     report["capabilities"]["webContent"] = json!({
         "state": "unknown",
         "reason": WEB_CONTENT,
     });
+
     report
 }
 
@@ -228,10 +241,12 @@ pub fn summary(mut report: Value) -> Value {
         .as_object_mut()
         .and_then(|report| report.remove("session"))
         .unwrap_or(Value::Null);
+
     report["helper"] = json!({
         "name": session["user"]["name"],
         "uid": session["user"]["uid"],
     });
+
     report["display"] = session["display"].clone();
     report
 }
@@ -253,6 +268,7 @@ const MAX_ARCHIVED: u64 = 16 << 20;
 /// error rather than read without end.
 fn read_bounded(path: &Path, limit: u64) -> std::io::Result<Vec<u8>> {
     use std::{io::Read, os::unix::fs::OpenOptionsExt};
+
     let file = fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
@@ -263,14 +279,17 @@ fn read_bounded(path: &Path, limit: u64) -> std::io::Result<Vec<u8>> {
             format!("{} is not a regular file", path.display()),
         ));
     }
+
     let mut bytes = Vec::new();
     file.take(limit + 1).read_to_end(&mut bytes)?;
+
     if bytes.len() as u64 > limit {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!("{} exceeds {limit} bytes", path.display()),
         ));
     }
+
     Ok(bytes)
 }
 
@@ -300,6 +319,7 @@ impl Fixture {
         )
         .ok()?;
         let finished = observed["finishedAt"].as_f64()? as u64;
+
         (observed["attemptID"] == attempt
             && observed["trusted"] == true
             && observed["parentPID"] == self.pid
@@ -352,13 +372,16 @@ fn same_path(left: &Value, right: &Path) -> bool {
 /// Poll `check` until it yields a value or `stage` times out.
 async fn until<T>(stage: &str, mut check: impl FnMut() -> Option<T>) -> Result<T> {
     let deadline = Instant::now() + Duration::from_secs(6);
+
     loop {
         if let Some(value) = check() {
             return Ok(value);
         }
+
         if Instant::now() >= deadline {
             return Err(problem(format!("Timed out: {stage}")));
         }
+
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
@@ -376,6 +399,7 @@ fn launched(output: &str) -> Option<(u32, PathBuf)> {
         && !suffix.is_empty()
         && suffix.bytes().all(|c| c.is_ascii_alphanumeric());
     let pid = pid.parse().ok().filter(|pid| *pid > 1)?;
+
     canary.then_some((pid, directory))
 }
 
@@ -452,6 +476,7 @@ impl Canary<'_> {
         let reply = self
             .run(vec![probe.into_owned(), "windows-info".into()])
             .await?;
+
         crate::native::windows::from_probe(&reply)
             .ok_or_else(|| problem("The helper window list is unavailable"))
     }
@@ -481,11 +506,13 @@ impl Canary<'_> {
         self.at("fixture window comes forward");
         let pid = i64::from(self.fixture.pid);
         let deadline = Instant::now() + Duration::from_secs(6);
+
         loop {
             let windows = self.windows().await?;
             if frontmost_pid(&windows) == Some(pid) {
                 return Ok(());
             }
+
             let point = self
                 .fixture_window(&windows)
                 .and_then(|window| visible_point(&windows, window, &self.display()));
@@ -493,9 +520,11 @@ impl Canary<'_> {
                 self.keys(json!([{ "type": "click", "x": x, "y": y }]))
                     .await?;
             }
+
             if Instant::now() >= deadline {
                 return Err(problem("The fixture window did not come forward"));
             }
+
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
     }
@@ -507,6 +536,7 @@ impl Canary<'_> {
         let previous = self.fixture.state()["centerCount"].as_u64();
         self.press("ctrl+cmd+0").await?;
         let fixture = &self.fixture;
+
         until(&self.stage(), || {
             (fixture.state()["centerCount"].as_u64() > previous).then_some(())
         })
@@ -520,15 +550,19 @@ impl Canary<'_> {
         if self.fixture.state()["panel"]["presented"] != true {
             return Ok(());
         }
+
         self.focus().await?;
         self.at("previous panel dismissed");
+
         for _ in 0..2 {
             if self.fixture.state()["panel"]["presented"] != true {
                 return Ok(());
             }
+
             self.press("escape").await?;
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
+
         let fixture = &self.fixture;
         until(&self.stage(), || {
             (fixture.state()["panel"]["presented"] != true).then_some(())
@@ -541,6 +575,7 @@ impl Canary<'_> {
     async fn open_panel(&self, kind: &str, shortcut: &str) -> Result<String> {
         let previous = self.fixture.state()["panel"]["attemptID"].clone();
         self.press(shortcut).await?;
+
         self.at(&format!("{kind} panel appears"));
         let fixture = &self.fixture;
         let attempt = until(&self.stage(), || {
@@ -550,6 +585,7 @@ impl Canary<'_> {
                 .flatten()
         })
         .await?;
+
         until(&self.stage(), || {
             let panel = &fixture.state()["panel"];
             (panel["presented"] == true
@@ -558,6 +594,7 @@ impl Canary<'_> {
             .then_some(())
         })
         .await?;
+
         self.at(&format!("{kind} panel focused"));
         until(&self.stage(), || {
             fixture
@@ -566,13 +603,15 @@ impl Canary<'_> {
                 .filter(|o| button(o, "Cancel").is_some_and(|b| b["enabled"] == true))
         })
         .await?;
+
         Ok(attempt)
     }
 
     async fn confirm(&self, kind: &str, attempt: &str, expected: &Path) -> Result<()> {
-        if self.fixture.completion(attempt, kind).is_none() {
+        let fixture = &self.fixture;
+
+        if fixture.completion(attempt, kind).is_none() {
             self.at(&format!("{kind} confirmation enabled"));
-            let fixture = &self.fixture;
             let title = if kind == "save" { "Save" } else { "Open" };
             until(&self.stage(), || {
                 fixture
@@ -581,21 +620,24 @@ impl Canary<'_> {
                     .filter(|o| button(o, title).is_some_and(|b| b["enabled"] == true))
             })
             .await?;
+
             self.press("return").await?;
         }
+
         self.at(&format!("{kind} completes"));
-        let fixture = &self.fixture;
         let done = until(&self.stage(), || fixture.completion(attempt, kind)).await?;
         if done["response"] != 1 {
             return Err(problem(format!(
                 "The {kind} panel did not accept the operation"
             )));
         }
+
         let key = if kind == "save" {
             "savedPath"
         } else {
             "openedPath"
         };
+
         until(&self.stage(), || {
             same_path(&fixture.state()[key], expected).then_some(())
         })
@@ -608,37 +650,45 @@ impl Canary<'_> {
         let state = self.fixture.state();
         let x = state["windowX"].as_f64().unwrap_or_default() + 100.0;
         let y = self.epoch.display.height - state["windowY"].as_f64().unwrap_or_default() - 520.0;
+
         // Never click or type unless the text field's point is the fixture's.
         let windows = self.windows().await?;
         let target = self.fixture_window(&windows);
         if !target.is_some_and(|window| unobstructed(&windows, window, x, y, &self.display())) {
             return Err(problem("The fixture text field is not uncovered"));
         }
+
         // The first click may only activate the window; the second focuses text.
         for _ in 0..2 {
             self.keys(json!([{ "type": "click", "x": x, "y": y }]))
                 .await?;
         }
+
         if frontmost_pid(&self.windows().await?) != Some(i64::from(self.fixture.pid)) {
             return Err(problem("The fixture lost focus before typing"));
         }
+
         self.keys(json!([
             { "type": "key", "key": "cmd+a" },
             { "type": "type", "text": SAVE_TEXT },
         ]))
         .await?;
+
         let fixture = &self.fixture;
         until(&self.stage(), || {
             (fixture.state()["text"] == SAVE_TEXT).then_some(())
         })
         .await?;
+
         let attempt = self.open_panel("save", "cmd+s").await?;
         self.capture("save-panel").await;
         self.confirm("save", &attempt, &expected).await?;
+
         self.at("saved bytes match");
         if fixture_text(&expected).as_deref() != Some(SAVE_TEXT) {
             return Err(problem("The saved file does not contain the exact text"));
         }
+
         Ok(())
     }
 
@@ -648,12 +698,13 @@ impl Canary<'_> {
         if fixture_text(&expected).as_deref() != Some(OPEN_TEXT) {
             return Err(problem("The fixture did not prepare its Open file"));
         }
+
         let attempt = self.open_panel("open", "cmd+o").await?;
         let fixture = &self.fixture;
         let before = fixture.observed(&attempt).map(|o| sheets(&o)).unwrap_or(0);
+
         self.press("cmd+shift+g").await?;
         self.at("Go to Folder field focused");
-        let fixture = &self.fixture;
         until(&self.stage(), || {
             fixture.observed(&attempt).filter(|o| {
                 sheets(o) > before
@@ -662,27 +713,31 @@ impl Canary<'_> {
             })
         })
         .await?;
+
         let path = expected.to_string_lossy().into_owned();
         self.keys(json!([
             { "type": "key", "key": "cmd+a" },
             { "type": "type", "text": path },
         ]))
         .await?;
+
         self.at("Go to Folder receives the path");
-        let fixture = &self.fixture;
         until(&self.stage(), || {
             fixture
                 .observed(&attempt)
                 .filter(|o| o["focused"]["value"] == path.as_str())
         })
         .await?;
+
         self.press("return").await?;
         self.capture("open-panel").await;
         self.confirm("open", &attempt, &expected).await?;
+
         self.at("opened text matches");
         if self.fixture.state()["openedText"] != OPEN_TEXT {
             return Err(problem("The fixture did not load the exact Open text"));
         }
+
         Ok(())
     }
 
@@ -700,6 +755,7 @@ impl Canary<'_> {
             }
         }
         .await;
+
         self.check(kind, outcome)
     }
 
@@ -711,6 +767,7 @@ impl Canary<'_> {
             .output_dir()?
             .join(format!("native-{}", timestamp()));
         fs::DirBuilder::new().mode(0o700).create(&directory)?;
+
         for name in [
             "state.json",
             "events.jsonl",
@@ -726,6 +783,7 @@ impl Canary<'_> {
                 Err(error) => return Err(error.into()),
             }
         }
+
         self.evidence.push(directory);
         Ok(())
     }
@@ -735,6 +793,7 @@ impl Canary<'_> {
     /// be archived elsewhere.
     async fn cleanup(&self, remove: bool) -> Result<()> {
         let _ = self.dismissed().await;
+
         let script = concat!(
             "if kill -0 \"$1\" 2>/dev/null; then ",
             "[ \"$(/bin/ps -o comm= -p \"$1\")\" = \"$2\" ] || exit 3; ",
@@ -747,6 +806,7 @@ impl Canary<'_> {
             "case \"$3\" in /private/tmp/atlas-canary.?*) /bin/rm -rf -- \"$3\";; ",
             "*) exit 5;; esac",
         );
+
         let reply = self
             .run(vec![
                 "/bin/sh".into(),
@@ -765,6 +825,7 @@ impl Canary<'_> {
                 reply["exitCode"]
             )));
         }
+
         Ok(())
     }
 }
@@ -778,6 +839,7 @@ async fn launch(client: &Client, ownership: &Ownership, program: &Path) -> Resul
         "nohup \"$1\" \"$d\" >\"$d/fixture.log\" 2>&1 </dev/null & ",
         "echo \"$! $d\"",
     );
+
     let reply = client
         .run_owned(
             ownership,
@@ -790,12 +852,14 @@ async fn launch(client: &Client, ownership: &Ownership, program: &Path) -> Resul
             ],
         )
         .await?;
+
     let (pid, directory) = run_output(&reply, 4096)
         .ok()
         .and_then(|bytes| String::from_utf8(bytes).ok())
         .as_deref()
         .and_then(launched)
         .ok_or_else(|| problem("The helper could not launch the canary fixture"))?;
+
     Ok(Fixture {
         pid,
         program: program.to_owned(),
@@ -816,6 +880,7 @@ pub async fn verify(client: &Client, fixture: &Path) -> Result<Value> {
             ),
         ));
     }
+
     let uid = client.config.helper_uid;
     let ownership = client.controller.acquire(false)?;
     let status = client.status().await;
@@ -829,6 +894,7 @@ pub async fn verify(client: &Client, fixture: &Path) -> Result<Value> {
                 "verify-native needs a hidden helper with ready input; see atlas doctor",
             )
         })?;
+
     let boot = boot_time().ok_or_else(|| problem("The boot time is unavailable"))?;
     let generation = Generation::of(&epoch, boot);
     let mut canary = Canary {
@@ -839,15 +905,18 @@ pub async fn verify(client: &Client, fixture: &Path) -> Result<Value> {
         stage: RefCell::new("fixture launched".into()),
         evidence: Vec::new(),
     };
+
     let checks = match canary.ready().await {
         Err(error) => vec![canary.check("launch", Err(error))],
         // Save and Open are independent observations.
         Ok(()) => vec![canary.attempt("save").await, canary.attempt("open").await],
     };
+
     canary.capture("after").await;
     let archived = canary.archive();
     let cleanup = canary.cleanup(archived.is_ok()).await;
-    let after = generation_of(client, uid, boot).await;
+
+    let after = generation_at(&client.status().await, uid, boot);
     let unchanged = after.as_ref() == Some(&generation);
     let passed = unchanged && checks.len() == 2 && checks.iter().all(|check| check.passed);
     let record = Record {
@@ -858,6 +927,7 @@ pub async fn verify(client: &Client, fixture: &Path) -> Result<Value> {
         evidence: canary.evidence.clone(),
     };
     write_record(uid, &record)?;
+
     let mut report = json!({
         "ok": record.passed,
         "passed": record.passed,
@@ -865,24 +935,21 @@ pub async fn verify(client: &Client, fixture: &Path) -> Result<Value> {
         "evidence": record.evidence,
         "record": record_path(uid)?,
     });
+
     if !unchanged {
         report["warning"] = json!("The helper session changed during the canary");
     }
+
     if let Err(error) = archived {
         report["archiveError"] = json!(error.error);
         report["fixtureDirectory"] = json!(canary.fixture.directory);
     }
+
     if let Err(error) = cleanup {
         report["cleanupError"] = json!(error.error);
     }
-    Ok(report)
-}
 
-async fn generation_of(client: &Client, uid: u32, boot: u64) -> Option<Generation> {
-    let session = require_hidden(&client.status().await, uid)
-        .ok()
-        .filter(|s| s.input)?;
-    Some(Generation::of(&session.epoch, boot))
+    Ok(report)
 }
 
 fn write_record(uid: u32, record: &Record) -> Result<()> {
@@ -890,6 +957,7 @@ fn write_record(uid: u32, record: &Record) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
+
     write_private(&path, &serde_json::to_vec_pretty(record)?)
 }
 
@@ -937,15 +1005,19 @@ mod tests {
         let state = |record: Option<&Record>, current: Option<&Generation>, at| {
             assess(record, current, at)["state"].clone()
         };
+
         assert_eq!(state(None, Some(&current), 100), "unknown");
+
         let passed = record(true, true, 100);
         assert_eq!(state(Some(&passed), Some(&current), 160), "passed");
         let failed = record(true, false, 100);
         assert_eq!(state(Some(&failed), Some(&current), 160), "failed");
         assert_eq!(state(Some(&passed), Some(&current), 100 + 31 * 60), "stale");
+
         let mut resized = generation();
         resized.display.width = 1920.0;
         assert_eq!(state(Some(&passed), Some(&resized), 160), "stale");
+
         let mut restarted = generation();
         restarted.input_pid = 9;
         assert_eq!(state(Some(&passed), Some(&restarted), 160), "stale");
@@ -956,18 +1028,23 @@ mod tests {
     fn inconsistent_or_future_records_are_not_trusted() {
         let current = generation();
         let state = |record: &Record| assess(Some(record), Some(&current), 1000)["state"].clone();
+
         let mut save_only = record(true, true, 900);
         save_only.checks.pop();
         assert_eq!(state(&save_only), "unknown");
+
         let mut duplicated = record(true, true, 900);
         duplicated.checks[1] = check("save", true);
         assert_eq!(state(&duplicated), "unknown");
+
         let mut claimed = record(true, false, 900);
         claimed.passed = true;
         assert_eq!(state(&claimed), "unknown");
+
         let mut launch = record(false, false, 900);
         launch.checks = vec![check("launch", false)];
         assert_eq!(state(&launch), "unknown");
+
         assert_eq!(state(&record(true, true, 1000 + SKEW + 1)), "unknown");
         assert_eq!(state(&record(true, true, 1000 + SKEW)), "passed");
     }
@@ -978,6 +1055,7 @@ mod tests {
             launched("123 /private/tmp/atlas-canary.Ab12Cd\n"),
             Some((123, "/private/tmp/atlas-canary.Ab12Cd".into()))
         );
+
         for output in [
             "123 /private/tmp/atlas-canary.",
             "123 /private/tmp/other.Ab12Cd",
@@ -1008,6 +1086,7 @@ mod tests {
             {"role": "AXButton", "title": "Cancel", "enabled": false},
             {"role": "AXSheet"},
         ]});
+
         assert_eq!(button(&observed, "Save").unwrap()["enabled"], true);
         assert!(button(&observed, "Cancel").is_none());
         assert!(button(&observed, "Open").is_none());
@@ -1021,12 +1100,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("state.json");
         fs::write(&path, b"{\"ok\":true}").unwrap();
+
         assert_eq!(read_bounded(&path, 11).unwrap(), b"{\"ok\":true}");
         assert!(read_bounded(&path, 10).is_err());
+
         let link = dir.path().join("link");
         std::os::unix::fs::symlink(&path, &link).unwrap();
         assert!(read_bounded(&link, 1024).is_err());
         assert!(read_bounded(dir.path(), 1024).is_err());
+
         assert_eq!(fixture_text(&path).as_deref(), Some("{\"ok\":true}"));
         assert_eq!(fixture_text(&dir.path().join("missing")), None);
     }

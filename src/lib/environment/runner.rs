@@ -24,6 +24,7 @@ pub(super) fn validate_argv(argv: &[String]) -> Result<()> {
             "Select a command with at most 128 bounded, NUL-free arguments",
         ));
     }
+
     Ok(())
 }
 
@@ -37,10 +38,12 @@ fn load(home: &Path) -> Result<BTreeMap<String, String>> {
         )
     })?;
     validate_private(&file, false)?;
+
     let environment: Environment = decode(&read_file(file, 65536)?)?;
     if environment.version != 1 || environment.variables.len() > 64 {
         return Err(problem("Unsupported helper environment profile"));
     }
+
     for (name, value) in &environment.variables {
         if !selectable_variable(name) || value.contains('\0') {
             return Err(problem(
@@ -48,6 +51,7 @@ fn load(home: &Path) -> Result<BTreeMap<String, String>> {
             ));
         }
     }
+
     Ok(environment.variables)
 }
 
@@ -60,6 +64,7 @@ pub(super) fn execute(
     let variables = load(home)?;
     let path = std::env::join_paths(helper_search_path(home))
         .map_err(|_| problem("Invalid helper command path"))?;
+
     let mut command = Command::new(&argv[0]);
     command
         .args(&argv[1..])
@@ -67,10 +72,12 @@ pub(super) fn execute(
         .env("HOME", home)
         .env("PATH", path)
         .current_dir(home);
+
     guard()?;
     // exec replaces this worker: there is no detached child to outlive the
     // existing helper transport's timeout, signals, stdout or stderr handling.
     let error = command.exec();
+
     Err(problem(format!(
         "Could not execute the helper command: {}",
         error.kind()
@@ -95,10 +102,13 @@ mod tests {
             0o600,
         )
         .unwrap();
+
         assert_eq!(load(&home).unwrap()["SELECTED"], literal);
         assert!(!home.join("should-not-run").exists());
+
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
         assert!(load(&home).is_err());
+
         for name in [
             "HOME", "USER", "LOGNAME", "SHELL", "PATH", "UID", "EUID", "TMPDIR", "1BAD", "BAD-NAME",
         ] {
@@ -111,6 +121,7 @@ mod tests {
             let error = load(&home).unwrap_err();
             assert!(!error.error.contains("secret"));
         }
+
         assert!(validate_argv(&[]).is_err());
         assert!(validate_argv(&["tool\0name".into()]).is_err());
     }
@@ -125,6 +136,7 @@ mod tests {
             0o600,
         )
         .unwrap();
+
         let error = execute(&home, &["/usr/bin/true".into()], &|| {
             Err(problem("session changed"))
         })

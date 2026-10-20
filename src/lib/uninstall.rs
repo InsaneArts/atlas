@@ -32,18 +32,21 @@ fn remove_link_to(path: &Path, executable: &Path) -> Result<bool> {
     if ours {
         fs::remove_file(path)?;
     }
+
     Ok(ours)
 }
 
 /// Remove `path` only if it is a regular file this account owns.
 fn remove_own_file(path: &Path) -> Result<bool> {
     use std::os::unix::fs::MetadataExt;
+
     let ours = fs::symlink_metadata(path).is_ok_and(|metadata| {
         metadata.is_file() && metadata.uid() == nix::unistd::getuid().as_raw()
     });
     if ours {
         fs::remove_file(path)?;
     }
+
     Ok(ours)
 }
 
@@ -55,23 +58,28 @@ fn retire_helper_job(executable: &Path, config: &Config) -> Result<Option<Value>
     let Some(helper) = setup::account_with_uid(config.helper_uid)? else {
         return Ok(None);
     };
+
     let ask = |request: &Request| -> Result<Value> {
         let (_, reply) = setup::request_as_helper(executable, &helper, request, false)?;
         if reply.is_null() {
             return Err(problem("The helper job could not be stopped"));
         }
+
         if reply["ok"] != true {
             return Err(problem(format!(
                 "The helper job could not be stopped: {}",
                 reply["error"].as_str().unwrap_or("unknown")
             )));
         }
+
         Ok(reply)
     };
+
     let inspected = ask(&Request::Inspect {
         uid: helper.uid,
         labels: vec![LABEL.to_owned()],
     })?;
+
     // The definition there now, else (none there) the one this Atlas
     // would write, whose backup a retired job leaves.
     let sha256 = match inspected["jobs"][LABEL]["plistSha256"].as_str() {
@@ -81,6 +89,7 @@ fn retire_helper_job(executable: &Path, config: &Config) -> Result<Option<Value>
                 uid: helper.uid,
                 home: helper.home.clone(),
             };
+
             let agent = Agent {
                 label: LABEL.to_owned(),
                 program: executable.to_owned(),
@@ -88,9 +97,11 @@ fn retire_helper_job(executable: &Path, config: &Config) -> Result<Option<Value>
                 controller_uid: nix::unistd::getuid().as_raw(),
                 socket: layout.socket(),
             };
+
             text_sha256(&plist(&agent, &layout.logs()))
         }
     };
+
     ask(&Request::Retire {
         uid: helper.uid,
         label: LABEL.to_owned(),
@@ -103,9 +114,11 @@ fn retire_helper_job(executable: &Path, config: &Config) -> Result<Option<Value>
 /// Undo install and init. `keep_config` keeps settings and logs.
 pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Value> {
     let found = survey(config_path)?;
+
     if !yes {
         confirm(&found, config_path, keep_config)?;
     }
+
     let Found {
         app,
         executable,
@@ -117,17 +130,21 @@ pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Val
     } = found;
     let mut removed = Vec::new();
     let mut warnings = Vec::new();
+
     if let Some(error) = &unloaded {
         skipped("Helper job", "left in place: the settings do not load");
         warnings.push(format!("Helper job left in place: {error}"));
     }
+
     if let Some(client) = &client {
         stop_helper(client, &executable, &mut removed, &mut warnings).await?;
     }
+
     stop_menubar(client.as_ref());
     disconnect(&executable, &mut removed)?;
     trash(&app, &leftovers, &mut removed)?;
     remove_settings(config_path, keep_config, &data, &mut removed)?;
+
     let mut report = json!({
         "ok": true,
         "removed": removed,
@@ -136,12 +153,15 @@ pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Val
             "remove": helper.as_ref().map(|name| format!("sudo sysadminctl -deleteUser {name}")),
         },
     });
+
     if unloaded.is_some() {
         report["kept"]["helperJob"] = json!(true);
     }
+
     if !warnings.is_empty() {
         report["warnings"] = json!(warnings);
     }
+
     Ok(report)
 }
 
@@ -163,12 +183,14 @@ struct Found {
 fn survey(config_path: &Path) -> Result<Found> {
     let app = crate::update::installed_app()?;
     let executable = crate::update::installed_executable()?;
+
     // Settings that exist but do not load name no helper, so its job stays.
     let (client, unloaded) = match Config::load(config_path) {
         Ok(config) => (Some(Client::new(config)?), None),
         Err(error) if error.code == "config-invalid" => (None, Some(error.error)),
         Err(_) => (None, None),
     };
+
     let config = client.as_ref().map(|client| &client.config);
     let helper = config
         .and_then(|config| setup::account_with_uid(config.helper_uid).ok().flatten())
@@ -177,6 +199,7 @@ fn survey(config_path: &Path) -> Result<Found> {
     let leftovers = config
         .map(|config| handed_over(&config.identity_probe))
         .unwrap_or_default();
+
     Ok(Found {
         app,
         executable,
@@ -198,6 +221,7 @@ fn confirm(found: &Found, config_path: &Path, keep_config: bool) -> Result<()> {
         leftovers,
         ..
     } = found;
+
     let mut parts = vec![
         if unloaded.is_some() {
             "the menu bar and the agent plugins".to_owned()
@@ -206,9 +230,11 @@ fn confirm(found: &Found, config_path: &Path, keep_config: bool) -> Result<()> {
         },
         format!("{} (to the Trash)", text::tilde(app)),
     ];
+
     if !leftovers.is_empty() {
         parts.push("apps and files Atlas copied for the helper to open".to_owned());
     }
+
     if !keep_config {
         parts.push(format!(
             "settings in {} and logs in {}",
@@ -216,24 +242,29 @@ fn confirm(found: &Found, config_path: &Path, keep_config: bool) -> Result<()> {
             text::tilde(data)
         ));
     }
+
     say("This removes from this Mac:");
     for part in parts {
         say(&format!("  · {part}"));
     }
+
     if let Some(name) = helper {
         say(&format!(
             "The helper account {name} and its files stay, including any copied into it with atlas environment."
         ));
     }
+
     if unloaded.is_some() {
         say(&format!(
             "The settings in {} do not load, so the helper's background job stays.",
             text::tilde(config_path)
         ));
     }
+
     if !prompt::confirm("Remove Atlas?", false, "pass --yes")? {
         return Err(prompt::cancelled());
     }
+
     Ok(())
 }
 
@@ -247,12 +278,14 @@ async fn stop_helper(
 ) -> Result<()> {
     let config = &client.config;
     let _exclusion = client.controller.acquire(false)?;
+
     if let Some(pid) = client.status().await["inputService"]["pid"]
         .as_u64()
         .and_then(|pid| u32::try_from(pid).ok())
     {
         let _ = client.stop_input(pid).await;
     }
+
     say("Stopping the helper's background job (macOS may ask for your password)…");
     if retire_helper_job(executable, config)?.is_some() {
         removed.push(json!("helper job"));
@@ -264,9 +297,11 @@ async fn stop_helper(
             config.helper_uid
         ));
     }
+
     if remove_link_to(&config.identity_probe, executable)? {
         removed.push(json!(config.identity_probe));
     }
+
     Ok(())
 }
 
@@ -291,10 +326,12 @@ fn disconnect(executable: &Path, removed: &mut Vec<Value>) -> Result<()> {
         removed.push(json!("agent plugins"));
         done("Agent plugins", "removed");
     }
+
     let command = config::home()?.join(".local/bin/atlas");
     if remove_link_to(&command, executable)? {
         removed.push(json!(command));
     }
+
     Ok(())
 }
 
@@ -310,8 +347,10 @@ fn trash(app: &Path, leftovers: &[PathBuf], removed: &mut Vec<Value>) -> Result<
             app.display()
         ))
     })?;
+
     removed.push(json!(app));
     done("Atlas.app", "moved to the Trash");
+
     let mut cleared = false;
     for leftover in leftovers {
         if fs::remove_dir_all(leftover).is_ok() {
@@ -319,14 +358,17 @@ fn trash(app: &Path, leftovers: &[PathBuf], removed: &mut Vec<Value>) -> Result<
             cleared = true;
         }
     }
+
     if cleared {
         done("Copies for the helper", "removed");
     }
+
     // The request naming the helper, when this account made it.
     let request = Path::new(crate::onboarding::REQUEST);
     if remove_own_file(request).unwrap_or(false) {
         removed.push(json!(request));
     }
+
     Ok(())
 }
 
@@ -347,11 +389,13 @@ fn remove_settings(
         removed.push(json!(config_path));
         done("Settings", "removed");
     }
+
     if !keep_config && data.exists() {
         fs::remove_dir_all(data)?;
         removed.push(json!(data));
         done("Logs and records", "removed");
     }
+
     Ok(())
 }
 
@@ -360,9 +404,11 @@ fn remove_settings(
 /// provably Atlas's own are listed.
 fn handed_over(shared_command: &Path) -> Vec<PathBuf> {
     let mut leftovers: Vec<PathBuf> = crate::handoff::root_if_owned().into_iter().collect();
+
     if let Some(shared) = shared_command.parent() {
         leftovers.extend(crate::environment::leftovers(shared));
     }
+
     leftovers
 }
 
@@ -377,14 +423,17 @@ mod tests {
         let executable = root.join("Atlas.app/Contents/MacOS/atlas");
         fs::create_dir_all(executable.parent().unwrap()).unwrap();
         fs::write(&executable, b"").unwrap();
+
         let ours = root.join("ours");
         std::os::unix::fs::symlink(&executable, &ours).unwrap();
         assert!(remove_link_to(&ours, &executable).unwrap());
         assert!(!ours.exists());
+
         let theirs = root.join("theirs");
         fs::write(&theirs, b"someone's file").unwrap();
         assert!(!remove_link_to(&theirs, &executable).unwrap());
         assert!(theirs.exists(), "a regular file is left alone");
+
         let elsewhere = root.join("elsewhere");
         std::os::unix::fs::symlink(&theirs, &elsewhere).unwrap();
         assert!(!remove_link_to(&elsewhere, &executable).unwrap());
@@ -399,11 +448,13 @@ mod tests {
         assert!(remove_own_file(&file).unwrap());
         assert!(!file.exists());
         assert!(!remove_own_file(&file).unwrap(), "nothing there");
+
         let target = dir.path().join("target.json");
         fs::write(&target, b"{}").unwrap();
         std::os::unix::fs::symlink(&target, &file).unwrap();
         assert!(!remove_own_file(&file).unwrap(), "a link is left alone");
         assert!(target.exists());
+
         assert!(!remove_own_file(dir.path()).unwrap(), "only a file");
         // A file another account owns (here root's) stays.
         assert!(!remove_own_file(Path::new("/etc/hosts")).unwrap());

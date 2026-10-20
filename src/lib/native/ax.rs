@@ -29,8 +29,10 @@ unsafe extern "C-unwind" {
 
 /// Longest text reported for any one attribute, in UTF-16 units.
 const TEXT_LIMIT: CFIndex = 200;
+
 /// Most menu bar titles read for an app.
 const MENU_BAR_ITEMS: usize = 64;
+
 /// AX errors meaning the element could not be read at all: the request could
 /// not complete (timeout or unresponsive app), the element vanished, or the
 /// API is disabled. Any of these makes the whole scan incomplete.
@@ -39,6 +41,7 @@ const INCOMPLETE: [AXError; 3] = [
     AXError::InvalidUIElement,
     AXError::APIDisabled,
 ];
+
 /// AX errors meaning the element simply lacks the attribute: no value,
 /// unsupported, not implemented.
 const ABSENT: [AXError; 3] = [
@@ -46,11 +49,13 @@ const ABSENT: [AXError; 3] = [
     AXError::AttributeUnsupported,
     AXError::NotImplemented,
 ];
+
 /// Text attributes an app's own getter may fail for (an AppKit text view
 /// answers Failure for its description every time); the text is then as
 /// good as absent. A tree read that fails so still leaves the scan
 /// incomplete.
 const TEXT_SELECTORS: [&str; 4] = ["AXTitle", "AXDescription", "AXValue", "AXIdentifier"];
+
 /// Attributes a selector matches on; an element whose selector attribute
 /// fails to read (other than being absent) may be an unseen match.
 const SELECTORS: [&str; 5] = [
@@ -74,12 +79,14 @@ fn bounded_string(value: &CFString) -> Option<(String, bool)> {
     } else {
         full
     };
+
     let range = CFRange {
         location: 0,
         length,
     };
     // SAFETY: a live string, the default allocator and a range within it.
     let part = unsafe { CFString::with_substring(None, Some(value), range) }?;
+
     Some((part.to_string(), truncated))
 }
 
@@ -106,6 +113,17 @@ struct Scan {
 }
 
 impl Scan {
+    fn new(deadline: Instant) -> Self {
+        Self {
+            deadline,
+            incomplete: false,
+            unreadable: Vec::new(),
+            truncated: Vec::new(),
+            errors: Default::default(),
+            last_error: None,
+        }
+    }
+
     /// Whether another AX request may start; past the deadline the scan is
     /// incomplete and nothing more is asked.
     fn open(&mut self) -> bool {
@@ -118,7 +136,9 @@ impl Scan {
         self.last_error = Some(status);
         let key = format!("{attribute}:{}", status.0);
         *self.errors.entry(key).or_default() += 1;
+
         let getter_failed = status == AXError::Failure && TEXT_SELECTORS.contains(&attribute);
+
         if INCOMPLETE.contains(&status) {
             self.incomplete = true;
         } else if !ABSENT.contains(&status) && !getter_failed && SELECTORS.contains(&attribute) {
@@ -135,6 +155,7 @@ impl Scan {
         if !self.open() {
             return None;
         }
+
         let name = CFString::from_static_str(attribute);
         let mut value: *const CFType = std::ptr::null();
         // SAFETY: a valid output slot; on success the Copy hands over one
@@ -144,6 +165,7 @@ impl Scan {
             // SAFETY: a successful Copy wrote an owned reference (or null).
             return unsafe { adopt(value) };
         }
+
         self.failed(status, attribute);
         None
     }
@@ -160,6 +182,7 @@ impl Scan {
         if truncated {
             self.truncated.push(name.to_owned());
         }
+
         Some(text)
     }
 
@@ -191,11 +214,13 @@ impl Scan {
             size.downcast_ref::<AXValue>()?,
         );
         let (mut point, mut extent) = (CGPoint::ZERO, CGSize::ZERO);
+
         // SAFETY: each AXValue is read into the struct its type names.
         let read = unsafe {
             position.value(AXValueType::CGPoint, NonNull::from(&mut point).cast())
                 && size.value(AXValueType::CGSize, NonNull::from(&mut extent).cast())
         };
+
         read.then_some(Frame {
             x: point.x,
             y: point.y,
@@ -217,6 +242,7 @@ impl Scan {
         if !self.open() {
             return Vec::new();
         }
+
         let name = CFString::from_static_str(attribute);
         let mut count: CFIndex = 0;
         // SAFETY: a valid output slot for the count.
@@ -226,20 +252,25 @@ impl Scan {
             if !ABSENT.contains(&status) {
                 self.incomplete = true;
             }
+
             return Vec::new();
         }
+
         if count <= 0 {
             return Vec::new();
         }
+
         let wanted = count.min(CFIndex::try_from(maximum).unwrap_or(CFIndex::MAX));
         if wanted < count {
             self.incomplete = true;
         }
+
         let mut array: *const CFArray = std::ptr::null();
         // SAFETY: a valid output slot; on success the Copy hands over one
         // owned array, adopted below.
         let status =
             unsafe { element.copy_attribute_values(&name, 0, wanted, NonNull::from(&mut array)) };
+
         // SAFETY: a successful Copy wrote an owned array (or null).
         let Some(array) = (status == AXError::Success)
             .then(|| unsafe { adopt(array) })
@@ -249,9 +280,11 @@ impl Scan {
             self.incomplete = true;
             return Vec::new();
         };
+
         // SAFETY: every element of a CFArray is a CF object; each is checked
         // to be an AXUIElement before use.
         let values = unsafe { CFRetained::cast_unchecked::<CFArray<CFType>>(array) };
+
         values
             .iter()
             .filter_map(|value| value.downcast::<AXUIElement>().ok())
@@ -270,35 +303,43 @@ impl Scan {
     fn drawn_at(&mut self, app: &AXUIElement, bounds: &Frame, read: &[Frame]) -> Option<Drawn> {
         let points = [0.5, 0.25, 0.75];
         let mut hits = Vec::new();
+
         // A point can fall on a separator; a menu has items around it.
         for fraction in points {
             if !self.open() {
                 return None;
             }
+
             let (x, y) = (
                 bounds.x + bounds.width / 2.0,
                 bounds.y + bounds.height * fraction,
             );
             let mut hit: *const AXUIElement = std::ptr::null();
+
             // SAFETY: a valid output slot; on success the Copy hands over one
             // owned element, adopted below.
             let status = unsafe {
                 app.copy_element_at_position(x as f32, y as f32, NonNull::from(&mut hit))
             };
+
             if status != AXError::Success {
                 self.failed(status, "AXElementAtPosition");
                 continue;
             }
+
             // SAFETY: a successful Copy wrote an owned reference (or null).
             let Some(leaf) = (unsafe { adopt(hit) }) else {
                 continue;
             };
+
             let mut element = Some(leaf.clone());
+
             // An item sits a few levels below its menu or window.
             for _ in 0..12 {
                 let Some(current) = element else {
                     break;
                 };
+
                 let frame = self.frame(&current);
                 let menu = self.text(&current, "AXRole").as_deref() == Some("AXMenu");
                 let parent = self
@@ -319,6 +360,7 @@ impl Scan {
                 }
             }
         }
+
         (hits.len() == points.len()).then_some(Drawn::Through(hits))
     }
 }
@@ -351,9 +393,11 @@ fn judge(menu: bool, frame: Option<&Frame>, top: bool, bounds: &Frame, read: &[F
     if frame.is_some_and(|frame| frame.matches(bounds)) {
         return Step::Found { menu };
     }
+
     if !top {
         return Step::Up;
     }
+
     if frame.is_some_and(|frame| read.iter().any(|other| other.matches(frame))) {
         Step::Through
     } else {
@@ -487,15 +531,10 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
         AXUIElementCreateApplication(pid).map(|app| CFRetained::from_raw(app))
     }
     .ok_or_else(|| Error::new("elements", "No accessibility element for that process"))?;
-    let mut scan = Scan {
-        deadline: Instant::now() + limits.time,
-        incomplete: false,
-        unreadable: Vec::new(),
-        truncated: Vec::new(),
-        errors: Default::default(),
-        last_error: None,
-    };
+
+    let mut scan = Scan::new(Instant::now() + limits.time);
     let windows = scan.children(&app, "AXWindows", limits.count);
+
     // An app that answers nothing at all, not even its role, is unreachable
     // (no Accessibility trust, or not a GUI process); report it, not "empty".
     if windows.is_empty() && scan.text(&app, "AXRole").is_none() {
@@ -504,6 +543,7 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
             "The app's accessibility tree is unavailable; check Accessibility for the helper",
         ));
     }
+
     let mut roots: Vec<(CFRetained<AXUIElement>, Option<Frame>, bool)> = windows
         .into_iter()
         .map(|window| {
@@ -514,6 +554,7 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
     // Elements hit through a click-through window, which the scan below
     // must reach; any it does not might hold an unseen match.
     let mut unvisited: Vec<CFRetained<AXUIElement>> = Vec::new();
+
     // The menu bar shows the active app's titles, which are on screen and
     // take clicks; the closed menus under them are left out below. A bar,
     // or the flag that says whether it is this app's, that fails to read
@@ -557,6 +598,7 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
                     width: menu.bounds.width,
                     height: menu.bounds.height,
                 };
+
                 // A window the app lists among its windows is read already.
                 if roots
                     .iter()
@@ -564,6 +606,7 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
                 {
                     continue;
                 }
+
                 let read: Vec<Frame> = roots
                     .iter()
                     .filter_map(|(_, frame, _)| frame.clone())
@@ -578,6 +621,7 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
         }
         Err(_) => scan.incomplete = true,
     }
+
     let open_menus: Vec<Frame> = roots
         .iter()
         .filter(|(.., menu)| *menu)
@@ -594,13 +638,16 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
             scan.incomplete = true;
             break;
         }
+
         let item = &*element;
         unvisited.retain(|hit| **hit != *item);
         scan.unreadable.clear();
         scan.truncated.clear();
+
         let role = scan.text(item, "AXRole");
         scan.last_error = None;
         let frame = scan.frame(item);
+
         if depth > 0 && role.as_deref() == Some("AXMenu") {
             // A frame that failed to read (rather than being absent) leaves
             // an open menu possible: it might hold an unseen match.
@@ -608,10 +655,12 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
                 scan.incomplete = true;
                 continue;
             }
+
             if skip_nested_menu(frame.as_ref(), &open_menus) {
                 continue;
             }
         }
+
         let window = sheet_window(role.as_deref(), frame.as_ref(), window);
         let mut element = Element {
             index: found.len(),
@@ -636,30 +685,37 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
                 .text(item, "AXMenuItemMarkChar")
                 .filter(|mark| !mark.is_empty());
         }
+
         element.unreadable = std::mem::take(&mut scan.unreadable);
         element.truncated = std::mem::take(&mut scan.truncated);
         let bar_title = element.role.as_deref() == Some("AXMenuBarItem");
         found.push(element);
+
         // The menu under a menu bar title is closed, or read as a window of
         // its own above: nothing in it is on screen here.
         if bar_title {
             continue;
         }
+
         if depth + 1 >= limits.depth {
             scan.incomplete |= !scan.children(item, "AXChildren", 1).is_empty();
             continue;
         }
+
         let budget = limits.count.saturating_sub(found.len() + stack.len());
         let children = scan.children(item, "AXChildren", budget);
         for child in children.into_iter().rev() {
             stack.push((child, depth + 1, window.clone(), menu));
         }
     }
+
     if !unvisited.is_empty() {
         scan.incomplete = true;
     }
+
     // A request that started before the deadline may have ended after it.
     scan.open();
+
     Ok(Snapshot {
         elements: found,
         incomplete: scan.incomplete,
@@ -687,6 +743,7 @@ mod tests {
             width: 400.0,
             height: 300.0,
         };
+
         assert_eq!(
             sheet_window(Some("AXSheet"), Some(&sheet), Some(window.clone())),
             Some(sheet.clone())
@@ -724,6 +781,7 @@ mod tests {
         let window = frame(300.0, 600.0);
         let read = [window.clone()];
         let step = |is_menu, at: Option<&Frame>, top| judge(is_menu, at, top, &menu, &read);
+
         assert_eq!(step(true, Some(&menu), false), Step::Found { menu: true });
         assert_eq!(
             step(false, Some(&menu), false),
@@ -754,6 +812,7 @@ mod tests {
             height: 100.0,
         };
         let open = [frame(10.0, 200.0)];
+
         assert!(skip_nested_menu(None, &open), "no frame: closed");
         assert!(
             skip_nested_menu(Some(&frame(0.0, 0.0)), &open),
@@ -781,6 +840,7 @@ mod tests {
         near.x += 0.5;
         near.height -= 1.0;
         assert!(frame.matches(&near));
+
         near.width += 2.0;
         assert!(!frame.matches(&near));
     }
@@ -802,20 +862,15 @@ mod tests {
     /// Past the deadline nothing more is asked and the scan is incomplete.
     #[test]
     fn a_scan_closes_at_its_deadline() {
-        let mut scan = Scan {
-            deadline: Instant::now() + std::time::Duration::from_secs(60),
-            incomplete: false,
-            unreadable: Vec::new(),
-            truncated: Vec::new(),
-            errors: Default::default(),
-            last_error: None,
-        };
+        let mut scan = Scan::new(Instant::now() + Duration::from_secs(60));
         assert!(scan.open() && !scan.incomplete);
+
         scan.incomplete = true;
         assert!(
             scan.open(),
             "an incomplete scan may still ask until its deadline"
         );
+
         scan.deadline = Instant::now();
         scan.incomplete = false;
         assert!(!scan.open() && scan.incomplete);
@@ -831,6 +886,7 @@ mod tests {
         let (text, truncated) = bound(&"x".repeat(5000));
         assert_eq!((text.len(), truncated), (TEXT_LIMIT as usize, true));
         assert_eq!(bound("short"), ("short".into(), false));
+
         let exact = "y".repeat(TEXT_LIMIT as usize);
         assert_eq!(
             bound(&exact),
@@ -846,6 +902,7 @@ mod tests {
         let (text, truncated) = bound(&format!("{}{family}tail", "a".repeat(199)));
         assert!(truncated);
         assert_eq!(text, "a".repeat(199), "the whole emoji sequence is dropped");
+
         // A combining mark at unit 200 stays with its base letter.
         let (text, _) = bound(&format!("{}e\u{301}tail", "a".repeat(199)));
         assert_eq!(text, "a".repeat(199));

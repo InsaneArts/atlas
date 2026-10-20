@@ -55,6 +55,7 @@ fn read_window(entry: &cf::Record) -> Option<Window> {
     // The bounds dictionary holds X, Y, Width and Height as numbers.
     let bounds = cf::nested(entry, "kCGWindowBounds")?;
     let side = |key| cf::float(&bounds, key);
+
     Some(Window {
         number: cf::integer(entry, "kCGWindowNumber")?,
         pid: cf::integer(entry, "kCGWindowOwnerPID")?,
@@ -87,6 +88,7 @@ pub fn windows() -> Result<Vec<Window>> {
         CGWindowListOption::OptionOnScreenOnly | CGWindowListOption::ExcludeDesktopElements;
     let list = cf::windows(options)
         .ok_or_else(|| Error::new("windows", "The window list is unavailable"))?;
+
     Ok(list.iter().filter_map(|entry| read_window(entry)).collect())
 }
 
@@ -99,6 +101,7 @@ pub fn unobstructed(windows: &[Window], target: i64, x: f64, y: f64, display: &B
     let Some(index) = windows.iter().position(|window| window.number == target) else {
         return false;
     };
+
     let window = &windows[index];
     window.bounds.contains(x, y)
         && !windows[..index].iter().any(|other| {
@@ -118,6 +121,7 @@ pub fn visible_point(windows: &[Window], target: i64, display: &Bounds) -> Optio
         .bounds;
     let steps = 24;
     let mut candidates = Vec::new();
+
     for row in 1..steps {
         for column in 1..steps {
             let x = (bounds.x + bounds.width * f64::from(column) / f64::from(steps)).round();
@@ -127,6 +131,7 @@ pub fn visible_point(windows: &[Window], target: i64, display: &Bounds) -> Optio
             candidates.push((distance, x, y));
         }
     }
+
     candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
     candidates
         .into_iter()
@@ -154,6 +159,7 @@ mod tests {
             kCGWindowAlpha, kCGWindowBounds, kCGWindowLayer, kCGWindowName, kCGWindowNumber,
             kCGWindowOwnerName, kCGWindowOwnerPID,
         };
+
         // SAFETY: reading immutable framework constants in a test.
         let constants = unsafe {
             [
@@ -166,6 +172,7 @@ mod tests {
                 kCGWindowBounds,
             ]
         };
+
         let names = [
             "kCGWindowNumber",
             "kCGWindowOwnerPID",
@@ -175,6 +182,7 @@ mod tests {
             "kCGWindowAlpha",
             "kCGWindowBounds",
         ];
+
         for (constant, name) in constants.into_iter().zip(names) {
             assert_eq!(constant.to_string(), name);
         }
@@ -208,10 +216,13 @@ mod tests {
         let target = window(2, 0.0, 0.0, 100.0, 100.0);
         let point = |windows: &[Window]| visible_point(windows, 2, &display);
         assert_eq!(point(std::slice::from_ref(&target)), Some((50.0, 50.0)));
+
         let cover = window(1, 0.0, 0.0, 80.0, 100.0);
         assert!(point(&[cover, target.clone()]).unwrap().0 >= 80.0);
+
         let behind = window(3, 0.0, 0.0, 100.0, 100.0);
         assert_eq!(point(&[target.clone(), behind]), Some((50.0, 50.0)));
+
         let mut overlay = window(1, 0.0, 0.0, 1000.0, 800.0);
         overlay.layer = 20;
         overlay.owner = Some("Dock".into());
@@ -220,6 +231,7 @@ mod tests {
             Some((50.0, 50.0)),
             "full-display overlays pass clicks through"
         );
+
         let mut unknown = window(1, 0.0, 0.0, 1000.0, 800.0);
         unknown.layer = 20;
         unknown.owner = Some("Other".into());
@@ -228,6 +240,7 @@ mod tests {
             None,
             "unidentified overlays fail closed"
         );
+
         let mut floating = window(1, -10.0, -10.0, 200.0, 200.0);
         floating.layer = 3;
         assert_eq!(
@@ -235,16 +248,20 @@ mod tests {
             None,
             "a floating panel over the target still occludes"
         );
+
         let mut menu = window(1, 0.0, 0.0, 100.0, 60.0);
         menu.layer = 24;
         assert!(point(&[menu, target.clone()]).unwrap().1 >= 60.0);
+
         // The tested point is the clicked point: rounding cannot move it under
         // an occluder (unrounded centre 50.5 would round into the cover).
         let odd = window(2, 0.0, 0.0, 101.0, 100.0);
         let right = window(1, 51.0, 0.0, 50.0, 100.0);
         let (x, _) = point(&[right, odd]).unwrap();
         assert!(x < 51.0, "{x}");
+
         assert_eq!(point(&[]), None);
+
         let menu_bar = {
             let mut menu = window(9, 0.0, 0.0, 1000.0, 30.0);
             menu.layer = 24;
@@ -255,6 +272,7 @@ mod tests {
             window(2, 0.0, 0.0, 100.0, 100.0),
             window(3, 0.0, 0.0, 9.0, 9.0),
         ];
+
         assert!(
             !unobstructed(&windows, 2, 10.0, 10.0, &display),
             "under the menu bar"
@@ -276,6 +294,7 @@ mod tests {
     #[test]
     fn window_entries_read_through_typed_keys() {
         use crate::native::cf::{CFDictionary, CFNumber, CFString, CFType};
+
         let number = |value: f64| CFNumber::new_f64(value);
         let keys = ["X", "Y", "Width", "Height"].map(CFString::from_static_str);
         let sides = [number(1.0), number(2.0), number(30.0), number(40.0)];
@@ -283,6 +302,7 @@ mod tests {
             &keys.iter().map(|key| &**key).collect::<Vec<_>>(),
             &sides.iter().map(|side| &**side).collect::<Vec<_>>(),
         );
+
         let names = [
             "kCGWindowNumber",
             "kCGWindowOwnerPID",
@@ -291,6 +311,7 @@ mod tests {
             "kCGWindowBounds",
         ]
         .map(CFString::from_static_str);
+
         let (seven, pid, layer) = (
             CFNumber::new_i64(7),
             CFNumber::new_i64(99),
@@ -304,11 +325,13 @@ mod tests {
             owner.as_ref(),
             bounds.as_opaque().as_ref(),
         ];
+
         let entry = CFDictionary::<CFString, CFType>::from_slices(
             &names.iter().map(|name| &**name).collect::<Vec<_>>(),
             &values,
         );
         let read = read_window(&entry).unwrap();
+
         assert_eq!((read.number, read.pid, read.layer), (7, 99, 0));
         assert_eq!(read.owner.as_deref(), Some("Finder"));
         assert_eq!(read.title, None);

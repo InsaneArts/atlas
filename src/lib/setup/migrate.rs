@@ -105,13 +105,16 @@ pub fn archive_foreign(uid: u32, home: &Path) -> Result<bool> {
     let Some(log) = load_log(&path)? else {
         return Ok(false);
     };
+
     if log.plan.home == home {
         return Ok(false);
     }
+
     fs::rename(
         &path,
         path.with_extension(format!("{}.foreign.json", timestamp())),
     )?;
+
     Ok(true)
 }
 
@@ -165,6 +168,7 @@ fn helper_result(reply: &Value) -> Result<Value> {
             value["error"].as_str().unwrap_or("unknown error")
         )));
     }
+
     Ok(value)
 }
 
@@ -182,11 +186,13 @@ async fn input_presence(client: &Client) -> Result<Option<u32>> {
         }
         _ => {}
     }
+
     let hello = client
         .input_transport()
         .call(&json!({ "op": "hello" }))
         .await
         .map_err(|error| problem(format!("Input service state is unknown: {}", error.error)))?;
+
     hello["pid"]
         .as_u64()
         .and_then(|pid| u32::try_from(pid).ok())
@@ -201,6 +207,7 @@ async fn reachable(client: &Client) -> bool {
 
 async fn await_endpoint(client: &Client) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(15);
+
     while !reachable(client).await {
         if Instant::now() >= deadline {
             return Err(problem(format!(
@@ -210,6 +217,7 @@ async fn await_endpoint(client: &Client) -> Result<()> {
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
+
     Ok(())
 }
 
@@ -308,6 +316,7 @@ impl Migration {
             )
             .uncertain());
         }
+
         Ok(())
     }
 
@@ -327,6 +336,7 @@ impl Migration {
     async fn helper(&mut self, through: Endpoint, request: Request) -> Result<Value> {
         let argv = helper_argv(self.client(through), &request)?;
         let generation = self.begin()?;
+
         let outcome = match self
             .client(through)
             .run_pending(argv, Duration::from_secs(20))
@@ -343,9 +353,11 @@ impl Migration {
             }
             Err(error) => Err(error),
         };
+
         let value = outcome.map_err(Error::uncertain)?;
         self.settle(&generation)?;
         self.note(&format!("{request:?}"))?;
+
         Ok(value)
     }
 
@@ -356,6 +368,7 @@ impl Migration {
                 return Ok(endpoint);
             }
         }
+
         Err(problem(
             "The helper is not running in the background. Log in to the helper account \
              once, switch back, then run atlas init again.",
@@ -365,6 +378,7 @@ impl Migration {
     /// The managed endpoint is private, captures, and runs the planned binary.
     async fn verify_new(&self) -> Result<()> {
         await_endpoint(&self.new).await?;
+
         let status = self.new.status().await;
         if status["permissions"]["screenCapture"] != true {
             return Err(problem(
@@ -373,13 +387,16 @@ impl Migration {
                  setup again",
             ));
         }
+
         self.new.frame(Some(256)).await?;
+
         let pid = status["daemon"]["pid"]
             .as_u64()
             .and_then(|pid| u32::try_from(pid).ok())
             .ok_or_else(|| {
                 problem("The helper did not say which process it is. Run atlas restart.")
             })?;
+
         // The file it runs must be the planned build, and its loaded code
         // must be valid, Atlas's, and still that file.
         let installed = executable_of(pid)
@@ -391,18 +408,21 @@ impl Migration {
                  atlas restart.",
             ));
         }
+
         if !running_developer_id(pid) {
             return Err(problem(
                 "The helper still runs an older build. Run atlas restart, then \
                  atlas setup --apply.",
             ));
         }
+
         let controller = nix::unistd::getuid().as_raw();
         if endpoint(&self.new.config.socket_path, self.log.plan.uid, controller).private
             != Some(true)
         {
             return Err(problem("The managed socket directory is not private"));
         }
+
         Ok(())
     }
 
@@ -428,25 +448,30 @@ impl Migration {
         if shared && ready {
             return Ok(());
         }
+
         let source = if shared {
             None
         } else {
             input_presence(self.client(from)).await?
         };
+
         if source.is_none() && ready {
             return Ok(());
         }
+
         let generation = self.begin()?;
         let (previous, target) = (self.client(from), self.client(to));
         let outcome = async {
             if let Some(pid) = source {
                 previous.stop_input(pid).await?;
             }
+
             if !ready {
                 // A stale or unready service would hold the endpoint's lock.
                 if let Some(pid) = input_presence(target).await? {
                     target.stop_input(pid).await?;
                 }
+
                 let pid = target.spawn_input().await?;
                 if !input_current(&target.status().await, target.config.helper_uid, pid) {
                     return Err(
@@ -455,13 +480,16 @@ impl Migration {
                     );
                 }
             }
+
             if !shared && input_presence(previous).await?.is_some() {
                 return Err(problem("The previous input service is still running").uncertain());
             }
+
             Ok(())
         }
         .await;
         self.conclude(&generation, outcome)?;
+
         self.note("input moved")
     }
 
@@ -472,12 +500,14 @@ impl Migration {
         if current == want {
             return Ok(());
         }
+
         if current != from {
             return Err(problem(format!(
                 "{} changed during setup; it was not overwritten",
                 path.display()
             )));
         }
+
         // Replacing a link would leave the file it points to unchanged.
         if fs::symlink_metadata(&path)?.file_type().is_symlink() {
             return Err(problem(format!(
@@ -486,6 +516,7 @@ impl Migration {
                 path.display()
             )));
         }
+
         save_private(&path, want.as_bytes())?;
         self.note("configuration switched")
     }
@@ -497,11 +528,13 @@ impl Migration {
             labels: vec![self.log.plan.old_label.clone(), self.log.plan.label.clone()],
         };
         let argv = helper_argv(self.client(through), &request)?;
+
         // Inspection is read-only and needs no pending marker.
         let reply = self
             .client(through)
             .run_pending(argv, Duration::from_secs(20))
             .await?;
+
         Ok(helper_result(&reply)?["jobs"].clone())
     }
 
@@ -514,20 +547,25 @@ impl Migration {
         let controller = plan.controller.clone();
         self.helper(Endpoint::New, Request::Prepare { uid, controller })
             .await?;
+
         if signed_daemon(&plan.program)? != plan.cdhash {
             return Err(problem(
                 "Atlas.app changed since setup was planned; run atlas init again",
             ));
         }
+
         let agent = self.agent();
         self.helper(Endpoint::New, Request::Install { agent })
             .await?;
         self.verify_new().await?;
+
         if !self.input_ready(Endpoint::New).await {
             return Err(problem("Input is not ready; run atlas start-input"));
         }
+
         self.settle_all()?;
         self.log.state = State::Applied;
+
         save_log(&self.path, &self.log)
     }
 
@@ -535,6 +573,7 @@ impl Migration {
         if self.log.plan.fresh {
             return self.apply_fresh().await;
         }
+
         let plan = self.log.plan.clone();
         let uid = plan.uid;
         let via = self
@@ -543,6 +582,7 @@ impl Migration {
         let controller = plan.controller.clone();
         self.helper(via, Request::Prepare { uid, controller })
             .await?;
+
         // The app may have changed since planning: install only the binary
         // that was planned, still validly signed.
         if signed_daemon(&plan.program)? != plan.cdhash {
@@ -551,16 +591,20 @@ impl Migration {
                  setup --apply again",
             ));
         }
+
         let agent = self.agent();
         self.helper(via, Request::Install { agent }).await?;
         self.verify_new().await?;
         self.move_input(Endpoint::Old, Endpoint::New).await?;
         self.switch_config(&plan.old_config, &plan.new_config)?;
+
         // The fallback goes only once its replacement is verified again.
         self.verify_new().await?;
+
         if !self.input_ready(Endpoint::New).await {
             return Err(problem("Input is not ready on the managed endpoint"));
         }
+
         let (label, sha256) = (plan.old_label.clone(), plan.old_plist_sha256.clone());
         self.helper(
             Endpoint::New,
@@ -572,31 +616,38 @@ impl Migration {
             },
         )
         .await?;
+
         let jobs = self.jobs(Endpoint::New).await?;
         if jobs[&plan.old_label]["loaded"] != false || jobs[&plan.label]["loaded"] != true {
             return Err(problem(
                 "launchd does not show the expected jobs after retiring",
             ));
         }
+
         self.settle_all()?;
         self.log.state = State::Applied;
+
         save_log(&self.path, &self.log)
     }
 
     async fn rollback(&mut self) -> Result<()> {
         let plan = self.log.plan.clone();
         let uid = plan.uid;
+
         self.log.state = State::RollingBack;
         save_log(&self.path, &self.log)?;
+
         if reachable(&self.new).await {
             // Idempotent: puts the original definition back only if absent.
             let (label, sha256) = (plan.old_label.clone(), plan.old_plist_sha256.clone());
             self.helper(Endpoint::New, Request::Restore { uid, label, sha256 })
                 .await?;
         }
+
         await_endpoint(&self.old).await?;
         self.move_input(Endpoint::New, Endpoint::Old).await?;
         self.switch_config(&plan.new_config, &plan.old_config)?;
+
         // Planning proved the managed label had no artifacts, so anything
         // there now was created by this migration.
         let sha256 = text_sha256(&plist(&self.agent(), &self.layout().logs()));
@@ -611,14 +662,17 @@ impl Migration {
             },
         )
         .await?;
+
         let jobs = self.jobs(Endpoint::Old).await?;
         if jobs[&plan.old_label]["loaded"] != true || jobs[&plan.label]["loaded"] != false {
             return Err(problem(
                 "launchd does not show the original job after rollback",
             ));
         }
+
         self.settle_all()?;
         self.log.state = State::RolledBack;
+
         save_log(&self.path, &self.log)
     }
 }
@@ -633,6 +687,7 @@ fn signed_daemon(program: &Path) -> Result<String> {
             program.display()
         )));
     }
+
     signature(program)
         .and_then(|signature| signature.cdhash)
         .ok_or_else(|| problem("The helper app's signature could not be read"))
@@ -642,6 +697,7 @@ fn signed_daemon(program: &Path) -> Result<String> {
 /// is inside the app, else the installed app's.
 fn daemon_program() -> Result<PathBuf> {
     const INSTALLED: &str = "/Applications/Atlas.app/Contents/MacOS/atlas";
+
     let current = std::env::current_exe().and_then(fs::canonicalize).ok();
     current
         .filter(|path| {
@@ -677,6 +733,7 @@ fn basis(config_path: &Path) -> Result<Basis> {
         uid: config.helper_uid,
         home: account.home.clone(),
     };
+
     Ok(Basis {
         config_path,
         config,
@@ -698,11 +755,13 @@ async fn plan_fresh(config_path: &Path) -> Result<Plan> {
         controller,
         layout,
     } = basis(config_path)?;
+
     if config.socket_path != layout.socket() {
         return Err(problem(
             "The configuration does not use the managed private layout",
         ));
     }
+
     let status = Client::new(config.clone())?.status().await;
     require_hidden(&status, config.helper_uid).map_err(|_| {
         problem(
@@ -710,8 +769,10 @@ async fn plan_fresh(config_path: &Path) -> Result<Plan> {
              run atlas doctor.",
         )
     })?;
+
     let program = daemon_program()?;
     let cdhash = signed_daemon(&program)?;
+
     Ok(Plan {
         uid: config.helper_uid,
         controller: controller.name,
@@ -809,6 +870,7 @@ async fn starting_log(
                 let archive = path.with_extension(format!("{}.json", timestamp()));
                 save_log(&archive, &previous)?;
             }
+
             Ok(Log {
                 version: 1,
                 plan: plan.await?,
@@ -825,6 +887,7 @@ async fn starting_log(
 async fn carry_out(path: PathBuf, log: Log, recheck: bool) -> Result<Value> {
     let mut migration = Migration::new(path, log)?;
     migration.require_owned_pending()?;
+
     if recheck {
         let current = signed_daemon(&migration.log.plan.program)?;
         if current != migration.log.plan.cdhash {
@@ -832,9 +895,11 @@ async fn carry_out(path: PathBuf, log: Log, recheck: bool) -> Result<Value> {
             migration.note("helper daemon updated")?;
         }
     }
+
     migration.log.state = State::Applying;
     save_log(&migration.path, &migration.log)?;
     let outcome = migration.apply().await;
+
     Ok(report(&migration.log, &migration.path, outcome))
 }
 
@@ -845,7 +910,9 @@ pub async fn apply_fresh(config_path: &Path, ownership: &Ownership) -> Result<Va
     let Some(start) = fresh_start(log, &path)? else {
         return apply(config_path, ownership).await;
     };
+
     let log = starting_log(&path, start, plan_fresh(config_path)).await?;
+
     // An updated Atlas.app, still validly signed as Atlas, continues the
     // same setup: its new signature is recorded, as apply does.
     carry_out(path, log, true).await
@@ -862,12 +929,14 @@ async fn plan(config_path: &Path) -> Result<Plan> {
         controller,
         layout,
     } = basis(config_path)?;
+
     let target = managed(&config, &layout);
     if config.socket_path == target.socket_path {
         return Err(problem(
             "The configuration already uses the managed private layout",
         ));
     }
+
     let client = Client::new(config.clone())?;
     let built = std::env::current_exe()
         .and_then(fs::canonicalize)
@@ -878,6 +947,7 @@ async fn plan(config_path: &Path) -> Result<Plan> {
             "The helper runs the installed executable; run atlas install first",
         ));
     }
+
     let status = client.status().await;
     require_hidden(&status, config.helper_uid).map_err(|_| {
         problem(
@@ -885,12 +955,14 @@ async fn plan(config_path: &Path) -> Result<Plan> {
              run atlas doctor.",
         )
     })?;
+
     let pid = status["daemon"]["pid"]
         .as_u64()
         .and_then(|pid| u32::try_from(pid).ok())
         .ok_or_else(|| problem("The helper did not say which process it is. Run atlas restart."))?;
     let program = daemon_program()?;
     let cdhash = signed_daemon(&program)?;
+
     let old_label = helper_job(&client, pid).await["label"]
         .as_str()
         .ok_or_else(|| problem("The current capture job could not be identified"))?
@@ -900,15 +972,18 @@ async fn plan(config_path: &Path) -> Result<Plan> {
             "The current capture job is already the managed one",
         ));
     }
+
     let request = Request::Inspect {
         uid: config.helper_uid,
         labels: vec![old_label.clone(), LABEL.to_owned()],
     };
+
     // Inspection is read-only, so it needs no pending marker.
     let reply = client
         .run_pending(helper_argv(&client, &request)?, Duration::from_secs(20))
         .await?;
     let jobs = helper_result(&reply)?["jobs"].clone();
+
     let old = &jobs[&old_label];
     let old_plist_sha256 = old["plistSha256"]
         .as_str()
@@ -921,12 +996,14 @@ async fn plan(config_path: &Path) -> Result<Plan> {
             problem("The current capture job is not loaded from a plain plist in LaunchAgents")
         })?
         .to_owned();
+
     let managed = &jobs[LABEL];
     if managed["loaded"] != false || managed["plistKind"] != "absent" {
         return Err(problem(format!(
             "{LABEL} already exists in the helper; remove it before setup manages it"
         )));
     }
+
     Ok(Plan {
         uid: config.helper_uid,
         controller: controller.name,
@@ -955,11 +1032,13 @@ fn report(log: &Log, path: &Path, outcome: Result<()>) -> Value {
         "pending": log.pending.len(),
         "history": log.history.iter().map(|(action, _)| action).collect::<Vec<_>>(),
     });
+
     if let Err(error) = outcome {
         value["resumeRequired"] = json!(true);
         value["uncertain"] = json!(error.uncertain);
         value["error"] = json!(error.error);
     }
+
     value
 }
 
@@ -969,6 +1048,7 @@ pub async fn apply(config_path: &Path, _ownership: &Ownership) -> Result<Value> 
     let (path, log) = recorded_log(config_path)?;
     let start = apply_start(log, &path)?;
     let log = starting_log(&path, start, plan(config_path)).await?;
+
     // An applied setup re-verifies. An updated Atlas.app is accepted if it
     // is still validly signed as Atlas: its new hash is recorded, and the
     // running daemon's executable must be that binary.
@@ -986,14 +1066,17 @@ pub async fn rollback(config_path: &Path, _ownership: &Ownership) -> Result<Valu
             "This setup was recorded by an older Atlas; roll it back with that version",
         ));
     }
+
     if log.plan.fresh {
         return Err(problem(
             "This was a first setup: there is nothing earlier to roll back to",
         ));
     }
+
     let mut migration = Migration::new(path, log)?;
     migration.require_owned_pending()?;
     let outcome = migration.rollback().await;
+
     Ok(report(&migration.log, &migration.path, outcome))
 }
 
@@ -1061,15 +1144,19 @@ mod tests {
             history: Vec::new(),
         })
         .unwrap();
+
         let fields = legacy["plan"].as_object_mut().unwrap();
         fields.remove("label");
         fields.remove("controllerUid");
+
         let log: Log = serde_json::from_value(legacy).unwrap();
         assert!(log.plan.label.is_empty());
     }
 
     #[test]
     fn logs_round_trip_privately() {
+        use std::os::unix::fs::PermissionsExt;
+
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("deep/setup-502.json");
         let log = Log {
@@ -1079,9 +1166,9 @@ mod tests {
             pending: vec!["g".into()],
             history: vec![("prepare".into(), "1".into())],
         };
+
         save_log(&path, &log).unwrap();
         assert_eq!(load_log(&path).unwrap(), Some(log));
-        use std::os::unix::fs::PermissionsExt;
         assert_eq!(
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
@@ -1102,6 +1189,7 @@ mod tests {
             pending: Vec::new(),
             history: Vec::new(),
         };
+
         let migration = Migration::new(dir.path().join("setup-502.json"), log).unwrap();
         assert_eq!(
             migration.old.config.socket_path,
@@ -1112,11 +1200,13 @@ mod tests {
     #[test]
     fn helper_results_must_be_affirmative_json() {
         use base64::{Engine, engine::general_purpose::STANDARD};
+
         let reply = |text: &str| {
             json!({"ok": true, "exitCode": 0, "events": [
                 {"event": "output", "data": STANDARD.encode(text)}
             ]})
         };
+
         assert_eq!(
             helper_result(&reply(r#"{"ok":true,"x":1}"#)).unwrap()["x"],
             1
@@ -1138,6 +1228,7 @@ mod tests {
         fs::write(&config_path, OLD).unwrap();
         let mut planned = plan(config_path, OLD);
         planned.new_config = NEW.into();
+
         let log = Log {
             version: 1,
             plan: planned,
@@ -1145,10 +1236,12 @@ mod tests {
             pending: Vec::new(),
             history: Vec::new(),
         };
+
         let mut migration = Migration::new(dir.join("setup.json"), log).unwrap();
         let controller = crate::control::Controller::at(60001, &dir.join("state"));
         migration.old.controller = controller.clone();
         migration.new.controller = controller;
+
         migration
     }
 
@@ -1157,13 +1250,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut migration = sandbox(dir.path());
         let path = migration.log.plan.config_path.clone();
+
         migration.switch_config(OLD, NEW).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), NEW);
+
         migration.switch_config(OLD, NEW).unwrap();
         assert_eq!(migration.log.history.len(), 1, "already switched");
+
         fs::write(&path, "edited").unwrap();
         assert!(migration.switch_config(NEW, OLD).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), "edited");
+
         // A link is never replaced, even with the expected contents behind it.
         let real = dir.path().join("real.toml");
         fs::write(&real, NEW).unwrap();
@@ -1187,15 +1284,18 @@ mod tests {
             let claim = migration.begin().unwrap();
             claim.to_string()
         };
+
         let uncertain = step(&mut migration);
         let outcome = migration.conclude(&uncertain, Err::<(), _>(problem("lost").uncertain()));
         assert!(outcome.unwrap_err().uncertain);
+
         let definitive = step(&mut migration);
         assert!(
             migration
                 .conclude(&definitive, Err::<(), _>(problem("refused")))
                 .is_err()
         );
+
         let succeeded = step(&mut migration);
         assert_eq!(migration.conclude(&succeeded, Ok(7)).unwrap(), 7);
         assert_eq!(migration.log.pending, vec![uncertain.clone()]);
@@ -1203,6 +1303,7 @@ mod tests {
             migration.old.controller.pending().unwrap(),
             vec![uncertain.clone()]
         );
+
         let saved = load_log(&migration.path).unwrap().unwrap();
         assert_eq!(saved.pending, vec![uncertain]);
     }
@@ -1212,8 +1313,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut migration = sandbox(dir.path());
         migration.require_owned_pending().unwrap();
+
         drop(migration.begin().unwrap());
         migration.require_owned_pending().unwrap();
+
         drop(migration.old.controller.quarantine().unwrap());
         let error = migration.require_owned_pending().unwrap_err();
         assert!(error.uncertain);
@@ -1224,6 +1327,7 @@ mod tests {
         let mut planned = plan("/c/atlas.toml".into(), "a");
         planned.label = label.into();
         planned.fresh = fresh;
+
         Log {
             version,
             plan: planned,
@@ -1237,6 +1341,7 @@ mod tests {
     fn apply_starts_only_from_a_log_it_can_continue() {
         let path = Path::new("/x/setup-502.json");
         assert_eq!(apply_start(None, path).unwrap(), Start::Plan(None));
+
         for state in [State::Applying, State::Applied] {
             let log = recorded(state, LABEL, false, 1);
             assert_eq!(
@@ -1244,6 +1349,7 @@ mod tests {
                 Start::Resume(log)
             );
         }
+
         for refused in [
             recorded(State::Applied, LABEL, false, 2),
             recorded(State::Applying, "", false, 1),
@@ -1254,6 +1360,7 @@ mod tests {
                 "{refused:?}"
             );
         }
+
         for replanned in [
             recorded(State::RolledBack, LABEL, false, 1),
             recorded(State::Applied, "", false, 1),
@@ -1269,15 +1376,18 @@ mod tests {
     fn a_first_setup_resumes_its_own_log_and_defers_to_a_migration() {
         let path = Path::new("/x/setup-502.json");
         assert_eq!(fresh_start(None, path).unwrap(), Some(Start::Plan(None)));
+
         let fresh = recorded(State::Applied, LABEL, true, 1);
         assert_eq!(
             fresh_start(Some(fresh.clone()), path).unwrap(),
             Some(Start::Resume(fresh))
         );
+
         let migrated = recorded(State::Applied, LABEL, false, 1);
         assert_eq!(fresh_start(Some(migrated), path).unwrap(), None);
         assert!(fresh_start(Some(recorded(State::Applied, LABEL, true, 2)), path).is_err());
         assert!(fresh_start(Some(recorded(State::RollingBack, LABEL, true, 1)), path).is_err());
+
         // An unfinished setup by an older Atlas is archived and planned anew.
         let legacy = recorded(State::Applying, "", false, 1);
         assert_eq!(
