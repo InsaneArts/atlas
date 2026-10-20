@@ -25,7 +25,7 @@ use std::{
 };
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::{Mutex, OwnedSemaphorePermit, Semaphore, watch},
+    sync::{Mutex, OwnedSemaphorePermit, RwLock, RwLockReadGuard, Semaphore, watch},
 };
 
 const FRAME_LIFETIME: Duration = Duration::from_secs(8);
@@ -44,6 +44,10 @@ const CONNECTIONS: usize = 64;
 /// How long a connection may take to send a request's headers. An idle
 /// connection closes after as long.
 const HEADER_DEADLINE: Duration = Duration::from_secs(15);
+/// How long a new connection may take to ask for something at the viewer's
+/// private address. One that has not closes, so connections nobody uses
+/// cannot keep every place taken.
+const FIRST_REQUEST: Duration = Duration::from_secs(3);
 /// How long reading the status or a frame may take: less than the app
 /// waits (8 seconds), so it hears why rather than giving up.
 const READ_DEADLINE: Duration = Duration::from_secs(5);
@@ -90,6 +94,14 @@ pub struct Viewer {
     settings_text: std::sync::Mutex<Option<Vec<u8>>>,
     lease: SharedLease,
     lease_epoch: Mutex<Option<Epoch>>,
+    /// The helper the lease was taken on. Control ends there, and input
+    /// goes there, even once the settings name another helper.
+    lease_client: std::sync::Mutex<Option<Arc<Client>>>,
+    /// Shared by each change being made in the helper (taking or ending
+    /// control, input, recovery) for as long as it runs. Shutdown takes it
+    /// whole, so it waits for those in progress, and sets it to true, so no
+    /// more begin.
+    closed: RwLock<bool>,
     frames: Mutex<Frames>,
     capture: std::sync::Mutex<Option<Capture>>,
     requests: Semaphore,
@@ -115,12 +127,21 @@ impl Viewer {
         unpoisoned(&self.client).clone()
     }
 
-    /// Follow the settings file: once it names another helper (Getting
-    /// Started set one up, say), serve that one without a restart. Only a
-    /// change to the file's text is read. Control held in the previous
-    /// helper ends there first; while control is still held the move waits
-    /// for a later read.
-    async fn follow_settings(&self) {
+    /// The helper control ends in: the one the lease was taken on, or the
+    /// current one when none was.
+    fn holder(&self) -> Arc<Client> {
+        let held = unpoisoned(&self.lease_client).clone();
+        held.unwrap_or_else(|| self.client())
+    }
+
+    /// Follow the settings file. Only a change to the file's text is read.
+    /// A new output folder alone keeps the same helper: control carries on
+    /// and the record moves there. Once the file names another helper
+    /// (Getting Started set one up, say), the viewer serves that one without
+    /// a restart. Control held in the previous helper ends there first, in a
+    /// task of its own that is waited on for a moment; while control is
+    /// still held (or being taken) the move waits for a later read.
+    async fn follow_settings(self: &Arc<Self>) {
         let Some(path) = self.settings.clone() else {
             return;
         };
@@ -144,12 +165,18 @@ impl Viewer {
             return;
         }
 
+        if same_helper(&config, &current.config) {
+            self.follow_output(&current, config, text).await;
+            return;
+        }
+
         let Ok(mut next) = Client::new(config) else {
             return;
         };
         next.actor = current.actor;
 
-        let _ = self.release(None).await;
+        let ending = self.release_in_background();
+        let _ = tokio::time::timeout(Duration::from_secs(1), ending).await;
 
         {
             let mut lease = self.lease.lock().await;
@@ -164,6 +191,33 @@ impl Viewer {
 
         self.frames.lock().await.items.clear();
         *unpoisoned(&self.input_started) = None;
+        self.move_record();
+    }
+
+    /// The settings name another output folder for the same helper: serve
+    /// it with `config` (whose file reads `text`) in place of `current`,
+    /// control and all, and move the record there.
+    async fn follow_output(&self, current: &Arc<Client>, config: Config, text: Vec<u8>) {
+        let mut next = Client::clone(current);
+        next.config = config;
+        let next = Arc::new(next);
+
+        {
+            let _lease = self.lease.lock().await;
+            let mut client = unpoisoned(&self.client);
+            if !Arc::ptr_eq(&client, current) {
+                return;
+            }
+
+            let mut held = unpoisoned(&self.lease_client);
+            if held.as_ref().is_some_and(|held| Arc::ptr_eq(held, current)) {
+                *held = Some(next.clone());
+            }
+
+            *client = next;
+            *unpoisoned(&self.settings_text) = Some(text);
+        }
+
         self.move_record();
     }
 
@@ -205,8 +259,12 @@ impl Viewer {
 
     /// A current frame of the helper. One capture runs at a time and every
     /// request asking meanwhile shares it; one started before the latest
-    /// input is waited out, then a fresh one taken.
+    /// input is waited out, then a fresh one taken. All of it, waiting
+    /// included, ends within one deadline, so the app hears why before it
+    /// gives up.
     async fn frame(&self) -> Result<(String, Arc<Frame>)> {
+        let until = tokio::time::Instant::now() + READ_DEADLINE;
+
         loop {
             let revision = self.frames.lock().await.input_revision;
 
@@ -226,11 +284,13 @@ impl Viewer {
             let sender = match ours {
                 Ok(sender) => sender,
                 Err((mut outcome, current)) => {
-                    let shared = outcome
-                        .wait_for(Option::is_some)
-                        .await
-                        .ok()
-                        .and_then(|outcome| outcome.clone());
+                    let Ok(waited) =
+                        tokio::time::timeout_at(until, outcome.wait_for(Option::is_some)).await
+                    else {
+                        return Err(late());
+                    };
+
+                    let shared = waited.ok().and_then(|outcome| outcome.clone());
                     match shared {
                         Some(captured) if current => {
                             return captured.map_err(|(code, message)| Error::new(code, message));
@@ -241,7 +301,7 @@ impl Viewer {
             };
 
             let _clear = Capturing(&self.capture);
-            let outcome = tokio::time::timeout(READ_DEADLINE, self.take_frame())
+            let outcome = tokio::time::timeout_at(until, self.take_frame())
                 .await
                 .unwrap_or_else(|_| Err(late()));
             let shared = match &outcome {
@@ -313,14 +373,25 @@ impl Viewer {
             })
     }
 
+    /// End `owner`'s control (any control, without one) in the helper it
+    /// was taken on.
     async fn release(&self, owner: Option<&str>) -> Result<()> {
-        let previous = {
+        let (previous, client) = {
             let mut lease = self.lease.lock().await;
-            lease.begin_release(owner)?
+            (lease.begin_release(owner)?, self.holder())
         };
+
         if let Some(previous) = previous {
-            let completion = self.release_native(&previous).await;
-            self.lease.lock().await.end_release();
+            let completion = release_native(&client, &previous).await;
+
+            {
+                let mut lease = self.lease.lock().await;
+                lease.end_release();
+                if !lease.active() {
+                    *unpoisoned(&self.lease_client) = None;
+                }
+            }
+
             completion?;
         }
 
@@ -329,39 +400,104 @@ impl Viewer {
 
     /// End whichever control is held in a task of its own, which finishes
     /// however long the helper takes; the caller may wait on it or not.
+    /// Once shutdown began, its own release ends control in place of this.
     fn release_in_background(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
         let viewer = self.clone();
 
         tokio::spawn(async move {
+            let Some(_changing) = viewer.changing().await else {
+                return;
+            };
+
             let _ = viewer.release(None).await;
         })
     }
 
-    /// End `owner`'s native control in the helper. The outcome is marked
-    /// pending first and cleared only once the helper confirms, so an
-    /// unconfirmed release stays an unknown outcome for recovery.
-    async fn release_native(&self, owner: &str) -> Result<()> {
-        let client = self.client();
-        let pending = client.controller.quarantine();
-        let result = client.native_control("release", owner).await;
-        match (pending, result) {
-            (Ok(generation), Ok(_)) => client.controller.clear_if(&generation),
-            (Err(error), _) => Err(error),
-            (_, Err(error)) => Err(Error::new(
-                "uncertain",
-                format!(
-                    "Control stopped accepting input, but native cleanup was not confirmed: {error}"
-                ),
-            )
-            .uncertain()),
+    /// Leave to change something in the helper, held until the change ends;
+    /// None once shutdown began.
+    async fn changing(&self) -> Option<RwLockReadGuard<'_, bool>> {
+        let closed = self.closed.read().await;
+        (!*closed).then_some(closed)
+    }
+
+    /// Wait for every change in progress in the helper to end, however long
+    /// that takes, then let no more begin.
+    async fn close(&self) {
+        *self.closed.write().await = true;
+    }
+
+    /// Take control of `client`'s helper for a new lease, in `epoch`: the
+    /// lease's token. Until the helper answers, the acquire counts as input
+    /// in progress, so control stays held (the settings cannot move to
+    /// another helper meanwhile, nor another controller come in). When the
+    /// lease ended meanwhile, or the answer is unknown, control is ended
+    /// again on that same helper.
+    async fn take_control(&self, client: &Arc<Client>, epoch: &Epoch) -> Result<String> {
+        let token = {
+            let mut lease = self.lease.lock().await;
+
+            // Settings that moved to another helper meanwhile refuse it.
+            if !Arc::ptr_eq(client, &self.client()) {
+                return Err(Error::new(
+                    "session-changed",
+                    "Wait for a fresh frame from the current helper",
+                ));
+            }
+
+            let token = lease.acquire(&client.controller)?;
+            *unpoisoned(&self.lease_client) = Some(client.clone());
+            *self.lease_epoch.lock().await = Some(epoch.clone());
+            token
+        };
+
+        // Nothing was asked of the helper yet, so a lease ended this soon
+        // just fails here.
+        let _acquiring = ActionPermit::begin(self.lease.clone(), &token).await?;
+        let acquired = client.acquire_input(&token, epoch).await;
+        let mut lease = self.lease.lock().await;
+
+        let error = match acquired {
+            Ok(_) => match lease.require(&token) {
+                Ok(()) => return Ok(token),
+                Err(lost) => lost,
+            },
+            Err(error) if !error.uncertain => {
+                // Refused for certain: nothing to undo, the lease just ends.
+                if lease.require(&token).is_ok() {
+                    lease.release();
+                }
+
+                return Err(error);
+            }
+            Err(error) => error,
+        };
+
+        // Control may be granted with no lease left to hold it, or no one
+        // knows: end it on the helper it was asked of, and say when that
+        // could not be confirmed.
+        let ending = lease.begin_release(Some(&token));
+        drop(lease);
+
+        let cleanup = release_native(client, &token).await;
+        if matches!(ending, Ok(Some(_))) {
+            self.lease.lock().await.end_release();
         }
+
+        Err(match cleanup {
+            Ok(()) => error,
+            Err(cleanup) => Error {
+                error: format!("{} {}", error.error, cleanup.error),
+                ..cleanup
+            },
+        })
     }
 
     async fn status(self: &Arc<Self>) -> Value {
+        // Reading waits on the helper, for a few seconds at most, following
+        // the settings included.
+        let until = tokio::time::Instant::now() + READ_DEADLINE;
         self.follow_settings().await;
 
-        // Reading waits on the helper, for a few seconds at most.
-        let until = tokio::time::Instant::now() + READ_DEADLINE;
         let client = self.client();
         let uid = client.config.helper_uid;
         let reply = tokio::time::timeout_at(until, client.status())
@@ -494,7 +630,7 @@ impl Viewer {
     /// Explicit, person-initiated recovery: the verified restart when an
     /// outcome is unknown, otherwise starting, resetting or upgrading input.
     /// It never takes control or resumes input.
-    async fn recover(&self) -> Result<Value> {
+    async fn recover(self: &Arc<Self>) -> Result<Value> {
         self.follow_settings().await;
 
         if self.lease.lock().await.active() {
@@ -511,7 +647,6 @@ impl Viewer {
 
     async fn control(&self, route: &str, body: &Value) -> Result<Value> {
         let owner = body["lease"].as_str().unwrap_or_default();
-        let client = self.client();
 
         // The menu bar's emergency stop: end whichever lease is held, with
         // the same cleanup as any release. Nothing is resumed.
@@ -535,6 +670,7 @@ impl Viewer {
             .await?;
 
         if route == "control/acquire" {
+            let client = self.client();
             let current = client.identity().await?;
             if current.epoch != frame.epoch {
                 return Err(Error::new(
@@ -550,43 +686,7 @@ impl Viewer {
                 ));
             }
 
-            let token = {
-                let mut lease = self.lease.lock().await;
-
-                // Settings that moved to another helper meanwhile refuse it.
-                if !Arc::ptr_eq(&client, &self.client()) {
-                    return Err(Error::new(
-                        "session-changed",
-                        "Wait for a fresh frame from the current helper",
-                    ));
-                }
-
-                let token = lease.acquire(&client.controller)?;
-                *self.lease_epoch.lock().await = Some(frame.epoch.clone());
-                token
-            };
-            if let Err(error) = client.acquire_input(&token, &frame.epoch).await {
-                if error.uncertain {
-                    let _ = self.release(Some(&token)).await;
-                } else {
-                    self.lease.lock().await.abandon_acquire(&token);
-                }
-                return Err(error);
-            }
-
-            let authorization = self.lease.lock().await.require(&token);
-            if let Err(error) = authorization {
-                // The lease ended while input was being acquired: undo the
-                // acquire, and say when that could not be confirmed.
-                return Err(match self.release_native(&token).await {
-                    Ok(()) => error,
-                    Err(cleanup) => Error {
-                        error: format!("{} {}", error.error, cleanup.error),
-                        ..cleanup
-                    },
-                });
-            }
-
+            let token = self.take_control(&client, &frame.epoch).await?;
             return Ok(json!({"ok": true, "lease": token, "ttlSeconds": LEASE_SECONDS}));
         }
 
@@ -597,13 +697,20 @@ impl Viewer {
             ));
         }
 
+        // Renewing and input go to the helper control was taken on.
         if route == "control/renew" {
-            self.lease.lock().await.renew(owner)?;
+            let client = {
+                let mut lease = self.lease.lock().await;
+                lease.renew(owner)?;
+                self.holder()
+            };
+
             client.native_control("renew", owner).await?;
             return Ok(json!({"ok": true}));
         }
 
         let _permit = ActionPermit::begin(self.lease.clone(), owner).await?;
+        let client = self.holder();
         let result = client
             .input(
                 &body["actions"],
@@ -615,6 +722,37 @@ impl Viewer {
         self.frames.lock().await.input_revision += 1;
         result
     }
+}
+
+/// End `owner`'s native control in `client`'s helper. The outcome is
+/// marked pending first and cleared only once the helper confirms, so an
+/// unconfirmed release stays an unknown outcome for recovery.
+async fn release_native(client: &Client, owner: &str) -> Result<()> {
+    let pending = client.controller.quarantine();
+    let result = client.native_control("release", owner).await;
+
+    match (pending, result) {
+        (Ok(generation), Ok(_)) => client.controller.clear_if(&generation),
+        (Err(error), _) => Err(error),
+        (_, Err(error)) => Err(Error::new(
+            "uncertain",
+            format!(
+                "Control stopped accepting input, but native cleanup was not confirmed: {error}"
+            ),
+        )
+        .uncertain()),
+    }
+}
+
+/// Whether two settings name the same helper: everything but where output
+/// goes.
+fn same_helper(one: &Config, other: &Config) -> bool {
+    let moved = Config {
+        output_dir: other.output_dir.clone(),
+        ..one.clone()
+    };
+
+    moved == *other
 }
 
 /// Bind the viewer for `client` on `port` (0 picks a free one). With
@@ -645,6 +783,8 @@ pub async fn bind(
         settings_text: std::sync::Mutex::new(None),
         lease: Arc::new(Mutex::new(Lease::new(Duration::from_secs(LEASE_SECONDS)))),
         lease_epoch: Mutex::new(None),
+        lease_client: std::sync::Mutex::new(None),
+        closed: RwLock::new(false),
         frames: Mutex::new(Frames::default()),
         capture: std::sync::Mutex::new(None),
         requests: Semaphore::new(CONCURRENT_REQUESTS),
@@ -692,7 +832,8 @@ async fn accept(
     drop(listener);
     drop(closing);
 
-    // Requests in progress finish, within a few seconds.
+    // Requests still open finish, within a few seconds. Changes in the
+    // helper are not cut here: shutdown waits for those itself.
     let _ = tokio::time::timeout(
         Duration::from_secs(5),
         open.acquire_many(u32::try_from(connections).unwrap_or(u32::MAX)),
@@ -701,8 +842,11 @@ async fn accept(
 }
 
 /// Answer requests on `stream` in a task of its own, which holds `permit`
-/// until the connection closes. Once `closed` changes, the request in
-/// progress finishes and the connection closes.
+/// until the connection closes. A connection that has not asked for
+/// anything at the viewer's private address within [`FIRST_REQUEST`]
+/// closes then; one that has stays open between requests for the app.
+/// Once `closed` changes, the request in progress finishes and the
+/// connection closes.
 fn serve_connection(
     http: &hyper::server::conn::http1::Builder,
     stream: TcpStream,
@@ -710,9 +854,14 @@ fn serve_connection(
     viewer: &Arc<Viewer>,
     mut closed: watch::Receiver<()>,
 ) {
+    let (named, mut naming) = watch::channel(false);
     let service = hyper::service::service_fn({
         let viewer = viewer.clone();
         move |request: hyper::Request<hyper::body::Incoming>| {
+            if request.uri().path().starts_with(&viewer.prefix) {
+                named.send_replace(true);
+            }
+
             let viewer = viewer.clone();
             async move {
                 Ok::<_, std::convert::Infallible>(handle(viewer, request.map(Body::new)).await)
@@ -725,9 +874,28 @@ fn serve_connection(
         let _permit = permit;
         tokio::pin!(served);
 
-        tokio::select! {
+        let first = async move {
+            tokio::time::timeout(FIRST_REQUEST, naming.wait_for(|named| *named))
+                .await
+                .is_ok_and(|named| named.is_ok())
+        };
+
+        // Whether it named the address in time; None when closing first.
+        let named = tokio::select! {
             _ = served.as_mut() => return,
-            _ = closed.changed() => {}
+            _ = closed.changed() => None,
+            named = first => Some(named),
+        };
+
+        match named {
+            Some(false) => return,
+            Some(true) => {
+                tokio::select! {
+                    _ = served.as_mut() => return,
+                    _ = closed.changed() => {}
+                }
+            }
+            None => {}
         }
 
         // Closing: the request in progress finishes, then it closes.
@@ -804,6 +972,12 @@ pub async fn serve(client: Client, port: u16, program: crate::menubar::Program) 
         loop {
             tokio::time::sleep(Duration::from_millis(100)).await;
 
+            // Ending expired control is a change like any other; once
+            // shutdown began, its own release ends control.
+            let Some(_changing) = timer_view.changing().await else {
+                break;
+            };
+
             let expired = {
                 let mut lease = timer_view.lease.lock().await;
                 lease.expire();
@@ -815,6 +989,9 @@ pub async fn serve(client: Client, port: u16, program: crate::menubar::Program) 
         }
     });
 
+    // Changes in progress in the helper (taking control, input, recovery)
+    // end first, however long the helper takes, and no more begin; then
+    // control ends. Only then are open connections given a few seconds.
     let shutdown_view = viewer.clone();
     accept(listener, viewer.clone(), CONNECTIONS, async move {
         tokio::select! {
@@ -823,11 +1000,14 @@ pub async fn serve(client: Client, port: u16, program: crate::menubar::Program) 
             _ = hung_up.recv() => {}
             () = app.exited() => {}
         }
+
+        shutdown_view.close().await;
         let _ = shutdown_view.release(None).await;
     })
     .await;
 
     expiry.abort();
+    viewer.close().await;
     let _ = viewer.release(None).await;
 
     // The record goes with this viewer, unless another has replaced it.
@@ -875,31 +1055,47 @@ async fn blocking<T: Send + 'static>(
 }
 
 /// The viewer recorded at `record`, if it serves `port` and answers there
-/// now as the very process the record names. It blocks for up to a second:
-/// call it off the async runtime.
+/// now as the very process the record names. A viewer from an older build
+/// does not say its process; the record's counts then, when that process
+/// runs Atlas. It blocks for up to a second: call it off the async runtime.
 pub fn running(record: &Path, port: u16) -> Option<Value> {
     std::fs::read(record)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         .filter(|running| {
             let url = running["url"].as_str().unwrap_or("");
-            url.starts_with(&format!("http://127.0.0.1:{port}/"))
-                && answering(url).is_some_and(|pid| running["pid"] == pid)
+            let recorded = running["pid"]
+                .as_u64()
+                .and_then(|pid| u32::try_from(pid).ok());
+            if !url.starts_with(&format!("http://127.0.0.1:{port}/")) {
+                return false;
+            }
+
+            match answering(url) {
+                Some(Some(pid)) => recorded == Some(pid),
+                Some(None) => recorded
+                    .and_then(|pid| i32::try_from(pid).ok())
+                    .is_some_and(crate::menubar::is_atlas),
+                None => false,
+            }
         })
 }
 
-/// The process of the viewer answering at `url` (its private address)
-/// right now, if a viewer does.
-fn answering(url: &str) -> Option<u32> {
+/// Whether a viewer answers at `url` (its private address) right now, and
+/// then the process it says serves it: None from a viewer built before
+/// viewers said so.
+fn answering(url: &str) -> Option<Option<u32>> {
     let (status, body) = exchange(url, "GET", "", None, Duration::from_secs(1)).ok()?;
     let reply: Value = serde_json::from_slice(&body).ok()?;
     if status != 200 || reply["service"] != SERVICE {
         return None;
     }
 
-    reply["pid"]
-        .as_u64()
-        .and_then(|pid| u32::try_from(pid).ok())
+    Some(
+        reply["pid"]
+            .as_u64()
+            .and_then(|pid| u32::try_from(pid).ok()),
+    )
 }
 
 /// One request to the local viewer at `url`, as its own origin, within
@@ -1301,6 +1497,12 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
         };
     }
 
+    // Held to the end of the request, cleanup included, so shutdown waits
+    // for it.
+    let Some(_changing) = viewer.changing().await else {
+        return json_response(503, json!({"ok": false, "error": "The viewer is closing"}));
+    };
+
     let outcome = if route == "recover" {
         viewer.recover().await
     } else {
@@ -1415,7 +1617,7 @@ mod tests {
     }
 
     /// [`answering`] off the runtime.
-    async fn answering_off(url: &str) -> Option<u32> {
+    async fn answering_off(url: &str) -> Option<Option<u32>> {
         let url = url.to_owned();
         tokio::task::spawn_blocking(move || answering(&url))
             .await
@@ -1469,7 +1671,7 @@ mod tests {
         .unwrap();
         assert_eq!(opened["viewer"], "open");
         assert_eq!(received.recv().await, Some(Line::Viewer));
-        assert_eq!(answering_off(&url).await, Some(std::process::id()));
+        assert_eq!(answering_off(&url).await, Some(Some(std::process::id())));
 
         server.abort();
     }
@@ -1527,7 +1729,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let viewer = unreachable(dir.path()).await;
         let controller = viewer.client().controller.clone();
-        let error = viewer.release_native("lost-lease").await.unwrap_err();
+        let error = release_native(&viewer.client(), "lost-lease")
+            .await
+            .unwrap_err();
         assert!(error.uncertain);
         assert_eq!(error.code, "uncertain");
         assert_eq!(controller.unresolved().unwrap().len(), 1);
@@ -1624,7 +1828,7 @@ mod tests {
         .unwrap();
         assert_eq!(status.0, 503, "reads wait for a slot");
 
-        assert_eq!(answering_off(&url).await, Some(std::process::id()));
+        assert_eq!(answering_off(&url).await, Some(Some(std::process::id())));
 
         let ended = tokio::task::spawn_blocking(move || {
             let revoked = post_local(&url, "control/revoke", &json!({}))?;
@@ -1655,7 +1859,10 @@ mod tests {
         assert_eq!(answering_off(&viewer.url).await, None, "all are taken");
 
         drop(idle);
-        assert_eq!(answering_off(&viewer.url).await, Some(std::process::id()));
+        assert_eq!(
+            answering_off(&viewer.url).await,
+            Some(Some(std::process::id()))
+        );
 
         server.abort();
     }
@@ -1750,9 +1957,10 @@ mod tests {
         );
     }
 
-    /// Once the settings name another helper, the running viewer serves it:
-    /// control held in the previous one ends (unconfirmed, it stays pending
-    /// there), and the record moves to the new output folder.
+    /// A new output folder alone keeps the helper and control with it, and
+    /// moves the record. Once the settings name another helper, the
+    /// running viewer serves it: control held in the previous one ends
+    /// (unconfirmed, it stays pending there), and the record moves again.
     #[tokio::test]
     async fn a_settings_change_moves_the_viewer_to_the_new_helper() {
         let dir = tempfile::tempdir().unwrap();
@@ -1776,11 +1984,20 @@ mod tests {
         assert_eq!(viewer.client().config.helper_uid, 60001, "unchanged");
         assert!(viewer.lease.lock().await.active());
 
+        std::fs::write(&settings, SETTINGS.replace("\"out\"", "\"moved\"")).unwrap();
+        viewer.follow_settings().await;
+
+        let moved = base.join("moved").join(MENUBAR_RECORD);
+        assert!(viewer.lease.lock().await.active(), "control carries on");
+        assert!(controller.pending().unwrap().is_empty());
+        assert!(moved.exists());
+        assert!(!record.exists());
+
         std::fs::write(
             &settings,
             SETTINGS
                 .replace("60001", "60002")
-                .replace("\"out\"", "\"moved\""),
+                .replace("\"out\"", "\"elsewhere\""),
         )
         .unwrap();
         viewer.follow_settings().await;
@@ -1789,9 +2006,337 @@ mod tests {
         assert!(!viewer.lease.lock().await.active());
         assert_eq!(controller.unresolved().unwrap().len(), 1);
 
-        let moved = base.join("moved").join(MENUBAR_RECORD);
-        assert!(moved.exists());
-        assert!(!record.exists());
-        assert_eq!(viewer.record.lock().unwrap().as_ref().unwrap().0, moved);
+        let elsewhere = base.join("elsewhere").join(MENUBAR_RECORD);
+        assert!(elsewhere.exists());
+        assert!(!moved.exists());
+        assert_eq!(viewer.record.lock().unwrap().as_ref().unwrap().0, elsewhere);
+    }
+
+    /// A stand-in for the helper's input service at `socket`. It reports
+    /// each request's operation, and answers it at once, except `held`,
+    /// which waits for the returned gate to open (once per request).
+    fn input_service(
+        socket: &Path,
+        held: &'static str,
+    ) -> (
+        tokio::sync::mpsc::UnboundedReceiver<String>,
+        Arc<tokio::sync::Notify>,
+    ) {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let listener = tokio::net::UnixListener::bind(socket).unwrap();
+        let (asked, operations) = tokio::sync::mpsc::unbounded_channel();
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let opens = gate.clone();
+
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let asked = asked.clone();
+                let opens = opens.clone();
+
+                tokio::spawn(async move {
+                    let mut stream = BufReader::new(stream);
+                    let mut line = String::new();
+                    stream.read_line(&mut line).await.unwrap();
+
+                    let request: Value = serde_json::from_str(&line).unwrap();
+                    let operation = request["op"].as_str().unwrap().to_owned();
+                    let _ = asked.send(operation.clone());
+
+                    if operation == held {
+                        opens.notified().await;
+                    }
+
+                    let _ = stream.get_mut().write_all(b"{\"ok\":true}\n").await;
+                });
+            }
+        });
+
+        (operations, gate)
+    }
+
+    /// A client whose input service is the stand-in at `socket`.
+    fn client_with_input(dir: &Path, socket: &Path) -> Client {
+        let mut client = client(dir);
+        client.config.input_socket = socket.to_owned();
+        client.config.helper_uid = nix::unistd::getuid().as_raw();
+        client
+    }
+
+    fn epoch() -> Epoch {
+        Epoch {
+            uid: 0,
+            capture_pid: 0,
+            display: crate::session::Display {
+                width: 1.0,
+                height: 1.0,
+                scale: 1.0,
+            },
+            security_session_id: 0,
+            display_id: 0,
+            input_pid: 0,
+        }
+    }
+
+    /// Control ends in the helper it was taken on, though the viewer
+    /// serves another one now.
+    #[tokio::test]
+    async fn ending_control_reaches_the_helper_it_was_taken_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let viewer = unreachable(dir.path()).await;
+        let taken = viewer.client();
+        viewer
+            .lease
+            .lock()
+            .await
+            .acquire(&taken.controller)
+            .unwrap();
+        *viewer.lease_client.lock().unwrap() = Some(taken.clone());
+
+        let mut other = client(dir.path());
+        other.controller = control::Controller::at(60001, &dir.path().join("other"));
+        *viewer.client.lock().unwrap() = Arc::new(other);
+
+        let error = viewer.release(None).await.unwrap_err();
+        assert!(error.uncertain);
+        assert_eq!(taken.controller.unresolved().unwrap().len(), 1);
+        assert!(viewer.client().controller.pending().unwrap().is_empty());
+        assert!(viewer.lease_client.lock().unwrap().is_none());
+    }
+
+    /// While the helper has not answered an acquire, control stays held:
+    /// the settings naming another helper end it, but only in the helper it
+    /// was asked of, and the viewer moves only once the acquire settled. A
+    /// grant that comes after the lease ended is undone there too.
+    #[tokio::test]
+    async fn control_being_taken_keeps_the_viewer_on_its_helper() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(dir.path()).unwrap();
+        let socket = base.join("a.sock");
+        let (mut asked, answer) = input_service(&socket, "acquire");
+        let settings = base.join("u.toml");
+        let (_, viewer) = bind(client_with_input(&base, &socket), 0, Some(&settings))
+            .await
+            .unwrap();
+        let taken = viewer.client();
+
+        let taking = tokio::spawn({
+            let viewer = viewer.clone();
+            let taken = taken.clone();
+            async move { viewer.take_control(&taken, &epoch()).await }
+        });
+        assert_eq!(asked.recv().await.as_deref(), Some("acquire"));
+
+        std::fs::write(&settings, SETTINGS.replace("60001", "60002")).unwrap();
+        viewer.follow_settings().await;
+        assert_eq!(asked.recv().await.as_deref(), Some("release"));
+        assert!(Arc::ptr_eq(&viewer.client(), &taken), "it waits");
+        assert!(viewer.lease.lock().await.active());
+
+        answer.notify_one();
+        let lost = taking.await.unwrap().unwrap_err();
+        assert_eq!(lost.code, "lease-lost");
+        assert_eq!(asked.recv().await.as_deref(), Some("release"), "undone");
+        assert!(taken.controller.pending().unwrap().is_empty());
+
+        viewer.follow_settings().await;
+        assert_eq!(viewer.client().config.helper_uid, 60002);
+        assert!(asked.try_recv().is_err(), "nothing more asked of it");
+    }
+
+    /// Ending control in a helper that does not answer never holds up the
+    /// status read when the settings name another helper.
+    #[tokio::test]
+    async fn following_the_settings_never_holds_up_the_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(dir.path()).unwrap();
+        let socket = base.join("a.sock");
+        let (mut asked, _never) = input_service(&socket, "release");
+        let settings = base.join("u.toml");
+        let (_, viewer) = bind(client_with_input(&base, &socket), 0, Some(&settings))
+            .await
+            .unwrap();
+
+        viewer
+            .take_control(&viewer.client(), &epoch())
+            .await
+            .unwrap();
+        assert_eq!(asked.recv().await.as_deref(), Some("acquire"));
+        std::fs::write(&settings, SETTINGS.replace("60001", "60002")).unwrap();
+
+        let started = std::time::Instant::now();
+        let status = viewer.status().await;
+        assert!(started.elapsed() < Duration::from_secs(3));
+        assert_ne!(status["ready"], true);
+        assert_eq!(asked.recv().await.as_deref(), Some("release"));
+    }
+
+    /// A frame request that waits out a capture from before the latest
+    /// input ends within the same deadline as any other.
+    #[tokio::test]
+    async fn a_frame_waiting_out_an_older_capture_still_ends_in_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let viewer = unreachable(dir.path()).await;
+        let (_never, outcome) = watch::channel(None);
+        *viewer.capture.lock().unwrap() = Some(Capture {
+            revision: 0,
+            outcome,
+        });
+        viewer.frames.lock().await.input_revision = 1;
+
+        let started = std::time::Instant::now();
+        let error = viewer.frame().await.err().unwrap();
+        assert!(started.elapsed() < READ_DEADLINE + Duration::from_secs(1));
+        assert_eq!(error.error, "The helper did not answer in time");
+    }
+
+    /// A viewer from an older build answers without its process: the one
+    /// its record names counts when that runs Atlas.
+    #[tokio::test]
+    async fn an_older_viewer_is_found_by_its_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let older = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = older.local_addr().unwrap();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+
+            let reply = "{\"ok\":true,\"service\":\"atlas-viewer\"}";
+            for mut stream in older.incoming().flatten() {
+                let _ = stream.read(&mut [0u8; 1024]);
+                let _ = stream.write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n{reply}",
+                        reply.len()
+                    )
+                    .as_bytes(),
+                );
+            }
+        });
+
+        let record = dir.path().join(MENUBAR_RECORD);
+        let url = format!("http://{address}/secret/");
+        let check = |pid: u32| {
+            std::fs::write(&record, json!({"url": url, "pid": pid}).to_string()).unwrap();
+            let record = record.clone();
+            tokio::task::spawn_blocking(move || running(&record, address.port()))
+        };
+
+        assert_eq!(answering_off(&url).await, Some(None));
+        assert!(check(std::process::id()).await.unwrap().is_some());
+        assert!(check(1).await.unwrap().is_none(), "not Atlas");
+    }
+
+    /// Shutdown waits for control being taken to settle, however long the
+    /// helper takes, and then lets no more changes begin.
+    #[tokio::test]
+    async fn shutdown_waits_for_changes_in_progress() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("a.sock");
+        let (mut asked, answer) = input_service(&socket, "acquire");
+        let (listener, viewer) = bind(client_with_input(dir.path(), &socket), 0, None)
+            .await
+            .unwrap();
+        let server = tokio::spawn(accept(
+            listener,
+            viewer.clone(),
+            CONNECTIONS,
+            std::future::pending(),
+        ));
+
+        let taking = tokio::spawn({
+            let viewer = viewer.clone();
+            async move {
+                let _changing = viewer.changing().await;
+                viewer.take_control(&viewer.client(), &epoch()).await
+            }
+        });
+        assert_eq!(asked.recv().await.as_deref(), Some("acquire"));
+
+        let closing = tokio::spawn({
+            let viewer = viewer.clone();
+            async move { viewer.close().await }
+        });
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(!closing.is_finished(), "it waits for the acquire");
+
+        answer.notify_one();
+        taking.await.unwrap().unwrap();
+        closing.await.unwrap();
+        viewer.release(None).await.unwrap();
+        assert_eq!(asked.recv().await.as_deref(), Some("release"));
+        assert!(viewer.client().controller.pending().unwrap().is_empty());
+
+        let url = viewer.url.clone();
+        let refused =
+            tokio::task::spawn_blocking(move || post_local(&url, "control/revoke", &json!({})))
+                .await
+                .unwrap()
+                .unwrap_err();
+        assert_eq!(refused.error, "The viewer is closing");
+
+        server.abort();
+    }
+
+    /// A connection that never asks for anything at the viewer's private
+    /// address closes within moments; one that did stays open between
+    /// requests.
+    #[tokio::test]
+    async fn connections_that_never_name_the_viewer_close_soon() {
+        let dir = tempfile::tempdir().unwrap();
+        let (viewer, server) = served(dir.path(), CONNECTIONS).await;
+        let address: std::net::SocketAddr = viewer.authority.parse().unwrap();
+        let authority = viewer.authority.clone();
+        let prefix = viewer.prefix.clone();
+
+        let outcome = tokio::task::spawn_blocking(move || {
+            use std::io::{Read, Write};
+
+            let open = |ask: Option<&str>| {
+                let mut stream = std::net::TcpStream::connect(address).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(10)))
+                    .unwrap();
+                if let Some(path) = ask {
+                    let request = format!("GET {path} HTTP/1.1\r\nHost: {authority}\r\n\r\n");
+                    stream.write_all(request.as_bytes()).unwrap();
+                }
+                stream
+            };
+
+            let reply = |stream: &mut std::net::TcpStream| {
+                let mut reply = Vec::new();
+                let mut chunk = [0u8; 4096];
+                loop {
+                    let read = stream.read(&mut chunk).unwrap();
+                    assert_ne!(read, 0, "closed before replying");
+                    reply.extend_from_slice(&chunk[..read]);
+                    if let Some(parsed) = parse_response(&reply) {
+                        return parsed.0;
+                    }
+                }
+            };
+
+            let started = std::time::Instant::now();
+            let mut idle = open(None);
+            let mut elsewhere = open(Some("/elsewhere"));
+            let mut named = open(Some(&prefix));
+            assert_eq!(reply(&mut named), 200);
+            assert_eq!(reply(&mut elsewhere), 404);
+
+            for stream in [&mut idle, &mut elsewhere] {
+                let _ = stream.read_to_end(&mut Vec::new());
+                assert!(started.elapsed() < FIRST_REQUEST + Duration::from_secs(2));
+            }
+
+            std::thread::sleep(FIRST_REQUEST + Duration::from_millis(500) - started.elapsed());
+            let request = format!("GET {prefix} HTTP/1.1\r\nHost: {authority}\r\n\r\n");
+            named.write_all(request.as_bytes()).unwrap();
+            reply(&mut named)
+        })
+        .await
+        .unwrap();
+        assert_eq!(outcome, 200, "still open");
+
+        server.abort();
     }
 }

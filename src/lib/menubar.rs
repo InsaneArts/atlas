@@ -230,7 +230,7 @@ pub fn stop(output: &Path) -> Option<u16> {
 }
 
 /// Whether process `pid` runs an executable named like this one (`atlas`).
-fn is_atlas(pid: i32) -> bool {
+pub(crate) fn is_atlas(pid: i32) -> bool {
     let Some(name) = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.file_name().map(|name| name.to_owned()))
