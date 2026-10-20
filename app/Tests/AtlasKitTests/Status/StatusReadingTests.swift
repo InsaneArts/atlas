@@ -30,7 +30,8 @@ struct StatusReadingTests {
   func controlWaits() throws {
     func overview(_ mode: String) throws -> StatusReading { StatusReading(try status(["overview": ["mode": mode]])) }
     #expect(try overview("agent").controlBlocked == "An agent is acting in the helper.")
-    #expect(try overview("controlling").controlBlocked != nil)
+    #expect(try overview("controlling").controlBlocked == "Another viewer has control.")
+    #expect(try overview("recovering").controlBlocked == "Recover before taking control.")
     #expect(try overview("observing").controlBlocked == nil)
     #expect(try overview("recovering").recoveryOffered(holdingControl: false))
     #expect(try !overview("recovering").recoveryOffered(holdingControl: true))
