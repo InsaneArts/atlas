@@ -27,8 +27,7 @@ struct PictureRateCard: View {
         .fixedSize()
       }
     }
-    Note(text: note)
-      .multilineTextAlignment(.leading)
+    Note(text: note, alignment: .leading)
       .padding(.horizontal, Spacing.xs)
   }
 }
