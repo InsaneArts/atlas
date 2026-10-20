@@ -39,10 +39,12 @@ struct ViewerControllerControlTests {
 
   @Test("leaving the window gives control back")
   func leavingTheWindowGivesControlBack() async throws {
-    let viewer = try await ViewerController.watching(ScriptedService())
+    let service = ScriptedService()
+    let viewer = try await ViewerController.watching(service)
     await viewer.takeControl()
     viewer.lostFocus()
     #expect(viewer.session.lease == nil)
+    try await settle("the lease was never released") { service.log.contains("release lease") }
     viewer.close()
   }
 
