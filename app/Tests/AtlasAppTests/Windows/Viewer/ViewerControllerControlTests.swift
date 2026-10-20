@@ -1,0 +1,187 @@
+import AtlasKit
+import AtlasUI
+import Foundation
+import Testing
+
+@testable import AtlasApp
+
+@MainActor
+@Suite("ViewerController+Control")
+struct ViewerControllerControlTests {
+  @Test("taking control holds a lease, and giving it back releases it")
+  func takingControlHoldsALeaseAndGivingItBackReleasesIt() async {
+    let service = ScriptedService()
+    let viewer = await ViewerController.watching(service)
+    await viewer.takeControl()
+    #expect(viewer.session.lease == "lease")
+    #expect(service.log.contains { $0.hasPrefix("acquire frame-") })
+    viewer.releaseControl()
+    #expect(viewer.session.lease == nil)
+    await settle { service.log.contains("release lease") }
+    viewer.close()
+  }
+
+  @Test("after Give Back the next reading starts at once, not after the pause")
+  func afterGiveBackTheNextReadingComesAtOnce() async {
+    let service = ScriptedService()
+    // The pause between readings never ends by itself: a reading that waits for it never comes.
+    let viewer = await ViewerController.watching(service, nap: ViewerController.untilCancelled)
+    await viewer.takeControl()
+    service.hold = ["status"]
+    await settle("no reading started while in control") { service.held["status"] != nil }
+    let asked = service.statusCalls
+    viewer.releaseControl()
+    await settle("the release never read the status") { service.answered == asked }
+    service.resume("status")
+    await settle("the next reading waited for the pause") { service.statusCalls > asked + 1 }
+    viewer.close()
+  }
+
+  @Test("leaving the window gives control back")
+  func leavingTheWindowGivesControlBack() async {
+    let viewer = await ViewerController.watching(ScriptedService())
+    await viewer.takeControl()
+    viewer.lostFocus()
+    #expect(viewer.session.lease == nil)
+    viewer.close()
+  }
+
+  @Test("a grant that arrives after leaving the window is given back")
+  func aGrantThatArrivesAfterLeavingIsGivenBack() async {
+    let service = ScriptedService()
+    let viewer = await ViewerController.watching(service)
+    viewer.gainedFocus()
+    let taking = Task { await viewer.takeControl() }
+    viewer.lostFocus()
+    await taking.value
+    #expect(viewer.session.lease == nil)
+    await settle { service.log.contains("release lease") }
+    viewer.close()
+  }
+
+  @Test("a grant that arrives while hidden or paused is given back", arguments: [true, false])
+  func aGrantThatArrivesWhileHiddenOrPausedIsGivenBack(hidden: Bool) async {
+    let service = ScriptedService()
+    let viewer = await ViewerController.watching(service)
+    service.hold = ["acquire"]
+    let taking = Task { await viewer.takeControl() }
+    await settle { service.held["acquire"] != nil }
+    #expect(viewer.session.acquiring)
+    if hidden {
+      viewer.setVisible(false)
+    } else {
+      viewer.togglePause()
+    }
+    service.resume("acquire")
+    await taking.value
+    #expect(viewer.session.lease == nil)
+    #expect(!viewer.session.acquiring)
+    await settle { service.log.contains("release lease") }
+    viewer.close()
+  }
+
+  @Test("control can be taken again after coming back to the window")
+  func controlCanBeTakenAgainAfterComingBackToTheWindow() async {
+    let viewer = await ViewerController.watching(ScriptedService())
+    await viewer.takeControl()
+    viewer.lostFocus()
+    viewer.gainedFocus()
+    await viewer.takeControl()
+    #expect(viewer.session.lease == "lease")
+    viewer.close()
+  }
+
+  @Test("a status that is not ready ends control at once")
+  func aStatusThatIsNotReadyEndsControlAtOnce() async {
+    let service = ScriptedService()
+    let viewer = await ViewerController.watching(service)
+    await viewer.takeControl()
+    service.reply = ["ready": false, "canObserve": true, "overview": ["mode": "observing"]]
+    await viewer.readStatus()
+    #expect(viewer.session.lease == nil)
+    #expect(viewer.session.notice == ViewerWords.inputUnavailable)
+    viewer.close()
+  }
+
+  @Test("hiding the window gives control back")
+  func hidingTheWindowGivesControlBack() async {
+    let viewer = await ViewerController.watching(ScriptedService())
+    await viewer.takeControl()
+    viewer.setVisible(false)
+    #expect(viewer.session.lease == nil)
+    viewer.close()
+  }
+
+  @Test("a stale picture ends control without further input")
+  func aStalePictureEndsControlWithoutFurtherInput() async {
+    let clock = TestClock()
+    let viewer = await ViewerController.watching(ScriptedService(), clock: clock.read, heartbeat: .milliseconds(5))
+    await viewer.takeControl()
+    viewer.watch(false)
+    clock.now = Freshness.stale
+    #expect(!viewer.canInput)
+    await settle { viewer.session.lease == nil }
+    #expect(viewer.session.notice == ViewerWords.stalePicture)
+    viewer.close()
+  }
+
+  @Test("a failed renewal ends control")
+  func aFailedRenewalEndsControl() async {
+    let service = ScriptedService()
+    let viewer = await ViewerController.watching(service, heartbeat: .milliseconds(5))
+    service.fail = ["renew"]
+    await viewer.takeControl()
+    await settle { viewer.session.lease == nil }
+    #expect(service.log.contains("renew"))
+    #expect(viewer.session.notice == "renew failed")
+    viewer.close()
+  }
+
+  @Test("an input that fails ends control")
+  func anInputThatFailsEndsControl() async {
+    let service = ScriptedService()
+    let viewer = await ViewerController.watching(service)
+    service.fail = ["input"]
+    await viewer.takeControl()
+    viewer.sendKey("escape")
+    await settle { viewer.session.lease == nil }
+    #expect(viewer.session.notice == "input failed")
+    viewer.close()
+  }
+
+  @Test("a changed helper ends control")
+  func aChangedHelperEndsControl() async {
+    let service = ScriptedService()
+    let viewer = await ViewerController.watching(service)
+    await viewer.takeControl()
+    service.revision = "r2"
+    viewer.refresh()
+    await settle { viewer.session.lease == nil }
+    #expect(viewer.session.notice == ViewerWords.helperChanged)
+    viewer.close()
+  }
+
+  @Test("control waits while an agent works")
+  func controlWaitsWhileAnAgentWorks() async {
+    let service = ScriptedService()
+    service.reply = ["ready": true, "canObserve": true, "overview": ["mode": "agent"]]
+    let viewer = await ViewerController.watching(service)
+    #expect(!viewer.snapshot.canTakeControl)
+    await viewer.takeControl()
+    #expect(!service.log.contains { $0.hasPrefix("acquire") }, "nothing is asked while control must wait")
+    viewer.close()
+  }
+
+  @Test("text being composed is dropped once the picture is lost mid-composition")
+  func losingThePictureDropsTheComposition() async {
+    let service = ScriptedService()
+    let viewer = await ViewerController.watching(service)
+    await viewer.takeControl()
+    viewer.compose("ni")
+    service.fail = ["status"]
+    viewer.refresh()
+    await settle { viewer.reading.unavailable != nil }
+    #expect(viewer.session.composing.isEmpty)
+    viewer.close()
+  }
+}
