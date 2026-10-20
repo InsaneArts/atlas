@@ -710,7 +710,16 @@ fn main() -> ExitCode {
                 if message.is_some() || runs_agents {
                     stop_cleanly_on_interrupt(message);
                 }
-                execute(config.clone(), command).await
+
+                let result = execute(config.clone(), command).await;
+
+                // Being stopped: the stop ends Atlas in a moment and says so,
+                // so what the cut-short command gave is not reported.
+                if atlas::agents::stopping() {
+                    std::future::pending::<()>().await;
+                }
+
+                result
             })
         })
         .map_err(|error| or_logged_out(error, &config));
@@ -983,7 +992,8 @@ fn stop_cleanly_on_interrupt(message: Option<&'static str>) {
         };
 
         // An agent tool Atlas started in its own process group does not see
-        // the terminal's Ctrl-C: stop it too, before saying stopped.
+        // the terminal's Ctrl-C: stop it too, before saying stopped. No tool
+        // starts after this, and the command stops at its next step.
         atlas::agents::stop_running();
 
         if let Some(message) = said {

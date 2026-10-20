@@ -142,6 +142,12 @@ pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Val
 
     stop_menubar(client.as_ref());
     disconnect(&executable, &mut removed, &mut warnings)?;
+
+    // Stopped while the agents were changed: the app and settings stay.
+    if crate::agents::stopping() {
+        return Err(problem("Stopped before Atlas.app was removed"));
+    }
+
     trash(&app, &leftovers, &mut removed)?;
     remove_settings(config_path, keep_config, &data, &mut removed)?;
 
@@ -271,12 +277,14 @@ fn confirm(found: &Found, config_path: &Path, keep_config: bool) -> Result<()> {
 }
 
 /// Why the helper cannot settle an action whose outcome is unknown: its
-/// account is gone, or Atlas does not answer there. None when it answers.
-fn cannot_settle(account_exists: bool, status: &Value) -> Option<&'static str> {
+/// account is gone, or it is logged out. None while it could: a helper
+/// that is logged in but not answering may answer again after atlas
+/// restart, and whether it is logged in at all may be unknown.
+fn cannot_settle(account_exists: bool, logged_in: Option<bool>) -> Option<&'static str> {
     if !account_exists {
         Some("the helper account no longer exists")
-    } else if !status["daemon"]["pid"].is_number() {
-        Some("the helper is not answering")
+    } else if logged_in == Some(false) {
+        Some("the helper is logged out")
     } else {
         None
     }
@@ -294,18 +302,22 @@ async fn stop_helper(
     warnings: &mut Vec<String>,
 ) -> Result<()> {
     let config = &client.config;
+
+    // Held from here on, so the outcome checked below stays as read.
+    let _exclusion = client.controller.acquire(true)?;
+
     let exists = setup::account_with_uid(config.helper_uid)?.is_some();
     let status = client.status().await;
-    let cannot_settle = cannot_settle(exists, &status);
-    let _exclusion = client.controller.acquire(cannot_settle.is_some())?;
 
-    if let Some(why) = cannot_settle
-        && client.controller.require_known().is_err()
-    {
-        skipped("Last action", &format!("outcome unknown; {why}"));
-        warnings.push(format!(
-            "The last action's outcome is unknown and {why}, so it was not checked"
-        ));
+    match cannot_settle(exists, crate::session::logged_in(config.helper_uid)) {
+        None => client.controller.require_known()?,
+        Some(why) if client.controller.require_known().is_err() => {
+            skipped("Last action", &format!("outcome unknown; {why}"));
+            warnings.push(format!(
+                "The last action's outcome is unknown and {why}, so it was not checked"
+            ));
+        }
+        Some(_) => {}
     }
 
     if let Some(pid) = status["inputService"]["pid"]
@@ -400,6 +412,16 @@ fn disconnect(
                 "The plugin was not removed from {failed}; run atlas agents remove"
             ));
         }
+
+        for (agent, place) in kept_agents(&reply) {
+            skipped(
+                "Agent plugins",
+                &format!("left in {agent}: its atlas marketplace is from {place}"),
+            );
+            warnings.push(format!(
+                "{agent}'s marketplace named atlas is from {place}, not Atlas, so it was left alone"
+            ));
+        }
     }
 
     let command = config::home()?.join(".local/bin/atlas");
@@ -426,6 +448,24 @@ fn failed_agents(reply: &Value) -> String {
     } else {
         names.join(" and ")
     }
+}
+
+/// The agents a plugin removal left alone, as their names and where their
+/// marketplace named atlas comes from.
+fn kept_agents(reply: &Value) -> Vec<(String, String)> {
+    reply["agents"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|agent| {
+            let place = agent["kept"].as_str()?;
+            let name = agent["agent"].as_str()?;
+            let shown =
+                crate::agents::Agent::named(name).map_or(name, |agent| agent.display_name());
+
+            Some((shown.to_owned(), place.to_owned()))
+        })
+        .collect()
 }
 
 /// The app goes to the Trash, where it can be recovered; what it left for
@@ -560,21 +600,35 @@ mod tests {
         assert!(!remove_own_file(Path::new("/etc/hosts")).unwrap());
     }
 
-    /// An unknown outcome blocks uninstall only while the helper can
-    /// settle it: its account exists and Atlas answers there.
+    /// An unknown outcome blocks uninstall while the helper could settle
+    /// it: its account exists and it is not known to be logged out, even
+    /// when Atlas does not answer there now.
     #[test]
-    fn only_a_helper_that_answers_must_settle_an_unknown_outcome() {
-        let answering = json!({"daemon": {"pid": 123}});
-        let silent = json!({"ok": false, "error": "not answering"});
-        assert_eq!(cannot_settle(true, &answering), None);
+    fn a_helper_that_could_answer_again_must_settle_an_unknown_outcome() {
+        assert_eq!(cannot_settle(true, Some(true)), None);
+        assert_eq!(cannot_settle(true, None), None, "unknown is not logged out");
         assert_eq!(
-            cannot_settle(true, &silent),
-            Some("the helper is not answering")
+            cannot_settle(true, Some(false)),
+            Some("the helper is logged out")
         );
         assert_eq!(
-            cannot_settle(false, &answering),
+            cannot_settle(false, Some(true)),
             Some("the helper account no longer exists")
         );
+    }
+
+    /// Agents whose marketplace named atlas is someone else's are named.
+    #[test]
+    fn agents_left_alone_are_named_with_their_marketplace() {
+        let reply = json!({"ok": true, "agents": [
+            {"agent": "claude", "ok": true, "changed": true},
+            {"agent": "codex", "ok": true, "changed": false, "kept": "someone/atlas"},
+        ]});
+        assert_eq!(
+            kept_agents(&reply),
+            vec![("Codex".to_owned(), "someone/atlas".to_owned())]
+        );
+        assert!(kept_agents(&json!({"ok": true, "agents": []})).is_empty());
     }
 
     /// Uninstall's own "off" is never kept as the person's choice; one

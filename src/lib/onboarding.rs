@@ -216,7 +216,7 @@ pub async fn status(config_path: &Path) -> Result<Value> {
 
     // This account asked this helper: its request names it (the window), or
     // a setup with it is recorded (`atlas init`, or the window's finish).
-    let paired = asked(uid, helper.uid);
+    let paired = asked(uid, &helper);
     let signed_in = crate::session::logged_in(helper.uid) == Some(true);
 
     let client = Client::new(config.clone())?;
@@ -339,11 +339,24 @@ fn settings(config_path: &Path) -> Result<Option<Config>> {
 }
 
 /// Whether this account (`controller`) asked `helper` to be its helper: its
-/// request names it, or a setup with it is recorded.
-fn asked(controller: u32, helper: u32) -> bool {
-    request()
-        .is_some_and(|pairing| pairing.controller_uid == controller && pairing.helper_uid == helper)
-        || setup::migrate::in_effect(helper)
+/// request names it, or a setup with it (not an earlier account with its
+/// user ID) is recorded.
+fn asked(controller: u32, helper: &setup::Account) -> bool {
+    request().is_some_and(|pairing| {
+        pairing.controller_uid == controller && pairing.helper_uid == helper.uid
+    }) || setup::migrate::in_effect_for(helper.uid, &helper.home)
+}
+
+/// Whether `helper`'s Atlas folder was prepared for this account, as `atlas
+/// init` does just before installing the helper's background job there.
+/// Only the account it was prepared for may look inside it.
+fn prepared(helper: &setup::Account) -> bool {
+    let layout = Layout {
+        uid: helper.uid,
+        home: helper.home.clone(),
+    };
+
+    fs::metadata(layout.daemon()).is_ok_and(|metadata| metadata.is_dir())
 }
 
 /// Whether something answers at the helper socket `config` names. Checked
@@ -353,15 +366,20 @@ fn answers(config: &Config) -> bool {
 }
 
 /// Refuse to replace settings that name another helper still in use: one
-/// this account asked, or one that answers. Settings for an account that
-/// is gone, or one never asked that is silent (an `atlas init` stopped once
-/// it wrote them), give way, as the window offers the choice again then.
+/// this account asked, one that answers, or one prepared for this account
+/// (an `atlas init` stopped once it may have installed the helper's job,
+/// which replacing the settings would leave with nothing using it).
+/// Settings for an account that is gone, or one never asked that is silent
+/// (an `atlas init` stopped earlier), give way, as the window offers the
+/// choice again then.
 fn keep_other_helper(uid: u32, previous: &Config) -> Result<()> {
     match setup::account_with_uid(previous.helper_uid)? {
-        Some(other) if asked(uid, other.uid) || answers(previous) => Err(problem(format!(
-            "Atlas already uses {} as its helper; choose {} again",
-            other.name, other.name
-        ))),
+        Some(other) if asked(uid, &other) || answers(previous) || prepared(&other) => {
+            Err(problem(format!(
+                "Atlas already uses {} as its helper; choose {} again",
+                other.name, other.name
+            )))
+        }
         _ => Ok(()),
     }
 }
@@ -982,6 +1000,29 @@ mod tests {
         drop(listener);
         assert!(socket.exists());
         assert!(!answers(&config), "a socket nothing listens at");
+    }
+
+    /// A helper whose Atlas folder was prepared for this account may have
+    /// its job installed, so its settings are not replaced by another's.
+    #[test]
+    fn a_helper_prepared_for_this_account_is_recognised() {
+        let dir = tempfile::tempdir().unwrap();
+        let helper = setup::Account {
+            name: "helper".into(),
+            uid: 502,
+            home: dir.path().to_owned(),
+        };
+        assert!(!prepared(&helper), "nothing prepared");
+
+        let layout = Layout {
+            uid: helper.uid,
+            home: helper.home.clone(),
+        };
+        fs::create_dir_all(layout.root()).unwrap();
+        assert!(!prepared(&helper), "only its root");
+
+        fs::create_dir_all(layout.daemon()).unwrap();
+        assert!(prepared(&helper));
     }
 
     #[test]

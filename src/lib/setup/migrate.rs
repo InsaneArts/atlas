@@ -107,6 +107,19 @@ fn carried_over(log: Result<Option<Log>>) -> bool {
     }
 }
 
+/// Whether helper `uid`'s setup is in effect (as [`in_effect`]) for the
+/// account whose home is `home`. A record left by a deleted account whose
+/// user ID was reused does not count; one that cannot be read does.
+pub fn in_effect_for(uid: u32, home: &Path) -> bool {
+    log_path(uid).is_ok_and(|path| in_effect_with(load_log(&path), home))
+}
+
+fn in_effect_with(log: Result<Option<Log>>, home: &Path) -> bool {
+    let theirs = matches!(&log, Ok(Some(log)) if log.plan.home != home);
+
+    !theirs && carried_over(log)
+}
+
 /// Archive helper `uid`'s setup record if it belongs to another account
 /// (a deleted helper whose UID was reused): it describes nothing here.
 /// Whether a record was archived.
@@ -1162,6 +1175,35 @@ mod tests {
 
         let log: Log = serde_json::from_value(legacy).unwrap();
         assert!(log.plan.label.is_empty());
+    }
+
+    /// A setup counts for the account at its home only: a record left by a
+    /// deleted account whose user ID was reused describes someone else.
+    #[test]
+    fn a_setup_is_in_effect_only_for_the_account_it_was_made_with() {
+        let log = |state| {
+            Ok(Some(Log {
+                version: 1,
+                plan: plan("/c/atlas.local.toml".into(), "a"),
+                state,
+                pending: Vec::new(),
+                history: Vec::new(),
+            }))
+        };
+        let home = Path::new("/Users/h");
+
+        assert!(in_effect_with(log(State::Applied), home));
+        assert!(in_effect_with(log(State::Applying), home));
+        assert!(!in_effect_with(log(State::RolledBack), home));
+        assert!(!in_effect_with(
+            log(State::Applied),
+            Path::new("/Users/new")
+        ));
+        assert!(!in_effect_with(Ok(None), home));
+        assert!(
+            in_effect_with(Err(problem("unreadable")), home),
+            "a record that cannot be read counts"
+        );
     }
 
     #[test]

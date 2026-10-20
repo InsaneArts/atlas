@@ -12,7 +12,7 @@ use std::{
     fs,
     io::Read,
     path::{Path, PathBuf},
-    process::{Command, Output, Stdio},
+    process::{Child, Command, Output, Stdio},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -83,12 +83,14 @@ impl Agent {
     /// marketplace comes from now (unknown when `None`). One from another
     /// folder of Atlas's own gives way first (Codex refuses to add over it;
     /// Claude Code replaces it itself); anyone else's is never touched.
+    /// Claude Code would replace one it cannot tell is Atlas's too, so it is
+    /// not connected while its marketplaces cannot be read.
     fn connecting(self, marketplace: &Path, now: Option<&Source>) -> Result<Vec<Vec<String>>> {
         let mut steps = Vec::new();
 
         match now {
             Some(Source::Folder(folder)) if same_place(folder, marketplace) => {}
-            Some(Source::Folder(folder)) if atlas_folder(folder) => {
+            Some(Source::Folder(folder)) if self.ours(folder) => {
                 if self == Agent::Codex {
                     steps.push(argv(&["plugin", "marketplace", "remove", NAME]));
                 }
@@ -97,7 +99,9 @@ impl Agent {
                 return Err(self.another(&folder.display().to_string()));
             }
             Some(Source::Elsewhere(place)) => return Err(self.another(place)),
-            Some(Source::Absent) | None => {}
+            Some(Source::Absent) => {}
+            None if self == Agent::Claude => return Err(self.unreadable()),
+            None => {}
         }
 
         steps.extend(self.connect(marketplace));
@@ -112,6 +116,49 @@ impl Agent {
             self.display_name(),
             self.name()
         ))
+    }
+
+    /// Its marketplaces could not be read.
+    fn unreadable(self) -> Error {
+        problem(format!(
+            "{}'s marketplaces could not be read",
+            self.display_name()
+        ))
+    }
+
+    /// Whether `folder`, where its marketplace named atlas comes from, is
+    /// Atlas's own: a folder of Atlas's, or one since removed whose plugin
+    /// this agent keeps a copy of that is Atlas's.
+    fn ours(self, folder: &Path) -> bool {
+        atlas_folder(folder) || (matches!(folder.try_exists(), Ok(false)) && self.keeps_atlas())
+    }
+
+    /// Whether this agent's copy of the plugin named atlas (agents copy a
+    /// plugin when installing it) is Atlas's.
+    fn keeps_atlas(self) -> bool {
+        let Some(home) = self.home() else {
+            return false;
+        };
+
+        fs::read_dir(home.join("plugins/cache").join(NAME).join(NAME))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|version| atlas_plugin(&version.path()))
+    }
+
+    /// The folder this agent keeps its settings in, as its tool finds it
+    /// with Atlas's environment.
+    fn home(self) -> Option<PathBuf> {
+        let (variable, folder) = match self {
+            Agent::Claude => ("CLAUDE_CONFIG_DIR", ".claude"),
+            Agent::Codex => ("CODEX_HOME", ".codex"),
+        };
+
+        std::env::var_os(variable)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(folder)))
     }
 
     /// The argv that disconnect it.
@@ -201,12 +248,23 @@ impl Agent {
     }
 
     /// Where its marketplace named atlas comes from (unknown when its list
-    /// cannot be read); an error when it does not answer.
+    /// cannot be read); an error when it does not answer. Codex's whole list
+    /// fails while any of its local marketplace folders is missing, so its
+    /// settings, where adding a marketplace records it, are read first.
     fn source(self) -> std::result::Result<Option<Source>, String> {
+        let recorded = match self {
+            Agent::Claude => None,
+            Agent::Codex => self.home().and_then(|home| codex_recorded(&home)),
+        };
+
+        if let Some(found @ (Source::Folder(_) | Source::Elsewhere(_))) = &recorded {
+            return Ok(Some(found.clone()));
+        }
+
         match exec(self, &["plugin", "marketplace", "list", "--json"], ASK) {
-            Ok(output) => Ok(self.source_in(&output.stdout)),
+            Ok(output) => Ok(self.source_in(&output.stdout).or(recorded)),
             Err(error) if error.code == "agents" => Err(error.error),
-            Err(_) => Ok(None),
+            Err(_) => Ok(recorded),
         }
     }
 
@@ -275,28 +333,77 @@ fn this_atlas(folder: &Path) -> bool {
 }
 
 /// Whether `folder` is a marketplace of Atlas's own: this Atlas's, one
-/// inside an Atlas.app (even one since removed), or a checkout's, whose
-/// plugin manifest gives Atlas's homepage.
+/// inside an app that is Atlas (or inside any app, once removed), or one
+/// whose plugin manifest gives Atlas's homepage, such as a checkout's.
 fn atlas_folder(folder: &Path) -> bool {
     if marketplace().is_ok_and(|ours| same_place(folder, &ours)) {
         return true;
     }
 
-    let in_app = folder.ends_with("Contents/Resources/agents")
-        && folder
-            .ancestors()
-            .nth(3)
-            .and_then(Path::file_name)
-            .is_some_and(|name| name == "Atlas.app");
-    if in_app {
+    let app = folder
+        .ancestors()
+        .nth(3)
+        .filter(|app| app.extension().is_some_and(|extension| extension == "app"))
+        .filter(|_| folder.ends_with("Contents/Resources/agents"));
+    if let Some(app) = app
+        && (matches!(folder.try_exists(), Ok(false)) || atlas_bundle(app))
+    {
         return true;
     }
 
+    atlas_plugin(&folder.join(NAME))
+}
+
+/// Whether `plugin` is Atlas's plugin: a manifest of it gives Atlas's homepage.
+fn atlas_plugin(plugin: &Path) -> bool {
     [".claude-plugin/plugin.json", ".codex-plugin/plugin.json"]
         .iter()
-        .filter_map(|manifest| fs::read(folder.join(NAME).join(manifest)).ok())
+        .filter_map(|manifest| fs::read(plugin.join(manifest)).ok())
         .filter_map(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         .any(|manifest| manifest["name"] == NAME && manifest["homepage"] == HOMEPAGE)
+}
+
+/// Whether the app bundle at `app` is Atlas, by its bundle identifier.
+fn atlas_bundle(app: &Path) -> bool {
+    let Ok(info) = fs::read_to_string(app.join("Contents/Info.plist")) else {
+        return false;
+    };
+
+    info.split("<key>CFBundleIdentifier</key>")
+        .nth(1)
+        .and_then(|rest| rest.trim_start().strip_prefix("<string>"))
+        .and_then(|rest| rest.split("</string>").next())
+        == Some(crate::setup::IDENTIFIER)
+}
+
+/// Where Codex's marketplace named atlas comes from, as the settings in
+/// `home` record it: None when they cannot be read.
+fn codex_recorded(home: &Path) -> Option<Source> {
+    match fs::read_to_string(home.join("config.toml")) {
+        Ok(text) => codex_recorded_in(&text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(Source::Absent),
+        Err(_) => None,
+    }
+}
+
+/// Where the marketplace named atlas comes from, in Codex's settings:
+/// `[marketplaces.atlas]` with `source_type` and `source`.
+fn codex_recorded_in(text: &str) -> Option<Source> {
+    let settings: toml::Table = text.parse().ok()?;
+    let Some(found) = settings
+        .get("marketplaces")
+        .and_then(|marketplaces| marketplaces.get(NAME))
+    else {
+        return Some(Source::Absent);
+    };
+
+    let kind = found.get("source_type").and_then(toml::Value::as_str);
+    let place = found.get("source").and_then(toml::Value::as_str);
+
+    Some(match (kind, place) {
+        (Some("local"), Some(folder)) => Source::Folder(PathBuf::from(folder)),
+        (_, place) => Source::Elsewhere(place.unwrap_or("somewhere else").to_owned()),
+    })
 }
 
 /// One argv of owned words.
@@ -335,15 +442,31 @@ pub fn marketplace() -> Result<PathBuf> {
     Err(problem("This Atlas carries no agent plugin; reinstall it"))
 }
 
-/// The process groups of agent tools running now.
-static RUNNING: Mutex<Vec<i32>> = Mutex::new(Vec::new());
+/// The agent tools Atlas runs: their process groups, and whether Atlas is
+/// being stopped, after which none starts.
+struct Tools {
+    groups: Vec<i32>,
+    stopping: bool,
+}
 
-/// Stop every agent tool Atlas is running (Atlas itself is being stopped).
-pub fn stop_running() {
-    let groups = RUNNING
+static RUNNING: Mutex<Tools> = Mutex::new(Tools {
+    groups: Vec::new(),
+    stopping: false,
+});
+
+/// The tools in `tools`, a lock that never stays poisoned (nothing panics
+/// while holding it).
+fn listed(tools: &Mutex<Tools>) -> std::sync::MutexGuard<'_, Tools> {
+    tools
         .lock()
-        .map(|groups| groups.clone())
-        .unwrap_or_default();
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Stop every agent tool Atlas is running (Atlas itself is being stopped,
+/// and ends once this returns). No tool starts from now on, so none
+/// outlives Atlas.
+pub fn stop_running() {
+    let groups = halt(&RUNNING);
     if groups.is_empty() {
         return;
     }
@@ -360,6 +483,37 @@ pub fn stop_running() {
     signal(nix::sys::signal::Signal::SIGKILL);
 }
 
+/// Whether Atlas is being stopped: whatever runs now stops at its next step.
+pub fn stopping() -> bool {
+    listed(&RUNNING).stopping
+}
+
+/// Mark `tools` stopping, so no tool starts from now on, and give the
+/// process groups running now.
+fn halt(tools: &Mutex<Tools>) -> Vec<i32> {
+    let mut tools = listed(tools);
+    tools.stopping = true;
+
+    tools.groups.clone()
+}
+
+/// Start `command` and list its process group in `tools`, under one lock:
+/// a stop then reaches every tool started before it, and none starts after.
+fn start(tools: &'static Mutex<Tools>, command: &mut Command) -> Result<(Child, Running)> {
+    let mut listed = listed(tools);
+    if listed.stopping {
+        return Err(problem("Atlas is stopping"));
+    }
+
+    let child = command.spawn()?;
+    let group = i32::try_from(child.id()).ok();
+    if let Some(group) = group {
+        listed.groups.push(group);
+    }
+
+    Ok((child, Running { tools, group }))
+}
+
 /// Run an agent's tool with no input and stop it after `limit`. Output is
 /// collected as it arrives, so a background process the tool leaves holding
 /// its output open cannot keep Atlas waiting.
@@ -369,38 +523,32 @@ fn exec(agent: Agent, argv: &[impl AsRef<std::ffi::OsStr>], limit: Duration) -> 
     let (executable, path) = executable(agent);
 
     // Its own process group, so a timeout stops whatever it started too.
-    let child = Command::new(executable)
+    let mut command = Command::new(executable);
+    command
         .args(argv)
         .env("PATH", path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .process_group(0)
-        .spawn()?;
-    let _running = Running::register(&child);
+        .process_group(0);
+    let (child, _running) = start(&RUNNING, &mut command)?;
 
     supervise(agent, child, limit)
 }
 
-/// A process group Atlas started, listed in RUNNING while it is waited
-/// for, so stop_running reaches it.
-struct Running(Option<i32>);
-
-impl Running {
-    fn register(child: &std::process::Child) -> Self {
-        let group = i32::try_from(child.id()).ok();
-        if let (Some(group), Ok(mut running)) = (group, RUNNING.lock()) {
-            running.push(group);
-        }
-
-        Self(group)
-    }
+/// A process group Atlas started, listed while it is waited for, so
+/// stop_running reaches it.
+struct Running {
+    tools: &'static Mutex<Tools>,
+    group: Option<i32>,
 }
 
 impl Drop for Running {
     fn drop(&mut self) {
-        if let (Some(group), Ok(mut running)) = (self.0, RUNNING.lock()) {
-            running.retain(|running| *running != group);
+        if let Some(group) = self.group {
+            listed(self.tools)
+                .groups
+                .retain(|running| *running != group);
         }
     }
 }
@@ -495,18 +643,16 @@ fn shell_path() -> &'static [PathBuf] {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_owned());
         // An interactive shell may print other things: the answer is marked.
         let script = "printf '\\n<atlas-path>%s</atlas-path>\\n' \"$PATH\"";
-        let Ok(mut child) = Command::new(shell)
+        let mut command = Command::new(shell);
+        command
             .args(["-ilc", script])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .process_group(0)
-            .spawn()
-        else {
+            .process_group(0);
+        let Ok((mut child, _running)) = start(&RUNNING, &mut command) else {
             return Vec::new();
         };
-
-        let _running = Running::register(&child);
 
         let Some(stdout) = child.stdout.take() else {
             return Vec::new();
@@ -728,19 +874,25 @@ pub fn change(chosen: &[Agent], remove: bool) -> Result<Value> {
         let source = agent.source();
 
         let outcome = match &marketplace {
-            Some(path) => connect_agent(agent, path, &source),
+            Some(path) => connect_agent(agent, path, &source).map(|()| Removal::Changed),
             None => disconnect_agent(agent, source),
         };
 
-        results.push(match outcome {
-            Ok(changed) => json!({
+        let mut result = match &outcome {
+            Ok(removal) => json!({
                 "agent": agent.name(),
                 "ok": true,
                 "connected": !remove,
-                "changed": changed,
+                "changed": *removal == Removal::Changed,
             }),
             Err(error) => json!({"agent": agent.name(), "ok": false, "error": error.error}),
-        });
+        };
+
+        if let Ok(Removal::Kept(place)) = outcome {
+            result["kept"] = json!(place);
+        }
+
+        results.push(result);
     }
 
     let ok = results.iter().all(|result| result["ok"] == true);
@@ -749,12 +901,12 @@ pub fn change(chosen: &[Agent], remove: bool) -> Result<Value> {
 
 /// Connect `agent` to `marketplace`, given where its marketplace named
 /// atlas comes from (`source`, unknown when unreadable): the steps stop at
-/// a failure. Whether anything changed, which connecting always does.
+/// a failure.
 fn connect_agent(
     agent: Agent,
     marketplace: &Path,
     source: &std::result::Result<Option<Source>, String>,
-) -> Result<bool> {
+) -> Result<()> {
     let steps = agent.connecting(marketplace, source.as_ref().ok().and_then(Option::as_ref))?;
 
     steps
@@ -762,25 +914,31 @@ fn connect_agent(
         .map(|argv| run(agent, argv))
         .find(Result::is_err)
         .unwrap_or(Ok(()))
-        .map(|()| true)
+}
+
+/// What removing the plugin from an agent did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Removal {
+    Changed,
+    /// It had no marketplace named atlas.
+    Nothing,
+    /// Its marketplace named atlas is someone else's, from this place.
+    Kept(String),
 }
 
 /// Disconnect `agent` when its marketplace named atlas (from `source`) is
 /// Atlas's own: every step runs, tolerating parts already gone, then the
-/// plugin must be gone. Whether anything changed.
+/// plugin must be gone.
 fn disconnect_agent(
     agent: Agent,
     source: std::result::Result<Option<Source>, String>,
-) -> Result<bool> {
+) -> Result<Removal> {
     match source.map_err(problem)? {
-        Some(Source::Folder(folder)) if atlas_folder(&folder) => {}
-        Some(_) => return Ok(false),
-        None => {
-            return Err(problem(format!(
-                "{}'s marketplaces could not be read",
-                agent.display_name()
-            )));
-        }
+        Some(Source::Folder(folder)) if agent.ours(&folder) => {}
+        Some(Source::Folder(folder)) => return Ok(Removal::Kept(folder.display().to_string())),
+        Some(Source::Elsewhere(place)) => return Ok(Removal::Kept(place)),
+        Some(Source::Absent) => return Ok(Removal::Nothing),
+        None => return Err(agent.unreadable()),
     }
 
     let failures = agent
@@ -789,7 +947,7 @@ fn disconnect_agent(
         .filter_map(|argv| run(agent, argv).err())
         .collect();
 
-    removed(agent, failures, agent.installed()).map(|()| true)
+    removed(agent, failures, agent.installed()).map(|()| Removal::Changed)
 }
 
 /// Whether removing from `agent` worked, from the steps that failed and
@@ -1315,9 +1473,6 @@ mod tests {
         assert!(atlas_folder(Path::new(
             "/Volumes/Old/Atlas.app/Contents/Resources/agents"
         )));
-        assert!(!atlas_folder(Path::new(
-            "/Applications/Other.app/Contents/Resources/agents"
-        )));
     }
 
     #[test]
@@ -1343,11 +1498,7 @@ mod tests {
         let remove = argv(&["plugin", "marketplace", "remove", "atlas"]);
 
         for agent in Agent::ALL {
-            for now in [
-                None,
-                Some(&Source::Absent),
-                Some(&Source::Folder(path.clone())),
-            ] {
+            for now in [Some(&Source::Absent), Some(&Source::Folder(path.clone()))] {
                 assert_eq!(
                     agent.connecting(&path, now).unwrap(),
                     agent.connect(&path),
@@ -1355,6 +1506,8 @@ mod tests {
                 );
             }
 
+            // There, so not judged by the agent's own copy of the plugin.
+            fs::create_dir_all(dir.path().join("someone")).unwrap();
             let someone = Source::Folder(dir.path().join("someone"));
             let error = agent.connecting(&path, Some(&someone)).unwrap_err();
             assert!(error.error.contains("another marketplace named atlas"));
@@ -1372,18 +1525,145 @@ mod tests {
         );
     }
 
+    /// Claude Code replaces a marketplace named atlas without asking, so an
+    /// unknown one stops it; Codex refuses to add over another itself.
+    #[test]
+    fn claude_code_is_not_connected_over_an_unknown_marketplace() {
+        let path = Path::new("/Applications/Atlas.app/Contents/Resources/agents");
+        let error = Agent::Claude.connecting(path, None).unwrap_err();
+        assert_eq!(error.error, "Claude Code's marketplaces could not be read");
+        assert_eq!(
+            Agent::Claude
+                .connecting(path, Some(&Source::Absent))
+                .unwrap(),
+            Agent::Claude.connect(path),
+            "none at all is no reason to stop"
+        );
+        assert_eq!(
+            Agent::Codex.connecting(path, None).unwrap(),
+            Agent::Codex.connect(path)
+        );
+    }
+
     /// Removing leaves an agent alone unless its marketplace named atlas is
-    /// Atlas's own (these cases run no tool).
+    /// Atlas's own, and says whose it left (these cases run no tool).
     #[test]
     fn removing_never_touches_someone_elses_marketplace() {
         let dir = tempfile::tempdir().unwrap();
         let someone = Some(Source::Folder(dir.path().to_owned()));
-        assert!(!disconnect_agent(Agent::Claude, Ok(someone)).unwrap());
+        assert_eq!(
+            disconnect_agent(Agent::Claude, Ok(someone)).unwrap(),
+            Removal::Kept(dir.path().display().to_string())
+        );
         let elsewhere = Some(Source::Elsewhere("someone/atlas".into()));
-        assert!(!disconnect_agent(Agent::Codex, Ok(elsewhere)).unwrap());
-        assert!(!disconnect_agent(Agent::Codex, Ok(Some(Source::Absent))).unwrap());
+        assert_eq!(
+            disconnect_agent(Agent::Codex, Ok(elsewhere)).unwrap(),
+            Removal::Kept("someone/atlas".into())
+        );
+        assert_eq!(
+            disconnect_agent(Agent::Codex, Ok(Some(Source::Absent))).unwrap(),
+            Removal::Nothing
+        );
         assert!(disconnect_agent(Agent::Claude, Ok(None)).is_err());
         assert!(disconnect_agent(Agent::Claude, Err("silent".into())).is_err());
+    }
+
+    /// Codex records where each marketplace comes from in its settings,
+    /// which stay readable while any marketplace folder is missing.
+    #[test]
+    fn codex_settings_say_where_its_atlas_marketplace_comes_from() {
+        let local = "model = \"x\"\n\n[marketplaces.atlas]\nsource_type = \"local\"\n\
+                     source = \"/a/agents\"\n\n[marketplaces.other]\nsource_type = \"local\"\n\
+                     source = \"/gone\"\n";
+        assert_eq!(
+            codex_recorded_in(local),
+            Some(Source::Folder("/a/agents".into()))
+        );
+        let git =
+            "[marketplaces.atlas]\nsource_type = \"git\"\nsource = \"https://example.com/a.git\"\n";
+        assert_eq!(
+            codex_recorded_in(git),
+            Some(Source::Elsewhere("https://example.com/a.git".into()))
+        );
+        assert_eq!(
+            codex_recorded_in("[marketplaces.other]\nsource = \"/x\"\n"),
+            Some(Source::Absent)
+        );
+        assert_eq!(codex_recorded_in(""), Some(Source::Absent));
+        assert_eq!(codex_recorded_in("not = [toml"), None);
+
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(codex_recorded(dir.path()), Some(Source::Absent), "no file");
+        fs::write(dir.path().join("config.toml"), local).unwrap();
+        assert_eq!(
+            codex_recorded(dir.path()),
+            Some(Source::Folder("/a/agents".into()))
+        );
+    }
+
+    /// A marketplace folder since removed is Atlas's when it was inside an
+    /// app, or when the agent's own copy of the plugin is Atlas's.
+    #[test]
+    fn a_removed_folder_is_atlas_own_by_its_shape_or_the_agents_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let gone = dir.path().join("Atlas 2.app/Contents/Resources/agents");
+        assert!(atlas_folder(&gone), "any app's, once removed");
+        assert!(!atlas_folder(&dir.path().join("checkout/agents")));
+
+        // An app that is there counts only when it is Atlas.
+        let other = dir.path().join("Other.app");
+        fs::create_dir_all(other.join("Contents/Resources/agents")).unwrap();
+        fs::write(
+            other.join("Contents/Info.plist"),
+            "<dict>\n\t<key>CFBundleIdentifier</key>\n\t<string>com.example.other</string>\n</dict>",
+        )
+        .unwrap();
+        assert!(!atlas_folder(&other.join("Contents/Resources/agents")));
+        fs::write(
+            other.join("Contents/Info.plist"),
+            "<dict>\n\t<key>CFBundleIdentifier</key>\n\t<string>com.insanearts.atlas</string>\n</dict>",
+        )
+        .unwrap();
+        assert!(atlas_folder(&other.join("Contents/Resources/agents")));
+
+        // The copy an agent keeps when installing the plugin.
+        let copy = dir.path().join("cache/1.0/.codex-plugin");
+        fs::create_dir_all(&copy).unwrap();
+        assert!(!atlas_plugin(&dir.path().join("cache/1.0")));
+        fs::write(
+            copy.join("plugin.json"),
+            format!(r#"{{"name":"atlas","homepage":"{HOMEPAGE}"}}"#),
+        )
+        .unwrap();
+        assert!(atlas_plugin(&dir.path().join("cache/1.0")));
+    }
+
+    /// Once stopping, no tool starts, and every tool started before is in
+    /// the groups the stop reaches.
+    #[test]
+    fn no_tool_starts_once_atlas_is_stopping() {
+        use std::os::unix::process::CommandExt;
+
+        static TOOLS: Mutex<Tools> = Mutex::new(Tools {
+            groups: Vec::new(),
+            stopping: false,
+        });
+
+        let mut command = Command::new("/bin/sleep");
+        command.arg("30").process_group(0);
+        let (mut child, running) = start(&TOOLS, &mut command).unwrap();
+        let group = i32::try_from(child.id()).unwrap();
+
+        assert_eq!(halt(&TOOLS), vec![group]);
+        let refused = start(&TOOLS, &mut command).err().unwrap();
+        assert_eq!(refused.error, "Atlas is stopping");
+
+        kill_group(&mut child);
+        drop(running);
+        assert!(
+            listed(&TOOLS).groups.is_empty(),
+            "a finished tool leaves the list"
+        );
     }
 
     /// The plugin's manifests describe this version, and its skill and
