@@ -70,7 +70,7 @@ const EXAMPLES: &[(&str, &[&str])] = &[
         &[
             "atlas open --app TextEdit",
             "atlas open ./build/Debug/MyApp.app --env DEBUG=1",
-            "atlas open https://example.com",
+            "atlas open --app \"Google Chrome\" https://example.com",
         ],
     ),
     (

@@ -1,6 +1,6 @@
 ---
 name: atlas
-description: "See and use macOS GUIs in a hidden second login (the helper) without touching the person's desktop, windows, keyboard or mouse. Use it whenever you change something a person could see in a Mac app (a window, dialog, menu, menu bar item, layout or icon), open the build in the helper and check it before saying it works. Also use it to reproduce on-screen bugs, run installers or anything that opens windows or takes focus, test a web app in Safari, take screenshots, and click or type in apps. Not for unit tests, builds or reading files."
+description: "See and use macOS GUIs in a hidden second login (the helper) without touching the person's desktop, windows, keyboard or mouse. Use it whenever you change something a person could see in a Mac app (a window, dialog, menu, menu bar item, layout or icon), open the build in the helper and check it before saying it works. Also use it to reproduce on-screen bugs, run installers or anything that opens windows or takes focus, test a web app in Google Chrome or Firefox, take screenshots, and click or type in apps. Not for unit tests, builds or reading files."
 ---
 
 # Atlas
@@ -47,9 +47,9 @@ screen and instead of guessing:
 - **To run anything that would disturb the person**: apps that open windows or
   take focus, installers, first-launch flows, menu bar extras, login items,
   commands that pop dialogs or touch the clipboard.
-- **To run a web app's native wrapper or installer**: the helper shares this
-  Mac's network. Web pages themselves stay blank there (see Limits), so test
-  a web app's pages another way.
+- **To test a web app**: open it in Google Chrome or Firefox, never Safari
+  (see Limits): `atlas open --app "Google Chrome" URL`. The helper shares
+  this Mac's network, so a local dev server is reachable.
 
 Do not use it for unit tests, builds, or files and logs you can read directly.
 Never act on the person's own desktop; Atlas cannot, and you must not try.
@@ -271,12 +271,16 @@ unless you looked at it in the helper.
 - The helper's Desktop, Documents and Downloads are protected by macOS: `run`
   gets "Operation not permitted" there. Keep files elsewhere in its home, such
   as `$HOME/atlas-work`.
-- Web pages do not draw in the helper unless a Screen Sharing session is
-  connected to it: Safari and every other WebKit view (Dictionary, help
-  windows, apps built on web views) show a blank area and list no elements,
-  because macOS reports the hidden login's windows as not visible and WebKit
-  then stops drawing (`doctor` → `capabilities.webContent`). Native windows
-  are unaffected. Test a web app's pages another way, and report them as not
+- Google Chrome and Firefox draw web pages in the helper and take clicks and
+  typing; test web pages there. Safari and other WebKit views (Dictionary,
+  help windows, apps built on WebKit web views) show a blank page unless a
+  Screen Sharing session is connected to the helper, because macOS reports
+  the hidden login's windows as not visible and WebKit then stops drawing
+  (`doctor` → `capabilities.webContent`). `atlas open URL` without `--app`
+  opens Safari, so name the browser. `elements` lists the browser's own
+  controls but usually not the page's: read the page from screenshots and
+  click by its coordinates. Chrome may open a tab of its own in front of
+  yours; switch to yours. Report a page that only a WebKit view shows as not
   checked.
 - Credentials and app sign-ins are never copied from the person's account.
 - Audio plays on the person's speakers.
