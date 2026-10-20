@@ -66,10 +66,11 @@ final class PanelPopover: NSObject, NSPopoverDelegate {
     if popover.isShown { popover.performClose(nil) }
   }
 
-  /// The panel closed: reading slows to the closed rate.
+  /// The panel closed: reading slows to the closed rate, unless it opened again while it closed.
   ///
   /// - Parameter notification: The popover's notification.
   func popoverDidClose(_ notification: Notification) {
+    guard !popover.isShown else { return }
     controller.watch(open: false)
   }
 }
