@@ -317,6 +317,26 @@ struct OnboardingControllerTests {
     #expect(controller.snapshot.choices.agentsDone, "the window moves on to Done")
   }
 
+  @Test("a failed install teaches no project, connects no agent and stays on the agents, saying why")
+  func aFailedInstallStops() async throws {
+    let opie = URL(fileURLWithPath: "/Users/me/dev/Opie")
+    let commands = ScriptedCommands([
+      "onboarding status": finishedMac,
+      "agents status": #"{"ok": true, "agents": [{"agent": "claude", "installed": true, "connected": false}]}"#,
+      "agents install": #"{"ok": false, "error": "npm is missing"}"#,
+      "agents project": #"{"ok": true}"#,
+    ])
+    let controller = try await Self.loaded(commands, folders: [opie])
+    try await settle("the agents were never read") { controller.snapshot.agentsLoaded }
+    controller.send(.chooseProject)
+    await controller.connectAgents()
+    #expect(commands.ran.contains(Action.installAgents([.claude]).arguments))
+    #expect(!commands.ran.contains { $0.starts(with: ["agents", "project"]) })
+    #expect(controller.snapshot.agents.allSatisfy { !$0.connected })
+    #expect(!controller.snapshot.choices.agentsDone)
+    #expect(controller.snapshot.problem == "npm is missing")
+  }
+
   @Test("Done sets Open at Login and opens Atlas, then the window closes")
   func doneClosesTheWindow() async {
     let commands = ScriptedCommands(["onboarding login": #"{"ok": true}"#, "menubar": #"{"ok": true}"#])
