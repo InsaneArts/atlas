@@ -38,6 +38,8 @@ struct CheckRow: View {
     case .failed:
       Image(systemName: "exclamationmark.circle.fill")
         .foregroundStyle(Color.attention)
+        // The row's value says it failed.
+        .accessibilityHidden(true)
     }
   }
 }
