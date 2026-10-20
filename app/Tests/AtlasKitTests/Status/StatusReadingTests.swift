@@ -78,6 +78,8 @@ struct StatusReadingTests {
         == SessionFacts(display: "2560 × 1440", input: "Ready", control: "Available", pending: "None")
     )
     #expect(overview.facts(holdingControl: true).control == "This window")
+    let recovering = StatusReading(try status(["overview": ["mode": "recovering"]]))
+    #expect(recovering.facts(holdingControl: true).control == "After recovery", "a held lease is not control now")
     #expect(StatusReading(try status([:])).facts(holdingControl: false).display == Words.unknown)
     for (mode, expected) in [
       ("agent", "Agent working"), ("recovering", "After recovery"), ("blocked", "Not ready"),

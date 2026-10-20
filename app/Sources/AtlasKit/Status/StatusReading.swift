@@ -71,8 +71,9 @@ package struct StatusReading: Equatable, Sendable {
 
   /// Whether this viewer could take control now, and if not, why.
   func availability(holdingControl: Bool) -> String {
-    if holdingControl { return "This window" }
-    return switch status.overview.mode {
+    let mode = status.overview.mode
+    if mode.isControlled(byThisViewer: holdingControl) { return "This window" }
+    return switch mode {
     case .observing: "Available"
     case .controlling: "Another window"
     case .agent: "Agent working"
