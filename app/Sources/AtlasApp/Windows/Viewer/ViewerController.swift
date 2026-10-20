@@ -367,14 +367,14 @@ final class ViewerController {
   }
 
   /// Shows a new picture, read with a status that says whether the helper takes input. A picture from a changed
-  /// helper ends control first.
+  /// helper ends control first, when this viewer holds or asks for it.
   ///
   /// - Parameters:
   ///   - frame: The picture's frame.
   ///   - decoded: Its picture and size, decoded once.
   ///   - ready: Whether the status read with it says the helper takes input.
   func show(_ frame: Frame, decoded: DesktopPicture.Decoded, ready: Bool) {
-    if let shown = reading.frame, shown.revision != frame.revision {
+    if holdingControl || session.acquiring, let shown = reading.frame, shown.revision != frame.revision {
       releaseControl(ViewerWords.helperChanged)
     }
     reading.frame = frame
