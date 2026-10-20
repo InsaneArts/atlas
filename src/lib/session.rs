@@ -375,7 +375,7 @@ pub fn diagnose(value: Value, uid: u32) -> Value {
                 "In the helper's System Settings › Privacy & Security › Accessibility, turn \
                  Atlas on (atlas init walks you through it)."
             } else if queried {
-                "Run atlas start-input."
+                START_INPUT
             } else {
                 not_queried
             }
@@ -392,7 +392,7 @@ pub fn diagnose(value: Value, uid: u32) -> Value {
             next_step: if queried && value["permissions"]["accessibility"] == false {
                 "Turn on Accessibility for Atlas in the helper first; atlas init walks you through it."
             } else if queried {
-                "Run atlas start-input."
+                START_INPUT
             } else if reachable {
                 not_queried
             } else {
@@ -456,6 +456,10 @@ pub enum Absence {
     /// logged out, or the Mac restarted.
     LoggedOut(String),
 }
+
+/// The doctor's step when input is down or pinned to a display that is
+/// gone, which Recover also takes.
+pub const START_INPUT: &str = "Run atlas start-input.";
 
 /// The doctor's step for a logged-out helper.
 pub const LOGGED_OUT: &str = "The helper is logged out (after a restart or a log-out). Log in \
