@@ -1,4 +1,3 @@
-import AppKit
 import AtlasKit
 import AtlasUI
 import Observation
@@ -37,7 +36,7 @@ final class PanelController {
   private(set) var running = 0
   /// The helper's short name, once `atlas switch --list` reports it.
   private(set) var helper: String?
-  /// Where Open at Login stands.
+  /// Where Open at Login stands, as last read: at launch, each time the panel opens, and after it is set here.
   private(set) var opensAtLogin: OpenAtLogin.State
   /// Where logging out stands.
   private(set) var logOutStage = LogOutStage.idle
@@ -46,6 +45,8 @@ final class PanelController {
   @ObservationIgnored let gettingStarted: @MainActor () -> Void
   /// Opens the viewer window.
   @ObservationIgnored let openViewer: @MainActor () -> Void
+  /// Quits Atlas.
+  @ObservationIgnored let quit: @MainActor () -> Void
   /// The viewer service it reads and asks.
   @ObservationIgnored let service: any ViewerService
   /// The `atlas` command line its actions run.
@@ -67,18 +68,21 @@ final class PanelController {
   ///   - loginItem: The app's login item.
   ///   - gettingStarted: Opens the setup window.
   ///   - openViewer: Opens the viewer window.
+  ///   - quit: Quits Atlas.
   init(
     service: any ViewerService,
     commands: any CommandRunning,
     loginItem: OpenAtLogin,
     gettingStarted: @escaping @MainActor () -> Void,
-    openViewer: @escaping @MainActor () -> Void
+    openViewer: @escaping @MainActor () -> Void,
+    quit: @escaping @MainActor () -> Void
   ) {
     self.service = service
     self.commands = commands
     self.loginItem = loginItem
     self.gettingStarted = gettingStarted
     self.openViewer = openViewer
+    self.quit = quit
     opensAtLogin = loginItem.state
   }
 
@@ -112,11 +116,13 @@ final class PanelController {
   // MARK: Reading
 
   /// Reads the status now and then at the open or closed rate, and the desktop at the open rate while open, until
-  /// called again. The two run apart, so a slow capture never holds the status back.
+  /// called again. The two run apart, so a slow capture never holds the status back. Opening also reads Open at
+  /// Login again, since Getting Started or the system may have changed it meanwhile.
   ///
   /// - Parameter open: Whether the panel is open.
   func watch(open: Bool) {
     stop()
+    if open { readOpenAtLogin() }
     polling.append(repeating(every: open ? Self.openEvery : Self.closedEvery) { await $0.readStatus() })
     if open { polling.append(repeating(every: Self.openEvery) { await $0.readFrame() }) }
   }
@@ -147,6 +153,11 @@ final class PanelController {
         try? await Task.sleep(for: pause)
       }
     }
+  }
+
+  /// Reads where Open at Login stands now: the panel shows it, and its switch turns it from there.
+  func readOpenAtLogin() {
+    opensAtLogin = loginItem.state
   }
 
   /// Learns the helper to switch to: whichever account `atlas` reports.
@@ -201,7 +212,7 @@ final class PanelController {
     case .forceLogOut: Task { await logOut(force: true) }
     case .setOpenAtLogin(let on): setOpenAtLogin(on)
     case .gettingStarted: gettingStarted()
-    case .quit: NSApp.terminate(nil)
+    case .quit: quit()
     }
   }
 
@@ -324,6 +335,6 @@ final class PanelController {
     } catch {
       say(error.localizedDescription)
     }
-    opensAtLogin = loginItem.state
+    readOpenAtLogin()
   }
 }

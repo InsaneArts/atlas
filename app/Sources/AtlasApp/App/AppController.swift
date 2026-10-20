@@ -49,7 +49,8 @@ final class AppController: NSObject, NSApplicationDelegate {
       openViewer: { [weak self] in
         self?.menuBar?.closePanel()
         self?.showViewer()
-      }
+      },
+      quit: { NSApp.terminate(nil) }
     )
     menuBar = PanelPopover(controller: controller)
     panel = controller
@@ -127,6 +128,8 @@ final class AppController: NSObject, NSApplicationDelegate {
       guard let self, onboarding === closed else { return }
       onboarding = nil
       settleDockIcon()
+      // Setup may have changed Open at Login.
+      panel?.readOpenAtLogin()
     }
     onboarding = window
     DockIcon.settle(windowOpen: true)

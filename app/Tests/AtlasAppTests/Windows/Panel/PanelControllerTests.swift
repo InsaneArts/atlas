@@ -5,15 +5,6 @@ import Testing
 
 @testable import AtlasApp
 
-/// What the test saw while a command ran.
-@MainActor
-private final class Seen {
-  /// Whether the panel still read as working.
-  var working: Bool?
-  /// The feedback line the panel showed.
-  var feedback: Feedback?
-}
-
 @MainActor
 @Suite("PanelController")
 struct PanelControllerTests {
@@ -23,18 +14,21 @@ struct PanelControllerTests {
   ///   - service: The scripted service.
   ///   - commands: The scripted command line, which by default knows no command.
   ///   - loginItem: The scripted login item.
+  ///   - quit: Stands in for quitting Atlas.
   /// - Returns: The panel's controller.
   private static func panel(
     _ service: ScriptedService = ScriptedService(),
     commands: ScriptedCommands = ScriptedCommands([:]),
-    loginItem: ScriptedLoginItem = ScriptedLoginItem()
+    loginItem: ScriptedLoginItem = ScriptedLoginItem(),
+    quit: @escaping @MainActor () -> Void = {}
   ) -> PanelController {
     PanelController(
       service: service,
       commands: commands,
       loginItem: loginItem.seam,
       gettingStarted: {},
-      openViewer: {}
+      openViewer: {},
+      quit: quit
     )
   }
 
@@ -140,7 +134,7 @@ struct PanelControllerTests {
   }
 
   @Test("ending control before a log-out counts as running, and a log-out asked for meanwhile says why it waits")
-  func theRevokeBeforeALogOutRuns() async {
+  func theRevokeBeforeALogOutRuns() async throws {
     let service = ScriptedService()
     service.reply = ["ready": true, "overview": ["mode": "controlling"]]
     let commands = ScriptedCommands(["logout": #"{"ok": true}"#])
@@ -148,7 +142,7 @@ struct PanelControllerTests {
     await controller.readStatus()
     service.hold = ["revoke"]
     let first = Task { await controller.logOut() }
-    await settle("control was never asked to end") { service.held["revoke"] != nil }
+    try await settle("control was never asked to end") { service.held["revoke"] != nil }
     #expect(controller.working)
     await controller.logOut()
     #expect(controller.feedback == PanelWords.waitForAction)
@@ -215,7 +209,7 @@ struct PanelControllerTests {
     let loginItem = ScriptedLoginItem(available: true)
     loginItem.refusal = ServiceError("Not allowed")
     let controller = Self.panel(service, commands: commands, loginItem: loginItem)
-    let seen = Seen()
+    let seen = PanelWorkObservation()
     commands.whileRunning { _ in
       await controller.revokeControl()
       seen.feedback = controller.state.feedback
@@ -239,5 +233,26 @@ struct PanelControllerTests {
     controller.setOpenAtLogin(false)
     #expect(controller.opensAtLogin.isEnabled, "the system kept it on")
     #expect(controller.feedback == "Not allowed")
+  }
+
+  @Test("each opening reads Open at Login again, so a change made elsewhere meanwhile shows in its switch")
+  func openAtLoginIsReadAgainOnOpening() {
+    let loginItem = ScriptedLoginItem(available: true, enabled: true)
+    let controller = Self.panel(loginItem: loginItem)
+    controller.watch(open: true)
+    #expect(controller.state.menu.opensAtLogin == true)
+    controller.watch(open: false)
+    // Getting Started turns it off while the panel is closed.
+    loginItem.enabled = false
+    controller.watch(open: true)
+    #expect(controller.state.menu.opensAtLogin == false)
+  }
+
+  @Test("Quit Atlas in the panel quits")
+  func quitInThePanelQuits() {
+    let quits = CallCount()
+    let controller = Self.panel(quit: { quits.count += 1 })
+    controller.send(.quit)
+    #expect(quits.count == 1)
   }
 }
