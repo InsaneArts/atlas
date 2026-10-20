@@ -82,6 +82,11 @@
       #expect(PNG.write(ViewerView(state: PreviewStates.viewerSidebar) { _ in }, size: size, to: file))
       let image = try #require(NSBitmapImageRep(data: Data(contentsOf: file)), "the narrow window was not drawn")
       #expect(image.pixelsWide == Int(size.width) * PNG.scale)
+      var hidden = PreviewStates.viewerSidebar
+      hidden.header.sidebar = PreviewStates.viewerSidebarToggle(shown: false)
+      let without = directory.appendingPathComponent("narrow-hidden.png")
+      #expect(PNG.write(ViewerView(state: hidden) { _ in }, size: size, to: without))
+      #expect(try Data(contentsOf: file) == Data(contentsOf: without), "the sidebar was drawn in a narrow window")
     }
   }
 #endif

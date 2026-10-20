@@ -71,8 +71,9 @@ package struct StatusReading: Equatable, Sendable {
 
   /// Whether this viewer could take control now, and if not, why.
   func availability(holdingControl: Bool) -> String {
-    if holdingControl { return "This window" }
-    return switch status.overview.mode {
+    let mode = status.overview.mode
+    if mode.isControlled(byThisViewer: holdingControl) { return "This window" }
+    return switch mode {
     case .observing: "Available"
     case .controlling: "Another window"
     case .agent: "Agent working"
@@ -137,9 +138,10 @@ package struct StatusReading: Equatable, Sendable {
     return rows
   }
 
-  /// Recovery is offered only without control, when something needs it.
+  /// Recovery is offered only without control, when something needs it and Recover can fix it.
   func recoveryOffered(holdingControl: Bool) -> Bool {
-    !holdingControl && (status.overview.mode == .recovering || status.overview.mode == .blocked)
+    let overview = status.overview
+    return !holdingControl && (overview.mode == .recovering || (overview.mode == .blocked && overview.recoverable))
   }
 
   /// The recovery alert, if any: while recovering, or when offered.

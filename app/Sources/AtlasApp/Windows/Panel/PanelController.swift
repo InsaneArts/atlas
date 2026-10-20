@@ -117,12 +117,14 @@ final class PanelController {
 
   /// Reads the status now and then at the open or closed rate, and the desktop at the open rate while open, until
   /// called again. The two run apart, so a slow capture never holds the status back. Opening also reads Open at
-  /// Login again, since Getting Started or the system may have changed it meanwhile.
+  /// Login again, since Getting Started or the system may have changed it meanwhile, and looks for a helper not found
+  /// yet.
   ///
   /// - Parameter open: Whether the panel is open.
   func watch(open: Bool) {
     stop()
     if open { readOpenAtLogin() }
+    if open, helper == nil { Task { await findHelper() } }
     polling.append(repeating(every: open ? Self.openEvery : Self.closedEvery) { await $0.readStatus() })
     if open { polling.append(repeating(every: Self.openEvery) { await $0.readFrame() }) }
   }

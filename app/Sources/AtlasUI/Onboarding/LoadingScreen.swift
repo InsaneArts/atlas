@@ -13,6 +13,9 @@ struct LoadingScreen: View {
         Note(text: problem, tone: .attention)
       }
     }
+    // The spinner says nothing to VoiceOver, so the screen says what it waits for.
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel(problem ?? "Loading")
   }
 }
 

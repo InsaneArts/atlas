@@ -31,8 +31,8 @@ final class OnboardingController {
   @ObservationIgnored private var readAgain = false
   /// Whether the helper's "set up here" notice was last told the window is open.
   @ObservationIgnored private var markedOpen = false
-  /// Whether that mark is being set now.
-  @ObservationIgnored private var marking = false
+  /// The mark being set now, if any.
+  @ObservationIgnored private var marking: Task<Void, Never>?
   /// The window closed: nothing new starts, and late replies are dropped.
   @ObservationIgnored private var closed = false
 
@@ -89,7 +89,6 @@ final class OnboardingController {
   /// Reads the facts now and then every ``readEvery`` until ``stop()``.
   func watch() {
     guard polling == nil else { return }
-    closed = false
     polling = Task { [weak self] in
       // Ends once cancelled, or once the controller is gone.
       while !Task.isCancelled, let controller = self {
@@ -129,6 +128,8 @@ final class OnboardingController {
       snapshot.facts = facts
       if !snapshot.loaded {
         snapshot.opensAtLogin = facts.opensAtLogin(enabledNow: dependencies.loginItem.isEnabled())
+        // A failed first reading's message goes with it.
+        snapshot.problem = nil
       }
       snapshot.loaded = true
       if snapshot.picked == nil { snapshot.picked = facts.defaultPick.map(OnboardingAccountPick.init(name:)) }
@@ -152,6 +153,8 @@ final class OnboardingController {
     case .allow, .permissions, .helperDone: markWindow(open: true)
     default: break
     }
+    // A check's outcome holds for this visit to the step alone: coming back runs it again.
+    if step != .finishing, snapshot.finish != .running { snapshot.finish = .idle }
     if let permission = snapshot.guiding, !permission.guideStays(on: step, asker: snapshot.facts.asker) {
       snapshot.guiding = nil
     }
@@ -180,10 +183,12 @@ final class OnboardingController {
     return outcome
   }
 
-  /// The window is closing: stop reading, start nothing new, and clear the helper's mark.
+  /// The window is closing: stop reading, start nothing new, and clear the helper's mark once a mark under way has
+  /// settled, so the clearing lands last.
   func close() async {
     closed = true
     stop()
+    await marking?.value
     if snapshot.facts.role == .helper {
       _ = await commands.run(.markWindow(open: false))
     }
@@ -213,15 +218,15 @@ final class OnboardingController {
   /// Creates the account. The password reaches macOS on standard input, never in the arguments, and leaves the form
   /// as it is handed over.
   func createAccount() async {
-    let form = snapshot.form
-    guard form.canCreate, snapshot.working == nil else { return }
-    var secret = Data(form.password.utf8)
+    guard snapshot.form.canCreate, snapshot.working == nil else { return }
+    let action = Action.createAccount(account: snapshot.form.accountName, fullName: snapshot.form.fullName)
+    var secret = Data(snapshot.form.password.utf8)
     secret.append(0x0A)
     // Cleared from the window as soon as it is handed to macOS.
     snapshot.form.password = ""
     snapshot.form.verify = ""
     await act(
-      .createAccount(account: form.accountName, fullName: form.fullName),
+      action,
       OnboardingWords.creating,
       input: secret
     )
@@ -233,6 +238,7 @@ final class OnboardingController {
     snapshot.finish = .running
     Task {
       let outcome = await commands.run(.finishSetup)
+      guard !closed else { return }
       snapshot.finish = outcome.ok ? .passed : .failed(outcome.message)
       refresh()
     }
@@ -244,15 +250,20 @@ final class OnboardingController {
     runFinish()
   }
 
-  /// Lists the agents Atlas can connect, then asks `atlas agents status` which are installed and connected.
+  /// Lists the agents Atlas can connect, then asks `atlas agents status` which are installed and connected. A reading
+  /// that fails says why, and the next reading of the facts asks again.
   func loadAgents() {
     snapshot.agents = AgentChoice.all
     Task {
-      let rows =
-        await commands.run(.agentsStatus)
-        .decode(AgentsStatus.self)?
-        .agents ?? []
-      snapshot.agents = AgentChoice.merged(snapshot.agents, with: rows)
+      let outcome = await commands.run(.agentsStatus)
+      guard !closed else { return }
+      guard outcome.ok, let status = outcome.decode(AgentsStatus.self) else {
+        snapshot.problem = outcome.ok ? OnboardingWords.notUnderstood : outcome.message
+        snapshot.agents = []
+        return
+      }
+      snapshot.problem = nil
+      snapshot.agents = AgentChoice.merged(snapshot.agents, with: status.agents)
       snapshot.agentsLoaded = true
     }
   }
@@ -340,11 +351,10 @@ final class OnboardingController {
   ///
   /// - Parameter open: Whether the window is open.
   private func markWindow(open: Bool) {
-    guard snapshot.facts.role == .helper, !closed, !marking, open != markedOpen else { return }
-    marking = true
-    Task {
+    guard snapshot.facts.role == .helper, !closed, marking == nil, open != markedOpen else { return }
+    marking = Task {
       let marked = await commands.run(.markWindow(open: open)).ok
-      marking = false
+      marking = nil
       if marked { markedOpen = open }
     }
   }

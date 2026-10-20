@@ -14,13 +14,16 @@ struct KeysMenuTests {
     await viewer.takeControl()
     let menu = KeysMenu.menu(for: viewer)
     let items = menu.items.compactMap { $0 as? KeyItem }
-    #expect(items.count == HelperKey.groups.joined().count)
+    let keys = Array(HelperKey.groups.joined())
+    #expect(items.map(\.title) == keys.map(\.name))
+    #expect(items.map(\.keyEquivalent) == keys.map(\.shown))
+    #expect(items.map(\.keyEquivalentModifierMask) == keys.map(\.modifiers))
     let switchApp = try #require(items.first { $0.title == "Switch App" })
     #expect(switchApp.keyEquivalent == "\t" && switchApp.keyEquivalentModifierMask == .command)
-    switchApp.fire()
-    try #require(items.first { $0.title == "Escape" }).fire()
-    try await settle("the two keys were never sent") { service.actions.count == 2 }
-    #expect(service.actions == [[.key("cmd+tab")], [.key("escape")]])
+    for item in items { item.fire() }
+    try await settle("the keys were never all sent") { service.actions.count == keys.count }
+    #expect(service.actions == keys.map { [.key($0.sent)] })
+    #expect(service.actions.first == [.key("escape")] && service.actions.last == [.key("cmd+q")])
     viewer.close()
   }
 

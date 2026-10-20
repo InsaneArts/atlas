@@ -83,6 +83,18 @@ struct PanelControllerTests {
     #expect(controller.feedback == PanelWords.switched)
   }
 
+  @Test("a helper not found at launch is looked for again when the panel opens")
+  func theHelperIsLookedForAgain() async throws {
+    let commands = ScriptedCommands([:])
+    let controller = Self.panel(commands: commands)
+    await controller.findHelper()
+    #expect(controller.helper == nil)
+    commands.answer("switch --list", #"{"ok": true, "accounts": [{"name": "atlas", "helper": true}]}"#)
+    controller.watch(open: true)
+    try await settle("the helper was never looked for again") { controller.helper == "atlas" }
+    controller.watch(open: false)
+  }
+
   @Test("logging in locks the screen for the helper and says what to do next")
   func loggingInLocksTheScreen() async {
     let service = ScriptedService()

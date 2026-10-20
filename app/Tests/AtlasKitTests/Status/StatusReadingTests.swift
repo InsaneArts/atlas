@@ -30,7 +30,8 @@ struct StatusReadingTests {
   func controlWaits() throws {
     func overview(_ mode: String) throws -> StatusReading { StatusReading(try status(["overview": ["mode": mode]])) }
     #expect(try overview("agent").controlBlocked == "An agent is acting in the helper.")
-    #expect(try overview("controlling").controlBlocked != nil)
+    #expect(try overview("controlling").controlBlocked == "Another viewer has control.")
+    #expect(try overview("recovering").controlBlocked == "Recover before taking control.")
     #expect(try overview("observing").controlBlocked == nil)
     #expect(try overview("recovering").recoveryOffered(holdingControl: false))
     #expect(try !overview("recovering").recoveryOffered(holdingControl: true))
@@ -78,6 +79,8 @@ struct StatusReadingTests {
         == SessionFacts(display: "2560 × 1440", input: "Ready", control: "Available", pending: "None")
     )
     #expect(overview.facts(holdingControl: true).control == "This window")
+    let recovering = StatusReading(try status(["overview": ["mode": "recovering"]]))
+    #expect(recovering.facts(holdingControl: true).control == "After recovery", "a held lease is not control now")
     #expect(StatusReading(try status([:])).facts(holdingControl: false).display == Words.unknown)
     for (mode, expected) in [
       ("agent", "Agent working"), ("recovering", "After recovery"), ("blocked", "Not ready"),
@@ -122,8 +125,10 @@ struct StatusReadingTests {
       needs.recovery(holdingControl: false, recovering: false)
         == Recovery(title: "The last action's outcome is unknown", reason: "An outcome is unknown", busy: false)
     )
-    let blocked = StatusReading(try status(["overview": ["mode": "blocked", "reason": "x"]]))
+    let blocked = StatusReading(try status(["overview": ["mode": "blocked", "reason": "x", "recoverable": true]]))
     #expect(blocked.recovery(holdingControl: false, recovering: false)?.title == "The helper isn't ready")
+    let stuck = StatusReading(try status(["overview": ["mode": "blocked", "reason": "Turn on Accessibility"]]))
+    #expect(stuck.recovery(holdingControl: false, recovering: false) == nil, "Recover cannot fix this block")
     #expect(needs.recovery(holdingControl: false, recovering: true)?.busy == true)
     let watching = StatusReading(try status(["overview": ["mode": "observing"]]))
     #expect(watching.recovery(holdingControl: false, recovering: true) != nil)

@@ -78,6 +78,12 @@ struct ViewerPresenterTests {
     var paused = ready
     paused.session.paused = true
     #expect(!ViewerPresenter.state(paused).footer.control.isEnabled)
+    var recovering = ready
+    recovering.session.recovering = true
+    #expect(!ViewerPresenter.state(recovering).footer.control.isEnabled)
+    var acquiring = ready
+    acquiring.session.acquiring = true
+    #expect(!ViewerPresenter.state(acquiring).footer.control.isEnabled)
   }
 
   @Test("the control button reads Give Back in control and Connecting… while asked")

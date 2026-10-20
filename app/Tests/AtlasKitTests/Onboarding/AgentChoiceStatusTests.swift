@@ -33,6 +33,14 @@ struct AgentChoiceStatusTests {
     #expect(!claude.found && !claude.on, "an agent nothing was reported of stays off")
   }
 
+  @Test("an agent reported installed and connected reads connected, and Continue leaves it out")
+  func installedAndConnected() throws {
+    let agents = AgentChoice.merged(AgentChoice.all, with: [try row("claude", installed: true, connected: true)])
+    let claude = try #require(agents.first { $0.id == .claude })
+    #expect(claude.found && claude.connected && claude.on)
+    #expect(AgentChoice.toConnect(agents).isEmpty)
+  }
+
   @Test("Continue installs only agents switched on, found and not connected yet")
   func toConnect() {
     var on = AgentChoice(id: .claude)

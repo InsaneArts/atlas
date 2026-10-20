@@ -8,9 +8,11 @@ import Testing
 struct PanelRenderOverridesTests {
   @Test("with nothing to change, the live panel is drawn as it is")
   func nothingChangesTheLivePanel() {
+    var observing = PanelSnapshot()
+    observing.status.overview.mode = .observing
     let live = PanelRenderOverrides(environment: ["ATLAS_RENDER_MODE": "nonsense", "ATLAS_RENDER_MESSAGE": ""])
-      .applied(to: PanelSnapshot())
-    #expect(live.status.overview.mode == .unavailable, "an unknown mode keeps the live one")
+      .applied(to: observing)
+    #expect(live.status.overview.mode == .observing, "an unknown mode keeps the live one")
     #expect(live.feedback == nil)
     #expect(live.logOutStage == .idle)
     #expect(live.helper == nil && live.opensAtLogin == nil)

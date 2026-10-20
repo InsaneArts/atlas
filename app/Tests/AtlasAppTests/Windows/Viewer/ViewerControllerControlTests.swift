@@ -39,10 +39,12 @@ struct ViewerControllerControlTests {
 
   @Test("leaving the window gives control back")
   func leavingTheWindowGivesControlBack() async throws {
-    let viewer = try await ViewerController.watching(ScriptedService())
+    let service = ScriptedService()
+    let viewer = try await ViewerController.watching(service)
     await viewer.takeControl()
     viewer.lostFocus()
     #expect(viewer.session.lease == nil)
+    try await settle("the lease was never released") { service.log.contains("release lease") }
     viewer.close()
   }
 
@@ -163,6 +165,17 @@ struct ViewerControllerControlTests {
     viewer.refresh()
     try await settle("the changed picture never ended control") { viewer.session.lease == nil }
     #expect(viewer.session.notice == ViewerWords.helperChanged)
+    viewer.close()
+  }
+
+  @Test("a changed helper says nothing to a viewer that only watches")
+  func aChangedHelperLeavesWatchingQuiet() async throws {
+    let service = ScriptedService()
+    let viewer = try await ViewerController.watching(service)
+    service.revision = "r2"
+    viewer.refresh()
+    try await settle("the changed picture never showed") { viewer.reading.frame?.revision == "r2" }
+    #expect(viewer.session.notice == nil, "no control was held, so none ended")
     viewer.close()
   }
 

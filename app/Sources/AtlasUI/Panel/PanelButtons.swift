@@ -14,7 +14,8 @@ struct PanelButtons: View {
     HStack(spacing: Spacing.m) {
       Button("Open Viewer") { send(.openViewer) }
         .buttonStyle(.capsule(viewerLook, fill: true))
-        .keyboardShortcut(.defaultAction)
+        // Return opens the viewer only while it is the next step.
+        .keyboardShortcut(viewerLook == .primary ? .defaultAction : nil)
       switch secondary {
       case .revokeControl:
         Button("Release Control") { send(.revokeControl) }

@@ -128,8 +128,9 @@ final class AppController: NSObject, NSApplicationDelegate {
       guard let self, onboarding === closed else { return }
       onboarding = nil
       settleDockIcon()
-      // Setup may have changed Open at Login.
+      // Setup may have changed Open at Login and the helper.
       panel?.readOpenAtLogin()
+      Task { await self.panel?.findHelper() }
     }
     onboarding = window
     DockIcon.settle(windowOpen: true)

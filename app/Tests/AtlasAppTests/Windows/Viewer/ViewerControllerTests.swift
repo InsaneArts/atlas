@@ -120,6 +120,7 @@ struct ViewerControllerTests {
     ]
     let viewer = try await ViewerController.watching(service)
     viewer.recoverLater()
+    #expect(viewer.snapshot.recovery == .setAside)
     service.reply = ["ready": true, "canObserve": true, "overview": ["mode": "observing"]]
     await viewer.readStatus()
     #expect(viewer.session.recoveryLater == nil)
