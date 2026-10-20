@@ -6,8 +6,8 @@ import Testing
 struct TypedTextTests {
   @Test("text up to the paste limit is typed in chunks the helper accepts")
   func textIsChunked() {
-    let text = String(repeating: "a", count: TypedText.pasteLimit)
-    #expect(TypedText(text) == .chunks(text.typedChunks(size: TypedText.chunkSize)))
+    let text = String(repeating: "a", count: 2048)
+    #expect(TypedText(text) == .chunks(Array(repeating: String(repeating: "a", count: 128), count: 16)))
   }
 
   @Test("a paste over the limit is refused, counted in Unicode characters")

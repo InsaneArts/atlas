@@ -20,16 +20,21 @@ struct DesktopPointMappingTests {
   }
 
   @Test(
-    "a drag that leaves the picture is clamped to its edge",
-    arguments: [CGPoint(x: -10, y: 70), CGPoint(x: 410, y: 70), CGPoint(x: 80, y: -20), CGPoint(x: 80, y: 320)]
+    "a drag that leaves the picture is clamped to its edge, a thousandth of a view point inside the far ones",
+    arguments: [
+      (CGPoint(x: -10, y: 70), DesktopPoint(x: 0, y: 280)),
+      (CGPoint(x: 410, y: 70), DesktopPoint(x: 1599.996, y: 280)),
+      (CGPoint(x: 80, y: -20), DesktopPoint(x: 320, y: 0)),
+      (CGPoint(x: 80, y: 320), DesktopPoint(x: 320, y: 1199.996)),
+    ] as [(CGPoint, DesktopPoint)]
   )
-  func clamped(location: CGPoint) {
+  func clamped(location: CGPoint, edge: DesktopPoint) throws {
     let view = CGSize(width: 400, height: 300)
     let image = CGSize(width: 800, height: 600)
     let display = ViewerStatus.Size(width: 1600, height: 1200)
     #expect(DesktopPoint(location: location, in: view, image: image, display: display) == nil)
-    let point = DesktopPoint(location: location, in: view, image: image, display: display, clamp: true)
-    #expect(point.map { $0.x >= 0 && $0.x < 1600 && $0.y >= 0 && $0.y < 1200 } == true)
+    let point = try #require(DesktopPoint(location: location, in: view, image: image, display: display, clamp: true))
+    #expect(point.distance(to: edge) < 1e-9)
   }
 
   @Test("an empty size maps nowhere")

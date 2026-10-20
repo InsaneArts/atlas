@@ -25,6 +25,9 @@ struct OnboardingStepRuleTests {
     #expect(step(try controller(helper(signedIn: false, answering: false, allowed: false))) == .switchToHelper)
     #expect(step(try controller(helper(hidden: false, allowed: true))) == .switchToHelper)
     #expect(step(try controller(helper())) == .finishing)
+    var screenOnly = helper()
+    screenOnly["permissions"] = ["screenCapture": true, "accessibility": false]
+    #expect(step(try controller(screenOnly)) == .switchToHelper, "Screen Recording alone is not allowed")
   }
 
   @Test("a choice cut short offers the choice again")
@@ -75,6 +78,7 @@ struct OnboardingStepRuleTests {
     #expect(step(try asker(installed: false, running: false, ax: false, screen: false)) == .allow)
     #expect(step(try asker(installed: true, running: true, ax: false, screen: false)) == .permissions)
     #expect(step(try asker(installed: true, running: true, ax: true, screen: false)) == .permissions)
+    #expect(step(try asker(installed: true, running: true, ax: false, screen: true)) == .permissions)
     #expect(step(try asker(installed: true, running: true, ax: true, screen: true)) == .helperDone)
   }
 
