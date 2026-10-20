@@ -57,8 +57,9 @@ pub struct Viewer {
     account_name: std::sync::Mutex<Option<(String, Option<String>)>>,
     /// The app this viewer serves, when it serves one.
     app: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<Line>>>,
-    /// The helper daemon input was last started for, so it starts once.
-    input_started: std::sync::Mutex<Option<u64>>,
+    /// The helper daemon and display input was last started or re-pinned
+    /// for, so each gets one try.
+    input_started: std::sync::Mutex<Option<String>>,
 }
 
 impl Viewer {
@@ -235,21 +236,36 @@ impl Viewer {
         status
     }
 
-    /// A helper just logged in has no input service yet. It starts once per
-    /// helper daemon, as Recover would, so agents carry on by themselves:
-    /// only in the background, with Accessibility on and nothing pending.
+    /// A helper just logged in has no input service yet, and switching
+    /// accounts can leave one pinned to a display that is gone. Input starts
+    /// or re-pins once per helper daemon and display, as Recover would, so
+    /// agents carry on by themselves: only in the background, with
+    /// Accessibility on and nothing pending or held.
     fn start_input_after_login(&self, session: &Value, settled: bool) {
+        let native = &session["inputService"];
         let starts = settled
-            && session["inputService"]["ok"] != true
-            && session["permissions"]["accessibility"] == true
-            && crate::session::require_hidden(session, self.client.config.helper_uid).is_ok();
-        let Some(daemon) = session["daemon"]["pid"].as_u64().filter(|_| starts) else {
+            && native["controlActive"] != true
+            && native["heldInput"] != true
+            && session["permissions"]["accessibility"] == true;
+        let Some(hidden) = starts
+            .then(|| crate::session::require_hidden(session, self.client.config.helper_uid).ok())
+            .flatten()
+            .filter(|hidden| !hidden.input && !crate::session::repinnable(session, hidden))
+        else {
             return;
         };
+        let Some(daemon) = session["daemon"]["pid"].as_u64() else {
+            return;
+        };
+        let display = &hidden.epoch.display;
+        let key = format!(
+            "{daemon}:{}:{}x{}",
+            hidden.epoch.display_id, display.width, display.height
+        );
         let first = self
             .input_started
             .lock()
-            .map(|mut started| started.replace(daemon) != Some(daemon))
+            .map(|mut started| started.replace(key.clone()) != Some(key))
             .unwrap_or(false);
         if first {
             let client = self.client.clone();

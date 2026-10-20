@@ -70,6 +70,8 @@ pub fn overview(
         .as_str()
         .unwrap_or("The helper is not ready")
         .to_owned();
+    // Recover fixes it: the panel offers the button beside the reason.
+    let recoverable = report["ready"] != true && first_step == crate::session::START_INPUT;
     // The person's own viewer input and explicit recovery are not an agent.
     let recent = activity
         .iter()
@@ -109,6 +111,11 @@ pub fn overview(
         // Starting or upgrading input makes readiness briefly false; work in
         // progress is not a reason to offer recovery.
         ("agent", "Work is in progress in the helper".to_owned())
+    } else if recoverable {
+        (
+            "blocked",
+            "The helper's input stopped. Recover starts it again.".to_owned(),
+        )
     } else if report["ready"] != true {
         ("blocked", first_step)
     } else if lease_active {
@@ -124,6 +131,7 @@ pub fn overview(
     json!({
         "mode": mode,
         "reason": reason,
+        "recoverable": mode == "blocked" && recoverable,
         "account": if reachable { &session["user"]["name"] } else { &report["account"] },
         "display": session["display"],
         "pending": pending.unresolved,
@@ -173,6 +181,21 @@ mod tests {
 
     fn mode(report: &Value, lease: bool, pending: usize, activity: &[Value]) -> Value {
         overview(report, lease, unresolved(pending), activity, NOW)["mode"].clone()
+    }
+
+    #[test]
+    fn input_that_recover_restarts_is_offered_as_recover_not_a_command() {
+        let mut stopped = report(true, false);
+        stopped["nextSteps"] = json!([crate::session::START_INPUT]);
+        let summary = overview(&stopped, false, unresolved(0), &[], NOW);
+        assert_eq!(summary["mode"], "blocked");
+        assert_eq!(summary["recoverable"], true);
+        assert!(!summary["reason"].as_str().unwrap().contains("atlas "));
+        let mut settings = report(true, false);
+        settings["nextSteps"] = json!(["Turn on Accessibility for Atlas in the helper first."]);
+        let summary = overview(&settings, false, unresolved(0), &[], NOW);
+        assert_eq!(summary["recoverable"], false);
+        assert_eq!(summary["reason"], settings["nextSteps"][0]);
     }
 
     #[test]
