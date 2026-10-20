@@ -219,7 +219,7 @@
     }()
 
     /// The picture was paused before the first one arrived: the stage says so in place of a picture.
-    @MainActor static let viewerPausedBeforePicture: ViewerState = {
+    @MainActor package static let viewerPausedBeforePicture: ViewerState = {
       var state = viewerPaused
       state.stage.picture = nil
       state.stage.placeholder = .paused
@@ -267,7 +267,7 @@
     }()
 
     /// The window has just opened: no reading has arrived yet.
-    @MainActor static let viewerConnecting = ViewerState(
+    @MainActor package static let viewerConnecting = ViewerState(
       header: ViewerHeaderState(
         status: StatusSummary(label: "Connecting", tone: .quiet),
         isWorking: false,
@@ -309,7 +309,7 @@
     )
 
     /// The person types through an input method; the composed text shows before it is sent.
-    @MainActor static let viewerTyping: ViewerState = {
+    @MainActor package static let viewerTyping: ViewerState = {
       var state = viewerControl
       state.stage.chip = .typing("こんにちは")
       return state

@@ -76,15 +76,18 @@ struct CommandsTests {
 
   @Test("cancelling the caller stops the command")
   func cancellation() async throws {
-    let started = ContinuousClock.now
-    let outcome = try await withScriptedAtlas(#"sleep 30; echo '{"ok": true}'"#) { commands in
+    // The command marks that it has started beside itself, then runs far longer than the ceiling.
+    let outcome = try await withScriptedAtlas(#"touch "$(dirname "$0")/started"; sleep 30; echo '{"ok": true}'"#) {
+      commands in
+      let started = commands.executable
+        .deletingLastPathComponent()
+        .appendingPathComponent("started")
       let running = Task { await commands.run(["status"]) }
-      try await Task.sleep(for: .milliseconds(300))
+      try await settle("the command never started") { FileManager.default.fileExists(atPath: started.path) }
       running.cancel()
-      return await running.value
+      return try await running.value("the cancelled command never ended")
     }
     #expect(!outcome.ok)
-    #expect(ContinuousClock.now - started < Ceiling.work)
   }
 
   @Test("the atlas beside the app's executable is the one it runs")

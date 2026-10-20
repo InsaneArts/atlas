@@ -10,7 +10,7 @@ struct KeysMenuTests {
   @Test("each key shows its key equivalent and sends the key it names")
   func theKeysMenuSendsTheKeyItNames() async throws {
     let service = ScriptedService()
-    let viewer = await ViewerController.watching(service)
+    let viewer = try await ViewerController.watching(service)
     await viewer.takeControl()
     let menu = KeysMenu.menu(for: viewer)
     let items = menu.items.compactMap { $0 as? KeyItem }
@@ -19,7 +19,7 @@ struct KeysMenuTests {
     #expect(switchApp.keyEquivalent == "\t" && switchApp.keyEquivalentModifierMask == .command)
     switchApp.fire()
     try #require(items.first { $0.title == "Escape" }).fire()
-    await settle { service.actions.count == 2 }
+    try await settle("the two keys were never sent") { service.actions.count == 2 }
     #expect(service.actions == [[.key("cmd+tab")], [.key("escape")]])
     viewer.close()
   }
@@ -27,7 +27,7 @@ struct KeysMenuTests {
   @Test("a key chosen without control sends nothing")
   func nothingIsSentWithoutControl() async throws {
     let service = ScriptedService()
-    let viewer = await ViewerController.watching(service)
+    let viewer = try await ViewerController.watching(service)
     let menu = KeysMenu.menu(for: viewer)
     let items = menu.items.compactMap { $0 as? KeyItem }
     try #require(items.first { $0.title == "Switch App" }).fire()
