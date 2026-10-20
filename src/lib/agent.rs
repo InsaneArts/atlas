@@ -75,6 +75,12 @@ code means and what to do.\n"
 /// The longest text a single `type` action accepts.
 const TYPE_LIMIT: usize = 256;
 
+/// How much text `atlas type` sends at once: 64 characters, about half a
+/// second of typing, so a busy Mac typing several times slower than usual
+/// still finishes each part well within the helper's deadline. Control is
+/// held across the parts, so nothing lands between them.
+const TYPE_BATCH: usize = 64;
+
 /// How long a read-only look at the helper (its window list) may take.
 const PROBE_LIMIT: Duration = Duration::from_secs(5);
 
@@ -100,8 +106,9 @@ pub fn drag(from: (f64, f64), to: (f64, f64), which: Button) -> Value {
     }])
 }
 
-/// Text as `type` batches of at most 256 characters, never splitting a
-/// grapheme cluster (an emoji sequence or a letter with combining marks).
+/// Text as `type` batches of at most [`TYPE_BATCH`] characters, never
+/// splitting a grapheme cluster (an emoji sequence or a letter with
+/// combining marks); a longer cluster goes on its own, up to [`TYPE_LIMIT`].
 pub(crate) fn type_batches(text: &str) -> Result<Vec<String>> {
     let mut batches = Vec::new();
     let mut chunk = String::new();
@@ -116,7 +123,7 @@ pub(crate) fn type_batches(text: &str) -> Result<Vec<String>> {
             ));
         }
 
-        if length + size > TYPE_LIMIT {
+        if length > 0 && length + size > TYPE_BATCH {
             batches.push(std::mem::take(&mut chunk));
             length = 0;
         }
@@ -1595,7 +1602,10 @@ mod tests {
         let batches = type_batches(&text).unwrap();
 
         assert_eq!(batches.concat(), text);
-        assert!(batches.iter().all(|t| t.chars().count() <= TYPE_LIMIT));
+        assert!(
+            batches.iter().all(|t| t.chars().count() <= TYPE_BATCH),
+            "each part is short enough to finish in time on a busy Mac"
+        );
         assert!(
             batches.iter().any(|t| t.contains(family)),
             "cluster kept whole"
@@ -1612,6 +1622,14 @@ mod tests {
         assert_eq!(batches.concat(), decomposed);
 
         assert!(type_batches("").is_err());
+
+        let long_cluster = format!("a{}", "\u{301}".repeat(99));
+        let batches = type_batches(&format!("xy{long_cluster}z")).unwrap();
+        assert_eq!(
+            batches,
+            ["xy", long_cluster.as_str(), "z"],
+            "a long cluster goes alone"
+        );
     }
 
     /// A look never asks the helper for longer than it allows a command,

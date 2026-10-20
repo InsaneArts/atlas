@@ -229,11 +229,17 @@ pub async fn status(config_path: &Path) -> Result<Value> {
 
     // Never asked and silent (a choice cut short, or an `atlas init` stopped
     // once it wrote settings): the window offers the choice again, and
-    // choosing another account replaces these settings.
-    let candidates = if !paired && !answering {
-        candidates()?
-    } else {
+    // choosing another account replaces these settings. A helper already
+    // prepared for this account is the only choice, as `choose` keeps it.
+    let candidates = if paired || answering {
         Vec::new()
+    } else if prepared(&helper) {
+        candidates()?
+            .into_iter()
+            .filter(|candidate| candidate["uid"] == helper.uid)
+            .collect()
+    } else {
+        candidates()?
     };
 
     Ok(json!({

@@ -219,15 +219,19 @@ pub fn stop(output: &Path) -> Option<u16> {
     let pid = nix::unistd::Pid::from_raw(pid);
     nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGINT).ok()?;
 
-    for _ in 0..50 {
-        if nix::sys::signal::kill(pid, None).is_err() {
-            break;
-        }
+    // It finishes what changes the helper first (a Recover can take most
+    // of a minute), and keeps its port until then.
+    let deadline = std::time::Instant::now() + STOP_WAIT;
+    while nix::sys::signal::kill(pid, None).is_ok() && std::time::Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(100));
     }
 
     Some(port)
 }
+
+/// How long [`stop`] waits for the menu bar to exit: 60 seconds, beyond a
+/// Recover's worst case of about 50, which it lets finish.
+const STOP_WAIT: Duration = Duration::from_secs(60);
 
 /// Whether process `pid` runs an executable named like this one (`atlas`).
 pub(crate) fn is_atlas(pid: i32) -> bool {
