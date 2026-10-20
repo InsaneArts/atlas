@@ -153,12 +153,13 @@ impl Store {
         };
 
         for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
+            let name = entry.file_name();
             let started = !matches!(
                 fs::symlink_metadata(entry.path().join("transaction.json")),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound
             );
             let folder = name
+                .to_string_lossy()
                 .strip_prefix("transaction-")
                 .is_some_and(|id| validate_id(id).is_ok())
                 && fs::symlink_metadata(entry.path()).is_ok_and(|metadata| metadata.is_dir());

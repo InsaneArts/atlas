@@ -151,8 +151,10 @@ pub(crate) fn link_command(executable: &Path) -> Result<Value> {
     link_command_in(&config::home()?.join(".local/bin"), executable)
 }
 
+/// [`link_command`] into the folder `bin`.
 fn link_command_in(bin: &Path, executable: &Path) -> Result<Value> {
     fs::create_dir_all(bin)?;
+
     let link = bin.join("atlas");
     if fs::canonicalize(&link).ok().as_deref() == Some(executable) {
         return Ok(json!({"linked": link, "changed": false}));
@@ -1309,7 +1311,7 @@ mod tests {
             false
         );
 
-        for target in [older.clone(), root.join("gone")] {
+        for target in [older, root.join("gone")] {
             fs::remove_file(&link).unwrap();
             std::os::unix::fs::symlink(&target, &link).unwrap();
             assert_eq!(link_command_in(&bin, &executable).unwrap()["changed"], true);

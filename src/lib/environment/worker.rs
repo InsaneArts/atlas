@@ -369,8 +369,9 @@ fn prepare(
     written.map(|()| transaction)
 }
 
-/// Whether this transaction installed the file: Some(true) installed,
-/// Some(false) not yet, None when it changed some other way.
+/// Whether this transaction installed the file, recognized by its owned
+/// generation or its journaled inode: Some(true) installed, Some(false) not
+/// yet, None when it changed some other way.
 fn install_state(
     home: &Path,
     transaction: &Transaction,
@@ -408,7 +409,8 @@ fn install_state(
     Ok(None)
 }
 
-/// An installed file is recognized by its owned generation or its journaled inode.
+/// Whether this transaction installed the file. One that changed some other
+/// way is refused, saying how to finish when the plan never put it in place.
 fn apply_state(
     home: &Path,
     transaction: &Transaction,

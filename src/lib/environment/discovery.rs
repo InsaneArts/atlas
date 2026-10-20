@@ -15,8 +15,8 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-// Every path is a separate positional argument. No selected name, path or
-// environment value is interpreted as shell syntax or emitted by this probe.
+/// Every path is a separate positional argument. No selected name, path or
+/// environment value is interpreted as shell syntax or emitted by this probe.
 const PATH_PROBE: &str = r#"
 for item do
     flags=''

@@ -787,9 +787,9 @@ fn header<'a>(headers: &'a HeaderMap, key: &str) -> Option<&'a str> {
     headers.get(key)?.to_str().ok()
 }
 
-// A client can abort any request. Axum drops the handler future when that
-// happens, which could stop between a quarantine or lease change and its
-// matching cleanup. Each request therefore runs to completion in its own task.
+/// A client can abort any request. Axum drops the handler future when that
+/// happens, which could stop between a quarantine or lease change and its
+/// matching cleanup. Each request therefore runs to completion in its own task.
 async fn handle(State(viewer): State<Arc<Viewer>>, request: Request) -> Response {
     tokio::spawn(respond(viewer, request))
         .await

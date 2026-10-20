@@ -21,8 +21,8 @@ use tokio::{
     task::JoinSet,
 };
 
-// Twice the controller's 32 KiB action limit, leaving room for the owner,
-// epoch and JSON re-encoding around any batch the controller accepts.
+/// Twice the controller's 32 KiB action limit, leaving room for the owner,
+/// epoch and JSON re-encoding around any batch the controller accepts.
 const MAX_REQUEST: usize = 64 * 1024;
 
 struct Service {

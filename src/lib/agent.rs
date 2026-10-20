@@ -5,6 +5,7 @@
 use crate::{
     actions::Button,
     client::Client,
+    control::Ownership,
     error::{Error, Result},
     handoff,
     native::{
@@ -252,7 +253,7 @@ pub struct WindowFilter {
     pub app: Option<String>,
     /// Text the window title must contain, compared case-insensitively.
     pub title: Option<String>,
-    /// Include menu bar, Dock and other non-document layers.
+    /// Include menus, the menu bar, the Dock and other system layers.
     pub all: bool,
 }
 
@@ -374,29 +375,8 @@ pub async fn open(
 
     let mut reply = client.run_owned(&ownership, argv.clone()).await?;
 
-    // An app opened again just as it quit can leave launchd holding its
-    // finished job, and every later launch fails until that job is gone.
-    if reply["exitCode"] != 0 {
-        let output = run_output(&reply, 4096).unwrap_or_default();
-
-        if let Some(bundle) = stale_launch(&String::from_utf8_lossy(&output)) {
-            let cleared = client
-                .run_owned(
-                    &ownership,
-                    vec![
-                        "/bin/sh".to_owned(),
-                        "-c".to_owned(),
-                        CLEAR_STALE_JOB.to_owned(),
-                        "sh".to_owned(),
-                        bundle.to_owned(),
-                    ],
-                )
-                .await?;
-
-            if !run_output(&cleared, 4096).unwrap_or_default().is_empty() {
-                reply = client.run_owned(&ownership, argv).await?;
-            }
-        }
+    if reply["exitCode"] != 0 && cleared_stale_launch(client, &ownership, &reply).await? {
+        reply = client.run_owned(&ownership, argv).await?;
     }
 
     let opened = reply["exitCode"] == 0;
@@ -435,6 +415,34 @@ pub async fn open(
     Ok(value)
 }
 
+/// After a failed `open`, remove the finished job launchd still holds for
+/// its app, when that is why it failed: an app opened again just as it quit
+/// can leave one, and every later launch fails until it is gone. Whether
+/// one was removed, so the launch is worth trying again.
+async fn cleared_stale_launch(
+    client: &Client,
+    ownership: &Ownership,
+    reply: &Value,
+) -> Result<bool> {
+    let output = run_output(reply, 4096).unwrap_or_default();
+    let said = String::from_utf8_lossy(&output);
+
+    let Some(bundle) = stale_launch(&said) else {
+        return Ok(false);
+    };
+
+    let argv = vec![
+        "/bin/sh".to_owned(),
+        "-c".to_owned(),
+        CLEAR_STALE_JOB.to_owned(),
+        "sh".to_owned(),
+        bundle.to_owned(),
+    ];
+    let cleared = client.run_owned(ownership, argv).await?;
+
+    Ok(!run_output(&cleared, 4096).unwrap_or_default().is_empty())
+}
+
 /// The app whose launch launchd refused because it still holds that app's
 /// finished job (error 37, "Operation already in progress"), from what
 /// `open` said.
@@ -445,8 +453,9 @@ fn stale_launch(said: &str) -> Option<&str> {
 
     let rest = said.split_once("The application ")?.1;
     let end = rest.find(".app ")? + ".app".len();
+    let app = &rest[..end];
 
-    rest[..end].starts_with('/').then(|| &rest[..end])
+    app.starts_with('/').then_some(app)
 }
 
 /// In the helper, remove launchd's jobs for the app at `$1` that are not
@@ -797,7 +806,7 @@ pub async fn wait(
             .into_iter()
             .filter(|window| filter.matches(window))
             .collect();
-        let observed = Instant::now();
+
         if matching.is_empty() == gone {
             return Ok(json!({
                 "ok": true,
@@ -806,6 +815,7 @@ pub async fn wait(
             }));
         }
 
+        let observed = Instant::now();
         if timeout.is_zero() || observed >= deadline {
             let error = if gone {
                 "The window did not close in time".to_owned()
@@ -1600,7 +1610,6 @@ mod tests {
         assert!(type_batches("").is_err());
     }
 
-    /// Every command compares app names the same way, beyond ASCII too.
     /// A look never asks the helper for longer than it allows a command,
     /// however long the wait.
     #[test]
@@ -1611,6 +1620,7 @@ mod tests {
             probe_budget(Duration::from_secs(86_400)),
             crate::client::RUN_TIMEOUT_MAX
         );
+
         let longest = crate::client::RUN_TIMEOUT_MAX.as_millis();
         let request = json!({"op": "run", "argv": ["x"], "timeoutMs": longest}).to_string();
         assert!(
@@ -1619,6 +1629,7 @@ mod tests {
         );
     }
 
+    /// Every command compares app names the same way, beyond ASCII too.
     #[test]
     fn app_names_match_in_any_case() {
         assert!(same_text("TextEdit", "textedit"));
@@ -1656,7 +1667,16 @@ mod tests {
             ..Default::default()
         };
         assert!(by_title.matches(&edit));
+        assert!(!by_title.matches(&window(5, 6, "Preview", 0)));
+
         assert!(!WindowFilter::default().matches(&menu));
+        assert!(
+            WindowFilter {
+                all: true,
+                ..Default::default()
+            }
+            .matches(&menu)
+        );
 
         let alert = window(7, 8, "CoreServicesUIAgent", 8);
         assert!(
@@ -1667,14 +1687,6 @@ mod tests {
             !WindowFilter::default().matches(&window(9, 10, "Dock", 20)),
             "the Dock is not"
         );
-        assert!(
-            WindowFilter {
-                all: true,
-                ..Default::default()
-            }
-            .matches(&menu)
-        );
-        assert!(!by_title.matches(&window(5, 6, "Preview", 0)));
     }
 
     fn element(role: &str, title: Option<&str>, description: Option<&str>) -> Element {

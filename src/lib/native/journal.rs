@@ -53,6 +53,8 @@ impl Journal {
     }
 }
 
+/// The input a crashed service left held in this login, if any. A journal
+/// from an earlier login is set aside, never returned.
 pub fn load(path: &Path, epoch: &InputEpoch) -> Result<Option<Held>> {
     let foreign = || Error::new("identity", "Held-input journal must belong to the helper");
 
@@ -128,29 +130,28 @@ fn set_aside(path: &Path, held: &Held) -> Result<PathBuf> {
         .unwrap_or_default()
         .as_secs();
 
-    for attempt in 0..100u32 {
-        let kept = path.with_extension(format!("{session}.{stamp}-{attempt}.json"));
-        if fs::symlink_metadata(&kept).is_ok() {
-            continue;
-        }
+    let Some(kept) = (0..100u32)
+        .map(|attempt| path.with_extension(format!("{session}.{stamp}-{attempt}.json")))
+        .find(|kept| fs::symlink_metadata(kept).is_err())
+    else {
+        return Err(Error::new(
+            "identity",
+            "Held input from an earlier login could not be set aside; it will not be replayed \
+             into this login",
+        ));
+    };
 
-        return match fs::rename(path, &kept) {
-            Ok(()) => Ok(kept),
-            Err(error) => Err(Error::new(
-                "identity",
-                format!(
-                    "Held input from an earlier login could not be set aside ({error}); it \
-                     will not be replayed into this login"
-                ),
-            )),
-        };
-    }
+    fs::rename(path, &kept).map_err(|error| {
+        Error::new(
+            "identity",
+            format!(
+                "Held input from an earlier login could not be set aside ({error}); it \
+                 will not be replayed into this login"
+            ),
+        )
+    })?;
 
-    Err(Error::new(
-        "identity",
-        "Held input from an earlier login could not be set aside; it will not be replayed \
-         into this login",
-    ))
+    Ok(kept)
 }
 
 /// Replace the journal in one step. It is written as far as the kernel: it

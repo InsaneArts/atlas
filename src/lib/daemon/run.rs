@@ -135,6 +135,13 @@ fn ended(
     reply
 }
 
+/// A failure after the command started: it may have done some of its work.
+fn interrupted(code: &str, error: impl Into<String>) -> Value {
+    let mut reply = failure(code, error);
+    reply["uncertain"] = json!(true);
+    reply
+}
+
 /// Signal the command's whole process group (`None` only probes); whether
 /// any member remains.
 fn signal_group(group: Pid, signal: impl Into<Option<Signal>>) -> bool {
@@ -177,22 +184,6 @@ struct Output {
 
 /// The client went away; nothing more can be delivered.
 struct Gone;
-
-/// Why a command was ended before it finished.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Cancel {
-    /// The client hung up.
-    Left,
-    /// The daemon is stopping.
-    Stopping,
-}
-
-/// A failure after the command started: it may have done some of its work.
-fn interrupted(code: &str, error: impl Into<String>) -> Value {
-    let mut reply = failure(code, error);
-    reply["uncertain"] = json!(true);
-    reply
-}
 
 impl Output {
     fn new() -> Self {
@@ -290,6 +281,15 @@ impl Output {
         self.pending.clear();
         Ok(())
     }
+}
+
+/// Why a command was ended before it finished.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cancel {
+    /// The client hung up.
+    Left,
+    /// The daemon is stopping.
+    Stopping,
 }
 
 /// Run `argv`, sending its events to `events`, and return the final reply.

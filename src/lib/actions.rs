@@ -108,7 +108,7 @@ fn modifier(value: &str) -> Option<u64> {
     })
 }
 
-// Five distinct modifier keys exist; longer lists only inflate requests.
+/// Five distinct modifier keys exist; longer lists only inflate requests.
 fn modifiers_valid(modifiers: &[String]) -> bool {
     modifiers.len() <= 5 && modifiers.iter().all(|m| modifier(m).is_some())
 }
