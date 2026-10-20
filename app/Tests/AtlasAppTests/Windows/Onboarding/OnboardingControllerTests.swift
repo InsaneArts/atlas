@@ -206,6 +206,55 @@ struct OnboardingControllerTests {
     #expect(!controller.snapshot.agentsLoaded, "the closed window took the agents' reply")
   }
 
+  @Test("a failed first reading's message goes once a reading succeeds")
+  func aFailedFirstReadingIsForgotten() async throws {
+    let commands = ScriptedCommands([:])
+    let controller = Self.controller(commands)
+    controller.refresh()
+    try await settle("the failed reading was never shown") { controller.snapshot.problem != nil }
+    commands.answer("onboarding status", freshMac)
+    controller.refresh()
+    try await settle("the facts were never read") { controller.snapshot.loaded }
+    #expect(controller.snapshot.problem == nil)
+  }
+
+  @Test("a failed agents reading says why and is asked again with the next reading")
+  func aFailedAgentsReadingIsAskedAgain() async throws {
+    let commands = ScriptedCommands(["onboarding status": finishedMac])
+    let controller = try await Self.loaded(commands)
+    try await settle("the failed agents reading was never shown") { controller.snapshot.problem != nil }
+    #expect(!controller.snapshot.agentsLoaded, "nothing is known about the agents")
+    commands.answer(
+      "agents status",
+      #"{"ok": true, "agents": [{"agent": "claude", "installed": true, "connected": false}]}"#
+    )
+    controller.refresh()
+    try await settle("the agents were never asked for again") { controller.snapshot.agentsLoaded }
+    #expect(controller.snapshot.agents.first { $0.id == .claude }?.found == true)
+    #expect(controller.snapshot.problem == nil)
+  }
+
+  @Test("leaving the check and coming back runs it again")
+  func theCheckRunsAgainOnReturn() async throws {
+    let unfinished = finishedMac.replacingOccurrences(of: #""finished": true"#, with: #""finished": false"#)
+    let shown = unfinished.replacingOccurrences(of: #""hidden": true"#, with: #""hidden": false"#)
+    let commands = ScriptedCommands([
+      "onboarding status": unfinished, "onboarding finish": #"{"ok": false, "error": "no answer"}"#,
+    ])
+    let controller = try await Self.loaded(commands)
+    try await settle("the check never failed") {
+      controller.snapshot.finish != .idle && controller.snapshot.finish != .running
+    }
+    commands.answer("onboarding status", shown)
+    controller.refresh()
+    try await settle("the check was never left") { controller.snapshot.step == .switchToHelper }
+    commands.answer("onboarding status", unfinished)
+    controller.refresh()
+    try await settle("the check never ran again") {
+      commands.ran.filter { $0 == Action.finishSetup.arguments }.count == 2
+    }
+  }
+
   @Test("Open at Login starts from what the login item says once the person has chosen")
   func openAtLoginStartsFromTheEarlierChoice() async throws {
     let decided = freshMac.replacingOccurrences(
