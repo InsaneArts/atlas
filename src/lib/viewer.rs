@@ -8,6 +8,7 @@ use crate::{
     control::{self, ActionPermit, Lease, SharedLease},
     error::{Error, Result},
     menubar::{App, Line},
+    overview::{READ_DEADLINE, late},
     session::Epoch,
 };
 use axum::{
@@ -49,9 +50,6 @@ const HEADER_DEADLINE: Duration = Duration::from_secs(15);
 /// private address. One that has not closes, so connections nobody uses
 /// cannot keep every place taken.
 const FIRST_REQUEST: Duration = Duration::from_secs(3);
-/// How long reading the status or a frame may take: less than the app
-/// waits (8 seconds), so it hears why rather than giving up.
-const READ_DEADLINE: Duration = Duration::from_secs(5);
 /// The largest request body, in bytes.
 const MAX_BODY: usize = 32768;
 /// What the viewer's own address answers, so it is told apart from any
@@ -511,27 +509,7 @@ impl Viewer {
         self.follow_settings().await;
 
         let client = self.client();
-        let uid = client.config.helper_uid;
-        let reply = tokio::time::timeout_at(until, client.status())
-            .await
-            .unwrap_or_else(|_| json!(late()));
-
-        // Why a silent helper is down, asked off the runtime (and only then).
-        let absence = if crate::session::silent(&reply) {
-            tokio::time::timeout_at(until, blocking(move || Ok(crate::session::absence(uid))))
-                .await
-                .ok()
-                .and_then(Result::ok)
-                .flatten()
-        } else {
-            None
-        };
-
-        let mut status = crate::capability::doctor(reply, uid);
-
-        if let Some(absence) = &absence {
-            absence.explain(&mut status);
-        }
+        let mut status = crate::overview::report(&client, until).await;
 
         // Ending control waits on the helper too: it finishes by itself
         // when that takes longer than a moment.
@@ -543,20 +521,13 @@ impl Viewer {
         let active = self.lease.lock().await.active();
         status["controlActive"] = json!(active);
 
-        // An unreadable marker is unknown, so it counts as unresolved.
-        let controller = &client.controller;
-        let total = controller.pending().map_or(1, |pending| pending.len());
-        let unresolved = controller.unresolved().map_or(1, |pending| pending.len());
-        let pending = crate::overview::Pending {
-            unresolved,
-            in_flight: total.saturating_sub(unresolved),
-        };
+        let (pending, total) = crate::overview::pending(&client.controller);
 
         self.start_input_after_login(&client, &status["session"], total == 0 && !active);
 
         let activity = client
             .output_dir()
-            .map(|directory| crate::overview::activity(directory, 12))
+            .map(|directory| crate::overview::activity(directory, crate::overview::ROWS))
             .unwrap_or_default();
         status["overview"] = crate::overview::overview(
             &status,
@@ -1062,11 +1033,6 @@ fn unpoisoned<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// A read of the helper that took longer than the app waits.
-fn late() -> Error {
-    Error::new("transport", "The helper did not answer in time")
-}
-
 /// The local viewer could not be reached, or its reply not read.
 fn unanswered() -> Error {
     Error::new("menubar", "The menu bar's viewer did not answer")
@@ -1126,6 +1092,39 @@ fn answering(url: &str) -> Option<Option<u32>> {
     )
 }
 
+/// Whether the menu bar's viewer is recorded in `output` as serving `port`
+/// and its process still runs Atlas, answering or not.
+pub fn recorded(output: &Path, port: u16) -> bool {
+    std::fs::read(output.join(MENUBAR_RECORD))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .filter(|record| {
+            record["url"]
+                .as_str()
+                .is_some_and(|url| url.starts_with(&format!("http://127.0.0.1:{port}/")))
+        })
+        .and_then(|record| record["pid"].as_i64())
+        .and_then(|pid| i32::try_from(pid).ok())
+        .is_some_and(crate::menubar::is_atlas)
+}
+
+/// The private address of the menu bar's viewer, when it runs and answers
+/// as the process its record names. It blocks for up to a second: call it
+/// off the async runtime.
+pub fn local(output: &Path, port: u16) -> Option<String> {
+    running(&output.join(MENUBAR_RECORD), port)
+        .and_then(|running| running["url"].as_str().map(str::to_owned))
+}
+
+/// What the local viewer at `url` serves at `route`, read within `deadline`
+/// and at most `limit` bytes. Anything but a 200 is refused.
+pub fn fetch(url: &str, route: &str, deadline: Duration, limit: usize) -> Result<Vec<u8>> {
+    match exchange_within(url, "GET", route, None, deadline, limit)? {
+        (200, body) => Ok(body),
+        _ => Err(unanswered()),
+    }
+}
+
 /// One request to the local viewer at `url`, as its own origin, within
 /// `deadline` overall: the reply's status and body. Replies are small; a
 /// larger one is refused.
@@ -1136,6 +1135,72 @@ fn exchange(
     body: Option<&[u8]>,
     deadline: Duration,
 ) -> Result<(u16, Vec<u8>)> {
+    exchange_within(url, method, route, body, deadline, 1 << 16)
+}
+
+/// [`exchange`], refusing a reply larger than `limit` bytes.
+fn exchange_within(
+    url: &str,
+    method: &str,
+    route: &str,
+    body: Option<&[u8]>,
+    deadline: Duration,
+    limit: usize,
+) -> Result<(u16, Vec<u8>)> {
+    let reply = exchange_raw(url, method, route, body, deadline, limit)?;
+    parse_response(&reply).ok_or_else(unanswered)
+}
+
+/// The menu bar viewer's newest frame, with the key control requests name
+/// it by and the display's size in points, which input is given in.
+pub(crate) struct SharedFrame {
+    pub png: Vec<u8>,
+    pub key: String,
+    pub display: (f64, f64),
+}
+
+/// The local viewer's newest frame at `url`, read within `deadline` and at
+/// most `limit` bytes.
+pub(crate) fn fetch_frame(url: &str, deadline: Duration, limit: usize) -> Result<SharedFrame> {
+    let reply = exchange_raw(url, "GET", "frame.png", None, deadline, limit)?;
+    let Some((200, png)) = parse_response(&reply) else {
+        return Err(unanswered());
+    };
+    let named = |name: &str| reply_header(&reply, name);
+    let points = |name: &str| named(name).and_then(|value| value.parse::<f64>().ok());
+
+    Ok(SharedFrame {
+        png,
+        key: named("x-frame-id").ok_or_else(unanswered)?,
+        display: (
+            points("x-display-width").ok_or_else(unanswered)?,
+            points("x-display-height").ok_or_else(unanswered)?,
+        ),
+    })
+}
+
+/// The value of the header `name` in a whole reply.
+fn reply_header(reply: &[u8], name: &str) -> Option<String> {
+    let split = reply.windows(4).position(|window| window == b"\r\n\r\n")?;
+    std::str::from_utf8(&reply[..split])
+        .ok()?
+        .split("\r\n")
+        .skip(1)
+        .filter_map(|line| line.split_once(':'))
+        .find(|(header, _)| header.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.trim().to_owned())
+}
+
+/// One request to the local viewer at `url`: its whole reply, head and
+/// body, once all of it has arrived.
+fn exchange_raw(
+    url: &str,
+    method: &str,
+    route: &str,
+    body: Option<&[u8]>,
+    deadline: Duration,
+    limit: usize,
+) -> Result<Vec<u8>> {
     use std::io::{Read, Write};
 
     // Any trouble on the wire reads the same to the person.
@@ -1184,16 +1249,16 @@ fn exchange(
 
         reply.extend_from_slice(&chunk[..read]);
 
-        if reply.len() > 1 << 16 {
+        if reply.len() > limit {
             return Err(unanswered());
         }
 
-        if let Some(parsed) = parse_response(&reply) {
-            return Ok(parsed);
+        if parse_response(&reply).is_some() {
+            return Ok(reply);
         }
     }
 
-    parse_response(&reply).ok_or_else(unanswered)
+    Ok(reply)
 }
 
 /// A complete HTTP/1.1 reply's status and body, framed by Content-Length
@@ -1274,14 +1339,20 @@ fn already_running(output: &Path, port: u16, taken: Error) -> Result<()> {
 }
 
 /// Open the viewer window in the menu bar app, starting the menu bar first
-/// when it is not running.
-pub async fn monitor(config: &Path, port: u16, output: &Path) -> Result<()> {
+/// when it is not running. It prints nothing.
+pub async fn open_viewer(config: &Path, port: u16, output: &Path) -> Result<()> {
     let (_, record) = crate::menubar::launch(config, port, output).await?;
     let url = record["url"]
         .as_str()
         .map(str::to_owned)
         .ok_or_else(|| Error::new("menubar", "The menu bar's record names no viewer"))?;
     blocking(move || post_local(&url, "app/viewer", &json!({}))).await?;
+    Ok(())
+}
+
+/// [`open_viewer`], saying so.
+pub async fn monitor(config: &Path, port: u16, output: &Path) -> Result<()> {
+    open_viewer(config, port, output).await?;
 
     if crate::ui::human() {
         println!(
@@ -1300,7 +1371,7 @@ pub async fn monitor(config: &Path, port: u16, output: &Path) -> Result<()> {
 
 /// POST `body` to `route` of the local viewer at `url`, as its own origin,
 /// and read its JSON reply; a refusal is an error in its own words.
-fn post_local(url: &str, route: &str, body: &Value) -> Result<Value> {
+pub(crate) fn post_local(url: &str, route: &str, body: &Value) -> Result<Value> {
     let (status, reply) = exchange(
         url,
         "POST",
@@ -1311,8 +1382,14 @@ fn post_local(url: &str, route: &str, body: &Value) -> Result<Value> {
     let reply: Value = serde_json::from_slice(&reply).map_err(|_| unanswered())?;
 
     if status != 200 {
+        // A refusal keeps its own code (busy, stale-frame…) when it is one
+        // Atlas knows.
+        let code = reply["code"]
+            .as_str()
+            .and_then(crate::error::code)
+            .unwrap_or("menubar");
         return Err(Error::new(
-            "menubar",
+            code,
             reply["error"]
                 .as_str()
                 .unwrap_or("The menu bar's viewer refused")
@@ -1408,15 +1485,21 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
     }
 
     // Ending control has slots of its own, so a busy viewer still lets go.
-    let urgent =
-        method == Method::POST && matches!(route.as_str(), "control/release" | "control/revoke");
+    let urgent = method == Method::POST
+        && matches!(
+            route.as_str(),
+            "control/release" | "control/revoke" | "control/hold"
+        );
     let slots = if urgent {
         &viewer.urgent
     } else {
         &viewer.requests
     };
     let Ok(_slot) = slots.try_acquire() else {
-        return json_response(503, json!({"ok": false, "error": "Viewer is busy"}));
+        return json_response(
+            503,
+            json!({"ok": false, "code": "busy", "error": "Viewer is busy"}),
+        );
     };
 
     if method == Method::GET {
@@ -1468,6 +1551,7 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
                 | "control/renew"
                 | "control/release"
                 | "control/revoke"
+                | "control/hold"
                 | "recover"
                 | "app/viewer"
         )
@@ -1535,6 +1619,10 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
 
     let outcome = if route == "recover" {
         viewer.recover().await
+    } else if route == "control/hold" {
+        // The person's stop for agents, or their resume. Control a viewer
+        // holds is left alone either way.
+        viewer.client().hold(body["on"] == true).await
     } else {
         viewer.control(&route, &body).await
     };
@@ -1660,6 +1748,23 @@ mod tests {
     }
 
     #[test]
+    fn a_frames_key_and_display_size_are_read_from_its_headers() {
+        let reply = b"HTTP/1.1 200 OK\r\nX-Frame-Id: abc123\r\nx-display-width: 1440\r\nContent-Length: 2\r\n\r\nok";
+        assert_eq!(reply_header(reply, "x-frame-id").as_deref(), Some("abc123"));
+        assert_eq!(
+            reply_header(reply, "X-Display-Width").as_deref(),
+            Some("1440"),
+            "named in any case"
+        );
+        assert_eq!(reply_header(reply, "x-display-height"), None);
+        assert_eq!(
+            reply_header(b"HTTP/1.1 200 OK\r\nX-Frame-Id: a", "x-frame-id"),
+            None,
+            "not until the head has ended"
+        );
+    }
+
+    #[test]
     fn replies_are_read_by_their_framing_and_status() {
         let plain = b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 11\r\n\r\n{\"ok\":true}";
         assert_eq!(
@@ -1679,6 +1784,58 @@ mod tests {
         );
         assert_eq!(parse_response(b"HTTP/1.1 200 OK\r\n\r\n"), None, "unframed");
         assert_eq!(parse_response(b"garbage\r\n\r\n"), None);
+    }
+
+    #[tokio::test]
+    async fn a_fetch_reads_the_viewers_status_within_its_limit_and_refuses_more() {
+        let dir = tempfile::tempdir().unwrap();
+        let (viewer, server) = served(dir.path(), CONNECTIONS).await;
+        let url = viewer.url.clone();
+
+        let (status, small) = tokio::task::spawn_blocking(move || {
+            let deadline = Duration::from_secs(8);
+            (
+                fetch(&url, "status.json", deadline, 1 << 16),
+                fetch(&url, "status.json", deadline, 16),
+            )
+        })
+        .await
+        .unwrap();
+
+        let status: Value = serde_json::from_slice(&status.unwrap()).unwrap();
+        assert!(
+            status["overview"]["state"].is_string(),
+            "watch reads the state"
+        );
+        assert_eq!(small.unwrap_err().code, "menubar");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn the_person_stops_and_resumes_agents_through_the_viewer() {
+        let dir = tempfile::tempdir().unwrap();
+        let (viewer, server) = served(dir.path(), CONNECTIONS).await;
+        let url = viewer.url.clone();
+
+        // No input service runs here: the Stop is kept on the person's side
+        // all the same, and says the service did not hear it.
+        let replies = tokio::task::spawn_blocking(move || {
+            [true, false].map(|on| post_local(&url, "control/hold", &json!({"on": on})))
+        })
+        .await
+        .unwrap();
+
+        for (reply, on) in replies.into_iter().zip([true, false]) {
+            let reply = reply.unwrap();
+            assert_eq!(reply["held"], on);
+            assert!(
+                reply["warnings"][0]
+                    .as_str()
+                    .unwrap()
+                    .contains("isn't running")
+            );
+        }
+        server.abort();
     }
 
     #[tokio::test]

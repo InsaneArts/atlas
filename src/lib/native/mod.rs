@@ -74,6 +74,8 @@ pub(crate) mod endpoint;
 #[cfg(target_os = "macos")]
 mod events;
 #[cfg(target_os = "macos")]
+pub mod icons;
+#[cfg(target_os = "macos")]
 mod journal;
 #[cfg(target_os = "macos")]
 mod lease;

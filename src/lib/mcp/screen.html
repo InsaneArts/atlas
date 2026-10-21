@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlas</title>
+<style>
+/* Atlas's viewer, as in the app and on the website: dark, the helper's
+   screen first, frosted captions over it and capsule buttons under it. */
+:root {
+  --ground: #161618;
+  --deep: #0d0d10;
+  --ink: #f5f5f7;
+  --ink-2: #a1a1a6;
+  --ink-3: #8e8e93;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-2: rgba(255, 255, 255, 0.16);
+  --fill: rgba(255, 255, 255, 0.08);
+  --fill-on: rgba(255, 255, 255, 0.16);
+  --card: rgba(255, 255, 255, 0.045);
+  --glass: rgba(22, 22, 24, 0.75);
+  --menu: rgba(40, 40, 44, 0.92);
+  --blue: #0a84ff;
+  --link: #4ea6ff;
+  --orange: #ff9f0a;
+  --orange-ink: #ffb340;
+  --red: #ff6961;
+  --idle: #8e8e93;
+  --rim-control: inset 0 0 0 1.5px rgba(10, 132, 255, 0.9), 0 0 14px rgba(10, 132, 255, 0.3);
+  --screen-shadow: 0 14px 28px rgba(0, 0, 0, 0.5);
+  --menu-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.6), inset 0 0 0 0.5px var(--line-2), 0 16px 40px rgba(0, 0, 0, 0.5);
+  --blur: blur(20px) saturate(1.6);
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  --radius-card: 22px;
+  --radius-screen: 12px;
+  --radius-menu: 12px;
+  --radius-row: 6px;
+  --space-2xs: 2px;
+  --space-xs: 4px;
+  --space-s: 8px;
+  --space-m: 12px;
+  --space-l: 16px;
+  --space-xl: 20px;
+  --space-2xl: 24px;
+  --text-xs: 11px;
+  --text-s: 12px;
+  --text-m: 13px;
+  --text-l: 15px;
+  --control: 34px;
+  --control-small: 30px;
+  --chip: 30px;
+  --menu-row: 26px;
+  --dot: 7px;
+  --footer: 62px;
+  --thumb-width: 56px;
+  --thumb-height: 35px;
+  --panel-width: 900px;
+  --menu-width: 240px;
+  --alert-width: 280px;
+  --icon: 34px;
+  --tile: 220px;
+}
+* { box-sizing: border-box; }
+/* The view fills the app's frame edge to edge; the app rounds and clips
+   that frame itself, so the view draws no corners, edge or shadow of its own. */
+html, body { margin: 0; background: var(--ground); }
+/* Dark on its own parts only: on the page it would paint the app's
+   conversation dark behind the card. */
+html { color-scheme: dark; }
+body { font: 400 var(--text-m)/1.35 var(--font); color: var(--ink); letter-spacing: -0.01em; -webkit-font-smoothing: antialiased; }
+[hidden] { display: none !important; }
+button { font: inherit; color: inherit; cursor: pointer; }
+button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+button[disabled] { opacity: 0.35; cursor: default; }
+.spoken { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* Buttons: a capsule, its primary white, and a round icon button. */
+.pill { flex: none; height: var(--control); padding: 0 18px; border: 0; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-weight: 600; white-space: nowrap; background: var(--fill); color: var(--ink); box-shadow: inset 0 0 0 0.5px var(--line-2); }
+.pill.primary { background: var(--ink); color: var(--ground); box-shadow: none; }
+.pill[aria-expanded="true"] { background: var(--fill-on); }
+.round { flex: none; width: var(--control); height: var(--control); padding: 0; border: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--fill); color: var(--ink); box-shadow: inset 0 0 0 0.5px var(--line-2); }
+.round[aria-expanded="true"] { background: var(--fill-on); }
+.pill:not([disabled]):active, .round:not([disabled]):active { transform: scale(0.97); }
+
+/* The status: a dot, its word, then quieter words. */
+.status { min-width: 0; display: flex; align-items: center; gap: var(--space-s); }
+.dot { flex: none; width: var(--dot); height: var(--dot); border-radius: 50%; background: var(--idle); }
+.dot.working, .dot.control { background: var(--blue); box-shadow: 0 0 8px var(--blue); }
+.dot.needsYou { background: var(--orange); box-shadow: 0 0 8px var(--orange); }
+.dot.stopped { border-radius: 2px; background: var(--orange); }
+.dot.notReady { background: transparent; box-shadow: inset 0 0 0 1.5px var(--idle); }
+.label { flex: none; font-weight: 600; }
+.label.stopped, .label.needsYou { color: var(--orange-ink); }
+.hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-3); }
+.orbit { flex: none; color: var(--ink); }
+
+/* The screen, with frosted captions over it. */
+.screen { position: relative; overflow: hidden; border-radius: var(--radius-screen); background: #000000; box-shadow: var(--screen-shadow); }
+.screen img.frame { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; user-select: none; -webkit-user-drag: none; }
+.screen img.frame.dim { opacity: 0.45; }
+.screen .rim { position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 0.5px var(--line); pointer-events: none; }
+.screen.ours { cursor: default; touch-action: none; }
+.screen.ours .rim { box-shadow: var(--rim-control); }
+.screen:focus { outline: none; }
+.screen .empty .orbit { color: var(--ink-3); }
+.screen .empty { --orbit-gap: var(--deep); position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-m); padding: var(--space-l); text-align: center; color: var(--ink-3); background: var(--deep); }
+.chip { display: inline-flex; align-items: center; gap: var(--space-s); height: var(--chip); padding: 0 13px; border-radius: 999px; white-space: nowrap; background: var(--glass); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); box-shadow: inset 0 0 0 0.5px var(--line-2); font: 500 var(--text-s)/1 var(--font); color: var(--ink); max-width: 100%; }
+.chip .when { font-weight: 400; color: var(--ink-3); }
+.chip .what { overflow: hidden; text-overflow: ellipsis; }
+.chip.old { opacity: 0.6; }
+.captions { position: absolute; left: 14px; bottom: 14px; right: 14px; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; pointer-events: none; }
+.topchip { position: absolute; left: 0; right: 0; top: 14px; display: flex; justify-content: center; pointer-events: none; padding: 0 var(--space-l); }
+.note { position: absolute; right: 14px; top: 14px; }
+
+/* Inline: a dark card in the conversation. */
+.card { background: var(--ground); padding: 10px; }
+.card .screen { width: 100%; aspect-ratio: 16 / 10; }
+.card .footer { display: flex; align-items: center; gap: 10px; padding: var(--space-s) var(--space-2xs) var(--space-2xs) 10px; min-height: 52px; }
+.card .footer .spacer { flex: 1; }
+.card .pill { height: var(--control-small); }
+.card .round { width: var(--control-small); height: var(--control-small); }
+
+/* Fullscreen and side panels: the viewer fills the frame. */
+body.full { background: var(--ground); }
+body.full .card { height: 100vh; display: flex; flex-direction: column; padding: 0; border-radius: 0; box-shadow: none; }
+body.full .content { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: var(--space-l) var(--space-l) 14px; }
+body.full .stage { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+body.full .card .screen { width: auto; aspect-ratio: auto; }
+body.full .card .footer { flex: none; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: var(--space-l); height: var(--footer); padding: 0 14px 0 22px; border-top: 0.5px solid var(--line); }
+body.full .card .pill { height: var(--control); }
+body.full .card .round { width: var(--control); height: var(--control); }
+.left, .right { min-width: 0; display: flex; align-items: center; gap: var(--space-s); }
+.left { gap: var(--space-m); }
+.right { justify-content: flex-end; }
+body:not(.full) .full-only { display: none !important; }
+body.full .inline-only { display: none !important; }
+.thumb { flex: none; position: relative; width: var(--thumb-width); height: var(--thumb-height); padding: 0; border: 0; border-radius: var(--radius-row); overflow: hidden; background: #000000; box-shadow: inset 0 0 0 0.5px var(--line-2); }
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* The tabs: Screen, Activity, Apps, Screenshots. */
+.tabs { display: inline-flex; align-items: center; gap: var(--space-2xs); padding: 3px; border-radius: 999px; background: var(--fill); box-shadow: inset 0 0 0 0.5px var(--line-2); }
+.tabs button { height: 28px; padding: 0 14px; border: 0; border-radius: 999px; background: none; color: var(--ink-2); font-weight: 500; white-space: nowrap; }
+.tabs button[aria-selected="true"] { background: var(--fill-on); color: var(--ink); box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.22); }
+.tabs.small button { height: 24px; padding: 0 11px; font-size: var(--text-s); }
+
+/* The panels a tab shows in place of the screen. */
+.panel { width: min(100%, var(--panel-width)); height: 100%; display: flex; flex-direction: column; border-radius: var(--radius-screen); overflow: hidden; background: var(--card); box-shadow: inset 0 0 0 0.5px var(--line); }
+.panel.wide { width: 100%; }
+.panel-head { flex: none; display: flex; align-items: center; gap: var(--space-m); padding: var(--space-l) var(--space-xl); border-bottom: 0.5px solid var(--line); }
+.panel-head h2 { margin: 0; font: 600 var(--text-l)/1 var(--font); }
+.panel-head .meta { color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.panel-head .tabs { margin-left: auto; }
+.panel-body { flex: 1; min-height: 0; overflow: auto; }
+.panel-empty { padding: 40px var(--space-xl); text-align: center; color: var(--ink-3); }
+.group { padding: 14px var(--space-xl) 6px; font: 600 var(--text-xs)/1 var(--font); letter-spacing: 0.02em; color: var(--ink-3); }
+.row { display: grid; grid-template-columns: 64px 16px minmax(0, 1fr) auto; align-items: center; column-gap: var(--space-m); min-height: 44px; padding: var(--space-xs) var(--space-xl); border-top: 0.5px solid var(--line); }
+.row .time { color: var(--ink-3); font-size: var(--text-s); font-variant-numeric: tabular-nums; }
+.row .mark { display: flex; justify-content: center; }
+.row .mark i { width: 6px; height: 6px; border-radius: 50%; background: rgba(255, 255, 255, 0.28); }
+.row .mark i.you { background: var(--blue); }
+.row .mark i.live { width: var(--dot); height: var(--dot); background: var(--blue); box-shadow: 0 0 8px var(--blue); }
+.row .text { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.row .text .why { font-size: var(--text-s); color: var(--orange-ink); }
+.row.live .text > span:first-child { font-weight: 600; }
+.row .times { color: var(--ink-3); font-size: var(--text-s); }
+.apps { padding: 14px var(--space-l); display: flex; flex-direction: column; gap: 10px; }
+.app { border-radius: var(--radius-screen); background: var(--card); box-shadow: inset 0 0 0 0.5px var(--line); overflow: hidden; }
+.app-head { display: flex; align-items: center; gap: var(--space-m); min-height: 52px; padding: 0 var(--space-l) 0 14px; }
+.app-head img, .app-head .tile { width: var(--icon); height: var(--icon); flex: none; }
+.app-head .tile { border-radius: 8px; background: var(--fill); display: inline-flex; align-items: center; justify-content: center; font-weight: 600; color: var(--ink-2); }
+.app-head .name { font: 600 14px/1 var(--font); }
+.tag { font: 600 var(--text-xs)/1 var(--font); color: var(--link); background: rgba(10, 132, 255, 0.16); border-radius: 999px; padding: var(--space-xs) var(--space-s); }
+.window { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 var(--space-l) 0 62px; border-top: 0.5px solid var(--line); }
+.window .size { font-size: var(--text-s); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.window.none { color: var(--ink-3); font-size: var(--text-s); }
+.shots { padding: var(--space-xl); display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--tile), 1fr)); gap: var(--space-2xl) 18px; align-content: start; }
+.shot { padding: 0; border: 0; background: none; text-align: left; display: flex; flex-direction: column; gap: 9px; }
+.shot .picture { position: relative; display: block; width: 100%; aspect-ratio: 16 / 10; border-radius: 10px; overflow: hidden; background: #000000; box-shadow: inset 0 0 0 0.5px var(--line-2); }
+.shot .picture img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.shot .words { display: flex; flex-direction: column; gap: 3px; padding: 0 var(--space-2xs); }
+.shot .words span:last-child { font-size: var(--text-s); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+
+/* Menus, as Atlas's own: dark frosted glass, blue under the pointer. */
+.menu { position: fixed; z-index: 20; width: var(--menu-width); padding: 5px; border-radius: var(--radius-menu); background: var(--menu); -webkit-backdrop-filter: blur(24px) saturate(1.6); backdrop-filter: blur(24px) saturate(1.6); box-shadow: var(--menu-shadow); display: flex; flex-direction: column; }
+.menu .head { padding: 6px 10px 3px; font: 600 var(--text-xs)/1.3 var(--font); color: rgba(235, 235, 245, 0.45); }
+.menu .note { position: static; padding: var(--space-xs) 10px 6px; font: 400 var(--text-xs)/1.4 var(--font); color: rgba(235, 235, 245, 0.45); }
+.menu hr { border: 0; height: 1px; margin: 5px 10px; background: rgba(255, 255, 255, 0.14); }
+.menu button { display: flex; align-items: center; gap: 7px; width: 100%; height: var(--menu-row); padding: 0 10px; border: 0; border-radius: var(--radius-row); background: none; color: var(--ink); text-align: left; }
+.menu button:hover:not([disabled]), .menu button:focus-visible { background: var(--blue); outline: none; }
+.menu button .key { margin-left: auto; color: rgba(235, 235, 245, 0.45); }
+.menu button:hover .key { color: #ffffff; }
+.menu button .check { width: 11px; flex: none; }
+.menu button[disabled] { opacity: 1; color: rgba(235, 235, 245, 0.3); }
+
+/* A macOS-style alert over the view, and a screenshot opened large. */
+.scrim { position: fixed; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center; padding: var(--space-xl); background: rgba(0, 0, 0, 0.42); }
+.alert { width: var(--alert-width); padding: 22px var(--space-l) var(--space-l); border-radius: var(--radius-card); background: rgba(44, 44, 48, 0.94); -webkit-backdrop-filter: blur(30px) saturate(1.6); backdrop-filter: blur(30px) saturate(1.6); box-shadow: var(--menu-shadow); display: flex; flex-direction: column; align-items: center; gap: var(--space-s); text-align: center; }
+.alert .badge { --orbit-gap: #ffffff; width: 64px; height: 64px; border-radius: 14px; background: #ffffff; display: flex; align-items: center; justify-content: center; margin-bottom: 6px; color: #1d1d1f; }
+.alert h2 { margin: 0; font: 700 14px/1.3 var(--font); }
+.alert p { margin: 0; font-size: var(--text-s); line-height: 1.45; color: rgba(235, 235, 245, 0.7); }
+.alert .buttons { align-self: stretch; display: flex; flex-direction: column; gap: var(--space-s); margin-top: 10px; }
+.alert .buttons button { height: var(--control-small); border: 0; border-radius: 999px; font-weight: 500; background: rgba(255, 255, 255, 0.1); color: var(--ink); }
+.alert .buttons button.default { background: var(--blue); color: #ffffff; }
+.alert .buttons button.destructive { color: var(--red); }
+.lightbox { flex-direction: column; gap: var(--space-m); }
+.lightbox img { max-width: 100%; max-height: calc(100vh - 120px); border-radius: var(--radius-screen); box-shadow: var(--screen-shadow); }
+
+/* A narrow frame's recent activity, under the screen. */
+.recent { width: 100%; border-radius: var(--radius-screen); background: var(--card); box-shadow: inset 0 0 0 0.5px var(--line); overflow: hidden; }
+.recent-head { display: flex; align-items: center; padding: var(--space-m) 14px var(--space-s); font: 600 var(--text-xs)/1 var(--font); color: var(--ink-3); }
+.recent-head .link { margin-left: auto; padding: 0; border: 0; background: none; color: var(--link); font: 500 var(--text-xs)/1 var(--font); }
+.recent ol { list-style: none; margin: 0; padding: 0; }
+.recent li { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 14px; border-top: 0.5px solid var(--line); }
+.recent li i { flex: none; width: 6px; height: 6px; border-radius: 50%; background: rgba(255, 255, 255, 0.28); }
+.recent li i.you { background: var(--blue); }
+.recent li .what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent li .when { margin-left: auto; flex: none; color: var(--ink-3); }
+
+/* A narrow frame (a side panel): the tabs on top, the screen across it
+   with the recent activity under it, the buttons at the bottom. */
+@media (max-width: 760px) {
+  body.full .content { align-items: flex-start; overflow: auto; }
+  body.full .stage { height: auto; flex-direction: column; gap: 14px; }
+  body.full .card .screen { width: 100%; }
+  body.full .card .footer { display: flex; flex-wrap: wrap; height: auto; padding: var(--space-m) 14px; gap: 10px; }
+  body.full .left { flex: 1 1 100%; }
+  body.full .center { order: -1; flex: 1 1 100%; }
+  body.full .center .tabs { width: 100%; }
+  body.full .center .tabs button { flex: 1; padding: 0 var(--space-s); }
+  body.full .right { flex: 1 1 100%; }
+  body.full .right .grow { flex: 1; }
+  body.full .content { padding: var(--space-m) var(--space-m) 0; }
+  .row { grid-template-columns: 56px 12px minmax(0, 1fr) auto; padding: var(--space-xs) var(--space-l); }
+}
+</style>
+</head>
+<body>
+<main class="card" data-card>
+  <div class="spoken" role="status" aria-live="polite" data-live></div>
+  <section class="content">
+    <div class="stage" data-stage data-tab-panel="screen">
+      <div class="screen" data-screen tabindex="-1" aria-label="The helper's screen">
+        <img class="frame" data-frame alt="" hidden draggable="false">
+        <div class="empty" data-empty>
+          <svg class="orbit" width="37" height="22" aria-hidden="true"><use href="#orbit" width="100%" height="100%"/></svg>
+          <span data-empty-words>Waiting for the helper's screen…</span>
+        </div>
+        <div class="topchip" data-topchip hidden></div>
+        <div class="captions" data-captions aria-hidden="true"></div>
+        <span class="chip note" data-note hidden></span>
+        <i class="rim"></i>
+      </div>
+      <section class="recent" aria-label="Recent activity" data-recent hidden>
+        <div class="recent-head"><span>Recent</span><button type="button" class="link" data-all-activity>All activity</button></div>
+        <ol data-recent-rows></ol>
+      </section>
+    </div>
+    <section class="panel" data-tab-panel="activity" hidden aria-labelledby="activity-title">
+      <div class="panel-head">
+        <h2 id="activity-title">Activity</h2>
+        <span class="meta" data-activity-meta></span>
+        <div class="tabs small" role="tablist" aria-label="Show" data-filters>
+          <button type="button" role="tab" aria-selected="true" data-filter="all">All</button>
+          <button type="button" role="tab" aria-selected="false" data-filter="agent">Agent</button>
+          <button type="button" role="tab" aria-selected="false" data-filter="you">You</button>
+          <button type="button" role="tab" aria-selected="false" data-filter="problems">Problems</button>
+        </div>
+      </div>
+      <div class="panel-body" data-activity></div>
+    </section>
+    <section class="panel" data-tab-panel="apps" hidden aria-labelledby="apps-title">
+      <div class="panel-head">
+        <h2 id="apps-title">Apps in the helper</h2>
+        <span class="meta" data-apps-meta></span>
+      </div>
+      <div class="panel-body"><div class="apps" data-apps></div></div>
+    </section>
+    <section class="panel wide" data-tab-panel="screenshots" hidden aria-labelledby="shots-title">
+      <div class="panel-head">
+        <h2 id="shots-title">Screenshots the agent took</h2>
+        <span class="meta" data-shots-meta></span>
+      </div>
+      <div class="panel-body"><div class="shots" data-shots></div></div>
+    </section>
+  </section>
+  <footer class="footer">
+    <div class="left">
+      <button type="button" class="thumb full-only" data-back hidden aria-label="Back to the screen" title="Back to the screen"><img alt="" data-back-frame></button>
+      <svg class="orbit" data-orbit width="22" height="13" aria-hidden="true"><use href="#orbit" width="100%" height="100%"/></svg>
+      <span class="status"><span class="dot" data-dot></span><span class="label" data-label>Connecting</span><span class="hint" data-hint></span></span>
+    </div>
+    <span class="spacer inline-only"></span>
+    <div class="center full-only">
+      <div class="tabs" role="tablist" aria-label="What you see" data-tabs>
+        <button type="button" role="tab" aria-selected="true" data-tab="screen">Screen</button>
+        <button type="button" role="tab" aria-selected="false" data-tab="activity">Activity</button>
+        <button type="button" role="tab" aria-selected="false" data-tab="apps">Apps</button>
+        <button type="button" role="tab" aria-selected="false" data-tab="screenshots">Screenshots</button>
+      </div>
+    </div>
+    <div class="right">
+      <button type="button" class="round" data-pause aria-label="Pause picture" title="Pause picture"><svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" data-pause-glyph><rect x="2.2" y="0.5" width="2.6" height="11" rx="1" fill="currentColor"/><rect x="7.2" y="0.5" width="2.6" height="11" rx="1" fill="currentColor"/></svg><svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" data-play-glyph hidden><path d="M2.5 1L10.5 6L2.5 11Z" fill="currentColor"/></svg></button>
+      <button type="button" class="pill full-only" data-keys aria-haspopup="menu" aria-expanded="false" title="Send a key your Mac or this app would keep, such as ⌘⇥"><svg viewBox="0 0 18 14" width="15" height="12" aria-hidden="true"><rect x="1" y="1" width="16" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M4 4.6H5M7 4.6H8M10 4.6H11M13 4.6H14M4 7.2H5M7 7.2H8M10 7.2H11M13 7.2H14M5.5 10H12.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>Keys</button>
+      <button type="button" class="pill" data-action hidden></button>
+      <button type="button" class="pill primary full-only grow" data-take hidden>Take Control</button>
+      <button type="button" class="round full-only" data-more aria-label="More" title="More" aria-haspopup="menu" aria-expanded="false"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><circle cx="3.5" cy="8" r="1.35" fill="currentColor"/><circle cx="8" cy="8" r="1.35" fill="currentColor"/><circle cx="12.5" cy="8" r="1.35" fill="currentColor"/></svg></button>
+      <button type="button" class="round inline-only" data-expand hidden aria-label="Open fullscreen" title="Open fullscreen to take control and see more"><svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M9.5 2.5H13.5V6.5M6.5 13.5H2.5V9.5M13.5 2.5L9 7M2.5 13.5L7 9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    </div>
+  </footer>
+</main>
+
+<div class="menu" role="menu" aria-label="Keys" data-menu="keys" hidden>
+  <div class="head">Keys your Mac would keep</div>
+  <button type="button" role="menuitem" data-key="cmd+tab"><span>Switch apps</span><span class="key">⌘⇥</span></button>
+  <button type="button" role="menuitem" data-key="cmd+space"><span>Spotlight</span><span class="key">⌘Space</span></button>
+  <button type="button" role="menuitem" data-key="ctrl+up"><span>Mission Control</span><span class="key">⌃↑</span></button>
+  <hr>
+  <div class="head">Keys this app would keep</div>
+  <button type="button" role="menuitem" data-key="cmd+w"><span>Close window</span><span class="key">⌘W</span></button>
+  <button type="button" role="menuitem" data-key="cmd+q"><span>Quit app</span><span class="key">⌘Q</span></button>
+  <button type="button" role="menuitem" data-key="cmd+t"><span>New tab</span><span class="key">⌘T</span></button>
+  <button type="button" role="menuitem" data-key="escape"><span>Escape</span><span class="key">esc</span></button>
+</div>
+
+<div class="menu" role="menu" aria-label="Helper actions" data-menu="more" hidden>
+  <div class="head">Picture</div>
+  <button type="button" role="menuitemradio" data-picture="live"><span class="check" data-check></span><span>Live</span></button>
+  <button type="button" role="menuitemradio" data-picture="slow"><span class="check" data-check></span><span>Every 5 seconds</span></button>
+  <button type="button" role="menuitemradio" data-picture="paused"><span class="check" data-check></span><span>Paused</span></button>
+  <hr>
+  <button type="button" role="menuitem" data-recover>Recover…</button>
+  <button type="button" role="menuitem" data-open-atlas>Open in Atlas</button>
+  <hr>
+  <button type="button" role="menuitem" data-ask="switch">Switch to the Helper…</button>
+  <button type="button" role="menuitem" data-ask="logout">Log Out the Helper…</button>
+  <hr>
+  <div class="note" data-facts></div>
+</div>
+
+<div class="scrim" data-alert hidden>
+  <div class="alert" role="alertdialog" aria-modal="true" aria-labelledby="alert-title" aria-describedby="alert-body">
+    <div class="badge" aria-hidden="true"><svg width="40" height="24"><use href="#orbit" width="100%" height="100%"/></svg></div>
+    <h2 id="alert-title" data-alert-title></h2>
+    <p id="alert-body" data-alert-body></p>
+    <div class="buttons">
+      <button type="button" class="default" data-alert-cancel>Cancel</button>
+      <button type="button" class="destructive" data-alert-confirm></button>
+    </div>
+  </div>
+</div>
+
+<div class="scrim lightbox" data-lightbox hidden role="dialog" aria-modal="true" aria-label="Screenshot">
+  <img alt="A screenshot the agent took" data-lightbox-image>
+  <button type="button" class="pill" data-lightbox-close>Close</button>
+</div>
+
+<template data-warning><svg viewBox="0 0 16 16" width="14" height="14" role="img" aria-label="Didn't work"><path d="M8 1.6L15.2 14.2H.8Z" fill="#ff9f0a"/><path d="M8 6V9.6M8 11.7V11.8" stroke="#1d1d1f" stroke-width="1.6" stroke-linecap="round"/></svg></template>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="orbit" viewBox="5 17 54 32">
+    <ellipse cx="32" cy="33" rx="25.6" ry="6.9" transform="rotate(-20 32 33)" fill="none" stroke="currentColor" stroke-width="2.4"/>
+    <circle cx="32" cy="33" r="14.6" fill="currentColor"/>
+    <path d="M6.4 33A25.6 6.9 0 0 0 57.6 33" transform="rotate(-20 32 33)" fill="none" stroke="var(--orbit-gap, #161618)" stroke-width="5.3"/>
+    <path d="M6.4 33A25.6 6.9 0 0 0 57.6 33" transform="rotate(-20 32 33)" fill="none" stroke="currentColor" stroke-width="2.4"/>
+  </symbol>
+</svg>
+<script>
+/*SCRIPT*/
+</script>
+</body>
+</html>
