@@ -942,9 +942,24 @@ fn rollback_file(
         }
     } else if status == RollbackState::Before || file.operation == Operation::Unchanged {
         // Nothing is put back: the file is already as it was, or this plan
-        // only adopted it. An adopted file a later plan's undo put back is a
-        // new inode, so the file as it is now is what this undo records.
-        transaction.progress[index].restore = fingerprint(&path)?;
+        // only adopted it. What is recorded is the file the state was judged
+        // on (an adopted file a later plan's undo put back is a new inode,
+        // known from the ledger), never a fresh read: a helper edit made
+        // since fails the check below and is kept on the next try.
+        transaction.progress[index].restore = match status {
+            RollbackState::Installed => match ledger.files.get(&file.payload.target) {
+                Some(Entry::Managed {
+                    generation,
+                    fingerprint,
+                }) if generation == &transaction.plan.id => Some(fingerprint.clone()),
+                _ => transaction.progress[index].prepared.clone(),
+            },
+            RollbackState::Restored => transaction.progress[index]
+                .restore
+                .clone()
+                .or_else(|| file.before.clone()),
+            _ => file.before.clone(),
+        };
         transaction.progress[index].reverting = true;
         store.save(transaction)?;
     }
