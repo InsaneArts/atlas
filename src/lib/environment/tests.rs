@@ -1650,3 +1650,96 @@ fn a_kept_file_in_a_folder_shared_since_still_finishes() {
     assert_eq!(result["keptTargets"], json!(["dir/file"]));
     assert_eq!(result["retainedDirectories"], json!(["dir"]));
 }
+
+#[test]
+fn an_adopted_file_a_later_undo_put_back_can_still_be_undone() {
+    let sandbox = Sandbox::new();
+    let path = sandbox.home.join("existing");
+    atomic_write(&path, b"same", 0o600).unwrap();
+    let adopt = sandbox.plan(vec![sandbox.payload("existing", b"same")]);
+    assert_eq!(adopt.files[0].operation, Operation::Unchanged);
+    assert_eq!(sandbox.apply(&adopt)["ok"], true);
+
+    let update = sandbox.plan(vec![sandbox.payload("existing", b"changed")]);
+    assert_eq!(update.files[0].operation, Operation::Update);
+    assert_eq!(sandbox.apply(&update)["ok"], true);
+
+    let undone = sandbox.rollback(&update, true);
+    assert_eq!(undone["ok"], true, "{undone}");
+    assert_eq!(fs::read(&path).unwrap(), b"same");
+    let inode = fs::metadata(&path).unwrap().ino();
+
+    let result = sandbox.rollback(&adopt, true);
+    assert_eq!(result["ok"], true, "{result}");
+    assert_eq!(result["rolledBack"], true, "{result}");
+    assert_eq!(fs::read(&path).unwrap(), b"same");
+    assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
+
+    let store = state::Store::open(&sandbox.home, false).unwrap();
+    assert!(
+        !store
+            .ledger()
+            .unwrap()
+            .files
+            .contains_key(Path::new("existing"))
+    );
+    drop(store);
+
+    sandbox.plan(vec![sandbox.payload("other", b"x")]);
+}
+
+#[test]
+fn a_restore_copy_written_before_it_was_recorded_goes_when_a_helper_edit_is_kept() {
+    let sandbox = Sandbox::new();
+    let path = sandbox.home.join("file");
+    let first = sandbox.plan(vec![sandbox.payload("file", b"old")]);
+    assert_eq!(sandbox.apply(&first)["ok"], true);
+    let second = sandbox.plan(vec![sandbox.payload("file", b"new")]);
+    assert_eq!(sandbox.apply(&second)["ok"], true);
+
+    // The undo stopped right after writing its restore copy, before
+    // recording it.
+    let store = state::Store::open(&sandbox.home, true).unwrap();
+    let mut transaction = store.transaction(&second.id).unwrap().unwrap();
+    transaction.phase = Phase::RollingBack;
+    store.save(&transaction).unwrap();
+    store.activate(&second.id).unwrap();
+    drop(store);
+
+    let restore = sandbox.home.join(format!(".atlas-{}-0-restore", second.id));
+    atomic_write(&restore, b"old", 0o600).unwrap();
+    fs::write(&path, b"helper edit").unwrap();
+
+    let result = sandbox.rollback(&second, true);
+    assert_eq!(result["ok"], true, "{result}");
+    assert_eq!(result["keptTargets"], json!(["file"]));
+    assert_eq!(fs::read(&path).unwrap(), b"helper edit");
+    assert!(!restore.exists());
+
+    sandbox.plan(vec![sandbox.payload("other", b"x")]);
+}
+
+#[test]
+fn an_unrecorded_restore_copy_with_other_contents_is_kept_for_inspection() {
+    let sandbox = Sandbox::new();
+    let path = sandbox.home.join("file");
+    let first = sandbox.plan(vec![sandbox.payload("file", b"old")]);
+    assert_eq!(sandbox.apply(&first)["ok"], true);
+    let second = sandbox.plan(vec![sandbox.payload("file", b"new")]);
+    assert_eq!(sandbox.apply(&second)["ok"], true);
+
+    let store = state::Store::open(&sandbox.home, true).unwrap();
+    let mut transaction = store.transaction(&second.id).unwrap().unwrap();
+    transaction.phase = Phase::RollingBack;
+    store.save(&transaction).unwrap();
+    store.activate(&second.id).unwrap();
+    drop(store);
+
+    let restore = sandbox.home.join(format!(".atlas-{}-0-restore", second.id));
+    atomic_write(&restore, b"something else", 0o600).unwrap();
+    fs::write(&path, b"helper edit").unwrap();
+
+    let result = sandbox.rollback(&second, true);
+    assert_eq!(result["ok"], false, "{result}");
+    assert_eq!(fs::read(&restore).unwrap(), b"something else");
+}

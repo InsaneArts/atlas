@@ -826,8 +826,10 @@ fn rollback_state(
     let entry = ledger.files.get(&file.payload.target);
     let ours = recorded(transaction, index, ledger);
 
+    // An unchanged file stays as it is when undone: the helper's original,
+    // or the copy a later plan's undo put back in its place.
     let restored = if file.operation == Operation::Unchanged {
-        file.before.as_ref()
+        progress.restore.as_ref().or(file.before.as_ref())
     } else {
         progress.restore.as_ref()
     };
@@ -939,7 +941,10 @@ fn rollback_file(
             unlink(&path, false)?;
         }
     } else if status == RollbackState::Before || file.operation == Operation::Unchanged {
-        transaction.progress[index].restore = file.before.clone();
+        // Nothing is put back: the file is already as it was, or this plan
+        // only adopted it. An adopted file a later plan's undo put back is a
+        // new inode, so the file as it is now is what this undo records.
+        transaction.progress[index].restore = fingerprint(&path)?;
         transaction.progress[index].reverting = true;
         store.save(transaction)?;
     }
@@ -947,13 +952,7 @@ fn rollback_file(
     guard()?;
     let restored = fingerprint(&path)?;
 
-    let expected = if file.operation == Operation::Unchanged {
-        &file.before
-    } else {
-        &transaction.progress[index].restore
-    };
-
-    if &restored != expected {
+    if restored != transaction.progress[index].restore {
         return Err(problem("Restored file does not match its recorded inode"));
     }
 
@@ -1004,8 +1003,9 @@ fn keep_changed(
 }
 
 /// Remove this transaction's waiting copies of one file, and anything an
-/// interrupted write of them left. A copy the transaction did not record
-/// is kept for inspection.
+/// interrupted write of them left. A restore copy written before it was
+/// recorded holds the backed-up file and goes too; any other copy the
+/// transaction did not record is kept for inspection.
 fn discard_candidates(
     path: &Path,
     transaction: &Transaction,
@@ -1023,7 +1023,14 @@ fn discard_candidates(
                 &transaction.progress[index].prepared
             };
 
-            if expected.as_ref() != Some(&current) {
+            let backup = transaction.plan.files[index].before.as_ref();
+            let unrecorded_restore = restore
+                && expected.is_none()
+                && backup.is_some_and(|backup| {
+                    current.sha256 == backup.sha256 && current.mode == backup.mode
+                });
+
+            if expected.as_ref() != Some(&current) && !unrecorded_restore {
                 return Err(problem(
                     "An unrecorded prepared file remains; resume or inspect before cleanup",
                 ));

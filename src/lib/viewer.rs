@@ -391,7 +391,7 @@ impl Viewer {
         };
 
         if let Some(previous) = previous {
-            let completion = release_native(&client, &previous).await;
+            let completion = release_native(&client, &previous, false).await;
 
             {
                 let mut lease = self.lease.lock().await;
@@ -463,6 +463,7 @@ impl Viewer {
         // just fails here.
         let _acquiring = ActionPermit::begin(self.lease.clone(), &token).await?;
         let acquired = client.acquire_input(&token, epoch).await;
+        let unknown = acquired.as_ref().is_err_and(|error| error.uncertain);
         let mut lease = self.lease.lock().await;
 
         let error = match acquired {
@@ -487,7 +488,7 @@ impl Viewer {
         let ending = lease.begin_release(Some(&token));
         drop(lease);
 
-        let cleanup = release_native(client, &token).await;
+        let cleanup = release_native(client, &token, unknown).await;
         if matches!(ending, Ok(Some(_))) {
             self.lease.lock().await.end_release();
         }
@@ -736,12 +737,25 @@ impl Viewer {
 /// End `owner`'s native control in `client`'s helper. The outcome is
 /// marked pending first and cleared only once the helper confirms, so an
 /// unconfirmed release stays an unknown outcome for recovery.
-async fn release_native(client: &Client, owner: &str) -> Result<()> {
+///
+/// The helper also settles it when it says for certain that `owner` holds
+/// no control to end (lease-lost): it was never granted, or another
+/// controller took over since. An acquire still under way is ended by the
+/// one that asked for it once it is answered. After an acquire whose answer
+/// is unknown (`unknown_acquire`), that acquire may still be granted later,
+/// so only a confirmed release settles it.
+async fn release_native(client: &Client, owner: &str, unknown_acquire: bool) -> Result<()> {
     let pending = client.controller.quarantine();
     let result = client.native_control("release", owner).await;
 
+    let nothing_held =
+        |error: &Error| !unknown_acquire && error.code == "lease-lost" && !error.uncertain;
+
     match (pending, result) {
         (Ok(generation), Ok(_)) => client.controller.clear_if(&generation),
+        (Ok(generation), Err(error)) if nothing_held(&error) => {
+            client.controller.clear_if(&generation)
+        }
         (Err(error), _) => Err(error),
         (_, Err(error)) => Err(Error::new(
             "uncertain",
@@ -1750,12 +1764,34 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let viewer = unreachable(dir.path()).await;
         let controller = viewer.client().controller.clone();
-        let error = release_native(&viewer.client(), "lost-lease")
+        let error = release_native(&viewer.client(), "lost-lease", false)
             .await
             .unwrap_err();
         assert!(error.uncertain);
         assert_eq!(error.code, "uncertain");
         assert_eq!(controller.unresolved().unwrap().len(), 1);
+    }
+
+    /// A release the helper refuses for certain, because the owner holds no
+    /// control, settles; after an acquire whose answer is unknown it does
+    /// not, since that acquire may still be granted.
+    #[tokio::test]
+    async fn releasing_control_never_granted_settles_unless_an_acquire_is_unknown() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(dir.path()).unwrap();
+        let socket = base.join("a.sock");
+        let (mut asked, _never) = input_service(&socket, "none");
+        let client = client_with_input(&base, &socket);
+        let owner = control::token();
+
+        release_native(&client, &owner, false).await.unwrap();
+        assert_eq!(asked.recv().await.as_deref(), Some("release"));
+        assert!(client.controller.pending().unwrap().is_empty());
+
+        let error = release_native(&client, &owner, true).await.unwrap_err();
+        assert_eq!(asked.recv().await.as_deref(), Some("release"));
+        assert!(error.uncertain);
+        assert_eq!(client.controller.unresolved().unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -2035,7 +2071,9 @@ mod tests {
 
     /// A stand-in for the helper's input service at `socket`. It reports
     /// each request's operation, and answers it at once, except `held`,
-    /// which waits for the returned gate to open (once per request).
+    /// which waits for the returned gate to open (once per request). Like
+    /// the real gate, it grants an acquire when answering it, and refuses
+    /// for certain to release an owner it never granted.
     fn input_service(
         socket: &Path,
         held: &'static str,
@@ -2049,11 +2087,13 @@ mod tests {
         let (asked, operations) = tokio::sync::mpsc::unbounded_channel();
         let gate = Arc::new(tokio::sync::Notify::new());
         let opens = gate.clone();
+        let granted = Arc::new(std::sync::Mutex::new(None::<String>));
 
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
                 let asked = asked.clone();
                 let opens = opens.clone();
+                let granted = granted.clone();
 
                 tokio::spawn(async move {
                     let mut stream = BufReader::new(stream);
@@ -2068,7 +2108,26 @@ mod tests {
                         opens.notified().await;
                     }
 
-                    let _ = stream.get_mut().write_all(b"{\"ok\":true}\n").await;
+                    let owner = request["owner"].as_str().map(str::to_owned);
+                    let reply = {
+                        let mut granted = granted.lock().unwrap();
+                        match operation.as_str() {
+                            "acquire" => {
+                                *granted = owner;
+                                json!({"ok": true})
+                            }
+                            "release" if *granted != owner => json!({
+                                "ok": false,
+                                "code": "lease-lost",
+                                "error": "This token cannot release another controller",
+                                "uncertain": false,
+                            }),
+                            _ => json!({"ok": true}),
+                        }
+                    };
+
+                    let line = format!("{reply}\n");
+                    let _ = stream.get_mut().write_all(line.as_bytes()).await;
                 });
             }
         });

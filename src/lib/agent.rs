@@ -378,10 +378,10 @@ pub async fn open(
         argv.extend(given);
     }
 
-    let mut reply = client.run_owned(&ownership, argv.clone()).await?;
+    let mut reply = ran(client.run_owned(&ownership, argv.clone()).await?)?;
 
     if reply["exitCode"] != 0 && cleared_stale_launch(client, &ownership, &reply).await? {
-        reply = client.run_owned(&ownership, argv).await?;
+        reply = ran(client.run_owned(&ownership, argv).await?)?;
     }
 
     let opened = reply["exitCode"] == 0;
@@ -420,6 +420,17 @@ pub async fn open(
     Ok(value)
 }
 
+/// A helper `run` reply whose command ran to its end. A command the helper
+/// could not start, or stopped part way, is said with the helper's own code
+/// and certainty: one stopped part way may have done some of its work.
+fn ran(reply: Value) -> Result<Value> {
+    if reply["ok"] != true {
+        return Err(crate::transport::refusal(&reply));
+    }
+
+    Ok(reply)
+}
+
 /// After a failed `open`, remove the finished job launchd still holds for
 /// its app, when that is why it failed: an app opened again just as it quit
 /// can leave one, and every later launch fails until it is gone. Whether
@@ -443,7 +454,7 @@ async fn cleared_stale_launch(
         "sh".to_owned(),
         bundle.to_owned(),
     ];
-    let cleared = client.run_owned(ownership, argv).await?;
+    let cleared = ran(client.run_owned(ownership, argv).await?)?;
 
     Ok(!run_output(&cleared, 4096).unwrap_or_default().is_empty())
 }
@@ -689,8 +700,8 @@ exit 0"#;
             argv.extend([process.pid.to_string(), process.executable.clone()]);
         }
 
-        let reply = client.run_owned(&ownership, argv).await?;
-        if reply["ok"] != true || reply["timedOut"] == true || reply["exitCode"] != 0 {
+        let reply = ran(client.run_owned(&ownership, argv).await?)?;
+        if reply["timedOut"] == true || reply["exitCode"] != 0 {
             return Err(Error::new(
                 "wait-failed",
                 "The helper did not finish quitting the apps; run atlas apps to see what is open",
@@ -2243,5 +2254,37 @@ mod tests {
             None,
             "identical geometry is ambiguous"
         );
+    }
+
+    #[test]
+    fn a_command_the_helper_stopped_part_way_stays_uncertain_with_its_code() {
+        for code in ["on-console", "restart", "transport"] {
+            let reply = json!({
+                "ok": false,
+                "code": code,
+                "error": "stopped",
+                "uncertain": true,
+            });
+
+            let error = ran(reply).unwrap_err();
+            assert_eq!(error.code, code);
+            assert!(error.uncertain, "{code}");
+        }
+    }
+
+    #[test]
+    fn a_command_the_helper_never_started_is_a_certain_refusal() {
+        let reply = json!({"ok": false, "code": "spawn-failed", "error": "no such file"});
+
+        let error = ran(reply).unwrap_err();
+        assert_eq!(error.code, "spawn-failed");
+        assert!(!error.uncertain);
+    }
+
+    #[test]
+    fn a_command_that_ran_to_its_end_is_read_for_its_exit() {
+        let reply = json!({"ok": true, "exitCode": 1, "timedOut": false});
+
+        assert_eq!(ran(reply.clone()).unwrap(), reply);
     }
 }
