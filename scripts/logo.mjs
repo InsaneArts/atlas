@@ -1,11 +1,12 @@
-// Draws the README banner, assets/banner-light.svg and assets/banner-dark.svg:
+// Draws the README logo, assets/logo-light.svg and assets/logo-dark.svg:
 //
-//     node scripts/banner.mjs
+//     node scripts/logo.mjs
 //
 // The mark is Atlas's orbit as the app icon draws it
 // (app/Resources/AppIcon.swift), on no tile: a flat planet with a ring
 // passing in front of it, the sphere cut clear on either side of the ring.
-// It takes the text's colour. Change them together.
+// It takes the page's text colour; the name and tagline are the README's own
+// text, never drawn here.
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,11 +16,11 @@ const CENTER = { x: 32, y: 33 };
 const RADIUS = 14.6;
 const RING = { rx: 25.6, ry: 6.9, tilt: -20, width: 2.4 };
 
-// What the orbit covers in that drawing, and its height in the banner.
+// What the orbit covers in that drawing, and its height in the logo.
 const BOUNDS = { left: 6.6, top: 18.4, width: 50.8, height: 29.2 };
-const HEIGHT = 40;
+const HEIGHT = 64;
 
-// GitHub's own text colours, so the banner sits in the page like its text.
+// GitHub's own text colours, so the logo sits in the page like its text.
 const THEMES = { light: '#1f2328', dark: '#e6edf3' };
 
 const n = (value) => Number(value.toFixed(4));
@@ -45,27 +46,18 @@ function mark(name, color) {
   );
 }
 
-function banner(name) {
+function logo(name) {
   const color = THEMES[name];
-  const height = 56;
   const scale = HEIGHT / BOUNDS.height;
-  const markWidth = BOUNDS.width * scale;
-  const x = -BOUNDS.left * scale;
-  const y = (height - HEIGHT) / 2 - BOUNDS.top * scale;
-  const text = Math.round(markWidth + 16);
+  const width = Math.ceil(BOUNDS.width * scale);
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${text + 310} ${height}" ` +
-    `width="${text + 310}" height="${height}" fill="${color}" ` +
-    `font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">` +
-    `<g transform="translate(${n(x)},${n(y)}) scale(${n(scale)})">${mark(name, color)}</g>` +
-    `<text x="${text}" y="29" font-size="22" font-weight="600">atlas</text>` +
-    `<text x="${text + 1}" y="45" font-size="10.0">` +
-    `A hidden Mac desktop where your agents test what they build</text>` +
-    `</svg>\n`
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${HEIGHT}" ` +
+    `width="${width}" height="${HEIGHT}">` +
+    `<g transform="translate(${n(-BOUNDS.left * scale)},${n(-BOUNDS.top * scale)}) scale(${n(scale)})">` +
+    `${mark(name, color)}</g></svg>\n`
   );
 }
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', 'assets');
 mkdirSync(root, { recursive: true });
-for (const name of Object.keys(THEMES))
-  writeFileSync(join(root, `banner-${name}.svg`), banner(name));
+for (const name of Object.keys(THEMES)) writeFileSync(join(root, `logo-${name}.svg`), logo(name));
