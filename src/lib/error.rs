@@ -49,6 +49,14 @@ impl Error {
     }
 }
 
+/// Why an agent is refused while the person has stopped agents.
+pub const STOPPED: &str =
+    "The person stopped agents in the helper. Ask them before doing anything more there.";
+
+/// What an agent hears when the person has control of the helper.
+pub const PERSON_HAS_CONTROL: &str =
+    "The person has control of the helper. Wait until they give it back, then try again.";
+
 /// Every failure code Atlas reports. Agents act on these (see the
 /// plugin's troubleshooting.md, which a test keeps in step).
 pub const CODES: &[&str] = &[
@@ -90,6 +98,7 @@ pub const CODES: &[&str] = &[
     "stale-frame",
     "startup",
     "state",
+    "stopped",
     "switch",
     "terminal",
     "transport",

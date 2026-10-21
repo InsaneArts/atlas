@@ -205,6 +205,17 @@ impl Drop for Pending {
 #[derive(Debug)]
 pub struct Ownership {
     _lock: File,
+    /// The note that the person holds this ownership through a viewer, gone
+    /// with it.
+    person: Option<PathBuf>,
+}
+
+impl Drop for Ownership {
+    fn drop(&mut self) {
+        if let Some(note) = &self.person {
+            let _ = fs::remove_file(note);
+        }
+    }
 }
 
 /// Controller exclusion and pending-mutation state for one helper account,
@@ -216,6 +227,12 @@ pub struct Controller {
     lock: PathBuf,
     marker: PathBuf,
     marker_lock: PathBuf,
+    /// Present while the person holds control through a viewer, so whoever
+    /// finds the controller busy is told to wait for them.
+    person: PathBuf,
+    /// Present while the person has stopped agents: kept on the person's
+    /// side, so a Stop holds even while the helper's input service is down.
+    stopped: PathBuf,
     name: String,
 }
 
@@ -233,6 +250,8 @@ impl Controller {
             lock: directory.join(format!("{name}.lock")),
             marker: directory.join(format!("{name}.uncertain.json")),
             marker_lock: directory.join(format!("{name}.state.lock")),
+            person: directory.join(format!("{name}.person")),
+            stopped: directory.join(format!("{name}.stopped")),
             name: name.to_owned(),
         }
     }
@@ -248,18 +267,58 @@ impl Controller {
             .map_err(|error| Error::writing(&self.directory, error))?;
 
         let lock = open_lock(&self.lock)?;
-        FileExt::try_lock_exclusive(&lock).map_err(|_| {
-            Error::new(
-                "busy",
-                "Another Atlas controller is active: wait for it to finish, or release it in the viewer.",
-            )
-        })?;
+        if FileExt::try_lock_exclusive(&lock).is_err() {
+            return Err(if self.person.exists() {
+                Error::new("busy", crate::error::PERSON_HAS_CONTROL)
+            } else {
+                Error::new(
+                    "busy",
+                    "Another Atlas controller is active: wait for it to finish, or release it in the viewer.",
+                )
+            });
+        }
+
+        // Nobody held it, so a note left by a viewer that ended is stale.
+        let _ = fs::remove_file(&self.person);
 
         if !recovery {
             self.require_known()?;
         }
 
-        Ok(Ownership { _lock: lock })
+        Ok(Ownership {
+            _lock: lock,
+            person: None,
+        })
+    }
+
+    /// Whether the person stopped agents, as noted on their side.
+    pub fn stop_noted(&self) -> bool {
+        self.stopped.exists()
+    }
+
+    /// Note that the person stopped agents (`on`), or let them go on.
+    pub fn note_stop(&self, on: bool) -> Result<()> {
+        if on {
+            fs::create_dir_all(&self.directory)
+                .map_err(|error| Error::writing(&self.directory, error))?;
+            fs::write(&self.stopped, b"").map_err(|error| Error::writing(&self.directory, error))
+        } else {
+            match fs::remove_file(&self.stopped) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                    Err(Error::writing(&self.directory, error))
+                }
+                _ => Ok(()),
+            }
+        }
+    }
+
+    /// [`Controller::acquire`] for the person's control through a viewer:
+    /// while it is held, others hear that the person has control.
+    pub fn acquire_for_person(&self) -> Result<Ownership> {
+        let mut ownership = self.acquire(false)?;
+        fs::write(&self.person, b"").map_err(|error| Error::writing(&self.directory, error))?;
+        ownership.person = Some(self.person.clone());
+        Ok(ownership)
     }
 
     pub fn require_known(&self) -> Result<()> {
@@ -477,7 +536,7 @@ impl Lease {
             return Err(Error::new("busy", "Another viewer has control"));
         }
 
-        self.descriptor = Some(controller.acquire(false)?);
+        self.descriptor = Some(controller.acquire_for_person()?);
         let token = token();
         self.owner = Some(token.clone());
         self.expires = Instant::now() + self.ttl;
@@ -625,6 +684,46 @@ mod tests {
 
         let unwritable = Controller::at(505, Path::new("/dev/null/Atlas"));
         assert_eq!(unwritable.writable().unwrap_err().code, "io");
+    }
+
+    /// While the person holds control through a viewer, an agent finding
+    /// the controller busy is told to wait for them; once they let go, or
+    /// when the note outlived a viewer that ended, nobody is.
+    #[test]
+    fn an_agent_finding_the_person_in_control_is_told_to_wait_for_them() {
+        let directory = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, &directory.path().join("Atlas"));
+
+        let person = controller.acquire_for_person().unwrap();
+        let refused = controller.acquire(false).err().unwrap();
+        assert_eq!(refused.code, "busy");
+        assert_eq!(refused.error, crate::error::PERSON_HAS_CONTROL);
+        drop(person);
+        assert!(
+            !controller.person.exists(),
+            "the note goes with the control"
+        );
+
+        // A child another test is starting may hold the lock's file a moment
+        // past its release, until it runs its own program.
+        let agent = (0..50)
+            .find_map(|_| {
+                controller.acquire(false).ok().or_else(|| {
+                    std::thread::sleep(Duration::from_millis(20));
+                    None
+                })
+            })
+            .expect("the lock comes free");
+        assert_ne!(
+            controller.acquire(false).err().unwrap().error,
+            crate::error::PERSON_HAS_CONTROL,
+            "another agent is not the person"
+        );
+        drop(agent);
+
+        fs::write(&controller.person, b"").unwrap();
+        drop(controller.acquire(false).unwrap());
+        assert!(!controller.person.exists(), "a stale note is cleared");
     }
 
     /// A permit dropped outside any runtime, while the lease is locked

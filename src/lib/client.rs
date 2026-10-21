@@ -8,6 +8,7 @@ use crate::{
     config::Config,
     control::{Controller, Ownership, SharedLease, write_private},
     digest::file_sha256,
+    doing::Doing,
     error::{Error, Result},
     session::{Display, Epoch, Session, input_current, input_settled, require_hidden},
     transport::{Transport, run_output},
@@ -66,6 +67,8 @@ pub struct Client {
     pub transport: Transport,
     pub controller: Controller,
     pub actor: Actor,
+    /// What the command acting through this client does, for the log.
+    pub doing: Option<Doing>,
     installed: BuildCache,
 }
 
@@ -222,8 +225,21 @@ impl Client {
             },
             installed: BuildCache::default(),
             actor: Actor::Agent,
+            doing: None,
             config,
         })
+    }
+
+    /// This client, recording what its command does in each activity row.
+    pub fn doing(mut self, doing: Doing) -> Self {
+        self.doing = Some(doing);
+        self
+    }
+
+    /// This client, keeping no control's name in what it records.
+    pub fn unlabelled(mut self) -> Self {
+        self.doing = self.doing.map(Doing::unlabelled);
+        self
     }
 
     /// The private output directory, created 0700 (with any missing parents)
@@ -369,6 +385,20 @@ impl Client {
     }
 
     pub async fn capture(&self, maximum: Option<u32>) -> Result<Value> {
+        let started = Instant::now();
+        let captured = self.capture_unrecorded(maximum).await;
+
+        // An agent's look at the screen is activity too; a recording that
+        // fails never fails the capture.
+        let request = json!({"op": "screenshot"});
+        let reply = json!({"ok": captured.is_ok()});
+        let _ = self.record(&request, &reply, started.elapsed());
+
+        captured
+    }
+
+    /// [`Client::capture`], kept in the output folder but not in the log.
+    async fn capture_unrecorded(&self, maximum: Option<u32>) -> Result<Value> {
         let frame = self.frame(maximum).await?;
         let path = self
             .output_dir()?
@@ -401,12 +431,92 @@ impl Client {
     }
 
     pub async fn acquire_input(&self, owner: &str, epoch: &Epoch) -> Result<Value> {
+        // The person's viewer may take over while agents are stopped.
         self.native_request(json!({
             "op": "acquire",
             "owner": owner,
             "epoch": epoch.input_epoch(),
+            "person": self.actor == Actor::Viewer,
         }))
         .await
+    }
+
+    /// Stop agents in the helper (`on`), or let them go on. Stopping ends
+    /// an agent's input under way and refuses its next actions; the person
+    /// keeps the viewer. Only the person resumes, through a viewer. An input
+    /// service too old to stop is refused.
+    pub async fn hold(&self, on: bool) -> Result<Value> {
+        if !on && self.actor != Actor::Viewer {
+            return Err(Error::new(
+                "stopped",
+                "Only the person resumes agents, from the Atlas menu bar",
+            ));
+        }
+
+        // The person's side keeps the Stop first, so it holds even when the
+        // helper's input service is down or older: agents' commands read it.
+        self.controller.note_stop(on)?;
+
+        let unreachable = |why: &str| {
+            json!({
+                "ok": true,
+                "held": on,
+                "kept": true,
+                "warnings": [format!("{why} Agents are {} here all the same.", if on { "stopped" } else { "free to go on" })],
+            })
+        };
+        let Ok(hello) = self.input_transport().call(&json!({"op": "hello"})).await else {
+            return Ok(unreachable("The helper's input service isn't running."));
+        };
+        let capable = hello["capabilities"]
+            .as_array()
+            .is_some_and(|capabilities| capabilities.iter().any(|c| c == "hold"));
+        if !capable {
+            return Ok(unreachable(
+                "The helper's input service is from an older build.",
+            ));
+        }
+
+        let mut reply = self.native_request(json!({"op": "hold", "on": on})).await?;
+        if reply["kept"] == false {
+            reply["warnings"] = json!([
+                "The helper could not save this, so it lasts only until its input restarts"
+            ]);
+        }
+
+        Ok(reply)
+    }
+
+    /// Once the person stops agents: the stop's saved marker appears, or
+    /// the input service says so.
+    async fn stopped_while_running(&self) {
+        let marker = self.config.input_socket.with_extension("stopped");
+        loop {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            if marker.exists() {
+                return;
+            }
+        }
+    }
+
+    /// Refuse an agent's command that would change the helper while the
+    /// person has stopped agents. Input is also refused by the input service
+    /// itself; commands run through the helper daemon, which knows nothing
+    /// of a stop. The stop's saved marker counts too, so a stopped helper
+    /// whose input service is down still refuses.
+    pub async fn require_going(&self) -> Result<()> {
+        if self.actor == Actor::Viewer {
+            return Ok(());
+        }
+
+        let marked = self.config.input_socket.with_extension("stopped").exists()
+            || self.controller.stop_noted();
+        let hello = self.input_transport().call(&json!({"op": "hello"})).await;
+        if marked || hello.is_ok_and(|hello| hello["held"] == true) {
+            return Err(Error::new("stopped", crate::error::STOPPED));
+        }
+
+        Ok(())
     }
 
     async fn native_request(&self, request: Value) -> Result<Value> {
@@ -417,6 +527,7 @@ impl Client {
                     Some("busy") => "busy",
                     Some("lease-lost") => "lease-lost",
                     Some("cancelled") => "cancelled",
+                    Some("stopped") => "stopped",
                     Some("identity") => "identity",
                     Some("session-changed") => "session-changed",
                     Some("permission") => "permission",
@@ -562,6 +673,8 @@ impl Client {
                     "actions": actions,
                     "owner": owner,
                     "epoch": session.epoch.input_epoch(),
+                    // An agent's command names the app it acted in.
+                    "app": self.doing.is_some(),
                 }),
                 lease,
                 expected.map(|(_, at)| at),
@@ -1179,6 +1292,14 @@ impl Client {
     ) -> Result<Value> {
         let started = Instant::now();
 
+        // An agent's command that changes the helper is refused, before it
+        // starts, once the person has stopped agents; reads and Atlas's own
+        // steps (no `doing`) go on.
+        let cuttable = request["op"] == "run" && self.actor == Actor::Agent && self.doing.is_some();
+        if cuttable && self.config.input_socket.with_extension("stopped").exists() {
+            return Err(Error::new("stopped", crate::error::STOPPED));
+        }
+
         // Connect without holding the lease. Release can cancel slow preflight.
         let mut transport = if request["op"] == "input" {
             self.input_transport()
@@ -1235,7 +1356,30 @@ impl Client {
         };
 
         drop(authorization);
-        let mut reply = pending.finish().await?;
+
+        // An agent's command runs until it ends, unless the person stops
+        // agents: then the connection is dropped, which ends the command in
+        // the helper. What it did by then is unknown, so it stays pending.
+        // A command that started ends with a row too, however it ends.
+        let finishing = pending.finish();
+        let mut reply = if cuttable {
+            let _ = self.record_start(&request);
+            let ended = tokio::select! {
+                reply = finishing => reply,
+                () = self.stopped_while_running() => {
+                    Err(Error::new("stopped", crate::error::STOPPED).uncertain())
+                }
+            };
+            match ended {
+                Ok(reply) => reply,
+                Err(error) => {
+                    let _ = self.record(&request, &json!({"ok": false}), started.elapsed());
+                    return Err(error);
+                }
+            }
+        } else {
+            finishing.await?
+        };
         validate_completion(&request, &reply)?;
 
         let mut warnings = Vec::new();
@@ -1279,7 +1423,23 @@ impl Client {
         Ok(())
     }
 
+    /// Record that a command began, so what it does shows while it runs;
+    /// the row it ends with stands for it after.
+    fn record_start(&self, request: &Value) -> Result<()> {
+        self.write_row(request, &json!({"ok": null}), Duration::ZERO, true)
+    }
+
     fn record(&self, request: &Value, reply: &Value, elapsed: Duration) -> Result<()> {
+        self.write_row(request, reply, elapsed, false)
+    }
+
+    fn write_row(
+        &self,
+        request: &Value,
+        reply: &Value,
+        elapsed: Duration,
+        start: bool,
+    ) -> Result<()> {
         let directory = self.output_dir()?;
         let lock = OpenOptions::new()
             .create(true)
@@ -1302,19 +1462,42 @@ impl Client {
             .custom_flags(libc::O_NOFOLLOW)
             .open(path)?;
 
-        // No input text, argv, window titles, output or image payloads in metadata.
-        let row = json!({
+        // No input text, argv, coordinates, window titles, output or image
+        // payloads in metadata: only what `Doing` names.
+        let ok = worked(reply);
+        let mut row = json!({
             "at": timestamp().to_string(),
             "operation": request["op"],
-            "ok": reply["ok"],
+            "ok": if start { Value::Null } else { json!(ok) },
             "elapsedMs": elapsed.as_secs_f64() * 1000.0,
             "actionCount": request["actions"].as_array().map(Vec::len),
             "actor": self.actor.as_str(),
         });
 
+        if let (Some(doing), Some(fields)) = (&self.doing, row.as_object_mut()) {
+            doing.fields(fields, ok);
+            if start {
+                fields.insert("started".into(), json!(true));
+            }
+            // Input names the app it landed in, as the helper saw it.
+            if !fields.contains_key("app")
+                && let Some(app) = reply["app"].as_str()
+            {
+                fields.insert("app".into(), json!(crate::doing::bounded(app)));
+            }
+        }
+
         writeln!(file, "{row}")?;
         Ok(())
     }
+}
+
+/// Whether a mutation did what it was for: the helper accepted it and, for
+/// a command, the command ran to its end and succeeded.
+fn worked(reply: &Value) -> bool {
+    reply["ok"] == true
+        && reply["exitCode"].as_i64().is_none_or(|code| code == 0)
+        && reply["timedOut"] != true
 }
 
 pub fn validate_completion(request: &Value, reply: &Value) -> Result<()> {
@@ -1445,16 +1628,158 @@ mod tests {
         assert!(!process_exists(u32::MAX));
     }
 
+    #[tokio::test]
+    async fn only_the_person_resumes_agents() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = client_in(dir.path());
+        assert_eq!(client.hold(false).await.unwrap_err().code, "stopped");
+    }
+
+    #[tokio::test]
+    async fn a_stop_holds_on_the_persons_side_while_the_helpers_input_is_down() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut person = client_in(dir.path());
+        person.controller = crate::control::Controller::at(60001, &dir.path().join("state"));
+        person.actor = Actor::Viewer;
+        let mut agent = client_in(dir.path());
+        agent.controller = crate::control::Controller::at(60001, &dir.path().join("state"));
+
+        let stopped = person.hold(true).await.unwrap();
+        assert_eq!(stopped["held"], true);
+        assert!(
+            stopped["warnings"][0]
+                .as_str()
+                .unwrap()
+                .contains("isn't running")
+        );
+        assert_eq!(agent.require_going().await.unwrap_err().code, "stopped");
+
+        person.hold(false).await.unwrap();
+        assert!(agent.require_going().await.is_ok(), "resumed");
+    }
+
+    #[tokio::test]
+    async fn a_running_command_hears_of_a_stop_from_its_saved_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = client_in(dir.path());
+        let marker = client.config.input_socket.with_extension("stopped");
+
+        let waiting =
+            tokio::time::timeout(Duration::from_millis(500), client.stopped_while_running());
+        assert!(waiting.await.is_err(), "no stop, no end");
+
+        std::fs::write(&marker, b"").unwrap();
+        let heard = tokio::time::timeout(Duration::from_secs(2), client.stopped_while_running());
+        assert!(heard.await.is_ok(), "the stop is heard within a moment");
+    }
+
+    #[tokio::test]
+    async fn a_stopped_agents_command_is_refused_before_it_starts_and_a_read_is_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = client_in(dir.path());
+        std::fs::write(client.config.input_socket.with_extension("stopped"), b"").unwrap();
+        let run = json!({"op": "run", "argv": ["true"], "timeoutMs": 1000});
+
+        let acting = client.clone().doing(Doing::new("run"));
+        let refused = acting.mutate(run.clone(), None, None).await.unwrap_err();
+        assert_eq!(refused.code, "stopped");
+        assert!(!refused.uncertain, "nothing started");
+
+        let reading = client.mutate(run, None, None).await.unwrap_err();
+        assert_ne!(
+            reading.code, "stopped",
+            "a read goes on (and finds no helper here)"
+        );
+    }
+
     #[test]
-    fn recorded_rows_name_the_actor_and_carry_no_payload() {
+    fn input_names_the_app_it_landed_in_and_a_command_its_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = client_in(dir.path()).doing(Doing::new("type"));
+        let typed = json!({"op": "input", "actions": [{"type": "type", "text": "x"}]});
+        client
+            .record(
+                &typed,
+                &json!({"ok": true, "app": "TextEdit"}),
+                Duration::ZERO,
+            )
+            .unwrap();
+        let rows = crate::overview::activity(client.output_dir().unwrap(), 5);
+        assert_eq!(crate::doing::says(&rows[0]), "typed in TextEdit");
+
+        let client = client.doing(Doing::new("open").app(Some("Calculator")));
+        let run = json!({"op": "run", "argv": ["open", "-a", "Calculator"]});
+        client.record_start(&run).unwrap();
+        let rows = crate::overview::activity(client.output_dir().unwrap(), 5);
+        assert_eq!(crate::doing::says(&rows[0]), "opening Calculator…");
+        client
+            .record(&run, &json!({"ok": true, "exitCode": 0}), Duration::ZERO)
+            .unwrap();
+        let rows = crate::overview::activity(client.output_dir().unwrap(), 5);
+        assert_eq!(
+            crate::doing::says(&rows[0]),
+            "opened Calculator",
+            "the end stands for the start"
+        );
+        assert_eq!(rows.len(), 2, "one row per command");
+    }
+
+    #[test]
+    fn a_command_that_failed_or_timed_out_is_recorded_as_failed() {
+        assert!(worked(&json!({"ok": true})));
+        assert!(worked(
+            &json!({"ok": true, "exitCode": 0, "timedOut": false})
+        ));
+        assert!(!worked(&json!({"ok": true, "exitCode": 1})));
+        assert!(!worked(
+            &json!({"ok": true, "exitCode": 0, "timedOut": true})
+        ));
+        assert!(!worked(&json!({"ok": false})));
+    }
+
+    #[tokio::test]
+    async fn a_screenshot_is_recorded_as_the_agent_looking_and_a_failed_one_as_failed() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = client_in(dir.path()).doing(Doing::new("screenshot"));
+        assert!(client.capture(None).await.is_err(), "no helper answers");
+
+        let rows = crate::overview::activity(client.output_dir().unwrap(), 5);
+        assert_eq!(
+            (&rows[0]["operation"], &rows[0]["ok"], &rows[0]["actor"]),
+            (&json!("screenshot"), &json!(false), &json!("agent"))
+        );
+        assert_eq!(crate::doing::says(&rows[0]), "couldn't take a screenshot");
+    }
+
+    #[tokio::test]
+    async fn a_status_read_without_a_viewer_says_no_viewer_has_control() {
         let dir = tempfile::tempdir().unwrap();
         let mut client = client_in(dir.path());
+        client.controller = crate::control::Controller::at(60001, &dir.path().join("state"));
+
+        let status = crate::overview::read(&client).await;
+        assert_eq!(status["controlActive"], false);
+        assert_eq!(status["overview"]["state"], "notReady", "no helper answers");
+        assert_eq!(status["overview"]["label"], "Not ready");
+        assert!(
+            !status["overview"]["headline"]
+                .as_str()
+                .unwrap()
+                .ends_with('.')
+        );
+    }
+
+    #[test]
+    fn recorded_rows_name_the_actor_and_what_was_done_but_never_typed_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut client = client_in(dir.path()).doing(Doing::new("type").app(Some("TextEdit")));
         let typed = json!({"op": "input", "actions": [{"type": "type", "text": "secret"}]});
         let ok = json!({"ok": true});
 
         client
             .record(&typed, &ok, Duration::from_millis(5))
             .unwrap();
+        client.doing = None;
         client.actor = Actor::Viewer;
         client
             .record(&json!({"op": "restart"}), &ok, Duration::ZERO)
@@ -1469,6 +1794,14 @@ mod tests {
         assert_eq!(
             (&rows[1]["actor"], &rows[1]["actionCount"]),
             (&json!("agent"), &json!(1))
+        );
+        assert_eq!(
+            (&rows[1]["verb"], &rows[1]["app"]),
+            (&json!("type"), &json!("TextEdit"))
+        );
+        assert!(
+            rows[0].get("verb").is_none(),
+            "a row says only what it knows"
         );
 
         let log = fs::read_to_string(directory.join("metadata.jsonl")).unwrap();

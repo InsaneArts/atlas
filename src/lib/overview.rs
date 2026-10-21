@@ -1,20 +1,107 @@
 //! One summary of what is happening in the helper, for the viewer and the
 //! menu bar: a mode, a one-sentence reason, recent agent activity and the
 //! capability facts a person needs at a glance.
+use crate::{client::Client, control::Controller, error::Error};
 use serde_json::{Value, json};
 use std::{
     fs,
     io::{Read, Seek, SeekFrom},
     path::Path,
+    time::Duration,
 };
+use tokio::time::Instant;
 
 /// Activity this recent counts as an agent acting now.
 const ACTIVE_NANOS: u128 = 5_000_000_000;
 /// How much of the end of the activity log is read.
 const TAIL: u64 = 64 * 1024;
 
-/// One recorded operation, newest first; no payloads are ever recorded.
+/// How long reading the status or a frame may take: less than the app
+/// waits (8 seconds), so it hears why rather than giving up.
+pub const READ_DEADLINE: Duration = Duration::from_secs(5);
+/// How many recent activity rows a status carries.
+pub const ROWS: usize = 12;
+
+/// A read of the helper that took longer than a status waits.
+pub(crate) fn late() -> Error {
+    Error::new("transport", "The helper did not answer in time")
+}
+
+/// The doctor report for the helper as it answers now, with why a silent
+/// helper is down. It waits on the helper until `until` at most.
+pub async fn report(client: &Client, until: Instant) -> Value {
+    let uid = client.config.helper_uid;
+    let reply = tokio::time::timeout_at(until, client.status())
+        .await
+        .unwrap_or_else(|_| json!(late()));
+
+    // Why a silent helper is down, asked off the runtime (and only then).
+    let absence = if crate::session::silent(&reply) {
+        let asking = tokio::task::spawn_blocking(move || crate::session::absence(uid));
+        tokio::time::timeout_at(until, asking)
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .flatten()
+    } else {
+        None
+    };
+
+    let mut status = crate::capability::doctor(reply, uid);
+    if let Some(absence) = &absence {
+        absence.explain(&mut status);
+    }
+
+    // A Stop kept on the person's side counts as one the helper holds.
+    if client.controller.stop_noted() && status["session"]["inputService"].is_object() {
+        status["session"]["inputService"]["held"] = json!(true);
+    }
+
+    status
+}
+
+/// The controller's mutations of unknown outcome, and how many are pending
+/// in all. An unreadable marker is unknown, so it counts as unresolved.
+pub fn pending(controller: &Controller) -> (Pending, usize) {
+    let total = controller.pending().map_or(1, |pending| pending.len());
+    let unresolved = controller.unresolved().map_or(1, |pending| pending.len());
+    let pending = Pending {
+        unresolved,
+        in_flight: total.saturating_sub(unresolved),
+    };
+
+    (pending, total)
+}
+
+/// The helper's status and overview as an agent app shows them, read
+/// without a viewer: no viewer of this process holds control.
+pub async fn read(client: &Client) -> Value {
+    let mut status = report(client, Instant::now() + READ_DEADLINE).await;
+    let (pending, _) = pending(&client.controller);
+    let activity = client
+        .output_dir()
+        .map(|directory| activity(directory, ROWS))
+        .unwrap_or_default();
+
+    status["controlActive"] = json!(false);
+    status["overview"] = overview(
+        &status,
+        false,
+        pending,
+        &activity,
+        crate::client::timestamp(),
+    );
+    status
+}
+
+/// One recorded operation per command, newest first; no payloads are ever
+/// recorded. A command that acted in several steps (typing in batches,
+/// opening then waiting) shows as its newest step.
 pub fn activity(directory: &Path, limit: usize) -> Vec<Value> {
+    if limit == 0 {
+        return Vec::new();
+    }
+
     let Ok(mut file) = fs::File::open(directory.join("metadata.jsonl")) else {
         return Vec::new();
     };
@@ -31,13 +118,26 @@ pub fn activity(directory: &Path, limit: usize) -> Vec<Value> {
 
     // The tail may start inside a character; only that first, partial line
     // is lost.
-    String::from_utf8_lossy(&bytes)
+    let mut rows: Vec<Value> = Vec::new();
+    for row in String::from_utf8_lossy(&bytes)
         .lines()
         .rev()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .filter(|row| row["operation"].is_string())
-        .take(limit)
-        .collect()
+    {
+        let step = row["command"].is_string()
+            && rows
+                .last()
+                .is_some_and(|newer| newer["command"] == row["command"]);
+        if !step {
+            rows.push(row);
+        }
+        if rows.len() == limit {
+            break;
+        }
+    }
+
+    rows
 }
 
 /// Nanoseconds since an activity row was recorded, if it parses.
@@ -55,6 +155,21 @@ fn age(row: &Value, now: u128) -> Option<u128> {
 pub struct Pending {
     pub unresolved: usize,
     pub in_flight: usize,
+}
+
+/// The state every agent app shows for a mode, and its label: an agent
+/// working, nothing happening, the person in control, something only the
+/// person or recovery can settle, or a helper agents can't use yet.
+fn kind(mode: &str, recoverable: bool) -> (&'static str, &'static str) {
+    match mode {
+        "agent" => ("working", "Working"),
+        "observing" => ("idle", "Idle"),
+        "controlling" => ("control", "You have control"),
+        "recovering" => ("needsYou", "Needs you"),
+        "stopped" => ("stopped", "Stopped"),
+        "blocked" if recoverable => ("needsYou", "Needs you"),
+        _ => ("notReady", "Not ready"),
+    }
 }
 
 /// The mode and reason for a doctor report plus local controller facts.
@@ -108,9 +223,20 @@ pub fn overview(
             ),
         }
     } else if pending.unresolved > 0 {
+        // A stop that cut an action short leaves its outcome unknown: say
+        // both, as recovery comes first and the stop stays after it.
+        let reason = if session["inputService"]["held"] == true {
+            "You stopped the agent mid-action, so its outcome is unknown. Recover, then resume."
+        } else {
+            "An action's outcome is unknown; recover before taking control"
+        };
+        ("recovering", reason.to_owned())
+    } else if session["inputService"]["held"] == true && !lease_active {
+        // The person's stop holds whatever else is true, until they take
+        // control themselves: agents wait.
         (
-            "recovering",
-            "An action's outcome is unknown; recover before taking control".to_owned(),
+            "stopped",
+            "You stopped the agent. It waits until you resume it.".to_owned(),
         )
     } else if pending.in_flight > 0 && !lease_active {
         // Starting or upgrading input makes readiness briefly false; work in
@@ -126,7 +252,7 @@ pub fn overview(
     } else if lease_active {
         (
             "controlling",
-            "A viewer has mouse and keyboard control".to_owned(),
+            "You have control. The agent waits".to_owned(),
         )
     } else if session["inputService"]["controlActive"] == true || recent || pending.in_flight > 0 {
         ("agent", "An agent is acting in the helper".to_owned())
@@ -134,8 +260,26 @@ pub fn overview(
         ("observing", "Watching the helper desktop".to_owned())
     };
 
+    let (state, label) = kind(mode, recoverable);
+
+    // What the agent is doing, or did last, in the words every surface
+    // shows; otherwise the reason. A headline is a status, not a sentence,
+    // so it ends without a full stop.
+    let newest = activity
+        .iter()
+        .find(|row| row["actor"] != "viewer")
+        .map(crate::doing::says);
+    let headline = match (state, newest) {
+        ("working", Some(newest)) => crate::doing::capitalized(&newest),
+        ("idle", Some(newest)) => format!("Last: {newest}"),
+        _ => reason.trim_end_matches('.').to_owned(),
+    };
+
     json!({
         "mode": mode,
+        "state": state,
+        "label": label,
+        "headline": headline,
         "reason": reason,
         "recoverable": mode == "blocked" && recoverable,
         "account": if reachable { &session["user"]["name"] } else { &report["account"] },
@@ -143,17 +287,27 @@ pub fn overview(
         "pending": pending.unresolved,
         "inFlight": pending.in_flight,
         "nativeDialogs": report["capabilities"]["nativeDialogs"]["state"],
-        "activity": activity
-            .iter()
-            .map(|row| json!({
-                "operation": row["operation"],
-                "ok": row["ok"],
-                "actionCount": row["actionCount"],
-                "actor": row["actor"].as_str().unwrap_or("agent"),
-                "ageSeconds": age(row, now)
-                    .map(|nanos| u64::try_from(nanos / 1_000_000_000).unwrap_or(u64::MAX)),
-            }))
-            .collect::<Vec<_>>(),
+        "activity": activity.iter().map(|row| shown(row, now)).collect::<Vec<_>>(),
+    })
+}
+
+/// A logged row as every app shows it: what it did in words, who did it
+/// and how long ago, at `now`.
+pub fn shown(row: &Value, now: u128) -> Value {
+    json!({
+        "operation": row["operation"],
+        // A command under way is not a failure: apps that read only `ok`
+        // show it as going well.
+        "ok": row["ok"] == true || row["started"] == true,
+        "actionCount": row["actionCount"],
+        "started": row["started"] == true,
+        "verb": row["verb"],
+        "app": row["app"],
+        "label": row["label"],
+        "says": crate::doing::says(row),
+        "actor": row["actor"].as_str().unwrap_or("agent"),
+        "ageSeconds": age(row, now)
+            .map(|nanos| u64::try_from(nanos / 1_000_000_000).unwrap_or(u64::MAX)),
     })
 }
 
@@ -187,6 +341,128 @@ mod tests {
 
     fn mode(report: &Value, lease: bool, pending: usize, activity: &[Value]) -> Value {
         overview(report, lease, unresolved(pending), activity, NOW)["mode"].clone()
+    }
+
+    #[test]
+    fn every_mode_has_one_of_the_states_agent_apps_show() {
+        let ready = report(true, true);
+        let state = |report: &Value, lease: bool, pending: usize, activity: &[Value]| {
+            let summary = overview(report, lease, unresolved(pending), activity, NOW);
+            (summary["state"].clone(), summary["label"].clone())
+        };
+
+        assert_eq!(
+            state(&ready, false, 0, &[row(2)]),
+            (json!("working"), json!("Working"))
+        );
+        assert_eq!(state(&ready, false, 0, &[]), (json!("idle"), json!("Idle")));
+        assert_eq!(
+            state(&ready, true, 0, &[]),
+            (json!("control"), json!("You have control"))
+        );
+        assert_eq!(
+            state(&ready, false, 1, &[]),
+            (json!("needsYou"), json!("Needs you"))
+        );
+
+        let mut stopped = report(true, false);
+        stopped["nextSteps"] = json!([crate::session::START_INPUT]);
+        assert_eq!(
+            state(&stopped, false, 0, &[]).0,
+            "needsYou",
+            "Recover fixes it"
+        );
+        assert_eq!(state(&report(true, false), false, 0, &[]).0, "notReady");
+        assert_eq!(state(&report(false, false), false, 0, &[]).0, "notReady");
+    }
+
+    #[test]
+    fn the_headline_is_the_newest_thing_an_agent_did() {
+        let ready = report(true, true);
+        let mut save = row(2);
+        save["verb"] = json!("click");
+        save["app"] = json!("TextEdit");
+        save["label"] = json!("Save");
+        let mut own = row(1);
+        own["actor"] = json!("viewer");
+
+        let summary = overview(&ready, false, unresolved(0), &[own, save], NOW);
+        assert_eq!(summary["headline"], "Clicked Save in TextEdit");
+        assert_eq!(summary["activity"][1]["says"], "clicked Save in TextEdit");
+        assert_eq!(summary["activity"][0]["says"], "sent 1 action");
+
+        let quiet = overview(&ready, false, unresolved(0), &[], NOW);
+        assert_eq!(quiet["headline"], quiet["reason"], "nothing done yet");
+
+        let unsure = overview(&ready, false, unresolved(1), &[row(2)], NOW);
+        assert_eq!(
+            unsure["headline"], unsure["reason"],
+            "why it needs the person"
+        );
+    }
+
+    #[test]
+    fn a_stop_shows_until_resumed_but_an_unknown_outcome_comes_first() {
+        let mut held = report(true, true);
+        held["session"]["inputService"]["held"] = json!(true);
+
+        let summary = overview(&held, false, unresolved(0), &[row(1)], NOW);
+        assert_eq!(
+            (&summary["mode"], &summary["state"], &summary["label"]),
+            (&json!("stopped"), &json!("stopped"), &json!("Stopped"))
+        );
+        assert_eq!(
+            summary["headline"],
+            "You stopped the agent. It waits until you resume it"
+        );
+        assert_eq!(
+            mode(&held, true, 0, &[]),
+            "controlling",
+            "the person may take over"
+        );
+        assert_eq!(mode(&held, false, 1, &[]), "recovering");
+    }
+
+    #[test]
+    fn an_idle_headline_says_what_was_done_last() {
+        let mut save = row(60);
+        save["verb"] = json!("click");
+        save["label"] = json!("Save");
+
+        let summary = overview(&report(true, true), false, unresolved(0), &[save], NOW);
+        assert_eq!(summary["state"], "idle");
+        assert_eq!(summary["headline"], "Last: clicked Save");
+    }
+
+    #[test]
+    fn a_command_of_several_steps_is_one_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let rows = [
+            json!({"operation": "run", "ok": true, "verb": "open", "command": "a"}),
+            json!({"operation": "input", "ok": true, "verb": "type", "command": "b"}),
+            json!({"operation": "input", "ok": false, "verb": "type", "command": "b"}),
+            json!({"operation": "input", "ok": true}),
+            json!({"operation": "input", "ok": true}),
+        ];
+        let log = rows
+            .iter()
+            .map(|row| format!("{row}\n"))
+            .collect::<String>();
+        fs::write(dir.path().join("metadata.jsonl"), log).unwrap();
+
+        let shown = activity(dir.path(), 12);
+        let says = shown.iter().map(crate::doing::says).collect::<Vec<_>>();
+        assert_eq!(
+            says,
+            [
+                "used the mouse and keyboard",
+                "used the mouse and keyboard",
+                "couldn't type",
+                "opened a file"
+            ],
+            "the newest step stands for its command; rows of no command stay apart"
+        );
+        assert_eq!(activity(dir.path(), 2).len(), 2);
     }
 
     #[test]
