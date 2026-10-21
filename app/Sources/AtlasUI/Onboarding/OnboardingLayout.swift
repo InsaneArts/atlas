@@ -22,6 +22,8 @@ package enum OnboardingLayout {
   /// 170: the height scrolling account rows take: two rows and most of a third, so the cut row shows there are more,
   /// with room left for the work note and the footer.
   static let accountListHeight: CGFloat = 170
+  /// 32: how far a scrolling screen's content fades out above its pinned bottom, so a cut line reads as more below.
+  static let scrollFade: CGFloat = 32
   /// 36: above a screen's content, clear of the title bar.
   static let contentTop: CGFloat = 36
   /// 76: the footer's height.

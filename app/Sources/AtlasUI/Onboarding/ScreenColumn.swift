@@ -57,12 +57,29 @@ struct ScreenColumn<Content: View, Bottom: View>: View {
         .padding(.horizontal, Spacing.section)
         .frame(maxWidth: .infinity)
       }
+      .mask { fade }
       VStack(spacing: Spacing.xl) {
         bottom
       }
       .frame(maxWidth: width)
       .padding(.horizontal, Spacing.section)
       .padding(.vertical, Spacing.l)
+    }
+  }
+}
+
+extension ScreenColumn {
+  /// Opaque down to its last ``OnboardingLayout/scrollFade`` points, which fade out: scrolled content ends in a fade,
+  /// never on a clean line that reads as finished.
+  fileprivate var fade: some View {
+    VStack(spacing: .zero) {
+      Color.black
+      LinearGradient(
+        colors: [.black, .clear],
+        startPoint: .top,
+        endPoint: .bottom
+      )
+      .frame(height: OnboardingLayout.scrollFade)
     }
   }
 }

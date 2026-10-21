@@ -142,7 +142,9 @@ struct StatusReadingTests {
         "overview": ["mode": "blocked", "reason": "Run atlas start-input."],
       ])
     )
-    #expect(reading.reason(holdingControl: false) == "Mouse and keyboard stopped. Recover starts them again.")
+    #expect(
+      reading.reason(holdingControl: false) == "Mouse and keyboard stopped in the helper. Recover starts them again."
+    )
   }
 
   @Test("the reason never shows another viewer's control as yours")

@@ -22,7 +22,7 @@ struct ViewerSnapshotRulesTests {
   @Test(
     "a recovery set aside alerts again once its reason or the helper's mode changes while recovery is still offered",
     arguments: [
-      ("recovering", "The helper's input stopped"),
+      ("recovering", "Mouse and keyboard stopped in the helper"),
       ("blocked", "Unknown outcome"),
     ]
   )

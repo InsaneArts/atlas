@@ -37,7 +37,7 @@ package enum CheckWords {
     case "Helper in the background": return "The helper isn't running in the background."
     case "Screen Recording allowed": return "Turn on Atlas in the helper's Screen Recording settings."
     case "Accessibility allowed" where restartsInput, "Input service ready" where restartsInput:
-      return "Mouse and keyboard stopped. Recover starts them again."
+      return "Mouse and keyboard stopped in the helper. Recover starts them again."
     case "Accessibility allowed": return "Turn on Atlas in the helper's Accessibility settings."
     case "Input service ready" where step.contains("Accessibility"): return "Needs Accessibility first."
     case "Input service ready": return "Mouse and keyboard aren't ready."
