@@ -5,6 +5,7 @@ use atlas::{
     agent,
     client::Client,
     config::Config,
+    doing::Doing,
     environment,
     error::{Error, Result},
     menubar,
@@ -147,6 +148,37 @@ enum Command {
         /// Local port for the viewer.
         #[arg(long, default_value_t = 8765)]
         port: u16,
+    },
+    /// Stop agents in the helper until the person resumes them.
+    #[command(hide = true)]
+    Stop,
+    /// Let agents act in the helper again: the person's, from a viewer
+    /// (Atlas.app, the Claude Code pane); refused for an agent.
+    #[command(hide = true)]
+    Resume,
+    /// Serve agent apps over MCP on standard input and output: the status,
+    /// and a live view of the helper's screen with Stop.
+    #[command(hide = true)]
+    Mcp {
+        /// Local port of the menu bar's viewer.
+        #[arg(long, default_value_t = 8765)]
+        port: u16,
+        /// Offer only the status and the screen: no Stop, Resume or Recover.
+        #[arg(long)]
+        read_only: bool,
+    },
+    /// The helper's status as it changes, one JSON line each, for agent apps.
+    #[command(hide = true)]
+    Watch {
+        /// Local port of the menu bar's viewer.
+        #[arg(long, default_value_t = 8765)]
+        port: u16,
+        /// A private folder to keep the helper's newest screen in.
+        #[arg(long)]
+        frames: Option<std::path::PathBuf>,
+        /// Say the status once and end.
+        #[arg(long)]
+        once: bool,
     },
     /// Show the helper in the menu bar, to watch it or take control.
     ///
@@ -848,6 +880,59 @@ fn machine_only(command: &Command) -> bool {
     )
 }
 
+/// What a command does in the helper, as the activity log keeps it: its
+/// verb and the app and control it names. None for commands that act on
+/// nothing there.
+fn doing(command: &Command) -> Option<Doing> {
+    Some(match command {
+        Command::Screenshot { .. } => Doing::new("screenshot"),
+        Command::Click {
+            target,
+            name,
+            button,
+            count,
+            ..
+        } => Doing::click(matches!(button, ButtonArg::Right), *count)
+            .app(target.app.as_deref())
+            .label(name.as_deref()),
+        Command::Move { .. } => Doing::new("move"),
+        Command::Drag { .. } => Doing::new("drag"),
+        Command::Scroll { .. } => Doing::new("scroll"),
+        Command::Type { .. } => Doing::new("type"),
+        Command::Key { keys } => Doing::keys(keys),
+        Command::Open { app, targets, .. } => Doing::open(app.as_deref(), targets),
+        Command::Close { app, .. } => Doing::new("close").app(app.as_deref()),
+        Command::Run { .. } => Doing::new("run"),
+        _ => return None,
+    })
+}
+
+/// Whether a command changes the helper, so an agent's is refused while
+/// the person has stopped agents. Looking, reading and recovery are not.
+fn changes_helper(command: &Command) -> bool {
+    match command {
+        Command::Screenshot { .. } => false,
+        // Each changes what runs in the helper, or how; a stop that moved
+        // with a migrated layout would be lost.
+        Command::Input { .. }
+        | Command::Logout { .. }
+        | Command::VerifyNative { .. }
+        | Command::Install
+        | Command::Update { .. } => true,
+        Command::Setup {
+            apply, rollback, ..
+        } => *apply || *rollback,
+        Command::Environment { apply, command, .. } => match command {
+            None => *apply,
+            Some(EnvironmentCommand::Run { .. } | EnvironmentCommand::Apply { .. }) => true,
+            Some(EnvironmentCommand::Rollback { apply, .. }) => *apply,
+            Some(EnvironmentCommand::Profile { apply, .. }) => *apply,
+            Some(_) => false,
+        },
+        _ => doing(command).is_some(),
+    }
+}
+
 /// How a command's result reads for a person.
 fn view(command: &Command) -> View {
     let at = |x: f64, y: f64| format!("{}, {}", text::number(x), text::number(y));
@@ -917,6 +1002,8 @@ fn view(command: &Command) -> View {
         ),
         Command::Wait { gone, .. } => View::Wait { gone: *gone },
         Command::Restart => View::Restart,
+        Command::Stop => View::Action("Stopped the agent".into()),
+        Command::Resume => View::Action("Resumed the agent".into()),
         Command::Logout { .. } => View::Logout,
         Command::StartInput => View::StartInput,
         Command::Install => View::Install,
@@ -931,7 +1018,11 @@ fn view(command: &Command) -> View {
         Command::Update { .. } => View::Update,
         Command::Uninstall { .. } => View::Uninstall,
         Command::Menubar { login: Some(_), .. } => View::Login,
-        Command::Init | Command::Monitor { .. } | Command::Menubar { .. } => View::Quiet,
+        Command::Init
+        | Command::Monitor { .. }
+        | Command::Watch { .. }
+        | Command::Mcp { .. }
+        | Command::Menubar { .. } => View::Quiet,
         _ => View::Generic,
     }
 }
@@ -1141,12 +1232,21 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
     // Helper-side commands run inside the helper login and never read the
     // controller's configuration. A command that talks to the helper loads
     // it before anything else.
+    let doing = doing(&command);
+    let changes = changes_helper(&command);
     let client = || {
         Client::new(Config::load(&config)?).map(|mut client| {
             client.actor = actor;
+            client.doing = doing.clone();
             client
         })
     };
+
+    // The person's stop refuses an agent's change at its start; one already
+    // under way is the input service's to cut off.
+    if changes {
+        client()?.require_going().await?;
+    }
 
     match command {
         Command::EnvironmentWorker { packet, apply } => environment::worker(&packet, apply),
@@ -1219,7 +1319,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
                     Ok(Value::Null)
                 }
                 AgentsCommand::Status { brief: false } => {
-                    let _spinner = Spinner::new("Checking Claude Code and Codex…");
+                    let _spinner = Spinner::new("Checking Claude Code, Codex and the Claude app…");
                     Ok(atlas::agents::status())
                 }
                 AgentsCommand::Project { dir } => {
@@ -1323,6 +1423,16 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
         }
         Command::Install => client()?.install(),
         Command::StartInput => client()?.start_input().await,
+        Command::Watch { port, frames, once } => {
+            atlas::watch::watch(client()?, port, frames, once).await?;
+            Ok(Value::Null)
+        }
+        Command::Stop => client()?.hold(true).await,
+        Command::Resume => client()?.hold(false).await,
+        Command::Mcp { port, read_only } => {
+            atlas::mcp::serve(client()?, config.clone(), port, read_only).await?;
+            Ok(Value::Null)
+        }
         Command::Monitor { port } => {
             let client = client()?;
             viewer::monitor(&config, port, client.output_dir()?).await?;
@@ -1916,6 +2026,88 @@ mod tests {
 
     fn parse(args: &[&str]) -> std::result::Result<Cli, clap::Error> {
         Cli::try_parse_from(std::iter::once("atlas").chain(args.iter().copied()))
+    }
+
+    #[test]
+    fn each_command_that_acts_in_the_helper_says_what_it_does() {
+        let said = |args: &[&str]| {
+            let command = parse(args).unwrap().command.unwrap();
+            doing(&command).map(|doing| {
+                let mut row = serde_json::Map::new();
+                row.insert("ok".into(), json!(true));
+                row.insert("actionCount".into(), json!(1));
+                doing.fields(&mut row, true);
+                atlas::doing::says(&Value::Object(row))
+            })
+        };
+        let says = |args: &[&str], words: &str| assert_eq!(said(args).as_deref(), Some(words));
+
+        says(&["screenshot"], "took a screenshot");
+        says(
+            &["click", "--app", "TextEdit", "--name", "Save"],
+            "clicked Save in TextEdit",
+        );
+        says(&["click", "10", "20", "--count", "2"], "double-clicked");
+        says(&["click", "10", "20", "--button", "right"], "right-clicked");
+        says(&["move", "1", "2"], "moved the pointer");
+        says(&["drag", "1", "2", "3", "4"], "dragged");
+        says(&["scroll", "1", "2", "--dy", "3"], "scrolled");
+        says(&["type", "secret"], "typed text");
+        says(&["key", "cmd+s"], "pressed ⌘S");
+        says(
+            &["open", "--app", "TextEdit", "notes.txt"],
+            "opened TextEdit",
+        );
+        says(&["open", "https://example.com"], "opened a link");
+        says(&["close", "--app", "TextEdit"], "closed TextEdit");
+        says(&["run", "--", "ls", "/private"], "ran a command");
+        assert_eq!(
+            said(&["windows"]),
+            None,
+            "a read does nothing in the helper"
+        );
+        assert_eq!(
+            said(&["restart"]),
+            None,
+            "recovery is worded by its operation"
+        );
+    }
+
+    #[test]
+    fn a_stop_refuses_what_changes_the_helper_and_lets_looking_and_recovery_through() {
+        let changes = |args: &[&str]| changes_helper(&parse(args).unwrap().command.unwrap());
+
+        for acting in [
+            &["click", "1", "2"][..],
+            &["type", "x"],
+            &["key", "cmd+s"],
+            &["open", "--app", "TextEdit"],
+            &["close", "--app", "TextEdit"],
+            &["run", "--", "ls"],
+            &["input", "[]"],
+            &["logout"],
+            &["environment", "run", "--", "ls"],
+            &["environment", "apply", "plan"],
+            &["verify-native"],
+            &["install"],
+            &["update"],
+            &["setup", "--apply"],
+        ] {
+            assert!(changes(acting), "{acting:?}");
+        }
+
+        for looking in [
+            &["screenshot"][..],
+            &["windows"],
+            &["elements", "--app", "TextEdit"],
+            &["restart"],
+            &["start-input"],
+            &["stop"],
+            &["environment"],
+            &["setup"],
+        ] {
+            assert!(!changes(looking), "{looking:?}");
+        }
     }
 
     #[test]

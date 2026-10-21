@@ -808,6 +808,8 @@ pub fn status() -> Value {
             .collect()
     });
 
+    let mut agents = agents;
+    agents.push(crate::claude_app::status());
     json!({"ok": true, "agents": agents, "plugin": marketplace().ok()})
 }
 
@@ -843,9 +845,19 @@ fn probe(agent: Agent) -> Value {
 /// removed; an agent whose is someone else's is refused when connecting and
 /// left alone when removing.
 pub fn change(chosen: &[Agent], remove: bool) -> Result<Value> {
+    // The Claude app comes along when no agent was named: it has no
+    // command line of its own to choose it by.
+    let app = chosen.is_empty() && crate::claude_app::installed();
+    let all = chosen.is_empty();
+    change_these(chosen, all, app, remove)
+}
+
+/// [`change`] for exactly `chosen` (every installed agent when `all`) and
+/// the Claude app when `app`.
+pub fn change_these(chosen: &[Agent], all: bool, app: bool, remove: bool) -> Result<Value> {
     let marketplace = if remove { None } else { Some(marketplace()?) };
 
-    let present: Vec<(Agent, Presence)> = if chosen.is_empty() {
+    let present: Vec<(Agent, Presence)> = if all {
         Agent::ALL
             .into_iter()
             .map(|agent| (agent, agent.presence()))
@@ -858,8 +870,10 @@ pub fn change(chosen: &[Agent], remove: bool) -> Result<Value> {
             .collect()
     };
 
-    if present.is_empty() {
-        return Err(problem("Neither Claude Code nor Codex is installed"));
+    if present.is_empty() && !app {
+        return Err(problem(
+            "Neither Claude Code, Codex nor the Claude app is installed",
+        ));
     }
 
     let mut results = Vec::new();
@@ -901,6 +915,10 @@ pub fn change(chosen: &[Agent], remove: bool) -> Result<Value> {
         }
 
         results.push(result);
+    }
+
+    if app {
+        results.push(crate::claude_app::change(!remove));
     }
 
     let ok = results.iter().all(|result| result["ok"] == true);
@@ -1173,6 +1191,12 @@ pub async fn brief(config_path: &Path) -> String {
     else {
         return format!("Atlas {version}: the helper is not answering; run atlas doctor.");
     };
+
+    if status["inputService"]["held"] == true {
+        return format!(
+            "Atlas {version}: the person stopped agents in the helper; ask them before using it."
+        );
+    }
 
     let ready = crate::capability::doctor(status, config.helper_uid)["ready"] == true;
     if ready {
