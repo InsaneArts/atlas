@@ -42,7 +42,9 @@ Ask the person to run it themselves if they prefer.
 
 Ask the person to open Atlas (from Applications, or `open -a Atlas`). Its
 window walks them through choosing or creating the helper account, switching
-to it once to allow Atlas there, and switching back. If they prefer a
+to it once to allow Atlas there, and switching back. Until Atlas has
+answered in that account, Choose Another Account takes them back to pick a
+different one. If they prefer a
 terminal, `atlas init` does the same and needs a real terminal:
 
 ```sh

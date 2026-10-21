@@ -35,7 +35,7 @@ its own failure is in `exitCode`.)
 | `no-environment` | No helper environment profile is installed for `environment run`. | Use `atlas run`, or install a profile with `atlas environment profile`. |
 | `on-console` | The helper is on screen right now, or came on screen while `atlas run` ran (uncertain: the command was stopped). | Ask the person to switch back to their own account. Do not retry. After `run`: once they are back, take a screenshot, run `atlas restart`, and check what the command did before running it again. |
 | `onboarding` | A setup step from the Atlas window could not finish. | Show `error` to the person; they open Atlas again (or run `atlas init`) to carry on. |
-| `permission` | Screen Recording or Accessibility is not allowed in the helper. | Tell the person; they allow it in the helper's System Settings (setup skill). |
+| `permission` | Screen Recording or Accessibility is not allowed in the helper, or the request came from inside the helper, which Atlas refuses. | Tell the person; they allow it in the helper's System Settings (setup skill). Run Atlas commands from your own shell, never through `atlas run`. |
 | `platform` | Atlas runs on macOS only. | Stop. |
 | `port-in-use` | The viewer's port is taken by another program. | Tell the person; pass `--port` with a free port. |
 | `protocol` | A reply was malformed or too large. | Retry once; then `atlas doctor`. |
@@ -46,7 +46,7 @@ its own failure is in `exitCode`.)
 | `stale-frame` | The screenshot is older than the current display. | Take a new screenshot. |
 | `startup` | The input service did not start. | Run `atlas start-input`, then `atlas doctor`. |
 | `state` | Local control state is corrupt. | Run `atlas restart`; tell the person if it persists. |
-| `switch` | Fast user switching was refused or unavailable. | Tell the person; they can switch from the menu bar. |
+| `switch` | The screen could not be locked for switching accounts. | Tell the person; they lock it from the Apple menu (Lock Screen) and switch there. |
 | `terminal` | The command asks the person a question and has no terminal. | Ask the person; pass the flag it names (such as `--yes`) only with their agreement. |
 | `transport` | The helper did not answer, or the connection broke. | If `uncertain`, run `atlas restart`; otherwise retry once. |
 | `uncertain` | An earlier action's outcome is unknown; control is blocked. | Take a screenshot, then `atlas restart`. |

@@ -105,7 +105,8 @@ screenshot pixels by multiplying by `pointsPerPixel`.
   waits for a window. A menu bar app may start with none: open one from its
   menu bar item.
 - `atlas run -- PROGRAM ARGS` runs a command as the helper, for example to
-  read a file the app wrote. It starts in the helper's home, finds programs
+  read a file the app wrote. It starts in the helper's home (so `./tool`
+  means a file there), finds programs
   where readiness looks (`.local/bin`, `.cargo/bin`, Homebrew and the system
   folders) and runs in a UTF-8 locale. Your own shell expands `~` and
   `$HOME` before Atlas sees
@@ -118,8 +119,9 @@ screenshot pixels by multiplying by `pointsPerPixel`.
   `outputUnfinished` means something the command started still held the
   output, so its end may be missing. `pid` is the command's process.
   A command is stopped after 20 seconds; `--timeout SECONDS` allows up to
-  600. If the helper stops while it runs, it fails with the code `restart`,
-  uncertain.
+  600. If the helper stops while it runs, it fails with the code `restart`;
+  if the helper comes on screen, the command is stopped with `on-console`.
+  Both are uncertain.
   Atlas stays busy while it runs, so start anything longer in the background
   (`nohup … > "$HOME/run.log" 2>&1 &`) and read its log.
 
@@ -223,7 +225,8 @@ unless you looked at it in the helper.
 - `busy`: the person (or another agent) has control, perhaps from the viewer.
   Never take it from them; wait and try again, and tell the person if it lasts.
 - `on-console`: the helper is on screen right now. Ask the person to switch
-  back to their own account; do not retry until they have.
+  back to their own account; do not retry until they have. If it stopped an
+  `atlas run`, it is uncertain: once they are back, handle it as above.
 - `blocked`: your shell may not connect to the helper or write Atlas's own
   files (locks, screenshots), usually because your sandbox blocks them. The
   helper is likely fine: run Atlas commands outside the sandbox (the error

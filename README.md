@@ -122,5 +122,6 @@ atlas uninstall    # keeps the helper account
 ## Safety
 
 - Agents act only in the helper's session, while it is in the background.
+- Apps running in the helper cannot use Atlas themselves.
 - One controller at a time; held keys are released when control ends.
 - Nothing is ever replayed after an unknown outcome.
