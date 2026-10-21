@@ -170,3 +170,14 @@ copied back to your account.
 - **Viewer** (Open Viewer, or `atlas monitor`): the helper's screen in its own
   window, each action as it happens. **Take Control** takes the mouse and
   keyboard; **Give Back** or Control–Shift–Esc gives them back.
+
+### Contributing
+
+Bug reports, ideas and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md)
+explains how to build Atlas and check a change, and everyone taking part follows
+the [Code of Conduct](CODE_OF_CONDUCT.md). Report security problems privately,
+as [SECURITY.md](SECURITY.md) explains.
+
+### License
+
+[MIT](LICENSE).
