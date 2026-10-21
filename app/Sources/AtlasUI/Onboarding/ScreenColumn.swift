@@ -55,6 +55,8 @@ struct ScreenColumn<Content: View, Bottom: View>: View {
         }
         .frame(maxWidth: width)
         .padding(.horizontal, Spacing.section)
+        // Room for the fade below the last piece, so scrolled to the end it is read in full.
+        .padding(.bottom, OnboardingLayout.scrollFade)
         .frame(maxWidth: .infinity)
       }
       .mask { fade }
