@@ -81,6 +81,12 @@ fn problem(message: impl Into<String>) -> Error {
     Error::new("setup", message)
 }
 
+/// A refusal that changed nothing, as the worker reports it: `unchanged`
+/// tells the caller it is certain, so no pending marker waits on it.
+fn refused(message: impl Into<String>) -> Value {
+    json!({ "ok": false, "code": "setup", "error": message.into(), "unchanged": true })
+}
+
 /// launchd labels and account names stay within a conservative charset; they
 /// become file names and launchctl service targets.
 pub fn valid_name(name: &str) -> bool {
@@ -492,9 +498,11 @@ fn prepare(layout: &Layout, controller: &str) -> Result<Value> {
     Ok(json!({ "ok": true, "root": root, "changed": changed }))
 }
 
+/// Write the managed agent's plist (or find identical bytes) and load it. A
+/// refusal before anything is written says it changed nothing.
 fn install(layout: &Layout, agent: &Agent) -> Result<Value> {
     if agent.label != LABEL || agent.uid != layout.uid || agent.socket != layout.socket() {
-        return Err(problem(
+        return Ok(refused(
             "Only the managed helper daemon in the private layout can be installed",
         ));
     }
@@ -502,7 +510,7 @@ fn install(layout: &Layout, agent: &Agent) -> Result<Value> {
     if !fs::symlink_metadata(&agent.program).is_ok_and(|metadata| metadata.is_file())
         || !agent.program.is_absolute()
     {
-        return Err(problem(
+        return Ok(refused(
             "The helper daemon program must be an absolute regular file",
         ));
     }
@@ -515,9 +523,12 @@ fn install(layout: &Layout, agent: &Agent) -> Result<Value> {
             fs::create_dir_all(path.parent().unwrap_or(&layout.home))?;
             crate::config::write_atomic(&path, text.as_bytes(), 0o644)?;
         }
+        // An earlier Atlas's definition is replaced only from outside the
+        // daemon it runs: atlas init does that, with a backup.
         _ => {
-            return Err(problem(format!(
-                "{} exists with other contents; it was not changed",
+            return Ok(refused(format!(
+                "The helper's background job was set up by another version of Atlas, so {} \
+                 was not changed. Run atlas init to replace it.",
                 path.display()
             )));
         }
@@ -811,8 +822,39 @@ mod tests {
             agent(LABEL, layout.daemon().join("other.sock")),
             agent(LABEL, "/tmp/x".into()),
         ] {
-            assert!(install(&layout, &agent).is_err());
+            let reply = install(&layout, &agent).unwrap();
+            assert_eq!(reply["ok"], false);
+            assert_eq!(
+                reply["unchanged"], true,
+                "a refusal before acting is certain"
+            );
         }
+    }
+
+    /// A definition with other bytes (an earlier Atlas's) is refused
+    /// certainly, left as it was, and the refusal says what replaces it.
+    #[test]
+    fn install_refuses_another_definition_without_changing_it() {
+        let (_dir, layout, _) = sandbox();
+        let agent = Agent {
+            label: LABEL.into(),
+            program: "/bin/sh".into(),
+            uid: layout.uid,
+            controller_uid: 0,
+            socket: layout.socket(),
+        };
+
+        let path = layout.agent_plist(LABEL);
+        fs::write(&path, "an earlier definition").unwrap();
+
+        let reply = install(&layout, &agent).unwrap();
+        assert_eq!(reply["ok"], false);
+        assert_eq!(reply["unchanged"], true);
+        assert!(
+            reply["error"].as_str().unwrap().contains("atlas init"),
+            "{reply}"
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), "an earlier definition");
     }
 
     fn sandbox() -> (tempfile::TempDir, Layout, String) {

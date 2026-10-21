@@ -308,6 +308,15 @@ fn running_developer_id(pid: u32) -> bool {
     satisfies_developer_id(pid.to_string().as_ref())
 }
 
+/// Whether helper daemon `pid` runs `executable` exactly as it is on disk
+/// now. False for a daemon still running a build an update replaced: its
+/// file moved aside, or its loaded code no longer matches the file.
+pub fn runs_current(pid: u32, executable: &Path) -> bool {
+    let running = executable_of(pid).and_then(|path| fs::canonicalize(path).ok());
+
+    running.is_some() && running == fs::canonicalize(executable).ok() && running_developer_id(pid)
+}
+
 #[allow(unsafe_code, reason = "FFI: proc_pidpath has no safe binding")]
 fn executable_of(pid: u32) -> Option<PathBuf> {
     let size = u32::try_from(libc::PROC_PIDPATHINFO_MAXSIZE).ok()?;
@@ -757,6 +766,11 @@ mod tests {
             !running_developer_id(std::process::id()),
             "this ad-hoc test process is not Atlas's Developer ID"
         );
+        assert!(
+            !runs_current(std::process::id(), &test),
+            "only Atlas's own signed build is current"
+        );
+        assert!(!runs_current(std::process::id(), Path::new("/bin/ls")));
     }
 
     #[test]

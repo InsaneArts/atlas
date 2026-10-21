@@ -219,9 +219,15 @@ pub fn environment(value: &Value) -> Rendered {
             .map(|error| format!(": {error}"))
             .unwrap_or_default();
 
+        // A copy that can no longer finish is finished by undoing it.
         let (what, command) = if undoing {
             (
                 "Undoing stopped part way",
+                format!("atlas environment rollback {id} --apply"),
+            )
+        } else if value["rollbackRequired"] == true {
+            (
+                "Copying stopped part way",
                 format!("atlas environment rollback {id} --apply"),
             )
         } else {
@@ -271,21 +277,44 @@ pub fn environment(value: &Value) -> Rendered {
     if value["rolledBack"] == true {
         lines.push(format!("{} Undone in the helper", style::ok()));
         lines.extend(targets("completedTargets"));
+
+        let kept = targets("keptTargets");
+        if !kept.is_empty() {
+            lines.push(format!(
+                "Kept {} the helper changed since the copy:",
+                count(kept.len())
+            ));
+            lines.extend(kept);
+        }
     } else if value["preview"] == true {
         let pending = targets("pendingTargets");
+        let kept = targets("keptTargets");
+
         if pending.is_empty() {
-            lines.push(format!("{} Nothing to undo", style::ok()));
+            lines.push(format!(
+                "{} No files change back in the helper",
+                style::ok()
+            ));
         } else {
             lines.push(format!(
                 "Undoing restores or removes {} in the helper:",
                 count(pending.len())
             ));
             lines.extend(pending);
-            lines.push(next(
-                "To undo",
-                format!("atlas environment rollback {id} --apply"),
-            ));
         }
+
+        if !kept.is_empty() {
+            lines.push(format!(
+                "It keeps {} the helper changed since the copy:",
+                count(kept.len())
+            ));
+            lines.extend(kept);
+        }
+
+        lines.push(next(
+            "To undo",
+            format!("atlas environment rollback {id} --apply"),
+        ));
     } else if value["applied"] == true {
         lines.push(format!("{} Copied into the helper", style::ok()));
         lines.extend(files.iter().map(listed));

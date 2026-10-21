@@ -16,6 +16,7 @@ use objc2_core_foundation::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashSet,
     ptr::NonNull,
     time::{Duration, Instant},
 };
@@ -673,10 +674,19 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
         .rev()
         .map(|(root, frame, menu)| (root, 0, frame, menu))
         .collect();
+    // Each element is read once: an app can list an element under itself
+    // (TextEdit lists its own application element as a child), and without
+    // this the scan would walk that loop until its budget ran out.
+    let mut seen: HashSet<CFRetained<AXUIElement>> = HashSet::new();
+
     while let Some((element, depth, window, menu)) = stack.pop() {
         if found.len() >= limits.count || !scan.open() {
             scan.incomplete = true;
             break;
+        }
+
+        if !seen.insert(element.clone()) {
+            continue;
         }
 
         let item = &*element;

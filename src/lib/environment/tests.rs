@@ -173,9 +173,16 @@ fn metadata_drift_and_later_same_content_generations_block_older_rollback() {
     assert_eq!(sandbox.rollback(&first, false)["ok"], false);
     assert_eq!(sandbox.rollback(&second, true)["ok"], true);
 
+    // A file the helper changed since is kept as it is.
     fs::set_permissions(sandbox.home.join("file"), fs::Permissions::from_mode(0o644)).unwrap();
-    assert_eq!(sandbox.rollback(&first, true)["ok"], false);
+    let result = sandbox.rollback(&first, true);
+    assert_eq!(result["rolledBack"], true, "{result}");
+    assert_eq!(result["keptTargets"], json!(["file"]));
     assert_eq!(fs::read(sandbox.home.join("file")).unwrap(), b"same");
+    assert_eq!(
+        fs::metadata(sandbox.home.join("file")).unwrap().mode() & 0o777,
+        0o644
+    );
 }
 
 #[test]
@@ -505,9 +512,11 @@ fn lost_install_acknowledgement_uses_the_prepared_inode_not_just_its_hash() {
     assert_eq!(sandbox.apply(&plan)["ok"], true);
     assert_eq!(fs::metadata(&path).unwrap().ino(), installed_inode);
 
-    // An uncooperative replacement with identical bytes is still a new inode.
+    // An uncooperative replacement with identical bytes is still a new
+    // inode: the helper's file, which undoing keeps.
     atomic_write(&path, b"one", 0o600).unwrap();
-    assert_eq!(sandbox.rollback(&plan, true)["ok"], false);
+    let result = sandbox.rollback(&plan, true);
+    assert_eq!(result["keptTargets"], json!(["file"]), "{result}");
     assert_eq!(fs::read(path).unwrap(), b"one");
 }
 
@@ -840,22 +849,28 @@ fn rollback_removes_its_own_folder_unless_a_request_is_unconfirmed() {
     ));
 }
 
-/// An undo of an ID the helper never applied is a refusal, not a
+/// A worker's own refusal (an unknown ID, another operation running, a
+/// plan that must be finished first) changed nothing, so it is not a
 /// transaction to resume; any other failed mutation stays resumable.
 #[test]
-fn a_rollback_of_an_unknown_id_is_not_resumable() {
+fn a_refusal_that_changed_nothing_is_not_resumable() {
     let refusal = |error: &str, request: &str| json!({"ok": false, "code": "environment", "error": error, "uncertain": false, "refusal": request});
-    let reply = worker_reply(WORKER_REFUSED, &refusal(worker::MISSING, "request-ab12"));
-    let value = decode_reply(&reply, true, "request-ab12").unwrap();
-    assert_eq!(value["ok"], false);
-    assert!(value["resumeRequired"].is_null(), "{value}");
 
+    for error in [
+        worker::MISSING,
+        "Another environment operation is running",
+        "Transaction 0 must be resumed or rolled back first",
+    ] {
+        let reply = worker_reply(WORKER_REFUSED, &refusal(error, "request-ab12"));
+        let value = decode_reply(&reply, true, "request-ab12").unwrap();
+        assert_eq!(value["ok"], false);
+        assert!(value["resumeRequired"].is_null(), "{value}");
+    }
+
+    let reply = worker_reply(WORKER_REFUSED, &refusal(worker::MISSING, "request-ab12"));
     for (exit, output) in [
         (WORKER_REFUSED, refusal(worker::MISSING, "request-other")),
-        (
-            WORKER_REFUSED,
-            refusal("Transaction is busy", "request-ab12"),
-        ),
+        (WORKER_REFUSED, json!({"ok": false, "error": "Stopped"})),
         (1, json!({"ok": false, "error": worker::MISSING})),
     ] {
         let value = decode_reply(&worker_reply(exit, &output), true, "request-ab12").unwrap();
@@ -975,6 +990,27 @@ fn only_old_readable_plans_without_unknown_requests_are_pruned() {
 
     fs::create_dir(stage.join("request-ab12")).unwrap();
     assert!(!prunable(&stage, &id, 501));
+}
+
+/// A command's folder, kept when the command was stopped or its reply was
+/// lost, goes once it is older than a week.
+#[test]
+fn old_command_folders_are_pruned() {
+    let sandbox = Sandbox::new();
+    let id = crate::control::token();
+    let run = sandbox.root.join(format!("environment-run-{id}"));
+    fs::create_dir(&run).unwrap();
+    stage_in(&sandbox.root, &crate::control::token());
+    std::thread::sleep(std::time::Duration::from_millis(20));
+
+    assert_eq!(
+        stale_runs(&sandbox.root, std::time::Duration::ZERO),
+        vec![run.clone()]
+    );
+    assert!(stale_runs(&sandbox.root, UNUSED).is_empty());
+
+    prune_runs(&sandbox.root);
+    assert!(run.exists(), "a recent command's folder stays");
 }
 
 /// A request that cannot be sent leaves no request folder, which would
@@ -1189,4 +1225,428 @@ fn copies_of_a_preparation_that_stopped_part_way_are_removed() {
 
     assert_eq!(sandbox.apply(&plan)["ok"], true);
     assert!(!orphan.exists());
+}
+
+/// Stop `plan`'s apply at the first guard where `stop` holds.
+fn stop_apply(sandbox: &Sandbox, plan: &Plan, stop: impl Fn() -> bool) -> Value {
+    let stopped = Cell::new(false);
+
+    worker::apply_plan(&sandbox.home, plan, &|| {
+        if stop() && !stopped.replace(true) {
+            return Err(problem("session changed"));
+        }
+        Ok(())
+    })
+    .unwrap()
+}
+
+/// A provenance value no process of this test makes.
+fn foreign_provenance() -> BTreeMap<String, String> {
+    BTreeMap::from([(
+        "com.apple.provenance".to_owned(),
+        STANDARD.encode([1_u8, 2, 0, 0x83, 0x32, 0x51, 0x45, 0x74, 0x26, 0x9a, 0xda]),
+    )])
+}
+
+/// macOS sets com.apple.provenance itself and ignores attempts to change it,
+/// so restores leave it alone and fingerprints do not compare it.
+#[test]
+fn provenance_is_never_restored_or_compared() {
+    let sandbox = Sandbox::new();
+    let path = sandbox.home.join("file");
+    atomic_write(&path, b"data", 0o600).unwrap();
+
+    restore_attributes(&path, &foreign_provenance()).unwrap();
+    restore_attributes(&path, &BTreeMap::new()).unwrap();
+
+    let own = fingerprint(&path).unwrap().unwrap();
+    let mut written_by_an_app = own.clone();
+    written_by_an_app.xattrs = foreign_provenance();
+    assert_eq!(own, written_by_an_app);
+
+    written_by_an_app
+        .xattrs
+        .insert("user.atlas-test".into(), STANDARD.encode([1_u8]));
+    assert_ne!(own, written_by_an_app, "other attributes still count");
+}
+
+/// A file an app in the helper wrote carries that app's provenance. A copy
+/// that only fixes its permissions, and undoing it, still finish.
+#[test]
+fn a_file_an_app_wrote_can_be_copied_over_and_restored() {
+    let sandbox = Sandbox::new();
+    let path = sandbox.home.join("settings");
+    atomic_write(&path, b"same", 0o644).unwrap();
+
+    let mut plan = sandbox.plan(vec![sandbox.payload("settings", b"same")]);
+    assert_eq!(plan.files[0].operation, Operation::Permissions);
+    plan.files[0].before.as_mut().unwrap().xattrs = foreign_provenance();
+
+    let result = sandbox.apply(&plan);
+    assert_eq!(result["ok"], true, "{result}");
+    assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
+
+    let other = sandbox.plan(vec![sandbox.payload("other", b"other")]);
+    assert_eq!(sandbox.apply(&other)["ok"], true);
+    assert_eq!(sandbox.rollback(&other, true)["rolledBack"], true);
+
+    let result = sandbox.rollback(&plan, true);
+    assert_eq!(result["rolledBack"], true, "{result}");
+    assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o644);
+}
+
+/// New contents never take over the download mark of the file they
+/// replace, which would stop a copied tool from running; undoing puts the
+/// earlier file back with it.
+#[test]
+fn new_contents_do_not_inherit_the_download_mark() {
+    let sandbox = Sandbox::new();
+    let path = sandbox.home.join("tool");
+    atomic_write(&path, b"old", 0o700).unwrap();
+    let mut attributes = fingerprint(&path).unwrap().unwrap().xattrs;
+    attributes.insert(
+        "com.apple.quarantine".into(),
+        STANDARD.encode("0081;00000000;Safari;"),
+    );
+    restore_attributes(&path, &attributes).unwrap();
+
+    let state = state::Store::open(&sandbox.home, true).unwrap();
+    state
+        .save_ledger(&Ledger {
+            version: 0,
+            files: BTreeMap::from([(PathBuf::from("tool"), Entry::Legacy(digest(b"old")))]),
+        })
+        .unwrap();
+    drop(state);
+
+    let mut payload = sandbox.payload("tool", b"new");
+    payload.executable = true;
+    let plan = sandbox.plan(vec![payload]);
+    assert_eq!(plan.files[0].operation, Operation::Update);
+
+    assert_eq!(sandbox.apply(&plan)["ok"], true);
+    let copied = fingerprint(&path).unwrap().unwrap().xattrs;
+    assert!(!copied.contains_key("com.apple.quarantine"), "{copied:?}");
+
+    assert_eq!(sandbox.rollback(&plan, true)["rolledBack"], true);
+    assert_eq!(fs::read(&path).unwrap(), b"old");
+    assert!(
+        fingerprint(&path)
+            .unwrap()
+            .unwrap()
+            .xattrs
+            .contains_key("com.apple.quarantine")
+    );
+}
+
+/// A file the helper changed while a copy was part way does not block the
+/// helper: undoing keeps that file, undoes the rest and releases the plan.
+#[test]
+fn a_file_changed_part_way_is_kept_and_the_rest_undone() {
+    let sandbox = Sandbox::new();
+    let plan = sandbox.plan(vec![
+        sandbox.payload("first", b"one"),
+        sandbox.payload("second", b"two"),
+    ]);
+
+    let state = sandbox.home.join(STATE);
+    let result = stop_apply(&sandbox, &plan, || {
+        fs::read_to_string(state.join("files.json")).is_ok_and(|ledger| ledger.contains("first"))
+    });
+    assert_eq!(result["completedTargets"], json!(["first"]), "{result}");
+
+    fs::write(sandbox.home.join("first"), b"app edit").unwrap();
+
+    let resumed = sandbox.apply(&plan);
+    assert_eq!(resumed["ok"], false);
+    assert_eq!(resumed["rollbackRequired"], true, "{resumed}");
+    assert!(
+        resumed["error"]
+            .as_str()
+            .unwrap()
+            .contains("changed in the helper after this plan copied it"),
+        "{resumed}"
+    );
+
+    let preview = sandbox.rollback(&plan, false);
+    assert_eq!(preview["ok"], true, "{preview}");
+    assert_eq!(preview["keptTargets"], json!(["first"]));
+    assert_eq!(preview["pendingTargets"], json!([]));
+
+    let result = sandbox.rollback(&plan, true);
+    assert_eq!(result["rolledBack"], true, "{result}");
+    assert_eq!(result["keptTargets"], json!(["first"]));
+    assert_eq!(result["completedTargets"], json!(["second"]));
+    assert_eq!(fs::read(sandbox.home.join("first")).unwrap(), b"app edit");
+    assert!(!sandbox.home.join("second").exists());
+
+    // The kept file is the helper's now: a new copy names it a conflict.
+    let next = sandbox.preview(vec![sandbox.payload("first", b"one")]);
+    assert_eq!(next["files"][0]["operation"], "conflict");
+    let next = sandbox.plan(vec![sandbox.payload("next", b"next")]);
+    assert_eq!(sandbox.apply(&next)["ok"], true);
+}
+
+/// Undoing a finished copy keeps the one file the helper changed since and
+/// puts every other one back.
+#[test]
+fn undoing_a_copy_keeps_only_the_file_the_helper_changed() {
+    let sandbox = Sandbox::new();
+    fs::write(sandbox.home.join("kept"), b"before").unwrap();
+    let earlier = sandbox.plan(vec![sandbox.payload("kept", b"before")]);
+    assert_eq!(sandbox.apply(&earlier)["ok"], true);
+
+    let plan = sandbox.plan(vec![
+        sandbox.payload("kept", b"copied"),
+        sandbox.payload("created", b"created"),
+    ]);
+    assert_eq!(sandbox.apply(&plan)["ok"], true);
+    fs::write(sandbox.home.join("kept"), b"app edit").unwrap();
+
+    let preview = sandbox.rollback(&plan, false);
+    assert_eq!(preview["pendingTargets"], json!(["created"]), "{preview}");
+    assert_eq!(preview["keptTargets"], json!(["kept"]));
+
+    let result = sandbox.rollback(&plan, true);
+    assert_eq!(result["rolledBack"], true, "{result}");
+    assert_eq!(fs::read(sandbox.home.join("kept")).unwrap(), b"app edit");
+    assert!(!sandbox.home.join("created").exists());
+
+    // The earlier copy's file changed too, so undoing it keeps it as well.
+    let result = sandbox.rollback(&earlier, true);
+    assert_eq!(result["rolledBack"], true, "{result}");
+    assert_eq!(result["keptTargets"], json!(["kept"]));
+    assert_eq!(fs::read(sandbox.home.join("kept")).unwrap(), b"app edit");
+}
+
+/// A later plan's copy of the same file is that plan's to undo first.
+#[test]
+fn a_file_a_later_plan_copied_again_still_blocks_the_older_undo() {
+    let sandbox = Sandbox::new();
+    let first = sandbox.plan(vec![sandbox.payload("file", b"one")]);
+    assert_eq!(sandbox.apply(&first)["ok"], true);
+
+    let second = sandbox.plan(vec![sandbox.payload("file", b"two")]);
+    assert_eq!(sandbox.apply(&second)["ok"], true);
+
+    let result = sandbox.rollback(&first, true);
+    assert_eq!(result["ok"], false, "{result}");
+    assert!(
+        result["error"]
+            .as_str()
+            .unwrap()
+            .contains("roll that back first")
+    );
+    assert_eq!(fs::read(sandbox.home.join("file")).unwrap(), b"two");
+}
+
+/// A preview of an undo leaves out files it would not restore or remove:
+/// ones the copy found already in place, and ones it never put in place.
+#[test]
+fn an_undo_preview_names_only_files_it_restores_or_removes() {
+    let sandbox = Sandbox::new();
+    fs::write(sandbox.home.join("there"), b"same").unwrap();
+    fs::set_permissions(
+        sandbox.home.join("there"),
+        fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+
+    let plan = sandbox.plan(vec![
+        sandbox.payload("there", b"same"),
+        sandbox.payload("first", b"one"),
+        sandbox.payload("second", b"two"),
+    ]);
+    assert_eq!(plan.files[0].operation, Operation::Unchanged);
+
+    let first = sandbox.home.join("first");
+    let result = stop_apply(&sandbox, &plan, || first.exists());
+    assert_eq!(result["ok"], false, "{result}");
+
+    let preview = sandbox.rollback(&plan, false);
+    assert_eq!(preview["pendingTargets"], json!(["first"]), "{preview}");
+    assert_eq!(preview["keptTargets"], json!([]));
+
+    assert_eq!(sandbox.rollback(&plan, true)["rolledBack"], true);
+    assert_eq!(fs::read(sandbox.home.join("there")).unwrap(), b"same");
+}
+
+/// A folder apply could not put a file into is refused by the preview, and
+/// by apply before it starts, never after it has begun.
+#[test]
+fn a_shared_folder_is_refused_before_anything_starts() {
+    let sandbox = Sandbox::new();
+    let shared = sandbox.home.join("shared");
+    fs::create_dir(&shared).unwrap();
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o775)).unwrap();
+
+    let refused = worker::preview(
+        &sandbox.home,
+        nix::unistd::getuid().as_raw(),
+        &crate::control::token(),
+        vec![sandbox.payload("shared/inner/file", b"x")],
+        &|| Ok(()),
+    )
+    .unwrap_err();
+    assert!(
+        refused
+            .error
+            .contains("~/shared is not a folder only the helper"),
+        "{}",
+        refused.error
+    );
+
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o755)).unwrap();
+    let plan = sandbox.plan(vec![sandbox.payload("shared/file", b"x")]);
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o775)).unwrap();
+
+    assert!(worker::apply_plan(&sandbox.home, &plan, &|| Ok(())).is_err());
+    assert!(!sandbox.home.join(STATE).join("active.json").exists());
+    assert!(!shared.join("file").exists());
+
+    let next = sandbox.plan(vec![sandbox.payload("next", b"next")]);
+    assert_eq!(sandbox.apply(&next)["ok"], true);
+}
+
+/// A plan stopped after it was prepared but before it began is not active,
+/// so another plan may copy the same file. The stopped one then never
+/// touched it: undoing it releases its copies and keeps the other's file.
+#[test]
+fn a_plan_stopped_before_it_began_can_be_undone_after_another_copied_its_file() {
+    let sandbox = Sandbox::new();
+    let stopped = sandbox.plan(vec![sandbox.payload("file", b"stopped")]);
+
+    let folder = sandbox
+        .home
+        .join(STATE)
+        .join(format!("transaction-{}", stopped.id));
+    let active = sandbox.home.join(STATE).join("active.json");
+    let result = stop_apply(&sandbox, &stopped, || {
+        folder.join("transaction.json").exists() && !active.exists()
+    });
+    assert_eq!(result["ok"], false, "{result}");
+    assert!(!active.exists());
+
+    let other = sandbox.plan(vec![sandbox.payload("file", b"other")]);
+    assert_eq!(sandbox.apply(&other)["ok"], true);
+
+    let resumed = sandbox.apply(&stopped);
+    assert_eq!(resumed["rollbackRequired"], true, "{resumed}");
+    assert!(
+        !active.exists(),
+        "a plan that cannot finish never activates"
+    );
+
+    let result = sandbox.rollback(&stopped, true);
+    assert_eq!(result["rolledBack"], true, "{result}");
+    assert_eq!(fs::read(sandbox.home.join("file")).unwrap(), b"other");
+
+    let mut names: Vec<_> = fs::read_dir(&folder)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["transaction.json"]);
+
+    assert_eq!(sandbox.rollback(&other, true)["rolledBack"], true);
+    assert!(!sandbox.home.join("file").exists());
+}
+
+/// A write stopped part way leaves its file under a known name, which the
+/// next write or an undo removes; a refused exclusive write leaves nothing.
+#[test]
+fn an_interrupted_write_leaves_nothing_behind() {
+    let sandbox = Sandbox::new();
+    let path = sandbox.home.join("record");
+    let partial = sandbox.home.join(".atlas-partial-record");
+
+    fs::write(&partial, b"half").unwrap();
+    atomic_write(&path, b"whole", 0o600).unwrap();
+    assert!(!partial.exists());
+    assert_eq!(fs::read(&path).unwrap(), b"whole");
+
+    assert!(atomic_install(&path, b"other", 0o600, true).is_err());
+    assert_eq!(fs::read_dir(&sandbox.home).unwrap().count(), 1);
+    assert_eq!(fs::metadata(&path).unwrap().nlink(), 1);
+
+    let plan = sandbox.plan(vec![sandbox.payload("dir/file", b"one")]);
+    let folder = sandbox.home.join("dir");
+    let result = stop_apply(&sandbox, &plan, || folder.exists());
+    assert_eq!(result["ok"], false, "{result}");
+
+    let waiting = sandbox
+        .home
+        .join(format!("dir/.atlas-partial-.atlas-{}-0-install", plan.id));
+    fs::write(&waiting, b"half").unwrap();
+
+    let result = sandbox.rollback(&plan, true);
+    assert_eq!(result["rolledBack"], true, "{result}");
+    assert!(!sandbox.home.join("dir").exists());
+}
+
+#[test]
+fn every_rollback_guard_failure_with_a_kept_file_is_resumable() {
+    let applied = || {
+        let sandbox = Sandbox::new();
+        let plan = sandbox.plan(vec![
+            sandbox.payload("nested/kept", b"one"),
+            sandbox.payload("nested/undone", b"two"),
+        ]);
+        assert_eq!(sandbox.apply(&plan)["ok"], true);
+        fs::write(sandbox.home.join("nested/kept"), b"app edit").unwrap();
+        (sandbox, plan)
+    };
+
+    let (baseline, baseline_plan) = applied();
+    let calls = Cell::new(0);
+    worker::rollback(&baseline.home, &baseline_plan.id, true, &|| {
+        calls.set(calls.get() + 1);
+        Ok(())
+    })
+    .unwrap();
+
+    for fail_at in 1..=calls.get() {
+        let (sandbox, plan) = applied();
+        let current = Cell::new(0);
+        let _ = worker::rollback(&sandbox.home, &plan.id, true, &|| {
+            current.set(current.get() + 1);
+            if current.get() == fail_at {
+                Err(problem("session changed"))
+            } else {
+                Ok(())
+            }
+        });
+
+        let result = sandbox.rollback(&plan, true);
+        assert_eq!(result["rolledBack"], true, "guard {fail_at}: {result}");
+        assert_eq!(result["keptTargets"], json!(["nested/kept"]));
+        assert_eq!(
+            fs::read(sandbox.home.join("nested/kept")).unwrap(),
+            b"app edit"
+        );
+        assert!(!sandbox.home.join("nested/undone").exists());
+        assert_eq!(
+            fs::read_dir(sandbox.home.join("nested")).unwrap().count(),
+            1,
+            "guard {fail_at}: no waiting copy is left"
+        );
+    }
+}
+
+/// Keeping a file never needs to change its folder, so a folder the helper
+/// shared since does not stop the undo.
+#[test]
+fn a_kept_file_in_a_folder_shared_since_still_finishes() {
+    let sandbox = Sandbox::new();
+    let plan = sandbox.plan(vec![sandbox.payload("dir/file", b"one")]);
+    assert_eq!(sandbox.apply(&plan)["ok"], true);
+
+    let folder = sandbox.home.join("dir");
+    fs::write(folder.join("file"), b"app edit").unwrap();
+    fs::set_permissions(&folder, fs::Permissions::from_mode(0o775)).unwrap();
+
+    let result = sandbox.rollback(&plan, true);
+    assert_eq!(result["rolledBack"], true, "{result}");
+    assert_eq!(result["keptTargets"], json!(["dir/file"]));
+    assert_eq!(result["retainedDirectories"], json!(["dir"]));
 }

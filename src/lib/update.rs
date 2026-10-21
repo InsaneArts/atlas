@@ -26,7 +26,8 @@ const NO_RELEASE: &str =
     "Atlas has no public release yet. Check https://atlas.insanearts.io for news.";
 
 /// Where releases come from: a directory URL holding the archive and
-/// SHA256SUMS (https, or file:// for a local mirror).
+/// SHA256SUMS (https, file:// for a local mirror, or http on this Mac for a
+/// rehearsal).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Source {
     base: String,
@@ -134,14 +135,41 @@ fn version(text: &str) -> Vec<u64> {
 const CONNECT_TIMEOUT: &str = "30";
 const DOWNLOAD_TIMEOUT: &str = "900";
 
-/// Download `url` to `output` over HTTPS only (redirects too), or from a
-/// local file:// mirror.
+/// The one protocol curl may use for `url`: https, file:// for a local
+/// mirror, or plain http only to this Mac (127.0.0.1 or localhost, with an
+/// optional port), as a rehearsal serves releases. install.sh accepts the
+/// same.
+fn protocol(url: &str) -> Result<&'static str> {
+    if url.starts_with("https://") {
+        return Ok("=https");
+    }
+
+    if url.starts_with("file://") {
+        return Ok("=file");
+    }
+
+    let loopback = url
+        .strip_prefix("http://")
+        .map(|rest| rest.split('/').next().unwrap_or_default())
+        .is_some_and(|authority| {
+            let (host, port) = authority.split_once(':').unwrap_or((authority, "80"));
+            matches!(host, "127.0.0.1" | "localhost")
+                && !port.is_empty()
+                && port.bytes().all(|byte| byte.is_ascii_digit())
+        });
+    if loopback {
+        return Ok("=http");
+    }
+
+    Err(problem(format!(
+        "Releases come over https, from a file:// folder, or over http from this Mac only, not {url}"
+    )))
+}
+
+/// Download `url` to `output` with the one protocol [`protocol`] allows,
+/// following redirects only to https.
 fn curl(url: &str, output: &Path) -> Result<()> {
-    let protocols = if url.starts_with("file://") {
-        "=file"
-    } else {
-        "=https"
-    };
+    let protocols = protocol(url)?;
 
     let finished = Command::new("/usr/bin/curl")
         .args(["-fsSL", "--proto", protocols, "--proto-redir", "=https"])
@@ -182,10 +210,54 @@ fn check(program: &str, args: &[&std::ffi::OsStr], why: &str) -> Result<()> {
         .ok_or_else(|| problem(why))
 }
 
+/// Where Atlas keeps its caches: update's scratch and lock among them.
+fn caches() -> Result<PathBuf> {
+    Ok(crate::config::home()?.join("Library/Caches/Atlas"))
+}
+
+/// One update at a time on this account, held until dropped. Updates share
+/// a scratch folder and sweep each other's staging copies otherwise.
+#[derive(Debug)]
+pub struct Exclusive {
+    _lock: fs::File,
+}
+
+/// Take the update lock, or say another update is running.
+pub fn exclusive() -> Result<Exclusive> {
+    exclusive_in(&caches()?)
+}
+
+fn exclusive_in(directory: &Path) -> Result<Exclusive> {
+    use fs2::FileExt;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(directory)
+        .map_err(|error| Error::writing(directory, error))?;
+
+    let path = directory.join("update.lock");
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&path)
+        .map_err(|error| Error::writing(&path, error))?;
+
+    lock.try_lock_exclusive()
+        .map_err(|_| problem("Another atlas update is running. Wait for it to finish."))?;
+
+    Ok(Exclusive { _lock: lock })
+}
+
 /// A private scratch directory for one update, emptied first: an update
 /// stopped midway leaves nothing behind for the next one to find.
 fn scratch() -> Result<PathBuf> {
-    let path = crate::config::home()?.join("Library/Caches/Atlas/update");
+    let path = caches()?.join("update");
     if path.exists() {
         fs::remove_dir_all(&path)?;
     }
@@ -360,27 +432,68 @@ fn finish_record(path: &Path) -> Result<Value> {
     Ok(json!({"previous": previous, "removed": removed}))
 }
 
-/// Where the next app is staged, beside the installed one.
+/// What every staging copy beside the installed app is named from.
 const STAGED: &str = ".Atlas.app.";
 
-/// Whether `previous` is a staging copy (`.Atlas.app.*`) in the folder
-/// that holds `installed`.
-fn staged_beside(previous: &Path, installed: Option<&Path>) -> bool {
-    let named = previous
-        .file_name()
-        .and_then(|name| name.to_str())
-        .and_then(|name| name.strip_prefix(STAGED))
-        .is_some_and(|rest| !rest.is_empty());
+/// The reserved prefix of the copies `atlas update` stages, followed by a
+/// random token. Other folders beside the app (a person's own
+/// `.Atlas.app.previous`, say) are never touched.
+const UPDATE: &str = "update-";
 
-    named
-        && previous.is_absolute()
-        && installed.is_some_and(|installed| {
-            installed.is_absolute() && installed.parent() == previous.parent()
-        })
+/// The reserved prefixes of the copies install.sh stages, each followed by
+/// its process ID.
+const INSTALL: [&str; 2] = ["install-", "install-previous-"];
+
+/// Whether `text` is exactly a token from [`crate::control::token`].
+fn token_shaped(text: &str) -> bool {
+    text.len() == crate::control::TOKEN_BYTES * 2
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-/// The staging copies (`.Atlas.app.*`) beside `installed`.
-pub(crate) fn staged_copies(installed: &Path) -> Vec<PathBuf> {
+/// Whether `name` is a copy `atlas update` stages: `.Atlas.app.update-` and
+/// a token, or (from Atlas before these names) `.Atlas.app.` and a token.
+fn update_copy(name: &str) -> bool {
+    name.strip_prefix(STAGED).is_some_and(|rest| {
+        rest.strip_prefix(UPDATE).is_some_and(token_shaped) || token_shaped(rest)
+    })
+}
+
+/// Whether `name` is a copy install.sh stages: `.Atlas.app.install-` or
+/// `.Atlas.app.install-previous-`, and a process ID.
+fn install_copy(name: &str) -> bool {
+    let pid = |text: &str| !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit());
+
+    name.strip_prefix(STAGED).is_some_and(|rest| {
+        INSTALL
+            .iter()
+            .any(|prefix| rest.strip_prefix(prefix).is_some_and(pid))
+    })
+}
+
+/// Whether `path` is named as `named` accepts and sits in the folder that
+/// holds `installed`.
+fn beside(path: &Path, installed: Option<&Path>, named: fn(&str) -> bool) -> bool {
+    let named = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(named);
+
+    named
+        && path.is_absolute()
+        && installed
+            .is_some_and(|installed| installed.is_absolute() && installed.parent() == path.parent())
+}
+
+/// Whether `previous` is a copy `atlas update` staged in the folder that
+/// holds `installed`.
+fn staged_beside(previous: &Path, installed: Option<&Path>) -> bool {
+    beside(previous, installed, update_copy)
+}
+
+/// The copies beside `installed` whose names `named` accepts.
+fn copies(installed: &Path, named: fn(&str) -> bool) -> Vec<PathBuf> {
     let Some(entries) = installed
         .parent()
         .and_then(|parent| fs::read_dir(parent).ok())
@@ -391,8 +504,19 @@ pub(crate) fn staged_copies(installed: &Path) -> Vec<PathBuf> {
     entries
         .flatten()
         .map(|entry| entry.path())
-        .filter(|path| staged_beside(path, Some(installed)))
+        .filter(|path| beside(path, Some(installed), named))
         .collect()
+}
+
+/// The copies `atlas update` staged beside `installed`.
+fn staged_copies(installed: &Path) -> Vec<PathBuf> {
+    copies(installed, update_copy)
+}
+
+/// Every copy Atlas staged beside `installed`, by `atlas update` or by
+/// install.sh: what uninstall clears.
+pub(crate) fn atlas_copies(installed: &Path) -> Vec<PathBuf> {
+    copies(installed, |name| update_copy(name) || install_copy(name))
 }
 
 /// Put `new` in place of `installed` with one atomic exchange, keeping
@@ -415,7 +539,7 @@ fn swap_recording(new: &Path, installed: &Path, name: &str, record: &Path) -> Re
         let _ = fs::remove_dir_all(&path);
     }
 
-    let staged = parent.join(format!("{STAGED}{}", crate::control::token()));
+    let staged = parent.join(format!("{STAGED}{UPDATE}{}", crate::control::token()));
     check(
         "/usr/bin/ditto",
         &[new.as_os_str(), staged.as_os_str()],
@@ -488,8 +612,14 @@ pub fn reachable_by_others(executable: &Path) -> bool {
 }
 
 /// Replace the installed app with the release from `source` when it is newer
-/// (or `force`). Reports whether it changed and the versions involved.
-pub fn install(source: &Source, allow_unnotarized: bool, force: bool) -> Result<Value> {
+/// (or `force`). Reports whether it changed and the versions involved. The
+/// caller holds the update lock throughout.
+pub fn install(
+    source: &Source,
+    allow_unnotarized: bool,
+    force: bool,
+    _exclusive: &Exclusive,
+) -> Result<Value> {
     let installed = installed_app()?;
 
     // A swap whose handover did not finish is resumed before anything else.
@@ -663,12 +793,32 @@ mod tests {
             fs::write(app.join(EXECUTABLE), version).unwrap();
         }
 
-        // A staging copy a stopped update left behind is swept first.
-        let stale = root.join("Applications/.Atlas.app.stale");
-        fs::create_dir_all(&stale).unwrap();
+        // A staging copy a stopped update left behind is swept first; a
+        // person's own folders beside the app, and install.sh's, stay.
+        let stale = root.join(format!(
+            "Applications/.Atlas.app.update-{}",
+            crate::control::token()
+        ));
+        let legacy = root.join(format!(
+            "Applications/.Atlas.app.{}",
+            crate::control::token()
+        ));
+        let kept = [
+            ".Atlas.app.feature",
+            ".Atlas.app.previous",
+            ".Atlas.app.install-42",
+        ]
+        .map(|name| root.join("Applications").join(name));
+        for folder in [&stale, &legacy].into_iter().chain(&kept) {
+            fs::create_dir_all(folder).unwrap();
+        }
+
         let record = root.join("Support/update.json");
         swap_recording(&new, &installed, "Atlas-9.9.9-macos.zip", &record).unwrap();
-        assert!(!stale.exists());
+        assert!(!stale.exists() && !legacy.exists());
+        for folder in &kept {
+            assert!(folder.exists(), "{}", folder.display());
+        }
         assert_eq!(
             fs::read_to_string(installed.join("version")).unwrap(),
             "new"
@@ -677,6 +827,15 @@ mod tests {
         let plan = read_record(&record).unwrap().unwrap();
         let previous = PathBuf::from(plan["previous"].as_str().unwrap());
         assert_eq!(previous.parent(), installed.parent());
+        assert!(
+            previous
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(".Atlas.app.update-")),
+            "{}",
+            previous.display()
+        );
+        assert_eq!(staged_copies(&installed), vec![previous.clone()]);
         assert_eq!(fs::read_to_string(previous.join("version")).unwrap(), "old");
         assert_eq!(
             plan["executable"],
@@ -724,10 +883,14 @@ mod tests {
         let installed = root.join("Applications/Atlas.app");
         let record = root.join("update.json");
 
+        let token = crate::control::token();
         for previous in [
             root.join("Documents"),
             root.join("Applications/Other.app"),
-            root.join("Elsewhere/.Atlas.app.1"),
+            root.join("Applications/.Atlas.app.previous"),
+            root.join("Applications/.Atlas.app.feature"),
+            root.join("Applications/.Atlas.app.install-42"),
+            root.join(format!("Elsewhere/.Atlas.app.update-{token}")),
         ] {
             fs::create_dir_all(&previous).unwrap();
             let plan = json!({"previous": previous, "installed": installed, "to": "x"});
@@ -737,13 +900,111 @@ mod tests {
             assert!(!record.exists());
         }
 
-        let staged = root.join("Applications/.Atlas.app.1");
+        let staged = root.join(format!("Applications/.Atlas.app.update-{token}"));
         assert!(staged_beside(&staged, Some(&installed)));
         assert!(!staged_beside(&staged, None));
-        assert!(!staged_beside(
-            &root.join("Applications/.Atlas.app."),
-            Some(&installed)
-        ));
+
+        // A record an earlier Atlas wrote names its copy without the prefix.
+        let legacy = root.join(format!("Applications/.Atlas.app.{token}"));
+        assert!(staged_beside(&legacy, Some(&installed)));
+
+        for name in [
+            ".Atlas.app.",
+            ".Atlas.app.update-",
+            ".Atlas.app.update-1",
+            ".Atlas.app.1",
+            ".Atlas.app.previous",
+            &format!(".Atlas.app.update-{}", token.to_uppercase()),
+            &format!(".Atlas.app.update-{token}0"),
+        ] {
+            let path = root.join("Applications").join(name);
+            assert!(!staged_beside(&path, Some(&installed)), "{name}");
+        }
+    }
+
+    /// Uninstall clears every copy Atlas staged, by update or by
+    /// install.sh, and nothing else beside the app.
+    #[test]
+    fn only_copies_atlas_staged_are_its_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let installed = root.join("Atlas.app");
+        let token = crate::control::token();
+
+        let ours = [
+            format!(".Atlas.app.update-{token}"),
+            format!(".Atlas.app.{token}"),
+            ".Atlas.app.install-123".to_owned(),
+            ".Atlas.app.install-previous-123".to_owned(),
+        ];
+        let theirs = [
+            ".Atlas.app.feature",
+            ".Atlas.app.previous",
+            ".Atlas.app.previous.123",
+            ".Atlas.app.123",
+            ".Atlas.app.install-",
+            ".Atlas.app.install-12x",
+            ".Atlas.app.install-previous-",
+            "Atlas.app.update-1",
+        ];
+        for name in ours.iter().map(String::as_str).chain(theirs) {
+            fs::create_dir_all(root.join(name)).unwrap();
+        }
+
+        let mut found = atlas_copies(&installed);
+        found.sort();
+        let mut expected: Vec<PathBuf> = ours.iter().map(|name| root.join(name)).collect();
+        expected.sort();
+        assert_eq!(found, expected);
+        assert_eq!(
+            staged_copies(&installed).len(),
+            2,
+            "update sweeps only its own"
+        );
+    }
+
+    /// Two updates never run at once on one account.
+    #[test]
+    fn one_update_runs_at_a_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = exclusive_in(dir.path()).unwrap();
+        let error = exclusive_in(dir.path()).unwrap_err();
+        assert!(
+            error.error.contains("Another atlas update"),
+            "{}",
+            error.error
+        );
+
+        drop(first);
+        exclusive_in(dir.path()).unwrap();
+    }
+
+    /// Releases come over https or from a folder; plain http only from
+    /// this Mac, as a rehearsal serves them.
+    #[test]
+    fn releases_come_only_over_https_a_folder_or_this_mac() {
+        for (url, allowed) in [
+            (
+                "https://atlas.insanearts.io/releases/latest/SHA256SUMS",
+                Some("=https"),
+            ),
+            ("file:///tmp/releases/latest/SHA256SUMS", Some("=file")),
+            (
+                "http://127.0.0.1:8787/releases/latest/SHA256SUMS",
+                Some("=http"),
+            ),
+            ("http://localhost:8787/releases/latest", Some("=http")),
+            ("http://localhost/releases", Some("=http")),
+            ("http://127.0.0.1", Some("=http")),
+            ("http://example.com/releases", None),
+            ("http://127.0.0.1.example.com/releases", None),
+            ("http://127.0.0.1:8787@example.com/releases", None),
+            ("http://localhost@example.com/releases", None),
+            ("http://127.0.0.1:/releases", None),
+            ("ftp://127.0.0.1/releases", None),
+        ] {
+            assert_eq!(protocol(url).ok(), allowed, "{url}");
+        }
     }
 
     #[test]

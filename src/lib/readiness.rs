@@ -77,7 +77,7 @@ pub(crate) fn tool_status(reply: &Value, output: &[u8]) -> (&'static str, String
 /// helper PATH when no environment profile is installed.
 async fn probe(client: &Client, home: &str, name: &str) -> Result<(Value, &'static str)> {
     let argv = vec![name.to_owned(), "--version".to_owned()];
-    match environment_run(client, argv).await {
+    match environment_run(client, argv, crate::client::RUN_TIMEOUT).await {
         Ok(reply) => Ok((reply, "environment")),
         // An older helper build refused with the generic code; its wording
         // is matched only for that.

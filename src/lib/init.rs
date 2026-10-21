@@ -418,6 +418,44 @@ fn keep_sudo_alive() {
     });
 }
 
+/// Ask for administrator rights once, saying `why`, and keep them fresh.
+fn administrator_rights(why: &str) -> Result<()> {
+    heading("Administrator rights");
+    say(why);
+
+    attended(
+        "/usr/bin/sudo",
+        &["-v"],
+        "Administrator rights were not granted",
+    )?;
+
+    keep_sudo_alive();
+    done("Administrator rights", "");
+
+    Ok(())
+}
+
+/// The helper's background job as this Atlas writes it, for `helper` and
+/// the app's `executable`, with the layout it lives in.
+fn helper_agent(helper: &setup::Account, executable: &Path) -> Result<(Agent, Layout)> {
+    let controller = setup::account_with_uid(nix::unistd::getuid().as_raw())?
+        .ok_or_else(|| problem("This account cannot be resolved"))?;
+    let layout = Layout {
+        uid: helper.uid,
+        home: helper.home.clone(),
+    };
+
+    let agent = Agent {
+        label: LABEL.to_owned(),
+        program: executable.to_path_buf(),
+        uid: helper.uid,
+        controller_uid: controller.uid,
+        socket: layout.socket(),
+    };
+
+    Ok((agent, layout))
+}
+
 /// Run one setup-helper request as the helper, inside its own login, with
 /// the administrator rights init holds.
 fn as_helper(executable: &Path, helper: &setup::Account, request: &Request) -> Result<Value> {
@@ -527,24 +565,114 @@ async fn restart_daemon(client: &Client, config: &Config) -> Result<()> {
         return Err(if uncertain { error.uncertain() } else { error });
     }
 
+    if !new_daemon_answers(client, &before).await {
+        // The restart stays pending: its outcome is unknown.
+        return Err(
+            problem("The helper did not start again after a restart. Run atlas doctor.")
+                .uncertain(),
+        );
+    }
+
+    client.controller.clear_if(&pending)?;
+    Ok(())
+}
+
+/// Whether a daemon other than the one whose pid was `before` answers
+/// within 30 seconds.
+async fn new_daemon_answers(client: &Client, before: &Value) -> bool {
     let deadline = Instant::now() + Duration::from_secs(30);
 
     loop {
         tokio::time::sleep(Duration::from_millis(500)).await;
         let pid = client.status().await["daemon"]["pid"].clone();
-        if pid.is_number() && pid != before {
-            client.controller.clear_if(&pending)?;
-            return Ok(());
+        if pid.is_number() && pid != *before {
+            return true;
         }
 
         if Instant::now() >= deadline {
-            // The restart stays pending: its outcome is unknown.
-            return Err(problem(
-                "The helper did not start again after a restart. Run atlas doctor.",
-            )
-            .uncertain());
+            return false;
         }
     }
+}
+
+/// Replace the helper's background job an earlier Atlas wrote with this
+/// version's, from outside the daemon it runs (through sudo, as installing
+/// it does): the earlier definition is kept as a backup, and comes back if
+/// the new one cannot go in. Pending until a new daemon answers, like a
+/// restart.
+async fn replace_job(
+    client: &Client,
+    helper: &setup::Account,
+    executable: &Path,
+    agent: Agent,
+    layout: &Layout,
+) -> Result<()> {
+    let _exclusion = client.controller.acquire(true)?;
+    let before = client.status().await["daemon"]["pid"].clone();
+    let pending = client.controller.quarantine()?;
+
+    let run = |request: &Request| as_helper(executable, helper, request);
+    install_job(run, helper.uid, agent, &layout.logs()).map_err(Error::uncertain)?;
+
+    if !new_daemon_answers(client, &before).await {
+        return Err(problem(format!(
+            "The helper's background job was replaced but the helper did not start again. Its \
+             log is {} in {}'s account; run atlas init again after checking it.",
+            layout.logs().join(format!("{LABEL}.log")).display(),
+            helper.name
+        ))
+        .uncertain());
+    }
+
+    client.controller.clear_if(&pending)?;
+    Ok(())
+}
+
+/// Put the helper's daemon on this version before checking it: its
+/// background job replaced when another version of Atlas wrote it, else
+/// the daemon restarted when it still runs an earlier build (an update
+/// whose handover did not finish).
+async fn current_daemon_step(
+    client: &Client,
+    helper: &setup::Account,
+    executable: &Path,
+    done_steps: &mut Vec<Value>,
+) -> Result<()> {
+    let (agent, layout) = helper_agent(helper, executable)?;
+    let expected = setup::helper::text_sha256(&setup::helper::plist(&agent, &layout.logs()));
+    let job = setup::migrate::managed_job(client).await?;
+
+    if outdated_job(&job, &expected) {
+        administrator_rights(
+            "  macOS asks for your password once, to replace the helper's background job with \
+             this version's.",
+        )?;
+
+        let _spinner = Spinner::new("Replacing the helper's background job…");
+        replace_job(client, helper, executable, agent, &layout).await?;
+        done("Helper job", "replaced with this version's");
+        done_steps.push(json!({"step": "daemon", "label": LABEL, "replaced": true}));
+
+        return Ok(());
+    }
+
+    let pid = client.status().await["daemon"]["pid"]
+        .as_u64()
+        .and_then(|pid| u32::try_from(pid).ok());
+    if pid.is_some_and(|pid| !setup::runs_current(pid, executable)) {
+        let _spinner = Spinner::new("Restarting the helper on this version…");
+        client.restart().await?;
+        done("Helper", "restarted on this version");
+        done_steps.push(json!({"step": "restart"}));
+    }
+
+    Ok(())
+}
+
+/// Whether the managed job's definition, as inspected (`job`), is a file
+/// another version of Atlas wrote, not the `expected` one.
+fn outdated_job(job: &Value, expected: &str) -> bool {
+    job["plistKind"] == "regular" && job["plistSha256"].as_str() != Some(expected)
 }
 
 /// Poll `ready` every few seconds until it holds or patience runs out.
@@ -746,6 +874,7 @@ pub async fn run(config_path: &Path) -> Result<Value> {
     // The session checks below run this executable in the helper.
     client.install()?;
     permissions_step(&client, &config, &name).await?;
+    current_daemon_step(&client, &helper, &executable, &mut done_steps).await?;
     verify_step(&client, &config, config_path).await?;
     done("Checked", "the helper works");
     done_steps.push(json!({"step": "verified"}));
@@ -917,17 +1046,9 @@ async fn start_helper(
             return Ok(());
         }
 
-        heading("Administrator rights");
-        say("  macOS asks for your password once, to install the helper's background job.");
-
-        attended(
-            "/usr/bin/sudo",
-            &["-v"],
-            "Administrator rights were not granted",
+        administrator_rights(
+            "  macOS asks for your password once, to install the helper's background job.",
         )?;
-
-        keep_sudo_alive();
-        done("Administrator rights", "");
         *sudo_ready = true;
 
         Ok(())
@@ -989,10 +1110,7 @@ async fn start_helper(
         let spinner = Spinner::new("Installing the helper's background job…");
         let controller = setup::account_with_uid(nix::unistd::getuid().as_raw())?
             .ok_or_else(|| problem("This account cannot be resolved"))?;
-        let layout = Layout {
-            uid: helper.uid,
-            home: helper.home.clone(),
-        };
+        let (agent, layout) = helper_agent(helper, executable)?;
 
         let run = |request: &Request| as_helper(executable, helper, request);
         run(&Request::Prepare {
@@ -1000,13 +1118,6 @@ async fn start_helper(
             controller: controller.name.clone(),
         })?;
 
-        let agent = Agent {
-            label: LABEL.to_owned(),
-            program: executable.to_path_buf(),
-            uid: helper.uid,
-            controller_uid: controller.uid,
-            socket: layout.socket(),
-        };
         install_job(run, helper.uid, agent, &layout.logs())?;
 
         spinner.set("Starting the helper…");
@@ -1290,6 +1401,24 @@ mod tests {
             error.ends_with("could not be put back: no backup"),
             "{error}"
         );
+    }
+
+    /// Only a definition file with other bytes is replaced; none there (a
+    /// job from an older label) or the expected one is left alone.
+    #[test]
+    fn only_another_versions_definition_is_replaced() {
+        let ours = "a".repeat(64);
+        let earlier = "b".repeat(64);
+        let job = |kind: &str, sha: Option<&str>| json!({"plistKind": kind, "plistSha256": sha});
+
+        assert!(outdated_job(&job("regular", Some(&earlier)), &ours));
+        assert!(!outdated_job(&job("regular", Some(&ours)), &ours));
+        assert!(!outdated_job(&job("absent", None), &ours));
+        assert!(
+            !outdated_job(&job("other", None), &ours),
+            "a link is never replaced"
+        );
+        assert!(!outdated_job(&Value::Null, &ours));
     }
 
     #[test]

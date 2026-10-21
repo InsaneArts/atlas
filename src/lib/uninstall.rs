@@ -152,6 +152,19 @@ pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Val
     trash(&app, &leftovers, &mut removed)?;
     remove_settings(config_path, keep_config, &data, &mut removed)?;
 
+    // Caches hold the record of an action of unknown outcome: kept while
+    // the helper job they describe stays.
+    if !keep_config && unloaded.is_none() {
+        let caches = config::home()?.join("Library/Caches/Atlas");
+        if let Err(error) = remove_caches(&caches, &mut removed) {
+            warnings.push(format!(
+                "{} was not removed: {}",
+                text::tilde(&caches),
+                error.error
+            ));
+        }
+    }
+
     let mut report = json!({
         "ok": true,
         "removed": removed,
@@ -342,6 +355,15 @@ async fn stop_helper(
         ));
     }
 
+    // The setup record describes a job that is gone now: kept as evidence
+    // (with --keep-config), but no longer read as a setup.
+    if let Err(error) = setup::migrate::archive_uninstalled(config.helper_uid) {
+        warnings.push(format!(
+            "The setup record was not set aside: {}",
+            error.error
+        ));
+    }
+
     if remove_link_to(&config.identity_probe, executable)? {
         removed.push(json!(config.identity_probe));
     }
@@ -492,8 +514,9 @@ fn trash(app: &Path, leftovers: &[PathBuf], removed: &mut Vec<Value>) -> Result<
     removed.push(json!(app));
     done("Atlas.app", "moved to the Trash");
 
-    // Earlier apps an unfinished update kept beside it.
-    for staged in crate::update::staged_copies(app) {
+    // Copies an unfinished update or install.sh staged beside it, by their
+    // reserved names only.
+    for staged in crate::update::atlas_copies(app) {
         if fs::remove_dir_all(&staged).is_ok() {
             removed.push(json!(staged));
         }
@@ -517,7 +540,48 @@ fn trash(app: &Path, leftovers: &[PathBuf], removed: &mut Vec<Value>) -> Result<
         removed.push(json!(request));
     }
 
+    // The shared folder itself, once nothing but Atlas's is left in it:
+    // another account could not set Atlas up while it is there.
+    if let Some(shared) = Path::new(crate::handoff::ROOT).parent()
+        && remove_own_empty_folder(shared)
+    {
+        removed.push(json!(shared));
+    }
+
     Ok(())
+}
+
+/// Remove `folder` only if it is a real folder this account owns holding
+/// nothing, or only the .DS_Store Finder leaves. Anything else stays.
+fn remove_own_empty_folder(folder: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    let ours = fs::symlink_metadata(folder).is_ok_and(|metadata| {
+        metadata.is_dir() && metadata.uid() == nix::unistd::getuid().as_raw()
+    });
+    if !ours {
+        return false;
+    }
+
+    let Ok(entries) = fs::read_dir(folder) else {
+        return false;
+    };
+
+    let mut finder = Vec::new();
+    for entry in entries {
+        let Ok(entry) = entry else {
+            return false;
+        };
+
+        let plain_file = entry.file_type().is_ok_and(|kind| kind.is_file());
+        if entry.file_name() != ".DS_Store" || !plain_file {
+            return false;
+        }
+
+        finder.push(entry.path());
+    }
+
+    finder.iter().all(|file| fs::remove_file(file).is_ok()) && fs::remove_dir(folder).is_ok()
 }
 
 /// The installed settings and the logs and records, unless kept.
@@ -543,6 +607,25 @@ fn remove_settings(
         removed.push(json!(data));
         done("Logs and records", "removed");
     }
+
+    Ok(())
+}
+
+/// Atlas's caches: control state and update's scratch. A link there is
+/// removed, never followed.
+fn remove_caches(caches: &Path, removed: &mut Vec<Value>) -> Result<()> {
+    let Ok(metadata) = fs::symlink_metadata(caches) else {
+        return Ok(());
+    };
+
+    if metadata.is_dir() {
+        fs::remove_dir_all(caches)?;
+    } else {
+        fs::remove_file(caches)?;
+    }
+
+    removed.push(json!(caches));
+    done("Caches", "removed");
 
     Ok(())
 }
@@ -586,6 +669,67 @@ mod tests {
         std::os::unix::fs::symlink(&theirs, &elsewhere).unwrap();
         assert!(!remove_link_to(&elsewhere, &executable).unwrap());
         assert!(!remove_link_to(&root.join("missing"), &executable).unwrap());
+    }
+
+    /// The shared folder goes only when nothing but Finder's .DS_Store is
+    /// left in it.
+    #[test]
+    fn only_an_empty_folder_of_this_accounts_is_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("Atlas");
+
+        assert!(!remove_own_empty_folder(&folder), "nothing there");
+
+        fs::create_dir(&folder).unwrap();
+        assert!(remove_own_empty_folder(&folder));
+        assert!(!folder.exists());
+
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join(".DS_Store"), b"").unwrap();
+        assert!(remove_own_empty_folder(&folder));
+        assert!(!folder.exists());
+
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join(".DS_Store"), b"").unwrap();
+        fs::write(folder.join("notes.txt"), b"someone's").unwrap();
+        assert!(!remove_own_empty_folder(&folder));
+        assert!(folder.join("notes.txt").exists() && folder.join(".DS_Store").exists());
+
+        fs::remove_file(folder.join("notes.txt")).unwrap();
+        fs::create_dir(folder.join("Open")).unwrap();
+        assert!(!remove_own_empty_folder(&folder), "a folder inside stays");
+
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(dir.path().join("empty"), &link).unwrap();
+        fs::create_dir(dir.path().join("empty")).unwrap();
+        assert!(!remove_own_empty_folder(&link), "a link is never followed");
+        assert!(dir.path().join("empty").exists());
+
+        // A folder another account (here root) owns stays.
+        assert!(!remove_own_empty_folder(Path::new("/var/empty")));
+    }
+
+    #[test]
+    fn caches_go_and_a_link_there_is_not_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        let caches = dir.path().join("Caches/Atlas");
+        let mut removed = Vec::new();
+
+        remove_caches(&caches, &mut removed).unwrap();
+        assert!(removed.is_empty(), "nothing there");
+
+        fs::create_dir_all(caches.join("update")).unwrap();
+        fs::write(caches.join("x.lock"), b"").unwrap();
+        remove_caches(&caches, &mut removed).unwrap();
+        assert!(!caches.exists());
+        assert_eq!(removed, vec![json!(caches)]);
+
+        let target = dir.path().join("elsewhere");
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("keep"), b"").unwrap();
+        std::os::unix::fs::symlink(&target, &caches).unwrap();
+        remove_caches(&caches, &mut removed).unwrap();
+        assert!(target.join("keep").exists());
     }
 
     #[test]

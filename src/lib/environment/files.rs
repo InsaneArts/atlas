@@ -7,9 +7,9 @@ use super::{
 use base64::{Engine, engine::general_purpose::STANDARD};
 use nix::{
     errno::Errno,
-    fcntl::{AtFlags, OFlag, openat, renameat},
+    fcntl::{OFlag, openat},
     sys::stat::{Mode, mkdirat},
-    unistd::{Gid, UnlinkatFlags, fchown, linkat, unlinkat},
+    unistd::{Gid, UnlinkatFlags, fchown, unlinkat},
 };
 use sha2::{Digest, Sha256};
 use std::os::macos::fs::MetadataExt as _;
@@ -254,6 +254,28 @@ fn attributes(file: &fs::File) -> Result<std::collections::BTreeMap<String, Stri
     Ok(result)
 }
 
+/// Extended attributes macOS keeps itself. Setting or removing one is
+/// silently ignored (a new file takes the provenance of the process that
+/// made it), so they are never restored and never compared.
+const SYSTEM_ATTRIBUTES: &[&str] = &["com.apple.provenance"];
+
+/// Whether macOS, not the file's owner, decides the attribute `name`.
+pub(super) fn system_attribute(name: &str) -> bool {
+    SYSTEM_ATTRIBUTES.contains(&name)
+}
+
+/// The attributes of `all` a file's owner can set, which restores and
+/// comparisons look at.
+pub(super) fn owned_attributes(
+    all: &std::collections::BTreeMap<String, String>,
+) -> impl Iterator<Item = (&String, &String)> {
+    all.iter().filter(|(name, _)| !system_attribute(name))
+}
+
+/// Where macOS marks a file as downloaded. It describes the bytes it came
+/// with, so new contents never take it over from the file they replace.
+pub(super) const QUARANTINE: &str = "com.apple.quarantine";
+
 #[allow(unsafe_code)] // FFI: extended-attribute writes by descriptor.
 pub(super) fn restore_attributes(
     path: &Path,
@@ -261,7 +283,11 @@ pub(super) fn restore_attributes(
 ) -> Result<()> {
     let file = open_regular(path, false)?.ok_or_else(|| problem("Prepared restore is missing"))?;
     let current = attributes(&file)?;
-    for key in current.keys().filter(|key| !expected.contains_key(*key)) {
+
+    for key in current
+        .keys()
+        .filter(|key| !expected.contains_key(*key) && !system_attribute(key))
+    {
         let name = attribute_name(key.as_bytes())?;
         // SAFETY: a live descriptor and NUL-terminated name.
         let status = unsafe { libc::fremovexattr(file.as_raw_fd(), name.as_ptr(), 0) };
@@ -285,7 +311,7 @@ pub(super) fn restore_attributes(
             return Err(problem("Stored attributes exceed their limit"));
         }
 
-        if current.get(key) == expected.get(key) {
+        if current.get(key) == expected.get(key) || system_attribute(key) {
             continue;
         }
 
@@ -311,7 +337,7 @@ pub(super) fn restore_attributes(
 
     file.sync_all()?;
 
-    if attributes(&file)? != *expected {
+    if !owned_attributes(&attributes(&file)?).eq(owned_attributes(expected)) {
         return Err(problem("Extended attributes could not be restored exactly"));
     }
 
@@ -502,8 +528,15 @@ pub(super) fn atomic_install(
         path.file_name()
             .ok_or_else(|| problem("Missing file name"))?,
     )?;
-    let temporary = CString::new(format!(".atlas-{}", crate::control::token()))
-        .map_err(|_| problem("Invalid path"))?;
+    let temporary = partial_name(path)?;
+
+    // Every write to one path is serialized by its owner's lock, so a file
+    // under the partial name is one an interrupted write left: it goes.
+    match unlinkat(&parent, temporary.as_c_str(), UnlinkatFlags::NoRemoveDir) {
+        Ok(()) | Err(Errno::ENOENT) => {}
+        Err(error) => return Err(std::io::Error::from(error).into()),
+    }
+
     let mut file = fs::File::from(
         openat(
             &parent,
@@ -521,24 +554,11 @@ pub(super) fn atomic_install(
         file.write_all(bytes)?;
         file.sync_all()?;
 
-        if create_only {
-            // Linking the new inode refuses an existing destination atomically.
-            linkat(
-                &parent,
-                temporary.as_c_str(),
-                &parent,
-                name.as_c_str(),
-                AtFlags::empty(),
-            )
-            .map_err(std::io::Error::from)?;
-
-            let _ = discard();
-        } else {
-            renameat(&parent, temporary.as_c_str(), &parent, name.as_c_str())
-                .map_err(std::io::Error::from)?;
-        }
-
+        // An exclusive rename refuses an existing destination atomically,
+        // and never leaves the new inode under two names.
+        rename_at(&parent, &temporary, &name, create_only)?;
         parent.sync_all()?;
+
         Ok(())
     })();
     if result.is_err() {
@@ -548,8 +568,69 @@ pub(super) fn atomic_install(
     result
 }
 
-/// Move a recorded prepared inode into place. No-replace is atomic for creates.
+/// The name a write to `path` uses until it is complete.
+fn partial_name(path: &Path) -> Result<CString> {
+    let name = path
+        .file_name()
+        .ok_or_else(|| problem("Missing file name"))?;
+
+    let mut partial = b".atlas-partial-".to_vec();
+    partial.extend_from_slice(name.as_bytes());
+
+    CString::new(partial).map_err(|_| problem("Invalid path"))
+}
+
+/// Remove what an interrupted write to `path` left, if anything.
+pub(super) fn discard_partial(path: &Path) -> Result<()> {
+    let folder = path
+        .parent()
+        .ok_or_else(|| problem("Missing parent directory"))?;
+    let name = partial_name(path)?;
+
+    // Only a folder with something to remove is checked.
+    let left = folder.join(std::ffi::OsStr::from_bytes(name.as_bytes()));
+    if fs::symlink_metadata(left).is_err() {
+        return Ok(());
+    }
+
+    let Some(parent) = directory(folder, false)? else {
+        return Ok(());
+    };
+    installation_parent(&parent)?;
+
+    match unlinkat(&parent, name.as_c_str(), UnlinkatFlags::NoRemoveDir) {
+        Ok(()) => {
+            parent.sync_all()?;
+            Ok(())
+        }
+        Err(Errno::ENOENT) => Ok(()),
+        Err(error) => Err(std::io::Error::from(error).into()),
+    }
+}
+
+/// Rename `from` to `to` inside `parent`; `exclusive` refuses an existing `to`.
 #[allow(unsafe_code)] // FFI: libc's renameatx_np has no safe wrapper.
+fn rename_at(parent: &fs::File, from: &CStr, to: &CStr, exclusive: bool) -> Result<()> {
+    // SAFETY: a live directory descriptor and two NUL-terminated single
+    // components; RENAME_EXCL makes the rename refuse an existing target.
+    let status = unsafe {
+        libc::renameatx_np(
+            parent.as_raw_fd(),
+            from.as_ptr(),
+            parent.as_raw_fd(),
+            to.as_ptr(),
+            if exclusive { libc::RENAME_EXCL } else { 0 },
+        )
+    };
+
+    if status != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+
+    Ok(())
+}
+
+/// Move a recorded prepared inode into place. No-replace is atomic for creates.
 pub(super) fn install_prepared(source: &Path, target: &Path, create_only: bool) -> Result<()> {
     let missing =
         || problem("Prepared replacement and its destination need a directory and a name");
@@ -566,23 +647,9 @@ pub(super) fn install_prepared(source: &Path, target: &Path, create_only: bool) 
     let source = component(source.file_name().ok_or_else(missing)?)?;
     let target = component(target.file_name().ok_or_else(missing)?)?;
 
-    // SAFETY: a live directory descriptor and two NUL-terminated single
-    // components; RENAME_EXCL makes the rename refuse an existing target.
-    let status = unsafe {
-        libc::renameatx_np(
-            parent.as_raw_fd(),
-            source.as_ptr(),
-            parent.as_raw_fd(),
-            target.as_ptr(),
-            if create_only { libc::RENAME_EXCL } else { 0 },
-        )
-    };
-
-    if status != 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
-
+    rename_at(&parent, &source, &target, create_only)?;
     parent.sync_all()?;
+
     Ok(())
 }
 
@@ -676,6 +743,35 @@ pub(super) fn installation_parent(directory: &fs::File) -> Result<()> {
         return Err(problem(
             "Installation parent must be owned by the current user and have no shared write access",
         ));
+    }
+
+    Ok(())
+}
+
+/// Refuse `target` unless every folder above it that already exists in
+/// `home` is one a copy can be put into, as apply requires.
+pub(super) fn installable_parents(home: &Path, target: &Path) -> Result<()> {
+    let parents = target
+        .parent()
+        .ok_or_else(|| problem("Missing target parent"))?;
+    let mut path = home.to_owned();
+
+    for part in parents.components() {
+        path.push(part);
+
+        let refused = || {
+            problem(format!(
+                "Cannot copy {}: ~/{} is not a folder only the helper can change",
+                target.display(),
+                path.strip_prefix(home).unwrap_or(&path).display(),
+            ))
+        };
+
+        let Some(folder) = directory(&path, false).map_err(|_| refused())? else {
+            return Ok(());
+        };
+
+        installation_parent(&folder).map_err(|_| refused())?;
     }
 
     Ok(())

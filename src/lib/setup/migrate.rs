@@ -133,12 +133,32 @@ pub fn archive_foreign(uid: u32, home: &Path) -> Result<bool> {
         return Ok(false);
     }
 
-    fs::rename(
-        &path,
-        path.with_extension(format!("{}.foreign.json", timestamp())),
-    )?;
+    archive_as(&path, "foreign")
+}
 
-    Ok(true)
+/// Archive helper `uid`'s setup record once uninstall has removed the job
+/// it describes, as `setup-<uid>.<time>.uninstalled.json`: kept as evidence,
+/// but no longer read as a setup (neither here nor by install.sh). Whether a
+/// record was archived.
+pub fn archive_uninstalled(uid: u32) -> Result<bool> {
+    archive_as(&log_path(uid)?, "uninstalled")
+}
+
+/// Move the record at `path` aside as `<name>.<time>.<why>.json`; false
+/// when there is none.
+fn archive_as(path: &Path, why: &str) -> Result<bool> {
+    let archive = path.with_extension(format!("{}.{why}.json", timestamp()));
+
+    match fs::rename(path, archive) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Whether any setup of helper `uid` is recorded, whatever its state.
+pub fn recorded(uid: u32) -> bool {
+    log_path(uid).is_ok_and(|path| fs::symlink_metadata(path).is_ok())
 }
 
 /// Whether helper `uid`'s setup is recorded as applied with nothing it
@@ -177,6 +197,15 @@ fn helper_argv(client: &Client, request: &Request) -> Result<Vec<String>> {
         "setup-helper".to_owned(),
         serde_json::to_string(request)?,
     ])
+}
+
+/// Whether a completed helper run is a refusal the worker says changed
+/// nothing, so its outcome is certain.
+fn refused_unchanged(reply: &Value) -> bool {
+    run_output(reply, 65536)
+        .ok()
+        .and_then(|output| serde_json::from_slice::<Value>(&output).ok())
+        .is_some_and(|value| value["ok"] == false && value["unchanged"] == true)
 }
 
 /// The worker's JSON result from a completed helper run.
@@ -352,10 +381,12 @@ impl Migration {
         Ok(())
     }
 
-    /// Run one typed request inside the helper as a recorded mutation. Only an
-    /// affirmative worker result settles it: an interrupted run, missing or
-    /// malformed output, or a worker error may have changed state part way,
-    /// so the generation stays pending for this migration to reconcile.
+    /// Run one typed request inside the helper as a recorded mutation. An
+    /// affirmative worker result settles it, and so does a refusal the
+    /// worker says changed nothing. An interrupted run, missing or
+    /// malformed output, or any other worker error may have changed state
+    /// part way, so the generation stays pending for this migration to
+    /// reconcile.
     async fn helper(&mut self, through: Endpoint, request: Request) -> Result<Value> {
         let argv = helper_argv(self.client(through), &request)?;
         let generation = self.begin()?;
@@ -366,9 +397,10 @@ impl Migration {
             .await
         {
             Ok(reply) if reply["timedOut"] == true || !reply["signal"].is_null() => {
-                Err(problem("The helper setup command was interrupted"))
+                Err(problem("The helper setup command was interrupted").uncertain())
             }
-            Ok(reply) => helper_result(&reply),
+            Ok(reply) if refused_unchanged(&reply) => helper_result(&reply),
+            Ok(reply) => helper_result(&reply).map_err(Error::uncertain),
             Err(error) if !error.uncertain => {
                 // Never dispatched or refused by the daemon: nothing ran.
                 self.settle(&generation)?;
@@ -377,8 +409,7 @@ impl Migration {
             Err(error) => Err(error),
         };
 
-        let value = outcome.map_err(Error::uncertain)?;
-        self.settle(&generation)?;
+        let value = self.conclude(&generation, outcome)?;
         self.note(&format!("{request:?}"))?;
 
         Ok(value)
@@ -941,6 +972,22 @@ pub async fn apply_fresh(config_path: &Path, ownership: &Ownership) -> Result<Va
     carry_out(path, log, true).await
 }
 
+/// How launchd and the helper's LaunchAgents folder show the managed job,
+/// read through `client`'s daemon (read-only, so no pending marker): the
+/// worker's report for [`LABEL`] (`loaded`, `plistKind`, `plistSha256`...).
+pub(crate) async fn managed_job(client: &Client) -> Result<Value> {
+    let request = Request::Inspect {
+        uid: client.config.helper_uid,
+        labels: vec![LABEL.to_owned()],
+    };
+
+    let reply = client
+        .run_pending(helper_argv(client, &request)?, Duration::from_secs(20))
+        .await?;
+
+    Ok(helper_result(&reply)?["jobs"][LABEL].clone())
+}
+
 /// Plan from the live configuration. Reads only; refuses unless the managed
 /// label has no artifacts and the current job is a verified plain plist.
 async fn plan(config_path: &Path) -> Result<Plan> {
@@ -1248,6 +1295,67 @@ mod tests {
             migration.old.config.socket_path,
             fs::canonicalize(dir.path()).unwrap().join("s.sock")
         );
+    }
+
+    /// Only a refusal the worker marks unchanged is certain; any other
+    /// failed result may have changed something.
+    #[test]
+    fn only_a_refusal_marked_unchanged_is_certain() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+
+        let reply = |text: &str| {
+            json!({"ok": true, "exitCode": 1, "events": [
+                {"event": "output", "data": STANDARD.encode(text)}
+            ]})
+        };
+
+        assert!(refused_unchanged(&reply(
+            r#"{"ok":false,"error":"no","unchanged":true}"#
+        )));
+        assert!(!refused_unchanged(&reply(r#"{"ok":false,"error":"no"}"#)));
+        assert!(!refused_unchanged(&reply(
+            r#"{"ok":true,"unchanged":true}"#
+        )));
+        assert!(!refused_unchanged(&reply("garbage")));
+        assert!(!refused_unchanged(&json!({"ok": true})));
+    }
+
+    /// Uninstall archives the record of the setup it removed; the archive
+    /// is never read as a setup.
+    #[test]
+    fn an_archived_record_is_no_longer_a_setup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("setup-502.json");
+        assert!(!archive_as(&path, "uninstalled").unwrap(), "nothing there");
+
+        let log = Log {
+            version: 1,
+            plan: plan("/c/atlas.toml".into(), "a"),
+            state: State::Applied,
+            pending: Vec::new(),
+            history: Vec::new(),
+        };
+        save_log(&path, &log).unwrap();
+        assert!(archive_as(&path, "uninstalled").unwrap());
+        assert_eq!(load_log(&path).unwrap(), None);
+
+        let names: Vec<String> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names.len(), 1);
+        let name = &names[0];
+        assert!(
+            name.starts_with("setup-502.") && name.ends_with(".uninstalled.json"),
+            "{name}"
+        );
+
+        // install.sh counts only setup-<digits>.json as a live record.
+        let uid = name
+            .strip_prefix("setup-")
+            .and_then(|rest| rest.strip_suffix(".json"))
+            .unwrap();
+        assert!(!uid.bytes().all(|byte| byte.is_ascii_digit()), "{uid}");
     }
 
     #[test]

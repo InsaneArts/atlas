@@ -54,7 +54,7 @@ enum Command {
     /// Copy selected settings and files into the helper.
     #[command(
         args_conflicts_with_subcommands = true,
-        long_about = "Copy selected settings and files into the helper.\n\nPreview a one-way copy into the helper. The TOML manifest lists [[files]] tables: source (absolute or relative to the manifest), target (an ASCII path inside the helper's home) and optional executable. Quit apps that write these files before applying. A different file already in the helper, or one changed there after Atlas copied it, is a conflict; a target inside, around or differing only in case from another, or from a file copied earlier, is refused. Rollback undoes it and deletes the copies Atlas kept for it. Accounts, sign-ins and running apps' databases are never copied."
+        long_about = "Copy selected settings and files into the helper.\n\nPreview a one-way copy into the helper. The TOML manifest lists [[files]] tables: source (absolute or relative to the manifest), target (an ASCII path inside the helper's home) and optional executable. Quit apps that write these files before applying. A different file already in the helper, or one changed there after Atlas copied it, is a conflict; a target inside, around or differing only in case from another, or from a file copied earlier, is refused. Rollback undoes it, leaves a file changed in the helper since as it is, and deletes the copies Atlas kept for it. Accounts, sign-ins and running apps' databases are never copied."
     )]
     Environment {
         /// TOML manifest listing only the files to provision.
@@ -583,7 +583,12 @@ enum EnvironmentCommand {
         apply: bool,
     },
     /// Run a command with the selected helper environment and helper tool paths.
+    ///
+    /// It is stopped after --timeout seconds (20 unless given, at most 600).
     Run {
+        /// Seconds before the command is stopped, 1 to 600.
+        #[arg(long, value_name = "SECONDS", default_value_t = atlas::client::RUN_TIMEOUT.as_secs(), value_parser = run_seconds)]
+        timeout: u64,
         /// The program and its arguments, after `--`.
         #[arg(last = true, required = true, value_name = "COMMAND")]
         argv: Vec<String>,
@@ -1172,9 +1177,18 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             allow_unnotarized,
             force,
             version,
-        } => update(&config, allow_unnotarized, force, version),
-        Command::UpdateFinish => update_finish(&config),
-        Command::Init => atlas::init::run(&config).await,
+        } => {
+            as_yourself("update")?;
+            update(&config, allow_unnotarized, force, version)
+        }
+        Command::UpdateFinish => {
+            as_yourself("update")?;
+            update_finish(&config).await
+        }
+        Command::Init => {
+            as_yourself("init")?;
+            atlas::init::run(&config).await
+        }
         Command::Onboarding { step } => {
             use atlas::onboarding;
 
@@ -1222,6 +1236,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             }
         }
         Command::Uninstall { keep_config, yes } => {
+            as_yourself("uninstall")?;
             atlas::uninstall::run(&config, keep_config, yes).await
         }
         Command::Menubar {
@@ -1268,8 +1283,10 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
                 Some(EnvironmentCommand::Profile { profile, apply }) => {
                     environment::profile::sync(&client, &profile, apply).await
                 }
-                Some(EnvironmentCommand::Run { argv }) => {
-                    environment::run(&client, argv).await.map(with_output)
+                Some(EnvironmentCommand::Run { argv, timeout }) => {
+                    environment::run(&client, argv, Duration::from_secs(timeout))
+                        .await
+                        .map(with_output)
                 }
                 Some(EnvironmentCommand::Apply { plan_id }) => {
                     environment::apply(&client, &plan_id).await
@@ -1590,6 +1607,23 @@ fn set_up(config: &std::path::Path) -> Result<Option<Config>> {
     }
 }
 
+/// Refuse `atlas <command>` run as root (with sudo): it would act for root's
+/// home, not the person's, and leave files only root can change.
+fn as_yourself(command: &str) -> Result<()> {
+    refuse_root(command, nix::unistd::geteuid().is_root())
+}
+
+fn refuse_root(command: &str, root: bool) -> Result<()> {
+    if root {
+        return Err(Error::new(
+            "usage",
+            format!("Run atlas {command} as yourself, not with sudo."),
+        ));
+    }
+
+    Ok(())
+}
+
 /// Update the app, then hand over to the new executable, so the steps that
 /// move the helper onto it are always the new version's own.
 fn update(
@@ -1600,6 +1634,9 @@ fn update(
 ) -> Result<Value> {
     let source = atlas::update::Source::from_env(version);
 
+    // One update at a time, from the download to the handover.
+    let exclusive = atlas::update::exclusive()?;
+
     // Nothing else may control the helper while its app is replaced: no
     // viewer or agent, and no action of unknown outcome. The new version's
     // steps take control again one by one.
@@ -1609,7 +1646,7 @@ fn update(
     };
 
     let spinner = Spinner::new("Checking for an update…");
-    let mut report = atlas::update::install(&source, allow_unnotarized, force)?;
+    let mut report = atlas::update::install(&source, allow_unnotarized, force, &exclusive)?;
 
     drop(exclusion);
 
@@ -1671,11 +1708,17 @@ fn update(
 /// Move the helper onto this (just installed) executable: the shared
 /// executable, the daemon, the input service, and (when a setup is
 /// recorded) setup's verification of the new signed build. Stops at the
-/// first failure and names it.
-fn update_finish(config: &std::path::Path) -> Result<Value> {
+/// first failure and names it. With no helper job yet (setup stopped before
+/// installing it), there is nothing to move: atlas init finishes setup.
+async fn update_finish(config: &std::path::Path) -> Result<Value> {
     let Some(loaded) = set_up(config)? else {
         return Ok(json!({"ok": true, "next": "atlas init"}));
     };
+
+    let daemon = Client::new(loaded.clone())?.status().await["daemon"]["pid"].is_number();
+    if !has_helper_job(atlas::setup::migrate::recorded(loaded.helper_uid), daemon) {
+        return Ok(json!({"ok": true, "completedSteps": [], "next": "atlas init"}));
+    }
 
     let executable = std::env::current_exe()?;
 
@@ -1715,6 +1758,12 @@ fn update_finish(config: &std::path::Path) -> Result<Value> {
 
     let agents = atlas::agents::refresh();
     Ok(json!({"ok": true, "completedSteps": done, "agents": agents}))
+}
+
+/// Whether the helper has a job to move onto a new version: a setup is
+/// recorded, or its daemon answers (setup stopped after installing it).
+fn has_helper_job(recorded: bool, daemon_answers: bool) -> bool {
+    recorded || daemon_answers
 }
 
 /// Every visible command with its full help, as Markdown: the agent
@@ -1895,17 +1944,49 @@ mod tests {
     }
 
     /// Only missing settings mean "not set up"; a broken file is an error.
-    #[test]
-    fn finishing_an_update_needs_settings_that_load() {
+    #[tokio::test]
+    async fn finishing_an_update_needs_settings_that_load() {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("config.toml");
-        let finished = update_finish(&missing).unwrap();
+        let finished = update_finish(&missing).await.unwrap();
         assert_eq!(finished, json!({"ok": true, "next": "atlas init"}));
 
         let broken = dir.path().join("broken.toml");
         std::fs::write(&broken, "helper_uid = [").unwrap();
-        let error = update_finish(&broken).unwrap_err();
+        let error = update_finish(&broken).await.unwrap_err();
         assert_eq!(error.code, "config-invalid", "{}", error.error);
+    }
+
+    /// Settings written before setup installed the helper's job leave no
+    /// daemon to move: the update finishes, and atlas init does the rest.
+    #[tokio::test]
+    async fn finishing_an_update_skips_a_helper_with_no_job() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = dir.path().join("config.toml");
+        std::fs::write(
+            &settings,
+            "helper_uid = 60001\nsocket_path = \"missing.sock\"\n\
+             identity_probe = \"atlas\"\ninput_socket = \"input.sock\"\n\
+             output_dir = \"runs\"\n",
+        )
+        .unwrap();
+
+        let finished = update_finish(&settings).await.unwrap();
+        assert_eq!(
+            finished,
+            json!({"ok": true, "completedSteps": [], "next": "atlas init"})
+        );
+
+        assert!(has_helper_job(true, false), "a recorded setup");
+        assert!(has_helper_job(false, true), "a daemon that answers");
+        assert!(!has_helper_job(false, false));
+    }
+
+    #[test]
+    fn setup_commands_refuse_to_run_as_root() {
+        let error = refuse_root("update", true).unwrap_err();
+        assert_eq!(error.error, "Run atlas update as yourself, not with sudo.");
+        assert!(refuse_root("init", false).is_ok());
     }
 
     #[test]
@@ -1974,5 +2055,34 @@ mod tests {
         assert!(parse(&["wait", "--app", "A", "--timeout", "86400"]).is_ok());
         assert!(parse(&["wait", "--app", "A", "--timeout", "86401"]).is_err());
         assert!(parse(&["wait", "--app", "A", "--timeout", "18446744073709551615"]).is_err());
+    }
+
+    #[test]
+    fn an_environment_command_takes_the_same_time_limit_as_run() {
+        let given = |args: &[&str]| match parse(args) {
+            Ok(Cli {
+                command:
+                    Some(Command::Environment {
+                        command: Some(EnvironmentCommand::Run { timeout, .. }),
+                        ..
+                    }),
+                ..
+            }) => Some(timeout),
+            _ => None,
+        };
+
+        assert_eq!(given(&["environment", "run", "--", "tool"]), Some(20));
+        assert_eq!(
+            given(&["environment", "run", "--timeout", "600", "--", "tool"]),
+            Some(600)
+        );
+        assert_eq!(
+            given(&["environment", "run", "--timeout", "0", "--", "tool"]),
+            None
+        );
+        assert_eq!(
+            given(&["environment", "run", "--timeout", "601", "--", "tool"]),
+            None
+        );
     }
 }

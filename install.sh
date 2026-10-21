@@ -14,7 +14,8 @@
 #
 # Environment:
 #   ATLAS_VERSION              release to install (default: latest)
-#   ATLAS_DOWNLOAD_BASE        another directory URL holding the zip and SHA256SUMS
+#   ATLAS_DOWNLOAD_BASE        another directory holding the zip and SHA256SUMS:
+#                              https://, file://, or http:// on this Mac only
 #   ATLAS_ALLOW_UNNOTARIZED=1  accept a signed but not notarized build
 #   ATLAS_NO_OPEN=1            do not open Atlas when installed
 set -eu
@@ -96,26 +97,48 @@ trap 'exit 143' TERM
 
 base=${ATLAS_DOWNLOAD_BASE:-$SITE/releases/${ATLAS_VERSION:-latest}}
 base=${base%/}
-# Over https (a local rehearsal may use http), following redirects only to
-# https, and never waiting forever.
+# Over https, from a file:// folder, or over plain http from this Mac only
+# (127.0.0.1 or localhost, as a local rehearsal serves releases); atlas
+# update accepts the same. Redirects go only to https, and nothing waits
+# forever.
 case $base in
-http://*) protocols='=http,https' ;;
-*) protocols='=https' ;;
+https://*) protocols='=https' ;;
+file://*) protocols='=file' ;;
+http://*)
+	authority=${base#http://}
+	authority=${authority%%/*}
+	case $authority in
+	127.0.0.1 | localhost) ;;
+	127.0.0.1:* | localhost:*)
+		case ${authority#*:} in
+		'' | *[!0-9]*) fail "plain http is only for this Mac: $base" ;;
+		esac
+		;;
+	*) fail "plain http is only for this Mac: $base" ;;
+	esac
+	protocols='=http'
+	;;
+*) fail "releases come over https or from a file:// folder, not $base" ;;
 esac
 fetch() { # url output
 	curl -fsSL --proto "$protocols" --proto-redir =https --connect-timeout 30 --max-time 900 -o "$2" "$1"
 }
 
-code=$(curl -sSL --proto "$protocols" --proto-redir =https --connect-timeout 30 --max-time 900 \
-	-o "$work/SHA256SUMS" -w '%{http_code}' "$base/SHA256SUMS" 2>/dev/null) || code=000
-case $code in
-200) ;;
-404)
-	[ -n "${ATLAS_DOWNLOAD_BASE:-}${ATLAS_VERSION:-}" ] || fail "Atlas has no public release yet. Check $SITE for news."
-	fail "there is no release at $base"
-	;;
-*) fail "could not reach $base (HTTP $code)" ;;
-esac
+if [ "$protocols" = '=file' ]; then
+	# A folder has no HTTP status: a missing SHA256SUMS means no release.
+	fetch "$base/SHA256SUMS" "$work/SHA256SUMS" 2>/dev/null || fail "there is no release at $base"
+else
+	code=$(curl -sSL --proto "$protocols" --proto-redir =https --connect-timeout 30 --max-time 900 \
+		-o "$work/SHA256SUMS" -w '%{http_code}' "$base/SHA256SUMS" 2>/dev/null) || code=000
+	case $code in
+	200) ;;
+	404)
+		[ -n "${ATLAS_DOWNLOAD_BASE:-}${ATLAS_VERSION:-}" ] || fail "Atlas has no public release yet. Check $SITE for news."
+		fail "there is no release at $base"
+		;;
+	*) fail "could not reach $base (HTTP $code)" ;;
+	esac
+fi
 name=$(awk 'NR == 1 { print $2 }' "$work/SHA256SUMS")
 case $name in
 Atlas-*-macos.zip) ;;
@@ -140,12 +163,15 @@ fi
 
 [ -w "$target" ] || fail "Atlas.app goes in /Applications; run this as an administrator"
 # Stage beside the destination, then swap by rename: never copy over the
-# executable a running helper daemon may be using.
-staged="$target/.Atlas.app.$$"
+# executable a running helper daemon may be using. The names are reserved
+# for this script (atlas uninstall clears them); nothing else beside the app
+# is touched.
+staged="$target/.Atlas.app.install-$$"
 rm -rf "$staged"
 ditto "$app" "$staged"
 if [ -d "$dest" ]; then
-	previous="$target/.Atlas.app.previous.$$"
+	previous="$target/.Atlas.app.install-previous-$$"
+	rm -rf "$previous"
 	mv "$dest" "$previous"
 fi
 mv "$staged" "$dest"

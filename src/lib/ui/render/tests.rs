@@ -525,6 +525,50 @@ fn environment_steps_say_what_changes_and_what_comes_next() {
 }
 
 #[test]
+fn an_undo_names_the_files_it_keeps_and_a_stuck_copy_says_to_undo_it() {
+    let id = "a".repeat(48);
+    let undone = show(
+        View::Environment,
+        json!({"ok": true, "rolledBack": true, "planId": id, "files": [],
+               "completedTargets": ["b"], "keptTargets": ["a"]}),
+    );
+    assert_eq!(
+        undone.out,
+        "✓ Undone in the helper\n  ~/b\nKept 1 file the helper changed since the copy:\n  ~/a"
+    );
+
+    let preview = show(
+        View::Environment,
+        json!({"ok": true, "preview": true, "planId": id, "files": [],
+               "pendingTargets": [], "keptTargets": ["a"]}),
+    );
+    assert!(
+        preview
+            .out
+            .starts_with("✓ No files change back in the helper\nIt keeps 1 file")
+    );
+    assert!(
+        preview
+            .out
+            .ends_with(&format!("To undo: atlas environment rollback {id} --apply"))
+    );
+
+    let stuck = show(
+        View::Environment,
+        json!({"ok": false, "error": "a changed", "phase": "applying", "resumeRequired": true,
+               "rollbackRequired": true, "planId": id, "files": []}),
+    );
+    assert!(
+        stuck
+            .err
+            .starts_with("✗ Copying stopped part way: a changed")
+    );
+    assert!(stuck.err.ends_with(&format!(
+        "To finish: atlas environment rollback {id} --apply"
+    )));
+}
+
+#[test]
 fn closing_everything_names_what_it_quit() {
     let some = show(
         View::Close,

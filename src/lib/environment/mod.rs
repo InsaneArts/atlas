@@ -27,6 +27,7 @@ use std::{
     fs,
     os::unix::fs::{DirBuilderExt, MetadataExt},
     path::{Path, PathBuf},
+    time::Duration,
 };
 pub use worker::worker;
 
@@ -351,17 +352,19 @@ fn discard(stage: &Path) {
 
 /// How long a frozen plan is kept before the helper is asked whether it is
 /// still needed.
-const UNUSED: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 60 * 60);
+const UNUSED: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 /// Remove frozen plans older than UNUSED that the helper never started (it
-/// answers that nothing was copied with their ID). Plans applied or undone
-/// completely were removed when that finished; one with a retained request
-/// (a step whose outcome is unknown), one the helper started, or one it
-/// cannot answer for, stays.
+/// answers that nothing was copied with their ID), and command folders
+/// older than UNUSED. Plans applied or undone completely were removed when
+/// that finished; one with a retained request (a step whose outcome is
+/// unknown), one the helper started, or one it cannot answer for, stays.
 async fn prune(client: &Client, helper: &str) {
     let Some(shared) = client.config.identity_probe.parent() else {
         return;
     };
+
+    prune_runs(shared);
 
     for (id, stage) in stale(shared, UNUSED) {
         // Everything below happens under the plan's own lock; a plan in use
@@ -396,13 +399,36 @@ async fn prune(client: &Client, helper: &str) {
     }
 }
 
+/// Remove the folders of commands run older than UNUSED. A command kept
+/// its folder only when it was stopped or its reply was lost; no command
+/// runs longer than ten minutes, so a week-old folder is no longer read.
+fn prune_runs(shared: &Path) {
+    for stage in stale_runs(shared, UNUSED) {
+        discard(&stage);
+    }
+}
+
 /// The frozen plans beside the shared command older than `age`, with their IDs.
-fn stale(shared: &Path, age: std::time::Duration) -> Vec<(String, PathBuf)> {
+fn stale(shared: &Path, age: Duration) -> Vec<(String, PathBuf)> {
+    older(shared, "environment-plan-", age)
+}
+
+/// The command folders beside the shared command older than `age`.
+fn stale_runs(shared: &Path, age: Duration) -> Vec<PathBuf> {
+    older(shared, "environment-run-", age)
+        .into_iter()
+        .map(|(_, stage)| stage)
+        .collect()
+}
+
+/// Atlas's folders beside the shared command named with `prefix` and older
+/// than `age`, with their IDs.
+fn older(shared: &Path, prefix: &str, age: Duration) -> Vec<(String, PathBuf)> {
     leftovers(shared)
         .into_iter()
         .filter_map(|stage| {
             let name = stage.file_name()?.to_string_lossy().into_owned();
-            let id = name.strip_prefix("environment-plan-")?.to_owned();
+            let id = name.strip_prefix(prefix)?.to_owned();
             let elapsed = fs::symlink_metadata(&stage)
                 .ok()?
                 .modified()
@@ -426,17 +452,24 @@ fn prunable(stage: &Path, id: &str, uid: u32) -> bool {
     ours && !requests(stage)
 }
 
-/// Execute a command with the installed helper-local profile. The reply is the
-/// actual process result, including its output, status, signal and timeout.
-pub async fn run(client: &Client, argv: Vec<String>) -> Result<Value> {
+/// Execute a command with the installed helper-local profile, stopping it
+/// after `timeout`. The reply is the actual process result, including its
+/// output, status, signal and timeout.
+pub async fn run(client: &Client, argv: Vec<String>, timeout: Duration) -> Result<Value> {
     runner::validate_argv(&argv)?;
 
     let id = crate::control::token();
     let stage = stage_path(client, &id)?.with_file_name(format!("environment-run-{id}"));
     let helper = helper_name(client.config.helper_uid)?;
+
+    if let Some(shared) = stage.parent() {
+        prune_runs(shared);
+    }
+
     create_stage(&stage, &helper)?;
 
-    let mut result = dispatch(client, &helper, &stage, Request::Run { argv }).await;
+    let request = Request::Run { argv };
+    let mut result = dispatch_within(client, &helper, &stage, request, timeout).await;
     if delivery_uncertain(&result) {
         match &mut result {
             Ok(value) => value["retainedRequest"] = json!(stage),
@@ -571,10 +604,22 @@ fn lock_stage(stage: &Path) -> Result<fs::File> {
     Ok(lock)
 }
 
+/// [`dispatch_within`] the usual time a helper command is given.
+async fn dispatch(client: &Client, helper: &str, stage: &Path, request: Request) -> Result<Value> {
+    dispatch_within(client, helper, stage, request, crate::client::RUN_TIMEOUT).await
+}
+
 /// Each invocation gets immutable arguments and a fresh session pin. Mutating
 /// requests and their binary remain available whenever the reply is uncertain;
-/// a request that was never sent leaves nothing behind.
-async fn dispatch(client: &Client, helper: &str, stage: &Path, request: Request) -> Result<Value> {
+/// a request that was never sent leaves nothing behind. The worker is
+/// stopped after `timeout`.
+async fn dispatch_within(
+    client: &Client,
+    helper: &str,
+    stage: &Path,
+    request: Request,
+    timeout: Duration,
+) -> Result<Value> {
     let mutating = matches!(
         &request,
         Request::Apply { .. } | Request::Rollback { apply: true, .. } | Request::Run { .. }
@@ -598,7 +643,7 @@ async fn dispatch(client: &Client, helper: &str, stage: &Path, request: Request)
         }
     };
 
-    let result = match client.run(argv).await {
+    let result = match client.run_within(argv, timeout).await {
         Ok(reply) if raw_output => refused(reply, &name),
         Ok(reply) => decode_reply(&reply, mutating, &name),
         Err(error) => Err(error),
@@ -652,12 +697,6 @@ fn stage_request(
     Ok(argv)
 }
 
-/// Whether the worker of `request` refused because the helper has no
-/// transaction with that ID: nothing was started, so nothing is to resume.
-fn never_started(value: &Value, request: &str) -> bool {
-    value["ok"] == false && value["refusal"] == request && value["error"] == worker::MISSING
-}
-
 fn decode_reply(reply: &Value, mutating: bool, request: &str) -> Result<Value> {
     let invalid = |message: &str| {
         let error = problem(message);
@@ -683,8 +722,12 @@ fn decode_reply(reply: &Value, mutating: bool, request: &str) -> Result<Value> {
         return Err(invalid("Environment worker returned an invalid result"));
     }
 
-    let missing = reply["exitCode"] == WORKER_REFUSED && never_started(&value, request);
-    if mutating && value["ok"] == false && !missing {
+    // The worker of `request` refuses before it changes anything (another
+    // operation is running, the plan changed, nothing was copied with that
+    // ID): there is nothing to resume. Any other failed mutation may have
+    // stopped part way.
+    let refused = reply["exitCode"] == WORKER_REFUSED && value["refusal"] == request;
+    if mutating && value["ok"] == false && !refused {
         value["resumeRequired"] = json!(true);
     }
 

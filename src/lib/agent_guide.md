@@ -176,7 +176,8 @@ never ask the person to do it:
 4. `atlas environment apply PLAN_ID` copies exactly what was previewed, as a
    one-time snapshot. Keep every `planId` you apply. If it stops partway
    (`resumeRequired`, with `pendingTargets`), run the same apply again to
-   finish, or roll it back.
+   finish, or roll it back. With `rollbackRequired`, a file changed in the
+   helper meanwhile, so only rolling back finishes.
 
 `atlas environment discover`, `profile` and `environment run` inspect or
 freeze a selected set of tools and variables (see commands.md); a test seldom
@@ -195,13 +196,14 @@ you found it:
    windows you opened with `key cmd+w`.
 2. `atlas environment rollback PLAN_ID --apply` for every copy you applied,
    newest first, and check each reply says `rolledBack`. Files you added are
-   removed and replaced ones come back. If it reports a file changed in the
-   helper, leave it and tell the person. A file a stopped copy never put in
-   place stays as the helper has it. Without `--apply` it only previews:
-   `pendingTargets` lists what would be undone, and each file's `operation`
-   still names what the copy did (`create` is undone by removing the file,
-   the others by putting the earlier file back). Folders the copy made go
-   too, unless something else now uses them (`retainedDirectories`).
+   removed and replaced ones come back. A file changed in the helper since
+   the copy stays as it is (`keptTargets`): tell the person. A file a
+   stopped copy never put in place stays as the helper has it. Without
+   `--apply` it only previews: `pendingTargets` lists what would be undone,
+   and each file's `operation` still names what the copy did (`create` is
+   undone by removing the file, the others by putting the earlier file
+   back). Folders the copy made go too, unless something else now uses them
+   (`retainedDirectories`).
 3. Delete files you made with `atlas run -- /bin/rm FILE...`, one command
    on its own rather than an `rm` inside `sh -c` or beside other commands,
    so a reviewer of your commands can see what goes.

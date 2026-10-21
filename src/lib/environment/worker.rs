@@ -81,6 +81,7 @@ pub(super) fn preview(
     for payload in files {
         guard()?;
         separate_from_ledger(&ledger, &payload.target)?;
+        installable_parents(home, &payload.target)?;
 
         let bytes = payload_bytes(&payload)?;
         let current = snapshot(&destination(home, &payload.target)?)?;
@@ -275,7 +276,18 @@ pub(super) fn apply_plan(
         Ok(())
     })();
 
-    Ok(report(&transaction, result, false))
+    // A file that changed in the helper some other way can never be copied
+    // by this plan: only undoing it finishes.
+    let stuck = result.is_err()
+        && (0..plan.files.len())
+            .any(|index| matches!(install_state(home, &transaction, index, &ledger), Ok(None)));
+
+    let mut value = report(&transaction, result, false);
+    if stuck {
+        value["rollbackRequired"] = json!(true);
+    }
+
+    Ok(value)
 }
 
 /// Refuse a target that differs only by case from a file Atlas copied
@@ -299,6 +311,7 @@ fn separate_from_ledger(ledger: &Ledger, target: &Path) -> Result<()> {
 fn preconditions(home: &Path, plan: &Plan, ledger: &Ledger) -> Result<()> {
     for file in &plan.files {
         separate_from_ledger(ledger, &file.payload.target)?;
+        installable_parents(home, &file.payload.target)?;
 
         if fingerprint(&destination(home, &file.payload.target)?)? != file.before
             || ledger.files.get(&file.payload.target) != file.previous.as_ref()
@@ -421,23 +434,48 @@ fn apply_state(
         return Ok(installed);
     }
 
-    if never_installed(home, transaction, index, ledger)? {
-        return Err(problem(format!(
-            "{} changed in the helper before this plan copied it; it was kept. \
-             To finish, run atlas environment rollback {} --apply",
-            transaction.plan.files[index].payload.target.display(),
-            transaction.plan.id,
-        )));
-    }
+    let file = &transaction.plan.files[index];
+    let when = if never_installed(home, transaction, index, ledger)? {
+        "before"
+    } else if undoable(transaction, index, ledger) {
+        "after"
+    } else {
+        return Err(problem(
+            "Destination or ownership changed during this transaction; it was preserved",
+        ));
+    };
 
-    Err(problem(
-        "Destination or ownership changed during this transaction; it was preserved",
-    ))
+    Err(problem(format!(
+        "{} changed in the helper {when} this plan copied it; it was kept. \
+         To finish, run atlas environment rollback {} --apply",
+        file.payload.target.display(),
+        transaction.plan.id,
+    )))
+}
+
+/// Whether the ledger names this transaction's own copy of the file.
+fn recorded(transaction: &Transaction, index: usize, ledger: &Ledger) -> bool {
+    matches!(
+        ledger.files.get(&transaction.plan.files[index].payload.target),
+        Some(Entry::Managed { generation, .. }) if generation == &transaction.plan.id
+    )
+}
+
+/// Whether undoing this transaction may still decide the file: the ledger
+/// names this transaction's copy, or still the entry it started from. One
+/// another plan copied since is that plan's to undo first.
+fn undoable(transaction: &Transaction, index: usize, ledger: &Ledger) -> bool {
+    let file = &transaction.plan.files[index];
+
+    recorded(transaction, index, ledger)
+        || ledger.files.get(&file.payload.target) == file.previous.as_ref()
 }
 
 /// Whether this transaction provably never put its file in place: it was
-/// never acknowledged, its ledger entry is the one it started from, and
-/// either nothing was prepared or the prepared copy still waits beside it.
+/// never acknowledged, the ledger does not name its copy, and either
+/// nothing was prepared or the prepared copy still waits beside it. A plan
+/// stopped before it was activated may find another plan copied the same
+/// file since; that file is the other plan's, and this one never touched it.
 fn never_installed(
     home: &Path,
     transaction: &Transaction,
@@ -446,7 +484,7 @@ fn never_installed(
 ) -> Result<bool> {
     let file = &transaction.plan.files[index];
     let progress = &transaction.progress[index];
-    if progress.applied || ledger.files.get(&file.payload.target) != file.previous.as_ref() {
+    if progress.applied || recorded(transaction, index, ledger) {
         return Ok(false);
     }
 
@@ -490,6 +528,7 @@ fn apply_file(
                 &bytes,
                 desired_mode(&file.payload),
                 file.before.as_ref(),
+                file.operation == Operation::Update,
             )?;
             transaction.progress[index].prepared = Some(prepared);
             store.save(transaction)?;
@@ -563,11 +602,15 @@ fn candidate(path: &Path, id: &str, index: usize, rollback: bool) -> PathBuf {
         ))
 }
 
+/// Write `bytes` beside their destination with the group and attributes of
+/// the file they replace. Contents that are new to the destination
+/// (`new_contents`) do not take over its download mark.
 fn prepare_inode(
     path: &Path,
     bytes: &[u8],
     mode: u32,
     previous: Option<&Fingerprint>,
+    new_contents: bool,
 ) -> Result<Fingerprint> {
     if fingerprint(path)?.is_none() {
         atomic_install(path, bytes, mode, true)?;
@@ -579,8 +622,13 @@ fn prepare_inode(
     }
 
     if let Some(previous) = previous {
+        let mut attributes = previous.xattrs.clone();
+        if new_contents {
+            attributes.remove(QUARANTINE);
+        }
+
         set_group(path, previous.gid)?;
-        restore_attributes(path, &previous.xattrs)?;
+        restore_attributes(path, &attributes)?;
     }
 
     fingerprint(path)?.ok_or_else(|| problem("Prepared file disappeared"))
@@ -651,9 +699,11 @@ pub(super) fn rollback(
         return Ok(report(&transaction, Ok(()), true));
     }
 
+    let mut states = Vec::new();
     let result = (|| -> Result<()> {
         for index in 0..transaction.plan.files.len() {
             let status = rollback_state(home, &transaction, index, &ledger)?;
+            states.push(status);
             let file = &transaction.plan.files[index];
             if status == RollbackState::Installed
                 && file.operation != Operation::Unchanged
@@ -703,15 +753,43 @@ pub(super) fn rollback(
     let mut value = report(&transaction, result, true);
     value["preview"] = json!(!apply);
 
+    // A preview names only the files undoing would put back or remove, and
+    // those it would leave as the helper changed them.
+    if !apply && states.len() == transaction.plan.files.len() {
+        let targets = |wanted: &dyn Fn(&PlannedFile, RollbackState) -> bool| {
+            transaction
+                .plan
+                .files
+                .iter()
+                .zip(&states)
+                .filter(|(file, state)| wanted(file, **state))
+                .map(|(file, _)| &file.payload.target)
+                .collect::<Vec<_>>()
+        };
+
+        value["pendingTargets"] = json!(targets(&|file, state| {
+            state == RollbackState::Installed && file.operation != Operation::Unchanged
+        }));
+        value["keptTargets"] = json!(targets(&|_, state| state == RollbackState::Changed));
+    }
+
     Ok(value)
 }
 
-#[derive(PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 enum RollbackState {
+    /// Undone already: put back, left untouched or kept.
+    Done,
+    /// Never put in place by this transaction.
     Untouched,
+    /// As it was before this transaction.
     Before,
+    /// This transaction's copy, unchanged.
     Installed,
+    /// The earlier file is back, not yet recorded.
     Restored,
+    /// Changed in the helper since this transaction copied it.
+    Changed,
 }
 
 fn previous_entry(file: &PlannedFile, restored: Option<&Fingerprint>) -> Option<Entry> {
@@ -730,16 +808,23 @@ fn rollback_state(
     index: usize,
     ledger: &Ledger,
 ) -> Result<RollbackState> {
+    let file = &transaction.plan.files[index];
+    let progress = &transaction.progress[index];
+
+    // What happens to the file once it is undone is the helper's business.
+    if progress.restored {
+        return Ok(RollbackState::Done);
+    }
+
     // A file this transaction never put in place is the helper's, whatever
     // it holds now; rollback leaves it alone.
     if never_installed(home, transaction, index, ledger)? {
         return Ok(RollbackState::Untouched);
     }
 
-    let file = &transaction.plan.files[index];
-    let progress = &transaction.progress[index];
     let current = fingerprint(&destination(home, &file.payload.target)?)?;
     let entry = ledger.files.get(&file.payload.target);
+    let ours = recorded(transaction, index, ledger);
 
     let restored = if file.operation == Operation::Unchanged {
         file.before.as_ref()
@@ -748,21 +833,11 @@ fn rollback_state(
     };
 
     let previous = previous_entry(file, restored);
-    if progress.reverting
-        && current.as_ref() == restored
-        && (entry == previous.as_ref()
-            || matches!(entry, Some(Entry::Managed { generation, .. }) if generation == &transaction.plan.id))
-    {
+    if progress.reverting && current.as_ref() == restored && (entry == previous.as_ref() || ours) {
         return Ok(RollbackState::Restored);
     }
 
-    if progress.restored {
-        return Err(problem(
-            "A rolled-back destination changed; it was preserved",
-        ));
-    }
-
-    if current == file.before && entry == file.previous.as_ref() {
+    if current == file.before && (entry == file.previous.as_ref() || ours) {
         return Ok(RollbackState::Before);
     }
 
@@ -770,9 +845,14 @@ fn rollback_state(
         return Ok(RollbackState::Installed);
     }
 
-    Err(problem(
-        "Rollback requires this transaction's latest unchanged file generation",
-    ))
+    if undoable(transaction, index, ledger) {
+        return Ok(RollbackState::Changed);
+    }
+
+    Err(problem(format!(
+        "{} was copied again by a later plan; roll that back first",
+        file.payload.target.display()
+    )))
 }
 
 fn rollback_file(
@@ -808,8 +888,15 @@ fn rollback_file(
         }
     }
 
-    if status == RollbackState::Untouched {
-        return release_untouched(&path, transaction, index, store, guard);
+    match status {
+        RollbackState::Done => return discard_candidates(&path, transaction, index, guard),
+        RollbackState::Untouched => {
+            return release_untouched(&path, transaction, index, store, guard);
+        }
+        RollbackState::Changed => {
+            return keep_changed(&path, transaction, index, store, ledger, guard);
+        }
+        _ => {}
     }
 
     if status == RollbackState::Installed && file.operation != Operation::Unchanged {
@@ -828,6 +915,7 @@ fn rollback_file(
                 &bytes,
                 before.mode,
                 Some(before),
+                false,
             )?);
             store.save(transaction)?;
         }
@@ -881,8 +969,53 @@ fn rollback_file(
     transaction.progress[index].restored = true;
     store.save(transaction)?;
 
+    discard_candidates(&path, transaction, index, guard)
+}
+
+/// Leave a file the helper changed since this transaction copied it as the
+/// helper has it. The ledger goes back to the entry the transaction started
+/// from, so the file is no longer this transaction's copy, and only the
+/// transaction's own waiting copies go.
+fn keep_changed(
+    path: &Path,
+    transaction: &mut Transaction,
+    index: usize,
+    store: &Store,
+    ledger: &mut Ledger,
+    guard: &impl Fn() -> Result<()>,
+) -> Result<()> {
+    let file = &transaction.plan.files[index];
+    match &file.previous {
+        Some(previous) => ledger
+            .files
+            .insert(file.payload.target.clone(), previous.clone()),
+        None => ledger.files.remove(&file.payload.target),
+    };
+
+    guard()?;
+    ledger.version = 1;
+    store.save_ledger(ledger)?;
+
+    transaction.progress[index].kept = true;
+    transaction.progress[index].restored = true;
+    store.save(transaction)?;
+
+    discard_candidates(path, transaction, index, guard)
+}
+
+/// Remove this transaction's waiting copies of one file, and anything an
+/// interrupted write of them left. A copy the transaction did not record
+/// is kept for inspection.
+fn discard_candidates(
+    path: &Path,
+    transaction: &Transaction,
+    index: usize,
+    guard: &impl Fn() -> Result<()>,
+) -> Result<()> {
     for restore in [false, true] {
-        let candidate = candidate(&path, &transaction.plan.id, index, restore);
+        let candidate = candidate(path, &transaction.plan.id, index, restore);
+        discard_partial(&candidate)?;
+
         if let Some(current) = fingerprint(&candidate)? {
             let expected = if restore {
                 &transaction.progress[index].restore
@@ -916,6 +1049,8 @@ fn release_untouched(
     guard: &impl Fn() -> Result<()>,
 ) -> Result<()> {
     let waiting = candidate(path, &transaction.plan.id, index, false);
+    discard_partial(&waiting)?;
+
     let current = fingerprint(&waiting)?;
     if current.is_some() && current != transaction.progress[index].prepared {
         return Err(problem(
@@ -990,6 +1125,9 @@ fn report(transaction: &Transaction, result: Result<()>, rollback: bool) -> Valu
                 progress.applied
             }
         });
+    let (kept, completed): (Vec<_>, Vec<_>) = completed
+        .into_iter()
+        .partition(|(_, progress)| rollback && progress.kept);
 
     fn targets<'a>(files: Vec<(&'a PlannedFile, &'a Progress)>) -> Vec<&'a PathBuf> {
         files
@@ -998,7 +1136,7 @@ fn report(transaction: &Transaction, result: Result<()>, rollback: bool) -> Valu
             .collect()
     }
 
-    let (completed, pending) = (targets(completed), targets(pending));
+    let (completed, pending, kept) = (targets(completed), targets(pending), targets(kept));
     let mut value = json!({
         "ok": result.is_ok(),
         "planId": transaction.plan.id,
@@ -1011,6 +1149,10 @@ fn report(transaction: &Transaction, result: Result<()>, rollback: bool) -> Valu
         "completedTargets": completed,
         "pendingTargets": pending,
     });
+
+    if rollback {
+        value["keptTargets"] = json!(kept);
+    }
 
     if let Err(error) = result {
         value["error"] = json!(error.error);

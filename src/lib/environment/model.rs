@@ -74,7 +74,7 @@ pub(super) struct Node {
     pub inode: u64,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Fingerprint {
     pub node: Node,
@@ -87,6 +87,34 @@ pub(super) struct Fingerprint {
     pub acl: bool,
     pub xattrs: BTreeMap<String, String>,
     pub flags: u32,
+}
+
+/// Two fingerprints of one file match whatever macOS's own attributes say:
+/// the system sets those itself, so they are kept but never compared.
+impl PartialEq for Fingerprint {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            node,
+            sha256,
+            size,
+            mode,
+            uid,
+            gid,
+            acl,
+            xattrs,
+            flags,
+        } = self;
+
+        *node == other.node
+            && *sha256 == other.sha256
+            && *size == other.size
+            && *mode == other.mode
+            && *uid == other.uid
+            && *gid == other.gid
+            && *acl == other.acl
+            && owned_attributes(xattrs).eq(owned_attributes(&other.xattrs))
+            && *flags == other.flags
+    }
 }
 
 impl Fingerprint {
@@ -161,6 +189,10 @@ pub(super) struct Progress {
     pub restore: Option<Fingerprint>,
     pub reverting: bool,
     pub restored: bool,
+    /// Undoing left the file as the helper changed it. Written only when
+    /// set, so records stay readable by earlier versions.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub kept: bool,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]

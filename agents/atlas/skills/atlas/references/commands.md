@@ -776,7 +776,7 @@ Examples:
 ```text
 Copy selected settings and files into the helper.
 
-Preview a one-way copy into the helper. The TOML manifest lists [[files]] tables: source (absolute or relative to the manifest), target (an ASCII path inside the helper's home) and optional executable. Quit apps that write these files before applying. A different file already in the helper, or one changed there after Atlas copied it, is a conflict; a target inside, around or differing only in case from another, or from a file copied earlier, is refused. Rollback undoes it and deletes the copies Atlas kept for it. Accounts, sign-ins and running apps' databases are never copied.
+Preview a one-way copy into the helper. The TOML manifest lists [[files]] tables: source (absolute or relative to the manifest), target (an ASCII path inside the helper's home) and optional executable. Quit apps that write these files before applying. A different file already in the helper, or one changed there after Atlas copied it, is a conflict; a target inside, around or differing only in case from another, or from a file copied earlier, is refused. Rollback undoes it, leaves a file changed in the helper since as it is, and deletes the copies Atlas kept for it. Accounts, sign-ins and running apps' databases are never copied.
 
 Usage: atlas environment [OPTIONS] [MANIFEST]
        atlas environment <COMMAND>
@@ -837,7 +837,9 @@ Global options:
 ## atlas environment run
 
 ```text
-Run a command with the selected helper environment and helper tool paths
+Run a command with the selected helper environment and helper tool paths.
+
+It is stopped after --timeout seconds (20 unless given, at most 600).
 
 Usage: atlas environment run [OPTIONS] -- <COMMAND>...
 
@@ -846,8 +848,13 @@ Arguments:
           The program and its arguments, after `--`
 
 Options:
+      --timeout <SECONDS>
+          Seconds before the command is stopped, 1 to 600
+          
+          [default: 20]
+
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 
 Global options:
       --json
