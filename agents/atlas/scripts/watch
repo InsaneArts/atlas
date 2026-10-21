@@ -1,0 +1,4 @@
+#!/bin/sh
+# Atlas's status as it changes, with the helper's screen kept in a private
+# folder of this run's own, for the Claude Code pane.
+exec "$(dirname "$0")/atlas" watch --frames "${TMPDIR:-/tmp}/atlas-frames-$$"

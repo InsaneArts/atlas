@@ -1,0 +1,9 @@
+#!/bin/sh
+# Only the person resumes agents they stopped, and only through Atlas's own
+# views: a shell command that would act as the person (ATLAS_ACTOR) is
+# refused before it runs.
+if grep -q 'ATLAS_ACTOR'; then
+	echo "Only the person resumes agents or acts as the person in Atlas. Ask them to use the Atlas menu bar." >&2
+	exit 2
+fi
+exit 0

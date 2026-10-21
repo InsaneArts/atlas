@@ -1,0 +1,10 @@
+#!/bin/sh
+# Run the installed Atlas with these arguments: the plugin's MCP server and
+# its Claude Code module start Atlas through here.
+atlas=$(command -v atlas 2>/dev/null)
+[ -n "$atlas" ] || [ ! -x "$HOME/.local/bin/atlas" ] || atlas="$HOME/.local/bin/atlas"
+if [ -z "$atlas" ]; then
+	echo "Atlas is not installed." >&2
+	exit 127
+fi
+exec "$atlas" "$@"

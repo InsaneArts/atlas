@@ -28,3 +28,7 @@ __pycache__/
 
 # SwiftPM build output
 .build/
+
+# Written by Claude Code's plugin tools beside the plugin.
+/agents/atlas/tsconfig.json
+/agents/atlas/.claude-plugin/types/
