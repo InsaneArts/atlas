@@ -17,6 +17,11 @@ package enum OnboardingLayout {
   static let listColumn: CGFloat = 460
   /// 480: the widest column: the account choice and the helper's allow screen.
   static let wideColumn: CGFloat = 480
+  /// 3: the most account rows the choice shows whole; with more, they scroll.
+  static let accountRowsInView = 3
+  /// 170: the height scrolling account rows take: two rows and most of a third, so the cut row shows there are more,
+  /// with room left for the work note and the footer.
+  static let accountListHeight: CGFloat = 170
   /// 36: above a screen's content, clear of the title bar.
   static let contentTop: CGFloat = 36
   /// 76: the footer's height.

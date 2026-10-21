@@ -14,11 +14,22 @@ struct WordsTests {
     #expect(Words.ago(seconds) == words)
   }
 
-  @Test("an operation reads as what it did, never its payload")
+  @Test("an operation reads as what it did, or what could not be done, never its payload or its name")
   func operations() {
     #expect(Words.describe(.init(operation: "run", ok: true)) == "ran a command")
-    #expect(Words.describe(.init(operation: "input", ok: false)) == "input failed")
+    #expect(Words.describe(.init(operation: "run", ok: false)) == "couldn't run a command")
+    #expect(Words.describe(.init(operation: "input", ok: false, actionCount: 2)) == "couldn't send 2 actions")
     #expect(Words.describe(.init(operation: "input", ok: true, actionCount: 1)) == "sent 1 action")
+    #expect(Words.describe(.init(operation: "logout", ok: false)) == "couldn't log out the helper")
+    #expect(Words.describe(.init(operation: "newop", ok: false)) == "couldn't finish an action")
+  }
+
+  @Test("a command's message shows as a sentence, with one full stop")
+  func sentence() {
+    #expect(Words.sentence("Atlas.app must be in Applications") == "Atlas.app must be in Applications.")
+    #expect(Words.sentence("Done.") == "Done.")
+    #expect(Words.sentence("Waiting…") == "Waiting…")
+    #expect(Words.sentence("") == "")
   }
 
   @Test("a size reads as width × height, or nothing when unknown")

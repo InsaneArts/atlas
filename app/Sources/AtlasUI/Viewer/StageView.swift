@@ -30,9 +30,10 @@ struct StageView<Input: View>: View {
       VStack(spacing: Spacing.m) {
         chip
         if let notice = state.notice {
-          FloatingChip {
+          FloatingChip(lines: ViewerLayout.noticeLines) {
             Text(notice)
           }
+          .frame(maxWidth: ViewerLayout.noticeWidth)
           .transition(.opacity)
         }
         Spacer()

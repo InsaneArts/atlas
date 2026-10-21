@@ -11,7 +11,7 @@ struct PermissionsScreen: View {
   var body: some View {
     ScreenColumn(width: OnboardingLayout.listColumn) {
       Eyebrow(text: "Permissions")
-      Headline(title: "Let Atlas see and use", tail: "this screen.")
+      Headline(title: OnboardingScreen.permissionsTitle, tail: OnboardingScreen.permissionsTail)
       Lede(
         text:
           "macOS asks you to allow Atlas twice, in this account only. Your own account is never touched."

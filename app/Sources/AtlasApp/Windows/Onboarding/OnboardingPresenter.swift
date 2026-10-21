@@ -61,7 +61,7 @@ enum OnboardingPresenter {
   }
 
   /// The footer's buttons and dots. Back shows on the account choice (before a helper is set up), on the form and on
-  /// Done; the next step's button waits while a command runs, and each also for its own condition: an account
+  /// Done, and Choose Another Account in its place on the switch while the helper asked never answered; the next step's button waits while a command runs, and each also for its own condition: an account
   /// picked, a form that can be sent, a passed check, the agents read. The finishing check's Continue is the one
   /// that Return does not press.
   ///
@@ -78,7 +78,7 @@ enum OnboardingPresenter {
         OnboardingFooterAction(
           title: .continue,
           event: .continueChoice,
-          isEnabled: snapshot.picked != nil && idle,
+          isEnabled: snapshot.shownPick != nil && idle,
           isDefault: true
         )
       case .createAccount:
@@ -99,7 +99,7 @@ enum OnboardingPresenter {
         OnboardingFooterAction(
           title: .continue,
           event: .connectAgents,
-          isEnabled: idle && snapshot.agentsLoaded,
+          isEnabled: idle && (snapshot.agentsLoaded || snapshot.agentsFailed),
           isDefault: true
         )
       case .done:
@@ -113,7 +113,20 @@ enum OnboardingPresenter {
       case .createAccount, .done: true
       case .welcome, .switchToHelper, .finishing, .agents, .allow, .permissions, .helperDone, .blocked: false
       }
-    return OnboardingFooterState(back: hasBack ? back : nil, next: next, dots: step.dots)
+    // A helper asked that never answered can be let go, to choose another: in Back's place.
+    let chooseAnother = OnboardingFooterAction(
+      title: .chooseAnother,
+      event: .chooseAnother,
+      isEnabled: idle,
+      isDefault: false
+    )
+    let left =
+      if step == .switchToHelper, snapshot.facts.helper.forgettable {
+        chooseAnother
+      } else {
+        hasBack ? back : nil
+      }
+    return OnboardingFooterState(back: left, next: next, dots: step.dots)
   }
 
   /// The line under a screen's controls: what runs, else what went wrong, else nothing.

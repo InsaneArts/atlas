@@ -20,6 +20,10 @@ enum ViewerLayout {
   static let placeholderInset: CGFloat = 28
   /// 380: the recovery alert's note, narrower than its lede.
   static let recoveryNoteWidth: CGFloat = 380
+  /// 3: the most lines a notice over the stage takes, so a longer one is read whole yet never covers the picture.
+  static let noticeLines = 3
+  /// 520: the widest a notice over the stage runs before it wraps.
+  static let noticeWidth: CGFloat = 520
   /// 16 by 10: the stage's shape before the first picture arrives.
   static let placeholderAspect = CGSize(width: 16, height: 10)
   /// 0.45: a paused picture, dimmed so it reads as not live.

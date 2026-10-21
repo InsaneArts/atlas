@@ -25,7 +25,7 @@ struct ProjectsCard: View {
             .disabled(isBusy)
         }
         if !projects.isEmpty {
-          HStack(spacing: Spacing.s) {
+          WrappingStack(spacing: Spacing.s) {
             ForEach(projects) { project in
               ProjectChip(project: project) { send(.removeProject(id: project.id)) }
             }

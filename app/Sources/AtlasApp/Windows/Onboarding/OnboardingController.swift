@@ -15,6 +15,9 @@ final class OnboardingController {
   /// How often the facts are read while the window is open: 1.5 s, soon enough that a switch turned on in System
   /// Settings, or a log-in in the helper, shows without the person waiting.
   static let readEvery: Duration = .seconds(1.5)
+  /// After `atlas agents status` failed, how many readings of the facts pass before it is asked again: 10, about 15
+  /// s, so a command that keeps failing is not run every moment while the person reads the screen.
+  static let agentsRetryReadings = 10
 
   /// Everything the window shows, as one value.
   private(set) var snapshot = OnboardingSnapshot()
@@ -37,6 +40,8 @@ final class OnboardingController {
   @ObservationIgnored private var finishing: Task<Void, Never>?
   /// Reading which agents are installed and connected, while it runs.
   @ObservationIgnored private var loadingAgents: Task<Void, Never>?
+  /// Readings of the facts since `atlas agents status` last failed.
+  @ObservationIgnored private var readingsSinceAgentsFailed = 0
   /// The window closed: nothing new starts, and late replies are dropped.
   @ObservationIgnored private var closed = false
 
@@ -64,6 +69,7 @@ final class OnboardingController {
     case .continueChoice: Task { await useHelper() }
     case .createAccount: Task { await createAccount() }
     case .lockAndSwitch: Task { await act(.switchTo(snapshot.facts.helper.name), Words.locking) }
+    case .chooseAnother: Task { await act(.forgetHelper, OnboardingWords.backToChoice) }
     case .checkAgain: refresh()
     case .retryFinish: retryFinish()
     case .continueFinishing: refresh()
@@ -136,10 +142,11 @@ final class OnboardingController {
         snapshot.problem = nil
       }
       snapshot.loaded = true
-      if snapshot.picked == nil { snapshot.picked = facts.defaultPick.map(OnboardingAccountPick.init(name:)) }
+      // A pick the choice no longer shows, or none yet, gives way to the default.
+      if snapshot.shownPick == nil { snapshot.picked = facts.defaultPick.map(OnboardingAccountPick.init(name:)) }
       advance()
     } else if !snapshot.loaded {
-      snapshot.problem = outcome.ok ? OnboardingWords.notUnderstood : outcome.message
+      snapshot.problem = outcome.ok ? OnboardingWords.notUnderstood : Words.sentence(outcome.message)
     }
     if readAgain {
       readAgain = false
@@ -154,6 +161,7 @@ final class OnboardingController {
     switch step {
     case .finishing where snapshot.finish == .idle: runFinish()
     case .agents where snapshot.agents.isEmpty: loadAgents()
+    case .agents where snapshot.agentsFailed: retryAgents()
     case .allow, .permissions, .helperDone: markWindow(open: true)
     default: break
     }
@@ -182,7 +190,7 @@ final class OnboardingController {
     let outcome = await commands.run(action, input: input)
     snapshot.working = nil
     guard !closed else { return nil }
-    if !outcome.ok { snapshot.problem = outcome.message }
+    if !outcome.ok { snapshot.problem = Words.sentence(outcome.message) }
     refresh()
     return outcome
   }
@@ -213,9 +221,11 @@ final class OnboardingController {
 
   /// Continue on the choice: the form for a new account, else set the picked account up as the helper.
   func useHelper() async {
-    switch snapshot.picked {
+    switch snapshot.shownPick {
     case .newAccount: snapshot.choices.creating = true
-    case .existing(let name): await act(.chooseHelper(name), OnboardingWords.settingUp(name))
+    case .existing(let name):
+      let title = snapshot.facts.candidates.first { $0.name == name }?.title ?? name
+      await act(.chooseHelper(name), OnboardingWords.settingUp(title))
     case nil: break
     }
   }
@@ -261,24 +271,33 @@ final class OnboardingController {
   }
 
   /// Lists the agents Atlas can connect, then asks `atlas agents status` which are installed and connected. A reading
-  /// that fails says why, and the next reading of the facts asks again; one that ends after the window closed is
-  /// dropped.
+  /// that fails keeps the agents listed, unchecked with their switches off, says so and lets Continue skip the step;
+  /// it is asked again every ``agentsRetryReadings`` readings. One that ends after the window closed is dropped.
   func loadAgents() {
     guard loadingAgents == nil, !closed else { return }
-    snapshot.agents = AgentChoice.all
+    if snapshot.agents.isEmpty { snapshot.agents = AgentChoice.all }
+    readingsSinceAgentsFailed = 0
     loadingAgents = Task {
       let outcome = await commands.run(.agentsStatus)
       guard !closed else { return }
       loadingAgents = nil
       guard outcome.ok, let status = outcome.decode(AgentsStatus.self) else {
-        snapshot.problem = outcome.ok ? OnboardingWords.notUnderstood : outcome.message
-        snapshot.agents = []
+        snapshot.agentsFailed = true
+        if snapshot.working == nil { snapshot.problem = OnboardingWords.agentsNotChecked }
         return
       }
-      snapshot.problem = nil
+      if snapshot.agentsFailed, snapshot.problem == OnboardingWords.agentsNotChecked { snapshot.problem = nil }
+      snapshot.agentsFailed = false
       snapshot.agents = AgentChoice.merged(snapshot.agents, with: status.agents)
       snapshot.agentsLoaded = true
     }
+  }
+
+  /// Counts a reading since `atlas agents status` failed, and asks it again once enough have passed.
+  private func retryAgents() {
+    guard loadingAgents == nil else { return }
+    readingsSinceAgentsFailed += 1
+    if readingsSinceAgentsFailed >= Self.agentsRetryReadings { loadAgents() }
   }
 
   /// Turns an agent's switch on or off.

@@ -13,6 +13,8 @@ package struct OnboardingFacts: Equatable, Sendable {
   package var configured = false
   /// The accounts that could be the helper.
   package var candidates: [Candidate] = []
+  /// The helper chosen before was prepared for this account, so it is the one account offered: no new one.
+  package var onlyChoice = false
   /// The helper, as this account sees it.
   package var helper = Helper()
   /// Whether setup has finished.
@@ -21,6 +23,12 @@ package struct OnboardingFacts: Equatable, Sendable {
   package var loginDecided = false
   /// In the helper: the account that asked, and this account's own state.
   package var asker = Asker()
+
+  /// Atlas.app is not in Applications, where the helper can run it.
+  static let notInApplications =
+    "Atlas.app must be in Applications, so the helper account can run it. Move it there, then open it again."
+  /// Atlas.app is not signed by its developer.
+  static let notSigned = "This copy of Atlas.app is not signed by its developer. Install it again."
 
   /// Creates facts with nothing known.
   package init() {}
@@ -34,12 +42,13 @@ package struct OnboardingFacts: Equatable, Sendable {
     role = raw.role ?? .controller
     myName = raw.me?.realName ?? raw.me?.name ?? ""
     if raw.app?.installed == false {
-      appProblem = raw.app?.error ?? "Atlas.app must be in Applications"
+      appProblem = Self.notInApplications
     } else if raw.app?.signed == false {
-      appProblem = "This Atlas.app is not signed by its developer; install it again"
+      appProblem = Self.notSigned
     }
     configured = raw.configured ?? false
     candidates = raw.candidates ?? []
+    onlyChoice = raw.onlyChoice ?? false
     finished = raw.finished ?? false
     loginDecided = raw.menubarLogin ?? false
     guard let side = raw.helper else { return }
@@ -51,6 +60,7 @@ package struct OnboardingFacts: Equatable, Sendable {
       helper.administrator = side.administrator
       helper.leftoverSession = side.leftoverSession ?? false
       helper.paired = side.paired ?? false
+      helper.forgettable = side.forgettable ?? false
       helper.signedIn = side.signedIn ?? false
       helper.answering = side.answering ?? false
       helper.onConsole = side.onConsole ?? false

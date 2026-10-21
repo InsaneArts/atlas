@@ -35,6 +35,7 @@ extension OnboardingFacts {
       let administrator: Bool?
       let leftoverSession: Bool?
       let paired: Bool?
+      let forgettable: Bool?
       let signedIn: Bool?
       let answering: Bool?
       let onConsole: Bool?
@@ -50,6 +51,7 @@ extension OnboardingFacts {
     let app: App?
     let configured: Bool?
     let candidates: [Candidate]?
+    let onlyChoice: Bool?
     let finished: Bool?
     let menubarLogin: Bool?
     let helper: Side?

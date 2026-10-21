@@ -28,6 +28,8 @@ struct Headline: View {
           .foregroundStyle(Color.textSecondary)
       }
     }
+    .lineLimit(Typography.headlineLines)
+    .minimumScaleFactor(Typography.leastHeadlineScale)
     .font(Typography.font(style, weight: .semibold))
     .tracking(LetterSpacing.headline)
     .multilineTextAlignment(.center)

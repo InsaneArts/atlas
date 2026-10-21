@@ -115,11 +115,12 @@ struct OnboardingControllerTests {
   }
 
   @Test("a failed command shows its message in one line, and nothing runs any more")
-  func aFailedCommandIsShown() async {
-    let controller = Self.controller(ScriptedCommands(["onboarding status": freshMac]))
+  func aFailedCommandIsShown() async throws {
+    let withQA = freshMac.replacingOccurrences(of: #""candidates": []"#, with: #""candidates": [{"name": "qa"}]"#)
+    let controller = try await Self.loaded(ScriptedCommands(["onboarding status": withQA]))
     controller.send(.pick(.existing("qa")))
     await controller.useHelper()
-    #expect(controller.snapshot.problem == "unknown command")
+    #expect(controller.snapshot.problem == "unknown command.", "a command's message reads as a sentence")
     #expect(controller.snapshot.working == nil)
   }
 
@@ -235,18 +236,32 @@ struct OnboardingControllerTests {
     #expect(controller.snapshot.problem == nil)
   }
 
-  @Test("a failed agents reading says why and is asked again with the next reading")
-  func aFailedAgentsReadingIsAskedAgain() async throws {
+  @Test(
+    "a failed agents reading keeps the agents listed unchecked, lets Continue skip the step, and is asked again later"
+  )
+  func aFailedAgentsReadingIsAskedAgainLater() async throws {
     let commands = ScriptedCommands(["onboarding status": finishedMac])
     let controller = try await Self.loaded(commands)
-    try await settle("the failed agents reading was never shown") { controller.snapshot.problem != nil }
-    #expect(!controller.snapshot.agentsLoaded, "nothing is known about the agents")
+    try await settle("the failed agents reading was never shown") { controller.snapshot.agentsFailed }
+    #expect(controller.snapshot.problem == OnboardingWords.agentsNotChecked)
+    #expect(controller.snapshot.agents.map(\.id) == AgentID.allCases, "the agents stay listed")
+    #expect(controller.state.footer.next?.isEnabled == true, "Continue skips the step")
+    controller.refresh()
+    try await settle("the next reading never ran") {
+      commands.ran.count { $0 == ["onboarding", "status"] } >= 2
+    }
+    #expect(
+      commands.ran.count { $0 == ["agents", "status"] } == 1,
+      "not asked again with the very next reading"
+    )
     commands.answer(
       "agents status",
       #"{"ok": true, "agents": [{"agent": "claude", "installed": true, "connected": false}]}"#
     )
-    controller.refresh()
-    try await settle("the agents were never asked for again") { controller.snapshot.agentsLoaded }
+    try await settle("the agents were never asked for again") {
+      controller.refresh()
+      return controller.snapshot.agentsLoaded
+    }
     #expect(controller.snapshot.agents.first { $0.id == .claude }?.found == true)
     #expect(controller.snapshot.problem == nil)
   }
@@ -373,7 +388,7 @@ struct OnboardingControllerTests {
     #expect(!commands.ran.contains { $0.starts(with: ["agents", "project"]) })
     #expect(controller.snapshot.agents.allSatisfy { !$0.connected })
     #expect(!controller.snapshot.choices.agentsDone)
-    #expect(controller.snapshot.problem == "npm is missing")
+    #expect(controller.snapshot.problem == "npm is missing.")
   }
 
   @Test("Done sets Open at Login and opens Atlas, then the window closes")
@@ -392,7 +407,7 @@ struct OnboardingControllerTests {
     let controller = Self.controller(ScriptedCommands(["onboarding login": #"{"ok": true}"#]))
     await controller.complete()
     #expect(!controller.closeRequested)
-    #expect(controller.snapshot.problem == "unknown command")
+    #expect(controller.snapshot.problem == "unknown command.")
   }
 
   @Test(

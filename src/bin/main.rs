@@ -505,6 +505,8 @@ enum OnboardingCommand {
         #[arg(value_enum)]
         state: WindowState,
     },
+    /// Take back this account's request of a helper that never answered.
+    Forget,
     /// Back in the person's account: start input and check everything.
     Finish,
     /// Open the menu bar at login (on or off), decided once.
@@ -1189,6 +1191,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
                 OnboardingCommand::Window { state } => {
                     onboarding::window(state == WindowState::Open)
                 }
+                OnboardingCommand::Forget => onboarding::forget(&config),
                 OnboardingCommand::Finish => onboarding::finish(&config).await,
                 OnboardingCommand::Login { state } => {
                     onboarding::login(&config, state == OnOff::On)

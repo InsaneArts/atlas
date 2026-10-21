@@ -13,7 +13,7 @@ struct DoneScreen: View {
   var body: some View {
     ScreenColumn(width: OnboardingLayout.narrowColumn) {
       AppIcon(size: OnboardingLayout.doneIcon)
-      Headline(title: "You're set.")
+      Headline(title: OnboardingScreen.doneTitle)
         .padding(.top, Spacing.m)
       Lede(text: state.lede)
       CardGroup {

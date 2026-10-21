@@ -17,7 +17,8 @@ struct ChoiceRow: View {
     Button(action: pick) {
       HStack(spacing: Spacing.l) {
         disc
-        TitleDetail(title: title, detail: detail)
+          .accessibilityHidden(true)
+        TitleDetail(title: title, detail: detail, wraps: true)
         Spacer(minLength: .zero)
         Circle()
           .strokeBorder(

@@ -16,6 +16,7 @@ extension AgentChoice {
     var merged = agents
     for row in rows {
       guard let index = merged.firstIndex(where: { $0.id.rawValue == row.agent }) else { continue }
+      merged[index].checked = true
       merged[index].found = row.installed == true
       merged[index].connected = row.connected == true
       merged[index].on = merged[index].found

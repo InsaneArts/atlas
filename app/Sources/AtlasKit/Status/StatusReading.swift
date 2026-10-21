@@ -105,34 +105,41 @@ package struct StatusReading: Equatable, Sendable {
       return "You have mouse and keyboard control"
     }
     if mode == .controlling { return Words.anotherViewer }
+    // A helper that is not ready gives its first step, which may name a command: its failed check says it plainly.
+    if mode == .blocked, let check = status.checks.first(where: { $0.ok == false }) {
+      return CheckWords.failed(check)
+    }
     return status.overview.reason.isEmpty ? Words.connecting : status.overview.reason
   }
 
-  /// Each readiness check, then the native Save and Open check, which
-  /// never counts as ready. An unknown check is unobservable, not failed.
+  /// Each readiness check in the app's words, then the native Save and Open check, which never counts as ready. An
+  /// unknown check is unobservable, not failed.
   package var statusRows: [StatusRow] {
     // A silent helper's steps name commands; the overview says it in the app's words.
     let silent = !status.overview.mode.answers
     var rows = status.checks.map { check in
-      switch check.ok {
-      case false? where silent: StatusRow(name: check.name, state: .bad, text: status.overview.reason)
-      case nil where silent: StatusRow(name: check.name, state: .unknown, text: "Unknown")
-      case true: StatusRow(name: check.name, state: .ready, text: "Ready")
-      case nil: StatusRow(name: check.name, state: .unknown, text: "Unknown. \(check.nextStep ?? "")")
-      default: StatusRow(name: check.name, state: .bad, text: check.nextStep ?? "Not ready")
+      let name = CheckWords.title(check.name)
+      return switch check.ok {
+      case true: StatusRow(name: name, state: .ready, text: CheckWords.ready)
+      case nil: StatusRow(name: name, state: .unknown, text: CheckWords.notKnown)
+      case false? where silent: StatusRow(name: name, state: .bad, text: status.overview.reason)
+      default: StatusRow(name: name, state: .bad, text: CheckWords.failed(check))
       }
     }
     let native = status.capabilities.nativeDialogs
-    let age = native.ageSeconds.map(Words.ago) ?? ""
+    // "Worked 5 min ago", or "Worked" when its age is unknown.
+    let ago = native.ageSeconds.map { " \(Words.ago($0))" } ?? ""
+    let name = "Save and Open dialogs"
     switch native.state {
     case .passed:
-      rows.append(StatusRow(name: "Native dialogs", state: .ready, text: "Save and Open passed \(age)"))
+      rows.append(StatusRow(name: name, state: .ready, text: "Worked\(ago)"))
     case .failed:
-      let stage = native.failedAt.map { " at “\($0)”" } ?? ""
-      rows.append(StatusRow(name: "Native dialogs", state: .bad, text: "Failed \(age)\(stage). \(native.reason)"))
+      rows.append(
+        StatusRow(name: name, state: .bad, text: "Didn't work\(ago).")
+      )
     case .unchecked:
       if !native.reason.isEmpty {
-        rows.append(StatusRow(name: "Native dialogs", state: .unknown, text: native.reason))
+        rows.append(StatusRow(name: name, state: .unknown, text: "Not checked yet"))
       }
     }
     return rows

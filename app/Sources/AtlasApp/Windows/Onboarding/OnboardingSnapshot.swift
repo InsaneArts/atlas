@@ -25,6 +25,8 @@ struct OnboardingSnapshot {
   var agents: [AgentChoice] = []
   /// Whether `atlas agents status` has said which agents are installed.
   var agentsLoaded = false
+  /// Whether `atlas agents status` failed last: the agents stay listed, unchecked, and the step can be skipped.
+  var agentsFailed = false
   /// The project folders chosen, in order.
   var projects: [URL] = []
   /// The project folders already taught.
@@ -36,4 +38,14 @@ struct OnboardingSnapshot {
 
   /// The screen the facts and choices lead to.
   var step: OnboardingStep { OnboardingStep(facts: facts, choices: choices) }
+
+  /// The account picked, while the choice shows it: never an account it does not list, nor a new one it does not
+  /// offer.
+  var shownPick: OnboardingAccountPick? {
+    switch picked {
+    case .newAccount: facts.offers("") ? .newAccount : nil
+    case .existing(let name): facts.offers(name) ? .existing(name) : nil
+    case nil: nil
+    }
+  }
 }

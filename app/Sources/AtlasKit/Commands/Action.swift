@@ -18,6 +18,8 @@ package enum Action: Sendable, Equatable {
   case chooseHelper(String)
   /// Create a new helper account; its password travels on standard input.
   case createAccount(account: String, fullName: String)
+  /// Take back the request of a helper that never answered, to choose another account.
+  case forgetHelper
   /// Run the end-to-end check of the helper.
   case finishSetup
   /// Turn Open at Login on or off at the end of setup.
@@ -61,6 +63,7 @@ package enum Action: Sendable, Equatable {
     case .chooseHelper(let account): ["onboarding", "choose", account]
     case .createAccount(let account, let fullName):
       ["onboarding", "create", "--account", account, "--full-name", fullName]
+    case .forgetHelper: ["onboarding", "forget"]
     case .finishSetup: ["onboarding", "finish"]
     case .setOpensAtLogin(let on): ["onboarding", "login", on ? "on" : "off"]
     case .openMenuBar: ["menubar"]

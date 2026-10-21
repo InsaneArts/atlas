@@ -51,13 +51,16 @@ struct StatusReadingTests {
     #expect((reading.recovery(holdingControl: false, recovering: false) != nil) == offered)
   }
 
-  @Test("an unknown check stays unknown and native dialogs show as their own row")
+  @Test("an unknown check stays unknown, checks read in plain words, and native dialogs show as their own row")
   func statusRows() throws {
     let reading = try status([
       "checks": [
-        ["name": "Helper connection", "ok": true],
-        ["name": "Input permission", "ok": NSNull(), "nextStep": "Run start-input."],
-        ["name": "Screen recording", "ok": false, "nextStep": "Enable it."],
+        ["name": "Helper running", "ok": true],
+        ["name": "Input service ready", "ok": NSNull(), "nextStep": "Run atlas start-input."],
+        [
+          "name": "Accessibility allowed", "ok": false,
+          "nextStep": "In the helper's System Settings, turn Atlas on (atlas init walks you through it).",
+        ],
       ],
       "overview": ["mode": "blocked"],
       "capabilities": [
@@ -72,8 +75,11 @@ struct StatusReadingTests {
     ])
     let rows = StatusReading(reading).statusRows
     #expect(rows.map(\.state) == [.ready, .unknown, .bad, .bad])
-    #expect(rows[1].text == "Unknown. Run start-input.")
-    #expect(rows[3].text.hasPrefix("Failed 5 min ago at “save confirmation enabled”"))
+    #expect(rows.map(\.name) == ["Helper", "Mouse and keyboard", "Accessibility", "Save and Open dialogs"])
+    #expect(rows[1].text == CheckWords.notKnown)
+    #expect(rows[2].text == "Turn on Atlas in the helper's Accessibility settings.")
+    #expect(rows[3].text == "Didn't work 5 min ago.")
+    #expect(rows.allSatisfy { !$0.text.contains("atlas ") })
     let stale = try status([
       "checks": [], "capabilities": ["nativeDialogs": ["state": "stale", "reason": "Changed"]],
     ])
@@ -121,9 +127,22 @@ struct StatusReadingTests {
     )
     let items = reading.activity()
     #expect(
-      items.map(\.line) == ["Agent sent 3 actions", "Agent ran a command", "You recovered", "Agent input failed"]
+      items.map(\.line) == [
+        "Agent sent 3 actions", "Agent ran a command", "You recovered the helper", "Agent couldn't send 8 actions",
+      ]
     )
     #expect(items.map(\.when) == ["just now", "40 s ago", "70 s ago", "3 min ago"])
+  }
+
+  @Test("a helper that isn't ready gives its failed check's plain words, never the command its step names")
+  func blockedReason() throws {
+    let reading = StatusReading(
+      try status([
+        "checks": [["name": "Input service ready", "ok": false, "nextStep": "Run atlas start-input."]],
+        "overview": ["mode": "blocked", "reason": "Run atlas start-input."],
+      ])
+    )
+    #expect(reading.reason(holdingControl: false) == "Mouse and keyboard stopped. Recover starts them again.")
   }
 
   @Test("the reason never shows another viewer's control as yours")
@@ -163,7 +182,7 @@ struct StatusReadingTests {
     ])
     let rows = StatusReading(reading).statusRows
     #expect(rows[0].text == "The helper is logged out, so agents can't use it")
-    #expect(rows[1].text == "Unknown")
+    #expect(rows[1].text == CheckWords.notKnown)
     #expect(rows.allSatisfy { !$0.text.contains("atlas ") })
   }
 }

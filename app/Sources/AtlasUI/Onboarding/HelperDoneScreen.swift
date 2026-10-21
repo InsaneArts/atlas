@@ -15,7 +15,7 @@ struct HelperDoneScreen: View {
   var body: some View {
     ScreenColumn(width: OnboardingLayout.helperDoneColumn) {
       CheckMark(size: IconSize.hero)
-      Headline(title: "All set here.", tail: state.tail)
+      Headline(title: OnboardingScreen.helperDoneTitle, tail: state.tail)
         .padding(.top, Spacing.s)
       Lede(
         text:

@@ -4,6 +4,8 @@ package struct OnboardingFooterAction: Equatable, Sendable {
   package enum Title: Equatable, Sendable {
     /// Back.
     case back
+    /// Choose Another Account, in Back's place: the helper asked never answered.
+    case chooseAnother
     /// Continue.
     case `continue`
     /// Create Account.

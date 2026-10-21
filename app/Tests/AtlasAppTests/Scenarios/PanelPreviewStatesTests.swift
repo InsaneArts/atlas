@@ -9,7 +9,7 @@
   @MainActor
   @Suite("PreviewStates+Panel")
   struct PanelPreviewStatesTests {
-    /// What the controller holds on a set-up Mac whose helper is in `mode`: Atlas, its display and an agent's click
+    /// What the controller holds on a set-up Mac whose helper is in `mode`: Atlas, its display and an agent's screenshot
     /// 7 seconds ago, its desktop on show, its helper known and Open at Login off.
     ///
     /// - Parameters:
@@ -25,7 +25,7 @@
           "account": "atlas",
           "accountName": "Atlas",
           "display": ["width": 1512, "height": 982],
-          "activity": [["operation": "click", "actor": "agent", "ok": true, "ageSeconds": 7]],
+          "activity": [["operation": "screenshot", "actor": "agent", "ok": true, "ageSeconds": 7]],
         ]
       ])
       return PanelSnapshot(

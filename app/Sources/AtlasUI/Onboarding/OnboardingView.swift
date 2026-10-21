@@ -33,6 +33,26 @@ package struct OnboardingView: View {
     content
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .windowSurface()
+      .onChange(of: screenID) { _, _ in
+        if case .screen(let screen) = state.content { announce(screen.spokenHeadline) }
+      }
+      .onChange(of: state.note) { _, note in
+        if case .problem(let text) = note { announce(text) }
+      }
+  }
+
+  /// Which screen shows, if one does: VoiceOver says its headline as it arrives.
+  private var screenID: OnboardingScreen.ID? {
+    guard case .screen(let screen) = state.content else { return nil }
+    return screen.id
+  }
+
+  /// VoiceOver says what changed.
+  ///
+  /// - Parameter text: What to say.
+  private func announce(_ text: String) {
+    AccessibilityNotification.Announcement(text)
+      .post()
   }
 
   /// The guide panel, the first reading, or a screen, each screen arriving as the last one leaves.
@@ -43,7 +63,7 @@ package struct OnboardingView: View {
         // No window animates its state, so the fade carries its own animation.
         .transition(.opacity.animation(Motion.fade))
     case .loading(let problem):
-      LoadingScreen(problem: problem)
+      LoadingScreen(problem: problem, send: send)
     case .screen(let screen):
       OnboardingScreenContent(
         screen: screen,

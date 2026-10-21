@@ -9,7 +9,7 @@ struct WelcomeScreen: View {
   var body: some View {
     ScreenColumn {
       AppIcon(size: OnboardingLayout.welcomeIcon)
-      Headline(title: "Give your agents", tail: "a Mac of their own.")
+      Headline(title: OnboardingScreen.welcomeTitle, tail: OnboardingScreen.welcomeTail)
         .padding(.top, Spacing.m)
       Lede(
         text:

@@ -17,6 +17,7 @@
         PreviewState(name: "Paused before a picture", value: viewerPausedBeforePicture),
         PreviewState(name: "Unavailable", value: viewerUnavailable),
         PreviewState(name: "Notice", value: viewerNotice),
+        PreviewState(name: "Notice, long", value: viewerNoticeLong),
         PreviewState(name: "Logged out", value: viewerLoggedOut),
         PreviewState(name: "Connecting", value: viewerConnecting),
         PreviewState(name: "Typing", value: viewerTyping),
@@ -38,9 +39,9 @@
 
     /// Every check ready; native dialogs not checked yet.
     private static let readyChecks = [
-      ReadinessItem(name: "Helper session", text: "Ready", state: .ready),
-      ReadinessItem(name: "Input service", text: "Ready", state: .ready),
-      ReadinessItem(name: "Native dialogs", text: "Run atlas verify-native to check.", state: .unknown),
+      ReadinessItem(name: "Helper", text: "Ready", state: .ready),
+      ReadinessItem(name: "Mouse and keyboard", text: "Ready", state: .ready),
+      ReadinessItem(name: "Save and Open dialogs", text: "Not checked yet", state: .unknown),
     ]
 
     /// The session's facts, with control as `control` reads.
@@ -181,7 +182,7 @@
       let failed = ActivityEntry(
         id: 0,
         initial: "A",
-        line: "Agent input failed",
+        line: "Agent couldn't send 2 actions",
         when: "just now",
         kind: .failed,
         isNewest: true
@@ -198,7 +199,11 @@
       state.footer.hint = "Recover before taking control."
       state.sidebar.reason = "Atlas can't tell whether the last action worked."
       state.sidebar.recent = [failed] + recentActivity.dropFirst()
-      state.sidebar.ready[1] = ReadinessItem(name: "Input service", text: "Not ready", state: .notReady)
+      state.sidebar.ready[1] = ReadinessItem(
+        name: "Mouse and keyboard",
+        text: "Mouse and keyboard aren't ready.",
+        state: .notReady
+      )
       state.sidebar.facts = facts(control: "After recovery", pending: "1")
       return state
     }()
@@ -250,6 +255,14 @@
       var state = viewerObserving
       state.stage.notice = "Control released."
       state.sidebar.reason = "An agent is acting in the helper"
+      return state
+    }()
+
+    /// A notice longer than one line wraps over the picture instead of being cut short.
+    @MainActor package static let viewerNoticeLong: ViewerState = {
+      var state = viewerNotice
+      state.stage.notice =
+        "Control ended because the helper's screen changed size. Take control again once the picture settles, and nothing you sent is lost."
       return state
     }()
 

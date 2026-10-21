@@ -32,6 +32,8 @@ struct OnboardingFooter: View {
       Button(Self.title(back.title)) { send(back.event) }
         .buttonStyle(.capsule(.plain))
         .disabled(!back.isEnabled)
+        // Escape goes back; it never lets a helper go.
+        .keyboardShortcut(back.title == .back ? .cancelAction : nil)
     }
   }
 
@@ -52,6 +54,7 @@ struct OnboardingFooter: View {
   private static func title(_ title: OnboardingFooterAction.Title) -> String {
     switch title {
     case .back: "Back"
+    case .chooseAnother: "Choose Another Account"
     case .continue: "Continue"
     case .createAccount: "Create Account"
     case .done: "Done"

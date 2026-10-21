@@ -14,10 +14,11 @@ struct BlockedScreen: View {
         .font(.system(size: OnboardingLayout.blockedSymbol))
         .foregroundStyle(Color.attention)
         .accessibilityHidden(true)
-      Headline(title: "One thing first.")
+      Headline(title: OnboardingScreen.blockedTitle)
       Lede(text: reason)
       Button("Check Again") { send(.checkAgain) }
         .buttonStyle(.capsule(size: .large))
+        .keyboardShortcut(.defaultAction)
         .padding(.top, Spacing.m)
     }
   }

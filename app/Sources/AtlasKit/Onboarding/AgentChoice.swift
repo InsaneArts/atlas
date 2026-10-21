@@ -2,6 +2,8 @@
 package struct AgentChoice: Equatable, Sendable {
   /// Which agent.
   package let id: AgentID
+  /// Whether `atlas agents status` has said anything of it yet.
+  package var checked = false
   /// Whether it is installed on this Mac.
   package var found = false
   /// Whether it already knows how to use Atlas.

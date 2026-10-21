@@ -23,7 +23,7 @@ struct AllowScreen: View {
       .accessibilityHidden(true)
       Eyebrow(text: state.eyebrow)
         .padding(.top, Spacing.s)
-      Headline(title: state.title, tail: "through Atlas?")
+      Headline(title: state.title, tail: OnboardingScreen.allowTail)
       Lede(text: state.lede)
       Button("Allow") { send(.allow) }
         .buttonStyle(.capsule(size: .large))

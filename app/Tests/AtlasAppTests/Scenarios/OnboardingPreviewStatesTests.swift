@@ -17,15 +17,21 @@
     ///   - helper: The helper's side of the reply, or nil before one is chosen.
     ///   - finished: Whether setup has finished.
     ///   - installed: Whether Atlas.app is where it must be.
+    ///   - candidates: The standard accounts that could be the helper, by short and full name.
+    ///   - onlyChoice: Whether the helper chosen before was prepared, so it is the one choice.
     /// - Returns: The facts.
     /// - Throws: When the reply is not a status.
-    func person(_ helper: [String: Any]? = nil, finished: Bool = false, installed: Bool = true) throws
-      -> OnboardingFacts
-    {
+    func person(
+      _ helper: [String: Any]? = nil,
+      finished: Bool = false,
+      installed: Bool = true,
+      candidates: [(String, String)] = [("testaccount", "Test Account")],
+      onlyChoice: Bool = false
+    ) throws -> OnboardingFacts {
       var reply: [String: Any] = [
         "ok": true, "role": "controller", "me": ["name": "me"], "app": ["installed": installed, "signed": true],
-        "configured": helper != nil, "finished": finished,
-        "candidates": [["name": "testaccount", "realName": "Test Account"]],
+        "configured": helper != nil, "finished": finished, "onlyChoice": onlyChoice,
+        "candidates": candidates.map { ["name": $0.0, "realName": $0.1] },
       ]
       if let helper { reply["helper"] = helper }
       return try facts(reply)
@@ -37,10 +43,19 @@
     ///   - signedIn: Whether it is logged in.
     ///   - answering: Whether Atlas answers in it.
     ///   - allowed: Whether both permissions are on.
+    ///   - paired: Whether this account asked it.
+    ///   - realName: Its full name.
     /// - Returns: The helper's side of the reply.
-    func helper(signedIn: Bool = true, answering: Bool = true, allowed: Bool = true) -> [String: Any] {
+    func helper(
+      signedIn: Bool = true,
+      answering: Bool = true,
+      allowed: Bool = true,
+      paired: Bool = true,
+      realName: String = "Atlas"
+    ) -> [String: Any] {
       [
-        "exists": true, "name": "atlas", "realName": "Atlas", "administrator": false, "paired": true,
+        "exists": true, "name": "atlas", "realName": realName, "administrator": false, "paired": paired,
+        "forgettable": paired && !answering,
         "signedIn": signedIn, "answering": answering, "onConsole": false, "hidden": true,
         "permissions": ["screenCapture": allowed, "accessibility": allowed],
       ]
@@ -52,14 +67,22 @@
     ///   - running: Whether Atlas's job runs here.
     ///   - accessibility: Whether Accessibility is on.
     ///   - screen: Whether Screen Recording is on.
+    ///   - me: This account's full name.
+    ///   - asker: The asking account's full name.
     /// - Returns: The facts.
     /// - Throws: When the reply is not a status.
-    func helperSide(running: Bool = true, accessibility: Bool = false, screen: Bool = false) throws -> OnboardingFacts {
+    func helperSide(
+      running: Bool = true,
+      accessibility: Bool = false,
+      screen: Bool = false,
+      me: String = "Atlas",
+      asker: String = "Ismayil"
+    ) throws -> OnboardingFacts {
       try facts([
-        "ok": true, "role": "helper", "me": ["name": "atlas", "realName": "Atlas"],
+        "ok": true, "role": "helper", "me": ["name": "atlas", "realName": me],
         "app": ["installed": true, "signed": true],
         "helper": [
-          "controller": ["uid": 501, "name": "theiskaa", "realName": "Ismayil"], "installed": running,
+          "controller": ["uid": 501, "name": "theiskaa", "realName": asker], "installed": running,
           "running": running, "permissions": ["screenCapture": screen, "accessibility": accessibility],
         ],
       ])
@@ -81,6 +104,41 @@
     func samplesMatchThePresenter() throws {
       var choose = loaded(try person(), started: true)
       choose.picked = .newAccount
+      var many = loaded(
+        try person(candidates: [
+          ("testaccount", "Test Account"), ("kid", "Guest Kid"),
+          ("maria", "Maria Fernanda Montgomery-Castellanos de la Vega"), ("studio", "Studio"),
+        ]),
+        started: true
+      )
+      many.picked = .newAccount
+      var chooseProblem = loaded(
+        try person(candidates: [("testaccount", "Test Account"), ("kid", "Guest Kid")]),
+        started: true
+      )
+      chooseProblem.picked = .newAccount
+      chooseProblem.problem = "macOS could not say whether kid is an administrator."
+      var only = loaded(
+        try person(
+          helper(signedIn: false, answering: false, allowed: false, paired: false),
+          candidates: [("atlas", "Atlas")],
+          onlyChoice: true
+        )
+      )
+      only.picked = .existing("atlas")
+      var switchLong = loaded(
+        try person(
+          helper(
+            signedIn: false,
+            answering: false,
+            allowed: false,
+            realName: "Maria Fernanda Montgomery-Castellanos de la Vega"
+          )
+        )
+      )
+      switchLong.problem = "The screen could not be locked: loginwindow did not answer within ten seconds."
+      var loadingFailed = OnboardingSnapshot()
+      loadingFailed.problem = PreviewStates.onboardingLoadingProblem
       var create = choose
       create.choices.creating = true
       var creating = create
@@ -95,29 +153,49 @@
       agents.agents = AgentID.allCases
         .map { id in
           var agent = AgentChoice(id: id)
+          agent.checked = true
           agent.found = true
           agent.on = true
           return agent
         }
       agents.projects = [URL(fileURLWithPath: "/Users/me/dev/Opie")]
+      var notChecked = loaded(try person(helper(), finished: true))
+      notChecked.agents = AgentChoice.all
+      notChecked.agentsFailed = true
+      notChecked.projects = ["Opie", "Jolt", "understudy", "markdown2pdf", "InsaneArts Website"]
+        .map { URL(fileURLWithPath: "/Users/me/dev/\($0)") }
+      notChecked.problem = OnboardingWords.agentsNotChecked
       var done = loaded(try person(helper(), finished: true))
       done.choices.agentsDone = true
       var guide = loaded(try helperSide())
       guide.guiding = .accessibility
       let presented: [String: OnboardingSnapshot] = [
         "Loading": OnboardingSnapshot(),
+        "Loading, failed": loadingFailed,
         "Welcome": loaded(try person()),
         "Choose": choose,
+        "Choose, many accounts": many,
+        "Choose, a problem": chooseProblem,
+        "Choose, only the helper set up": only,
         "Create": create,
         "Create, working": creating,
         "Switch": loaded(try person(helper(signedIn: false, answering: false, allowed: false))),
         "Switch, open Atlas": loaded(try person(helper(answering: false, allowed: false))),
+        "Switch, a long name": switchLong,
         "Finishing": finishing,
         "Finishing, passed": passed,
         "Finishing, failed": failed,
         "Agents": agents,
+        "Agents, not checked": notChecked,
         "Done": done,
         "Helper allow": loaded(try helperSide(running: false)),
+        "Helper allow, a long name": loaded(
+          try helperSide(
+            running: false,
+            me: "Maria Fernanda Montgomery-Castellanos de la Vega",
+            asker: "Christopher Alexander Montgomery-Smith"
+          )
+        ),
         "Helper permissions": loaded(try helperSide(accessibility: true)),
         "Helper guide": guide,
         "Helper done": loaded(try helperSide(accessibility: true, screen: true)),

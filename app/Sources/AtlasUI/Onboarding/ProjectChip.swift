@@ -12,6 +12,8 @@ struct ProjectChip: View {
     HStack(spacing: Spacing.s) {
       Text(project.name)
         .font(Typography.font(.callout))
+        .lineLimit(1)
+        .truncationMode(.middle)
       if project.isRemovable {
         Button(action: remove) {
           Image(systemName: "xmark")

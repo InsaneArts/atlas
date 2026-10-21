@@ -16,7 +16,7 @@ struct RecoveryAlert: View {
         Eyebrow(text: "Needs you", tone: .attention)
         Headline(title: prompt.title, size: .title)
         Lede(text: prompt.reason)
-        Note(text: "Recovering restarts the helper's capture and releases held keys. Nothing is repeated.")
+        Note(text: "Recover gets the helper ready again and lets go of any held keys. No action runs twice.")
           .frame(maxWidth: ViewerLayout.recoveryNoteWidth)
         HStack(spacing: Spacing.ml) {
           Button("Not Now") { send(.recoverLater) }

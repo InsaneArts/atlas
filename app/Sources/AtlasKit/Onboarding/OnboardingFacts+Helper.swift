@@ -13,6 +13,8 @@ extension OnboardingFacts {
     package var leftoverSession = false
     /// This account asked this helper: its request names it, or a setup with it is recorded.
     package var paired = false
+    /// This account asked it, and it never answered: the request may be taken back to choose another account.
+    package var forgettable = false
     /// Whether it is logged in.
     package var signedIn = false
     /// Whether Atlas answers in it.

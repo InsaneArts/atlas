@@ -22,12 +22,37 @@ enum OnboardingWords {
   /// While the helper allows the account that asked.
   static let settingUpHere = "Setting Atlas up in this account…"
 
+  /// While the helper asked is let go, to choose another.
+  static let backToChoice = "Going back to the choice…"
+
   /// While an existing account is set up as the helper.
   ///
-  /// - Parameter account: The account's short name.
-  /// - Returns: "Setting up atlas…"
+  /// - Parameter account: The account as people know it.
+  /// - Returns: "Setting up Test Account…"
   static func settingUp(_ account: String) -> String {
-    "Setting up \(account)…"
+    "Setting up \(named(account))…"
+  }
+
+  // MARK: Naming an account
+
+  /// An account named in a sentence: the default helper's name, Atlas, is also the app's, so it is named as the Atlas
+  /// account; any other name reads as itself.
+  ///
+  /// - Parameter account: The account as people know it.
+  /// - Returns: "the Atlas account", or the name itself.
+  static func named(_ account: String) -> String {
+    account.caseInsensitiveCompare("Atlas") == .orderedSame ? "the \(account) account" : account
+  }
+
+  /// An account named at the start of a sentence.
+  ///
+  /// - Parameter account: The account as people know it.
+  /// - Returns: "The Atlas account", or the name itself.
+  static func namedFirst(_ account: String) -> String {
+    let words = named(account)
+    let first = words.prefix(1)
+      .uppercased()
+    return first + words.dropFirst()
   }
 
   /// While a project is taught.
@@ -88,41 +113,41 @@ enum OnboardingWords {
   /// The switch screen's headline.
   ///
   /// - Parameter helper: The helper as people know it.
-  /// - Returns: "Now log in to Atlas."
+  /// - Returns: "Now log in to the Atlas account."
   static func logIn(to helper: String) -> String {
-    "Now log in to \(helper)."
+    "Now log in to \(named(helper))."
   }
 
   /// Where to choose the helper.
   ///
   /// - Parameter helper: The helper as people know it.
-  /// - Returns: "Choose Atlas on the lock screen"
+  /// - Returns: "Choose the Atlas account on the lock screen"
   static func chooseOnLockScreen(_ helper: String) -> String {
-    "Choose \(helper) on the lock screen"
+    "Choose \(named(helper)) on the lock screen"
   }
 
   /// The switch screen's second step, once the helper has logged in.
   ///
   /// - Parameter helper: The helper as people know it.
-  /// - Returns: "Open Atlas in Atlas"
+  /// - Returns: "Open Atlas in the Atlas account"
   static func openAtlas(in helper: String) -> String {
-    "Open Atlas in \(helper)"
+    "Open Atlas in \(named(helper))"
   }
 
   /// The helper has not logged in yet.
   ///
   /// - Parameter helper: The helper as people know it.
-  /// - Returns: "Next: Lock and Switch, then log in to Atlas."
+  /// - Returns: "Next: Lock and Switch, then log in to the Atlas account."
   static func lockThenLogIn(to helper: String) -> String {
-    "Next: Lock and Switch, then log in to \(helper)."
+    "Next: Lock and Switch, then log in to \(named(helper))."
   }
 
   /// The helper is on screen, and Atlas not open there yet.
   ///
   /// - Parameter helper: The helper as people know it.
-  /// - Returns: "Waiting for Atlas to open in Atlas…"
+  /// - Returns: "Waiting for Atlas to open in the Atlas account…"
   static func waitingForAtlas(in helper: String) -> String {
-    "Waiting for Atlas to open in \(helper)…"
+    "Waiting for Atlas to open in \(named(helper))…"
   }
 
   // MARK: Finishing
@@ -135,6 +160,10 @@ enum OnboardingWords {
   static let everythingWorks = "Everything works."
   /// Its tail.
   static let agentsHaveAMac = "Your agents have a Mac now."
+  /// The headline once the check failed.
+  static let almostThere = "Almost there."
+  /// Its tail.
+  static let oneCheckFailed = "One check didn't pass."
   /// The live check's note while it runs.
   static let checkingNote = "checking…"
   /// Its note once passed.
@@ -145,9 +174,9 @@ enum OnboardingWords {
   /// The first check, naming the helper.
   ///
   /// - Parameter helper: The helper as people know it.
-  /// - Returns: "Atlas is logged in"
+  /// - Returns: "The Atlas account is logged in"
   static func loggedIn(_ helper: String) -> String {
-    "\(helper) is logged in"
+    "\(namedFirst(helper)) is logged in"
   }
 
   // MARK: Agents and done
@@ -169,6 +198,12 @@ enum OnboardingWords {
   static let agentFound = "Found. Adds the Atlas skill to every session."
   /// An agent not on this Mac.
   static let agentMissing = "Not installed on this Mac."
+  /// An agent while `atlas agents status` runs.
+  static let agentChecking = "Checking…"
+  /// An agent `atlas agents status` could not check.
+  static let agentNotChecked = "Not checked yet."
+  /// `atlas agents status` failed: the step can be skipped, and Atlas asks again.
+  static let agentsNotChecked = "Atlas couldn't check your agents. Continue to skip this, or wait while it tries again."
 
   /// A chosen project's remove button, for VoiceOver.
   ///
@@ -183,7 +218,7 @@ enum OnboardingWords {
   /// - Parameter helper: The helper as people know it.
   /// - Returns: What Atlas does from now on, and what to do after a restart.
   static func doneLede(_ helper: String) -> String {
-    "That was the whole setup. Atlas lives in your menu bar: ask your agent to check something on screen, and watch it work from there. After a restart, just log in to \(helper) again; Atlas does the rest."
+    "That was the whole setup. Atlas lives in your menu bar: ask your agent to check something on screen, and watch it work from there. After a restart, just log in to \(named(helper)) again; Atlas does the rest."
   }
 
   // MARK: The helper's side
@@ -198,9 +233,9 @@ enum OnboardingWords {
   /// The allow screen's eyebrow.
   ///
   /// - Parameter account: This account as people know it.
-  /// - Returns: "Atlas in Atlas"
+  /// - Returns: "Atlas in the Atlas account"
   static func atlasIn(_ account: String) -> String {
-    "Atlas in \(account)"
+    "Atlas in \(named(account))"
   }
 
   /// The allow screen's headline.
@@ -208,7 +243,7 @@ enum OnboardingWords {
   /// - Parameter asker: The asking account as people know it.
   /// - Returns: "Let Ismayil use this account"
   static func letUse(_ asker: String) -> String {
-    "Let \(asker) use this account"
+    "Let \(named(asker)) use this account"
   }
 
   /// What allowing means.
@@ -267,6 +302,6 @@ enum OnboardingWords {
   /// - Parameter asker: The account to switch back to, as people know it.
   /// - Returns: "Switch back to Ismayil."
   static func switchBack(to asker: String) -> String {
-    "Switch back to \(asker)."
+    "Switch back to \(named(asker))."
   }
 }

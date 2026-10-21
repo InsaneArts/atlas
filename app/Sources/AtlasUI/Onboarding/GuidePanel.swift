@@ -26,6 +26,7 @@ struct GuidePanel: View {
       ProgressPill(text: state.pill, done: state.isOn)
       Button("Back") { send(.closeGuide) }
         .buttonStyle(.capsule(.plain))
+        .keyboardShortcut(.cancelAction)
     }
     .padding(.horizontal, OnboardingLayout.guideSideInset)
     .padding(.top, OnboardingLayout.guideTop)

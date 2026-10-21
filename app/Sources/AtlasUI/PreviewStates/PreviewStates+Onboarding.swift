@@ -4,18 +4,25 @@
     @MainActor package static var onboarding: [PreviewState<OnboardingState>] {
       [
         PreviewState(name: "Loading", value: onboardingLoading),
+        PreviewState(name: "Loading, failed", value: onboardingLoadingFailed),
         PreviewState(name: "Welcome", value: onboardingWelcome),
         PreviewState(name: "Choose", value: onboardingChoose),
+        PreviewState(name: "Choose, many accounts", value: onboardingChooseMany),
+        PreviewState(name: "Choose, a problem", value: onboardingChooseProblem),
+        PreviewState(name: "Choose, only the helper set up", value: onboardingChooseOnly),
         PreviewState(name: "Create", value: onboardingCreate),
         PreviewState(name: "Create, working", value: onboardingCreateWorking),
         PreviewState(name: "Switch", value: onboardingSwitch),
         PreviewState(name: "Switch, open Atlas", value: onboardingSwitchOpenAtlas),
+        PreviewState(name: "Switch, a long name", value: onboardingSwitchLong),
         PreviewState(name: "Finishing", value: onboardingFinishing),
         PreviewState(name: "Finishing, passed", value: onboardingFinishingPassed),
         PreviewState(name: "Finishing, failed", value: onboardingFinishingFailed),
         PreviewState(name: "Agents", value: onboardingAgents),
+        PreviewState(name: "Agents, not checked", value: onboardingAgentsNotChecked),
         PreviewState(name: "Done", value: onboardingDone),
         PreviewState(name: "Helper allow", value: onboardingAllow),
+        PreviewState(name: "Helper allow, a long name", value: onboardingAllowLong),
         PreviewState(name: "Helper permissions", value: onboardingPermissions),
         PreviewState(name: "Helper guide", value: onboardingGuide),
         PreviewState(name: "Helper done", value: onboardingHelperDone),
@@ -83,10 +90,14 @@
       return state
     }()
 
-    /// The helper chosen, not logged in yet.
+    /// The helper chosen, not logged in yet: until it answers, another account can be chosen.
     @MainActor package static let onboardingSwitch = OnboardingState(
       content: .screen(.switchToHelper(onboardingSwitchScreen)),
-      footer: OnboardingFooterState(back: nil, next: nil, dots: .init(index: 2, count: 6)),
+      footer: OnboardingFooterState(
+        back: OnboardingFooterAction(title: .chooseAnother, event: .chooseAnother, isEnabled: true, isDefault: false),
+        next: nil,
+        dots: .init(index: 2, count: 6)
+      ),
       note: .none,
       isBusy: false
     )
@@ -97,9 +108,9 @@
       state.content = .screen(
         .switchToHelper(
           OnboardingSwitchScreenState(
-            title: "Now log in to Atlas.",
-            logInDetail: "Choose Atlas on the lock screen",
-            openAtlasTitle: "Open Atlas in Atlas",
+            title: "Now log in to the Atlas account.",
+            logInDetail: "Choose the Atlas account on the lock screen",
+            openAtlasTitle: "Open Atlas in the Atlas account",
             progress: .init(logIn: .done, openAtlas: .current, allow: .waiting),
             showsLockButton: true,
             waiting: "Next: Lock and Switch, then open Atlas there."
@@ -205,7 +216,158 @@
       isBusy: false
     )
 
+    /// The first reading failed: why, and Try Again.
+    @MainActor package static let onboardingLoadingFailed = OnboardingState(
+      content: .loading(problem: onboardingLoadingProblem),
+      footer: OnboardingFooterState(),
+      note: .problem(onboardingLoadingProblem),
+      isBusy: false
+    )
+
+    /// The account choice with more standard accounts than the window holds: the rows scroll, the footer stays.
+    @MainActor package static let onboardingChooseMany: OnboardingState = {
+      var state = onboardingChoose
+      state.content = .screen(
+        .choose(
+          OnboardingChooseScreenState(
+            isNewAccountPicked: true,
+            accounts: [
+              onboardingAccount("Test Account", "testaccount"),
+              onboardingAccount("Guest Kid", "kid"),
+              onboardingAccount("Maria Fernanda Montgomery-Castellanos de la Vega", "maria"),
+              onboardingAccount("Studio", "studio"),
+            ]
+          )
+        )
+      )
+      return state
+    }()
+
+    /// The account choice with two standard accounts, and why the last choice failed.
+    @MainActor package static let onboardingChooseProblem: OnboardingState = {
+      var state = onboardingChoose
+      state.content = .screen(
+        .choose(
+          OnboardingChooseScreenState(
+            isNewAccountPicked: true,
+            accounts: [onboardingAccount("Test Account", "testaccount"), onboardingAccount("Guest Kid", "kid")]
+          )
+        )
+      )
+      state.note = .problem("macOS could not say whether kid is an administrator.")
+      return state
+    }()
+
+    /// Atlas was set up in the account chosen before, so that account is the one choice.
+    @MainActor package static let onboardingChooseOnly: OnboardingState = {
+      var state = onboardingChoose
+      state.content = .screen(
+        .choose(
+          OnboardingChooseScreenState(
+            isNewAccountPicked: false,
+            accounts: [
+              OnboardingAccountChoice(
+                id: .existing("atlas"),
+                title: "Atlas",
+                detail: "atlas · standard account on this Mac",
+                mark: .letter("A"),
+                isSelected: true
+              )
+            ],
+            offersNewAccount: false
+          )
+        )
+      )
+      state.footer.back = nil
+      return state
+    }()
+
+    /// A helper with a long name, never answered, and a switch that failed: Choose Another Account in Back's place.
+    @MainActor package static let onboardingSwitchLong: OnboardingState = {
+      var state = onboardingSwitch
+      let name = "Maria Fernanda Montgomery-Castellanos de la Vega"
+      state.content = .screen(
+        .switchToHelper(
+          OnboardingSwitchScreenState(
+            title: "Now log in to \(name).",
+            logInDetail: "Choose \(name) on the lock screen",
+            openAtlasTitle: "Answer the welcome questions, then open Atlas there",
+            progress: .init(logIn: .current, openAtlas: .waiting, allow: .waiting),
+            showsLockButton: true,
+            waiting: nil
+          )
+        )
+      )
+      state.note = .problem("The screen could not be locked: loginwindow did not answer within ten seconds.")
+      return state
+    }()
+
+    /// `atlas agents status` failed: the agents listed unchecked, many projects chosen, and Continue skips the step.
+    @MainActor package static let onboardingAgentsNotChecked: OnboardingState = {
+      var state = onboardingAgents
+      state.content = .screen(
+        .agents(
+          OnboardingAgentsScreenState(
+            agents: [
+              OnboardingAgentItem(
+                id: "claude",
+                title: "Claude Code",
+                detail: "Not checked yet.",
+                isOn: false,
+                isEnabled: false
+              ),
+              OnboardingAgentItem(
+                id: "codex",
+                title: "Codex",
+                detail: "Not checked yet.",
+                isOn: false,
+                isEnabled: false
+              ),
+            ],
+            projects: onboardingAgentsManyProjects
+          )
+        )
+      )
+      state.footer.next?.isEnabled = true
+      state.note = .problem("Atlas couldn't check your agents. Continue to skip this, or wait while it tries again.")
+      return state
+    }()
+
+    /// In the helper: a person with a long name asks a helper with a long name.
+    @MainActor package static let onboardingAllowLong: OnboardingState = {
+      var state = onboardingAllow
+      let asker = "Christopher Alexander Montgomery-Smith"
+      state.content = .screen(
+        .allow(
+          OnboardingAllowScreenState(
+            initial: "C",
+            eyebrow: "Atlas in Maria Fernanda Montgomery-Castellanos de la Vega",
+            title: "Let \(asker) use this account",
+            lede:
+              "\(asker)'s agents will open apps here, click and type, while \(asker) keeps working in their own account. You allow this once; Atlas then starts here by itself."
+          )
+        )
+      )
+      return state
+    }()
+
     // MARK: Pieces
+
+    /// A standard account in the choice, not picked.
+    ///
+    /// - Parameters:
+    ///   - title: Its full name.
+    ///   - name: Its short name.
+    /// - Returns: The account's row.
+    @MainActor static func onboardingAccount(_ title: String, _ name: String) -> OnboardingAccountChoice {
+      OnboardingAccountChoice(
+        id: .existing(name),
+        title: title,
+        detail: "\(name) · standard account on this Mac",
+        mark: .letter(String(title.prefix(1))),
+        isSelected: false
+      )
+    }
 
     /// The form a new window opens with.
     @MainActor package static let onboardingForm = OnboardingAccountForm()
@@ -241,19 +403,19 @@
 
     /// The first of the three switch steps.
     @MainActor static let onboardingSwitchScreen = OnboardingSwitchScreenState(
-      title: "Now log in to Atlas.",
-      logInDetail: "Choose Atlas on the lock screen",
+      title: "Now log in to the Atlas account.",
+      logInDetail: "Choose the Atlas account on the lock screen",
       openAtlasTitle: "Answer the welcome questions, then open Atlas there",
       progress: .init(logIn: .current, openAtlas: .waiting, allow: .waiting),
       showsLockButton: true,
-      waiting: "Next: Lock and Switch, then log in to Atlas."
+      waiting: "Next: Lock and Switch, then log in to the Atlas account."
     )
 
     /// The checklist with its live check running.
     @MainActor static let onboardingFinishingScreen = OnboardingFinishingScreenState(
       title: "Checking everything",
       tail: "end to end.",
-      loggedIn: "Atlas is logged in",
+      loggedIn: "The Atlas account is logged in",
       live: .busy,
       liveNote: "checking…",
       failure: nil
@@ -262,6 +424,8 @@
     /// The checklist with its live check failed.
     @MainActor static let onboardingFinishingFailedScreen: OnboardingFinishingScreenState = {
       var screen = onboardingFinishingScreen
+      screen.title = "Almost there."
+      screen.tail = "One check didn't pass."
       screen.live = .failed
       screen.liveNote = "failed"
       screen.failure = "The test screenshot never arrived."
@@ -300,14 +464,14 @@
     /// Done, opening at login.
     @MainActor static let onboardingDoneScreen = OnboardingDoneScreenState(
       lede:
-        "That was the whole setup. Atlas lives in your menu bar: ask your agent to check something on screen, and watch it work from there. After a restart, just log in to Atlas again; Atlas does the rest.",
+        "That was the whole setup. Atlas lives in your menu bar: ask your agent to check something on screen, and watch it work from there. After a restart, just log in to the Atlas account again; Atlas does the rest.",
       opensAtLogin: true
     )
 
     /// Ismayil asks the Atlas account.
     @MainActor static let onboardingAllowScreen = OnboardingAllowScreenState(
       initial: "I",
-      eyebrow: "Atlas in Atlas",
+      eyebrow: "Atlas in the Atlas account",
       title: "Let Ismayil use this account",
       lede:
         "Ismayil's agents will open apps here, click and type, while Ismayil keeps working in their own account. You allow this once; Atlas then starts here by itself."
@@ -349,6 +513,25 @@
     @MainActor static let onboardingHelperDoneScreen = OnboardingHelperDoneScreenState(tail: "Switch back to Ismayil.")
 
     /// What blocks a Mac whose Atlas.app is elsewhere.
-    @MainActor static let onboardingBlockedReason = "Atlas.app must be in Applications"
+    @MainActor static let onboardingBlockedReason =
+      "Atlas.app must be in Applications, so the helper account can run it. Move it there, then open it again."
+
+    /// Why the first reading failed, as the command said it.
+    @MainActor package static let onboardingLoadingProblem =
+      "Atlas could not run its command line at /Applications/Atlas.app/Contents/MacOS/atlas."
+
+    /// Five chosen project folders, more than one row of chips holds.
+    @MainActor static let onboardingAgentsManyProjects = [
+      "Opie", "Jolt", "understudy", "markdown2pdf", "InsaneArts Website",
+    ]
+    .map { name in
+      OnboardingProjectItem(
+        id: "/Users/me/dev/\(name)",
+        name: name,
+        isTaught: false,
+        isRemovable: true,
+        removeLabel: "Remove \(name)"
+      )
+    }
   }
 #endif

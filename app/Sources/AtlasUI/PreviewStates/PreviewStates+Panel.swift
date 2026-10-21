@@ -28,7 +28,7 @@
       facts: [
         Fact(name: "Helper", value: "Atlas"),
         Fact(name: "Display", value: "1512 × 982"),
-        Fact(name: "Last action", value: "Agent click · 7 s ago"),
+        Fact(name: "Last action", value: "Agent took a screenshot · 7 s ago"),
       ],
       isViewerPrimary: true,
       secondary: .switchToHelper(isEnabled: true),

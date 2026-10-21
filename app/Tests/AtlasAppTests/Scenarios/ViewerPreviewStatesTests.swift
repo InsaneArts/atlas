@@ -24,7 +24,7 @@
       let reply: [String: Any] = [
         "ready": true,
         "canObserve": true,
-        "checks": [["name": "Helper session", "ok": true], ["name": "Input service", "ok": ok]],
+        "checks": [["name": "Helper running", "ok": true], ["name": "Input service ready", "ok": ok]],
         "session": ["user": ["name": "Atlas"], "inputService": ["ok": true, "ready": true]],
         "capabilities": ["nativeDialogs": ["state": "unknown", "reason": "Run atlas verify-native to check."]],
         "overview": [
@@ -114,6 +114,11 @@
           unavailable: "Atlas isn't answering in the helper. Open Getting Started if this lasts."
         ),
         "Notice": shown(try reported("observing"), notice: "Control released."),
+        "Notice, long": shown(
+          try reported("observing"),
+          notice:
+            "Control ended because the helper's screen changed size. Take control again once the picture settles, and nothing you sent is lost."
+        ),
         "Logged out": shown(
           try reported("loggedOut", reason: "The helper is logged out, so agents can't use it"),
           picture: false,

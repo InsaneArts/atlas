@@ -45,8 +45,10 @@ struct CapsuleButtonStyle: ButtonStyle {
         Capsule()
           .fill(background)
       )
+      // A capsule's shape drawn as a rounded rectangle: a stroked `Capsule` leaves a hairline outside each end where
+      // AppKit draws the view into an image, as the design renders do, and this one draws the same edge without it.
       .overlay(
-        Capsule()
+        RoundedRectangle(cornerRadius: height / 2, style: .circular)
           .strokeBorder(look == .glass ? Color.strokeStrong : .clear, lineWidth: Stroke.hairline)
       )
       .contentShape(Capsule())

@@ -17,6 +17,7 @@
       ("06-paused", PreviewStates.viewerPaused),
       ("07-unavailable", PreviewStates.viewerUnavailable),
       ("08-notice", PreviewStates.viewerNotice),
+      ("08-notice-long", PreviewStates.viewerNoticeLong),
       ("09-logged-out", PreviewStates.viewerLoggedOut),
       ("10-paused-before-picture", PreviewStates.viewerPausedBeforePicture),
       ("11-connecting", PreviewStates.viewerConnecting),

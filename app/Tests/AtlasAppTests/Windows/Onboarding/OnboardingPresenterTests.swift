@@ -190,8 +190,8 @@ struct OnboardingPresenterTests {
   @Test(
     "the switch screen names the next step until the person switches back",
     arguments: [
-      (false, false, true, false, "Next: Lock and Switch, then log in to Atlas."),
-      (true, false, false, false, "Waiting for Atlas to open in Atlas…"),
+      (false, false, true, false, "Next: Lock and Switch, then log in to the Atlas account."),
+      (true, false, false, false, "Waiting for Atlas to open in the Atlas account…"),
       (true, false, true, false, "Next: Lock and Switch, then open Atlas there."),
       (true, true, true, false, "Waiting for the two permissions…"),
       (true, true, false, true, "Waiting for you to switch back…"),
@@ -231,7 +231,7 @@ struct OnboardingPresenterTests {
     snapshot.finish = .running
     let running = OnboardingPresenter.finishing(snapshot)
     #expect(running.title == "Checking everything")
-    #expect(running.loggedIn == "Atlas is logged in")
+    #expect(running.loggedIn == "The Atlas account is logged in", "the default helper is named as an account")
     #expect(running.live == .busy && running.liveNote == "checking…")
     #expect(running.failure == nil)
     snapshot.finish = .passed
@@ -241,6 +241,7 @@ struct OnboardingPresenterTests {
     snapshot.finish = .failed("The test screenshot never arrived")
     let failed = OnboardingPresenter.finishing(snapshot)
     #expect(failed.live == .failed && failed.liveNote == "failed")
+    #expect(failed.title == "Almost there.", "a failed check no longer reads as checking")
     #expect(failed.failure == "The test screenshot never arrived")
   }
 
@@ -248,6 +249,7 @@ struct OnboardingPresenterTests {
   func agentRows() throws {
     func agent(_ id: AgentID, found: Bool, connected: Bool) -> AgentChoice {
       var agent = AgentChoice(id: id)
+      agent.checked = true
       agent.found = found
       agent.connected = connected
       return agent
@@ -269,6 +271,54 @@ struct OnboardingPresenterTests {
     let missing = try #require(OnboardingPresenter.agents(snapshot).agents.first)
     #expect(missing.detail == OnboardingWords.agentMissing)
     #expect(!missing.isEnabled)
+    snapshot.agents = AgentChoice.all
+    snapshot.agentsFailed = true
+    let unchecked = OnboardingPresenter.state(snapshot)
+    #expect(
+      Self.agentsScreen(unchecked)?.agents.map(\.detail) == [
+        OnboardingWords.agentNotChecked, OnboardingWords.agentNotChecked,
+      ],
+      "an agent the failed reading never checked reads unchecked, not missing"
+    )
+    #expect(unchecked.footer.next?.isEnabled == true, "Continue skips the step")
+  }
+
+  /// The agents screen a state shows, if it shows it.
+  ///
+  /// - Parameter state: The window's state.
+  /// - Returns: The agents screen, or nil.
+  private static func agentsScreen(_ state: OnboardingState) -> OnboardingAgentsScreenState? {
+    if case .screen(.agents(let screen)) = state.content { return screen }
+    return nil
+  }
+
+  @Test("the choice never picks an account it does not show, and offers no new account once one was set up")
+  func onlyShownAccountsArePicked() throws {
+    var unpaired = Self.helper(answering: false)
+    unpaired["paired"] = false
+    var snapshot = Self.snapshot(try Self.person(unpaired))
+    snapshot.facts.candidates = [OnboardingFacts.Candidate(name: "atlas", realName: "Atlas")]
+    snapshot.facts.onlyChoice = true
+    snapshot.picked = .newAccount
+    let state = OnboardingPresenter.state(snapshot)
+    #expect(state.footer.next?.isEnabled == false, "a new account is not offered, so it is not picked")
+    guard case .screen(.choose(let choose)) = state.content else {
+      Issue.record("the choice is not shown")
+      return
+    }
+    #expect(!choose.offersNewAccount && !choose.isNewAccountPicked)
+    snapshot.picked = .existing("qa")
+    #expect(OnboardingPresenter.state(snapshot).footer.next?.isEnabled == false, "qa is not listed")
+  }
+
+  @Test("the switch offers Choose Another Account in Back's place only while the helper asked never answered")
+  func chooseAnotherWhileUnanswered() throws {
+    var helper = Self.helper(signedIn: false, answering: false, allowed: false)
+    helper["forgettable"] = true
+    let unanswered = OnboardingPresenter.state(Self.snapshot(try Self.person(helper)))
+    #expect(unanswered.footer.back?.event == .chooseAnother)
+    helper["forgettable"] = false
+    #expect(OnboardingPresenter.state(Self.snapshot(try Self.person(helper))).footer.back == nil)
   }
 
   @Test("the guide counts its permission and ticks its steps once the switch is on")

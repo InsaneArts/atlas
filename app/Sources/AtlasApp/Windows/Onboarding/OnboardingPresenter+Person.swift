@@ -8,16 +8,17 @@ extension OnboardingPresenter {
   /// - Returns: The choice's rows.
   static func choose(_ snapshot: OnboardingSnapshot) -> OnboardingChooseScreenState {
     OnboardingChooseScreenState(
-      isNewAccountPicked: snapshot.picked == .newAccount,
+      isNewAccountPicked: snapshot.shownPick == .newAccount,
       accounts: snapshot.facts.candidates.map { candidate in
         OnboardingAccountChoice(
           id: .existing(candidate.name),
           title: candidate.title,
           detail: OnboardingWords.candidateDetail(candidate.name),
           mark: .letter(candidate.title.initial),
-          isSelected: snapshot.picked == .existing(candidate.name)
+          isSelected: snapshot.shownPick == .existing(candidate.name)
         )
-      }
+      },
+      offersNewAccount: !snapshot.facts.onlyChoice
     )
   }
 
@@ -79,16 +80,21 @@ extension OnboardingPresenter {
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The finishing screen.
   static func finishing(_ snapshot: OnboardingSnapshot) -> OnboardingFinishingScreenState {
-    let passed = snapshot.finish == .passed
     let live: (state: CheckState, note: String, failure: String?) =
       switch snapshot.finish {
       case .passed: (.done, OnboardingWords.passed, nil)
       case .failed(let message): (.failed, OnboardingWords.failed, message)
       case .idle, .running: (.busy, OnboardingWords.checkingNote, nil)
       }
+    let headline: (title: String, tail: String) =
+      switch snapshot.finish {
+      case .passed: (OnboardingWords.everythingWorks, OnboardingWords.agentsHaveAMac)
+      case .failed: (OnboardingWords.almostThere, OnboardingWords.oneCheckFailed)
+      case .idle, .running: (OnboardingWords.checking, OnboardingWords.endToEnd)
+      }
     return OnboardingFinishingScreenState(
-      title: passed ? OnboardingWords.everythingWorks : OnboardingWords.checking,
-      tail: passed ? OnboardingWords.agentsHaveAMac : OnboardingWords.endToEnd,
+      title: headline.title,
+      tail: headline.tail,
       loggedIn: OnboardingWords.loggedIn(snapshot.facts.helper.title),
       live: live.state,
       liveNote: live.note,
@@ -105,7 +111,9 @@ extension OnboardingPresenter {
     OnboardingAgentsScreenState(
       agents: snapshot.agents.map { agent in
         let detail =
-          if agent.connected {
+          if !agent.checked {
+            snapshot.agentsFailed ? OnboardingWords.agentNotChecked : OnboardingWords.agentChecking
+          } else if agent.connected {
             OnboardingWords.agentConnected
           } else if agent.found {
             OnboardingWords.agentFound

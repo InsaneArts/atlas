@@ -14,6 +14,8 @@ package enum OnboardingEvent: Equatable, Sendable {
   case createAccount
   /// Lock and Switch, to log in to the helper.
   case lockAndSwitch
+  /// Choose Another Account, while the helper asked never answered.
+  case chooseAnother
   /// Check Again when blocked: read the facts again.
   case checkAgain
   /// Try Again after a failed check.

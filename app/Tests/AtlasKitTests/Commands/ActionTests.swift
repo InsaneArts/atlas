@@ -20,6 +20,7 @@ struct ActionTests {
         .createAccount(account: "atlas", fullName: "Atlas"),
         ["onboarding", "create", "--account", "atlas", "--full-name", "Atlas"]
       ),
+      (.forgetHelper, ["onboarding", "forget"]),
       (.finishSetup, ["onboarding", "finish"]),
       (.setOpensAtLogin(true), ["onboarding", "login", "on"]),
       (.setOpensAtLogin(false), ["onboarding", "login", "off"]),

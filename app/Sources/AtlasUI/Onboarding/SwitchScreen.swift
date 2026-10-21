@@ -15,7 +15,7 @@ struct SwitchScreen: View {
   var body: some View {
     ScreenColumn(width: OnboardingLayout.listColumn) {
       Eyebrow(text: "Helper account")
-      Headline(title: state.title, tail: "Just this once, to set Atlas up there.")
+      Headline(title: state.title, tail: OnboardingScreen.switchTail)
       VStack(spacing: Spacing.m) {
         StepRow(index: 1, title: "Lock and switch", detail: state.logInDetail, state: state.progress.logIn)
         StepRow(

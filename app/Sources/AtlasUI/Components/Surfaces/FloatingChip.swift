@@ -2,6 +2,8 @@ import SwiftUI
 
 /// A status capsule floating over the helper's desktop, as the onboarding's pills look.
 struct FloatingChip<Content: View>: View {
+  /// The most lines its text takes: one for a status, a few for a notice that must be read whole.
+  var lines = 1
   /// What the chip says: a few texts and marks, laid in a row.
   @ViewBuilder let content: Content
 
@@ -10,23 +12,30 @@ struct FloatingChip<Content: View>: View {
       content
     }
     .font(Typography.font(.callout))
-    .lineLimit(1)
+    .lineLimit(lines)
+    .multilineTextAlignment(.center)
     .padding(.horizontal, Spacing.xl)
-    .frame(height: ControlHeight.compactRow)
+    .padding(.vertical, Spacing.s)
+    .frame(minHeight: ControlHeight.compactRow)
     .background(
-      Capsule()
+      shape
         .fill(.ultraThinMaterial)
     )
     .background(
-      Capsule()
+      shape
         .fill(Color.fillChip)
     )
     .overlay(
-      Capsule()
+      shape
         .strokeBorder(Color.strokeStrong, lineWidth: Stroke.hairline)
     )
     .environment(\.colorScheme, .dark)
     .accessibilityElement(children: .combine)
+  }
+
+  /// A capsule while the chip is one line high; its ends keep that roundness as more lines make it taller.
+  private var shape: RoundedRectangle {
+    RoundedRectangle(cornerRadius: ControlHeight.compactRow / 2, style: .circular)
   }
 }
 

@@ -15,7 +15,7 @@ struct FinishingScreen: View {
       CardGroup {
         CheckRow(text: state.loggedIn, state: .done, note: "in the background")
         SeparatorLine()
-        CheckRow(text: "Atlas runs in the helper", state: .done, note: "starts by itself")
+        CheckRow(text: "Atlas runs there", state: .done, note: "starts by itself")
         SeparatorLine()
         CheckRow(text: "Screen Recording and Accessibility", state: .done, note: "allowed")
         SeparatorLine()
@@ -26,6 +26,7 @@ struct FinishingScreen: View {
         Note(text: failure, tone: .attention)
         Button("Try Again") { send(.retryFinish) }
           .buttonStyle(.capsule(.glass))
+          .keyboardShortcut(.defaultAction)
       } else {
         Note(text: "The last check starts input in the helper, takes a screenshot and confirms it.")
       }

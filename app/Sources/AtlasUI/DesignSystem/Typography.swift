@@ -2,6 +2,12 @@ import SwiftUI
 
 /// Builds fonts from the type scale. A view says `.font(Typography.font(.body, weight: .semibold))`, never a size.
 enum Typography {
+  /// 0.75: the least a headline shrinks to keep within its lines, as a long account name needs, so it still reads as
+  /// a headline rather than running on or being cut short.
+  static let leastHeadlineScale: CGFloat = 0.75
+  /// 2: the most lines a headline's statement or its tail takes; past them it shrinks.
+  static let headlineLines = 2
+
   /// A system font from the scale.
   ///
   /// - Parameters:

@@ -11,7 +11,7 @@ struct CreateScreen: View {
   var body: some View {
     ScreenColumn {
       Eyebrow(text: "New account")
-      Headline(title: "Create the helper account.", tail: state.tail)
+      Headline(title: OnboardingScreen.createTitle, tail: state.tail)
       CardGroup {
         FieldRow(label: "Full name", text: $form.fullName)
         SeparatorLine()

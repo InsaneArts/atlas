@@ -231,9 +231,10 @@ pub async fn status(config_path: &Path) -> Result<Value> {
     // once it wrote settings): the window offers the choice again, and
     // choosing another account replaces these settings. A helper already
     // prepared for this account is the only choice, as `choose` keeps it.
+    let only_choice = !paired && !answering && prepared(&helper);
     let candidates = if paired || answering {
         Vec::new()
-    } else if prepared(&helper) {
+    } else if only_choice {
         candidates()?
             .into_iter()
             .filter(|candidate| candidate["uid"] == helper.uid)
@@ -242,6 +243,15 @@ pub async fn status(config_path: &Path) -> Result<Value> {
         candidates()?
     };
 
+    // Asked by this window but never answered: the request may be taken
+    // back, so another account can be chosen.
+    let forgettable = may_forget(
+        requested(uid, &helper),
+        setup::migrate::in_effect_for(helper.uid, &helper.home),
+        answering || answers(&config),
+        prepared(&helper),
+    );
+
     Ok(json!({
         "ok": true,
         "role": "controller",
@@ -249,6 +259,7 @@ pub async fn status(config_path: &Path) -> Result<Value> {
         "app": app,
         "configured": true,
         "candidates": candidates,
+        "onlyChoice": only_choice,
         "helper": {
             "exists": true,
             "uid": helper.uid,
@@ -257,6 +268,7 @@ pub async fn status(config_path: &Path) -> Result<Value> {
             "administrator": admin,
             "leftoverSession": leftover,
             "paired": paired,
+            "forgettable": forgettable,
             "signedIn": signed_in,
             "answering": answering,
             "onConsole": reply["session"]["onConsole"] == true,
@@ -348,9 +360,24 @@ fn settings(config_path: &Path) -> Result<Option<Config>> {
 /// request names it, or a setup with it (not an earlier account with its
 /// user ID) is recorded.
 fn asked(controller: u32, helper: &setup::Account) -> bool {
+    requested(controller, helper) || setup::migrate::in_effect_for(helper.uid, &helper.home)
+}
+
+/// Whether the shared request is this account's (`controller`), naming
+/// `helper`.
+fn requested(controller: u32, helper: &setup::Account) -> bool {
     request().is_some_and(|pairing| {
-        pairing.controller_uid == controller && pairing.helper_uid == helper.uid
-    }) || setup::migrate::in_effect_for(helper.uid, &helper.home)
+        pairing.controller_uid == controller
+            && pairing.helper_uid == helper.uid
+            && pairing.helper_name == helper.name
+    })
+}
+
+/// Whether a request may be taken back: this account's own, for a helper
+/// that never answered, was never prepared for it and has no setup
+/// recorded. A real setup is never undone this way.
+fn may_forget(requested: bool, recorded: bool, answered: bool, prepared: bool) -> bool {
+    requested && !recorded && !answered && !prepared
 }
 
 /// Whether `helper`'s Atlas folder was prepared for this account, as `atlas
@@ -493,6 +520,37 @@ pub fn choose(config_path: &Path, name: &str) -> Result<Value> {
         "config": config_path,
         "command": linked,
     }))
+}
+
+/// Take back this account's request of the helper its settings name, so
+/// the window can offer the choice again: only while that helper never
+/// answered, was never prepared for this account and has no setup recorded.
+/// The settings stay; choosing another account replaces them.
+pub fn forget(config_path: &Path) -> Result<Value> {
+    let (uid, _, _) = me()?;
+    let config = Config::load(config_path)?;
+    let helper = setup::account_with_uid(config.helper_uid)?
+        .ok_or_else(|| problem("The helper account no longer exists."))?;
+
+    if !may_forget(
+        requested(uid, &helper),
+        setup::migrate::in_effect_for(helper.uid, &helper.home),
+        answers(&config),
+        prepared(&helper),
+    ) {
+        return Err(problem(format!(
+            "Atlas is already set up in {}, so it stays the helper.",
+            helper.name
+        )));
+    }
+
+    match fs::remove_file(REQUEST) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+
+    Ok(json!({"ok": true, "forgotten": helper.name}))
 }
 
 /// Create a standard account. Its password arrives on standard input (from
@@ -769,7 +827,7 @@ fn signed_executable() -> Result<PathBuf> {
     let executable = init::app_executable()?;
     if !setup::developer_id(&executable) {
         return Err(problem(
-            "This Atlas.app is not signed by Atlas's developer; install it again",
+            "This Atlas.app is not signed by Atlas's developer. Install it again.",
         ));
     }
 
@@ -866,7 +924,7 @@ pub async fn finish(config_path: &Path) -> Result<Value> {
     let doctor = crate::capability::doctor(client.status().await, config.helper_uid);
     if doctor["ready"] != true {
         return Err(problem(
-            "Setup finished but is not ready; run atlas doctor to see why",
+            "Atlas is set up but not ready yet. Try again in a moment.",
         ));
     }
 
@@ -1029,6 +1087,23 @@ mod tests {
 
         fs::create_dir_all(layout.daemon()).unwrap();
         assert!(prepared(&helper));
+    }
+
+    /// Only a request this account made, for a helper that never answered,
+    /// was never prepared and has no setup recorded, may be taken back.
+    #[test]
+    fn only_an_unanswered_request_may_be_taken_back() {
+        assert!(may_forget(true, false, false, false));
+        assert!(
+            !may_forget(false, false, false, false),
+            "not this account's"
+        );
+        assert!(!may_forget(true, true, false, false), "a setup is recorded");
+        assert!(!may_forget(true, false, true, false), "the helper answered");
+        assert!(
+            !may_forget(true, false, false, true),
+            "prepared for this account"
+        );
     }
 
     #[test]
