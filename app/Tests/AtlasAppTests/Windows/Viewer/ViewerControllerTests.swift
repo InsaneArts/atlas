@@ -196,6 +196,22 @@ struct ViewerControllerTests {
     #expect(!redrawn.withLock { $0 })
   }
 
+  @Test("Log In… shows in the viewer what locking the screen said, a failure included")
+  func logInSaysHowItWent() async {
+    let viewer = ViewerController(
+      service: ScriptedService(),
+      preferences: .memory(rate: 0),
+      clock: { 0 },
+      heartbeatInterval: ViewerController.heartbeatEvery,
+      nap: ViewerController.sleep,
+      logIn: { "The screen could not lock" },
+      showKeys: { _ in },
+      doubleClickInterval: { 0.5 }
+    )
+    await viewer.askToLogIn()
+    #expect(viewer.session.notice == "The screen could not lock")
+  }
+
   @Test("a saved rate that is not offered falls back to every 2 seconds")
   func anUnofferedRateFallsBack() {
     #expect(ViewerController.scripted(ScriptedService(), rate: 3).rate == .everyTwoSeconds)

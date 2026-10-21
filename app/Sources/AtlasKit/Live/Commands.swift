@@ -6,8 +6,9 @@ package struct Commands: CommandRunning {
   /// The `atlas` executable it runs.
   package let executable: URL
   /// The environment every command runs in: the app's own, with `ATLAS_ACTOR=viewer`, so what the person does from
-  /// the app is recorded as theirs, not an agent's. Its settings arrive as `ATLAS_CONFIG`, which every command
-  /// inherits.
+  /// the app is recorded as theirs, not an agent's, and without `XPC_SERVICE_NAME`, which launchd sets when it opens
+  /// the app at login and which would make `atlas menubar` take itself for that login job. Its settings arrive as
+  /// `ATLAS_CONFIG`, which every command inherits.
   package let environment: [String: String]
 
   /// Creates a runner for one `atlas`.
@@ -19,7 +20,9 @@ package struct Commands: CommandRunning {
   ///   - environment: The app's environment, which every command inherits.
   package init(executable: URL, environment: [String: String]) {
     self.executable = executable
-    self.environment = environment.merging(["ATLAS_ACTOR": "viewer"]) { $1 }
+    var environment = environment.merging(["ATLAS_ACTOR": "viewer"]) { $1 }
+    environment["XPC_SERVICE_NAME"] = nil
+    self.environment = environment
   }
 
   /// The `atlas` beside this app's own executable (in Atlas.app).

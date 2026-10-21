@@ -1,4 +1,5 @@
 import AtlasKit
+import Foundation
 import Testing
 
 @testable import AtlasApp
@@ -33,6 +34,19 @@ struct ViewerSnapshotRulesTests {
     snapshot.reading.status = try status(["overview": ["mode": mode, "reason": reason, "recoverable": true]])
     let offered = try #require(snapshot.offeredRecovery, "recovery is still offered")
     #expect(snapshot.recovery == .alert(offered))
+  }
+
+  @Test("control waits for a fresh picture: one as old as the stale mark is not taken over")
+  func aStalePictureIsNotTakenOver() throws {
+    var snapshot = ViewerSnapshot()
+    snapshot.reading.status = try status(["ready": true, "overview": ["mode": "observing"]])
+    snapshot.reading.ready = true
+    snapshot.reading.frame = Frame(png: Data(), id: "f", revision: "r", display: .init(width: 4, height: 3))
+    snapshot.reading.frameAt = 0
+    snapshot.now = Freshness.stale - 1
+    try #require(snapshot.canTakeControl, "a fresh picture is taken over")
+    snapshot.now = Freshness.stale
+    #expect(!snapshot.canTakeControl)
   }
 
   @Test("a recovery running here shows its alert even when that alert was set aside")

@@ -12,6 +12,8 @@ package struct ViewerStatus: Decodable, Equatable, Sendable {
   package var nextSteps: [String] = []
   /// Why the service could not read the helper, when it could not.
   package var error: String?
+  /// Whether a viewer holds mouse and keyboard control, as the service's lease says; nil when it does not say.
+  package var controlActive: Bool?
   /// The helper's login session.
   package var session = Session()
   /// What the helper has shown it can do.
@@ -24,7 +26,7 @@ package struct ViewerStatus: Decodable, Equatable, Sendable {
 
   /// The root fields of `status.json`.
   enum CodingKeys: String, CodingKey {
-    case ready, canObserve, checks, nextSteps, error, session, capabilities, overview
+    case ready, canObserve, checks, nextSteps, error, controlActive, session, capabilities, overview
   }
 
   /// Decodes a status, keeping the default of every field that is missing or of the wrong type.
@@ -38,6 +40,7 @@ package struct ViewerStatus: Decodable, Equatable, Sendable {
     checks = (try? container.decodeIfPresent([Check].self, forKey: .checks)) ?? []
     nextSteps = (try? container.decodeIfPresent([String].self, forKey: .nextSteps)) ?? []
     error = try? container.decodeIfPresent(String.self, forKey: .error)
+    controlActive = try? container.decodeIfPresent(Bool.self, forKey: .controlActive)
     session = (try? container.decodeIfPresent(Session.self, forKey: .session)) ?? Session()
     capabilities = (try? container.decodeIfPresent(Capabilities.self, forKey: .capabilities)) ?? Capabilities()
     overview = (try? container.decodeIfPresent(Overview.self, forKey: .overview)) ?? Overview()

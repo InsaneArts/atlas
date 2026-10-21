@@ -113,6 +113,34 @@ struct ViewerControllerControlTests {
     viewer.close()
   }
 
+  @Test("a status that says no viewer holds control any more, as after Release Control in the menu bar, ends it")
+  func aStatusWithNoViewerInControlEndsIt() async throws {
+    let service = ScriptedService()
+    let viewer = try await ViewerController.watching(service, nap: ViewerController.untilCancelled)
+    await viewer.takeControl()
+    try await service.revoke()
+    await viewer.readStatus()
+    try await settle("control never ended") { viewer.session.lease == nil }
+    #expect(viewer.session.notice == ViewerWords.releasedElsewhere)
+    viewer.close()
+  }
+
+  @Test("a status asked before the grant never ends the control it could not know of")
+  func aStatusAskedBeforeTheGrantKeepsControl() async throws {
+    let service = ScriptedService()
+    let viewer = try await ViewerController.watching(service, nap: ViewerController.untilCancelled)
+    service.hold = ["status"]
+    viewer.refresh()
+    try await settle("no reading started") { service.held["status"] != nil }
+    let asked = service.statusCalls
+    await viewer.takeControl()
+    service.resume("status")
+    // The reading under way, which says no viewer holds control, then the one the grant asked for.
+    try await settle("the reading after the grant never ended") { service.answered > asked }
+    #expect(viewer.session.lease == "lease")
+    viewer.close()
+  }
+
   @Test("hiding the window gives control back")
   func hidingTheWindowGivesControlBack() async throws {
     let viewer = try await ViewerController.watching(ScriptedService())

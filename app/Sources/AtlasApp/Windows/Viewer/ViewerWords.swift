@@ -77,6 +77,8 @@ enum ViewerWords {
   static let helperChanged = "The helper changed. Take control again when ready."
   /// The status said input is not ready, which ended control, when it gives no reason.
   static let notReady = "The helper isn't ready for mouse and keyboard."
+  /// The service said no viewer holds control any more: it was released from the menu bar, say.
+  static let releasedElsewhere = "Control ended outside this window. Take control again when ready."
   /// A stale picture ended control.
   static let stalePicture = "The picture stopped updating. Wait for a fresh one, then take control again."
   /// Typed text held a grapheme longer than the helper takes in one go.

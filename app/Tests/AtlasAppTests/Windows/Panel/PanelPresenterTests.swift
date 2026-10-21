@@ -112,6 +112,11 @@ struct PanelPresenterTests {
     #expect(settings.menu.recover == .enabled)
   }
 
+  @Test("Recover in the menu waits while the helper's mode would refuse it")
+  func recoverWaitsWhereItWouldBeRefused() {
+    #expect(PanelPresenter.state(Self.snapshot(.controlling)).menu.recover == .disabled)
+  }
+
   @Test("the facts read a dash for an unknown helper and display")
   func factsFallBackToADash() {
     let known = PanelPresenter.state(Self.snapshot(.observing)).facts

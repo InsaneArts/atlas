@@ -1,3 +1,5 @@
+import AtlasKit
+
 /// The panel's words that depend on its state: its placeholders, its facts' names, what each action says while it
 /// runs, when it ends and when it cannot run, and the menu bar item's label.
 ///
@@ -35,6 +37,10 @@ enum PanelWords {
   static let waitForAction = "Another action is running. Try again once it ends."
   /// A log-out the helper's mode no longer allows.
   static let cannotLogOut = "The helper can't log out right now."
+  /// Recover refused while a viewer or an agent's work holds the helper.
+  static let recoverBusy = "The helper is in use. Try Recover again once it's free."
+  /// Recover's input start refused because an earlier action's outcome is unknown.
+  static let recoverNeedsRestart = "The last action's outcome is unknown. Recover again to restart the helper."
 
   /// The menu bar item's tooltip and VoiceOver label, which agree.
   ///
@@ -42,6 +48,18 @@ enum PanelWords {
   /// - Returns: "Atlas — Watching"
   static func statusItem(_ mode: String) -> String {
     "Atlas — \(mode)"
+  }
+
+  /// Why Recover did not run, in plain words for the refusals the command line words for itself.
+  ///
+  /// - Parameter outcome: The refused command's outcome.
+  /// - Returns: The plain words for a busy helper or an unknown outcome, else the command's own message.
+  static func recoverRefused(_ outcome: Outcome) -> String {
+    switch outcome.code {
+    case "busy": recoverBusy
+    case "uncertain": recoverNeedsRestart
+    default: outcome.message
+    }
   }
 
   /// What to do once the screen is locked for the helper.

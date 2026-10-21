@@ -98,21 +98,22 @@ enum PanelPresenter {
   }
 
   /// The menu rows: Open at Login when the app carries the login item; Recover unless the card offers it or logged
-  /// out; Log Out Helper… unless logged out, waiting while a command runs, the mode forbids it or the person is
-  /// asked.
+  /// out, waiting while a command runs or the helper's mode would refuse it; Log Out Helper… unless logged out,
+  /// waiting while a command runs, the mode forbids it or the person is asked.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The menu.
   private static func menu(_ snapshot: PanelSnapshot) -> PanelMenu {
-    let mode = snapshot.status.overview.mode
+    let overview = snapshot.status.overview
+    let mode = overview.mode
     let opensAtLogin = snapshot.opensAtLogin.flatMap { $0.isAvailable ? $0.isEnabled : nil }
     let recover: PanelMenuItem =
-      if snapshot.status.overview.recoveryHelps || mode == .loggedOut {
+      if overview.recoveryHelps || mode == .loggedOut {
         .hidden
-      } else if snapshot.working {
-        .disabled
-      } else {
+      } else if !snapshot.working && overview.recoverMayRun {
         .enabled
+      } else {
+        .disabled
       }
     let asking = snapshot.logOutStage == .confirming
     let logOut: PanelMenuItem =

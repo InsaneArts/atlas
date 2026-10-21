@@ -60,8 +60,13 @@ final class PanelController {
   @ObservationIgnored private var statusReading = 0
   /// Numbers each desktop reading, under the same rule.
   @ObservationIgnored private var frameReading = 0
-  /// Numbers each change to Open at Login, so only the newest one shows what the system then reports.
-  @ObservationIgnored private var loginChange = 0
+  /// The newest Open at Login the person asked for and no change has taken up yet.
+  @ObservationIgnored private var wantedAtLogin: Bool?
+  /// Whether a change to Open at Login runs now: one at a time, so the system ends where the person last asked.
+  @ObservationIgnored private var changingAtLogin = false
+  /// Whether the last Recover's input start was refused over an unknown outcome, so the next one restarts, whatever
+  /// a status the service still refuses to give last said.
+  @ObservationIgnored private var restartNext = false
 
   /// Creates a panel that has read nothing yet.
   ///
@@ -165,8 +170,10 @@ final class PanelController {
     }
   }
 
-  /// Reads where Open at Login stands now: the panel shows it, and its switch turns it from there.
+  /// Reads where Open at Login stands now: the panel shows it, and its switch turns it from there. While a change
+  /// runs the switch keeps what the person asked for; the change reads it back once it ends.
   func readOpenAtLogin() {
+    guard !changingAtLogin else { return }
     opensAtLogin = loginItem.state
   }
 
@@ -291,17 +298,20 @@ final class PanelController {
   }
 
   /// Locks the screen so the person can log in to the helper there, finding the helper first if it is not known.
-  func logIn() async {
+  ///
+  /// - Returns: What it said: what to do next, or why the screen did not lock; the viewer's Log In… shows it too.
+  @discardableResult
+  func logIn() async -> String {
     if helper == nil { await findHelper() }
     guard let helper else {
       say(PanelWords.helperNotFound)
-      return
+      return PanelWords.helperNotFound
     }
-    await perform(
-      .switchTo(helper),
-      working: Words.locking,
-      done: PanelWords.logInThenSwitchBack(to: status.overview.title ?? helper)
-    )
+    let done = PanelWords.logInThenSwitchBack(to: status.overview.title ?? helper)
+    guard let outcome = await perform(.switchTo(helper), working: Words.locking, done: done) else {
+      return PanelWords.waitForAction
+    }
+    return outcome.ok ? done : outcome.message
   }
 
   /// Asks the person to confirm logging the helper out.
@@ -341,23 +351,37 @@ final class PanelController {
   }
 
   /// Recovers the helper as the viewer service does: a restart while an action's outcome is unknown or under way,
-  /// else starting its input.
+  /// else starting its input. The status is read first, so the choice follows the helper now; a refusal the helper
+  /// still gives says why in plain words, and one over an unknown outcome makes the next Recover a restart.
   func recover() async {
-    let action = Action.recover(status.overview)
-    await perform(action, working: Words.recovering, done: action == .restart ? Words.recovered : Words.readyAgain)
+    guard !working else { return }
+    await readStatus()
+    let action = restartNext ? .restart : Action.recover(status.overview)
+    let done = action == .restart ? Words.recovered : Words.readyAgain
+    guard let outcome = await perform(action, working: Words.recovering, done: done) else { return }
+    restartNext = outcome.code == "uncertain" && action == .startInput
+    if !outcome.ok { say(PanelWords.recoverRefused(outcome)) }
   }
 
   /// Turns Open at Login on or off through `atlas`, which records the person's choice so setup keeps it. The switch
-  /// follows the click at once; each command that ends reads back what the system then reports, so quick clicks
-  /// settle on the system's state, and the newest refusal says why.
+  /// follows the click at once. One change runs at a time: clicks meanwhile leave only the newest wish, run once the
+  /// change ends if it differs from what ran, and only when none is left is the system's state read back. A refusal
+  /// says why unless the person has asked for something else since.
   ///
   /// - Parameter on: Whether the app should open at login.
   func setOpenAtLogin(_ on: Bool) async {
-    loginChange += 1
-    let change = loginChange
     opensAtLogin.isEnabled = on
-    let outcome = await commands.run(.openAtLogin(on))
-    if !outcome.ok, change == loginChange { say(outcome.message) }
+    wantedAtLogin = on
+    guard !changingAtLogin else { return }
+    changingAtLogin = true
+    var ran: Bool?
+    while let wanted = wantedAtLogin, wanted != ran {
+      let outcome = await commands.run(.openAtLogin(wanted))
+      ran = wanted
+      if !outcome.ok, wantedAtLogin == wanted { say(outcome.message) }
+    }
+    wantedAtLogin = nil
+    changingAtLogin = false
     readOpenAtLogin()
   }
 }

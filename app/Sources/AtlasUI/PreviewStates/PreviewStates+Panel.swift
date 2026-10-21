@@ -46,12 +46,13 @@
       return state
     }()
 
-    /// A viewer holds control: the second button releases it.
+    /// A viewer holds control: the second button releases it, and Recover waits for it.
     @MainActor static let panelInControl: PanelState = {
       var state = panelWatching
       state.status = StatusSummary(label: "Viewer has control", tone: .active)
       state.reason = "A viewer has control"
       state.secondary = .revokeControl
+      state.menu.recover = .disabled
       return state
     }()
 
@@ -122,7 +123,7 @@
       return state
     }()
 
-    /// The service cannot reach the helper: no picture, and its facts unknown.
+    /// The service cannot reach the helper: no picture, its facts unknown, and Recover and logging out wait.
     @MainActor static let panelUnavailable: PanelState = {
       var state = panelWatching
       state.status = StatusSummary(label: "Unavailable", tone: .quiet)
@@ -134,6 +135,7 @@
         Fact(name: "Last action", value: "No recent actions"),
       ]
       state.secondary = .switchToHelper(isEnabled: false)
+      state.menu.recover = .disabled
       state.menu.logOut = .disabled
       return state
     }()

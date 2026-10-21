@@ -434,11 +434,13 @@ impl Program {
 /// Start the app with `args` and hand it the URL on stdin. Its commands
 /// run this very `atlas` with this configuration. Closing stdin asks the
 /// app to quit by itself; dropping the returned child kills it outright
-/// (`kill_on_drop`).
+/// (`kill_on_drop`). The login job's name stays here: an `atlas` the app
+/// runs is never the login agent ([`started_at_login`]).
 async fn spawn(program: &Program, url: &str, args: &[&str]) -> Result<(Child, ChildStdin)> {
     let cli = std::env::current_exe().and_then(fs::canonicalize)?;
     let mut child = Command::new(&program.executable)
         .args(args)
+        .env_remove("XPC_SERVICE_NAME")
         .env("ATLAS_CLI", cli)
         .env("ATLAS_CONFIG", &program.config)
         .stdin(Stdio::piped())

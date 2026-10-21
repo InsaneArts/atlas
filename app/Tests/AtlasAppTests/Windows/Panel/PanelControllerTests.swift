@@ -111,11 +111,22 @@ struct PanelControllerTests {
     controller.watch(open: false)
   }
 
-  @Test("logging in with no helper account found says where to look")
+  @Test("logging in with no helper account found says where to look, and tells the window that asked")
   func logInWithNoHelperSaysWhereToLook() async {
     let controller = Self.panel()
-    await controller.logIn()
+    let said = await controller.logIn()
     #expect(controller.feedback == PanelWords.helperNotFound)
+    #expect(said == PanelWords.helperNotFound)
+  }
+
+  @Test("a switch that fails while logging in tells the window that asked why")
+  func aFailedLogInSaysWhy() async {
+    let service = ScriptedService()
+    service.reply = ["overview": ["mode": "loggedOut", "account": "atlas"]]
+    let commands = ScriptedCommands(["switch": #"{"ok": false, "error": "The screen could not lock"}"#])
+    let controller = Self.panel(service, commands: commands)
+    await controller.readStatus()
+    #expect(await controller.logIn() == "The screen could not lock")
   }
 
   @Test("logging out asks first, ends control first, and offers to force it when an app holds it up")
@@ -269,6 +280,71 @@ struct PanelControllerTests {
     await controller.recover()
     #expect(commands.ran.last == Action.restart.arguments)
     #expect(controller.feedback == Words.recovered)
+  }
+
+  @Test("Recover reads the status first, so it restarts a helper whose outcome became unknown since the last reading")
+  func recoverReadsTheStatusFirst() async {
+    let service = ScriptedService()
+    let commands = ScriptedCommands(["start-input": #"{"ok": true}"#, "restart": #"{"ok": true}"#])
+    let controller = Self.panel(service, commands: commands)
+    await controller.readStatus()
+    service.reply = ["overview": ["mode": "recovering", "pending": 1]]
+    await controller.recover()
+    #expect(commands.ran == [Action.restart.arguments])
+  }
+
+  @Test(
+    "a Recover the command line refuses says why in plain words, never naming a command",
+    arguments: [("uncertain", PanelWords.recoverNeedsRestart), ("busy", PanelWords.recoverBusy)]
+  )
+  func aRefusedRecoverSaysWhyPlainly(code: String, words: String) async {
+    let commands = ScriptedCommands([
+      "start-input": #"{"ok": false, "code": "\#(code)", "error": "Run 'atlas restart'."}"#
+    ])
+    let controller = Self.panel(commands: commands)
+    await controller.recover()
+    #expect(controller.feedback == words)
+  }
+
+  @Test(
+    "quick Open at Login clicks run one change at a time, then only the newest that differs, and the switch holds the click until the last ends"
+  )
+  func openAtLoginChangesRunOneAtATime() async {
+    let loginItem = ScriptedLoginItem(available: true)
+    let commands = ScriptedCommands(["menubar --login": #"{"ok": true}"#])
+    let controller = Self.panel(commands: commands, loginItem: loginItem)
+    let seen = LoginChangeObservation()
+    commands.whileRunning { arguments in
+      loginItem.enabled = arguments.last == "on"
+      guard commands.ran.count == 1 else { return }
+      await controller.setOpenAtLogin(false)
+      await controller.setOpenAtLogin(true)
+      await controller.setOpenAtLogin(false)
+      // Opening the panel meanwhile reads the login item, which the first change has just turned on.
+      controller.readOpenAtLogin()
+      seen.startedAnother = commands.ran.count > 1
+      seen.switchOn = controller.opensAtLogin.isEnabled
+    }
+    await controller.setOpenAtLogin(true)
+    #expect(seen.startedAnother == false, "no second change started while the first ran")
+    #expect(seen.switchOn == false, "the switch kept the newest click")
+    #expect(commands.ran == [Action.openAtLogin(true).arguments, Action.openAtLogin(false).arguments])
+    #expect(controller.opensAtLogin == OpenAtLogin.State(isAvailable: true, isEnabled: false))
+  }
+
+  @Test("a Recover refused over an unknown outcome makes the next one a restart, though the status stays refused")
+  func anUnknownOutcomeMakesTheNextRecoverARestart() async {
+    let service = ScriptedService()
+    let commands = ScriptedCommands([
+      "start-input": #"{"ok": false, "code": "uncertain", "error": "Run 'atlas restart'."}"#,
+      "restart": #"{"ok": true}"#,
+    ])
+    let controller = Self.panel(service, commands: commands)
+    await controller.readStatus()
+    service.busy = true
+    await controller.recover()
+    await controller.recover()
+    #expect(commands.ran == [Action.startInput.arguments, Action.restart.arguments])
   }
 
   @Test("a status the service refuses to give, as a busy one does, leaves the last one standing")

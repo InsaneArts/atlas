@@ -44,6 +44,16 @@ struct CommandsTests {
     #expect(reply.decode(Echo.self)?.config == "/tmp/atlas.toml", "the rest of the environment is handed on")
   }
 
+  @Test("a command never inherits the login job's name launchd gave the app, so atlas never takes itself for it")
+  func noCommandIsTheLoginJob() async throws {
+    struct Echo: Decodable { let job: String }
+    let reply = try await withScriptedAtlas(
+      #"echo '{"ok": true, "job": "'"${XPC_SERVICE_NAME-none}"'"}'"#,
+      environment: ["XPC_SERVICE_NAME": "com.insanearts.atlas.menubar"]
+    ) { await $0.run(["menubar"]) }
+    #expect(reply.decode(Echo.self)?.job == "none")
+  }
+
   @Test("a command run now, before any app, runs its action's arguments as the person's too")
   func runNowIsThePersons() async throws {
     struct Echo: Decodable {

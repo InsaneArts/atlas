@@ -78,7 +78,7 @@ final class AppController: NSObject, NSApplicationDelegate {
       clock: { ProcessInfo.processInfo.systemUptime },
       heartbeatInterval: ViewerController.heartbeatEvery,
       nap: ViewerController.sleep,
-      logIn: { [weak self] in Task { await self?.panel?.logIn() } },
+      logIn: { [weak self] in await self?.panel?.logIn() ?? PanelWords.helperNotFound },
       showKeys: KeysMenu.show(for:),
       doubleClickInterval: { NSEvent.doubleClickInterval }
     )

@@ -49,8 +49,8 @@ final class ViewerController {
   @ObservationIgnored let heartbeatInterval: Duration
   /// The pause between readings, which ends early when cancelled.
   @ObservationIgnored let nap: @Sendable (Duration) async -> Void
-  /// Locks the screen so the person can log in to the helper; nil when the app cannot.
-  @ObservationIgnored let logIn: (@MainActor () -> Void)?
+  /// Locks the screen so the person can log in to the helper, returning what to tell them; nil when the app cannot.
+  @ObservationIgnored let logIn: (@MainActor () async -> String)?
   /// Offers the keys the Mac keeps for itself, each sent to this controller.
   @ObservationIgnored let showKeys: @MainActor (ViewerController) -> Void
   /// The Mac's double-click speed, in seconds, read at each click so a change in System Settings counts at once.
@@ -70,6 +70,8 @@ final class ViewerController {
 
   /// Numbers each acquisition and release, so a late reply knows it was overtaken.
   @ObservationIgnored var controlGeneration = 0
+  /// The status reading under way when the lease was granted: only a later one can say the lease has ended.
+  @ObservationIgnored var controlSince = 0
   /// Renews the lease and ends control over a stale picture.
   @ObservationIgnored var heartbeat: Task<Void, Never>?
   /// The mouse button held and the clicks counted.
@@ -113,7 +115,8 @@ final class ViewerController {
   ///   - clock: The time now, in seconds of uptime.
   ///   - heartbeatInterval: One heartbeat tick; the app passes ``heartbeatEvery``.
   ///   - nap: The pause between readings, which must end early when cancelled; the app passes ``sleep``.
-  ///   - logIn: Locks the screen so the person can log in to the helper; nil when the app cannot.
+  ///   - logIn: Locks the screen so the person can log in to the helper, returning what to tell them; nil when the app
+  ///     cannot.
   ///   - showKeys: Offers the keys the Mac keeps for itself, each sent to the controller it is given.
   ///   - doubleClickInterval: The Mac's double-click speed, in seconds; the app passes `NSEvent`'s.
   init(
@@ -122,7 +125,7 @@ final class ViewerController {
     clock: @escaping @MainActor () -> TimeInterval,
     heartbeatInterval: Duration,
     nap: @escaping @Sendable (Duration) async -> Void,
-    logIn: (@MainActor () -> Void)? = nil,
+    logIn: (@MainActor () async -> String)? = nil,
     showKeys: @escaping @MainActor (ViewerController) -> Void,
     doubleClickInterval: @escaping @MainActor () -> TimeInterval
   ) {
@@ -179,7 +182,7 @@ final class ViewerController {
     case .showRecovery: showRecovery()
     case .showKeys: showKeys(self)
     case .setRate(let rate): self.rate = rate
-    case .logIn: logIn?()
+    case .logIn: Task { await askToLogIn() }
     }
   }
 
@@ -190,6 +193,13 @@ final class ViewerController {
   /// - Parameter text: The line, or nil to show none.
   func say(_ text: String?) {
     session.notice = text
+  }
+
+  /// Log In…: locks the screen for the helper, saying what to do next or why it could not.
+  func askToLogIn() async {
+    guard let logIn else { return }
+    say(Words.locking)
+    say(await logIn())
   }
 
   /// Pauses the picture, or resumes it. Either way control goes back; resuming reads afresh.
@@ -280,7 +290,8 @@ final class ViewerController {
   /// Take control with the picture on screen. A reply that arrives after
   /// the person changed their mind, or left the window, is given back.
   func takeControl() async {
-    guard snapshot.canTakeControl, let frame = reading.frame else { return }
+    // The live clock, not the last tick's: a picture gone stale since then is not one to aim at.
+    guard snapshot.canTakeControl, !pictureStale, let frame = reading.frame else { return }
     session.acquiring = true
     controlGeneration += 1
     let generation = controlGeneration
@@ -292,6 +303,8 @@ final class ViewerController {
         return
       }
       session.lease = granted
+      // A status read under way now was asked before the grant, so it cannot know of this lease.
+      controlSince = statusReading
       session.acquiring = false
       input.activate(granted)
       say(nil)
@@ -365,9 +378,11 @@ final class ViewerController {
     reading.picture = picture
   }
 
-  /// Shows a status. Input not ready ends control now; a recovery set aside is forgotten once nothing needs it.
+  /// Shows a status. Input not ready ends control now, and so does a status asked after the grant that says no
+  /// viewer holds it, as after Release Control in the menu bar; a recovery set aside is forgotten once nothing needs
+  /// it.
   ///
-  /// - Parameter reply: The status read.
+  /// - Parameter reply: The status read; only the newest reading started is shown, so it is ``statusReading``'s.
   func show(_ reply: ViewerStatus) {
     reading.status = reply
     reading.hasStatus = true
@@ -375,6 +390,8 @@ final class ViewerController {
     if !reply.ready {
       reading.ready = false
       if holdingControl || session.acquiring { releaseControl(ViewerWords.controlEnded(reply.overview.reason)) }
+    } else if holdingControl, statusReading > controlSince, reply.noViewerInControl {
+      releaseControl(ViewerWords.releasedElsewhere)
     }
     // Not Now covers one incident: once nothing needs recovery, a later one alerts again.
     if snapshot.offeredRecovery == nil { session.recoveryLater = nil }

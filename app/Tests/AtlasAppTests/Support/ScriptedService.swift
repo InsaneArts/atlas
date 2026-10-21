@@ -30,6 +30,9 @@ final class ScriptedService: ViewerService {
   var log: [String] = []
   /// The input sent, a batch a request.
   var actions: [[InputAction]] = []
+  /// Whether a viewer holds the lease: granted, and not released or revoked since; nil until one is first granted.
+  /// The status says so as `controlActive` once known, unless its reply sets that itself.
+  var leaseHeld: Bool?
 
   /// Whether any viewer's control was revoked.
   var revoked: Bool { log.contains("revoke") }
@@ -56,9 +59,11 @@ final class ScriptedService: ViewerService {
   func status() async throws -> ViewerStatus {
     statusCalls += 1
     defer { answered += 1 }
+    // Read when asked, as the service does: a held reply still says what was so then.
+    let answer = reply.merging(leaseHeld.map { ["controlActive": $0] } ?? [:]) { given, _ in given }
     try await pause("status")
     if busy { throw StatusRefused("Viewer is busy") }
-    return try AtlasAppTests.status(reply)
+    return try AtlasAppTests.status(answer)
   }
 
   func frame() async throws -> Frame {
@@ -75,6 +80,7 @@ final class ScriptedService: ViewerService {
   func acquire(frame: String) async throws -> String {
     log.append("acquire \(frame)")
     try await pause("acquire")
+    leaseHeld = true
     return "lease"
   }
 
@@ -83,11 +89,15 @@ final class ScriptedService: ViewerService {
     try await pause("renew")
   }
 
-  func release(lease: String) async throws { log.append("release \(lease)") }
+  func release(lease: String) async throws {
+    log.append("release \(lease)")
+    leaseHeld = false
+  }
 
   func revoke() async throws {
     log.append("revoke")
     try await pause("revoke")
+    leaseHeld = false
   }
 
   func input(lease: String, frame: String, actions: [InputAction]) async throws {

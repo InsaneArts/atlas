@@ -7,7 +7,14 @@ extension ViewerSnapshot {
   /// blocking it and no recovery running.
   var canTakeControl: Bool {
     !session.acquiring && !session.holdingControl && reading.ready && !session.paused && reading.frame != nil
-      && controlBlocked == nil && !session.recovering
+      && !pictureStale && controlBlocked == nil && !session.recovering
+  }
+
+  /// Whether the picture is too old to aim input at, as of the snapshot's time: control ends over one, and none is
+  /// taken.
+  var pictureStale: Bool {
+    guard let frameAt = reading.frameAt else { return true }
+    return now - frameAt >= Freshness.stale
   }
 
   /// Why taking control must wait now, as the footer says it, if it must.

@@ -32,6 +32,22 @@ struct ViewerStatusTests {
     )
   }
 
+  @Test(
+    "Recover may run only where the command line takes it: never under a viewer's control, an agent's work under way, or an unreachable helper",
+    arguments: [
+      ("observing", 0, true),
+      ("blocked", 0, true),
+      ("agent", 0, true),
+      ("agent", 1, false),
+      ("controlling", 0, false),
+      ("unavailable", 0, false),
+    ]
+  )
+  func recoverMayRun(mode: String, inFlight: Int, runs: Bool) throws {
+    let reading = try status(["overview": ["mode": mode, "inFlight": inFlight]])
+    #expect(reading.overview.recoverMayRun == runs)
+  }
+
   @Test("missing or mistyped fields fall back to safe defaults, and an unknown mode reads as unavailable")
   func defaults() throws {
     let empty = try status([:])
