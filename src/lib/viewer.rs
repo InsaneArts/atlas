@@ -28,6 +28,7 @@ use tokio::{
     sync::{Mutex, OwnedSemaphorePermit, RwLock, RwLockReadGuard, Semaphore, watch},
 };
 
+/// How long a frame is kept and may be named by control requests.
 const FRAME_LIFETIME: Duration = Duration::from_secs(8);
 /// How long control lasts without a renewal; the app is told the same.
 const LEASE_SECONDS: u64 = 10;
@@ -57,10 +58,13 @@ const MAX_BODY: usize = 32768;
 /// other program on its port.
 const SERVICE: &str = "atlas-viewer";
 
+/// The recent frames, each under the key control requests name it by.
 #[derive(Default)]
 struct Frames {
     items: VecDeque<(String, Arc<Frame>)>,
+    /// Counts input sent, so a capture can tell whether it shows the latest.
     input_revision: u64,
+    /// The input revision the newest frame was captured at.
     capture_revision: Option<u64>,
 }
 
@@ -84,6 +88,8 @@ impl Drop for Capturing<'_> {
     }
 }
 
+/// One running viewer: the helper it serves, the control lease the app
+/// holds, and the frames it has shown.
 pub struct Viewer {
     /// The helper this viewer serves. It follows the settings when they
     /// name another one.
@@ -106,6 +112,8 @@ pub struct Viewer {
     capture: std::sync::Mutex<Option<Capture>>,
     requests: Semaphore,
     urgent: Semaphore,
+    /// The viewer's private address. Whoever holds it may control the
+    /// helper, so it is never printed.
     pub url: String,
     prefix: String,
     authority: String,
@@ -356,6 +364,7 @@ impl Viewer {
         Ok((key, frame))
     }
 
+    /// The recent frame kept under `key`.
     async fn observed(&self, key: &str) -> Result<Arc<Frame>> {
         self.frames
             .lock()
@@ -364,7 +373,7 @@ impl Viewer {
             .iter()
             .find(|(id, _)| id == key)
             .map(|(_, frame)| frame.clone())
-            .filter(|f| f.at.elapsed() < FRAME_LIFETIME)
+            .filter(|frame| frame.at.elapsed() < FRAME_LIFETIME)
             .ok_or_else(|| {
                 Error::new(
                     "stale-frame",
@@ -492,6 +501,8 @@ impl Viewer {
         })
     }
 
+    /// The helper's status and overview as the app shows them, with
+    /// whether control is held.
     async fn status(self: &Arc<Self>) -> Value {
         // Reading waits on the helper, for a few seconds at most, following
         // the settings included.
@@ -554,34 +565,31 @@ impl Viewer {
             crate::client::timestamp(),
         );
 
-        // The helper's full name, as people know the account; looked up once
-        // per account (off the runtime, it asks directory services), also
-        // when it has none.
         if let Some(name) = status["overview"]["account"].as_str() {
-            let known = unpoisoned(&self.account_name)
-                .clone()
-                .filter(|(account, _)| account == name);
-            let title = match known {
-                Some((_, title)) => title,
-                None => {
-                    let account = name.to_owned();
-                    match tokio::task::spawn_blocking(move || crate::setup::real_name(&account))
-                        .await
-                    {
-                        Ok(title) => {
-                            *unpoisoned(&self.account_name) =
-                                Some((name.to_owned(), title.clone()));
-                            title
-                        }
-                        Err(_) => None,
-                    }
-                }
-            };
-
-            status["overview"]["accountName"] = json!(title);
+            status["overview"]["accountName"] = json!(self.account_title(name).await);
         }
 
         status
+    }
+
+    /// The helper account `name`'s full name, as people know it. It is
+    /// looked up once per account (off the runtime, as it asks directory
+    /// services), also when it has none.
+    async fn account_title(&self, name: &str) -> Option<String> {
+        let known = unpoisoned(&self.account_name)
+            .clone()
+            .filter(|(account, _)| account == name);
+        if let Some((_, title)) = known {
+            return title;
+        }
+
+        let account = name.to_owned();
+        let title = tokio::task::spawn_blocking(move || crate::setup::real_name(&account))
+            .await
+            .ok()?;
+
+        *unpoisoned(&self.account_name) = Some((name.to_owned(), title.clone()));
+        title
     }
 
     /// A helper just logged in has no input service yet, and switching
@@ -645,6 +653,7 @@ impl Viewer {
         client.start_input().await
     }
 
+    /// Take, renew or end control, or send input, as `route` asks.
     async fn control(&self, route: &str, body: &Value) -> Result<Value> {
         let owner = body["lease"].as_str().unwrap_or_default();
 
@@ -1044,6 +1053,11 @@ fn late() -> Error {
     Error::new("transport", "The helper did not answer in time")
 }
 
+/// The local viewer could not be reached, or its reply not read.
+fn unanswered() -> Error {
+    Error::new("menubar", "The menu bar's viewer did not answer")
+}
+
 /// Run `work`, which waits on the local viewer's socket (for seconds at
 /// most), off the async runtime.
 async fn blocking<T: Send + 'static>(
@@ -1051,7 +1065,7 @@ async fn blocking<T: Send + 'static>(
 ) -> Result<T> {
     tokio::task::spawn_blocking(work)
         .await
-        .map_err(|_| Error::new("menubar", "The menu bar's viewer did not answer"))?
+        .map_err(|_| unanswered())?
 }
 
 /// The viewer recorded at `record`, if it serves `port` and answers there
@@ -1110,20 +1124,19 @@ fn exchange(
 ) -> Result<(u16, Vec<u8>)> {
     use std::io::{Read, Write};
 
-    let refused = || Error::new("menubar", "The menu bar's viewer did not answer");
     // Any trouble on the wire reads the same to the person.
-    let io = |_: std::io::Error| refused();
+    let io = |_: std::io::Error| unanswered();
 
-    let rest = url.strip_prefix("http://").ok_or_else(refused)?;
-    let (authority, path) = rest.split_at(rest.find('/').ok_or_else(refused)?);
-    let address: std::net::SocketAddr = authority.parse().map_err(|_| refused())?;
+    let rest = url.strip_prefix("http://").ok_or_else(unanswered)?;
+    let (authority, path) = rest.split_at(rest.find('/').ok_or_else(unanswered)?);
+    let address: std::net::SocketAddr = authority.parse().map_err(|_| unanswered())?;
 
     let until = std::time::Instant::now() + deadline;
     let left = || {
         until
             .checked_duration_since(std::time::Instant::now())
             .filter(|left| !left.is_zero())
-            .ok_or_else(refused)
+            .ok_or_else(unanswered)
     };
 
     let mut stream = std::net::TcpStream::connect_timeout(&address, left()?).map_err(io)?;
@@ -1158,7 +1171,7 @@ fn exchange(
         reply.extend_from_slice(&chunk[..read]);
 
         if reply.len() > 1 << 16 {
-            return Err(refused());
+            return Err(unanswered());
         }
 
         if let Some(parsed) = parse_response(&reply) {
@@ -1166,7 +1179,7 @@ fn exchange(
         }
     }
 
-    parse_response(&reply).ok_or_else(refused)
+    parse_response(&reply).ok_or_else(unanswered)
 }
 
 /// A complete HTTP/1.1 reply's status and body, framed by Content-Length
@@ -1281,8 +1294,7 @@ fn post_local(url: &str, route: &str, body: &Value) -> Result<Value> {
         Some(&serde_json::to_vec(body)?),
         Duration::from_secs(5),
     )?;
-    let reply: Value = serde_json::from_slice(&reply)
-        .map_err(|_| Error::new("menubar", "The menu bar's viewer did not answer"))?;
+    let reply: Value = serde_json::from_slice(&reply).map_err(|_| unanswered())?;
 
     if status != 200 {
         return Err(Error::new(
@@ -1320,6 +1332,7 @@ pub async fn render_menubar(
         if outcome.is_err() {
             break;
         }
+
         paths.push(path);
     }
 
@@ -1330,6 +1343,7 @@ pub async fn render_menubar(
     Ok(json!({"ok": true, "paths": paths}))
 }
 
+/// The header `key` in `headers`, when it is there as text.
 fn header<'a>(headers: &'a HeaderMap, key: &str) -> Option<&'a str> {
     headers.get(key)?.to_str().ok()
 }
@@ -1346,12 +1360,14 @@ async fn handle(viewer: Arc<Viewer>, request: Request) -> Response {
         })
 }
 
+/// Answer one request: only from the viewer's own origin and private
+/// address, within a free slot, and for a known route.
 async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
     let method = request.method().clone();
     let origin = format!("http://{}", viewer.authority);
     if header(request.headers(), "host") != Some(&viewer.authority)
         || (method == Method::POST && header(request.headers(), "origin") != Some(&origin))
-        || header(request.headers(), "origin").is_some_and(|v| v != origin)
+        || header(request.headers(), "origin").is_some_and(|given| given != origin)
     {
         return json_response(
             403,
@@ -1446,7 +1462,7 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
     }
 
     if request.headers().contains_key("transfer-encoding")
-        || header(request.headers(), "content-type").and_then(|v| v.split(';').next())
+        || header(request.headers(), "content-type").and_then(|kind| kind.split(';').next())
             != Some("application/json")
     {
         return json_response(
@@ -1456,8 +1472,8 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
     }
 
     let length = header(request.headers(), "content-length")
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|n| (1..=MAX_BODY).contains(n));
+        .and_then(|given| given.parse::<usize>().ok())
+        .filter(|length| (1..=MAX_BODY).contains(length));
     let Some(length) = length else {
         return json_response(
             400,
@@ -1540,10 +1556,14 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
     }
 }
 
+/// A reply of `value` as JSON, with status `code`.
 fn json_response(code: u16, value: Value) -> Response {
     response(code, "application/json", Body::from(value.to_string()), &[])
 }
 
+/// A reply of `body` as `mime`, with status `code`, the headers every
+/// reply carries (not cached, not shown inside other pages, nothing
+/// loaded from elsewhere) and then `headers`.
 fn response(code: u16, mime: &str, body: Body, headers: &[(&str, String)]) -> Response {
     let mut response = Response::new(body);
     *response.status_mut() =
@@ -1598,6 +1618,7 @@ mod tests {
         bind(client(dir), 0, None).await.unwrap()
     }
 
+    /// A viewer for a helper that is not there, not answering requests.
     async fn unreachable(dir: &Path) -> Arc<Viewer> {
         bound(dir).await.1
     }
@@ -2063,6 +2084,7 @@ mod tests {
         client
     }
 
+    /// A session for input that a stand-in service accepts as is.
     fn epoch() -> Epoch {
         Epoch {
             uid: 0,

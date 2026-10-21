@@ -556,10 +556,10 @@ impl Engine {
                     x: from_x + step.x,
                     y: from_y + step.y,
                 };
-                let end = Point {
-                    x: (to_x + step.x).clamp(0.0, self.epoch.width - 1.0),
-                    y: (to_y + step.y).clamp(0.0, self.epoch.height - 1.0),
-                };
+                let end = self.on_display(Point {
+                    x: to_x + step.x,
+                    y: to_y + step.y,
+                });
 
                 self.pointer(PointerPhase::Move, anchor, button, &[], 1)
                     .await?;
@@ -671,8 +671,6 @@ mod tests {
     /// input has always sent.
     #[test]
     fn typed_constants_keep_their_raw_values() {
-        use crate::actions::{COMMAND, CONTROL, FUNCTION, OPTION, SHIFT};
-
         let raw = |button: Button| {
             (
                 button.number().0,

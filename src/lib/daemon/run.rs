@@ -555,16 +555,22 @@ mod tests {
         );
     }
 
-    async fn execute(argv: &[&str], timeout_ms: u64) -> (Vec<Value>, Value) {
-        let argv: Vec<String> = argv.iter().map(|a| (*a).to_owned()).collect();
-        let (sender, mut receiver) = mpsc::channel(EVENTS);
-        let collected = tokio::spawn(async move {
+    /// Every event `receiver` gets until the run drops its sender, taken as
+    /// they come so a long output never fills the channel.
+    fn gather(mut receiver: mpsc::Receiver<Value>) -> tokio::task::JoinHandle<Vec<Value>> {
+        tokio::spawn(async move {
             let mut events = Vec::new();
             while let Some(event) = receiver.recv().await {
                 events.push(event);
             }
             events
-        });
+        })
+    }
+
+    async fn execute(argv: &[&str], timeout_ms: u64) -> (Vec<Value>, Value) {
+        let argv: Vec<String> = argv.iter().map(|a| (*a).to_owned()).collect();
+        let (sender, receiver) = mpsc::channel(EVENTS);
+        let collected = gather(receiver);
 
         let reply = run(
             &argv,
@@ -872,7 +878,9 @@ mod tests {
             let argv: Vec<String> = argv.iter().map(|a| (*a).to_owned()).collect();
             let home = home.path().to_owned();
             async move {
-                let (sender, mut receiver) = mpsc::channel(EVENTS);
+                let (sender, receiver) = mpsc::channel(EVENTS);
+                let collected = gather(receiver);
+
                 let reply = run_at(
                     &argv,
                     Some(home),
@@ -882,12 +890,7 @@ mod tests {
                 )
                 .await;
 
-                let mut events = Vec::new();
-                while let Some(event) = receiver.recv().await {
-                    events.push(event);
-                }
-
-                (events, reply)
+                (collected.await.unwrap(), reply)
             }
         };
 

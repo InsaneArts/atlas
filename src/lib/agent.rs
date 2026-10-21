@@ -72,9 +72,6 @@ code means and what to do.\n"
     )
 }
 
-/// The longest text a single `type` action accepts.
-const TYPE_LIMIT: usize = 256;
-
 /// How much text `atlas type` sends at once: 64 characters, about half a
 /// second of typing, so a busy Mac typing several times slower than usual
 /// still finishes each part well within the helper's deadline. Control is
@@ -108,7 +105,8 @@ pub fn drag(from: (f64, f64), to: (f64, f64), which: Button) -> Value {
 
 /// Text as `type` batches of at most [`TYPE_BATCH`] characters, never
 /// splitting a grapheme cluster (an emoji sequence or a letter with
-/// combining marks); a longer cluster goes on its own, up to [`TYPE_LIMIT`].
+/// combining marks); a longer cluster goes on its own, up to
+/// [`TEXT_MAX`](crate::actions::TEXT_MAX).
 pub(crate) fn type_batches(text: &str) -> Result<Vec<String>> {
     let mut batches = Vec::new();
     let mut chunk = String::new();
@@ -116,7 +114,7 @@ pub(crate) fn type_batches(text: &str) -> Result<Vec<String>> {
 
     for grapheme in text.graphemes(true) {
         let size = grapheme.chars().count();
-        if size > TYPE_LIMIT {
+        if size > crate::actions::TEXT_MAX {
             return Err(Error::new(
                 "input",
                 "A single character cluster is too long to type",

@@ -51,7 +51,7 @@ fn remove_own_file(path: &Path) -> Result<bool> {
 }
 
 /// Stop the helper's job as the helper, outside the daemon it would stop:
-/// inspected first and retired as it is, as onboarding does, whichever
+/// inspected first and retired as it is, as installing it does, whichever
 /// Atlas wrote its definition. None when the helper account is gone, and
 /// its job with it. sudo may ask the person for their password.
 fn retire_helper_job(executable: &Path, config: &Config) -> Result<Option<Value>> {
@@ -128,6 +128,7 @@ pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Val
         data,
         leftovers,
     } = found;
+
     let mut removed = Vec::new();
     let mut warnings = Vec::new();
 
@@ -186,6 +187,7 @@ struct Found {
     leftovers: Vec<PathBuf>,
 }
 
+/// Find what uninstall would remove and what it keeps, changing nothing.
 fn survey(config_path: &Path) -> Result<Found> {
     let app = crate::update::installed_app()?;
     let executable = crate::update::installed_executable()?;
@@ -252,6 +254,7 @@ fn confirm(found: &Found, config_path: &Path, keep_config: bool) -> Result<()> {
     }
 
     say("This removes from this Mac:");
+
     for part in parts {
         say(&format!("  · {part}"));
     }
@@ -373,6 +376,7 @@ fn stop_menubar(client: Option<&Client>) {
         (false, true) => "no longer opens at login",
         (false, false) => return,
     };
+
     done("Menu bar", said);
 }
 
@@ -440,7 +444,7 @@ fn failed_agents(reply: &Value) -> String {
         .flatten()
         .filter(|agent| agent["ok"] != true)
         .filter_map(|agent| agent["agent"].as_str())
-        .map(|name| crate::agents::Agent::named(name).map_or(name, |agent| agent.display_name()))
+        .map(shown)
         .collect();
 
     if names.is_empty() {
@@ -460,12 +464,15 @@ fn kept_agents(reply: &Value) -> Vec<(String, String)> {
         .filter_map(|agent| {
             let place = agent["kept"].as_str()?;
             let name = agent["agent"].as_str()?;
-            let shown =
-                crate::agents::Agent::named(name).map_or(name, |agent| agent.display_name());
 
-            Some((shown.to_owned(), place.to_owned()))
+            Some((shown(name).to_owned(), place.to_owned()))
         })
         .collect()
+}
+
+/// The name a person knows an agent by, from its name in a reply.
+fn shown(name: &str) -> &str {
+    crate::agents::Agent::named(name).map_or(name, |agent| agent.display_name())
 }
 
 /// The app goes to the Trash, where it can be recovered; what it left for
@@ -474,6 +481,7 @@ fn trash(app: &Path, leftovers: &[PathBuf], removed: &mut Vec<Value>) -> Result<
     let trash = config::home()?
         .join(".Trash")
         .join(format!("Atlas-{}.app", crate::control::token()));
+
     fs::rename(app, &trash).map_err(|_| {
         problem(format!(
             "Could not move {} to the Trash; remove it yourself",

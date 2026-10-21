@@ -324,19 +324,32 @@ pub fn with_output(mut reply: Value) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{OUTPUT_LIMIT, OutputError, refused, run_output, with_output};
+    use super::{OUTPUT_LIMIT, OutputError, Transport, refused, run_output, with_output};
     use base64::{Engine, engine::general_purpose::STANDARD};
     use serde_json::json;
+
+    /// A listener on a socket in a new folder (kept while the folder is), and
+    /// a transport to it.
+    fn listening() -> (tempfile::TempDir, tokio::net::UnixListener, Transport) {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("t.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let transport = Transport {
+            path: socket,
+            timeout: std::time::Duration::from_secs(10),
+            peer_uid: nix::unistd::getuid().as_raw(),
+        };
+
+        (dir, listener, transport)
+    }
 
     /// The client refuses exactly the requests the helper daemon would: a
     /// line longer than its limit, not counting the newline.
     #[tokio::test]
     async fn the_request_limit_is_the_daemons() {
-        use super::{MAX_REQUEST, Transport};
+        use super::MAX_REQUEST;
 
-        let dir = tempfile::tempdir().unwrap();
-        let socket = dir.path().join("t.sock");
-        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let (_dir, listener, transport) = listening();
         tokio::spawn(async move {
             while let Ok((mut stream, _)) = listener.accept().await {
                 tokio::spawn(async move {
@@ -346,11 +359,6 @@ mod tests {
             }
         });
 
-        let transport = Transport {
-            path: socket,
-            timeout: std::time::Duration::from_secs(10),
-            peer_uid: nix::unistd::getuid().as_raw(),
-        };
         // A JSON string is its characters plus two quotes.
         let request = |length: usize| json!("x".repeat(length - 2));
         let fits = transport.connect().await.unwrap();
@@ -374,11 +382,7 @@ mod tests {
     /// heard: nothing ran, so the outcome is known.
     #[tokio::test]
     async fn a_refusal_sent_before_the_request_is_heard() {
-        use super::Transport;
-
-        let dir = tempfile::tempdir().unwrap();
-        let socket = dir.path().join("t.sock");
-        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let (_dir, listener, transport) = listening();
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
                 crate::native::endpoint::turn_away(
@@ -388,11 +392,6 @@ mod tests {
             }
         });
 
-        let transport = Transport {
-            path: socket,
-            timeout: std::time::Duration::from_secs(10),
-            peer_uid: nix::unistd::getuid().as_raw(),
-        };
         let pending = transport.connect().await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
@@ -413,11 +412,9 @@ mod tests {
     /// wait for its newline, which is the last byte sent.
     #[tokio::test]
     async fn a_request_never_sent_whole_is_certain() {
-        use super::{DISPATCH, Transport};
+        use super::DISPATCH;
 
-        let dir = tempfile::tempdir().unwrap();
-        let socket = dir.path().join("t.sock");
-        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let (_dir, listener, transport) = listening();
         tokio::spawn(async move {
             let mut held = Vec::new();
             while let Ok((stream, _)) = listener.accept().await {
@@ -425,11 +422,6 @@ mod tests {
             }
         });
 
-        let transport = Transport {
-            path: socket,
-            timeout: std::time::Duration::from_secs(10),
-            peer_uid: nix::unistd::getuid().as_raw(),
-        };
         let started = std::time::Instant::now();
         let stalled = transport
             .connect()
@@ -449,12 +441,9 @@ mod tests {
     /// never saw its newline either.
     #[tokio::test]
     async fn a_peer_that_hangs_up_mid_request_changed_nothing() {
-        use super::Transport;
         use tokio::io::AsyncReadExt;
 
-        let dir = tempfile::tempdir().unwrap();
-        let socket = dir.path().join("t.sock");
-        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let (_dir, listener, transport) = listening();
         tokio::spawn(async move {
             while let Ok((mut stream, _)) = listener.accept().await {
                 let mut start = [0; 16];
@@ -463,11 +452,6 @@ mod tests {
             }
         });
 
-        let transport = Transport {
-            path: socket,
-            timeout: std::time::Duration::from_secs(10),
-            peer_uid: nix::unistd::getuid().as_raw(),
-        };
         let cut = transport
             .connect()
             .await
@@ -481,6 +465,8 @@ mod tests {
         assert!(!cut.uncertain, "the newline was never sent");
     }
 
+    /// A refusal keeps the helper's code when Atlas knows it, and says
+    /// whether what was refused may have happened.
     #[test]
     fn a_refusal_keeps_its_code_and_doubt() {
         let refused = super::refusal(

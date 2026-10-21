@@ -533,6 +533,8 @@ mod tests {
         replies
     }
 
+    /// Anything in the helper's own account is answered hello and refused
+    /// everything else, so nothing changed.
     #[tokio::test]
     async fn the_helpers_own_processes_may_only_say_hello() {
         let hello = exchange_as(daemon(false), r#"{"op":"hello"}"#, false).await;

@@ -254,6 +254,8 @@ pub(crate) const DRAG_STEP: Duration = Duration::from_millis(16);
 pub(crate) const DRAG_ANCHOR: f64 = 1.0;
 /// The pause after the first step that starts a drag.
 pub(crate) const DRAG_START: Duration = Duration::from_millis(10);
+/// The most characters one `type` action types.
+pub(crate) const TEXT_MAX: usize = 256;
 /// The pause after each typed character.
 pub(crate) const TYPE_GAP: Duration = Duration::from_millis(2);
 /// The pause between moving the pointer to a point and scrolling there.
@@ -274,7 +276,7 @@ const SCROLL_MS: u32 = 60;
 /// session checks and the journal write before them: close to 7 ms in all.
 const TYPE_MS: u32 = 7;
 // The longest text one action types fits one batch.
-const _: () = assert!(TYPE_MS * 256 <= BATCH_MS);
+const _: () = assert!(TYPE_MS * TEXT_MAX as u32 <= BATCH_MS);
 const KEY_MS: u32 = 10;
 
 pub fn validate(value: &Value, display: &Display) -> Result<()> {
@@ -347,7 +349,8 @@ pub fn validate(value: &Value, display: &Display) -> Result<()> {
             Action::Type { text } => {
                 let characters = text.chars().count();
                 (
-                    (!(1..=256).contains(&characters)).then_some("text is 1 to 256 characters"),
+                    (!(1..=TEXT_MAX).contains(&characters))
+                        .then_some("text is 1 to 256 characters"),
                     u32::try_from(characters)
                         .unwrap_or(u32::MAX)
                         .saturating_mul(TYPE_MS),

@@ -319,7 +319,7 @@ pub fn apps(value: &Value) -> String {
 pub fn windows(value: &Value) -> String {
     let windows: Vec<&Value> = value["windows"].as_array().into_iter().flatten().collect();
     if windows.is_empty() {
-        return "No windows. --all includes panels and menus.".to_owned();
+        return "No windows. --all adds menus, the menu bar and the Dock.".to_owned();
     }
 
     let rows: Vec<Vec<String>> = windows

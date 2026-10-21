@@ -65,6 +65,7 @@ pub fn request() -> Option<Pairing> {
                 .flatten()
                 .is_some_and(|account| account.name == name)
         };
+
         named(pairing.controller_uid, &pairing.controller_name)
             && named(pairing.helper_uid, &pairing.helper_name)
     })
@@ -788,6 +789,7 @@ pub fn accept(controller_uid: u32, controller_name: &str) -> Result<Value> {
     let controller = setup::account_with_uid(request.controller_uid)?
         .filter(|account| account.name == request.controller_name)
         .ok_or_else(|| problem("The account that asked no longer exists"))?;
+
     signed_executable()?;
 
     let layout = Layout { uid, home: home()? };
@@ -858,6 +860,7 @@ pub fn window(open: bool) -> Result<Value> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
+
         fs::write(&path, format!("{}\n", std::os::unix::process::parent_id()))?;
     } else {
         let _ = fs::remove_file(&path);
@@ -939,11 +942,12 @@ pub async fn finish(config_path: &Path) -> Result<Value> {
 /// Open the menu bar at login, or not, as the person chose. As with `atlas
 /// init`, only for the default settings, the ones the login item uses.
 pub fn login(config_path: &Path, on: bool) -> Result<Value> {
-    let same = |a: &Path, b: &Path| match (fs::canonicalize(a), fs::canonicalize(b)) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => a == b,
+    let default = || {
+        config::installed_path()
+            .is_ok_and(|default| crate::agents::same_place(&default, config_path))
     };
-    if on && !config::installed_path().is_ok_and(|default| same(&default, config_path)) {
+
+    if on && !default() {
         return Err(problem(format!(
             "Open at Login uses the default settings; start the menu bar with atlas menubar \
              --config {}",

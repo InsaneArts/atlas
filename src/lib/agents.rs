@@ -25,8 +25,9 @@ const PLUGIN: &str = "atlas@atlas";
 /// folder as Atlas's own wherever it is.
 const HOMEPAGE: &str = "https://github.com/InsaneArts/atlas";
 
-/// How long a question to an agent's tool may take, and a change to it.
+/// How long a question to an agent's tool may take.
 const ASK: Duration = Duration::from_secs(10);
+/// How long a change to an agent's tool may take.
 const CHANGE: Duration = Duration::from_secs(120);
 
 fn problem(message: impl Into<String>) -> Error {
@@ -79,16 +80,17 @@ impl Agent {
         }
     }
 
-    /// The argv that connect it to `marketplace`, given where its atlas
-    /// marketplace comes from now (unknown when `None`). One from another
+    /// The argv that connect it to `marketplace`, given where its
+    /// marketplace named atlas comes from (`source`, unknown when `None`).
+    /// One from another
     /// folder of Atlas's own gives way first (Codex refuses to add over it;
     /// Claude Code replaces it itself); anyone else's is never touched.
     /// Claude Code would replace one it cannot tell is Atlas's too, so it is
     /// not connected while its marketplaces cannot be read.
-    fn connecting(self, marketplace: &Path, now: Option<&Source>) -> Result<Vec<Vec<String>>> {
+    fn connecting(self, marketplace: &Path, source: Option<&Source>) -> Result<Vec<Vec<String>>> {
         let mut steps = Vec::new();
 
-        match now {
+        match source {
             Some(Source::Folder(folder)) if same_place(folder, marketplace) => {}
             Some(Source::Folder(folder)) if self.ours(folder) => {
                 if self == Agent::Codex {
@@ -316,7 +318,7 @@ enum Source {
 
 /// Whether `a` and `b` are the same file or folder, links resolved when
 /// they exist.
-fn same_place(a: &Path, b: &Path) -> bool {
+pub(crate) fn same_place(a: &Path, b: &Path) -> bool {
     match (fs::canonicalize(a), fs::canonicalize(b)) {
         (Ok(a), Ok(b)) => a == b,
         _ => a == b,
@@ -456,7 +458,7 @@ static RUNNING: Mutex<Tools> = Mutex::new(Tools {
 
 /// The tools in `tools`, a lock that never stays poisoned (nothing panics
 /// while holding it).
-fn listed(tools: &Mutex<Tools>) -> std::sync::MutexGuard<'_, Tools> {
+fn locked(tools: &Mutex<Tools>) -> std::sync::MutexGuard<'_, Tools> {
     tools
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -485,13 +487,13 @@ pub fn stop_running() {
 
 /// Whether Atlas is being stopped: whatever runs now stops at its next step.
 pub fn stopping() -> bool {
-    listed(&RUNNING).stopping
+    locked(&RUNNING).stopping
 }
 
 /// Mark `tools` stopping, so no tool starts from now on, and give the
 /// process groups running now.
 fn halt(tools: &Mutex<Tools>) -> Vec<i32> {
-    let mut tools = listed(tools);
+    let mut tools = locked(tools);
     tools.stopping = true;
 
     tools.groups.clone()
@@ -500,15 +502,15 @@ fn halt(tools: &Mutex<Tools>) -> Vec<i32> {
 /// Start `command` and list its process group in `tools`, under one lock:
 /// a stop then reaches every tool started before it, and none starts after.
 fn start(tools: &'static Mutex<Tools>, command: &mut Command) -> Result<(Child, Running)> {
-    let mut listed = listed(tools);
-    if listed.stopping {
+    let mut list = locked(tools);
+    if list.stopping {
         return Err(problem("Atlas is stopping"));
     }
 
     let child = command.spawn()?;
     let group = i32::try_from(child.id()).ok();
     if let Some(group) = group {
-        listed.groups.push(group);
+        list.groups.push(group);
     }
 
     Ok((child, Running { tools, group }))
@@ -546,7 +548,7 @@ struct Running {
 impl Drop for Running {
     fn drop(&mut self) {
         if let Some(group) = self.group {
-            listed(self.tools)
+            locked(self.tools)
                 .groups
                 .retain(|running| *running != group);
         }
@@ -563,6 +565,7 @@ fn executable(agent: Agent) -> (PathBuf, std::ffi::OsString) {
     let original = std::env::var_os("PATH").unwrap_or_default();
     let mut places: Vec<PathBuf> = std::env::split_paths(&original).collect();
     let mut found = find(name, &places);
+
     if found.is_none() {
         places.extend(install_places());
         found = find(name, &places);
@@ -775,6 +778,8 @@ fn supervise(agent: Agent, mut child: std::process::Child, limit: Duration) -> R
     })
 }
 
+/// Run one change with an agent's tool; a failure says the first line the
+/// tool wrote to its error output.
 fn run(agent: Agent, argv: &[String]) -> Result<()> {
     let output = exec(agent, argv, CHANGE)?;
     if output.status.success() {
@@ -796,6 +801,7 @@ pub fn status() -> Value {
             .map(|agent| scope.spawn(move || probe(agent)))
             .into_iter()
             .collect();
+
         probes
             .into_iter()
             .map(|probe| probe.join().unwrap_or(Value::Null))
@@ -805,6 +811,8 @@ pub fn status() -> Value {
     json!({"ok": true, "agents": agents, "plugin": marketplace().ok()})
 }
 
+/// One agent's row for `status`: whether its tool is here, and whether
+/// Atlas is connected to it.
 fn probe(agent: Agent) -> Value {
     match agent.presence() {
         Presence::Installed(version) => match agent.connected() {
@@ -951,17 +959,17 @@ fn disconnect_agent(
 }
 
 /// Whether removing from `agent` worked, from the steps that failed and
-/// whether the agent still lists the plugin afterwards. A failed step on a
-/// plugin that is gone was a part already absent; when the list cannot be
-/// read, a failed step is reported.
+/// whether the agent still lists the plugin afterwards (`installed`). A
+/// failed step on a plugin that is gone was a part already absent; when the
+/// list cannot be read, a failed step is reported.
 fn removed(
     agent: Agent,
     failures: Vec<Error>,
-    connected: std::result::Result<Option<bool>, String>,
+    installed: std::result::Result<Option<bool>, String>,
 ) -> Result<()> {
     let first = failures.into_iter().next();
 
-    match connected {
+    match installed {
         Ok(Some(false)) => Ok(()),
         Ok(Some(true)) => Err(first.unwrap_or_else(|| {
             problem(format!(
@@ -1111,6 +1119,7 @@ fn replace_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 
         std::fs::rename(&temporary, &target)
     })();
+
     if result.is_err() {
         let _ = std::fs::remove_file(&temporary);
     }
@@ -1498,11 +1507,11 @@ mod tests {
         let remove = argv(&["plugin", "marketplace", "remove", "atlas"]);
 
         for agent in Agent::ALL {
-            for now in [Some(&Source::Absent), Some(&Source::Folder(path.clone()))] {
+            for source in [Some(&Source::Absent), Some(&Source::Folder(path.clone()))] {
                 assert_eq!(
-                    agent.connecting(&path, now).unwrap(),
+                    agent.connecting(&path, source).unwrap(),
                     agent.connect(&path),
-                    "{agent:?} {now:?}"
+                    "{agent:?} {source:?}"
                 );
             }
 
@@ -1661,7 +1670,7 @@ mod tests {
         kill_group(&mut child);
         drop(running);
         assert!(
-            listed(&TOOLS).groups.is_empty(),
+            locked(&TOOLS).groups.is_empty(),
             "a finished tool leaves the list"
         );
     }
