@@ -69,15 +69,6 @@ fn release_each(held: &mut u64, mut post: impl FnMut(u16, u64) -> Result<()>) ->
     Ok(())
 }
 
-/// Where a held button comes up when its gesture is abandoned (cancelled,
-/// expired, or cleaned up after a failure): where it went down, if the
-/// pointer has moved since. A drag dropped there puts what it carried back
-/// where it was, never onto whatever lay partway along its path, such as a
-/// folder or the Trash.
-fn abandoned_at(press: Option<Point>, position: Point) -> Option<Point> {
-    press.filter(|press| press.x != position.x || press.y != position.y)
-}
-
 /// The engine's private event source, the one field that is not `Send` by
 /// itself.
 struct Source(CFRetained<CGEventSource>);
@@ -100,8 +91,6 @@ pub struct Engine {
     pub(crate) posted: u64,
     source: Source,
     held: Option<Button>,
-    /// Where the held button went down.
-    press: Option<Point>,
     held_keys: Vec<u16>,
     position: Point,
     click_count: u8,
@@ -126,7 +115,6 @@ impl Engine {
             posted: 0,
             source,
             held: None,
-            press: None,
             held_keys: Vec::new(),
             position: Point { x: 0.0, y: 0.0 },
             click_count: 1,
@@ -199,7 +187,6 @@ impl Engine {
                 x: held.x,
                 y: held.y,
             });
-            self.press = held.press.map(|[x, y]| self.on_display(Point { x, y }));
         }
 
         self.journal = Some(Journal::new(path));
@@ -218,7 +205,6 @@ impl Engine {
         self.epoch = current;
         self.journal_dirty = true;
         self.position = self.on_display(self.position);
-        self.press = self.press.map(|press| self.on_display(press));
 
         self.release()
     }
@@ -236,7 +222,6 @@ impl Engine {
             journal.write(Held {
                 epoch: self.epoch.clone(),
                 button: self.held,
-                press: self.press.map(|press| [press.x, press.y]),
                 keys: self.held_keys.clone(),
                 x: point.x,
                 y: point.y,
@@ -320,16 +305,8 @@ impl Engine {
         }
 
         if let Some(button) = self.held {
-            // Taken back to where it went down first (see `abandoned_at`),
-            // still held, through the session tap like every event.
-            if let Some(press) = abandoned_at(self.press, self.position) {
-                self.mouse(button.dragged(), press, button, self.click_count, 0)?;
-                self.position = press;
-            }
-
             self.mouse(button.up(), self.position, button, self.click_count, 0)?;
             self.held = None;
-            self.press = None;
             self.drag_started = false;
         }
 
@@ -366,7 +343,6 @@ impl Engine {
                 self.position = point;
 
                 self.held = Some(button);
-                self.press = Some(point);
                 self.mouse_number = self.mouse_number.checked_add(1).unwrap_or(1);
                 self.drag_started = false;
                 self.click_count = count;
@@ -429,7 +405,6 @@ impl Engine {
 
                 self.mouse(button.up(), point, button, self.click_count, flags)?;
                 self.held = None;
-                self.press = None;
                 self.drag_started = false;
                 self.position = point;
                 self.release_modifiers()?;
@@ -764,19 +739,6 @@ mod tests {
         .unwrap();
 
         assert_eq!((held, posted), (0, 0));
-    }
-
-    /// An abandoned drag comes up where it went down; a button that never
-    /// moved comes up where it is.
-    #[test]
-    fn an_abandoned_drag_is_released_where_it_began() {
-        let press = Point { x: 10.0, y: 20.0 };
-        let along = Point { x: 300.0, y: 20.0 };
-
-        let back = abandoned_at(Some(press), along).unwrap();
-        assert_eq!((back.x, back.y), (10.0, 20.0));
-        assert!(abandoned_at(Some(press), press).is_none());
-        assert!(abandoned_at(None, along).is_none());
     }
 
     /// The named constants are the raw values input has always used; in

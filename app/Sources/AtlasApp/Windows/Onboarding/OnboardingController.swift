@@ -69,7 +69,7 @@ final class OnboardingController {
     case .continueChoice: Task { await useHelper() }
     case .createAccount: Task { await createAccount() }
     case .lockAndSwitch: Task { await act(.switchTo(snapshot.facts.helper.name), Words.locking) }
-    case .chooseAnother: Task { await act(.forgetHelper, OnboardingWords.backToChoice) }
+    case .chooseAnother: Task { await chooseAnother() }
     case .checkAgain: refresh()
     case .retryFinish: retryFinish()
     case .continueFinishing: refresh()
@@ -321,6 +321,13 @@ final class OnboardingController {
 
   /// Connects the chosen agents, then teaches each chosen project; a project that cannot be taught is named, and the
   /// rest still follow. Agents that cannot be connected are each named with why, and the window stays.
+  /// Gives up the helper picked but never set up and goes back to the choice: the list, never the account form,
+  /// even when the account was just created there.
+  func chooseAnother() async {
+    guard let outcome = await act(.forgetHelper, OnboardingWords.backToChoice), outcome.ok else { return }
+    snapshot.choices.creating = false
+  }
+
   func connectAgents() async {
     let chosen = AgentChoice.toConnect(snapshot.agents)
     if !chosen.isEmpty {
@@ -348,6 +355,8 @@ final class OnboardingController {
         failed.append(OnboardingWords.notTaught(project.lastPathComponent, outcome.message))
       }
     }
+    // A skipped check's note belongs to the agents step only.
+    if snapshot.problem == OnboardingWords.agentsNotChecked { snapshot.problem = nil }
     snapshot.choices.agentsDone = true
     if !failed.isEmpty { snapshot.problem = failed.joined(separator: " ") }
   }

@@ -32,6 +32,8 @@ package enum CheckWords {
     switch check.name {
     case "Helper running": return "Atlas isn't answering in the helper."
     case "Helper reachable from here": return "This app can't reach the helper."
+    case "Helper in the background" where step.hasPrefix("Switch back"):
+      return "The helper is on screen. Switch back to your own account."
     case "Helper in the background": return "The helper isn't running in the background."
     case "Screen Recording allowed": return "Turn on Atlas in the helper's Screen Recording settings."
     case "Accessibility allowed" where restartsInput, "Input service ready" where restartsInput:

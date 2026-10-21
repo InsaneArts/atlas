@@ -532,16 +532,21 @@ pub fn forget(config_path: &Path) -> Result<Value> {
     let helper = setup::account_with_uid(config.helper_uid)?
         .ok_or_else(|| problem("The helper account no longer exists."))?;
 
-    if !may_forget(
-        requested(uid, &helper),
-        setup::migrate::in_effect_for(helper.uid, &helper.home),
-        answers(&config),
-        prepared(&helper),
-    ) {
+    let set_up = setup::migrate::in_effect_for(helper.uid, &helper.home)
+        || answers(&config)
+        || prepared(&helper);
+    let asked = requested(uid, &helper);
+
+    if set_up {
         return Err(problem(format!(
             "Atlas is already set up in {}, so it stays the helper.",
             helper.name
         )));
+    }
+
+    // Nothing asked and nothing set up: there is nothing to give up.
+    if !asked {
+        return Ok(json!({"ok": true, "forgotten": null}));
     }
 
     match fs::remove_file(REQUEST) {

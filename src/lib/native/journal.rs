@@ -19,10 +19,6 @@ use std::{
 pub struct Held {
     pub epoch: InputEpoch,
     pub button: Option<Button>,
-    /// Where the held button went down, while one is held. Left out
-    /// otherwise, so a journal without a held button reads as before.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub press: Option<[f64; 2]>,
     pub keys: Vec<u16>,
     pub x: f64,
     pub y: f64,
@@ -92,9 +88,6 @@ pub fn load(path: &Path, epoch: &InputEpoch) -> Result<Option<Held>> {
     if held.epoch.uid != epoch.uid
         || !held.x.is_finite()
         || !held.y.is_finite()
-        || held
-            .press
-            .is_some_and(|press| !press.iter().all(|value| value.is_finite()))
         || held.keys.len() > 16
         || held.keys.iter().any(|key| *key > 127)
         || !(1..=5).contains(&held.count)
@@ -228,7 +221,6 @@ mod tests {
         let held = Held {
             epoch: epoch.clone(),
             button: Some(Button::Right),
-            press: Some([4.0, 8.0]),
             keys: vec![55],
             x: 10.5,
             y: 20.5,
@@ -244,16 +236,10 @@ mod tests {
         let mut recovered = load(&path, &epoch).unwrap().unwrap();
         assert!(recovered == held);
         assert_eq!(recovered.mouse_number, 37);
-        assert_eq!(
-            recovered.press,
-            Some([4.0, 8.0]),
-            "a drag goes back to where it began"
-        );
 
         // This validates the recovery record, not desktop event delivery.
         recovered.epoch = epoch.clone();
         recovered.button = None;
-        recovered.press = None;
         recovered.keys.clear();
         recovered.flags = 0;
 
@@ -261,36 +247,6 @@ mod tests {
         let clean = load(&path, &epoch).unwrap().unwrap();
         assert!(clean == recovered);
         assert_eq!(clean.mouse_number, 37);
-    }
-
-    /// A journal with no button held is written as before, without a press
-    /// point, so an earlier build can still read it.
-    #[test]
-    fn a_journal_names_a_press_point_only_while_a_button_is_held() {
-        let held = Held {
-            epoch: test_epoch(),
-            button: None,
-            press: None,
-            keys: Vec::new(),
-            x: 1.0,
-            y: 2.0,
-            count: 1,
-            mouse_number: 3,
-            flags: 0,
-        };
-
-        let written = serde_json::to_value(&held).unwrap();
-        assert!(written.get("press").is_none());
-
-        let pressed = Held {
-            button: Some(Button::Left),
-            press: Some([5.0, 6.0]),
-            ..held
-        };
-        assert_eq!(
-            serde_json::to_value(&pressed).unwrap()["press"],
-            serde_json::json!([5.0, 6.0])
-        );
     }
 
     #[test]
@@ -301,7 +257,6 @@ mod tests {
         let mut held = Held {
             epoch: epoch.clone(),
             button: Some(Button::Left),
-            press: None,
             keys: Vec::new(),
             x: 10.0,
             y: 10.0,
@@ -330,7 +285,6 @@ mod tests {
         let mut held = Held {
             epoch: epoch.clone(),
             button: None,
-            press: None,
             keys: Vec::new(),
             x: 10.0,
             y: 10.0,
@@ -380,7 +334,6 @@ mod tests {
             &Held {
                 epoch: epoch.clone(),
                 button: None,
-                press: None,
                 keys: Vec::new(),
                 x: 1.0,
                 y: 1.0,
@@ -419,7 +372,6 @@ mod tests {
         let mut held = Held {
             epoch: epoch.clone(),
             button: None,
-            press: None,
             keys: vec![0],
             x: 10.0,
             y: 10.0,
