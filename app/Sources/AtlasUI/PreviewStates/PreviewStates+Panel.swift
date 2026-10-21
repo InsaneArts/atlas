@@ -70,7 +70,7 @@
       var state = panelWatching
       state.status = StatusSummary(label: "Not ready", tone: .attention)
       state.reason = nil
-      state.recovery = .notReady("The helper's input stopped. Recover starts it again.")
+      state.recovery = .notReady("Mouse and keyboard stopped in the helper. Recover starts them again.")
       state.menu.recover = .hidden
       return state
     }()

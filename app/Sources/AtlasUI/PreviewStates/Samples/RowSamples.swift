@@ -140,11 +140,15 @@
           }
         case .readiness:
           CardGroup {
-            ReadinessRow(name: String("Helper session"), text: String(""), state: .ready)
+            ReadinessRow(name: String("Helper"), text: String("Ready"), state: .ready)
             SeparatorLine()
-            ReadinessRow(name: String("Native dialogs"), text: String("Not checked yet."), state: .unknown)
+            ReadinessRow(name: String("Save and Open dialogs"), text: String("Not checked yet"), state: .unknown)
             SeparatorLine()
-            ReadinessRow(name: String("Input service"), text: String("It isn't answering."), state: .notReady)
+            ReadinessRow(
+              name: String("Mouse and keyboard"),
+              text: String("Mouse and keyboard aren't ready."),
+              state: .notReady
+            )
           }
         }
       }

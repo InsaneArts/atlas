@@ -12,7 +12,7 @@ enum PanelWords {
   /// The recovery card's detail when the helper gives no reason.
   static let recoverFirst = "Recover before anything else runs."
   /// The not-ready card's detail when the helper gives no reason.
-  static let inputStopped = "The helper's input stopped. Recover starts it again."
+  static let inputStopped = "Mouse and keyboard stopped in the helper. Recover starts them again."
   /// The helper fact's name.
   static let helperFact = "Helper"
   /// The last-action fact's name.

@@ -21,6 +21,7 @@ struct HelperDoneScreen: View {
         text:
           "You won't need to set anything up here again. Atlas starts in this account by itself whenever it is logged in, and finishes setting up in your own account."
       )
+    } bottom: {
       Button("Switch Back") { send(.switchBack) }
         .buttonStyle(.capsule(size: .large))
         .keyboardShortcut(.defaultAction)

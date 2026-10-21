@@ -61,9 +61,10 @@ enum OnboardingPresenter {
   }
 
   /// The footer's buttons and dots. Back shows on the account choice (before a helper is set up), on the form and on
-  /// Done, and Choose Another Account in its place on the switch while the helper asked never answered; the next step's button waits while a command runs, and each also for its own condition: an account
-  /// picked, a form that can be sent, a passed check, the agents read. The finishing check's Continue is the one
-  /// that Return does not press.
+  /// Done, and Choose Another Account in its place on the switch while the helper asked never answered; the next
+  /// step's button waits while a command runs, and each also for its own condition: an account picked, a form that
+  /// can be sent, a passed check, the agents read or skipped. The finishing check's Continue is the one that Return
+  /// does not press.
   ///
   /// - Parameters:
   ///   - snapshot: What the controller holds.

@@ -55,7 +55,10 @@
         opensAtLogin: OpenAtLogin.State(isAvailable: true, isEnabled: false)
       )
       unavailable.helper = nil
-      var inputStopped = try snapshot("blocked", reason: "The helper's input stopped. Recover starts it again.")
+      var inputStopped = try snapshot(
+        "blocked",
+        reason: "Mouse and keyboard stopped in the helper. Recover starts them again."
+      )
       inputStopped.status.overview.recoverable = true
       let presented: [String: PanelSnapshot] = [
         "Watching": try snapshot("observing"),

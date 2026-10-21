@@ -5,27 +5,20 @@ import Testing
 
 @testable import AtlasApp
 
-private let choiceFresh = """
-  {"ok": true, "role": "controller", "me": {"name": "me"}, "app": {"installed": true, "signed": true},
-   "configured": false, "candidates": []}
-  """
+/// The helper `atlas` asked and never answered, so it can be given up.
 private let choiceAsked = """
   {"ok": true, "role": "controller", "me": {"name": "me"}, "app": {"installed": true, "signed": true},
    "configured": true, "candidates": [],
    "helper": {"exists": true, "name": "atlas", "administrator": false, "paired": true, "forgettable": true,
               "signedIn": false, "answering": false}}
   """
+
+/// The helper given up: no longer asked, and listed among the accounts to choose again.
 private let choiceForgotten = """
   {"ok": true, "role": "controller", "me": {"name": "me"}, "app": {"installed": true, "signed": true},
    "configured": true, "candidates": [{"name": "atlas"}, {"name": "qa"}],
    "helper": {"exists": true, "name": "atlas", "administrator": false, "paired": false, "forgettable": false,
               "signedIn": false, "answering": false}}
-  """
-private let choiceFinished = """
-  {"ok": true, "role": "controller", "me": {"name": "me"}, "app": {"installed": true, "signed": true},
-   "configured": true, "finished": true, "candidates": [],
-   "helper": {"exists": true, "name": "atlas", "administrator": false, "paired": true, "signedIn": true,
-              "answering": true, "hidden": true, "permissions": {"screenCapture": true, "accessibility": true}}}
   """
 
 @MainActor
@@ -33,15 +26,8 @@ private let choiceFinished = """
 struct OnboardingControllerChoiceTests {
   @Test("choosing another account after creating one goes back to the list, not the account form")
   func chooseAnotherAfterCreating() async throws {
-    let commands = ScriptedCommands(["onboarding status": choiceFresh, "onboarding forget": #"{"ok": true}"#])
-    let controller = OnboardingController(
-      dependencies: OnboardingDependencies(
-        commands: commands,
-        openURL: { _ in },
-        chooseFolders: { [] },
-        loginItem: ScriptedLoginItem().seam
-      )
-    )
+    let commands = ScriptedCommands(["onboarding status": freshMac, "onboarding forget": #"{"ok": true}"#])
+    let controller = OnboardingControllerTests.controller(commands)
     controller.refresh()
     try await settle("the facts were never read") { controller.snapshot.loaded }
     controller.send(.begin)
@@ -61,15 +47,8 @@ struct OnboardingControllerChoiceTests {
 
   @Test("skipping agents that could not be checked leaves no note about them on Done")
   func skippedAgentsLeavesNoProblem() async throws {
-    let commands = ScriptedCommands(["onboarding status": choiceFinished])
-    let controller = OnboardingController(
-      dependencies: OnboardingDependencies(
-        commands: commands,
-        openURL: { _ in },
-        chooseFolders: { [] },
-        loginItem: ScriptedLoginItem().seam
-      )
-    )
+    let commands = ScriptedCommands(["onboarding status": finishedMac])
+    let controller = OnboardingControllerTests.controller(commands)
     controller.refresh()
     try await settle("the agents check never failed") { controller.snapshot.agentsFailed }
     controller.send(.connectAgents)

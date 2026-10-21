@@ -164,9 +164,17 @@
       notChecked.agentsFailed = true
       notChecked.projects = ["Opie", "Jolt", "understudy", "markdown2pdf", "InsaneArts Website"]
         .map { URL(fileURLWithPath: "/Users/me/dev/\($0)") }
-      notChecked.problem = OnboardingWords.agentsNotChecked
+      notChecked.problem = OnboardingWords.agentsCheckFailed
       var done = loaded(try person(helper(), finished: true))
       done.choices.agentsDone = true
+      var allowLong = loaded(
+        try helperSide(
+          running: false,
+          me: "Maria Fernanda Montgomery-Castellanos de la Vega",
+          asker: "Christopher Alexander Montgomery-Smith"
+        )
+      )
+      allowLong.problem = "Atlas could not finish setting up here: the login item could not be added."
       var guide = loaded(try helperSide())
       guide.guiding = .accessibility
       let presented: [String: OnboardingSnapshot] = [
@@ -189,13 +197,7 @@
         "Agents, not checked": notChecked,
         "Done": done,
         "Helper allow": loaded(try helperSide(running: false)),
-        "Helper allow, a long name": loaded(
-          try helperSide(
-            running: false,
-            me: "Maria Fernanda Montgomery-Castellanos de la Vega",
-            asker: "Christopher Alexander Montgomery-Smith"
-          )
-        ),
+        "Helper allow, a long name": allowLong,
         "Helper permissions": loaded(try helperSide(accessibility: true)),
         "Helper guide": guide,
         "Helper done": loaded(try helperSide(accessibility: true, screen: true)),

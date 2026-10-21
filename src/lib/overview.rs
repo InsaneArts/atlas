@@ -119,7 +119,7 @@ pub fn overview(
     } else if recoverable {
         (
             "blocked",
-            "The helper's input stopped. Recover starts it again.".to_owned(),
+            "Mouse and keyboard stopped in the helper. Recover starts them again.".to_owned(),
         )
     } else if report["ready"] != true {
         ("blocked", first_step)

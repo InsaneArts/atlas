@@ -283,10 +283,10 @@ final class OnboardingController {
       loadingAgents = nil
       guard outcome.ok, let status = outcome.decode(AgentsStatus.self) else {
         snapshot.agentsFailed = true
-        if snapshot.working == nil { snapshot.problem = OnboardingWords.agentsNotChecked }
+        if snapshot.working == nil { snapshot.problem = OnboardingWords.agentsCheckFailed }
         return
       }
-      if snapshot.agentsFailed, snapshot.problem == OnboardingWords.agentsNotChecked { snapshot.problem = nil }
+      if snapshot.agentsFailed, snapshot.problem == OnboardingWords.agentsCheckFailed { snapshot.problem = nil }
       snapshot.agentsFailed = false
       snapshot.agents = AgentChoice.merged(snapshot.agents, with: status.agents)
       snapshot.agentsLoaded = true
@@ -319,8 +319,6 @@ final class OnboardingController {
     }
   }
 
-  /// Connects the chosen agents, then teaches each chosen project; a project that cannot be taught is named, and the
-  /// rest still follow. Agents that cannot be connected are each named with why, and the window stays.
   /// Gives up the helper picked but never set up and goes back to the choice: the list, never the account form,
   /// even when the account was just created there.
   func chooseAnother() async {
@@ -328,6 +326,8 @@ final class OnboardingController {
     snapshot.choices.creating = false
   }
 
+  /// Connects the chosen agents, then teaches each chosen project; a project that cannot be taught is named, and the
+  /// rest still follow. Agents that cannot be connected are each named with why, and the window stays.
   func connectAgents() async {
     let chosen = AgentChoice.toConnect(snapshot.agents)
     if !chosen.isEmpty {
@@ -356,7 +356,7 @@ final class OnboardingController {
       }
     }
     // A skipped check's note belongs to the agents step only.
-    if snapshot.problem == OnboardingWords.agentsNotChecked { snapshot.problem = nil }
+    if snapshot.problem == OnboardingWords.agentsCheckFailed { snapshot.problem = nil }
     snapshot.choices.agentsDone = true
     if !failed.isEmpty { snapshot.problem = failed.joined(separator: " ") }
   }

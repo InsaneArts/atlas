@@ -81,7 +81,7 @@ enum OnboardingWords {
   /// - Returns: "Codex: not installed."
   static func notConnected(_ agent: AgentID, _ message: String) -> String {
     let reason = message.isEmpty ? "it didn't connect" : message
-    return "\(agentTitle(agent)): \(reason.hasSuffix(".") ? String(reason.dropLast()) : reason)."
+    return "\(agentTitle(agent)): \(Words.sentence(reason))"
   }
 
   // MARK: The account choice and form
@@ -203,7 +203,8 @@ enum OnboardingWords {
   /// An agent `atlas agents status` could not check.
   static let agentNotChecked = "Not checked yet."
   /// `atlas agents status` failed: the step can be skipped, and Atlas asks again.
-  static let agentsNotChecked = "Atlas couldn't check your agents. Continue to skip this, or wait while it tries again."
+  static let agentsCheckFailed =
+    "Atlas couldn't check your agents. Continue to skip this, or wait while it tries again."
 
   /// A chosen project's remove button, for VoiceOver.
   ///

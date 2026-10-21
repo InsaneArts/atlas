@@ -32,6 +32,7 @@ struct SwitchScreen: View {
         )
       }
       .padding(.top, Spacing.xs)
+    } bottom: {
       if state.showsLockButton {
         Button("Lock and Switch") { send(.lockAndSwitch) }
           .buttonStyle(.capsule(size: .large))

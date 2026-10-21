@@ -93,10 +93,10 @@ enum ViewerWords {
   /// Control ended because the status said input is not ready, in the status's own words.
   ///
   /// - Parameter reason: The status's reason; empty, or the placeholder before any reason, for none.
-  /// - Returns: "Control ended. The helper's input stopped. Recover starts it again."
+  /// - Returns: "Control ended. Mouse and keyboard stopped in the helper. Recover starts them again."
   static func controlEnded(_ reason: String) -> String {
     let known = reason.isEmpty || reason == Words.connecting ? notReady : reason
-    return "Control ended. \(known.hasSuffix(".") ? known : known + ".")"
+    return "Control ended. \(Words.sentence(known))"
   }
 
   /// The header's line after the status: the helper, then how fresh its picture is.

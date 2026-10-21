@@ -25,6 +25,7 @@ struct AllowScreen: View {
         .padding(.top, Spacing.s)
       Headline(title: state.title, tail: OnboardingScreen.allowTail)
       Lede(text: state.lede)
+    } bottom: {
       Button("Allow") { send(.allow) }
         .buttonStyle(.capsule(size: .large))
         .keyboardShortcut(.defaultAction)

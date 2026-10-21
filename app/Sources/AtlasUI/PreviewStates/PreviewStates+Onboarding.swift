@@ -333,7 +333,7 @@
       return state
     }()
 
-    /// In the helper: a person with a long name asks a helper with a long name.
+    /// In the helper: a person with a long name asks a helper with a long name, and allowing failed.
     @MainActor package static let onboardingAllowLong: OnboardingState = {
       var state = onboardingAllow
       let asker = "Christopher Alexander Montgomery-Smith"
@@ -348,6 +348,7 @@
           )
         )
       )
+      state.note = .problem("Atlas could not finish setting up here: the login item could not be added.")
       return state
     }()
 

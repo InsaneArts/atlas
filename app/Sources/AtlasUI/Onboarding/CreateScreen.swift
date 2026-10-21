@@ -24,6 +24,7 @@ struct CreateScreen: View {
       .disabled(!state.isFormEnabled)
       .opacity(state.isFormEnabled ? 1 : Opacity.busy)
       .padding(.top, Spacing.s)
+    } bottom: {
       WorkNoteLine(note: state.note)
       Note(
         text:

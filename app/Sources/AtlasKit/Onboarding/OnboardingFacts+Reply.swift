@@ -11,7 +11,6 @@ extension OnboardingFacts {
     struct App: Decodable {
       let installed: Bool?
       let signed: Bool?
-      let error: String?
     }
 
     /// The two permissions, in the helper.

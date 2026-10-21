@@ -1,6 +1,6 @@
 /// One readiness check, as the viewer's Ready card lists it.
 package struct ReadinessItem: Equatable, Sendable, Identifiable {
-  /// What is checked, such as "Input service".
+  /// What is checked, such as "Mouse and keyboard".
   package var name: String
   /// What it means, or what to do.
   package var text: String
@@ -10,7 +10,7 @@ package struct ReadinessItem: Equatable, Sendable, Identifiable {
   /// Creates a readiness check.
   ///
   /// - Parameters:
-  ///   - name: What is checked, such as "Input service".
+  ///   - name: What is checked, such as "Mouse and keyboard".
   ///   - text: What it means, or what to do.
   ///   - state: How it stands.
   package init(name: String, text: String, state: ReadinessState) {

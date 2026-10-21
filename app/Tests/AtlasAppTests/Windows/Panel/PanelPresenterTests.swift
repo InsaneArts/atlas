@@ -97,10 +97,13 @@ struct PanelPresenterTests {
 
   @Test("input Recover starts again shows the not-ready card in place of the reason and the Recover row")
   func inputStoppedOffersRecover() {
-    var stopped = Self.snapshot(.blocked, reason: "The helper's input stopped. Recover starts it again.")
+    var stopped = Self.snapshot(
+      .blocked,
+      reason: "Mouse and keyboard stopped in the helper. Recover starts them again."
+    )
     stopped.status.overview.recoverable = true
     let state = PanelPresenter.state(stopped)
-    #expect(state.recovery == .notReady("The helper's input stopped. Recover starts it again."))
+    #expect(state.recovery == .notReady("Mouse and keyboard stopped in the helper. Recover starts them again."))
     #expect(state.reason == nil)
     #expect(state.menu.recover == .hidden)
     let settings = PanelPresenter.state(Self.snapshot(.blocked, reason: "Turn on Accessibility."))

@@ -5,14 +5,16 @@ import Testing
 
 @testable import AtlasApp
 
-/// A fresh Mac's reply: no helper chosen, and no standard account that could be one.
-private let freshMac = """
+/// A fresh Mac's reply: no helper chosen, and no standard account that could be one. Shared with
+/// `OnboardingControllerChoiceTests`.
+let freshMac = """
   {"ok": true, "role": "controller", "me": {"name": "me"}, "app": {"installed": true, "signed": true},
    "configured": false, "candidates": []}
   """
 
 /// A set-up Mac's reply: the helper `atlas` is chosen, allowed and checked, so the agents come next.
-private let finishedMac = """
+/// Shared with `OnboardingControllerChoiceTests`.
+let finishedMac = """
   {"ok": true, "role": "controller", "me": {"name": "me"}, "app": {"installed": true, "signed": true},
    "configured": true, "finished": true, "candidates": [],
    "helper": {"exists": true, "name": "atlas", "administrator": false, "paired": true, "signedIn": true,
@@ -33,7 +35,7 @@ struct OnboardingControllerTests {
   ///   - folders: What the folder chooser answers.
   ///   - loginItem: The scripted login item.
   /// - Returns: The controller.
-  private static func controller(
+  static func controller(
     _ commands: ScriptedCommands,
     opened: OpenedURLs = OpenedURLs(),
     folders: [URL] = [],
@@ -243,7 +245,7 @@ struct OnboardingControllerTests {
     let commands = ScriptedCommands(["onboarding status": finishedMac])
     let controller = try await Self.loaded(commands)
     try await settle("the failed agents reading was never shown") { controller.snapshot.agentsFailed }
-    #expect(controller.snapshot.problem == OnboardingWords.agentsNotChecked)
+    #expect(controller.snapshot.problem == OnboardingWords.agentsCheckFailed)
     #expect(controller.snapshot.agents.map(\.id) == AgentID.allCases, "the agents stay listed")
     #expect(controller.state.footer.next?.isEnabled == true, "Continue skips the step")
     controller.refresh()

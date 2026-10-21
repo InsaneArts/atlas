@@ -21,6 +21,7 @@ struct AgentsScreen: View {
       }
       .padding(.top, Spacing.s)
       ProjectsCard(projects: state.projects, isBusy: isBusy, send: send)
+    } bottom: {
       WorkNoteLine(note: note)
     }
   }

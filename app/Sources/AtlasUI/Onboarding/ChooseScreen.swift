@@ -20,6 +20,7 @@ struct ChooseScreen: View {
       )
       list
         .padding(.top, Spacing.s)
+    } bottom: {
       WorkNoteLine(note: note)
       footnote
     }

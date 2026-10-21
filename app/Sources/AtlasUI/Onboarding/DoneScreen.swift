@@ -24,6 +24,7 @@ struct DoneScreen: View {
         )
       }
       .padding(.top, Spacing.s)
+    } bottom: {
       WorkNoteLine(note: note)
       Note(text: "Getting Started… in the menu bar brings this window back.")
     }
