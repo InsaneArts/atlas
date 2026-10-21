@@ -11,6 +11,9 @@ struct ModeTests {
     #expect(Mode.of(.recovering).tone == .attention)
     #expect(Mode.of(.unavailable).label == "Unavailable")
     #expect(Mode.of(.loggedOut).label == "Logged out")
+    #expect(Mode.of(.stopped).label == "Stopped")
+    #expect(Mode.of(.stopped).tone == .attention)
+    #expect(Mode.of(.stopped).mark == .stopped, "a mark of its own, apart from Needs you")
   }
 
   @Test(

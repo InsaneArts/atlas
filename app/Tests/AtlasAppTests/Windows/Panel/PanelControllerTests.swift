@@ -69,6 +69,45 @@ struct PanelControllerTests {
     #expect(!controller.working)
   }
 
+  @Test("stopping the agent asks the service and says so, and resuming lets it go on")
+  func stoppingTheAgent() async {
+    let service = ScriptedService()
+    let controller = Self.panel(service)
+    await controller.stopAgent()
+    #expect(service.log == ["stop"])
+    #expect(controller.feedback == PanelWords.stopped)
+    await controller.resumeAgent()
+    #expect(service.log == ["stop", "resume"])
+    #expect(controller.feedback == PanelWords.resumed)
+    #expect(!controller.working)
+  }
+
+  @Test("a stop the service refuses says why")
+  func refusedStop() async {
+    let service = ScriptedService()
+    service.fail = ["hold"]
+    let controller = Self.panel(service)
+    await controller.stopAgent()
+    #expect(controller.feedback == "hold failed")
+    #expect(!controller.working)
+  }
+
+  @Test("a stop never waits for another action, and a resume does")
+  func stopNeverWaits() async {
+    let service = ScriptedService()
+    service.hold = ["revoke"]
+    let controller = Self.panel(service)
+    let revoking = Task { await controller.revokeControl() }
+    while service.held["revoke"] == nil { await Task.yield() }
+    #expect(controller.working)
+    await controller.resumeAgent()
+    #expect(service.log == ["revoke"], "a resume waits")
+    await controller.stopAgent()
+    #expect(service.log == ["revoke", "stop"], "a stop does not")
+    service.resume("revoke")
+    await revoking.value
+  }
+
   @Test("the helper to switch to is the account atlas reports")
   func theHelperIsTheOneAtlasReports() async {
     let commands = ScriptedCommands([

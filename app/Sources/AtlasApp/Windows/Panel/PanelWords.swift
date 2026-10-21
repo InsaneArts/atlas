@@ -23,6 +23,14 @@ enum PanelWords {
   static let releasing = "Releasing control…"
   /// Once control is released.
   static let released = "Control released."
+  /// While Stop Agent runs.
+  static let stopping = "Stopping…"
+  /// Once agents are stopped.
+  static let stopped = "Agent stopped."
+  /// While Resume Agent runs.
+  static let resuming = "Resuming…"
+  /// Once agents may go on.
+  static let resumed = "Agent resumed."
   /// While Switch to Helper… runs.
   static let switching = "Switching…"
   /// Once the switch ran.

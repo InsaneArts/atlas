@@ -20,4 +20,8 @@ package enum ViewerEvent: Equatable, Sendable {
   case setRate(ViewerPictureRate)
   /// Log In… on a logged-out helper's stage.
   case logIn
+  /// Stop Agent: end an agent's input under way in the helper and refuse its next actions.
+  case stopAgent
+  /// Resume Agent: let agents act in the helper again.
+  case resumeAgent
 }

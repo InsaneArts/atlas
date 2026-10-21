@@ -63,12 +63,26 @@ struct PanelPresenterTests {
     #expect(!PanelPresenter.state(Self.snapshot(.loggedOut)).isViewerPrimary)
   }
 
-  @Test("in control the second button releases control; otherwise Switch waits for a known helper and an idle panel")
+  @Test(
+    "the second button releases control, stops a working agent, resumes a stopped one or switches to a known helper"
+  )
   func secondaryButton() {
     #expect(PanelPresenter.state(Self.snapshot(.controlling, helper: nil)).secondary == .revokeControl)
-    #expect(PanelPresenter.state(Self.snapshot(.agent)).secondary == .switchToHelper(isEnabled: true))
-    #expect(PanelPresenter.state(Self.snapshot(.agent, helper: nil)).secondary == .switchToHelper(isEnabled: false))
-    #expect(PanelPresenter.state(Self.snapshot(.agent, working: true)).secondary == .switchToHelper(isEnabled: false))
+    #expect(PanelPresenter.state(Self.snapshot(.agent, working: true)).secondary == .stopAgent, "a stop never waits")
+    #expect(PanelPresenter.state(Self.snapshot(.stopped)).secondary == .resumeAgent(isEnabled: true))
+    #expect(PanelPresenter.state(Self.snapshot(.stopped, working: true)).secondary == .resumeAgent(isEnabled: false))
+    #expect(PanelPresenter.state(Self.snapshot(.observing)).secondary == .switchToHelper(isEnabled: true))
+    var between = Self.snapshot(.observing)
+    between.status.overview.activity = [.init(operation: "input", ok: true, ageSeconds: 30)]
+    #expect(PanelPresenter.state(between).secondary == .stopAgent, "an agent between steps can still be stopped")
+    between.status.overview.activity = [.init(operation: "input", ok: true, ageSeconds: 90)]
+    #expect(PanelPresenter.state(between).secondary == .switchToHelper(isEnabled: true))
+    between.status.overview.activity = [.init(operation: "input", ok: true, actor: "viewer", ageSeconds: 5)]
+    #expect(PanelPresenter.state(between).secondary == .switchToHelper(isEnabled: true), "the person's own input")
+    #expect(PanelPresenter.state(Self.snapshot(.observing, helper: nil)).secondary == .switchToHelper(isEnabled: false))
+    #expect(
+      PanelPresenter.state(Self.snapshot(.observing, working: true)).secondary == .switchToHelper(isEnabled: false)
+    )
   }
 
   @Test(
@@ -115,6 +129,13 @@ struct PanelPresenterTests {
   @Test("Recover in the menu waits while the helper's mode would refuse it")
   func recoverWaitsWhereItWouldBeRefused() {
     #expect(PanelPresenter.state(Self.snapshot(.controlling)).menu.recover == .disabled)
+  }
+
+  @Test("while stopped, Recover and Log Out Helper… stay open in the menu")
+  func stoppedMenu() {
+    let menu = PanelPresenter.state(Self.snapshot(.stopped)).menu
+    #expect(menu.recover == .enabled)
+    #expect(menu.logOut == .enabled)
   }
 
   @Test("the facts read a dash for an unknown helper and display")

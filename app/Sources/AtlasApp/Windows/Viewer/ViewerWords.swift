@@ -35,6 +35,10 @@ enum ViewerWords {
   static let watching = "Watching. Control-Shift-Escape takes control."
   /// The control button in control.
   static let giveBack = "Give Back"
+  /// Once Stop Agent ran.
+  static let agentStopped = "Agent stopped."
+  /// Once Resume Agent ran.
+  static let agentResumed = "Agent resumed."
   /// The control button while watching.
   static let takeControl = "Take Control"
   /// The control button's tooltip in control.

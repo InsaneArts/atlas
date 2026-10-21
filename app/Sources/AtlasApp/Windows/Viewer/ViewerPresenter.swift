@@ -183,8 +183,21 @@ enum ViewerPresenter {
         help: paused ? ViewerWords.resumePictureHelp : ViewerWords.pausePictureHelp
       ),
       keysEnabled: session.holdingControl,
-      control: control(snapshot)
+      control: control(snapshot),
+      agent: agent(snapshot)
     )
+  }
+
+  /// Stop Agent while an agent acts, as the panel offers it; Resume Agent once stopped, waiting while recovery runs.
+  /// Neither while this window holds control: no agent acts then.
+  ///
+  /// - Parameter snapshot: What the controller holds.
+  /// - Returns: The button, or nil for none.
+  static func agent(_ snapshot: ViewerSnapshot) -> ViewerAgentButton? {
+    let overview = snapshot.reading.status.overview
+    if snapshot.session.holdingControl { return nil }
+    if overview.offersResume { return .resume(isEnabled: !snapshot.session.recovering) }
+    return overview.offersStop ? .stop : nil
   }
 
   /// Give Back while in control; else Connecting… while asked, or Take Control when it can be taken.

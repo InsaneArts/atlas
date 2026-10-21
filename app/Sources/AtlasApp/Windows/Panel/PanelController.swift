@@ -230,6 +230,8 @@ final class PanelController {
     case .openViewer: openViewer()
     case .revokeControl: Task { await revokeControl() }
     case .switchToHelper: Task { await switchToHelper() }
+    case .stopAgent: Task { await stopAgent() }
+    case .resumeAgent: Task { await resumeAgent() }
     case .logIn: Task { await logIn() }
     case .recover: Task { await recover() }
     case .askToLogOut: askToLogOut()
@@ -288,6 +290,36 @@ final class PanelController {
   func revokeControl() async {
     say(PanelWords.releasing)
     if await revokeEveryViewer() { say(PanelWords.released) }
+    await readStatus()
+  }
+
+  /// Stop Agent: ends an agent's input under way and refuses its next actions. It never waits for another action.
+  func stopAgent() async {
+    await setStopped(true, working: PanelWords.stopping, done: PanelWords.stopped)
+  }
+
+  /// Resume Agent: lets agents act again, unless another action runs.
+  func resumeAgent() async {
+    guard !working else { return }
+    await setStopped(false, working: PanelWords.resuming, done: PanelWords.resumed)
+  }
+
+  /// Asks the service to stop or resume agents, saying what it does and how it ended, then reads the status.
+  ///
+  /// - Parameters:
+  ///   - stopped: Whether agents stop.
+  ///   - working: What to say while the service is asked.
+  ///   - done: What to say once it agreed; a refusal says why.
+  private func setStopped(_ stopped: Bool, working: String, done: String) async {
+    running += 1
+    say(working)
+    do {
+      try await service.setStopped(stopped)
+      say(done)
+    } catch {
+      say(error.localizedDescription)
+    }
+    running -= 1
     await readStatus()
   }
 

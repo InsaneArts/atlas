@@ -10,7 +10,7 @@
   @Suite("PreviewStates+Panel")
   struct PanelPreviewStatesTests {
     /// What the controller holds on a set-up Mac whose helper is in `mode`: Atlas, its display and an agent's screenshot
-    /// 7 seconds ago, its desktop on show, its helper known and Open at Login off.
+    /// 2 minutes ago, its desktop on show, its helper known and Open at Login off.
     ///
     /// - Parameters:
     ///   - mode: The helper's mode, as the service names it.
@@ -25,7 +25,7 @@
           "account": "atlas",
           "accountName": "Atlas",
           "display": ["width": 1512, "height": 982],
-          "activity": [["operation": "screenshot", "actor": "agent", "ok": true, "ageSeconds": 7]],
+          "activity": [["operation": "screenshot", "actor": "agent", "ok": true, "ageSeconds": 120]],
         ]
       ])
       return PanelSnapshot(
@@ -63,6 +63,7 @@
       let presented: [String: PanelSnapshot] = [
         "Watching": try snapshot("observing"),
         "Agent working": try snapshot("agent", reason: "An agent is acting in the helper"),
+        "Stopped": try snapshot("stopped", reason: "You stopped the agent. It waits until you resume it."),
         "In control": try snapshot("controlling", reason: "A viewer has control"),
         "Recovering": try snapshot(
           "recovering",

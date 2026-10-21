@@ -7,7 +7,7 @@ struct ViewerFooter: View {
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
 
-  /// The hint, then Recover… when set aside, pause, Keys and the control capsule.
+  /// The hint, then Recover… when set aside, Stop or Resume Agent, pause, Keys and the control capsule.
   var body: some View {
     VStack(spacing: .zero) {
       SeparatorLine()
@@ -22,6 +22,19 @@ struct ViewerFooter: View {
         if state.offersRecovery {
           Button("Recover…") { send(.showRecovery) }
             .buttonStyle(.capsule(.glass))
+        }
+        switch state.agent {
+        case .stop:
+          Button("Stop Agent") { send(.stopAgent) }
+            .buttonStyle(.capsule(.glass))
+            .help("End what the agent is doing in the helper, and let it do nothing more until you resume")
+        case .resume(let isEnabled):
+          Button("Resume Agent") { send(.resumeAgent) }
+            .buttonStyle(.capsule(.glass))
+            .disabled(!isEnabled)
+            .help("Let agents act in the helper again")
+        case nil:
+          EmptyView()
         }
         Button {
           send(.togglePause)

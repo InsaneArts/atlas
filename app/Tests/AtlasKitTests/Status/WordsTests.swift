@@ -24,6 +24,12 @@ struct WordsTests {
     #expect(Words.describe(.init(operation: "newop", ok: false)) == "couldn't finish an action")
   }
 
+  @Test("an operation the service describes reads in the service's words")
+  func serviceWords() {
+    let row = ViewerStatus.Activity(operation: "input", ok: true, actionCount: 1, says: "clicked Save in TextEdit")
+    #expect(Words.describe(row) == "clicked Save in TextEdit")
+  }
+
   @Test("a command's message shows as a sentence, with one full stop")
   func sentence() {
     #expect(Words.sentence("Atlas.app must be in Applications") == "Atlas.app must be in Applications.")

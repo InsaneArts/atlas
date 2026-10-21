@@ -150,6 +150,15 @@ package struct ViewerClient: ViewerService {
     _ = try await post("control/revoke", Body())
   }
 
+  /// Posts to `control/hold`.
+  ///
+  /// - Parameter stopped: Whether agents stop.
+  /// - Throws: ``ServiceError`` when the service refuses.
+  package func setStopped(_ stopped: Bool) async throws {
+    struct Body: Encodable { let on: Bool }
+    _ = try await post("control/hold", Body(on: stopped))
+  }
+
   /// Posts to `input`.
   ///
   /// - Parameters:

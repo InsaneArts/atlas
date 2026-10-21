@@ -6,6 +6,10 @@ package enum PanelEvent: Equatable, Sendable {
   case revokeControl
   /// Switch to Helper…
   case switchToHelper
+  /// Stop Agent: end an agent's input under way in the helper and refuse its next actions.
+  case stopAgent
+  /// Resume Agent: let agents act in the helper again.
+  case resumeAgent
   /// Log In…: lock the screen so the person can log in to the helper.
   case logIn
   /// Recover, from the card or the menu.

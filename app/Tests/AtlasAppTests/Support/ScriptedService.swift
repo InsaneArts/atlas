@@ -100,6 +100,11 @@ final class ScriptedService: ViewerService {
     leaseHeld = false
   }
 
+  func setStopped(_ stopped: Bool) async throws {
+    log.append(stopped ? "stop" : "resume")
+    try await pause("hold")
+  }
+
   func input(lease: String, frame: String, actions: [InputAction]) async throws {
     log.append("input \(lease) \(actions.count)")
     self.actions.append(actions)

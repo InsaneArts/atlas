@@ -23,6 +23,8 @@ package struct Mode: Equatable, Sendable {
     case filled
     /// The person is needed.
     case alert
+    /// The person stopped agents.
+    case stopped
     /// The helper is not ready.
     case dash
     /// The helper cannot be reached.
@@ -58,6 +60,7 @@ package struct Mode: Equatable, Sendable {
     case .agent: Mode(label: "Agent working", tone: .active, mark: .working)
     case .controlling: Mode(label: "Viewer has control", tone: .active, mark: .filled)
     case .recovering: Mode(label: "Needs you", tone: .attention, mark: .alert)
+    case .stopped: Mode(label: "Stopped", tone: .attention, mark: .stopped)
     case .blocked: Mode(label: "Not ready", tone: .attention, mark: .dash)
     case .unavailable: Mode(label: "Unavailable", tone: .quiet, mark: .dimmed)
     case .loggedOut: Mode(label: "Logged out", tone: .quiet, mark: .dimmed)

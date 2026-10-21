@@ -34,6 +34,8 @@ struct StatusReadingTests {
     #expect(try overview("controlling").controlBlocked == "Another viewer has control.")
     #expect(try overview("recovering").controlBlocked == "Recover before taking control.")
     #expect(try overview("observing").controlBlocked == nil)
+    #expect(try overview("stopped").controlBlocked == nil, "the person may take over while agents are stopped")
+    #expect(try overview("stopped").availability(holdingControl: false) == "Available")
     #expect(try overview("recovering").recoveryOffered(holdingControl: false))
     #expect(try !overview("recovering").recoveryOffered(holdingControl: true))
   }

@@ -183,7 +183,23 @@ final class ViewerController {
     case .showKeys: showKeys(self)
     case .setRate(let rate): self.rate = rate
     case .logIn: Task { await askToLogIn() }
+    case .stopAgent: Task { await setStopped(true) }
+    case .resumeAgent: Task { await setStopped(false) }
     }
+  }
+
+  /// Stop Agent or Resume Agent, saying how it went, then reads the status so the window shows it at once.
+  ///
+  /// - Parameter stopped: Whether agents stop.
+  func setStopped(_ stopped: Bool) async {
+    do {
+      try await service.setStopped(stopped)
+      say(stopped ? ViewerWords.agentStopped : ViewerWords.agentResumed)
+    } catch {
+      say(error.localizedDescription)
+    }
+    await readStatus()
+    refresh()
   }
 
   // MARK: Actions

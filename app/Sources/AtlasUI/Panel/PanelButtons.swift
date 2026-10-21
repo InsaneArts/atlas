@@ -20,6 +20,13 @@ struct PanelButtons: View {
       case .revokeControl:
         Button("Release Control") { send(.revokeControl) }
           .buttonStyle(.capsule(.glass, fill: true))
+      case .stopAgent:
+        Button("Stop Agent") { send(.stopAgent) }
+          .buttonStyle(.capsule(.glass, fill: true))
+      case .resumeAgent(let isEnabled):
+        Button("Resume Agent") { send(.resumeAgent) }
+          .buttonStyle(.capsule(.glass, fill: true))
+          .disabled(!isEnabled)
       case .switchToHelper(let isEnabled):
         Button("Switch to Helper…") { send(.switchToHelper) }
           .buttonStyle(.capsule(.glass, fill: true))
@@ -34,6 +41,12 @@ struct PanelButtons: View {
 #if DEBUG
   #Preview("In control") {
     PanelButtons(viewerLook: PreviewStates.panelInControl.viewerLook, secondary: .revokeControl) { _ in }
+      .frame(width: SampleWidth.narrow)
+      .sampleSurface()
+  }
+
+  #Preview("Agent working") {
+    PanelButtons(viewerLook: PreviewStates.panelAgentWorking.viewerLook, secondary: .stopAgent) { _ in }
       .frame(width: SampleWidth.narrow)
       .sampleSurface()
   }

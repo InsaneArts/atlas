@@ -74,7 +74,7 @@ package struct StatusReading: Equatable, Sendable {
     let mode = status.overview.mode
     if mode.isControlled(byThisViewer: holdingControl) { return "This window" }
     return switch mode {
-    case .observing: "Available"
+    case .observing, .stopped: "Available"
     case .controlling: "Another window"
     case .agent: "Agent working"
     case .recovering: "After recovery"

@@ -70,16 +70,20 @@ enum PanelPresenter {
     ]
   }
 
-  /// The button beside Open Viewer: Release Control, which revokes it, while a viewer holds control; Switch to
-  /// Helper… unless the helper is logged out, waiting for a known helper and an idle panel.
+  /// The button beside Open Viewer: Release Control, which revokes it, while a viewer holds control; Stop Agent
+  /// while ``ViewerStatus/Overview/offersStop``, and Resume Agent once stopped, waiting for an idle panel;
+  /// otherwise Switch to Helper… unless the helper is logged out, waiting for a known helper and an idle panel.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The button, or nil for none.
   private static func secondary(_ snapshot: PanelSnapshot) -> PanelSecondaryAction? {
     switch snapshot.status.overview.mode {
     case .controlling: .revokeControl
+    case .stopped: .resumeAgent(isEnabled: !snapshot.working)
     case .loggedOut: nil
-    case .observing, .agent, .recovering, .blocked, .unavailable:
+    case .agent: .stopAgent
+    case .observing where snapshot.status.overview.offersStop: .stopAgent
+    case .observing, .recovering, .blocked, .unavailable:
       .switchToHelper(isEnabled: snapshot.helper != nil && !snapshot.working)
     }
   }

@@ -22,6 +22,27 @@ extension ViewerStatus {
     /// Recent operations, newest first.
     package var activity: [Activity] = []
 
+    /// How long after an agent's last action Stop Agent stays offered, in seconds: an agent between two steps still
+    /// reads as working, so Stop stays where the person reaches for it.
+    package static let stopStaysFor: Double = 60
+
+    /// Whether Stop Agent is offered: an agent acts, or acted within ``stopStaysFor``.
+    package var offersStop: Bool {
+      mode == .agent || (mode == .observing && agentActed(within: Self.stopStaysFor))
+    }
+
+    /// Whether Resume Agent is offered: the person stopped agents.
+    package var offersResume: Bool { mode == .stopped }
+
+    /// Whether an agent did something in the helper within `seconds`, so it may still be at work between steps.
+    ///
+    /// - Parameter seconds: How recent counts, in seconds.
+    /// - Returns: Whether the newest agent row is that recent.
+    package func agentActed(within seconds: Double) -> Bool {
+      guard let newest = activity.first(where: { $0.actor != "viewer" }) else { return false }
+      return newest.ageSeconds.map { $0 < seconds } ?? false
+    }
+
     /// Whether Recover helps now: an action's outcome is unknown, or what keeps the helper not ready is something
     /// Recover fixes. The panel's recovery card and the viewer's alert both follow it.
     package var recoveryHelps: Bool {
@@ -40,7 +61,7 @@ extension ViewerStatus {
     package var recoverMayRun: Bool {
       switch mode {
       case .observing, .blocked: true
-      case .agent: inFlight == 0
+      case .agent, .stopped: inFlight == 0
       case .controlling, .recovering, .unavailable, .loggedOut: false
       }
     }

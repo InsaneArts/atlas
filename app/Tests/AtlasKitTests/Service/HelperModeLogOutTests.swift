@@ -10,6 +10,7 @@ struct HelperModeLogOutTests {
       (HelperMode.observing, true, true),
       (.controlling, true, true),
       (.blocked, true, true),
+      (.stopped, true, true),
       (.recovering, false, true),
       (.agent, false, false),
       (.unavailable, false, false),

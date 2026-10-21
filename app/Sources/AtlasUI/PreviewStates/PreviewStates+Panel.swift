@@ -7,6 +7,7 @@
       [
         PreviewState(name: "Watching", value: panelWatching),
         PreviewState(name: "Agent working", value: panelAgentWorking),
+        PreviewState(name: "Stopped", value: panelStopped),
         PreviewState(name: "In control", value: panelInControl),
         PreviewState(name: "Recovering", value: panelRecovering),
         PreviewState(name: "Input stopped", value: panelInputStopped),
@@ -28,7 +29,7 @@
       facts: [
         Fact(name: "Helper", value: "Atlas"),
         Fact(name: "Display", value: "1512 × 982"),
-        Fact(name: "Last action", value: "Agent took a screenshot · 7 s ago"),
+        Fact(name: "Last action", value: "Agent took a screenshot · 2 min ago"),
       ],
       isViewerPrimary: true,
       secondary: .switchToHelper(isEnabled: true),
@@ -37,12 +38,22 @@
       menu: PanelMenu(opensAtLogin: false, recover: .enabled, logOut: .enabled)
     )
 
-    /// An agent acts in the helper: logging out waits.
+    /// An agent acts in the helper: the second button stops it, and logging out waits.
     @MainActor static let panelAgentWorking: PanelState = {
       var state = panelWatching
       state.status = StatusSummary(label: "Agent working", tone: .active)
       state.reason = "An agent is acting in the helper"
+      state.secondary = .stopAgent
       state.menu.logOut = .disabled
+      return state
+    }()
+
+    /// The person stopped agents: the second button resumes them.
+    @MainActor static let panelStopped: PanelState = {
+      var state = panelWatching
+      state.status = StatusSummary(label: "Stopped", tone: .attention)
+      state.reason = "You stopped the agent. It waits until you resume it."
+      state.secondary = .resumeAgent(isEnabled: true)
       return state
     }()
 

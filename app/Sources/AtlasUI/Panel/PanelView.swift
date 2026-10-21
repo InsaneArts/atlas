@@ -87,6 +87,10 @@ package struct PanelView: View {
     PanelView(state: PreviewStates.panelAgentWorking) { _ in }
   }
 
+  #Preview("Stopped") {
+    PanelView(state: PreviewStates.panelStopped) { _ in }
+  }
+
   #Preview("In control") {
     PanelView(state: PreviewStates.panelInControl) { _ in }
   }

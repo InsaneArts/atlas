@@ -19,7 +19,7 @@ enum StatusGlyph {
     let dot: NSColor? =
       switch mode.mark {
       case .working: .systemBlue
-      case .alert, .dash: .systemOrange
+      case .alert, .dash, .stopped: .systemOrange
       default: nil
       }
     let size = NSSize(width: dot == nil ? Layout.box.width : Layout.boxWithDot, height: Layout.box.height)
@@ -56,8 +56,12 @@ enum StatusGlyph {
       context.restoreGState()
       if let dot {
         dot.setFill()
-        NSBezierPath(ovalIn: Layout.dot)
-          .fill()
+        // Stopped draws a square, a stop button's shape, so it reads apart from the alert's round dot.
+        let mark =
+          mode.mark == .stopped
+          ? NSBezierPath(roundedRect: Layout.dot, xRadius: Layout.stopCorner, yRadius: Layout.stopCorner)
+          : NSBezierPath(ovalIn: Layout.dot)
+        mark.fill()
       }
       return true
     }
@@ -99,6 +103,8 @@ private enum Layout {
   static let tileOrbitLeast: CGFloat = 0.8
   /// The dot beside the orbit: 4.5 across, at 19.25, centred on the box's height.
   static let dot = NSRect(x: 19.25, y: 5.75, width: 4.5, height: 4.5)
+  /// 1: the stopped mark's corner radius, a square softened as the system's stop buttons are.
+  static let stopCorner: CGFloat = 1
   /// 0.4: how strongly the glyph draws while the helper cannot be reached.
   static let dimmed: CGFloat = 0.4
   /// 2: the pixels a point is taken to have when no context is current, a Retina display's.

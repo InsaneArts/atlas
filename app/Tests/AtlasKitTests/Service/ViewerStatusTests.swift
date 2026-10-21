@@ -5,7 +5,7 @@ import Testing
 
 @Suite("ViewerStatus")
 struct ViewerStatusTests {
-  @Test("a status report decodes the session, the mode, the helper's names, its display and its activity")
+  @Test("a status report decodes the session, the mode, the helper's names, its display and what it did")
   func decodes() throws {
     let reading = try status([
       "ready": true,
@@ -14,7 +14,9 @@ struct ViewerStatusTests {
         "mode": "controlling", "recoverable": true, "account": "atlastest", "accountName": "Atlas Test",
         "display": ["width": 2560.0, "height": 1440.0], "pending": 0,
         "activity": [
-          ["operation": "input", "actor": "viewer", "ok": true, "actionCount": 3, "ageSeconds": 42.0]
+          ["operation": "input", "actor": "viewer", "ok": true, "actionCount": 3, "ageSeconds": 42.0],
+          ["operation": "input", "ok": true, "says": "clicked Save in TextEdit"],
+          ["operation": "run", "ok": true, "says": ""],
         ],
       ],
     ])
@@ -27,9 +29,26 @@ struct ViewerStatusTests {
     #expect(reading.overview.display == .init(width: 2560, height: 1440))
     #expect(
       reading.overview.activity == [
-        .init(operation: "input", ok: true, actionCount: 3, actor: "viewer", ageSeconds: 42)
+        .init(operation: "input", ok: true, actionCount: 3, actor: "viewer", ageSeconds: 42),
+        .init(operation: "input", ok: true, says: "clicked Save in TextEdit"),
+        .init(operation: "run", ok: true),
       ]
     )
+  }
+
+  @Test("Stop is offered while an agent acts or acted a minute ago, and Resume once stopped")
+  func stopAndResume() throws {
+    func overview(_ mode: String, agentAge: Double? = nil, actor: String = "agent") throws -> ViewerStatus.Overview {
+      let rows = agentAge.map { [["operation": "input", "ok": true, "actor": actor, "ageSeconds": $0]] } ?? []
+      return try status(["overview": ["mode": mode, "activity": rows]]).overview
+    }
+    #expect(try overview("agent").offersStop)
+    #expect(try overview("observing", agentAge: 30).offersStop, "between two steps")
+    #expect(try !overview("observing", agentAge: 90).offersStop)
+    #expect(try !overview("observing", agentAge: 5, actor: "viewer").offersStop, "the person's own input")
+    #expect(try !overview("stopped").offersStop)
+    #expect(try overview("stopped").offersResume)
+    #expect(try !overview("agent").offersResume)
   }
 
   @Test(
@@ -39,6 +58,8 @@ struct ViewerStatusTests {
       ("blocked", 0, true),
       ("agent", 0, true),
       ("agent", 1, false),
+      ("stopped", 0, true),
+      ("stopped", 1, false),
       ("controlling", 0, false),
       ("unavailable", 0, false),
     ]

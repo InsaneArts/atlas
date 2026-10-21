@@ -9,6 +9,8 @@ package enum HelperMode: String, Decodable, Sendable {
   case controlling
   /// An action's outcome is unknown; recovery must run first.
   case recovering
+  /// The person stopped agents; they wait until the person resumes them.
+  case stopped
   /// The helper is not ready for actions.
   case blocked
   /// The service cannot reach the helper.

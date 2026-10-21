@@ -20,6 +20,22 @@ struct ViewerControllerTests {
     viewer.close()
   }
 
+  @Test("Stop Agent and Resume Agent ask the service and say how it went")
+  func stoppingAndResumingTheAgent() async throws {
+    let service = ScriptedService()
+    let viewer = ViewerController.scripted(service)
+    await viewer.setStopped(true)
+    #expect(service.log == ["stop"])
+    #expect(viewer.session.notice == ViewerWords.agentStopped)
+    await viewer.setStopped(false)
+    #expect(service.log == ["stop", "resume"])
+    #expect(viewer.session.notice == ViewerWords.agentResumed)
+    service.fail = ["hold"]
+    await viewer.setStopped(true)
+    #expect(viewer.session.notice == "hold failed", "a refusal says why")
+    viewer.close()
+  }
+
   @Test("the panel's picture shows at once, but control waits for a reading of its own")
   func thePanelsPictureShowsAtOnceButControlWaitsForAReading() async throws {
     let service = ScriptedService()

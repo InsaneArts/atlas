@@ -18,8 +18,10 @@
         next.menu.logOut = .enabled
       case .logOut, .forceLogOut:
         return panelLoggedOut
-      case .revokeControl, .logIn, .recover:
+      case .revokeControl, .logIn, .recover, .resumeAgent:
         return panelWatching
+      case .stopAgent:
+        return panelStopped
       case .setOpenAtLogin(let on):
         next.menu.opensAtLogin = on
       case .openViewer, .switchToHelper, .gettingStarted, .quit:

@@ -116,7 +116,8 @@
         offersRecovery: false,
         pause: viewerPauseToggle(paused: false),
         keysEnabled: false,
-        control: takeControl(isEnabled: false)
+        control: takeControl(isEnabled: false),
+        agent: .stop
       ),
       sidebar: ViewerSidebarState(
         account: "Atlas",
@@ -158,6 +159,7 @@
       state.stage.captions = []
       state.footer.hint = "Click the helper's screen to connect your keyboard."
       state.footer.keysEnabled = true
+      state.footer.agent = nil
       state.footer.control = ViewerControlButton(
         title: "Give Back",
         isEnabled: true,
@@ -197,6 +199,7 @@
         recoverTitle: "Recover"
       )
       state.footer.hint = "Recover before taking control."
+      state.footer.agent = nil
       state.sidebar.reason = "Atlas can't tell whether the last action worked."
       state.sidebar.recent = [failed] + recentActivity.dropFirst()
       state.sidebar.ready[1] = ReadinessItem(
@@ -244,6 +247,7 @@
         reason: "Atlas isn't answering in the helper. Open Getting Started if this lasts."
       )
       state.footer.hint = "Control returns once the helper's screen is back."
+      state.footer.agent = nil
       state.sidebar.reason = "Atlas isn't answering in the helper"
       state.sidebar.facts = facts(control: "Unavailable")
       state.sidebar.pictureNote = "Pictures of the helper stay in memory and are never saved."

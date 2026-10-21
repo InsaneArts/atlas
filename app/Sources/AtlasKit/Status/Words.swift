@@ -38,11 +38,12 @@ package enum Words {
     return "\(Int((seconds / 3600).rounded())) h ago"
   }
 
-  /// What an operation did, after who did it. No payload is ever recorded.
+  /// What an operation did, after who did it: the service's own words when it gives them, so every app says the same.
   ///
   /// - Parameter row: The recorded operation.
-  /// - Returns: What it did, such as "ran a command", or what could not be done.
+  /// - Returns: What it did, such as "clicked Save in TextEdit" or "ran a command", or what could not be done.
   package static func describe(_ row: ViewerStatus.Activity) -> String {
+    if let says = row.says { return says }
     let count = row.actionCount ?? 0
     let actions = "\(count) action\(count == 1 ? "" : "s")"
     switch (row.operation, row.ok) {

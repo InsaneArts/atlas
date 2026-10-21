@@ -18,6 +18,14 @@
         return viewerControl
       case .giveBack, .recover, .logIn:
         return viewerWatching
+      case .stopAgent:
+        var next = state
+        next.footer.agent = .resume(isEnabled: true)
+        return next
+      case .resumeAgent:
+        var next = state
+        next.footer.agent = .stop
+        return next
       case .recoverLater, .showRecovery, .showKeys, .setRate:
         return state
       }

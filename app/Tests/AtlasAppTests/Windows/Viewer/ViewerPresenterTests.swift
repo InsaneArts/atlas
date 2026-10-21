@@ -86,6 +86,22 @@ struct ViewerPresenterTests {
     #expect(!ViewerPresenter.state(acquiring).footer.control.isEnabled)
   }
 
+  @Test("the footer offers Stop Agent while an agent acts and Resume Agent once stopped, never while in control")
+  func theAgentButtonFollowsTheAgent() throws {
+    let agent = watching(try status(["overview": ["mode": "agent"]]))
+    #expect(ViewerPresenter.state(agent).footer.agent == .stop)
+    let stopped = watching(try status(["overview": ["mode": "stopped"]]))
+    #expect(ViewerPresenter.state(stopped).footer.agent == .resume(isEnabled: true))
+    var recovering = stopped
+    recovering.session.recovering = true
+    #expect(ViewerPresenter.state(recovering).footer.agent == .resume(isEnabled: false))
+    let idle = watching(try status(["overview": ["mode": "observing"]]))
+    #expect(ViewerPresenter.state(idle).footer.agent == nil)
+    var holding = stopped
+    holding.session.lease = "lease"
+    #expect(ViewerPresenter.state(holding).footer.agent == nil, "no agent acts while this window has control")
+  }
+
   @Test("the control button reads Give Back in control and Connecting… while asked")
   func theControlButtonFollowsTheLease() throws {
     var snapshot = watching(try status(["overview": ["mode": "observing"]]))
