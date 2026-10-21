@@ -126,11 +126,11 @@ body.full .card { height: 100vh; display: flex; flex-direction: column; padding:
 body.full .content { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: var(--space-l) var(--space-l) 14px; }
 body.full .stage { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
 body.full .card .screen { width: auto; aspect-ratio: auto; }
-body.full .card .footer { flex: none; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: var(--space-l); height: var(--footer); padding: 0 14px 0 22px; border-top: 0.5px solid var(--line); }
+body.full .card .footer { flex: none; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr); gap: var(--space-l); height: var(--footer); padding: 0 14px 0 22px; border-top: 0.5px solid var(--line); }
 body.full .card .pill { height: var(--control); }
 body.full .card .round { width: var(--control); height: var(--control); }
 .left, .right { min-width: 0; display: flex; align-items: center; gap: var(--space-s); }
-.left { gap: var(--space-m); }
+.left { gap: var(--space-m); overflow: hidden; }
 .right { justify-content: flex-end; }
 body:not(.full) .full-only { display: none !important; }
 body.full .inline-only { display: none !important; }
@@ -216,14 +216,26 @@ body.full .inline-only { display: none !important; }
 .recent li .what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recent li .when { margin-left: auto; flex: none; color: var(--ink-3); }
 
+/* As the frame narrows, the buttons keep their room: Keys loses its word
+   and the tabs draw in, then the hint goes, then the bar stacks. */
+@media (max-width: 1040px) {
+  body.full .pill .word { display: none; }
+  body.full .pill[data-keys] { padding: 0 var(--space-m); }
+  body.full .center .tabs button { padding: 0 var(--space-s); }
+}
+@media (max-width: 900px) {
+  body.full .hint { display: none; }
+}
+
 /* A narrow frame (a side panel): the tabs on top, the screen across it
    with the recent activity under it, the buttons at the bottom. */
-@media (max-width: 760px) {
+@media (max-width: 820px) {
   body.full .content { align-items: flex-start; overflow: auto; }
   body.full .stage { height: auto; flex-direction: column; gap: 14px; }
   body.full .card .screen { width: 100%; }
   body.full .card .footer { display: flex; flex-wrap: wrap; height: auto; padding: var(--space-m) 14px; gap: 10px; }
   body.full .left { flex: 1 1 100%; }
+  body.full .hint { display: block; }
   body.full .center { order: -1; flex: 1 1 100%; }
   body.full .center .tabs { width: 100%; }
   body.full .center .tabs button { flex: 1; padding: 0 var(--space-s); }
@@ -300,7 +312,7 @@ body.full .inline-only { display: none !important; }
     </div>
     <div class="right">
       <button type="button" class="round" data-pause aria-label="Pause picture" title="Pause picture"><svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" data-pause-glyph><rect x="2.2" y="0.5" width="2.6" height="11" rx="1" fill="currentColor"/><rect x="7.2" y="0.5" width="2.6" height="11" rx="1" fill="currentColor"/></svg><svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" data-play-glyph hidden><path d="M2.5 1L10.5 6L2.5 11Z" fill="currentColor"/></svg></button>
-      <button type="button" class="pill full-only" data-keys aria-haspopup="menu" aria-expanded="false" title="Send a key your Mac or this app would keep, such as ⌘⇥"><svg viewBox="0 0 18 14" width="15" height="12" aria-hidden="true"><rect x="1" y="1" width="16" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M4 4.6H5M7 4.6H8M10 4.6H11M13 4.6H14M4 7.2H5M7 7.2H8M10 7.2H11M13 7.2H14M5.5 10H12.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>Keys</button>
+      <button type="button" class="pill full-only" data-keys aria-haspopup="menu" aria-expanded="false" title="Send a key your Mac or this app would keep, such as ⌘⇥" aria-label="Keys"><svg viewBox="0 0 18 14" width="15" height="12" aria-hidden="true"><rect x="1" y="1" width="16" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M4 4.6H5M7 4.6H8M10 4.6H11M13 4.6H14M4 7.2H5M7 7.2H8M10 7.2H11M13 7.2H14M5.5 10H12.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg><span class="word">Keys</span></button>
       <button type="button" class="pill" data-action hidden></button>
       <button type="button" class="pill primary full-only grow" data-take hidden>Take Control</button>
       <button type="button" class="round full-only" data-more aria-label="More" title="More" aria-haspopup="menu" aria-expanded="false"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><circle cx="3.5" cy="8" r="1.35" fill="currentColor"/><circle cx="8" cy="8" r="1.35" fill="currentColor"/><circle cx="12.5" cy="8" r="1.35" fill="currentColor"/></svg></button>
