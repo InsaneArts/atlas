@@ -1,35 +1,40 @@
-/// Everything the viewer window draws, decided before it reaches the view.
+/// Everything the main window draws, decided before it reaches the view.
 package struct ViewerState: Equatable, Sendable {
-  /// The title bar: the helper's state and the sidebar's toggle.
-  package var header: ViewerHeaderState
-  /// The helper's desktop and what is laid over it.
-  package var stage: ViewerStageState
-  /// The recovery alert over the desktop and footer; nil shows none.
-  package var recovery: ViewerRecoveryPrompt?
-  /// The line of what the person can do now, and the buttons beside it.
-  package var footer: ViewerFooterState
-  /// The cards beside the desktop, while the sidebar shows.
-  package var sidebar: ViewerSidebarState
+  /// The quiet row at the top: the status, the tabs and the buttons.
+  package var top: ViewerTopRowState
+  /// The Screen tab: the helper's screen and what is laid over it.
+  package var screen: ViewerScreenState
+  /// The Details column beside the screen; nil hides it.
+  package var details: ViewerDetailsState?
+  /// The alert over the whole window; nil shows none.
+  package var alert: OrbitAlertState<AlertChoice>?
+  /// The helper's screen, small and live in the corner, over the Activity or Apps tab; nil shows none.
+  package var mini: MiniScreenState?
+  /// What shows under the top row: the screen, or the selected tab's pane.
+  package var pane: ViewerPane
 
-  /// Creates the viewer window's state.
+  /// Creates the main window's state.
   ///
   /// - Parameters:
-  ///   - header: The title bar: the helper's state and the sidebar's toggle.
-  ///   - stage: The helper's desktop and what is laid over it.
-  ///   - recovery: The recovery alert over the desktop and footer; nil shows none.
-  ///   - footer: The line of what the person can do now, and the buttons beside it.
-  ///   - sidebar: The cards beside the desktop, while the sidebar shows.
+  ///   - top: The quiet row at the top.
+  ///   - screen: The Screen tab.
+  ///   - details: The Details column; nil hides it.
+  ///   - alert: The alert over the whole window; nil shows none.
+  ///   - mini: The small screen over the Activity or Apps tab; nil shows none.
+  ///   - pane: What shows under the top row; the screen by default.
   package init(
-    header: ViewerHeaderState,
-    stage: ViewerStageState,
-    recovery: ViewerRecoveryPrompt? = nil,
-    footer: ViewerFooterState,
-    sidebar: ViewerSidebarState
+    top: ViewerTopRowState,
+    screen: ViewerScreenState,
+    details: ViewerDetailsState? = nil,
+    alert: OrbitAlertState<AlertChoice>? = nil,
+    mini: MiniScreenState? = nil,
+    pane: ViewerPane = .screen
   ) {
-    self.header = header
-    self.stage = stage
-    self.recovery = recovery
-    self.footer = footer
-    self.sidebar = sidebar
+    self.top = top
+    self.screen = screen
+    self.details = details
+    self.alert = alert
+    self.mini = mini
+    self.pane = pane
   }
 }

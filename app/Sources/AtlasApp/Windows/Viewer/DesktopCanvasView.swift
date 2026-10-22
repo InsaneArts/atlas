@@ -15,6 +15,9 @@ final class DesktopCanvasView: NSView {
   var marked = NSAttributedString()
   /// The input method's selection within the marked text.
   var markedSelection = NSRange(location: 0, length: 0)
+  /// Whether a window takes the keyboard now: AppKit's own answer, which a test stands in for, as a window it
+  /// draws off screen never becomes key.
+  var takesKeyboard: @MainActor (NSWindow) -> Bool = { $0.isKeyWindow }
 
   /// Locations run from the top left, as the helper's display does.
   override var isFlipped: Bool { true }
@@ -70,8 +73,10 @@ final class DesktopCanvasView: NSView {
     }
   }
 
-  /// Keys are seen before menus and the window's own shortcuts: while in control, so a shortcut reaches the helper
-  /// rather than this app, and always, so a held Control-Shift-Escape's repeats reach neither.
+  /// Keys are seen before menus and the window's own shortcuts: while in control, so a shortcut, the main menu's
+  /// ⌘1 to ⌘4, ⌘. and ⌘S included, reaches the helper rather than this app, and always, so a held
+  /// Control-Shift-Escape's repeats reach neither. Only Control-Shift-Escape, which gives control back, and Command-Q
+  /// stay with this Mac (``KeyRoute``).
   private func startIntercepting() {
     guard keys == nil else { return }
     keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -116,8 +121,8 @@ final class DesktopCanvasView: NSView {
   ///
   /// - Parameter event: The key down.
   /// - Returns: The event to pass on, or nil when handled here.
-  private func intercept(_ event: NSEvent) -> NSEvent? {
-    guard let window, window.isKeyWindow else { return event }
+  func intercept(_ event: NSEvent) -> NSEvent? {
+    guard let window, takesKeyboard(window) else { return event }
     let modifiers = event.heldModifiers
     // Giving control back by holding ⌃⇧⎋ ends the key monitor's control here, and the control button's shortcut would
     // take each repeat as Take Control: the repeats go nowhere, in control or not.
@@ -150,7 +155,7 @@ final class DesktopCanvasView: NSView {
   ///
   /// - Parameter event: A mouse event.
   /// - Returns: Its location in the view.
-  private func location(_ event: NSEvent) -> CGPoint { convert(event.locationInWindow, from: nil) }
+  func location(_ event: NSEvent) -> CGPoint { convert(event.locationInWindow, from: nil) }
 
   /// The button a mouse event is about.
   ///

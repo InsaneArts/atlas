@@ -1,8 +1,12 @@
 extension ViewerStatus {
   /// What is happening in the helper, as the service sums it up.
   package struct Overview: Decodable, Equatable, Sendable {
-    /// The helper's mode; unavailable when missing or unknown.
+    /// The helper's mode; unavailable when missing or unknown. The rules (Stop, Resume, Recover) follow it.
     package var mode = HelperMode.unavailable
+    /// What the helper is doing, as every agent app shows it; not ready when missing. The words follow it.
+    package var state = OverviewState.notReady
+    /// The state in the service's words, such as "Working"; empty when it gives none.
+    package var label = ""
     /// Why the helper is in its mode, in the service's words.
     package var reason = Words.connecting
     /// Whether Recover fixes what keeps the helper not ready: its input stopped or lost its display.
@@ -22,6 +26,27 @@ extension ViewerStatus {
     /// Recent operations, newest first.
     package var activity: [Activity] = []
 
+    /// How long after an agent's last action Stop Agent stays offered, in seconds: an agent between two steps still
+    /// reads as working, so Stop stays where the person reaches for it.
+    package static let stopStaysFor: Double = 60
+
+    /// Whether Stop Agent is offered: an agent acts, or acted within ``stopStaysFor``.
+    package var offersStop: Bool {
+      mode == .agent || (mode == .observing && agentActed(within: Self.stopStaysFor))
+    }
+
+    /// Whether Resume Agent is offered: the person stopped agents.
+    package var offersResume: Bool { mode == .stopped }
+
+    /// Whether an agent did something in the helper within `seconds`, so it may still be at work between steps.
+    ///
+    /// - Parameter seconds: How recent counts, in seconds.
+    /// - Returns: Whether the newest agent row is that recent.
+    package func agentActed(within seconds: Double) -> Bool {
+      guard let newest = activity.first(where: { $0.actor != "viewer" }) else { return false }
+      return newest.ageSeconds.map { $0 < seconds } ?? false
+    }
+
     /// Whether Recover helps now: an action's outcome is unknown, or what keeps the helper not ready is something
     /// Recover fixes. The panel's recovery card and the viewer's alert both follow it.
     package var recoveryHelps: Bool {
@@ -40,7 +65,7 @@ extension ViewerStatus {
     package var recoverMayRun: Bool {
       switch mode {
       case .observing, .blocked: true
-      case .agent: inFlight == 0
+      case .agent, .stopped: inFlight == 0
       case .controlling, .recovering, .unavailable, .loggedOut: false
       }
     }
@@ -50,7 +75,7 @@ extension ViewerStatus {
 
     /// The fields of the `overview` object.
     enum CodingKeys: String, CodingKey {
-      case mode, reason, recoverable, account, accountName, display, pending, inFlight, activity
+      case mode, state, label, reason, recoverable, account, accountName, display, pending, inFlight, activity
     }
 
     /// Decodes an overview, keeping the default of anything missing or of the wrong type.
@@ -60,6 +85,8 @@ extension ViewerStatus {
     package init(from decoder: any Decoder) throws {
       let container = try decoder.container(keyedBy: CodingKeys.self)
       mode = (try? container.decodeIfPresent(HelperMode.self, forKey: .mode)) ?? .unavailable
+      state = (try? container.decodeIfPresent(OverviewState.self, forKey: .state)) ?? .notReady
+      label = (try? container.decodeIfPresent(String.self, forKey: .label)) ?? ""
       reason = (try? container.decodeIfPresent(String.self, forKey: .reason)) ?? reason
       recoverable = (try? container.decodeIfPresent(Bool.self, forKey: .recoverable)) ?? false
       account = try? container.decodeIfPresent(String.self, forKey: .account)

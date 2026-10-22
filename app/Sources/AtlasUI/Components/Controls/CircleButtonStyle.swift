@@ -6,7 +6,7 @@ struct CircleButtonStyle: ButtonStyle {
   enum Size: Sendable {
     /// 34 across, a capsule's height: in a footer beside capsules.
     case regular
-    /// 30 across: in a title bar.
+    /// 30 across: in a title bar and the menu bar panel.
     case small
   }
 

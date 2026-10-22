@@ -1,0 +1,34 @@
+import Foundation
+
+extension Words {
+  /// A time of day to the second, on the person's own 12- or 24-hour clock, as the Activity and Screenshots tabs
+  /// list it.
+  ///
+  /// - Parameters:
+  ///   - date: The moment.
+  ///   - locale: The person's locale, which picks the clock.
+  ///   - timeZone: The person's time zone.
+  /// - Returns: "10:31:42" on a 24-hour clock, "10:31:42 AM" on a 12-hour one.
+  package static func clockTime(_ date: Date, locale: Locale, timeZone: TimeZone) -> String {
+    let style = Date.FormatStyle(locale: locale, timeZone: timeZone)
+      .hour(.twoDigits(amPM: .abbreviated))
+      .minute(.twoDigits)
+      .second(.twoDigits)
+    return date.formatted(style)
+  }
+
+  /// A day before yesterday, as a group's label.
+  ///
+  /// - Parameters:
+  ///   - date: A moment of the day.
+  ///   - locale: The person's locale.
+  ///   - timeZone: The person's time zone.
+  /// - Returns: "Mon 19 Oct", in the locale's own order.
+  package static func dayName(_ date: Date, locale: Locale, timeZone: TimeZone) -> String {
+    let style = Date.FormatStyle(locale: locale, timeZone: timeZone)
+      .weekday(.abbreviated)
+      .day()
+      .month(.abbreviated)
+    return date.formatted(style)
+  }
+}

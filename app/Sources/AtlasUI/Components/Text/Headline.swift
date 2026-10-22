@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// A two-line title: the statement, then its quieter tail.
+/// A two-line title: the statement, then its quieter tail. Each takes at most two lines, shrinking a little first;
+/// what still does not fit is cut in its middle, so a long name inside keeps both its ends and the sentence its end.
 struct Headline: View {
   /// How large the title is.
   enum Size: Sendable {
@@ -30,6 +31,7 @@ struct Headline: View {
     }
     .lineLimit(Typography.headlineLines)
     .minimumScaleFactor(Typography.leastHeadlineScale)
+    .truncationMode(.middle)
     .font(Typography.font(style, weight: .semibold))
     .tracking(LetterSpacing.headline)
     .multilineTextAlignment(.center)

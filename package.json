@@ -3,9 +3,9 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "test": "node --test tests/test_viewer_client.mjs",
-    "format": "prettier --write scripts tests/*.mjs",
-    "format:check": "prettier --check scripts tests/*.mjs"
+    "test": "node --test tests/test_viewer_client.mjs tests/test_screen_view.mjs",
+    "format": "prettier --write scripts tests/*.mjs src/lib/mcp/screen.js agents/atlas/hooks/register.js agents/atlas/tests/pane.test.ts",
+    "format:check": "prettier --check scripts tests/*.mjs src/lib/mcp/screen.js agents/atlas/hooks/register.js agents/atlas/tests/pane.test.ts"
   },
   "devDependencies": {
     "prettier": "3.6.2"

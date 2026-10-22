@@ -272,6 +272,14 @@ fn scratch() -> Result<PathBuf> {
 
 /// Download the release archive and its sums into `work`; the archive's name.
 fn download(source: &Source, work: &Path) -> Result<String> {
+    let name = newest(source, work)?;
+    curl(&format!("{}/{name}", source.base), &work.join(&name))?;
+
+    Ok(name)
+}
+
+/// Download only the release's sums into `work`; the archive they name.
+fn newest(source: &Source, work: &Path) -> Result<String> {
     let base = &source.base;
     let sums = work.join("SHA256SUMS");
     curl(&format!("{base}/SHA256SUMS"), &sums)
@@ -285,9 +293,70 @@ fn download(source: &Source, work: &Path) -> Result<String> {
         .filter(|name| !name.contains('/') && archive_version(name).is_some())
         .map(str::to_owned)
         .ok_or_else(|| problem("SHA256SUMS does not name an Atlas archive"))?;
-    curl(&format!("{base}/{name}"), &work.join(&name))?;
 
     Ok(name)
+}
+
+/// Whether a newer release than this one is published, without installing
+/// anything or touching the helper: this version, the newest, and whether
+/// the newest is newer.
+pub fn newer(source: &Source) -> Result<Value> {
+    newer_in(source, &caches()?)
+}
+
+/// [`newer`], reading the sums in a folder of its own inside `caches`.
+fn newer_in(source: &Source, caches: &Path) -> Result<Value> {
+    sweep_checks(caches);
+    // A folder of its own: an update running meanwhile keeps its scratch.
+    let work = caches.join(format!("check-{}", std::process::id()));
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&work)
+        .map_err(|error| Error::writing(&work, error))?;
+    let outcome = newest(source, &work).map(|name| {
+        let available = archive_version(&name).unwrap_or_default();
+        json!({
+            "ok": true,
+            "version": crate::VERSION,
+            "latest": shown_version(&available),
+            "newer": available > version(crate::VERSION),
+        })
+    });
+
+    let _ = fs::remove_dir_all(&work);
+    outcome
+}
+
+/// Remove what checks that were stopped midway left in `caches`: a folder
+/// named for a process that is no longer running.
+fn sweep_checks(caches: &Path) {
+    let Ok(entries) = fs::read_dir(caches) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix("check-"))
+            .and_then(|pid| pid.parse::<i32>().ok())
+        else {
+            continue;
+        };
+        let running = nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok();
+        if !running && entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+/// A version's parts as people write it, such as "0.2.0".
+fn shown_version(parts: &[u64]) -> String {
+    parts
+        .iter()
+        .map(u64::to_string)
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 /// Verify the archive against SHA256SUMS, unpack it and check the app.
@@ -669,6 +738,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_check_reads_the_newest_release_and_installs_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let next = format!("Atlas-{}.0.0-macos.zip", version(crate::VERSION)[0] + 1);
+        fs::write(
+            dir.path().join("SHA256SUMS"),
+            format!("{} {next}\n", "0".repeat(64)),
+        )
+        .unwrap();
+        let source = Source {
+            base: format!("file://{}", dir.path().display()),
+            latest: true,
+        };
+
+        let caches = tempfile::tempdir().unwrap();
+        let report = newer_in(&source, caches.path()).unwrap();
+        assert_eq!(report["newer"], true);
+        assert_eq!(report["version"], crate::VERSION);
+        assert_eq!(
+            fs::read_dir(dir.path()).unwrap().count(),
+            1,
+            "only the sums were there to read"
+        );
+
+        let current = format!("Atlas-{}-macos.zip", crate::VERSION);
+        fs::write(
+            dir.path().join("SHA256SUMS"),
+            format!("{} {current}\n", "0".repeat(64)),
+        )
+        .unwrap();
+        assert_eq!(newer_in(&source, caches.path()).unwrap()["newer"], false);
+    }
+
+    #[test]
+    fn a_check_stopped_midway_leaves_nothing_for_long() {
+        let caches = tempfile::tempdir().unwrap();
+        let stale = caches.path().join("check-999999");
+        let other = caches.path().join("update");
+        fs::create_dir_all(&stale).unwrap();
+        fs::create_dir_all(&other).unwrap();
+
+        sweep_checks(caches.path());
+
+        assert!(!stale.exists(), "no process 999999 runs");
+        assert!(other.exists(), "an update's scratch is not a check's");
+    }
+
+    #[test]
     fn archives_name_their_version() {
         assert_eq!(
             archive_version("Atlas-0.10.2-macos.zip"),
@@ -976,7 +1092,18 @@ mod tests {
         );
 
         drop(first);
-        exclusive_in(dir.path()).unwrap();
+        // A process another test starts at this moment may hold a copy of
+        // the lock's file for an instant before it runs its program.
+        let again = (0..50).find_map(|_| {
+            exclusive_in(dir.path()).ok().or_else(|| {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                None
+            })
+        });
+        assert!(
+            again.is_some(),
+            "the lock is free once the first is dropped"
+        );
     }
 
     /// Releases come over https or from a folder; plain http only from

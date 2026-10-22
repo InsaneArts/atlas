@@ -1,6 +1,7 @@
 /// AtlasKit — level 0.
 ///
-/// Owns: the viewer service's model and its client (`Service/`, `Live/ViewerClient`), the `atlas` command runner and
+/// Owns: the viewer service's model and its client (`Service/`, `Live/ViewerClient`), what it lists of the helper
+/// (`Activity/`, `Helper/`, `Screenshots/`), the `atlas` command runner and
 /// the replies the app reads (`Commands/`, `Live/Commands`), mapping the person's mouse, keys and text to the
 /// service's input actions (`Control/`), the onboarding rules that choose each setup step (`Onboarding/`), and what a
 /// status means in words, shared by the panel, the viewer and the setup window (`Status/`). Every decision here is a

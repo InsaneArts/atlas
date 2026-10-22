@@ -22,18 +22,25 @@ extension OnboardingPresenter {
     )
   }
 
-  /// The account form: its tail says to confirm in macOS's dialog while the account is made, and a password problem
-  /// takes the line under the form in place of the work note, which shows only once the password is right.
+  /// The account form: its tail says to confirm in macOS's dialog while the account is made, and a problem with the
+  /// short name, then with the password, takes the line under the form in place of the work note, which shows only
+  /// once both are right.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The form's screen.
   static func create(_ snapshot: OnboardingSnapshot) -> OnboardingCreateScreenState {
     let working = snapshot.working != nil
+    let form = snapshot.form
+    let nameProblem = AccountNameRule.problem(form.accountName)
+    let passwordProblem = PasswordRule.problem(password: form.password, verify: form.verify)
+    // A password problem is the verify field's only when the two differ; the others are about the password itself.
+    let differs = passwordProblem != nil && !form.verify.isEmpty && form.password != form.verify
     return OnboardingCreateScreenState(
       tail: working ? OnboardingWords.confirmInDialog : OnboardingWords.passwordNext,
-      note: PasswordRule.problem(password: snapshot.form.password, verify: snapshot.form.verify)
+      note: (nameProblem ?? passwordProblem)
         .map(WorkNote.problem) ?? note(snapshot),
-      isFormEnabled: !working
+      isFormEnabled: !working,
+      flagged: nameProblem != nil ? .accountName : differs ? .verify : nil
     )
   }
 

@@ -1,0 +1,518 @@
+use super::*;
+use crate::config::Config;
+
+fn server(dir: &std::path::Path) -> Server {
+    let text = "helper_uid = 60001\nsocket_path = \"c.sock\"\noutput_dir = \"out\"\n\
+                identity_probe = \"probe\"\ninput_socket = \"i.sock\"\n";
+    let config = Config::parse(text.as_bytes(), &dir.join("u.toml")).unwrap();
+    let mut client = Client::new(config).unwrap();
+    // The controller's notes (a Stop among them) stay in this test's folder.
+    client.controller = crate::control::Controller::at(60001, &dir.join("state"));
+    Server {
+        client,
+        config: dir.join("u.toml"),
+        port: 1,
+        read_only: false,
+        views: AtomicBool::new(false),
+        last: Mutex::new(None),
+        framed: Mutex::new(None),
+        shared: Mutex::new(None),
+        held: Mutex::new(None),
+        icons: Icons::default(),
+    }
+}
+
+async fn ask(server: &Server, method: &str, params: Value) -> Value {
+    let request = json!({"jsonrpc": "2.0", "id": 7, "method": method, "params": params});
+    server.answer(&request).await.unwrap()
+}
+
+fn names(listed: &Value) -> Vec<String> {
+    listed["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[tokio::test]
+async fn it_answers_in_the_clients_protocol_version_when_it_speaks_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = server(dir.path());
+
+    let known = ask(
+        &server,
+        "initialize",
+        json!({"protocolVersion": "2025-11-25"}),
+    )
+    .await;
+    assert_eq!(known["id"], 7);
+    assert_eq!(known["result"]["protocolVersion"], "2025-11-25");
+    assert_eq!(known["result"]["serverInfo"]["name"], "atlas");
+    assert!(known["result"]["capabilities"]["tools"].is_object());
+
+    let newer = ask(
+        &server,
+        "initialize",
+        json!({"protocolVersion": "2099-01-01"}),
+    )
+    .await;
+    assert_eq!(
+        newer["result"]["protocolVersion"], VERSIONS[0],
+        "its newest"
+    );
+}
+
+#[tokio::test]
+async fn resume_is_offered_only_to_a_client_that_keeps_view_tools_from_the_model() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = server(dir.path());
+
+    ask(
+        &server,
+        "initialize",
+        json!({"protocolVersion": "2025-06-18"}),
+    )
+    .await;
+    let listed = ask(&server, "tools/list", json!({})).await;
+    assert!(!names(&listed).contains(&"resume_agent".to_owned()));
+    let refused = ask(&server, "tools/call", json!({"name": "resume_agent"})).await;
+    assert_eq!(
+        refused["error"]["code"], -32602,
+        "a model that sees every tool cannot resume"
+    );
+
+    let views = json!({"extensions": {UI_EXTENSION: {"mimeTypes": [APP_MIME]}}});
+    let started = json!({"protocolVersion": "2025-06-18", "capabilities": views});
+    ask(&server, "initialize", started).await;
+    let listed = ask(&server, "tools/list", json!({})).await;
+    assert!(names(&listed).contains(&"resume_agent".to_owned()));
+}
+
+#[tokio::test]
+async fn a_read_only_server_offers_only_what_looks() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut server = server(dir.path());
+    server.read_only = true;
+    server.views.store(true, Ordering::Relaxed);
+
+    let listed = ask(&server, "tools/list", json!({})).await;
+    assert_eq!(
+        names(&listed),
+        [
+            "atlas_status",
+            "show_screen",
+            "screen_frame",
+            "activity",
+            "helper_apps",
+            "screenshots",
+            "screenshot"
+        ]
+    );
+    for name in ["stop_agent", "take_control", "send_input", "log_out_helper"] {
+        let refused = ask(&server, "tools/call", json!({"name": name})).await;
+        assert_eq!(refused["error"]["code"], -32602, "{name}");
+    }
+}
+
+#[tokio::test]
+async fn the_model_sees_the_status_and_the_view_and_only_the_view_calls_the_rest() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = server(dir.path());
+    server.views.store(true, Ordering::Relaxed);
+    let listed = ask(&server, "tools/list", json!({})).await;
+    let tools = listed["result"]["tools"].as_array().unwrap();
+    let visibility = |name: &str| {
+        let tool = tools.iter().find(|tool| tool["name"] == name).unwrap();
+        tool["_meta"]["ui"]["visibility"].clone()
+    };
+
+    assert_eq!(
+        visibility("atlas_status"),
+        Value::Null,
+        "the model's by default"
+    );
+    assert_eq!(visibility("show_screen"), json!(["model", "app"]));
+    for name in [
+        "screen_frame",
+        "stop_agent",
+        "resume_agent",
+        "recover",
+        "open_viewer",
+        "take_control",
+        "keep_control",
+        "give_back",
+        "send_input",
+        "activity",
+        "helper_apps",
+        "screenshots",
+        "screenshot",
+        "switch_helper",
+        "log_out_helper",
+    ] {
+        assert_eq!(visibility(name), json!(["app"]), "{name}");
+    }
+
+    let show = tools
+        .iter()
+        .find(|tool| tool["name"] == "show_screen")
+        .unwrap();
+    assert_eq!(show["_meta"]["ui"]["resourceUri"], SCREEN_URI);
+    assert_eq!(
+        show["_meta"]["ui/resourceUri"], SCREEN_URI,
+        "for older hosts"
+    );
+    assert_eq!(
+        show["_meta"]["openai/ui"]["entrypoints"][0]["type"],
+        "thread"
+    );
+}
+
+#[tokio::test]
+async fn the_view_is_one_page_with_its_script_inline() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = server(dir.path());
+
+    let listed = ask(&server, "resources/list", json!({})).await;
+    assert_eq!(listed["result"]["resources"][0]["mimeType"], APP_MIME);
+
+    let read = ask(&server, "resources/read", json!({"uri": SCREEN_URI})).await;
+    let content = &read["result"]["contents"][0];
+    let page = content["text"].as_str().unwrap();
+    assert_eq!(content["mimeType"], APP_MIME);
+    assert!(page.contains("ui/initialize") && !page.contains("/*SCRIPT*/"));
+    assert!(
+        !page.contains("http://") && !page.contains("https://"),
+        "nothing loads from a network"
+    );
+    assert_eq!(content["_meta"]["ui"]["prefersBorder"], false);
+
+    let missing = ask(
+        &server,
+        "resources/read",
+        json!({"uri": "ui://atlas/other"}),
+    )
+    .await;
+    assert_eq!(missing["error"]["code"], -32002);
+}
+
+#[tokio::test]
+async fn notifications_get_no_answer_and_unknown_methods_and_tools_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = server(dir.path());
+
+    let note = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
+    assert_eq!(server.answer(&note).await, None);
+    let unknown = ask(&server, "sampling/createMessage", json!({})).await;
+    assert_eq!(unknown["error"]["code"], -32601);
+    assert_eq!(ask(&server, "ping", json!({})).await["result"], json!({}));
+    let click = ask(&server, "tools/call", json!({"name": "click"})).await;
+    assert_eq!(click["error"]["code"], -32602, "no such tool");
+}
+
+#[tokio::test]
+async fn a_tool_that_fails_says_why_as_an_error_result() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = server(dir.path());
+    server.views.store(true, Ordering::Relaxed);
+
+    let recover = ask(&server, "tools/call", json!({"name": "recover"})).await;
+    assert_eq!(recover["result"]["isError"], true, "no helper answers here");
+    assert!(recover["result"]["structuredContent"]["error"]["code"].is_string());
+}
+
+#[tokio::test]
+async fn a_status_read_that_began_earlier_never_replaces_a_later_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = server(dir.path());
+    // A read that began after this one, such as the one a stop made.
+    let later = Instant::now() + Duration::from_secs(60);
+    *server.last.lock().await = Some((later, json!({"state": "stopped"})));
+
+    assert!(server.status().await.is_ok());
+    let (at, kept) = server.last.lock().await.clone().unwrap();
+    assert_eq!(at, later);
+    assert_eq!(kept["state"], "stopped");
+}
+
+#[tokio::test]
+async fn a_screen_that_has_not_changed_reuses_its_frame() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = server(dir.path());
+    let png = crate::native::capture::sample_png(640, 360);
+
+    let first = server.frame_of(png.clone()).await.unwrap();
+    let marker = json!({"id": "kept"});
+    server.framed.lock().await.as_mut().unwrap().1 = marker.clone();
+    assert_eq!(
+        server.frame_of(png).await.unwrap(),
+        marker,
+        "not made again"
+    );
+    assert_eq!(first["mimeType"], "image/jpeg");
+}
+
+#[test]
+fn a_status_reads_in_a_line_for_the_model_and_whole_for_the_view() {
+    let status = summary(&json!({"overview": {
+        "state": "working",
+        "label": "Working",
+        "headline": "Clicked Save in TextEdit",
+        "accountName": "Atlas",
+        "activity": [
+            {"says": "clicked Save in TextEdit", "actor": "agent", "ok": true, "ageSeconds": 1, "verb": "click"},
+            {"says": "sent 1 action", "actor": "viewer", "ok": true, "ageSeconds": 2},
+            {"says": "opened TextEdit", "actor": "agent", "ok": true, "ageSeconds": 9},
+        ],
+    }}));
+    assert_eq!(status["helper"], "Atlas");
+    assert_eq!(
+        status["activity"][0].get("verb"),
+        None,
+        "only what the view shows"
+    );
+
+    let step = summary(&json!({"overview": {"headline": "Run atlas start-input"}}));
+    assert_eq!(
+        step["headline"], "The helper isn't ready. Open Atlas to see why",
+        "no commands for the person"
+    );
+
+    let result = said(&status);
+    assert_eq!(
+        result["content"][0]["text"],
+        "Atlas: Working. Clicked Save in TextEdit. Recent: clicked Save in TextEdit; opened TextEdit."
+    );
+    assert_eq!(result["structuredContent"]["status"]["state"], "working");
+    assert_eq!(result.get("_meta"), None, "no screen for the model");
+}
+
+#[tokio::test]
+async fn control_and_the_persons_actions_are_offered_only_to_a_client_that_draws_views() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = server(dir.path());
+
+    let listed = names(&ask(&server, "tools/list", json!({})).await);
+    for name in VIEW_ONLY {
+        assert!(!listed.contains(&name.to_owned()), "{name}");
+        let refused = ask(&server, "tools/call", json!({"name": name})).await;
+        assert_eq!(refused["error"]["code"], -32602, "{name}");
+    }
+
+    server.views.store(true, Ordering::Relaxed);
+    let listed = names(&ask(&server, "tools/list", json!({})).await);
+    for name in VIEW_ONLY {
+        assert!(listed.contains(&name.to_owned()), "{name}");
+    }
+}
+
+#[tokio::test]
+async fn input_without_control_is_refused_and_every_result_says_whether_control_is_ours() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = server(dir.path());
+    server.views.store(true, Ordering::Relaxed);
+
+    let click = json!([{"type": "pointer", "phase": "down", "x": 1, "y": 1}]);
+    let sent = ask(
+        &server,
+        "tools/call",
+        json!({"name": "send_input", "arguments": {"actions": click}}),
+    )
+    .await;
+    assert_eq!(sent["result"]["isError"], true);
+    assert_eq!(
+        sent["result"]["structuredContent"]["error"]["code"],
+        "lease-lost"
+    );
+    assert_eq!(sent["result"]["structuredContent"]["control"], false);
+    assert_eq!(sent["result"]["structuredContent"]["canControl"], true);
+
+    let kept = ask(&server, "tools/call", json!({"name": "keep_control"})).await;
+    assert_eq!(kept["result"]["isError"], true, "nothing to keep");
+}
+
+#[test]
+fn only_clicks_scrolls_typing_and_keys_go_to_the_helper_as_many_as_it_takes_at_once() {
+    let click = json!([{"type": "pointer", "phase": "down", "x": 1, "y": 2}, {"type": "key", "key": "cmd+s"}]);
+    assert!(checked(&click).is_ok());
+
+    for refused in [
+        json!([]),
+        json!({"type": "key"}),
+        json!([{"type": "wait", "ms": 60000}]),
+        json!([{"type": "run"}]),
+        Value::Array(vec![json!({"type": "key", "key": "a"}); ACTIONS + 1]),
+    ] {
+        assert_eq!(checked(&refused).unwrap_err().code, "input", "{refused}");
+    }
+}
+
+#[tokio::test]
+async fn a_screenshot_is_read_only_by_a_name_a_capture_wrote() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = server(dir.path());
+    let output = server.client.output_dir().unwrap().to_path_buf();
+    std::fs::create_dir_all(&output).unwrap();
+    let png = crate::native::capture::sample_png(1280, 800);
+    std::fs::write(output.join("5-capture.png"), &png).unwrap();
+    std::os::unix::fs::symlink(output.join("5-capture.png"), output.join("6-capture.png")).unwrap();
+
+    let thumb = server.screenshot("5-capture.png", false).await.unwrap();
+    assert_eq!(thumb["_meta"][FRAME_META]["width"], 480);
+    let full = server.screenshot("5-capture.png", true).await.unwrap();
+    assert_eq!(full["_meta"][FRAME_META]["width"], 1024);
+
+    for name in ["../u.toml", "6-capture.png", "7-capture.png"] {
+        assert_eq!(
+            server.screenshot(name, false).await.unwrap_err().code,
+            "bad-request",
+            "{name}"
+        );
+    }
+}
+
+fn held(lease: &str, kept: Instant) -> Held {
+    // Nothing listens here, so releasing it fails at once.
+    Held {
+        url: "http://127.0.0.1:9/viewer/".to_owned(),
+        lease: lease.to_owned(),
+        kept,
+    }
+}
+
+#[tokio::test]
+async fn a_late_failure_on_older_control_never_ends_control_taken_since() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = server(dir.path());
+    let now = Instant::now();
+    let lost = Err(Error::new(
+        "lease-lost",
+        "Native control was released or expired",
+    ));
+
+    *server.held.lock().await = Some(held("b", now));
+    server.settle(&held("a", now), &lost, true).await;
+    assert_eq!(server.held.lock().await.as_ref().unwrap().lease, "b");
+
+    server
+        .settle(&held("b", now), &Err(Error::new("busy", "busy")), true)
+        .await;
+    assert!(
+        server.held.lock().await.is_some(),
+        "a busy helper ends nothing"
+    );
+    let unanswered = Err(Error::new("menubar", "Atlas's menu bar didn't answer"));
+    server.settle(&held("b", now), &unanswered, true).await;
+    assert!(
+        server.held.lock().await.is_some(),
+        "an answer that never came ends nothing"
+    );
+
+    let long_ago = now - Duration::from_secs(5);
+    *server.held.lock().await = Some(held("b", long_ago));
+    server
+        .settle(&held("b", long_ago), &Ok(json!({})), false)
+        .await;
+    assert_eq!(
+        server.held.lock().await.as_ref().unwrap().kept,
+        long_ago,
+        "input keeps nothing"
+    );
+    server
+        .settle(&held("b", long_ago), &Ok(json!({})), true)
+        .await;
+    assert!(
+        server.held.lock().await.as_ref().unwrap().kept > long_ago,
+        "a renewal keeps it"
+    );
+
+    server.settle(&held("b", now), &lost, true).await;
+    assert!(
+        server.held.lock().await.is_none(),
+        "its own failure ends it"
+    );
+}
+
+#[tokio::test]
+async fn control_nobody_kept_lapses_and_is_let_go_of() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = server(dir.path());
+
+    *server.held.lock().await = Some(held("a", Instant::now()));
+    assert!(server.controlling().await);
+
+    let long_ago = Instant::now() - LEASE - Duration::from_secs(1);
+    *server.held.lock().await = Some(held("a", long_ago));
+    assert!(!server.controlling().await);
+    assert_eq!(server.holding().await.err().unwrap().code, "lease-lost");
+    assert!(server.held.lock().await.is_none());
+}
+
+#[tokio::test]
+async fn every_tool_only_the_view_may_call_is_private_in_openais_words_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = server(dir.path());
+    server.views.store(true, Ordering::Relaxed);
+    let listed = ask(&server, "tools/list", json!({})).await;
+
+    for tool in listed["result"]["tools"].as_array().unwrap() {
+        let app_only = tool["_meta"]["ui"]["visibility"] == json!(["app"]);
+        assert_eq!(
+            tool["_meta"]["openai/visibility"] == "private",
+            app_only,
+            "{}",
+            tool["name"]
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_line_too_long_or_not_text_is_refused_and_the_session_goes_on() {
+    let mut text = Vec::new();
+    text.extend_from_slice(b"{\"a\":1}\n");
+    text.extend(std::iter::repeat_n(b'x', MAX_LINE + 10));
+    text.extend_from_slice(b"\n\xff\xfe\n{\"b\":2}\r\n{\"c\":3}");
+    let mut input = tokio::io::BufReader::new(&text[..]);
+
+    assert_eq!(
+        next_request(&mut input).await.unwrap(),
+        Some(Ok("{\"a\":1}".to_owned()))
+    );
+    let long = next_request(&mut input)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(long["error"]["code"], -32600);
+    let bad = next_request(&mut input)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(bad["error"]["code"], -32700);
+    assert_eq!(
+        next_request(&mut input).await.unwrap(),
+        Some(Ok("{\"b\":2}".to_owned()))
+    );
+    assert_eq!(
+        next_request(&mut input).await.unwrap(),
+        Some(Ok("{\"c\":3}".to_owned())),
+        "the last line needs no newline"
+    );
+    assert_eq!(next_request(&mut input).await.unwrap(), None);
+}
+
+#[test]
+fn the_view_gets_each_windows_title_and_size_but_never_its_place_or_number() {
+    let mut app = json!({"name": "Opie", "windows": [
+        {"id": 12, "title": "Ring", "x": 10.0, "y": 40.0, "width": 520.0, "height": 860.0},
+    ]});
+
+    only_title_and_size(&mut app);
+
+    assert_eq!(
+        app["windows"],
+        json!([{"title": "Ring", "width": 520.0, "height": 860.0}])
+    );
+}

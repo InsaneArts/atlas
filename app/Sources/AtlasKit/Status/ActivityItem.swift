@@ -16,8 +16,9 @@ package struct ActivityItem: Equatable, Sendable, Identifiable {
     }
   }
 
-  /// The row's place in the list.
-  package let id: Int
+  /// The row's id from the service, which holds across readings; its place in the list, newest first, from a service
+  /// that gives none.
+  package let id: String
   /// Who did it.
   package let actor: Actor
   /// What was done, in words.

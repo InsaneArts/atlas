@@ -51,6 +51,7 @@ pub fn fix(code: &str) -> Option<&'static str> {
         "spawn-failed" => "Check that the program or app exists in the helper account.",
         "stale-frame" => "Take a new screenshot.",
         "startup" => "Run atlas start-input, then atlas doctor.",
+        "stopped" => "Choose Resume Agent in the Atlas menu bar when the agent may go on.",
         "switch" => "Use the Apple menu: Lock Screen, then Switch User.",
         "transport" => "Run atlas doctor. If an action was cut off, run atlas restart.",
         "uncertain" => "Take a screenshot to see what happened, then run atlas restart.",

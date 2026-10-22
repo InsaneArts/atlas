@@ -14,6 +14,15 @@ struct WordsTests {
     #expect(Words.ago(seconds) == words)
   }
 
+  // Each case sits on a unit's edge, where a row would otherwise read "60 s" or "60 min".
+  @Test(
+    "a short age moves to the next unit at a whole minute and a whole hour",
+    arguments: [(0.4, "now"), (9.0, "9 s"), (59.9, "59 s"), (60, "1 min"), (3599, "59 min"), (3600, "1 h")]
+  )
+  func shortAgo(seconds: Double, words: String) {
+    #expect(Words.shortAgo(seconds) == words)
+  }
+
   @Test("an operation reads as what it did, or what could not be done, never its payload or its name")
   func operations() {
     #expect(Words.describe(.init(operation: "run", ok: true)) == "ran a command")
@@ -22,6 +31,12 @@ struct WordsTests {
     #expect(Words.describe(.init(operation: "input", ok: true, actionCount: 1)) == "sent 1 action")
     #expect(Words.describe(.init(operation: "logout", ok: false)) == "couldn't log out the helper")
     #expect(Words.describe(.init(operation: "newop", ok: false)) == "couldn't finish an action")
+  }
+
+  @Test("an operation the service describes reads in the service's words")
+  func serviceWords() {
+    let row = ViewerStatus.Activity(operation: "input", ok: true, actionCount: 1, says: "clicked Save in TextEdit")
+    #expect(Words.describe(row) == "clicked Save in TextEdit")
   }
 
   @Test("a command's message shows as a sentence, with one full stop")

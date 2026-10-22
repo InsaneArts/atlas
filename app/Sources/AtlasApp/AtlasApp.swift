@@ -37,12 +37,18 @@ enum AtlasApp {
       case .renderOnboarding(let folder):
         drawPreviews { OnboardingRender.draw(to: folder) }
       case .renderViewer(let folder):
-        drawPreviews { ViewerRender.draw(to: folder) }
+        drawPreviews {
+          ViewerRender.draw(to: folder) && ComponentRender.draw(to: folder + "/components")
+        }
+      case .renderSettings(let folder):
+        drawPreviews { SettingsRender.draw(to: folder) }
     #else
       case .renderOnboarding:
         needsDebugBuild("--render-onboarding")
       case .renderViewer:
         needsDebugBuild("--render-viewer")
+      case .renderSettings:
+        needsDebugBuild("--render-settings")
     #endif
     case .app(let folder, let inDark):
       render = folder
@@ -65,7 +71,7 @@ enum AtlasApp {
   }
 
   #if DEBUG
-    /// `--render-onboarding DIR` or `--render-viewer DIR`: draw every screen from the preview states, which only a
+    /// `--render-onboarding DIR`, `--render-viewer DIR` or `--render-settings DIR`: draw every screen from the preview states, which only a
     /// debug build carries, then exit.
     ///
     /// - Parameter draw: Draws the screens to their folder, returning whether every one was drawn.
@@ -78,7 +84,7 @@ enum AtlasApp {
     /// A render flag that draws the preview states, which a release build does not carry: say how to draw them,
     /// then exit.
     ///
-    /// - Parameter flag: The flag, `--render-onboarding` or `--render-viewer`.
+    /// - Parameter flag: The flag, `--render-onboarding`, `--render-viewer` or `--render-settings`.
     /// - Returns: Never; the process exits.
     static func needsDebugBuild(_ flag: String) -> Never {
       FileHandle.standardError
@@ -121,7 +127,9 @@ enum AtlasApp {
   static func onboarding(commands: Commands, loginItem: OpenAtLogin) -> Never {
     let app = NSApplication.shared
     app.mainMenu = MainMenu.make()
-    let controller = OnboardingController(dependencies: .live(commands: commands, loginItem: loginItem))
+    let controller = OnboardingController(
+      dependencies: .live(commands: commands, loginItem: loginItem, installs: AgentInstalls(commands: commands))
+    )
     let window = OnboardingWindow(controller: controller) { _ in NSApp.terminate(nil) }
     DockIcon.settle(windowOpen: true)
     app.finishLaunching()

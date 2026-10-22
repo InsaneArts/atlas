@@ -92,8 +92,8 @@ extension ViewerController {
     show(reply)
   }
 
-  /// Refreshes ``now`` every ``tickEvery`` while readings run, so the header's age of the picture stays current;
-  /// stops otherwise. A paused picture's header reads no age.
+  /// Refreshes ``now`` every ``tickEvery`` while readings run, so Details' age of the picture stays current; stops
+  /// otherwise.
   ///
   /// - Parameter running: Whether readings run.
   private func tick(_ running: Bool) {
@@ -107,5 +107,71 @@ extension ViewerController {
         try? await Task.sleep(for: Self.tickEvery)
       }
     }
+  }
+
+  /// What the panel last saw, shown while the first reading is under way. It is only a picture: control waits for a
+  /// reading of its own.
+  ///
+  /// - Parameters:
+  ///   - status: The service's last answer to the panel, or nil when it has none.
+  ///   - picture: The panel's latest picture, if any.
+  func begin(with status: ViewerStatus?, picture: DesktopPicture?) {
+    guard !reading.hasStatus, reading.frame == nil else { return }
+    reading.status = status ?? ViewerStatus()
+    reading.hasStatus = status != nil
+    reading.picture = picture
+  }
+
+  /// Shows a status. Input not ready ends control now, and so does a status asked after the grant that says no
+  /// viewer holds it, as after Release Control in the menu bar; a recovery set aside is forgotten once nothing needs
+  /// it.
+  ///
+  /// - Parameter reply: The status read; only the newest reading started is shown, so it is ``statusReading``'s.
+  func show(_ reply: ViewerStatus) {
+    let newAccount = reply.overview.account != reading.status.overview.account
+    reading.status = reply
+    reading.hasStatus = true
+    // Details tells when the helper logged in once its account is known, and again should it change.
+    if newAccount, detailsShown { readLoginTime() }
+    // Input not ready: control ends now, not with the next picture, saying why in the status's own words.
+    if !reply.ready {
+      reading.ready = false
+      if holdingControl || session.acquiring { releaseControl(ViewerWords.controlEnded(reply.overview.reason)) }
+    } else if holdingControl, statusReading > controlSince, reply.noViewerInControl {
+      releaseControl(ViewerWords.releasedElsewhere)
+    }
+    // Not Now covers one incident: once nothing needs recovery, a later one alerts again.
+    if snapshot.offeredRecovery == nil { session.recoveryLater = nil }
+  }
+
+  /// Shows a new picture, read with a status that says whether the helper takes input. A picture from a changed
+  /// helper ends control first, when this viewer holds or asks for it.
+  ///
+  /// - Parameters:
+  ///   - frame: The picture's frame.
+  ///   - decoded: Its picture and size, decoded once.
+  ///   - ready: Whether the status read with it says the helper takes input.
+  func show(_ frame: Frame, decoded: DesktopPicture.Decoded, ready: Bool) {
+    if holdingControl || session.acquiring, let shown = reading.frame, shown.revision != frame.revision {
+      releaseControl(ViewerWords.helperChanged)
+    }
+    reading.frame = frame
+    reading.picture = decoded.picture
+    reading.pictureSize = decoded.size
+    reading.frameAt = clock()
+    reading.unavailable = nil
+    reading.ready = ready
+  }
+
+  /// No picture: say why, and give control back.
+  ///
+  /// - Parameter error: Why the reading failed.
+  func lost(_ error: any Error) {
+    reading.ready = false
+    reading.frame = nil
+    reading.picture = nil
+    reading.pictureSize = nil
+    releaseControl()
+    reading.unavailable = error.localizedDescription
   }
 }

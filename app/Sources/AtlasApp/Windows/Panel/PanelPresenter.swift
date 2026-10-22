@@ -2,128 +2,71 @@ import AtlasKit
 import AtlasUI
 
 /// Builds the panel's state from what its controller holds. Pure: every choice the panel shows is made here, from
-/// the snapshot and AtlasKit's rules (``Mode``, ``StatusReading``, ``Words`` and the log-out policy).
+/// the snapshot, the status table (`Mode+StatusSummary`) and AtlasKit's rules (``Mode`` and ``StatusReading``). Its
+/// buttons and ⋯ menu are in `PanelPresenter+Controls`.
 enum PanelPresenter {
   /// The panel as it should look now.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: Everything the panel draws.
   static func state(_ snapshot: PanelSnapshot) -> PanelState {
-    let mode = snapshot.status.overview.mode
+    let mode = mode(snapshot)
+    let reading = StatusReading(snapshot.status)
     return PanelState(
-      status: Mode.of(mode).summary,
-      reason: reason(snapshot.status.overview),
-      stage: stage(snapshot),
-      recovery: recovery(snapshot.status.overview),
-      facts: facts(snapshot.status),
-      isViewerPrimary: mode != .loggedOut,
-      secondary: secondary(snapshot),
-      logOut: logOut(snapshot),
-      // The spinner shows while any action runs, whichever said the words.
-      feedback: snapshot.feedback.map { Feedback(text: $0, isWorking: snapshot.working) },
-      menu: menu(snapshot)
+      status: mode.panelSummary(reading),
+      notice: snapshot.session.notice,
+      picture: picture(snapshot, mode: mode, reading: reading),
+      recent: hidesRecent(mode) ? [] : reading.recentEntries,
+      controls: controls(snapshot, mode: mode)
     )
   }
 
-  /// The reason under the title: hidden when empty, and when the recovery card or the way to log in says it.
-  ///
-  /// - Parameter overview: The service's overview.
-  /// - Returns: The reason, or nil to hide the line.
-  private static func reason(_ overview: ViewerStatus.Overview) -> String? {
-    let hidden = overview.reason.isEmpty || overview.recoveryHelps || overview.mode == .loggedOut
-    return hidden ? nil : overview.reason
-  }
-
-  /// What fills the space under the header: logged out, the way to log in; else the desktop or why there is none.
+  /// The helper's mode as the panel and the menu bar glyph show it: connecting before the first answer, You have
+  /// control while Atlas's main window holds it, In use elsewhere while another window does, else the service's
+  /// state.
   ///
   /// - Parameter snapshot: What the controller holds.
-  /// - Returns: The stage.
-  private static func stage(_ snapshot: PanelSnapshot) -> PanelStage {
-    if snapshot.status.overview.mode == .loggedOut {
-      return .loggedOut(text: Words.loggedOut, isEnabled: !snapshot.working)
+  /// - Returns: The mode.
+  static func mode(_ snapshot: PanelSnapshot) -> Mode {
+    if snapshot.connecting { return .connecting }
+    return Mode.seen(by: snapshot.status.overview, holdingControl: snapshot.holdingControl)
+  }
+
+  /// What fills the picture's frame: the empty stage saying why while the helper is logged out or not ready; else the
+  /// screen, inside the rim while in control, dimmed while it needs the person, faded while paused, with the newest
+  /// action over it while an agent works and the picture is live.
+  ///
+  /// - Parameters:
+  ///   - snapshot: What the controller holds.
+  ///   - mode: The helper's mode.
+  ///   - reading: The status, read.
+  /// - Returns: The picture's state.
+  static func picture(_ snapshot: PanelSnapshot, mode: Mode, reading: StatusReading) -> PanelPictureState {
+    switch mode.kind {
+    case .loggedOut: return .empty(PanelWords.loggedOutPicture)
+    // Recover is offered only where it fixes something (``helperMenu``), and the stage says so only then.
+    case .notReady:
+      return .empty(
+        snapshot.status.overview.recoveryHelps ? PanelWords.notReadyPicture : PanelWords.notReadyWaitPicture
+      )
+    case .idle, .working, .control, .needsYou, .stopped, .connecting, .inUseElsewhere: break
     }
-    return snapshot.picture.map(PanelStage.picture) ?? .placeholder(snapshot.placeholder)
-  }
-
-  /// Why the recovery card offers Recover: an unknown outcome, or input Recover starts again.
-  ///
-  /// - Parameter overview: The service's overview.
-  /// - Returns: The reason, a fallback when it is empty, or nil to hide the card.
-  private static func recovery(_ overview: ViewerStatus.Overview) -> PanelRecovery? {
-    guard overview.recoveryHelps else { return nil }
-    if overview.mode == .blocked {
-      return .notReady(overview.reason.isEmpty ? PanelWords.inputStopped : overview.reason)
-    }
-    return .unfinished(overview.reason.isEmpty ? PanelWords.recoverFirst : overview.reason)
-  }
-
-  /// The helper, its display and the newest action, with a dash for what is unknown.
-  ///
-  /// - Parameter status: The service's status.
-  /// - Returns: The three facts, in order.
-  private static func facts(_ status: ViewerStatus) -> [Fact] {
-    let overview = status.overview
-    return [
-      Fact(name: PanelWords.helperFact, value: overview.title ?? Words.unknown),
-      Fact(name: Words.displayFact, value: Words.size(overview.display) ?? Words.unknown),
-      Fact(name: PanelWords.lastActionFact, value: StatusReading(status).lastAction),
-    ]
-  }
-
-  /// The button beside Open Viewer: Release Control, which revokes it, while a viewer holds control; Switch to
-  /// Helper… unless the helper is logged out, waiting for a known helper and an idle panel.
-  ///
-  /// - Parameter snapshot: What the controller holds.
-  /// - Returns: The button, or nil for none.
-  private static func secondary(_ snapshot: PanelSnapshot) -> PanelSecondaryAction? {
-    switch snapshot.status.overview.mode {
-    case .controlling: .revokeControl
-    case .loggedOut: nil
-    case .observing, .agent, .recovering, .blocked, .unavailable:
-      .switchToHelper(isEnabled: snapshot.helper != nil && !snapshot.working)
-    }
-  }
-
-  /// The confirmation or Log Out Anyway, each waiting while a command runs or the mode forbids it.
-  ///
-  /// - Parameter snapshot: What the controller holds.
-  /// - Returns: Where logging out stands, as the panel shows it.
-  private static func logOut(_ snapshot: PanelSnapshot) -> PanelLogOut {
-    let mode = snapshot.status.overview.mode
-    return switch snapshot.logOutStage {
-    case .idle: .none
-    case .confirming: .confirming(isEnabled: !snapshot.working && mode.allowsLogOut)
-    case .held: .held(isEnabled: !snapshot.working && mode.allowsForcedLogOut)
-    }
-  }
-
-  /// The menu rows: Open at Login when the app carries the login item; Recover unless the card offers it or logged
-  /// out, waiting while a command runs or the helper's mode would refuse it; Log Out Helper… unless logged out,
-  /// waiting while a command runs, the mode forbids it or the person is asked.
-  ///
-  /// - Parameter snapshot: What the controller holds.
-  /// - Returns: The menu.
-  private static func menu(_ snapshot: PanelSnapshot) -> PanelMenu {
-    let overview = snapshot.status.overview
-    let mode = overview.mode
-    let opensAtLogin = snapshot.opensAtLogin.flatMap { $0.isAvailable ? $0.isEnabled : nil }
-    let recover: PanelMenuItem =
-      if overview.recoveryHelps || mode == .loggedOut {
-        .hidden
-      } else if !snapshot.working && overview.recoverMayRun {
-        .enabled
-      } else {
-        .disabled
+    let paused = snapshot.session.paused
+    let look: PictureLook =
+      switch mode.kind {
+      case .control: .inControl
+      case .needsYou: .dimmed
+      default: paused ? .paused : .live
       }
-    let asking = snapshot.logOutStage == .confirming
-    let logOut: PanelMenuItem =
-      if mode == .loggedOut {
-        .hidden
-      } else if !snapshot.working && mode.allowsLogOut && !asking {
-        .enabled
-      } else {
-        .disabled
-      }
-    return PanelMenu(opensAtLogin: opensAtLogin, recover: recover, logOut: logOut)
+    let caption = mode.kind == .working && !paused ? reading.captionEntries.last : nil
+    return .screen(picture: snapshot.picture, look: look, caption: caption)
+  }
+
+  /// Whether Recent hides: while the helper is logged out or not ready, as its picture does.
+  ///
+  /// - Parameter mode: The helper's mode.
+  /// - Returns: Whether Recent hides.
+  static func hidesRecent(_ mode: Mode) -> Bool {
+    mode.kind == .loggedOut || mode.kind == .notReady
   }
 }

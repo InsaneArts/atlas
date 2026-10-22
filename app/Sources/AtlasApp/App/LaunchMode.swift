@@ -10,6 +10,8 @@ enum LaunchMode: Equatable {
   case renderOnboarding(String)
   /// Draw every viewer state to PNGs in a folder (debug builds).
   case renderViewer(String)
+  /// Draw every Settings state to PNGs in a folder (debug builds).
+  case renderSettings(String)
   /// The app that reads the viewer's URL on standard input: the menu bar, or with `render`, one drawing of the
   /// panel in light or dark.
   case app(render: String?, dark: Bool)

@@ -195,16 +195,25 @@ fn replaceable(link: &Path) -> bool {
 
 /// Whether `name` can be a new account's short name.
 pub(crate) fn valid_account_name(name: &str) -> std::result::Result<(), String> {
-    if name.is_empty() || name.len() > 31 {
-        return Err("Use 1 to 31 characters.".into());
+    if name.chars().any(char::is_whitespace) {
+        return Err("Account names can't have spaces.".into());
     }
 
     if !name
         .bytes()
         .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
-        || name.starts_with(['.', '-'])
     {
-        return Err("Use letters, digits, '.', '_' and '-'.".into());
+        return Err(
+            "Account names can only use letters, numbers, dots, dashes and underscores.".into(),
+        );
+    }
+
+    if name.starts_with(['.', '-']) {
+        return Err("Account names start with a letter or a number.".into());
+    }
+
+    if name.is_empty() || name.len() > 31 {
+        return Err("Account names are 1 to 31 characters.".into());
     }
 
     Ok(())
@@ -742,13 +751,24 @@ fn finish(done_steps: &mut Vec<Value>, settings: &Path) -> Result<()> {
                 .and_then(crate::agents::Agent::named)
         })
         .collect();
-    let names: Vec<&str> = found.iter().map(|agent| agent.display_name()).collect();
-    if !found.is_empty()
+    // The Claude app is offered beside them when it is here and not yet
+    // connected.
+    let app = agents["agents"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|agent| {
+            agent["agent"] == crate::claude_app::ID
+                && agent["installed"] == true
+                && agent["connected"] == false
+        });
+    let mut names: Vec<&str> = found.iter().map(|agent| agent.display_name()).collect();
+    if app {
+        names.push("the Claude app");
+    }
+    if !names.is_empty()
         && prompt::confirm(
-            &format!(
-                "Teach {} to use Atlas? (adds a plugin)",
-                names.join(" and ")
-            ),
+            &format!("Teach {} to use Atlas? (adds a plugin)", listed(&names)),
             true,
             "run atlas agents install later",
         )?
@@ -756,11 +776,14 @@ fn finish(done_steps: &mut Vec<Value>, settings: &Path) -> Result<()> {
         // Setup is already done; this step can only be skipped, never fail it.
         let connected = {
             let _spinner = Spinner::new("Connecting…");
-            crate::agents::change(&found, false)
+            crate::agents::change_these(&found, false, app, false)
                 .unwrap_or_else(|error| json!({"ok": false, "error": error.error}))
         };
         if connected["ok"] == true {
-            done("Agents", &format!("{} connected", names.join(" and ")));
+            done(
+                "Agents",
+                &format!("{} connected", crate::doing::capitalized(&listed(&names))),
+            );
         } else {
             skipped(
                 "Agents",
@@ -772,6 +795,15 @@ fn finish(done_steps: &mut Vec<Value>, settings: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Names as a sentence lists them: "A", "A and B", "A, B and C".
+fn listed(names: &[&str]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => (*one).to_owned(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
 }
 
 /// The closing lines: ready, and what to try.

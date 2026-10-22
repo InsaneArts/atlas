@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Atlas's capsule buttons: white for the next step, glass beside it, plain for the quiet way out. A style, not a
-/// view, so the control stays a `Button` with its own label, role, shortcut and disabled state.
+/// Atlas's capsule buttons: white for the next step, glass beside it, plain for the quiet way out, and an alert's
+/// three. A style, not a view, so the control stays a `Button` with its own label, role, shortcut and disabled state.
 struct CapsuleButtonStyle: ButtonStyle {
   /// How the capsule is painted.
   enum Look: Sendable {
@@ -11,11 +11,23 @@ struct CapsuleButtonStyle: ButtonStyle {
     case glass
     /// Text alone: the quiet way out, such as Back.
     case plain
+    /// The pressed fill with a brighter edge: a capsule whose state is on, such as Keys while in control.
+    case pressed
+    /// The accent with white text: an alert's default button.
+    case alertDefault
+    /// A quiet fill with plain text: an alert's other button, such as Cancel.
+    case alertOther
+    /// A quiet fill with red text: an alert's destructive button, such as Log Out.
+    case alertDestructive
   }
 
   /// How large the capsule is.
   enum Size: Sendable {
-    /// 34 high, 13-point text: in a footer, a card or a panel.
+    /// 26 high, 13-point text: in a settings row.
+    case mini
+    /// 30 high, 13-point text: in the panel, an alert and an empty message.
+    case small
+    /// 34 high, 13-point text: in a footer, a card or the top row.
     case regular
     /// 44 high, 14-point text: a screen's one main action.
     case large
@@ -36,6 +48,7 @@ struct CapsuleButtonStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
       .font(Typography.font(textStyle, weight: weight))
+      .tracking(tracking)
       .lineLimit(1)
       .padding(.horizontal, inset)
       .frame(maxWidth: fill ? .infinity : nil)
@@ -49,7 +62,7 @@ struct CapsuleButtonStyle: ButtonStyle {
       // AppKit draws the view into an image, as the design renders do, and this one draws the same edge without it.
       .overlay(
         RoundedRectangle(cornerRadius: height / 2, style: .circular)
-          .strokeBorder(look == .glass ? Color.strokeStrong : .clear, lineWidth: Stroke.hairline)
+          .strokeBorder(edge, lineWidth: Stroke.hairline)
       )
       .contentShape(Capsule())
       .modifier(PressScale(isPressed: configuration.isPressed, scale: Layout.pressedScale))
@@ -60,19 +73,34 @@ struct CapsuleButtonStyle: ButtonStyle {
   /// The label's size: a step larger on a large capsule.
   private var textStyle: TextStyle {
     switch size {
-    case .regular: .body
+    case .mini, .small, .regular: .body
     case .large: .headline
     }
   }
 
-  /// The label's weight: regular for plain text, semibold on a capsule.
+  /// The label's weight: regular for plain text, medium on an alert's buttons, semibold on a capsule.
   private var weight: Font.Weight {
-    look == .plain ? .regular : .semibold
+    switch look {
+    case .plain: .regular
+    case .alertDefault, .alertOther, .alertDestructive: .medium
+    case .primary, .glass, .pressed: .semibold
+    }
+  }
+
+  /// The label's letter spacing: drawn in on a capsule, as the boards set every capsule's word (v3.py `pill`); plain
+  /// text and an alert's buttons keep the font's own.
+  private var tracking: CGFloat {
+    switch look {
+    case .primary, .glass, .pressed: LetterSpacing.control
+    case .plain, .alertDefault, .alertOther, .alertDestructive: 0
+    }
   }
 
   /// The capsule's height.
   private var height: CGFloat {
     switch size {
+    case .mini: ControlHeight.chip
+    case .small: ControlHeight.row
     case .regular: ControlHeight.button
     case .large: ControlHeight.large
     }
@@ -89,8 +117,10 @@ struct CapsuleButtonStyle: ButtonStyle {
   private var foreground: Color {
     switch look {
     case .primary: .ground
-    case .glass: .textPrimary
+    case .glass, .pressed, .alertOther: .textPrimary
     case .plain: .textSecondary
+    case .alertDefault: .onAccent
+    case .alertDestructive: .textDestructive
     }
   }
 
@@ -98,7 +128,19 @@ struct CapsuleButtonStyle: ButtonStyle {
     switch look {
     case .primary: .textPrimary
     case .glass: .fillControl
+    case .alertOther, .alertDestructive: .fillAlertButton
+    case .pressed: .fillControlOn
     case .plain: .clear
+    case .alertDefault: .accent
+    }
+  }
+
+  /// The capsule's edge: a glass hairline, a brighter one while pressed, none otherwise.
+  private var edge: Color {
+    switch look {
+    case .glass: .strokeStrong
+    case .pressed: .strokePressed
+    case .primary, .plain, .alertDefault, .alertOther, .alertDestructive: .clear
     }
   }
 }
@@ -126,6 +168,10 @@ private enum Layout {
     CapsuleButtonSamples(.fill)
   }
 
+  #Preview("Alert") {
+    CapsuleButtonSamples(.alert)
+  }
+
   #Preview("Interactive") {
     @Previewable @State var look = CapsuleButtonStyle.Look.primary
     @Previewable @State var size = CapsuleButtonStyle.Size.regular
@@ -138,8 +184,20 @@ private enum Layout {
           .tag(CapsuleButtonStyle.Look.glass)
         Text(verbatim: "Plain")
           .tag(CapsuleButtonStyle.Look.plain)
+        Text(verbatim: "Pressed")
+          .tag(CapsuleButtonStyle.Look.pressed)
+        Text(verbatim: "Alert default")
+          .tag(CapsuleButtonStyle.Look.alertDefault)
+        Text(verbatim: "Alert other")
+          .tag(CapsuleButtonStyle.Look.alertOther)
+        Text(verbatim: "Alert destructive")
+          .tag(CapsuleButtonStyle.Look.alertDestructive)
       }
       Picker(String("Size"), selection: $size) {
+        Text(verbatim: "Mini")
+          .tag(CapsuleButtonStyle.Size.mini)
+        Text(verbatim: "Small")
+          .tag(CapsuleButtonStyle.Size.small)
         Text(verbatim: "Regular")
           .tag(CapsuleButtonStyle.Size.regular)
         Text(verbatim: "Large")

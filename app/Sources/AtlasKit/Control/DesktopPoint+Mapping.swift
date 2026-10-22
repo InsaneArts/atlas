@@ -58,4 +58,17 @@ extension DesktopPoint {
     let shown = image.width * min(view.width / image.width, view.height / image.height)
     return shown / display.width
   }
+
+  /// Where the point lies as a share of the helper's display: 0 at its left or top edge, 1 at its right or bottom,
+  /// held to that span, as a window outline is placed over the picture (`ViewerLayout.outlineFrame`, which letterboxes
+  /// it as ``init(location:in:image:display:clamp:)`` maps a click).
+  ///
+  /// Fails when the display is empty or not finite.
+  ///
+  /// - Parameter display: The helper's display, in points.
+  /// - Returns: The share across and down.
+  package func fraction(of display: ViewerStatus.Size) -> CGPoint? {
+    guard [display.width, display.height].allSatisfy({ $0.isFinite && $0 > 0 }) else { return nil }
+    return CGPoint(x: min(1, max(0, x / display.width)), y: min(1, max(0, y / display.height)))
+  }
 }

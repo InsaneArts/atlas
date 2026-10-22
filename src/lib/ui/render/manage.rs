@@ -7,6 +7,7 @@ use serde_json::Value;
 fn agent_name(id: &str) -> &str {
     match crate::agents::Agent::named(id) {
         Some(agent) => agent.display_name(),
+        None if id == crate::claude_app::ID => "Claude app",
         None => id,
     }
 }
@@ -67,10 +68,12 @@ pub fn agents_project(value: &Value) -> String {
         let line = match file["change"].as_str() {
             Some("added") => format!("Added Atlas to {name}"),
             Some("updated") => format!("Updated Atlas in {name}"),
+            Some("removed") => format!("Took Atlas out of {name}"),
+            Some("absent") => format!("{name} has no Atlas section"),
             _ => format!("{name} already has Atlas"),
         };
 
-        changed |= file["change"] != "unchanged";
+        changed |= matches!(file["change"].as_str(), Some("added" | "updated"));
         lines.push(format!("{} {}", style::ok(), text::printable(&line)));
     }
 
@@ -78,6 +81,14 @@ pub fn agents_project(value: &Value) -> String {
         lines.push(style::dim(
             "Agents working here will now test changes in the helper.",
         ));
+    }
+    if lines.is_empty() {
+        lines.push(format!("{} No Atlas section here", style::ok()));
+    }
+    for warning in value["warnings"].as_array().into_iter().flatten() {
+        lines.push(style::dim(text::printable(
+            warning.as_str().unwrap_or_default(),
+        )));
     }
 
     lines.join("\n")
@@ -106,6 +117,17 @@ pub fn agents_change(value: &Value) -> Rendered {
                 false,
             ));
         }
+    }
+
+    let restart = value["agents"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|agent| agent["restart"] == true);
+    if restart {
+        out.push(style::dim(
+            "Quit and reopen the Claude app for this to take effect.",
+        ));
     }
 
     if connected {

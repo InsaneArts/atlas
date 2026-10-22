@@ -14,10 +14,12 @@
       ("01-welcome", PreviewStates.onboardingWelcome),
       ("02-choose", PreviewStates.onboardingChoose),
       ("02-choose-many", PreviewStates.onboardingChooseMany),
+      ("02-choose-long", PreviewStates.onboardingChooseLong),
       ("02-choose-problem", PreviewStates.onboardingChooseProblem),
       ("02-choose-only", PreviewStates.onboardingChooseOnly),
       ("03-create", PreviewStates.onboardingCreate),
       ("03-create-working", PreviewStates.onboardingCreateWorking),
+      ("03-create-bad-name", PreviewStates.onboardingCreateBadName),
       ("04-switch", PreviewStates.onboardingSwitch),
       ("04-switch-open-atlas", PreviewStates.onboardingSwitchOpenAtlas),
       ("04-switch-long", PreviewStates.onboardingSwitchLong),
@@ -44,13 +46,22 @@
       let folder = URL(fileURLWithPath: directory)
       return renders.map { render in
         PNG.write(
-          OnboardingView(state: render.state, form: .constant(PreviewStates.onboardingForm)) { _ in }
+          OnboardingView(state: render.state, form: .constant(form(render.state))) { _ in }
             .environment(\.appIcon, AppIconImage.image),
           size: size(render.state),
           to: folder.appendingPathComponent("\(render.file).png")
         )
       }
       .allSatisfy { $0 }
+    }
+
+    /// The form a render draws: the one with a bad short name for that sample, else the form a new window opens with.
+    ///
+    /// - Parameter state: The sample drawn.
+    /// - Returns: Its form.
+    static func form(_ state: OnboardingState) -> OnboardingAccountForm {
+      if state == PreviewStates.onboardingCreateBadName { return PreviewStates.onboardingFormBadName }
+      return PreviewStates.onboardingForm
     }
 
     /// The window size a sample draws at.

@@ -5,17 +5,30 @@ import Foundation
 /// One punctuation rule holds for every word AtlasKit makes: a line a window shows on its own as a sentence (a hint, a
 /// notice, a reason to wait) ends with its full stop, and a label, a title, a mode or a fact's value has none.
 package enum Words {
-  /// What a logged-out helper means, and the way back.
-  package static let loggedOut =
-    "Agents can't use it until you log in to it again. Then switch back here; Atlas carries on by itself."
   /// A fact whose value is not known yet: the same dash in the panel and the viewer.
   package static let unknown = "—"
   /// The helper's display, as the panel's and the viewer's facts name it.
   package static let displayFact = "Display"
   /// The helper's reason before the service has given one.
   package static let connecting = "Connecting to the helper"
-  /// Another viewer holds control: the mode's label and the reason under it.
-  package static let anotherViewer = "Another viewer has control"
+  /// Another window holds control: the mode's word.
+  package static let inUseElsewhere = "In use elsewhere"
+  /// Another window holds control: the line beside the word, and the reason a window gives.
+  package static let inUseElsewhereLine = "Another window has control"
+  /// The person holds control: the main window's line beside the word.
+  package static let controlLine = "The agent waits"
+  /// How to give control back, on the chip over the screen: chip text, not a sentence, so it has no full stop.
+  package static let controlHint = "Control-Shift-Escape gives it back"
+  /// The line beside the word while the picture is paused.
+  package static let pausedLine = "Picture paused"
+  /// The person stopped agents: the line beside the word.
+  package static let stoppedLine = "The agent waits for you"
+  /// An action's outcome is unknown: the line beside the word.
+  package static let unfinishedLine = "An action may not have finished"
+  /// The helper's input stopped, which Recover starts again: the line beside the word.
+  package static let inputStoppedLine = "Mouse and keyboard stopped in the helper"
+  /// Nothing is happening and no agent has acted yet: the reason a window gives.
+  package static let nothingHappening = "Nothing is happening in the helper"
   /// While the helper is recovered, from the panel or the viewer.
   package static let recovering = "Recovering the helper…"
   /// Recovery gave no answer in time and may still be under way.
@@ -26,6 +39,17 @@ package enum Words {
   package static let recovered = "The helper was recovered. Take control again when ready."
   /// While the screen locks so the person can switch accounts, from the panel or the setup window.
   package static let locking = "Locking the screen…"
+
+  /// An agent's name.
+  ///
+  /// - Parameter agent: The agent.
+  /// - Returns: "Claude Code" or "Codex".
+  package static func agentTitle(_ agent: AgentID) -> String {
+    switch agent {
+    case .claude: "Claude Code"
+    case .codex: "Codex"
+    }
+  }
 
   /// Seconds ago as a short relative time.
   ///
@@ -38,11 +62,41 @@ package enum Words {
     return "\(Int((seconds / 3600).rounded())) h ago"
   }
 
-  /// What an operation did, after who did it. No payload is ever recorded.
+  /// Seconds ago as the shortest time a row's right edge holds, as the panel's Recent rows show it.
+  ///
+  /// - Parameter seconds: How long ago.
+  /// - Returns: "now" under a second, then "9 s", "2 min" or "3 h".
+  package static func shortAgo(_ seconds: Double) -> String {
+    if seconds < 1 { return "now" }
+    if seconds < 60 { return "\(Int(seconds.rounded(.down))) s" }
+    if seconds < 3600 { return "\(Int((seconds / 60).rounded(.down))) min" }
+    return "\(Int((seconds / 3600).rounded(.down))) h"
+  }
+
+  /// What an agent did last, and when, beside Idle.
+  ///
+  /// - Parameters:
+  ///   - last: What it did, such as "turned Show Center off".
+  ///   - ago: How long ago, in words; empty when unknown.
+  /// - Returns: "Last: turned Show Center off · 2 min ago", or without the time when it is unknown.
+  package static func idleLine(last: String, ago: String) -> String {
+    ago.isEmpty ? "Last: \(last)" : "Last: \(last) · \(ago)"
+  }
+
+  /// The window an app shows on the screen, beside Idle.
+  ///
+  /// - Parameter app: The app's name.
+  /// - Returns: "Showing Opie's window".
+  package static func showingLine(app: String) -> String {
+    "Showing \(app)'s window"
+  }
+
+  /// What an operation did, after who did it: the service's own words when it gives them, so every app says the same.
   ///
   /// - Parameter row: The recorded operation.
-  /// - Returns: What it did, such as "ran a command", or what could not be done.
+  /// - Returns: What it did, such as "clicked Save in TextEdit" or "ran a command", or what could not be done.
   package static func describe(_ row: ViewerStatus.Activity) -> String {
+    if let says = row.says { return says }
     let count = row.actionCount ?? 0
     let actions = "\(count) action\(count == 1 ? "" : "s")"
     switch (row.operation, row.ok) {

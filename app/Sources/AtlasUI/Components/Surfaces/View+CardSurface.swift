@@ -3,10 +3,13 @@ import SwiftUI
 extension View {
   /// Sets the view on a card.
   ///
-  /// - Parameter tint: The card's tint; neutral by default.
+  /// - Parameters:
+  ///   - tint: The card's tint; neutral by default.
+  ///   - radius: The card's corners: `Radius.large` for a card on its own, by default, or `Radius.medium` for a
+  ///     group of rows in a column.
   /// - Returns: The view on its card.
-  func cardSurface(_ tint: CardSurface.Tint = .neutral) -> some View {
-    modifier(CardSurface(tint: tint))
+  func cardSurface(_ tint: CardSurface.Tint = .neutral, radius: CGFloat = Radius.large) -> some View {
+    modifier(CardSurface(tint: tint, radius: radius))
   }
 }
 

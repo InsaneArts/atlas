@@ -5,8 +5,6 @@
   struct TextSamples: View {
     /// Which component the samples show.
     enum Kind: Sendable {
-      /// Eyebrows in both tones.
-      case eyebrow
       /// Headlines at each size.
       case headline
       /// A lede.
@@ -30,9 +28,6 @@
     var body: some View {
       VStack(spacing: Spacing.xl) {
         switch kind {
-        case .eyebrow:
-          Eyebrow(text: String("Helper account"))
-          Eyebrow(text: String("Can't show the helper"), tone: .attention)
         case .headline:
           Headline(title: String("Give your agents"), tail: String("a Mac of their own."))
           Headline(title: String("The helper is"), tail: String("logged out."), size: .title)

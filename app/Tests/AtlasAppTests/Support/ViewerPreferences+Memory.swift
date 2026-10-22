@@ -7,24 +7,24 @@ extension ViewerPreferences {
   ///
   /// - Parameters:
   ///   - rate: The saved picture rate, in seconds; 0 for none.
-  ///   - sidebar: Whether the sidebar was left showing.
+  ///   - details: Whether Details was left showing.
   /// - Returns: The preferences.
-  @MainActor static func memory(rate: Double = 0, sidebar: Bool = false) -> ViewerPreferences {
+  @MainActor static func memory(rate: Double = 0, details: Bool = false) -> ViewerPreferences {
     final class Store {
       var rate: Double
-      var sidebar: Bool
+      var details: Bool
 
-      init(rate: Double, sidebar: Bool) {
+      init(rate: Double, details: Bool) {
         self.rate = rate
-        self.sidebar = sidebar
+        self.details = details
       }
     }
-    let store = Store(rate: rate, sidebar: sidebar)
+    let store = Store(rate: rate, details: details)
     return ViewerPreferences(
       loadRate: { store.rate },
       saveRate: { store.rate = $0 },
-      loadSidebar: { store.sidebar },
-      saveSidebar: { store.sidebar = $0 }
+      loadDetails: { store.details },
+      saveDetails: { store.details = $0 }
     )
   }
 }

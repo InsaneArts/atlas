@@ -61,6 +61,7 @@ Usage: atlas agents [OPTIONS] [COMMAND]
 Commands:
   status   Which agents are on this Mac and whether Atlas is connected
   project  Tell a project's agents to test with Atlas: adds a short section to its AGENTS.md, and to a CLAUDE.md it has that does not include AGENTS.md
+  forget   Take the Atlas section out of a project's AGENTS.md and CLAUDE.md
   install  Connect the plugin to Claude Code and/or Codex (all installed by default)
   remove   Disconnect the plugin from Claude Code and/or Codex
   help     Print this message or the help of the given subcommand(s)
@@ -127,6 +128,29 @@ Global options:
           Use another settings file
 ```
 
+## atlas agents forget
+
+```text
+Take the Atlas section out of a project's AGENTS.md and CLAUDE.md
+
+Usage: atlas agents forget [OPTIONS] [DIR]
+
+Arguments:
+  [DIR]
+          The project folder (default: this one)
+
+Options:
+  -h, --help
+          Print help
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --config <FILE>
+          Use another settings file
+```
+
 ## atlas agents install
 
 ```text
@@ -140,6 +164,9 @@ Options:
 
       --codex
           Only Codex
+
+      --app
+          Only the Claude app
 
   -h, --help
           Print help
@@ -165,6 +192,9 @@ Options:
 
       --codex
           Only Codex
+
+      --app
+          Only the Claude app
 
   -h, --help
           Print help
@@ -1123,6 +1153,9 @@ Options:
 
       --version <VERSION>
           Install this release tag instead of the latest
+
+      --check
+          Only say whether a newer release is out; install nothing
 
   -h, --help
           Print help (see a summary with '-h')

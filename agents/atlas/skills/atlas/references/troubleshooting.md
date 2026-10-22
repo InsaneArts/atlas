@@ -46,6 +46,7 @@ its own failure is in `exitCode`.)
 | `stale-frame` | The screenshot is older than the current display. | Take a new screenshot. |
 | `startup` | The input service did not start. | Run `atlas start-input`, then `atlas doctor`. |
 | `state` | Local control state is corrupt. | Run `atlas restart`; tell the person if it persists. |
+| `stopped` | The person stopped agents in the helper. | Stop at once and ask the person what to do. Never resume agents yourself; only they can. |
 | `switch` | The screen could not be locked for switching accounts. | Tell the person; they lock it from the Apple menu (Lock Screen) and switch there. |
 | `terminal` | The command asks the person a question and has no terminal. | Ask the person; pass the flag it names (such as `--yes`) only with their agreement. |
 | `transport` | The helper did not answer, or the connection broke. | If `uncertain`, run `atlas restart`; otherwise retry once. |

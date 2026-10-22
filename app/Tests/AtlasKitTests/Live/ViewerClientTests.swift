@@ -52,4 +52,21 @@ struct ViewerClientTests {
     let reply = Data(#"{"ready": true, "overview": {"mode": "observing"}}"#.utf8)
     #expect(try ViewerClient.status(reply, response: answered).overview.mode == .observing)
   }
+
+  @Test("a screenshot request keeps the capability URL, percent-encodes the name and asks for the size wanted")
+  func screenshotRequest() throws {
+    let client = try #require(ViewerClient("http://127.0.0.1:8765/abc/"))
+    let thumb = try client.screenshotRequest(name: "1 a&size=full+b/\u{e9}.png", full: false)
+    let encoded = "1%20a%26size%3Dfull%2Bb%2F%C3%A9.png"
+    #expect(thumb.url?.absoluteString == "http://127.0.0.1:8765/abc/screenshot.png?name=\(encoded)&size=thumb")
+    let full = try client.screenshotRequest(name: "1700000005000000000-capture.png", full: true)
+    #expect(full.url?.query == "name=1700000005000000000-capture.png&size=full")
+  }
+
+  @Test("an apps reply that is not a 200 is the service's error with its code, never an empty list")
+  func appsRefused() throws {
+    #expect(throws: ServiceError("The helper is not running.", code: "unavailable")) {
+      try ViewerClient.apps(appsUnreachable, response: reply(503))
+    }
+  }
 }

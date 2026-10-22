@@ -24,16 +24,25 @@ struct StatusReadingEntriesTests {
     return StatusReading(try status(reply))
   }
 
-  @Test("a failure reads as failed whoever ran it, then the person's own as yours, and an agent's as others'")
-  func theKindFollowsWhoAndWhetherItWorked() throws {
-    let entries = try reading().recentEntries
-    #expect(entries.map(\.kind) == [.others, .yours, .failed])
-    #expect(entries.map(\.initial) == ["A", "Y", "Y"])
+  @Test("a failure is marked failed whoever ran it, and every other action quiet")
+  func theMarkFollowsWhetherItWorked() throws {
+    let entries = try reading().captionEntries
+    #expect(entries.map(\.mark) == [.failed, .quiet, .quiet])
   }
 
-  @Test("the newest is the first row of the sidebar and the last caption")
+  @Test("the newest is the last caption")
   func theNewestIsMarked() throws {
-    #expect(try reading().recentEntries.map(\.isNewest) == [true, false, false])
     #expect(try reading().captionEntries.map(\.isNewest) == [false, false, true])
+  }
+
+  @Test("captions and Recent key on the service's row ids, so a newer action never renames the older ones")
+  func entriesKeepTheRowsIDs() throws {
+    let older: [String: Any] = ["id": "41", "operation": "run", "ok": true, "ageSeconds": 5]
+    let newer: [String: Any] = ["id": "42", "operation": "run", "ok": true, "ageSeconds": 1]
+    let before = StatusReading(try status(["overview": ["activity": [older]]]))
+    let after = StatusReading(try status(["overview": ["activity": [newer, older]]]))
+    #expect(before.captionEntries.map(\.id) == ["41"])
+    #expect(after.captionEntries.map(\.id) == ["41", "42"])
+    #expect(after.recentEntries.map(\.id) == ["42", "41"])
   }
 }

@@ -2,142 +2,212 @@
   import SwiftUI
 
   extension PreviewStates {
-    /// Every panel sample, in the order the previews list them.
+    /// Every panel sample, in the order the previews and the renders list them: the board's six cards, then the
+    /// states no card draws.
     @MainActor package static var panel: [PreviewState<PanelState>] {
       [
-        PreviewState(name: "Watching", value: panelWatching),
-        PreviewState(name: "Agent working", value: panelAgentWorking),
-        PreviewState(name: "In control", value: panelInControl),
-        PreviewState(name: "Recovering", value: panelRecovering),
-        PreviewState(name: "Input stopped", value: panelInputStopped),
+        PreviewState(name: "Idle", value: panelIdle),
+        PreviewState(name: "Working", value: panelWorking),
+        PreviewState(name: "You have control", value: panelControl),
+        PreviewState(name: "Needs you", value: panelNeedsYou),
         PreviewState(name: "Logged out", value: panelLoggedOut),
-        PreviewState(name: "No picture", value: panelNoPicture),
-        PreviewState(name: "Confirm log-out", value: panelConfirmLogOut),
-        PreviewState(name: "Log-out held", value: panelLogOutHeld),
-        PreviewState(name: "Working message", value: panelWorkingMessage),
-        PreviewState(name: "Unavailable", value: panelUnavailable),
+        PreviewState(name: "Not ready", value: panelNotReady),
+        PreviewState(name: "Stopped", value: panelStopped),
+        PreviewState(name: "Connecting", value: panelConnecting),
+        PreviewState(name: "In use elsewhere", value: panelInUseElsewhere),
+        PreviewState(name: "Paused", value: panelPaused),
+        PreviewState(name: "Stop refused", value: panelStopRefused),
       ]
     }
 
-    /// Nothing acts in the helper; its desktop shows, and every action is open.
-    @MainActor static let panelWatching = PanelState(
-      status: StatusSummary(label: "Watching", tone: .ready),
-      reason: "Ready for agents",
-      stage: SampleDesktop.picture.map(PanelStage.picture) ?? .placeholder("Waiting for the helper's screen…"),
-      recovery: nil,
-      facts: [
-        Fact(name: "Helper", value: "Atlas"),
-        Fact(name: "Display", value: "1512 × 982"),
-        Fact(name: "Last action", value: "Agent took a screenshot · 7 s ago"),
-      ],
-      isViewerPrimary: true,
-      secondary: .switchToHelper(isEnabled: true),
-      logOut: .none,
-      feedback: nil,
-      menu: PanelMenu(opensAtLogin: false, recover: .enabled, logOut: .enabled)
+    /// The helper's screen, live, with no caption.
+    @MainActor private static let liveScreen = PanelPictureState.screen(
+      picture: SampleDesktop.picture,
+      look: .live,
+      caption: nil
     )
 
-    /// An agent acts in the helper: logging out waits.
-    @MainActor static let panelAgentWorking: PanelState = {
-      var state = panelWatching
-      state.status = StatusSummary(label: "Agent working", tone: .active)
-      state.reason = "An agent is acting in the helper"
-      state.menu.logOut = .disabled
-      return state
-    }()
+    /// The pause button while pictures arrive.
+    private static let pictureLive = PanelPause(
+      isPaused: false,
+      label: "Pause picture",
+      help: "Stop updating the helper's screen here"
+    )
 
-    /// A viewer holds control: the second button releases it, and Recover waits for it.
-    @MainActor static let panelInControl: PanelState = {
-      var state = panelWatching
-      state.status = StatusSummary(label: "Viewer has control", tone: .active)
-      state.reason = "A viewer has control"
-      state.secondary = .revokeControl
-      state.menu.recover = .disabled
-      return state
-    }()
+    /// Open Atlas, the main action while nothing needs the person.
+    private static let openAtlas = PanelMainButton(title: "Open Atlas", help: "Open Atlas's window", event: .openAtlas)
 
-    /// The last action's outcome is unknown: the recovery card shows, and Recover leaves the menu.
-    @MainActor static let panelRecovering: PanelState = {
-      var state = panelWatching
-      state.status = StatusSummary(label: "Needs you", tone: .attention)
-      state.reason = nil
-      state.recovery = .unfinished("An action's outcome is unknown. Recover the helper before anything else runs.")
-      state.menu = PanelMenu(opensAtLogin: false, recover: .hidden, logOut: .disabled)
-      return state
-    }()
+    /// An agent's actions two minutes ago, newest first, as Recent lists them.
+    private static let earlier = [
+      recent(0, "Turned Show Center off", "2 min"),
+      recent(1, "Clicked Ring in Opie", "2 min"),
+      recent(2, "Opened Opie", "2 min"),
+    ]
 
-    /// The helper's input stopped after an account switch: the card offers Recover, and Recover leaves the menu.
-    @MainActor static let panelInputStopped: PanelState = {
-      var state = panelWatching
-      state.status = StatusSummary(label: "Not ready", tone: .attention)
-      state.reason = nil
-      state.recovery = .notReady("Mouse and keyboard stopped in the helper. Recover starts them again.")
-      state.menu.recover = .hidden
-      return state
-    }()
+    /// Nothing acts in the helper; its screen shows, with what an agent did last.
+    @MainActor static let panelIdle = PanelState(
+      status: StatusSummary(label: "Idle", tone: .quiet, mark: .dot, line: "Last: turned Show Center off · 2 min ago"),
+      picture: liveScreen,
+      recent: earlier,
+      controls: PanelControls(main: openAtlas, pause: pictureLive)
+    )
 
-    /// The helper is logged out: Log In… takes the desktop's place, and Switch, Recover and Log Out leave.
-    @MainActor static let panelLoggedOut: PanelState = {
-      var state = panelWatching
-      state.status = StatusSummary(label: "Logged out", tone: .quiet)
-      state.reason = nil
-      state.stage = .loggedOut(
-        text: "Agents can't use it until you log in to it again. Then switch back here; Atlas carries on by itself.",
-        isEnabled: true
+    /// An agent acts in the helper: its newest action over the screen, and Stop before Open Atlas.
+    @MainActor static let panelWorking = PanelState(
+      status: StatusSummary(
+        label: "Working",
+        tone: .active,
+        mark: .pulsing,
+        line: "Turning Show Center off in Opie · just now"
+      ),
+      picture: .screen(
+        picture: SampleDesktop.picture,
+        look: .live,
+        caption: ActivityEntry(
+          id: "0",
+          line: "Turning Show Center off in Opie",
+          when: "just now",
+          isNewest: true
+        )
+      ),
+      recent: [
+        recent(0, "Turning Show Center off in Opie", "2 s"),
+        recent(1, "Clicked Ring in Opie", "9 s"),
+        recent(2, "Opened Opie", "31 s"),
+      ],
+      controls: PanelControls(showsStop: true, main: openAtlas, pause: pictureLive)
+    )
+
+    /// The person holds control in Atlas's window: the blue rim, and Give Back.
+    @MainActor static let panelControl = PanelState(
+      status: StatusSummary(label: "You have control", tone: .link, mark: .dot, line: "In Atlas · the agent waits"),
+      picture: .screen(picture: SampleDesktop.picture, look: .inControl, caption: nil),
+      recent: earlier,
+      controls: PanelControls(
+        main: PanelMainButton(title: "Give Back", help: "Give control back to the agent", event: .giveBack),
+        pause: pictureLive
       )
-      state.isViewerPrimary = false
-      state.secondary = nil
-      state.menu = PanelMenu(opensAtLogin: false, recover: .hidden, logOut: .hidden)
+    )
+
+    /// An action may not have finished: the screen dimmed, and Recover….
+    @MainActor static let panelNeedsYou = PanelState(
+      status: StatusSummary(
+        label: "Needs you",
+        tone: .attention,
+        mark: .dot,
+        line: "An action may not have finished"
+      ),
+      picture: .screen(picture: SampleDesktop.picture, look: .dimmed, caption: nil),
+      recent: earlier,
+      controls: PanelControls(main: recover, pause: pictureLive)
+    )
+
+    /// The helper is logged out: no screen and no Recent, and Switch to the Helper….
+    @MainActor static let panelLoggedOut = PanelState(
+      status: StatusSummary(
+        label: "Logged out",
+        tone: .quiet,
+        mark: .dot,
+        line: "Agents can't use the helper until you log in"
+      ),
+      picture: .empty("The helper is logged out"),
+      recent: [],
+      controls: PanelControls(
+        main: PanelMainButton(
+          title: "Switch to the Helper…",
+          help: "Lock your screen so you can log in to the helper",
+          event: .askSwitch
+        ),
+        pause: pictureLive
+      )
+    )
+
+    /// Atlas isn't answering in the helper: no screen and no Recent, and Recover….
+    @MainActor static let panelNotReady = PanelState(
+      status: StatusSummary(
+        label: "Not ready",
+        tone: .quiet,
+        mark: .small,
+        line: "Atlas isn't answering in the helper"
+      ),
+      picture: .empty("Atlas checks again by itself. Settings shows what the helper needs"),
+      recent: [],
+      controls: PanelControls(main: recoverWaiting, pause: pictureLive)
+    )
+
+    /// The person stopped agents: Resume.
+    @MainActor static let panelStopped = PanelState(
+      status: StatusSummary(label: "Stopped", tone: .attention, mark: .square, line: "The agent waits for you"),
+      picture: liveScreen,
+      recent: earlier,
+      controls: PanelControls(
+        main: PanelMainButton(title: "Resume", help: "Let agents act in the helper again", event: .resumeAgent),
+        pause: pictureLive
+      )
+    )
+
+    /// Before the first answer: the empty stage, and Open Atlas waiting.
+    @MainActor static let panelConnecting = PanelState(
+      status: StatusSummary(label: "Connecting", tone: .quiet, mark: .dot),
+      picture: .screen(picture: nil, look: .live, caption: nil),
+      recent: [],
+      controls: PanelControls(
+        main: PanelMainButton(title: "Open Atlas", isEnabled: false, help: "Open Atlas's window", event: .openAtlas),
+        pause: pictureLive
+      )
+    )
+
+    /// Another window holds control: Open Atlas.
+    @MainActor static let panelInUseElsewhere = PanelState(
+      status: StatusSummary(label: "In use elsewhere", tone: .quiet, mark: .dot, line: "Another window has control"),
+      picture: liveScreen,
+      recent: earlier,
+      controls: PanelControls(main: openAtlas, pause: pictureLive)
+    )
+
+    /// The person paused the panel's picture: it fades, and the pause button reads Resume picture.
+    @MainActor static let panelPaused: PanelState = {
+      var state = panelIdle
+      state.picture = .screen(picture: SampleDesktop.picture, look: .paused, caption: nil)
+      state.controls.pause = PanelPause(
+        isPaused: true,
+        label: "Resume picture",
+        help: "Update the helper's screen here again"
+      )
       return state
     }()
 
-    /// The last capture gave no picture.
-    @MainActor static let panelNoPicture: PanelState = {
-      var state = panelWatching
-      state.stage = .placeholder("The helper's screen is not available")
+    /// A stop the service refused: why, in place of the line.
+    @MainActor static let panelStopRefused: PanelState = {
+      var state = panelWorking
+      state.notice = "The agent could not be stopped. Try again."
       return state
     }()
 
-    /// Log Out Helper… was chosen: the confirmation shows.
-    @MainActor static let panelConfirmLogOut: PanelState = {
-      var state = panelWatching
-      state.logOut = .confirming(isEnabled: true)
-      state.menu.logOut = .disabled
-      return state
-    }()
+    /// Recover…, the main action while the helper needs recovering.
+    private static let recover = PanelMainButton(
+      title: "Recover…",
+      help: "Check the helper and start its mouse and keyboard again",
+      event: .askRecover
+    )
 
-    /// An app held the last log-out up: Log Out Anyway is offered under what it said.
-    @MainActor static let panelLogOutHeld: PanelState = {
-      var state = panelWatching
-      state.logOut = .held(isEnabled: true)
-      state.feedback = Feedback(text: "The helper has not logged out yet", isWorking: false)
-      return state
-    }()
+    /// Recover…, waiting while the helper isn't ready for a reason Recover can't fix.
+    private static let recoverWaiting = PanelMainButton(
+      title: "Recover…",
+      isEnabled: false,
+      help: "Check the helper and start its mouse and keyboard again",
+      event: .askRecover
+    )
 
-    /// A command runs: its words show beside a spinner, and every button that starts one waits.
-    @MainActor static let panelWorkingMessage: PanelState = {
-      var state = panelWatching
-      state.secondary = .switchToHelper(isEnabled: false)
-      state.feedback = Feedback(text: "Recovering the helper…", isWorking: true)
-      state.menu = PanelMenu(opensAtLogin: false, recover: .disabled, logOut: .disabled)
-      return state
-    }()
-
-    /// The service cannot reach the helper: no picture, its facts unknown, and Recover and logging out wait.
-    @MainActor static let panelUnavailable: PanelState = {
-      var state = panelWatching
-      state.status = StatusSummary(label: "Unavailable", tone: .quiet)
-      state.reason = "Connecting to the helper"
-      state.stage = .placeholder("The helper's screen is not available")
-      state.facts = [
-        Fact(name: "Helper", value: "—"),
-        Fact(name: "Display", value: "—"),
-        Fact(name: "Last action", value: "No recent actions"),
-      ]
-      state.secondary = .switchToHelper(isEnabled: false)
-      state.menu.recover = .disabled
-      state.menu.logOut = .disabled
-      return state
-    }()
+    /// One of Recent's rows: an agent's action that worked.
+    ///
+    /// - Parameters:
+    ///   - id: Its place, newest first.
+    ///   - line: What was done.
+    ///   - when: How long ago, short.
+    /// - Returns: The row's entry.
+    private static func recent(_ id: Int, _ line: String, _ when: String) -> ActivityEntry {
+      ActivityEntry(id: String(id), line: line, when: when, isNewest: id == 0)
+    }
   }
 #endif

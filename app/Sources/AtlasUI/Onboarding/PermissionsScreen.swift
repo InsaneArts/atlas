@@ -10,7 +10,7 @@ struct PermissionsScreen: View {
   /// Why Atlas asks, the two permissions, and the next one's button.
   var body: some View {
     ScreenColumn(width: OnboardingLayout.listColumn) {
-      Eyebrow(text: "Permissions")
+      GroupLabel(text: "Permissions")
       Headline(title: OnboardingScreen.permissionsTitle, tail: OnboardingScreen.permissionsTail)
       Lede(
         text:

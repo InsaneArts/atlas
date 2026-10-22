@@ -10,6 +10,16 @@ package struct AgentsStatus: Decodable, Sendable {
     package let connected: Bool?
   }
 
+  /// One project `atlas agents project` taught.
+  package struct Project: Decodable, Sendable {
+    /// The project's folder.
+    package let path: String
+    /// Whether its AGENTS.md still has the Atlas section.
+    package let taught: Bool?
+  }
+
   /// The agents, in the command's order.
   package let agents: [Agent]
+  /// Every project taught, in the command's order; nil from a command line that lists none.
+  package let projects: [Project]?
 }

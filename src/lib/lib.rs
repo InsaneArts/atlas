@@ -3,15 +3,19 @@ pub mod actions;
 pub mod agent;
 pub mod agents;
 pub mod capability;
+pub mod claude_app;
 pub mod client;
 pub mod config;
 pub mod control;
 pub mod daemon;
 pub mod digest;
+pub mod doing;
 pub mod environment;
 pub mod error;
 pub mod handoff;
+pub mod helper_info;
 pub mod init;
+pub mod mcp;
 pub mod menubar;
 pub mod native;
 pub mod onboarding;
@@ -25,6 +29,7 @@ pub mod ui;
 pub mod uninstall;
 pub mod update;
 pub mod viewer;
+pub mod watch;
 
 /// This build's version, as released.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

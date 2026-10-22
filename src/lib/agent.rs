@@ -42,7 +42,8 @@ const SKILL_RULES: &str = "## Rules
 - Never use sudo, type a password or change privacy settings. If `doctor` is
   not ready, run the Atlas commands it suggests; tell the person only what
   needs them (or use the setup skill).
-- Never take control from the person: on `busy`, wait.
+- Never take control from the person: on `busy`, wait. On `stopped`, stop and
+  ask them; never resume agents yourself.
 - Ask the person before `atlas switch`, and before anything that locks, sleeps
   or logs out. Run `atlas logout` only when the person asks for it: only they
   can log the helper back in.
@@ -1439,6 +1440,16 @@ pub async fn click_element(
             "The element is not visible in its window: covered, moved or off screen",
         ));
     }
+
+    // The name it was found by is kept only as a control's caption: any
+    // other element's name may be a document's text, a file or a title.
+    let uncaptioned;
+    let client = if crate::doing::captioned(element.role.as_deref()) {
+        client
+    } else {
+        uncaptioned = client.clone().unlabelled();
+        &uncaptioned
+    };
 
     let actions = click(x, y, which, count, modifiers);
     let mut result = client.input_owned(&ownership, &actions, &epoch).await?;

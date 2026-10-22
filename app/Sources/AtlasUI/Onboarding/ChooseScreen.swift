@@ -12,7 +12,7 @@ struct ChooseScreen: View {
   /// What a helper is, the rows, and the work note.
   var body: some View {
     ScreenColumn(width: OnboardingLayout.wideColumn) {
-      Eyebrow(text: "Helper account")
+      GroupLabel(text: "Helper account")
       Headline(title: OnboardingScreen.chooseTitle, tail: OnboardingScreen.chooseTail)
       Lede(
         text:
@@ -70,6 +70,8 @@ struct ChooseScreen: View {
           mark: account.mark,
           selected: account.isSelected
         ) { send(.pick(account.id)) }
+        .lineLimit(OnboardingLayout.nameLines)
+        .truncationMode(.middle)
       }
     }
   }

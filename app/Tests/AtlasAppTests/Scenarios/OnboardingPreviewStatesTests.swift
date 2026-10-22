@@ -112,6 +112,17 @@
         started: true
       )
       many.picked = .newAccount
+      var chooseLong = loaded(
+        try person(candidates: [
+          (
+            "mariafernanda",
+            "Maria Fernanda Montgomery-Castellanos de la Vega y Rodríguez-Hernández del Valle Alto de San Sebastián y Monteverde de los Ríos"
+          ),
+          ("testaccount", "Test Account"),
+        ]),
+        started: true
+      )
+      chooseLong.picked = .existing("mariafernanda")
       var chooseProblem = loaded(
         try person(candidates: [("testaccount", "Test Account"), ("kid", "Guest Kid")]),
         started: true
@@ -141,6 +152,8 @@
       loadingFailed.problem = PreviewStates.onboardingLoadingProblem
       var create = choose
       create.choices.creating = true
+      var badName = create
+      badName.form = PreviewStates.onboardingFormBadName
       var creating = create
       creating.working = OnboardingWords.creating
       var finishing = loaded(try person(helper()))
@@ -183,10 +196,12 @@
         "Welcome": loaded(try person()),
         "Choose": choose,
         "Choose, many accounts": many,
+        "Choose, a long name": chooseLong,
         "Choose, a problem": chooseProblem,
         "Choose, only the helper set up": only,
         "Create": create,
         "Create, working": creating,
+        "Create, a bad account name": badName,
         "Switch": loaded(try person(helper(signedIn: false, answering: false, allowed: false))),
         "Switch, open Atlas": loaded(try person(helper(answering: false, allowed: false))),
         "Switch, a long name": switchLong,

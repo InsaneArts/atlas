@@ -10,14 +10,16 @@ enum TextStyle: CaseIterable, Sendable {
   case title2
   /// 20: a column's title, such as an account's name, and a large avatar's letter.
   case title3
+  /// 15: a pane's title and an empty message's headline.
+  case heading
   /// 14: a window's title, a large button and a tile's symbol.
   case headline
   /// 13: running text, row titles, fields, buttons and menu rows.
   case body
   /// 12: details, facts, hints and pills; a chip, a compact card's title and a work note.
   case callout
-  /// 11: small print, such as a note, a reason under a title and an action's time; an eyebrow, and the letter in
-  /// a disc.
+  /// 11: small print, such as a note, a reason under a title and an action's time; a group's label, and the letter
+  /// in a disc.
   case caption
   /// 10: a badge over a picture, and a chip's symbol.
   case caption2
@@ -31,6 +33,7 @@ enum TextStyle: CaseIterable, Sendable {
     case .title: 24
     case .title2: 22
     case .title3: 20
+    case .heading: 15
     case .headline: 14
     case .body: 13
     case .callout: 12

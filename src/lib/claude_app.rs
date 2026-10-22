@@ -1,0 +1,315 @@
+//! The Claude app (Claude for Mac): Atlas's MCP server in its settings, so
+//! its chats can show the helper's screen with Stop. The app has no plugin
+//! command line, so Atlas edits the one entry it owns in the app's own
+//! settings file, keeping every other setting and a copy of the file as it
+//! was; the app reads it when it next starts.
+use crate::error::{Error, Result};
+use serde_json::{Map, Value, json};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
+/// The entry's name in the app's `mcpServers`.
+const NAME: &str = "atlas";
+/// The app's id in `atlas agents` results.
+pub const ID: &str = "claude-app";
+
+/// Where the app keeps its settings, under `home`.
+fn settings_in(home: &Path) -> PathBuf {
+    home.join("Library/Application Support/Claude/claude_desktop_config.json")
+}
+
+fn home() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from)
+}
+
+/// Whether the app is on this Mac: installed, or its settings folder is.
+pub fn installed() -> bool {
+    Path::new("/Applications/Claude.app").exists()
+        || home().is_some_and(|home| home.join("Applications/Claude.app").exists())
+        || home().is_some_and(|home| settings_in(&home).parent().is_some_and(Path::is_dir))
+}
+
+/// The entry that runs `atlas` as the app's MCP server.
+fn entry(atlas: &Path) -> Value {
+    json!({"command": atlas, "args": ["mcp"]})
+}
+
+/// Whether `found`, the app's entry named atlas, is one Atlas wrote: it
+/// runs an `atlas` executable's MCP server.
+fn ours(found: &Value) -> bool {
+    found["args"] == json!(["mcp"])
+        && found["command"]
+            .as_str()
+            .and_then(|command| Path::new(command).file_name())
+            .is_some_and(|name| name == "atlas")
+}
+
+/// The app's settings in `text`, a JSON object; an empty object when there
+/// are none yet.
+fn parse(text: Option<&str>) -> Result<Map<String, Value>> {
+    let Some(text) = text.filter(|text| !text.trim().is_empty()) else {
+        return Ok(Map::new());
+    };
+
+    match serde_json::from_str::<Value>(text) {
+        Ok(Value::Object(settings)) => Ok(settings),
+        _ => Err(Error::new(
+            "agents",
+            "The Claude app's settings file is not valid JSON; fix it or move it aside, then try again",
+        )),
+    }
+}
+
+/// `settings` with Atlas's entry for `atlas` (`Some`) or without it (`None`);
+/// whether that changed them. Another program's entry named atlas is
+/// refused, never replaced.
+fn changed(settings: &mut Map<String, Value>, atlas: Option<&Path>) -> Result<bool> {
+    let servers = settings
+        .entry("mcpServers")
+        .or_insert_with(|| Value::Object(Map::new()));
+    let Some(servers) = servers.as_object_mut() else {
+        return Err(Error::new(
+            "agents",
+            "The Claude app's mcpServers setting is not an object; fix it, then try again",
+        ));
+    };
+
+    if let Some(found) = servers.get(NAME)
+        && !ours(found)
+    {
+        return Err(Error::new(
+            "agents",
+            "The Claude app already has an MCP server named atlas that is not Atlas's; remove it \
+             in the app's settings, then try again",
+        ));
+    }
+
+    Ok(match atlas {
+        Some(atlas) => servers.insert(NAME.into(), entry(atlas)).as_ref() != Some(&entry(atlas)),
+        None => servers.remove(NAME).is_some(),
+    })
+}
+
+/// Whether the app's settings file in `home` runs Atlas's MCP server.
+fn connected_in(home: &Path) -> bool {
+    fs::read_to_string(settings_in(home))
+        .ok()
+        .and_then(|text| parse(Some(&text)).ok())
+        .and_then(|settings| settings.get("mcpServers").cloned())
+        .and_then(|servers| servers.get(NAME).cloned())
+        .is_some_and(|found| ours(&found))
+}
+
+/// Add Atlas's MCP server (`atlas`, the executable it runs) to the app's
+/// settings in `home`, or remove it (`None`): whether the file changed.
+///
+/// The file before Atlas first changed it is kept beside it, privately, and
+/// never replaced. The new file replaces the old one whole, with its
+/// permissions; a settings file that is a link is changed where it points.
+/// Removing leaves alone what is not Atlas's to change: a file that is not
+/// JSON, or another program's entry named atlas.
+fn change_in(home: &Path, atlas: Option<&Path>) -> Result<bool> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let named = settings_in(home);
+    let path = fs::canonicalize(&named).unwrap_or(named);
+    let before = match fs::read_to_string(&path) {
+        Ok(text) => Some(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(Error::writing(&path, error)),
+    };
+
+    let changing = parse(before.as_deref()).and_then(|mut settings| {
+        changed(&mut settings, atlas).map(|changed| changed.then_some(settings))
+    });
+    let settings = match changing {
+        Ok(Some(settings)) => settings,
+        Ok(None) => return Ok(false),
+        Err(_) if atlas.is_none() => return Ok(false),
+        Err(error) => return Err(error),
+    };
+
+    let folder = path.parent().unwrap_or(home);
+    fs::create_dir_all(folder).map_err(|error| Error::writing(folder, error))?;
+    let kept = path.with_extension("json.before-atlas");
+    if let Some(before) = &before
+        && !kept.exists()
+    {
+        crate::control::write_private(&kept, before.as_bytes())?;
+    }
+
+    let mode = fs::metadata(&path).map_or(0o600, |metadata| metadata.permissions().mode() & 0o777);
+    let mut text = serde_json::to_string_pretty(&Value::Object(settings))?;
+    text.push('\n');
+    let partial = path.with_extension("json.atlas-partial");
+    crate::control::write_private(&partial, text.as_bytes())?;
+    fs::set_permissions(&partial, fs::Permissions::from_mode(mode))
+        .map_err(|error| Error::writing(&partial, error))?;
+    fs::rename(&partial, &path).map_err(|error| Error::writing(&path, error))?;
+    Ok(true)
+}
+
+/// The executable the app should run: the one inside the installed
+/// Atlas.app, which updates keep current, else this one.
+fn executable() -> Result<PathBuf> {
+    if let Ok(app) = crate::update::installed_app() {
+        let inside = app.join("Contents/MacOS/atlas");
+        if inside.is_file() {
+            return Ok(inside);
+        }
+    }
+
+    Ok(std::env::current_exe()?)
+}
+
+/// The app's row in `atlas agents`.
+pub fn status() -> Value {
+    let installed = installed();
+    json!({
+        "agent": ID,
+        "installed": installed,
+        "connected": installed && home().is_some_and(|home| connected_in(&home)),
+        "version": Value::Null,
+    })
+}
+
+/// Connect the app (`connect`) or disconnect it: its row in the results.
+pub fn change(connect: bool) -> Value {
+    let outcome = home()
+        .ok_or_else(|| Error::new("agents", "HOME is not set"))
+        .and_then(|home| {
+            let atlas = if connect { Some(executable()?) } else { None };
+            change_in(&home, atlas.as_deref())
+        });
+
+    match outcome {
+        Ok(changed) => json!({
+            "agent": ID,
+            "ok": true,
+            "connected": connect,
+            "changed": changed,
+            // The app reads its MCP servers when it starts.
+            "restart": changed,
+        }),
+        Err(error) => json!({"agent": ID, "ok": false, "error": error.error}),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn written(home: &Path) -> Value {
+        serde_json::from_str(&fs::read_to_string(settings_in(home)).unwrap()).unwrap()
+    }
+
+    fn mode(path: &Path) -> u32 {
+        fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[test]
+    fn connecting_adds_atlas_and_keeps_every_other_setting_and_the_file_as_it_was() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let path = settings_in(home);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let before = r#"{"mcpServers": {"other": {"command": "x"}}, "theme": "dark"}"#;
+        fs::write(&path, before).unwrap();
+        let atlas = Path::new("/Applications/Atlas.app/Contents/MacOS/atlas");
+
+        assert!(change_in(home, Some(atlas)).unwrap());
+        let settings = written(home);
+        assert_eq!(settings["theme"], "dark");
+        assert_eq!(settings["mcpServers"]["other"]["command"], "x");
+        assert_eq!(settings["mcpServers"]["atlas"], entry(atlas));
+        assert!(connected_in(home));
+        let kept = path.with_extension("json.before-atlas");
+        assert_eq!(fs::read_to_string(&kept).unwrap(), before);
+
+        assert!(
+            !change_in(home, Some(atlas)).unwrap(),
+            "nothing to change twice"
+        );
+        assert!(change_in(home, None).unwrap());
+        assert!(!connected_in(home));
+        assert_eq!(written(home)["mcpServers"]["other"]["command"], "x");
+        assert!(!change_in(home, None).unwrap());
+        assert_eq!(
+            fs::read_to_string(&kept).unwrap(),
+            before,
+            "the copy is never replaced"
+        );
+    }
+
+    #[test]
+    fn a_missing_settings_file_is_made_privately() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(change_in(dir.path(), Some(Path::new("/usr/local/bin/atlas"))).unwrap());
+        assert!(connected_in(dir.path()));
+        let path = settings_in(dir.path());
+        assert!(!path.with_extension("json.before-atlas").exists());
+        assert_eq!(mode(&path), 0o600);
+    }
+
+    #[test]
+    fn the_file_keeps_its_permissions_and_its_copy_is_private() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let path = settings_in(home);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r#"{"mcpServers": {"tokens": {"env": {"KEY": "secret"}}}}"#,
+        )
+        .unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+
+        assert!(change_in(home, Some(Path::new("/x/atlas"))).unwrap());
+        assert_eq!(mode(&path), 0o640);
+        assert_eq!(mode(&path.with_extension("json.before-atlas")), 0o600);
+    }
+
+    #[test]
+    fn a_linked_settings_file_is_changed_where_it_points() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let path = settings_in(home);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let real = dir.path().join("dotfiles.json");
+        fs::write(&real, "{}").unwrap();
+        std::os::unix::fs::symlink(&real, &path).unwrap();
+
+        assert!(change_in(home, Some(Path::new("/x/atlas"))).unwrap());
+        assert!(
+            fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(fs::read_to_string(&real).unwrap().contains("atlas"));
+    }
+
+    #[test]
+    fn another_programs_atlas_entry_and_a_broken_file_are_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let path = settings_in(home);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let atlas = Path::new("/x/atlas");
+
+        let theirs = r#"{"mcpServers": {"atlas": {"command": "npx", "args": ["atlas-maps"]}}}"#;
+        fs::write(&path, theirs).unwrap();
+        assert_eq!(change_in(home, Some(atlas)).unwrap_err().code, "agents");
+        assert!(!change_in(home, None).unwrap(), "removing leaves it alone");
+        assert_eq!(fs::read_to_string(&path).unwrap(), theirs);
+        assert!(!connected_in(home));
+
+        fs::write(&path, "{ not json").unwrap();
+        assert_eq!(change_in(home, Some(atlas)).unwrap_err().code, "agents");
+        assert!(!change_in(home, None).unwrap());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{ not json");
+    }
+}

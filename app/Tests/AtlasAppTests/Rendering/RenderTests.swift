@@ -1,12 +1,15 @@
 #if DEBUG
   import AppKit
+  import AtlasKit
   import Testing
 
   @testable import AtlasApp
   @testable import AtlasUI
 
+  // One render at a time: run together, the renders' seconds of main-actor drawing queue ahead of every other suite's
+  // work and outlast its waits; one by one, that work runs between them.
   @MainActor
-  @Suite("Render")
+  @Suite("Render", .serialized)
   struct RenderTests {
     /// A new empty folder for one test's renders, which the test removes.
     ///
@@ -37,27 +40,130 @@
       }
     }
 
-    @Test("every viewer render draws at the samples' window size, wide enough to show the sidebar samples' sidebar")
-    func everyViewerRenderDraws() throws {
+    // One case a render, so drawing them, about a second each with their frosted chips and alerts, never holds
+    // the main actor long enough to starve another suite's wait.
+    @Test("every main window render draws at the boards' window size", arguments: ViewerRender.files)
+    func everyViewerRenderDraws(file: String) throws {
       let size = PreviewStates.viewerSize
-      try #require(
-        ViewerLayout.showsSidebar(width: size.width, wanted: true),
-        "the samples' window is wide enough for the sidebar"
-      )
+      let state = try #require(ViewerRender.renders.first { $0.file == file }?.state)
       let directory = try Self.directory()
       defer {
         try? FileManager.default
           .removeItem(at: directory)
       }
-      #expect(ViewerRender.draw(to: directory.path))
-      let drawn = try FileManager.default
-        .contentsOfDirectory(atPath: directory.path)
-      #expect(Set(drawn) == Set(ViewerRender.renders.map { "\($0.file).png" }))
-      for render in ViewerRender.renders {
-        let file = directory.appendingPathComponent("\(render.file).png")
-        let image = try #require(NSBitmapImageRep(data: Data(contentsOf: file)), "\(render.file) was not drawn")
-        #expect(image.pixelsWide == Int(size.width) * PNG.scale, "\(render.file)")
-        #expect(image.pixelsHigh == Int(size.height) * PNG.scale, "\(render.file)")
+      #expect(ViewerRender.draw(file, state, to: directory))
+      let drawn = directory.appendingPathComponent("\(file).png")
+      let image = try #require(NSBitmapImageRep(data: Data(contentsOf: drawn)), "\(file) was not drawn")
+      #expect(image.pixelsWide == Int(size.width) * PNG.scale)
+      #expect(image.pixelsHigh == Int(size.height) * PNG.scale)
+    }
+
+    @Test("every narrow main window render draws at its width", arguments: ViewerRender.narrowFiles)
+    func everyNarrowRenderDraws(file: String) throws {
+      let render = try #require(ViewerRender.narrowRenders.first { $0.file == file })
+      let directory = try Self.directory()
+      defer {
+        try? FileManager.default
+          .removeItem(at: directory)
+      }
+      let size = NSSize(width: render.width, height: PreviewStates.viewerSize.height)
+      #expect(ViewerRender.draw(file, render.state, to: directory, size: size))
+      let drawn = directory.appendingPathComponent("\(file).png")
+      let image = try #require(NSBitmapImageRep(data: Data(contentsOf: drawn)), "\(file) was not drawn")
+      #expect(image.pixelsWide == Int(render.width) * PNG.scale)
+    }
+
+    @Test("the main window renders have names of their own")
+    func theViewerRendersHaveTheirOwnNames() {
+      let files = ViewerRender.files + ViewerRender.narrowFiles
+      #expect(Set(files).count == files.count)
+      #expect(ViewerRender.renders.count == ViewerRender.files.count, "every name has its state")
+      #expect(ViewerRender.narrowRenders.count == ViewerRender.narrowFiles.count, "every narrow name has its state")
+    }
+
+    @Test("every settings render draws at its window's size", arguments: SettingsRender.files)
+    func everySettingsRenderDraws(file: String) throws {
+      let size = SettingsLayout.window
+      let state = try #require(SettingsRender.renders.first { $0.file == file }?.state)
+      let directory = try Self.directory()
+      defer {
+        try? FileManager.default
+          .removeItem(at: directory)
+      }
+      #expect(SettingsRender.draw(file, state, to: directory))
+      let drawn = directory.appendingPathComponent("\(file).png")
+      let image = try #require(NSBitmapImageRep(data: Data(contentsOf: drawn)), "\(file) was not drawn")
+      #expect(image.pixelsWide == Int(size.width) * PNG.scale)
+      #expect(image.pixelsHigh == Int(size.height) * PNG.scale)
+    }
+
+    @Test("the settings renders draw every sample the previews list, each under a name of its own")
+    func theSettingsRendersDrawEverySample() {
+      #expect(SettingsRender.renders.count == PreviewStates.settings.count, "every sample has a name")
+      #expect(Set(SettingsRender.files).count == SettingsRender.files.count)
+    }
+
+    @Test("every panel render draws the panel at its width on its card", arguments: PanelRender.modes)
+    func everyPanelRenderDraws(mode: String) throws {
+      let directory = try Self.directory()
+      defer {
+        try? FileManager.default
+          .removeItem(at: directory)
+      }
+      let snapshot = PanelRenderOverrides(environment: ["ATLAS_RENDER_MODE": mode, "ATLAS_RENDER_PREVIEW": "1"])
+        .applied(to: PanelSnapshot(picture: SampleDesktop.picture))
+      let drawn = directory.appendingPathComponent("\(mode).png")
+      #expect(PanelRender.draw(snapshot, to: drawn.path, appearance: .darkAqua))
+      let image = try #require(NSBitmapImageRep(data: Data(contentsOf: drawn)), "\(mode) was not drawn")
+      #expect(image.pixelsWide == Int(PanelLayout.width + 2 * PanelRender.margin) * PNG.scale)
+    }
+
+    /// The alert a render's settings draw, as the alert window's controller would hold it.
+    ///
+    /// - Parameter file: The render's file name.
+    /// - Returns: The alert.
+    /// - Throws: When the file names no alert render.
+    private static func alert(_ file: String) throws -> AlertSnapshot {
+      let environment = try #require(PanelRender.alerts.first { $0.file == file }?.environment)
+      let overrides = PanelRenderOverrides(environment: environment)
+      return try #require(overrides.alertSnapshot(over: overrides.applied(to: PanelSnapshot()).status.overview))
+    }
+
+    @Test("every alert window render draws its alert", arguments: PanelRender.alerts.map(\.file))
+    func everyAlertRenderDraws(file: String) throws {
+      let directory = try Self.directory()
+      defer {
+        try? FileManager.default
+          .removeItem(at: directory)
+      }
+      let drawn = directory.appendingPathComponent("\(file).png")
+      #expect(PanelRender.draw(alert: try Self.alert(file), to: drawn.path, appearance: .darkAqua))
+      let image = try #require(NSBitmapImageRep(data: Data(contentsOf: drawn)), "\(file) was not drawn")
+      #expect(image.pixelsWide > 0 && image.pixelsHigh > 0)
+    }
+
+    @Test("the alert window renders draw every alert sample the previews list, each under a name of its own")
+    func theAlertRendersDrawEverySample() throws {
+      let drawn = try PanelRender.alerts.map { AlertPresenter.state(try Self.alert($0.file)) }
+      let missing = PreviewStates.alert
+        .filter { !drawn.contains($0.value) }
+        .map(\.name)
+      #expect(missing.isEmpty, "samples with no render: \(missing)")
+      #expect(Set(PanelRender.alerts.map(\.file)).count == PanelRender.alerts.count)
+    }
+
+    @Test("every component's samples draw, none of them empty")
+    func everyComponentRenderDraws() throws {
+      let directory = try Self.directory()
+      defer {
+        try? FileManager.default
+          .removeItem(at: directory)
+      }
+      #expect(ComponentRender.draw(to: directory.path))
+      for sample in ComponentSample.allCases {
+        let file = directory.appendingPathComponent("\(sample.rawValue).png")
+        let image = try #require(NSBitmapImageRep(data: Data(contentsOf: file)), "\(sample.rawValue) was not drawn")
+        #expect(image.pixelsWide > 0 && image.pixelsHigh > 0, "\(sample.rawValue)")
       }
     }
 
@@ -67,26 +173,6 @@
         .filter { sample in !ViewerRender.renders.contains { $0.state == sample.value } }
         .map(\.name)
       #expect(missing.isEmpty, "samples with no render: \(missing)")
-    }
-
-    @Test("a sidebar sample in a window too narrow for the sidebar draws without it")
-    func aSidebarSampleDrawsInANarrowWindow() throws {
-      let size = NSSize(width: 900, height: 600)
-      try #require(!ViewerLayout.showsSidebar(width: size.width, wanted: true), "the window is too narrow for it")
-      let directory = try Self.directory()
-      defer {
-        try? FileManager.default
-          .removeItem(at: directory)
-      }
-      let file = directory.appendingPathComponent("narrow-sidebar.png")
-      #expect(PNG.write(ViewerView(state: PreviewStates.viewerSidebar) { _ in }, size: size, to: file))
-      let image = try #require(NSBitmapImageRep(data: Data(contentsOf: file)), "the narrow window was not drawn")
-      #expect(image.pixelsWide == Int(size.width) * PNG.scale)
-      var hidden = PreviewStates.viewerSidebar
-      hidden.header.sidebar = PreviewStates.viewerSidebarToggle(shown: false)
-      let without = directory.appendingPathComponent("narrow-hidden.png")
-      #expect(PNG.write(ViewerView(state: hidden) { _ in }, size: size, to: without))
-      #expect(try Data(contentsOf: file) == Data(contentsOf: without), "the sidebar was drawn in a narrow window")
     }
   }
 #endif

@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// A labelled text field in a card.
+/// A labelled text field in a card. Flagged, it shows what the note under the form is about: its label in the
+/// attention colour, a warning mark at its end, and an attention edge around it.
 struct FieldRow: View {
   /// The field's name, on the left.
   let label: String
@@ -8,12 +9,14 @@ struct FieldRow: View {
   @Binding var text: String
   /// Whether the text is hidden, as a password's is.
   var secure = false
+  /// Whether the problem under the form is about this field.
+  var isFlagged = false
 
   var body: some View {
     HStack(spacing: Spacing.l) {
       Text(label)
         .font(Typography.font(.body))
-        .foregroundStyle(Color.textSecondary)
+        .foregroundStyle(isFlagged ? Color.textAttention : Color.textSecondary)
         .frame(width: Layout.labelWidth, alignment: .leading)
       Group {
         if secure {
@@ -25,9 +28,29 @@ struct FieldRow: View {
       .textFieldStyle(.plain)
       .font(Typography.font(.body))
       .accessibilityLabel(label)
+      if isFlagged {
+        Image(systemName: "exclamationmark.triangle.fill")
+          .font(Typography.font(.callout))
+          .foregroundStyle(Color.attention)
+          .accessibilityHidden(true)
+      }
     }
     .padding(.horizontal, Spacing.xl)
     .frame(height: ControlHeight.field)
+    .background {
+      if isFlagged {
+        RoundedRectangle(cornerRadius: Radius.small)
+          .fill(
+            Color.attention
+              .opacity(Opacity.tint)
+          )
+          .overlay(
+            RoundedRectangle(cornerRadius: Radius.small)
+              .strokeBorder(Color.attention, lineWidth: Stroke.regular)
+          )
+          .padding(Spacing.xxs)
+      }
+    }
   }
 }
 

@@ -59,7 +59,11 @@ not test on the person's desktop instead, and do not silently skip the check.
    close those first (Cmd+W, then Cmd+Backspace in the keep-or-delete sheet).
 
 When you start something long, tell the person they can watch it live from
-the Atlas menu bar item, or open the viewer window with `atlas monitor`.
+the Atlas menu bar item, or open the viewer window with `atlas monitor`. In
+an app that shows Atlas's own view (the Claude app, the Codex app), call the
+Atlas `show_screen` tool once as visible work starts: the person sees the
+helper's screen and what you do there, and can stop you. In Claude Code,
+tell the person they can type `/atlas-screen` to see the same.
 
 ## Look
 
@@ -224,8 +228,13 @@ unless you looked at it in the helper.
   `partial: true` on a failed input says some of its events were posted first;
   when the code is `cancelled` the person stopped it and saw what landed, so
   it is not uncertain.
-- `busy`: the person (or another agent) has control, perhaps from the viewer.
+- `busy`: the person (or another agent) has control, perhaps from Atlas's viewer
+  or the Atlas view in their chat app.
   Never take it from them; wait and try again, and tell the person if it lasts.
+- `stopped`: the person stopped agents in the helper.
+  Stop at once, say what you were doing, and ask them what to do. Never resume
+  agents yourself, and never set `ATLAS_ACTOR`: only they can. When the result is also uncertain (input cut
+  part way), say so; recover only once they resume.
 - `on-console`: the helper is on screen right now. Ask the person to switch
   back to their own account; do not retry until they have. If it stopped an
   `atlas run`, it is uncertain: once they are back, handle it as above.

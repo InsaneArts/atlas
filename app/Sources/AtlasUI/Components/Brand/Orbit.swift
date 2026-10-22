@@ -47,12 +47,9 @@ package struct Orbit {
 
   /// Draws the orbit in the current colour.
   ///
-  /// - Parameters:
-  ///   - context: The context to draw into.
-  ///   - cutOut: Whether to clear the shape from what is already drawn instead, for the solid tile.
-  package func draw(in context: CGContext, cutOut: Bool) {
+  /// - Parameter context: The context to draw into.
+  package func draw(in context: CGContext) {
     context.saveGState()
-    context.setBlendMode(cutOut ? .destinationOut : .normal)
     context.beginTransparencyLayer(auxiliaryInfo: nil)
     context.setLineWidth(line)
     context.addPath(ring)

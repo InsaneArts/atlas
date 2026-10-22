@@ -100,7 +100,7 @@ enum OnboardingPresenter {
         OnboardingFooterAction(
           title: .continue,
           event: .connectAgents,
-          isEnabled: idle && (snapshot.agentsLoaded || snapshot.agentsFailed),
+          isEnabled: idle && !snapshot.agentsInstalling && (snapshot.agentsLoaded || snapshot.agentsFailed),
           isDefault: true
         )
       case .done:

@@ -1,27 +1,27 @@
+import CoreGraphics
+
 /// What the person did in the panel.
 package enum PanelEvent: Equatable, Sendable {
-  /// Open Viewer.
-  case openViewer
-  /// Release Control: revoke every viewer's control at once.
-  case revokeControl
-  /// Switch to Helper…
-  case switchToHelper
-  /// Log In…: lock the screen so the person can log in to the helper.
-  case logIn
-  /// Recover, from the card or the menu.
-  case recover
-  /// Log Out Helper…: ask before logging out.
-  case askToLogOut
-  /// Cancel in the log-out confirmation.
-  case cancelLogOut
-  /// Log Out in the confirmation.
-  case logOut
-  /// Log Out Anyway, past an app that held the last log-out up.
-  case forceLogOut
-  /// Open at Login switched on or off.
-  case setOpenAtLogin(Bool)
-  /// Getting Started…
-  case gettingStarted
-  /// Quit Atlas.
-  case quit
+  /// Open Atlas: the main window, on the tab it shows.
+  case openAtlas
+  /// The picture: the main window on Screen.
+  case openScreen
+  /// All activity: the main window on Activity.
+  case openActivity
+  /// Stop: end an agent's input under way in the helper and refuse its next actions.
+  case stopAgent
+  /// Resume: let agents act in the helper again.
+  case resumeAgent
+  /// Give Back: end the control Atlas's window holds.
+  case giveBack
+  /// Recover…: ask before recovering the helper.
+  case askRecover
+  /// Switch to the Helper…: ask before switching this Mac's screen to it.
+  case askSwitch
+  /// The pause button: stop or start the panel's picture.
+  case togglePause
+  /// ⋯: open the menu under its button.
+  ///
+  /// - Parameter below: The button's frame in the panel, top left first, so the menu opens under it.
+  case showMore(below: CGRect)
 }

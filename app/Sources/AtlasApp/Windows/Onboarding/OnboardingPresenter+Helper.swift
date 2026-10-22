@@ -10,7 +10,7 @@ extension OnboardingPresenter {
     let asker = facts.asker.title
     return OnboardingAllowScreenState(
       initial: asker.initial,
-      eyebrow: OnboardingWords.atlasIn(facts.myName),
+      label: OnboardingWords.atlasIn(facts.myName),
       title: OnboardingWords.letUse(asker),
       lede: OnboardingWords.allowLede(asker)
     )
@@ -68,7 +68,7 @@ extension OnboardingPresenter {
     let on = permission.granted(to: asker)
     let title = permission.title
     return OnboardingGuideState(
-      eyebrow: OnboardingWords.guideEyebrow(permission.number, of: Permission.allCases.count, title),
+      label: OnboardingWords.guideLabel(permission.number, of: Permission.allCases.count, title),
       settingsPath: OnboardingWords.settingsPath(title),
       turnOn: on ? .done : .current,
       comeBack: on ? .done : .waiting,

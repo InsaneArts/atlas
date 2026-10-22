@@ -1,6 +1,10 @@
 //! Peer-authenticated input service. Socket handlers can cancel ownership while
 //! the serialized event engine awaits the next step of a gesture.
-use super::{events::Engine, lease::Gate, session_info};
+use super::{
+    events::Engine,
+    lease::{Gate, Who},
+    session_info,
+};
 use crate::{
     actions::{self, Action},
     error::{Error, Result},
@@ -38,6 +42,9 @@ struct Service {
     executable: Option<Executable>,
     /// Signalled once an acknowledged shutdown has been answered.
     stopping: tokio::sync::Notify,
+    /// Present while the person has stopped agents, so a stop outlives a
+    /// restart of this service (recovery starts a new one).
+    stop_marker: PathBuf,
 }
 
 /// The operations the input service answers, by their `op` string.
@@ -45,6 +52,7 @@ struct Service {
 enum Operation {
     Hello,
     Shutdown,
+    Hold,
     Release,
     Reset,
     Renew,
@@ -58,6 +66,7 @@ impl Operation {
         match request["op"].as_str().unwrap_or_default() {
             "hello" => Self::Hello,
             "shutdown" => Self::Shutdown,
+            "hold" => Self::Hold,
             "release" => Self::Release,
             "reset" => Self::Reset,
             "renew" => Self::Renew,
@@ -151,12 +160,13 @@ impl Service {
                 "version": env!("CARGO_PKG_VERSION"),
                 "build": self.build,
                 "replaced": self.replaced(),
-                "capabilities": ["shutdown"],
+                "capabilities": ["shutdown", "hold"],
                 "accessibility": Engine::trusted(),
                 "ready": self.check().is_ok(),
                 "enforcedEpoch": self.epoch()?,
                 "session": session_info()?,
                 "controlActive": self.gate.active()?,
+                "held": self.gate.held()?,
                 "heldInput": held_input,
                 "streaming": true,
             }));
@@ -200,6 +210,41 @@ impl Service {
 
             self.gate.close()?;
             return Ok(json!({ "ok": true, "stopping": true, "pid": std::process::id() }));
+        }
+
+        // A stop is the person's: it works whatever the session or
+        // permission, and resuming only lets agents ask again.
+        if operation == Operation::Hold {
+            let on = request["on"] == true;
+            let kept = if on {
+                use std::os::unix::fs::OpenOptionsExt;
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(false)
+                    .mode(0o644)
+                    .custom_flags(libc::O_NOFOLLOW)
+                    .open(&self.stop_marker)
+                    .map(drop)
+            } else {
+                match std::fs::remove_file(&self.stop_marker) {
+                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+                    _ => Ok(()),
+                }
+            };
+
+            // A resume whose marker stays would come back at the next
+            // restart: agents stay stopped until it can be removed.
+            if !on && kept.is_err() {
+                return Err(Error::new(
+                    "native",
+                    "Agents could not be resumed: the helper could not clear the stop",
+                ));
+            }
+
+            self.gate.hold(on)?;
+            self.cleanup().await?;
+            return Ok(json!({ "ok": true, "held": on, "kept": kept.is_ok() }));
         }
 
         if operation == Operation::Release {
@@ -254,15 +299,26 @@ impl Service {
             let mut engine = self.engine.lock().await;
 
             if self.gate.active()? {
+                // An agent finding the person in control is told to wait.
+                let agent = request["person"] != true;
                 return Err(Error::new(
                     "busy",
-                    "The native input service already has a controller",
+                    if agent && self.gate.person_in_control()? {
+                        crate::error::PERSON_HAS_CONTROL
+                    } else {
+                        "The native input service already has a controller"
+                    },
                 ));
             }
 
             engine.check()?;
             engine.release()?;
-            engine.grant = Some(self.gate.acquire(owner)?);
+            let who = if request["person"] == true {
+                Who::Person
+            } else {
+                Who::Agent
+            };
+            engine.grant = Some(self.gate.acquire(owner, who)?);
 
             return Ok(json!({ "ok": true }));
         }
@@ -303,8 +359,9 @@ impl Service {
                 reply["performed"] = json!(performed);
                 reply["partial"] = json!(partial);
 
-                // A cancellation is the person's doing and tells them what
-                // landed; any other break mid-action leaves that unknown.
+                // A viewer's cancel is the person's doing, watching what
+                // landed; a stop (the helper hidden) or any other break
+                // mid-action leaves that unknown.
                 let unknown = partial && error.code != "cancelled";
                 reply["uncertain"] = json!(cleanup.is_err() || unknown || error.uncertain);
 
@@ -316,11 +373,34 @@ impl Service {
             }
         }
 
+        // The app the input landed in, for an agent's activity log (only
+        // when asked, so a person's own control pays nothing): the owner of
+        // the frontmost ordinary window, read once the engine is free.
+        drop(engine);
+        let app = if request["app"] == true {
+            tokio::task::spawn_blocking(frontmost_app)
+                .await
+                .ok()
+                .flatten()
+        } else {
+            None
+        };
+
         Ok(json!({
             "ok": true,
             "performed": request["actions"].as_array().map(Vec::len),
+            "app": app,
         }))
     }
+}
+
+/// The name of the app owning the frontmost ordinary window, if any.
+fn frontmost_app() -> Option<String> {
+    super::windows::windows()
+        .ok()?
+        .into_iter()
+        .find(|window| window.layer == 0)
+        .and_then(|window| window.owner)
 }
 
 /// How often the service looks for its desktop, and how many looks in a
@@ -350,13 +430,20 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
 
     engine.recover(socket.with_extension("held.json"))?;
 
+    let stop_marker = socket.with_extension("stopped");
+    let gate = Arc::new(Gate::default());
+    if stop_marker.exists() {
+        gate.hold(true)?;
+    }
+
     let service = Arc::new(Service {
         build,
         executable,
         stopping: tokio::sync::Notify::new(),
         epoch: RwLock::new(engine.epoch.clone()),
         engine: Mutex::new(engine),
-        gate: Arc::new(Gate::default()),
+        gate,
+        stop_marker,
     });
     let mut timer = tokio::time::interval(Duration::from_millis(50));
 

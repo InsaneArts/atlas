@@ -1,64 +1,48 @@
 import SwiftUI
 
-/// The helper's desktop, letterboxed on a dark rounded stage, or why there is none.
+/// The panel's picture: the helper's screen, which opens the main window on Screen when clicked, with the newest
+/// action over its corner while an agent works; or, with no screen to show, the empty stage saying why.
 struct PanelPicture: View {
-  /// What the stage shows.
-  enum Content: Equatable, Sendable {
-    /// The desktop, live.
-    case picture(DesktopPicture)
-    /// No desktop, and why.
-    case placeholder(String)
-  }
+  /// What fills the frame.
+  let state: PanelPictureState
+  /// Receives a click on the screen.
+  let send: @MainActor (PanelEvent) -> Void
 
-  /// What the stage shows.
-  let content: Content
-
-  /// The stage, then the picture with its Live badge or the placeholder's words.
   var body: some View {
-    ZStack(alignment: .bottomLeading) {
-      RoundedRectangle(cornerRadius: Radius.medium)
-        .fill(Color.stageBackground)
-      switch content {
-      case .picture(let picture):
-        Image(decorative: picture.image, scale: 1)
-          .resizable()
-          .interpolation(.high)
-          .aspectRatio(contentMode: .fit)
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-        LiveBadge()
-          .padding(Spacing.m)
-      case .placeholder(let text):
-        Text(text)
-          .font(Typography.font(.caption))
-          .foregroundStyle(Color.textTertiary)
-          .multilineTextAlignment(.center)
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-          .padding(Spacing.xxl)
+    switch state {
+    case .screen(let picture, let look, let caption):
+      Button {
+        send(.openScreen)
+      } label: {
+        PictureFrame(picture: picture, look: look, size: .small)
+          .overlay(alignment: .bottomLeading) {
+            if let caption {
+              CaptionStack(entries: [caption])
+                .padding(PanelLayout.captionInset)
+            }
+          }
       }
-    }
-    .aspectRatio(PanelLayout.pictureAspect, contentMode: .fit)
-    .clipShape(RoundedRectangle(cornerRadius: Radius.medium))
-    .overlay(
-      RoundedRectangle(cornerRadius: Radius.medium)
-        .strokeBorder(PanelLayout.pictureEdge, lineWidth: Stroke.hairline)
-    )
-    .accessibilityElement()
-    .accessibilityLabel(spokenLabel)
-  }
-
-  /// What VoiceOver says for the stage: the picture by name, or the placeholder's words.
-  private var spokenLabel: String {
-    switch content {
-    case .picture: "The helper's screen"
-    case .placeholder(let text): text
+      .buttonStyle(.plain)
+      .frame(width: PanelLayout.picture.width, height: PanelLayout.picture.height)
+      .elevation(.stage)
+      .help("Open the helper's screen in Atlas")
+      .accessibilityLabel("The helper's screen")
+      .accessibilityHint("Opens it in Atlas")
+    case .empty(let line):
+      PanelEmptyPicture(line: line)
+        .frame(width: PanelLayout.picture.width, height: PanelLayout.picture.height)
     }
   }
 }
 
 #if DEBUG
-  #Preview("No picture") {
-    PanelPicture(content: .placeholder(String("The helper's screen is not available")))
-      .frame(width: SampleWidth.narrow)
+  #Preview("Working") {
+    PanelPicture(state: PreviewStates.panelWorking.picture) { _ in }
+      .sampleSurface()
+  }
+
+  #Preview("Logged out") {
+    PanelPicture(state: PreviewStates.panelLoggedOut.picture) { _ in }
       .sampleSurface()
   }
 #endif

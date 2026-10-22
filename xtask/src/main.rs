@@ -521,14 +521,24 @@ fn build(options: &Options, stage: &Path, upload: &Path) -> Result<PathBuf> {
         .map_err(|error| error.to_string())?;
     }
 
-    // The agent plugin (Claude Code and Codex), matching this CLI's version.
-    exec(
-        "/usr/bin/ditto",
-        &[
-            text(&root.join("agents"))?,
-            text(&app.join("Contents/Resources/agents"))?,
-        ],
+    // The agent plugin (Claude Code and Codex), matching this CLI's version:
+    // its committed files only, so nothing a test or tool left beside them
+    // ships, and not its tests.
+    let tracked = output(
+        "/usr/bin/git",
+        &["-C", text(&root)?, "ls-files", "--", "agents"],
     )?;
+    for file in tracked
+        .lines()
+        .filter(|file| !file.split('/').any(|part| part == "tests"))
+    {
+        let target = app.join("Contents/Resources").join(file);
+        if let Some(folder) = target.parent() {
+            fs::create_dir_all(folder).map_err(|error| error.to_string())?;
+        }
+        // ditto keeps the mode, so the plugin's scripts stay executable.
+        exec("/usr/bin/ditto", &[text(&root.join(file))?, text(&target)?])?;
+    }
 
     // "Open at login": the menu bar registers this agent with SMAppService.
     let agents = app.join("Contents/Library/LaunchAgents");

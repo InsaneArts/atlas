@@ -7,7 +7,9 @@ use crate::{
     config::Config,
     control::{self, ActionPermit, Lease, SharedLease},
     error::{Error, Result},
+    helper_info,
     menubar::{App, Line},
+    overview::{READ_DEADLINE, late},
     session::Epoch,
 };
 use axum::{
@@ -49,14 +51,15 @@ const HEADER_DEADLINE: Duration = Duration::from_secs(15);
 /// private address. One that has not closes, so connections nobody uses
 /// cannot keep every place taken.
 const FIRST_REQUEST: Duration = Duration::from_secs(3);
-/// How long reading the status or a frame may take: less than the app
-/// waits (8 seconds), so it hears why rather than giving up.
-const READ_DEADLINE: Duration = Duration::from_secs(5);
 /// The largest request body, in bytes.
 const MAX_BODY: usize = 32768;
 /// What the viewer's own address answers, so it is told apart from any
 /// other program on its port.
 const SERVICE: &str = "atlas-viewer";
+/// The most activity rows and screenshots one read lists: what the app's
+/// tabs show, a day or so of an agent's work.
+const ACTIVITY_ROWS: usize = 200;
+const SHOTS: usize = 200;
 
 /// The recent frames, each under the key control requests name it by.
 #[derive(Default)]
@@ -127,6 +130,8 @@ pub struct Viewer {
     input_started: std::sync::Mutex<Option<String>>,
     /// Where this viewer's record is kept and what it says, once written.
     record: std::sync::Mutex<Option<(PathBuf, Value)>>,
+    /// The helper's app icons, made once.
+    icons: helper_info::Icons,
 }
 
 impl Viewer {
@@ -511,27 +516,7 @@ impl Viewer {
         self.follow_settings().await;
 
         let client = self.client();
-        let uid = client.config.helper_uid;
-        let reply = tokio::time::timeout_at(until, client.status())
-            .await
-            .unwrap_or_else(|_| json!(late()));
-
-        // Why a silent helper is down, asked off the runtime (and only then).
-        let absence = if crate::session::silent(&reply) {
-            tokio::time::timeout_at(until, blocking(move || Ok(crate::session::absence(uid))))
-                .await
-                .ok()
-                .and_then(Result::ok)
-                .flatten()
-        } else {
-            None
-        };
-
-        let mut status = crate::capability::doctor(reply, uid);
-
-        if let Some(absence) = &absence {
-            absence.explain(&mut status);
-        }
+        let mut status = crate::overview::report(&client, until).await;
 
         // Ending control waits on the helper too: it finishes by itself
         // when that takes longer than a moment.
@@ -543,20 +528,13 @@ impl Viewer {
         let active = self.lease.lock().await.active();
         status["controlActive"] = json!(active);
 
-        // An unreadable marker is unknown, so it counts as unresolved.
-        let controller = &client.controller;
-        let total = controller.pending().map_or(1, |pending| pending.len());
-        let unresolved = controller.unresolved().map_or(1, |pending| pending.len());
-        let pending = crate::overview::Pending {
-            unresolved,
-            in_flight: total.saturating_sub(unresolved),
-        };
+        let (pending, total) = crate::overview::pending(&client.controller);
 
         self.start_input_after_login(&client, &status["session"], total == 0 && !active);
 
         let activity = client
             .output_dir()
-            .map(|directory| crate::overview::activity(directory, 12))
+            .map(|directory| crate::overview::activity(directory, crate::overview::ROWS))
             .unwrap_or_default();
         status["overview"] = crate::overview::overview(
             &status,
@@ -591,6 +569,147 @@ impl Viewer {
 
         *unpoisoned(&self.account_name) = Some((name.to_owned(), title.clone()));
         title
+    }
+
+    /// What was done in the helper lately, newest first, as the app lists
+    /// it. Reading it records nothing.
+    async fn activity(&self) -> Result<Value> {
+        let client = self.client();
+        // A folder that can't be read is said, never shown as no activity.
+        client.output_dir()?;
+        let rows = tokio::task::spawn_blocking(move || {
+            client
+                .output_dir()
+                .map(|directory| crate::overview::activity(directory, ACTIVITY_ROWS))
+                .unwrap_or_default()
+        })
+        .await
+        .unwrap_or_default();
+
+        let now = crate::client::timestamp();
+        let rows = rows
+            .iter()
+            .map(|row| activity_row(row, now))
+            .collect::<Vec<_>>();
+        Ok(json!({"ok": true, "activity": rows}))
+    }
+
+    /// The apps open in the helper with their windows, front to back, and
+    /// the icons of those installed where apps go. It only reads: nothing
+    /// is recorded and no control is taken.
+    async fn apps(&self) -> Result<Value> {
+        let client = self.client();
+        let read = async {
+            let apps = answered(client.apps().await?)?;
+            let filter = crate::agent::WindowFilter {
+                app: None,
+                title: None,
+                all: false,
+            };
+            let windows = crate::agent::list(&client, &filter).await?;
+            Ok::<_, Error>(listed_apps(&apps["apps"], &windows["windows"]))
+        };
+        let mut apps = tokio::time::timeout(READ_DEADLINE, read)
+            .await
+            .map_err(|_| late())??;
+
+        for app in apps.iter_mut().take(helper_info::ICON_CACHE) {
+            if let Some(bundle) = app["bundle"].as_str().map(PathBuf::from)
+                && let Some(icon) = self.icons.get(bundle).await
+            {
+                app["icon"] = json!(icon);
+            }
+        }
+
+        Ok(json!({"ok": true, "apps": apps}))
+    }
+
+    /// The screenshots agents took, newest first: each one's name, when it
+    /// was taken (milliseconds since 1970) and its size when its header
+    /// reads.
+    async fn screenshots(&self) -> Result<Value> {
+        let client = self.client();
+        // A folder that can't be read is said, never shown as no screenshots.
+        client.output_dir()?;
+        let shots = tokio::task::spawn_blocking(move || {
+            let Ok(output) = client.output_dir() else {
+                return Vec::new();
+            };
+
+            helper_info::captures(output, SHOTS)
+                .into_iter()
+                .map(|(at, name)| {
+                    let size = helper_info::capture_size(output, &name);
+                    let taken = u64::try_from(at / 1_000_000).unwrap_or(u64::MAX);
+                    let mut shot = json!({"name": name, "takenAt": taken});
+                    if let Some((width, height)) = size {
+                        shot["width"] = json!(width);
+                        shot["height"] = json!(height);
+                    }
+                    shot
+                })
+                .collect::<Vec<_>>()
+        })
+        .await
+        .unwrap_or_default();
+
+        // The folder they're in, so the app can show one in the Finder.
+        let folder = self.client().output_dir().ok().map(Path::to_path_buf);
+        Ok(json!({"ok": true, "screenshots": shots, "folder": folder}))
+    }
+
+    /// One screenshot an agent took, as `query` names it: its thumbnail as
+    /// a JPEG, or with `size=full` the PNG as taken. Any other name, a link
+    /// or anything but a plain file is not found.
+    async fn screenshot(&self, query: Option<&str>) -> Response {
+        let refused = || {
+            json_response(
+                404,
+                json!(Error::new("bad-request", "No screenshot has that name")),
+            )
+        };
+
+        let (mut name, mut size) = (None, None);
+        for pair in query.unwrap_or_default().split('&') {
+            match pair.split_once('=') {
+                Some(("name", given)) => name = Some(given),
+                Some(("size", given)) => size = Some(given),
+                _ => {}
+            }
+        }
+
+        let full = match size {
+            None | Some("thumb") => false,
+            Some("full") => true,
+            Some(_) => return refused(),
+        };
+        let Some(name) = name
+            .filter(|name| helper_info::capture_time(name).is_some())
+            .map(str::to_owned)
+        else {
+            return refused();
+        };
+
+        let client = self.client();
+        let read = tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, &'static str)> {
+            let png = helper_info::read_capture(client.output_dir()?, &name)?;
+            if full {
+                return Ok((png, "image/png"));
+            }
+            let (thumbnail, _, _) = helper_info::jpeg(&png, helper_info::THUMB)?;
+            Ok((thumbnail, "image/jpeg"))
+        })
+        .await;
+
+        match read {
+            Ok(Ok((bytes, mime))) => response(200, mime, Body::from(bytes), &[]),
+            Ok(Err(error)) if error.code == "bad-request" => json_response(404, json!(error)),
+            Ok(Err(error)) => json_response(500, json!(error)),
+            Err(_) => json_response(
+                500,
+                json!(Error::new("capture", "The screenshot could not be read")),
+            ),
+        }
     }
 
     /// A helper just logged in has no input service yet, and switching
@@ -819,6 +938,7 @@ pub async fn bind(
         account_name: std::sync::Mutex::new(None),
         input_started: std::sync::Mutex::new(None),
         record: std::sync::Mutex::new(None),
+        icons: helper_info::Icons::default(),
     });
 
     Ok((listener, viewer))
@@ -1062,11 +1182,6 @@ fn unpoisoned<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// A read of the helper that took longer than the app waits.
-fn late() -> Error {
-    Error::new("transport", "The helper did not answer in time")
-}
-
 /// The local viewer could not be reached, or its reply not read.
 fn unanswered() -> Error {
     Error::new("menubar", "The menu bar's viewer did not answer")
@@ -1126,6 +1241,39 @@ fn answering(url: &str) -> Option<Option<u32>> {
     )
 }
 
+/// Whether the menu bar's viewer is recorded in `output` as serving `port`
+/// and its process still runs Atlas, answering or not.
+pub fn recorded(output: &Path, port: u16) -> bool {
+    std::fs::read(output.join(MENUBAR_RECORD))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .filter(|record| {
+            record["url"]
+                .as_str()
+                .is_some_and(|url| url.starts_with(&format!("http://127.0.0.1:{port}/")))
+        })
+        .and_then(|record| record["pid"].as_i64())
+        .and_then(|pid| i32::try_from(pid).ok())
+        .is_some_and(crate::menubar::is_atlas)
+}
+
+/// The private address of the menu bar's viewer, when it runs and answers
+/// as the process its record names. It blocks for up to a second: call it
+/// off the async runtime.
+pub fn local(output: &Path, port: u16) -> Option<String> {
+    running(&output.join(MENUBAR_RECORD), port)
+        .and_then(|running| running["url"].as_str().map(str::to_owned))
+}
+
+/// What the local viewer at `url` serves at `route`, read within `deadline`
+/// and at most `limit` bytes. Anything but a 200 is refused.
+pub fn fetch(url: &str, route: &str, deadline: Duration, limit: usize) -> Result<Vec<u8>> {
+    match exchange_within(url, "GET", route, None, deadline, limit)? {
+        (200, body) => Ok(body),
+        _ => Err(unanswered()),
+    }
+}
+
 /// One request to the local viewer at `url`, as its own origin, within
 /// `deadline` overall: the reply's status and body. Replies are small; a
 /// larger one is refused.
@@ -1136,6 +1284,72 @@ fn exchange(
     body: Option<&[u8]>,
     deadline: Duration,
 ) -> Result<(u16, Vec<u8>)> {
+    exchange_within(url, method, route, body, deadline, 1 << 16)
+}
+
+/// [`exchange`], refusing a reply larger than `limit` bytes.
+fn exchange_within(
+    url: &str,
+    method: &str,
+    route: &str,
+    body: Option<&[u8]>,
+    deadline: Duration,
+    limit: usize,
+) -> Result<(u16, Vec<u8>)> {
+    let reply = exchange_raw(url, method, route, body, deadline, limit)?;
+    parse_response(&reply).ok_or_else(unanswered)
+}
+
+/// The menu bar viewer's newest frame, with the key control requests name
+/// it by and the display's size in points, which input is given in.
+pub(crate) struct SharedFrame {
+    pub png: Vec<u8>,
+    pub key: String,
+    pub display: (f64, f64),
+}
+
+/// The local viewer's newest frame at `url`, read within `deadline` and at
+/// most `limit` bytes.
+pub(crate) fn fetch_frame(url: &str, deadline: Duration, limit: usize) -> Result<SharedFrame> {
+    let reply = exchange_raw(url, "GET", "frame.png", None, deadline, limit)?;
+    let Some((200, png)) = parse_response(&reply) else {
+        return Err(unanswered());
+    };
+    let named = |name: &str| reply_header(&reply, name);
+    let points = |name: &str| named(name).and_then(|value| value.parse::<f64>().ok());
+
+    Ok(SharedFrame {
+        png,
+        key: named("x-frame-id").ok_or_else(unanswered)?,
+        display: (
+            points("x-display-width").ok_or_else(unanswered)?,
+            points("x-display-height").ok_or_else(unanswered)?,
+        ),
+    })
+}
+
+/// The value of the header `name` in a whole reply.
+fn reply_header(reply: &[u8], name: &str) -> Option<String> {
+    let split = reply.windows(4).position(|window| window == b"\r\n\r\n")?;
+    std::str::from_utf8(&reply[..split])
+        .ok()?
+        .split("\r\n")
+        .skip(1)
+        .filter_map(|line| line.split_once(':'))
+        .find(|(header, _)| header.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.trim().to_owned())
+}
+
+/// One request to the local viewer at `url`: its whole reply, head and
+/// body, once all of it has arrived.
+fn exchange_raw(
+    url: &str,
+    method: &str,
+    route: &str,
+    body: Option<&[u8]>,
+    deadline: Duration,
+    limit: usize,
+) -> Result<Vec<u8>> {
     use std::io::{Read, Write};
 
     // Any trouble on the wire reads the same to the person.
@@ -1184,16 +1398,16 @@ fn exchange(
 
         reply.extend_from_slice(&chunk[..read]);
 
-        if reply.len() > 1 << 16 {
+        if reply.len() > limit {
             return Err(unanswered());
         }
 
-        if let Some(parsed) = parse_response(&reply) {
-            return Ok(parsed);
+        if parse_response(&reply).is_some() {
+            return Ok(reply);
         }
     }
 
-    parse_response(&reply).ok_or_else(unanswered)
+    Ok(reply)
 }
 
 /// A complete HTTP/1.1 reply's status and body, framed by Content-Length
@@ -1274,14 +1488,20 @@ fn already_running(output: &Path, port: u16, taken: Error) -> Result<()> {
 }
 
 /// Open the viewer window in the menu bar app, starting the menu bar first
-/// when it is not running.
-pub async fn monitor(config: &Path, port: u16, output: &Path) -> Result<()> {
+/// when it is not running. It prints nothing.
+pub async fn open_viewer(config: &Path, port: u16, output: &Path) -> Result<()> {
     let (_, record) = crate::menubar::launch(config, port, output).await?;
     let url = record["url"]
         .as_str()
         .map(str::to_owned)
         .ok_or_else(|| Error::new("menubar", "The menu bar's record names no viewer"))?;
     blocking(move || post_local(&url, "app/viewer", &json!({}))).await?;
+    Ok(())
+}
+
+/// [`open_viewer`], saying so.
+pub async fn monitor(config: &Path, port: u16, output: &Path) -> Result<()> {
+    open_viewer(config, port, output).await?;
 
     if crate::ui::human() {
         println!(
@@ -1300,7 +1520,7 @@ pub async fn monitor(config: &Path, port: u16, output: &Path) -> Result<()> {
 
 /// POST `body` to `route` of the local viewer at `url`, as its own origin,
 /// and read its JSON reply; a refusal is an error in its own words.
-fn post_local(url: &str, route: &str, body: &Value) -> Result<Value> {
+pub(crate) fn post_local(url: &str, route: &str, body: &Value) -> Result<Value> {
     let (status, reply) = exchange(
         url,
         "POST",
@@ -1311,8 +1531,14 @@ fn post_local(url: &str, route: &str, body: &Value) -> Result<Value> {
     let reply: Value = serde_json::from_slice(&reply).map_err(|_| unanswered())?;
 
     if status != 200 {
+        // A refusal keeps its own code (busy, stale-frame…) when it is one
+        // Atlas knows.
+        let code = reply["code"]
+            .as_str()
+            .and_then(crate::error::code)
+            .unwrap_or("menubar");
         return Err(Error::new(
-            "menubar",
+            code,
             reply["error"]
                 .as_str()
                 .unwrap_or("The menu bar's viewer refused")
@@ -1408,20 +1634,51 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
     }
 
     // Ending control has slots of its own, so a busy viewer still lets go.
-    let urgent =
-        method == Method::POST && matches!(route.as_str(), "control/release" | "control/revoke");
+    let urgent = method == Method::POST
+        && matches!(
+            route.as_str(),
+            "control/release" | "control/revoke" | "control/hold"
+        );
     let slots = if urgent {
         &viewer.urgent
     } else {
         &viewer.requests
     };
     let Ok(_slot) = slots.try_acquire() else {
-        return json_response(503, json!({"ok": false, "error": "Viewer is busy"}));
+        return json_response(
+            503,
+            json!({"ok": false, "code": "busy", "error": "Viewer is busy"}),
+        );
     };
 
     if method == Method::GET {
         if route == "status.json" {
             return json_response(200, viewer.status().await);
+        }
+
+        if route == "activity.json" {
+            return match viewer.activity().await {
+                Ok(activity) => json_response(200, activity),
+                Err(error) => json_response(503, json!(error)),
+            };
+        }
+
+        if route == "apps.json" {
+            return match viewer.apps().await {
+                Ok(apps) => json_response(200, apps),
+                Err(error) => json_response(503, json!(error)),
+            };
+        }
+
+        if route == "screenshots.json" {
+            return match viewer.screenshots().await {
+                Ok(shots) => json_response(200, shots),
+                Err(error) => json_response(503, json!(error)),
+            };
+        }
+
+        if route == "screenshot.png" {
+            return viewer.screenshot(request.uri().query()).await;
         }
 
         if route == "frame.png" {
@@ -1468,6 +1725,7 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
                 | "control/renew"
                 | "control/release"
                 | "control/revoke"
+                | "control/hold"
                 | "recover"
                 | "app/viewer"
         )
@@ -1535,6 +1793,10 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
 
     let outcome = if route == "recover" {
         viewer.recover().await
+    } else if route == "control/hold" {
+        // The person's stop for agents, or their resume. Control a viewer
+        // holds is left alone either way.
+        viewer.client().hold(body["on"] == true).await
     } else {
         viewer.control(&route, &body).await
     };
@@ -1568,6 +1830,58 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
             )
         }
     }
+}
+
+/// A logged row as the app's activity lists it: what was done in words, by
+/// whom, how long ago, whether it worked and how many actions it sent.
+/// Only these fields go, through [`crate::overview::shown`]: never typed
+/// text, argv, coordinates or titles, which the log never keeps either.
+fn activity_row(row: &Value, now: u128) -> Value {
+    let shown = crate::overview::shown(row, now);
+    json!({
+        "id": crate::overview::row_id(row),
+        // When it started, in milliseconds since 1970, so its time never
+        // moves between readings.
+        "startedAt": row["at"]
+            .as_str()
+            .and_then(|at| at.parse::<u128>().ok())
+            .and_then(|at| u64::try_from(at / 1_000_000).ok()),
+        "says": shown["says"],
+        "ok": shown["ok"],
+        "started": shown["started"],
+        "actor": shown["actor"],
+        "ageSeconds": shown["ageSeconds"],
+        "reason": shown["reason"],
+        "operation": shown["operation"],
+        "count": shown["actionCount"],
+    })
+}
+
+/// The helper's reply when it answered with what was asked; a refusal is an
+/// answer too, and never reads as an empty list.
+fn answered(reply: Value) -> Result<Value> {
+    if reply["ok"] == true {
+        Ok(reply)
+    } else {
+        Err(crate::transport::refusal(&reply))
+    }
+}
+
+/// The helper's regular apps as the app lists them, front to back, each
+/// with its windows front to back. A window's id is its window number.
+fn listed_apps(apps: &Value, windows: &Value) -> Vec<Value> {
+    helper_info::open_apps(apps, windows)
+        .into_iter()
+        .map(|app| {
+            json!({
+                "pid": app["pid"],
+                "name": app["name"],
+                "bundle": app["bundle"],
+                "front": app["active"],
+                "windows": app["windows"],
+            })
+        })
+        .collect()
 }
 
 /// A reply of `value` as JSON, with status `code`.
@@ -1651,12 +1965,70 @@ mod tests {
         (viewer, server)
     }
 
+    /// `path` asked of `viewer` with `method` at `host`, from `origin` when
+    /// one is given: the reply's status, type and body.
+    async fn asked(
+        viewer: &Arc<Viewer>,
+        method: Method,
+        path: &str,
+        host: &str,
+        origin: Option<&str>,
+    ) -> (u16, String, Vec<u8>) {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("host", host);
+        if let Some(origin) = origin {
+            request = request.header("origin", origin);
+        }
+
+        let reply = respond(viewer.clone(), request.body(Body::empty()).unwrap()).await;
+        let status = reply.status().as_u16();
+        let kind = header(reply.headers(), "content-type")
+            .unwrap_or_default()
+            .to_owned();
+        let body = to_bytes(reply.into_body(), usize::MAX).await.unwrap();
+        (status, kind, body.to_vec())
+    }
+
+    /// `route` read from `viewer` as its app reads it: at its private
+    /// address, from its own origin.
+    async fn read(viewer: &Arc<Viewer>, route: &str) -> (u16, String, Vec<u8>) {
+        let path = format!("{}{route}", viewer.prefix);
+        let origin = format!("http://{}", viewer.authority);
+        asked(viewer, Method::GET, &path, &viewer.authority, Some(&origin)).await
+    }
+
+    /// `route` read from `viewer` as JSON, with the reply's status.
+    async fn read_json(viewer: &Arc<Viewer>, route: &str) -> (u16, Value) {
+        let (status, kind, body) = read(viewer, route).await;
+        assert_eq!(kind, "application/json", "{route}");
+        (status, serde_json::from_slice(&body).unwrap())
+    }
+
     /// [`answering`] off the runtime.
     async fn answering_off(url: &str) -> Option<Option<u32>> {
         let url = url.to_owned();
         tokio::task::spawn_blocking(move || answering(&url))
             .await
             .unwrap()
+    }
+
+    #[test]
+    fn a_frames_key_and_display_size_are_read_from_its_headers() {
+        let reply = b"HTTP/1.1 200 OK\r\nX-Frame-Id: abc123\r\nx-display-width: 1440\r\nContent-Length: 2\r\n\r\nok";
+        assert_eq!(reply_header(reply, "x-frame-id").as_deref(), Some("abc123"));
+        assert_eq!(
+            reply_header(reply, "X-Display-Width").as_deref(),
+            Some("1440"),
+            "named in any case"
+        );
+        assert_eq!(reply_header(reply, "x-display-height"), None);
+        assert_eq!(
+            reply_header(b"HTTP/1.1 200 OK\r\nX-Frame-Id: a", "x-frame-id"),
+            None,
+            "not until the head has ended"
+        );
     }
 
     #[test]
@@ -1679,6 +2051,58 @@ mod tests {
         );
         assert_eq!(parse_response(b"HTTP/1.1 200 OK\r\n\r\n"), None, "unframed");
         assert_eq!(parse_response(b"garbage\r\n\r\n"), None);
+    }
+
+    #[tokio::test]
+    async fn a_fetch_reads_the_viewers_status_within_its_limit_and_refuses_more() {
+        let dir = tempfile::tempdir().unwrap();
+        let (viewer, server) = served(dir.path(), CONNECTIONS).await;
+        let url = viewer.url.clone();
+
+        let (status, small) = tokio::task::spawn_blocking(move || {
+            let deadline = Duration::from_secs(8);
+            (
+                fetch(&url, "status.json", deadline, 1 << 16),
+                fetch(&url, "status.json", deadline, 16),
+            )
+        })
+        .await
+        .unwrap();
+
+        let status: Value = serde_json::from_slice(&status.unwrap()).unwrap();
+        assert!(
+            status["overview"]["state"].is_string(),
+            "watch reads the state"
+        );
+        assert_eq!(small.unwrap_err().code, "menubar");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn the_person_stops_and_resumes_agents_through_the_viewer() {
+        let dir = tempfile::tempdir().unwrap();
+        let (viewer, server) = served(dir.path(), CONNECTIONS).await;
+        let url = viewer.url.clone();
+
+        // No input service runs here: the Stop is kept on the person's side
+        // all the same, and says the service did not hear it.
+        let replies = tokio::task::spawn_blocking(move || {
+            [true, false].map(|on| post_local(&url, "control/hold", &json!({"on": on})))
+        })
+        .await
+        .unwrap();
+
+        for (reply, on) in replies.into_iter().zip([true, false]) {
+            let reply = reply.unwrap();
+            assert_eq!(reply["held"], on);
+            assert!(
+                reply["warnings"][0]
+                    .as_str()
+                    .unwrap()
+                    .contains("isn't running")
+            );
+        }
+        server.abort();
     }
 
     #[tokio::test]
@@ -2419,5 +2843,302 @@ mod tests {
         assert_eq!(outcome, 200, "still open");
 
         server.abort();
+    }
+
+    /// The helper's activity, apps and screenshots answer only at the
+    /// viewer's private address, from its own origin, within a free slot.
+    #[tokio::test]
+    async fn the_helpers_activity_apps_and_screenshots_answer_only_the_viewers_own_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        let viewer = unreachable(dir.path()).await;
+        let routes = [
+            "activity.json",
+            "apps.json",
+            "screenshots.json",
+            "screenshot.png?name=1-capture.png",
+        ];
+        let own = format!("http://{}", viewer.authority);
+
+        for route in routes {
+            let path = format!("{}{route}", viewer.prefix);
+            let elsewhere = Some("http://evil.example");
+            let (status, ..) =
+                asked(&viewer, Method::GET, &path, &viewer.authority, elsewhere).await;
+            assert_eq!(status, 403, "{route} from another origin");
+            let (status, ..) = asked(&viewer, Method::GET, &path, "localhost", None).await;
+            assert_eq!(status, 403, "{route} at another host");
+
+            let bare = format!("/{route}");
+            let (status, _, body) =
+                asked(&viewer, Method::GET, &bare, &viewer.authority, None).await;
+            assert_eq!(status, 404, "{route} without the private address");
+            assert!(String::from_utf8_lossy(&body).contains("Unknown viewer address"));
+
+            let (status, _, body) =
+                asked(&viewer, Method::POST, &path, &viewer.authority, Some(&own)).await;
+            assert_eq!(status, 404, "{route} only reads");
+            assert!(String::from_utf8_lossy(&body).contains("Unknown operation"));
+        }
+
+        assert_eq!(read_json(&viewer, "activity.json").await.0, 200);
+        assert_eq!(read_json(&viewer, "screenshots.json").await.0, 200);
+        let (status, apps) = read_json(&viewer, "apps.json").await;
+        assert_eq!(
+            (status, apps["ok"].clone()),
+            (503, json!(false)),
+            "no helper"
+        );
+        assert_eq!(read_json(&viewer, "screenshot.jpg").await.0, 404);
+
+        let _busy = viewer
+            .requests
+            .try_acquire_many(CONCURRENT_REQUESTS as u32)
+            .unwrap();
+        for route in routes {
+            let (status, reply) = read_json(&viewer, route).await;
+            assert_eq!(
+                (status, reply["code"].clone()),
+                (503, json!("busy")),
+                "{route}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn activity_json_never_carries_typed_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let viewer = unreachable(dir.path()).await;
+        let output = viewer.client().output_dir().unwrap().to_path_buf();
+        let at = crate::client::timestamp() - 3_000_000_000;
+        // Fields the log never keeps, written here all the same: none of
+        // them may reach the app.
+        let row = json!({
+            "at": at.to_string(), "operation": "input", "ok": true, "actionCount": 2,
+            "actor": "agent", "verb": "type", "app": "TextEdit", "command": "0123456789ab",
+            "text": "hunter2", "argv": ["rm", "secret-argument"], "x": 123.5, "y": 456.25,
+            "title": "Secret plans", "elapsedMs": 4.0,
+        });
+        std::fs::write(output.join("metadata.jsonl"), format!("{row}\n")).unwrap();
+
+        let (status, reply) = read_json(&viewer, "activity.json").await;
+        assert_eq!((status, reply["ok"].clone()), (200, json!(true)));
+        let text = reply.to_string();
+        for secret in [
+            "hunter2",
+            "secret-argument",
+            "Secret plans",
+            "123.5",
+            "456.25",
+        ] {
+            assert!(!text.contains(secret), "{secret}");
+        }
+
+        let listed = &reply["activity"][0];
+        let mut keys = listed
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [
+                "actor",
+                "ageSeconds",
+                "count",
+                "id",
+                "ok",
+                "operation",
+                "reason",
+                "says",
+                "started",
+                "startedAt"
+            ]
+        );
+        assert_eq!(listed["says"], "typed in TextEdit");
+        assert_eq!(listed["count"], 2);
+        assert_eq!(listed["ageSeconds"], 3);
+    }
+
+    #[tokio::test]
+    async fn activity_json_lists_the_newest_200_rows_by_ids_that_hold_across_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let viewer = unreachable(dir.path()).await;
+        let output = viewer.client().output_dir().unwrap().to_path_buf();
+        let log = (0..250)
+            .map(|at| {
+                let row = json!({"at": format!("{}", 1_000_000 + at), "operation": "input",
+                    "ok": true, "actionCount": 1, "actor": "viewer", "elapsedMs": 2.5});
+                format!("{row}\n")
+            })
+            .collect::<String>();
+        std::fs::write(output.join("metadata.jsonl"), log).unwrap();
+
+        let first = read_json(&viewer, "activity.json").await.1;
+        let rows = first["activity"].as_array().unwrap();
+        assert_eq!(rows.len(), ACTIVITY_ROWS);
+        let ids = rows
+            .iter()
+            .map(|row| row["id"].as_str().unwrap().to_owned())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(ids.len(), ACTIVITY_ROWS, "no two rows share an id");
+
+        let newer = json!({"at": "2000000", "operation": "input", "ok": false, "actor": "agent"});
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(output.join("metadata.jsonl"))
+            .unwrap();
+        std::io::Write::write_all(&mut file, format!("{newer}\n").as_bytes()).unwrap();
+
+        let second = read_json(&viewer, "activity.json").await.1;
+        assert_eq!(second["activity"][0]["ok"], false, "newest first");
+        assert_eq!(
+            second["activity"][1]["id"], rows[0]["id"],
+            "a row keeps its id as newer ones come"
+        );
+        assert!(!ids.contains(second["activity"][0]["id"].as_str().unwrap()));
+    }
+
+    #[test]
+    fn apps_json_lists_windows_front_to_back() {
+        let apps = json!([
+            {"name": "Finder", "pid": 1, "policy": "regular",
+                "executable": "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder"},
+            {"name": "Dock", "pid": 2, "policy": "accessory", "executable": "/x"},
+            {"name": "Opie", "pid": 3, "policy": "regular", "active": true,
+                "executable": "/Applications/Opie.app/Contents/MacOS/Opie"},
+            {"name": "Notes", "pid": 4, "policy": "regular",
+                "executable": "/System/Applications/Notes.app/Contents/MacOS/Notes"},
+        ]);
+        let window = |number: i64, pid: i64, title: &str| {
+            json!({"number": number, "pid": pid, "title": title, "layer": 0, "alpha": 1.0,
+                "bounds": {"x": 10.0, "y": 40.0, "width": 520.0, "height": 860.0}})
+        };
+        let windows = json!([
+            window(31, 4, "QA checklist"),
+            window(12, 3, "Ring"),
+            window(7, 3, "Starter"),
+        ]);
+
+        let listed = listed_apps(&apps, &windows);
+        let order = listed
+            .iter()
+            .map(|app| app["name"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            order,
+            ["Notes", "Opie", "Finder"],
+            "by each app's front window"
+        );
+        assert_eq!(
+            listed[1],
+            json!({
+                "pid": 3, "name": "Opie", "bundle": "/Applications/Opie.app", "front": true,
+                "windows": [
+                    {"id": 12, "title": "Ring", "x": 10.0, "y": 40.0, "width": 520.0, "height": 860.0},
+                    {"id": 7, "title": "Starter", "x": 10.0, "y": 40.0, "width": 520.0, "height": 860.0},
+                ],
+            })
+        );
+        assert_eq!(listed[2]["windows"], json!([]), "Finder has none");
+        assert_eq!(listed[2]["front"], false);
+    }
+
+    #[test]
+    fn a_refused_app_listing_never_reads_as_no_apps() {
+        let refused = answered(json!({"ok": false, "code": "busy", "error": "Busy"}));
+        assert_eq!(refused.map_err(|error| error.code).unwrap_err(), "busy");
+        assert!(answered(json!({"ok": true, "apps": []})).is_ok());
+    }
+
+    #[tokio::test]
+    async fn reading_the_helpers_apps_and_windows_records_no_activity() {
+        let dir = tempfile::tempdir().unwrap();
+        let viewer = unreachable(dir.path()).await;
+        assert_eq!(read_json(&viewer, "apps.json").await.0, 503, "no helper");
+
+        let agent = client(dir.path()).doing(crate::doing::Doing::new("screenshot"));
+        let filter = crate::agent::WindowFilter {
+            app: None,
+            title: None,
+            all: false,
+        };
+        assert!(agent.apps().await.is_err());
+        assert!(crate::agent::list(&agent, &filter).await.is_err());
+        let output = agent.output_dir().unwrap().to_path_buf();
+        assert!(crate::overview::activity(&output, 5).is_empty());
+
+        // The same client records what acts, even when no helper answers.
+        assert!(agent.capture(None).await.is_err());
+        let rows = crate::overview::activity(&output, 5);
+        assert_eq!(rows.len(), 1);
+        assert!(
+            crate::overview::shown(&rows[0], 0)["reason"].is_string(),
+            "a failed capture says why: {}",
+            rows[0]
+        );
+    }
+
+    #[tokio::test]
+    async fn screenshots_are_listed_newest_first_and_served_only_by_a_capture_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let viewer = unreachable(dir.path()).await;
+        let output = viewer.client().output_dir().unwrap().to_path_buf();
+        let older = crate::native::capture::sample_png(1280, 800);
+        let newer = crate::native::capture::sample_png(640, 400);
+        std::fs::write(output.join("1700000000000000000-capture.png"), &older).unwrap();
+        std::fs::write(output.join("1700000005000000000-capture.png"), &newer).unwrap();
+        std::os::unix::fs::symlink(
+            output.join("1700000000000000000-capture.png"),
+            output.join("1700000009000000000-capture.png"),
+        )
+        .unwrap();
+        std::fs::create_dir(output.join("1700000007000000000-capture.png")).unwrap();
+        std::fs::write(dir.path().join("u.toml"), SETTINGS).unwrap();
+
+        let (status, listed) = read_json(&viewer, "screenshots.json").await;
+        assert_eq!(status, 200);
+        assert_eq!(
+            listed,
+            json!({"ok": true, "folder": output, "screenshots": [
+                {"name": "1700000005000000000-capture.png", "takenAt": 1_700_000_005_000_u64,
+                    "width": 640, "height": 400},
+                {"name": "1700000000000000000-capture.png", "takenAt": 1_700_000_000_000_u64,
+                    "width": 1280, "height": 800},
+            ]})
+        );
+
+        let (status, kind, body) = read(
+            &viewer,
+            "screenshot.png?name=1700000000000000000-capture.png&size=full",
+        )
+        .await;
+        assert_eq!((status, kind.as_str()), (200, "image/png"));
+        assert_eq!(body, older, "as taken");
+
+        let (status, kind, body) = read(
+            &viewer,
+            "screenshot.png?name=1700000000000000000-capture.png",
+        )
+        .await;
+        assert_eq!((status, kind.as_str()), (200, "image/jpeg"));
+        assert_eq!(&body[..2], [0xFF, 0xD8], "a thumbnail");
+
+        for query in [
+            "",
+            "?name=../u.toml",
+            "?name=1700000009000000000-capture.png",
+            "?name=1700000007000000000-capture.png",
+            "?name=1800000000000000000-capture.png",
+            "?name=1700000005000000000-capture.png&size=huge",
+        ] {
+            let (status, refused) = read_json(&viewer, &format!("screenshot.png{query}")).await;
+            assert_eq!(
+                (status, refused["code"].clone()),
+                (404, json!("bad-request")),
+                "{query}"
+            );
+        }
     }
 }

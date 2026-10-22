@@ -33,6 +33,11 @@ struct ActionTests {
       (.agentsStatus, ["agents", "status"]),
       (.installAgents([.claude, .codex]), ["agents", "install", "--claude", "--codex"]),
       (.teachProject(path: "/Users/me/dev/Opie"), ["agents", "project", "/Users/me/dev/Opie"]),
+      (.connectClaudeApp, ["agents", "install", "--app"]),
+      (.forgetProject(path: "/Users/me/dev/Opie"), ["agents", "forget", "/Users/me/dev/Opie"]),
+      (.doctor, ["doctor", "--verbose"]),
+      (.checkForUpdate, ["update", "--check"]),
+      (.update, ["update"]),
     ] as [(Action, [String])]
   )
   func arguments(action: Action, arguments: [String]) {

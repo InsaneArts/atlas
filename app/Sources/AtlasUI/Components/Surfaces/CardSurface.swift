@@ -15,6 +15,8 @@ struct CardSurface: ViewModifier {
 
   /// The card's tint.
   let tint: Tint
+  /// The card's corners: `Radius.large` for a card on its own, `Radius.medium` for a group of rows in a column.
+  let radius: CGFloat
 
   /// Lays the card's ground under the content and its edge over it.
   ///
@@ -23,11 +25,11 @@ struct CardSurface: ViewModifier {
   func body(content: Content) -> some View {
     content
       .background(
-        RoundedRectangle(cornerRadius: Radius.large)
+        RoundedRectangle(cornerRadius: radius)
           .fill(fill)
       )
       .overlay(
-        RoundedRectangle(cornerRadius: Radius.large)
+        RoundedRectangle(cornerRadius: radius)
           .strokeBorder(edge, lineWidth: tint == .accent ? Stroke.regular : Stroke.hairline)
       )
   }
