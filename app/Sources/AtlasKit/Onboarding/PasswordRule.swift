@@ -19,7 +19,8 @@ package enum PasswordRule {
     return password == verify ? nil : "The two passwords are different."
   }
 
-  /// Whether the account form may be sent: every field filled, and the password fine and confirmed.
+  /// Whether the account form may be sent: every field filled, the short name one macOS takes, and the password fine
+  /// and confirmed.
   ///
   /// - Parameters:
   ///   - fullName: The account's full name.
@@ -29,6 +30,6 @@ package enum PasswordRule {
   /// - Returns: Whether the account can be created.
   package static func canCreate(fullName: String, accountName: String, password: String, verify: String) -> Bool {
     !fullName.isEmpty && !accountName.isEmpty && !password.isEmpty && password == verify
-      && problem(password: password, verify: verify) == nil
+      && problem(password: password, verify: verify) == nil && AccountNameRule.problem(accountName) == nil
   }
 }

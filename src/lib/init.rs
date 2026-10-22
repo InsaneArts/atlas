@@ -196,15 +196,21 @@ fn replaceable(link: &Path) -> bool {
 /// Whether `name` can be a new account's short name.
 pub(crate) fn valid_account_name(name: &str) -> std::result::Result<(), String> {
     if name.is_empty() || name.len() > 31 {
-        return Err("Use 1 to 31 characters.".into());
+        return Err("Use 1 to 31 characters in the account name.".into());
     }
 
     if !name
         .bytes()
         .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
-        || name.starts_with(['.', '-'])
     {
-        return Err("Use letters, digits, '.', '_' and '-'.".into());
+        return Err(
+            "Use only letters, digits, '.', '_' and '-' in the account name, with no spaces."
+                .into(),
+        );
+    }
+
+    if name.starts_with(['.', '-']) {
+        return Err("Start the account name with a letter or a digit.".into());
     }
 
     Ok(())
