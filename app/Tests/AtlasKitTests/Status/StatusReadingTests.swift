@@ -24,14 +24,14 @@ struct StatusReadingTests {
   @Test("a log-out reads as one action")
   func logOut() throws {
     let reading = try status(["overview": ["activity": [["operation": "logout", "ok": true, "ageSeconds": 3.0]]]])
-    #expect(StatusReading(reading).lastAction == "Agent logged out the helper · just now")
+    #expect(StatusReading(reading).activity().map(\.line) == ["Agent logged out the helper"])
   }
 
-  @Test("control waits for agents, recovery and other viewers")
+  @Test("control waits for recovery and other viewers, never for an agent at work")
   func controlWaits() throws {
     func overview(_ mode: String) throws -> StatusReading { StatusReading(try status(["overview": ["mode": mode]])) }
-    #expect(try overview("agent").controlBlocked == "An agent is acting in the helper.")
-    #expect(try overview("controlling").controlBlocked == "Another viewer has control.")
+    #expect(try overview("agent").controlBlocked == nil, "the person may take over while an agent works")
+    #expect(try overview("controlling").controlBlocked == "Another window has control.")
     #expect(try overview("recovering").controlBlocked == "Recover before taking control.")
     #expect(try overview("observing").controlBlocked == nil)
     #expect(try overview("stopped").controlBlocked == nil, "the person may take over while agents are stopped")
@@ -105,8 +105,8 @@ struct StatusReadingTests {
     #expect(recovering.facts(holdingControl: true).control == "After recovery", "a held lease is not control now")
     #expect(StatusReading(try status([:])).facts(holdingControl: false).display == Words.unknown)
     for (mode, expected) in [
-      ("agent", "Agent working"), ("recovering", "After recovery"), ("blocked", "Not ready"),
-      ("unavailable", "Unavailable"), ("loggedOut", "Logged out"),
+      ("agent", "Available"), ("recovering", "After recovery"), ("blocked", "Not ready"),
+      ("unavailable", "Not ready"), ("loggedOut", "Logged out"),
     ] {
       let reading = try status(["overview": ["mode": mode]])
       #expect(StatusReading(reading).facts(holdingControl: false).control == expected)
@@ -149,11 +149,32 @@ struct StatusReadingTests {
     )
   }
 
-  @Test("the reason never shows another viewer's control as yours")
+  @Test("the reason never shows another window's control as yours")
   func reason() throws {
     let held = StatusReading(try status(["overview": ["mode": "controlling", "reason": "A viewer has control"]]))
-    #expect(held.reason(holdingControl: false) == Words.anotherViewer)
+    #expect(held.reason(holdingControl: false) == Words.inUseElsewhereLine)
     #expect(held.reason(holdingControl: true) == "You have mouse and keyboard control")
+  }
+
+  @Test("the lines beside Working and Idle name the newest agent action, never the person's own, else say no more")
+  func workingAndIdleLines() throws {
+    let reading = StatusReading(
+      try status([
+        "overview": [
+          "reason": "An agent is acting in the helper.",
+          "activity": [
+            ["operation": "input", "actor": "viewer", "ok": true, "actionCount": 3, "ageSeconds": 1],
+            ["operation": "input", "ok": true, "ageSeconds": 120, "says": "turning Show Center off in Opie"],
+          ],
+        ]
+      ])
+    )
+    #expect(reading.workingLine(withAge: false) == "Turning Show Center off in Opie")
+    #expect(reading.workingLine(withAge: true) == "Turning Show Center off in Opie · 2 min ago")
+    #expect(reading.idleLine == "Last: turning Show Center off in Opie · 2 min ago")
+    let quiet = StatusReading(try status(["overview": ["reason": "An agent is acting in the helper."]]))
+    #expect(quiet.workingLine(withAge: true) == "An agent is acting in the helper", "a status line, not a sentence")
+    #expect(quiet.idleLine.isEmpty)
   }
 
   @Test("the recovery alert follows recovery, never while holding control")

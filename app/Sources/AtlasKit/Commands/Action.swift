@@ -36,8 +36,18 @@ package enum Action: Sendable, Equatable {
   case agentsStatus
   /// Connect these agents.
   case installAgents([AgentID])
+  /// Connect the Claude app alone.
+  case connectClaudeApp
+  /// Take the Atlas section out of the project in this folder, and off the list of projects taught.
+  case forgetProject(path: String)
+  /// Diagnose the helper, with its full status.
+  case doctor
   /// Teach the project in this folder.
   case teachProject(path: String)
+  /// Ask whether a newer Atlas is published, changing nothing.
+  case checkForUpdate
+  /// Install the newer Atlas, checking its signature first.
+  case update
 
   /// Recover as the viewer service's own Recover does: restart the helper while an action's outcome is unknown or
   /// under way, else start its input, which never needs the full restart.
@@ -73,7 +83,15 @@ package enum Action: Sendable, Equatable {
     case .markWindow(let open): ["onboarding", "window", open ? "open" : "closed"]
     case .agentsStatus: ["agents", "status"]
     case .installAgents(let agents): ["agents", "install"] + agents.map { "--\($0.rawValue)" }
+    case .connectClaudeApp: ["agents", "install", "--app"]
     case .teachProject(let path): ["agents", "project", path]
+    // The person confirmed in Settings.
+    case .forgetProject(let path): ["agents", "forget", path]
+    case .doctor: ["doctor", "--verbose"]
+    // Only asks: the check downloads nothing and installs nothing.
+    case .checkForUpdate: ["update", "--check"]
+    // The person confirmed in Settings.
+    case .update: ["update"]
     }
   }
 }

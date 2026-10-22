@@ -1,3 +1,5 @@
+import Foundation
+
 /// The viewer service, as the app sees it; a protocol so the models are
 /// tested with a stand-in.
 ///
@@ -61,4 +63,32 @@ package protocol ViewerService: Sendable {
   /// - Returns: Whether it restarted the helper, rather than starting its input.
   /// - Throws: ``ServiceError`` when recovery did not run.
   func recover() async throws -> Bool
+
+  /// Reads what was done in the helper lately. Reading it records nothing.
+  ///
+  /// - Returns: The log, newest first, every missing field at its safe default.
+  /// - Throws: ``ServiceError`` when the service cannot be read or refuses.
+  func activity() async throws(ServiceError) -> ActivityLog
+
+  /// Reads the apps open in the helper with their windows. Reading them records nothing and takes no control.
+  ///
+  /// - Returns: The apps, front to back, every missing field at its safe default.
+  /// - Throws: ``ServiceError`` when the service cannot be read or cannot reach the helper; a refusal never reads as
+  ///   no apps.
+  func apps() async throws(ServiceError) -> [HelperApp]
+
+  /// Reads the screenshots agents took in the helper, and the folder they are kept in.
+  ///
+  /// - Returns: The screenshots, newest first, and their folder, every missing field at its safe default.
+  /// - Throws: ``ServiceError`` when the service cannot be read or refuses.
+  func screenshots() async throws(ServiceError) -> ScreenshotList
+
+  /// Reads one screenshot an agent took.
+  ///
+  /// - Parameters:
+  ///   - name: The screenshot's file name, as ``Screenshot/name`` gives it.
+  ///   - full: Whether to read the picture as taken (PNG), rather than its thumbnail (JPEG).
+  /// - Returns: The picture's bytes.
+  /// - Throws: ``ServiceError`` when the service cannot be read, or no screenshot has that name.
+  func screenshot(name: String, full: Bool) async throws(ServiceError) -> Data
 }

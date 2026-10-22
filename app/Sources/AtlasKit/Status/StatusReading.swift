@@ -20,7 +20,7 @@ package struct StatusReading: Equatable, Sendable {
       .enumerated()
       .map { index, row in
         ActivityItem(
-          id: index,
+          id: row.id ?? String(index),
           actor: row.actor == "viewer" ? .you : .agent,
           text: Words.describe(row),
           when: row.ageSeconds.map(Words.ago) ?? "",
@@ -45,14 +45,6 @@ package struct StatusReading: Equatable, Sendable {
     )
   }
 
-  /// The newest action in one line, for the panel.
-  package var lastAction: String {
-    guard let first = activity(limit: 1).first else { return "No recent actions" }
-    return [first.line, first.when]
-      .filter { !$0.isEmpty }
-      .joined(separator: " · ")
-  }
-
   /// The session's facts; this viewer knows whether it holds control.
   ///
   /// - Parameter holdingControl: Whether this viewer holds control.
@@ -60,7 +52,7 @@ package struct StatusReading: Equatable, Sendable {
   package func facts(holdingControl: Bool) -> SessionFacts {
     let overview = status.overview
     let input =
-      status.session.inputReady ? "Ready" : status.session.inputReachable ? "Not ready" : "Unavailable"
+      status.session.inputReady ? "Ready" : status.session.inputReachable ? "Not ready" : "Not answering"
     return SessionFacts(
       display: Words.size(overview.display) ?? Words.unknown,
       input: input,
@@ -74,28 +66,27 @@ package struct StatusReading: Equatable, Sendable {
     let mode = status.overview.mode
     if mode.isControlled(byThisViewer: holdingControl) { return "This window" }
     return switch mode {
-    case .observing, .stopped: "Available"
+    // The person may take over while an agent works: its action under way finishes first (``controlBlocked``).
+    case .observing, .stopped, .agent: "Available"
     case .controlling: "Another window"
-    case .agent: "Agent working"
     case .recovering: "After recovery"
-    case .blocked: "Not ready"
-    case .unavailable: "Unavailable"
+    case .blocked, .unavailable: "Not ready"
     case .loggedOut: "Logged out"
     }
   }
 
-  /// Why a viewer that does not hold control must wait to take it, if it must, as the sentence a footer shows; `nil`
-  /// when nothing blocks it.
+  /// Why a viewer that does not hold control must wait to take it, if it must, as a sentence; `nil` when nothing
+  /// blocks it. An agent at work never does: the person may always take over, and the service answers busy only while
+  /// one of its actions runs, which the viewer asks again after.
   package var controlBlocked: String? {
     switch status.overview.mode {
-    case .agent: "An agent is acting in the helper."
     case .recovering: "Recover before taking control."
-    case .controlling: "\(Words.anotherViewer)."
+    case .controlling: "\(Words.inUseElsewhereLine)."
     default: nil
     }
   }
 
-  /// The sidebar's line: why the helper is in its mode.
+  /// The sidebar's line: why the helper is in its mode, or, while idle, what an agent did last.
   ///
   /// - Parameter holdingControl: Whether this viewer holds control.
   /// - Returns: The service's reason, unless this viewer's control says more.
@@ -104,7 +95,9 @@ package struct StatusReading: Equatable, Sendable {
     if mode.isControlled(byThisViewer: holdingControl) {
       return "You have mouse and keyboard control"
     }
-    if mode == .controlling { return Words.anotherViewer }
+    if mode == .controlling { return Words.inUseElsewhereLine }
+    // Idle says what an agent did last, in the words beside the status, not the service's reason.
+    if status.overview.state == .idle { return idleLine.isEmpty ? Words.nothingHappening : idleLine }
     // A helper that is not ready gives its first step, which may name a command: its failed check says it plainly.
     if mode == .blocked, let check = status.checks.first(where: { $0.ok == false }) {
       return CheckWords.failed(check)

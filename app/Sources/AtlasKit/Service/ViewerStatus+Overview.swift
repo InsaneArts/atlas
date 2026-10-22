@@ -1,8 +1,12 @@
 extension ViewerStatus {
   /// What is happening in the helper, as the service sums it up.
   package struct Overview: Decodable, Equatable, Sendable {
-    /// The helper's mode; unavailable when missing or unknown.
+    /// The helper's mode; unavailable when missing or unknown. The rules (Stop, Resume, Recover) follow it.
     package var mode = HelperMode.unavailable
+    /// What the helper is doing, as every agent app shows it; not ready when missing. The words follow it.
+    package var state = OverviewState.notReady
+    /// The state in the service's words, such as "Working"; empty when it gives none.
+    package var label = ""
     /// Why the helper is in its mode, in the service's words.
     package var reason = Words.connecting
     /// Whether Recover fixes what keeps the helper not ready: its input stopped or lost its display.
@@ -71,7 +75,7 @@ extension ViewerStatus {
 
     /// The fields of the `overview` object.
     enum CodingKeys: String, CodingKey {
-      case mode, reason, recoverable, account, accountName, display, pending, inFlight, activity
+      case mode, state, label, reason, recoverable, account, accountName, display, pending, inFlight, activity
     }
 
     /// Decodes an overview, keeping the default of anything missing or of the wrong type.
@@ -81,6 +85,8 @@ extension ViewerStatus {
     package init(from decoder: any Decoder) throws {
       let container = try decoder.container(keyedBy: CodingKeys.self)
       mode = (try? container.decodeIfPresent(HelperMode.self, forKey: .mode)) ?? .unavailable
+      state = (try? container.decodeIfPresent(OverviewState.self, forKey: .state)) ?? .notReady
+      label = (try? container.decodeIfPresent(String.self, forKey: .label)) ?? ""
       reason = (try? container.decodeIfPresent(String.self, forKey: .reason)) ?? reason
       recoverable = (try? container.decodeIfPresent(Bool.self, forKey: .recoverable)) ?? false
       account = try? container.decodeIfPresent(String.self, forKey: .account)

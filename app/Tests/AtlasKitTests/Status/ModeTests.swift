@@ -4,29 +4,37 @@ import Testing
 
 @Suite("Mode")
 struct ModeTests {
-  @Test("each helper mode has its label, tone and mark")
-  func modes() {
-    #expect(Mode.of(.observing).tone == .ready)
-    #expect(Mode.of(.controlling).mark == .filled)
-    #expect(Mode.of(.recovering).tone == .attention)
-    #expect(Mode.of(.unavailable).label == "Unavailable")
-    #expect(Mode.of(.loggedOut).label == "Logged out")
-    #expect(Mode.of(.stopped).label == "Stopped")
-    #expect(Mode.of(.stopped).tone == .attention)
-    #expect(Mode.of(.stopped).mark == .stopped, "a mark of its own, apart from Needs you")
+  @Test("an overview state the app doesn't know reads as not ready, and a logged-out helper as logged out")
+  func unknownAndLoggedOut() throws {
+    let unknown = try status(["overview": ["mode": "observing", "state": "dreaming", "label": "Dreaming"]])
+    #expect(unknown.overview.state == .unknown("dreaming"))
+    #expect(Mode.of(unknown.overview) == Mode(.notReady), "the unknown state's own word is not shown")
+    let loggedOut = try status(["overview": ["mode": "loggedOut", "state": "notReady", "label": "Not ready"]])
+    #expect(Mode.of(loggedOut.overview).kind == .loggedOut, "the service files it under not ready")
+  }
+
+  @Test("a state reads in the service's word, or the app's own when the service gives none")
+  func serviceWord() throws {
+    let worded = try status(["overview": ["mode": "agent", "state": "working", "label": "Busy"]])
+    #expect(Mode.of(worded.overview) == Mode(.working, label: "Busy"))
+    let bare = try status(["overview": ["mode": "agent", "state": "working"]])
+    #expect(Mode.of(bare.overview).label == "Working")
   }
 
   @Test(
-    "a viewer tells its own control from another viewer's, and a logged-out helper never shows control as yours"
+    "a viewer tells its own control from another window's, and never shows control as yours while recovering or logged out"
   )
   func seen() {
     var overview = ViewerStatus.Overview()
     overview.mode = .controlling
-    #expect(Mode.seen(by: overview, holdingControl: true).label == "You have control")
-    #expect(Mode.seen(by: overview, holdingControl: false).label == "Another viewer has control")
+    overview.state = .control
+    #expect(Mode.seen(by: overview, holdingControl: true).kind == .control)
+    #expect(Mode.seen(by: overview, holdingControl: false).kind == .inUseElsewhere)
     overview.mode = .recovering
-    #expect(Mode.seen(by: overview, holdingControl: true).label == "Needs you")
+    overview.state = .needsYou
+    #expect(Mode.seen(by: overview, holdingControl: true).kind == .needsYou)
     overview.mode = .loggedOut
-    #expect(Mode.seen(by: overview, holdingControl: true).label == "Logged out", "no control without a helper")
+    overview.state = .notReady
+    #expect(Mode.seen(by: overview, holdingControl: true).kind == .loggedOut, "no control without a helper")
   }
 }

@@ -25,18 +25,25 @@ package struct ViewerClient: ViewerService {
 
   /// A client for `text`, which must be the service's local capability URL.
   ///
-  /// - Parameter text: The capability URL: `http://127.0.0.1:<port>/<secret>/`, surrounding whitespace allowed.
-  package init?(_ text: String) {
+  /// - Parameters:
+  ///   - text: The capability URL: `http://127.0.0.1:<port>/<secret>/`, surrounding whitespace allowed.
+  ///   - session: The session requests go through; by default an ephemeral one that caches nothing and gives up
+  ///     after ``timeout``. A test passes one of its own, answered by a scripted protocol.
+  package init?(_ text: String, session: URLSession? = nil) {
     guard let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
       url.scheme == "http", url.host == "127.0.0.1", let port = url.port,
       url.absoluteString.hasSuffix("/")
     else { return nil }
     base = url
     origin = "http://127.0.0.1:\(port)"
-    let configuration = URLSessionConfiguration.ephemeral
-    configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-    configuration.timeoutIntervalForRequest = Self.timeout
-    session = URLSession(configuration: configuration)
+    if let session {
+      self.session = session
+    } else {
+      let configuration = URLSessionConfiguration.ephemeral
+      configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+      configuration.timeoutIntervalForRequest = Self.timeout
+      self.session = URLSession(configuration: configuration)
+    }
   }
 
   /// A request for `route`: a POST of `body` as JSON when there is one, else a GET.
@@ -45,15 +52,26 @@ package struct ViewerClient: ViewerService {
     body: (any Encodable & Sendable)? = nil,
     timeout: TimeInterval = ViewerClient.timeout
   ) throws -> URLRequest {
-    var request = URLRequest(url: base.appendingPathComponent(route))
-    request.timeoutInterval = timeout
-    request.setValue(origin, forHTTPHeaderField: "Origin")
+    var request = request(to: base.appendingPathComponent(route), timeout: timeout)
     if let body {
       request.httpMethod = "POST"
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
       let encoder = JSONEncoder()
       request.httpBody = try encoder.encode(body)
     }
+    return request
+  }
+
+  /// A GET of `url`, which must be under the capability URL, carrying the service's origin.
+  ///
+  /// - Parameters:
+  ///   - url: The route's full URL, query included.
+  ///   - timeout: How long the reply may take, in seconds.
+  /// - Returns: The request.
+  func request(to url: URL, timeout: TimeInterval = ViewerClient.timeout) -> URLRequest {
+    var request = URLRequest(url: url)
+    request.timeoutInterval = timeout
+    request.setValue(origin, forHTTPHeaderField: "Origin")
     return request
   }
 
@@ -219,11 +237,14 @@ package struct ViewerClient: ViewerService {
   /// Every POST reply says whether it worked.
   private struct Acknowledgement: Decodable { let ok: Bool? }
 
-  /// The service's own error in `data`, else `fallback`.
+  /// The service's own error in `data`, with its code, else `fallback`.
   static func failure(_ data: Data, fallback: String) -> ServiceError {
-    struct Reply: Decodable { let error: String? }
+    struct Reply: Decodable {
+      let error: String?
+      let code: String?
+    }
     let reply = decoded(Reply.self, from: data)
-    return ServiceError(reply?.error ?? fallback)
+    return ServiceError(reply?.error ?? fallback, code: reply?.code)
   }
 
   /// A reply decoded as `type`, or nil when it is not one.
@@ -232,7 +253,7 @@ package struct ViewerClient: ViewerService {
   ///   - type: The reply's expected shape.
   ///   - data: The reply's body.
   /// - Returns: The decoded reply, or nil.
-  private static func decoded<T: Decodable>(_ type: T.Type, from data: Data) -> T? {
+  static func decoded<T: Decodable>(_ type: T.Type, from data: Data) -> T? {
     let decoder = JSONDecoder()
     return try? decoder.decode(type, from: data)
   }

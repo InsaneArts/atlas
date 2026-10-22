@@ -14,6 +14,15 @@ struct WordsTests {
     #expect(Words.ago(seconds) == words)
   }
 
+  // Each case sits on a unit's edge, where a row would otherwise read "60 s" or "60 min".
+  @Test(
+    "a short age moves to the next unit at a whole minute and a whole hour",
+    arguments: [(0.4, "now"), (9.0, "9 s"), (59.9, "59 s"), (60, "1 min"), (3599, "59 min"), (3600, "1 h")]
+  )
+  func shortAgo(seconds: Double, words: String) {
+    #expect(Words.shortAgo(seconds) == words)
+  }
+
   @Test("an operation reads as what it did, or what could not be done, never its payload or its name")
   func operations() {
     #expect(Words.describe(.init(operation: "run", ok: true)) == "ran a command")
