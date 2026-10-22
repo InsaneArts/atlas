@@ -19,4 +19,16 @@ struct AccountNameRuleTests {
       "Create waits for a name the command line takes: \(name)"
     )
   }
+
+  @Test(
+    "the name a problem suggests is one the rule takes, made from what was typed",
+    arguments: [
+      ("Atlas Helper", "atlas-helper"), ("café bot", "cafe-bot"), ("-dash", "dash"), ("..", "atlas"),
+      ("a  b!!c", "a-b-c"), (String(repeating: "x", count: 40), String(repeating: "x", count: 31)),
+    ]
+  )
+  func suggestion(name: String, suggested: String) {
+    #expect(AccountNameRule.suggestion(for: name) == suggested, "\(name)")
+    #expect(AccountNameRule.problem(suggested) == nil, "\(suggested) is taken")
+  }
 }

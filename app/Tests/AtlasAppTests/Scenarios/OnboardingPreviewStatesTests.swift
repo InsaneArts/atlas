@@ -152,6 +152,8 @@
       loadingFailed.problem = PreviewStates.onboardingLoadingProblem
       var create = choose
       create.choices.creating = true
+      var badName = create
+      badName.form = PreviewStates.onboardingFormBadName
       var creating = create
       creating.working = OnboardingWords.creating
       var finishing = loaded(try person(helper()))
@@ -199,6 +201,7 @@
         "Choose, only the helper set up": only,
         "Create": create,
         "Create, working": creating,
+        "Create, a bad account name": badName,
         "Switch": loaded(try person(helper(signedIn: false, answering: false, allowed: false))),
         "Switch, open Atlas": loaded(try person(helper(answering: false, allowed: false))),
         "Switch, a long name": switchLong,

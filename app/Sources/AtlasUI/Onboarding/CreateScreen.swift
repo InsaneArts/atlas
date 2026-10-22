@@ -15,11 +15,11 @@ struct CreateScreen: View {
       CardGroup {
         FieldRow(label: "Full name", text: $form.fullName)
         SeparatorLine()
-        FieldRow(label: "Account name", text: $form.accountName)
+        FieldRow(label: "Account name", text: $form.accountName, isFlagged: state.flagged == .accountName)
         SeparatorLine()
         FieldRow(label: "Password", text: $form.password, secure: true)
         SeparatorLine()
-        FieldRow(label: "Verify", text: $form.verify, secure: true)
+        FieldRow(label: "Verify", text: $form.verify, secure: true, isFlagged: state.flagged == .verify)
       }
       .disabled(!state.isFormEnabled)
       .opacity(state.isFormEnabled ? 1 : Opacity.busy)

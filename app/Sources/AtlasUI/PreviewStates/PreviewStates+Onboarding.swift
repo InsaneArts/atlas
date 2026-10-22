@@ -13,6 +13,7 @@
         PreviewState(name: "Choose, only the helper set up", value: onboardingChooseOnly),
         PreviewState(name: "Create", value: onboardingCreate),
         PreviewState(name: "Create, working", value: onboardingCreateWorking),
+        PreviewState(name: "Create, a bad account name", value: onboardingCreateBadName),
         PreviewState(name: "Switch", value: onboardingSwitch),
         PreviewState(name: "Switch, open Atlas", value: onboardingSwitchOpenAtlas),
         PreviewState(name: "Switch, a long name", value: onboardingSwitchLong),
@@ -72,6 +73,23 @@
       note: .none,
       isBusy: false
     )
+
+    /// The account form with a short name macOS refuses: the row is marked, the note says why and what to try, and
+    /// Create waits. Drawn with ``onboardingFormBadName``.
+    @MainActor package static let onboardingCreateBadName: OnboardingState = {
+      var state = onboardingCreate
+      state.content = .screen(
+        .create(
+          OnboardingCreateScreenState(
+            tail: "macOS asks for your password next.",
+            note: .problem("Account names can't have spaces. Try “atlas-helper”."),
+            isFormEnabled: true,
+            flagged: .accountName
+          )
+        )
+      )
+      return state
+    }()
 
     /// The account being made: the form and the footer wait for macOS's dialog.
     @MainActor package static let onboardingCreateWorking: OnboardingState = {
@@ -393,6 +411,14 @@
 
     /// The form a new window opens with.
     @MainActor package static let onboardingForm = OnboardingAccountForm()
+
+    /// A filled form whose short name has a space, which macOS refuses.
+    @MainActor package static let onboardingFormBadName = OnboardingAccountForm(
+      fullName: "Atlas Helper",
+      accountName: "Atlas Helper",
+      password: "secret",
+      verify: "secret"
+    )
 
     /// Back, ready to press.
     @MainActor static let onboardingBack = OnboardingFooterAction(

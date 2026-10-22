@@ -30,12 +30,17 @@ extension OnboardingPresenter {
   /// - Returns: The form's screen.
   static func create(_ snapshot: OnboardingSnapshot) -> OnboardingCreateScreenState {
     let working = snapshot.working != nil
+    let form = snapshot.form
+    let nameProblem = AccountNameRule.problem(form.accountName)
+    let passwordProblem = PasswordRule.problem(password: form.password, verify: form.verify)
+    // A password problem is the verify field's only when the two differ; the others are about the password itself.
+    let differs = passwordProblem != nil && !form.verify.isEmpty && form.password != form.verify
     return OnboardingCreateScreenState(
       tail: working ? OnboardingWords.confirmInDialog : OnboardingWords.passwordNext,
-      note: (AccountNameRule.problem(snapshot.form.accountName)
-        ?? PasswordRule.problem(password: snapshot.form.password, verify: snapshot.form.verify))
+      note: (nameProblem ?? passwordProblem)
         .map(WorkNote.problem) ?? note(snapshot),
-      isFormEnabled: !working
+      isFormEnabled: !working,
+      flagged: nameProblem != nil ? .accountName : differs ? .verify : nil
     )
   }
 
