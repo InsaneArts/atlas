@@ -16,5 +16,6 @@ struct ShellRoot<Content: View>: View {
   /// The window's view, built afresh.
   var body: some View {
     content()
+      .environment(\.appIcon, AppIconImage.image)
   }
 }

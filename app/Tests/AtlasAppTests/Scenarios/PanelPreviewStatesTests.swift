@@ -9,78 +9,72 @@
   @MainActor
   @Suite("PreviewStates+Panel")
   struct PanelPreviewStatesTests {
-    /// What the controller holds on a set-up Mac whose helper is in `mode`: Atlas, its display and an agent's screenshot
-    /// 2 minutes ago, its desktop on show, its helper known and Open at Login off.
+    /// What the controller holds on a set-up Mac whose helper is in `mode`: an agent's three actions in Opie, a few
+    /// seconds ago while it works and two minutes ago otherwise, and the helper's screen on show.
     ///
     /// - Parameters:
     ///   - mode: The helper's mode, as the service names it.
-    ///   - reason: Why it is in that mode.
+    ///   - state: The state the service shows for it.
+    ///   - holdingControl: Whether Atlas's main window holds control.
     /// - Returns: The snapshot.
     /// - Throws: A decoding error, which a fixed reply never gives.
-    func snapshot(_ mode: String, reason: String = "Ready for agents") throws -> PanelSnapshot {
-      let reported = try status([
-        "overview": [
-          "mode": mode,
-          "reason": reason,
-          "account": "atlas",
-          "accountName": "Atlas",
-          "display": ["width": 1512, "height": 982],
-          "activity": [["operation": "screenshot", "actor": "agent", "ok": true, "ageSeconds": 120]],
-        ]
-      ])
+    func snapshot(_ mode: String, state: String, holdingControl: Bool = false) throws -> PanelSnapshot {
+      let working = mode == "agent"
+      let said = [
+        working ? "turning Show Center off in Opie" : "turned Show Center off", "clicked Ring in Opie", "opened Opie",
+      ]
+      let ages = working ? [2, 9, 31] : [120, 129, 151]
+      let activity = zip(said, ages)
+        .map { ["operation": "input", "actor": "agent", "ok": true, "ageSeconds": $1, "says": $0] as [String: Any] }
       return PanelSnapshot(
-        status: reported,
+        status: try status(["overview": ["mode": mode, "state": state, "reason": "", "activity": activity]]),
         picture: SampleDesktop.picture,
-        helper: "atlas",
-        opensAtLogin: OpenAtLogin.State(isAvailable: true, isEnabled: false)
+        holdingControl: holdingControl
       )
     }
 
     @Test("each panel sample is what the panel shows for the same facts")
     func samplesMatchThePresenter() throws {
-      var noPicture = try snapshot("observing")
-      noPicture.picture = nil
-      noPicture.placeholder = PanelWords.pictureUnavailable
-      var confirming = try snapshot("observing")
-      confirming.logOutStage = .confirming
-      var held = try snapshot("observing")
-      held.logOutStage = .held
-      held.feedback = "The helper has not logged out yet"
-      var working = try snapshot("observing")
-      working.working = true
-      working.feedback = Words.recovering
-      var unavailable = PanelSnapshot(
-        status: try status(["overview": ["mode": "unavailable", "reason": Words.connecting]]),
-        placeholder: PanelWords.pictureUnavailable,
-        opensAtLogin: OpenAtLogin.State(isAvailable: true, isEnabled: false)
-      )
-      unavailable.helper = nil
-      var inputStopped = try snapshot(
-        "blocked",
-        reason: "Mouse and keyboard stopped in the helper. Recover starts them again."
-      )
-      inputStopped.status.overview.recoverable = true
+      var paused = try snapshot("observing", state: "idle")
+      paused.session.paused = true
+      var refused = try snapshot("agent", state: "working")
+      refused.session.notice = "The agent could not be stopped. Try again."
       let presented: [String: PanelSnapshot] = [
-        "Watching": try snapshot("observing"),
-        "Agent working": try snapshot("agent", reason: "An agent is acting in the helper"),
-        "Stopped": try snapshot("stopped", reason: "You stopped the agent. It waits until you resume it."),
-        "In control": try snapshot("controlling", reason: "A viewer has control"),
-        "Recovering": try snapshot(
-          "recovering",
-          reason: "An action's outcome is unknown. Recover the helper before anything else runs."
-        ),
-        "Input stopped": inputStopped,
-        "Logged out": try snapshot("loggedOut", reason: "The helper is logged out"),
-        "No picture": noPicture,
-        "Confirm log-out": confirming,
-        "Log-out held": held,
-        "Working message": working,
-        "Unavailable": unavailable,
+        "Idle": try snapshot("observing", state: "idle"),
+        "Working": try snapshot("agent", state: "working"),
+        "You have control": try snapshot("controlling", state: "control", holdingControl: true),
+        "Needs you": try snapshot("recovering", state: "needsYou"),
+        "Logged out": try snapshot("loggedOut", state: "notReady"),
+        "Not ready": try snapshot("unavailable", state: "notReady"),
+        "Stopped": try snapshot("stopped", state: "stopped"),
+        "Connecting": PanelSnapshot(connecting: true),
+        "In use elsewhere": try snapshot("controlling", state: "control"),
+        "Paused": paused,
+        "Stop refused": refused,
       ]
       #expect(Set(presented.keys) == Set(PreviewStates.panel.map(\.name)), "every sample has its facts, and no more")
       for preview in PreviewStates.panel {
         let snapshot = try #require(presented[preview.name], "\(preview.name) has no facts")
         #expect(preview.value == PanelPresenter.state(snapshot), "\(preview.name)")
+      }
+    }
+
+    @Test("each alert window sample is what the alert window shows for the same alert")
+    func alertSamplesMatchThePresenter() {
+      var recovering = ViewerStatus.Overview()
+      recovering.mode = .recovering
+      let presented: [String: AlertSnapshot] = [
+        "Recover": AlertSnapshot(alert: .recover, overview: recovering),
+        "Switch": AlertSnapshot(alert: .switchToHelper),
+        "Log out": AlertSnapshot(alert: .logOut),
+        "Log out anyway": AlertSnapshot(alert: .logOutAnyway),
+        "Recover refused": AlertSnapshot(alert: .recover, failure: HelperWords.recoverBusy, overview: recovering),
+        "Recovering": AlertSnapshot(alert: .recover, running: true, overview: recovering),
+      ]
+      #expect(Set(presented.keys) == Set(PreviewStates.alert.map(\.name)), "every sample has its facts, and no more")
+      for preview in PreviewStates.alert {
+        guard let snapshot = presented[preview.name] else { continue }
+        #expect(preview.value == AlertPresenter.state(snapshot), "\(preview.name)")
       }
     }
   }

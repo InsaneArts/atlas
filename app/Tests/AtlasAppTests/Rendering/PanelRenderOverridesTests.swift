@@ -13,32 +13,23 @@ struct PanelRenderOverridesTests {
     let live = PanelRenderOverrides(environment: ["ATLAS_RENDER_MODE": "nonsense", "ATLAS_RENDER_MESSAGE": ""])
       .applied(to: observing)
     #expect(live.status.overview.mode == .observing, "an unknown mode keeps the live one")
-    #expect(live.feedback == nil)
-    #expect(live.logOutStage == .idle)
-    #expect(live.helper == nil && live.opensAtLogin == nil)
+    #expect(live.session.notice == nil)
+    #expect(live.opensAtLogin == nil && live.status.overview.activity.isEmpty)
   }
 
-  @Test("the mode and the message replace the live ones")
-  func theModeAndMessageReplaceTheLiveOnes() {
-    let shown = PanelRenderOverrides(environment: ["ATLAS_RENDER_MODE": "controlling", "ATLAS_RENDER_MESSAGE": "Hi"])
+  @Test(
+    "each render mode reads as its state of the panel",
+    arguments: zip(
+      PanelRender.modes,
+      [
+        "Idle", "Working", "You have control", "Needs you", "Logged out", "Not ready", "Stopped", "Connecting",
+        "In use elsewhere",
+      ]
+    )
+  )
+  func eachModeReadsAsItsState(mode: String, label: String) {
+    let shown = PanelRenderOverrides(environment: ["ATLAS_RENDER_MODE": mode, "ATLAS_RENDER_PREVIEW": "1"])
       .applied(to: PanelSnapshot())
-    #expect(shown.status.overview.mode == .controlling)
-    #expect(shown.feedback == "Hi")
-  }
-
-  @Test("a log-out step shows its stage and every action, as on a set-up Mac", arguments: ["ask", "held"])
-  func aLogOutStepShowsEveryAction(step: String) {
-    let overrides = PanelRenderOverrides(environment: ["ATLAS_RENDER_LOGOUT": step])
-    let shown = overrides.applied(to: PanelSnapshot())
-    #expect(shown.logOutStage == (step == "ask" ? .confirming : .held))
-    #expect(shown.helper != nil && shown.opensAtLogin?.isAvailable == true)
-  }
-
-  @Test("the preview flag shows every action with no log-out step")
-  func thePreviewShowsEveryAction() {
-    let overrides = PanelRenderOverrides(environment: ["ATLAS_RENDER_PREVIEW": "1"])
-    let shown = overrides.applied(to: PanelSnapshot())
-    #expect(shown.helper != nil && shown.opensAtLogin?.isAvailable == true)
-    #expect(shown.logOutStage == .idle)
+    #expect(PanelPresenter.state(shown).status.label == label)
   }
 }

@@ -112,6 +112,17 @@
         started: true
       )
       many.picked = .newAccount
+      var chooseLong = loaded(
+        try person(candidates: [
+          (
+            "mariafernanda",
+            "Maria Fernanda Montgomery-Castellanos de la Vega y Rodríguez-Hernández del Valle Alto de San Sebastián y Monteverde de los Ríos"
+          ),
+          ("testaccount", "Test Account"),
+        ]),
+        started: true
+      )
+      chooseLong.picked = .existing("mariafernanda")
       var chooseProblem = loaded(
         try person(candidates: [("testaccount", "Test Account"), ("kid", "Guest Kid")]),
         started: true
@@ -183,6 +194,7 @@
         "Welcome": loaded(try person()),
         "Choose": choose,
         "Choose, many accounts": many,
+        "Choose, a long name": chooseLong,
         "Choose, a problem": chooseProblem,
         "Choose, only the helper set up": only,
         "Create": create,
