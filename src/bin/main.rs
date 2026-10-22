@@ -476,6 +476,9 @@ enum Command {
         /// Install this release tag instead of the latest.
         #[arg(long)]
         version: Option<String>,
+        /// Only say whether a newer release is out; install nothing.
+        #[arg(long, conflicts_with_all = ["allow_unnotarized", "force"])]
+        check: bool,
     },
     /// Set Atlas up, step by step (safe to run again).
     ///
@@ -574,6 +577,11 @@ enum AgentsCommand {
         /// The project folder (default: this one).
         dir: Option<PathBuf>,
     },
+    /// Take the Atlas section out of a project's AGENTS.md and CLAUDE.md.
+    Forget {
+        /// The project folder (default: this one).
+        dir: Option<PathBuf>,
+    },
     /// Connect the plugin to Claude Code and/or Codex (all installed by default).
     Install {
         /// Only Claude Code.
@@ -582,6 +590,9 @@ enum AgentsCommand {
         /// Only Codex.
         #[arg(long)]
         codex: bool,
+        /// Only the Claude app.
+        #[arg(long)]
+        app: bool,
     },
     /// Disconnect the plugin from Claude Code and/or Codex.
     Remove {
@@ -591,7 +602,24 @@ enum AgentsCommand {
         /// Only Codex.
         #[arg(long)]
         codex: bool,
+        /// Only the Claude app.
+        #[arg(long)]
+        app: bool,
     },
+}
+
+/// Connect or disconnect the agents named by --claude/--codex/--app; none
+/// named means every installed one, the Claude app included.
+fn changed(claude: bool, codex: bool, app: bool, remove: bool) -> Result<Value> {
+    // Connecting an app that isn't here would only leave its settings behind.
+    if app && !remove && !atlas::claude_app::installed() {
+        return Err(Error::new("agents", "The Claude app isn't installed"));
+    }
+    if app {
+        atlas::agents::change_these(&chosen(claude, codex), false, true, remove)
+    } else {
+        atlas::agents::change(&chosen(claude, codex), remove)
+    }
 }
 
 /// The agents named by --claude/--codex (none means every installed one).
@@ -730,7 +758,7 @@ fn main() -> ExitCode {
         | Command::Uninstall { .. }
         | Command::Logout { .. }
         | Command::Agents { .. } => Some("Stopped."),
-        Command::Update { .. } => Some("Stopped. Run atlas update again to finish."),
+        Command::Update { check: false, .. } => Some("Stopped. Run atlas update again to finish."),
         _ => None,
     };
     let runs_agents = matches!(
@@ -918,7 +946,7 @@ fn changes_helper(command: &Command) -> bool {
         | Command::Logout { .. }
         | Command::VerifyNative { .. }
         | Command::Install
-        | Command::Update { .. } => true,
+        | Command::Update { check: false, .. } => true,
         Command::Setup {
             apply, rollback, ..
         } => *apply || *rollback,
@@ -1011,10 +1039,11 @@ fn view(command: &Command) -> View {
             action: Some(AgentsCommand::Install { .. } | AgentsCommand::Remove { .. }),
         } => View::AgentsChange,
         Command::Agents {
-            action: Some(AgentsCommand::Project { .. }),
+            action: Some(AgentsCommand::Project { .. } | AgentsCommand::Forget { .. }),
         } => View::AgentsProject,
         Command::Agents { .. } => View::Agents,
         Command::Switch { .. } => View::Switch,
+        Command::Update { check: true, .. } => View::Generic,
         Command::Update { .. } => View::Update,
         Command::Uninstall { .. } => View::Uninstall,
         Command::Menubar { login: Some(_), .. } => View::Login,
@@ -1274,9 +1303,15 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
         } => input_service(uid, controller_uid, socket).await,
         Command::SetupHelper { request } => atlas::setup::helper::run(&request),
         Command::Update {
+            check: true,
+            version,
+            ..
+        } => atlas::update::newer(&atlas::update::Source::from_env(version)),
+        Command::Update {
             allow_unnotarized,
             force,
             version,
+            check: false,
         } => {
             as_yourself("update")?;
             update(&config, allow_unnotarized, force, version)
@@ -1325,13 +1360,16 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
                 AgentsCommand::Project { dir } => {
                     atlas::agents::project(&dir.unwrap_or_else(|| PathBuf::from(".")))
                 }
-                AgentsCommand::Install { claude, codex } => {
-                    let _spinner = Spinner::new("Connecting…");
-                    atlas::agents::change(&chosen(claude, codex), false)
+                AgentsCommand::Forget { dir } => {
+                    atlas::agents::forget(&dir.unwrap_or_else(|| PathBuf::from(".")))
                 }
-                AgentsCommand::Remove { claude, codex } => {
+                AgentsCommand::Install { claude, codex, app } => {
+                    let _spinner = Spinner::new("Connecting…");
+                    changed(claude, codex, app, false)
+                }
+                AgentsCommand::Remove { claude, codex, app } => {
                     let _spinner = Spinner::new("Disconnecting…");
-                    atlas::agents::change(&chosen(claude, codex), true)
+                    changed(claude, codex, app, true)
                 }
             }
         }
