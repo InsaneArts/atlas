@@ -1,0 +1,17 @@
+import AtlasUI
+
+/// What the Settings window is doing: the pane shown, the alert asked, what runs, and what the last command said.
+struct SettingsSession: Equatable {
+  /// The pane shown.
+  var tab = SettingsTab.general
+  /// The alert asked, if any.
+  var alert: SettingsAlert?
+  /// Whether the alert's command runs now, so its buttons wait.
+  var alertRunning = false
+  /// Whether Check Again's reading runs now.
+  var checking = false
+  /// Where a check for updates stands.
+  var update = SettingsUpdate.idle
+  /// What the last command said, in the pane that ran it.
+  var notice: SettingsNotice?
+}
