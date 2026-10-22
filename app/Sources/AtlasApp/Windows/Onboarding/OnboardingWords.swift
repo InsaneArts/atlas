@@ -186,10 +186,7 @@ enum OnboardingWords {
   /// - Parameter agent: The agent.
   /// - Returns: "Claude Code" or "Codex".
   static func agentTitle(_ agent: AgentID) -> String {
-    switch agent {
-    case .claude: "Claude Code"
-    case .codex: "Codex"
-    }
+    Words.agentTitle(agent)
   }
 
   /// An agent that already knows Atlas.
@@ -231,7 +228,7 @@ enum OnboardingWords {
   /// The helper's done tail when no account asked.
   static let switchBackToOwn = "Switch back to your own account."
 
-  /// The allow screen's eyebrow.
+  /// The allow screen's label over its title.
   ///
   /// - Parameter account: This account as people know it.
   /// - Returns: "Atlas in the Atlas account"
@@ -263,14 +260,14 @@ enum OnboardingWords {
     "Allow \(permission)"
   }
 
-  /// The guide's eyebrow.
+  /// The guide's label over its title.
   ///
   /// - Parameters:
   ///   - number: Which permission, from 1.
   ///   - count: How many.
   ///   - permission: Its name.
   /// - Returns: "1 of 2 · Accessibility"
-  static func guideEyebrow(_ number: Int, of count: Int, _ permission: String) -> String {
+  static func guideLabel(_ number: Int, of count: Int, _ permission: String) -> String {
     "\(number) of \(count) · \(permission)"
   }
 

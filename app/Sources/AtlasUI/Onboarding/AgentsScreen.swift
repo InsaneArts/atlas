@@ -14,7 +14,7 @@ struct AgentsScreen: View {
   /// The agents' card, the projects' card, and the work note.
   var body: some View {
     ScreenColumn(width: OnboardingLayout.listColumn) {
-      Eyebrow(text: "Your agents")
+      GroupLabel(text: "Your agents")
       Headline(title: OnboardingScreen.agentsTitle, tail: OnboardingScreen.agentsTail)
       CardGroup(state.agents) { agent in
         AgentRow(agent: agent) { send(.setAgent(id: agent.id, on: $0)) }

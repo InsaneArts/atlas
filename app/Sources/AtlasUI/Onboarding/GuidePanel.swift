@@ -8,27 +8,30 @@ struct GuidePanel: View {
   /// Receives Back.
   let send: @MainActor (OnboardingEvent) -> Void
 
-  /// The three steps, what the panel waits for, and Back.
+  /// The three steps, what the panel waits for, and Back, spaced as the card's screens are: its pieces as a column's,
+  /// its steps as the switch screen's.
   var body: some View {
-    VStack(spacing: Spacing.l) {
-      Eyebrow(text: state.eyebrow)
+    VStack(spacing: Spacing.xl) {
+      GroupLabel(text: state.label)
       Headline(title: "Turn on Atlas.", size: .compact)
-        .padding(.bottom, Spacing.xs)
-      StepRow(index: 1, title: "Find Atlas in the list", detail: state.settingsPath, state: .done)
-      StepRow(
-        index: 2,
-        title: "Turn its switch on",
-        detail: "Confirm with Touch ID or your password",
-        state: state.turnOn
-      )
-      StepRow(index: 3, title: "Come back here", detail: "Atlas notices on its own", state: state.comeBack)
+      VStack(spacing: Spacing.m) {
+        StepRow(index: 1, title: "Find Atlas in the list", detail: state.settingsPath, state: .done)
+        StepRow(
+          index: 2,
+          title: "Turn its switch on",
+          detail: "Confirm with Touch ID or your password",
+          state: state.turnOn
+        )
+        StepRow(index: 3, title: "Come back here", detail: "Atlas notices on its own", state: state.comeBack)
+      }
+      .padding(.top, Spacing.xs)
       Spacer(minLength: Spacing.m)
       ProgressPill(text: state.pill, done: state.isOn)
       Button("Back") { send(.closeGuide) }
         .buttonStyle(.capsule(.plain))
         .keyboardShortcut(.cancelAction)
     }
-    .padding(.horizontal, OnboardingLayout.guideSideInset)
+    .padding(.horizontal, Spacing.section)
     .padding(.top, OnboardingLayout.guideTop)
     .padding(.bottom, OnboardingLayout.guideBottom)
   }

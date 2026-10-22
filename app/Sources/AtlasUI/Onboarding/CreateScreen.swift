@@ -10,7 +10,7 @@ struct CreateScreen: View {
   /// The form, then the line under it.
   var body: some View {
     ScreenColumn {
-      Eyebrow(text: "New account")
+      GroupLabel(text: "New account")
       Headline(title: OnboardingScreen.createTitle, tail: state.tail)
       CardGroup {
         FieldRow(label: "Full name", text: $form.fullName)

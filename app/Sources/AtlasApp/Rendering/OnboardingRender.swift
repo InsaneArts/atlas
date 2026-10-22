@@ -14,6 +14,7 @@
       ("01-welcome", PreviewStates.onboardingWelcome),
       ("02-choose", PreviewStates.onboardingChoose),
       ("02-choose-many", PreviewStates.onboardingChooseMany),
+      ("02-choose-long", PreviewStates.onboardingChooseLong),
       ("02-choose-problem", PreviewStates.onboardingChooseProblem),
       ("02-choose-only", PreviewStates.onboardingChooseOnly),
       ("03-create", PreviewStates.onboardingCreate),

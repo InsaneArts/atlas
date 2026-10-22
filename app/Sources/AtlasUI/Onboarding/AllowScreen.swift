@@ -21,7 +21,10 @@ struct AllowScreen: View {
         AppIcon(size: OnboardingLayout.allowIcon)
       }
       .accessibilityHidden(true)
-      Eyebrow(text: state.eyebrow)
+      GroupLabel(text: state.label)
+        .lineLimit(OnboardingLayout.nameLines)
+        .truncationMode(.middle)
+        .multilineTextAlignment(.center)
         .padding(.top, Spacing.s)
       Headline(title: state.title, tail: OnboardingScreen.allowTail)
       Lede(text: state.lede)

@@ -55,8 +55,12 @@ final class OnboardingController {
   /// The `atlas` command line every action runs.
   var commands: any CommandRunning { dependencies.commands }
 
-  /// The window as it should look now.
-  var state: OnboardingState { OnboardingPresenter.state(snapshot) }
+  /// The window as it should look now, with whether an agents install runs from any window.
+  var state: OnboardingState {
+    var shown = snapshot
+    shown.agentsInstalling = dependencies.installs.isBusy
+    return OnboardingPresenter.state(shown)
+  }
 
   /// Applies one of the window's events.
   ///
@@ -184,12 +188,27 @@ final class OnboardingController {
   /// - Returns: The command's outcome, or nil when another one runs or the window has closed.
   @discardableResult
   func act(_ action: Action, _ words: String, input: Data? = nil) async -> Outcome? {
+    await act(words) { await self.commands.run(action, input: input) }
+  }
+
+  /// Runs `command` as ``act(_:_:input:)`` runs a command; one that could not start, as an agents install while
+  /// another window's runs, says so.
+  ///
+  /// - Parameters:
+  ///   - words: What runs, in words, while it does.
+  ///   - command: The command, answering nil when it could not start.
+  /// - Returns: Its outcome, or nil when it did not run or the window closed.
+  func act(_ words: String, _ command: () async -> Outcome?) async -> Outcome? {
     guard !closed, snapshot.working == nil else { return nil }
     snapshot.working = words
     snapshot.problem = nil
-    let outcome = await commands.run(action, input: input)
+    let ran = await command()
     snapshot.working = nil
     guard !closed else { return nil }
+    guard let outcome = ran else {
+      snapshot.problem = HelperWords.waitForAction
+      return nil
+    }
     if !outcome.ok { snapshot.problem = Words.sentence(outcome.message) }
     refresh()
     return outcome
@@ -331,7 +350,8 @@ final class OnboardingController {
   func connectAgents() async {
     let chosen = AgentChoice.toConnect(snapshot.agents)
     if !chosen.isEmpty {
-      guard let outcome = await act(.installAgents(chosen), OnboardingWords.connecting) else { return }
+      let installs = dependencies.installs
+      guard let outcome = await act(OnboardingWords.connecting, { await installs.install(chosen) }) else { return }
       let change = outcome.decode(AgentsChange.self)
       // A reply that names no agent connected them all when it worked.
       let connected = outcome.ok ? chosen : change?.connected ?? []

@@ -10,10 +10,12 @@ struct FinishingScreen: View {
   /// The checklist, then why it failed with Try Again, or what the last check does.
   var body: some View {
     ScreenColumn {
-      Eyebrow(text: "Welcome back")
+      GroupLabel(text: "Welcome back")
       Headline(title: state.title, tail: state.tail)
       CardGroup {
         CheckRow(text: state.loggedIn, state: .done, note: "in the background")
+          .lineLimit(OnboardingLayout.nameLines)
+          .truncationMode(.middle)
         SeparatorLine()
         CheckRow(text: "Atlas runs there", state: .done, note: "starts by itself")
         SeparatorLine()

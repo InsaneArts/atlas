@@ -324,11 +324,11 @@ struct OnboardingPresenterTests {
   @Test("the guide counts its permission and ticks its steps once the switch is on")
   func guideSteps() throws {
     let off = OnboardingPresenter.guide(.screenRecording, asker: try Self.helperSide(accessibility: true).asker)
-    #expect(off.eyebrow == "2 of 2 · Screen Recording")
+    #expect(off.label == "2 of 2 · Screen Recording")
     #expect([off.turnOn, off.comeBack] == [.current, .waiting])
     #expect(off.pill == "Waiting for Screen Recording…" && !off.isOn)
     let on = OnboardingPresenter.guide(.accessibility, asker: try Self.helperSide(accessibility: true).asker)
-    #expect(on.eyebrow == "1 of 2 · Accessibility")
+    #expect(on.label == "1 of 2 · Accessibility")
     #expect([on.turnOn, on.comeBack] == [.done, .done])
     #expect(on.pill == "Accessibility is on" && on.isOn)
   }

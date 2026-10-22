@@ -1,7 +1,7 @@
 /// The narrow panel beside System Settings while one permission's switch is turned on.
 package struct OnboardingGuideState: Equatable, Sendable {
   /// Which permission of how many, and its name.
-  package var eyebrow: String
+  package var label: String
   /// The first step's detail: where the switch is.
   package var settingsPath: String
   /// Where the second step, turning the switch on, stands.
@@ -16,21 +16,21 @@ package struct OnboardingGuideState: Equatable, Sendable {
   /// Creates the guide panel's state.
   ///
   /// - Parameters:
-  ///   - eyebrow: Which permission of how many, and its name.
+  ///   - label: Which permission of how many, and its name.
   ///   - settingsPath: The first step's detail: where the switch is.
   ///   - turnOn: Where the second step, turning the switch on, stands.
   ///   - comeBack: Where the third step, coming back, stands.
   ///   - pill: What the panel waits for, or that the switch is on.
   ///   - isOn: Whether the switch is on, which ticks the pill.
   package init(
-    eyebrow: String,
+    label: String,
     settingsPath: String,
     turnOn: StepState,
     comeBack: StepState,
     pill: String,
     isOn: Bool
   ) {
-    self.eyebrow = eyebrow
+    self.label = label
     self.settingsPath = settingsPath
     self.turnOn = turnOn
     self.comeBack = comeBack

@@ -14,10 +14,12 @@ struct SwitchScreen: View {
   /// The three steps, Lock and Switch until the helper is on screen, then what happens next.
   var body: some View {
     ScreenColumn(width: OnboardingLayout.listColumn) {
-      Eyebrow(text: "Helper account")
+      GroupLabel(text: "Helper account")
       Headline(title: state.title, tail: OnboardingScreen.switchTail)
       VStack(spacing: Spacing.m) {
         StepRow(index: 1, title: "Lock and switch", detail: state.logInDetail, state: state.progress.logIn)
+          .lineLimit(OnboardingLayout.nameLines)
+          .truncationMode(.middle)
         StepRow(
           index: 2,
           title: state.openAtlasTitle,
@@ -41,6 +43,9 @@ struct SwitchScreen: View {
       }
       if let waiting = state.waiting {
         ProgressPill(text: waiting)
+          .lineLimit(OnboardingLayout.nameLines)
+          .truncationMode(.middle)
+          .multilineTextAlignment(.center)
       } else {
         WorkNoteLine(note: note)
       }

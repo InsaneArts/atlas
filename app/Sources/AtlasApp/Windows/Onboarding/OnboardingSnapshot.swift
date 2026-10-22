@@ -25,6 +25,8 @@ struct OnboardingSnapshot {
   var agents: [AgentChoice] = []
   /// Whether `atlas agents status` has said which agents are installed.
   var agentsLoaded = false
+  /// Whether an agents install runs now, from this window or Settings, so Continue waits for it.
+  var agentsInstalling = false
   /// Whether `atlas agents status` failed last: the agents stay listed, unchecked, and the step can be skipped.
   var agentsFailed = false
   /// The project folders chosen, in order.

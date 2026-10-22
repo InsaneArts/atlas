@@ -8,6 +8,7 @@
         PreviewState(name: "Welcome", value: onboardingWelcome),
         PreviewState(name: "Choose", value: onboardingChoose),
         PreviewState(name: "Choose, many accounts", value: onboardingChooseMany),
+        PreviewState(name: "Choose, a long name", value: onboardingChooseLong),
         PreviewState(name: "Choose, a problem", value: onboardingChooseProblem),
         PreviewState(name: "Choose, only the helper set up", value: onboardingChooseOnly),
         PreviewState(name: "Create", value: onboardingCreate),
@@ -243,6 +244,26 @@
       return state
     }()
 
+    /// The account choice with an account whose name is longer than two lines, picked: its row cuts the name in its
+    /// middle.
+    @MainActor package static let onboardingChooseLong: OnboardingState = {
+      var state = onboardingChoose
+      var long = onboardingAccount(
+        "Maria Fernanda Montgomery-Castellanos de la Vega y Rodríguez-Hernández del Valle Alto de San Sebastián y Monteverde de los Ríos",
+        "mariafernanda"
+      )
+      long.isSelected = true
+      state.content = .screen(
+        .choose(
+          OnboardingChooseScreenState(
+            isNewAccountPicked: false,
+            accounts: [long, onboardingAccount("Test Account", "testaccount")]
+          )
+        )
+      )
+      return state
+    }()
+
     /// The account choice with two standard accounts, and why the last choice failed.
     @MainActor package static let onboardingChooseProblem: OnboardingState = {
       var state = onboardingChoose
@@ -341,7 +362,7 @@
         .allow(
           OnboardingAllowScreenState(
             initial: "C",
-            eyebrow: "Atlas in Maria Fernanda Montgomery-Castellanos de la Vega",
+            label: "Atlas in Maria Fernanda Montgomery-Castellanos de la Vega",
             title: "Let \(asker) use this account",
             lede:
               "\(asker)'s agents will open apps here, click and type, while \(asker) keeps working in their own account. You allow this once; Atlas then starts here by itself."
@@ -472,7 +493,7 @@
     /// Ismayil asks the Atlas account.
     @MainActor static let onboardingAllowScreen = OnboardingAllowScreenState(
       initial: "I",
-      eyebrow: "Atlas in the Atlas account",
+      label: "Atlas in the Atlas account",
       title: "Let Ismayil use this account",
       lede:
         "Ismayil's agents will open apps here, click and type, while Ismayil keeps working in their own account. You allow this once; Atlas then starts here by itself."
@@ -502,7 +523,7 @@
 
     /// The guide waiting for Accessibility's switch.
     @MainActor static let onboardingGuideState = OnboardingGuideState(
-      eyebrow: "1 of 2 · Accessibility",
+      label: "1 of 2 · Accessibility",
       settingsPath: "Privacy & Security › Accessibility",
       turnOn: .current,
       comeBack: .waiting,

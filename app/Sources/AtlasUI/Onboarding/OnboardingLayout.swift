@@ -17,6 +17,8 @@ package enum OnboardingLayout {
   static let listColumn: CGFloat = 460
   /// 480: the widest column: the account choice and the helper's allow screen.
   static let wideColumn: CGFloat = 480
+  /// 2: the most lines a line naming an account takes; a longer name is cut in its middle, so both its ends show.
+  static let nameLines = 2
   /// 3: the most account rows the choice shows whole; with more, they scroll.
   static let accountRowsInView = 3
   /// 170: the height scrolling account rows take: two rows and most of a third, so the cut row shows there are more,
@@ -32,8 +34,6 @@ package enum OnboardingLayout {
   static let barInset: CGFloat = 22
   /// 20: the work note's least height, so the screen does not jump as it comes and goes.
   static let workNoteHeight: CGFloat = 20
-  /// 26: the guide panel's side inset.
-  static let guideSideInset: CGFloat = 26
   /// 44: above the guide panel's content, clear of the title bar.
   static let guideTop: CGFloat = 44
   /// 18: below the guide panel's content.

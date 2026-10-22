@@ -100,7 +100,7 @@ extension ScreenColumn where Bottom == EmptyView {
 #if DEBUG
   #Preview("A title over a lede") {
     ScreenColumn {
-      Eyebrow(text: String("Helper account"))
+      GroupLabel(text: String("Helper account"))
       Headline(title: String("Agents need an account"), tail: String("of their own."))
       Lede(text: String("A standard account on this Mac that only Atlas uses."))
     }

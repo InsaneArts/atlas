@@ -12,14 +12,21 @@ struct OnboardingDependencies {
   var chooseFolders: @MainActor () -> [URL]
   /// The app's login item, read for Open at Login's first value.
   var loginItem: OpenAtLogin
+  /// Connecting agents, shared with Settings, so one install runs at a time from either window.
+  var installs: AgentInstalls
 
   /// The app's own: `commands`, NSWorkspace, an open panel and the bundled login item.
   ///
   /// - Parameters:
   ///   - commands: The `atlas` command line.
   ///   - loginItem: The app's login item.
+  ///   - installs: Connecting agents, shared with Settings.
   /// - Returns: The live dependencies.
-  static func live(commands: any CommandRunning, loginItem: OpenAtLogin) -> OnboardingDependencies {
+  static func live(
+    commands: any CommandRunning,
+    loginItem: OpenAtLogin,
+    installs: AgentInstalls
+  ) -> OnboardingDependencies {
     OnboardingDependencies(
       commands: commands,
       openURL: { url in
@@ -27,7 +34,8 @@ struct OnboardingDependencies {
           .open(url)
       },
       chooseFolders: askForFolders,
-      loginItem: loginItem
+      loginItem: loginItem,
+      installs: installs
     )
   }
 

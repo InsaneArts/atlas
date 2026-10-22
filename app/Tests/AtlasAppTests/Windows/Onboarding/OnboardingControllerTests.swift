@@ -34,19 +34,22 @@ struct OnboardingControllerTests {
   ///   - opened: Records the URLs opened.
   ///   - folders: What the folder chooser answers.
   ///   - loginItem: The scripted login item.
+  ///   - installs: The agent installs it shares with another window; its own over `commands` when nil.
   /// - Returns: The controller.
   static func controller(
     _ commands: ScriptedCommands,
     opened: OpenedURLs = OpenedURLs(),
     folders: [URL] = [],
-    loginItem: ScriptedLoginItem = ScriptedLoginItem()
+    loginItem: ScriptedLoginItem = ScriptedLoginItem(),
+    installs: AgentInstalls? = nil
   ) -> OnboardingController {
     OnboardingController(
       dependencies: OnboardingDependencies(
         commands: commands,
         openURL: { opened.urls.append($0) },
         chooseFolders: { folders },
-        loginItem: loginItem.seam
+        loginItem: loginItem.seam,
+        installs: installs ?? AgentInstalls(commands: commands)
       )
     )
   }
@@ -56,10 +59,15 @@ struct OnboardingControllerTests {
   /// - Parameters:
   ///   - commands: The scripted command line, answering `onboarding status`.
   ///   - folders: What the folder chooser answers.
+  ///   - installs: The agent installs it shares with another window; its own over `commands` when nil.
   /// - Returns: The controller, loaded.
   /// - Throws: The failed requirement, when the facts are never read.
-  private static func loaded(_ commands: ScriptedCommands, folders: [URL] = []) async throws -> OnboardingController {
-    let controller = controller(commands, folders: folders)
+  private static func loaded(
+    _ commands: ScriptedCommands,
+    folders: [URL] = [],
+    installs: AgentInstalls? = nil
+  ) async throws -> OnboardingController {
+    let controller = controller(commands, folders: folders, installs: installs)
     controller.refresh()
     try await settle("the facts were never read") { controller.snapshot.loaded }
     return controller
@@ -350,6 +358,32 @@ struct OnboardingControllerTests {
     try await settle("the agents were never read") { controller.snapshot.agentsLoaded }
     #expect(controller.snapshot.agents.map(\.id) == AgentID.allCases)
     #expect(controller.snapshot.agents.first?.on == true, "a found agent is switched on")
+  }
+
+  @Test("an agents install Settings started holds the setup window's Continue, and the two never install at once")
+  func installsFromBothWindowsNeverOverlap() async throws {
+    let commands = ScriptedCommands([
+      "onboarding status": finishedMac,
+      "agents status": #"{"ok": true, "agents": [{"agent": "claude", "installed": true, "connected": false}]}"#,
+      "agents install": #"{"ok": true}"#,
+    ])
+    let gate = ReleaseSignal()
+    commands.whileRunning { arguments in
+      if arguments.prefix(2) == ["agents", "install"] { await gate.wait() }
+    }
+    let installs = AgentInstalls(commands: commands)
+    let onboarding = try await Self.loaded(commands, installs: installs)
+    try await settle("the agents were never read") { onboarding.snapshot.agentsLoaded }
+    let settings = SettingsController.scripted(commands: commands, installs: installs)
+    let connecting = Task { await settings.connect("codex") }
+    try await settle("Settings' Connect never started") { installs.isBusy }
+    #expect(onboarding.state.footer.next?.isEnabled == false, "Continue waits for the other window's install")
+    await onboarding.connectAgents()
+    #expect(onboarding.snapshot.problem == HelperWords.waitForAction)
+    gate.open()
+    await connecting.value
+    let installed = commands.ran.filter { $0.prefix(2) == ["agents", "install"] }
+    #expect(installed == [Action.installAgents([.codex]).arguments])
   }
 
   @Test("Continue connects the chosen agents, then teaches each project, naming one that cannot be taught")
