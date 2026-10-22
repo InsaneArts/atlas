@@ -1,60 +1,37 @@
-/// Everything the menu bar panel draws, decided before it reaches the view.
+/// Everything the menu bar panel draws, decided before it reaches the view (MacPanel).
 package struct PanelState: Equatable, Sendable {
-  /// The helper's mode, for the badge beside the title.
+  /// The helper's status: the word and mark on the right of the header, and the line under it; an empty line hides
+  /// its row.
   package var status: StatusSummary
-  /// Why the helper is in its mode, under the title; nil hides the line.
-  package var reason: String?
-  /// What fills the space under the header: the helper's desktop, a placeholder, or the way to log in.
-  package var stage: PanelStage
-  /// Why the recovery card offers Recover; nil hides the card.
-  package var recovery: PanelRecovery?
-  /// The helper, its display and the last action.
-  package var facts: [Fact]
-  /// Whether Open Viewer is the next step; beside the way to log in, it steps back.
-  package var isViewerPrimary: Bool
-  /// The button beside Open Viewer; nil shows none.
-  package var secondary: PanelSecondaryAction?
-  /// Where logging out stands: nothing, the confirmation, or the offer to force it.
-  package var logOut: PanelLogOut
-  /// What the last action said; nil shows nothing.
-  package var feedback: Feedback?
-  /// The menu rows under the cards.
-  package var menu: PanelMenu
+  /// What the last action of the panel's own said when it did not work, shown in place of the status's line until
+  /// the next action or the next opening; nil shows the line.
+  package var notice: String?
+  /// The helper's screen, or why there is none.
+  package var picture: PanelPictureState
+  /// The newest actions, newest first, at most three; empty hides Recent.
+  package var recent: [ActivityEntry]
+  /// The row of buttons at the foot.
+  package var controls: PanelControls
 
   /// Creates the panel's state.
   ///
   /// - Parameters:
-  ///   - status: The helper's mode, for the badge beside the title.
-  ///   - reason: Why the helper is in its mode, under the title; nil hides the line.
-  ///   - stage: What fills the space under the header: the helper's desktop, a placeholder, or the way to log in.
-  ///   - recovery: Why the recovery card offers Recover; nil hides the card.
-  ///   - facts: The helper, its display and the last action.
-  ///   - isViewerPrimary: Whether Open Viewer is the next step; beside the way to log in, it steps back.
-  ///   - secondary: The button beside Open Viewer; nil shows none.
-  ///   - logOut: Where logging out stands: nothing, the confirmation, or the offer to force it.
-  ///   - feedback: What the last action said; nil shows nothing.
-  ///   - menu: The menu rows under the cards.
+  ///   - status: The helper's status, with its line; an empty line hides its row.
+  ///   - notice: What the last action said when it did not work; nil shows the status's line.
+  ///   - picture: The helper's screen, or why there is none.
+  ///   - recent: The newest actions, newest first, at most three; empty hides Recent.
+  ///   - controls: The row of buttons at the foot.
   package init(
     status: StatusSummary,
-    reason: String? = nil,
-    stage: PanelStage,
-    recovery: PanelRecovery? = nil,
-    facts: [Fact],
-    isViewerPrimary: Bool,
-    secondary: PanelSecondaryAction? = nil,
-    logOut: PanelLogOut,
-    feedback: Feedback? = nil,
-    menu: PanelMenu
+    notice: String? = nil,
+    picture: PanelPictureState,
+    recent: [ActivityEntry],
+    controls: PanelControls
   ) {
     self.status = status
-    self.reason = reason
-    self.stage = stage
-    self.recovery = recovery
-    self.facts = facts
-    self.isViewerPrimary = isViewerPrimary
-    self.secondary = secondary
-    self.logOut = logOut
-    self.feedback = feedback
-    self.menu = menu
+    self.notice = notice
+    self.picture = picture
+    self.recent = recent
+    self.controls = controls
   }
 }

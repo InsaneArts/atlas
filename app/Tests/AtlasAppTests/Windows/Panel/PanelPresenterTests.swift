@@ -7,187 +7,126 @@ import Testing
 
 @Suite("PanelPresenter")
 struct PanelPresenterTests {
-  /// A snapshot in `mode`, with the helper's names and display unless said otherwise.
-  private static func snapshot(
-    _ mode: HelperMode,
-    reason: String = "Ready for agents",
-    known: Bool = true,
-    working: Bool = false,
-    helper: String? = "atlas",
-    logOut: LogOutStage = .idle
-  ) -> PanelSnapshot {
-    var status = ViewerStatus()
-    status.overview.mode = mode
-    status.overview.reason = reason
-    if known {
-      status.overview.account = "atlas"
-      status.overview.accountName = "Atlas"
-      status.overview.display = ViewerStatus.Size(width: 1512, height: 982)
-    }
+  /// What the controller holds for one of the status table's rows, by its word: the service's mode and state for it,
+  /// whether Atlas's main window holds control, and whether the panel is still connecting.
+  ///
+  /// - Parameter name: The row's word, such as "Needs you".
+  /// - Returns: The snapshot.
+  /// - Throws: A decoding error, which a fixed reply never gives, or when the row is not one of the table's.
+  private static func snapshot(_ name: String) throws -> PanelSnapshot {
+    let facts: [String: (mode: String, state: String, holding: Bool)] = [
+      "Idle": ("observing", "idle", false),
+      "Working": ("agent", "working", false),
+      "You have control": ("controlling", "control", true),
+      "Needs you": ("recovering", "needsYou", false),
+      "Stopped": ("stopped", "stopped", false),
+      "Logged out": ("loggedOut", "notReady", false),
+      "Not ready": ("unavailable", "notReady", false),
+      "Connecting": ("observing", "idle", false),
+      "In use elsewhere": ("controlling", "control", false),
+    ]
+    let row = try #require(facts[name], "\(name) is not a row of the status table")
     return PanelSnapshot(
-      status: status,
-      feedback: working ? Words.recovering : nil,
-      working: working,
-      helper: helper,
-      logOutStage: logOut
-    )
-  }
-
-  @Test("a logged-out helper shows Log In in place of the picture and hides Switch, Recover and Log Out")
-  func loggedOut() throws {
-    let context = try #require(
-      CGContext(
-        data: nil,
-        width: 1,
-        height: 1,
-        bitsPerComponent: 8,
-        bytesPerRow: 0,
-        space: CGColorSpaceCreateDeviceRGB(),
-        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-      )
-    )
-    var snapshot = Self.snapshot(.loggedOut)
-    snapshot.picture = DesktopPicture(id: "f", image: try #require(context.makeImage()))
-    let state = PanelPresenter.state(snapshot)
-    #expect(state.stage == .loggedOut(text: Words.loggedOut, isEnabled: true))
-    #expect(state.secondary == nil)
-    #expect(state.menu.recover == .hidden)
-    #expect(state.menu.logOut == .hidden)
-    let working = PanelPresenter.state(Self.snapshot(.loggedOut, working: true))
-    #expect(working.stage == .loggedOut(text: Words.loggedOut, isEnabled: false), "Log In… waits for a command")
-  }
-
-  @Test("Open Viewer is the primary button unless the helper is logged out")
-  func openViewerLook() {
-    #expect(PanelPresenter.state(Self.snapshot(.observing)).isViewerPrimary)
-    #expect(!PanelPresenter.state(Self.snapshot(.loggedOut)).isViewerPrimary)
-  }
-
-  @Test(
-    "the second button releases control, stops a working agent, resumes a stopped one or switches to a known helper"
-  )
-  func secondaryButton() {
-    #expect(PanelPresenter.state(Self.snapshot(.controlling, helper: nil)).secondary == .revokeControl)
-    #expect(PanelPresenter.state(Self.snapshot(.agent, working: true)).secondary == .stopAgent, "a stop never waits")
-    #expect(PanelPresenter.state(Self.snapshot(.stopped)).secondary == .resumeAgent(isEnabled: true))
-    #expect(PanelPresenter.state(Self.snapshot(.stopped, working: true)).secondary == .resumeAgent(isEnabled: false))
-    #expect(PanelPresenter.state(Self.snapshot(.observing)).secondary == .switchToHelper(isEnabled: true))
-    var between = Self.snapshot(.observing)
-    between.status.overview.activity = [.init(operation: "input", ok: true, ageSeconds: 30)]
-    #expect(PanelPresenter.state(between).secondary == .stopAgent, "an agent between steps can still be stopped")
-    between.status.overview.activity = [.init(operation: "input", ok: true, ageSeconds: 90)]
-    #expect(PanelPresenter.state(between).secondary == .switchToHelper(isEnabled: true))
-    between.status.overview.activity = [.init(operation: "input", ok: true, actor: "viewer", ageSeconds: 5)]
-    #expect(PanelPresenter.state(between).secondary == .switchToHelper(isEnabled: true), "the person's own input")
-    #expect(PanelPresenter.state(Self.snapshot(.observing, helper: nil)).secondary == .switchToHelper(isEnabled: false))
-    #expect(
-      PanelPresenter.state(Self.snapshot(.observing, working: true)).secondary == .switchToHelper(isEnabled: false)
+      status: try status(["overview": ["mode": row.mode, "state": row.state]]),
+      connecting: name == "Connecting",
+      holdingControl: row.holding
     )
   }
 
   @Test(
-    "the reason line hides when empty, recovering or logged out",
+    "each state offers its one main action",
     arguments: [
-      (HelperMode.observing, "Ready for agents", "Ready for agents"),
-      (.observing, "", nil),
-      (.recovering, "An action's outcome is unknown", nil),
-      (.loggedOut, "The helper is logged out", nil),
-    ] as [(HelperMode, String, String?)]
+      ("Idle", "Open Atlas", PanelEvent.openAtlas),
+      ("Working", "Open Atlas", .openAtlas),
+      ("You have control", "Give Back", .giveBack),
+      ("Needs you", "Recover…", .askRecover),
+      ("Stopped", "Resume", .resumeAgent),
+      ("Logged out", "Switch to the Helper…", .askSwitch),
+      ("Not ready", "Recover…", .askRecover),
+      ("Connecting", "Open Atlas", .openAtlas),
+      ("In use elsewhere", "Open Atlas", .openAtlas),
+    ]
   )
-  func reasonLine(mode: HelperMode, reason: String, shown: String?) {
-    #expect(PanelPresenter.state(Self.snapshot(mode, reason: reason)).reason == shown)
+  func eachStateOffersItsMainAction(row: String, title: String, event: PanelEvent) throws {
+    let panel = PanelPresenter.state(try Self.snapshot(row))
+    #expect(panel.status.label == row, "the facts read as \(row)")
+    #expect(panel.controls.main.title == title)
+    #expect(panel.controls.main.event == event)
+    // Connecting waits, and so does Recover… for a helper that isn't answering, which Recover cannot fix.
+    #expect(panel.controls.main.isEnabled == (row != "Connecting" && row != "Not ready"))
+    #expect(panel.controls.showsStop == (row == "Working"), "Stop stands before it only while an agent works")
   }
 
-  @Test("a recovering helper shows the recovery card with its reason, or a fallback when it gives none")
-  func recoveryCard() {
-    #expect(PanelPresenter.state(Self.snapshot(.observing)).recovery == nil)
-    #expect(
-      PanelPresenter.state(Self.snapshot(.recovering, reason: "Unknown outcome")).recovery
-        == .unfinished("Unknown outcome")
-    )
-    let fallback = PanelPresenter.state(Self.snapshot(.recovering, reason: "")).recovery
-    #expect(fallback == .unfinished("Recover before anything else runs."))
+  @Test("a main action that asks for one of the helper's commands waits while that command runs from any window")
+  func theMainActionWaitsForItsCommand() throws {
+    var needsYou = try Self.snapshot("Needs you")
+    needsYou.running = [.switchToHelper]
+    #expect(PanelPresenter.state(needsYou).controls.main.isEnabled, "another command does not hold it")
+    needsYou.running = [.recovery]
+    #expect(!PanelPresenter.state(needsYou).controls.main.isEnabled)
+    var loggedOut = try Self.snapshot("Logged out")
+    loggedOut.running = [.switchToHelper]
+    #expect(!PanelPresenter.state(loggedOut).controls.main.isEnabled)
   }
 
-  @Test("input Recover starts again shows the not-ready card in place of the reason and the Recover row")
-  func inputStoppedOffersRecover() {
-    var stopped = Self.snapshot(
-      .blocked,
-      reason: "Mouse and keyboard stopped in the helper. Recover starts them again."
-    )
-    stopped.status.overview.recoverable = true
-    let state = PanelPresenter.state(stopped)
-    #expect(state.recovery == .notReady("Mouse and keyboard stopped in the helper. Recover starts them again."))
-    #expect(state.reason == nil)
-    #expect(state.menu.recover == .hidden)
-    let settings = PanelPresenter.state(Self.snapshot(.blocked, reason: "Turn on Accessibility."))
-    #expect(settings.recovery == nil)
-    #expect(settings.reason == "Turn on Accessibility.")
-    #expect(settings.menu.recover == .enabled)
+  @Test(
+    "the picture wears the rim in control, dims while the helper needs the person, fades while paused, and gives way to why while logged out or not ready, with Recent"
+  )
+  func thePictureFollowsTheState() throws {
+    func picture(_ row: String, paused: Bool = false) throws -> (PanelPictureState, Bool) {
+      var snapshot = try Self.snapshot(row)
+      snapshot.session.paused = paused
+      let state = PanelPresenter.state(snapshot)
+      return (state.picture, state.recent.isEmpty)
+    }
+    #expect(try picture("You have control", paused: true).0 == .screen(picture: nil, look: .inControl, caption: nil))
+    #expect(try picture("Needs you").0 == .screen(picture: nil, look: .dimmed, caption: nil))
+    #expect(try picture("Idle", paused: true).0 == .screen(picture: nil, look: .paused, caption: nil))
+    #expect(try picture("Logged out") == (.empty(PanelWords.loggedOutPicture), true))
+    #expect(try picture("Not ready") == (.empty(PanelWords.notReadyWaitPicture), true), "Recover cannot fix it")
   }
 
-  @Test("Recover in the menu waits while the helper's mode would refuse it")
-  func recoverWaitsWhereItWouldBeRefused() {
-    #expect(PanelPresenter.state(Self.snapshot(.controlling)).menu.recover == .disabled)
+  @Test("while an agent works the picture carries its newest action alone, and none once paused")
+  func theCaptionIsTheNewestActionAlone() throws {
+    var snapshot = try Self.snapshot("Working")
+    snapshot.status.overview.activity = [
+      .init(operation: "input", ok: true, ageSeconds: 2, says: "clicked Save"),
+      .init(operation: "input", ok: true, ageSeconds: 9, says: "opened TextEdit"),
+    ]
+    guard case .screen(_, _, let caption) = PanelPresenter.state(snapshot).picture else {
+      Issue.record("a working helper shows its screen")
+      return
+    }
+    #expect(caption?.line == "Clicked Save")
+    snapshot.session.paused = true
+    #expect(PanelPresenter.state(snapshot).picture == .screen(picture: nil, look: .paused, caption: nil))
   }
 
-  @Test("while stopped, Recover and Log Out Helper… stay open in the menu")
-  func stoppedMenu() {
-    let menu = PanelPresenter.state(Self.snapshot(.stopped)).menu
-    #expect(menu.recover == .enabled)
-    #expect(menu.logOut == .enabled)
+  @Test(
+    "Recover… is offered only where it fixes something, by the main window's rule: an unknown outcome or input it starts"
+  )
+  func recoverIsOfferedOnlyWhereItHelps() throws {
+    #expect(!PanelPresenter.moreMenu(try Self.snapshot("Idle")).helper.canRecover)
+    #expect(PanelPresenter.moreMenu(try Self.snapshot("Needs you")).helper.canRecover)
+    #expect(!PanelPresenter.moreMenu(try Self.snapshot("Not ready")).helper.canRecover, "an unreachable service")
+    let blocked = { (recoverable: Bool) throws -> PanelSnapshot in
+      PanelSnapshot(
+        status: try status([
+          "overview": ["mode": "blocked", "state": recoverable ? "needsYou" : "notReady", "recoverable": recoverable]
+        ])
+      )
+    }
+    #expect(PanelPresenter.moreMenu(try blocked(true)).helper.canRecover, "input Recover starts again")
+    #expect(!PanelPresenter.moreMenu(try blocked(false)).helper.canRecover, "a block Recover can't fix")
   }
 
-  @Test("the facts read a dash for an unknown helper and display")
-  func factsFallBackToADash() {
-    let known = PanelPresenter.state(Self.snapshot(.observing)).facts
-    #expect(known.map(\.value) == ["Atlas", "1512 × 982", "No recent actions"])
-    let unknown = PanelPresenter.state(Self.snapshot(.unavailable, known: false)).facts
-    #expect(unknown.map(\.name) == ["Helper", "Display", "Last action"])
-    #expect(unknown.map(\.value) == [Words.unknown, Words.unknown, "No recent actions"])
-  }
-
-  // Which modes allow a log-out, forced or not, is HelperMode's (HelperModeLogOutTests); these check one mode per
-  // branch, so each step follows its own rule of the two, and waits while a command runs.
-  @Test("the log-out confirmation follows whether a log-out is allowed, and Log Out Anyway whether forcing one is")
-  func logOutSteps() {
-    #expect(PanelPresenter.state(Self.snapshot(.observing)).logOut == PanelLogOut.none)
-    let asking = PanelPresenter.state(Self.snapshot(.observing, logOut: .confirming))
-    #expect(asking.logOut == .confirming(isEnabled: true))
-    #expect(asking.menu.logOut == .disabled, "Log Out Helper… waits while the person is asked")
-    #expect(
-      PanelPresenter.state(Self.snapshot(.recovering, logOut: .confirming)).logOut == .confirming(isEnabled: false),
-      "recovering forbids a log-out"
-    )
-    #expect(
-      PanelPresenter.state(Self.snapshot(.recovering, logOut: .held)).logOut == .held(isEnabled: true),
-      "recovering still allows forcing one"
-    )
-    #expect(
-      PanelPresenter.state(Self.snapshot(.observing, working: true, logOut: .confirming)).logOut
-        == .confirming(isEnabled: false)
-    )
-    #expect(
-      PanelPresenter.state(Self.snapshot(.recovering, working: true, logOut: .held)).logOut == .held(isEnabled: false)
-    )
-  }
-
-  @Test("the feedback's spinner turns while any command runs, whichever action said the words")
-  func theSpinnerFollowsWork() {
-    var snapshot = Self.snapshot(.observing)
-    snapshot.feedback = PanelWords.released
-    #expect(PanelPresenter.state(snapshot).feedback == Feedback(text: PanelWords.released, isWorking: false))
-    snapshot.working = true
-    #expect(PanelPresenter.state(snapshot).feedback == Feedback(text: PanelWords.released, isWorking: true))
-  }
-
-  @Test("Open at Login shows only when the app carries the login item")
-  func openAtLogin() {
-    var snapshot = Self.snapshot(.observing)
-    #expect(PanelPresenter.state(snapshot).menu.opensAtLogin == nil)
+  @Test("Open at Login shows in the ⋯ menu only when the app carries the login item")
+  func openAtLogin() throws {
+    var snapshot = try Self.snapshot("Idle")
+    #expect(PanelPresenter.moreMenu(snapshot).opensAtLogin == nil)
     snapshot.opensAtLogin = OpenAtLogin.State(isAvailable: false, isEnabled: false)
-    #expect(PanelPresenter.state(snapshot).menu.opensAtLogin == nil)
+    #expect(PanelPresenter.moreMenu(snapshot).opensAtLogin == nil)
     snapshot.opensAtLogin = OpenAtLogin.State(isAvailable: true, isEnabled: true)
-    #expect(PanelPresenter.state(snapshot).menu.opensAtLogin == true)
+    #expect(PanelPresenter.moreMenu(snapshot).opensAtLogin == true)
   }
 }

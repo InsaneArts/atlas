@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// The menu bar panel: the helper's status, its desktop, facts and actions. It draws its state and sends what the
-/// person does; it decides nothing.
+/// The menu bar panel (MacPanel): the helper's status, its screen, the newest actions and one row of buttons. It
+/// draws its state and sends what the person does; it decides nothing. It fills the popover that holds it, whose
+/// corners and shadow are the system's; `panelCard()` draws the board's own where no popover does.
 package struct PanelView: View {
   /// What the panel shows.
   private let state: PanelState
@@ -18,117 +19,116 @@ package struct PanelView: View {
     self.send = send
   }
 
-  /// The header, the stage, the cards and buttons, any log-out step and feedback, then the menu rows.
+  /// The header, the line, the picture, Recent when there is any, then the buttons.
   package var body: some View {
-    VStack(spacing: Spacing.l) {
-      PanelHeader(status: state.status, reason: state.reason)
-      stage
-      if let recovery = state.recovery {
-        RecoveryCard(recovery: recovery, isEnabled: state.feedback?.isWorking != true) { send(.recover) }
+    VStack(alignment: .leading, spacing: PanelLayout.gap) {
+      PanelHeader(status: state.status)
+      line
+      PanelPicture(state: state.picture, send: send)
+      if !state.recent.isEmpty {
+        PanelRecent(entries: state.recent, send: send)
       }
-      PanelFacts(facts: state.facts)
-      PanelButtons(viewerLook: state.viewerLook, secondary: state.secondary, send: send)
-      confirmation
-      if let feedback = state.feedback {
-        PanelFeedbackLine(feedback: feedback)
-      }
-      logOutAnyway
-      SeparatorLine()
-      PanelMenuList(menu: state.menu, send: send)
+      PanelControlRow(controls: state.controls, send: send)
     }
-    .padding(Spacing.xl)
+    .padding(PanelLayout.inset)
     .frame(width: PanelLayout.width)
-    .windowSurface()
+    .background(PanelLayout.ground)
+    .foregroundStyle(Color.textPrimary)
+    .environment(\.colorScheme, .dark)
+    // Only a change is spoken: a poll that reads the same status or notice again says nothing.
+    .onChange(of: state.status.label) { _, label in announce(label) }
+    .onChange(of: state.notice) { _, notice in if let notice { announce(notice) } }
   }
 
-  /// The desktop, why there is none, or, logged out, the way to log in.
-  @ViewBuilder private var stage: some View {
-    switch state.stage {
-    case .picture(let picture):
-      PanelPicture(content: .picture(picture))
-    case .placeholder(let text):
-      PanelPicture(content: .placeholder(text))
-    case .loggedOut(let text, let isEnabled):
-      LogInCard(detail: text) { send(.logIn) }
-        .disabled(!isEnabled)
+  /// Has VoiceOver say `text`, as a change the person did not move to.
+  ///
+  /// - Parameter text: What to say.
+  private func announce(_ text: String) {
+    AccessibilityNotification.Announcement(text)
+      .post()
+  }
+
+  /// The status's line, or what the last action said when it did not work, in one line; nothing when both are
+  /// empty.
+  @ViewBuilder private var line: some View {
+    if let notice = state.notice {
+      lineText(notice)
+        .foregroundStyle(Color.textAttention)
+    } else if !state.status.line.isEmpty {
+      lineText(state.status.line)
+        .foregroundStyle(Color.textSecondary)
     }
   }
 
-  /// The log-out confirmation, while the person is asked.
-  @ViewBuilder private var confirmation: some View {
-    switch state.logOut {
-    case .confirming(let isEnabled):
-      LogOutConfirmation(cancel: { send(.cancelLogOut) }, logOut: { send(.logOut) })
-        .disabled(!isEnabled)
-    case .none, .held:
-      EmptyView()
-    }
-  }
-
-  /// Log Out Anyway, after an app held the last log-out up.
-  @ViewBuilder private var logOutAnyway: some View {
-    switch state.logOut {
-    case .held(let isEnabled):
-      Button("Log Out Anyway") { send(.forceLogOut) }
-        .buttonStyle(.capsule(.glass, fill: true))
-        .disabled(!isEnabled)
-    case .none, .confirming:
-      EmptyView()
-    }
+  /// One line of the line row's words, cut short with an ellipsis.
+  ///
+  /// - Parameter text: The words.
+  /// - Returns: The line.
+  private func lineText(_ text: String) -> some View {
+    Text(text)
+      .font(Typography.font(.callout))
+      .lineLimit(1)
+      .truncationMode(.tail)
   }
 }
 
 #if DEBUG
-  #Preview("Watching") {
-    PanelView(state: PreviewStates.panelWatching) { _ in }
+  #Preview("Idle") {
+    PanelView(state: PreviewStates.panelIdle) { _ in }
+      .panelCard()
+      .padding(Spacing.page)
   }
 
-  #Preview("Agent working") {
-    PanelView(state: PreviewStates.panelAgentWorking) { _ in }
+  #Preview("Working") {
+    PanelView(state: PreviewStates.panelWorking) { _ in }
+      .panelCard()
+      .padding(Spacing.page)
+  }
+
+  #Preview("You have control") {
+    PanelView(state: PreviewStates.panelControl) { _ in }
+      .panelCard()
+      .padding(Spacing.page)
+  }
+
+  #Preview("Needs you") {
+    PanelView(state: PreviewStates.panelNeedsYou) { _ in }
+      .panelCard()
+      .padding(Spacing.page)
   }
 
   #Preview("Stopped") {
     PanelView(state: PreviewStates.panelStopped) { _ in }
-  }
-
-  #Preview("In control") {
-    PanelView(state: PreviewStates.panelInControl) { _ in }
-  }
-
-  #Preview("Recovering") {
-    PanelView(state: PreviewStates.panelRecovering) { _ in }
-  }
-
-  #Preview("Input stopped") {
-    PanelView(state: PreviewStates.panelInputStopped) { _ in }
+      .panelCard()
+      .padding(Spacing.page)
   }
 
   #Preview("Logged out") {
     PanelView(state: PreviewStates.panelLoggedOut) { _ in }
+      .panelCard()
+      .padding(Spacing.page)
   }
 
-  #Preview("No picture") {
-    PanelView(state: PreviewStates.panelNoPicture) { _ in }
+  #Preview("Not ready") {
+    PanelView(state: PreviewStates.panelNotReady) { _ in }
+      .panelCard()
+      .padding(Spacing.page)
   }
 
-  #Preview("Confirm log-out") {
-    PanelView(state: PreviewStates.panelConfirmLogOut) { _ in }
+  #Preview("Connecting") {
+    PanelView(state: PreviewStates.panelConnecting) { _ in }
+      .panelCard()
+      .padding(Spacing.page)
   }
 
-  #Preview("Log-out held") {
-    PanelView(state: PreviewStates.panelLogOutHeld) { _ in }
-  }
-
-  #Preview("Working message") {
-    PanelView(state: PreviewStates.panelWorkingMessage) { _ in }
-  }
-
-  #Preview("Unavailable") {
-    PanelView(state: PreviewStates.panelUnavailable) { _ in }
+  #Preview("In use elsewhere") {
+    PanelView(state: PreviewStates.panelInUseElsewhere) { _ in }
+      .panelCard()
+      .padding(Spacing.page)
   }
 
   #Preview("Interactive") {
-    @Previewable @State var state = PreviewStates.panelWatching
+    @Previewable @State var state = PreviewStates.panelIdle
     InteractivePreview {
       Menu(String("State")) {
         ForEach(PreviewStates.panel) { preview in
@@ -140,6 +140,7 @@ package struct PanelView: View {
       PanelView(state: state) { event in
         state = PreviewStates.panel(state, applying: event)
       }
+      .panelCard()
     }
   }
 #endif

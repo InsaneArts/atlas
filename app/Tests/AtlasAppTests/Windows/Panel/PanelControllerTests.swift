@@ -14,21 +14,23 @@ struct PanelControllerTests {
   ///   - service: The scripted service.
   ///   - commands: The scripted command line, which by default knows no command.
   ///   - loginItem: The scripted login item.
-  ///   - quit: Stands in for quitting Atlas.
+  ///   - links: Stand-ins for the other windows.
+  ///   - nap: The pause between readings; one that never ends by default, so nothing is read twice unasked.
   /// - Returns: The panel's controller.
   private static func panel(
     _ service: ScriptedService = ScriptedService(),
     commands: ScriptedCommands = ScriptedCommands([:]),
     loginItem: ScriptedLoginItem = ScriptedLoginItem(),
-    quit: @escaping @MainActor () -> Void = {}
+    links: PanelLinks = PanelLinks(),
+    nap: SteppedNap = SteppedNap()
   ) -> PanelController {
     PanelController(
       service: service,
       commands: commands,
+      actions: HelperActions(commands: commands, service: service, barrier: ControlBarrier(service: service)),
       loginItem: loginItem.seam,
-      gettingStarted: {},
-      openViewer: {},
-      quit: quit
+      links: links,
+      nap: nap.nap
     )
   }
 
@@ -42,7 +44,6 @@ struct PanelControllerTests {
     await controller.readFrame()
     #expect(controller.status.overview.mode == .recovering)
     #expect(controller.picture == nil)
-    #expect(controller.placeholder == PanelWords.pictureUnavailable)
   }
 
   @Test("only the service's answer is handed to the viewer: none before the first reading, none after a failed one")
@@ -59,79 +60,138 @@ struct PanelControllerTests {
     #expect(controller.answer == nil && controller.answered == false)
   }
 
-  @Test("revoking control ends every viewer's and says so")
-  func revokingControl() async {
+  @Test("each reading is handed to the rest of the app, the service's answer as itself and a failed one as nil")
+  func readingsAreHandedOn() async {
     let service = ScriptedService()
-    let controller = Self.panel(service)
-    await controller.revokeControl()
-    #expect(service.revoked)
-    #expect(controller.feedback == PanelWords.released)
-    #expect(!controller.working)
+    service.reply = ["overview": ["mode": "recovering", "state": "needsYou"]]
+    var read: [ViewerStatus?] = []
+    let controller = Self.panel(service, links: PanelLinks(read: { read.append($0) }))
+    await controller.readStatus()
+    service.fail = ["status"]
+    await controller.readStatus()
+    #expect(read.map { $0?.overview.state } == [.needsYou, nil])
   }
 
-  @Test("stopping the agent asks the service and says so, and resuming lets it go on")
+  @Test("the picture opens the main window on Screen, All activity on Activity and Open Atlas on the tab it shows")
+  func theOpenersOpenTheirTabs() {
+    var opened: [ViewerTab?] = []
+    let controller = Self.panel(links: PanelLinks(openViewer: { opened.append($0) }))
+    controller.send(.openScreen)
+    controller.send(.openActivity)
+    controller.send(.openAtlas)
+    #expect(opened == [.screen, .activity, nil])
+  }
+
+  @Test("Recover… and Switch to the Helper… ask first and run nothing themselves")
+  func theHelperCommandsAskFirst() {
+    var asked: [HelperAlert] = []
+    let commands = ScriptedCommands([:])
+    let controller = Self.panel(commands: commands, links: PanelLinks(showAlert: { asked.append($0) }))
+    controller.send(.askRecover)
+    controller.send(.askSwitch)
+    controller.askLogOut()
+    #expect(asked == [.recover, .switchToHelper, .logOut])
+    #expect(commands.ran.isEmpty)
+  }
+
+  @Test("stopping the agent asks the service, and resuming lets it go on")
   func stoppingTheAgent() async {
     let service = ScriptedService()
     let controller = Self.panel(service)
     await controller.stopAgent()
-    #expect(service.log == ["stop"])
-    #expect(controller.feedback == PanelWords.stopped)
     await controller.resumeAgent()
     #expect(service.log == ["stop", "resume"])
-    #expect(controller.feedback == PanelWords.resumed)
-    #expect(!controller.working)
+    #expect(controller.session.requests == 0)
   }
 
-  @Test("a stop the service refuses says why")
+  @Test("a stop the service refuses says why in place of the line, until the panel opens again")
   func refusedStop() async {
     let service = ScriptedService()
     service.fail = ["hold"]
     let controller = Self.panel(service)
     await controller.stopAgent()
-    #expect(controller.feedback == "hold failed")
-    #expect(!controller.working)
+    #expect(controller.state.notice == "hold failed.")
+    controller.watch(open: true)
+    #expect(controller.state.notice == nil)
+    controller.watch(open: false)
   }
 
-  @Test("a stop never waits for another action, and a resume does")
-  func stopNeverWaits() async {
+  @Test("a stop never waits for the panel's own requests, and a resume waits until every stop is answered")
+  func stopNeverWaits() async throws {
     let service = ScriptedService()
-    service.hold = ["revoke"]
+    service.hold = ["hold"]
     let controller = Self.panel(service)
-    let revoking = Task { await controller.revokeControl() }
-    while service.held["revoke"] == nil { await Task.yield() }
-    #expect(controller.working)
+    let first = Task { await controller.stopAgent() }
+    try await settle("the first stop never reached the service") { service.held["hold"] != nil }
     await controller.resumeAgent()
-    #expect(service.log == ["revoke"], "a resume waits")
+    #expect(service.log == ["stop"], "a resume waits")
     await controller.stopAgent()
-    #expect(service.log == ["revoke", "stop"], "a stop does not")
-    service.resume("revoke")
-    await revoking.value
+    #expect(service.log == ["stop", "stop"], "a second stop does not, and is answered")
+    await controller.resumeAgent()
+    #expect(service.log == ["stop", "stop"], "the first stop is still unanswered, so a resume still waits")
+    service.resume("hold")
+    await first.value
+    await controller.resumeAgent()
+    #expect(service.log == ["stop", "stop", "resume"])
   }
 
-  @Test("the helper to switch to is the account atlas reports")
-  func theHelperIsTheOneAtlasReports() async {
-    let commands = ScriptedCommands([
-      "switch --list": #"{"ok": true, "accounts": [{"name": "me"}, {"name": "atlas", "helper": true}]}"#,
-      "switch": #"{"ok": true}"#,
-    ])
-    let controller = Self.panel(commands: commands)
-    await controller.findHelper()
-    #expect(controller.helper == "atlas")
-    await controller.switchToHelper()
-    #expect(commands.ran.last == Action.switchTo("atlas").arguments)
-    #expect(controller.feedback == PanelWords.switched)
+  @Test("the open panel reads the status and the picture every 2 s, and the closed panel the status every 5 s")
+  func theReadingsKeepTheirIntervals() async throws {
+    let service = ScriptedService()
+    let nap = SteppedNap()
+    let controller = Self.panel(service, nap: nap)
+    controller.watch(open: true)
+    try await settle("the open panel never paused after reading") { nap.waitingCount == 2 }
+    #expect(service.statusCalls == 1 && service.frameCalls == 1)
+    #expect(nap.asked == [PanelController.openEvery, PanelController.openEvery])
+    nap.step()
+    try await settle("the open panel never read again") { nap.waitingCount == 2 && service.frameCalls == 2 }
+    #expect(service.statusCalls == 2)
+    controller.watch(open: false)
+    try await settle("the closed panel never paused after reading") { nap.asked.last == PanelController.closedEvery }
+    let pictures = service.frameCalls
+    nap.step()
+    try await settle("the closed panel never read the status again") { service.statusCalls == 4 }
+    #expect(service.frameCalls == pictures, "a closed panel reads no pictures")
+    nap.step()
   }
 
-  @Test("logging in locks the screen for the helper the service reports and says what to do next")
-  func loggingInLocksTheScreen() async {
+  @Test(
+    "pausing or closing with a capture outstanding drops its late reply and reads no more pictures, and reopening reads at once",
+    arguments: [true, false]
+  )
+  func aLateCaptureIsDropped(pausing: Bool) async throws {
+    let service = ScriptedService()
+    service.picture = png()
+    let nap = SteppedNap()
+    let controller = Self.panel(service, nap: nap)
+    controller.watch(open: true)
+    try await settle("the first picture never showed") { controller.picture != nil && nap.waitingCount == 2 }
+    let first = controller.picture?.id
+    service.hold = ["frame"]
+    nap.step()
+    try await settle("the next capture was never asked for") { service.held["frame"] != nil }
+    if pausing { controller.send(.togglePause) } else { controller.watch(open: false) }
+    service.resume("frame")
+    nap.step()
+    try await settle("the status was never read again") { service.statusCalls >= 3 }
+    #expect(controller.picture?.id == first, "the late reply shows nothing")
+    #expect(service.frameCalls == 2, "no picture is read meanwhile")
+    if pausing { controller.send(.togglePause) } else { controller.watch(open: true) }
+    try await settle("reopening never read a picture") { service.frameCalls == 3 }
+    controller.watch(open: false)
+    nap.step()
+  }
+
+  @Test("switching locks the screen for the helper the service reports and says what to do next")
+  func switchingLocksTheScreen() async {
     let service = ScriptedService()
     service.reply = ["overview": ["mode": "loggedOut", "account": "atlas", "accountName": "Atlas"]]
     let commands = ScriptedCommands(["switch": #"{"ok": true}"#])
     let controller = Self.panel(service, commands: commands)
     await controller.readStatus()
-    await controller.logIn()
+    #expect(await controller.logIn() == PanelWords.logInThenSwitchBack(to: "Atlas"))
     #expect(commands.ran == [Action.switchTo("atlas").arguments])
-    #expect(controller.feedback == PanelWords.logInThenSwitchBack(to: "Atlas"))
   }
 
   @Test("a helper not found at launch is listed again when the panel opens, and a later failed listing keeps it known")
@@ -150,141 +210,22 @@ struct PanelControllerTests {
     controller.watch(open: false)
   }
 
-  @Test("logging in with no helper account found says where to look, and tells the window that asked")
-  func logInWithNoHelperSaysWhereToLook() async {
-    let controller = Self.panel()
-    let said = await controller.logIn()
-    #expect(controller.feedback == PanelWords.helperNotFound)
-    #expect(said == PanelWords.helperNotFound)
+  @Test("switching with no helper account found says where to look, and runs nothing")
+  func switchWithNoHelperSaysWhereToLook() async {
+    let commands = ScriptedCommands([:])
+    let controller = Self.panel(commands: commands)
+    #expect(await controller.logIn() == PanelWords.helperNotFound)
+    #expect(commands.ran == [Action.listAccounts.arguments], "it only looked for the helper")
   }
 
-  @Test("a switch that fails while logging in tells the window that asked why")
-  func aFailedLogInSaysWhy() async {
+  @Test("a switch that fails tells the window that asked why")
+  func aFailedSwitchSaysWhy() async {
     let service = ScriptedService()
     service.reply = ["overview": ["mode": "loggedOut", "account": "atlas"]]
     let commands = ScriptedCommands(["switch": #"{"ok": false, "error": "The screen could not lock"}"#])
     let controller = Self.panel(service, commands: commands)
     await controller.readStatus()
     #expect(await controller.logIn() == "The screen could not lock")
-  }
-
-  @Test("logging out asks first, ends control first, and offers to force it when an app holds it up")
-  func loggingOutAsksFirstAndOffersForce() async {
-    let service = ScriptedService()
-    service.reply = ["ready": true, "overview": ["mode": "controlling", "accountName": "Atlas"]]
-    let commands = ScriptedCommands([
-      "logout": #"{"ok": false, "code": "logout-held", "error": "The helper has not logged out yet"}"#
-    ])
-    let controller = Self.panel(service, commands: commands)
-    await controller.readStatus()
-    controller.send(.askToLogOut)
-    #expect(controller.logOutStage == .confirming)
-    #expect(commands.ran.isEmpty, "nothing runs before the person confirms")
-    await controller.logOut()
-    #expect(service.log.contains("revoke"), "control ends first")
-    #expect(commands.ran.last == Action.logOut(force: false).arguments)
-    #expect(controller.feedback == "The helper has not logged out yet")
-    #expect(controller.logOutStage == .held)
-    // The held log-out stays pending; logging out anyway still may run.
-    service.reply = ["overview": ["mode": "recovering"]]
-    await controller.readStatus()
-    #expect(controller.logOutStage == .held)
-    commands.answer("logout", #"{"ok": true, "loggedOut": true}"#)
-    await controller.logOut(force: true)
-    #expect(commands.ran.last == Action.logOut(force: true).arguments)
-    #expect(controller.logOutStage == .idle)
-    #expect(controller.feedback == PanelWords.helperLoggedOut)
-  }
-
-  @Test("ending control before a log-out counts as running, and a log-out asked for meanwhile says why it waits")
-  func theRevokeBeforeALogOutRuns() async throws {
-    let service = ScriptedService()
-    service.reply = ["ready": true, "overview": ["mode": "controlling"]]
-    let commands = ScriptedCommands(["logout": #"{"ok": true}"#])
-    let controller = Self.panel(service, commands: commands)
-    await controller.readStatus()
-    service.hold = ["revoke"]
-    let first = Task { await controller.logOut() }
-    try await settle("control was never asked to end") { service.held["revoke"] != nil }
-    #expect(controller.working)
-    await controller.logOut()
-    #expect(controller.feedback == PanelWords.waitForAction)
-    service.resume("revoke")
-    await first.value
-    #expect(commands.ran == [Action.logOut(force: false).arguments], "the first log-out ran, once")
-  }
-
-  @Test("a refused revoke stops the log-out, saying why")
-  func aRefusedRevokeStopsTheLogOut() async {
-    let service = ScriptedService()
-    service.reply = ["ready": true, "overview": ["mode": "controlling"]]
-    service.fail = ["revoke"]
-    let commands = ScriptedCommands(["logout": #"{"ok": true}"#])
-    let controller = Self.panel(service, commands: commands)
-    await controller.readStatus()
-    await controller.logOut()
-    #expect(commands.ran.isEmpty)
-    #expect(controller.feedback == "revoke failed")
-    #expect(!controller.working)
-  }
-
-  @Test("a log-out the helper's mode no longer allows says so and runs nothing")
-  func aLogOutTheModeForbidsSaysSo() async {
-    let service = ScriptedService()
-    service.reply = ["ready": true, "overview": ["mode": "agent"]]
-    let commands = ScriptedCommands(["logout": #"{"ok": true}"#])
-    let controller = Self.panel(service, commands: commands)
-    await controller.readStatus()
-    await controller.logOut()
-    #expect(commands.ran.isEmpty)
-    #expect(controller.feedback == PanelWords.cannotLogOut)
-  }
-
-  @Test("a confirmation the person reopens while a log-out runs stays once it ends")
-  func aReopenedConfirmationStays() async {
-    let service = ScriptedService()
-    service.reply = ["ready": true, "overview": ["mode": "observing"]]
-    let commands = ScriptedCommands([
-      "logout": #"{"ok": false, "code": "logout-held", "error": "The helper has not logged out yet"}"#
-    ])
-    let controller = Self.panel(service, commands: commands)
-    await controller.readStatus()
-    commands.whileRunning { _ in controller.askToLogOut() }
-    await controller.logOut()
-    #expect(controller.logOutStage == .confirming)
-  }
-
-  @Test("a confirmation the mode no longer allows is dropped")
-  func aConfirmationThatNoLongerAppliesIsDropped() async {
-    let service = ScriptedService()
-    let controller = Self.panel(service)
-    await controller.readStatus()
-    controller.send(.askToLogOut)
-    service.reply = ["overview": ["mode": "agent"]]
-    await controller.readStatus()
-    #expect(controller.logOutStage == .idle, "an agent started meanwhile")
-  }
-
-  @Test("a message said while a command runs never ends it: the panel stays working, its spinner on, until it ends")
-  func aMessageNeverEndsARunningCommand() async {
-    let service = ScriptedService()
-    let commands = ScriptedCommands([
-      "start-input": #"{"ok": true}"#, "menubar --login": #"{"ok": false, "error": "Not allowed"}"#,
-    ])
-    let controller = Self.panel(service, commands: commands)
-    let seen = PanelWorkObservation()
-    commands.whileRunning { arguments in
-      guard arguments == Action.startInput.arguments else { return }
-      await controller.revokeControl()
-      seen.feedback = controller.state.feedback
-      await controller.setOpenAtLogin(true)
-      seen.working = controller.working
-    }
-    await controller.recover()
-    #expect(seen.feedback == Feedback(text: PanelWords.released, isWorking: true), "Recover still ran")
-    #expect(seen.working == true, "Recover still ran")
-    #expect(!controller.working)
-    #expect(controller.state.feedback?.isWorking == false)
   }
 
   @Test("Open at Login goes through atlas, which records the choice, then follows the system; a refusal says why")
@@ -301,52 +242,11 @@ struct PanelControllerTests {
     commands.answer("menubar --login", #"{"ok": false, "error": "Not allowed"}"#)
     await controller.setOpenAtLogin(false)
     #expect(controller.opensAtLogin.isEnabled, "the system kept it on")
-    #expect(controller.feedback == "Not allowed")
-  }
-
-  @Test("Recover starts the helper's input when nothing is pending, and restarts it while an outcome is unknown")
-  func recoverMirrorsTheService() async {
-    let service = ScriptedService()
-    let commands = ScriptedCommands(["start-input": #"{"ok": true}"#, "restart": #"{"ok": true}"#])
-    let controller = Self.panel(service, commands: commands)
-    service.reply = ["overview": ["mode": "blocked", "recoverable": true]]
-    await controller.readStatus()
-    await controller.recover()
-    #expect(commands.ran.last == Action.startInput.arguments)
-    #expect(controller.feedback == Words.readyAgain)
-    service.reply = ["overview": ["mode": "recovering", "pending": 1]]
-    await controller.readStatus()
-    await controller.recover()
-    #expect(commands.ran.last == Action.restart.arguments)
-    #expect(controller.feedback == Words.recovered)
-  }
-
-  @Test("Recover reads the status first, so it restarts a helper whose outcome became unknown since the last reading")
-  func recoverReadsTheStatusFirst() async {
-    let service = ScriptedService()
-    let commands = ScriptedCommands(["start-input": #"{"ok": true}"#, "restart": #"{"ok": true}"#])
-    let controller = Self.panel(service, commands: commands)
-    await controller.readStatus()
-    service.reply = ["overview": ["mode": "recovering", "pending": 1]]
-    await controller.recover()
-    #expect(commands.ran == [Action.restart.arguments])
+    #expect(controller.state.notice == "Not allowed.")
   }
 
   @Test(
-    "a Recover the command line refuses says why in plain words, never naming a command",
-    arguments: [("uncertain", PanelWords.recoverNeedsRestart), ("busy", PanelWords.recoverBusy)]
-  )
-  func aRefusedRecoverSaysWhyPlainly(code: String, words: String) async {
-    let commands = ScriptedCommands([
-      "start-input": #"{"ok": false, "code": "\#(code)", "error": "Run 'atlas restart'."}"#
-    ])
-    let controller = Self.panel(commands: commands)
-    await controller.recover()
-    #expect(controller.feedback == words)
-  }
-
-  @Test(
-    "quick Open at Login clicks run one change at a time, then only the newest that differs, and the switch holds the click until the last ends"
+    "quick Open at Login clicks run one change at a time, then only the newest that differs, and the tick holds the click until the last ends"
   )
   func openAtLoginChangesRunOneAtATime() async {
     let loginItem = ScriptedLoginItem(available: true)
@@ -366,24 +266,9 @@ struct PanelControllerTests {
     }
     await controller.setOpenAtLogin(true)
     #expect(seen.startedAnother == false, "no second change started while the first ran")
-    #expect(seen.switchOn == false, "the switch kept the newest click")
+    #expect(seen.switchOn == false, "the tick kept the newest click")
     #expect(commands.ran == [Action.openAtLogin(true).arguments, Action.openAtLogin(false).arguments])
     #expect(controller.opensAtLogin == OpenAtLogin.State(isAvailable: true, isEnabled: false))
-  }
-
-  @Test("a Recover refused over an unknown outcome makes the next one a restart, though the status stays refused")
-  func anUnknownOutcomeMakesTheNextRecoverARestart() async {
-    let service = ScriptedService()
-    let commands = ScriptedCommands([
-      "start-input": #"{"ok": false, "code": "uncertain", "error": "Run 'atlas restart'."}"#,
-      "restart": #"{"ok": true}"#,
-    ])
-    let controller = Self.panel(service, commands: commands)
-    await controller.readStatus()
-    service.busy = true
-    await controller.recover()
-    await controller.recover()
-    #expect(commands.ran == [Action.startInput.arguments, Action.restart.arguments])
   }
 
   @Test("a status the service refuses to give, as a busy one does, leaves the last one standing")
@@ -397,24 +282,17 @@ struct PanelControllerTests {
     #expect(controller.answer != nil)
   }
 
-  @Test("each opening reads Open at Login again, so a change made elsewhere meanwhile shows in its switch")
+  @Test("each opening reads Open at Login again, so a change made elsewhere meanwhile shows in its tick")
   func openAtLoginIsReadAgainOnOpening() {
     let loginItem = ScriptedLoginItem(available: true, enabled: true)
     let controller = Self.panel(loginItem: loginItem)
     controller.watch(open: true)
-    #expect(controller.state.menu.opensAtLogin == true)
+    #expect(controller.moreMenu.opensAtLogin == true)
     controller.watch(open: false)
     // Getting Started turns it off while the panel is closed.
     loginItem.enabled = false
     controller.watch(open: true)
-    #expect(controller.state.menu.opensAtLogin == false)
-  }
-
-  @Test("Quit Atlas in the panel quits")
-  func quitInThePanelQuits() {
-    let quits = CallCount()
-    let controller = Self.panel(quit: { quits.count += 1 })
-    controller.send(.quit)
-    #expect(quits.count == 1)
+    #expect(controller.moreMenu.opensAtLogin == false)
+    controller.watch(open: false)
   }
 }

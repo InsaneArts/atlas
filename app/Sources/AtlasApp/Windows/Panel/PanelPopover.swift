@@ -3,30 +3,42 @@ import AtlasKit
 import AtlasUI
 import SwiftUI
 
-/// Atlas's menu bar item and its panel. The glyph follows the helper's mode; the panel reads the desktop only while
-/// it is open.
+/// Atlas's menu bar item and its panel. The glyph follows the helper's mode; the panel reads the picture only while
+/// it is open, and opens its ⋯ menu here, under its button (`PanelPopover+Menu`).
 @MainActor
 final class PanelPopover: NSObject, NSPopoverDelegate {
+  /// 6: between ⋯ and the menu it opens, as in the main window.
+  static let menuGap: CGFloat = 6
+
   /// The panel's controller.
   let controller: PanelController
+  /// Opens the Settings window, from the ⋯ menu.
+  let openSettings: @MainActor () -> Void
   /// The menu bar item.
   private let item = NSStatusBar.system
     .statusItem(withLength: NSStatusItem.variableLength)
   /// The panel.
   private let popover = NSPopover()
+  /// Watches for clicks outside Atlas while the panel shows, so a click anywhere else closes it as a menu would;
+  /// nil while it is closed. A transient popover only closes on clicks this app receives, and a menu bar app is
+  /// often not the active one.
+  private var outsideClicks: Any?
 
   /// Puts the item in the menu bar and starts reading at the closed rate.
   ///
-  /// - Parameter controller: The panel's controller.
-  init(controller: PanelController) {
+  /// - Parameters:
+  ///   - controller: The panel's controller.
+  ///   - openSettings: Opens the Settings window, from the ⋯ menu.
+  init(controller: PanelController, openSettings: @escaping @MainActor () -> Void) {
     self.controller = controller
+    self.openSettings = openSettings
     super.init()
     let content = NSHostingController(
-      rootView: ShellRoot {
-        PanelView(state: controller.state, send: controller.send)
+      rootView: ShellRoot { [weak self] in
+        PanelView(state: controller.state) { self?.handle($0) }
       }
     )
-    // The popover follows the panel as rows and messages come and go.
+    // The popover follows the panel as Recent and the line come and go.
     content.sizingOptions = [.preferredContentSize]
     popover.contentViewController = content
     popover.behavior = .transient
@@ -46,6 +58,16 @@ final class PanelPopover: NSObject, NSPopoverDelegate {
     Task { await controller.findHelper() }
   }
 
+  /// What the person did in the panel: ⋯ opens its menu here, everything else goes to the controller.
+  ///
+  /// - Parameter event: The event.
+  func handle(_ event: PanelEvent) {
+    switch event {
+    case .showMore(let frame): openMore(below: frame)
+    default: controller.send(event)
+    }
+  }
+
   /// Opens the panel, or closes it when open.
   @objc private func toggle() {
     guard let button = item.button else { return }
@@ -53,17 +75,66 @@ final class PanelPopover: NSObject, NSPopoverDelegate {
       popover.performClose(nil)
     } else {
       popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-      // No row is focused until the person presses Tab, as in menus.
+      // The panel takes the keyboard, as a menu does, so Escape and clicks elsewhere close it.
+      NSApp.activate()
       let window = popover.contentViewController?.view.window
+      window?.makeKey()
+      // No button is focused until the person presses Tab, as in menus.
       window?.makeFirstResponder(nil)
       Task { window?.makeFirstResponder(nil) }
+      watchOutsideClicks()
       controller.watch(open: true)
     }
   }
 
-  /// Closes the panel, as Open Viewer does.
+  /// Closes the panel, as opening a window or an alert from it does.
   func closePanel() {
     if popover.isShown { popover.performClose(nil) }
+  }
+
+  /// Opens the ⋯ menu under its button, the button pressed until the menu closes.
+  ///
+  /// - Parameter frame: The button's frame in the panel, top left first.
+  private func openMore(below frame: CGRect) {
+    guard let content = popover.contentViewController?.view else { return }
+    let menu = PanelMoreMenu.menu(
+      controller.moreMenu,
+      target: self,
+      actions: PanelMoreMenu.Actions(
+        openAtlas: { [weak self] in self?.controller.send(.openAtlas) },
+        openSettings: { [weak self] in
+          self?.closePanel()
+          self?.openSettings()
+        },
+        setOpenAtLogin: { [weak self] on in
+          guard let controller = self?.controller else { return }
+          Task { await controller.setOpenAtLogin(on) }
+        },
+        quit: { [weak self] in self?.controller.links.quit() }
+      )
+    )
+    controller.setMoreOpen(true)
+    // SwiftUI's frames run down from the top; a view that is not flipped runs up from the bottom.
+    let below = frame.maxY + Self.menuGap
+    let point = NSPoint(x: frame.minX, y: content.isFlipped ? below : content.bounds.height - below)
+    menu.popUp(positioning: nil, at: point, in: content)
+    controller.setMoreOpen(false)
+  }
+
+  /// Closes the panel on a click in another app, until the panel closes. Clicks in Atlas's own windows reach the
+  /// popover itself, which closes on them as a transient popover does.
+  private func watchOutsideClicks() {
+    stopWatchingOutsideClicks()
+    outsideClicks = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) {
+      [weak self] _ in
+      Task { @MainActor in self?.closePanel() }
+    }
+  }
+
+  /// Stops watching for clicks outside, once the panel has closed.
+  private func stopWatchingOutsideClicks() {
+    if let outsideClicks { NSEvent.removeMonitor(outsideClicks) }
+    outsideClicks = nil
   }
 
   /// The panel closed: reading slows to the closed rate, unless it opened again while it closed.
@@ -71,6 +142,7 @@ final class PanelPopover: NSObject, NSPopoverDelegate {
   /// - Parameter notification: The popover's notification.
   func popoverDidClose(_ notification: Notification) {
     guard !popover.isShown else { return }
+    stopWatchingOutsideClicks()
     controller.watch(open: false)
   }
 }

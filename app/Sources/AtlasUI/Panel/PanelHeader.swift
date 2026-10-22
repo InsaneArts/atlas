@@ -1,37 +1,40 @@
 import SwiftUI
 
-/// The panel's title, with the helper's mode beside it and the reason for it below.
+/// The panel's header: Atlas's orbit and name on the left, the helper's mark and word on the right in the word's
+/// colour. VoiceOver reads the status as one.
 struct PanelHeader: View {
-  /// The helper's mode.
+  /// The helper's status.
   let status: StatusSummary
-  /// Why the helper is in its mode; nil hides the line.
-  let reason: String?
 
-  /// The mark, the title and the badge on one line, then the reason.
   var body: some View {
-    VStack(alignment: .leading, spacing: Spacing.xs) {
-      HStack(spacing: Spacing.ml) {
-        OrbitMark(size: PanelLayout.mark)
-        Text("Atlas")
-          .font(Typography.font(.headline, weight: .semibold))
-        Spacer()
-        StatusBadge(label: status.label, tone: status.tone)
+    HStack(spacing: Spacing.m) {
+      OrbitMark(height: PanelLayout.orbit)
+      Text("Atlas")
+        .font(Typography.font(.body, weight: .semibold))
+      Spacer(minLength: Spacing.m)
+      HStack(spacing: Spacing.s) {
+        StatusDot(mark: status.mark, tone: status.tone)
+        Text(status.label)
+          .font(Typography.font(.callout, weight: .semibold))
+          .foregroundStyle(status.tone.wordColor)
       }
-      if let reason {
-        Text(reason)
-          .font(Typography.font(.caption))
-          .foregroundStyle(Color.textSecondary)
-          .lineLimit(2)
-          .fixedSize(horizontal: false, vertical: true)
-      }
+      .accessibilityElement(children: .combine)
+      .accessibilityAddTraits(.updatesFrequently)
     }
+    .lineLimit(1)
   }
 }
 
 #if DEBUG
-  #Preview("Watching") {
-    PanelHeader(status: PreviewStates.panelWatching.status, reason: PreviewStates.panelWatching.reason)
-      .frame(width: SampleWidth.narrow)
+  #Preview("Idle") {
+    PanelHeader(status: PreviewStates.panelIdle.status)
+      .frame(width: PanelLayout.picture.width)
+      .sampleSurface()
+  }
+
+  #Preview("You have control") {
+    PanelHeader(status: PreviewStates.panelControl.status)
+      .frame(width: PanelLayout.picture.width)
       .sampleSurface()
   }
 #endif
