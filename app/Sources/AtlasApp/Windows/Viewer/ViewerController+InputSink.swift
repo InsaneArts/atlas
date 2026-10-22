@@ -6,7 +6,9 @@ extension ViewerController: InputSink {
   /// still shows what the input did.
   static let inputReadEvery: Duration = .milliseconds(200)
 
-  /// Sends queued input to the service.
+  /// Sends queued input to the service, counted as control work under way (``ControlBarrier``) until it answers: the
+  /// person's own batch still in flight after Give Back holds the helper, so Take Control waits for it rather than
+  /// meeting the service's busy answer and blaming an agent.
   ///
   /// - Parameters:
   ///   - lease: The lease the input belongs to.
@@ -14,7 +16,7 @@ extension ViewerController: InputSink {
   ///   - actions: The actions, in order.
   /// - Throws: The service's error when it refuses the input or does not answer.
   func send(lease: String, frame: String, actions: [InputAction]) async throws {
-    try await service.input(lease: lease, frame: frame, actions: actions)
+    try await barrier.tracking { try await service.input(lease: lease, frame: frame, actions: actions) }
   }
 
   /// Input went: read again, to show its effect. At once after a quiet spell; while input keeps coming, as a moving

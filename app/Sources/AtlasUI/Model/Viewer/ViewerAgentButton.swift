@@ -1,8 +1,8 @@
-/// The footer's button for agents: Stop Agent while one acts, Resume Agent once the person stopped them.
+/// The top row's button for agents: Stop while one acts, Resume in its place once the person stopped them.
 package enum ViewerAgentButton: Equatable, Sendable {
-  /// Stop Agent. It never waits for anything.
+  /// Stop. It never waits for anything.
   case stop
-  /// Resume Agent.
+  /// Resume.
   ///
   /// - Parameter isEnabled: Whether it can be pressed: nothing else is asked of the service.
   case resume(isEnabled: Bool)

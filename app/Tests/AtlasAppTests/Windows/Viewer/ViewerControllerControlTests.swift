@@ -87,12 +87,14 @@ struct ViewerControllerControlTests {
     viewer.close()
   }
 
-  @Test("control can be taken again after coming back to the window")
+  @Test("control can be taken again after coming back to the window, once its release is answered")
   func controlCanBeTakenAgainAfterComingBackToTheWindow() async throws {
     let viewer = try await ViewerController.watching(ScriptedService())
     await viewer.takeControl()
     viewer.lostFocus()
     viewer.gainedFocus()
+    // Take Control waits until the release is answered.
+    try await settle("the release was never answered") { !viewer.barrier.isBusy }
     await viewer.takeControl()
     #expect(viewer.session.lease == "lease")
     viewer.close()
@@ -211,14 +213,26 @@ struct ViewerControllerControlTests {
     viewer.close()
   }
 
-  @Test("control waits while an agent works")
-  func controlWaitsWhileAnAgentWorks() async throws {
+  @Test("Take Control pressed while an agent acts retries once and then says the agent is mid-action")
+  func takeControlRetriesOnceWhileAnAgentActs() async throws {
     let service = ScriptedService()
-    service.reply = ["ready": true, "canObserve": true, "overview": ["mode": "agent"]]
-    let viewer = try await ViewerController.watching(service)
-    #expect(!viewer.snapshot.canTakeControl)
+    service.reply = ["ready": true, "canObserve": true, "overview": ["mode": "agent", "state": "working"]]
+    // The retry's wait ends at once; the pause between readings never ends by itself.
+    let retry = ViewerController.busyRetryAfter
+    let nap: @Sendable (Duration) async -> Void = { pause in
+      guard pause != retry else { return }
+      try? await Task.sleep(for: .seconds(86_400))
+    }
+    let viewer = try await ViewerController.watching(service, nap: nap)
+    #expect(viewer.state.top.actions.control.isEnabled, "Take Control stays offered while an agent works")
+    service.busyAcquires = 2
     await viewer.takeControl()
-    #expect(!service.log.contains { $0.hasPrefix("acquire") }, "nothing is asked while control must wait")
+    #expect(service.log.filter { $0.hasPrefix("acquire") }.count == 2, "asked once, then once more")
+    #expect(viewer.session.lease == nil)
+    #expect(viewer.session.notice == ViewerWords.agentMidAction)
+    service.busyAcquires = 1
+    await viewer.takeControl()
+    #expect(viewer.session.lease == "lease", "the action ended within the wait, so the retry took control")
     viewer.close()
   }
 

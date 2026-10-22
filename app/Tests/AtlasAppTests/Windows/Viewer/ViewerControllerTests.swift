@@ -125,17 +125,19 @@ struct ViewerControllerTests {
     viewer.close()
   }
 
-  @Test("recovering clears a recovery set aside and says the helper was recovered")
+  @Test("recovering clears a recovery set aside, restarts the helper an unknown outcome left, and says so")
   func recoveringSaysSo() async throws {
     let service = ScriptedService()
     service.reply = [
-      "ready": true, "canObserve": true, "overview": ["mode": "recovering", "reason": "Unknown outcome"],
+      "ready": true, "canObserve": true,
+      "overview": ["mode": "recovering", "reason": "Unknown outcome", "pending": 1],
     ]
-    let viewer = try await ViewerController.watching(service)
-    viewer.recoverLater()
+    let commands = ScriptedCommands(["restart": #"{"ok": true}"#])
+    let viewer = try await ViewerController.watching(service, commands: commands)
+    viewer.cancelAlert()
     #expect(viewer.snapshot.recovery == .setAside)
     await viewer.recover()
-    #expect(service.log.contains("recover"))
+    #expect(commands.ran == [Action.restart.arguments])
     #expect(viewer.session.recoveryLater == nil)
     #expect(viewer.session.notice == Words.recovered)
     viewer.close()
@@ -148,7 +150,7 @@ struct ViewerControllerTests {
       "ready": true, "canObserve": true, "overview": ["mode": "recovering", "reason": "Unknown outcome"],
     ]
     let viewer = try await ViewerController.watching(service)
-    viewer.recoverLater()
+    viewer.cancelAlert()
     #expect(viewer.snapshot.recovery == .setAside)
     service.reply = ["ready": true, "canObserve": true, "overview": ["mode": "observing"]]
     await viewer.readStatus()
@@ -165,16 +167,16 @@ struct ViewerControllerTests {
     let viewer = try await ViewerController.watching(service)
     let redrawn = OSAllocatedUnfairLock(initialState: false)
     withObservationTracking {
-      _ = viewer.state.recovery
+      _ = viewer.state.alert
     } onChange: {
       redrawn.withLock { $0 = true }
     }
-    viewer.recoverLater()
+    viewer.cancelAlert()
     #expect(redrawn.withLock { $0 }, "the window redraws without waiting for a reading")
     viewer.close()
   }
 
-  @Test("the clock's tick moves the picture's age in the status line, and redraws nothing else")
+  @Test("the clock's tick moves the picture's age in Details, and redraws nothing else")
   func theTickRedrawsTheStatusLineAlone() async throws {
     let clock = TestClock()
     let viewer = try await ViewerController.watching(ScriptedService(), clock: clock.read)
@@ -186,14 +188,14 @@ struct ViewerControllerTests {
       window.withLock { $0 = true }
     }
     withObservationTracking {
-      _ = viewer.headerDetail
+      _ = viewer.newestPicture
     } onChange: {
       line.withLock { $0 = true }
     }
-    clock.now = 4
+    clock.now = 10
     viewer.readClock()
-    #expect(line.withLock { $0 }, "the status line draws again")
-    #expect(viewer.headerDetail == ViewerWords.headerDetail(account: ViewerWords.helper, freshness: "Updated 4 s ago"))
+    #expect(line.withLock { $0 }, "the age row draws again")
+    #expect(viewer.newestPicture == "10 s ago")
     #expect(!window.withLock { $0 }, "the rest of the window stays as it was")
     viewer.close()
   }
@@ -212,25 +214,44 @@ struct ViewerControllerTests {
     #expect(!redrawn.withLock { $0 })
   }
 
-  @Test("Log In… shows in the viewer what locking the screen said, a failure included")
-  func logInSaysHowItWent() async {
-    let viewer = ViewerController(
-      service: ScriptedService(),
-      preferences: .memory(rate: 0),
-      clock: { 0 },
-      heartbeatInterval: ViewerController.heartbeatEvery,
-      nap: ViewerController.sleep,
-      logIn: { "The screen could not lock" },
-      showKeys: { _ in },
-      doubleClickInterval: { 0.5 }
-    )
-    await viewer.askToLogIn()
+  @Test("Switch to the Helper… shows in the window what locking the screen said, a failure included")
+  func switchingSaysHowItWent() async {
+    let viewer = ViewerController.scripted(ScriptedService(), switchToHelper: { "The screen could not lock" })
+    viewer.send(.askSwitch)
+    await viewer.confirmAlert()
     #expect(viewer.session.notice == "The screen could not lock")
+    #expect(viewer.state.alert == nil)
   }
 
-  @Test("a saved rate that is not offered falls back to every 2 seconds")
+  @Test("a saved rate that is not offered falls back to Live")
   func anUnofferedRateFallsBack() {
-    #expect(ViewerController.scripted(ScriptedService(), rate: 3).rate == .everyTwoSeconds)
+    #expect(ViewerController.scripted(ScriptedService(), rate: 3).rate == .live)
     #expect(ViewerController.scripted(ScriptedService(), rate: 5).rate == .everyFiveSeconds)
+  }
+
+  @Test("Details reads the connected agents when it opens and by Check Again, never with each reading")
+  func detailsReadsAgentsWhenItOpens() async throws {
+    let service = ScriptedService()
+    let reads = CallCount()
+    let viewer = ViewerController.scripted(
+      service,
+      nap: ViewerController.untilCancelled,
+      connectedAgents: {
+        reads.count += 1
+        return [AgentID.codex]
+      }
+    )
+    service.picture = png()
+    viewer.setVisible(true)
+    try await settle("the first picture never arrived") { viewer.reading.frame != nil }
+    #expect(reads.count == 0, "closed Details reads nothing")
+    viewer.send(.toggleDetails)
+    try await settle("the agents were never read") { viewer.agents == [.codex] }
+    await viewer.read(viewer.generation)
+    #expect(reads.count == 1, "a reading leaves them be")
+    await viewer.checkAgain()
+    #expect(reads.count == 2)
+    #expect(viewer.state.details?.session.map(\.value) == ["Codex"])
+    viewer.close()
   }
 }

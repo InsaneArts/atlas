@@ -1,16 +1,16 @@
 import SwiftUI
 
-/// The viewer window, in the onboarding's language: the helper's desktop on the dark ground, one white capsule for
-/// the next step, and quiet cards of rows beside it on request. It draws its state and sends what the person does; it
-/// decides nothing. The shell supplies `input`, the surface over the desktop that takes the mouse and keyboard while
-/// in control, so this view never sees AppKit; previews pass none.
+/// The main window in the widget's look: one quiet row at the top, the helper's screen under it, the Details column
+/// beside it on request, and an alert over everything when one is asked. It draws its state and sends what the person
+/// does; it decides nothing. The shell supplies `input`, the surface over the screen that takes the mouse and
+/// keyboard while in control, so this view never sees AppKit; previews pass none.
 package struct ViewerView<Input: View>: View {
   /// What the window shows.
   private let state: ViewerState
   /// Receives what the person does.
   private let send: @MainActor (ViewerEvent) -> Void
-  /// Reads the header's detail, the helper and how fresh its picture is, as the status line draws.
-  private let detail: @MainActor () -> String
+  /// Reads how old the newest picture is, as Details' row draws.
+  private let newest: @MainActor () -> String
   /// The surface laid over the picture that takes the mouse and keyboard.
   private let input: Input
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -20,65 +20,101 @@ package struct ViewerView<Input: View>: View {
   /// - Parameters:
   ///   - state: What the window shows.
   ///   - send: Receives what the person does.
-  ///   - detail: Reads the header's detail as the status line draws: the app's reads its controller, whose clock
-  ///     ticks every second, so the picture's age redraws that line alone and not the window.
+  ///   - newest: Reads how old the newest picture is as Details' row draws: the app's reads its controller, whose
+  ///     clock ticks every second, so the picture's age redraws that row alone and not the window.
   ///   - input: The surface laid over the picture that takes the mouse and keyboard.
   package init(
     state: ViewerState,
     send: @escaping @MainActor (ViewerEvent) -> Void,
-    detail: @escaping @MainActor () -> String,
+    newest: @escaping @MainActor () -> String,
     @ViewBuilder input: () -> Input
   ) {
     self.state = state
     self.send = send
-    self.detail = detail
+    self.newest = newest
     self.input = input()
   }
 
-  /// The header in the title bar, the stage over the footer, and the sidebar beside them when it fits.
+  /// The top row in the title bar, the screen or a tab's pane under it, Details beside them, the mini screen in the
+  /// corner, a screenshot shown large over all of it, and the alert over that.
   package var body: some View {
     GeometryReader { proxy in
-      let room = ViewerLayout.showsSidebar(width: proxy.size.width, wanted: true)
-      let sidebar = ViewerLayout.showsSidebar(width: proxy.size.width, wanted: state.header.sidebar.isOn)
       VStack(spacing: .zero) {
-        // The header fills the title bar, whatever its height.
-        ViewerHeader(state: state.header, detail: detail, hasRoom: room, send: send)
-          .frame(height: max(proxy.safeAreaInsets.top, ViewerLayout.headerHeight))
+        // The top row fills the title bar, whatever its height.
+        ViewerTopRow(state: state.top, fit: ViewerLayout.topRowFit(width: proxy.size.width), send: send)
+          .frame(height: max(proxy.safeAreaInsets.top, ViewerLayout.topRowHeight))
         HStack(spacing: .zero) {
-          VStack(spacing: .zero) {
-            StageView(state: ViewerLayout.stage(state.stage, besideSidebar: sidebar), send: send, input: input)
-              .padding(.horizontal, Spacing.section)
-              .padding(.top, Spacing.ml)
-              .padding(.bottom, Spacing.group)
-              .frame(maxWidth: .infinity, maxHeight: .infinity)
-            ViewerFooter(state: state.footer, send: send)
-          }
-          .overlay {
-            if let recovery = state.recovery {
-              RecoveryAlert(prompt: recovery, send: send)
+          // Every tab stands in the same frame, the content area less the window's inset: the panes fill it, the picture
+          // fits in it.
+          pane
+            .padding(Spacing.l)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // The small screen keeps to the panes' corner, clear of Details.
+            .overlay(alignment: .bottomTrailing) {
+              if let mini = state.mini {
+                MiniScreen(state: mini) { send(.selectTab(.screen)) }
+                  .padding(ViewerLayout.miniInset)
+              }
+            }
+          // Details is a pane of the same card beside the main one, below the top row: its top level with the main
+          // pane's, the window's inset to its right and below it, the main pane's own inset as the gap between them.
+          // The slide moves Details alone: the pane takes its new width at once, so nothing on the screen, a caption,
+          // the outline or the picture's frame, rides along.
+          ZStack {
+            if let details = state.details {
+              ViewerDetails(state: details, newest: newest, send: send)
+                .frame(width: ViewerLayout.detailsWidth)
+                .padding([.top, .bottom, .trailing], Spacing.l)
+                .transition(
+                  reduceMotion
+                    ? .opacity
+                    : .move(edge: .trailing)
+                      .combined(with: .opacity)
+                )
             }
           }
-          if sidebar {
-            HStack(spacing: .zero) {
-              SeparatorLine(axis: .vertical)
-              ViewerSidebar(state: state.sidebar, send: send)
-            }
-            .transition(
-              reduceMotion
-                ? .opacity
-                : .move(edge: .trailing)
-                  .combined(with: .opacity)
-            )
-          }
+          .animation(reduceMotion ? Motion.fade : Motion.slide, value: state.details == nil)
         }
       }
+      .overlay {
+        ZStack {
+          if let large = largeShot {
+            LargeShotLayer(shot: large, send: send)
+              .transition(reduceMotion ? .identity : .opacity)
+          }
+        }
+        .animation(reduceMotion ? nil : Motion.fade, value: largeShot == nil)
+      }
+      .overlay {
+        AlertLayer(state: state.alert) { send($0 == .confirm ? .alertConfirm : .alertCancel) }
+      }
       .ignoresSafeArea(.container, edges: .top)
-      .animation(reduceMotion ? nil : Motion.slide, value: sidebar)
     }
     .windowSurface()
-    .onChange(of: state.header.status.label) { _, label in announce(label) }
-    .onChange(of: state.stage.notice) { _, notice in if let notice { announce(notice) } }
-    .onChange(of: state.recovery?.title) { _, title in if let title { announce(title) } }
+    .onChange(of: state.top.status.label) { _, label in announce(label) }
+    .onChange(of: state.screen.notice) { _, notice in if let notice { announce(notice) } }
+    .onChange(of: state.alert?.title) { _, title in if let title { announce(title) } }
+  }
+
+  /// The Screen tab, or the selected tab's pane: Activity, Apps and Screenshots fill the frame inside the window's
+  /// inset, and the Screen's picture fits within that same frame at its own shape.
+  @ViewBuilder private var pane: some View {
+    switch state.pane {
+    case .screen:
+      ViewerScreen(state: state.screen, send: send, input: input)
+    case .activity(let activity):
+      ViewerActivityPane(state: activity, send: send)
+    case .apps(let apps):
+      ViewerAppsPane(state: apps, send: send)
+    case .screenshots(let shots):
+      ViewerShotsPane(state: shots, send: send)
+    }
+  }
+
+  /// The screenshot shown large over the whole window, if the Screenshots tab shows one.
+  private var largeShot: ViewerLargeShot? {
+    guard case .screenshots(let shots) = state.pane else { return nil }
+    return shots.large
   }
 
   /// VoiceOver says what changed.
@@ -91,75 +127,65 @@ package struct ViewerView<Input: View>: View {
 }
 
 extension ViewerView where Input == EmptyView {
-  /// Creates the window's content with no input surface and the state's own detail, as previews and design renders
-  /// draw it.
+  /// Creates the window's content with no input surface and the state's own picture age, as previews and design
+  /// renders draw it.
   ///
   /// - Parameters:
   ///   - state: What the window shows.
   ///   - send: Receives what the person does.
   package init(state: ViewerState, send: @escaping @MainActor (ViewerEvent) -> Void) {
-    self.init(state: state, send: send, detail: { state.header.detail }, input: { EmptyView() })
+    self.init(state: state, send: send, newest: { state.details?.newest ?? "" }, input: { EmptyView() })
   }
 }
 
 #if DEBUG
-  #Preview("Watching") {
-    ViewerView(state: PreviewStates.viewerWatching) { _ in }
+  #Preview("Working") {
+    ViewerView(state: PreviewStates.viewerWorking) { _ in }
       .frame(width: PreviewStates.viewerSize.width, height: PreviewStates.viewerSize.height)
   }
 
-  #Preview("Sidebar") {
-    ViewerView(state: PreviewStates.viewerSidebar) { _ in }
-      .frame(width: PreviewStates.viewerSize.width, height: PreviewStates.viewerSize.height)
-  }
-
-  #Preview("Sidebar and control") {
-    ViewerView(state: PreviewStates.viewerSidebarControl) { _ in }
-      .frame(width: PreviewStates.viewerSize.width, height: PreviewStates.viewerSize.height)
-  }
-
-  #Preview("Control") {
+  #Preview("You have control") {
     ViewerView(state: PreviewStates.viewerControl) { _ in }
       .frame(width: PreviewStates.viewerSize.width, height: PreviewStates.viewerSize.height)
   }
 
-  #Preview("Recovery") {
-    ViewerView(state: PreviewStates.viewerRecovery) { _ in }
+  #Preview("Details") {
+    ViewerView(state: PreviewStates.viewerDetails) { _ in }
       .frame(width: PreviewStates.viewerSize.width, height: PreviewStates.viewerSize.height)
   }
 
-  #Preview("Paused") {
-    ViewerView(state: PreviewStates.viewerPaused) { _ in }
+  #Preview("Needs you") {
+    ViewerView(state: PreviewStates.viewerNeedsYou) { _ in }
       .frame(width: PreviewStates.viewerSize.width, height: PreviewStates.viewerSize.height)
   }
 
-  #Preview("Unavailable") {
-    ViewerView(state: PreviewStates.viewerUnavailable) { _ in }
+  #Preview("Activity") {
+    ViewerView(state: PreviewStates.viewerActivity) { _ in }
       .frame(width: PreviewStates.viewerSize.width, height: PreviewStates.viewerSize.height)
   }
 
-  #Preview("Notice") {
-    ViewerView(state: PreviewStates.viewerNotice) { _ in }
+  #Preview("Apps") {
+    ViewerView(state: PreviewStates.viewerApps) { _ in }
       .frame(width: PreviewStates.viewerSize.width, height: PreviewStates.viewerSize.height)
   }
 
-  #Preview("Logged out") {
-    ViewerView(state: PreviewStates.viewerLoggedOut) { _ in }
+  #Preview("Show on screen") {
+    ViewerView(state: PreviewStates.viewerShowOnScreen) { _ in }
       .frame(width: PreviewStates.viewerSize.width, height: PreviewStates.viewerSize.height)
   }
 
-  #Preview("Connecting") {
-    ViewerView(state: PreviewStates.viewerConnecting) { _ in }
+  #Preview("Screenshots") {
+    ViewerView(state: PreviewStates.viewerShots) { _ in }
       .frame(width: PreviewStates.viewerSize.width, height: PreviewStates.viewerSize.height)
   }
 
-  #Preview("Typing") {
-    ViewerView(state: PreviewStates.viewerTyping) { _ in }
+  #Preview("A screenshot, large") {
+    ViewerView(state: PreviewStates.viewerShotLarge) { _ in }
       .frame(width: PreviewStates.viewerSize.width, height: PreviewStates.viewerSize.height)
   }
 
   #Preview("Interactive") {
-    @Previewable @State var state = PreviewStates.viewerWatching
+    @Previewable @State var state = PreviewStates.viewerWorking
     InteractivePreview {
       Menu(String("State")) {
         ForEach(PreviewStates.viewer) { preview in
