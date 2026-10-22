@@ -13,12 +13,15 @@
 use crate::{
     client::{Actor, Client},
     error::{Error, Result},
+    helper_info::{
+        FRAME_LIMIT, ICONS, Icons, capture_time, captures, frame, open_apps, read_capture,
+        thumbnail,
+    },
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -43,13 +46,6 @@ const SCREEN_SCRIPT: &str = include_str!("screen.js");
 /// MCP versions this server speaks; it answers in the client's when it is
 /// one of them.
 const VERSIONS: [&str; 4] = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
-/// The widest frame sent, and its JPEG quality; a smaller second try when
-/// the first is too large for a tool result.
-const FRAME: (u32, f64) = (1024, 0.6);
-const FRAME_SMALL: (u32, f64) = (768, 0.45);
-/// The most base64 characters a frame may take: well under the ~150,000
-/// characters an agent app hydrates into a view.
-const FRAME_BUDGET: usize = 120_000;
 /// The longest request line read, in bytes.
 const MAX_LINE: usize = 1 << 20;
 /// How long a status read serves the view's frames: each read asks the
@@ -62,17 +58,8 @@ const STATUS_REUSE: Duration = Duration::from_secs(2);
 const KEY_REUSE: Duration = Duration::from_secs(1);
 /// How long the viewer's control lasts unless it is kept.
 const LEASE: Duration = Duration::from_secs(10);
-/// How long a frame read from the menu bar's viewer may take, and its
-/// largest size.
+/// How long a frame read from the menu bar's viewer may take.
 const FRAME_DEADLINE: Duration = Duration::from_secs(6);
-const FRAME_LIMIT: usize = 16 << 20;
-/// A screenshot's thumbnail: its widest side and JPEG quality.
-const THUMB: (u32, f64) = (480, 0.6);
-/// App icons' size in pixels, the most sent in one answer, and the most
-/// kept made.
-const ICON: usize = 64;
-const ICONS: usize = 12;
-const ICON_CACHE: usize = 64;
 /// The most activity rows and screenshots listed.
 const ACTIVITY: usize = 100;
 const SHOTS: usize = 30;
@@ -127,9 +114,8 @@ struct Server {
     shared: Mutex<Option<Seen>>,
     /// The person's control taken from the view.
     held: Mutex<Option<Held>>,
-    /// App icons made, as base64 PNGs, by bundle path; None when an app has
-    /// none to read.
-    icons: Mutex<HashMap<PathBuf, Option<String>>>,
+    /// App icons made.
+    icons: Icons,
 }
 
 /// A frame of the menu bar's viewer: the key control requests name it by,
@@ -167,7 +153,7 @@ pub async fn serve(client: Client, config: PathBuf, port: u16, read_only: bool) 
         framed: Mutex::new(None),
         shared: Mutex::new(None),
         held: Mutex::new(None),
-        icons: Mutex::new(HashMap::new()),
+        icons: Icons::default(),
     });
     let out = Arc::new(Mutex::new(tokio::io::stdout()));
     let mut input = BufReader::new(tokio::io::stdin());
@@ -723,9 +709,11 @@ impl Server {
         let windows = crate::agent::list(&self.client, &filter).await?;
         let mut listed = open_apps(&apps["apps"], &windows["windows"]);
 
-        for app in listed.iter_mut().take(ICONS) {
-            if let Some(bundle) = app["bundle"].as_str().map(PathBuf::from)
-                && let Some(icon) = self.icon(bundle).await
+        for (at, app) in listed.iter_mut().enumerate() {
+            only_title_and_size(app);
+            if at < ICONS
+                && let Some(bundle) = app["bundle"].as_str().map(PathBuf::from)
+                && let Some(icon) = self.icons.get(bundle).await
             {
                 app["icon"] = json!(icon);
             }
@@ -737,39 +725,19 @@ impl Server {
         }))
     }
 
-    /// An app's icon as a base64 PNG, made once. Only apps installed where
-    /// apps are (not files any app could have put in a shared folder) are
-    /// read on the person's side.
-    async fn icon(&self, bundle: PathBuf) -> Option<String> {
-        if !installed(&bundle) {
-            return None;
-        }
-        if let Some(known) = self.icons.lock().await.get(&bundle) {
-            return known.clone();
-        }
-
-        let made = tokio::task::spawn_blocking({
-            let bundle = bundle.clone();
-            move || icon(&bundle)
-        })
-        .await
-        .ok()
-        .flatten();
-        let mut icons = self.icons.lock().await;
-        if icons.len() >= ICON_CACHE {
-            icons.clear();
-        }
-        icons.insert(bundle, made.clone());
-        made
-    }
-
     /// The screenshots agents took, newest first.
     async fn screenshots(&self) -> Result<Value> {
         let output = self.client.output_dir()?.to_path_buf();
         let now = crate::client::timestamp();
-        let shots = tokio::task::spawn_blocking(move || captures(&output, now))
+        let shots = tokio::task::spawn_blocking(move || captures(&output, SHOTS))
             .await
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(at, name)| {
+                let seconds = now.saturating_sub(at) / 1_000_000_000;
+                json!({"name": name, "ageSeconds": u64::try_from(seconds).unwrap_or(u64::MAX)})
+            })
+            .collect::<Vec<_>>();
 
         Ok(json!({
             "content": [{"type": "text", "text": format!("{} screenshots.", shots.len())}],
@@ -783,22 +751,10 @@ impl Server {
             return Err(Error::new("bad-request", "No screenshot has that name"));
         }
 
-        let path = self.client.output_dir()?.join(name);
+        let output = self.client.output_dir()?.to_path_buf();
+        let wanted = name.to_owned();
         let image = tokio::task::spawn_blocking(move || -> Result<Value> {
-            // Only a plain file the agent's capture wrote: never through a
-            // link, and no more of it than a screenshot takes.
-            use std::{io::Read, os::unix::fs::OpenOptionsExt};
-            let file = std::fs::OpenOptions::new()
-                .read(true)
-                .custom_flags(nix::libc::O_NOFOLLOW)
-                .open(&path)
-                .map_err(|_| Error::new("bad-request", "No screenshot has that name"))?;
-            if !file.metadata()?.is_file() {
-                return Err(Error::new("bad-request", "No screenshot has that name"));
-            }
-
-            let mut png = Vec::new();
-            file.take(FRAME_LIMIT as u64).read_to_end(&mut png)?;
+            let png = read_capture(&output, &wanted)?;
             if full { frame(&png) } else { thumbnail(&png) }
         })
         .await
@@ -872,6 +828,18 @@ impl Server {
 
 /// The answer to `initialize`, in the client's protocol version when this
 /// server speaks it.
+/// An app's windows as the view shows them: each one's title and size only,
+/// never its place on the screen or its number.
+fn only_title_and_size(app: &mut Value) {
+    for window in app["windows"].as_array_mut().into_iter().flatten() {
+        *window = json!({
+            "title": window["title"],
+            "width": window["width"],
+            "height": window["height"],
+        });
+    }
+}
+
 fn initialized(params: &Value) -> Value {
     let asked = params["protocolVersion"].as_str().unwrap_or_default();
     let version = VERSIONS
@@ -1090,47 +1058,6 @@ fn said(status: &Value) -> Value {
     })
 }
 
-/// A PNG screen as the frame the view shows: a JPEG within the budget, as
-/// base64, with its size and an id that changes with its content.
-fn frame(png: &[u8]) -> Result<Value> {
-    let mut encoded = jpeg(png, FRAME)?;
-    if base64_length(encoded.0.len()) > FRAME_BUDGET {
-        encoded = jpeg(png, FRAME_SMALL)?;
-    }
-
-    let (bytes, width, height) = encoded;
-    if base64_length(bytes.len()) > FRAME_BUDGET {
-        return Err(Error::new("capture", "The screen is too detailed to send"));
-    }
-
-    let digest = Sha256::digest(&bytes);
-    let id = digest[..8]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-
-    use base64::{Engine, engine::general_purpose::STANDARD};
-    Ok(json!({
-        "id": id,
-        "mimeType": "image/jpeg",
-        "data": STANDARD.encode(&bytes),
-        "width": width,
-        "height": height,
-    }))
-}
-
-/// A screenshot's thumbnail: a small JPEG, as base64, with its size.
-fn thumbnail(png: &[u8]) -> Result<Value> {
-    let (bytes, width, height) = jpeg(png, THUMB)?;
-    use base64::{Engine, engine::general_purpose::STANDARD};
-    Ok(json!({
-        "mimeType": "image/jpeg",
-        "data": STANDARD.encode(&bytes),
-        "width": width,
-        "height": height,
-    }))
-}
-
 /// The view's input after checking it is only what the person may send:
 /// pointer, move, scroll, typing and keys, at most as many as the helper
 /// takes at once. The helper's own checks (points on its display, typing
@@ -1150,134 +1077,6 @@ fn checked(actions: &Value) -> Result<&Value> {
     }
 
     Ok(actions)
-}
-
-/// The regular apps in `apps`, each with its windows from `windows` (front
-/// to back): apps with a window first, in the order of their front one.
-fn open_apps(apps: &Value, windows: &Value) -> Vec<Value> {
-    let windows = windows.as_array().map(Vec::as_slice).unwrap_or_default();
-    let mut listed = apps
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|app| app["policy"] == "regular")
-        .map(|app| {
-            let own = windows
-                .iter()
-                .enumerate()
-                .filter(|(_, window)| window["pid"] == app["pid"])
-                .collect::<Vec<_>>();
-            let front = own.first().map_or(usize::MAX, |(at, _)| *at);
-            // The app the executable is in: the innermost, for a helper app
-            // inside another.
-            let bundle = app["executable"].as_str().and_then(|path| {
-                path.rfind(".app/Contents/MacOS/")
-                    .map(|end| &path[..end + 4])
-            });
-            let listed = json!({
-                "name": app["name"],
-                "pid": app["pid"],
-                "active": app["active"] == true,
-                "hidden": app["hidden"] == true,
-                "bundle": bundle,
-                "windows": own
-                    .iter()
-                    .map(|(_, window)| json!({
-                        "title": window["title"],
-                        "width": window["bounds"]["width"],
-                        "height": window["bounds"]["height"],
-                    }))
-                    .collect::<Vec<_>>(),
-            });
-            (
-                front,
-                app["name"].as_str().unwrap_or_default().to_lowercase(),
-                listed,
-            )
-        })
-        .collect::<Vec<_>>();
-
-    listed.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
-    listed.into_iter().map(|(_, _, app)| app).collect()
-}
-
-/// When a screenshot named `name` was taken, in nanoseconds since 1970:
-/// only names an agent's capture writes have one.
-fn capture_time(name: &str) -> Option<u128> {
-    let digits = name.strip_suffix("-capture.png")?;
-    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    digits.parse().ok()
-}
-
-/// The agents' screenshots in `output`, newest first, with their age at
-/// `now`.
-fn captures(output: &Path, now: u128) -> Vec<Value> {
-    let Ok(entries) = std::fs::read_dir(output) else {
-        return Vec::new();
-    };
-
-    let mut shots = entries
-        .flatten()
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
-        .filter_map(|entry| {
-            let name = entry.file_name().to_str()?.to_owned();
-            Some((capture_time(&name)?, name))
-        })
-        .collect::<Vec<_>>();
-    shots.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
-
-    shots
-        .into_iter()
-        .take(SHOTS)
-        .map(|(at, name)| {
-            let seconds = now.saturating_sub(at) / 1_000_000_000;
-            json!({"name": name, "ageSeconds": u64::try_from(seconds).unwrap_or(u64::MAX)})
-        })
-        .collect()
-}
-
-/// Whether `bundle` is an app installed where apps go: the system's and
-/// the person's Applications folders, nowhere any app could write.
-fn installed(bundle: &Path) -> bool {
-    let home = std::env::var_os("HOME").map(|home| PathBuf::from(home).join("Applications"));
-    let roots = [
-        Some(PathBuf::from("/Applications")),
-        Some(PathBuf::from("/System/Applications")),
-        home,
-    ];
-    bundle.is_absolute()
-        && !bundle
-            .components()
-            .any(|part| part == std::path::Component::ParentDir)
-        && roots.iter().flatten().any(|root| bundle.starts_with(root))
-}
-
-#[cfg(target_os = "macos")]
-fn icon(bundle: &Path) -> Option<String> {
-    use base64::{Engine, engine::general_purpose::STANDARD};
-    let png = crate::native::icons::png(bundle, ICON).ok()?;
-    Some(STANDARD.encode(png))
-}
-
-#[cfg(not(target_os = "macos"))]
-fn icon(_bundle: &Path) -> Option<String> {
-    None
-}
-
-fn base64_length(bytes: usize) -> usize {
-    bytes.div_ceil(3) * 4
-}
-
-#[cfg(target_os = "macos")]
-fn jpeg(png: &[u8], (limit, quality): (u32, f64)) -> Result<(Vec<u8>, u32, u32)> {
-    crate::native::capture::jpeg(png, limit, quality)
-}
-
-#[cfg(not(target_os = "macos"))]
-fn jpeg(_png: &[u8], _: (u32, f64)) -> Result<(Vec<u8>, u32, u32)> {
-    Err(Error::new("platform", "Atlas runs on macOS only"))
 }
 
 #[cfg(test)]

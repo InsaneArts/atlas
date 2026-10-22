@@ -13,6 +13,7 @@ pub mod doing;
 pub mod environment;
 pub mod error;
 pub mod handoff;
+pub mod helper_info;
 pub mod init;
 pub mod mcp;
 pub mod menubar;

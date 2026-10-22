@@ -391,7 +391,10 @@ impl Client {
         // An agent's look at the screen is activity too; a recording that
         // fails never fails the capture.
         let request = json!({"op": "screenshot"});
-        let reply = json!({"ok": captured.is_ok()});
+        let reply = match &captured {
+            Ok(_) => json!({"ok": true}),
+            Err(error) => json!({"ok": false, "code": recorded_code(error)}),
+        };
         let _ = self.record(&request, &reply, started.elapsed());
 
         captured
@@ -1373,7 +1376,8 @@ impl Client {
             match ended {
                 Ok(reply) => reply,
                 Err(error) => {
-                    let _ = self.record(&request, &json!({"ok": false}), started.elapsed());
+                    let failed = json!({"ok": false, "code": recorded_code(&error)});
+                    let _ = self.record(&request, &failed, started.elapsed());
                     return Err(error);
                 }
             }
@@ -1474,6 +1478,15 @@ impl Client {
             "actor": self.actor.as_str(),
         });
 
+        // A failure keeps its fixed code (never its message), so the app can
+        // say why in plain words.
+        if !start
+            && !ok
+            && let (Some(code), Some(fields)) = (failure_code(reply), row.as_object_mut())
+        {
+            fields.insert("code".into(), json!(code));
+        }
+
         if let (Some(doing), Some(fields)) = (&self.doing, row.as_object_mut()) {
             doing.fields(fields, ok);
             if start {
@@ -1490,6 +1503,38 @@ impl Client {
         writeln!(file, "{row}")?;
         Ok(())
     }
+}
+
+/// The code a failure is recorded with: `uncertain` when it may have
+/// finished in the helper all the same, so the activity never says it
+/// didn't happen.
+fn recorded_code(error: &Error) -> &'static str {
+    if error.uncertain {
+        "uncertain"
+    } else {
+        error.code
+    }
+}
+
+/// Why a mutation failed, as a fixed code: the helper's error code, or
+/// `timeout` and `exit` for a command that ran too long or failed. Only a
+/// short lowercase code is kept, so no message text reaches the log.
+fn failure_code(reply: &Value) -> Option<String> {
+    if let Some(code) = reply["code"].as_str() {
+        let fixed = !code.is_empty()
+            && code.len() <= 32
+            && code
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte == b'-');
+        return fixed.then(|| code.to_owned());
+    }
+    if reply["timedOut"] == true {
+        return Some("timeout".into());
+    }
+    reply["exitCode"]
+        .as_i64()
+        .is_some_and(|code| code != 0)
+        .then(|| "exit".into())
 }
 
 /// Whether a mutation did what it was for: the helper accepted it and, for
@@ -1766,6 +1811,42 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .ends_with('.')
+        );
+    }
+
+    #[test]
+    fn a_failure_keeps_its_fixed_code_and_reads_as_plain_words_but_never_its_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let click = json!({"op": "input", "actions": [{"type": "click"}]});
+        let refused =
+            json!({"ok": false, "code": "elements", "error": "No element is named secret"});
+        let odd = json!({"ok": false, "code": "Not A Code: secret"});
+        let failed = json!({"ok": true, "exitCode": 2});
+
+        // One client per action: rows of one command read as its newest step.
+        for reply in [&refused, &odd, &failed] {
+            client_in(dir.path())
+                .doing(Doing::new("click").app(Some("Opie")))
+                .record(&click, reply, Duration::ZERO)
+                .unwrap();
+        }
+
+        let client = client_in(dir.path());
+        let directory = client.output_dir().unwrap();
+        let log = std::fs::read_to_string(directory.join("metadata.jsonl")).unwrap();
+        assert!(!log.contains("secret"), "{log}");
+        let rows = crate::overview::activity(directory, 5);
+        let reasons = rows
+            .iter()
+            .map(|row| crate::overview::shown(row, 0)["reason"].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            reasons,
+            [
+                json!("The command failed"),
+                Value::Null,
+                json!("Nothing on screen matched")
+            ]
         );
     }
 

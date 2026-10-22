@@ -3,8 +3,8 @@
 //! capability facts a person needs at a glance.
 use crate::{client::Client, control::Controller, error::Error};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
-    fs,
     io::{Read, Seek, SeekFrom},
     path::Path,
     time::Duration,
@@ -13,8 +13,10 @@ use tokio::time::Instant;
 
 /// Activity this recent counts as an agent acting now.
 const ACTIVE_NANOS: u128 = 5_000_000_000;
-/// How much of the end of the activity log is read.
+/// How much of the end of the activity log is read at least, and as much
+/// more as a row takes at most for each row asked for past that.
 const TAIL: u64 = 64 * 1024;
+const ROW_BYTES: u64 = 512;
 
 /// How long reading the status or a frame may take: less than the app
 /// waits (8 seconds), so it hears why rather than giving up.
@@ -102,16 +104,18 @@ pub fn activity(directory: &Path, limit: usize) -> Vec<Value> {
         return Vec::new();
     }
 
-    let Ok(mut file) = fs::File::open(directory.join("metadata.jsonl")) else {
+    // Never through a link, and never waiting on a pipe put in its place.
+    let Some(mut file) = crate::helper_info::open_plain(&directory.join("metadata.jsonl")) else {
         return Vec::new();
     };
 
+    let tail = TAIL.max(ROW_BYTES.saturating_mul(limit as u64));
     let length = file.metadata().map(|m| m.len()).unwrap_or(0);
     let mut bytes = Vec::new();
     if file
-        .seek(SeekFrom::Start(length.saturating_sub(TAIL)))
+        .seek(SeekFrom::Start(length.saturating_sub(tail)))
         .is_err()
-        || file.take(TAIL).read_to_end(&mut bytes).is_err()
+        || file.take(tail).read_to_end(&mut bytes).is_err()
     {
         return Vec::new();
     }
@@ -138,6 +142,24 @@ pub fn activity(directory: &Path, limit: usize) -> Vec<Value> {
     }
 
     rows
+}
+
+/// A logged row's id: the same on every read, and never another row's.
+///
+/// The log keeps no sequence number, and a row's place in it moves: it is
+/// read from its tail, and it starts over once it grows past a megabyte.
+/// What a row holds never changes once written, though, and no two rows
+/// hold the same: each carries the nanosecond it was written at (taken
+/// under the log's exclusive lock, so writers take turns) and, for an
+/// agent's command, that command's random token. So the id is a digest of
+/// the row itself. A command's newest step stands for it, so the row shown
+/// for a command under way is another one, with another id, once it ends.
+pub fn row_id(row: &Value) -> String {
+    let digest = Sha256::digest(row.to_string().as_bytes());
+    digest[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 /// Nanoseconds since an activity row was recorded, if it parses.
@@ -257,7 +279,7 @@ pub fn overview(
     } else if session["inputService"]["controlActive"] == true || recent || pending.in_flight > 0 {
         ("agent", "An agent is acting in the helper".to_owned())
     } else {
-        ("observing", "Watching the helper desktop".to_owned())
+        ("observing", "Nothing is happening in the helper".to_owned())
     };
 
     let (state, label) = kind(mode, recoverable);
@@ -291,10 +313,38 @@ pub fn overview(
     })
 }
 
+/// Why a failed action failed, in plain words, from the fixed code its row
+/// keeps; nil for an action that worked or a code with no plain reason.
+fn reason(row: &Value) -> Option<&'static str> {
+    if row["ok"] != false {
+        return None;
+    }
+    Some(match row["code"].as_str()? {
+        "busy" => "Something else had the mouse and keyboard",
+        "stopped" => "Agents were stopped",
+        "elements" => "Nothing on screen matched",
+        "windows" => "The window wasn't there",
+        "input" => "The mouse and keyboard weren't ready",
+        "capture" => "The screen couldn't be read",
+        "lease-lost" => "Control ended before it finished",
+        "cancelled" => "It was cancelled",
+        "uncertain" => "It may not have finished",
+        "timeout" => "It took too long",
+        "exit" => "The command failed",
+        "transport" | "identity" | "native" | "daemon" | "on-console" => {
+            "Atlas couldn't reach the helper"
+        }
+        _ => return None,
+    })
+}
+
 /// A logged row as every app shows it: what it did in words, who did it
 /// and how long ago, at `now`.
 pub fn shown(row: &Value, now: u128) -> Value {
     json!({
+        // The row's own id, the same on every read, so an app can keep a
+        // line's identity as newer ones arrive.
+        "id": row_id(row),
         "operation": row["operation"],
         // A command under way is not a failure: apps that read only `ok`
         // show it as going well.
@@ -305,6 +355,7 @@ pub fn shown(row: &Value, now: u128) -> Value {
         "app": row["app"],
         "label": row["label"],
         "says": crate::doing::says(row),
+        "reason": reason(row),
         "actor": row["actor"].as_str().unwrap_or("agent"),
         "ageSeconds": age(row, now)
             .map(|nanos| u64::try_from(nanos / 1_000_000_000).unwrap_or(u64::MAX)),
@@ -314,8 +365,27 @@ pub fn shown(row: &Value, now: u128) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     const NOW: u128 = 100_000_000_000;
+
+    #[test]
+    fn the_activity_log_is_read_only_as_a_plain_file_never_a_link_or_a_pipe() {
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = dir.path().join("elsewhere.jsonl");
+        fs::write(&elsewhere, row(1).to_string() + "\n").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, dir.path().join("metadata.jsonl")).unwrap();
+        assert!(activity(dir.path(), 5).is_empty(), "a link");
+
+        fs::remove_file(dir.path().join("metadata.jsonl")).unwrap();
+        nix::unistd::mkfifo(
+            &dir.path().join("metadata.jsonl"),
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        )
+        .unwrap();
+        // A pipe would hold a blocking open forever; this returns at once.
+        assert!(activity(dir.path(), 5).is_empty(), "a pipe");
+    }
 
     fn report(reachable: bool, ready: bool) -> Value {
         json!({

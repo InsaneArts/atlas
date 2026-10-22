@@ -18,7 +18,7 @@ fn server(dir: &std::path::Path) -> Server {
         framed: Mutex::new(None),
         shared: Mutex::new(None),
         held: Mutex::new(None),
-        icons: Mutex::new(HashMap::new()),
+        icons: Icons::default(),
     }
 }
 
@@ -288,25 +288,6 @@ fn a_status_reads_in_a_line_for_the_model_and_whole_for_the_view() {
     assert_eq!(result.get("_meta"), None, "no screen for the model");
 }
 
-#[test]
-fn a_frame_is_a_jpeg_within_the_budget_named_by_its_content() {
-    let png = crate::native::capture::sample_png(2560, 1440);
-    let first = frame(&png).unwrap();
-    assert_eq!(first["mimeType"], "image/jpeg");
-    assert_eq!(
-        (first["width"].clone(), first["height"].clone()),
-        (json!(1024), json!(576))
-    );
-    assert!(first["data"].as_str().unwrap().len() <= FRAME_BUDGET);
-    assert_eq!(first["id"].as_str().unwrap().len(), 16);
-    assert_eq!(
-        frame(&png).unwrap()["id"],
-        first["id"],
-        "the same screen, the same id"
-    );
-    assert_eq!(base64_length(4), 8);
-}
-
 #[tokio::test]
 async fn control_and_the_persons_actions_are_offered_only_to_a_client_that_draws_views() {
     let dir = tempfile::tempdir().unwrap();
@@ -367,79 +348,6 @@ fn only_clicks_scrolls_typing_and_keys_go_to_the_helper_as_many_as_it_takes_at_o
     }
 }
 
-#[test]
-fn apps_list_front_to_back_with_their_windows_and_bundles() {
-    let apps = json!([
-        {"name": "Finder", "pid": 1, "policy": "regular", "executable": "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder"},
-        {"name": "loginwindow", "pid": 2, "policy": "accessory", "executable": "/x"},
-        {"name": "Opie", "pid": 3, "policy": "regular", "active": true, "executable": "/Applications/Opie.app/Contents/MacOS/Opie"},
-        {"name": "Notes", "pid": 4, "policy": "regular", "executable": "/System/Applications/Notes.app/Contents/MacOS/Notes"},
-    ]);
-    let windows = json!([
-        {"pid": 3, "title": "Starter", "bounds": {"width": 1080.0, "height": 590.0}},
-        {"pid": 4, "title": "QA checklist", "bounds": {"width": 900.0, "height": 640.0}},
-        {"pid": 3, "title": "Ring", "bounds": {"width": 520.0, "height": 860.0}},
-    ]);
-
-    let listed = open_apps(&apps, &windows);
-    let order = listed
-        .iter()
-        .map(|app| app["name"].clone())
-        .collect::<Vec<_>>();
-    assert_eq!(order, [json!("Opie"), json!("Notes"), json!("Finder")]);
-    assert_eq!(listed[0]["active"], true);
-    assert_eq!(listed[0]["bundle"], "/Applications/Opie.app");
-    assert_eq!(listed[0]["windows"][1]["title"], "Ring");
-    assert_eq!(listed[0]["windows"][1]["width"], 520.0);
-    assert_eq!(
-        listed[2]["windows"],
-        json!([]),
-        "Finder, without a window, last"
-    );
-}
-
-#[test]
-fn only_files_an_agents_capture_wrote_are_screenshots() {
-    assert_eq!(
-        capture_time("1700000000000000000-capture.png"),
-        Some(1_700_000_000_000_000_000)
-    );
-    for name in [
-        "-capture.png",
-        "../1-capture.png",
-        "1-capture.png.partial",
-        "a1-capture.png",
-        "metadata.jsonl",
-    ] {
-        assert_eq!(capture_time(name), None, "{name}");
-    }
-
-    let dir = tempfile::tempdir().unwrap();
-    let second = 1_000_000_000_u128;
-    std::fs::write(
-        dir.path().join(format!("{}-capture.png", 10 * second)),
-        b"x",
-    )
-    .unwrap();
-    std::fs::write(
-        dir.path().join(format!("{}-capture.png", 40 * second)),
-        b"x",
-    )
-    .unwrap();
-    std::fs::write(dir.path().join("metadata.jsonl"), b"x").unwrap();
-    std::os::unix::fs::symlink(
-        "/etc/hosts",
-        dir.path().join(format!("{}-capture.png", 50 * second)),
-    )
-    .unwrap();
-
-    let shots = captures(dir.path(), 70 * second);
-    assert_eq!(shots.len(), 2, "no links, no other files");
-    assert_eq!(shots[0]["name"], format!("{}-capture.png", 40 * second));
-    assert_eq!(shots[0]["ageSeconds"], 30);
-    assert_eq!(shots[1]["ageSeconds"], 60);
-}
-
 #[tokio::test]
 async fn a_screenshot_is_read_only_by_a_name_a_capture_wrote() {
     let dir = tempfile::tempdir().unwrap();
@@ -462,13 +370,6 @@ async fn a_screenshot_is_read_only_by_a_name_a_capture_wrote() {
             "{name}"
         );
     }
-}
-
-#[test]
-fn an_icon_is_drawn_at_the_size_asked() {
-    let icon = crate::native::capture::icon_png(&crate::native::capture::sample_png(256, 256), 64)
-        .unwrap();
-    assert_eq!(crate::client::png_dimensions(&icon).unwrap(), (64, 64));
 }
 
 fn held(lease: &str, kept: Instant) -> Held {
@@ -603,18 +504,15 @@ async fn a_line_too_long_or_not_text_is_refused_and_the_session_goes_on() {
 }
 
 #[test]
-fn icons_come_only_from_apps_installed_where_apps_go() {
-    assert!(installed(Path::new("/Applications/Opie.app")));
-    assert!(installed(Path::new("/System/Applications/Notes.app")));
-    assert!(!installed(Path::new("/Users/Shared/Evil.app")));
-    assert!(!installed(Path::new("/tmp/Evil.app")));
-    assert!(!installed(Path::new("/Applications/../tmp/Evil.app")));
-    assert!(!installed(Path::new("Applications/Opie.app")));
+fn the_view_gets_each_windows_title_and_size_but_never_its_place_or_number() {
+    let mut app = json!({"name": "Opie", "windows": [
+        {"id": 12, "title": "Ring", "x": 10.0, "y": 40.0, "width": 520.0, "height": 860.0},
+    ]});
 
-    let nested = json!([{"name": "Helper", "pid": 1, "policy": "regular",
-        "executable": "/Applications/Big.app/Contents/Frameworks/Helper.app/Contents/MacOS/Helper"}]);
+    only_title_and_size(&mut app);
+
     assert_eq!(
-        open_apps(&nested, &json!([]))[0]["bundle"],
-        "/Applications/Big.app/Contents/Frameworks/Helper.app"
+        app["windows"],
+        json!([{"title": "Ring", "width": 520.0, "height": 860.0}])
     );
 }
