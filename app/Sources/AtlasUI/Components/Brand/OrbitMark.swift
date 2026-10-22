@@ -34,6 +34,15 @@ struct OrbitMark: View {
   }
 }
 
+extension OrbitMark {
+  /// The mark by the height of its box, as the boards size it: `orbit(13)` is 13 high.
+  ///
+  /// - Parameter height: The height of the mark's box, in points.
+  init(height: CGFloat) {
+    self.init(size: height * 54 / 32)
+  }
+}
+
 #if DEBUG
   #Preview("Orbit mark") {
     HStack(spacing: Spacing.xl) {

@@ -9,7 +9,7 @@ extension ActivityEntry {
 
   /// The caption's mark: a failure first, whatever its age, then the newest action; older ones have none.
   var captionMark: CaptionMark? {
-    if kind == .failed { return .failed }
+    if mark == .failed { return .failed }
     return isNewest ? .newest : nil
   }
 }

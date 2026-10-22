@@ -5,8 +5,8 @@
   /// three buttons and a few lines of text. Its colours, sizes and words are a sample desktop's, not the app's, so
   /// they are not tokens (``SampleDesktop``).
   struct SampleDesktopScene: View {
-    /// A laptop display's size, in points.
-    private let display = CGSize(width: 1512, height: 982)
+    /// A display's size, in points, at the boards' 16 by 10.
+    private let display = CGSize(width: 1440, height: 900)
 
     var body: some View {
       ZStack(alignment: .topLeading) {

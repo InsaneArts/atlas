@@ -24,6 +24,15 @@ extension Color {
   static let onSuccess = Color(red: 0x0B / 255, green: 0x24 / 255, blue: 0x10 / 255)
   /// What needs the person: system orange, #FF9F0A.
   static let attention = Color(red: 0xFF / 255, green: 0x9F / 255, blue: 0x0A / 255)
+  /// A word that needs the person, such as Needs you: #FFB340.
+  static let textAttention = Color(red: 0xFF / 255, green: 0xB3 / 255, blue: 0x40 / 255)
+  /// A link, and the word You have control: #4EA6FF.
+  static let textLink = Color(red: 0x4E / 255, green: 0xA6 / 255, blue: 0xFF / 255)
+  /// An alert's message under its title: rgb(235, 235, 245) at 0.7.
+  static let textAlert = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255)
+    .opacity(0.7)
+  /// A destructive button's word, such as Log Out: #FF6961.
+  static let textDestructive = Color(red: 0xFF / 255, green: 0x69 / 255, blue: 0x61 / 255)
   /// A card's ground: white at 0.045.
   static let fillCard = Color.white
     .opacity(0.045)
@@ -33,6 +42,10 @@ extension Color {
   /// A control's fill while what it toggles is on, such as a round button's: white at 0.16.
   static let fillControlOn = Color.white
     .opacity(0.16)
+  /// An alert's other buttons, such as Cancel and a destructive one, on the alert's lighter ground, and a selected
+  /// icon tab's fill: white at 0.10.
+  static let fillAlertButton = Color.white
+    .opacity(0.1)
   /// A pill's ground, such as a status badge's: white at 0.06.
   static let fillPill = Color.white
     .opacity(0.06)
@@ -41,23 +54,39 @@ extension Color {
   /// An inactive page dot: white at 0.18.
   static let fillIndicator = Color.white
     .opacity(0.18)
-  /// A badge over a picture, such as Live: black at 0.55.
-  static let fillBadge = Color.black
-    .opacity(0.55)
   /// A chip floating over a picture, under its material: the ground at 0.75.
   static let fillChip = Color.ground
     .opacity(0.75)
-  /// The shade laid over content behind an alert: the ground at 0.82.
-  static let scrim = Color.ground
-    .opacity(0.82)
+  /// The shade laid over the whole window behind an alert: black at 0.42.
+  static let scrim = Color.black
+    .opacity(0.42)
   /// The letterbox around a picture: black.
   static let stageBackground = Color.black
+  /// The stage while there is no picture to show: #0D0D10.
+  static let stageEmpty = Color(red: 0x0D / 255, green: 0x0D / 255, blue: 0x10 / 255)
+  /// An alert's ground drawn opaque, under Reduce Transparency: rgb(44, 44, 48).
+  static let fillAlertSolid = Color(red: 44 / 255, green: 44 / 255, blue: 48 / 255)
+  /// An alert's ground over its material: rgb(44, 44, 48) at 0.95.
+  static let fillAlert = Color.fillAlertSolid
+    .opacity(0.95)
+  /// A floating bar of buttons drawn opaque, under Reduce Transparency: rgb(40, 40, 44).
+  static let fillBarSolid = Color(red: 40 / 255, green: 40 / 255, blue: 44 / 255)
+  /// A floating bar of buttons over its material, such as a large screenshot's: rgb(40, 40, 44) at 0.92.
+  static let fillBar = Color.fillBarSolid
+    .opacity(0.92)
   /// A divider and a card's edge: white at 0.08.
   static let separator = Color.white
     .opacity(0.08)
   /// A glass edge: white at 0.16.
   static let strokeStrong = Color.white
     .opacity(0.16)
+  /// A selected tab's edge: white at 0.22.
+  static let strokeSelected = Color.white
+    .opacity(0.22)
+  /// A pressed capsule's edge, such as Keys while in control, and a quiet mark, such as an agent's dot in Activity:
+  /// white at 0.28.
+  static let strokePressed = Color.white
+    .opacity(0.28)
   /// An unselected radio's ring: white at 0.30.
   static let strokeControl = Color.white
     .opacity(0.3)

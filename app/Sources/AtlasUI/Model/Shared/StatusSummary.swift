@@ -1,17 +1,25 @@
-/// A status at a glance: its name and the tone of its dot.
+/// A status at a glance: its word, how it reads, its mark and the line beside it.
 package struct StatusSummary: Equatable, Sendable {
-  /// The status in words, such as "Watching".
+  /// The status in words, such as "Working".
   package var label: String
-  /// How it reads at a glance, which its dot's colour shows.
+  /// How it reads at a glance, which its mark's and its word's colours show.
   package var tone: StatusTone
+  /// The mark beside the word.
+  package var mark: StatusMark
+  /// The line beside the word, such as "Turning Show Center off in Opie"; empty for none.
+  package var line: String
 
   /// Creates a status at a glance.
   ///
   /// - Parameters:
-  ///   - label: The status in words, such as "Watching".
-  ///   - tone: How it reads at a glance, which its dot's colour shows.
-  package init(label: String, tone: StatusTone) {
+  ///   - label: The status in words, such as "Working".
+  ///   - tone: How it reads at a glance, which its mark's and its word's colours show.
+  ///   - mark: The mark beside the word.
+  ///   - line: The line beside the word; empty for none.
+  package init(label: String, tone: StatusTone, mark: StatusMark, line: String = "") {
     self.label = label
     self.tone = tone
+    self.mark = mark
+    self.line = line
   }
 }

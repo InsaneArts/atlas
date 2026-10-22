@@ -11,14 +11,12 @@
       case checkMark
       /// Discs at each size and tone in use.
       case disc
-      /// A still and a breathing dot at each size.
+      /// Every mark, a breathing dot and the small dots a caption and a badge use.
       case statusDot
       /// The first, a middle and the last step.
       case pageDots
       /// Waiting and done.
       case progressPill
-      /// One badge per tone.
-      case statusBadge
     }
 
     private let kind: Kind
@@ -60,11 +58,14 @@
           }
         case .statusDot:
           HStack(spacing: Spacing.l) {
-            StatusDot(tone: .ready)
-            StatusDot(tone: .active, pulsing: true)
-            StatusDot(tone: .attention, size: .small)
-            StatusDot(tone: .active, pulsing: true, size: .small)
-            StatusDot(tone: .ready, size: .small)
+            StatusDot(mark: .dot, tone: .quiet)
+            StatusDot(mark: .pulsing, tone: .active)
+            StatusDot(mark: .dot, tone: .link)
+            StatusDot(mark: .dot, tone: .attention)
+            StatusDot(mark: .square, tone: .attention)
+            StatusDot(mark: .small, tone: .quiet)
+            StatusDot(mark: .pulsing, tone: .active, size: .small)
+            StatusDot(mark: .small, tone: .ready)
           }
         case .pageDots:
           PageDots(index: 0, count: 6)
@@ -73,11 +74,6 @@
         case .progressPill:
           ProgressPill(text: String("Waiting for Accessibility…"))
           ProgressPill(text: String("Accessibility is on"), done: true)
-        case .statusBadge:
-          StatusBadge(label: String("Ready"), tone: .ready)
-          StatusBadge(label: String("Agent working"), tone: .active)
-          StatusBadge(label: String("Needs recovery"), tone: .attention)
-          StatusBadge(label: String("Unavailable"), tone: .quiet)
         }
       }
       .sampleSurface()

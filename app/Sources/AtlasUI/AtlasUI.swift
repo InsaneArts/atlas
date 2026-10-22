@@ -2,8 +2,8 @@
 ///
 /// Owns: the design system (`DesignSystem/`: colours, type, spacing, radii, strokes, sizes, opacities, motion), the
 /// reusable views every window composes (`Components/`), each window's state and events (`Model/`), the windows'
-/// views (`Panel/`, `Viewer/`, `Onboarding/`), and the samples every preview and design render draws
-/// (`PreviewStates/`, debug builds only).
+/// views (`Panel/`, `Viewer/`, `Onboarding/`, `Settings/`, `Alert/`), and the samples every preview and design
+/// render draws (`PreviewStates/`, debug builds only).
 /// Never imports: AtlasKit, AppKit or the app. A view is a function of its state struct and sends events; it decides
 /// nothing. Its words follow one rule: fixed copy (a title, a button, a step or a check that reads the same in every
 /// state) stays in the view, keyed by its case where a state picks among them; every word that depends on state,

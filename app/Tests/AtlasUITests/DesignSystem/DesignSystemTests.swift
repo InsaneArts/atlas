@@ -29,26 +29,38 @@ struct DesignSystemTests {
     #expect(sizes.allSatisfy { $0 == $0.rounded() })
   }
 
-  @Test("radii, strokes, icon sizes, control heights and durations ascend")
+  @Test("radii, strokes, icon sizes, control heights, opacities and durations ascend, no two steps alike")
   func scalesAscend() {
     let scales: [(String, [Double])] = [
-      ("radius", [Radius.small, Radius.medium, Radius.large].map(Double.init)),
+      (
+        "radius",
+        [Radius.compact, Radius.small, Radius.medium, Radius.large, Radius.alert]
+          .map(Double.init)
+      ),
       ("stroke", [Stroke.hairline, Stroke.regular, Stroke.emphasis, Stroke.thick].map(Double.init)),
       (
         "icon size",
         [
-          IconSize.dot, IconSize.glyph, IconSize.glyphLarge, IconSize.radio, IconSize.mark, IconSize.disc,
-          IconSize.tile, IconSize.avatar, IconSize.avatarLarge, IconSize.hero,
+          IconSize.dot, IconSize.glyph, IconSize.glyphLarge, IconSize.radio,
+          IconSize.mark, IconSize.disc, IconSize.agent, IconSize.tile, IconSize.avatar, IconSize.avatarLarge,
+          IconSize.hero,
         ]
         .map(Double.init)
       ),
       (
         "control height",
         [
-          ControlHeight.badge, ControlHeight.pill, ControlHeight.chip, ControlHeight.menuRow, ControlHeight.row,
+          ControlHeight.pill, ControlHeight.chip, ControlHeight.menuRow, ControlHeight.row,
           ControlHeight.compactRow, ControlHeight.button, ControlHeight.field, ControlHeight.large,
         ]
         .map(Double.init)
+      ),
+      (
+        "opacity",
+        [
+          Opacity.tint, Opacity.tag, Opacity.tintEdgeQuiet, Opacity.disabled, Opacity.paused, Opacity.busy,
+          Opacity.tintEdge,
+        ]
       ),
       (
         "duration",
@@ -62,6 +74,26 @@ struct DesignSystemTests {
     for (name, steps) in scales {
       #expect(steps == steps.sorted(), "\(name)")
       #expect(Set(steps).count == steps.count, "\(name)")
+    }
+  }
+
+  @Test("elevations float higher in order, their radius and drop ascending and no two alike")
+  func elevationsAscend() {
+    let levels = Elevation.allCases
+    #expect(levels.map(\.radius) == levels.map(\.radius).sorted())
+    #expect(Set(levels.map(\.radius)).count == levels.count)
+    #expect(levels.map(\.y) == levels.map(\.y).sorted())
+  }
+
+  @Test("every radius, icon size and shadow radius is a whole even point")
+  func stepsAreEven() {
+    let steps =
+      [Radius.compact, Radius.small, Radius.medium, Radius.large, Radius.alert]
+      + [IconSize.dot, IconSize.glyph, IconSize.glyphLarge, IconSize.radio, IconSize.mark, IconSize.disc]
+      + [IconSize.agent, IconSize.tile, IconSize.avatar, IconSize.avatarLarge, IconSize.hero]
+      + Elevation.allCases.map(\.radius)
+    for step in steps {
+      #expect(step.truncatingRemainder(dividingBy: 2) == 0, "\(step)")
     }
   }
 }

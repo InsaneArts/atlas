@@ -7,10 +7,6 @@
     enum Kind: Sendable {
       /// Waiting, current and done steps.
       case step
-      /// Compact and regular facts.
-      case fact
-      /// Menu rows, one with a shortcut and one disabled.
-      case menu
       /// A switch among menu rows, and a picker in a card.
       case control
       /// A selected symbol choice and an unselected letter choice.
@@ -23,10 +19,8 @@
       case icon
       /// A setting with its switch.
       case setting
-      /// The person's, another's and a failed action.
-      case activity
-      /// Ready, unknown and failing checks.
-      case readiness
+      /// A details group's facts and checks.
+      case detail
     }
 
     private let kind: Kind
@@ -46,20 +40,6 @@
           StepRow(index: 1, title: String("Find Atlas in the list"), detail: String("Privacy & Security"), state: .done)
           StepRow(index: 2, title: String("Turn its switch on"), detail: String("Confirm it"), state: .current)
           StepRow(index: 3, title: String("Come back here"), detail: String("Atlas notices"), state: .waiting)
-        case .fact:
-          CardGroup {
-            FactRow(name: String("Helper"), value: String("Atlas"))
-            SeparatorLine()
-            FactRow(name: String("Display"), value: String("1512 × 982"), size: .regular)
-          }
-        case .menu:
-          Button(String("Getting Started…")) {}
-            .buttonStyle(.menuRow())
-          Button(String("Recover")) {}
-            .buttonStyle(.menuRow())
-            .disabled(true)
-          Button(String("Quit Atlas")) {}
-            .buttonStyle(.menuRow(shortcut: KeyboardShortcut("q", modifiers: .command)))
         case .control:
           ControlRow(size: .menu) {
             Text(verbatim: "Open at Login")
@@ -73,9 +53,9 @@
               Text(verbatim: "Refresh")
                 .foregroundStyle(Color.textSecondary)
             } control: {
-              Picker(String("Refresh"), selection: .constant(ViewerPictureRate.everyTwoSeconds)) {
+              Picker(String("Refresh"), selection: .constant(2)) {
                 Text(verbatim: "Every 2 seconds")
-                  .tag(ViewerPictureRate.everyTwoSeconds)
+                  .tag(2)
               }
               .labelsHidden()
               .fixedSize()
@@ -130,26 +110,21 @@
               isOn: .constant(true)
             )
           }
-        case .activity:
-          CardGroup {
-            ActivityRow(initial: String("Y"), line: String("You clicked twice"), when: String("now"), kind: .yours)
+        case .detail:
+          CardGroup(radius: Radius.medium) {
+            DetailRow(name: String("Account"), value: String("Atlas"))
             SeparatorLine()
-            ActivityRow(initial: String("A"), line: String("Agent ran a command"), when: String("7s"), kind: .others)
+            DetailRow(name: String("Helper is running"), readiness: .ready)
             SeparatorLine()
-            ActivityRow(initial: String("A"), line: String("Agent typed"), when: String("4m"), kind: .failed)
-          }
-        case .readiness:
-          CardGroup {
-            ReadinessRow(name: String("Helper"), text: String("Ready"), state: .ready)
+            DetailRow(name: String("Save and Open dialogs"), readiness: .unknown, note: String("Not checked yet"))
             SeparatorLine()
-            ReadinessRow(name: String("Save and Open dialogs"), text: String("Not checked yet"), state: .unknown)
-            SeparatorLine()
-            ReadinessRow(
+            DetailRow(
               name: String("Mouse and keyboard"),
-              text: String("Mouse and keyboard aren't ready."),
-              state: .notReady
+              readiness: .notReady,
+              note: String("Mouse and keyboard aren't ready.")
             )
           }
+          .frame(width: SampleWidth.narrow)
         }
       }
       .frame(width: SampleWidth.column)
