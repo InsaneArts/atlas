@@ -15,7 +15,7 @@ package enum Motion {
     /// 0.1: a button press.
     static let press = Duration(seconds: 0.1)
     /// 0.2: a notice, an edge, content leaving.
-    static let fade = Duration(seconds: 0.2)
+    package static let fade = Duration(seconds: 0.2)
     /// 0.4: content arriving.
     static let entry = Duration(seconds: 0.4)
     /// 0.45: a window gliding to a new place on the screen and back.

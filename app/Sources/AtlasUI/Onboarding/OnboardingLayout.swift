@@ -35,16 +35,22 @@ package enum OnboardingLayout {
   static let barInset: CGFloat = 22
   /// 20: the work note's least height, so the screen does not jump as it comes and goes.
   static let workNoteHeight: CGFloat = 20
-  /// 44: above the guide panel's content, clear of the title bar.
-  static let guideTop: CGFloat = 44
-  /// 18: below the guide panel's content.
-  static let guideBottom: CGFloat = 18
+  /// 44: above the permission panel's content, clear of the title bar.
+  static let panelTop: CGFloat = 44
+  /// 18: below the permission panel's content.
+  static let panelBottom: CGFloat = 18
   /// 104: the app icon on the welcome screen.
   static let welcomeIcon: CGFloat = 104
   /// 92: the app icon on the done screen.
   static let doneIcon: CGFloat = 92
   /// 72: the app icon on the helper's allow screen.
   static let allowIcon: CGFloat = 72
+  /// 72: Atlas's icon in the permission panel, dragged into System Settings.
+  static let dragIcon: CGFloat = 72
+  /// 30: the hand carrying the drag ghost.
+  static let ghostHand: CGFloat = 30
+  /// 14: how far past the ghost's icon, right and down, the hand holds it.
+  static let ghostHandOffset: CGFloat = 14
   /// 40: the warning symbol on the blocked screen.
   static let blockedSymbol: CGFloat = 40
   /// 14: how far below its place a screen starts as it arrives.

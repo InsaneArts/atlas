@@ -32,13 +32,13 @@
       ("08-helper-allow", PreviewStates.onboardingAllow),
       ("08-helper-allow-long", PreviewStates.onboardingAllowLong),
       ("09-helper-permissions", PreviewStates.onboardingPermissions),
-      ("10-helper-guide", PreviewStates.onboardingGuide),
+      ("10-helper-permission-panel", PreviewStates.onboardingPermissionPanel),
       ("11-helper-done", PreviewStates.onboardingHelperDone),
       ("12-blocked", PreviewStates.onboardingBlocked),
     ]
 
     /// Draws every setup window sample to a PNG named after it in `directory`, at Retina scale and at its window's
-    /// size: the guide panel's for the guide, the card's for the rest.
+    /// size: the side panel's for the permission panel, the card's for the rest.
     ///
     /// - Parameter directory: Where to write the PNGs.
     /// - Returns: Whether every PNG was written.
@@ -67,10 +67,10 @@
     /// The window size a sample draws at.
     ///
     /// - Parameter state: The sample.
-    /// - Returns: The side panel's size for the guide, else the card's.
+    /// - Returns: The side panel's size for the permission panel, else the card's.
     static func size(_ state: OnboardingState) -> CGSize {
       switch state.content {
-      case .guide: OnboardingPlacement.size(guiding: true)
+      case .permissionPanel: OnboardingPlacement.size(guiding: true)
       case .loading, .screen: OnboardingPlacement.size(guiding: false)
       }
     }

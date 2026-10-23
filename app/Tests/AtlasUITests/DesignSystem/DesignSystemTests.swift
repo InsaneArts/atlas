@@ -59,7 +59,7 @@ struct DesignSystemTests {
         "opacity",
         [
           Opacity.tint, Opacity.tag, Opacity.tintEdgeQuiet, Opacity.disabled, Opacity.paused, Opacity.busy,
-          Opacity.tintEdge,
+          Opacity.tintEdge, Opacity.demonstration,
         ]
       ),
       (

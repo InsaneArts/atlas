@@ -18,6 +18,8 @@ struct TitleDetail: View {
   var size = Size.regular
   /// How the title is painted: primary, or secondary for a step that is not reached yet.
   var titleTone = TextTone.primary
+  /// Whether the title wraps onto as many lines as it needs, rather than being cut.
+  var titleWraps = false
   /// Whether the detail wraps onto as many lines as it needs.
   var wraps = false
 
@@ -26,6 +28,7 @@ struct TitleDetail: View {
       Text(title)
         .font(Typography.font(titleStyle, weight: .semibold))
         .foregroundStyle(titleTone.color)
+        .fixedSize(horizontal: false, vertical: titleWraps)
       Text(detail)
         .font(Typography.font(detailStyle))
         .foregroundStyle(Color.textSecondary)

@@ -7,8 +7,8 @@ enum AppIconImage {
   /// The icon to draw.
   @MainActor static let image = Image(nsImage: icon)
 
-  /// The icon as AppKit has it.
-  @MainActor private static let icon: NSImage = {
+  /// The icon as AppKit has it, as the permission panel drags it.
+  @MainActor static let icon: NSImage = {
     if Bundle.main.bundlePath.hasSuffix(".app"), let icon = NSApp?.applicationIconImage {
       return icon
     }

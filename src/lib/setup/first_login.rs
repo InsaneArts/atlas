@@ -237,8 +237,8 @@ fn write_if_absent(path: &Path, bytes: &[u8]) -> Result<bool> {
 struct Readied {
     /// The files written now; empty when they were all there.
     answered: Vec<PathBuf>,
-    /// Whether the account runs something, so its preferences were left.
-    busy: bool,
+    /// Whether the account has a desktop login, so its preferences were left.
+    logged_in: bool,
     /// The opener's plist, when one was asked for.
     opener: Option<PathBuf>,
     /// Whether the opener's plist was written or replaced now.
@@ -246,15 +246,17 @@ struct Readied {
 }
 
 /// Get the account ready: macOS's setup questions answered (with the skip
-/// file) only in an account that was never set up and runs nothing
-/// (`busy`), so a person's own account keeps every question macOS asks it;
+/// file) only in an account that was never set up and has no desktop login
+/// (`logged_in`), so a person's own account keeps every question macOS asks
+/// it. A new account may already run macOS's own background services
+/// (distnoted, cfprefsd), which say nothing of a person using it;
 /// and, given `program`, the opener in place. Run as the account itself;
 /// `version` and `build` are macOS's. An account with Atlas settings of its
 /// own is no helper, so it gets no opener, and a home others may write to
 /// gets nothing.
 fn ready(
     layout: &Layout,
-    busy: bool,
+    logged_in: bool,
     program: Option<&Path>,
     (version, build): (&str, &str),
 ) -> Result<Readied> {
@@ -275,7 +277,7 @@ fn ready(
     // Setup Assistant's own preferences mark an account that was set up.
     let never_set_up = fs::symlink_metadata(layout.home.join(SETUP_ASSISTANT)).is_err();
     let mut answered = Vec::new();
-    if never_set_up && !busy {
+    if never_set_up && !logged_in {
         owned_folder(layout, "Library/Preferences")?;
         let files = [
             (
@@ -317,7 +319,7 @@ fn ready(
 
     Ok(Readied {
         answered,
-        busy,
+        logged_in,
         opener,
         opener_written,
     })
@@ -328,8 +330,6 @@ fn ready(
 /// loaded its LaunchAgents when it began. Run through `launchctl asuser`
 /// for that, so launchctl reaches the login.
 pub(super) fn first_login(layout: &Layout, opener: bool) -> Result<Value> {
-    let busy = crate::session::runs_besides(layout.uid, std::process::id())
-        .ok_or_else(|| problem("This account's processes could not be listed"))?;
     let logged_in = crate::session::login(layout.uid).is_some();
     let program = if opener {
         Some(crate::init::app_executable()?)
@@ -337,7 +337,7 @@ pub(super) fn first_login(layout: &Layout, opener: bool) -> Result<Value> {
         None
     };
     let (version, build) = macos()?;
-    let readied = ready(layout, busy, program.as_deref(), (&version, &build))?;
+    let readied = ready(layout, logged_in, program.as_deref(), (&version, &build))?;
 
     // Without an opener asked for (atlas init sets the account up itself),
     // one a window left would only race it.
@@ -360,7 +360,6 @@ pub(super) fn first_login(layout: &Layout, opener: bool) -> Result<Value> {
     Ok(json!({
         "ok": true,
         "answered": readied.answered,
-        "busy": readied.busy,
         "loggedIn": logged_in,
         "opener": readied.opener,
         "started": started,
@@ -400,6 +399,15 @@ const REQUEST_PATIENCE: Duration = Duration::from_secs(120);
 /// How long the opener waits for Atlas's window once it asked for it: a
 /// first login is busy, and waiting longer costs nothing.
 const WINDOW_PATIENCE: Duration = Duration::from_secs(120);
+
+/// Whether this account's opener still waits to open Atlas's setup window:
+/// until it has, the window is on its way to guide the person. An opener
+/// that gave up (its job no longer running) leaves its plist for the next
+/// login, and does not count.
+pub(crate) fn opener_waiting(layout: &Layout) -> bool {
+    fs::symlink_metadata(layout.agent_plist(OPENER)).is_ok_and(|metadata| metadata.is_file())
+        && super::helper::job_pid(layout, OPENER).is_some()
+}
 
 /// Whether launchd started this process as the helper's opener: it names
 /// the job in `XPC_SERVICE_NAME`, and gives an app LaunchServices opens
@@ -621,11 +629,11 @@ mod tests {
         );
         assert!(readied.opener.is_some(), "the opener still goes in");
 
-        let (_dir, busy) = self::layout();
-        let readied = ready(&busy, true, None, MACOS).unwrap();
+        let (_dir, logged_in) = self::layout();
+        let readied = ready(&logged_in, true, None, MACOS).unwrap();
         assert!(readied.answered.is_empty());
-        assert!(!busy.home.join("Library").exists());
-        assert!(!busy.home.join(SKIP).exists());
+        assert!(!logged_in.home.join("Library").exists());
+        assert!(!logged_in.home.join(SKIP).exists());
     }
 
     #[test]

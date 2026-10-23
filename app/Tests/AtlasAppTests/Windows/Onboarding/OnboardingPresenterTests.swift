@@ -71,6 +71,9 @@ struct OnboardingPresenterTests {
     ])
   }
 
+  /// macOS 26, whose System Settings names the permissions the tests expect.
+  private static let tahoe = OperatingSystemVersion(majorVersion: 26, minorVersion: 0, patchVersion: 0)
+
   /// A snapshot that has read `facts` once.
   ///
   /// - Parameters:
@@ -98,7 +101,7 @@ struct OnboardingPresenterTests {
   /// Which screen a state shows, if it shows one.
   ///
   /// - Parameter state: The window's state.
-  /// - Returns: The screen's id, or nil for the first reading or the guide.
+  /// - Returns: The screen's id, or nil for the first reading or the permission panel.
   private static func screen(_ state: OnboardingState) -> OnboardingScreen.ID? {
     if case .screen(let screen) = state.content { return screen.id }
     return nil
@@ -128,7 +131,10 @@ struct OnboardingPresenterTests {
       #expect(Self.screen(OnboardingPresenter.state(snapshot)) == screen)
     }
     var guiding = OnboardingSnapshot(facts: try Self.helperSide(), guiding: .accessibility)
-    #expect(OnboardingPresenter.state(guiding).content.isGuide, "the guide shows even before the first reading")
+    #expect(
+      OnboardingPresenter.state(guiding).content.isPermissionPanel,
+      "the panel shows even before the first reading"
+    )
     guiding.loaded = true
     #expect(OnboardingPresenter.state(guiding).footer == OnboardingFooterState())
   }
@@ -325,28 +331,48 @@ struct OnboardingPresenterTests {
     #expect(OnboardingPresenter.state(Self.snapshot(try Self.person(helper))).footer.back == nil)
   }
 
-  @Test("the guide counts its permission and ticks its steps once the switch is on")
-  func guideSteps() throws {
-    let off = OnboardingPresenter.guide(.screenRecording, asker: try Self.helperSide(accessibility: true).asker)
-    #expect(off.label == "2 of 2 · Screen Recording")
-    #expect([off.turnOn, off.comeBack] == [.current, .waiting])
-    #expect(off.pill == "Waiting for Screen Recording…" && !off.isOn)
-    let on = OnboardingPresenter.guide(.accessibility, asker: try Self.helperSide(accessibility: true).asker)
+  @Test("the panel counts its permission by this macOS's name and ticks its pill once the switch is on")
+  func panelPill() throws {
+    var snapshot = Self.snapshot(try Self.helperSide(accessibility: true))
+    snapshot.macOS = Self.tahoe
+    let off = OnboardingPresenter.panel(.screenRecording, snapshot: snapshot)
+    #expect(off.label == "2 of 2 · Screen & System Audio Recording")
+    #expect(off.instruction == "Drag Atlas into the top list.")
+    #expect(off.pill == "Waiting for the switch…" && !off.isOn)
+    #expect(off.alreadyListed == "Already in the top list? Turn its switch on.")
+    let on = OnboardingPresenter.panel(.accessibility, snapshot: snapshot)
     #expect(on.label == "1 of 2 · Accessibility")
-    #expect([on.turnOn, on.comeBack] == [.done, .done])
-    #expect(on.pill == "Accessibility is on" && on.isOn)
+    #expect(on.pill == "Allowed" && on.isOn)
+    snapshot.macOS = OperatingSystemVersion(majorVersion: 27, minorVersion: 0, patchVersion: 0)
+    #expect(
+      OnboardingPresenter.panel(.accessibility, snapshot: snapshot).label == "1 of 2 · Device Control and Data Access"
+    )
   }
 
-  @Test("Accessibility is asked for before Screen Recording")
+  @Test("Accessibility is allowed before Screen Recording, one at a time")
   func accessibilityFirst() throws {
-    let neither = OnboardingPresenter.permissions(try Self.helperSide().asker)
-    #expect(neither.next?.id == Permission.accessibility.id)
-    #expect(neither.accessibility.status == "Off")
-    let one = OnboardingPresenter.permissions(try Self.helperSide(accessibility: true).asker)
-    #expect(one.next?.allowTitle == "Allow Screen Recording")
-    #expect(one.accessibility.status == "Allowed")
-    let both = OnboardingPresenter.permissions(try Self.helperSide(accessibility: true, screen: true).asker)
-    #expect(both.next == nil)
+    var neither = Self.snapshot(try Self.helperSide())
+    neither.macOS = Self.tahoe
+    let first = OnboardingPresenter.permissions(neither)
+    #expect(first.accessibility.canAllow && !first.screenRecording.canAllow)
+    #expect(first.accessibility.status == "Off" && first.accessibility.allowTitle == "Allow…")
+    var one = Self.snapshot(try Self.helperSide(accessibility: true))
+    one.macOS = Self.tahoe
+    let second = OnboardingPresenter.permissions(one)
+    #expect(!second.accessibility.canAllow && second.screenRecording.canAllow)
+    #expect(second.accessibility.status == "Allowed")
+    #expect(second.screenRecording.title == "Screen & System Audio Recording")
+    let both = OnboardingPresenter.permissions(Self.snapshot(try Self.helperSide(accessibility: true, screen: true)))
+    #expect(!both.accessibility.canAllow && !both.screenRecording.canAllow)
+  }
+
+  @Test("permissions not read yet show as being checked, with nothing to allow")
+  func unknownPermissions() throws {
+    var facts = try Self.helperSide(accessibility: true)
+    facts.asker.permissionsKnown = false
+    let screen = OnboardingPresenter.permissions(Self.snapshot(facts))
+    #expect(!screen.screenRecording.canAllow)
+    #expect(screen.screenRecording.status == "Checking…")
   }
 
   @Test("the helper's done screen names the account to switch back to, or the person's own")
@@ -385,9 +411,9 @@ struct OnboardingPresenterTests {
 }
 
 extension OnboardingContent {
-  /// Whether this is the guide panel.
-  fileprivate var isGuide: Bool {
-    if case .guide = self { return true }
+  /// Whether this is the permission panel.
+  fileprivate var isPermissionPanel: Bool {
+    if case .permissionPanel = self { return true }
     return false
   }
 }

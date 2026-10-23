@@ -34,19 +34,22 @@ struct OnboardingControllerTests {
   ///   - opened: Records the URLs opened.
   ///   - loginItem: The scripted login item.
   ///   - installs: The agent installs it shares with another window; its own over `commands` when nil.
+  ///   - pause: The tick's wait; none by default.
   /// - Returns: The controller.
   static func controller(
     _ commands: ScriptedCommands,
     opened: OpenedURLs = OpenedURLs(),
     loginItem: ScriptedLoginItem = ScriptedLoginItem(),
-    installs: AgentInstalls? = nil
+    installs: AgentInstalls? = nil,
+    pause: @escaping @Sendable (Duration) async -> Void = { _ in }
   ) -> OnboardingController {
     OnboardingController(
       dependencies: OnboardingDependencies(
         commands: commands,
         openURL: { opened.urls.append($0) },
         loginItem: loginItem.seam,
-        installs: installs ?? AgentInstalls(commands: commands)
+        installs: installs ?? AgentInstalls(commands: commands),
+        pause: pause
       )
     )
   }
@@ -73,15 +76,22 @@ struct OnboardingControllerTests {
   /// - Parameters:
   ///   - asker: The account that asked, or nil when no one did.
   ///   - accessibility: Whether Accessibility is on.
+  ///   - screenCapture: Whether Screen Recording is on.
   /// - Returns: The reply.
-  private static func helperReply(asker: String? = "me", accessibility: Bool) -> String {
+  private static func helperReply(asker: String? = "me", accessibility: Bool, screenCapture: Bool = false) -> String {
     let controller = asker.map { #"{"uid": 501, "name": "\#($0)"}"# } ?? "null"
     return """
       {"ok": true, "role": "helper", "me": {"name": "atlas"}, "app": {"installed": true, "signed": true},
        "helper": {"controller": \(controller), "installed": true, "running": true,
-                  "permissions": {"accessibility": \(accessibility), "screenCapture": false}}}
+                  "permissions": {"accessibility": \(accessibility), "screenCapture": \(screenCapture)}}}
       """
   }
+
+  /// A helper-side reply while Atlas's job restarts: installed, not running, its permissions unknown.
+  private static let restartingReply = """
+    {"ok": true, "role": "helper", "me": {"name": "atlas"}, "app": {"installed": true, "signed": true},
+     "helper": {"controller": {"uid": 501, "name": "me"}, "installed": true, "running": false, "permissions": null}}
+    """
 
   @Test("a fresh Mac with no candidates picks a new account, and Continue opens the form")
   func aFreshMacPicksANewAccount() async throws {
@@ -504,7 +514,7 @@ struct OnboardingControllerTests {
     #expect(commands.ran.contains(Action.allow(uid: 501, name: "me").arguments))
   }
 
-  @Test("a permission's button opens its own Privacy & Security page, with the guide beside it")
+  @Test("a permission's button opens its own Privacy & Security page, with the panel beside it")
   func allowingAPermissionOpensItsPage() async throws {
     let opened = OpenedURLs()
     let commands = ScriptedCommands([
@@ -518,12 +528,15 @@ struct OnboardingControllerTests {
     #expect(controller.snapshot.guiding == .screenRecording)
   }
 
-  @Test("the guide panel steps aside once its switch is on")
-  func theGuideStepsAside() async throws {
+  @Test("the panel opens the next permission's page once its switch is on, and steps aside once both are")
+  func thePanelMovesOn() async throws {
+    let opened = OpenedURLs()
     let commands = ScriptedCommands([
       "onboarding status": Self.helperReply(accessibility: false), "onboarding window": #"{"ok": true}"#,
     ])
-    let controller = try await Self.loaded(commands)
+    let controller = Self.controller(commands, opened: opened)
+    controller.refresh()
+    try await settle("the facts were never read") { controller.snapshot.loaded }
     controller.send(.openSettings(id: Permission.accessibility.id))
     controller.refresh()
     try await settle("the facts were never read again") {
@@ -532,6 +545,85 @@ struct OnboardingControllerTests {
     #expect(controller.snapshot.guiding == .accessibility, "still waiting for the switch")
     commands.answer("onboarding status", Self.helperReply(accessibility: true))
     controller.refresh()
-    try await settle("the guide never stepped aside") { controller.snapshot.guiding == nil }
+    try await settle("the panel never moved on") { controller.snapshot.guiding == .screenRecording }
+    #expect(opened.urls == [Permission.accessibility, .screenRecording].compactMap(\.settingsURL))
+    commands.answer("onboarding status", Self.helperReply(accessibility: true, screenCapture: true))
+    controller.refresh()
+    try await settle("the panel never stepped aside") { controller.snapshot.guiding == nil }
+    #expect(controller.snapshot.step == .helperDone)
+    #expect(opened.urls.count == 2, "each page opens once")
+  }
+
+  @Test(
+    "a tick under way moves on once however often the facts are read, and Back stops it even if the panel opens again"
+  )
+  func aTickUnderWay() async throws {
+    let opened = OpenedURLs()
+    let ticks = NapGate(holding: OnboardingController.tickShown)
+    let commands = ScriptedCommands([
+      "onboarding status": Self.helperReply(accessibility: false), "onboarding window": #"{"ok": true}"#,
+    ])
+    let controller = Self.controller(commands, opened: opened, pause: ticks.nap)
+    controller.refresh()
+    try await settle("the facts were never read") { controller.snapshot.loaded }
+    controller.send(.openSettings(id: Permission.accessibility.id))
+    commands.answer("onboarding status", Self.helperReply(accessibility: true))
+    controller.refresh()
+    try await settle("the tick never started") { ticks.asked == 1 }
+    controller.refresh()
+    try await settle("the facts were never read again") {
+      commands.ran.filter { $0 == Action.onboardingStatus.arguments }.count == 3
+    }
+    #expect(ticks.asked == 1, "one tick however often the facts are read")
+    controller.send(.closePanel)
+    controller.send(.openSettings(id: Permission.accessibility.id))
+    ticks.gate.open()
+    try? await Task.sleep(for: Ceiling.absence)
+    let accessibility = try #require(Permission.accessibility.settingsURL)
+    #expect(opened.urls == [accessibility, accessibility], "Screen Recording's page never opened")
+    #expect(controller.snapshot.guiding == .accessibility)
+  }
+
+  @Test("Back closes the panel and stops it moving on")
+  func backClosesThePanel() async throws {
+    let commands = ScriptedCommands([
+      "onboarding status": Self.helperReply(accessibility: false), "onboarding window": #"{"ok": true}"#,
+    ])
+    let controller = try await Self.loaded(commands)
+    controller.send(.openSettings(id: Permission.accessibility.id))
+    controller.send(.closePanel)
+    #expect(controller.snapshot.guiding == nil)
+    #expect(controller.snapshot.step == .permissions)
+  }
+
+  @Test("a job restarting to pick up Screen Recording keeps its permissions and the permissions screen")
+  func aRestartingJobKeepsItsPermissions() async throws {
+    let commands = ScriptedCommands([
+      "onboarding status": Self.helperReply(accessibility: true), "onboarding window": #"{"ok": true}"#,
+    ])
+    let controller = try await Self.loaded(commands)
+    commands.answer("onboarding status", Self.restartingReply)
+    controller.refresh()
+    try await settle("the facts were never read again") {
+      commands.ran.filter { $0 == Action.onboardingStatus.arguments }.count == 2
+    }
+    #expect(controller.snapshot.step == .permissions, "not Allow again")
+    #expect(controller.snapshot.facts.asker.accessibility, "not off")
+  }
+
+  @Test("a job that answers nothing for too long counts as stopped")
+  func aStoppedJobAsksForAllowAgain() async throws {
+    let commands = ScriptedCommands([
+      "onboarding status": Self.helperReply(accessibility: true), "onboarding window": #"{"ok": true}"#,
+    ])
+    let controller = try await Self.loaded(commands)
+    commands.answer("onboarding status", Self.restartingReply)
+    for reading in 2...(OnboardingController.restartReadings + 2) {
+      controller.refresh()
+      try await settle("the facts were never read again") {
+        commands.ran.filter { $0 == Action.onboardingStatus.arguments }.count == reading
+      }
+    }
+    #expect(controller.snapshot.step == .allow)
   }
 }

@@ -1,13 +1,15 @@
 import SwiftUI
 
-/// The setup window's content: the first reading, the guide panel beside System Settings, or one screen at a time.
-/// It draws its state and sends what the person does; it decides nothing. The account form is the one value it edits
-/// in place.
-package struct OnboardingView: View {
+/// The setup window's content: the first reading, the permission panel beside System Settings, or one screen at a
+/// time. It draws its state and sends what the person does; it decides nothing. The account form is the one value it
+/// edits in place.
+package struct OnboardingView<DragIcon: View>: View {
   /// What the window shows.
   private let state: OnboardingState
   /// The new helper account's form.
   private let form: Binding<OnboardingAccountForm>
+  /// The permission panel's icon, which the person drags into System Settings.
+  private let dragIcon: DragIcon
   /// Receives what the person does.
   private let send: @MainActor (OnboardingEvent) -> Void
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -17,14 +19,17 @@ package struct OnboardingView: View {
   /// - Parameters:
   ///   - state: What the window shows.
   ///   - form: The new helper account's form, which the account screen edits.
+  ///   - dragIcon: The permission panel's icon, which the person drags into System Settings.
   ///   - send: Receives what the person does.
   package init(
     state: OnboardingState,
     form: Binding<OnboardingAccountForm>,
+    dragIcon: DragIcon,
     send: @escaping @MainActor (OnboardingEvent) -> Void
   ) {
     self.state = state
     self.form = form
+    self.dragIcon = dragIcon
     self.send = send
   }
 
@@ -55,11 +60,11 @@ package struct OnboardingView: View {
       .post()
   }
 
-  /// The guide panel, the first reading, or a screen, each screen arriving as the last one leaves.
+  /// The permission panel, the first reading, or a screen, each screen arriving as the last one leaves.
   @ViewBuilder private var content: some View {
     switch state.content {
-    case .guide(let guide):
-      GuidePanel(state: guide, send: send)
+    case .permissionPanel(let panel):
+      PermissionPanel(state: panel, dragIcon: dragIcon, send: send)
         // No window animates its state, so the fade carries its own animation.
         .transition(.opacity.animation(Motion.fade))
     case .loading(let problem):
@@ -110,9 +115,11 @@ package struct OnboardingView: View {
       .onboardingSample()
   }
 
-  #Preview("Helper guide") {
-    OnboardingView(state: PreviewStates.onboardingGuide, form: .constant(PreviewStates.onboardingForm)) { _ in }
-      .onboardingSample(OnboardingLayout.side)
+  #Preview("Helper permission panel") {
+    OnboardingView(state: PreviewStates.onboardingPermissionPanel, form: .constant(PreviewStates.onboardingForm)) {
+      _ in
+    }
+    .onboardingSample(OnboardingLayout.side)
   }
 
   #Preview("Loading") {

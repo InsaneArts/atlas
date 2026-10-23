@@ -1,7 +1,7 @@
 #if DEBUG
   extension PreviewStates {
     /// The setup window sample an event leads to, so the Interactive preview answers clicks as the app would: pick
-    /// an account, switch agents, open and close the guide, and step between screens.
+    /// an account, switch agents, open and close the permission panel, and step between screens.
     ///
     /// - Parameters:
     ///   - state: The sample shown.
@@ -40,10 +40,10 @@
         return onboardingSwitch
       case (_, .connectAgents):
         return onboardingDone
-      case (_, .allow), (_, .closeGuide):
+      case (_, .allow), (_, .closePanel):
         return onboardingPermissions
       case (_, .openSettings):
-        return onboardingGuide
+        return onboardingPermissionPanel
       case (_, .retryFinish):
         return onboardingFinishing
       default:

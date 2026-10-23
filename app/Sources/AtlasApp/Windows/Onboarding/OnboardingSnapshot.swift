@@ -34,8 +34,10 @@ struct OnboardingSnapshot {
   /// Whether the helper chosen in this window was readied for its first login, so Atlas opens there by itself; false
   /// when this macOS could not ready it, and the person opens Atlas there.
   var helperReadied = true
-  /// The permission the guide panel is about, while it is open.
+  /// The permission allowed now in System Settings, with the panel beside it.
   var guiding: Permission?
+  /// This Mac's macOS, which names the permissions' pages.
+  var macOS = ProcessInfo.processInfo.operatingSystemVersion
 
   /// The screen the facts and choices lead to.
   var step: OnboardingStep { OnboardingStep(facts: facts, choices: choices) }

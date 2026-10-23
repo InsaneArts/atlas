@@ -9,7 +9,7 @@ struct Headline: View {
     case hero
     /// A title over the viewer's stage.
     case title
-    /// The guide panel's narrow title.
+    /// The permission panel's narrow title.
     case compact
   }
 

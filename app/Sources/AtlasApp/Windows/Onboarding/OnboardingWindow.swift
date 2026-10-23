@@ -2,14 +2,11 @@ import AppKit
 import AtlasUI
 import SwiftUI
 
-/// The onboarding window: a dark card in the middle of the screen, or a narrow panel at its left while the person
-/// turns a switch on in System Settings beside it. It has a Dock icon while open, like any app window (``DockIcon``).
+/// The onboarding window: a dark card in the middle of the screen, or a narrow panel beside System Settings, following
+/// its window, while the person turns a switch on there (``SettingsDock``). It has a Dock icon while open, like any app
+/// window (``DockIcon``).
 @MainActor
 final class OnboardingWindow: NSObject, NSWindowDelegate {
-  /// The glide's curve, its control points: an ease in and out steeper than AppKit's own, so the window leaves softly,
-  /// travels quickly and lands softly over ``Motion/Duration/glide``.
-  static let glideCurve = (x1: Float(0.65), y1: Float(0), x2: Float(0.35), y2: Float(1))
-
   /// The window's controller.
   let controller: OnboardingController
   /// The window.
@@ -18,10 +15,14 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
   let closed: @MainActor (OnboardingWindow) -> Void
   /// Open until closed.
   private(set) var isOpen = false
-  /// Whether the window was last placed for the guide panel; nil before the first placing. The controller's state
+  /// Whether the window was last placed for the permission panel; nil before the first placing. The controller's state
   /// changes with every reading, and the window moves only when the placing asked for differs from this one
   /// (``OnboardingPlacement/placed(guiding:last:place:)``).
   private var placedGuiding: Bool?
+  /// Moves the window.
+  private let glide: WindowGlide
+  /// Keeps the permission panel beside System Settings.
+  private let dock: SettingsDock
   /// Whether the window takes the keyboard now.
   var isKey: Bool { window.isKeyWindow }
 
@@ -39,6 +40,19 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
       backing: .buffered,
       defer: false
     )
+    glide = WindowGlide(window: window)
+    let ghost = DragGhost()
+    dock = SettingsDock(
+      window: window,
+      glide: glide,
+      ghost: ghost,
+      waitingForSwitch: { [weak controller] in
+        guard case .permissionPanel(let panel) = controller?.state.content else { return false }
+        return !panel.isOn
+      },
+      // System Settings closed or quit: back to the card, whose Allow… opens it again.
+      lost: { [weak controller] in controller?.send(.closePanel) }
+    )
     super.init()
     window.title = "Atlas"
     window.titleVisibility = .hidden
@@ -53,6 +67,7 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
         OnboardingView(
           state: controller.state,
           form: Binding(get: { controller.snapshot.form }, set: { controller.update($0) }),
+          dragIcon: AppDragIcon(app: controller.dependencies.app, help: OnboardingWords.dragHelp, ghost: ghost),
           send: controller.send
         )
       }
@@ -87,25 +102,29 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
     controller.watch()
   }
 
-  /// Moves to the card in the middle, or the side panel at the left of the screen, floating so it stays in view.
+  /// Moves to the card in the middle, coming in front again, or to the side panel beside System Settings, floating so
+  /// it stays in view while the dock follows System Settings' window.
   ///
-  /// - Parameter guiding: Whether the guide panel shows.
+  /// - Parameter guiding: Whether the permission panel shows.
   /// - Returns: Whether it moved: a hidden window, or one with no screen, does not.
   @discardableResult
   func place(guiding: Bool) -> Bool {
+    dock.stop()
+    window.level = guiding ? .floating : .normal
     guard window.isVisible, let screen = window.screen ?? NSScreen.main else { return false }
     let content = NSRect(origin: .zero, size: OnboardingPlacement.size(guiding: guiding))
-    let frame = window.frameRect(forContentRect: content)
-    let origin = OnboardingPlacement.origin(guiding: guiding, frame: frame.size, visible: screen.visibleFrame)
-    window.level = guiding ? .floating : .normal
-    let curve = Self.glideCurve
-    NSAnimationContext.runAnimationGroup { context in
-      context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : Motion.Duration.glide.seconds
-      context.timingFunction = CAMediaTimingFunction(controlPoints: curve.x1, curve.y1, curve.x2, curve.y2)
-      window
-        .animator()
-        .setFrame(NSRect(origin: origin, size: frame.size), display: true)
+    let size = window.frameRect(forContentRect: content).size
+    guard !guiding else {
+      dock.start(size: size, visible: screen.visibleFrame)
+      return true
     }
+    let origin = OnboardingPlacement.origin(guiding: false, frame: size, visible: screen.visibleFrame)
+    glide.move(to: NSRect(origin: origin, size: size))
+    // Back from System Settings, which may still have the focus: the card comes in front of it all the same (macOS
+    // lets an app take the focus only when the person acts in it), and takes the focus where macOS allows.
+    window.orderFrontRegardless()
+    window.makeKey()
+    NSApp.activate()
     return true
   }
 
@@ -117,6 +136,7 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
   /// - Parameter notification: The window's notification.
   func windowWillClose(_ notification: Notification) {
     isOpen = false
+    dock.close()
     Task {
       await controller.close()
       closed(self)

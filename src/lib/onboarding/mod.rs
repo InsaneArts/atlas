@@ -310,21 +310,19 @@ async fn helper_side(uid: u32, pairing: Option<&Pairing>) -> Value {
         .is_ok_and(|layout| setup::helper::job_pid(layout, LABEL).is_some());
 
     // macOS counts a process the window starts as the window's own, so only
-    // the job's answer tells what Atlas itself may do here.
-    let mut permissions = json!({"screenCapture": false, "accessibility": false});
+    // the job's answer tells what Atlas itself may do here. Without one (not
+    // running, or restarting to pick up Screen Recording) they are unknown,
+    // not off.
+    let mut hello = None;
     if let (true, Ok(layout)) = (running, &layout) {
         let transport = crate::transport::Transport {
             path: layout.socket(),
             timeout: Duration::from_secs(3),
             peer_uid: uid,
         };
-        if let Ok(hello) = transport.call(&json!({"op": "hello"})).await {
-            permissions = json!({
-                "screenCapture": hello["permissions"]["screenCapture"] == true,
-                "accessibility": hello["permissions"]["accessibility"] == true,
-            });
-        }
+        hello = transport.call(&json!({"op": "hello"})).await.ok();
     }
+    let permissions = permissions_from(hello.as_ref());
 
     let controller = pairing.map_or(json!(null), |pairing| {
         json!({
@@ -339,6 +337,17 @@ async fn helper_side(uid: u32, pairing: Option<&Pairing>) -> Value {
         "installed": installed,
         "running": running,
         "permissions": permissions,
+    })
+}
+
+/// The two permissions as the job's `hello` reports them, or unknown
+/// (`null`) without one, never off.
+fn permissions_from(hello: Option<&Value>) -> Value {
+    hello.map_or(Value::Null, |hello| {
+        json!({
+            "screenCapture": hello["permissions"]["screenCapture"] == true,
+            "accessibility": hello["permissions"]["accessibility"] == true,
+        })
     })
 }
 
@@ -1111,6 +1120,16 @@ pub fn login(config_path: &Path, on: bool) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn permissions_without_the_jobs_answer_are_unknown_never_off() {
+        assert_eq!(permissions_from(None), Value::Null);
+        let hello = json!({"permissions": {"screenCapture": true, "accessibility": false}});
+        assert_eq!(
+            permissions_from(Some(&hello)),
+            json!({"screenCapture": true, "accessibility": false})
+        );
+    }
 
     #[test]
     fn a_secret_is_one_short_plain_line() {

@@ -97,6 +97,8 @@
     func loaded(_ facts: OnboardingFacts, started: Bool = false) -> OnboardingSnapshot {
       var snapshot = OnboardingSnapshot(facts: facts, loaded: true)
       snapshot.choices.started = started
+      // The samples name the permissions as macOS 26 does.
+      snapshot.macOS = OperatingSystemVersion(majorVersion: 26, minorVersion: 0, patchVersion: 0)
       return snapshot
     }
 
@@ -185,8 +187,8 @@
         )
       )
       allowLong.problem = "Atlas could not finish setting up here: the login item could not be added."
-      var guide = loaded(try helperSide())
-      guide.guiding = .accessibility
+      var panel = loaded(try helperSide(accessibility: true))
+      panel.guiding = .screenRecording
       let presented: [String: OnboardingSnapshot] = [
         "Loading": OnboardingSnapshot(),
         "Loading, failed": loadingFailed,
@@ -211,7 +213,7 @@
         "Helper allow": loaded(try helperSide(running: false)),
         "Helper allow, a long name": allowLong,
         "Helper permissions": loaded(try helperSide(accessibility: true)),
-        "Helper guide": guide,
+        "Helper permission panel": panel,
         "Helper done": loaded(try helperSide(accessibility: true, screen: true)),
         "Blocked": loaded(try person(installed: false)),
       ]

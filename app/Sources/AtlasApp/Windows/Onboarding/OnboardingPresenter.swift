@@ -14,7 +14,7 @@ enum OnboardingPresenter {
     let footer: OnboardingFooterState =
       switch content {
       case .screen: footer(snapshot, step: step)
-      case .loading, .guide: OnboardingFooterState()
+      case .loading, .permissionPanel: OnboardingFooterState()
       }
     return OnboardingState(
       content: content,
@@ -24,7 +24,7 @@ enum OnboardingPresenter {
     )
   }
 
-  /// The guide panel while a switch is turned on, the first reading until it lands, or the step's screen.
+  /// The permission panel while a permission is allowed, the first reading until it lands, or the step's screen.
   ///
   /// - Parameters:
   ///   - snapshot: What the controller holds.
@@ -32,7 +32,7 @@ enum OnboardingPresenter {
   /// - Returns: What fills the window.
   private static func content(_ snapshot: OnboardingSnapshot, step: OnboardingStep) -> OnboardingContent {
     if let permission = snapshot.guiding {
-      return .guide(guide(permission, asker: snapshot.facts.asker))
+      return .permissionPanel(panel(permission, snapshot: snapshot))
     }
     guard snapshot.loaded else { return .loading(problem: snapshot.problem) }
     return .screen(screen(snapshot, step: step))
@@ -54,7 +54,7 @@ enum OnboardingPresenter {
     case .agents: .agents(agents(snapshot))
     case .done: .done(done(snapshot))
     case .allow: .allow(allow(snapshot.facts))
-    case .permissions: .permissions(permissions(snapshot.facts.asker))
+    case .permissions: .permissions(permissions(snapshot))
     case .helperDone: .helperDone(helperDone(snapshot.facts.asker))
     case .blocked(let reason): .blocked(reason)
     }

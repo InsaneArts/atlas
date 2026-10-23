@@ -16,35 +16,48 @@ extension OnboardingPresenter {
     )
   }
 
-  /// The two permissions, and the first one still off, Accessibility before Screen Recording.
+  /// The two permissions, the next one still off with its Allow… button; none while they are unknown.
   ///
-  /// - Parameter asker: This account's state, in the helper.
+  /// - Parameter snapshot: What the controller holds.
   /// - Returns: The permissions screen.
-  static func permissions(_ asker: OnboardingFacts.Asker) -> OnboardingPermissionsScreenState {
-    let next = Permission.allCases
-      .first { !$0.granted(to: asker) }
-    return OnboardingPermissionsScreenState(
-      accessibility: item(.accessibility, asker: asker),
-      screenRecording: item(.screenRecording, asker: asker),
-      next: next.map { item($0, asker: asker) }
+  static func permissions(_ snapshot: OnboardingSnapshot) -> OnboardingPermissionsScreenState {
+    OnboardingPermissionsScreenState(
+      accessibility: item(.accessibility, snapshot: snapshot),
+      screenRecording: item(.screenRecording, snapshot: snapshot)
     )
   }
 
-  /// One permission as its row and button show it.
+  /// One permission as its row shows it, named as this Mac's System Settings names it.
   ///
   /// - Parameters:
   ///   - permission: The permission.
-  ///   - asker: This account's state, in the helper.
+  ///   - snapshot: What the controller holds.
   /// - Returns: The permission's item.
-  private static func item(_ permission: Permission, asker: OnboardingFacts.Asker) -> OnboardingPermissionItem {
+  private static func item(_ permission: Permission, snapshot: OnboardingSnapshot) -> OnboardingPermissionItem {
+    let asker = snapshot.facts.asker
     let on = permission.granted(to: asker)
     return OnboardingPermissionItem(
       id: permission.id,
-      title: permission.title,
+      title: permission.title(on: snapshot.macOS),
       isOn: on,
-      status: on ? OnboardingWords.permissionOn : OnboardingWords.permissionOff,
-      allowTitle: OnboardingWords.allow(permission.title)
+      status: status(on: on, known: asker.permissionsKnown),
+      allowTitle: OnboardingWords.allowButton,
+      canAllow: asker.permissionsKnown && Permission.toGuide(after: nil, asker: asker) == permission
     )
+  }
+
+  /// A permission's status in words.
+  ///
+  /// - Parameters:
+  ///   - on: Whether it is on.
+  ///   - known: Whether the permissions were read.
+  /// - Returns: Allowed, Off, or Checking… while unknown.
+  private static func status(on: Bool, known: Bool) -> String {
+    switch (on, known) {
+    case (true, _): OnboardingWords.permissionOn
+    case (false, true): OnboardingWords.permissionOff
+    case (false, false): OnboardingWords.permissionUnknown
+    }
   }
 
   /// The helper's done screen, naming the account to switch back to, or the person's own when none asked.
@@ -57,22 +70,23 @@ extension OnboardingPresenter {
     )
   }
 
-  /// The guide beside System Settings: which permission of how many, where its switch is, and its steps ticked once
-  /// the switch is on.
+  /// The panel beside System Settings while `permission` is allowed: which of how many, where to drag Atlas, the way
+  /// for Atlas listed already, both permissions, and its pill ticked once it is on.
   ///
   /// - Parameters:
-  ///   - permission: The permission whose switch is turned on.
-  ///   - asker: This account's state, in the helper.
-  /// - Returns: The guide.
-  static func guide(_ permission: Permission, asker: OnboardingFacts.Asker) -> OnboardingGuideState {
-    let on = permission.granted(to: asker)
-    let title = permission.title
-    return OnboardingGuideState(
-      label: OnboardingWords.guideLabel(permission.number, of: Permission.allCases.count, title),
-      settingsPath: OnboardingWords.settingsPath(title),
-      turnOn: on ? .done : .current,
-      comeBack: on ? .done : .waiting,
-      pill: on ? OnboardingWords.isOn(title) : OnboardingWords.waiting(for: title),
+  ///   - permission: The permission allowed now.
+  ///   - snapshot: What the controller holds.
+  /// - Returns: The panel.
+  static func panel(_ permission: Permission, snapshot: OnboardingSnapshot) -> OnboardingPermissionPanelState {
+    let on = permission.granted(to: snapshot.facts.asker)
+    let title = permission.title(on: snapshot.macOS)
+    return OnboardingPermissionPanelState(
+      label: OnboardingWords.panelLabel(permission.number, of: Permission.allCases.count, title),
+      instruction: OnboardingWords.dragInto(permission),
+      alreadyListed: OnboardingWords.alreadyListed(permission),
+      accessibility: item(.accessibility, snapshot: snapshot),
+      screenRecording: item(.screenRecording, snapshot: snapshot),
+      pill: on ? OnboardingWords.permissionOn : OnboardingWords.waitingForSwitch,
       isOn: on
     )
   }

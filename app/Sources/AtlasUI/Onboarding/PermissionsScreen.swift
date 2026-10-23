@@ -1,45 +1,39 @@
 import SwiftUI
 
-/// In the helper: Accessibility and Screen Recording, and the button for the next one still off.
+/// In the helper: Accessibility and Screen Recording, allowed one after the other in System Settings, the next one
+/// with its Allow… button.
 struct PermissionsScreen: View {
   /// The two permissions.
   let state: OnboardingPermissionsScreenState
   /// Receives the permission to allow next.
   let send: @MainActor (OnboardingEvent) -> Void
 
-  /// Why Atlas asks, the two permissions, and the next one's button.
+  /// Why Atlas asks, and the two permissions; Return allows the next one.
   var body: some View {
     ScreenColumn(width: OnboardingLayout.listColumn) {
       GroupLabel(text: "Permissions")
       Headline(title: OnboardingScreen.permissionsTitle, tail: OnboardingScreen.permissionsTail)
       Lede(
         text:
-          "macOS asks you to allow Atlas twice, in this account only. Your own account is never touched."
+          "You allow Atlas twice. Atlas uses them only in this account, never in your own."
       )
       CardGroup {
         PermissionRow(
           permission: state.accessibility,
           symbol: "cursorarrow",
-          detail: "So agents can click, type and read buttons"
+          detail: "So agents can click, type and read buttons",
+          send: send
         )
         SeparatorLine()
         PermissionRow(
           permission: state.screenRecording,
           symbol: "rectangle.dashed",
-          detail: "So agents can take screenshots of this desktop"
+          detail: "So agents can take screenshots of this desktop",
+          send: send
         )
       }
       .padding(.top, Spacing.xs)
-      if let next = state.next {
-        Button(next.allowTitle) { send(.openSettings(id: next.id)) }
-          .buttonStyle(.capsule(size: .large))
-          .keyboardShortcut(.defaultAction)
-          .padding(.top, Spacing.s)
-      }
-      Note(
-        text:
-          "Atlas notices each switch on its own. If macOS offers to quit and reopen Atlas, either choice is fine."
-      )
+      Note(text: "Allow opens the list in System Settings. Atlas notices each one on its own.")
     }
   }
 }

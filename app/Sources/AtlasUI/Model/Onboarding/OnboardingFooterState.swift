@@ -1,4 +1,4 @@
-/// The bar under a setup screen. Its defaults show no buttons and no dots, as the guide and the first reading have.
+/// The bar under a setup screen. Its defaults show no buttons and no dots, as the permission panel and the first reading have.
 package struct OnboardingFooterState: Equatable, Sendable {
   /// Where the screen sits among the dots in the middle of the bar.
   package struct Dots: Equatable, Sendable {

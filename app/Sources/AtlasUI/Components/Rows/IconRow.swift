@@ -16,6 +16,8 @@ struct IconRow<Trailing: View>: View {
   let title: String
   /// What it means.
   let detail: String
+  /// Whether the title and detail wrap onto as many lines as they need, rather than being cut.
+  var wraps = false
   /// What the row ends with.
   @ViewBuilder let trailing: Trailing
 
@@ -28,7 +30,7 @@ struct IconRow<Trailing: View>: View {
             .fill(Color.fillControl)
         )
         .accessibilityHidden(true)
-      TitleDetail(title: title, detail: detail)
+      TitleDetail(title: title, detail: detail, titleWraps: wraps, wraps: wraps)
       Spacer(minLength: Spacing.m)
       trailing
     }

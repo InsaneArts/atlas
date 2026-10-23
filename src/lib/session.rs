@@ -609,18 +609,6 @@ pub fn logged_in(uid: u32) -> Option<bool> {
     )
 }
 
-/// Whether `uid` runs any process but `besides`: a login, a background
-/// session or a leftover of one. `None` when processes could not be listed.
-pub fn runs_besides(uid: u32, besides: u32) -> Option<bool> {
-    Some(running_besides(&processes()?, uid, besides))
-}
-
-fn running_besides(listed: &[Process], uid: u32, besides: u32) -> bool {
-    listed
-        .iter()
-        .any(|process| process.uid == uid && process.pid != besides)
-}
-
 /// Whether `uid`'s desktop is up: Setup Assistant gone, and the Dock and
 /// the Finder running (loginwindow starts the Dock only once Setup
 /// Assistant is done). `None` when processes could not be listed.
@@ -716,7 +704,7 @@ fn running_for(elapsed: &str) -> Option<std::time::Duration> {
 mod tests {
     use super::{
         Absence, LOGGED_OUT, desktop_up_in, diagnose, input_build_current, parse_processes,
-        require_hidden, running_besides, running_for, silent, validate_target_uid,
+        require_hidden, running_for, silent, validate_target_uid,
     };
     use serde_json::json;
 
@@ -755,17 +743,6 @@ mod tests {
             "another account's Setup Assistant"
         );
         assert!(!desktop_up_in(&listing(""), 503), "no Dock of its own");
-    }
-
-    #[test]
-    fn an_account_runs_something_besides_the_asking_process_only_with_another_process() {
-        let listed = parse_processes(
-            "502 40 00:01 /Applications/Atlas.app/Contents/MacOS/atlas\n\
-             0 41 00:01 /usr/bin/sudo\n",
-        );
-        assert!(!running_besides(&listed, 502, 40));
-        assert!(running_besides(&listed, 502, 99));
-        assert!(!running_besides(&listed, 503, 40));
     }
 
     #[test]

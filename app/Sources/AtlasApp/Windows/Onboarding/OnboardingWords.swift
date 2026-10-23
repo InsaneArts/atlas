@@ -205,6 +205,8 @@ enum OnboardingWords {
   static let permissionOn = "Allowed"
   /// A permission that is off.
   static let permissionOff = "Off"
+  /// A permission not read yet: Atlas's job did not answer.
+  static let permissionUnknown = "Checking…"
   /// The helper's done tail when no account asked.
   static let switchBackToOwn = "Switch back to your own account."
 
@@ -232,48 +234,50 @@ enum OnboardingWords {
     "\(asker)'s agents will open apps here, click and type, while \(asker) keeps working in their own account. You allow this once; Atlas then starts here by itself."
   }
 
-  /// The button that opens a permission's switch.
+  /// The button that opens a permission's list in System Settings.
+  static let allowButton = "Allow…"
+
+  /// What to do in System Settings: drag Atlas into the list; for Screen Recording, the top one of its two lists
+  /// (the lower one grants sound only).
   ///
-  /// - Parameter permission: The permission's name.
-  /// - Returns: "Allow Accessibility"
-  static func allow(_ permission: String) -> String {
-    "Allow \(permission)"
+  /// - Parameter permission: The permission allowed now.
+  /// - Returns: "Drag Atlas into the list."
+  static func dragInto(_ permission: Permission) -> String {
+    switch permission {
+    case .accessibility: "Drag Atlas into the list."
+    case .screenRecording: "Drag Atlas into the top list."
+    }
   }
 
-  /// The guide's label over its title.
+  /// The panel's draggable icon, as VoiceOver names it.
+  static let atlas = "Atlas"
+  /// The panel's icon's tooltip.
+  static let dragHelp = "Drag Atlas into the list in System Settings"
+
+  /// For Atlas listed already, switched off (dragging it in again may leave it off), and for anyone who can't drag.
+  ///
+  /// - Parameter permission: The permission allowed now.
+  /// - Returns: "Already in the list? Turn its switch on."
+  static func alreadyListed(_ permission: Permission) -> String {
+    switch permission {
+    case .accessibility: "Already in the list? Turn its switch on."
+    case .screenRecording: "Already in the top list? Turn its switch on."
+    }
+  }
+
+  /// The panel's label over its icon.
   ///
   /// - Parameters:
   ///   - number: Which permission, from 1.
   ///   - count: How many.
   ///   - permission: Its name.
   /// - Returns: "1 of 2 · Accessibility"
-  static func guideLabel(_ number: Int, of count: Int, _ permission: String) -> String {
+  static func panelLabel(_ number: Int, of count: Int, _ permission: String) -> String {
     "\(number) of \(count) · \(permission)"
   }
 
-  /// Where the switch is.
-  ///
-  /// - Parameter permission: The permission's name.
-  /// - Returns: "Privacy & Security › Accessibility"
-  static func settingsPath(_ permission: String) -> String {
-    "Privacy & Security › \(permission)"
-  }
-
-  /// The guide's pill once the switch is on.
-  ///
-  /// - Parameter permission: The permission's name.
-  /// - Returns: "Accessibility is on"
-  static func isOn(_ permission: String) -> String {
-    "\(permission) is on"
-  }
-
-  /// The guide's pill while it waits.
-  ///
-  /// - Parameter permission: The permission's name.
-  /// - Returns: "Waiting for Accessibility…"
-  static func waiting(for permission: String) -> String {
-    "Waiting for \(permission)…"
-  }
+  /// The panel's pill while it waits.
+  static let waitingForSwitch = "Waiting for the switch…"
 
   /// The helper's done tail.
   ///

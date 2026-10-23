@@ -14,4 +14,6 @@ enum Opacity {
   static let tintEdge = 0.55
   /// 0.3: a quieter tinted edge, such as an attention card's.
   static let tintEdgeQuiet = 0.3
+  /// 0.7: a demonstration drawn over the screen, see-through so it reads as showing how, not as the real thing.
+  static let demonstration = 0.7
 }

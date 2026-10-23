@@ -126,7 +126,7 @@
         PreviewStates.onboarding.map { preview in
           switch preview.value.content {
           case .loading: "loading"
-          case .guide: "guide"
+          case .permissionPanel: "permissionPanel"
           case .screen(let screen):
             switch screen.id {
             case .welcome: "welcome"
@@ -146,7 +146,8 @@
       )
       #expect(
         shown == [
-          "loading", "guide", "welcome", "choose", "create", "switchToHelper", "finishing", "agents", "done", "allow",
+          "loading", "permissionPanel", "welcome", "choose", "create", "switchToHelper", "finishing", "agents", "done",
+          "allow",
           "permissions", "helperDone", "blocked",
         ]
       )

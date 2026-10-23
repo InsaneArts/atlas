@@ -1,6 +1,6 @@
 /// Everything the setup window draws, decided before it reaches the view.
 package struct OnboardingState: Equatable, Sendable {
-  /// What fills the window: the first reading, the guide panel beside System Settings, or a screen.
+  /// What fills the window: the first reading, the permission panel beside System Settings, or a screen.
   package var content: OnboardingContent
   /// The bar under a screen: Back, the next step's button and the dots.
   package var footer: OnboardingFooterState
@@ -12,7 +12,7 @@ package struct OnboardingState: Equatable, Sendable {
   /// Creates the setup window's state.
   ///
   /// - Parameters:
-  ///   - content: What fills the window: the first reading, the guide panel beside System Settings, or a screen.
+  ///   - content: What fills the window: the first reading, the permission panel beside System Settings, or a screen.
   ///   - footer: The bar under a screen: Back, the next step's button and the dots.
   ///   - note: The line under a screen's controls.
   ///   - isBusy: Whether a command runs, so every button that starts one waits.

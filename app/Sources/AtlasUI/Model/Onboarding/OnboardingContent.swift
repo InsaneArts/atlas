@@ -4,8 +4,8 @@ package enum OnboardingContent: Equatable, Sendable {
   ///
   /// - Parameter problem: Why the first reading failed, if it did.
   case loading(problem: String?)
-  /// The narrow panel beside System Settings while a switch is turned on.
-  case guide(OnboardingGuideState)
+  /// The compact panel beside System Settings while a permission is allowed.
+  case permissionPanel(OnboardingPermissionPanelState)
   /// One setup screen.
   case screen(OnboardingScreen)
 }

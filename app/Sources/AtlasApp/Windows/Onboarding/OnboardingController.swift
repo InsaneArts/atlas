@@ -18,6 +18,11 @@ final class OnboardingController {
   /// After `atlas agents status` failed, how many readings of the facts pass before it is asked again: 10, about 15
   /// s, so a command that keeps failing is not run every moment while the person reads the screen.
   static let agentsRetryReadings = 10
+  /// How many readings in a row a job may answer nothing before it counts as stopped: 20, about 30 s, longer than
+  /// launchd waits to bring a job back.
+  static let restartReadings = 20
+  /// How long a permission just turned on shows its tick before the next one is allowed: 1.2 s.
+  static let tickShown: Duration = .milliseconds(1200)
 
   /// Everything the window shows, as one value.
   private(set) var snapshot = OnboardingSnapshot()
@@ -42,8 +47,12 @@ final class OnboardingController {
   @ObservationIgnored private var loadingAgents: Task<Void, Never>?
   /// Readings of the facts since `atlas agents status` last failed.
   @ObservationIgnored private var readingsSinceAgentsFailed = 0
+  /// Readings in a row whose permissions were unknown.
+  @ObservationIgnored private var readingsUnknown = 0
   /// The window closed: nothing new starts, and late replies are dropped.
   @ObservationIgnored private var closed = false
+  /// Moving on from a permission just turned on, while its tick shows.
+  @ObservationIgnored private var movingOn: Task<Void, Never>?
 
   /// Creates a controller that has read nothing yet.
   ///
@@ -84,7 +93,10 @@ final class OnboardingController {
     case .allow: Task { await allow() }
     case .openSettings(let id):
       if let permission = Permission.allCases.first(where: { $0.id == id }) { openSettings(permission) }
-    case .closeGuide: snapshot.guiding = nil
+    case .closePanel:
+      movingOn?.cancel()
+      movingOn = nil
+      snapshot.guiding = nil
     case .switchBack: Task { await switchBack() }
     }
   }
@@ -136,7 +148,13 @@ final class OnboardingController {
     let outcome = await commands.run(.onboardingStatus)
     reading = false
     guard !closed else { return }
-    if outcome.ok, let facts = OnboardingFacts(json: outcome.reply) {
+    if outcome.ok, var facts = OnboardingFacts(json: outcome.reply) {
+      // A job restarting (to pick up Screen Recording) leaves its permissions unknown, never off.
+      readingsUnknown = facts.asker.permissionsKnown ? 0 : readingsUnknown + 1
+      facts.asker = facts.asker.keepingLastKnown(
+        of: snapshot.facts.asker,
+        restarting: readingsUnknown <= Self.restartReadings
+      )
       snapshot.facts = facts
       if !snapshot.loaded {
         snapshot.opensAtLogin = facts.opensAtLogin(enabledNow: dependencies.loginItem.isEnabled())
@@ -156,7 +174,7 @@ final class OnboardingController {
     }
   }
 
-  /// Starts what a step needs as soon as it is shown, and lets the guide step aside once it is done.
+  /// Starts what a step needs as soon as it is shown, and moves the permission panel on once its permission is on.
   private func advance() {
     guard !closed else { return }
     let step = snapshot.step
@@ -170,8 +188,33 @@ final class OnboardingController {
     }
     // A check's outcome holds for this visit to the step alone: coming back runs it again.
     if step != .finishing, snapshot.finish != .running { snapshot.finish = .idle }
-    if let permission = snapshot.guiding, !permission.guideStays(on: step, asker: snapshot.facts.asker) {
-      snapshot.guiding = nil
+    if let permission = snapshot.guiding {
+      // With both on the step is the helper's done screen already, while the last tick still shows.
+      if step != .permissions, step != .helperDone {
+        snapshot.guiding = nil
+      } else if permission.granted(to: snapshot.facts.asker), movingOn == nil {
+        moveOn(from: permission)
+      }
+    }
+  }
+
+  /// Once `permission`'s tick has shown, allows the next permission still off, opening its list in System Settings,
+  /// or, with both on, closes the panel for the helper's done screen.
+  ///
+  /// - Parameter permission: The permission just turned on.
+  private func moveOn(from permission: Permission) {
+    let pause = dependencies.pause
+    movingOn = Task {
+      await pause(Self.tickShown)
+      // Back during the tick: a panel opened again since is not this one's to move on.
+      guard !Task.isCancelled else { return }
+      movingOn = nil
+      guard !closed, snapshot.guiding == permission else { return }
+      if let next = Permission.toGuide(after: permission, asker: snapshot.facts.asker), next != permission {
+        openSettings(next)
+      } else {
+        snapshot.guiding = nil
+      }
     }
   }
 
@@ -389,7 +432,7 @@ final class OnboardingController {
     await act(.allow(uid: asker.uid, name: asker.name), OnboardingWords.settingUpHere)
   }
 
-  /// Opens the permission's Privacy & Security page, with the guide panel beside it.
+  /// Opens the permission's list in System Settings, with the permission panel beside it.
   ///
   /// - Parameter permission: The permission to allow.
   private func openSettings(_ permission: Permission) {

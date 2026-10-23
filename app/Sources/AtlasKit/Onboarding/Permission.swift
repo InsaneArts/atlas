@@ -12,15 +12,19 @@ package enum Permission: String, CaseIterable, Identifiable, Sendable {
   /// is.
   package var id: String { rawValue }
 
-  /// The permission's name, as System Settings shows it.
-  package var title: String {
+  /// The permission's name, as System Settings shows it on macOS `version`: Screen Recording became Screen & System
+  /// Audio Recording in macOS 15, and Accessibility became Device Control and Data Access in macOS 27.
+  ///
+  /// - Parameter version: The macOS version.
+  /// - Returns: The page's name.
+  package func title(on version: OperatingSystemVersion) -> String {
     switch self {
-    case .accessibility: "Accessibility"
-    case .screenRecording: "Screen Recording"
+    case .accessibility: version.majorVersion >= 27 ? "Device Control and Data Access" : "Accessibility"
+    case .screenRecording: version.majorVersion >= 15 ? "Screen & System Audio Recording" : "Screen Recording"
     }
   }
 
-  /// "1 of 2", as the guide panel counts them.
+  /// "1 of 2", as the permission panel counts them.
   package var number: Int { (Permission.allCases.firstIndex(of: self) ?? 0) + 1 }
 
   /// The Privacy & Security page that holds the switch.

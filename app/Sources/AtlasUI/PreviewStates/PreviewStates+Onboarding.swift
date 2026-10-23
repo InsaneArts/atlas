@@ -26,7 +26,7 @@
         PreviewState(name: "Helper allow", value: onboardingAllow),
         PreviewState(name: "Helper allow, a long name", value: onboardingAllowLong),
         PreviewState(name: "Helper permissions", value: onboardingPermissions),
-        PreviewState(name: "Helper guide", value: onboardingGuide),
+        PreviewState(name: "Helper permission panel", value: onboardingPermissionPanel),
         PreviewState(name: "Helper done", value: onboardingHelperDone),
         PreviewState(name: "Blocked", value: onboardingBlocked),
       ]
@@ -216,9 +216,9 @@
       isBusy: false
     )
 
-    /// In the helper: the guide beside System Settings, waiting for Accessibility.
-    @MainActor package static let onboardingGuide = OnboardingState(
-      content: .guide(onboardingGuideState),
+    /// In the helper: the panel beside System Settings, Accessibility on and Screen Recording allowed now.
+    @MainActor package static let onboardingPermissionPanel = OnboardingState(
+      content: .permissionPanel(onboardingPermissionPanelState),
       footer: OnboardingFooterState(),
       note: .none,
       isBusy: false
@@ -520,35 +520,39 @@
         "Ismayil's agents will open apps here, click and type, while Ismayil keeps working in their own account. You allow this once; Atlas then starts here by itself."
     )
 
-    /// Accessibility on, Screen Recording next.
-    @MainActor static let onboardingPermissionsScreen: OnboardingPermissionsScreenState = {
-      let recording = OnboardingPermissionItem(
-        id: "screenRecording",
-        title: "Screen Recording",
-        isOn: false,
-        status: "Off",
-        allowTitle: "Allow Screen Recording"
-      )
-      return OnboardingPermissionsScreenState(
-        accessibility: OnboardingPermissionItem(
-          id: "accessibility",
-          title: "Accessibility",
-          isOn: true,
-          status: "Allowed",
-          allowTitle: "Allow Accessibility"
-        ),
-        screenRecording: recording,
-        next: recording
-      )
-    }()
+    /// Accessibility on, as macOS 26 names it.
+    @MainActor static let onboardingAccessibilityOn = OnboardingPermissionItem(
+      id: "accessibility",
+      title: "Accessibility",
+      isOn: true,
+      status: "Allowed",
+      allowTitle: "Allow…"
+    )
 
-    /// The guide waiting for Accessibility's switch.
-    @MainActor static let onboardingGuideState = OnboardingGuideState(
-      label: "1 of 2 · Accessibility",
-      settingsPath: "Privacy & Security › Accessibility",
-      turnOn: .current,
-      comeBack: .waiting,
-      pill: "Waiting for Accessibility…",
+    /// Screen Recording off, as macOS 26 names it.
+    @MainActor static let onboardingScreenRecordingOff = OnboardingPermissionItem(
+      id: "screenRecording",
+      title: "Screen & System Audio Recording",
+      isOn: false,
+      status: "Off",
+      allowTitle: "Allow…",
+      canAllow: true
+    )
+
+    /// Accessibility on, Screen Recording next.
+    @MainActor static let onboardingPermissionsScreen = OnboardingPermissionsScreenState(
+      accessibility: onboardingAccessibilityOn,
+      screenRecording: onboardingScreenRecordingOff
+    )
+
+    /// The panel while Screen Recording is allowed, Accessibility already on.
+    @MainActor static let onboardingPermissionPanelState = OnboardingPermissionPanelState(
+      label: "2 of 2 · Screen & System Audio Recording",
+      instruction: "Drag Atlas into the top list.",
+      alreadyListed: "Already in the top list? Turn its switch on.",
+      accessibility: onboardingAccessibilityOn,
+      screenRecording: onboardingScreenRecordingOff,
+      pill: "Waiting for the switch…",
       isOn: false
     )
 

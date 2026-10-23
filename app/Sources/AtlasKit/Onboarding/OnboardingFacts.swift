@@ -75,6 +75,7 @@ package struct OnboardingFacts: Equatable, Sendable {
       asker.running = side.running ?? false
       asker.screenCapture = side.permissions?.screenCapture ?? false
       asker.accessibility = side.permissions?.accessibility ?? false
+      asker.permissionsKnown = side.permissions != nil
     }
   }
 }

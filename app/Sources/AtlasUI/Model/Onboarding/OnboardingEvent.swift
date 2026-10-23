@@ -36,12 +36,12 @@ package enum OnboardingEvent: Equatable, Sendable {
   case complete
   /// Allow, in the helper.
   case allow
-  /// Allow a permission: open its page in System Settings, with the guide beside it.
+  /// Allow a permission: open its page in System Settings, with the permission panel beside it.
   ///
   /// - Parameter permission: The permission's id.
   case openSettings(id: String)
-  /// Back on the guide panel.
-  case closeGuide
+  /// Back on the permission panel: the permissions screen again.
+  case closePanel
   /// Switch Back, in the helper.
   case switchBack
 }
