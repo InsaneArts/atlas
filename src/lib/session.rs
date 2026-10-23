@@ -609,6 +609,34 @@ pub fn logged_in(uid: u32) -> Option<bool> {
     )
 }
 
+/// Whether `uid` runs any process but `besides`: a login, a background
+/// session or a leftover of one. `None` when processes could not be listed.
+pub fn runs_besides(uid: u32, besides: u32) -> Option<bool> {
+    Some(running_besides(&processes()?, uid, besides))
+}
+
+fn running_besides(listed: &[Process], uid: u32, besides: u32) -> bool {
+    listed
+        .iter()
+        .any(|process| process.uid == uid && process.pid != besides)
+}
+
+/// Whether `uid`'s desktop is up: Setup Assistant gone, and the Dock and
+/// the Finder running (loginwindow starts the Dock only once Setup
+/// Assistant is done). `None` when processes could not be listed.
+pub fn desktop_up(uid: u32) -> Option<bool> {
+    Some(desktop_up_in(&processes()?, uid))
+}
+
+fn desktop_up_in(listed: &[Process], uid: u32) -> bool {
+    let runs = |name: &str| {
+        listed
+            .iter()
+            .any(|process| process.uid == uid && process.command.ends_with(name))
+    };
+    !runs("/Setup Assistant") && runs("/Dock") && runs("/Finder")
+}
+
 /// A desktop login: its loginwindow, which starts when the person logs in
 /// and lasts until they log out (unlike the Dock, which may restart).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -687,8 +715,8 @@ fn running_for(elapsed: &str) -> Option<std::time::Duration> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Absence, LOGGED_OUT, diagnose, input_build_current, parse_processes, require_hidden,
-        running_for, silent, validate_target_uid,
+        Absence, LOGGED_OUT, desktop_up_in, diagnose, input_build_current, parse_processes,
+        require_hidden, running_besides, running_for, silent, validate_target_uid,
     };
     use serde_json::json;
 
@@ -704,6 +732,40 @@ mod tests {
         }
 
         assert!(!silent(&json!({"ok": true})));
+    }
+
+    #[test]
+    fn the_desktop_is_up_once_setup_assistant_is_gone_and_the_dock_and_finder_run() {
+        let core = "/System/Library/CoreServices";
+        let listing = |extra: &str| {
+            parse_processes(&format!(
+                "502 10 00:10 {core}/Dock.app/Contents/MacOS/Dock\n\
+                 502 11 00:10 {core}/Finder.app/Contents/MacOS/Finder\n\
+                 502 12 00:10 {core}/KeyboardSetupAssistant.app/Contents/MacOS/KeyboardSetupAssistant\n\
+                 {extra}"
+            ))
+        };
+        let assistant = |uid: u32| {
+            format!("{uid} 13 00:10 {core}/Setup Assistant.app/Contents/MacOS/Setup Assistant\n")
+        };
+        assert!(desktop_up_in(&listing(""), 502));
+        assert!(!desktop_up_in(&listing(&assistant(502)), 502));
+        assert!(
+            desktop_up_in(&listing(&assistant(503)), 502),
+            "another account's Setup Assistant"
+        );
+        assert!(!desktop_up_in(&listing(""), 503), "no Dock of its own");
+    }
+
+    #[test]
+    fn an_account_runs_something_besides_the_asking_process_only_with_another_process() {
+        let listed = parse_processes(
+            "502 40 00:01 /Applications/Atlas.app/Contents/MacOS/atlas\n\
+             0 41 00:01 /usr/bin/sudo\n",
+        );
+        assert!(!running_besides(&listed, 502, 40));
+        assert!(running_besides(&listed, 502, 99));
+        assert!(!running_besides(&listed, 503, 40));
     }
 
     #[test]

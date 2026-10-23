@@ -104,6 +104,29 @@ struct OnboardingControllerTests {
     #expect(controller.snapshot.step == .welcome)
   }
 
+  @Test("a helper macOS could not ready says to open Atlas there, and one it readied says Atlas opens by itself")
+  func anUnreadiedHelperSaysToOpenAtlas() async throws {
+    let unreadied = ScriptedCommands([
+      "onboarding status": freshMac, "onboarding create": #"{"ok": true, "readied": false}"#,
+    ])
+    let controller = Self.controller(unreadied)
+    var form = controller.snapshot.form
+    form.password = "hunter2"
+    form.verify = "hunter2"
+    controller.update(form)
+    await controller.createAccount()
+    #expect(!controller.snapshot.helperReadied)
+    #expect(!OnboardingPresenter.switchToHelper(controller.snapshot).opensByItself)
+
+    let readied = ScriptedCommands([
+      "onboarding status": freshMac, "onboarding create": #"{"ok": true, "readied": true}"#,
+    ])
+    let other = Self.controller(readied)
+    other.update(form)
+    await other.createAccount()
+    #expect(OnboardingPresenter.switchToHelper(other.snapshot).opensByItself)
+  }
+
   @Test("the password reaches macOS on standard input and the form forgets it")
   func thePasswordTravelsOnStandardInput() async throws {
     let commands = ScriptedCommands(["onboarding status": freshMac, "onboarding create": #"{"ok": true}"#])
@@ -179,6 +202,30 @@ struct OnboardingControllerTests {
     try await settle("the mark was never cleared") { overlapped != nil && commands.ran.contains(closed) }
     #expect(overlapped == false, "the window was marked closed while the open mark still ran")
     #expect(commands.ran.last == closed)
+  }
+
+  @Test("a blocked window marks itself open in the helper, where the opener waits for it, and not in your account")
+  func aBlockedWindowMarksItselfOnlyInTheHelper() async throws {
+    let open = Action.markWindow(open: true).arguments
+    let unsigned = Self.helperReply(accessibility: false)
+      .replacingOccurrences(of: #""signed": true"#, with: #""signed": false"#)
+    let helper = ScriptedCommands(["onboarding status": unsigned, "onboarding window": #"{"ok": true}"#])
+    let blocked = try await Self.loaded(helper)
+    guard case .blocked = blocked.snapshot.step else {
+      Issue.record("an unsigned Atlas in the helper is blocked")
+      return
+    }
+    try await settle("the blocked window was never marked") { helper.ran.contains(open) }
+
+    let mine = freshMac.replacingOccurrences(of: #""signed": true"#, with: #""signed": false"#)
+    let person = ScriptedCommands(["onboarding status": mine, "onboarding window": #"{"ok": true}"#])
+    let yours = try await Self.loaded(person)
+    guard case .blocked = yours.snapshot.step else {
+      Issue.record("an unsigned Atlas in your account is blocked")
+      return
+    }
+    try await Task.sleep(for: Ceiling.absence)
+    #expect(!person.ran.contains(open))
   }
 
   @Test("a check that ends once the window has closed changes nothing")

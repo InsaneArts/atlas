@@ -216,6 +216,11 @@ pub(crate) fn valid_account_name(name: &str) -> std::result::Result<(), String> 
         return Err("Account names are 1 to 31 characters.".into());
     }
 
+    // macOS reads a name of only digits as a user ID.
+    if name.bytes().all(|c| c.is_ascii_digit()) {
+        return Err("Account names need at least one letter.".into());
+    }
+
     Ok(())
 }
 
@@ -1092,6 +1097,24 @@ async fn start_helper(
 
     let logged_in = || crate::session::logged_in(helper.uid) == Some(true);
     if !logged_in() {
+        // A helper never set up skips macOS's setup questions at its first
+        // login. Only a convenience: a refusal leaves them to the person,
+        // and the step says what came of it.
+        if !installed {
+            let request = Request::FirstLogin {
+                uid: helper.uid,
+                opener: false,
+            };
+            let step = match setup::request_before_login(executable, helper, &request) {
+                Ok((_, reply)) if reply["ok"] == true => {
+                    json!({"step": "firstLogin", "answered": reply["answered"]})
+                }
+                Ok((_, reply)) => json!({"step": "firstLogin", "error": reply["error"]}),
+                Err(error) => json!({"step": "firstLogin", "error": error.error}),
+            };
+            done_steps.push(step);
+        }
+
         heading(&format!("Log in to {name} once"));
 
         if installed {
@@ -1101,9 +1124,9 @@ async fn start_helper(
             ));
         } else {
             say(&format!(
-                "  Switch to {name}, log in and finish macOS's setup questions. If macOS then\n  \
-                     asks about Accessibility or Screen Recording for Atlas, turn Atlas on.\n  \
-                     Then switch back here."
+                "  Switch to {name} and log in. If macOS asks you to set anything up, choose\n  \
+                     Set Up Later. If it asks about Accessibility or Screen Recording for Atlas,\n  \
+                     turn Atlas on. Then switch back here."
             ));
         }
 
@@ -1499,6 +1522,11 @@ mod tests {
         assert!(valid_account_name("").is_err());
         assert!(valid_account_name("has space").is_err());
         assert!(valid_account_name("-dash").is_err());
+        assert!(
+            valid_account_name("503").is_err(),
+            "macOS reads digits alone as a user ID"
+        );
+        assert!(valid_account_name("503a").is_ok());
         assert!(valid_account_name(&"x".repeat(32)).is_err());
     }
 

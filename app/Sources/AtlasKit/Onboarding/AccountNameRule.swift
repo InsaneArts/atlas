@@ -22,6 +22,8 @@ package enum AccountNameRule {
       reason = "Account names start with a letter or a number."
     } else if name.utf8.count > maxLength {
       reason = "Account names can be at most 31 characters."
+    } else if name.utf8.allSatisfy(isDigit) {
+      reason = "Account names need at least one letter."
     } else {
       return nil
     }
@@ -29,7 +31,7 @@ package enum AccountNameRule {
   }
 
   /// A name that works, made from what was typed: lowercase, accents dropped, spaces and other marks made dashes,
-  /// no dash or dot to start, at most 31 characters; "atlas" when nothing of it is left.
+  /// no dash or dot to start, at most 31 characters, "atlas" before digits alone; "atlas" when nothing of it is left.
   ///
   /// - Parameter name: The short name typed.
   /// - Returns: A short name the rule accepts.
@@ -52,7 +54,17 @@ package enum AccountNameRule {
         .drop { $0 == "-" || $0 == "." }
         .reversed()
     )
-    return tidy.isEmpty ? "atlas" : tidy
+    if tidy.isEmpty { return "atlas" }
+    // macOS reads a name of only digits as a user ID.
+    return tidy.utf8.allSatisfy(isDigit) ? String("atlas\(tidy)".prefix(maxLength)) : tidy
+  }
+
+  /// Whether a byte is an ASCII digit.
+  ///
+  /// - Parameter byte: One byte of the name's UTF-8.
+  /// - Returns: Whether it is 0 to 9.
+  private static func isDigit(_ byte: UInt8) -> Bool {
+    (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(byte)
   }
 
   /// Whether a byte may be in a short name: an ASCII letter or digit, '.', '_' or '-'.

@@ -63,6 +63,12 @@ pub enum Request {
         label: String,
         sha256: String,
     },
+    /// Ready the account for its next login: macOS's setup questions marked
+    /// answered while it runs nothing, and, with `opener`, the one-time job
+    /// that opens Atlas there (started now when it is logged in).
+    FirstLogin { uid: u32, opener: bool },
+    /// Take away a waiting opener.
+    ForgetOpener { uid: u32 },
 }
 
 impl Request {
@@ -71,7 +77,9 @@ impl Request {
             Self::Inspect { uid, .. }
             | Self::Prepare { uid, .. }
             | Self::Retire { uid, .. }
-            | Self::Restore { uid, .. } => *uid,
+            | Self::Restore { uid, .. }
+            | Self::FirstLogin { uid, .. }
+            | Self::ForgetOpener { uid } => *uid,
             Self::Install { agent } => agent.uid,
         }
     }
@@ -117,7 +125,7 @@ fn require_sha256(value: &str) -> Result<()> {
 }
 
 /// Escape text for a plist `<string>`.
-fn escape(text: &str) -> String {
+pub(super) fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
@@ -211,7 +219,12 @@ impl Layout {
 pub fn run(request: &str) -> Result<Value> {
     let request: Request = serde_json::from_str(request)?;
     let uid = nix::unistd::getuid().as_raw();
-    if request.uid() != uid || uid < super::FIRST_USER_UID {
+    // Never as root with the helper's real user ID: files would be root's,
+    // written in a home the helper controls.
+    if request.uid() != uid
+        || uid < super::FIRST_USER_UID
+        || nix::unistd::geteuid() != nix::unistd::getuid()
+    {
         return Err(problem(
             "setup-helper must run as the requested helper account",
         ));
@@ -234,6 +247,8 @@ pub fn run(request: &str) -> Result<Value> {
             ..
         } => retire(&layout, &label, &sha256, missing_ok),
         Request::Restore { label, sha256, .. } => restore(&layout, &label, &sha256),
+        Request::FirstLogin { opener, .. } => super::first_login::first_login(&layout, opener),
+        Request::ForgetOpener { .. } => super::first_login::forget_opener(&layout),
     }
 }
 
@@ -260,13 +275,17 @@ fn parse_job(text: &str) -> Result<Job> {
     })
 }
 
+/// launchctl's exit status for a user with no domain at all: logged out,
+/// or never logged in.
+const NO_SUCH_USER_DOMAIN: i32 = 112;
 /// launchctl's exit status for a service its domain does not have.
 const NO_SUCH_SERVICE: i32 = 113;
 /// launchctl's exit status for a domain that does not exist.
 const NO_SUCH_DOMAIN: i32 = 125;
 
-/// Fails closed: only launchctl's "no such service" and "no such desktop
-/// domain" (the helper is signed out) statuses mean absent.
+/// Fails closed: only launchctl's "no such service", "no such desktop
+/// domain" and "no domain for this user" (the helper is signed out, or
+/// never signed in) statuses mean absent.
 fn job(layout: &Layout, label: &str) -> Result<Job> {
     let output = Command::new("/bin/launchctl")
         .args(["print", &format!("{}/{label}", layout.domain())])
@@ -275,7 +294,7 @@ fn job(layout: &Layout, label: &str) -> Result<Job> {
         Some(0) => parse_job(&String::from_utf8_lossy(&output.stdout)),
         // When the helper is signed out its desktop domain does not exist,
         // so nothing can be loaded there.
-        Some(NO_SUCH_SERVICE | NO_SUCH_DOMAIN) => Ok(Job::Absent),
+        Some(NO_SUCH_SERVICE | NO_SUCH_DOMAIN | NO_SUCH_USER_DOMAIN) => Ok(Job::Absent),
         _ => Err(problem(format!(
             "launchctl could not inspect {label}: {}",
             String::from_utf8_lossy(&output.stderr).trim()
@@ -334,14 +353,14 @@ fn as_loaded(job: Job) -> Option<(Option<u32>, PathBuf)> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum File {
+pub(super) enum File {
     Absent,
     Regular(String),
     /// A symlink, directory or anything else; never followed or replaced.
     Other,
 }
 
-fn file(path: &Path) -> Result<File> {
+pub(super) fn file(path: &Path) -> Result<File> {
     match fs::symlink_metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(File::Absent),
         Err(error) => Err(error.into()),
@@ -540,7 +559,7 @@ fn install(layout: &Layout, agent: &Agent) -> Result<Value> {
 
 /// Load `label` from `path` unless launchd has it already; its pid, once
 /// running. A job loaded from another definition is an error.
-fn loaded(layout: &Layout, label: &str, path: &Path) -> Result<Option<u32>> {
+pub(super) fn loaded(layout: &Layout, label: &str, path: &Path) -> Result<Option<u32>> {
     let (pid, from) = match as_loaded(job(layout, label)?) {
         Some(loaded) => loaded,
         None => {
@@ -557,6 +576,18 @@ fn loaded(layout: &Layout, label: &str, path: &Path) -> Result<Option<u32>> {
     }
 
     Ok(pid)
+}
+
+/// Unload `label` if launchd has it, whatever its definition.
+pub(super) fn unload(layout: &Layout, label: &str) -> Result<()> {
+    if job(layout, label)? != Job::Absent {
+        launchctl(&["bootout", &format!("{}/{label}", layout.domain())])?;
+        wait_for(layout, label, "unloaded", |job| {
+            (job == Job::Absent).then_some(())
+        })?;
+    }
+
+    Ok(())
 }
 
 fn retire(layout: &Layout, label: &str, sha256: &str, missing_ok: bool) -> Result<Value> {
@@ -649,6 +680,20 @@ fn restore(layout: &Layout, label: &str, sha256: &str) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_login_requests_read_back_as_written() {
+        for request in [
+            Request::FirstLogin {
+                uid: 502,
+                opener: false,
+            },
+            Request::ForgetOpener { uid: 502 },
+        ] {
+            let text = serde_json::to_string(&request).unwrap();
+            assert_eq!(serde_json::from_str::<Request>(&text).unwrap(), request);
+        }
+    }
 
     #[test]
     fn names_are_conservative() {

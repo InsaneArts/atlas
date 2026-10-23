@@ -52,33 +52,44 @@ fn remove_own_file(path: &Path) -> Result<bool> {
 
 /// Stop the helper's job as the helper, outside the daemon it would stop:
 /// inspected first and retired as it is, as installing it does, whichever
-/// Atlas wrote its definition. None when the helper account is gone, and
-/// its job with it. sudo may ask the person for their password.
-fn retire_helper_job(executable: &Path, config: &Config) -> Result<Option<Value>> {
+/// Atlas wrote its definition. A one-time opener still waiting there goes
+/// too, since it could never run again once Atlas.app is gone. None when
+/// the helper account is gone, and its job with it. sudo may ask the person
+/// for their password.
+/// Some with what taking the opener away came to: whether one was there and
+/// is gone now, or why it stays.
+fn retire_helper_job(
+    executable: &Path,
+    config: &Config,
+) -> Result<Option<std::result::Result<bool, String>>> {
     let Some(helper) = setup::account_with_uid(config.helper_uid)? else {
         return Ok(None);
     };
 
-    let ask = |request: &Request| -> Result<Value> {
+    let ask = |request: &Request, failed: &str| -> Result<Value> {
         let (_, reply) = setup::request_as_helper(executable, &helper, request, false)?;
         if reply.is_null() {
-            return Err(problem("The helper job could not be stopped"));
+            return Err(problem(failed));
         }
 
         if reply["ok"] != true {
             return Err(problem(format!(
-                "The helper job could not be stopped: {}",
+                "{failed}: {}",
                 reply["error"].as_str().unwrap_or("unknown")
             )));
         }
 
         Ok(reply)
     };
+    let stopping = "The helper job could not be stopped";
 
-    let inspected = ask(&Request::Inspect {
-        uid: helper.uid,
-        labels: vec![LABEL.to_owned()],
-    })?;
+    let inspected = ask(
+        &Request::Inspect {
+            uid: helper.uid,
+            labels: vec![LABEL.to_owned()],
+        },
+        stopping,
+    )?;
 
     // The definition there now, else (none there) the one this Atlas
     // would write, whose backup a retired job leaves.
@@ -102,13 +113,23 @@ fn retire_helper_job(executable: &Path, config: &Config) -> Result<Option<Value>
         }
     };
 
-    ask(&Request::Retire {
-        uid: helper.uid,
-        label: LABEL.to_owned(),
-        sha256,
-        missing_ok: true,
-    })
-    .map(Some)
+    let opener = ask(
+        &Request::ForgetOpener { uid: helper.uid },
+        "Atlas's one-time start in the helper was not removed",
+    )
+    .map(|reply| reply["removed"] == true)
+    .map_err(|error| error.error);
+
+    ask(
+        &Request::Retire {
+            uid: helper.uid,
+            label: LABEL.to_owned(),
+            sha256,
+            missing_ok: true,
+        },
+        stopping,
+    )?;
+    Ok(Some(opener))
 }
 
 /// Undo install and init. `keep_config` keeps settings and logs.
@@ -141,6 +162,7 @@ pub async fn run(config_path: &Path, keep_config: bool, yes: bool) -> Result<Val
         stop_helper(client, &executable, &mut removed, &mut warnings).await?;
     }
 
+    forget_requested_opener(&executable, client.as_ref(), &mut removed, &mut warnings);
     stop_menubar(client.as_ref());
     disconnect(&executable, &mut removed, &mut warnings)?;
 
@@ -344,9 +366,14 @@ async fn stop_helper(
     }
 
     say("Stopping the helper's background job (macOS may ask for your password)…");
-    if retire_helper_job(executable, config)?.is_some() {
+    if let Some(opener) = retire_helper_job(executable, config)? {
         removed.push(json!("helper job"));
         done("Helper job", "stopped");
+        match opener {
+            Ok(true) => removed.push(json!("Atlas's one-time start in the helper")),
+            Ok(false) => {}
+            Err(why) => warnings.push(why),
+        }
     } else {
         skipped("Helper job", "the helper account no longer exists");
         warnings.push(format!(
@@ -490,6 +517,47 @@ fn kept_agents(reply: &Value) -> Vec<(String, String)> {
             Some((shown(name).to_owned(), place.to_owned()))
         })
         .collect()
+}
+
+/// Take away the one-time start the window left in an account this
+/// account asked for but whose setup it never finished (not the helper its
+/// settings name, whose start goes with its job): with Atlas.app gone it
+/// could never run, and would stay among that account's login items. sudo
+/// may ask the person for their password.
+fn forget_requested_opener(
+    executable: &Path,
+    client: Option<&Client>,
+    removed: &mut Vec<Value>,
+    warnings: &mut Vec<String>,
+) {
+    let me = nix::unistd::getuid().as_raw();
+    let Some(pairing) = crate::onboarding::request().filter(|pairing| {
+        pairing.controller_uid == me
+            && client.is_none_or(|client| client.config.helper_uid != pairing.helper_uid)
+    }) else {
+        return;
+    };
+    let Ok(Some(account)) = setup::account_with_uid(pairing.helper_uid) else {
+        return;
+    };
+
+    let request = Request::ForgetOpener { uid: account.uid };
+    match setup::request_as_helper(executable, &account, &request, false) {
+        Ok((_, reply)) if reply["ok"] == true => {
+            if reply["removed"] == true {
+                removed.push(json!(format!("Atlas's one-time start in {}", account.name)));
+            }
+        }
+        Ok((_, reply)) => warnings.push(format!(
+            "Atlas's one-time start in {} was not removed: {}",
+            account.name,
+            reply["error"].as_str().unwrap_or("no reply")
+        )),
+        Err(error) => warnings.push(format!(
+            "Atlas's one-time start in {} was not removed: {}",
+            account.name, error.error
+        )),
+    }
 }
 
 /// The name a person knows an agent by, from its name in a reply.

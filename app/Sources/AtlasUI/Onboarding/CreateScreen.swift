@@ -7,7 +7,7 @@ struct CreateScreen: View {
   /// The account's names and password.
   @Binding var form: OnboardingAccountForm
 
-  /// The form, then the line under it.
+  /// The form, why macOS will ask for an administrator's approval, then the line under it.
   var body: some View {
     ScreenColumn {
       GroupLabel(text: "New account")
@@ -26,10 +26,7 @@ struct CreateScreen: View {
       .padding(.top, Spacing.s)
     } bottom: {
       WorkNoteLine(note: state.note)
-      Note(
-        text:
-          "You log in to the helper with this password, now and after each restart. Atlas hands it to macOS and never keeps it."
-      )
+      ApprovalNote()
     }
   }
 }

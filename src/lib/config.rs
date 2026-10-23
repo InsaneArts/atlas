@@ -12,10 +12,13 @@ use std::{
 
 pub const DEFAULT_PATH: &str = "atlas.local.toml";
 
+/// The configuration's place in a home, as `atlas init` keeps it.
+pub const SETTINGS: &str = ".config/atlas.toml";
+
 /// Where `atlas init` keeps the configuration: `~/.config/atlas.toml`.
 /// Screenshots, logs and records stay in `~/Library/Application Support/Atlas`.
 pub fn installed_path() -> Result<PathBuf> {
-    Ok(home()?.join(".config/atlas.toml"))
+    Ok(home()?.join(SETTINGS))
 }
 
 /// The configuration to use: `path` as given (by --config or ATLAS_CONFIG),

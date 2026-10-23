@@ -81,7 +81,7 @@
       state.content = .screen(
         .create(
           OnboardingCreateScreenState(
-            tail: "macOS asks for your password next.",
+            tail: "You'll approve it once in macOS.",
             note: .problem("Account names can't have spaces. Try “atlas-helper”."),
             isFormEnabled: true,
             flagged: .accountName
@@ -97,14 +97,20 @@
       state.content = .screen(
         .create(
           OnboardingCreateScreenState(
-            tail: "Confirm in the macOS dialog.",
-            note: .working("Creating the account…"),
+            tail: "You'll approve it once in macOS.",
+            note: .working(
+              "Approve in the macOS dialog. It says Atlas can change your Mac. "
+                + "That covers only the three steps above."
+            ),
             isFormEnabled: false
           )
         )
       )
       state.footer.back?.isEnabled = false
-      state.note = .working("Creating the account…")
+      state.note = .working(
+        "Approve in the macOS dialog. It says Atlas can change your Mac. "
+          + "That covers only the three steps above."
+      )
       state.isBusy = true
       return state
     }()
@@ -129,10 +135,9 @@
           OnboardingSwitchScreenState(
             title: "Now log in to the Atlas account.",
             logInDetail: "Choose the Atlas account on the lock screen",
-            openAtlasTitle: "Open Atlas in the Atlas account",
             progress: .init(logIn: .done, openAtlas: .current, allow: .waiting),
             showsLockButton: true,
-            waiting: "Next: Lock and Switch, then open Atlas there."
+            waiting: "Next: Lock and Switch, then allow Atlas there."
           )
         )
       )
@@ -275,7 +280,9 @@
         .choose(
           OnboardingChooseScreenState(
             isNewAccountPicked: false,
-            accounts: [long, onboardingAccount("Test Account", "testaccount")]
+            accounts: [long, onboardingAccount("Test Account", "testaccount")],
+            approval:
+              "You'll approve once in macOS so Atlas can get Maria Fernanda Montgomery-Castellanos de la Vega y Rodríguez-Hernández del Valle Alto de San Sebastián y Monteverde de los Ríos ready: Atlas opens there by itself, and an account never used yet skips macOS's welcome questions. Nothing in the account is removed or replaced."
           )
         )
       )
@@ -330,7 +337,6 @@
           OnboardingSwitchScreenState(
             title: "Now log in to \(name).",
             logInDetail: "Choose \(name) on the lock screen",
-            openAtlasTitle: "Answer the welcome questions, then open Atlas there",
             progress: .init(logIn: .current, openAtlas: .waiting, allow: .waiting),
             showsLockButton: true,
             waiting: nil
@@ -443,7 +449,7 @@
 
     /// The form ready to fill.
     @MainActor static let onboardingCreateScreen = OnboardingCreateScreenState(
-      tail: "macOS asks for your password next.",
+      tail: "You'll approve it once in macOS.",
       note: .none,
       isFormEnabled: true
     )
@@ -452,7 +458,6 @@
     @MainActor static let onboardingSwitchScreen = OnboardingSwitchScreenState(
       title: "Now log in to the Atlas account.",
       logInDetail: "Choose the Atlas account on the lock screen",
-      openAtlasTitle: "Answer the welcome questions, then open Atlas there",
       progress: .init(logIn: .current, openAtlas: .waiting, allow: .waiting),
       showsLockButton: true,
       waiting: "Next: Lock and Switch, then log in to the Atlas account."
@@ -502,7 +507,7 @@
     /// Done, opening at login.
     @MainActor static let onboardingDoneScreen = OnboardingDoneScreenState(
       lede:
-        "That was the whole setup. Atlas lives in your menu bar: ask your agent to check something on screen, and watch it work from there. After a restart, just log in to the Atlas account again; Atlas does the rest.",
+        "That was the whole setup. Atlas lives in your menu bar: ask your agent to check something on screen, and watch it work from there. After a restart, just log in to the Atlas account again; Atlas does the rest. Atlas doesn't need administrator access again. Removing it later asks once more, to stop it in the helper.",
       opensAtLogin: true
     )
 

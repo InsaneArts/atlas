@@ -1,5 +1,5 @@
 extension OnboardingFacts.Helper {
-  /// The three steps on the switch screen: log in, open Atlas, allow it.
+  /// The three steps on the switch screen: log in, Atlas opening, allow it.
   package var switchProgress: SwitchProgress {
     let allowed = accessibility && screenCapture
     if !signedIn { return SwitchProgress(logIn: .current, openAtlas: .waiting, allow: .waiting) }

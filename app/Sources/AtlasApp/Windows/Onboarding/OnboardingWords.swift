@@ -12,7 +12,8 @@ enum OnboardingWords {
   /// The first reading gave a reply that is not a status.
   static let notUnderstood = "Atlas gave an answer this window does not understand"
   /// While the account is made.
-  static let creating = "Creating the account…"
+  static let creating =
+    "Approve in the macOS dialog. It says Atlas can change your Mac. That covers only the three steps above."
   /// While the chosen agents are connected.
   static let connecting = "Connecting your agents…"
   /// While Open at Login is set.
@@ -25,12 +26,29 @@ enum OnboardingWords {
   /// While the helper asked is let go, to choose another.
   static let backToChoice = "Going back to the choice…"
 
-  /// While an existing account is set up as the helper.
+  /// While an existing account is set up as the helper, which macOS asks to approve.
+  ///
+  /// - Parameter account: The account as people know it.
+  /// - Returns: "Approve in the macOS dialog to get Test Account ready."
+  static func settingUp(_ account: String) -> String {
+    "Approve in the macOS dialog to get \(named(account)) ready."
+  }
+
+  /// While the account Atlas was set up in before is chosen again, with no approval.
   ///
   /// - Parameter account: The account as people know it.
   /// - Returns: "Setting up Test Account…"
-  static func settingUp(_ account: String) -> String {
+  static func choosing(_ account: String) -> String {
     "Setting up \(named(account))…"
+  }
+
+  /// An existing account picked, which macOS will ask to approve getting ready.
+  ///
+  /// - Parameter account: The account as people know it.
+  /// - Returns: "You'll approve once in macOS so Atlas can get Annie ready: …"
+  static func approveToReady(_ account: String) -> String {
+    "You'll approve once in macOS so Atlas can get \(named(account)) ready: Atlas opens there by itself, and an "
+      + "account never used yet skips macOS's welcome questions. Nothing in the account is removed or replaced."
   }
 
   // MARK: Naming an account
@@ -68,10 +86,8 @@ enum OnboardingWords {
 
   // MARK: The account choice and form
 
-  /// The form's tail while the account is made.
-  static let confirmInDialog = "Confirm in the macOS dialog."
-  /// The form's tail before.
-  static let passwordNext = "macOS asks for your password next."
+  /// The form's tail.
+  static let approveOnce = "You'll approve it once in macOS."
 
   /// A standard account's row detail.
   ///
@@ -83,14 +99,12 @@ enum OnboardingWords {
 
   // MARK: The switch
 
-  /// The switch screen's second step, before the helper has logged in.
-  static let answerWelcome = "Answer the welcome questions, then open Atlas there"
   /// Atlas answers in the helper, which still lacks a permission.
   static let waitingForPermissions = "Waiting for the two permissions…"
   /// The helper is ready, on screen.
   static let waitingForSwitchBack = "Waiting for you to switch back…"
-  /// Atlas runs in the helper, but the helper is not on screen.
-  static let lockThenOpenAtlas = "Next: Lock and Switch, then open Atlas there."
+  /// The helper is logged in but not on screen, and Atlas not set up there yet.
+  static let lockThenAllow = "Next: Lock and Switch, then allow Atlas there."
 
   /// The switch screen's headline.
   ///
@@ -106,14 +120,6 @@ enum OnboardingWords {
   /// - Returns: "Choose the Atlas account on the lock screen"
   static func chooseOnLockScreen(_ helper: String) -> String {
     "Choose \(named(helper)) on the lock screen"
-  }
-
-  /// The switch screen's second step, once the helper has logged in.
-  ///
-  /// - Parameter helper: The helper as people know it.
-  /// - Returns: "Open Atlas in the Atlas account"
-  static func openAtlas(in helper: String) -> String {
-    "Open Atlas in \(named(helper))"
   }
 
   /// The helper has not logged in yet.
@@ -190,7 +196,7 @@ enum OnboardingWords {
   /// - Parameter helper: The helper as people know it.
   /// - Returns: What Atlas does from now on, and what to do after a restart.
   static func doneLede(_ helper: String) -> String {
-    "That was the whole setup. Atlas lives in your menu bar: ask your agent to check something on screen, and watch it work from there. After a restart, just log in to \(named(helper)) again; Atlas does the rest."
+    "That was the whole setup. Atlas lives in your menu bar: ask your agent to check something on screen, and watch it work from there. After a restart, just log in to \(named(helper)) again; Atlas does the rest. Atlas doesn't need administrator access again. Removing it later asks once more, to stop it in the helper."
   }
 
   // MARK: The helper's side

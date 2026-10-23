@@ -164,7 +164,8 @@ final class OnboardingController {
     case .finishing where snapshot.finish == .idle: runFinish()
     case .agents where snapshot.agents.isEmpty: loadAgents()
     case .agents where snapshot.agentsFailed: retryAgents()
-    case .allow, .permissions, .helperDone: markWindow(open: true)
+    // In the helper the window marks itself open even when blocked: the opener waits for that mark.
+    case .allow, .permissions, .helperDone, .blocked: markWindow(open: true)
     default: break
     }
     // A check's outcome holds for this visit to the step alone: coming back runs it again.
@@ -242,7 +243,9 @@ final class OnboardingController {
     case .newAccount: snapshot.choices.creating = true
     case .existing(let name):
       let title = snapshot.facts.candidates.first { $0.name == name }?.title ?? name
-      await act(.chooseHelper(name), OnboardingWords.settingUp(title))
+      // The account Atlas was set up in before needs no approval.
+      let words = snapshot.facts.onlyChoice ? OnboardingWords.choosing(title) : OnboardingWords.settingUp(title)
+      noteReadied(await act(.chooseHelper(name), words))
     case nil: break
     }
   }
@@ -258,12 +261,22 @@ final class OnboardingController {
     // Cleared from the window as soon as it is handed to macOS.
     snapshot.form.password = ""
     snapshot.form.verify = ""
-    await act(
-      action,
-      OnboardingWords.creating,
-      input: secret
+    noteReadied(
+      await act(
+        action,
+        OnboardingWords.creating,
+        input: secret
+      )
     )
     secret.resetBytes(in: 0..<secret.count)
+  }
+
+  /// Remembers whether the helper just chosen or created was readied for its first login, from the command's reply.
+  ///
+  /// - Parameter outcome: The command's outcome, when it ran.
+  private func noteReadied(_ outcome: Outcome?) {
+    guard let outcome, outcome.ok else { return }
+    snapshot.helperReadied = outcome.decode(HelperChoice.self)?.readied ?? true
   }
 
   /// Runs the end-to-end check, then reads the facts again; never a second one while one runs, and a check the

@@ -26,12 +26,14 @@ struct ChooseScreen: View {
     }
   }
 
-  /// Who is listed, or why one account is: left out while a problem shows, so the problem has the room.
+  /// What approving will do for the account picked, else who is listed, or why one account is: left out while a
+  /// problem shows, so the problem has the room.
   @ViewBuilder private var footnote: some View {
-    switch (note, state.offersNewAccount) {
-    case (.problem, _): EmptyView()
-    case (_, true): Note(text: "Administrator accounts are not listed: a helper must be a standard account.")
-    case (_, false): Note(text: "Atlas was set up in this account before, so it keeps using it.")
+    switch (note, state.approval, state.offersNewAccount) {
+    case (.problem, _, _): EmptyView()
+    case (_, .some(let approval), _): Note(text: approval)
+    case (_, nil, true): Note(text: "Administrator accounts are not listed: a helper must be a standard account.")
+    case (_, nil, false): Note(text: "Atlas was set up in this account before, so it keeps using it.")
     }
   }
 

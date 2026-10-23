@@ -22,8 +22,10 @@ struct SwitchScreen: View {
           .truncationMode(.middle)
         StepRow(
           index: 2,
-          title: state.openAtlasTitle,
-          detail: "In Applications, or with Spotlight",
+          title: state.opensByItself ? "Atlas opens there by itself" : "Open Atlas there",
+          detail: state.opensByItself
+            ? "If macOS asks you to set anything up, choose Set Up Later"
+            : "In Applications. If macOS asks you to set anything up, choose Set Up Later",
           state: state.progress.openAtlas
         )
         StepRow(

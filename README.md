@@ -37,7 +37,9 @@ notarization, puts Atlas.app in /Applications and links `atlas` into
 `~/.local/bin`. Atlas then opens and walks you through the rest in one window:
 choose or create the helper account, switch to it once to allow Atlas there,
 and switch back. `atlas init` does the same in a terminal, and both are safe to
-run again. Atlas never stores a password or changes privacy settings for you.
+run again. Setting up asks for your administrator password once, in macOS's own
+dialog, to create the helper account and get it ready; Atlas doesn't keep it,
+and never stores a password or changes privacy settings for you.
 
 ```sh
 atlas update                 # checks the signature, then swaps the app in place

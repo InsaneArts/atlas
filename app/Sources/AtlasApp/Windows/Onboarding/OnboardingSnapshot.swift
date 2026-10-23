@@ -31,6 +31,9 @@ struct OnboardingSnapshot {
   var agentsFailed = false
   /// Whether Atlas opens at login once setup is done.
   var opensAtLogin = true
+  /// Whether the helper chosen in this window was readied for its first login, so Atlas opens there by itself; false
+  /// when this macOS could not ready it, and the person opens Atlas there.
+  var helperReadied = true
   /// The permission the guide panel is about, while it is open.
   var guiding: Permission?
 

@@ -695,9 +695,18 @@ fn main() -> ExitCode {
     let config = atlas::config::effective(cli.config.take());
 
     // `atlas` alone shows what it can do; opened as an app (Finder,
-    // Launchpad, `open`), it shows the window instead.
+    // Launchpad, `open`), it shows the window instead. launchd names the
+    // job that started it: the helper's one-time opener opens the window
+    // once the desktop is up.
     let Some(command) = cli.command.take() else {
         if opened_as_app() {
+            if atlas::setup::first_login::started_as_opener() {
+                // Its output goes nowhere; the next login tries again.
+                return match atlas::setup::first_login::open_at_login() {
+                    Ok(_) => ExitCode::SUCCESS,
+                    Err(_) => ExitCode::FAILURE,
+                };
+            }
             return open_app(&config);
         }
         let _ = help::command().print_help();

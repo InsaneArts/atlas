@@ -152,6 +152,16 @@ struct OnboardingPresenterTests {
     #expect(OnboardingPresenter.state(Self.snapshot(try Self.person(Self.helper(), finished: true))).footer.back == nil)
   }
 
+  @Test("picking an existing account says what approving in macOS will do, and the account set up before needs none")
+  func pickingAnExistingAccountExplainsTheApproval() throws {
+    var choose = Self.snapshot(try Self.person(nil), Self.choices())
+    #expect(OnboardingPresenter.choose(choose).approval == nil, "nothing picked")
+    choose.picked = .existing("testaccount")
+    #expect(OnboardingPresenter.choose(choose).approval == OnboardingWords.approveToReady("Test Account"))
+    choose.picked = .newAccount
+    #expect(OnboardingPresenter.choose(choose).approval == nil, "the form explains a new account")
+  }
+
   @Test("every footer button waits while a command runs, and each Continue waits for its own condition")
   func footerButtonsWait() throws {
     var choose = Self.snapshot(try Self.person(nil), Self.choices())
@@ -192,7 +202,7 @@ struct OnboardingPresenterTests {
     arguments: [
       (false, false, true, false, "Next: Lock and Switch, then log in to the Atlas account."),
       (true, false, false, false, "Waiting for Atlas to open in the Atlas account…"),
-      (true, false, true, false, "Next: Lock and Switch, then open Atlas there."),
+      (true, false, true, false, "Next: Lock and Switch, then allow Atlas there."),
       (true, true, true, false, "Waiting for the two permissions…"),
       (true, true, false, true, "Waiting for you to switch back…"),
     ] as [(Bool, Bool, Bool, Bool, String)]
@@ -358,10 +368,10 @@ struct OnboardingPresenterTests {
     #expect(OnboardingPresenter.create(snapshot).note == .problem("The two passwords are different."))
     snapshot.form.verify = "one"
     #expect(OnboardingPresenter.create(snapshot).note == .problem("The account could not be created."))
-    snapshot.working = "Creating the account…"
+    snapshot.working = OnboardingWords.creating
     let working = OnboardingPresenter.create(snapshot)
-    #expect(working.note == .working("Creating the account…"))
-    #expect(working.tail == "Confirm in the macOS dialog." && !working.isFormEnabled)
+    #expect(working.note == .working(OnboardingWords.creating))
+    #expect(working.tail == "You'll approve it once in macOS." && !working.isFormEnabled)
   }
 
   @Test("the person's side counts six dots and the helper's three; a blocked screen shows none")

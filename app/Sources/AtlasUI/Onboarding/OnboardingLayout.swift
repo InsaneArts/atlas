@@ -3,8 +3,9 @@ import Foundation
 
 /// The onboarding window's own measures, which no other window shares.
 package enum OnboardingLayout {
-  /// 720 by 540: the window as a card in the middle of the screen.
-  package static let card = CGSize(width: 720, height: 540)
+  /// 720 by 600: the window as a card in the middle of the screen, tall enough for the account form and why macOS
+  /// asks to approve it.
+  package static let card = CGSize(width: 720, height: 600)
   /// 360 by 500: the window as a narrow panel beside System Settings.
   package static let side = CGSize(width: 360, height: 500)
   /// 420: the done screen's column.

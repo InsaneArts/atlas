@@ -10,7 +10,10 @@
 //! are never stored, logged or put in a command line: the one Atlas handles
 //! (a new account's) goes from the window, through a pipe, straight into
 //! macOS's own password prompt.
+mod as_root;
+
 use crate::{
+    approval::Refusal,
     client::Client,
     config::{self, Config},
     error::{Error, Result},
@@ -38,7 +41,8 @@ pub const REQUEST: &str = "/Users/Shared/Atlas/onboarding.json";
 /// daemon then leaves telling the person to the window.
 pub const WINDOW_MARKER: &str = "onboarding-window";
 
-/// How long creating an account may wait for the person to approve it.
+/// How long a step under the person's approval may take, the approval
+/// included.
 const APPROVAL: Duration = Duration::from_secs(10 * 60);
 
 fn problem(message: impl Into<String>) -> Error {
@@ -432,14 +436,13 @@ fn ready_to_choose(config_path: &Path, uid: u32) -> Result<()> {
     Ok(())
 }
 
-/// Make `name`, an existing standard account, the helper: the shared
-/// executable, the request Atlas in the helper reads, and the settings.
-/// Settings for another helper in use are never replaced.
-pub fn choose(config_path: &Path, name: &str) -> Result<Value> {
+/// `name`, an existing standard account other than `controller`'s, that
+/// no deleted account's session still holds, with a user ID from 501 up and
+/// a home of its own in /Users: one that may be the helper.
+fn choosable(name: &str, controller: u32) -> Result<setup::Account> {
     let helper = setup::account_named(name)?
         .ok_or_else(|| problem(format!("There is no account {name}")))?;
-    let (uid, me_name, _) = me()?;
-    if helper.uid == uid {
+    if helper.uid == controller {
         return Err(problem("The helper must be another account than yours"));
     }
 
@@ -464,9 +467,62 @@ pub fn choose(config_path: &Path, name: &str) -> Result<Value> {
         )));
     }
 
+    // A person's account: a user ID from 501 up, and a home in /Users that
+    // is its own, when it has one yet.
+    let home_ours = helper.home.parent() == Some(Path::new("/Users"))
+        && fs::symlink_metadata(&helper.home).map_or(true, |metadata| {
+            metadata.is_dir() && metadata.uid() == helper.uid
+        });
+    if helper.uid < setup::FIRST_USER_UID || !home_ours {
+        return Err(problem(format!(
+            "{name} is not a person's account, so it cannot be the helper"
+        )));
+    }
+
+    Ok(helper)
+}
+
+/// Make `name`, an existing standard account, the helper: readied for its
+/// next login first (macOS asks for one approval, unless Atlas already
+/// answers there for this account), then the shared executable, the request
+/// Atlas in the helper reads, and the settings. Settings for another helper
+/// in use are never replaced.
+pub fn choose(config_path: &Path, name: &str) -> Result<Value> {
+    let (uid, _, _) = me()?;
+    let helper = choosable(name, uid)?;
+    ready_to_choose(config_path, uid)?;
+
+    // Atlas already answering there needs nothing readied.
+    let mut readied = true;
+    if !init::proposed(&helper).is_ok_and(|config| answers(&config)) {
+        match as_root::ready(name, helper.uid) {
+            Ok(()) => {}
+            // Without the approval call the account is chosen unreadied:
+            // Atlas is opened there by hand, as the window then says.
+            Err(Refusal::Unavailable) => readied = false,
+            Err(Refusal::Cancelled) => {
+                return Err(problem(format!(
+                    "{name} was not chosen. Approve the macOS dialog to get it ready."
+                )));
+            }
+            Err(Refusal::Failed(reason)) => {
+                return Err(problem(format!("{name} was not chosen: {reason}")));
+            }
+        }
+    }
+
+    let mut chosen = use_helper(config_path, &helper)?;
+    chosen["readied"] = json!(readied);
+    Ok(chosen)
+}
+
+/// Make `helper` the helper: the shared executable, the request Atlas in
+/// the helper reads, and the settings.
+fn use_helper(config_path: &Path, helper: &setup::Account) -> Result<Value> {
+    let (uid, me_name, _) = me()?;
     let executable = signed_executable()?;
     let previous = settings(config_path)?;
-    let fresh = init::proposed(&helper)?;
+    let fresh = init::proposed(helper)?;
 
     // As `atlas init` does: the settings for this same helper stay (only
     // their sockets follow its home); another helper in use is kept.
@@ -559,18 +615,23 @@ pub fn forget(config_path: &Path) -> Result<Value> {
     Ok(json!({"ok": true, "forgotten": helper.name}))
 }
 
-/// Create a standard account. Its password arrives on standard input (from
-/// the window) and is typed into sysadminctl's own prompt through a
-/// pseudo-terminal, so it is never in a command line or a file; macOS asks
-/// for an administrator's approval in its own dialog.
+/// Create a standard account and make it the helper. Its password arrives
+/// on standard input (from the window) and is typed into sysadminctl's own
+/// prompt through a pseudo-terminal, so it is never in a command line or a
+/// file. macOS asks for one approval, under which the account is also
+/// readied for its first login (see `as_root`); on a macOS without that
+/// approval, sysadminctl asks for it in its own dialog instead.
 pub fn create(config_path: &Path, name: &str, full_name: &str) -> Result<Value> {
     init::valid_account_name(name).map_err(problem)?;
 
     if full_name.is_empty()
         || full_name.chars().count() > 64
-        || full_name.chars().any(|c| c.is_control())
+        || full_name.chars().any(|c| c.is_control() || c == '@')
+        || full_name.starts_with('-')
     {
-        return Err(problem("Use a full name of 1 to 64 characters"));
+        return Err(problem(
+            "Use a full name of 1 to 64 characters, without @, that does not start with -",
+        ));
     }
 
     if setup::account_named(name)?.is_some() {
@@ -582,18 +643,58 @@ pub fn create(config_path: &Path, name: &str, full_name: &str) -> Result<Value> 
     let (uid, _, _) = me()?;
     ready_to_choose(config_path, uid)?;
 
-    let mut password = read_secret(std::io::stdin())?;
-    let mut args = init::add_user_args(name, full_name, init::free_uid()?);
-    args.push("interactive".to_owned());
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    let result = answer_prompts(init::SYSADMINCTL, &args, &password, APPROVAL);
-    password.fill(0);
+    let password = Secret(read_secret(std::io::stdin())?);
+    let next_uid = init::free_uid()?;
+    let mut readied = true;
+    let account = match as_root::create(name, next_uid, full_name, &password.0) {
+        Ok(()) => created(name, None)?,
+        Err(Refusal::Unavailable) => {
+            readied = false;
+            let mut args = init::add_user_args(name, full_name, next_uid);
+            args.push("interactive".to_owned());
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            let result = answer_prompts(init::SYSADMINCTL, &args, &password.0, APPROVAL);
+            created(name, result.err().map(|error| error.error))?
+        }
+        Err(Refusal::Cancelled) => {
+            return Err(problem(
+                "The account was not created. Approve the macOS dialog to create it.",
+            ));
+        }
+        Err(Refusal::Failed(reason)) => {
+            // Made, but not readied: it can be chosen again, which readies it.
+            return Err(problem(match setup::account_named(name)? {
+                Some(_) => {
+                    format!("{name} was created, but Atlas could not get it ready: {reason}")
+                }
+                None => format!("The account was not created: {reason}"),
+            }));
+        }
+    };
+    drop(password);
 
-    // sysadminctl reports success even when it did nothing: the account
-    // itself is the answer.
-    let created = setup::account_named(name)?;
-    let Some(account) = created else {
-        let detail = result.err().map(|error| error.error).unwrap_or_default();
+    if account.uid != next_uid {
+        return Err(problem(format!(
+            "An account named {name} appeared that Atlas did not create"
+        )));
+    }
+
+    let account = choosable(&account.name, uid)?;
+    let chosen = use_helper(config_path, &account)?;
+    Ok(json!({
+        "ok": true,
+        "created": {"name": account.name, "uid": account.uid},
+        "chosen": chosen,
+        "readied": readied,
+    }))
+}
+
+/// The standard account `name` a creation made, or why not, from what the
+/// creation said when it failed (`detail`). sysadminctl reports success even
+/// when it did nothing: the account itself is the answer.
+fn created(name: &str, detail: Option<String>) -> Result<setup::Account> {
+    let Some(account) = setup::account_named(name)? else {
+        let detail = detail.unwrap_or_default();
         return Err(problem(if detail.is_empty() {
             "The account was not created. Approve the macOS dialog to create it.".to_owned()
         } else {
@@ -607,14 +708,31 @@ pub fn create(config_path: &Path, name: &str, full_name: &str) -> Result<Value> 
         )));
     }
 
-    let chosen = choose(config_path, &account.name)?;
-    Ok(json!({"ok": true, "created": {"name": account.name, "uid": account.uid}, "chosen": chosen}))
+    Ok(account)
+}
+
+/// A password, zeroed when dropped.
+struct Secret(Vec<u8>);
+
+impl Drop for Secret {
+    fn drop(&mut self) {
+        self.0.fill(0);
+    }
+}
+
+/// The last thing a program said: its last line that is not empty and not a
+/// password question.
+fn last_words(text: &str) -> Option<&str> {
+    text.lines()
+        .map(str::trim)
+        .rfind(|line| !line.is_empty() && !line.to_ascii_lowercase().ends_with("password:"))
 }
 
 /// A password from standard input: one line of 1 to 256 bytes, with no
 /// control characters (a terminal would edit the line with them, so macOS
 /// would receive a different password than the one typed).
 fn read_secret(input: impl Read) -> Result<Vec<u8>> {
+    // To the end: the window closes its input after the password.
     let mut secret = Vec::new();
     input.take(258).read_to_end(&mut secret)?;
 
@@ -665,44 +783,20 @@ fn answer_prompts(
     let receiver = init::forward(output);
     // Drained as it comes, so a chatty program never blocks on it.
     let complaints = init::forward(errors);
-    let deadline = Instant::now() + patience;
     let mut seen = Vec::new();
-    let mut answered = 0;
-
-    loop {
-        match receiver.recv_timeout(Duration::from_millis(100)) {
-            Ok(bytes) => seen.extend(bytes),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-
-        // A question ends without a newline: "User password:".
-        let asked = seen
-            .windows(PROMPT.len())
-            .filter(|window| window.eq_ignore_ascii_case(PROMPT))
-            .count();
-        if asked > answered && answered < MAX_ANSWERS {
-            // Let the prompt turn echo off before typing.
-            std::thread::sleep(Duration::from_millis(150));
-
-            let typed = input
-                .write_all(secret)
-                .and_then(|()| input.write_all(b"\n"))
-                .and_then(|()| input.flush());
-            if let Err(error) = typed {
-                let _ = child.kill();
-                let _ = child.wait();
-                seen.fill(0);
-                return Err(error.into());
-            }
-
-            answered += 1;
-        }
-
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            break;
-        }
+    let answered = answer(
+        &mut input,
+        &receiver,
+        secret,
+        MAX_ANSWERS,
+        Instant::now() + patience,
+        &mut seen,
+    );
+    if let Err(error) = answered {
+        let _ = child.kill();
+        let _ = child.wait();
+        seen.fill(0);
+        return Err(error);
     }
 
     drop(input);
@@ -718,17 +812,56 @@ fn answer_prompts(
     }
 
     let complained: Vec<u8> = complaints.try_iter().flatten().collect();
-    let last = |text: &str| {
-        text.lines()
-            .map(str::trim)
-            .rfind(|line| !line.is_empty() && !line.to_ascii_lowercase().contains("password"))
-            .map(str::to_owned)
-    };
-    let summary = last(&text)
-        .or_else(|| last(&String::from_utf8_lossy(&without(&complained, secret))))
-        .unwrap_or_default();
+    let complained = String::from_utf8_lossy(&without(&complained, secret)).into_owned();
+    let summary = last_words(&text)
+        .or_else(|| last_words(&complained))
+        .unwrap_or_default()
+        .to_owned();
 
     Err(problem(summary))
+}
+
+/// Read what a program writes until it stops (its output closes) or
+/// `deadline` passes, collecting it into `seen`, and type `secret` and a
+/// newline into `input` each time it has asked for a password, up to
+/// `answers` times.
+fn answer(
+    input: &mut impl Write,
+    receiver: &std::sync::mpsc::Receiver<Vec<u8>>,
+    secret: &[u8],
+    answers: usize,
+    deadline: Instant,
+    seen: &mut Vec<u8>,
+) -> Result<()> {
+    let mut answered = 0;
+
+    loop {
+        match receiver.recv_timeout(Duration::from_millis(100)) {
+            Ok(bytes) => seen.extend(bytes),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+        }
+
+        // A question ends without a newline: "User password:".
+        let asked = seen
+            .windows(PROMPT.len())
+            .filter(|window| window.eq_ignore_ascii_case(PROMPT))
+            .count();
+        if asked > answered && answered < answers {
+            // Let the prompt turn echo off before typing.
+            std::thread::sleep(Duration::from_millis(150));
+
+            input
+                .write_all(secret)
+                .and_then(|()| input.write_all(b"\n"))
+                .and_then(|()| input.flush())?;
+            answered += 1;
+        }
+
+        if Instant::now() >= deadline {
+            return Err(problem("The step took too long and was stopped"));
+        }
+    }
 }
 
 /// What a password question ends with, in any case.
@@ -813,6 +946,10 @@ pub fn accept(controller_uid: u32, controller_name: &str) -> Result<Value> {
     let agent = expected_agent(&layout, controller.uid)?;
     let installed = init::install_job(run, uid, agent, &layout.logs())?;
 
+    // Atlas is set up here now: an opener still waiting would only open
+    // this window again at the next login.
+    let _ = setup::first_login::forget_opener(&layout);
+
     // Install waits for the job to load, not to run; a job launchd has not
     // started yet (or gave up on earlier) is started now.
     if installed["pid"].is_null() {
@@ -832,6 +969,15 @@ pub fn accept(controller_uid: u32, controller_name: &str) -> Result<Value> {
 /// This Atlas.app's executable, refused unless Atlas's developer signed it.
 fn signed_executable() -> Result<PathBuf> {
     let executable = init::app_executable()?;
+    // Only from Applications, where macOS guards apps against changes: a copy
+    // elsewhere could be swapped after this check, before it runs as the
+    // helper.
+    if !executable.starts_with("/Applications") {
+        return Err(problem(
+            "Atlas.app must be in Applications to set up the helper. Move it there, then open it again.",
+        ));
+    }
+
     if !setup::developer_id(&executable) {
         return Err(problem(
             "This Atlas.app is not signed by Atlas's developer. Install it again.",

@@ -9,7 +9,7 @@ struct AccountNameRuleTests {
     arguments: [
       ("atlas", true), ("qa_helper-2", true), ("Atlas.Helper", true), ("has space", false), ("café", false),
       ("-dash", false), (".dot", false), (String(repeating: "x", count: 31), true),
-      (String(repeating: "x", count: 32), false),
+      (String(repeating: "x", count: 32), false), ("503", false), ("503a", true),
     ]
   )
   func rule(name: String, accepted: Bool) {
@@ -25,6 +25,7 @@ struct AccountNameRuleTests {
     arguments: [
       ("Atlas Helper", "atlas-helper"), ("café bot", "cafe-bot"), ("-dash", "dash"), ("..", "atlas"),
       ("a  b!!c", "a-b-c"), (String(repeating: "x", count: 40), String(repeating: "x", count: 31)),
+      ("503", "atlas503"),
     ]
   )
   func suggestion(name: String, suggested: String) {

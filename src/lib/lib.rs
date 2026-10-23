@@ -2,6 +2,7 @@ pub mod acl;
 pub mod actions;
 pub mod agent;
 pub mod agents;
+pub mod approval;
 pub mod capability;
 pub mod claude_app;
 pub mod client;

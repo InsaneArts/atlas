@@ -3,6 +3,7 @@
 //! nothing; a fact we cannot observe is `null`, never `false`. [`migrate`]
 //! moves capture to the managed private layout through [`helper`] actions run
 //! inside the helper login.
+pub mod first_login;
 pub mod helper;
 pub mod migrate;
 
@@ -140,30 +141,61 @@ pub(crate) fn request_as_helper(
     request: &helper::Request,
     cached_rights: bool,
 ) -> Result<(bool, Value)> {
-    let mut command = Command::new("/usr/bin/sudo");
+    run_as_helper(executable, helper, request, cached_rights, true)
+}
 
+/// Run one `setup-helper` request as `helper` while it is logged out (no
+/// desktop): plainly through sudo, with the administrator rights already
+/// held, so nothing (no per-user launchd session) starts in the account.
+/// The reply as [`request_as_helper`] gives it.
+pub(crate) fn request_before_login(
+    executable: &Path,
+    helper: &Account,
+    request: &helper::Request,
+) -> Result<(bool, Value)> {
+    run_as_helper(executable, helper, request, true, false)
+}
+
+/// Run one `setup-helper` request as `helper` through sudo, inside its login
+/// (`in_login`, through `launchctl asuser`) or plainly.
+fn run_as_helper(
+    executable: &Path,
+    helper: &Account,
+    request: &helper::Request,
+    cached_rights: bool,
+    in_login: bool,
+) -> Result<(bool, Value)> {
+    let mut command = Command::new("/usr/bin/sudo");
     if cached_rights {
         command.arg("-n");
     }
-
-    let output = command
-        .args([
+    if in_login {
+        command.args([
             "/bin/launchctl",
             "asuser",
             &helper.uid.to_string(),
             "/usr/bin/sudo",
-            "-u",
-            &helper.name,
-        ])
+        ]);
+    }
+
+    let output = command
+        .args(["-u", &helper.name])
         .arg(executable)
         .arg("setup-helper")
         .arg(serde_json::to_string(request)?)
         .output()?;
+
+    Ok(worker_reply(&output))
+}
+
+/// Whether a `setup-helper` run succeeded, and the JSON it printed: on
+/// standard output, or (a refusal) on standard error; null when none.
+fn worker_reply(output: &std::process::Output) -> (bool, Value) {
     let reply = serde_json::from_slice(&output.stdout)
         .or_else(|_| serde_json::from_slice(&output.stderr))
         .unwrap_or(Value::Null);
 
-    Ok((output.status.success(), reply))
+    (output.status.success(), reply)
 }
 
 #[derive(Debug, Default, PartialEq, Eq, Serialize)]
