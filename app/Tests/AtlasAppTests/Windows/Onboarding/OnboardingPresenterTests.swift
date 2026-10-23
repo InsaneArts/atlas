@@ -256,17 +256,11 @@ struct OnboardingPresenterTests {
     }
     var snapshot = Self.snapshot(try Self.person(Self.helper(), finished: true))
     snapshot.agents = [agent(.claude, found: true, connected: true), agent(.codex, found: true, connected: false)]
-    let opie = URL(fileURLWithPath: "/Users/me/dev/Opie")
-    let jolt = URL(fileURLWithPath: "/Users/me/dev/Jolt")
-    snapshot.projects = [opie, jolt]
-    snapshot.taught = [jolt]
     let state = OnboardingPresenter.agents(snapshot)
     #expect(state.agents.map(\.title) == ["Claude Code", "Codex"])
     #expect(state.agents.map(\.detail) == [OnboardingWords.agentConnected, OnboardingWords.agentFound])
     #expect(state.agents.map(\.isOn) == [true, false], "a connected agent's switch is on")
     #expect(state.agents.map(\.isEnabled) == [false, true])
-    #expect(state.projects.map(\.isRemovable) == [true, false], "a taught project stays")
-    #expect(state.projects.first?.id == opie.path)
     snapshot.agents = [agent(.claude, found: false, connected: false)]
     let missing = try #require(OnboardingPresenter.agents(snapshot).agents.first)
     #expect(missing.detail == OnboardingWords.agentMissing)

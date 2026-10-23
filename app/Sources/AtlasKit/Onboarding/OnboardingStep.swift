@@ -12,7 +12,7 @@ package enum OnboardingStep: Equatable, Hashable, Sendable {
   case switchToHelper
   /// Atlas checks the helper works.
   case finishing
-  /// Connect agents and teach projects.
+  /// Connect agents.
   case agents
   /// Setup is done.
   case done

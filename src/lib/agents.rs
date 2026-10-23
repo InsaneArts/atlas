@@ -1803,6 +1803,22 @@ mod tests {
         }
     }
 
+    /// Codex refuses hooks/hooks.json for its Claude Code `modules`, so its
+    /// manifest names hooks.json, which holds the same hooks without them.
+    #[test]
+    fn codex_reads_the_same_hooks_without_claude_code_modules() {
+        let plugin = Path::new(env!("CARGO_MANIFEST_DIR")).join("agents/atlas");
+        let read = |name: &str| -> Value {
+            serde_json::from_str(&std::fs::read_to_string(plugin.join(name)).unwrap()).unwrap()
+        };
+
+        let mut claude = read("hooks/hooks.json");
+        assert!(claude["modules"].is_array());
+        claude.as_object_mut().unwrap().remove("modules");
+        assert_eq!(read("hooks.json"), claude);
+        assert_eq!(read(".codex-plugin/plugin.json")["hooks"], "./hooks.json");
+    }
+
     /// Codex will not add over a marketplace of the same name, so another
     /// of Atlas's own goes first; anyone else's stops the connection.
     #[test]

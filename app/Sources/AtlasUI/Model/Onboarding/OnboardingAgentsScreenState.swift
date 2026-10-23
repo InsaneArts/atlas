@@ -1,17 +1,12 @@
-/// The agents screen: which agents to connect, and which projects to teach.
+/// The agents screen: which agents to connect.
 package struct OnboardingAgentsScreenState: Equatable, Sendable {
   /// The agents, in order.
   package var agents: [OnboardingAgentItem]
-  /// The chosen project folders, in the order chosen.
-  package var projects: [OnboardingProjectItem]
 
   /// Creates the agents screen's state.
   ///
-  /// - Parameters:
-  ///   - agents: The agents, in order.
-  ///   - projects: The chosen project folders, in the order chosen.
-  package init(agents: [OnboardingAgentItem], projects: [OnboardingProjectItem]) {
+  /// - Parameter agents: The agents, in order.
+  package init(agents: [OnboardingAgentItem]) {
     self.agents = agents
-    self.projects = projects
   }
 }

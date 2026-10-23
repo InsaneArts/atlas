@@ -46,9 +46,11 @@ atlas uninstall              # keeps the helper account
 
 ### Teach your agents
 
-Setup connects Claude Code and Codex, so every session has the Atlas skill
-(later: `atlas agents install`). To make agents use it whenever they change
-something you can see, add a short section to each project:
+Setup connects Claude Code and Codex; `atlas agents install` does it later.
+That is all they need: every session gets the Atlas skill and, while Atlas is
+ready, a reminder to check on-screen changes in the helper (Codex asks you to
+trust the plugin's hooks once). For any other agent, add a short section to the
+project instead:
 
 ```sh
 cd your-project

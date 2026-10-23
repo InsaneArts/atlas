@@ -42,8 +42,6 @@ package enum Action: Sendable, Equatable {
   case forgetProject(path: String)
   /// Diagnose the helper, with its full status.
   case doctor
-  /// Teach the project in this folder.
-  case teachProject(path: String)
   /// Ask whether a newer Atlas is published, changing nothing.
   case checkForUpdate
   /// Install the newer Atlas, checking its signature first.
@@ -84,7 +82,6 @@ package enum Action: Sendable, Equatable {
     case .agentsStatus: ["agents", "status"]
     case .installAgents(let agents): ["agents", "install"] + agents.map { "--\($0.rawValue)" }
     case .connectClaudeApp: ["agents", "install", "--app"]
-    case .teachProject(let path): ["agents", "project", path]
     // The person confirmed in Settings.
     case .forgetProject(let path): ["agents", "forget", path]
     case .doctor: ["doctor", "--verbose"]

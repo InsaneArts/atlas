@@ -32,14 +32,12 @@ struct OnboardingControllerTests {
   /// - Parameters:
   ///   - commands: The scripted command line.
   ///   - opened: Records the URLs opened.
-  ///   - folders: What the folder chooser answers.
   ///   - loginItem: The scripted login item.
   ///   - installs: The agent installs it shares with another window; its own over `commands` when nil.
   /// - Returns: The controller.
   static func controller(
     _ commands: ScriptedCommands,
     opened: OpenedURLs = OpenedURLs(),
-    folders: [URL] = [],
     loginItem: ScriptedLoginItem = ScriptedLoginItem(),
     installs: AgentInstalls? = nil
   ) -> OnboardingController {
@@ -47,7 +45,6 @@ struct OnboardingControllerTests {
       dependencies: OnboardingDependencies(
         commands: commands,
         openURL: { opened.urls.append($0) },
-        chooseFolders: { folders },
         loginItem: loginItem.seam,
         installs: installs ?? AgentInstalls(commands: commands)
       )
@@ -58,16 +55,14 @@ struct OnboardingControllerTests {
   ///
   /// - Parameters:
   ///   - commands: The scripted command line, answering `onboarding status`.
-  ///   - folders: What the folder chooser answers.
   ///   - installs: The agent installs it shares with another window; its own over `commands` when nil.
   /// - Returns: The controller, loaded.
   /// - Throws: The failed requirement, when the facts are never read.
   private static func loaded(
     _ commands: ScriptedCommands,
-    folders: [URL] = [],
     installs: AgentInstalls? = nil
   ) async throws -> OnboardingController {
-    let controller = controller(commands, folders: folders, installs: installs)
+    let controller = controller(commands, installs: installs)
     controller.refresh()
     try await settle("the facts were never read") { controller.snapshot.loaded }
     return controller
@@ -146,25 +141,21 @@ struct OnboardingControllerTests {
     #expect(!controller.snapshot.loaded)
   }
 
-  @Test("closing setup while a command runs lets it settle and starts no further command")
-  func closingWhileACommandRunsStartsNoMore() async throws {
-    let opie = URL(fileURLWithPath: "/Users/me/dev/Opie")
+  @Test("closing setup while a command runs lets it settle and moves on to nothing")
+  func closingWhileACommandRunsMovesOnToNothing() async throws {
     let commands = ScriptedCommands([
       "onboarding status": finishedMac,
       "agents status": #"{"ok": true, "agents": [{"agent": "claude", "installed": true, "connected": false}]}"#,
       "agents install": #"{"ok": true}"#,
-      "agents project": #"{"ok": true}"#,
     ])
-    let controller = try await Self.loaded(commands, folders: [opie])
+    let controller = try await Self.loaded(commands)
     try await settle("the agents were never read") { controller.snapshot.agentsLoaded }
-    controller.send(.chooseProject)
-    // The window closes while the agents are installed, before the project would be taught.
+    // The window closes while the agents are installed.
     commands.whileRunning { arguments in
       if arguments.starts(with: ["agents", "install"]) { await controller.close() }
     }
     await controller.connectAgents()
     #expect(commands.ran.contains(Action.installAgents([.claude]).arguments), "the running command settled")
-    #expect(!commands.ran.contains(Action.teachProject(path: opie.path).arguments))
     #expect(!controller.snapshot.choices.agentsDone, "the closed window moved on to nothing")
   }
 
@@ -296,7 +287,7 @@ struct OnboardingControllerTests {
     }
   }
 
-  @Test("agents that cannot be connected are each named with why, and the window stays")
+  @Test("agents that cannot be connected are each named with why, and switching them off moves on without the note")
   func agentsThatCannotBeConnectedAreNamed() async throws {
     let commands = ScriptedCommands([
       "onboarding status": finishedMac,
@@ -316,6 +307,12 @@ struct OnboardingControllerTests {
     #expect(controller.snapshot.problem == OnboardingWords.notConnected(.codex, "codex plugin install failed"))
     #expect(controller.snapshot.agents.first { $0.id == .claude }?.connected == true)
     #expect(!controller.snapshot.choices.agentsDone)
+    // Codex switched off, Continue moves on without the failed install's note.
+    controller.send(.setAgent(id: "codex", on: false))
+    await controller.connectAgents()
+    #expect(commands.ran.count { $0.starts(with: ["agents", "install"]) } == 1)
+    #expect(controller.snapshot.problem == nil)
+    #expect(controller.snapshot.choices.agentsDone)
   }
 
   @Test("Open at Login starts from what the login item says once the person has chosen")
@@ -326,26 +323,6 @@ struct OnboardingControllerTests {
     )
     let controller = try await Self.loaded(ScriptedCommands(["onboarding status": decided]))
     #expect(!controller.snapshot.opensAtLogin, "the login item is off, as the person left it")
-  }
-
-  @Test("a chosen folder is added once, however it is spelled or linked to, and removed by its path")
-  func chosenFoldersAreAddedOnce() throws {
-    let files = FileManager.default
-    let home = files.temporaryDirectory
-      .appendingPathComponent("atlas-projects-\(UUID().uuidString)")
-    let opie = home.appendingPathComponent("Opie", isDirectory: true)
-    try files.createDirectory(at: opie, withIntermediateDirectories: true)
-    defer { try? files.removeItem(at: home) }
-    let link = home.appendingPathComponent("Opie link")
-    try files.createSymbolicLink(at: link, withDestinationURL: opie)
-    let spellings = [opie, URL(fileURLWithPath: home.path + "/./Opie"), link]
-    let controller = Self.controller(ScriptedCommands([:]), folders: spellings)
-    controller.send(.chooseProject)
-    controller.send(.chooseProject)
-    let chosen = try #require(controller.snapshot.projects.first)
-    #expect(controller.snapshot.projects.count == 1)
-    controller.send(.removeProject(id: chosen.path))
-    #expect(controller.snapshot.projects.isEmpty)
   }
 
   @Test("the agents step lists every agent with what atlas agents status reports")
@@ -386,42 +363,45 @@ struct OnboardingControllerTests {
     #expect(installed == [Action.installAgents([.codex]).arguments])
   }
 
-  @Test("Continue connects the chosen agents, then teaches each project, naming one that cannot be taught")
-  func continueConnectsAgentsAndTeachesProjects() async throws {
-    let opie = URL(fileURLWithPath: "/Users/me/dev/Opie")
+  @Test("Continue after a skipped agents check clears its note and moves on to Done, connecting nothing")
+  func continueAfterASkippedCheckClearsItsNote() async throws {
+    let commands = ScriptedCommands(["onboarding status": finishedMac])
+    let controller = try await Self.loaded(commands)
+    try await settle("the failed agents reading was never shown") { controller.snapshot.agentsFailed }
+    #expect(controller.snapshot.problem == OnboardingWords.agentsCheckFailed)
+    await controller.connectAgents()
+    #expect(!commands.ran.contains { $0.starts(with: ["agents", "install"]) })
+    #expect(controller.snapshot.problem == nil)
+    #expect(controller.snapshot.choices.agentsDone)
+  }
+
+  @Test("Continue connects the chosen agents and moves on to Done")
+  func continueConnectsTheAgents() async throws {
     let commands = ScriptedCommands([
       "onboarding status": finishedMac,
       "agents status": #"{"ok": true, "agents": [{"agent": "claude", "installed": true, "connected": false}]}"#,
       "agents install": #"{"ok": true}"#,
-      "agents project": #"{"ok": false, "error": "No AGENTS.md here"}"#,
     ])
-    let controller = try await Self.loaded(commands, folders: [opie])
+    let controller = try await Self.loaded(commands)
     try await settle("the agents were never read") { controller.snapshot.agentsLoaded }
-    controller.send(.chooseProject)
     await controller.connectAgents()
     #expect(commands.ran.contains(Action.installAgents([.claude]).arguments))
-    #expect(commands.ran.contains(Action.teachProject(path: opie.path).arguments))
     #expect(controller.snapshot.agents.first?.connected == true)
-    #expect(controller.snapshot.taught.isEmpty)
-    #expect(controller.snapshot.problem == OnboardingWords.notTaught("Opie", "No AGENTS.md here"))
+    #expect(controller.snapshot.problem == nil)
     #expect(controller.snapshot.choices.agentsDone, "the window moves on to Done")
   }
 
-  @Test("a failed install teaches no project, connects no agent and stays on the agents, saying why")
+  @Test("a failed install connects no agent and stays on the agents, saying why")
   func aFailedInstallStops() async throws {
-    let opie = URL(fileURLWithPath: "/Users/me/dev/Opie")
     let commands = ScriptedCommands([
       "onboarding status": finishedMac,
       "agents status": #"{"ok": true, "agents": [{"agent": "claude", "installed": true, "connected": false}]}"#,
       "agents install": #"{"ok": false, "error": "npm is missing"}"#,
-      "agents project": #"{"ok": true}"#,
     ])
-    let controller = try await Self.loaded(commands, folders: [opie])
+    let controller = try await Self.loaded(commands)
     try await settle("the agents were never read") { controller.snapshot.agentsLoaded }
-    controller.send(.chooseProject)
     await controller.connectAgents()
     #expect(commands.ran.contains(Action.installAgents([.claude]).arguments))
-    #expect(!commands.ran.contains { $0.starts(with: ["agents", "project"]) })
     #expect(controller.snapshot.agents.allSatisfy { !$0.connected })
     #expect(!controller.snapshot.choices.agentsDone)
     #expect(controller.snapshot.problem == "npm is missing.")

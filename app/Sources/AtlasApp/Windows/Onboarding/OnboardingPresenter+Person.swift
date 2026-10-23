@@ -109,8 +109,8 @@ extension OnboardingPresenter {
     )
   }
 
-  /// The agents and projects: an agent reads connected, found or not installed; its switch is on once connected or
-  /// chosen, and only a found, unconnected one can be switched. A project can be removed until it is taught.
+  /// The agents: each reads connected, found or not installed; its switch is on once connected or chosen, and only a
+  /// found, unconnected one can be switched.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The agents screen.
@@ -133,16 +133,6 @@ extension OnboardingPresenter {
           detail: detail,
           isOn: agent.on || agent.connected,
           isEnabled: agent.found && !agent.connected
-        )
-      },
-      projects: snapshot.projects.map { url in
-        let taught = snapshot.taught.contains(url)
-        return OnboardingProjectItem(
-          id: url.path,
-          name: url.lastPathComponent,
-          isTaught: taught,
-          isRemovable: !taught,
-          removeLabel: OnboardingWords.remove(url.lastPathComponent)
         )
       }
     )

@@ -41,7 +41,7 @@ struct SettingsGroup<Content: View>: View {
 
 #if DEBUG
   #Preview("Samples") {
-    SettingsGroup(title: String("Projects"), footer: String("Teach a project so agents know how to build it.")) {
+    SettingsGroup(title: String("Projects"), footer: String("Forget takes Atlas's section out.")) {
       FormRow(title: String("opie"), detail: String("~/dev/opie"))
     }
     .frame(width: SettingsLayout.formWidth)

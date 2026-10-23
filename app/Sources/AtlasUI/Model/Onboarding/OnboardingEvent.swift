@@ -28,13 +28,7 @@ package enum OnboardingEvent: Equatable, Sendable {
   ///   - id: The agent's id.
   ///   - on: Whether it is on.
   case setAgent(id: String, on: Bool)
-  /// Choose Folder…, to teach a project.
-  case chooseProject
-  /// A chosen project removed.
-  ///
-  /// - Parameter id: The project's id.
-  case removeProject(id: String)
-  /// Continue on the agents screen: connect the agents and teach the projects.
+  /// Continue on the agents screen: connect the agents.
   case connectAgents
   /// Open Atlas at login turned on or off.
   case setOpenAtLogin(Bool)

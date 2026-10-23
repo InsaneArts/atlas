@@ -23,7 +23,7 @@ enum TextStyle: CaseIterable, Sendable {
   case caption
   /// 10: a badge over a picture, and a chip's symbol.
   case caption2
-  /// 9: the smallest glyph, such as a chip's remove button.
+  /// 9: the smallest glyph, such as a popup button's chevron and a disc's mark.
   case footnote
 
   /// The style's size in points.

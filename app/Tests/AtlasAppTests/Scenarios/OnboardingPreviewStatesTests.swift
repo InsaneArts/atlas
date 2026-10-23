@@ -171,12 +171,9 @@
           agent.on = true
           return agent
         }
-      agents.projects = [URL(fileURLWithPath: "/Users/me/dev/Opie")]
       var notChecked = loaded(try person(helper(), finished: true))
       notChecked.agents = AgentChoice.all
       notChecked.agentsFailed = true
-      notChecked.projects = ["Opie", "Jolt", "understudy", "markdown2pdf", "InsaneArts Website"]
-        .map { URL(fileURLWithPath: "/Users/me/dev/\($0)") }
       notChecked.problem = OnboardingWords.agentsCheckFailed
       var done = loaded(try person(helper(), finished: true))
       done.choices.agentsDone = true

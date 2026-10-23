@@ -171,7 +171,7 @@
       return state
     }()
 
-    /// The agents, both found, before `atlas agents status` has answered, with one project chosen.
+    /// The agents, both found, before `atlas agents status` has answered.
     @MainActor package static let onboardingAgents = OnboardingState(
       content: .screen(.agents(onboardingAgentsScreen)),
       footer: OnboardingFooterState(
@@ -341,7 +341,7 @@
       return state
     }()
 
-    /// `atlas agents status` failed: the agents listed unchecked, many projects chosen, and Continue skips the step.
+    /// `atlas agents status` failed: the agents listed unchecked, and Continue skips the step.
     @MainActor package static let onboardingAgentsNotChecked: OnboardingState = {
       var state = onboardingAgents
       state.content = .screen(
@@ -362,8 +362,7 @@
                 isOn: false,
                 isEnabled: false
               ),
-            ],
-            projects: onboardingAgentsManyProjects
+            ]
           )
         )
       )
@@ -480,7 +479,7 @@
       return screen
     }()
 
-    /// Claude Code and Codex found, and the Opie folder chosen.
+    /// Claude Code and Codex found, both switched on.
     @MainActor static let onboardingAgentsScreen = OnboardingAgentsScreenState(
       agents: [
         OnboardingAgentItem(
@@ -497,15 +496,6 @@
           isOn: true,
           isEnabled: true
         ),
-      ],
-      projects: [
-        OnboardingProjectItem(
-          id: "/Users/me/dev/Opie",
-          name: "Opie",
-          isTaught: false,
-          isRemovable: true,
-          removeLabel: "Remove Opie"
-        )
       ]
     )
 
@@ -567,19 +557,5 @@
     /// Why the first reading failed, as the command said it.
     @MainActor package static let onboardingLoadingProblem =
       "Atlas could not run its command line at /Applications/Atlas.app/Contents/MacOS/atlas."
-
-    /// Five chosen project folders, more than one row of chips holds.
-    @MainActor static let onboardingAgentsManyProjects = [
-      "Opie", "Jolt", "understudy", "markdown2pdf", "InsaneArts Website",
-    ]
-    .map { name in
-      OnboardingProjectItem(
-        id: "/Users/me/dev/\(name)",
-        name: name,
-        isTaught: false,
-        isRemovable: true,
-        removeLabel: "Remove \(name)"
-      )
-    }
   }
 #endif

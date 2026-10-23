@@ -39,7 +39,7 @@ struct OnboardingScreenContent: View {
     case .finishing(let state):
       FinishingScreen(state: state, send: send)
     case .agents(let state):
-      AgentsScreen(state: state, note: note, isBusy: isBusy, send: send)
+      AgentsScreen(state: state, note: note, send: send)
     case .done(let state):
       DoneScreen(state: state, note: note, send: send)
     case .allow(let state):

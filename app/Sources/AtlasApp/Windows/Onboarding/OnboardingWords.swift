@@ -55,24 +55,6 @@ enum OnboardingWords {
     return first + words.dropFirst()
   }
 
-  /// While a project is taught.
-  ///
-  /// - Parameter project: The folder's name.
-  /// - Returns: "Teaching Opie…"
-  static func teaching(_ project: String) -> String {
-    "Teaching \(project)…"
-  }
-
-  /// A project that could not be taught.
-  ///
-  /// - Parameters:
-  ///   - project: The folder's name.
-  ///   - message: Why, in one line.
-  /// - Returns: "Opie: why."
-  static func notTaught(_ project: String, _ message: String) -> String {
-    "\(project): \(message)."
-  }
-
   /// An agent that could not be connected.
   ///
   /// - Parameters:
@@ -202,14 +184,6 @@ enum OnboardingWords {
   /// `atlas agents status` failed: the step can be skipped, and Atlas asks again.
   static let agentsCheckFailed =
     "Atlas couldn't check your agents. Continue to skip this, or wait while it tries again."
-
-  /// A chosen project's remove button, for VoiceOver.
-  ///
-  /// - Parameter project: The folder's name.
-  /// - Returns: "Remove Opie"
-  static func remove(_ project: String) -> String {
-    "Remove \(project)"
-  }
 
   /// The done screen's lede.
   ///

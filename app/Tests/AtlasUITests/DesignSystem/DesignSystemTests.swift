@@ -50,7 +50,7 @@ struct DesignSystemTests {
       (
         "control height",
         [
-          ControlHeight.pill, ControlHeight.chip, ControlHeight.menuRow, ControlHeight.row,
+          ControlHeight.pill, ControlHeight.mini, ControlHeight.menuRow, ControlHeight.row,
           ControlHeight.compactRow, ControlHeight.button, ControlHeight.field, ControlHeight.large,
         ]
         .map(Double.init)

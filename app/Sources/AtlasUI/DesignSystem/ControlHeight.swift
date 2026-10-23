@@ -4,8 +4,8 @@ import CoreGraphics
 enum ControlHeight {
   /// 24: a status badge, and the mini screen's Live chip.
   static let pill: CGFloat = 24
-  /// 26: a removable chip, and a mini capsule, as Settings' buttons are.
-  static let chip: CGFloat = 26
+  /// 26: a mini capsule, as Settings' buttons are.
+  static let mini: CGFloat = 26
   /// 28: a menu row, a tab in a capsule track and a search field.
   static let menuRow: CGFloat = 28
   /// 30: a control row among menu rows, a progress pill, the small round button, a caption chip, and a small capsule:

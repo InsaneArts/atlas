@@ -1,17 +1,15 @@
 import SwiftUI
 
-/// Connect agents to Atlas, and teach project folders to check their work on screen.
+/// Connect agents to Atlas.
 struct AgentsScreen: View {
-  /// The agents and the chosen projects.
+  /// The agents.
   let state: OnboardingAgentsScreenState
-  /// The line under the cards.
+  /// The line under the card.
   let note: WorkNote
-  /// Whether a command runs.
-  let isBusy: Bool
-  /// Receives the switches, the folder choice and removals.
+  /// Receives the switches.
   let send: @MainActor (OnboardingEvent) -> Void
 
-  /// The agents' card, the projects' card, and the work note.
+  /// The agents' card and the work note.
   var body: some View {
     ScreenColumn(width: OnboardingLayout.listColumn) {
       GroupLabel(text: "Your agents")
@@ -20,7 +18,6 @@ struct AgentsScreen: View {
         AgentRow(agent: agent) { send(.setAgent(id: agent.id, on: $0)) }
       }
       .padding(.top, Spacing.s)
-      ProjectsCard(projects: state.projects, isBusy: isBusy, send: send)
     } bottom: {
       WorkNoteLine(note: note)
     }
@@ -29,7 +26,7 @@ struct AgentsScreen: View {
 
 #if DEBUG
   #Preview("Agents") {
-    AgentsScreen(state: PreviewStates.onboardingAgentsScreen, note: .none, isBusy: false) { _ in }
+    AgentsScreen(state: PreviewStates.onboardingAgentsScreen, note: .none) { _ in }
       .onboardingSample()
   }
 #endif

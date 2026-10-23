@@ -29,10 +29,6 @@ struct OnboardingSnapshot {
   var agentsInstalling = false
   /// Whether `atlas agents status` failed last: the agents stay listed, unchecked, and the step can be skipped.
   var agentsFailed = false
-  /// The project folders chosen, in order.
-  var projects: [URL] = []
-  /// The project folders already taught.
-  var taught: [URL] = []
   /// Whether Atlas opens at login once setup is done.
   var opensAtLogin = true
   /// The permission the guide panel is about, while it is open.

@@ -15,6 +15,7 @@
   ],
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
+  "hooks": "./hooks.json",
   "interface": {
     "displayName": "Atlas",
     "shortDescription": "Test Mac apps in a hidden second desktop",

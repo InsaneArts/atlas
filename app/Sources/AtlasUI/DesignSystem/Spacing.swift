@@ -9,7 +9,7 @@ enum Spacing {
   static let xxs: CGFloat = 2
   /// 4: between a headline and its reason, and a lede's line spacing.
   static let xs: CGFloat = 4
-  /// 6: between chips and between a dot and its label.
+  /// 6: between page dots, and between a dot and its label.
   static let s: CGFloat = 6
   /// 8: between buttons in a row and inside a pill.
   static let m: CGFloat = 8

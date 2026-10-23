@@ -41,7 +41,7 @@
         case .looks:
           Button(String("Continue")) {}
             .buttonStyle(.capsule())
-          Button(String("Choose Folder…")) {}
+          Button(String("Getting Started…")) {}
             .buttonStyle(.capsule(.glass))
           Button(String("Back")) {}
             .buttonStyle(.capsule(.plain))

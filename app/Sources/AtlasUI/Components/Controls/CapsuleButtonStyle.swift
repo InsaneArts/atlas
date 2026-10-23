@@ -99,7 +99,7 @@ struct CapsuleButtonStyle: ButtonStyle {
   /// The capsule's height.
   private var height: CGFloat {
     switch size {
-    case .mini: ControlHeight.chip
+    case .mini: ControlHeight.mini
     case .small: ControlHeight.row
     case .regular: ControlHeight.button
     case .large: ControlHeight.large

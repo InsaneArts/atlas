@@ -78,8 +78,6 @@ final class OnboardingController {
     case .retryFinish: retryFinish()
     case .continueFinishing: refresh()
     case .setAgent(let id, let on): setAgent(id, on: on)
-    case .chooseProject: chooseProject()
-    case .removeProject(let id): snapshot.projects.removeAll { $0.path == id }
     case .connectAgents: Task { await connectAgents() }
     case .setOpenAtLogin(let on): snapshot.opensAtLogin = on
     case .complete: Task { await complete() }
@@ -329,15 +327,6 @@ final class OnboardingController {
     snapshot.agents[index].on = on
   }
 
-  /// Asks for project folders to teach, adding each new one. A folder is known by its path with links resolved, so
-  /// one folder chosen twice, by another spelling or through a link, is added once.
-  private func chooseProject() {
-    for url in dependencies.chooseFolders() {
-      let folder = url.standardizedFileURL.resolvingSymlinksInPath()
-      if !snapshot.projects.contains(where: { $0.path == folder.path }) { snapshot.projects.append(folder) }
-    }
-  }
-
   /// Gives up the helper picked but never set up and goes back to the choice: the list, never the account form,
   /// even when the account was just created there.
   func chooseAnother() async {
@@ -345,8 +334,7 @@ final class OnboardingController {
     snapshot.choices.creating = false
   }
 
-  /// Connects the chosen agents, then teaches each chosen project; a project that cannot be taught is named, and the
-  /// rest still follow. Agents that cannot be connected are each named with why, and the window stays.
+  /// Connects the chosen agents. Agents that cannot be connected are each named with why, and the window stays.
   func connectAgents() async {
     let chosen = AgentChoice.toConnect(snapshot.agents)
     if !chosen.isEmpty {
@@ -364,21 +352,10 @@ final class OnboardingController {
         return
       }
     }
-    var failed: [String] = []
-    for project in snapshot.projects where !snapshot.taught.contains(project) {
-      guard
-        let outcome = await act(.teachProject(path: project.path), OnboardingWords.teaching(project.lastPathComponent))
-      else { return }
-      if outcome.ok {
-        snapshot.taught.append(project)
-      } else {
-        failed.append(OnboardingWords.notTaught(project.lastPathComponent, outcome.message))
-      }
-    }
-    // A skipped check's note belongs to the agents step only.
-    if snapshot.problem == OnboardingWords.agentsCheckFailed { snapshot.problem = nil }
+    // A note left here (a skipped check, or an install that failed before its agent was switched off) belongs to the
+    // agents step only.
+    snapshot.problem = nil
     snapshot.choices.agentsDone = true
-    if !failed.isEmpty { snapshot.problem = failed.joined(separator: " ") }
   }
 
   /// Done: set Open at Login, open Atlas, then close the window; on any failure the window stays, saying why.

@@ -10,7 +10,7 @@ package enum OnboardingScreen: Equatable, Sendable {
   case switchToHelper(OnboardingSwitchScreenState)
   /// Atlas checks the helper works.
   case finishing(OnboardingFinishingScreenState)
-  /// Connect agents and teach projects.
+  /// Connect agents.
   case agents(OnboardingAgentsScreenState)
   /// Setup is done.
   case done(OnboardingDoneScreenState)

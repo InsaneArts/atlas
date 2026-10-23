@@ -42,7 +42,7 @@
           Note(text: String("You set this up once, in about five minutes."))
           Note(text: String("The passwords don't match."), tone: .attention)
         case .titleDetail:
-          TitleDetail(title: String("Teach a project too"), detail: String("Adds a short section to its AGENTS.md."))
+          TitleDetail(title: String("Claude Code"), detail: String("Found. Adds the Atlas skill to every session."))
           TitleDetail(
             title: String("The helper is logged out"),
             detail: String("Log in to it to use it again."),

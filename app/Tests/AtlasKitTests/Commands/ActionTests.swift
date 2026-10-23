@@ -32,7 +32,6 @@ struct ActionTests {
       (.markWindow(open: false), ["onboarding", "window", "closed"]),
       (.agentsStatus, ["agents", "status"]),
       (.installAgents([.claude, .codex]), ["agents", "install", "--claude", "--codex"]),
-      (.teachProject(path: "/Users/me/dev/Opie"), ["agents", "project", "/Users/me/dev/Opie"]),
       (.connectClaudeApp, ["agents", "install", "--app"]),
       (.forgetProject(path: "/Users/me/dev/Opie"), ["agents", "forget", "/Users/me/dev/Opie"]),
       (.doctor, ["doctor", "--verbose"]),
