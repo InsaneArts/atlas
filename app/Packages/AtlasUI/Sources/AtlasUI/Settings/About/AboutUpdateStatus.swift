@@ -22,7 +22,7 @@ struct AboutUpdateStatus: View {
       }
     }
     .frame(maxWidth: SettingsLayout.aboutStatusWidth, alignment: .top)
-    .frame(height: SettingsLayout.aboutStatusHeight, alignment: .top)
+    .frame(minHeight: SettingsLayout.aboutStatusHeight, alignment: .top)
     .animation(Motion.textSwap, value: status)
   }
 

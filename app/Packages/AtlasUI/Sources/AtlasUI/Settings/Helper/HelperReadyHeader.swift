@@ -9,8 +9,15 @@ struct HelperReadyHeader: View {
 
   /// The section's name and the link.
   var body: some View {
-    HStack(alignment: .firstTextBaseline) {
-      GroupLabel(text: "Ready to act")
+    HStack(alignment: .top) {
+      VStack(alignment: .leading, spacing: Spacing.half) {
+        Text("Ready to act")
+          .textStyle(.heading)
+          .foregroundStyle(Color.textPrimary)
+        Text("Check the helper and the permissions it needs.")
+          .textStyle(.callout)
+          .foregroundStyle(Color.textSecondary)
+      }
       Spacer(minLength: Spacing.s)
       Button("Check Again", action: checkAgain)
         .buttonStyle(.textLink(.small))

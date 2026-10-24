@@ -59,7 +59,8 @@ extension WindowCoordinator {
         SettingsLinkRules.choose(choice, viewer: self?.openViewerController, preferences: preferences)
       },
       switchToHelper: viewerSwitch(),
-      gettingStarted: { [weak self] in self?.showOnboarding() }
+      gettingStarted: { [weak self] in self?.showOnboarding() },
+      copyDiagnostics: { [weak self] in Task { await self?.copyDiagnostics() } }
     )
   }
 

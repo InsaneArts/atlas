@@ -38,7 +38,7 @@ public struct SettingsView: View {
   public var body: some View {
     ZStack {
       HStack(spacing: .zero) {
-        SettingsSidebar(state: state) { send(.selectTab($0)) }
+        SettingsSidebar(state: state) { send(.navigate(.root($0))) }
         VStack(spacing: .zero) {
           SettingsHeader(
             title: state.title,
@@ -61,6 +61,12 @@ public struct SettingsView: View {
     .onChange(of: state.alert?.shownTitle) { _, title in if let title { announce(title) } }
     .onChange(of: state.alert?.refusal) { _, refusal in if let refusal { announce(refusal) } }
     .onChange(of: state.helper.waiting) { _, waiting in if let waiting { announce(waiting) } }
+    .onChange(of: state.helper.buttons.isChecking) { _, checking in
+      if !checking {
+        let ready = !state.helper.ready.isEmpty && state.helper.ready.allSatisfy { $0.item.state == .ready }
+        announce(ready ? "Checked. All ready." : "Checked. Not everything is ready.")
+      }
+    }
     .onChange(of: state.helper.notice) { _, notice in if let notice { announce(notice.text) } }
     .onChange(of: state.agents.notice) { _, notice in if let notice { announce(notice.text) } }
     .onChange(of: state.about.status) { _, status in if let status { announce(status.text) } }

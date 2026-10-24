@@ -20,7 +20,7 @@ extension SettingsController {
   func enteredDestination() {
     guard let destination = session.navigation.destination else { return }
     dependencies.preferences.saveTab(destination.root.rawValue)
-    nameWindow?("Settings — \(SettingsWords.tab(session.tab))")
+    nameWindow?("Settings — \(destination.title)")
     if session.tab == .agents { readAgents() }
   }
 }

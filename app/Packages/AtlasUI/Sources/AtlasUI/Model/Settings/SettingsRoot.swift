@@ -1,4 +1,4 @@
-/// A persistent root destination in Settings, including pages available in later content migrations.
+/// A persistent root destination in Settings.
 public enum SettingsRoot: String, CaseIterable, Hashable, Sendable {
   /// Startup and everyday preferences.
   case general
@@ -32,7 +32,7 @@ public enum SettingsRoot: String, CaseIterable, Hashable, Sendable {
     }
   }
 
-  /// The existing content pane, or nil until this root's content is built.
+  /// The original content pane, or nil for a root introduced by the page split.
   public var pane: SettingsTab? {
     switch self {
     case .general: .general

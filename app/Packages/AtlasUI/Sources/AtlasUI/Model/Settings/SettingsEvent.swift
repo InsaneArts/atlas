@@ -2,6 +2,16 @@
 public enum SettingsEvent: Equatable, Sendable {
   /// Shows a pane.
   case selectTab(SettingsTab)
+  /// Opens a root or detail page without running a command.
+  case navigate(SettingsDestination)
+  /// Changes only the startup preference through its existing writer.
+  case setOpenAtLogin(Bool)
+  /// Changes only the screen cadence through its existing writer.
+  case choosePicture(SettingsPicture)
+  /// Changes only the notification preference through its existing writer.
+  case setNotify(Bool)
+  /// Delegates to the Help menu's existing diagnostics operation.
+  case copyDiagnostics
   /// Returns to the previous destination.
   case back
   /// Returns to the next destination.

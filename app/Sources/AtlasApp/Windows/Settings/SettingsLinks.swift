@@ -24,4 +24,6 @@ struct SettingsLinks {
   var switchToHelper: @MainActor () async -> String
   /// Opens the setup window.
   var gettingStarted: @MainActor () -> Void
+  /// Invokes the existing diagnostics route, including its result reporting.
+  var copyDiagnostics: @MainActor () -> Void = {}
 }

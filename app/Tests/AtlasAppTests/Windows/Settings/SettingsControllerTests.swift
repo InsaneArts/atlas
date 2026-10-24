@@ -12,6 +12,146 @@ import Testing
 
 @Suite("SettingsController")
 struct SettingsControllerTests {
+  @Test("a failed project refresh keeps the last loaded list and its count on the detail page")
+  func failedProjectRefreshKeepsTheList() async {
+    let commands = ScriptedCommands(["agents status": Self.statusWithOpie])
+    let controller = SettingsController.scripted(commands: commands)
+    controller.send(.navigate(.projects))
+    await controller.agentsReading?.value
+    let projects = controller.state.agents.projects
+    commands.answer("agents status", #"{"ok":false,"error":"Cannot read agents"}"#)
+    await controller.loadAgents()
+    #expect(controller.agents.failed)
+    #expect(controller.state.location == .projects)
+    #expect(controller.state.agents.projects == projects)
+    #expect(controller.state.agents.projectsSummary == "1 project taught")
+  }
+
+  @Test("relocated field edits read fresh shared values and call only their original writers")
+  func independentPreferenceEdits() async throws {
+    let commands = ScriptedCommands([:])
+    var dependencies = SettingsController.scripted(commands: commands).dependencies
+    var picture = ViewerPictureChoice.live
+    var startup = false
+    var pictureWrites: [ViewerPictureChoice] = []
+    var startupWrites: [Bool] = []
+    let startupCalls = CallCount()
+    var notifyWrites: [Bool] = []
+    dependencies.links.picture = { picture }
+    dependencies.links.opensAtLogin = { OpenAtLogin.State(isAvailable: true, isEnabled: startup) }
+    dependencies.links.choosePicture = {
+      picture = $0
+      pictureWrites.append($0)
+    }
+    dependencies.links.setOpenAtLogin = {
+      startup = $0
+      startupWrites.append($0)
+      startupCalls.count += 1
+    }
+    dependencies.preferences.saveNotify = { notifyWrites.append($0) }
+    let controller = SettingsController(dependencies: dependencies)
+    // The viewer and panel change after a previous Settings snapshot was drawn.
+    _ = controller.state
+    picture = .everyFiveSeconds
+    startup = true
+    controller.send(.setNotify(true))
+    #expect(pictureWrites.isEmpty && startupWrites.isEmpty)
+    #expect(controller.state.general.picture == .everyFiveSeconds && controller.state.general.opensAtLogin)
+    controller.send(.choosePicture(.live))
+    #expect(pictureWrites == [.live] && startupWrites.isEmpty && notifyWrites == [true])
+    controller.send(.setOpenAtLogin(false))
+    try await settle("the original startup writer never ran") { startupCalls.count == 1 }
+    #expect(startupWrites == [false])
+    controller.send(.setNotify(false))
+    #expect(notifyWrites == [true, false])
+    #expect(pictureWrites == [.live] && !startup)
+    #expect(commands.ran.isEmpty)
+  }
+
+  @Test("new roots restore directly and details save only their owning root")
+  func rootsAndDetailsRestore() async {
+    for root in [SettingsRoot.screen, .notifications] {
+      let commands = ScriptedCommands([:])
+      var dependencies = SettingsController.scripted(commands: commands).dependencies
+      dependencies.preferences.loadTab = { root.rawValue }
+      let controller = SettingsController(dependencies: dependencies)
+      #expect(controller.state.location == .root(root))
+      #expect(commands.ran.isEmpty)
+    }
+    let commands = ScriptedCommands(["agents status": Self.statusWithOpie])
+    var dependencies = SettingsController.scripted(commands: commands).dependencies
+    var saved: [String] = []
+    dependencies.preferences.saveTab = { saved.append($0) }
+    let controller = SettingsController(dependencies: dependencies)
+    controller.send(.navigate(.diagnostics))
+    #expect(controller.state.title == "Readiness & Diagnostics")
+    controller.send(.navigate(.projects))
+    await controller.agentsReading?.value
+    #expect(saved == ["helper", "agents"])
+    #expect(controller.state.title == "Projects")
+    controller.close()
+    #expect(controller.state.location == .root(.agents))
+    #expect(commands.ran == [Action.agentsStatus.arguments])
+  }
+
+  @Test("Copy Diagnostics delegates once to the existing link without running another Settings command")
+  func diagnosticsDelegates() {
+    let commands = ScriptedCommands([:])
+    var dependencies = SettingsController.scripted(commands: commands).dependencies
+    var copies = 0
+    dependencies.links.copyDiagnostics = { copies += 1 }
+    let controller = SettingsController(dependencies: dependencies)
+    controller.send(.navigate(.diagnostics))
+    #expect(copies == 0)
+    controller.send(.copyDiagnostics)
+    #expect(copies == 1 && commands.ran.isEmpty)
+  }
+
+  @Test("a check remains shared across Helper and Diagnostics and keeps its diagnosis on either route")
+  func diagnosticsSharesChecking() async throws {
+    let commands = ScriptedCommands(["doctor": #"{"ok":true,"ready":false,"nextSteps":["Check the helper."]}"#])
+    let clock = ManualClock()
+    let controller = SettingsController.scripted(commands: commands, clock: clock)
+    controller.send(.navigate(.root(.helper)))
+    let checking = Task { await controller.checkAgain() }
+    let least = Duration.seconds(Motion.Duration.leastWork.seconds)
+    try await clock.untilSleeping(for: least, "the check never held")
+    controller.send(.navigate(.diagnostics))
+    #expect(controller.state.helper.readinessSummary == "Checking…")
+    await controller.checkAgain()
+    clock.advance(by: least)
+    await checking.value
+    let diagnosis = controller.state.helper.readyNote
+    #expect(diagnosis?.text == "Check the helper.")
+    controller.send(.back)
+    #expect(controller.state.helper.readyNote == diagnosis)
+    #expect(commands.ran == [Action.doctor.arguments])
+  }
+
+  @Test("a failed Forget leaves the path and failure visible through Projects and its owning Agents root")
+  func failedForgetPersistsAcrossRoutes() async {
+    let commands = ScriptedCommands([
+      "agents status": Self.statusWithOpie,
+      "agents forget": #"{"ok":false,"error":"Cannot write AGENTS.md"}"#,
+    ])
+    let controller = SettingsController.scripted(commands: commands)
+    controller.send(.navigate(.projects))
+    await controller.agentsReading?.value
+    controller.send(.askForget(Self.opie))
+    #expect(controller.session.alert == .forget(Self.opie))
+    await controller.confirmAlert()
+    let failure = controller.state.agents.notice
+    #expect(failure?.isProblem == true)
+    #expect(controller.state.agents.projects.map(\.id) == [Self.opie])
+    controller.send(.navigate(.root(.agents)))
+    await controller.agentsReading?.value
+    #expect(controller.state.agents.notice == failure)
+    controller.send(.back)
+    await controller.agentsReading?.value
+    #expect(controller.state.agents.notice == failure)
+    #expect(commands.ran.filter { $0 == Action.forgetProject(path: Self.opie).arguments }.count == 1)
+  }
+
   @Test("Back and Forward into Agents refresh projects with only a status read and remember the destination")
   func historyRefreshesAgents() async {
     let commands = ScriptedCommands(["agents status": #"{"ok": true, "agents": [], "projects": []}"#])

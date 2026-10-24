@@ -3,7 +3,7 @@ import SwiftUI
 /// One keyboard-accessible destination, with selection, hover and focus kept distinct.
 struct SettingsSidebarRow: View {
   /// The destination's label and identity.
-  let item: CapsuleTab<SettingsTab>
+  let item: CapsuleTab<SettingsRoot>
   /// The live subtitle for Helper, or nil for an ordinary row.
   let subtitle: String?
   /// Whether this destination owns the page shown.

@@ -3,7 +3,7 @@ import SwiftUI
 /// A constant category tile; live helper state is shown separately in text.
 struct SettingsSidebarTile: View {
   /// The existing pane represented by the tile.
-  let pane: SettingsTab
+  let pane: SettingsRoot
 
   /// The symbol on its category fill.
   var body: some View {
@@ -20,7 +20,9 @@ struct SettingsSidebarTile: View {
     switch pane {
     case .helper: .display
     case .general: .gear
-    case .agents: .terminal
+    case .agents: .agents
+    case .screen: .screens
+    case .notifications: .notifications
     case .about: .info
     }
   }
@@ -30,6 +32,8 @@ struct SettingsSidebarTile: View {
     switch pane {
     case .helper: .accent
     case .agents: .success
+    case .screen: .accentFill
+    case .notifications: .attention
     case .general, .about: .fillControlRaised
     }
   }
@@ -39,6 +43,8 @@ struct SettingsSidebarTile: View {
     switch pane {
     case .helper: .onAccent
     case .agents: .onSuccess
+    case .screen: .textLink
+    case .notifications: .onAttention
     case .general, .about: .textPrimary
     }
   }

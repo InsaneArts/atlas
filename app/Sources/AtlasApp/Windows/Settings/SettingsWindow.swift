@@ -35,7 +35,7 @@ final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
       backing: .buffered,
       defer: false
     )
-    title = "Settings — \(SettingsWords.tab(controller.session.tab))"
+    title = "Settings — \(controller.state.title)"
     titleVisibility = .hidden
     titlebarAppearsTransparent = true
     titlebarSeparatorStyle = .none

@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// The About pane: Atlas's icon, name, version and what it is, then the update button with Getting Started… as a
-/// link beside it, and what it says about updates in one spot under them, which keeps its height whatever it says.
+/// Atlas's identity, the existing update controls, and the setup destination in separate groups.
 struct AboutPane: View {
   /// What the pane shows.
   let state: SettingsAboutState
@@ -10,6 +9,25 @@ struct AboutPane: View {
 
   /// What it draws, from its state.
   var body: some View {
+    VStack(alignment: .leading, spacing: SettingsLayout.sectionGap) {
+      identity
+      GroupedSection([GeneralRow.picture], title: "Updates", description: "Check for a newer Atlas release") { _ in
+        VStack(spacing: Spacing.m) {
+          AboutUpdateButton(update: state.update, send: send)
+          AboutUpdateStatus(status: state.status, send: send)
+        }
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity)
+        .padding(Spacing.m)
+      }
+      GroupedSection([GeneralRow.openAtLogin], title: "Setup", description: "Open Atlas's setup window.") { _ in
+        ListRow("Getting Started…", trailing: .button("Getting Started…"), size: .compact) { send(.gettingStarted) }
+      }
+    }
+  }
+
+  /// Atlas's existing identity, version and product explanation.
+  private var identity: some View {
     VStack(spacing: .zero) {
       // Laid out by its visible tile; the icon's transparent margin overhangs.
       AppIcon(tile: SettingsLayout.aboutTile)
@@ -28,14 +46,7 @@ struct AboutPane: View {
         .frame(maxWidth: SettingsLayout.aboutTextWidth)
         .fixedSize(horizontal: false, vertical: true)
         .padding(.top, Spacing.sPlus)
-      HStack(spacing: Spacing.m) {
-        AboutUpdateButton(update: state.update, send: send)
-        Button("Getting Started…") { send(.gettingStarted) }
-          .buttonStyle(.textLink(.regular))
-      }
-      .padding(.top, Spacing.xl)
-      AboutUpdateStatus(status: state.status, send: send)
-        .padding(.top, Spacing.m)
+
     }
     .multilineTextAlignment(.center)
     .frame(maxWidth: .infinity)

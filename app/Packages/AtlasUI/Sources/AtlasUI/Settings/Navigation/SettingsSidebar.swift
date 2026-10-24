@@ -1,11 +1,11 @@
 import SwiftUI
 
-/// Stable sidebar navigation around the four existing panes.
+/// Stable sidebar navigation around the six root pages.
 struct SettingsSidebar: View {
   /// Labels, current selection and live helper state.
   let state: SettingsState
   /// Receives a destination selection.
-  let select: @MainActor (SettingsTab) -> Void
+  let select: @MainActor (SettingsRoot) -> Void
 
   /// The reserved search field and independently scrollable destination clusters.
   var body: some View {
@@ -18,11 +18,13 @@ struct SettingsSidebar: View {
             row(.helper)
           }
         }
-        ForEach([SettingsTab.general, .agents, .about], id: \.self) { tab in
-          VStack(spacing: SettingsLayout.sidebarRowGap) {
-            row(tab)
-          }
+        VStack(spacing: SettingsLayout.sidebarRowGap) {
+          row(.general)
+          row(.screen)
+          row(.notifications)
         }
+        row(.agents)
+        row(.about)
       }
       .padding(.horizontal, SettingsLayout.sidebarInsets)
       .padding(.bottom, SettingsLayout.sidebarInsets)
@@ -38,13 +40,12 @@ struct SettingsSidebar: View {
   ///
   /// - Parameter pane: The destination to draw.
   /// - Returns: Its navigation row, when a label is present.
-  @ViewBuilder private func row(_ pane: SettingsTab) -> some View {
-    if let item = state.tabs.tabs.first(where: { $0.id == pane }) {
-      SettingsSidebarRow(
-        item: item,
-        subtitle: pane == .helper ? state.helper.account.status.label : nil,
-        selected: state.tabs.selected == pane
-      ) { select(pane) }
-    }
+  private func row(_ pane: SettingsRoot) -> some View {
+    let item = CapsuleTab(id: pane, title: SettingsDestination.root(pane).title, symbol: .gear)
+    return SettingsSidebarRow(
+      item: item,
+      subtitle: pane == .helper ? state.helper.account.status.label : nil,
+      selected: state.location.root == pane
+    ) { select(pane) }
   }
 }

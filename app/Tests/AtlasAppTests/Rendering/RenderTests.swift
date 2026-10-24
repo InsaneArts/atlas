@@ -116,10 +116,14 @@
 
     @Test("Settings renders preserve every old scenario and draw minimum and tall viewports")
     func settingsViewportsKeepTheirExplicitSize() throws {
-      #expect(SettingsRender.files.count == 28)
+      #expect(SettingsRender.files.prefix(28).last == "28-claude-partly-connected")
+      #expect(SettingsRender.files.count == PreviewStates.settings.count)
       let viewportNames = SettingsRender.viewportRenders
         .map(\.file)
-      let allNames = SettingsRender.files + viewportNames
+      let allNames =
+        SettingsRender.files + viewportNames
+        + SettingsRender.popupRenders
+        .map(\.file)
       #expect(Set(allNames).count == allNames.count)
       let directory = try Self.directory()
       defer {
@@ -132,6 +136,10 @@
         let image = try #require(NSBitmapImageRep(data: Data(contentsOf: drawn)))
         #expect(image.pixelsWide == Int(render.size.width) * PNG.scale)
         #expect(image.pixelsHigh == Int(render.size.height) * PNG.scale)
+      }
+      for render in SettingsRender.popupRenders {
+        #expect(SettingsRender.draw(render.file, render.state, to: directory, voiceOver: true))
+        #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent("\(render.file).png").path))
       }
     }
 

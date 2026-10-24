@@ -36,7 +36,7 @@ struct HelperAccountLayout: Layout {
   /// - Returns: The horizontal or compact vertical arrangement.
   private func layout(width: CGFloat?, subviews: Subviews) -> AnyLayout {
     let naturalWidth = subviews.reduce(CGFloat.zero) { $0 + $1.sizeThatFits(.unspecified).width } + Spacing.m
-    return if let width, width < max(naturalWidth, SettingsLayout.accountStackThreshold) {
+    return if let width, width < max(naturalWidth, SettingsLayout.accountContentStackThreshold) {
       AnyLayout(VStackLayout(alignment: .leading, spacing: Spacing.m))
     } else {
       AnyLayout(HStackLayout(spacing: Spacing.m))

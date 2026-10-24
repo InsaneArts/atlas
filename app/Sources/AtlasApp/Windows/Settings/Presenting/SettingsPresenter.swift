@@ -8,7 +8,7 @@ enum SettingsPresenter {
   /// - Parameter snapshot: What the controller holds and reads.
   /// - Returns: The window's state.
   static func state(_ snapshot: SettingsSnapshot) -> SettingsState {
-    SettingsState(
+    var state = SettingsState(
       tabs: tabs(selected: snapshot.session.tab),
       general: general(snapshot),
       helper: helper(snapshot),
@@ -18,6 +18,8 @@ enum SettingsPresenter {
       canGoBack: snapshot.session.navigation.canGoBack,
       canGoForward: snapshot.session.navigation.canGoForward
     )
+    state.destination = snapshot.session.navigation.destination
+    return state
   }
 
   /// The tab row: General, Helper, Agents and About, each its symbol over its word, `selected` shown.
