@@ -1,17 +1,15 @@
 import SwiftUI
 
-/// The end-to-end check, once the person is back from the helper.
+/// The end-to-end check, once the person is back from the helper. Continue, or Try Again once it failed, is the
+/// footer's.
 struct FinishingScreen: View {
   /// The checklist and how the check stands.
   let state: OnboardingFinishingScreenState
-  /// Receives Try Again.
-  let send: @MainActor (OnboardingEvent) -> Void
 
-  /// The checklist, then why it failed with Try Again, or what the last check does.
+  /// The checklist, then why it failed, or what the last check does.
   var body: some View {
-    ScreenColumn {
-      GroupLabel(text: "Welcome back")
-      Headline(title: state.title, tail: state.tail)
+    ScrollColumn(width: OnboardingLayout.column) {
+      OnboardingHeader(label: "Welcome back", title: state.title, tail: state.tail)
       CardGroup {
         CheckRow(text: state.loggedIn, state: .done, note: "in the background")
           .lineLimit(OnboardingLayout.nameLines)
@@ -23,27 +21,33 @@ struct FinishingScreen: View {
         SeparatorLine()
         CheckRow(text: "Mouse, keyboard and a test screenshot", state: state.live, note: state.liveNote)
       }
-      .padding(.top, Spacing.xsPlus)
-      if let failure = state.failure {
-        Note(text: failure, tone: .attention)
-        Button("Try Again") { send(.retryFinish) }
-          .buttonStyle(.capsule(.glass))
-          .keyboardShortcut(.defaultAction)
-      } else {
-        Note(text: "The last check starts input in the helper, takes a screenshot and confirms it.")
-      }
+      .padding(.top, OnboardingLayout.Rhythm.paragraph)
+      .pagePiece(.content)
+      outcome
+        .pagePiece(.status)
+    }
+  }
+
+  /// Why the check failed, as the status under the checklist, or what the last check does, as a note.
+  @ViewBuilder private var outcome: some View {
+    if let failure = state.failure {
+      Note(text: failure, tone: .attention)
+        .padding(.top, OnboardingLayout.Rhythm.content)
+    } else {
+      Note(text: "The last check starts input in the helper, takes a screenshot and confirms it.")
+        .padding(.top, OnboardingLayout.Rhythm.status)
     }
   }
 }
 
 #if DEBUG
   #Preview("Finishing") {
-    FinishingScreen(state: PreviewStates.onboardingFinishingScreen) { _ in }
+    FinishingScreen(state: PreviewStates.onboardingFinishingScreen)
       .onboardingSample()
   }
 
   #Preview("Finishing failed") {
-    FinishingScreen(state: PreviewStates.onboardingFinishingFailedScreen) { _ in }
+    FinishingScreen(state: PreviewStates.onboardingFinishingFailedScreen)
       .onboardingSample()
   }
 #endif

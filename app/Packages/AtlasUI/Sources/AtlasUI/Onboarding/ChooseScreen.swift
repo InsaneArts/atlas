@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Choose an account to be the helper: a new one, or a standard account already on this Mac.
+/// Choose an account to be the helper: a new one, or a standard account already on this Mac. Continue is the
+/// footer's.
 struct ChooseScreen: View {
   /// The rows to choose from.
   let state: OnboardingChooseScreenState
@@ -9,31 +10,39 @@ struct ChooseScreen: View {
   /// Receives the account picked.
   let send: @MainActor (OnboardingEvent) -> Void
 
-  /// What a helper is, the rows, and the work note.
+  /// What a helper is, the rows, the work note and who is listed.
   var body: some View {
-    ScreenColumn(width: OnboardingLayout.wideColumn) {
-      GroupLabel(text: "Helper account")
-      Headline(title: OnboardingScreen.chooseTitle, tail: OnboardingScreen.chooseTail)
-      Lede(
-        text:
+    ScrollColumn(width: OnboardingLayout.column) {
+      OnboardingHeader(
+        label: "Helper account",
+        title: OnboardingScreen.chooseTitle,
+        tail: OnboardingScreen.chooseTail,
+        lede:
           "A standard account on this Mac that only Atlas uses. Your own files and windows stay out of its reach."
       )
       list
-        .padding(.top, Spacing.xsPlus)
+        .padding(.top, OnboardingLayout.Rhythm.paragraph)
+        .pagePiece(.content)
     } bottom: {
       WorkNoteLine(note: note)
-      footnote
+        .padding(.top, OnboardingLayout.Rhythm.content)
+        .pagePiece(.status)
+      if let footnote {
+        Note(text: footnote)
+          .padding(.top, OnboardingLayout.Rhythm.status)
+          .pagePiece(.status)
+      }
     }
   }
 
   /// What approving will do for the account picked, else who is listed, or why one account is: left out while a
   /// problem shows, so the problem has the room.
-  @ViewBuilder private var footnote: some View {
+  private var footnote: String? {
     switch (note, state.approval, state.offersNewAccount) {
-    case (.problem, _, _): EmptyView()
-    case (_, .some(let approval), _): Note(text: approval)
-    case (_, nil, true): Note(text: "Administrator accounts are not listed: a helper must be a standard account.")
-    case (_, nil, false): Note(text: "Atlas was set up in this account before, so it keeps using it.")
+    case (.problem, _, _): nil
+    case (_, .some(let approval), _): approval
+    case (_, nil, true): "Administrator accounts are not listed: a helper must be a standard account."
+    case (_, nil, false): "Atlas was set up in this account before, so it keeps using it."
     }
   }
 

@@ -15,13 +15,15 @@ enum OnboardingPresenter {
     let footer: OnboardingFooterState =
       switch content {
       case .screen: footer(snapshot, step: step)
-      case .loading, .permissionPanel: OnboardingFooterState()
+      case .loading(let problem): loadingFooter(failed: problem != nil)
+      case .permissionPanel: panelFooter
       }
     return OnboardingState(
       content: content,
       footer: footer,
       note: note(snapshot),
-      isBusy: snapshot.working != nil
+      isBusy: snapshot.working != nil,
+      direction: snapshot.direction.page
     )
   }
 

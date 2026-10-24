@@ -25,6 +25,16 @@ enum OnboardingWords {
   /// While the helper asked is let go, to choose another.
   static let backToChoice = "Going back to the choice…"
 
+  /// Where the screen sits on the footer's track, as VoiceOver says it.
+  ///
+  /// - Parameters:
+  ///   - index: The screen, from 0.
+  ///   - count: How many screens its side of setup has.
+  /// - Returns: "Step 2 of 6"
+  static func step(_ index: Int, of count: Int) -> String {
+    "Step \(index + 1) of \(count)"
+  }
+
   /// While an existing account is set up as the helper, which macOS asks to approve.
   ///
   /// - Parameter account: The account as people know it.

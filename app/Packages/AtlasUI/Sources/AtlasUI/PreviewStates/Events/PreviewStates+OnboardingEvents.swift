@@ -1,7 +1,8 @@
 #if DEBUG
   extension PreviewStates {
     /// The setup window sample an event leads to, so the Interactive preview answers clicks as the app would: pick
-    /// an account, switch agents, open and close the permission panel, and step between screens.
+    /// an account, switch agents, open and close the permission panel, and step between screens, back ones sliding
+    /// the other way.
     ///
     /// - Parameters:
     ///   - state: The sample shown.
@@ -29,11 +30,11 @@
         screen.opensAtLogin = on
         next.content = .screen(.done(screen))
       case (.screen(.choose), .back):
-        return onboardingWelcome
+        return wentBack(onboardingWelcome)
       case (.screen(.create), .back):
-        return onboardingChoose
+        return wentBack(onboardingChoose)
       case (.screen(.done), .back):
-        return onboardingAgents
+        return wentBack(onboardingAgents)
       case (_, .begin):
         return onboardingChoose
       case (_, .createAccount):
@@ -46,10 +47,22 @@
         return onboardingPermissionPanel
       case (_, .retryFinish):
         return onboardingFinishing
+      case (_, .lockAndSwitch):
+        return onboardingSwitchOpenAtlas
       default:
         break
       }
       return next
+    }
+
+    /// A sample reached by going back, so it slides in the other way.
+    ///
+    /// - Parameter state: The sample.
+    /// - Returns: The sample, moving back.
+    @MainActor private static func wentBack(_ state: OnboardingState) -> OnboardingState {
+      var state = state
+      state.direction = .back
+      return state
     }
   }
 #endif

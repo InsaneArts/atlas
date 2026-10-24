@@ -5,7 +5,10 @@
     /// In the helper: Ismayil asks to use it.
     @MainActor public static let onboardingAllow = OnboardingState(
       content: .screen(.allow(onboardingAllowScreen)),
-      footer: OnboardingFooterState(back: nil, next: nil, dots: .init(index: 0, count: 3)),
+      footer: OnboardingFooterState(
+        next: OnboardingFooterAction(title: .allow, event: .allow, isEnabled: true, isDefault: true),
+        track: onboardingTrack(0, of: 3)
+      ),
       note: .none,
       isBusy: false
     )
@@ -13,7 +16,7 @@
     /// In the helper: Accessibility on, Screen Recording still off.
     @MainActor public static let onboardingPermissions = OnboardingState(
       content: .screen(.permissions(onboardingPermissionsScreen)),
-      footer: OnboardingFooterState(back: nil, next: nil, dots: .init(index: 1, count: 3)),
+      footer: OnboardingFooterState(track: onboardingTrack(1, of: 3)),
       note: .none,
       isBusy: false
     )
@@ -21,7 +24,10 @@
     /// In the helper: both permissions on.
     @MainActor public static let onboardingHelperDone = OnboardingState(
       content: .screen(.helperDone(onboardingHelperDoneScreen)),
-      footer: OnboardingFooterState(back: nil, next: nil, dots: .init(index: 2, count: 3)),
+      footer: OnboardingFooterState(
+        next: OnboardingFooterAction(title: .switchBack, event: .switchBack, isEnabled: true, isDefault: true),
+        track: onboardingTrack(2, of: 3)
+      ),
       note: .none,
       isBusy: false
     )
@@ -29,7 +35,9 @@
     /// Atlas.app is not where it must be.
     @MainActor public static let onboardingBlocked = OnboardingState(
       content: .screen(.blocked(onboardingBlockedReason)),
-      footer: OnboardingFooterState(),
+      footer: OnboardingFooterState(
+        next: OnboardingFooterAction(title: .checkAgain, event: .checkAgain, isEnabled: true, isDefault: true)
+      ),
       note: .none,
       isBusy: false
     )

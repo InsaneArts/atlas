@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Connect agents to Atlas.
+/// Connect agents to Atlas. Continue is the footer's.
 struct AgentsScreen: View {
   /// The agents.
   let state: OnboardingAgentsScreenState
@@ -11,15 +11,17 @@ struct AgentsScreen: View {
 
   /// The agents' card and the work note.
   var body: some View {
-    ScreenColumn(width: OnboardingLayout.listColumn) {
-      GroupLabel(text: "Your agents")
-      Headline(title: OnboardingScreen.agentsTitle, tail: OnboardingScreen.agentsTail)
+    ScrollColumn(width: OnboardingLayout.column) {
+      OnboardingHeader(label: "Your agents", title: OnboardingScreen.agentsTitle, tail: OnboardingScreen.agentsTail)
       CardGroup(state.agents) { agent in
         AgentRow(agent: agent) { send(.setAgent(id: agent.id, on: $0)) }
       }
-      .padding(.top, Spacing.xsPlus)
+      .padding(.top, OnboardingLayout.Rhythm.paragraph)
+      .pagePiece(.content)
     } bottom: {
       WorkNoteLine(note: note)
+        .padding(.top, OnboardingLayout.Rhythm.content)
+        .pagePiece(.status)
     }
   }
 }

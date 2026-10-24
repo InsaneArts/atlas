@@ -38,6 +38,8 @@ struct OnboardingSnapshot {
   var guiding: Permission?
   /// This Mac's macOS, which names the permissions' pages.
   var macOS = ProcessInfo.processInfo.operatingSystemVersion
+  /// Which way the window last moved between screens, so the new screen slides in the way the person goes.
+  var direction = StepDirection.forward
 
   /// The screen the facts and choices lead to.
   var step: OnboardingStep { OnboardingStep(facts: facts, choices: choices) }

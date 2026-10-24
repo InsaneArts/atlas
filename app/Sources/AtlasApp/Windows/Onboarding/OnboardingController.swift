@@ -30,8 +30,15 @@ final class OnboardingController {
   /// How long a permission just turned on shows its tick before the next one is allowed: 1.2 s.
   static let tickShown: Duration = .milliseconds(1200)
 
-  /// Everything the window shows, as one value.
-  var snapshot = OnboardingSnapshot()
+  /// Everything the window shows, as one value. Whenever a change moves the window to another screen, the way it
+  /// moved is kept with it (``OnboardingStep/direction(from:to:)``), so the screen slides in the way the person goes.
+  var snapshot = OnboardingSnapshot() {
+    didSet {
+      let step = snapshot.step
+      let last = oldValue.step
+      if step != last { snapshot.direction = OnboardingStep.direction(from: last, to: step) }
+    }
+  }
   /// The window's work is done: setup finished, or the helper locked for the switch back. The window closes itself.
   var closeRequested = false
 

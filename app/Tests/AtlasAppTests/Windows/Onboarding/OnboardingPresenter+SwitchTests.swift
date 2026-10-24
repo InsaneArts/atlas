@@ -30,11 +30,11 @@ struct OnboardingPresenterSwitchTests {
   @Test("Lock and Switch shows until the helper is signed in on screen")
   func lockButton() throws {
     let out = try Samples.person(Samples.helper(signedIn: false, answering: false))
-    #expect(Self.switchScreen(OnboardingPresenter.state(Samples.snapshot(out)))?.showsLockButton == true)
+    #expect(OnboardingPresenter.state(Samples.snapshot(out)).footer.next?.event == .lockAndSwitch)
     let hidden = try Samples.person(Samples.helper(answering: false))
-    #expect(Self.switchScreen(OnboardingPresenter.state(Samples.snapshot(hidden)))?.showsLockButton == true)
+    #expect(OnboardingPresenter.state(Samples.snapshot(hidden)).footer.next?.event == .lockAndSwitch)
     let onScreen = try Samples.person(Samples.helper(answering: false, hidden: false))
-    #expect(Self.switchScreen(OnboardingPresenter.state(Samples.snapshot(onScreen)))?.showsLockButton == false)
+    #expect(OnboardingPresenter.state(Samples.snapshot(onScreen)).footer.next == nil)
   }
 
   /// The switch screen a state shows, if it shows it.

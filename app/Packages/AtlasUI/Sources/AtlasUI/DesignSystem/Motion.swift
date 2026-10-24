@@ -16,8 +16,14 @@ public enum Motion {
       self.seconds = seconds
     }
 
+    /// 0.03: between the pieces of a setup screen arriving one after another: its header, then its content, then its
+    /// status (v3 S2, X7).
+    static let stagger = Duration(seconds: 0.03)
     /// 0.06: how long a pane arriving waits before it fades in, so the one leaving has begun to go (v3 G2, X2).
     static let crossfadeDelay = Duration(seconds: 0.06)
+    /// 0.07: how long a new setup screen waits as the last one leaves, so it starts when the last is 40% gone (v3 S2,
+    /// R9).
+    static let pageDelay = Duration(seconds: 0.07)
     /// 0.08: how long a drawn check waits after its disc before it draws (v3 S3, X11).
     static let drawDelay = Duration(seconds: 0.08)
     /// 0.1: a button press.
@@ -42,6 +48,8 @@ public enum Motion {
     public static let crossfade = Duration(seconds: 0.2)
     /// 0.25: the menu bar orbit's dim fading in or out (v3 M4, X14).
     public static let dim = Duration(seconds: 0.25)
+    /// 0.26: one piece of a setup screen fading in as the screen arrives (v3 X7).
+    static let piece = Duration(seconds: 0.26)
     /// 0.3: a check drawing itself along its stroke (v3 S3, X11: `trim` 0 → 1).
     static let draw = Duration(seconds: 0.3)
     /// 0.3: a piece moving to a new state, ``Motion/state``'s length; AppKit reads it for the menu bar panel's height
@@ -125,6 +133,24 @@ public enum Motion {
 
   /// A setup screen giving way to the next: ``Springs/page``.
   static var page: Animation { .spring(Springs.page) }
+
+  /// A setup screen arriving: ``page``, after ``Duration/pageDelay``, so it starts while the last one leaves on
+  /// ``leave`` (v3 S2, R9).
+  static var pageEntry: Animation {
+    page.delay(Duration.pageDelay.seconds)
+  }
+
+  /// One piece of an arriving setup screen fading in: ease out over ``Duration/piece``, after the screen's
+  /// ``Duration/pageDelay`` and one ``Duration/stagger`` for each piece before it, so its header, content and status
+  /// come in 30 ms apart (v3 S2, X7). Only opacity changes, but it outlasts what Reduce Motion keeps, so under Reduce
+  /// Motion a piece arrives with its screen's crossfade instead.
+  ///
+  /// - Parameter place: How many pieces arrive before this one: 0 for the header.
+  /// - Returns: The piece's fade.
+  static func pieceArrival(_ place: Int) -> Animation {
+    .easeOut(duration: Duration.piece.seconds)
+      .delay(Duration.pageDelay.seconds + Double(place) * Duration.stagger.seconds)
+  }
 
   /// A check, a badge or a symbol popping in: ``Springs/pop``.
   static var pop: Animation { .spring(Springs.pop) }

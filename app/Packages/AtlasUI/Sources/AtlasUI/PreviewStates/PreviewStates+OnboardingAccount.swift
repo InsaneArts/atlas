@@ -8,7 +8,7 @@
       footer: OnboardingFooterState(
         back: onboardingBack,
         next: OnboardingFooterAction(title: .continue, event: .continueChoice, isEnabled: true, isDefault: true),
-        dots: .init(index: 1, count: 6)
+        track: onboardingTrack(1, of: 6)
       ),
       note: .none,
       isBusy: false
@@ -20,7 +20,7 @@
       footer: OnboardingFooterState(
         back: onboardingBack,
         next: OnboardingFooterAction(title: .createAccount, event: .createAccount, isEnabled: false, isDefault: true),
-        dots: .init(index: 1, count: 6)
+        track: onboardingTrack(1, of: 6)
       ),
       note: .none,
       isBusy: false

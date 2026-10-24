@@ -1,48 +1,43 @@
 import SwiftUI
 
-/// In the helper: whether to let the account that asked use this one through Atlas.
+/// In the helper: whether to let the account that asked use this one through Atlas. Allow is the footer's.
 struct AllowScreen: View {
   /// Who asked, and what allowing means.
   let state: OnboardingAllowScreenState
-  /// The line under Allow.
+  /// The line under what allowing means.
   let note: WorkNote
-  /// Whether a command runs.
-  let isBusy: Bool
-  /// Receives Allow.
-  let send: @MainActor (OnboardingEvent) -> Void
 
-  /// The asking account handing over to Atlas, what it means, and Allow.
+  /// The asking account handing over to Atlas, what it means, the work note and how to undo it.
   var body: some View {
-    ScreenColumn(width: OnboardingLayout.wideColumn) {
-      HStack(spacing: Spacing.mPlus) {
-        Disc(content: .letter(state.initial), tone: .avatar, size: .large)
-        Image(systemName: "arrow.right")
-          .foregroundStyle(Color.textTertiary)
-        AppIcon(size: OnboardingLayout.allowIcon)
+    ScrollColumn(width: OnboardingLayout.column) {
+      OnboardingHeader(
+        label: state.label,
+        title: state.title,
+        tail: OnboardingScreen.allowTail,
+        lede: state.lede
+      ) {
+        HStack(spacing: Spacing.mPlus) {
+          Disc(content: .letter(state.initial), tone: .avatar, size: .large)
+          Image(systemName: "arrow.right")
+            .foregroundStyle(Color.textTertiary)
+          AppIcon(size: OnboardingLayout.allowIcon)
+        }
+        .accessibilityHidden(true)
       }
-      .accessibilityHidden(true)
-      GroupLabel(text: state.label)
-        .lineLimit(OnboardingLayout.nameLines)
-        .truncationMode(.middle)
-        .multilineTextAlignment(.center)
-        .padding(.top, Spacing.xsPlus)
-      Headline(title: state.title, tail: OnboardingScreen.allowTail)
-      Lede(text: state.lede)
     } bottom: {
-      Button("Allow") { send(.allow) }
-        .buttonStyle(.capsule(size: .large))
-        .keyboardShortcut(.defaultAction)
-        .disabled(isBusy)
-        .padding(.top, Spacing.s)
       WorkNoteLine(note: note)
+        .padding(.top, OnboardingLayout.Rhythm.content)
+        .pagePiece(.status)
       Note(text: "Atlas can be removed from both accounts at any time.")
+        .padding(.top, OnboardingLayout.Rhythm.status)
+        .pagePiece(.status)
     }
   }
 }
 
 #if DEBUG
   #Preview("Helper allow") {
-    AllowScreen(state: PreviewStates.onboardingAllowScreen, note: .none, isBusy: false) { _ in }
+    AllowScreen(state: PreviewStates.onboardingAllowScreen, note: .none)
       .onboardingSample()
   }
 #endif

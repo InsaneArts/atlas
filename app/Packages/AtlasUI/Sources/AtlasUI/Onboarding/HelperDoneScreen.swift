@@ -1,41 +1,37 @@
 import SwiftUI
 
-/// In the helper: set up, so the person switches back to their own account.
+/// In the helper: set up, so the person switches back to their own account. Switch Back is the footer's.
 struct HelperDoneScreen: View {
   /// Who to switch back to.
   let state: OnboardingHelperDoneScreenState
-  /// The line under Switch Back.
+  /// The line under what happens from now on.
   let note: WorkNote
-  /// Whether a command runs.
-  let isBusy: Bool
-  /// Receives Switch Back.
-  let send: @MainActor (OnboardingEvent) -> Void
 
-  /// A check, what happens from now on, and Switch Back.
+  /// A check, what happens from now on, the work note and what Switch Back does.
   var body: some View {
-    ScreenColumn(width: OnboardingLayout.helperDoneColumn) {
-      CheckMark(size: IconSize.xxl)
-      Headline(title: OnboardingScreen.helperDoneTitle, tail: state.tail)
-        .padding(.top, Spacing.xsPlus)
-      Lede(
-        text:
+    ScrollColumn(width: OnboardingLayout.column) {
+      OnboardingHeader(
+        title: OnboardingScreen.helperDoneTitle,
+        tail: state.tail,
+        lede:
           "You won't need to set anything up here again. Atlas starts in this account by itself whenever it is logged in, and finishes setting up in your own account."
-      )
+      ) {
+        CheckMark(size: IconSize.xxl)
+      }
     } bottom: {
-      Button("Switch Back") { send(.switchBack) }
-        .buttonStyle(.capsule(size: .large))
-        .keyboardShortcut(.defaultAction)
-        .disabled(isBusy)
-        .padding(.top, Spacing.sPlus)
       WorkNoteLine(note: note)
+        .padding(.top, OnboardingLayout.Rhythm.content)
+        .pagePiece(.status)
       Note(text: "Locks this account and opens the lock screen.")
+        .padding(.top, OnboardingLayout.Rhythm.status)
+        .pagePiece(.status)
     }
   }
 }
 
 #if DEBUG
   #Preview("Helper done") {
-    HelperDoneScreen(state: PreviewStates.onboardingHelperDoneScreen, note: .none, isBusy: false) { _ in }
+    HelperDoneScreen(state: PreviewStates.onboardingHelperDoneScreen, note: .none)
       .onboardingSample()
   }
 #endif

@@ -1,32 +1,26 @@
 import SwiftUI
 
-/// Something only the person can fix comes first.
+/// Something only the person can fix comes first. Check Again is the footer's.
 struct BlockedScreen: View {
   /// What to fix, in words.
   let reason: String
-  /// Receives Check Again.
-  let send: @MainActor (OnboardingEvent) -> Void
 
-  /// A warning, what to fix, and Check Again.
+  /// A warning, and what to fix.
   var body: some View {
-    ScreenColumn {
-      Image(systemName: "exclamationmark.triangle.fill")
-        .font(OnboardingLayout.blockedSymbolFont)
-        .foregroundStyle(Color.attention)
-        .accessibilityHidden(true)
-      Headline(title: OnboardingScreen.blockedTitle)
-      Lede(text: reason)
-      Button("Check Again") { send(.checkAgain) }
-        .buttonStyle(.capsule(size: .large))
-        .keyboardShortcut(.defaultAction)
-        .padding(.top, Spacing.s)
+    ScrollColumn(width: OnboardingLayout.column) {
+      OnboardingHeader(title: OnboardingScreen.blockedTitle, lede: reason) {
+        Image(systemName: "exclamationmark.triangle.fill")
+          .font(OnboardingLayout.blockedSymbolFont)
+          .foregroundStyle(Color.attention)
+          .accessibilityHidden(true)
+      }
     }
   }
 }
 
 #if DEBUG
   #Preview("Blocked") {
-    BlockedScreen(reason: PreviewStates.onboardingBlockedReason) { _ in }
+    BlockedScreen(reason: PreviewStates.onboardingBlockedReason)
       .onboardingSample()
   }
 #endif

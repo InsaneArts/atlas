@@ -13,7 +13,10 @@
     /// A fresh Mac: what Atlas is.
     @MainActor public static let onboardingWelcome = OnboardingState(
       content: .screen(.welcome),
-      footer: OnboardingFooterState(back: nil, next: nil, dots: .init(index: 0, count: 6)),
+      footer: OnboardingFooterState(
+        next: OnboardingFooterAction(title: .getStarted, event: .begin, isEnabled: true, isDefault: true),
+        track: onboardingTrack(0, of: 6)
+      ),
       note: .none,
       isBusy: false
     )
@@ -23,8 +26,8 @@
       content: .screen(.switchToHelper(onboardingSwitchScreen)),
       footer: OnboardingFooterState(
         back: OnboardingFooterAction(title: .chooseAnother, event: .chooseAnother, isEnabled: true, isDefault: false),
-        next: nil,
-        dots: .init(index: 2, count: 6)
+        next: OnboardingFooterAction(title: .lockAndSwitch, event: .lockAndSwitch, isEnabled: true, isDefault: true),
+        track: onboardingTrack(2, of: 6)
       ),
       note: .none,
       isBusy: false
@@ -39,7 +42,6 @@
             title: "Now log in to the Atlas account.",
             logInDetail: "Choose the Atlas account on the lock screen",
             progress: .init(logIn: .done, openAtlas: .current, allow: .waiting),
-            showsLockButton: true,
             waiting: "Next: Lock and Switch, then allow Atlas there."
           )
         )
@@ -51,9 +53,8 @@
     @MainActor public static let onboardingFinishing = OnboardingState(
       content: .screen(.finishing(onboardingFinishingScreen)),
       footer: OnboardingFooterState(
-        back: nil,
         next: OnboardingFooterAction(title: .continue, event: .continueFinishing, isEnabled: false, isDefault: false),
-        dots: .init(index: 3, count: 6)
+        track: onboardingTrack(3, of: 6)
       ),
       note: .none,
       isBusy: false
@@ -76,6 +77,12 @@
     @MainActor public static let onboardingFinishingFailed: OnboardingState = {
       var state = onboardingFinishing
       state.content = .screen(.finishing(onboardingFinishingFailedScreen))
+      state.footer.next = OnboardingFooterAction(
+        title: .tryAgain,
+        event: .retryFinish,
+        isEnabled: true,
+        isDefault: true
+      )
       return state
     }()
 
@@ -83,9 +90,8 @@
     @MainActor public static let onboardingAgents = OnboardingState(
       content: .screen(.agents(onboardingAgentsScreen)),
       footer: OnboardingFooterState(
-        back: nil,
         next: OnboardingFooterAction(title: .continue, event: .connectAgents, isEnabled: false, isDefault: true),
-        dots: .init(index: 4, count: 6)
+        track: onboardingTrack(4, of: 6)
       ),
       note: .none,
       isBusy: false
@@ -97,7 +103,7 @@
       footer: OnboardingFooterState(
         back: onboardingBack,
         next: OnboardingFooterAction(title: .done, event: .complete, isEnabled: true, isDefault: true),
-        dots: .init(index: 5, count: 6)
+        track: onboardingTrack(5, of: 6)
       ),
       note: .none,
       isBusy: false
@@ -106,7 +112,9 @@
     /// The first reading failed: why, and Try Again.
     @MainActor public static let onboardingLoadingFailed = OnboardingState(
       content: .loading(problem: onboardingLoadingProblem),
-      footer: OnboardingFooterState(),
+      footer: OnboardingFooterState(
+        next: OnboardingFooterAction(title: .tryAgain, event: .checkAgain, isEnabled: true, isDefault: true)
+      ),
       note: .problem(onboardingLoadingProblem),
       isBusy: false
     )
@@ -121,7 +129,6 @@
             title: "Now log in to \(name).",
             logInDetail: "Choose \(name) on the lock screen",
             progress: .init(logIn: .current, openAtlas: .waiting, allow: .waiting),
-            showsLockButton: true,
             waiting: nil
           )
         )
@@ -160,6 +167,16 @@
       return state
     }()
 
+    /// Where a screen sits on the track, with what VoiceOver says for it.
+    ///
+    /// - Parameters:
+    ///   - index: The screen, from 0.
+    ///   - count: How many screens its side of setup has.
+    /// - Returns: The track.
+    @MainActor static func onboardingTrack(_ index: Int, of count: Int) -> OnboardingFooterState.Track {
+      OnboardingFooterState.Track(index: index, count: count, label: "Step \(index + 1) of \(count)")
+    }
+
     /// Back, ready to press.
     @MainActor static let onboardingBack = OnboardingFooterAction(
       title: .back,
@@ -173,7 +190,6 @@
       title: "Now log in to the Atlas account.",
       logInDetail: "Choose the Atlas account on the lock screen",
       progress: .init(logIn: .current, openAtlas: .waiting, allow: .waiting),
-      showsLockButton: true,
       waiting: "Next: Lock and Switch, then log in to the Atlas account."
     )
 

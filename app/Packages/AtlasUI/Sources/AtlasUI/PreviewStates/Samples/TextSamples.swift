@@ -30,6 +30,11 @@
         switch kind {
         case .headline:
           Headline(title: String("Give your agents"), tail: String("a Mac of their own."))
+          Headline(
+            title: String("Now log in to Maria Fernanda Montgomery-Castellanos de la Vega y Rodríguez."),
+            tail: String("Just this once, to set Atlas up there.")
+          )
+          .frame(width: SampleWidth.column)
           Headline(title: String("The helper is"), tail: String("logged out."), size: .title)
           Headline(title: String("Turn on Atlas."), size: .compact)
         case .lede:

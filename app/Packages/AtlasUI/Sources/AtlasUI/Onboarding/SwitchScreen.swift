@@ -1,21 +1,16 @@
 import SwiftUI
 
-/// Log in to the helper once, to set Atlas up there.
+/// Log in to the helper once, to set Atlas up there. Lock and Switch is the footer's.
 struct SwitchScreen: View {
   /// The steps and what happens next.
   let state: OnboardingSwitchScreenState
   /// The line under the steps while a command runs or failed.
   let note: WorkNote
-  /// Whether a command runs.
-  let isBusy: Bool
-  /// Receives Lock and Switch.
-  let send: @MainActor (OnboardingEvent) -> Void
 
-  /// The three steps, Lock and Switch until the helper is on screen, then what happens next.
+  /// The three steps, then what happens next or what runs.
   var body: some View {
-    ScreenColumn(width: OnboardingLayout.listColumn) {
-      GroupLabel(text: "Helper account")
-      Headline(title: state.title, tail: OnboardingScreen.switchTail)
+    ScrollColumn(width: OnboardingLayout.column) {
+      OnboardingHeader(label: "Helper account", title: state.title, tail: OnboardingScreen.switchTail)
       VStack(spacing: Spacing.s) {
         StepRow(index: 1, title: "Lock and switch", detail: state.logInDetail, state: state.progress.logIn)
           .lineLimit(OnboardingLayout.nameLines)
@@ -35,29 +30,31 @@ struct SwitchScreen: View {
           state: state.progress.allow
         )
       }
-      .padding(.top, Spacing.xs)
+      .padding(.top, OnboardingLayout.Rhythm.paragraph)
+      .pagePiece(.content)
     } bottom: {
-      if state.showsLockButton {
-        Button("Lock and Switch") { send(.lockAndSwitch) }
-          .buttonStyle(.capsule(size: .large))
-          .keyboardShortcut(.defaultAction)
-          .disabled(isBusy)
-      }
-      if let waiting = state.waiting {
-        ProgressPill(text: waiting)
-          .lineLimit(OnboardingLayout.nameLines)
-          .truncationMode(.middle)
-          .multilineTextAlignment(.center)
-      } else {
-        WorkNoteLine(note: note)
-      }
+      status
+        .padding(.top, OnboardingLayout.Rhythm.content)
+        .pagePiece(.status)
+    }
+  }
+
+  /// What happens next, in the pill, while nothing runs or failed; else the work note.
+  @ViewBuilder private var status: some View {
+    if let waiting = state.waiting {
+      ProgressPill(text: waiting)
+        .lineLimit(OnboardingLayout.nameLines)
+        .truncationMode(.middle)
+        .multilineTextAlignment(.center)
+    } else {
+      WorkNoteLine(note: note)
     }
   }
 }
 
 #if DEBUG
   #Preview("Switch") {
-    SwitchScreen(state: PreviewStates.onboardingSwitchScreen, note: .none, isBusy: false) { _ in }
+    SwitchScreen(state: PreviewStates.onboardingSwitchScreen, note: .none)
       .onboardingSample()
   }
 #endif

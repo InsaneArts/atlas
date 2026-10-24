@@ -1,5 +1,5 @@
 /// What the person did in the setup window.
-public enum OnboardingEvent: Equatable, Sendable {
+public enum OnboardingEvent: Hashable, Sendable {
   /// Get Started on the welcome.
   case begin
   /// Back, to the screen before.

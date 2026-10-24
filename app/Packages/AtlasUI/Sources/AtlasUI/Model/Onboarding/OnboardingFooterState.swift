@@ -1,39 +1,45 @@
-/// The bar under a setup screen. Its defaults show no buttons and no dots, as the permission panel and the first reading have.
+/// The bar under every setup screen and the permission panel: Back or Choose Another Account on the left, the track in
+/// the middle, the screen's main action on the right. Its defaults show no buttons and no track, as the first reading
+/// has.
 public struct OnboardingFooterState: Equatable, Sendable {
-  /// Where the screen sits among the dots in the middle of the bar.
-  public struct Dots: Equatable, Sendable {
+  /// Where the screen sits on the track in the middle of the bar.
+  public struct Track: Equatable, Sendable {
     /// The current screen, from 0.
     public var index: Int
     /// How many screens this side of setup has.
     public var count: Int
+    /// What VoiceOver says for the track, such as "Step 2 of 6".
+    public var label: String
 
-    /// Creates the dots for one screen of a side of setup.
+    /// Creates the track for one screen of a side of setup.
     ///
     /// - Parameters:
     ///   - index: The current screen, from 0.
     ///   - count: How many screens this side of setup has.
-    public init(index: Int, count: Int) {
+    ///   - label: What VoiceOver says for the track, such as "Step 2 of 6".
+    public init(index: Int, count: Int, label: String) {
       self.index = index
       self.count = count
+      self.label = label
     }
   }
 
-  /// Back, on the left; nil shows none.
+  /// Back, or Choose Another Account in its place, on the left; nil shows none.
   public var back: OnboardingFooterAction?
-  /// The next step's button, on the right; nil shows none.
+  /// The screen's main action, on the right; nil shows none.
   public var next: OnboardingFooterAction?
-  /// The dots; nil shows none.
-  public var dots: Dots?
+  /// The track; nil shows none.
+  public var track: Track?
 
   /// Creates the bar under a screen.
   ///
   /// - Parameters:
-  ///   - back: Back, on the left; nil shows none.
-  ///   - next: The next step's button, on the right; nil shows none.
-  ///   - dots: The dots; nil shows none.
-  public init(back: OnboardingFooterAction? = nil, next: OnboardingFooterAction? = nil, dots: Dots? = nil) {
+  ///   - back: Back, or Choose Another Account in its place, on the left; nil shows none.
+  ///   - next: The screen's main action, on the right; nil shows none.
+  ///   - track: The track; nil shows none.
+  public init(back: OnboardingFooterAction? = nil, next: OnboardingFooterAction? = nil, track: Track? = nil) {
     self.back = back
     self.next = next
-    self.dots = dots
+    self.track = track
   }
 }

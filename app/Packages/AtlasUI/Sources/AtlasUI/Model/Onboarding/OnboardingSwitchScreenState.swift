@@ -28,8 +28,6 @@ public struct OnboardingSwitchScreenState: Equatable, Sendable {
   public var logInDetail: String
   /// Where the three steps stand.
   public var progress: Progress
-  /// Whether Lock and Switch shows: until the helper is signed in on screen.
-  public var showsLockButton: Bool
   /// Whether Atlas opens in the helper by itself; false when the helper could not be readied, so the person opens it.
   public var opensByItself: Bool
   /// What happens next, in the pill; nil while the work note has something to say.
@@ -41,21 +39,18 @@ public struct OnboardingSwitchScreenState: Equatable, Sendable {
   ///   - title: The headline, naming the helper.
   ///   - logInDetail: The first step's detail: where to choose the helper.
   ///   - progress: Where the three steps stand.
-  ///   - showsLockButton: Whether Lock and Switch shows: until the helper is signed in on screen.
   ///   - opensByItself: Whether Atlas opens in the helper by itself.
   ///   - waiting: What happens next, in the pill; nil while the work note has something to say.
   public init(
     title: String,
     logInDetail: String,
     progress: Progress,
-    showsLockButton: Bool,
     opensByItself: Bool = true,
     waiting: String? = nil
   ) {
     self.title = title
     self.logInDetail = logInDetail
     self.progress = progress
-    self.showsLockButton = showsLockButton
     self.opensByItself = opensByItself
     self.waiting = waiting
   }

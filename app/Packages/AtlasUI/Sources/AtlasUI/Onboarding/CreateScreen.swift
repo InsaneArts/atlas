@@ -1,17 +1,17 @@
 import SwiftUI
 
-/// The form for a new helper account. Its four fields edit the window's `OnboardingAccountForm` in place.
+/// The form for a new helper account. Its four fields edit the window's `OnboardingAccountForm` in place. Create
+/// Account is the footer's.
 struct CreateScreen: View {
   /// What the screen shows around the form.
   let state: OnboardingCreateScreenState
   /// The account's names and password.
   @Binding var form: OnboardingAccountForm
 
-  /// The form, why macOS will ask for an administrator's approval, then the line under it.
+  /// The form, the line under it, then why macOS will ask for an administrator's approval.
   var body: some View {
-    ScreenColumn {
-      GroupLabel(text: "New account")
-      Headline(title: OnboardingScreen.createTitle, tail: state.tail)
+    ScrollColumn(width: OnboardingLayout.column) {
+      OnboardingHeader(label: "New account", title: OnboardingScreen.createTitle, tail: state.tail)
       CardGroup {
         FieldRow(label: "Full name", text: $form.fullName)
         SeparatorLine()
@@ -23,10 +23,15 @@ struct CreateScreen: View {
       }
       .disabled(!state.isFormEnabled)
       .opacity(state.isFormEnabled ? 1 : Opacity.muted)
-      .padding(.top, Spacing.xsPlus)
+      .padding(.top, OnboardingLayout.Rhythm.paragraph)
+      .pagePiece(.content)
     } bottom: {
       WorkNoteLine(note: state.note)
+        .padding(.top, OnboardingLayout.Rhythm.content)
+        .pagePiece(.status)
       ApprovalNote()
+        .padding(.top, OnboardingLayout.Rhythm.status)
+        .pagePiece(.status)
     }
   }
 }

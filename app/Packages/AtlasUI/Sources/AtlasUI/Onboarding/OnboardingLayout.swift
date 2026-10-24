@@ -9,16 +9,8 @@ public enum OnboardingLayout {
   public static let card = CGSize(width: 720, height: 600)
   /// 360 by 500: the window as a narrow panel beside System Settings.
   public static let side = CGSize(width: 360, height: 500)
-  /// 420: the done screen's column.
-  static let narrowColumn: CGFloat = 420
-  /// 440: a screen's column unless it says otherwise.
+  /// 440: every setup screen's one column, so moving between screens never shifts its edges (v3 D2).
   static let column: CGFloat = 440
-  /// 450: the helper's done screen's column.
-  static let helperDoneColumn: CGFloat = 450
-  /// 460: a column holding a list of rows: switching, agents, permissions.
-  static let listColumn: CGFloat = 460
-  /// 480: the widest column: the account choice and the helper's allow screen.
-  static let wideColumn: CGFloat = 480
   /// 2: the most lines a line naming an account takes; a longer name is cut in its middle, so both its ends show.
   static let nameLines = 2
   /// 3: the most account rows the choice shows whole; with more, they scroll.
@@ -26,14 +18,14 @@ public enum OnboardingLayout {
   /// 170: the height scrolling account rows take: two rows and most of a third, so the cut row shows there are more,
   /// with room left for the work note and the footer.
   static let accountListHeight: CGFloat = 170
-  /// 32: how far a scrolling screen's content fades out above its pinned bottom, so a cut line reads as more below.
-  static let scrollFade: CGFloat = 32
-  /// 36: above a screen's content, clear of the title bar.
-  static let contentTop: CGFloat = 36
-  /// 76: the footer's height.
-  static let footerHeight: CGFloat = 76
-  /// 22: the footer's side inset.
-  static let barInset: CGFloat = 22
+  /// 28: above a screen's content, clear of the title bar (v3 `.stage2`).
+  static let contentTop: CGFloat = 28
+  /// 64: the footer's height under a screen (v3 D2).
+  static let footerHeight: CGFloat = 64
+  /// 56: the footer's height under the permission panel beside System Settings (v3 D2).
+  static let sideFooterHeight: CGFloat = 56
+  /// 20: the footer's side inset (v3 `.foot2`).
+  static let barInset: CGFloat = 20
   /// 20: the work note's least height, so the screen does not jump as it comes and goes.
   static let workNoteHeight: CGFloat = 20
   /// 44: above the permission panel's content, clear of the title bar.
@@ -58,10 +50,21 @@ public enum OnboardingLayout {
   static let blockedSymbol: CGFloat = 40
   /// The warning symbol's font, at ``blockedSymbol``: a symbol of its own size, not text on the type scale.
   static let blockedSymbolFont = Font.system(size: blockedSymbol)
-  /// 14: how far below its place a screen starts as it arrives.
-  static let entryOffset: CGFloat = 14
-  /// −10: how far above its place a screen ends as it leaves.
-  static let exitOffset: CGFloat = -10
-  /// 0.08 seconds: a screen arrives just after the last one starts to leave.
-  static let entryDelay: TimeInterval = 0.08
+
+  /// The one vertical rhythm every setup screen keeps, so a screen's pieces sit at the same heights from screen to
+  /// screen (v3 D2). Each value is the space a piece takes above it, or, for the hero and the label, below it.
+  enum Rhythm {
+    /// 18: below the hero: an icon, a pairing or a mark.
+    static let hero: CGFloat = 18
+    /// 6: below the label over the title.
+    static let label: CGFloat = 6
+    /// 10: between the title and the paragraph under it.
+    static let title: CGFloat = 10
+    /// 22: above the screen's main block, below the paragraph or the title.
+    static let paragraph: CGFloat = 22
+    /// 14: above the status line, below the main block.
+    static let content: CGFloat = 14
+    /// 10: above a note, below the status line.
+    static let status: CGFloat = 10
+  }
 }

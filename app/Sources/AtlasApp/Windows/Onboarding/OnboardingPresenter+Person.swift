@@ -46,8 +46,8 @@ extension OnboardingPresenter {
     )
   }
 
-  /// The switch screen: the three steps from the helper's progress, Lock and Switch until the helper is signed in on
-  /// screen, and what happens next while nothing runs or failed.
+  /// The switch screen: the three steps from the helper's progress, and what happens next while nothing runs or
+  /// failed. Lock and Switch is the footer's.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The switch screen.
@@ -63,7 +63,6 @@ extension OnboardingPresenter {
         openAtlas: progress.openAtlas.stepState,
         allow: progress.allow.stepState
       ),
-      showsLockButton: !helper.signedIn || !helper.onConsole,
       opensByItself: snapshot.helperReadied,
       waiting: quiet ? waiting(helper, progress: progress) : nil
     )

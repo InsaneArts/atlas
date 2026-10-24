@@ -12,10 +12,13 @@ struct OnboardingPresenterTests {
   @Test("each step shows its screen, and loading shows until the first reading")
   func eachStepShowsItsScreen() throws {
     let fresh = try Samples.person(nil)
-    #expect(OnboardingPresenter.state(OnboardingSnapshot(facts: fresh)).content == .loading(problem: nil))
+    let loading = OnboardingPresenter.state(OnboardingSnapshot(facts: fresh))
+    #expect(loading.content == .loading(problem: nil))
+    #expect(loading.footer == OnboardingFooterState())
     let failed = OnboardingPresenter.state(OnboardingSnapshot(facts: fresh, problem: "unknown command"))
     #expect(failed.content == .loading(problem: "unknown command"))
-    #expect(failed.footer == OnboardingFooterState())
+    #expect(failed.footer.next?.event == .checkAgain, "Try Again reads again")
+    #expect(failed.footer.back == nil && failed.footer.track == nil)
     let cases: [(OnboardingSnapshot, OnboardingScreen.ID)] = [
       (Samples.snapshot(fresh), .welcome),
       (Samples.snapshot(fresh, Samples.choices()), .choose),
@@ -40,16 +43,18 @@ struct OnboardingPresenterTests {
       "the panel shows even before the first reading"
     )
     guiding.loaded = true
-    #expect(OnboardingPresenter.state(guiding).footer == OnboardingFooterState())
+    let footer = OnboardingPresenter.state(guiding).footer
+    #expect(footer.back?.event == .closePanel, "Back to the card, at the panel's bottom left")
+    #expect(footer.next == nil && footer.track == nil)
   }
 
-  @Test("the person's side counts six dots and the helper's three; a blocked screen shows none")
-  func dots() {
-    #expect(OnboardingStep.welcome.dots == OnboardingFooterState.Dots(index: 0, count: 6))
-    #expect(OnboardingStep.createAccount.dots == OnboardingStep.chooseHelper.dots, "the form shares the choice's dot")
-    #expect(OnboardingStep.done.dots?.index == 5)
-    #expect(OnboardingStep.helperDone.dots == OnboardingFooterState.Dots(index: 2, count: 3))
-    #expect(OnboardingStep.blocked("x").dots == nil)
+  @Test("the person's side counts six segments and the helper's three; a blocked screen shows no track")
+  func track() {
+    #expect(OnboardingStep.welcome.track == OnboardingFooterState.Track(index: 0, count: 6, label: "Step 1 of 6"))
+    #expect(OnboardingStep.createAccount.track == OnboardingStep.chooseHelper.track, "the form shares the choice's")
+    #expect(OnboardingStep.done.track?.index == 5)
+    #expect(OnboardingStep.helperDone.track == OnboardingFooterState.Track(index: 2, count: 3, label: "Step 3 of 3"))
+    #expect(OnboardingStep.blocked("x").track == nil)
   }
 
   /// What blocks a helper whose Atlas does not run, when no account asked.

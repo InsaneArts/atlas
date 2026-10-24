@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// In the helper: Accessibility and Screen Recording, allowed one after the other in System Settings, the next one
-/// with its Allow… button.
+/// with its Allow… button. Each row keeps its own Allow…, so the footer holds no main action here (Q-D3).
 struct PermissionsScreen: View {
   /// The two permissions.
   let state: OnboardingPermissionsScreenState
@@ -10,12 +10,12 @@ struct PermissionsScreen: View {
 
   /// Why Atlas asks, and the two permissions; Return allows the next one.
   var body: some View {
-    ScreenColumn(width: OnboardingLayout.listColumn) {
-      GroupLabel(text: "Permissions")
-      Headline(title: OnboardingScreen.permissionsTitle, tail: OnboardingScreen.permissionsTail)
-      Lede(
-        text:
-          "You allow Atlas twice. Atlas uses them only in this account, never in your own."
+    ScrollColumn(width: OnboardingLayout.column) {
+      OnboardingHeader(
+        label: "Permissions",
+        title: OnboardingScreen.permissionsTitle,
+        tail: OnboardingScreen.permissionsTail,
+        lede: "You allow Atlas twice. Atlas uses them only in this account, never in your own."
       )
       CardGroup {
         PermissionRow(
@@ -32,8 +32,11 @@ struct PermissionsScreen: View {
           send: send
         )
       }
-      .padding(.top, Spacing.xs)
+      .padding(.top, OnboardingLayout.Rhythm.paragraph)
+      .pagePiece(.content)
       Note(text: "Allow opens the list in System Settings. Atlas notices each one on its own.")
+        .padding(.top, OnboardingLayout.Rhythm.status)
+        .pagePiece(.status)
     }
   }
 }

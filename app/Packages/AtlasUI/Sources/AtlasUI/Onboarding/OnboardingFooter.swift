@@ -1,71 +1,99 @@
 import SwiftUI
 
-/// The bar under a setup screen: Back on the left, the dots in the middle, the next step's button on the right.
+/// The bar under every setup screen and the permission panel (v3 D3): Back, or Choose Another Account in its place, on
+/// the left; the track in the middle; the screen's main action on the right, the one button Return presses. It sits
+/// outside the screens, so it stays put while they change: its words swap in place and the track moves (v3 S1, S10).
+/// No rule above it; a scrolling screen fades out over it instead (v3 D9).
 struct OnboardingFooter: View {
   /// What the bar shows.
   let footer: OnboardingFooterState
+  /// The bar's height: the card's or the side panel's.
+  let height: CGFloat
   /// Receives the buttons' events.
   let send: @MainActor (OnboardingEvent) -> Void
+  @Environment(\.mainActionInFooter) private var mainActionInFooter
 
-  /// The dots under the two buttons, with a line above.
+  /// Back, the track and the main action, the track centred between the two sides.
   var body: some View {
-    ZStack {
-      if let dots = footer.dots {
-        PageDots(index: dots.index, count: dots.count)
+    HStack(spacing: Spacing.s) {
+      slot(footer.back, alignment: .leading)
+      if let track = footer.track {
+        ProgressTrack(index: track.index, count: track.count, label: track.label)
       }
-      HStack {
-        back
-        Spacer()
-        next
-      }
+      slot(next, alignment: .trailing)
     }
     .padding(.horizontal, OnboardingLayout.barInset)
-    .frame(height: OnboardingLayout.footerHeight)
-    .overlay(alignment: .top) {
-      SeparatorLine()
-    }
+    .frame(height: height)
   }
 
-  /// Back, when the screen has one.
-  @ViewBuilder private var back: some View {
-    if let back = footer.back {
-      Button(Self.title(back.title)) { send(back.event) }
-        .buttonStyle(.capsule(.plain))
-        .disabled(!back.isEnabled)
-        // Escape goes back; it never lets a helper go.
-        .keyboardShortcut(back.title == .back ? .cancelAction : nil)
-    }
+  /// The main action, unless the screen draws it (``SwiftUICore/EnvironmentValues/mainActionInFooter`` off).
+  private var next: OnboardingFooterAction? {
+    guard let next = footer.next, mainActionInFooter || !next.title.isScreenAction else { return nil }
+    return next
   }
 
-  /// The next step's button, when the screen has one.
-  @ViewBuilder private var next: some View {
-    if let next = footer.next {
-      Button(Self.title(next.title)) { send(next.event) }
-        .buttonStyle(.capsule())
-        .disabled(!next.isEnabled)
-        .keyboardShortcut(next.isDefault ? .defaultAction : nil)
-    }
-  }
-
-  /// Each button's fixed title.
+  /// One side of the bar, half of what the track leaves, holding its button at its outer edge.
   ///
-  /// - Parameter title: Which button it is.
-  /// - Returns: Its title.
-  private static func title(_ title: OnboardingFooterAction.Title) -> String {
-    switch title {
-    case .back: "Back"
-    case .chooseAnother: "Choose Another Account"
-    case .continue: "Continue"
-    case .createAccount: "Create Account"
-    case .done: "Done"
+  /// - Parameters:
+  ///   - action: The side's button, or nil for none.
+  ///   - alignment: Which edge it holds to: leading for Back, trailing for the main action.
+  /// - Returns: The side.
+  private func slot(_ action: OnboardingFooterAction?, alignment: Alignment) -> some View {
+    ZStack(alignment: alignment) {
+      if let action {
+        button(action, leading: alignment == .leading)
+          // A new identity for each event: SwiftUI keeps a shortcut's first action while the button's title stays
+          // the same, so a Continue that now does something else would otherwise send what it did before.
+          .id(action.event)
+          // Only opacity changes, so Reduce Motion keeps it.
+          .transition(.opacity.animation(Motion.fade))
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: alignment)
+  }
+
+  /// A footer button: plain on the left, filled on the right. Escape presses Back; Return presses the main action
+  /// alone, and only when its state says so.
+  ///
+  /// - Parameters:
+  ///   - action: The button.
+  ///   - leading: Whether it is Back's side.
+  /// - Returns: The button.
+  @ViewBuilder private func button(_ action: OnboardingFooterAction, leading: Bool) -> some View {
+    if leading {
+      Button(action.title.words) { send(action.event) }
+        .buttonStyle(.capsule(.plain))
+        .disabled(!action.isEnabled)
+        // Escape goes back; it never lets a helper go.
+        .keyboardShortcut(action.title == .back ? .cancelAction : nil)
+    } else {
+      Button(action.title.words) { send(action.event) }
+        .buttonStyle(.capsule())
+        .disabled(!action.isEnabled)
+        .keyboardShortcut(action.isDefault ? .defaultAction : nil)
     }
   }
 }
 
 #if DEBUG
   #Preview("Create") {
-    OnboardingFooter(footer: PreviewStates.onboardingCreate.footer) { _ in }
+    OnboardingFooter(footer: PreviewStates.onboardingCreate.footer, height: OnboardingLayout.footerHeight) { _ in }
       .frame(width: OnboardingLayout.card.width)
       .windowSurface()
+  }
+
+  #Preview("Interactive") {
+    @Previewable @State var state = PreviewStates.onboardingWelcome
+    InteractivePreview {
+      Menu(String("State")) {
+        ForEach(PreviewStates.onboarding) { preview in
+          Button(preview.name) { state = preview.value }
+        }
+      }
+      .fixedSize()
+    } content: {
+      OnboardingFooter(footer: state.footer, height: OnboardingLayout.footerHeight) { _ in }
+        .frame(width: OnboardingLayout.card.width)
+    }
   }
 #endif

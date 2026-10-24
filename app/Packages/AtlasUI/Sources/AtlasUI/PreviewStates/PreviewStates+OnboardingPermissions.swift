@@ -5,7 +5,9 @@
     /// In the helper: the panel beside System Settings, Accessibility on and Screen Recording allowed now.
     @MainActor public static let onboardingPermissionPanel = OnboardingState(
       content: .permissionPanel(onboardingPermissionPanelState),
-      footer: OnboardingFooterState(),
+      footer: OnboardingFooterState(
+        back: OnboardingFooterAction(title: .back, event: .closePanel, isEnabled: true, isDefault: false)
+      ),
       note: .none,
       isBusy: false
     )

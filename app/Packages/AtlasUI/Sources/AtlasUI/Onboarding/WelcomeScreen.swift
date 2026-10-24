@@ -1,32 +1,28 @@
 import SwiftUI
 
-/// What Atlas is, before anything is set up.
+/// What Atlas is, before anything is set up. Get Started is the footer's.
 struct WelcomeScreen: View {
-  /// Receives Get Started.
-  let send: @MainActor (OnboardingEvent) -> Void
-
-  /// The icon, what Atlas does, and Get Started.
+  /// The icon, what Atlas does, and how long setup takes.
   var body: some View {
-    ScreenColumn {
-      AppIcon(size: OnboardingLayout.welcomeIcon)
-      Headline(title: OnboardingScreen.welcomeTitle, tail: OnboardingScreen.welcomeTail)
-        .padding(.top, Spacing.s)
-      Lede(
-        text:
+    ScrollColumn(width: OnboardingLayout.column) {
+      OnboardingHeader(
+        title: OnboardingScreen.welcomeTitle,
+        tail: OnboardingScreen.welcomeTail,
+        lede:
           "Atlas runs a hidden second login on this Mac. Your agents open their builds there, click through them and come back with screenshots, while you keep working."
-      )
-      Button("Get Started") { send(.begin) }
-        .buttonStyle(.capsule(size: .large))
-        .keyboardShortcut(.defaultAction)
-        .padding(.top, Spacing.sPlus)
+      ) {
+        AppIcon(size: OnboardingLayout.welcomeIcon)
+      }
       Note(text: "You set this up once, in about five minutes. After that Atlas runs by itself.")
+        .padding(.top, OnboardingLayout.Rhythm.status)
+        .pagePiece(.status)
     }
   }
 }
 
 #if DEBUG
   #Preview("Welcome") {
-    WelcomeScreen { _ in }
+    WelcomeScreen()
       .onboardingSample()
   }
 #endif

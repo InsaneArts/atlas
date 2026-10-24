@@ -1,16 +1,14 @@
 import SwiftUI
 
 /// The compact panel beside System Settings while one permission is allowed: Atlas's icon to drag into the list, the
-/// switch for Atlas listed already, both permissions, and what it waits for.
+/// switch for Atlas listed already, both permissions, and what it waits for. Back is the footer's, at its bottom left.
 struct PermissionPanel<DragIcon: View>: View {
   /// The permission allowed now, and both permissions.
   let state: OnboardingPermissionPanelState
   /// Atlas's icon, which the person drags into System Settings: the app hands in its own, as no drag starts here.
   let dragIcon: DragIcon
-  /// Receives Back.
-  let send: @MainActor (OnboardingEvent) -> Void
 
-  /// The icon, what to do, both permissions, the pill and Back.
+  /// The icon, what to do, both permissions and the pill.
   var body: some View {
     VStack(spacing: Spacing.mPlus) {
       GroupLabel(text: state.label)
@@ -27,9 +25,6 @@ struct PermissionPanel<DragIcon: View>: View {
       }
       Spacer(minLength: Spacing.s)
       ProgressPill(text: state.pill, done: state.isOn)
-      Button("Back") { send(.closePanel) }
-        .buttonStyle(.capsule(.plain))
-        .keyboardShortcut(.cancelAction)
     }
     .padding(.horizontal, Spacing.xxl)
     .padding(.top, OnboardingLayout.panelTop)
@@ -42,9 +37,7 @@ struct PermissionPanel<DragIcon: View>: View {
     PermissionPanel(
       state: PreviewStates.onboardingPermissionPanelState,
       dragIcon: AppIcon(size: OnboardingLayout.dragIcon)
-    ) {
-      _ in
-    }
+    )
     .onboardingSample(OnboardingLayout.side)
   }
 #endif
