@@ -5,7 +5,6 @@
 
   /// The shared components' design renders: each component's samples, drawn at the size they take. Debug builds
   /// only, since the samples are.
-  @MainActor
   enum ComponentRender {
     /// Draws every component's samples to PNGs in `directory`, one per component (``ComponentSample``), at Retina
     /// scale.

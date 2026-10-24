@@ -16,14 +16,14 @@ struct PictureOutlet {
   var save: @MainActor (CGImage) -> Bool?
 
   /// The app's own: the general pasteboard and a save panel.
-  @MainActor static var live: PictureOutlet {
+  static var live: PictureOutlet {
     PictureOutlet(copy: copyToPasteboard, save: saveWithPanel)
   }
 
   /// Puts `image` on the general pasteboard.
   ///
   /// - Parameter image: The picture.
-  @MainActor private static func copyToPasteboard(_ image: CGImage) {
+  private static func copyToPasteboard(_ image: CGImage) {
     let pasteboard = NSPasteboard.general
     pasteboard.clearContents()
     pasteboard.writeObjects([NSImage(cgImage: image, size: .zero)])
@@ -33,7 +33,7 @@ struct PictureOutlet {
   ///
   /// - Parameter image: The picture.
   /// - Returns: Whether it was written, or nil when the person cancelled.
-  @MainActor private static func saveWithPanel(_ image: CGImage) -> Bool? {
+  private static func saveWithPanel(_ image: CGImage) -> Bool? {
     let panel = NSSavePanel()
     panel.allowedContentTypes = [.png]
     panel.nameFieldStringValue = suggestedName

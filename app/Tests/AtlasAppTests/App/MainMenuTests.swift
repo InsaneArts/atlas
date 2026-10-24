@@ -3,7 +3,6 @@ import Testing
 
 @testable import AtlasApp
 
-@MainActor
 @Suite("MainMenu")
 struct MainMenuTests {
   @Test("Close ⌘W is in the menus with the main window and with the setup window on its own", arguments: [true, false])

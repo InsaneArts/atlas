@@ -11,7 +11,6 @@ import os
 
 @testable import AtlasApp
 
-@MainActor
 @Suite("ViewerController")
 struct ViewerControllerTests {
   @Test("a reading shows the status and the picture, and control can be taken")

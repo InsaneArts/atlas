@@ -27,7 +27,6 @@ let finishedMac = """
 /// A Mac whose helper is chosen, allowed and answering, but not checked yet: the end-to-end check runs next.
 private let checkingMac = finishedMac.replacingOccurrences(of: #""finished": true"#, with: #""finished": false"#)
 
-@MainActor
 @Suite("OnboardingController")
 struct OnboardingControllerTests {
   /// A controller that runs `commands` and reaches nothing else of the system.
@@ -649,6 +648,8 @@ struct OnboardingControllerTests {
     try await settle("the facts were never read again") {
       commands.ran.filter { $0 == Action.onboardingStatus.arguments }.count == 2
     }
+    // The reading answers a turn after it is asked, on the main actor: behind it, its facts have landed.
+    await afterQueuedWork()
     #expect(controller.snapshot.step == .permissions, "not Allow again")
     #expect(controller.snapshot.facts.asker.accessibility, "not off")
   }
@@ -666,6 +667,6 @@ struct OnboardingControllerTests {
         commands.ran.filter { $0 == Action.onboardingStatus.arguments }.count == reading
       }
     }
-    #expect(controller.snapshot.step == .allow)
+    try await settle("the job never counted as stopped") { controller.snapshot.step == .allow }
   }
 }

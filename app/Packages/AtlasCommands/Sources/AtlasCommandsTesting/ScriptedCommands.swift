@@ -6,7 +6,8 @@ import Observation
 /// A stand-in command line: answers by the first arguments, records what ran and what it was given, and can run a
 /// step of the test while a command runs.
 /// It is main-actor bound, as every test that uses it is, so its state is only ever touched there, and observable, so
-/// a test's `settle` hears each command it records.
+/// a test's `settle` hears each command it records. ``run(_:input:)`` is marked `@MainActor` too: a witness of a
+/// requirement that runs on its caller's actor takes that isolation otherwise, even in a main-actor class.
 @MainActor
 @Observable
 public final class ScriptedCommands: CommandRunning {
@@ -46,14 +47,17 @@ public final class ScriptedCommands: CommandRunning {
     self.step = step
   }
 
-  /// Records the command, runs the step, then answers it, or fails it as unknown.
+  /// Records the command, waits a turn as a live one does, runs the step, then answers it, or fails it as unknown.
   ///
   /// - Parameters:
   ///   - arguments: The command's arguments.
   ///   - input: What it was given on standard input.
   /// - Returns: Its scripted outcome.
+  @MainActor
   public func run(_ arguments: [String], input: Data?) async -> Outcome {
     log.append((arguments, input))
+    // A live command runs on another thread, so an answer never comes in line either.
+    await Task.yield()
     await step?(arguments)
     let command = arguments.prefix(2)
       .joined(separator: " ")

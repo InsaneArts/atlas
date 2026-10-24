@@ -2,7 +2,6 @@ import AppKit
 
 /// The helper's menu items, built once for every menu that lists them: Recover…, Switch to the Helper… and Log Out the
 /// Helper…. Each asks its window (``HelperMenuActions``), which validates it against the same state its buttons draw.
-@MainActor
 enum HelperMenuItems {
   /// The three items, in order.
   ///

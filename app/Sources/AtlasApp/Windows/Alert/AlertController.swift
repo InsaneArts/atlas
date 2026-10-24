@@ -9,7 +9,6 @@ import Observation
 /// alert stays and says why. A log-out an app held up asks again, offering Log Out Anyway. Its buttons wait from the
 /// press until the status is read again and the outcome shows, and a command closes only the alert it started from
 /// (``generation``). ``AlertPresenter`` decides what the alert says.
-@MainActor
 @Observable
 final class AlertController {
   /// Which alert shows.

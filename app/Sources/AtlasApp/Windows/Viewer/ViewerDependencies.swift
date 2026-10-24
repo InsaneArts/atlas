@@ -43,7 +43,7 @@ struct ViewerDependencies {
   ///   - clock: The app's clock.
   ///   - switchToHelper: Locks the screen for the helper, returning what to tell the person.
   /// - Returns: The live dependencies.
-  @MainActor static func live(
+  static func live(
     service: any ViewerService,
     actions: HelperActions,
     commands: any CommandRunning,

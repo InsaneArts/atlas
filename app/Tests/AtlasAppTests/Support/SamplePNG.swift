@@ -8,7 +8,6 @@ import Foundation
 ///   - height: Its height in pixels.
 ///   - points: Its size in points, which the PNG records as its resolution; nil records none, as the helper's do.
 /// - Returns: The PNG's bytes.
-@MainActor
 func png(width: Int = 4, height: Int = 3, points: CGSize? = nil) -> Data {
   let bitmap = NSBitmapImageRep(
     bitmapDataPlanes: nil,

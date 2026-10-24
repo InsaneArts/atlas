@@ -9,7 +9,7 @@ extension ViewerPreferences {
   ///   - rate: The saved picture rate, in seconds; 0 for none.
   ///   - details: Whether Details was left showing.
   /// - Returns: The preferences.
-  @MainActor static func memory(rate: Double = 0, details: Bool = false) -> ViewerPreferences {
+  static func memory(rate: Double = 0, details: Bool = false) -> ViewerPreferences {
     final class Store {
       var rate: Double
       var details: Bool

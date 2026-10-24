@@ -31,7 +31,7 @@ struct OpenAtLogin {
   }
 
   /// Where Open at Login stands now.
-  @MainActor var state: State {
+  var state: State {
     State(isAvailable: isAvailable(), isEnabled: isEnabled())
   }
 }

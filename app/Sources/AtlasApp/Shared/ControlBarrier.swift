@@ -7,7 +7,6 @@ import Observation
 /// pending and are sent again before anything else that needs the helper free. It outlives any
 /// window, so closing or reopening the main window never drops a release still under way. Take Control waits while
 /// anything is under way here; the helper's own commands wait for all of it to be answered first.
-@MainActor
 @Observable
 final class ControlBarrier {
   /// 10 s: how long a lease the service grants stays alive unrenewed (`LEASE_SECONDS`, src/lib/viewer.rs).
@@ -73,8 +72,8 @@ final class ControlBarrier {
   /// (``unconfirmed``).
   func holdLostAcquisition() {
     begin()
+    // Unstructured and never cancelled: the hold ends only once a lease granted meanwhile can no longer be alive.
     Task {
-      // Never cancelled: the hold ends only once a lease granted meanwhile can no longer be alive.
       try? await clock.sleep(for: Self.lateGrant + Self.leaseLifetime)
       unconfirmed = await answered(tries: Self.statusTries) ? nil : HelperWords.helperUnconfirmed
       end()
@@ -101,6 +100,7 @@ final class ControlBarrier {
   ///   - answered: Runs once the service answered, with why it refused, or nil once it agreed.
   func release(_ lease: String, answered: @escaping @MainActor (String?) -> Void = { _ in }) {
     begin()
+    // Unstructured, so the release is counted and sent at once while the caller goes on; `settle()` waits for it.
     Task {
       let refusal = await send(lease)
       end()
@@ -131,6 +131,7 @@ final class ControlBarrier {
       await withTaskCancellationHandler {
         await withCheckedContinuation { waiting[number] = $0 }
       } onCancel: {
+        // Unstructured, as a cancellation handler is synchronous and may run off the main actor: the wait ends there.
         Task { @MainActor in self.wake(number) }
       }
       waiters -= 1

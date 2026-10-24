@@ -6,7 +6,6 @@ import Testing
 
 @testable import AtlasApp
 
-@MainActor
 @Suite("ViewerController+Tabs")
 struct ViewerControllerTabsTests {
   @Test("leaving the Screen tab gives control back")

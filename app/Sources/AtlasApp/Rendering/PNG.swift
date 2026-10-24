@@ -2,7 +2,6 @@ import AppKit
 import SwiftUI
 
 /// Drawing a view to PNG data at Retina scale, for the design renders.
-@MainActor
 enum PNG {
   /// The design renders draw two pixels a point, as a Retina display shows them, whatever this Mac's own display.
   static let scale = 2

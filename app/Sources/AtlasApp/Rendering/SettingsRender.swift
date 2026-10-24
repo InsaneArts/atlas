@@ -4,7 +4,6 @@
   import SwiftUI
 
   /// The Settings window's design renders. Debug builds only, since the samples are.
-  @MainActor
   enum SettingsRender {
     /// Each render's file name, in the order the previews list the samples (``PreviewStates/settings``): one for
     /// each sample. Kept apart from the states, which are the main actor's, so a test can list them as its arguments.

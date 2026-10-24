@@ -9,7 +9,6 @@ import Observation
 /// saying why, while a release is still refused; before switching, logging out or restarting it also ends this
 /// app's own control. While any of them runs, Take Control waits (``running``). `AppController` builds the one
 /// instance every window shares.
-@MainActor
 @Observable
 final class HelperActions {
   /// The commands, each with its own in-flight guard.

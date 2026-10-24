@@ -39,7 +39,7 @@ struct AttentionSignals {
   /// that was already there.
   ///
   /// - Parameter status: The service's answer, or nil when the reading failed.
-  @MainActor mutating func read(_ status: ViewerStatus?) {
+  mutating func read(_ status: ViewerStatus?) {
     guard let status else { return }
     let notice = RecoveryNotice.of(earlier: answerBefore, previous: lastAnswer, current: status.overview)
     answerBefore = lastAnswer
@@ -51,7 +51,7 @@ struct AttentionSignals {
   /// The Dock icon showed or hid.
   ///
   /// - Parameter shown: Whether it shows now.
-  @MainActor mutating func dockIcon(shown: Bool) {
+  mutating func dockIcon(shown: Bool) {
     dockIconShown = shown
     settleBadge()
   }
@@ -60,18 +60,18 @@ struct AttentionSignals {
   /// which macOS asks only the first time; Atlas never asks at launch.
   ///
   /// - Parameter on: Whether it is on now.
-  @MainActor func notifyChanged(_ on: Bool) {
+  func notifyChanged(_ on: Bool) {
     if on { notifier.requestAuthorization() }
   }
 
   /// The person turned the Dock badge on or off in Settings.
-  @MainActor mutating func badgeChanged() {
+  mutating func badgeChanged() {
     settleBadge()
   }
 
   /// Shows the badge while Needs you asks for the person, the Dock icon shows and the person asked for it; clears it
   /// otherwise.
-  @MainActor private mutating func settleBadge() {
+  private mutating func settleBadge() {
     let needsYou = lastAnswer.map { RecoveryNotice.needsPerson(previous: answerBefore, current: $0) } ?? false
     let label = needsYou && dockIconShown && preferences.loadBadge() ? NotificationWords.badge : nil
     guard label != shownBadge else { return }

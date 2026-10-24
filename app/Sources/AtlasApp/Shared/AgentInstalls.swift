@@ -6,7 +6,6 @@ import Observation
 /// One install runs at a time, app-wide, since each rewrites the plugin's marketplace and the agents' own settings;
 /// the agents it connects stay reserved until its command ends, whether or not the window that asked is still open.
 /// Both windows read ``installing`` for their buttons. `AppController` builds the one instance and passes it to each.
-@MainActor
 @Observable
 final class AgentInstalls {
   /// The agents being connected now, by their ids in `atlas agents` results; empty while none is.

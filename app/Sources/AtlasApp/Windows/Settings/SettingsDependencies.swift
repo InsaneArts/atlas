@@ -32,7 +32,7 @@ struct SettingsDependencies {
   ///   - links: What Settings shares with the other windows.
   ///   - clock: The app's clock.
   /// - Returns: The live dependencies.
-  @MainActor static func live(
+  static func live(
     commands: any CommandRunning,
     actions: HelperActions,
     installs: AgentInstalls,

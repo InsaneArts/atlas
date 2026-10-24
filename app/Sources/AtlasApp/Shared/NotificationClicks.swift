@@ -3,7 +3,9 @@ import UserNotifications
 
 /// Opens Atlas's main window when the person clicks one of its notifications. A class only because Notification
 /// Center's delegate must be an object.
-final class NotificationClicks: NSObject, UNUserNotificationCenterDelegate, Sendable {
+/// `nonisolated`: Notification Center calls its delegate on a queue of its own, and only opening the window needs the
+/// main actor.
+nonisolated final class NotificationClicks: NSObject, UNUserNotificationCenterDelegate, Sendable {
   /// Opens the main window.
   private let open: @MainActor @Sendable () -> Void
 

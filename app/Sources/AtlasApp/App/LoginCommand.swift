@@ -1,7 +1,6 @@
 import Foundation
 
 /// `--login on|off|status`: manages Open at Login for the command line, answering in JSON on standard output.
-@MainActor
 enum LoginCommand {
   /// Applies `change` and prints the result, then exits.
   ///

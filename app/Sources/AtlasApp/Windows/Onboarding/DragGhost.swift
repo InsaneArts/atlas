@@ -7,7 +7,6 @@ import SwiftUI
 /// taking focus. It shows ``DragGhostView`` from the panel's icon into System Settings' list while the panel waits
 /// for its switch, and hides while the person points at the icon or drags it. Each time it appears it starts at the
 /// icon, and it rests after ``DragGhostTrack/loops`` loops for a permission (``DemonstrationBudget``).
-@MainActor
 @Observable
 final class DragGhost {
   /// Where Atlas lands in System Settings' window, as fractions of its width from the left and of its height from the

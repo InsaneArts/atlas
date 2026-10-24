@@ -61,6 +61,7 @@ public final class InputQueue {
       return
     }
     pending.append(Item(actions: actions, frame: frame, lease: owner, generation: generation))
+    // Unstructured, as input arrives through synchronous event handlers; `sending` keeps one drain at a time.
     Task { await drain() }
   }
 

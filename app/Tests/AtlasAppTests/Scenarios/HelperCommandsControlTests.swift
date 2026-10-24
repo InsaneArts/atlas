@@ -11,7 +11,6 @@ import Testing
 
 /// The helper's commands and the main window's control, over one shared barrier: no command runs while an
 /// acquisition or a release is unanswered, a late grant is given back first, and Take Control waits for both.
-@MainActor
 @Suite("Helper commands and control")
 struct HelperCommandsControlTests {
   /// A status of a ready, idle helper the panel can switch to.
@@ -63,7 +62,7 @@ struct HelperCommandsControlTests {
     let switching = Task { await viewer.actions.switchTo("atlas") }
     try await settle("the switch never reached its wait") { viewer.barrier.waiters == 1 }
     service.resume("acquire")
-    try await settle("the switch never ran") { commands.ran.count == 1 }
+    try await settle("the switch never ran") { seen.serviceLogs.count == 1 }
     await taking.value
     #expect(viewer.session.lease == nil, "a grant that arrives once a command started is not kept")
     #expect(seen.serviceLogs.first?.contains("released lease") == true)
@@ -311,10 +310,12 @@ struct HelperCommandsControlTests {
     let clock = ManualClock()
     let viewer = try await ViewerController.watching(service, commands: commands, clock: clock)
     await viewer.takeControl()
-    // The reading the grant asks for has ended once the heartbeat and the pause between pictures both wait, so the
-    // status held next is Recover's own.
     try await clock.untilSleeping(2, for: ViewerController.controlEvery, "the viewer never came to rest in control")
-    service.hold = ["status"]
+    // Recover's own reading, made once it no longer waits for the release: the viewer reads the status too once its
+    // release is answered, and which of the two asks first is the executor's choice.
+    service.holdWhen = { route in
+      route == "status" && viewer.actions.running.contains(.recovery) && !viewer.actions.isWaiting(.recovery)
+    }
     let recovering = Task { await viewer.actions.recover() }
     try await settle("Recover never read the status") { service.held["status"] != nil }
     #expect(viewer.session.lease == nil, "control was given back first")

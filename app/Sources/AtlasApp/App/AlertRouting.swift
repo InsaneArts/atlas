@@ -1,6 +1,5 @@
 /// Where an alert the menu bar panel asks for shows: in the main window, over its own scrim, while it is open; else
 /// in the alert window. `AppController` decides through it, so the choice is one rule.
-@MainActor
 struct AlertRouting {
   /// Whether the main window is open.
   var viewerOpen: @MainActor () -> Bool

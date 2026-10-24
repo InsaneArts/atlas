@@ -3,7 +3,6 @@ import Testing
 
 @testable import AtlasApp
 
-@MainActor
 @Suite("PanelMoreMenu")
 struct PanelMoreMenuTests {
   /// Answers the helper's items; none is chosen here.

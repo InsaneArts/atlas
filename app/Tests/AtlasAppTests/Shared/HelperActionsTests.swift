@@ -7,7 +7,6 @@ import Testing
 
 @testable import AtlasApp
 
-@MainActor
 @Suite("HelperActions")
 struct HelperActionsTests {
   /// A status whose last action's outcome is unknown, so Recover restarts the helper.

@@ -10,7 +10,6 @@
 
   /// The setup window's samples are written out by hand; these keep each one what the window would show for the same
   /// facts.
-  @MainActor
   @Suite("PreviewStates+Onboarding")
   struct OnboardingPreviewStatesTests {
     /// The person's account, with one standard account that could be the helper, and the helper `atlas` as given.

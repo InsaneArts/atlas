@@ -141,7 +141,8 @@ extension ViewerController {
       barrier.release(previous) { [weak self] refusal in
         guard let self, generation == controlGeneration, session.lease == nil else { return }
         if let refusal { return say(refusal) }
-        // Show the release at once: reading the status overtakes a reading under way.
+        // Show the release at once: reading the status overtakes a reading under way. Unstructured, as the barrier
+        // answers through a synchronous callback.
         Task {
           await self.readStatus()
           self.refresh()

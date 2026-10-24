@@ -9,7 +9,6 @@ import AtlasService
 /// closes, so it never outlives the `atlas` that started it. A few flags run one task and exit instead
 /// (``LaunchArguments``).
 @main
-@MainActor
 enum AtlasApp {
   /// Starts the launch its arguments ask for.
   static func main() {
@@ -112,6 +111,7 @@ enum AtlasApp {
   static func drawPanel(service: ViewerClient, overrides: PanelRenderOverrides, to path: String, dark: Bool) -> Never {
     let app = NSApplication.shared
     listen(received: { _ in }, closed: { NSApp.terminate(nil) })
+    // Unstructured, as the drawing needs the app running below; it exits the process once drawn.
     Task {
       let drawn = await PanelRender.draw(
         service: service,
@@ -162,6 +162,7 @@ enum AtlasApp {
     closed: @escaping @MainActor @Sendable () -> Void
   ) {
     Thread.detachNewThread {
+      // Unstructured, as this thread is outside any actor: each line, then the close, hops to the main actor.
       while let line = readLine() {
         Task { @MainActor in received(line) }
       }

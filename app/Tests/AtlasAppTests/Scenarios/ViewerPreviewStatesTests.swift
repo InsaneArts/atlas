@@ -9,7 +9,6 @@
 
   /// The main window's samples are written out by hand; these keep each one what the window would show for the same
   /// facts.
-  @MainActor
   @Suite("PreviewStates+Viewer")
   struct ViewerPreviewStatesTests {
     /// An agent's latest actions, as the boards show them, newest first.

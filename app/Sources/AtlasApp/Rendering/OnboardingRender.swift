@@ -4,7 +4,6 @@
   import SwiftUI
 
   /// The setup window's design renders. Debug builds only, since the samples are.
-  @MainActor
   enum OnboardingRender {
     /// Every setup window sample drawn for checking against the design, by file name, in the order the person
     /// meets them.

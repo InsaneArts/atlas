@@ -6,7 +6,6 @@ import Testing
 
 @testable import AtlasApp
 
-@MainActor
 @Suite("KeysMenu")
 struct KeysMenuTests {
   @Test("the Keys menu offers exactly the board's six keys")

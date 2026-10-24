@@ -7,7 +7,6 @@ import Testing
 
 @testable import AtlasApp
 
-@MainActor
 @Suite("ViewerController+Panes")
 struct ViewerControllerPanesTests {
   /// Two screenshots, newest first, as the service lists them.

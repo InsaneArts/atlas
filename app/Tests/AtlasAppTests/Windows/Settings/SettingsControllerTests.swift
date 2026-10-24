@@ -7,7 +7,6 @@ import Testing
 
 @testable import AtlasApp
 
-@MainActor
 @Suite("SettingsController")
 struct SettingsControllerTests {
   /// A project `atlas agents status` lists as taught.

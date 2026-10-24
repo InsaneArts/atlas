@@ -9,12 +9,10 @@ import Testing
 
 @testable import AtlasApp
 
-@MainActor
 @Suite("AlertController")
 struct AlertControllerTests {
   /// What a test's stand-in links saw: the overview they give, and how often the window closed; observable, so a
   /// test's `settle` hears each read.
-  @MainActor
   @Observable
   final class Seen {
     /// The overview the links give.

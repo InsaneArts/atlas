@@ -4,7 +4,6 @@ import AppKit
 /// (``HelperMenuItems``), then Open at Login and Quit Atlas. Built from the presenter's ``PanelMoreMenuState``, whose
 /// fields its items are enabled and ticked by, the same fields the panel's buttons draw; its key equivalents act
 /// only while it is open.
-@MainActor
 enum PanelMoreMenu {
   /// 230: the menu's width (mac.py:386).
   static let width: CGFloat = 230

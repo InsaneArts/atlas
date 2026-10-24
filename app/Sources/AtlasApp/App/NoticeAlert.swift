@@ -13,7 +13,7 @@ enum NoticeAlert {
   ///   - switchBack: The account Switch Back locks the screen for, or nil for OK alone.
   ///   - commands: The `atlas` Switch Back runs.
   /// - Returns: Never; the process exits.
-  @MainActor static func show(title: String, message: String, switchBack: String?, commands: Commands) -> Never {
+  static func show(title: String, message: String, switchBack: String?, commands: Commands) -> Never {
     let app = NSApplication.shared
     DockIcon.settle(windowOpen: false)
     let alert = NSAlert()

@@ -11,7 +11,6 @@ import Observation
 /// ``ViewerPresenter`` decides what the window shows. Its parts are in `ViewerController+Control`, `+Input`,
 /// `+InputSink`, `+Reading`, `+Tabs`, `+Picture`, `+Alert`, and for the other tabs `+Panes`, `+Activity`, `+Apps`,
 /// `+Shots` and `+Thumbnails`.
-@MainActor
 @Observable
 final class ViewerController {
   /// Between pictures while holding control: 500 ms, so the person sees what their input did at once.
@@ -188,6 +187,7 @@ final class ViewerController {
   ///
   /// - Parameter event: What the person did.
   func send(_ event: ViewerEvent) {
+    // Unstructured, as `send` is the view's synchronous callback: each async event runs in a task of its own.
     switch event {
     case .selectTab(let tab): selectTab(tab)
     case .togglePause: togglePause()
@@ -239,6 +239,7 @@ final class ViewerController {
   /// Shows Details, reading what it lists that the helper's status does not carry, or hides it.
   func toggleDetails() {
     detailsShown.toggle()
+    // Unstructured, as the event is synchronous: Details reads its facts beside it.
     if detailsShown { Task { await readDetails() } }
   }
 
@@ -246,6 +247,7 @@ final class ViewerController {
   ///
   /// - Parameter shown: Whether the window is on screen.
   func setVisible(_ shown: Bool) {
+    // Unstructured, as AppKit's notification is synchronous: Details reads its facts beside it.
     if shown, !self.shown, detailsShown, agents == nil { Task { await readDetails() } }
     self.shown = shown
     if !shown { releaseControl() }

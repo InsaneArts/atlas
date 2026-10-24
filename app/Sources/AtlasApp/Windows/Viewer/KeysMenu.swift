@@ -3,7 +3,6 @@ import AppKit
 /// Keys this Mac would keep for itself (⌘⇥, ⌘Space…) and keys an app would keep (⌘W, ⌘Q, Escape), sent to the
 /// helper from a menu under the Keys button, which leaves the window in front and control where it is. An AppKit
 /// menu, so its key equivalents are only shown, never registered as this app's.
-@MainActor
 enum KeysMenu {
   /// 240: the menu's width (mac.py:152).
   static let width: CGFloat = 240

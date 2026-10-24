@@ -5,7 +5,6 @@ import SwiftUI
 /// The onboarding window: a dark card in the middle of the screen, or a narrow panel beside System Settings, following
 /// its window, while the person turns a switch on there (``SettingsDock``). It has a Dock icon while open, like any app
 /// window (``DockIcon``).
-@MainActor
 final class OnboardingWindow: NSObject, NSWindowDelegate {
   /// The window's controller.
   let controller: OnboardingController
@@ -138,6 +137,7 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
   func windowWillClose(_ notification: Notification) {
     isOpen = false
     dock.close()
+    // Unstructured, as AppKit's notification cannot wait: the controller's close runs to its end, then `closed`.
     Task {
       await controller.close()
       closed(self)

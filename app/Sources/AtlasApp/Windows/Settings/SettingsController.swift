@@ -5,7 +5,6 @@ import Observation
 /// person's choices. Values another window also shows (the helper's status, Open at Login, the picture) are read
 /// through ``SettingsLinks`` each time the window draws, so they stay one value; ``SettingsPresenter`` decides what
 /// the window shows. Its parts are in `SettingsController+Helper`, `+Agents`, `+Updates` and `+Alert`.
-@MainActor
 @Observable
 final class SettingsController {
   /// What the window is doing. Written only by the controller's own files.
@@ -78,6 +77,7 @@ final class SettingsController {
   ///
   /// - Parameter event: What the person did.
   func send(_ event: SettingsEvent) {
+    // Unstructured, as `send` is the view's synchronous callback: each async event runs in a task of its own.
     switch event {
     case .selectTab(let tab): selectTab(tab)
     case .checkAgain: Task { await checkAgain() }
@@ -102,6 +102,7 @@ final class SettingsController {
     let shown = SettingsPresenter.general(snapshot)
     let links = dependencies.links
     if general.opensAtLogin != shown.opensAtLogin {
+      // Unstructured, as an edit is synchronous: the change runs beside it.
       Task { await links.setOpenAtLogin(general.opensAtLogin) }
     }
     if general.picture != shown.picture {

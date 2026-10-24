@@ -11,7 +11,6 @@ import Observation
 ///
 /// Each part of the snapshot is its own stored property, so the menu bar glyph, which reads only the status, is not
 /// redrawn when a picture arrives. They are written only by the controller's own files; the shell calls its methods.
-@MainActor
 @Observable
 final class PanelController {
   /// Between status readings with the panel open, and between pictures while it is open: 2 s, as the viewer's
@@ -116,6 +115,7 @@ final class PanelController {
   ///
   /// - Parameter event: What the person did.
   func send(_ event: PanelEvent) {
+    // Unstructured, as `send` is the view's synchronous callback: each async event runs in a task of its own.
     switch event {
     case .openAtlas: links.openViewer(nil)
     case .openScreen: links.openViewer(.screen)

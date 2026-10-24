@@ -10,7 +10,6 @@ enum SystemSettingsWindow {
   /// System Settings' main window on screen now, in AppKit's coordinates; nil when it shows none.
   ///
   /// - Returns: The window's frame.
-  @MainActor
   static func frame() -> CGRect? {
     let owners = Set(
       NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)

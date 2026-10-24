@@ -4,7 +4,6 @@ import AtlasUI
 /// Moves the setup window to a new place on the screen: a glide that leaves softly, travels quickly and lands softly
 /// over ``Motion/Duration/glide``, or at once with Reduce Motion. It counts the glides running, so nothing else moves
 /// the window meanwhile.
-@MainActor
 final class WindowGlide {
   /// The glide's curve, its control points: an ease in and out steeper than AppKit's own.
   static let curve = (x1: Float(0.65), y1: Float(0), x2: Float(0.35), y2: Float(1))

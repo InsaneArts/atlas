@@ -3,7 +3,6 @@ import AppKit
 /// The ⋯ menu under its button (mac.py:347): the picture's choices, Copy and Save Picture, the helper's commands
 /// (``HelperMenuItems``) and a note on the helper. Built from the presenter's ``ViewerMoreMenu``; each item asks the
 /// window, which validates it against the state its buttons draw, so its key equivalents are only shown.
-@MainActor
 enum MoreMenu {
   /// 250: the menu's width (mac.py:347).
   static let width: CGFloat = 250

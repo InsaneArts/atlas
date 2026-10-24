@@ -9,7 +9,6 @@ import Testing
 
 @testable import AtlasApp
 
-@MainActor
 @Suite("PanelController")
 struct PanelControllerTests {
   /// A panel over scripted parts that opens no window.

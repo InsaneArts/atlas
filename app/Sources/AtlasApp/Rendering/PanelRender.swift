@@ -5,7 +5,6 @@ import SwiftUI
 
 /// The panel's render, `--render PATH`, in release builds too: it draws from the live service, not from samples,
 /// changed only by ``PanelRenderOverrides``, so every state, and the alert window, can be drawn offline.
-@MainActor
 enum PanelRender {
   /// The menu bar strip's height above the panel: 28, a menu bar's on a laptop without a notch.
   static let barHeight: CGFloat = 28

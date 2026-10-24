@@ -11,7 +11,7 @@ struct ShotOutlet {
   var reveal: @MainActor (URL) -> Void
 
   /// The app's own: the general pasteboard, and the Finder selecting the file.
-  @MainActor static var live: ShotOutlet {
+  static var live: ShotOutlet {
     ShotOutlet(copy: copyToPasteboard) { file in
       NSWorkspace.shared
         .activateFileViewerSelecting([file])
@@ -21,7 +21,7 @@ struct ShotOutlet {
   /// Puts a PNG on the general pasteboard, as a PNG and as an image for apps that take only TIFF.
   ///
   /// - Parameter png: The screenshot's bytes.
-  @MainActor private static func copyToPasteboard(_ png: Data) {
+  private static func copyToPasteboard(_ png: Data) {
     let pasteboard = NSPasteboard.general
     pasteboard.clearContents()
     if let image = NSImage(data: png) { pasteboard.writeObjects([image]) }

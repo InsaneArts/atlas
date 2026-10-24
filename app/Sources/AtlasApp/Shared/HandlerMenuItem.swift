@@ -1,8 +1,11 @@
 import AppKit
 
-/// A menu item that runs a closure (NSMenuItem itself is not main-actor-bound), such as a key in the Keys menu.
-@MainActor
-final class HandlerMenuItem: NSMenuItem {
+/// A menu item that runs a closure, such as a key in the Keys menu.
+///
+/// `nonisolated`, as NSMenuItem is: the app's main-actor default would make the initializer stubs Swift writes for
+/// NSMenuItem's own designated initializers main-actor bound, which an override of a nonisolated one may not be. Only
+/// choosing the item runs on the main actor, where AppKit sends its action.
+nonisolated final class HandlerMenuItem: NSMenuItem {
   /// What choosing the item runs.
   private let handler: @MainActor () -> Void
 
@@ -23,5 +26,5 @@ final class HandlerMenuItem: NSMenuItem {
   required init(coder: NSCoder) { fatalError("not used") }
 
   /// Runs the handler.
-  @objc func fire() { handler() }
+  @MainActor @objc func fire() { handler() }
 }

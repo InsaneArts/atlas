@@ -2,7 +2,6 @@ import Foundation
 
 /// What the main menu's View and File items, and the main window's ⋯ menu, ask of the window in front. The main
 /// window answers each and validates its item against the same state its buttons draw.
-@MainActor
 @objc protocol ViewerMenuActions {
   /// Screen, Activity, Apps or Screenshots, by the item's tag (``ViewerMenuTag``).
   ///

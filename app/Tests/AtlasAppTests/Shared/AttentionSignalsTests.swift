@@ -4,7 +4,6 @@ import Testing
 @testable import AtlasApp
 
 @Suite("AttentionSignals")
-@MainActor
 struct AttentionSignalsTests {
   /// A status whose overview is in `mode` and `state`.
   ///

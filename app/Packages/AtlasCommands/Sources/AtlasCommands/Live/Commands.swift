@@ -1,5 +1,6 @@
 import AtlasService
 import Foundation
+import os
 
 /// Runs the `atlas` command line. The app holds no policy of its own: every
 /// action is a command, so the command line stays complete.
@@ -115,18 +116,20 @@ public struct Commands: CommandRunning {
       try? stdin.fileHandleForWriting.write(contentsOf: input)
       try? stdin.fileHandleForWriting.close()
     }
-    // Both outputs are read at once, so neither can fill and stall the other.
-    let errors = CollectedOutput()
+    // Both outputs are read at once, so neither can fill and stall the other. The group orders standard error's one
+    // write before its one read; the lock holds it, so a closure on another thread may write it.
+    let errors = OSAllocatedUnfairLock(initialState: Data())
     let reading = DispatchGroup()
     reading.enter()
     let queue = DispatchQueue.global(qos: .userInitiated)
     queue.async {
-      errors.data = stderr.fileHandleForReading.readDataToEndOfFile()
+      let data = stderr.fileHandleForReading.readDataToEndOfFile()
+      errors.withLock { $0 = data }
       reading.leave()
     }
     let out = stdout.fileHandleForReading.readDataToEndOfFile()
     reading.wait()
     process.waitUntilExit()
-    return Outcome.parse(status: process.terminationStatus, stdout: out, stderr: errors.data)
+    return Outcome.parse(status: process.terminationStatus, stdout: out, stderr: errors.withLock { $0 })
   }
 }

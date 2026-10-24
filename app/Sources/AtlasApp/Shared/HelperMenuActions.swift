@@ -2,7 +2,6 @@ import Foundation
 
 /// What the helper's menu items ask, wherever they stand: the main menu's Helper menu, the main window's ⋯ and, from
 /// the panel's redesign on, the panel's ⋯. The window that answers them implements each and validates its items.
-@MainActor
 @objc protocol HelperMenuActions {
   /// Recover…: ask before recovering the helper.
   ///

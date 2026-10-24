@@ -79,18 +79,12 @@ final class DesktopCanvasView: NSView {
   /// stay with this Mac (``KeyRoute``).
   private func startIntercepting() {
     guard keys == nil else { return }
+    // AppKit runs a local monitor's handler on the main thread, and its handler type is not `@Sendable`, so the
+    // handler shares this view's main-actor isolation and reads the event where it was delivered.
     keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-      // Local monitors run on the main thread, so the event never crosses threads; AppKit's handler type is not
-      // main-actor bound, so Swift cannot know that, and the event is marked as safe to hand to the main actor.
-      nonisolated(unsafe) let event = event
-      nonisolated(unsafe) var passed: NSEvent? = event
-      // AppKit delivers every event, and runs a local monitor's handler, on the main thread, so the main actor is
-      // already running here; assumeIsolated says so rather than hopping.
-      MainActor.assumeIsolated {
-        // nil means handled here: AppKit then does nothing more with it.
-        if let self { passed = self.intercept(event) }
-      }
-      return passed
+      guard let self else { return event }
+      // nil means handled here: AppKit then does nothing more with it.
+      return intercept(event)
     }
   }
 

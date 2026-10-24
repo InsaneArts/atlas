@@ -25,13 +25,13 @@ struct SettingsPreferences {
   var saveBadge: @MainActor (Bool) -> Void
 
   /// The app's own, in its standard defaults.
-  @MainActor static var standard: SettingsPreferences { stored(in: .standard) }
+  static var standard: SettingsPreferences { stored(in: .standard) }
 
   /// Preferences kept in `defaults` under the shipped keys.
   ///
   /// - Parameter defaults: Where to keep them.
   /// - Returns: The preferences.
-  @MainActor static func stored(in defaults: UserDefaults) -> SettingsPreferences {
+  static func stored(in defaults: UserDefaults) -> SettingsPreferences {
     SettingsPreferences(
       loadTab: { defaults.string(forKey: tabKey) },
       saveTab: { defaults.set($0, forKey: tabKey) },

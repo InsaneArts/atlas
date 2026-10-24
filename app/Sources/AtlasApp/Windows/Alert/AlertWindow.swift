@@ -5,7 +5,6 @@ import SwiftUI
 /// The alert window: one alert in the widget's look, centred on the screen, for the helper's commands the menu bar
 /// panel asks for while no main window is open. Borderless and clear, so the alert's own corners and shadow show; it
 /// can become key, so Return and Escape press its buttons.
-@MainActor
 final class AlertWindow: NSWindow {
   /// The window's controller.
   let controller: AlertController

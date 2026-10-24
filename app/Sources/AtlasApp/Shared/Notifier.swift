@@ -23,7 +23,7 @@ struct Notifier {
   ///
   /// - Parameter open: Opens the main window.
   /// - Returns: The notifier.
-  @MainActor static func live(open: @escaping @MainActor @Sendable () -> Void) -> Notifier {
+  static func live(open: @escaping @MainActor @Sendable () -> Void) -> Notifier {
     let bundle = Bundle.main
     guard bundle.bundlePath.hasSuffix(".app"), bundle.bundleIdentifier != nil else { return silent }
     let clicks = NotificationClicks(open: open)

@@ -4,7 +4,6 @@ import AppKit
 /// in fields as in any app; File, View and Helper ask the main window through the responder chain
 /// (`MainMenu+File`, `+View`, `+Helper`), so with no main window in front their items wait. Every shortcut here is
 /// registered once; the window's buttons carry none.
-@MainActor
 enum MainMenu {
   /// The menu bar's menus.
   ///

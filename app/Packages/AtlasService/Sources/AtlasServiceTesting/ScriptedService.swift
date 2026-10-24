@@ -1,11 +1,13 @@
 import AtlasService
 import Foundation
 import Observation
+import Testing
 
 /// A stand-in viewer service: answers from fixed replies, can hold or fail a request until told, and records what it
 /// was asked.
 /// It is main-actor bound, as every test that uses it is, so its state is only ever touched there, and observable, so
-/// a test's `settle` hears each request it records.
+/// a test's `settle` hears each request it records. Each request is marked `@MainActor` too: a witness of a
+/// requirement that runs on its caller's actor takes that isolation otherwise, even in a main-actor class.
 @MainActor
 @Observable
 public final class ScriptedService: ViewerService {
@@ -19,6 +21,9 @@ public final class ScriptedService: ViewerService {
   public var display = ViewerStatus.Size(width: 1512, height: 982)
   /// Requests to hold the next time they are made, until `resume`d.
   public var hold: Set<String> = []
+  /// Holds the next request it says yes to, given its route as the request is made, until `resume`d, then is cleared:
+  /// for a test that must hold one caller's request among others to the same route. Nil holds none this way.
+  public var holdWhen: (@MainActor (String) -> Bool)?
   /// The requests held now, by route.
   public var held: [String: CheckedContinuation<Void, Never>] = [:]
   /// Requests that fail every time.
@@ -102,15 +107,34 @@ public final class ScriptedService: ViewerService {
     continuation?.resume()
   }
 
-  /// Holds a request when asked to, then fails it when asked to.
+  /// Holds a request when asked to, else lets it wait one turn as the live client's network request does, then fails
+  /// it when asked to.
   ///
   /// - Parameter route: The request's route.
   /// - Throws: A ``ServiceError`` saying the route failed.
   private func pause(_ route: String) async throws(ServiceError) {
-    if hold.remove(route) != nil {
-      await withCheckedContinuation { held[route] = $0 }
+    let chosen = holdWhen?(route) == true
+    if chosen { holdWhen = nil }
+    if hold.remove(route) != nil || chosen {
+      await withCheckedContinuation { holding($0, route) }
+    } else {
+      // The live client suspends on every request, so an unheld one never answers in line either.
+      await Task.yield()
     }
     if fail.contains(route) { throw ServiceError("\(route) failed") }
+  }
+
+  /// Keeps `continuation` as `route`'s held request. A second one held on the same route is a test's mistake: it is
+  /// recorded as an issue, and the first is let go rather than lost.
+  ///
+  /// - Parameters:
+  ///   - continuation: The held request.
+  ///   - route: Its route.
+  private func holding(_ continuation: CheckedContinuation<Void, Never>, _ route: String) {
+    if let earlier = held.updateValue(continuation, forKey: route) {
+      Issue.record("A second \(route) request was held while one already was; the first was let go")
+      earlier.resume()
+    }
   }
 
   /// Answers `reply` as the status, with `leaseHeld` as its control where `reply` names none, unless held, failed or
@@ -118,6 +142,7 @@ public final class ScriptedService: ViewerService {
   ///
   /// - Returns: The status `reply` describes.
   /// - Throws: A ``ServiceError`` when the route fails, or ``StatusRefused`` while `busy`.
+  @MainActor
   public func status() async throws -> ViewerStatus {
     statusCalls += 1
     defer { answered += 1 }
@@ -132,6 +157,7 @@ public final class ScriptedService: ViewerService {
   ///
   /// - Returns: The picture, with `revision` and `display`.
   /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
   public func frame() async throws -> Frame {
     frameCalls += 1
     try await pause("frame")
@@ -148,6 +174,7 @@ public final class ScriptedService: ViewerService {
   /// - Parameter frame: The id of the picture the person acts on.
   /// - Returns: The lease, `lease`.
   /// - Throws: A ``ServiceError`` when the route fails or is busy, or a timeout when its reply is lost.
+  @MainActor
   public func acquire(frame: String) async throws -> String {
     log.append("acquire \(frame)")
     try await pause("acquire")
@@ -169,6 +196,7 @@ public final class ScriptedService: ViewerService {
   ///   - lease: The lease to renew.
   ///   - frame: The id of the picture now shown.
   /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
   public func renew(lease: String, frame: String) async throws {
     log.append("renew")
     try await pause("renew")
@@ -178,6 +206,7 @@ public final class ScriptedService: ViewerService {
   ///
   /// - Parameter lease: The lease to end.
   /// - Throws: A ``ServiceError`` when the route fails, or `releaseRefusal`.
+  @MainActor
   public func release(lease: String) async throws {
     log.append("release \(lease)")
     try await pause("release")
@@ -189,6 +218,7 @@ public final class ScriptedService: ViewerService {
   /// Ends any viewer's control, unless held or failed.
   ///
   /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
   public func revoke() async throws {
     log.append("revoke")
     try await pause("revoke")
@@ -199,6 +229,7 @@ public final class ScriptedService: ViewerService {
   ///
   /// - Parameter stopped: Whether agents stop.
   /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
   public func setStopped(_ stopped: Bool) async throws {
     log.append(stopped ? "stop" : "resume")
     try await pause("hold")
@@ -211,6 +242,7 @@ public final class ScriptedService: ViewerService {
   ///   - frame: The id of the picture the input's coordinates refer to.
   ///   - actions: The actions, in order.
   /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
   public func input(lease: String, frame: String, actions: [InputAction]) async throws {
     log.append("input \(lease) \(actions.count)")
     self.actions.append(actions)
@@ -220,6 +252,7 @@ public final class ScriptedService: ViewerService {
   /// Records the recovery, which always restarts the helper.
   ///
   /// - Returns: True.
+  @MainActor
   public func recover() async throws -> Bool {
     log.append("recover")
     return true
@@ -229,6 +262,7 @@ public final class ScriptedService: ViewerService {
   ///
   /// - Returns: The activity log.
   /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
   public func activity() async throws(ServiceError) -> ActivityLog {
     activityCalls += 1
     try await pause("activity")
@@ -239,6 +273,7 @@ public final class ScriptedService: ViewerService {
   ///
   /// - Returns: The apps open in the helper.
   /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
   public func apps() async throws(ServiceError) -> [HelperApp] {
     appsCalls += 1
     try await pause("apps")
@@ -249,6 +284,7 @@ public final class ScriptedService: ViewerService {
   ///
   /// - Returns: The screenshots and their folder.
   /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
   public func screenshots() async throws(ServiceError) -> ScreenshotList {
     try await pause("screenshots")
     return ScreenshotList(shots: shots, folder: shotsFolder)
@@ -261,6 +297,7 @@ public final class ScriptedService: ViewerService {
   ///   - full: Whether it is asked for as taken, rather than as a thumbnail.
   /// - Returns: Its bytes.
   /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
   public func screenshot(name: String, full: Bool) async throws(ServiceError) -> Data {
     // Read when asked, as the service does: a held reply still carries the bytes there were then.
     shotCalls += 1

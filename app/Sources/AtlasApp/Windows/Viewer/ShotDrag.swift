@@ -30,10 +30,11 @@ enum ShotDrag {
     let folder = folder
     let provider = NSItemProvider()
     provider.suggestedName = suggestedName
-    provider.registerDataRepresentation(for: .png, visibility: .all) { completion in
-      // The provider takes its answer on any thread, as its documentation says; its handler's type is not marked as
-      // safe to send, so it is marked here.
-      nonisolated(unsafe) let done = completion
+    // Registered by type identifier: Foundation marks these handlers and their answers `@Sendable`, since the provider
+    // asks and takes its answer on any thread; the `UTType` forms leave the answer unmarked. Each handler is
+    // nonisolated, and so is its task. Unstructured, as the provider asks synchronously and takes the answer later.
+    let type = UTType.png.identifier
+    provider.registerDataRepresentation(forTypeIdentifier: type, visibility: .all) { done in
       Task {
         do {
           done(try await service.screenshot(name: name, full: true), nil)
@@ -43,9 +44,7 @@ enum ShotDrag {
       }
       return nil
     }
-    provider.registerFileRepresentation(for: .png, visibility: .all, openInPlace: false) { completion in
-      // As above: any thread may answer.
-      nonisolated(unsafe) let done = completion
+    provider.registerFileRepresentation(forTypeIdentifier: type, fileOptions: [], visibility: .all) { done in
       Task {
         do {
           let png = try await service.screenshot(name: name, full: true)

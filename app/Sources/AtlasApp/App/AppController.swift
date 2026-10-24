@@ -6,7 +6,6 @@ import AtlasUI
 /// Atlas.app once it is set up: the menu bar item, and the setup window
 /// when Getting Started… brings it back. The app has no Dock icon unless
 /// a window is open (``DockIcon``).
-@MainActor
 final class AppController: NSObject, NSApplicationDelegate {
   /// The `atlas` command line every window runs.
   let commands: any CommandRunning
@@ -25,6 +24,8 @@ final class AppController: NSObject, NSApplicationDelegate {
   private(set) var menuBar: PanelPopover?
   /// The panel's controller, which the viewer opens on.
   private(set) var panel: PanelController?
+  /// The panel's launch work (``PanelController/run()``), started once at launch; it ends once the helper is learned.
+  private var panelWork: Task<Void, Never>?
   /// The setup window, while open.
   private var onboarding: OnboardingWindow?
   /// The viewer window, while open.
@@ -96,6 +97,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     )
     menuBar = PanelPopover(controller: controller) { [weak self] in self?.openSettings() }
     panel = controller
+    panelWork = Task { await controller.run() }
   }
 
   /// A line from `atlas menubar` on standard input.
@@ -265,6 +267,7 @@ final class AppController: NSObject, NSApplicationDelegate {
       settleDockIcon()
       // Setup may have changed Open at Login, or set up a new helper.
       panel?.readOpenAtLogin()
+      // Unstructured, as the close callback is synchronous.
       Task { await self.panel?.findHelper() }
     }
     onboarding = window

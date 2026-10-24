@@ -7,7 +7,6 @@
   @testable import AtlasApp
 
   /// The panel's samples are written out by hand; these keep each one what the panel would show for the same facts.
-  @MainActor
   @Suite("PreviewStates+Panel")
   struct PanelPreviewStatesTests {
     /// What the controller holds on a set-up Mac whose helper is in `mode`: an agent's three actions in Opie, a few

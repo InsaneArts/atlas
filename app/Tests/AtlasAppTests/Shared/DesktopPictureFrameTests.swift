@@ -5,7 +5,6 @@ import Testing
 
 @testable import AtlasApp
 
-@MainActor
 @Suite("DesktopPicture+Frame")
 struct DesktopPictureFrameTests {
   @Test("a PNG that names no resolution is a point a pixel, as the helper's are")

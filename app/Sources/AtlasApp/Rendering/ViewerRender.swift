@@ -4,7 +4,6 @@
   import SwiftUI
 
   /// The viewer window's design renders. Debug builds only, since the samples are.
-  @MainActor
   enum ViewerRender {
     /// Each render's file name, numbered in the order the renders were added, one for each sample the previews list
     /// (``PreviewStates/viewer``), which `RenderTests` checks. Kept apart from the states, which are the main actor's,

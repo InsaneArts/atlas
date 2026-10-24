@@ -19,13 +19,13 @@ struct ViewerPreferences {
   var saveDetails: @MainActor (Bool) -> Void
 
   /// The app's own, in its standard defaults.
-  @MainActor static var standard: ViewerPreferences { stored(in: .standard) }
+  static var standard: ViewerPreferences { stored(in: .standard) }
 
   /// Preferences kept in `defaults` under the shipped keys.
   ///
   /// - Parameter defaults: Where to keep them.
   /// - Returns: The preferences.
-  @MainActor static func stored(in defaults: UserDefaults) -> ViewerPreferences {
+  static func stored(in defaults: UserDefaults) -> ViewerPreferences {
     ViewerPreferences(
       loadRate: { defaults.double(forKey: rateKey) },
       saveRate: { defaults.set($0, forKey: rateKey) },

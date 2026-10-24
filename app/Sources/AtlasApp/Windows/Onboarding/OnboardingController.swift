@@ -11,7 +11,6 @@ import Observation
 ///
 /// What the window shows is written in this file alone, so the window's shell and view change it only through
 /// ``send(_:)`` and ``update(_:)``.
-@MainActor
 @Observable
 final class OnboardingController {
   /// How often the facts are read while the window is open: 1.5 s, soon enough that a switch turned on in System
@@ -77,6 +76,7 @@ final class OnboardingController {
   ///
   /// - Parameter event: What the person did.
   func send(_ event: OnboardingEvent) {
+    // Unstructured, as `send` is the view's synchronous callback: each async event runs in a task of its own.
     switch event {
     case .begin: snapshot.choices.started = true
     case .back: back()
@@ -134,6 +134,7 @@ final class OnboardingController {
     if reading {
       readAgain = true
     } else {
+      // Unstructured, as asking is synchronous; `reading` keeps it to one reading at a time.
       Task { await read() }
     }
   }

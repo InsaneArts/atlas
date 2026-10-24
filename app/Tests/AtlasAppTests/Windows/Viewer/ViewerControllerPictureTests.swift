@@ -5,7 +5,6 @@ import Testing
 
 @testable import AtlasApp
 
-@MainActor
 @Suite("ViewerController+Picture")
 struct ViewerControllerPictureTests {
   @Test("Copy Picture never asks the helper for a new frame")

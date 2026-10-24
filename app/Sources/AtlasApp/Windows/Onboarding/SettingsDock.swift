@@ -3,7 +3,6 @@ import AppKit
 /// Keeps the permission panel beside System Settings' window while it guides, and shows the drag ghost there while
 /// the panel waits for its switch. System Settings may take a moment to open: the panel waits where the card was, then
 /// glides beside it once (or to the screen's left should it show no window by then), and moves with it at once after.
-@MainActor
 final class SettingsDock {
   /// How often the panel looks for System Settings' window to follow it: 8 times a second, so it keeps up with a
   /// window the person moves.

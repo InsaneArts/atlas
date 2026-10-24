@@ -4,7 +4,6 @@ import Testing
 
 @testable import AtlasApp
 
-@MainActor
 @Suite("DragGhost")
 struct DragGhostTests {
   @Test("the overlay covers both windows past their edges, and the path runs from the icon into the list")

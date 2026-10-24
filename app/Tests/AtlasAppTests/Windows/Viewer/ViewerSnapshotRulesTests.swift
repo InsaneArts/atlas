@@ -6,7 +6,6 @@ import Testing
 
 @testable import AtlasApp
 
-@MainActor
 @Suite("ViewerSnapshot+Rules")
 struct ViewerSnapshotRulesTests {
   /// A viewer that has read `reply` and set its recovery alert aside with Not Now.

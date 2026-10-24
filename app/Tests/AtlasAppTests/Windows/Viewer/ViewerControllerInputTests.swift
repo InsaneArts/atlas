@@ -9,7 +9,6 @@ import Testing
 
 @testable import AtlasApp
 
-@MainActor
 @Suite("ViewerController+Input")
 struct ViewerControllerInputTests {
   /// The desktop view: 400 by 300, showing the scripted helper's 1512-point display at about a quarter.

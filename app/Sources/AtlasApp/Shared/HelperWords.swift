@@ -2,7 +2,8 @@ import AtlasService
 
 /// The words the helper's own commands say in every window that runs them: their menu items and how Recover's
 /// refusals read. Words a single window says around them stay in that window's words.
-enum HelperWords {
+/// `nonisolated`: constants, which a test's arguments read off the main actor too.
+nonisolated enum HelperWords {
   /// The menu item that asks to recover the helper.
   static let recoverItem = "Recover…"
   /// The menu item that asks to restart the helper.

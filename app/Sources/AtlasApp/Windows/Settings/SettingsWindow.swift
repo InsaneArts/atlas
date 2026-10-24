@@ -4,7 +4,6 @@ import SwiftUI
 
 /// The Settings window: dark, a fixed 680 by 540, its icon tabs on the window's ground with no toolbar behind them.
 /// One at a time; it has a Dock icon while open, like any app window (``DockIcon``).
-@MainActor
 final class SettingsWindow: NSObject, NSWindowDelegate {
   /// The window's controller.
   let controller: SettingsController

@@ -30,7 +30,8 @@ struct DesktopInput: NSViewRepresentable {
     view.stopIntercepting()
     guard view.hasMarkedText() else { return }
     view.discardComposition()
-    Task { @MainActor [weak controller = view.controller] in controller?.compose("") }
+    // Unstructured, so the chip is dropped once SwiftUI's update has finished.
+    Task { [weak controller = view.controller] in controller?.compose("") }
   }
 
   /// Follows control once each update has finished.
@@ -42,8 +43,8 @@ struct DesktopInput: NSViewRepresentable {
     view.controller = controller
     // Read here so SwiftUI calls this again when control changes.
     _ = controller.holdingControl
-    // Changing the first responder during a SwiftUI update is not
-    // allowed: follow control once this update has finished.
-    Task { @MainActor in view.follow() }
+    // Changing the first responder during a SwiftUI update is not allowed. Unstructured, so control is followed once
+    // this update has finished.
+    Task { view.follow() }
   }
 }

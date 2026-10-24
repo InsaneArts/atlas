@@ -4,7 +4,6 @@ import AtlasUI
 
 /// The agents' own app icons, where their apps are on this Mac: the Claude app, and the Codex app, which is not the
 /// Codex command line but is the same agent. Claude Code has no app, so it keeps its tile.
-@MainActor
 enum AgentIcons {
   /// 52: an icon's pixels, twice the 26-point row icon, so it stays sharp on a Retina display.
   static let pixels: CGFloat = 52

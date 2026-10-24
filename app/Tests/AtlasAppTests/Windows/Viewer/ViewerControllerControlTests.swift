@@ -7,7 +7,6 @@ import Testing
 
 @testable import AtlasApp
 
-@MainActor
 @Suite("ViewerController+Control")
 struct ViewerControllerControlTests {
   @Test("taking control holds a lease, and giving it back releases it")

@@ -7,7 +7,6 @@ import Testing
 
 @testable import AtlasApp
 
-@MainActor
 @Suite("DesktopCanvasView")
 struct DesktopCanvasViewTests {
   /// No range: the desktop ignores where the input method's text would go.

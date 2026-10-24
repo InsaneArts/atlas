@@ -2,7 +2,6 @@ import AppKit
 
 /// The app's Dock icon, decided in this one place: Atlas lives in the menu bar, and shows in the Dock only while one
 /// of its windows is open, like any app window.
-@MainActor
 enum DockIcon {
   /// The activation policy for whether a window is open.
   ///

@@ -5,10 +5,10 @@ import SwiftUI
 /// modes and tests do, the icon file beside the sources.
 enum AppIconImage {
   /// The icon to draw.
-  @MainActor static let image = Image(nsImage: icon)
+  static let image = Image(nsImage: icon)
 
   /// The icon as AppKit has it, as the permission panel drags it.
-  @MainActor static let icon: NSImage = {
+  static let icon: NSImage = {
     if Bundle.main.bundlePath.hasSuffix(".app"), let icon = NSApp?.applicationIconImage {
       return icon
     }

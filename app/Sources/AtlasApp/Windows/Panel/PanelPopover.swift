@@ -4,7 +4,6 @@ import SwiftUI
 
 /// Atlas's menu bar item and its panel. The glyph follows the helper's mode; the panel reads the picture only while
 /// it is open, and opens its ⋯ menu here, under its button (`PanelPopover+Menu`).
-@MainActor
 final class PanelPopover: NSObject, NSPopoverDelegate {
   /// 6: between ⋯ and the menu it opens, as in the main window.
   static let menuGap: CGFloat = 6
@@ -54,7 +53,6 @@ final class PanelPopover: NSObject, NSPopoverDelegate {
       }
     )
     controller.watch(open: false)
-    Task { await controller.findHelper() }
   }
 
   /// What the person did in the panel: ⋯ opens its menu here, everything else goes to the controller.
@@ -80,6 +78,7 @@ final class PanelPopover: NSObject, NSPopoverDelegate {
       window?.makeKey()
       // No button is focused until the person presses Tab, as in menus.
       window?.makeFirstResponder(nil)
+      // Again after this turn, once the popover has finished opening. Unstructured, as opening is synchronous.
       Task { window?.makeFirstResponder(nil) }
       watchOutsideClicks()
       controller.watch(open: true)
@@ -107,6 +106,7 @@ final class PanelPopover: NSObject, NSPopoverDelegate {
         },
         setOpenAtLogin: { [weak self] on in
           guard let controller = self?.controller else { return }
+          // Unstructured, as a menu item's action is synchronous.
           Task { await controller.setOpenAtLogin(on) }
         },
         quit: { [weak self] in self?.controller.links.quit() }
@@ -126,6 +126,7 @@ final class PanelPopover: NSObject, NSPopoverDelegate {
     stopWatchingOutsideClicks()
     outsideClicks = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) {
       [weak self] _ in
+      // Unstructured, as a monitor's handler is synchronous: the panel closes after it, on the main actor.
       Task { @MainActor in self?.closePanel() }
     }
   }

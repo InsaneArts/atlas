@@ -6,7 +6,6 @@ import Testing
 
 @testable import AtlasApp
 
-@MainActor
 @Suite("ViewerPresenter")
 struct ViewerPresenterTests {
   /// A viewer that has read `status` and a picture taken just now.

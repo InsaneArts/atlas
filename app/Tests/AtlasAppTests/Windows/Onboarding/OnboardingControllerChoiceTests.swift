@@ -22,7 +22,6 @@ private let choiceForgotten = """
               "signedIn": false, "answering": false}}
   """
 
-@MainActor
 @Suite("OnboardingController choosing again")
 struct OnboardingControllerChoiceTests {
   @Test("choosing another account after creating one goes back to the list, not the account form")

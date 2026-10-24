@@ -2,11 +2,9 @@ import Testing
 
 @testable import AtlasApp
 
-@MainActor
 @Suite("AlertRouting")
 struct AlertRoutingTests {
   /// Where the stand-in windows showed alerts, and whether the main window is open.
-  @MainActor
   final class Shown {
     /// Whether the main window is open.
     var viewerOpen = true
