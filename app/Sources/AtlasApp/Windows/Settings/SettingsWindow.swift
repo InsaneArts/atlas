@@ -18,8 +18,15 @@ final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   ///
   /// - Parameters:
   ///   - controller: The window's controller.
+  ///   - autosaveName: The saved placement identity.
+  ///   - center: Places a window with no saved frame at the screen's center.
   ///   - closed: Runs once the window closes and its controller stops reading.
-  init(controller: SettingsController, closed: @escaping @MainActor (SettingsWindow) -> Void) {
+  init(
+    controller: SettingsController,
+    autosaveName: String = SettingsWindow.autosaveName,
+    center: @MainActor (NSWindow) -> Void = { $0.center() },
+    closed: @escaping @MainActor (SettingsWindow) -> Void
+  ) {
     self.controller = controller
     self.closed = closed
     super.init(
@@ -42,17 +49,15 @@ final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
       SettingsView(state: controller.state, edit: controller.update, send: controller.send)
     }
     controller.nameWindow = { [weak self] title in self?.title = title }
-    setFrameAutosaveName(Self.autosaveName)
+    let restored = setFrameUsingName(autosaveName)
+    if !restored { center(self) }
     validateFrame()
+    setFrameAutosaveName(autosaveName)
   }
 
-  /// Restores the person's frame on first presentation, centering only when no saved placement exists.
+  /// Presents the restored or centered window.
   func present() {
-    if !isPresented {
-      let restored = setFrameUsingName(Self.autosaveName)
-      if !restored { center() }
-      validateFrame()
-    }
+    validateFrame()
     isPresented = true
     makeKeyAndOrderFront(nil)
     NSApp.activate()

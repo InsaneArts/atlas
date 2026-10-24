@@ -12,6 +12,35 @@ import Testing
 
 @Suite("SettingsController")
 struct SettingsControllerTests {
+  @Test("Back and Forward into Agents refresh projects with only a status read and remember the destination")
+  func historyRefreshesAgents() async {
+    let commands = ScriptedCommands(["agents status": #"{"ok": true, "agents": [], "projects": []}"#])
+    var saved: String?
+    var title: String?
+    var dependencies = SettingsController.scripted(commands: commands).dependencies
+    dependencies.preferences.saveTab = { saved = $0 }
+    let controller = SettingsController(dependencies: dependencies)
+    controller.nameWindow = { title = $0 }
+    controller.send(.selectTab(.agents))
+    await controller.agentsReading?.value
+    controller.send(.selectTab(.about))
+    commands.answer("agents status", Self.statusWithOpie)
+    controller.send(.back)
+    await controller.agentsReading?.value
+    #expect(controller.agents.projects.map(\.path) == [Self.opie])
+    #expect(saved == "agents")
+    #expect(title == "Settings — Agents")
+    controller.send(.back)
+    commands.answer("agents status", #"{"ok": true, "agents": [], "projects": []}"#)
+    controller.send(.forward)
+    await controller.agentsReading?.value
+    #expect(controller.agents.projects.isEmpty)
+    #expect(saved == "agents")
+    #expect(title == "Settings — Agents")
+    #expect(commands.ran == Array(repeating: Action.agentsStatus.arguments, count: 3))
+    controller.close()
+  }
+
   @Test("history navigation preserves active work and alerts without running helper or update commands")
   func navigationPreservesWorkAndAlerts() {
     let commands = ScriptedCommands([:])

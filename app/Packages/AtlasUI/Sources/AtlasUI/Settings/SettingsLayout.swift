@@ -24,10 +24,10 @@ public enum SettingsLayout {
   static let sidebarTopInset: CGFloat = 52
   /// 2: between adjacent sidebar rows.
   static let sidebarRowGap = Spacing.half
-  /// 20: between sidebar clusters.
-  static let sidebarClusterGap = Spacing.xl
-  /// 36: the minimum ordinary sidebar row height.
-  static let sidebarRowHeight: CGFloat = 36
+  /// 12: between sidebar clusters.
+  static let sidebarClusterGap = Spacing.m
+  /// 32: the minimum ordinary sidebar row height.
+  static let sidebarRowHeight: CGFloat = 32
   /// 52: the Helper row's stable two-line slot.
   static let helperSidebarRowHeight: CGFloat = 52
   /// 64: the stationary navigation header height.
@@ -75,6 +75,8 @@ public enum SettingsLayout {
   static let progressWidth: CGFloat = 220
   /// 40: the helper's picture at the top of the Helper pane.
   static let accountPicture: CGFloat = 40
+  /// 600: the default account row's usable width after its horizontal padding.
+  static let accountStackThreshold = contentMaximumWidth - Spacing.m * 2
   /// 10: between a section's name and its group, as ``GroupedSection`` sets them, for a section that draws its own
   /// name.
   static let titleGap = Spacing.sPlus

@@ -12,25 +12,29 @@ struct HelperAccountRow: View {
 
   /// What it draws, from its state.
   var body: some View {
-    HStack(spacing: Spacing.m) {
-      AccountPicture(side: SettingsLayout.accountPicture)
-      VStack(alignment: .leading, spacing: Spacing.half) {
-        Text(account.name)
-          .textStyle(.headline)
-          .foregroundStyle(Color.textPrimary)
-          .lineLimit(1)
-        Text(account.line)
-          .textStyle(.callout)
-          .foregroundStyle(Color.textSecondary)
-          .lineLimit(1)
+    HelperAccountLayout {
+      HStack(spacing: Spacing.m) {
+        AccountPicture(side: SettingsLayout.accountPicture)
+        VStack(alignment: .leading, spacing: Spacing.half) {
+          Text(account.name)
+            .textStyle(.headline)
+            .foregroundStyle(Color.textPrimary)
+          Text(account.line)
+            .textStyle(.callout)
+            .foregroundStyle(Color.textSecondary)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
       }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .accessibilityElement(children: .combine)
-      StatusPill(label: account.status.label, tone: account.status.tone)
-      Button("Switch to the Helper…") { send(.askSwitch) }
-        .buttonStyle(.capsule(.glass, size: .mini))
-        .disabled(!buttons.canSwitch)
-        .help(buttons.switchHelp)
+      HStack(spacing: Spacing.m) {
+        StatusPill(label: account.status.label, tone: account.status.tone)
+        Spacer(minLength: Spacing.m)
+        Button("Switch to the Helper…") { send(.askSwitch) }
+          .buttonStyle(.capsule(.glass, size: .mini))
+          .disabled(!buttons.canSwitch)
+          .help(buttons.switchHelp)
+      }
     }
     .padding(Spacing.m)
     .accessibilityElement(children: .contain)

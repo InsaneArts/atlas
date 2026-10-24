@@ -1,12 +1,34 @@
 import AppKit
 import AtlasCommandsTesting
 import AtlasUI
+import Foundation
 import Testing
 
 @testable import AtlasApp
 
 @Suite("SettingsWindow")
 struct SettingsWindowTests {
+  @Test("a first opening with no saved frame centers before enabling autosave")
+  func aFirstOpeningCenters() {
+    let name = "Settings-first-opening-\(UUID().uuidString)"
+    defer { NSWindow.removeFrame(usingName: name) }
+    #expect(UserDefaults.standard.string(forKey: "NSWindow Frame \(name)") == nil)
+    let controller = SettingsController.scripted(commands: ScriptedCommands([:]))
+    var centered = false
+    let window = SettingsWindow(
+      controller: controller,
+      autosaveName: name,
+      center: { window in
+        #expect(window.frameAutosaveName.isEmpty, "centering precedes any automatic frame writes")
+        #expect(UserDefaults.standard.string(forKey: "NSWindow Frame \(name)") == nil)
+        centered = true
+      },
+      closed: { _ in }
+    )
+    #expect(centered)
+    #expect(window.frameAutosaveName == name)
+  }
+
   @Test("a restored narrow frame grows to the minimum while retaining its top edge")
   func anOldFrameGrowsToTheMinimum() {
     let current = CGRect(x: 100, y: 300, width: 680, height: 400)

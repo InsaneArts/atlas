@@ -14,11 +14,15 @@ struct SettingsSidebar: View {
         VStack(spacing: Spacing.m) {
           SearchField(text: "", prompt: "Search Settings", onChange: { _ in })
             .disabled(true)
-          row(.helper)
+          VStack(spacing: SettingsLayout.sidebarRowGap) {
+            row(.helper)
+          }
         }
-        row(.general)
-        row(.agents)
-        row(.about)
+        ForEach([SettingsTab.general, .agents, .about], id: \.self) { tab in
+          VStack(spacing: SettingsLayout.sidebarRowGap) {
+            row(tab)
+          }
+        }
       }
       .padding(.horizontal, SettingsLayout.sidebarInsets)
       .padding(.bottom, SettingsLayout.sidebarInsets)
