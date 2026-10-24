@@ -752,21 +752,9 @@ fn signed_daemon(program: &Path) -> Result<String> {
         .ok_or_else(|| problem("The helper app's signature could not be read"))
 }
 
-/// The signed Atlas executable the helper daemon runs: this one when it
-/// is inside the app, else the installed app's.
+/// The stable installed executable the helper daemon runs.
 fn daemon_program() -> Result<PathBuf> {
-    const INSTALLED: &str = "/Applications/Atlas.app/Contents/MacOS/atlas";
-
-    let current = std::env::current_exe().and_then(fs::canonicalize).ok();
-    current
-        .filter(|path| {
-            path.parent()
-                .is_some_and(|dir| dir.ends_with("Contents/MacOS"))
-        })
-        .or_else(|| Some(PathBuf::from(INSTALLED)).filter(|path| path.is_file()))
-        .ok_or_else(|| {
-            problem("Install Atlas.app in /Applications first; the helper runs it from there")
-        })
+    crate::init::app_executable()
 }
 
 /// What every plan starts from: the configuration (its canonical path,

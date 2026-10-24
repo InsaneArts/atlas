@@ -1422,9 +1422,15 @@ pub fn accept(controller_uid: u32, controller_name: &str) -> Result<Value> {
     )
 }
 
-/// This Atlas.app's executable, refused unless Atlas's developer signed it.
-fn signed_executable() -> Result<PathBuf> {
-    let executable = init::app_executable()?;
+/// The installed Atlas.app's executable, refused unless its developer signed it.
+pub(crate) fn signed_executable() -> Result<PathBuf> {
+    signed_executable_using(init::app_executable()?, setup::developer_id)
+}
+
+pub(crate) fn signed_executable_using(
+    executable: PathBuf,
+    developer_id: impl FnOnce(&Path) -> bool,
+) -> Result<PathBuf> {
     // Installation location for the shared app. The approved executor
     // independently protects and verifies its own copy before using it.
     if !executable.starts_with("/Applications") {
@@ -1433,7 +1439,7 @@ fn signed_executable() -> Result<PathBuf> {
         ));
     }
 
-    if !setup::developer_id(&executable) {
+    if !developer_id(&executable) {
         return Err(problem(
             "This Atlas.app is not signed by Atlas's developer. Install it again.",
         ));

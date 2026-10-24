@@ -142,10 +142,14 @@ fn sudo(args: &[&str]) -> Result<std::process::Output> {
         .output()?)
 }
 
-/// The installed app's executable; init runs from it.
+/// The stable installed identity, including when a temporary worker calls us.
 pub(crate) fn app_executable() -> Result<PathBuf> {
-    let executable = crate::update::installed_executable()?;
-    if !crate::update::reachable_by_others(&executable) {
+    app_executable_using(crate::update::reachable_by_others)
+}
+
+pub(crate) fn app_executable_using(reachable: impl FnOnce(&Path) -> bool) -> Result<PathBuf> {
+    let executable = PathBuf::from("/Applications/Atlas.app/Contents/MacOS/atlas");
+    if !reachable(&executable) {
         return Err(problem(
             "Atlas.app must be in /Applications so the helper account can run it",
         ));

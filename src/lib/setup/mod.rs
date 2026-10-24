@@ -145,11 +145,6 @@ chosen() {
 }
 chosen
 stage_executable
-# Only a login opener needs its copy after this worker exits.
-if [[ $9 == temporary ]]; then
-  snapshot=${executable%/Atlas.app/Contents/MacOS/atlas}
-  trap '/bin/rm -rf -- $snapshot' EXIT
-fi
 chosen
 if [[ $mode == login ]]; then
   /bin/launchctl asuser $uid /usr/bin/sudo -n -u $name $executable setup-helper $request --account $identity $last
@@ -260,13 +255,6 @@ fn run_as_helper(
         .arg(serde_json::to_string(request)?)
         .arg(serde_json::to_string(expected)?)
         .arg(if logged_out { "--logged-out" } else { "--" })
-        .arg(
-            if matches!(request, helper::Request::FirstLogin { opener: true, .. }) {
-                "keep"
-            } else {
-                "temporary"
-            },
-        )
         .stderr(std::process::Stdio::piped());
     let output = crate::onboarding::as_root::tracked_output(&mut command).map_err(|refusal| {
         Error::new(
@@ -853,6 +841,79 @@ fn next_steps(report: &Value) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_dispatcher_removes_first_login_copies_on_success_and_failure() {
+        use std::os::unix::fs::PermissionsExt;
+
+        for failure in ["none", "identity", "worker"] {
+            let dir = tempfile::tempdir().unwrap();
+            let source = dir.path().join("Source.app/Contents/MacOS");
+            fs::create_dir_all(&source).unwrap();
+            fs::write(source.join("atlas"), "worker").unwrap();
+            fs::write(source.join("AtlasApp"), "app").unwrap();
+            let guid = "6DB4B7AF-BE3C-486C-BD46-1B4558946919";
+            let mut script = [crate::onboarding::as_root::staging().as_str(), DISPATCH]
+                .concat()
+                .replace(
+                    "/private/var/tmp/atlas-approved.XXXXXXXX",
+                    &format!("{}/atlas-approved.XXXXXXXX", dir.path().display()),
+                );
+            for (tool, body) in [
+                (
+                    "/usr/bin/dscl",
+                    format!(
+                        "[[ $failure == identity && -e verified ]] && exit 1; print 'GeneratedUID: {guid}'"
+                    ),
+                ),
+                ("/usr/bin/id", "[[ $1 == -u ]] && print 7001 || print helper".into()),
+                ("/usr/sbin/chown", "exit 0".into()),
+                ("/usr/bin/codesign", "touch verified".into()),
+                (
+                    "/usr/bin/sudo",
+                    "[[ -f $4 ]] || exit 2; print -r -- \"$4\" > worker-path; [[ $failure == worker ]] && exit 1; print '{\"ok\":true}'".into(),
+                ),
+            ] {
+                let path = dir.path().join(Path::new(tool).file_name().unwrap());
+                fs::write(&path, format!("#!/bin/zsh -f\n{body}\n")).unwrap();
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+                script = script.replace(tool, path.to_str().unwrap());
+            }
+            let output = Command::new("/bin/zsh")
+                .args(["-f", "-c", &script, "zsh", "7001", "helper", guid, "plain"])
+                .arg(source.join("atlas"))
+                .args([
+                    r#"{"action":"first-login","uid":7001,"opener":true}"#,
+                    "{}",
+                    "--logged-out",
+                ])
+                .env("failure", failure)
+                .current_dir(dir.path())
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.success(),
+                failure == "none",
+                "{failure}: {output:?}"
+            );
+            assert!(dir.path().join("verified").is_file());
+            assert!(
+                !fs::read_dir(dir.path()).unwrap().any(|entry| {
+                    entry
+                        .unwrap()
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("atlas-approved.")
+                }),
+                "{failure}"
+            );
+            if failure != "identity" {
+                let worker = fs::read_to_string(dir.path().join("worker-path")).unwrap();
+                assert!(worker.contains("/atlas-approved."));
+                assert!(!Path::new(worker.trim()).exists());
+            }
+        }
+    }
+
     #[test]
     fn the_privileged_dispatcher_checks_identity_before_entering_a_session() {
         use std::os::unix::fs::PermissionsExt;

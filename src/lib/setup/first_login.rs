@@ -343,7 +343,7 @@ fn ready(
 pub(super) fn first_login(layout: &Layout, opener: bool) -> Result<Value> {
     let logged_in = crate::session::login(layout.uid).is_some();
     let program = if opener {
-        Some(crate::init::app_executable()?)
+        Some(crate::onboarding::signed_executable()?)
     } else {
         None
     };
@@ -609,6 +609,66 @@ mod tests {
         assert_eq!(
             value["AssociatedBundleIdentifiers"],
             json!([super::super::IDENTIFIER])
+        );
+    }
+
+    #[test]
+    fn a_staged_worker_records_the_installed_opener_and_passes_the_allow_identity_check() {
+        const TEST: &str = "setup::first_login::tests::a_staged_worker_records_the_installed_opener_and_passes_the_allow_identity_check";
+        const DIRECTORY: &str = "ATLAS_FIRST_LOGIN_TEST_DIRECTORY";
+        let Some(directory) = std::env::var_os(DIRECTORY).map(PathBuf::from) else {
+            let dir = tempfile::tempdir().unwrap();
+            let worker = dir
+                .path()
+                .join("atlas-approved.test/Atlas.app/Contents/MacOS/atlas");
+            fs::create_dir_all(worker.parent().unwrap()).unwrap();
+            fs::copy(std::env::current_exe().unwrap(), &worker).unwrap();
+            let output = Command::new(worker)
+                .args(["--exact", TEST, "--nocapture"])
+                .env(DIRECTORY, dir.path())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let running = std::env::current_exe().unwrap();
+        assert!(running.starts_with(directory.join("atlas-approved.test")));
+        let installed = Path::new("/Applications/Atlas.app/Contents/MacOS/atlas");
+        // Stand in only for disk reachability and codesign. Resolve paths,
+        // write the real plist and apply Allow's actual identity checks.
+        let program = crate::init::app_executable_using(|path| {
+            assert_eq!(path, installed);
+            true
+        })
+        .unwrap();
+        let program = crate::onboarding::signed_executable_using(program, |path| {
+            assert_eq!(path, installed);
+            true
+        })
+        .unwrap();
+        let (_home, layout) = layout();
+        let readied = ready(&layout, false, Some(&program), MACOS).unwrap();
+        let opener = lint(&fs::read_to_string(readied.opener.unwrap()).unwrap());
+        let opened = PathBuf::from(opener["ProgramArguments"][0].as_str().unwrap());
+        assert_eq!(opened, installed);
+
+        let (allowed, approvals) = crate::approval::without_authorization(|| {
+            crate::onboarding::signed_executable_using(opened, |path| path == installed)
+        });
+        assert_eq!(allowed.unwrap(), installed);
+        assert_eq!(approvals, 0);
+        assert!(
+            crate::onboarding::signed_executable_using(program, |_| false).is_err(),
+            "the installed app must still pass signature verification"
+        );
+        assert!(
+            crate::onboarding::signed_executable_using(running, |_| true).is_err(),
+            "a staged copy is never accepted as the installed identity"
         );
     }
 

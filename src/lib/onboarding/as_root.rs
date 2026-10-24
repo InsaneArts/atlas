@@ -51,24 +51,26 @@ unset OLDPWD
 cd /
 "##;
 
-/// Keep the worker and the login opener in the same protected, signed
-/// bundle. The directory is private until copying, ownership, permissions
-/// and signature verification finish. It stays for the subsequent login;
-/// the asking account and the helper can neither replace nor edit it.
-const STAGING: &str = r##"stage_executable() {
+/// Protect and verify the root run's worker, then remove its copy on exit.
+/// The directory is private until copying, ownership, permissions and
+/// signature verification finish; neither account can replace or edit it.
+const STAGING: &str = r##"staged=
+trap '[[ -z $staged ]] || /bin/rm -rf -- "$staged"' EXIT
+trap 'exit 1' HUP INT TERM
+stage_executable() {
   [[ $executable == /*/Contents/MacOS/atlas ]] || refuse "Atlas has no app bundle"
-  local source=${executable%/Contents/MacOS/atlas} staged bad
+  local source=${executable%/Contents/MacOS/atlas} bad
   staged=$(/usr/bin/mktemp -d /private/var/tmp/atlas-approved.XXXXXXXX) || refuse "macOS could not protect a copy of Atlas"
   # Remove any inherited ACL before copying anything into this directory.
   /bin/chmod -N $staged && /bin/chmod 700 $staged || refuse "macOS could not protect the copy's folder"
-  /usr/bin/ditto --noacl --noextattr --norsrc $source $staged/Atlas.app || { /bin/rm -rf -- $staged; refuse "Atlas could not be copied"; }
+  /usr/bin/ditto --noacl --noextattr --norsrc $source $staged/Atlas.app || refuse "Atlas could not be copied"
   # Links or special files could escape the protected bundle. Inspect them
   # before any recursive ownership or permission change.
-  bad=$(/usr/bin/find $staged ! -type d ! -type f -print) || { /bin/rm -rf -- $staged; refuse "Atlas's copy could not be inspected"; }
-  [[ -z $bad ]] || { /bin/rm -rf -- $staged; refuse "Atlas's copy contains links or special files"; }
-  /usr/sbin/chown -R 0:0 $staged && /bin/chmod -RN $staged && /bin/chmod -R u+rwX,go+rX,go-w,u-s,g-s $staged/Atlas.app || { /bin/rm -rf -- $staged; refuse "Atlas's copy could not be protected"; }
+  bad=$(/usr/bin/find $staged ! -type d ! -type f -print) || refuse "Atlas's copy could not be inspected"
+  [[ -z $bad ]] || refuse "Atlas's copy contains links or special files"
+  /usr/sbin/chown -R 0:0 $staged && /bin/chmod -RN $staged && /bin/chmod -R u+rwX,go+rX,go-w,u-s,g-s $staged/Atlas.app || refuse "Atlas's copy could not be protected"
   /usr/bin/codesign --verify --strict --deep -R '=ATLAS_WORKER_REQUIREMENT' $staged/Atlas.app &&
-    /usr/bin/codesign --verify --strict -R '=ATLAS_APP_REQUIREMENT' $staged/Atlas.app/Contents/MacOS/AtlasApp || { /bin/rm -rf -- $staged; refuse "Atlas's protected copy is not signed by Atlas's developer"; }
+    /usr/bin/codesign --verify --strict -R '=ATLAS_APP_REQUIREMENT' $staged/Atlas.app/Contents/MacOS/AtlasApp || refuse "Atlas's protected copy is not signed by Atlas's developer"
   /bin/chmod 755 $staged || refuse "Atlas's verified copy could not be opened"
   executable=$staged/Atlas.app/Contents/MacOS/atlas
 }
@@ -2497,11 +2499,77 @@ print -r -- '{"ok": true}'"#,
         let worker = fs::read_to_string(dir.path().join("worker-path")).unwrap();
         assert!(worker.starts_with(dir.path().to_str().unwrap()));
         assert!(worker.contains("/atlas-approved."));
+        assert!(!Path::new(worker.trim()).exists());
+        assert_no_staged_copies(dir.path());
         let ownership = fs::read_to_string(dir.path().join("ownership")).unwrap();
         assert!(ownership.starts_with("-R\n0:0\n"));
         let verified = fs::read_to_string(dir.path().join("verification")).unwrap();
         assert!(verified.contains(&crate::setup::requirement_for(crate::setup::IDENTIFIER)));
         assert!(verified.contains(&crate::setup::requirement_for(crate::setup::APP_IDENTIFIER)));
+    }
+
+    #[test]
+    fn every_failure_after_staging_removes_the_copy() {
+        for failure in [
+            "permissions",
+            "copy",
+            "ownership",
+            "opening",
+            "account",
+            "worker",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let source = dir.path().join("Source.app/Contents/MacOS");
+            fs::create_dir_all(&source).unwrap();
+            fs::write(source.join("atlas"), "verified").unwrap();
+            fs::write(source.join("AtlasApp"), "verified app").unwrap();
+            let mut tools = vec![
+                ("/usr/bin/id", OPIE),
+                ("/usr/sbin/chown", "exit 0"),
+                ("/usr/bin/codesign", "exit 0"),
+            ];
+            tools.extend(STANDARD);
+            match failure {
+                "permissions" => tools.push(("/bin/chmod", "exit 1")),
+                "copy" => tools.push(("/usr/bin/ditto", "exit 1")),
+                "ownership" => tools[1].1 = "exit 1",
+                "opening" => {
+                    tools.push(("/bin/chmod", "[[ $1 == 755 ]] && exit 1; /bin/chmod \"$@\""))
+                }
+                "account" => tools[0].1 = "exit 1",
+                "worker" => {
+                    let sudo = tools
+                        .iter_mut()
+                        .find(|(tool, _)| *tool == "/usr/bin/sudo")
+                        .unwrap();
+                    sudo.1 = "print -r -- '{\"ok\":false,\"error\":\"worker failed\"}'; exit 1";
+                }
+                _ => unreachable!(),
+            }
+            let script = staged_stand_ins(dir.path(), &tools);
+            let text = run_script(
+                &script,
+                &[
+                    "choose",
+                    "opie",
+                    source.join("atlas").to_str().unwrap(),
+                    "502",
+                    GUID,
+                ],
+            );
+            assert!(outcome(&text).is_err(), "{failure}: {text}");
+            assert_no_staged_copies(dir.path());
+        }
+    }
+
+    fn assert_no_staged_copies(dir: &Path) {
+        assert!(!fs::read_dir(dir).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("atlas-approved.")
+        }));
     }
 
     #[test]
@@ -2536,13 +2604,7 @@ print -r -- '{"ok": true}'"#,
             assert!(outcome(&text).is_err(), "{text}");
             assert!(!dir.path().join("sudo.log").exists());
             assert!(!asked(dir.path(), "createhomedir"));
-            assert!(!fs::read_dir(dir.path()).unwrap().any(|entry| {
-                entry
-                    .unwrap()
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with("atlas-approved.")
-            }));
+            assert_no_staged_copies(dir.path());
         }
     }
 
