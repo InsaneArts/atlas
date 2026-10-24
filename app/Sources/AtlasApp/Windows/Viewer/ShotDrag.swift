@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasService
 import Foundation
 import UniformTypeIdentifiers
 

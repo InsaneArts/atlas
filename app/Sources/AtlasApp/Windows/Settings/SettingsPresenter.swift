@@ -1,4 +1,3 @@
-import AtlasKit
 import AtlasUI
 
 /// Decides what the Settings window shows from what its controller holds and reads: a pure function of the snapshot,

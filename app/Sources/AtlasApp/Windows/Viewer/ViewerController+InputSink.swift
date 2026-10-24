@@ -1,4 +1,5 @@
-import AtlasKit
+import AtlasControl
+import AtlasService
 
 extension ViewerController: InputSink {
   /// The least time between the readings input asks for: 200 ms. Each batch sent asks to read again, and a reading

@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasStatus
 
 /// The main window's rules that both its presenter and its controller follow: the button drawn and the controller's
 /// guard are one rule, and so are the alert shown and the alert Not Now sets aside.

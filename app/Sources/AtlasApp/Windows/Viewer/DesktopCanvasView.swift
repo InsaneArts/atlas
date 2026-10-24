@@ -1,5 +1,5 @@
 import AppKit
-import AtlasKit
+import AtlasControl
 
 /// The surface over the helper's picture that takes the mouse, scrolling
 /// and the keyboard while this window holds control. Keys that name a key

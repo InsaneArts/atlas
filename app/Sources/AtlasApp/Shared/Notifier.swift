@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasStatus
 import Foundation
 import UserNotifications
 

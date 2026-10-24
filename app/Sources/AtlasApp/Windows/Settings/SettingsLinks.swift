@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasService
 
 /// What Settings shares with the app's other parts, which only `AppController` knows: the helper's status as the menu
 /// bar last read it, Open at Login as the panel keeps it, the picture as the main window keeps it, switching to the

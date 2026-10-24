@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasService
 import Foundation
 
 /// The Screenshots tab's words that depend on what it holds: the count, the day groups, a screenshot's label, caption

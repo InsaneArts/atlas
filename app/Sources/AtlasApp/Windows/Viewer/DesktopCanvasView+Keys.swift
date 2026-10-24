@@ -1,5 +1,5 @@
 import AppKit
-import AtlasKit
+import AtlasControl
 
 /// The keyboard's side: in control, a key goes to the input method, and a command it names goes to the helper as
 /// its key.

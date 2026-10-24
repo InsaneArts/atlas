@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasService
 
 /// What Settings reads from the rest of the app each time it draws: the helper's status, Open at Login, the picture,
 /// the helper's commands running and the app's version.

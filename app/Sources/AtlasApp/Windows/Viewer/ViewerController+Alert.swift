@@ -1,4 +1,3 @@
-import AtlasKit
 import AtlasUI
 
 /// The alerts: Recover, Switch, Log Out, Log Out Anyway and Restart, each asked first, run once however many times

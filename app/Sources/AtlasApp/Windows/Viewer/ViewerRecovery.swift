@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasStatus
 
 /// Where recovery stands as the viewer shows it: nothing needs it, its alert shows, or Not Now set the alert aside,
 /// so the footer offers Recover… instead.

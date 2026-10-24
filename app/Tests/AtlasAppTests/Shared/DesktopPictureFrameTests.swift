@@ -1,5 +1,5 @@
 import AppKit
-import AtlasKit
+import AtlasService
 import AtlasUI
 import Testing
 

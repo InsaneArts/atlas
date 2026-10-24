@@ -1,8 +1,10 @@
 import AppKit
+import AsyncSupportTesting
+import AtlasService
+import AtlasServiceTesting
 import Testing
 
 @testable import AtlasApp
-@testable import AtlasKit
 
 @MainActor
 @Suite("KeysMenu")
@@ -34,9 +36,13 @@ struct KeysMenuTests {
     let items = KeysMenu.menu(for: viewer).items
       .compactMap { $0 as? HandlerMenuItem }
     let switchApps = try #require(items.first { $0.title == "Switch apps" })
+    let escape = try #require(items.first { $0.title == "Escape" })
     switchApps.fire()
-    // Input is queued as it is sent and leaves the queue only later, so an empty queue now means nothing was sent.
-    #expect(viewer.input.pending.isEmpty)
+    // Input leaves in order, so a key sent once in control arriving alone means the first key sent nothing.
+    await viewer.takeControl()
+    escape.fire()
+    try await settle("the key sent in control never arrived") { !service.actions.isEmpty }
+    #expect(service.actions == [[InputAction.key("escape")]])
     viewer.close()
   }
 }

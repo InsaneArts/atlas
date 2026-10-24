@@ -1,4 +1,6 @@
-import AtlasKit
+import AtlasCommands
+import AtlasOnboarding
+import AtlasService
 
 /// The Agents pane's work: reading which agents are connected and which projects are taught, connecting one agent,
 /// and forgetting a project.

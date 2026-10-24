@@ -1,8 +1,8 @@
-import AtlasKit
+import AtlasStatus
 import AtlasUI
 
 /// Builds the panel's state from what its controller holds. Pure: every choice the panel shows is made here, from
-/// the snapshot, the status table (`Mode+StatusSummary`) and AtlasKit's rules (``Mode`` and ``StatusReading``). Its
+/// the snapshot, the status table (`Mode+StatusSummary`) and AtlasStatus's rules (``Mode`` and ``StatusReading``). Its
 /// buttons and ⋯ menu are in `PanelPresenter+Controls`.
 enum PanelPresenter {
   /// The panel as it should look now.

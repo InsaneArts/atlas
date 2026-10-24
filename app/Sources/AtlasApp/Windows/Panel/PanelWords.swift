@@ -1,5 +1,3 @@
-import AtlasKit
-
 /// The panel's words that depend on its state: its lines, its main action and pause button, its empty picture, its
 /// ⋯ menu and what its own actions say when they don't work.
 ///

@@ -1,4 +1,5 @@
-import AtlasKit
+import AtlasService
+import AtlasStatus
 
 /// What Not Now remembers of a recovery alert: the helper's mode and the alert's reason, so a new reason alerts again.
 struct RecoveryKey: Equatable {

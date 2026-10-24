@@ -1,5 +1,5 @@
 import AppKit
-import AtlasKit
+import AtlasCommands
 
 /// `--notice TITLE MESSAGE [--switch-back ACCOUNT]`: tells the person something in this session (the helper's, when
 /// its daemon asks), waits for OK, then exits. With an account, its default button locks this session so they can

@@ -1,4 +1,5 @@
-import AtlasKit
+import AtlasCommands
+import AtlasOnboarding
 
 /// The agents and projects as `atlas agents status` last reported them: Claude Code and Codex as the setup window
 /// reads them, the Claude app's own row, and every project taught.

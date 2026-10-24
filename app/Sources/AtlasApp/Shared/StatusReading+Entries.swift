@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasStatus
 import AtlasUI
 
 extension StatusReading {

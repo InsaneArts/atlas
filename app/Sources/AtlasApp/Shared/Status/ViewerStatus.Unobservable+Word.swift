@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasService
 
 extension ViewerStatus.Unobservable {
   /// Why the helper's desktop cannot be watched, as the viewer says it: a silent helper's reason, else what the service

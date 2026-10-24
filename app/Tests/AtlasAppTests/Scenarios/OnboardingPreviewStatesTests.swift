@@ -1,5 +1,7 @@
 #if DEBUG
-  import AtlasKit
+  import AtlasCommands
+  import AtlasOnboarding
+  import AtlasOnboardingTesting
   import AtlasUI
   import Foundation
   import Testing

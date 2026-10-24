@@ -1,8 +1,9 @@
 import AppKit
-import AtlasKit
+import AtlasCommands
+import AtlasService
 
 /// Atlas.app's executable, the app target: AppKit windows, one controller and presenter per window, rendering and
-/// launch. It reads its environment once (``AppConfiguration``) and draws with AtlasUI, which never sees AtlasKit.
+/// launch. It reads its environment once (``AppConfiguration``) and draws with AtlasUI, which sees no domain package.
 ///
 /// `atlas menubar` starts it with the viewer's capability URL on stdin, never in argv, and it quits when stdin
 /// closes, so it never outlives the `atlas` that started it. A few flags run one task and exit instead

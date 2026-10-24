@@ -1,8 +1,10 @@
-import AtlasKit
+import AtlasCommands
+import AtlasService
+import AtlasStatus
 import Foundation
 
 /// Words for times, operations and facts, shared by the panel, the viewer and the setup window, each written once.
-/// AtlasKit returns kinds; these are their words.
+/// The domain packages return kinds; these are their words.
 ///
 /// One punctuation rule holds for every word Atlas.app makes: a line a window shows on its own as a sentence (a hint, a
 /// notice, a reason to wait) ends with its full stop, and a label, a title, a mode or a fact's value has none.

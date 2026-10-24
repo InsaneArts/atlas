@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasOnboarding
 
 /// The helper's side of setup: allowing the account that asked, each permission and its guide beside System
 /// Settings, and the helper's last screen.

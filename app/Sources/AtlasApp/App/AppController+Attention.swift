@@ -1,5 +1,4 @@
 import AppKit
-import AtlasKit
 
 /// What Atlas shows outside its windows when it needs the person: the notification and the Dock badge
 /// (``AttentionSignals``), fed by the panel's readings, the Dock icon and the choices in Settings.

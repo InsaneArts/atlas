@@ -1,5 +1,3 @@
-import AtlasKit
-
 /// The Agents tab's words: each agent's rows and states, an agent that did not connect, and forgetting a project, with
 /// its alert and what follows it.
 extension SettingsWords {

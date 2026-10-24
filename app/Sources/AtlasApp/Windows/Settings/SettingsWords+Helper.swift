@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasCommands
 
 /// The Helper tab's words: the helper's line and what a check of it found.
 extension SettingsWords {

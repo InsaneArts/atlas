@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasService
 import AtlasUI
 
 /// The Activity tab's reading: the log, and the screenshots with it while a screenshot's row can show its capture.

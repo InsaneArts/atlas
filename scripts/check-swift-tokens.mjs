@@ -2,8 +2,8 @@
 // opacity, size, offset (a view's or a shadow's), position, shadow or blur
 // radius, line width, scale, tracking or animation duration in AtlasUI or
 // AtlasApp outside AtlasUI/DesignSystem, or on arithmetic that bends a token
-// with a literal: node scripts/check-swift-tokens.mjs [FOLDER...]. AtlasKit
-// draws nothing and is not read, as jolt reads JoltUI alone.
+// with a literal: node scripts/check-swift-tokens.mjs [FOLDER...]. The domain
+// packages draw nothing and are not read, as jolt reads JoltUI alone.
 //
 // A port of ../jolt-v2/Scripts/check_tokens.py, with its patterns. The design
 // system lives in DesignSystem/; everything else names it. A literal belongs

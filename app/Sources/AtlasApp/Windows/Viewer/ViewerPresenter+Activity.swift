@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasService
 import AtlasUI
 import Foundation
 
@@ -99,7 +99,7 @@ extension ViewerPresenter {
   /// The rule a filter picks.
   ///
   /// - Parameter filter: The pane's filter.
-  /// - Returns: AtlasKit's.
+  /// - Returns: AtlasService's.
   static func activityFilter(_ filter: ViewerActivityFilter) -> ActivityFilter {
     switch filter {
     case .all: .all

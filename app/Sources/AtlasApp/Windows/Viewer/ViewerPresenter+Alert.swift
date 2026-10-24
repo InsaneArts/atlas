@@ -1,4 +1,3 @@
-import AtlasKit
 import AtlasUI
 
 extension ViewerPresenter {

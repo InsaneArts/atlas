@@ -1,4 +1,5 @@
-import AtlasKit
+import AtlasService
+import AtlasStatus
 
 /// What Atlas shows outside its windows when it needs the person: a notification once per new recovery or log-out
 /// (``RecoveryNotice``), and a badge on the Dock icon while Needs you asks for the person

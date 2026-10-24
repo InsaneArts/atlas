@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasCommands
 
 /// About's update: Check for Updates asks `atlas update --check`, which changes nothing; a newer version found is
 /// installed only after the person confirms. One check or install runs at a time.

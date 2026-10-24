@@ -1,5 +1,5 @@
 import AppKit
-import AtlasKit
+import AtlasCommands
 import AtlasUI
 
 /// The agents' own app icons, where their apps are on this Mac: the Claude app, and the Codex app, which is not the

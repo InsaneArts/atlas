@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasCommands
 
 /// Open at Login, reached through closures so tests stand in for the system's login item. Built once at launch and
 /// handed to the panel, the setup window and `--login` as their `loginItem`; what it reports is `opensAtLogin`.

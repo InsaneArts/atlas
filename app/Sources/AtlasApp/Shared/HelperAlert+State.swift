@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasService
 import AtlasUI
 
 /// The alerts as every window draws them: the main window, the alert window and Settings build them here, so a

@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasCommands
 
 /// The setup window's words that depend on its state: what each command says while it runs, and every word a screen
 /// shows that names an account, an agent, a permission or a state.

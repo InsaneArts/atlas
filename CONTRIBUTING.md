@@ -46,7 +46,7 @@ To try your build against a helper, set Atlas up once with the released app
 | `src/lib/native`      | capture, accessibility, input and the held-input journal      |
 | `src/lib/environment` | copies into the helper and their rollback                     |
 | `src/lib/setup`       | the helper's launchd jobs and their repair                    |
-| `app/`                | Atlas.app in Swift 6: AtlasKit, AtlasApp, `Packages/AtlasUI`  |
+| `app/`                | Atlas.app in Swift 6: AtlasApp and its `Packages/`            |
 | `agents/`             | the Claude Code and Codex plugin                              |
 | `scripts/`            | live checks against a real helper                             |
 | `tests/`              | integration tests and the native test fixture                 |
@@ -93,10 +93,11 @@ These hold everywhere; a change that needs to break one needs an issue first.
 - **`unsafe` is denied crate-wide.** Prefer safe bindings (`nix`, `objc2`).
   FFI without one lives in a module or function marked `allow(unsafe_code)`
   with its reason, and every `unsafe` block has a `SAFETY:` note.
-- **Swift** follows `app/`'s layout: AtlasKit holds rules and the service
-  client, AtlasUI holds views and never imports AtlasKit, AtlasApp holds the
-  AppKit windows. Use the design tokens, one type per file, and name tests as
-  sentences.
+- **Swift** follows `app/`'s layout: the domain packages under `app/Packages`
+  (AtlasService, AtlasCommands, AtlasControl, AtlasStatus, AtlasOnboarding)
+  hold rules and the service client, AtlasUI holds views and never imports
+  them, AtlasApp holds the AppKit windows. Use the design tokens, one type per
+  file, and name tests as sentences.
 - **Plain words** in every message a person or agent reads: short, specific,
   no jargon.
 

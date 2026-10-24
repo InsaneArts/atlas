@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasStatus
 
 extension StatusReading.Reason {
   /// The reason as a window gives it: a failed check in plain words, never the command its step names.

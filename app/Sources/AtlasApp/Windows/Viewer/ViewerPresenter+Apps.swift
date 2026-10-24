@@ -1,4 +1,5 @@
-import AtlasKit
+import AtlasControl
+import AtlasService
 import AtlasUI
 import CoreGraphics
 

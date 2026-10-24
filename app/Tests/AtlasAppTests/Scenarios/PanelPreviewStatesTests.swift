@@ -1,5 +1,6 @@
 #if DEBUG
-  import AtlasKit
+  import AtlasService
+  import AtlasServiceTesting
   import AtlasUI
   import Testing
 

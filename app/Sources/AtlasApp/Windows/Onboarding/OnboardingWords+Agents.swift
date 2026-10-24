@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasCommands
 
 /// The agents screen's words and the last screen's: each agent's name and state, an agent that did not connect, and
 /// what setup did.

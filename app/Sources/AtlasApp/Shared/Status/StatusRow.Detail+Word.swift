@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasStatus
 
 extension StatusRow.Detail {
   /// What the check found, as the Ready card says it: a silent helper's overview reason stands for its failed checks,

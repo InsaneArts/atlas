@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasStatus
 
 extension ActivityItem {
   /// What was done, in words (``Words/describe(_:)``).

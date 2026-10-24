@@ -1,4 +1,3 @@
-import AtlasKit
 import AtlasUI
 
 /// Builds the alert window's alert from what its controller holds. Pure. It reads as the same alert does in the main

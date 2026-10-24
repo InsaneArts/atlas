@@ -1,5 +1,6 @@
 import AppKit
-import AtlasKit
+import AtlasCommands
+import AtlasService
 
 /// What the main window's controller reaches outside itself, handed in so tests can stand in for each: the viewer
 /// service, the helper's own commands, the clocks and pauses, the double-click speed, where pictures and screenshots

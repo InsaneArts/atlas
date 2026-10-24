@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasStatus
 
 /// The lines beside a status's word that depend on what was done, so the panel and the window say the same.
 extension StatusReading {

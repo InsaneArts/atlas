@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasService
 
 /// What the alert window's controller holds, as one plain value for ``AlertPresenter``.
 struct AlertSnapshot {

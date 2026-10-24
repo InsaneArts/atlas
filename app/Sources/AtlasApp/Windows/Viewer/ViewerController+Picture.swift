@@ -1,4 +1,3 @@
-import AtlasKit
 import AtlasUI
 
 /// The picture on screen: copied or saved as it is, never captured anew; drawn at actual size; and how often it is

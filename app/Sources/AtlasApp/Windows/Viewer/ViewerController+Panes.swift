@@ -1,4 +1,3 @@
-import AtlasKit
 import AtlasUI
 
 /// The Activity, Apps and Screenshots tabs: each reads only while it shows and the window is on screen, one reading

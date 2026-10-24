@@ -1,4 +1,3 @@
-import AtlasKit
 import Foundation
 
 /// Details' facts that the helper's status does not carry: the agents connected to Atlas and when the helper logged

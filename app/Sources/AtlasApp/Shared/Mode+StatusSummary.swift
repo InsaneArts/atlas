@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasStatus
 import AtlasUI
 
 /// The status table, in one place: each row's word colour and mark, and its line in the main window and in the

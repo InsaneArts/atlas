@@ -1,4 +1,6 @@
-import AtlasKit
+import AtlasCommands
+import AtlasService
+import AtlasStatus
 import AtlasUI
 import Observation
 

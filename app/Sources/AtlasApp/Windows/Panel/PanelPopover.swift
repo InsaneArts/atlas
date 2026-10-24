@@ -1,5 +1,4 @@
 import AppKit
-import AtlasKit
 import AtlasUI
 import SwiftUI
 

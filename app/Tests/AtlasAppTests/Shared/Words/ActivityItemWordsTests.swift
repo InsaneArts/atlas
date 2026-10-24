@@ -1,4 +1,5 @@
-import AtlasKit
+import AtlasServiceTesting
+import AtlasStatus
 import Testing
 
 @testable import AtlasApp

@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasStatus
 
 /// What Atlas says outside its windows: each notification's title and body, and the Dock badge.
 enum NotificationWords {

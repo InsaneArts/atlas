@@ -1,4 +1,3 @@
-import AtlasKit
 import AtlasUI
 
 /// The tabs and Details: leaving the Screen tab gives control back, as losing focus does, and Take Control then waits

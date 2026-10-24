@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasStatus
 
 extension StatusRow.Subject {
   /// The check's name as the Ready card shows it.

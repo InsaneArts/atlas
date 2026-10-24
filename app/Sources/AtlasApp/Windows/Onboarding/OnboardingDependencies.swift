@@ -1,5 +1,5 @@
 import AppKit
-import AtlasKit
+import AtlasCommands
 
 /// What the setup window's controller reaches outside itself, handed in so tests can stand in for each: the `atlas`
 /// command line, opening a URL, the login item and waiting.

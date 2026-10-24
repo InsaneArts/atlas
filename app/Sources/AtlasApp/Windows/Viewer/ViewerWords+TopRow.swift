@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasControl
 
 /// The top row's words: the control button in each state and its tooltips, the picture's pause button, ⋯, the
 /// Details button and the tabs.

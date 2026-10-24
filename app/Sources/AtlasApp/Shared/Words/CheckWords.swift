@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasService
 
 /// The helper's readiness checks in the app's words: each check the service names (`src/lib/session.rs`) gets a plain
 /// name and, when it fails, one plain sentence with no command in it, since the viewer offers buttons, not commands.

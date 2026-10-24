@@ -1,5 +1,5 @@
 import AppKit
-import AtlasKit
+import AtlasStatus
 import AtlasUI
 
 /// The menu bar glyph: Atlas's orbit, a flat planet with a ring passing in front of it, then the status's mark

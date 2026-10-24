@@ -1,4 +1,5 @@
-import AtlasKit
+import AtlasControl
+import AtlasService
 import Foundation
 
 /// Input from the desktop view: pointer, scrolling, keys and text, each sent only while input may go.

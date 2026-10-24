@@ -1,4 +1,3 @@
-import AtlasKit
 import Foundation
 
 /// The notices over the screen: what Stop, Resume and a change in the helper did, why control ended, and text too

@@ -1,5 +1,6 @@
 import AppKit
-import AtlasKit
+import AtlasCommands
+import AtlasService
 import AtlasUI
 
 /// Atlas.app once it is set up: the menu bar item, and the setup window

@@ -1,4 +1,5 @@
-import AtlasKit
+import AtlasCommands
+import AtlasService
 import Observation
 
 /// Connecting agents to Atlas, for every window that does it: the setup window's agents step and Settings' Connect.

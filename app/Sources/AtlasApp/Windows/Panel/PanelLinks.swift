@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasService
 import AtlasUI
 
 /// What the panel asks of the rest of the app, as closures `AppController` gives it at `init`: the panel never

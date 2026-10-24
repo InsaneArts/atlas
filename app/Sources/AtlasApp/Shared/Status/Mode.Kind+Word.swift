@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasStatus
 
 extension Mode.Kind {
   /// The row's own word, when the service gives none.

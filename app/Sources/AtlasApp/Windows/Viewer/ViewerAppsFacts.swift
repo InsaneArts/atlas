@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasService
 import AtlasUI
 
 /// What the Apps tab last read, its icons decoded, the search, and the window shown on the screen.

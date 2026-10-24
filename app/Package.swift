@@ -5,33 +5,58 @@ import PackageDescription
 // what Atlas's local viewer service reports and runs `atlas` commands; the
 // rules that keep the helper safe live in the `atlas` command line.
 //
-// Levels: a target depends only on targets of a lower level. AtlasKit and
-// the AtlasUI package are level 0 and never import each other; AtlasApp,
-// level 1, is the only target that imports both. Local packages arrive by
-// path only.
+// Levels: a package depends only on packages of a lower level, and local
+// packages arrive by path only. Level 0: AsyncSupport, AtlasUI and
+// AtlasService. Level 1: AtlasCommands, AtlasControl and AtlasStatus, on
+// AtlasService. Level 2: AtlasOnboarding, on AtlasCommands. AtlasUI never
+// sees a domain package, and no domain package sees AtlasUI.
+//
+// Level 3. The executable: AtlasApp is the only target that imports them
+// all. No shipping target depends on a `…Testing` product; only
+// AtlasAppTests does.
 let package = Package(
   name: "Atlas",
   platforms: [.macOS(.v14)],
   products: [.executable(name: "AtlasApp", targets: ["AtlasApp"])],
   dependencies: [
-    // Level 0. The design system, components, each window's state and
-    // events, its views and previews: SwiftUI alone, never AtlasKit.
-    .package(path: "Packages/AtlasUI")
+    .package(path: "Packages/AsyncSupport"),
+    .package(path: "Packages/AtlasCommands"),
+    .package(path: "Packages/AtlasControl"),
+    .package(path: "Packages/AtlasOnboarding"),
+    .package(path: "Packages/AtlasService"),
+    .package(path: "Packages/AtlasStatus"),
+    .package(path: "Packages/AtlasUI"),
   ],
   targets: [
-    // Level 0. Models, the service client and every rule: Foundation only
-    // (ServiceManagement only in Live/LoginItem.swift).
-    .target(name: "AtlasKit"),
-    // Level 1. The executable shipped beside `atlas` in Atlas.app: AppKit
-    // windows, one controller and presenter per window, rendering, launch.
+    // The executable shipped beside `atlas` in Atlas.app: AppKit windows,
+    // one controller and presenter per window, rendering, launch.
     .executableTarget(
       name: "AtlasApp",
-      dependencies: ["AtlasKit", .product(name: "AtlasUI", package: "AtlasUI")]
+      dependencies: [
+        .product(name: "AtlasCommands", package: "AtlasCommands"),
+        .product(name: "AtlasControl", package: "AtlasControl"),
+        .product(name: "AtlasOnboarding", package: "AtlasOnboarding"),
+        .product(name: "AtlasService", package: "AtlasService"),
+        .product(name: "AtlasStatus", package: "AtlasStatus"),
+        .product(name: "AtlasUI", package: "AtlasUI"),
+      ]
     ),
-    .testTarget(name: "AtlasKitTests", dependencies: ["AtlasKit"]),
     .testTarget(
       name: "AtlasAppTests",
-      dependencies: ["AtlasApp", "AtlasKit", .product(name: "AtlasUI", package: "AtlasUI")]
+      dependencies: [
+        "AtlasApp",
+        .product(name: "AsyncSupportTesting", package: "AsyncSupport"),
+        .product(name: "AtlasCommands", package: "AtlasCommands"),
+        .product(name: "AtlasCommandsTesting", package: "AtlasCommands"),
+        .product(name: "AtlasControl", package: "AtlasControl"),
+        .product(name: "AtlasControlTesting", package: "AtlasControl"),
+        .product(name: "AtlasOnboarding", package: "AtlasOnboarding"),
+        .product(name: "AtlasOnboardingTesting", package: "AtlasOnboarding"),
+        .product(name: "AtlasService", package: "AtlasService"),
+        .product(name: "AtlasServiceTesting", package: "AtlasService"),
+        .product(name: "AtlasStatus", package: "AtlasStatus"),
+        .product(name: "AtlasUI", package: "AtlasUI"),
+      ]
     ),
   ],
   swiftLanguageModes: [.v6]

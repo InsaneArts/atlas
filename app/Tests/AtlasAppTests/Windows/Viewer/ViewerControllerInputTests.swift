@@ -1,9 +1,13 @@
+import AsyncSupportTesting
+import AtlasControl
+import AtlasService
+import AtlasServiceTesting
+import AtlasStatus
 import AtlasUI
 import Foundation
 import Testing
 
 @testable import AtlasApp
-@testable import AtlasKit
 
 @MainActor
 @Suite("ViewerController+Input")
@@ -185,8 +189,10 @@ struct ViewerControllerInputTests {
     await viewer.takeControl()
     viewer.send(text: String(repeating: "a", count: TypedText.pasteLimit + 1))
     #expect(viewer.session.notice == ViewerWords.pasteTooLong(TypedText.pasteLimit))
-    // Input is queued as it is sent and leaves the queue only later, so an empty queue now means nothing was sent.
-    #expect(viewer.input.pending.isEmpty)
+    // Input leaves in order, so a key sent after the paste arriving alone means the paste sent nothing.
+    viewer.sendKey("escape")
+    try await settle("the key after the paste was never sent") { !service.actions.isEmpty }
+    #expect(service.actions == [[InputAction.key("escape")]])
     viewer.close()
   }
 }

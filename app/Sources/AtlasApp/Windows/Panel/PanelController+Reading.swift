@@ -1,4 +1,5 @@
-import AtlasKit
+import AtlasCommands
+import AtlasService
 import AtlasUI
 
 /// The readings: the status at the open or closed rate, the picture while the panel is open and not paused, Open at

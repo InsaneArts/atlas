@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasStatus
 
 extension SessionFacts.Input {
   /// Whether input is ready, as the Details column lists it: "Ready", "Not ready" or "Not answering".

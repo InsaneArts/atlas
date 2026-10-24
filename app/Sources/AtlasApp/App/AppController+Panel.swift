@@ -1,5 +1,5 @@
 import AppKit
-import AtlasKit
+import AtlasService
 import AtlasUI
 
 /// The menu bar panel's links to the other windows, and the alerts it asks for: in the main window while it is open,

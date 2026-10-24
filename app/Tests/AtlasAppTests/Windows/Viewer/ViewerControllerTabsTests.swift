@@ -1,4 +1,5 @@
-import AtlasKit
+import AsyncSupportTesting
+import AtlasServiceTesting
 import AtlasUI
 import Foundation
 import Testing

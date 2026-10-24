@@ -1,4 +1,6 @@
-import AtlasKit
+import AtlasCommandsTesting
+import AtlasService
+import AtlasServiceTesting
 import AtlasUI
 
 @testable import AtlasApp

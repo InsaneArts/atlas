@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasService
 
 /// The words the helper's own commands say in every window that runs them: their menu items and how Recover's
 /// refusals read. Words a single window says around them stay in that window's words.

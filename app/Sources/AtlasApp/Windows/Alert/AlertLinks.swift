@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasService
 
 /// What the alert window asks of the rest of the app, as closures `AppController` gives it at `init`.
 struct AlertLinks {

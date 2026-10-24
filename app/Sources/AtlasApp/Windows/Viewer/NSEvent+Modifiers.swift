@@ -1,5 +1,5 @@
 import AppKit
-import AtlasKit
+import AtlasControl
 
 extension NSEvent {
   /// The modifier keys held, in Atlas's own terms: Command, Control, Option and Shift.

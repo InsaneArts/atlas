@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasCommands
 
 /// Where a check for updates stands in About: one check or install runs at a time.
 enum SettingsUpdate: Equatable {

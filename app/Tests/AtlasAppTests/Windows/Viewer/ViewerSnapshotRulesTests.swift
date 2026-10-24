@@ -1,4 +1,6 @@
-import AtlasKit
+import AtlasService
+import AtlasServiceTesting
+import AtlasStatus
 import Foundation
 import Testing
 

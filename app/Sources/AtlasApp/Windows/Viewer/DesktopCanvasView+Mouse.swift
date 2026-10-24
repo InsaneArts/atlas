@@ -1,5 +1,5 @@
 import AppKit
-import AtlasKit
+import AtlasService
 
 /// The mouse's side: presses, drags and releases of any button, movement and scrolling go to the helper while in
 /// control, and a right click never opens a menu here.

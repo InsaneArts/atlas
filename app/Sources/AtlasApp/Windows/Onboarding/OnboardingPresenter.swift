@@ -1,8 +1,9 @@
-import AtlasKit
+import AtlasOnboarding
 import AtlasUI
 
 /// Builds the setup window's state from what its controller holds. Pure: every choice the window shows is made here,
-/// from the snapshot and AtlasKit's rules (the step rule, ``PasswordRule``, the switch progress and ``Permission``).
+/// from the snapshot and AtlasOnboarding's rules (the step rule, ``PasswordRule``, the switch progress and
+/// ``Permission``).
 enum OnboardingPresenter {
   /// The window as it should look now.
   ///

@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasStatus
 
 extension ActivityItem.Actor {
   /// The actor in words, as a row starts.

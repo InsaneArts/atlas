@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasOnboarding
 import AtlasUI
 
 extension StepProgress {

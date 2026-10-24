@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasService
 import AtlasUI
 
 /// The Apps tab: its reading, each app's icon decoded once off the main actor, and Show on screen, which outlines a

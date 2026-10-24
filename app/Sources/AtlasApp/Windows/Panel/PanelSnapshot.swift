@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasService
 import AtlasUI
 
 /// What the panel's controller holds, as one plain value for ``PanelPresenter``.

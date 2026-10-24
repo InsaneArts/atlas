@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasCommands
 
 /// The Helper pane's commands: Check Again diagnoses the helper, and Recover, Switch and Log Out run through the
 /// helper's own commands, as the main window's do, each answered with a notice once it ends.
