@@ -31,7 +31,8 @@ struct KeysMenuTests {
   func nothingIsSentWithoutControl() async throws {
     let service = ScriptedService()
     let viewer = try await ViewerController.watching(service)
-    let items = KeysMenu.menu(for: viewer).items.compactMap { $0 as? HandlerMenuItem }
+    let items = KeysMenu.menu(for: viewer).items
+      .compactMap { $0 as? HandlerMenuItem }
     let switchApps = try #require(items.first { $0.title == "Switch apps" })
     switchApps.fire()
     // Input is queued as it is sent and leaves the queue only later, so an empty queue now means nothing was sent.

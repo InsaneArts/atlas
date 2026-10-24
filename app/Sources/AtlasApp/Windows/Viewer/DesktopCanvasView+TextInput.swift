@@ -12,6 +12,8 @@ extension DesktopCanvasView: @preconcurrency NSTextInputClient {
   static let candidateRise: CGFloat = 48
   /// 20: the height of the line the candidate window opens under, one line of text.
   static let candidateLineHeight: CGFloat = 20
+  /// 1: the width of that line, a caret's; the input method reads only where it starts.
+  static let candidateWidth: CGFloat = 1
 
   /// Committed text: the composition ends and the text is typed.
   ///
@@ -102,7 +104,7 @@ extension DesktopCanvasView: @preconcurrency NSTextInputClient {
     let corner = NSRect(
       x: bounds.minX + Self.candidateInset,
       y: bounds.maxY - Self.candidateRise,
-      width: 1,
+      width: Self.candidateWidth,
       height: Self.candidateLineHeight
     )
     return window?.convertToScreen(convert(corner, to: nil)) ?? .zero

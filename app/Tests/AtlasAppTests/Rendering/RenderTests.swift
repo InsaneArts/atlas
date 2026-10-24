@@ -144,7 +144,8 @@
 
     @Test("the alert window renders draw every alert sample the previews list, each under a name of its own")
     func theAlertRendersDrawEverySample() throws {
-      let drawn = try PanelRender.alerts.map { AlertPresenter.state(try Self.alert($0.file)) }
+      let drawn = try PanelRender.alerts
+        .map { AlertPresenter.state(try Self.alert($0.file)) }
       let missing = PreviewStates.alert
         .filter { !drawn.contains($0.value) }
         .map(\.name)
@@ -170,7 +171,10 @@
     @Test("the viewer renders draw every sample the previews list")
     func theViewerRendersDrawEverySample() {
       let missing = PreviewStates.viewer
-        .filter { sample in !ViewerRender.renders.contains { $0.state == sample.value } }
+        .filter { sample in
+          !ViewerRender.renders
+            .contains { $0.state == sample.value }
+        }
         .map(\.name)
       #expect(missing.isEmpty, "samples with no render: \(missing)")
     }

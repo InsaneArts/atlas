@@ -95,6 +95,12 @@ enum ViewerLayout {
     )
   }
 
+  /// The width a large screenshot leaves beside it: Previous and Next, each with its gap and the page margin.
+  private static let largeShotBeside = (ControlHeight.button + Spacing.xl + Spacing.page) * 2
+  /// The height a large screenshot leaves under it: the bar's row with its padding above and below, the gap over the
+  /// bar, and the page margin top and bottom.
+  private static let largeShotUnder = ControlHeight.row + Spacing.s * 2 + Spacing.xl + Spacing.page * 2
+
   /// How large a screenshot is drawn in the large view: at its own shape, within ``largeShotLargest``, and within a
   /// window `window` large with room for Previous and Next beside it and the bar under it.
   ///
@@ -103,11 +109,9 @@ enum ViewerLayout {
   ///   - window: The window's size.
   /// - Returns: The picture's size; zero when nothing fits.
   static func largeShotSize(aspect: CGSize, in window: CGSize) -> CGSize {
-    let beside = (ControlHeight.button + Spacing.xl + Spacing.page) * 2
-    let under = ControlHeight.row + Spacing.s * 2 + Spacing.xl + Spacing.page * 2
     let room = CGSize(
-      width: min(largeShotLargest.width, window.width - beside),
-      height: min(largeShotLargest.height, window.height - under)
+      width: min(largeShotLargest.width, window.width - largeShotBeside),
+      height: min(largeShotLargest.height, window.height - largeShotUnder)
     )
     guard aspect.width > 0, aspect.height > 0, room.width > 0, room.height > 0 else { return .zero }
     let scale = min(room.width / aspect.width, room.height / aspect.height)

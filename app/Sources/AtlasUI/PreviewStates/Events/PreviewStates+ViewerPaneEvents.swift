@@ -121,7 +121,7 @@
           ViewerLargeShot(
             id: tile.id,
             picture: tile.thumbnail,
-            aspect: CGSize(width: 16, height: 10),
+            aspect: ViewerLayout.placeholderAspect,
             caption: "\(tile.time) · 2560 × 1440",
             canGoBack: tile.id != ids.first,
             canGoForward: tile.id != ids.last,

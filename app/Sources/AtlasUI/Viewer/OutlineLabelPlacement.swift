@@ -7,6 +7,9 @@ struct OutlineLabelPlacement: Layout {
   /// Where the label's top-left corner goes when it fits, in the picture.
   let anchor: CGPoint
 
+  /// The part of the picture's width the label never takes: an inset of ``Spacing/m`` each side.
+  private static let insets = Spacing.m * 2
+
   /// Takes the whole space offered, the picture's.
   ///
   /// - Parameters:
@@ -28,7 +31,7 @@ struct OutlineLabelPlacement: Layout {
   func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
     for subview in subviews {
       let natural = subview.sizeThatFits(.unspecified)
-      let width = min(natural.width, max(0, bounds.width - Spacing.m * 2))
+      let width = min(natural.width, max(0, bounds.width - Self.insets))
       let x = max(Spacing.m, min(anchor.x, bounds.width - width - Spacing.m))
       subview.place(
         at: CGPoint(x: bounds.minX + x, y: bounds.minY + anchor.y),

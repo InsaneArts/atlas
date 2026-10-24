@@ -14,9 +14,9 @@
 // a white tile on the rounded-square grid (an 824-point tile with a soft
 // shadow in a 1024-point canvas). The account picture is the same mark on
 // white filling the canvas, which macOS shows in a circle. The menu bar
-// glyph (StatusImage.swift), the header mark (OrbitMark.swift), the plugin
-// logo (agents/atlas/assets/atlas.svg) and the README logo
-// (scripts/logo.mjs) draw the same shape: change them together.
+// glyph (Windows/Panel/StatusGlyph.swift), the header mark
+// (OrbitMark.swift), the plugin logo (agents/atlas/assets/atlas.svg) and the
+// README logo (scripts/logo.mjs) draw the same shape: change them together.
 import AppKit
 
 let canvas = NSRect(x: 0, y: 0, width: 1024, height: 1024)

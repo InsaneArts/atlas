@@ -13,7 +13,8 @@ struct ShotOutlet {
   /// The app's own: the general pasteboard, and the Finder selecting the file.
   @MainActor static var live: ShotOutlet {
     ShotOutlet(copy: copyToPasteboard) { file in
-      NSWorkspace.shared.activateFileViewerSelecting([file])
+      NSWorkspace.shared
+        .activateFileViewerSelecting([file])
     }
   }
 

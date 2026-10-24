@@ -158,7 +158,8 @@
         draw($0.file, $0.state, to: folder, size: NSSize(width: $0.width, height: size.height))
       }
       let frames = frameRenders.map { draw($0.file, $0.state, to: folder, size: $0.size) }
-      return (wide + narrow + frames).allSatisfy { $0 }
+      return (wide + narrow + frames)
+        .allSatisfy { $0 }
     }
 
     /// Draws one main window state to `file`.png in `folder`, at Retina scale.

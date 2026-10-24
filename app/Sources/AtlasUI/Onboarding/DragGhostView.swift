@@ -45,7 +45,7 @@ package struct DragGhostView: View {
         Image(systemName: "hand.point.up.left")
           .foregroundStyle(Color.onAccent)
       }
-      .font(.system(size: OnboardingLayout.ghostHand))
+      .font(OnboardingLayout.ghostHandFont)
       .elevation(.bar)
       .offset(x: OnboardingLayout.ghostHandOffset, y: OnboardingLayout.ghostHandOffset)
     }

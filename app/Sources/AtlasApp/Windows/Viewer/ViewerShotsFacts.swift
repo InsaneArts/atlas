@@ -26,6 +26,7 @@ struct ViewerShotsFacts {
   /// - Parameter name: The screenshot's file name.
   /// - Returns: The file.
   func file(named name: String) -> URL? {
-    ScreenshotList(shots: shots ?? [], folder: folder).file(named: name)
+    ScreenshotList(shots: shots ?? [], folder: folder)
+      .file(named: name)
   }
 }

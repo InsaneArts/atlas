@@ -64,7 +64,8 @@ package enum AccountNameRule {
   /// - Parameter byte: One byte of the name's UTF-8.
   /// - Returns: Whether it is 0 to 9.
   private static func isDigit(_ byte: UInt8) -> Bool {
-    (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(byte)
+    (UInt8(ascii: "0")...UInt8(ascii: "9"))
+      .contains(byte)
   }
 
   /// Whether a byte may be in a short name: an ASCII letter or digit, '.', '_' or '-'.

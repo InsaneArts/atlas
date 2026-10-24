@@ -40,6 +40,8 @@ final class WindowGlide {
         .animator()
         .setFrame(frame, display: true)
     } completionHandler: { [weak self] in
+      // AppKit runs an animation group's completion handler on the main thread, where the group began, so the main
+      // actor is already running here; assumeIsolated says so rather than hopping.
       MainActor.assumeIsolated { self?.running -= 1 }
     }
   }

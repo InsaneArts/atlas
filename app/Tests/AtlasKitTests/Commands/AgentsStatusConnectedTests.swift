@@ -14,7 +14,8 @@ struct AgentsStatusConnectedTests {
       {"agent": "other", "installed": true, "connected": true}]}
       """#.utf8
     )
-    let status = try JSONDecoder().decode(AgentsStatus.self, from: reply)
+    let status = try JSONDecoder()
+      .decode(AgentsStatus.self, from: reply)
     #expect(status.connected == [.codex])
   }
 }

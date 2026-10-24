@@ -54,7 +54,8 @@ struct ActivityGroupingTests {
       Self.row("older", 3 * 86_400, says: "ran a command"),
     ])
     let groups = rules.groups(filter: .all, query: "", captures: [])
-    let older = Self.calendar.startOfDay(for: Self.readAt.addingTimeInterval(-3 * 86_400))
+    let older = Self.calendar
+      .startOfDay(for: Self.readAt.addingTimeInterval(-3 * 86_400))
     #expect(groups.map(\.period) == [.now, .earlierToday, .yesterday, .day(older)])
     #expect(groups.map { $0.runs.map(\.id) } == [["now"], ["today", "untimed"], ["yesterday"], ["older"]])
   }
@@ -182,7 +183,8 @@ struct ActivityGroupingTests {
 
   @Test("a row's time is the same at every reading when the service gives its start")
   func startHoldsAcrossReadings() {
-    let started = Self.readAt.addingTimeInterval(-4.4)
+    let started = Self.readAt
+      .addingTimeInterval(-4.4)
     let first = ActivityLog.Entry(id: "1", ageSeconds: 4, startedAt: started)
     let second = ActivityLog.Entry(id: "1", ageSeconds: 6, startedAt: started)
     let later = ActivityGrouping(

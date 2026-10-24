@@ -8,7 +8,10 @@ extension HelperApp {
     let words = query.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !words.isEmpty, !name.localizedStandardContains(words) else { return self }
     var kept = self
-    kept.windows = windows.filter { ($0.title ?? "").localizedStandardContains(words) }
+    kept.windows = windows.filter {
+      ($0.title ?? "")
+        .localizedStandardContains(words)
+    }
     return kept.windows.isEmpty ? nil : kept
   }
 }

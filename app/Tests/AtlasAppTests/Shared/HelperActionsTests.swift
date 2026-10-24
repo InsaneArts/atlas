@@ -46,7 +46,8 @@ struct HelperActionsTests {
     let service = ScriptedService()
     // The window last read a quiet helper; the outcome became unknown since.
     service.reply = Self.unknownOutcome
-    let recovery = await Self.actions(service, commands).recover()
+    let recovery = await Self.actions(service, commands)
+      .recover()
     #expect(recovery?.action == .restart)
     #expect(commands.ran == [Action.restart.arguments])
     #expect(service.statusCalls == 1, "it read the status itself")

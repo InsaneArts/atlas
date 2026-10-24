@@ -18,7 +18,8 @@
     /// - Parameter name: The screenshot's file name.
     /// - Returns: The thumbnail, or nil should the sample desktop not draw.
     @MainActor static func shotPicture(_ name: String) -> DesktopPicture? {
-      SampleDesktop.picture.map { DesktopPicture(id: name, image: $0.image) }
+      SampleDesktop.picture
+        .map { DesktopPicture(id: name, image: $0.image) }
     }
 
     /// One tile of the Screenshots sample.

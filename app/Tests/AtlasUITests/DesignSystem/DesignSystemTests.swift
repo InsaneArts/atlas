@@ -1,4 +1,5 @@
 import CoreGraphics
+import SwiftUI
 import Testing
 
 @testable import AtlasUI
@@ -18,6 +19,14 @@ struct DesignSystemTests {
     for step in Self.spacing where step != Spacing.hairline {
       #expect(step.truncatingRemainder(dividingBy: 2) == 0, "\(step)")
     }
+  }
+
+  @Test("a glyph font is the system font at the size and weight it is given, the regular weight when none is")
+  func glyphFontIsTheSystemFontAtItsSize() {
+    let side = ControlHeight.button / 2
+    #expect(Typography.font(size: side, weight: .semibold) == Font.system(size: side, weight: .semibold))
+    #expect(Typography.font(size: side) == Font.system(size: side))
+    #expect(Typography.font(size: side) != Typography.font(size: side, weight: .bold))
   }
 
   @Test("the type scale descends in whole sizes")
@@ -87,11 +96,13 @@ struct DesignSystemTests {
 
   @Test("every radius, icon size and shadow radius is a whole even point")
   func stepsAreEven() {
+    let shadows = Elevation.allCases
+      .map(\.radius)
     let steps =
       [Radius.compact, Radius.small, Radius.medium, Radius.large, Radius.alert]
       + [IconSize.dot, IconSize.glyph, IconSize.glyphLarge, IconSize.radio, IconSize.mark, IconSize.disc]
       + [IconSize.agent, IconSize.tile, IconSize.avatar, IconSize.avatarLarge, IconSize.hero]
-      + Elevation.allCases.map(\.radius)
+      + shadows
     for step in steps {
       #expect(step.truncatingRemainder(dividingBy: 2) == 0, "\(step)")
     }

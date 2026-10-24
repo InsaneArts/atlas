@@ -72,10 +72,11 @@ struct ScreenColumn<Content: View, Bottom: View>: View {
 
 extension ScreenColumn {
   /// Opaque down to its last ``OnboardingLayout/scrollFade`` points, which fade out: scrolled content ends in a fade,
-  /// never on a clean line that reads as finished.
+  /// never on a clean line that reads as finished. A mask reads only alpha: the filled rectangle shows the content
+  /// whole, and the gradient's black to clear fades it.
   fileprivate var fade: some View {
     VStack(spacing: .zero) {
-      Color.black
+      Rectangle()
       LinearGradient(
         colors: [.black, .clear],
         startPoint: .top,

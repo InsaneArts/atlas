@@ -10,7 +10,7 @@ struct CheckMark: View {
       Circle()
         .fill(Color.success)
       Image(systemName: "checkmark")
-        .font(.system(size: size * Layout.glyphScale, weight: .bold))
+        .font(Typography.font(size: size * Layout.glyphScale, weight: .bold))
         .foregroundStyle(Color.onSuccess)
     }
     .frame(width: size, height: size)

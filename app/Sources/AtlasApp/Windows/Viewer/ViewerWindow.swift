@@ -144,6 +144,8 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
       // main-actor bound, so Swift cannot know that, and the event is marked as safe to hand to the main actor.
       nonisolated(unsafe) let event = event
       nonisolated(unsafe) var passed: NSEvent? = event
+      // AppKit delivers every event, and runs a local monitor's handler, on the main thread, so the main actor is
+      // already running here; assumeIsolated says so rather than hopping.
       MainActor.assumeIsolated {
         // nil means handled here: AppKit then does nothing more with it.
         if let self { passed = self.shotKey(event) }

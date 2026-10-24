@@ -22,7 +22,7 @@ struct CircleButtonStyle: ButtonStyle {
   /// - Returns: The styled button.
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
-      .font(.system(size: diameter * Layout.symbolScale, weight: .semibold))
+      .font(Typography.font(size: diameter * Layout.symbolScale, weight: .semibold))
       .foregroundStyle(Color.textPrimary)
       .frame(width: diameter, height: diameter)
       .background(

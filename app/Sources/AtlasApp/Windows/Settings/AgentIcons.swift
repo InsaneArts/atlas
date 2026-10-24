@@ -23,10 +23,14 @@ enum AgentIcons {
       let found =
         folders
         .map { $0.appendingPathComponent(app) }
-        .first { FileManager.default.fileExists(atPath: $0.path) }
+        .first {
+          FileManager.default
+            .fileExists(atPath: $0.path)
+        }
       guard let found else { continue }
       var rect = CGRect(x: 0, y: 0, width: pixels, height: pixels)
-      let icon = NSWorkspace.shared.icon(forFile: found.path)
+      let icon = NSWorkspace.shared
+        .icon(forFile: found.path)
       guard let image = icon.cgImage(forProposedRect: &rect, context: nil, hints: nil) else { continue }
       icons[agent] = IconImage(id: found.path, image: image)
     }

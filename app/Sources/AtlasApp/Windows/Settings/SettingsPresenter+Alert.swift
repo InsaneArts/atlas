@@ -13,10 +13,18 @@ extension SettingsPresenter {
     let overview = snapshot.facts.status.overview
     let busy = snapshot.session.alertRunning || (kind == .recover && snapshot.facts.running.contains(.recovery))
     return switch kind {
-    case .recover: HelperAlert.recover.state(overview: overview, busy: busy)
-    case .switchToHelper: HelperAlert.switchToHelper.state(overview: overview, busy: busy)
-    case .logOut: HelperAlert.logOut.state(overview: overview, busy: busy)
-    case .logOutAnyway: HelperAlert.logOutAnyway.state(overview: overview, busy: busy)
+    case .recover:
+      HelperAlert.recover
+        .state(overview: overview, busy: busy)
+    case .switchToHelper:
+      HelperAlert.switchToHelper
+        .state(overview: overview, busy: busy)
+    case .logOut:
+      HelperAlert.logOut
+        .state(overview: overview, busy: busy)
+    case .logOutAnyway:
+      HelperAlert.logOutAnyway
+        .state(overview: overview, busy: busy)
     case .forget(let path):
       HelperAlert.destructive(
         SettingsWords.forgetTitle(projectName(path)),

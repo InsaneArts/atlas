@@ -60,7 +60,8 @@ extension ViewerPresenter {
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The names.
   static func shotOrder(_ snapshot: ViewerSnapshot) -> [String] {
-    shotDays(snapshot).flatMap(\.shots)
+    shotDays(snapshot)
+      .flatMap(\.shots)
       .map(\.name)
   }
 

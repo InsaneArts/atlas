@@ -44,7 +44,9 @@ final class ScriptedURLProtocol: URLProtocol {
   /// Answers from the script, by the first part of the request's path.
   override func startLoading() {
     let secret = request.url?.pathComponents.dropFirst().first ?? ""
-    let answer = Self.script.withLock { $0[secret] } ?? .failure(.cannotConnectToHost)
+    let scripted = Self.script
+      .withLock { $0[secret] }
+    let answer = scripted ?? .failure(.cannotConnectToHost)
     switch answer {
     case .reply(let status, let body):
       guard

@@ -1,7 +1,6 @@
-/// The onboarding's screens, in the order the person meets them.
+/// The onboarding's screens, in the order the person meets them. The person's screens come first, then the helper's,
+/// then `blocked`.
 package enum OnboardingStep: Equatable, Hashable, Sendable {
-  // MARK: In the person's account
-
   /// What Atlas is, before anything is set up.
   case welcome
   /// Choose an account to be the helper.
@@ -17,16 +16,12 @@ package enum OnboardingStep: Equatable, Hashable, Sendable {
   /// Setup is done.
   case done
 
-  // MARK: In the helper's account
-
   /// Allow the account that asked.
   case allow
   /// Grant Accessibility and Screen Recording.
   case permissions
   /// The helper is set up; switch back.
   case helperDone
-
-  // MARK: Something only the person can fix first
 
   /// What only the person can fix, in words.
   case blocked(String)

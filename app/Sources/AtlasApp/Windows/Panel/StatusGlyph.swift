@@ -83,11 +83,13 @@ enum StatusGlyph {
         .fill()
       context.restoreGState()
     case .square:
-      NSColor.systemOrange.setFill()
+      NSColor.systemOrange
+        .setFill()
       NSBezierPath(roundedRect: rect(side: Layout.square), xRadius: Layout.squareCorner, yRadius: Layout.squareCorner)
         .fill()
     case .quiet:
-      NSColor.systemGray.setFill()
+      NSColor.systemGray
+        .setFill()
       NSBezierPath(ovalIn: rect(side: Layout.quietDot))
         .fill()
     }

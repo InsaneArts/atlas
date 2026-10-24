@@ -108,8 +108,6 @@ final class OnboardingController {
     snapshot.form = form
   }
 
-  // MARK: Reading
-
   /// Reads the facts now and then every ``readEvery`` until ``stop()``.
   func watch() {
     guard polling == nil else { return }
@@ -268,8 +266,6 @@ final class OnboardingController {
     }
   }
 
-  // MARK: The person's side
-
   /// Back to the screen before: the welcome from the choice, the choice from the form, the agents from Done.
   private func back() {
     switch snapshot.step {
@@ -403,7 +399,8 @@ final class OnboardingController {
         snapshot.agents[index].connected = true
       }
       guard outcome.ok else {
-        let failures = (change?.failures ?? []).map { OnboardingWords.notConnected($0.agent, $0.error) }
+        let failures = (change?.failures ?? [])
+          .map { OnboardingWords.notConnected($0.agent, $0.error) }
         if !failures.isEmpty { snapshot.problem = failures.joined(separator: " ") }
         return
       }
@@ -423,8 +420,6 @@ final class OnboardingController {
     else { return }
     closeRequested = true
   }
-
-  // MARK: The helper's side
 
   /// Allows exactly the account shown: a request changed since is refused.
   func allow() async {

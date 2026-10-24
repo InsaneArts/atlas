@@ -11,7 +11,7 @@ struct BlockedScreen: View {
   var body: some View {
     ScreenColumn {
       Image(systemName: "exclamationmark.triangle.fill")
-        .font(.system(size: OnboardingLayout.blockedSymbol))
+        .font(OnboardingLayout.blockedSymbolFont)
         .foregroundStyle(Color.attention)
         .accessibilityHidden(true)
       Headline(title: OnboardingScreen.blockedTitle)

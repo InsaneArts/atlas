@@ -29,10 +29,18 @@ extension ViewerPresenter {
       ? snapshot.session.recovering || snapshot.running.contains(.recovery) : snapshot.session.alertRunning
     let overview = snapshot.reading.status.overview
     return switch kind {
-    case .recover: HelperAlert.recover.state(overview: overview, busy: busy)
-    case .switchToHelper: HelperAlert.switchToHelper.state(overview: overview, busy: busy)
-    case .logOut: HelperAlert.logOut.state(overview: overview, busy: busy)
-    case .logOutAnyway: HelperAlert.logOutAnyway.state(overview: overview, busy: busy)
+    case .recover:
+      HelperAlert.recover
+        .state(overview: overview, busy: busy)
+    case .switchToHelper:
+      HelperAlert.switchToHelper
+        .state(overview: overview, busy: busy)
+    case .logOut:
+      HelperAlert.logOut
+        .state(overview: overview, busy: busy)
+    case .logOutAnyway:
+      HelperAlert.logOutAnyway
+        .state(overview: overview, busy: busy)
     case .restart:
       HelperAlert.plain(
         ViewerWords.restartTitle,

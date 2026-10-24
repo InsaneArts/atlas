@@ -54,6 +54,10 @@ private enum Layout {
   static let halo = 0.25
   /// 6: how far the halo reaches outside the frame, its inner 2 under the ring.
   static let haloWidth: CGFloat = 6
+  #if DEBUG
+    /// The part the preview picks out of the sample desktop: a window-sized piece near its top left.
+    static let sampleFrame = CGRect(x: 120, y: 60, width: 220, height: 160)
+  #endif
 }
 
 #if DEBUG
@@ -62,7 +66,7 @@ private enum Layout {
       if let picture = SampleDesktop.picture {
         PictureFrame(picture: picture)
       }
-      OutlineHighlight(frame: CGRect(x: 120, y: 60, width: 220, height: 160))
+      OutlineHighlight(frame: Layout.sampleFrame)
     }
     .frame(width: SampleWidth.column * 2, height: SampleWidth.column * 1.25)
     .sampleSurface()

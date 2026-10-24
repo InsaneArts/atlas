@@ -42,7 +42,8 @@ struct ShotGroupingTests {
 
   @Test("earlier today reads as the afternoon from noon and the evening from six")
   func partsOfTheDay() {
-    let evening = Self.now.addingTimeInterval(10 * 3600)
+    let evening = Self.now
+      .addingTimeInterval(10 * 3600)
     let rules = ShotGrouping(now: evening, calendar: Self.calendar)
     #expect(rules.period(of: Self.at(11, 59)) == .morning)
     #expect(rules.period(of: Self.at(12, 0)) == .afternoon)

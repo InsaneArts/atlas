@@ -69,7 +69,10 @@ package struct ActivityGrouping: Sendable {
   /// How many rows started today, whatever the filter or the search: the pane's count.
   package var countToday: Int {
     log.entries
-      .filter { entry in start(of: entry).map { calendar.isDate($0, inSameDayAs: now) } ?? false }
+      .filter { entry in
+        start(of: entry)
+          .map { calendar.isDate($0, inSameDayAs: now) } ?? false
+      }
       .count
   }
 
@@ -166,7 +169,8 @@ package struct ActivityGrouping: Sendable {
   package static func matches(_ entry: ActivityLog.Entry, query: String) -> Bool {
     let words = query.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !words.isEmpty else { return true }
-    return done(entry).localizedStandardContains(words)
+    return done(entry)
+      .localizedStandardContains(words)
   }
 
   /// What a line says: the person's own action after "You", anyone else's as a sentence's start.
@@ -177,7 +181,9 @@ package struct ActivityGrouping: Sendable {
     let done = done(entry)
     switch entry.actor {
     case .you: return "You \(done)"
-    case .agent, .someoneElse: return done.prefix(1).uppercased() + done.dropFirst()
+    case .agent, .someoneElse:
+      let first = done.prefix(1)
+      return first.uppercased() + done.dropFirst()
     }
   }
 

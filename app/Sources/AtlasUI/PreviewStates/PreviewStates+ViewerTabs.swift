@@ -104,7 +104,8 @@
     @MainActor package static let viewerActivity: ViewerState = {
       var state = viewerWorking
       state.top.tabs = viewerTabs(.activity)
-      state.mini = SampleDesktop.picture.map { MiniScreenState(picture: $0) }
+      state.mini = SampleDesktop.picture
+        .map { MiniScreenState(picture: $0) }
       state.pane = .activity(
         ViewerActivityState(meta: "11 actions today", query: "", filters: activityFilters(), groups: activityGroups)
       )
@@ -116,7 +117,8 @@
       var state = viewerIdle
       state.top.status = StatusSummary(label: "Idle", tone: .quiet, mark: .dot, line: "")
       state.top.tabs = viewerTabs(.activity)
-      state.mini = SampleDesktop.picture.map { MiniScreenState(picture: $0) }
+      state.mini = SampleDesktop.picture
+        .map { MiniScreenState(picture: $0) }
       state.pane = .activity(
         ViewerActivityState(
           meta: "No actions today",
@@ -154,7 +156,8 @@
     @MainActor package static let viewerActivityPaused: ViewerState = {
       var state = viewerPaused
       state.top.tabs = viewerTabs(.activity)
-      state.mini = SampleDesktop.picture.map { MiniScreenState(picture: $0, isPaused: true) }
+      state.mini = SampleDesktop.picture
+        .map { MiniScreenState(picture: $0, isPaused: true) }
       state.pane = viewerActivity.pane
       return state
     }()
@@ -204,7 +207,8 @@
     @MainActor package static let viewerApps: ViewerState = {
       var state = viewerIdle
       state.top.tabs = viewerTabs(.apps)
-      state.mini = SampleDesktop.picture.map { MiniScreenState(picture: $0) }
+      state.mini = SampleDesktop.picture
+        .map { MiniScreenState(picture: $0) }
       state.pane = .apps(ViewerAppsState(meta: "5 apps · 5 windows, front to back", query: "", apps: sampleApps))
       return state
     }()
@@ -213,7 +217,8 @@
     @MainActor package static let viewerAppsPaused: ViewerState = {
       var state = viewerPaused
       state.top.tabs = viewerTabs(.apps)
-      state.mini = SampleDesktop.picture.map { MiniScreenState(picture: $0, isPaused: true) }
+      state.mini = SampleDesktop.picture
+        .map { MiniScreenState(picture: $0, isPaused: true) }
       state.pane = viewerApps.pane
       return state
     }()

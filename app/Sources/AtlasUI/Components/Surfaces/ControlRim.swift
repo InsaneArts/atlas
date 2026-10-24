@@ -37,7 +37,9 @@ struct ControlRim: ViewModifier {
 
   /// The edge: the accent in control, a quiet hairline otherwise.
   private var edge: Color {
-    isInControl ? Color.accent.opacity(Layout.rim) : Color.separator
+    guard isInControl else { return Color.separator }
+    return Color.accent
+      .opacity(Layout.rim)
   }
 }
 

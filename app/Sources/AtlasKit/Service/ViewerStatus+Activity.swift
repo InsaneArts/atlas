@@ -54,7 +54,8 @@ extension ViewerStatus {
     /// - Throws: `DecodingError` only when the row is not an object.
     package init(from decoder: any Decoder) throws {
       let container = try decoder.container(keyedBy: CodingKeys.self)
-      id = (try? container.decodeIfPresent(String.self, forKey: .id)).flatMap { $0?.isEmpty == false ? $0 : nil }
+      id = (try? container.decodeIfPresent(String.self, forKey: .id))
+        .flatMap { $0?.isEmpty == false ? $0 : nil }
       operation = (try? container.decodeIfPresent(String.self, forKey: .operation)) ?? "action"
       ok = (try? container.decodeIfPresent(Bool.self, forKey: .ok)) == true
       actionCount = try? container.decodeIfPresent(Int.self, forKey: .actionCount)

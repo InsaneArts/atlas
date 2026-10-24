@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import SwiftUI
 
 /// The onboarding window's own measures, which no other window shares.
 package enum OnboardingLayout {
@@ -49,10 +50,14 @@ package enum OnboardingLayout {
   static let dragIcon: CGFloat = 72
   /// 30: the hand carrying the drag ghost.
   static let ghostHand: CGFloat = 30
+  /// The hand's symbol font, at ``ghostHand``: a symbol of its own size, not text on the type scale.
+  static let ghostHandFont = Font.system(size: ghostHand)
   /// 14: how far past the ghost's icon, right and down, the hand holds it.
   static let ghostHandOffset: CGFloat = 14
   /// 40: the warning symbol on the blocked screen.
   static let blockedSymbol: CGFloat = 40
+  /// The warning symbol's font, at ``blockedSymbol``: a symbol of its own size, not text on the type scale.
+  static let blockedSymbolFont = Font.system(size: blockedSymbol)
   /// 14: how far below its place a screen starts as it arrives.
   static let entryOffset: CGFloat = 14
   /// −10: how far above its place a screen ends as it leaves.

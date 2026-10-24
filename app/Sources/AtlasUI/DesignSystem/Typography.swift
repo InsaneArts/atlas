@@ -18,4 +18,16 @@ enum Typography {
   static func font(_ style: TextStyle, weight: Font.Weight? = nil, design: Font.Design? = nil) -> Font {
     .system(size: style.pointSize, weight: weight, design: design)
   }
+
+  /// A system font for a glyph sized from its frame rather than from the scale, such as a symbol at a fraction of the
+  /// circle it sits in. Only for glyphs sized from a frame: the size is arithmetic on the frame's token, never a
+  /// literal, which the token checker refuses.
+  ///
+  /// - Parameters:
+  ///   - size: The glyph's size in points, derived from its frame.
+  ///   - weight: The weight, or nil for the system's regular.
+  /// - Returns: The system font at that size.
+  static func font(size: CGFloat, weight: Font.Weight? = nil) -> Font {
+    .system(size: size, weight: weight)
+  }
 }

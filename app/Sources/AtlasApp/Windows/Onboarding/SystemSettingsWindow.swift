@@ -35,7 +35,8 @@ enum SystemSettingsWindow {
   static func largest(in windows: [[String: Any]], ownedBy owners: Set<pid_t>) -> CGRect? {
     windows
       .filter { window in
-        (window[kCGWindowOwnerPID as String] as? pid_t).map(owners.contains) == true
+        (window[kCGWindowOwnerPID as String] as? pid_t)
+          .map(owners.contains) == true
           && window[kCGWindowLayer as String] as? Int == 0
       }
       .compactMap { window in

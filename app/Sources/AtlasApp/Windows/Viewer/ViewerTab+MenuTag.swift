@@ -2,7 +2,10 @@ import AtlasUI
 
 extension ViewerTab {
   /// The tab's View menu item tag: its place among the tabs, as ⌘1 to ⌘4 number them.
-  var menuTag: Int { Self.allCases.firstIndex(of: self) ?? 0 }
+  var menuTag: Int {
+    Self.allCases
+      .firstIndex(of: self) ?? 0
+  }
 
   /// The tab a View menu item's tag names.
   ///

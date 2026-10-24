@@ -16,7 +16,8 @@ extension StatusReading {
       let reason = status.overview.reason
       return reason.hasSuffix(".") ? String(reason.dropLast()) : reason
     }
-    let action = newest.text.prefix(1).uppercased() + newest.text.dropFirst()
+    let first = newest.text.prefix(1)
+    let action = first.uppercased() + newest.text.dropFirst()
     return withAge && !newest.when.isEmpty ? "\(action) · \(newest.when)" : action
   }
 

@@ -70,7 +70,8 @@ extension ActivityLog {
     package init(from decoder: any Decoder) throws {
       let container = try decoder.container(keyedBy: CodingKeys.self)
       let text = { (key: CodingKeys) in
-        (try? container.decodeIfPresent(String.self, forKey: key)).flatMap { $0.isEmpty ? nil : $0 }
+        (try? container.decodeIfPresent(String.self, forKey: key))
+          .flatMap { $0.isEmpty ? nil : $0 }
       }
       let flag = { (key: CodingKeys) in (try? container.decodeIfPresent(Bool.self, forKey: key)) == true }
       id = text(.id) ?? ""

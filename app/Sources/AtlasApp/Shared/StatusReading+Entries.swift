@@ -34,7 +34,8 @@ extension StatusReading {
   ///   - isNewest: Whether it is the newest in its list.
   /// - Returns: The entry.
   private static func entry(_ item: ActivityItem, isNewest: Bool) -> ActivityEntry {
-    let line = item.actor == .agent ? item.text.prefix(1).uppercased() + item.text.dropFirst() : item.line
+    let first = item.text.prefix(1)
+    let line = item.actor == .agent ? first.uppercased() + item.text.dropFirst() : item.line
     return ActivityEntry(
       id: item.id,
       line: line,
