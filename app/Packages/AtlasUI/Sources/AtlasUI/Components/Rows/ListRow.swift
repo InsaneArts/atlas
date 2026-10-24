@@ -81,18 +81,20 @@ struct ListRow: View {
     case regular
     /// 44: a Settings group.
     case compact
+    /// 44: a setup checklist, at a setup list's inset (v3 `.row.check`).
+    case checklist
     /// 38: Activity.
     case dense
     /// 34: a window under its app.
     case tight
 
     /// The space above and below the row's content: v3's 10 on a setup row, 7 in a Settings group (v3 `.srow`); the
-    /// tighter rows keep 4, so their least height sets their rhythm.
+    /// tighter rows and a checklist keep 4, so their least height sets their rhythm.
     var verticalInset: CGFloat {
       switch self {
       case .regular: Spacing.sPlus
       case .compact: Layout.compactVerticalInset
-      case .dense, .tight: Spacing.xs
+      case .dense, .tight, .checklist: Spacing.xs
       }
     }
 
@@ -110,7 +112,7 @@ struct ListRow: View {
     var height: CGFloat {
       switch self {
       case .regular: Layout.regularHeight
-      case .compact: ControlHeight.xl
+      case .compact, .checklist: ControlHeight.xl
       case .dense: Layout.denseHeight
       case .tight: ControlHeight.mPlus
       }
@@ -248,7 +250,7 @@ struct ListRow: View {
   ///   - size: How tall the row is; a setup list's by default.
   /// - Returns: The weight.
   nonisolated static func titleWeight(_ lead: Lead, size: Size = .regular) -> Font.Weight {
-    if size == .compact { return .regular }
+    if size == .compact || size == .checklist { return .regular }
     switch lead {
     case .check, .pending: return .regular
     case .none, .tile, .image, .picture, .letter: return .medium

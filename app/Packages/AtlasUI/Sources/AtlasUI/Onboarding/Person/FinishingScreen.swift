@@ -13,7 +13,7 @@ struct FinishingScreen: View {
     ScrollColumn(width: OnboardingLayout.column) {
       OnboardingHeader(label: "Welcome back", title: state.title, tail: state.tail, swapsTitle: true)
       GroupedList(Self.checks(state)) { check in
-        ListRow(check.title, lead: check.lead, trailing: check.trailing, size: .compact)
+        ListRow(check.title, lead: check.lead, trailing: check.trailing, size: Self.rowSize)
       }
       .animation(Motion.animation(Motion.state, reduceMotion: reduceMotion, reduced: Motion.reduced), value: state.live)
       .padding(.top, OnboardingLayout.Rhythm.paragraph)
@@ -33,6 +33,9 @@ struct FinishingScreen: View {
         .padding(.top, OnboardingLayout.Rhythm.status)
     }
   }
+
+  /// The checklist's rows: 44 high at a setup list's inset (v3 `.row.check`), not a Settings group's.
+  static let rowSize = ListRow.Size.checklist
 
   /// The four checks: the helper logged in, Atlas running there and its permissions, all passed by now, then the live
   /// check as it stands, its note orange once it failed.
