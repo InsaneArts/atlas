@@ -8,6 +8,19 @@ import Testing
 
 @Suite("WindowShell")
 struct WindowShellTests {
+  @Test("Settings keeps the shell appearance and native close control while allowing resizing")
+  func settingsCanResizeWithoutAMinimizeControl() throws {
+    let made = WindowMaking.live
+      .settings(.scripted(commands: ScriptedCommands([:]))) { _ in }
+    let window = try #require(made as? SettingsWindow)
+    #expect(window.styleMask.contains(.resizable))
+    #expect(window.styleMask.contains(.closable))
+    #expect(!window.styleMask.contains(.miniaturizable))
+    #expect(window.titleVisibility == .hidden)
+    #expect(window.collectionBehavior.contains(.moveToActiveSpace))
+    #expect(window.collectionBehavior.contains(.fullScreenAuxiliary))
+  }
+
   @Test("every window the coordinator opens is hosted by the shell in the dark appearance")
   func everyWindowIsHostedByTheShellInTheDark() throws {
     let service = ScriptedService()

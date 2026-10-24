@@ -28,11 +28,8 @@ final class SettingsController {
   @ObservationIgnored var agentsReading: Task<Void, Never>?
   /// Numbers each agents reading, so only the newest one started is kept.
   @ObservationIgnored var agentsGeneration = 0
-  /// How tall each pane last drew, its insets included, by pane. Written only by the controller's own files.
-  @ObservationIgnored var paneHeights: [SettingsTab: CGFloat] = [:]
-  /// Shapes the window to the pane shown: its name for the title bar, and the window's content height, nil until
-  /// the pane has drawn. The window sets it.
-  @ObservationIgnored var reshape: (@MainActor (_ title: String, _ contentHeight: CGFloat?) -> Void)?
+  /// Updates the native window title without changing its frame.
+  @ObservationIgnored var nameWindow: (@MainActor (String) -> Void)?
 
   /// Creates the window's controller on the pane last shown, with the person's saved choices.
   ///
@@ -40,9 +37,8 @@ final class SettingsController {
   init(dependencies: SettingsDependencies) {
     self.dependencies = dependencies
     let preferences = dependencies.preferences
-    session.tab =
-      preferences.loadTab()
-      .flatMap(SettingsTab.init(rawValue:)) ?? .general
+    let root = SettingsRoot(savedValue: preferences.loadTab())
+    session.navigation = SettingsNavigation(initial: .root(SettingsRoot(pane: root.pane ?? .general)))
     notify = preferences.loadNotify()
     icons = AgentRowIcons.onThisMac(home: FileManager.default.homeDirectoryForCurrentUser) { path in
       dependencies.icon(forFile: path)
@@ -87,7 +83,8 @@ final class SettingsController {
     // Unstructured, as `send` is the view's synchronous callback: each async event runs in a task of its own.
     switch event {
     case .selectTab(let tab): selectTab(tab)
-    case .paneHeight(let tab, let height): fit(tab, height: height)
+    case .back: moveInHistory(forward: false)
+    case .forward: moveInHistory(forward: true)
     case .checkAgain: Task { await checkAgain() }
     case .askSwitch: ask(.switchToHelper)
     case .askRecover: ask(.recover)
@@ -132,10 +129,10 @@ final class SettingsController {
   ///
   /// - Parameter tab: The pane.
   func selectTab(_ tab: SettingsTab) {
-    guard tab != session.tab else { return }
-    session.tab = tab
+    guard .root(SettingsRoot(pane: tab)) != session.navigation.destination else { return }
+    session.navigation.visit(.root(SettingsRoot(pane: tab)))
     dependencies.preferences.saveTab(tab.rawValue)
-    reshapeWindow()
+    nameWindow?("Settings — \(SettingsWords.tab(tab))")
     if tab == .agents { readAgents() }
   }
 
@@ -151,6 +148,8 @@ final class SettingsController {
   func close() {
     agentsReading?.cancel()
     agentsReading = nil
+    let root = session.navigation.destination?.root ?? .general
+    session.navigation = SettingsNavigation(initial: .root(root))
   }
 
   /// One line about what a command just did, in the pane that ran it; it stays until the next.

@@ -1,32 +1,34 @@
 import AtlasUI
 import CoreGraphics
 
-/// Where the Settings window goes as it fits a pane: as tall as the pane, its top edge where it is, and
-/// never taller than the screen nor past its bottom. The window has a full-size content view, so its frame is as tall
-/// as its content.
+/// Validates restored and user-sized Settings frames against the usable screen, without fitting page content.
 enum SettingsWindowFrame {
-  /// The frame that fits a content height, from wherever the window is now, mid-resize included.
+  /// The smallest usable size, reduced only when the physical screen is smaller.
   ///
-  /// - Parameters:
-  ///   - current: The window's frame now.
-  ///   - contentHeight: The height to fit: the title and tabs over the pane.
-  ///   - visible: The screen's visible frame, or nil for none known.
-  /// - Returns: The frame: Settings' width, the content's height, and the current top edge; a frame the screen
-  ///   cannot hold is cut to its height and lifted off its bottom.
-  static func frame(current: CGRect, contentHeight: CGFloat, within visible: CGRect? = nil) -> CGRect {
-    let height = visible.map { min(contentHeight, $0.height) } ?? contentHeight
-    var bottom = current.maxY - height
-    if let visible, bottom < visible.minY { bottom = visible.minY }
-    return CGRect(x: current.minX, y: bottom, width: SettingsLayout.width, height: height)
+  /// - Parameter visible: The usable screen bounds, when known.
+  /// - Returns: The minimum frame size for that screen.
+  static func minimum(within visible: CGRect?) -> CGSize {
+    CGSize(
+      width: min(SettingsLayout.minimumWidth, visible?.width ?? SettingsLayout.minimumWidth),
+      height: min(SettingsLayout.minimumHeight, visible?.height ?? SettingsLayout.minimumHeight)
+    )
   }
 
-  /// Whether the window eases to its new frame, or jumps: it eases only while on screen and Reduce Motion is off.
+  /// Keeps the user's size where possible, enlarging old narrow frames and clamping all edges to the screen.
   ///
   /// - Parameters:
-  ///   - isVisible: Whether the window is on screen.
-  ///   - reduceMotion: Whether the Reduce Motion setting is on.
-  /// - Returns: Whether the resize animates.
-  static func animates(isVisible: Bool, reduceMotion: Bool) -> Bool {
-    isVisible && !reduceMotion
+  ///   - current: A restored or user-sized frame.
+  ///   - visible: The usable screen bounds, when known.
+  /// - Returns: A usable frame, preserving the top edge when its minimum height grows.
+  static func frame(current: CGRect, within visible: CGRect? = nil) -> CGRect {
+    let minimum = minimum(within: visible)
+    let width = min(max(current.width, minimum.width), visible?.width ?? .greatestFiniteMagnitude)
+    let height = min(max(current.height, minimum.height), visible?.height ?? .greatestFiniteMagnitude)
+    var origin = CGPoint(x: current.minX, y: current.maxY - height)
+    if let visible {
+      origin.x = min(max(origin.x, visible.minX), visible.maxX - width)
+      origin.y = min(max(origin.y, visible.minY), visible.maxY - height)
+    }
+    return CGRect(origin: origin, size: CGSize(width: width, height: height))
   }
 }

@@ -41,7 +41,7 @@
         next.alert = settingsSwitch.alert
       case .closeLeftovers, .closeHelper:
         next.helper.closeLogin = nil
-      case .checkAgain, .gettingStarted, .paneHeight, .showAppInFinder, .showAgentFile:
+      case .checkAgain, .gettingStarted, .back, .forward, .showAppInFinder, .showAgentFile:
         break
       }
       return next

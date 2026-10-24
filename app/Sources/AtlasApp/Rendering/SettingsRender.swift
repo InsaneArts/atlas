@@ -43,6 +43,24 @@
       Array(zip(files, PreviewStates.settings.map(\.value)))
     }
 
+    /// Additional stable viewports; the original 28 state scenarios remain in their original order above.
+    static var viewportRenders: [(file: String, state: SettingsState, size: NSSize)] {
+      let minimum = NSSize(width: SettingsLayout.minimumWidth, height: SettingsLayout.minimumHeight)
+      return Array(zip(files.prefix(4), renders.prefix(4)))
+        .map { file, render in
+          ("minimum-\(file)", render.state, minimum)
+        } + [
+          (
+            "long-helper", PreviewStates.settingsLongHelper,
+            NSSize(width: SettingsLayout.defaultWidth, height: SettingsLayout.defaultHeight)
+          ),
+          (
+            "tall-helper", renders[1].state,
+            NSSize(width: SettingsLayout.defaultWidth, height: SettingsLayout.tallPreviewHeight)
+          ),
+        ]
+    }
+
     /// Draws every Settings state to PNGs in `directory`, at Retina scale (``PNG/scale``), each at its window's size;
     /// with `ATLAS_RENDER_REDUCE_TRANSPARENCY=1`, as Reduce Transparency draws them, the alerts' glass opaque.
     ///
@@ -54,44 +72,44 @@
       try? FileManager.default
         .createDirectory(at: folder, withIntermediateDirectories: true)
       let reduceTransparency = ProcessInfo.processInfo.environment["ATLAS_RENDER_REDUCE_TRANSPARENCY"] == "1"
-      return renders.map { draw($0.file, $0.state, to: folder, reduceTransparency: reduceTransparency) }
+      let standard = renders.map { draw($0.file, $0.state, to: folder, reduceTransparency: reduceTransparency) }
+      let viewports = viewportRenders.map {
+        draw($0.file, $0.state, to: folder, reduceTransparency: reduceTransparency, size: $0.size)
+      }
+      return (standard + viewports)
         .allSatisfy { $0 }
     }
 
-    /// Draws one Settings state to `file`.png in `folder`, at Retina scale, Settings' width and its pane's
-    /// height, as the window fits it.
+    /// Draws one Settings state to `file`.png in `folder`, at Retina scale, the stable Settings viewport.
     ///
     /// - Parameters:
     ///   - file: The PNG's name, without its extension.
     ///   - state: The state.
     ///   - folder: Where the PNG goes.
     ///   - reduceTransparency: Whether to draw it as under Reduce Transparency; not by default.
+    ///   - size: The explicit viewport, or the stable default when nil.
     /// - Returns: Whether it was drawn.
-    static func draw(_ file: String, _ state: SettingsState, to folder: URL, reduceTransparency: Bool = false) -> Bool {
+    static func draw(
+      _ file: String,
+      _ state: SettingsState,
+      to folder: URL,
+      reduceTransparency: Bool = false,
+      size: NSSize? = nil
+    ) -> Bool {
       PNG.write(
         view(state) { _ in }
           .environment(\._accessibilityReduceTransparency, reduceTransparency),
-        size: size(of: state),
+        size: size ?? Self.size(of: state),
         to: folder.appendingPathComponent("\(file).png")
       )
     }
 
-    /// The window's size for a state: Settings' width, and the title and tabs over the pane as it draws, which the
-    /// pane reports as the window lays it out.
+    /// The stable default viewport, independent of pane content and status.
     ///
     /// - Parameter state: The state.
     /// - Returns: The size.
     static func size(of state: SettingsState) -> NSSize {
-      var pane: CGFloat?
-      let host = PNG.host(
-        view(state) { event in
-          if case .paneHeight(let tab, let height) = event, tab == state.tabs.selected { pane = height }
-        }
-      )
-      host.frame = NSRect(x: 0, y: 0, width: SettingsLayout.width, height: SettingsLayout.firstHeight)
-      host.layoutSubtreeIfNeeded()
-      let height = pane.map { SettingsLayout.header + $0 } ?? SettingsLayout.firstHeight
-      return NSSize(width: SettingsLayout.width, height: height.rounded(.up))
+      NSSize(width: SettingsLayout.defaultWidth, height: SettingsLayout.defaultHeight)
     }
 
     /// The window's view for a render.

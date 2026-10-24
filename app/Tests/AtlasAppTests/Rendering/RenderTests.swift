@@ -97,13 +97,11 @@
       #expect(Set(names).count == names.count)
     }
 
-    @Test("every settings render draws at Settings' width and its pane's height", arguments: SettingsRender.files)
+    @Test("every settings render draws at the stable Settings viewport", arguments: SettingsRender.files)
     func everySettingsRenderDraws(file: String) throws {
       let state = try #require(SettingsRender.renders.first { $0.file == file }?.state)
       let size = SettingsRender.size(of: state)
-      #expect(size.width == SettingsLayout.width)
-      #expect(size.height > SettingsLayout.header, "the pane said how tall it draws")
-      #expect(size.height != SettingsLayout.firstHeight, "the pane said how tall it draws")
+      #expect(size == NSSize(width: SettingsLayout.defaultWidth, height: SettingsLayout.defaultHeight))
       let directory = try Self.directory()
       defer {
         try? FileManager.default
@@ -114,6 +112,27 @@
       let image = try #require(NSBitmapImageRep(data: Data(contentsOf: drawn)), "\(file) was not drawn")
       #expect(image.pixelsWide == Int(size.width) * PNG.scale)
       #expect(image.pixelsHigh == Int(size.height) * PNG.scale)
+    }
+
+    @Test("Settings renders preserve every old scenario and draw minimum and tall viewports")
+    func settingsViewportsKeepTheirExplicitSize() throws {
+      #expect(SettingsRender.files.count == 28)
+      let viewportNames = SettingsRender.viewportRenders
+        .map(\.file)
+      let allNames = SettingsRender.files + viewportNames
+      #expect(Set(allNames).count == allNames.count)
+      let directory = try Self.directory()
+      defer {
+        try? FileManager.default
+          .removeItem(at: directory)
+      }
+      for render in SettingsRender.viewportRenders {
+        #expect(SettingsRender.draw(render.file, render.state, to: directory, size: render.size))
+        let drawn = directory.appendingPathComponent("\(render.file).png")
+        let image = try #require(NSBitmapImageRep(data: Data(contentsOf: drawn)))
+        #expect(image.pixelsWide == Int(render.size.width) * PNG.scale)
+        #expect(image.pixelsHigh == Int(render.size.height) * PNG.scale)
+      }
     }
 
     @Test("the settings renders draw every sample the previews list, each under a name of its own")

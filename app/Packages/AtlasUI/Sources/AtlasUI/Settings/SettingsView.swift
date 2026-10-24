@@ -1,8 +1,6 @@
 import SwiftUI
 
-/// The Settings window: the pane's name and the tabs at the top, the selected pane under them, and an alert over the
-/// whole window when one is asked. It draws its state and sends what the person does, and how tall each pane draws, so
-/// the window can fit it; the General pane's values change through `edit`.
+/// The Settings sidebar, stationary navigation header, existing pane content and window-wide alert.
 public struct SettingsView: View {
   /// What the window shows.
   private let state: SettingsState
@@ -20,7 +18,7 @@ public struct SettingsView: View {
   ///   - state: What the window shows.
   ///   - edit: Receives the General pane as the person changed it.
   ///   - announce: Posts explicit results and alerts to VoiceOver.
-  ///   - send: Receives what the person does, and each pane's height.
+  ///   - send: Receives what the person does.
   public init(
     state: SettingsState,
     edit: @escaping @MainActor (SettingsGeneralState) -> Void,
@@ -36,12 +34,20 @@ public struct SettingsView: View {
     self.announce = announce
   }
 
-  /// The header over the selected pane, and the alert over both when one is asked.
+  /// The stationary shell and selected pane beneath the window-wide alert.
   public var body: some View {
     ZStack {
-      VStack(spacing: .zero) {
-        SettingsHeader(title: state.title, tabs: state.tabs) { send(.selectTab($0)) }
-        SettingsPane(state: state, edit: edit, send: send)
+      HStack(spacing: .zero) {
+        SettingsSidebar(state: state) { send(.selectTab($0)) }
+        VStack(spacing: .zero) {
+          SettingsHeader(
+            title: state.title,
+            canGoBack: state.canGoBack,
+            canGoForward: state.canGoForward,
+            send: send
+          )
+          SettingsPane(state: state, edit: edit, send: send)
+        }
       }
       // Under an alert, nothing is reached by Tab or VoiceOver until it is answered.
       .disabled(state.alert != nil)
@@ -49,7 +55,7 @@ public struct SettingsView: View {
       AlertLayer(state: state.alert) { send($0 == .confirm ? .alertConfirm : .alertCancel) }
     }
     .windowSurface()
-    // The header sits in the title bar, beside the window buttons.
+    // The sidebar reserves traffic-light space in the full-size content view.
     .ignoresSafeArea(.container, edges: .top)
     // Each only when its words change, so a poll that reads the same says nothing.
     .onChange(of: state.alert?.shownTitle) { _, title in if let title { announce(title) } }
@@ -75,6 +81,16 @@ public struct SettingsView: View {
 
   #Preview("Forget") {
     SettingsView(state: PreviewStates.settingsForget, edit: { _ in }, send: { _ in })
+      .frame(width: SettingsLayout.width, height: SettingsLayout.firstHeight)
+  }
+
+  #Preview("Minimum viewport") {
+    SettingsView(state: PreviewStates.settingsHelper, edit: { _ in }, send: { _ in })
+      .frame(width: SettingsLayout.minimumWidth, height: SettingsLayout.minimumHeight)
+  }
+
+  #Preview("Long account and connecting subtitle") {
+    SettingsView(state: PreviewStates.settingsLongHelper, edit: { _ in }, send: { _ in })
       .frame(width: SettingsLayout.width, height: SettingsLayout.firstHeight)
   }
 
