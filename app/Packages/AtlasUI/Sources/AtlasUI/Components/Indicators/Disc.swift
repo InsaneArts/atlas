@@ -38,7 +38,7 @@ struct Disc: View {
     case regular
     /// 34: an avatar in a choice row.
     case avatar
-    /// 56: a large avatar.
+    /// 56: a large avatar, such as the account asking for access on the helper's allow screen.
     case large
   }
 
@@ -88,10 +88,10 @@ struct Disc: View {
 
   private var side: CGFloat {
     switch size {
-    case .mark: IconSize.mark
-    case .regular: IconSize.disc
-    case .avatar: IconSize.avatar
-    case .large: IconSize.avatarLarge
+    case .mark: IconSize.sPlus
+    case .regular: IconSize.m
+    case .avatar: IconSize.xl
+    case .large: Layout.largeSide
     }
   }
 
@@ -125,6 +125,9 @@ struct Disc: View {
 private enum Layout {
   /// 0.2: the soft accent under the person's own initial, stronger than a tint so it reads at disc size.
   static let accentSoft = 0.2
+  /// 56: a large disc's side, the boards' large avatar (the shared `IconSize.avatarLarge` until Phase 6a, which only
+  /// this size used).
+  static let largeSide: CGFloat = 56
 }
 
 #if DEBUG

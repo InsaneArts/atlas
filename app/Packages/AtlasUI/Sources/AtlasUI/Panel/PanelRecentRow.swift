@@ -7,11 +7,11 @@ struct PanelRecentRow: View {
   let entry: ActivityEntry
 
   var body: some View {
-    HStack(spacing: Spacing.m) {
+    HStack(spacing: Spacing.s) {
       ActivityMark(kind: entry.mark)
       Text(entry.line)
         .truncationMode(.tail)
-      Spacer(minLength: Spacing.m)
+      Spacer(minLength: Spacing.s)
       Text(entry.when)
         .foregroundStyle(Color.textTertiary)
         .monospacedDigit()

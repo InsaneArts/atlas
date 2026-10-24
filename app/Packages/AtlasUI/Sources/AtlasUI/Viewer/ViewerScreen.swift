@@ -18,8 +18,8 @@ struct ViewerScreen<Input: View>: View {
         // The shadow falls from the screen's shape alone, never blurred from the picture.
         .background {
           RoundedRectangle(cornerRadius: Radius.large)
-            .fill(Color.stageBackground)
-            .elevation(.stage)
+            .fill(Color.letterbox)
+            .elevation(.raised)
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("The helper's screen")

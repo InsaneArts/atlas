@@ -28,8 +28,8 @@ extension Color {
   static let textAttention = Color(red: 0xFF / 255, green: 0xB3 / 255, blue: 0x40 / 255)
   /// A link, and the word You have control: #4EA6FF.
   static let textLink = Color(red: 0x4E / 255, green: 0xA6 / 255, blue: 0xFF / 255)
-  /// An alert's message under its title: rgb(235, 235, 245) at 0.7.
-  static let textAlert = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255)
+  /// Secondary text on a glass surface, such as an alert's message under its title: rgb(235, 235, 245) at 0.7.
+  static let textOnGlass = Color(red: 235 / 255, green: 235 / 255, blue: 245 / 255)
     .opacity(0.7)
   /// A destructive button's word, such as Log Out: #FF6961.
   static let textDestructive = Color(red: 0xFF / 255, green: 0x69 / 255, blue: 0x61 / 255)
@@ -42,9 +42,9 @@ extension Color {
   /// A control's fill while what it toggles is on, such as a round button's: white at 0.16.
   static let fillControlOn = Color.white
     .opacity(0.16)
-  /// An alert's other buttons, such as Cancel and a destructive one, on the alert's lighter ground, and a selected
-  /// icon tab's fill: white at 0.10.
-  static let fillAlertButton = Color.white
+  /// A control's fill raised a step, for a control on a lighter ground, such as an alert's Cancel and destructive
+  /// buttons, and a selected icon tab's fill: white at 0.10.
+  static let fillControlRaised = Color.white
     .opacity(0.1)
   /// A pill's ground, such as a status badge's: white at 0.06.
   static let fillPill = Color.white
@@ -61,18 +61,18 @@ extension Color {
   static let scrim = Color.black
     .opacity(0.42)
   /// The letterbox around a picture: black.
-  static let stageBackground = Color.black
-  /// The stage while there is no picture to show: #0D0D10.
-  static let stageEmpty = Color(red: 0x0D / 255, green: 0x0D / 255, blue: 0x10 / 255)
-  /// An alert's ground drawn opaque, under Reduce Transparency: rgb(44, 44, 48).
-  static let fillAlertSolid = Color(red: 44 / 255, green: 44 / 255, blue: 48 / 255)
-  /// An alert's ground over its material: rgb(44, 44, 48) at 0.95.
-  static let fillAlert = Color.fillAlertSolid
+  static let letterbox = Color.black
+  /// Where a picture goes while there is none to show: #0D0D10.
+  static let fillPlaceholder = Color(red: 0x0D / 255, green: 0x0D / 255, blue: 0x10 / 255)
+  /// An overlay's ground drawn opaque, under Reduce Transparency, such as an alert's: rgb(44, 44, 48).
+  static let fillOverlaySolid = Color(red: 44 / 255, green: 44 / 255, blue: 48 / 255)
+  /// An overlay's ground over its material, such as an alert's: rgb(44, 44, 48) at 0.95.
+  static let fillOverlay = Color.fillOverlaySolid
     .opacity(0.95)
   /// A floating bar of buttons drawn opaque, under Reduce Transparency: rgb(40, 40, 44).
-  static let fillBarSolid = Color(red: 40 / 255, green: 40 / 255, blue: 44 / 255)
+  static let fillFloatingSolid = Color(red: 40 / 255, green: 40 / 255, blue: 44 / 255)
   /// A floating bar of buttons over its material, such as a large screenshot's: rgb(40, 40, 44) at 0.92.
-  static let fillBar = Color.fillBarSolid
+  static let fillFloating = Color.fillFloatingSolid
     .opacity(0.92)
   /// A divider and a card's edge: white at 0.08.
   static let separator = Color.white
@@ -90,4 +90,10 @@ extension Color {
   /// An unselected radio's ring: white at 0.30.
   static let strokeControl = Color.white
     .opacity(0.3)
+  /// A surface's shadow, such as a raised picture's or a floating bar's: black at 0.5.
+  static let dropShadow = Color.black
+    .opacity(0.5)
+  /// A heavier shadow, for a surface over other content, such as the mini screen's or an alert's: black at 0.55.
+  static let dropShadowStrong = Color.black
+    .opacity(0.55)
 }

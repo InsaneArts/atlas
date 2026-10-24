@@ -32,7 +32,7 @@ public struct AppIcon: View {
 
 #if DEBUG
   #Preview("Placeholder") {
-    AppIcon(size: IconSize.hero)
+    AppIcon(size: IconSize.xxl)
       .sampleSurface()
   }
 #endif

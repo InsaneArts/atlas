@@ -20,7 +20,7 @@ struct ViewerTopRow: View {
       ViewerTopButtons(actions: state.actions, fit: fit, send: send)
         .frame(maxWidth: .infinity, alignment: .trailing)
     }
-    .padding(.trailing, Spacing.xl)
+    .padding(.trailing, Spacing.mPlus)
   }
 }
 
@@ -33,7 +33,7 @@ struct ViewerTopRow: View {
 
   #Preview("You have control, narrowest") {
     ViewerTopRow(state: PreviewStates.viewerControl.top, fit: .shortWords) { _ in }
-      .frame(width: ViewerLayout.longWordsRoom - Spacing.page, height: ViewerLayout.topRowHeight)
+      .frame(width: ViewerLayout.longWordsRoom - Spacing.xxxl, height: ViewerLayout.topRowHeight)
       .sampleSurface()
   }
 #endif

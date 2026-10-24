@@ -24,7 +24,7 @@
     ]
 
     var body: some View {
-      VStack(spacing: Spacing.l) {
+      VStack(spacing: Spacing.m) {
         CapsuleTabs(state: CapsuleTabsState(tabs: Self.tabs, selected: .screen, label: "What you see")) { _ in }
         CapsuleTabs(state: CapsuleTabsState(tabs: Self.tabs, selected: .screenshots, label: "What you see")) { _ in }
       }

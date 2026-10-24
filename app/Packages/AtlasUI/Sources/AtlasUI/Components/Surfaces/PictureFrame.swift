@@ -22,14 +22,14 @@ struct PictureFrame: View {
   var body: some View {
     ZStack {
       if let picture {
-        Color.stageBackground
+        Color.letterbox
         Image(decorative: picture.image, scale: 1)
           .resizable()
           .interpolation(.high)
           .aspectRatio(contentMode: .fit)
           .pictureTreatment(look)
       } else {
-        Color.stageEmpty
+        Color.fillPlaceholder
       }
     }
     .clipShape(shape)

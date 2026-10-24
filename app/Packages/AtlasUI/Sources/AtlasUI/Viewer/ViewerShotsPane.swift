@@ -26,10 +26,10 @@ struct ViewerShotsPane: View {
   @ViewBuilder private var content: some View {
     if let empty = state.empty {
       EmptyMessage(state: empty, ground: .pane)
-        .padding(Spacing.xxl)
+        .padding(Spacing.l)
     } else {
       ScrollView {
-        VStack(alignment: .leading, spacing: Spacing.xl) {
+        VStack(alignment: .leading, spacing: Spacing.mPlus) {
           ForEach(state.days) { day in
             GroupLabel(text: day.title)
             LazyVGrid(columns: columns, alignment: .leading, spacing: ViewerLayout.shotRowGap) {
@@ -39,7 +39,7 @@ struct ViewerShotsPane: View {
             }
           }
         }
-        .padding(.vertical, Spacing.xxl)
+        .padding(.vertical, Spacing.l)
         .padding(.horizontal, ViewerLayout.paneTextInset)
       }
       .scrollIndicators(.automatic)
@@ -48,7 +48,7 @@ struct ViewerShotsPane: View {
 
   /// Four columns sharing the width, 16 apart.
   private var columns: [GridItem] {
-    Array(repeating: GridItem(.flexible(), spacing: Spacing.xxl, alignment: .top), count: ViewerLayout.shotColumns)
+    Array(repeating: GridItem(.flexible(), spacing: Spacing.l, alignment: .top), count: ViewerLayout.shotColumns)
   }
 }
 

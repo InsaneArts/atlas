@@ -96,10 +96,10 @@ enum ViewerLayout {
   }
 
   /// The width a large screenshot leaves beside it: Previous and Next, each with its gap and the page margin.
-  private static let largeShotBeside = (ControlHeight.button + Spacing.xl + Spacing.page) * 2
+  private static let largeShotBeside = (ControlHeight.mPlus + Spacing.mPlus + Spacing.xxxl) * 2
   /// The height a large screenshot leaves under it: the bar's row with its padding above and below, the gap over the
   /// bar, and the page margin top and bottom.
-  private static let largeShotUnder = ControlHeight.row + Spacing.s * 2 + Spacing.xl + Spacing.page * 2
+  private static let largeShotUnder = ControlHeight.sPlus + Spacing.xsPlus * 2 + Spacing.mPlus + Spacing.xxxl * 2
 
   /// How large a screenshot is drawn in the large view: at its own shape, within ``largeShotLargest``, and within a
   /// window `window` large with room for Previous and Next beside it and the bar under it.

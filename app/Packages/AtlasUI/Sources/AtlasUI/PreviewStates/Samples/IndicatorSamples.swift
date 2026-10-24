@@ -30,23 +30,23 @@
 
     /// That component's samples, on the ground.
     var body: some View {
-      VStack(spacing: Spacing.l) {
+      VStack(spacing: Spacing.m) {
         switch kind {
         case .spinner:
-          HStack(spacing: Spacing.l) {
-            Spinner(size: IconSize.glyph)
+          HStack(spacing: Spacing.m) {
+            Spinner(size: IconSize.xs)
             Spinner()
-            Spinner(size: IconSize.glyphLarge)
-            Spinner(size: IconSize.mark)
+            Spinner(size: IconSize.xsPlus)
+            Spinner(size: IconSize.sPlus)
           }
         case .checkMark:
-          HStack(spacing: Spacing.l) {
+          HStack(spacing: Spacing.m) {
             CheckMark()
-            CheckMark(size: IconSize.disc)
-            CheckMark(size: IconSize.hero)
+            CheckMark(size: IconSize.m)
+            CheckMark(size: IconSize.xxl)
           }
         case .disc:
-          HStack(spacing: Spacing.l) {
+          HStack(spacing: Spacing.m) {
             Disc(content: .symbol("exclamationmark"), tone: .attention, size: .mark)
             Disc(content: .number(1), tone: .waiting)
             Disc(content: .number(2), tone: .accent)
@@ -57,7 +57,7 @@
             Disc(content: .letter(String("I")), tone: .avatar, size: .large)
           }
         case .statusDot:
-          HStack(spacing: Spacing.l) {
+          HStack(spacing: Spacing.m) {
             StatusDot(mark: .dot, tone: .quiet)
             StatusDot(mark: .pulsing, tone: .active)
             StatusDot(mark: .dot, tone: .link)

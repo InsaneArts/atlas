@@ -8,7 +8,7 @@ struct ScreenOverlay: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
-    VStack(spacing: Spacing.m) {
+    VStack(spacing: Spacing.s) {
       if let chip = state.chip {
         ScreenChip(chip: chip)
       }
@@ -23,8 +23,8 @@ struct ScreenOverlay: View {
       CaptionStack(entries: state.captions)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
-    .padding(Spacing.xl)
-    .animation(reduceMotion ? nil : Motion.fade, value: state.notice)
+    .padding(Spacing.mPlus)
+    .animation(Motion.animation(Motion.fade, reduceMotion: reduceMotion), value: state.notice)
     .allowsHitTesting(false)
   }
 }

@@ -11,7 +11,7 @@ struct WorkNoteLine: View {
     Group {
       switch note {
       case .working(let text):
-        HStack(spacing: Spacing.m) {
+        HStack(spacing: Spacing.s) {
           Spinner()
           Text(text)
             .font(Typography.font(.callout))
@@ -31,7 +31,7 @@ struct WorkNoteLine: View {
 
 #if DEBUG
   #Preview("Working and problem") {
-    VStack(spacing: Spacing.l) {
+    VStack(spacing: Spacing.m) {
       WorkNoteLine(note: PreviewStates.onboardingCreateWorking.note)
       WorkNoteLine(note: .problem(String("The account could not be created.")))
     }

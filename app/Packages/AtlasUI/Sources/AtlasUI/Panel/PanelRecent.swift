@@ -11,12 +11,12 @@ struct PanelRecent: View {
     VStack(spacing: .zero) {
       HStack {
         GroupLabel(text: "Recent")
-        Spacer(minLength: Spacing.m)
+        Spacer(minLength: Spacing.s)
         Button("All activity") { send(.openActivity) }
           .buttonStyle(.textLink(.small))
           .help("Open every action in Atlas")
       }
-      .padding(.bottom, Spacing.xxs)
+      .padding(.bottom, Spacing.half)
       // An entry's id is its place in the service's list of recent actions, the one identity the service gives.
       ForEach(entries) { entry in
         PanelRecentRow(entry: entry)

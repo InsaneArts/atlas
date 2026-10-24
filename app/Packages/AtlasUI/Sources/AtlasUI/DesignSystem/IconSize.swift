@@ -1,28 +1,27 @@
 import CoreGraphics
 
-/// The sides of square marks, dots and tiles, in points.
+/// The sides of square marks, dots and tiles, in points, named by size as ``Spacing`` is: a `Plus` step is 2 points
+/// above its named step. A size only one window or component uses lives with it.
 enum IconSize {
   /// 6: a page dot's height and a small status dot.
-  static let dot: CGFloat = 6
+  static let xxs: CGFloat = 6
   /// 12: a small spinner, beside a pill's or a message's text, and the Orbit beside a status, by its height (the
   /// board's 13, rounded to the panel's 12 so both windows draw one Orbit).
-  static let glyph: CGFloat = 12
+  static let xs: CGFloat = 12
   /// 14: a spinner in a checklist row.
-  static let glyphLarge: CGFloat = 14
+  static let xsPlus: CGFloat = 14
   /// 16: a radio, and a small app icon.
-  static let radio: CGFloat = 16
+  static let s: CGFloat = 16
   /// 18: a check mark, a readiness mark and the waiting spinner.
-  static let mark: CGFloat = 18
+  static let sPlus: CGFloat = 18
   /// 24: a numbered step's or an activity's disc.
-  static let disc: CGFloat = 24
-  /// 26: an agent's icon in a row.
-  static let agent: CGFloat = 26
+  static let m: CGFloat = 24
+  /// 26: a symbol tile's icon in a row, such as an agent's.
+  static let mPlus: CGFloat = 26
   /// 30: a symbol tile.
-  static let tile: CGFloat = 30
+  static let l: CGFloat = 30
   /// 34: an account's avatar in a choice row, and an app's icon.
-  static let avatar: CGFloat = 34
-  /// 56: a large avatar, such as the account asking for access.
-  static let avatarLarge: CGFloat = 56
+  static let xl: CGFloat = 34
   /// 64: a screen's leading mark, such as a done check, and an alert's icon.
-  static let hero: CGFloat = 64
+  static let xxl: CGFloat = 64
 }

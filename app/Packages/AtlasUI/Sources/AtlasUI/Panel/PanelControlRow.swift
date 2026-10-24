@@ -11,7 +11,7 @@ struct PanelControlRow: View {
   @State private var moreFrame = CGRect.zero
 
   var body: some View {
-    HStack(spacing: Spacing.m) {
+    HStack(spacing: Spacing.s) {
       if controls.showsStop {
         Button("Stop") { send(.stopAgent) }
           .buttonStyle(.capsule(.glass, size: .small))

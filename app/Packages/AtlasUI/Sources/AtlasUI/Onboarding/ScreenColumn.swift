@@ -37,12 +37,12 @@ struct ScreenColumn<Content: View, Bottom: View>: View {
 
   /// The pieces over the bottom, centred.
   private var fitting: some View {
-    VStack(spacing: Spacing.xl) {
+    VStack(spacing: Spacing.mPlus) {
       content
       bottom
     }
     .frame(maxWidth: width)
-    .padding(.horizontal, Spacing.section)
+    .padding(.horizontal, Spacing.xxl)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 
@@ -50,22 +50,22 @@ struct ScreenColumn<Content: View, Bottom: View>: View {
   private var scrolling: some View {
     VStack(spacing: .zero) {
       ScrollView(.vertical) {
-        VStack(spacing: Spacing.xl) {
+        VStack(spacing: Spacing.mPlus) {
           content
         }
         .frame(maxWidth: width)
-        .padding(.horizontal, Spacing.section)
+        .padding(.horizontal, Spacing.xxl)
         // Room for the fade below the last piece, so scrolled to the end it is read in full.
         .padding(.bottom, OnboardingLayout.scrollFade)
         .frame(maxWidth: .infinity)
       }
       .mask { fade }
-      VStack(spacing: Spacing.xl) {
+      VStack(spacing: Spacing.mPlus) {
         bottom
       }
       .frame(maxWidth: width)
-      .padding(.horizontal, Spacing.section)
-      .padding(.vertical, Spacing.l)
+      .padding(.horizontal, Spacing.xxl)
+      .padding(.vertical, Spacing.m)
     }
   }
 }

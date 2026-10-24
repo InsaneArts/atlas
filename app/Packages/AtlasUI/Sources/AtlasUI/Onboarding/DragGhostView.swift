@@ -46,7 +46,7 @@ public struct DragGhostView: View {
           .foregroundStyle(Color.onAccent)
       }
       .font(OnboardingLayout.ghostHandFont)
-      .elevation(.bar)
+      .elevation(.floating)
       .offset(x: OnboardingLayout.ghostHandOffset, y: OnboardingLayout.ghostHandOffset)
     }
     .scaleEffect(track.scale)

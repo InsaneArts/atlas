@@ -25,10 +25,10 @@ struct ScreenOutline: View {
     ZStack(alignment: .topLeading) {
       OutlineHighlight(frame: frame)
       OutlineLabelPlacement(
-        anchor: CGPoint(x: frame.minX, y: max(Spacing.m, frame.minY - ViewerLayout.outlineLabelLift))
+        anchor: CGPoint(x: frame.minX, y: max(Spacing.s, frame.minY - ViewerLayout.outlineLabelLift))
       ) {
         FloatingChip {
-          AppTile(image: outline.icon?.image, side: IconSize.radio)
+          AppTile(image: outline.icon?.image, side: IconSize.s)
           Text(outline.title)
             .truncationMode(.tail)
           Text(outline.size)

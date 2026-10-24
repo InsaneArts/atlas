@@ -30,7 +30,7 @@ struct ShotTileView: View {
 
   /// The thumbnail over its time, taking clicks.
   private var shown: some View {
-    VStack(alignment: .leading, spacing: Spacing.m) {
+    VStack(alignment: .leading, spacing: Spacing.s) {
       PictureTile(picture: tile.thumbnail, isSelected: tile.isSelected)
         .aspectRatio(ViewerLayout.placeholderAspect, contentMode: .fit)
       Text(tile.time)
@@ -38,7 +38,7 @@ struct ShotTileView: View {
         .foregroundStyle(Color.textTertiary)
         .monospacedDigit()
         .lineLimit(1)
-        .padding(.horizontal, Spacing.xxs)
+        .padding(.horizontal, Spacing.half)
     }
     .contentShape(Rectangle())
     .onTapGesture { send(.selectShot(tile.id)) }
@@ -52,13 +52,13 @@ struct ShotTileView: View {
 #if DEBUG
   #Preview("Samples") {
     if case .screenshots(let shots) = PreviewStates.viewerShots.pane {
-      HStack(spacing: Spacing.xxl) {
+      HStack(spacing: Spacing.l) {
         ForEach(shots.days.flatMap(\.shots).prefix(2)) { tile in
           ShotTileView(tile: tile) { _ in }
             .frame(width: SampleWidth.narrow)
         }
       }
-      .padding(Spacing.m)
+      .padding(Spacing.s)
       .sampleSurface()
     }
   }

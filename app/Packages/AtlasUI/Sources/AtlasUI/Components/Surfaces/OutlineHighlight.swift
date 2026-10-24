@@ -14,7 +14,7 @@ struct OutlineHighlight: View {
           path.addRoundedRect(in: frame, cornerSize: CGSize(width: Radius.medium, height: Radius.medium))
         }
         .fill(
-          Color.stageBackground
+          Color.letterbox
             .opacity(Layout.dim),
           style: FillStyle(eoFill: true)
         )

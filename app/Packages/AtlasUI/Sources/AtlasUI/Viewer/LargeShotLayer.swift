@@ -13,8 +13,8 @@ struct LargeShotLayer: View {
       ZStack {
         Color.scrim
           .contentShape(Rectangle())
-        VStack(spacing: Spacing.xl) {
-          HStack(spacing: Spacing.xl) {
+        VStack(spacing: Spacing.mPlus) {
+          HStack(spacing: Spacing.mPlus) {
             Button {
               send(.previousShot)
             } label: {
@@ -52,8 +52,8 @@ struct LargeShotLayer: View {
       .frame(width: size.width, height: size.height)
       .background(
         RoundedRectangle(cornerRadius: Radius.large)
-          .fill(Color.stageBackground)
-          .elevation(.alert)
+          .fill(Color.letterbox)
+          .elevation(.modal)
       )
       .accessibilityElement()
       .accessibilityLabel(shot.caption)
@@ -66,7 +66,7 @@ struct LargeShotLayer: View {
       Text(shot.caption)
         .font(Typography.font(.body, weight: .medium))
         .monospacedDigit()
-        .padding(.horizontal, Spacing.l)
+        .padding(.horizontal, Spacing.m)
       Button("Copy") { send(.copyShot) }
         .buttonStyle(.capsule(.glass, size: .small))
         .help("Copy this screenshot as taken")

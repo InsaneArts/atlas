@@ -7,7 +7,7 @@ struct PanelEmptyPicture: View {
   let line: String
 
   var body: some View {
-    VStack(spacing: Spacing.ml) {
+    VStack(spacing: Spacing.sPlus) {
       OrbitMark(height: PanelLayout.emptyOrbit)
       Text(line)
         .font(Typography.font(.callout))
@@ -19,7 +19,7 @@ struct PanelEmptyPicture: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background {
       RoundedRectangle(cornerRadius: Radius.medium)
-        .fill(Color.stageEmpty)
+        .fill(Color.fillPlaceholder)
       RoundedRectangle(cornerRadius: Radius.medium)
         .strokeBorder(Color.separator, lineWidth: Stroke.hairline)
     }

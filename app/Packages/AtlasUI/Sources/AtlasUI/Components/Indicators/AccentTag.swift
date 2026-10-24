@@ -11,12 +11,12 @@ struct AccentTag: View {
       .foregroundStyle(Color.textLink)
       .lineLimit(1)
       .padding(.vertical, Spacing.xs)
-      .padding(.horizontal, Spacing.m)
+      .padding(.horizontal, Spacing.s)
       .background(
         Capsule()
           .fill(
             Color.accent
-              .opacity(Opacity.tag)
+              .opacity(Opacity.tintStrong)
           )
       )
   }

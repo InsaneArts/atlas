@@ -30,11 +30,11 @@
     }
 
     var body: some View {
-      HStack(alignment: .top, spacing: Spacing.section) {
+      HStack(alignment: .top, spacing: Spacing.xxl) {
         OrbitAlert(state: Self.recover) { _ in }
         OrbitAlert(state: Self.logOut()) { _ in }
       }
-      .padding(Spacing.page)
+      .padding(Spacing.xxxl)
       .background(Color.scrim)
       .sampleSurface()
     }

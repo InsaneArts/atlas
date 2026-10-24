@@ -23,7 +23,7 @@ struct FinishingScreen: View {
         SeparatorLine()
         CheckRow(text: "Mouse, keyboard and a test screenshot", state: state.live, note: state.liveNote)
       }
-      .padding(.top, Spacing.s)
+      .padding(.top, Spacing.xsPlus)
       if let failure = state.failure {
         Note(text: failure, tone: .attention)
         Button("Try Again") { send(.retryFinish) }

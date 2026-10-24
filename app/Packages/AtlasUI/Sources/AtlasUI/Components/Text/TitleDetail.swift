@@ -24,7 +24,7 @@ struct TitleDetail: View {
   var wraps = false
 
   var body: some View {
-    VStack(alignment: .leading, spacing: Spacing.xxs) {
+    VStack(alignment: .leading, spacing: Spacing.half) {
       Text(title)
         .font(Typography.font(titleStyle, weight: .semibold))
         .foregroundStyle(titleTone.color)

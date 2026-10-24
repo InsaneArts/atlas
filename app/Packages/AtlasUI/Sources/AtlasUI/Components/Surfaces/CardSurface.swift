@@ -51,10 +51,10 @@ struct CardSurface: ViewModifier {
     case .neutral: .separator
     case .accent:
       Color.accent
-        .opacity(Opacity.tintEdge)
+        .opacity(Opacity.edgeTint)
     case .attention:
       Color.attention
-        .opacity(Opacity.tintEdgeQuiet)
+        .opacity(Opacity.edgeTintQuiet)
     }
   }
 }

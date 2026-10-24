@@ -22,20 +22,20 @@ struct IconRow<Trailing: View>: View {
   @ViewBuilder let trailing: Trailing
 
   var body: some View {
-    HStack(spacing: Spacing.l) {
+    HStack(spacing: Spacing.m) {
       tile
-        .frame(width: IconSize.tile, height: IconSize.tile)
+        .frame(width: IconSize.l, height: IconSize.l)
         .background(
           RoundedRectangle(cornerRadius: Radius.small)
             .fill(Color.fillControl)
         )
         .accessibilityHidden(true)
       TitleDetail(title: title, detail: detail, titleWraps: wraps, wraps: wraps)
-      Spacer(minLength: Spacing.m)
+      Spacer(minLength: Spacing.s)
       trailing
     }
-    .padding(.horizontal, Spacing.xl)
-    .padding(.vertical, Spacing.l)
+    .padding(.horizontal, Spacing.mPlus)
+    .padding(.vertical, Spacing.m)
   }
 
   @ViewBuilder private var tile: some View {

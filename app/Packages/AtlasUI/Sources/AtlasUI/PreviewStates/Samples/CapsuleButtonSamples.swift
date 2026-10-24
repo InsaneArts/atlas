@@ -31,10 +31,10 @@
 
     /// The samples, on the ground.
     var body: some View {
-      VStack(spacing: Spacing.l) {
+      VStack(spacing: Spacing.m) {
         switch kind {
         case .every:
-          HStack(alignment: .top, spacing: Spacing.section) {
+          HStack(alignment: .top, spacing: Spacing.xxl) {
             CapsuleButtonSamples(.looks)
             CapsuleButtonSamples(.alert)
           }
@@ -60,7 +60,7 @@
           Button(String("Get Started")) {}
             .buttonStyle(.capsule(size: .large))
         case .fill:
-          HStack(spacing: Spacing.m) {
+          HStack(spacing: Spacing.s) {
             Button(String("Open Viewer")) {}
               .buttonStyle(.capsule(fill: true))
             Button(String("Switch to Helper…")) {}
@@ -68,19 +68,19 @@
           }
           .frame(width: SampleWidth.narrow)
         case .alert:
-          VStack(spacing: Spacing.m) {
+          VStack(spacing: Spacing.s) {
             Button(String("Recover")) {}
-              .buttonStyle(.capsule(.alertDefault, size: .small, fill: true))
+              .buttonStyle(.capsule(.accent, size: .small, fill: true))
             Button(String("Not Now")) {}
-              .buttonStyle(.capsule(.alertOther, size: .small, fill: true))
+              .buttonStyle(.capsule(.tinted, size: .small, fill: true))
             Button(String("Cancel")) {}
-              .buttonStyle(.capsule(.alertDefault, size: .small, fill: true))
+              .buttonStyle(.capsule(.accent, size: .small, fill: true))
             Button(String("Log Out"), role: .destructive) {}
-              .buttonStyle(.capsule(.alertDestructive, size: .small, fill: true))
+              .buttonStyle(.capsule(.destructive, size: .small, fill: true))
           }
           .frame(width: SampleWidth.alert)
         case .circles:
-          HStack(spacing: Spacing.m) {
+          HStack(spacing: Spacing.s) {
             Button(String("Pause"), systemImage: "pause.fill") {}
               .buttonStyle(.circle())
             Button(String("Sidebar"), systemImage: "sidebar.right") {}

@@ -13,7 +13,7 @@ struct SearchField: View {
   @FocusState private var focused: Bool
 
   var body: some View {
-    HStack(spacing: Spacing.s) {
+    HStack(spacing: Spacing.xsPlus) {
       Image(systemName: "magnifyingglass")
         .font(Typography.font(.body))
         .foregroundStyle(Color.textTertiary)
@@ -25,9 +25,9 @@ struct SearchField: View {
       .font(Typography.font(.body))
       .focused($focused)
     }
-    .padding(.horizontal, Spacing.ml)
+    .padding(.horizontal, Spacing.sPlus)
     .frame(minWidth: Layout.leastWidth, idealWidth: Layout.width, maxWidth: Layout.width)
-    .frame(height: ControlHeight.menuRow)
+    .frame(height: ControlHeight.s)
     .background(
       RoundedRectangle(cornerRadius: Radius.small)
         .fill(Color.fillControl)

@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// Atlas's capsule buttons: white for the next step, glass beside it, plain for the quiet way out, and an alert's
-/// three. A style, not a view, so the control stays a `Button` with its own label, role, shortcut and disabled state.
+/// Atlas's capsule buttons: white for the next step, glass beside it, plain for the quiet way out, and the accent,
+/// tinted and destructive looks an alert's buttons wear. A style, not a view, so the control stays a `Button` with
+/// its own label, role, shortcut and disabled state.
 struct CapsuleButtonStyle: ButtonStyle {
   /// How the capsule is painted.
   enum Look: Sendable {
@@ -13,12 +14,12 @@ struct CapsuleButtonStyle: ButtonStyle {
     case plain
     /// The pressed fill with a brighter edge: a capsule whose state is on, such as Keys while in control.
     case pressed
-    /// The accent with white text: an alert's default button.
-    case alertDefault
-    /// A quiet fill with plain text: an alert's other button, such as Cancel.
-    case alertOther
-    /// A quiet fill with red text: an alert's destructive button, such as Log Out.
-    case alertDestructive
+    /// The accent with white text: a default action, such as an alert's.
+    case accent
+    /// A raised quiet fill with plain text: another action beside the default, such as an alert's Cancel.
+    case tinted
+    /// A raised quiet fill with red text: a destructive action, such as an alert's Log Out.
+    case destructive
   }
 
   /// How large the capsule is.
@@ -82,7 +83,7 @@ struct CapsuleButtonStyle: ButtonStyle {
   private var weight: Font.Weight {
     switch look {
     case .plain: .regular
-    case .alertDefault, .alertOther, .alertDestructive: .medium
+    case .accent, .tinted, .destructive: .medium
     case .primary, .glass, .pressed: .semibold
     }
   }
@@ -92,17 +93,17 @@ struct CapsuleButtonStyle: ButtonStyle {
   private var tracking: CGFloat {
     switch look {
     case .primary, .glass, .pressed: LetterSpacing.control
-    case .plain, .alertDefault, .alertOther, .alertDestructive: 0
+    case .plain, .accent, .tinted, .destructive: 0
     }
   }
 
   /// The capsule's height.
   private var height: CGFloat {
     switch size {
-    case .mini: ControlHeight.mini
-    case .small: ControlHeight.row
-    case .regular: ControlHeight.button
-    case .large: ControlHeight.large
+    case .mini: ControlHeight.xsPlus
+    case .small: ControlHeight.sPlus
+    case .regular: ControlHeight.mPlus
+    case .large: ControlHeight.xl
     }
   }
 
@@ -110,28 +111,30 @@ struct CapsuleButtonStyle: ButtonStyle {
   /// its row.
   private var inset: CGFloat {
     if size == .large { return Layout.largeInset }
-    if look == .plain { return Spacing.l }
-    return fill ? Spacing.ml : Layout.regularInset
+    if look == .plain { return Spacing.m }
+    return fill ? Spacing.sPlus : Layout.regularInset
   }
 
   private var foreground: Color {
     switch look {
     case .primary: .ground
-    case .glass, .pressed, .alertOther: .textPrimary
+    case .glass, .pressed, .tinted: .textPrimary
     case .plain: .textSecondary
-    case .alertDefault: .onAccent
-    case .alertDestructive: .textDestructive
+    case .accent: .onAccent
+    case .destructive: .textDestructive
     }
   }
 
+  /// The capsule's fill: near white for primary, a quiet fill for glass, pressed, tinted and destructive, none for
+  /// plain, and the accent colour itself, system blue, for the accent look.
   private var background: Color {
     switch look {
     case .primary: .textPrimary
     case .glass: .fillControl
-    case .alertOther, .alertDestructive: .fillAlertButton
+    case .tinted, .destructive: .fillControlRaised
     case .pressed: .fillControlOn
     case .plain: .clear
-    case .alertDefault: .accent
+    case .accent: .accent
     }
   }
 
@@ -140,7 +143,7 @@ struct CapsuleButtonStyle: ButtonStyle {
     switch look {
     case .glass: .strokeStrong
     case .pressed: .strokePressed
-    case .primary, .plain, .alertDefault, .alertOther, .alertDestructive: .clear
+    case .primary, .plain, .accent, .tinted, .destructive: .clear
     }
   }
 }
@@ -186,12 +189,12 @@ private enum Layout {
           .tag(CapsuleButtonStyle.Look.plain)
         Text(verbatim: "Pressed")
           .tag(CapsuleButtonStyle.Look.pressed)
-        Text(verbatim: "Alert default")
-          .tag(CapsuleButtonStyle.Look.alertDefault)
-        Text(verbatim: "Alert other")
-          .tag(CapsuleButtonStyle.Look.alertOther)
-        Text(verbatim: "Alert destructive")
-          .tag(CapsuleButtonStyle.Look.alertDestructive)
+        Text(verbatim: "Accent")
+          .tag(CapsuleButtonStyle.Look.accent)
+        Text(verbatim: "Tinted")
+          .tag(CapsuleButtonStyle.Look.tinted)
+        Text(verbatim: "Destructive")
+          .tag(CapsuleButtonStyle.Look.destructive)
       }
       Picker(String("Size"), selection: $size) {
         Text(verbatim: "Mini")

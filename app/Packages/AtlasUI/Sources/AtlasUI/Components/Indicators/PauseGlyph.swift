@@ -14,7 +14,7 @@ struct PauseGlyph: View {
 
 #if DEBUG
   #Preview("Samples") {
-    HStack(spacing: Spacing.l) {
+    HStack(spacing: Spacing.m) {
       PauseGlyph(isPaused: false)
       PauseGlyph(isPaused: true)
     }

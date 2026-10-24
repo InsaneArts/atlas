@@ -9,15 +9,15 @@ struct PageDots: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
-    HStack(spacing: Spacing.s) {
+    HStack(spacing: Spacing.xsPlus) {
       // A dot is a place in the row, not an item: its position is all it is, so the position is its identity.
       ForEach(0..<count, id: \.self) { dot in
         Capsule()
           .fill(dot == index ? Color.accent : Color.fillIndicator)
-          .frame(width: dot == index ? Layout.currentWidth : IconSize.dot, height: IconSize.dot)
+          .frame(width: dot == index ? Layout.currentWidth : IconSize.xxs, height: IconSize.xxs)
       }
     }
-    .animation(reduceMotion ? nil : Motion.indicator, value: index)
+    .animation(Motion.animation(Motion.indicator, reduceMotion: reduceMotion), value: index)
     .accessibilityElement()
     .accessibilityLabel("Step \(index + 1) of \(count)")
   }

@@ -14,8 +14,8 @@ struct CapsuleTabStyle: ButtonStyle {
     /// The space on each side of a word.
     var inset: CGFloat {
       switch self {
-      case .regular: Spacing.xl
-      case .compact: Spacing.m
+      case .regular: Spacing.mPlus
+      case .compact: Spacing.s
       }
     }
   }
@@ -40,7 +40,7 @@ struct CapsuleTabStyle: ButtonStyle {
       .foregroundStyle(isSelected ? Color.textPrimary : Color.textSecondary)
       .lineLimit(1)
       .padding(.horizontal, size.inset)
-      .frame(height: ControlHeight.menuRow)
+      .frame(height: ControlHeight.s)
       .background {
         if isSelected {
           selection
@@ -51,7 +51,7 @@ struct CapsuleTabStyle: ButtonStyle {
       }
       .contentShape(Capsule())
       .opacity(enabled ? 1 : Opacity.disabled)
-      .animation(reduceMotion ? nil : Motion.press, value: configuration.isPressed)
+      .animation(Motion.animation(Motion.press, reduceMotion: reduceMotion), value: configuration.isPressed)
   }
 
   /// The selected capsule behind the word, gliding in `thumb` when there is one.
@@ -71,7 +71,7 @@ struct CapsuleTabStyle: ButtonStyle {
 
 #if DEBUG
   #Preview("Samples") {
-    HStack(spacing: Spacing.xxs) {
+    HStack(spacing: Spacing.half) {
       Button(String("Screen")) {}
         .buttonStyle(CapsuleTabStyle(isSelected: true, thumb: nil))
       Button(String("Activity")) {}

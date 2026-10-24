@@ -4,7 +4,7 @@
   /// The picture frame's samples: each look, then the empty stage, at the panel's small corners.
   struct PictureFrameSamples: View {
     var body: some View {
-      Grid(horizontalSpacing: Spacing.l, verticalSpacing: Spacing.l) {
+      Grid(horizontalSpacing: Spacing.m, verticalSpacing: Spacing.m) {
         GridRow {
           PictureFrame(picture: SampleDesktop.picture)
           PictureFrame(picture: SampleDesktop.picture, look: .inControl)

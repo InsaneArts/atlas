@@ -14,7 +14,7 @@ struct AllowScreen: View {
   /// The asking account handing over to Atlas, what it means, and Allow.
   var body: some View {
     ScreenColumn(width: OnboardingLayout.wideColumn) {
-      HStack(spacing: Spacing.xl) {
+      HStack(spacing: Spacing.mPlus) {
         Disc(content: .letter(state.initial), tone: .avatar, size: .large)
         Image(systemName: "arrow.right")
           .foregroundStyle(Color.textTertiary)
@@ -25,7 +25,7 @@ struct AllowScreen: View {
         .lineLimit(OnboardingLayout.nameLines)
         .truncationMode(.middle)
         .multilineTextAlignment(.center)
-        .padding(.top, Spacing.s)
+        .padding(.top, Spacing.xsPlus)
       Headline(title: state.title, tail: OnboardingScreen.allowTail)
       Lede(text: state.lede)
     } bottom: {
@@ -33,7 +33,7 @@ struct AllowScreen: View {
         .buttonStyle(.capsule(size: .large))
         .keyboardShortcut(.defaultAction)
         .disabled(isBusy)
-        .padding(.top, Spacing.m)
+        .padding(.top, Spacing.s)
       WorkNoteLine(note: note)
       Note(text: "Atlas can be removed from both accounts at any time.")
     }

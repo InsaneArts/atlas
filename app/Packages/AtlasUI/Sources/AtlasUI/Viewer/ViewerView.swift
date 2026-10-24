@@ -47,7 +47,7 @@ public struct ViewerView<Input: View>: View {
           // Every tab stands in the same frame, the content area less the window's inset: the panes fill it, the picture
           // fits in it.
           pane
-            .padding(Spacing.l)
+            .padding(Spacing.m)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             // The small screen keeps to the panes' corner, clear of Details.
             .overlay(alignment: .bottomTrailing) {
@@ -64,7 +64,7 @@ public struct ViewerView<Input: View>: View {
             if let details = state.details {
               ViewerDetails(state: details, newest: newest, send: send)
                 .frame(width: ViewerLayout.detailsWidth)
-                .padding([.top, .bottom, .trailing], Spacing.l)
+                .padding([.top, .bottom, .trailing], Spacing.m)
                 .transition(
                   reduceMotion
                     ? .opacity
@@ -73,7 +73,10 @@ public struct ViewerView<Input: View>: View {
                 )
             }
           }
-          .animation(reduceMotion ? Motion.fade : Motion.slide, value: state.details == nil)
+          .animation(
+            Motion.animation(Motion.slide, reduceMotion: reduceMotion, reduced: Motion.fade),
+            value: state.details == nil
+          )
         }
       }
       .overlay {
@@ -83,7 +86,7 @@ public struct ViewerView<Input: View>: View {
               .transition(reduceMotion ? .identity : .opacity)
           }
         }
-        .animation(reduceMotion ? nil : Motion.fade, value: largeShot == nil)
+        .animation(Motion.animation(Motion.fade, reduceMotion: reduceMotion), value: largeShot == nil)
       }
       .overlay {
         AlertLayer(state: state.alert) { send($0 == .confirm ? .alertConfirm : .alertCancel) }

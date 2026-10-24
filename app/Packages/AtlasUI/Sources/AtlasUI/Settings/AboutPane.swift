@@ -8,7 +8,7 @@ struct AboutPane: View {
   let send: @MainActor (SettingsEvent) -> Void
 
   var body: some View {
-    VStack(spacing: Spacing.l) {
+    VStack(spacing: Spacing.m) {
       AppIcon(size: SettingsLayout.aboutIcon)
       Text("Atlas")
         .font(Typography.font(.title3, weight: .bold))
@@ -21,12 +21,12 @@ struct AboutPane: View {
         .foregroundStyle(Color.textSecondary)
         .frame(maxWidth: SettingsLayout.aboutTextWidth)
         .fixedSize(horizontal: false, vertical: true)
-      HStack(spacing: Spacing.m) {
+      HStack(spacing: Spacing.s) {
         updateButton
         Button("Getting Started…") { send(.gettingStarted) }
           .buttonStyle(.capsule(.glass, size: .small))
       }
-      .padding(.top, Spacing.m)
+      .padding(.top, Spacing.s)
       if let answer = state.answer {
         Text(answer)
           .font(Typography.font(.callout))

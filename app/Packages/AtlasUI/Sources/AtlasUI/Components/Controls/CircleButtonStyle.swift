@@ -41,8 +41,8 @@ struct CircleButtonStyle: ButtonStyle {
 
   private var diameter: CGFloat {
     switch size {
-    case .regular: ControlHeight.button
-    case .small: ControlHeight.row
+    case .regular: ControlHeight.mPlus
+    case .small: ControlHeight.sPlus
     }
   }
 }

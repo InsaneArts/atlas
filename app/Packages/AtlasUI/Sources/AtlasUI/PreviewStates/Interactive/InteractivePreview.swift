@@ -20,8 +20,8 @@
 
     /// The controls, then the component.
     var body: some View {
-      VStack(spacing: Spacing.group) {
-        VStack(alignment: .leading, spacing: Spacing.m) {
+      VStack(spacing: Spacing.xl) {
+        VStack(alignment: .leading, spacing: Spacing.s) {
           controls
         }
         content

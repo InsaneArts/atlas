@@ -7,12 +7,12 @@ struct PanelHeader: View {
   let status: StatusSummary
 
   var body: some View {
-    HStack(spacing: Spacing.m) {
+    HStack(spacing: Spacing.s) {
       OrbitMark(height: PanelLayout.orbit)
       Text("Atlas")
         .font(Typography.font(.body, weight: .semibold))
-      Spacer(minLength: Spacing.m)
-      HStack(spacing: Spacing.s) {
+      Spacer(minLength: Spacing.s)
+      HStack(spacing: Spacing.xsPlus) {
         StatusDot(mark: status.mark, tone: status.tone)
         Text(status.label)
           .font(Typography.font(.callout, weight: .semibold))

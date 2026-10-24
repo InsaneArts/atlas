@@ -14,7 +14,7 @@
     ]
 
     var body: some View {
-      VStack(alignment: .leading, spacing: Spacing.l) {
+      VStack(alignment: .leading, spacing: Spacing.m) {
         ForEach(Self.statuses, id: \.label) { status in
           StatusLabel(status: status)
         }

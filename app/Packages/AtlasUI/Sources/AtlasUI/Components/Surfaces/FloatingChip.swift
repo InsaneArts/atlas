@@ -22,14 +22,14 @@ struct FloatingChip<Content: View>: View {
   @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
   var body: some View {
-    HStack(spacing: Spacing.m) {
+    HStack(spacing: Spacing.s) {
       content
     }
     .font(Typography.font(.callout, weight: .medium))
     .lineLimit(lines)
     .multilineTextAlignment(.center)
-    .padding(.horizontal, Spacing.l)
-    .padding(.vertical, lines > 1 ? Spacing.s : .zero)
+    .padding(.horizontal, Spacing.m)
+    .padding(.vertical, lines > 1 ? Spacing.xsPlus : .zero)
     .frame(minHeight: height)
     .background {
       if reduceTransparency {
@@ -52,9 +52,9 @@ struct FloatingChip<Content: View>: View {
   /// The chip's height while one line high.
   private var height: CGFloat {
     switch size {
-    case .mini: ControlHeight.pill
-    case .caption: ControlHeight.row
-    case .top: ControlHeight.compactRow
+    case .mini: ControlHeight.xs
+    case .caption: ControlHeight.sPlus
+    case .top: ControlHeight.m
     }
   }
 

@@ -15,7 +15,7 @@ struct ChoiceRow: View {
 
   var body: some View {
     Button(action: pick) {
-      HStack(spacing: Spacing.l) {
+      HStack(spacing: Spacing.m) {
         disc
           .accessibilityHidden(true)
         TitleDetail(title: title, detail: detail, wraps: true)
@@ -25,10 +25,10 @@ struct ChoiceRow: View {
             selected ? Color.accent : Color.strokeControl,
             lineWidth: selected ? Layout.selectedRing : Stroke.emphasis
           )
-          .frame(width: IconSize.radio, height: IconSize.radio)
+          .frame(width: IconSize.s, height: IconSize.s)
       }
-      .padding(.horizontal, Spacing.xl)
-      .padding(.vertical, Spacing.l)
+      .padding(.horizontal, Spacing.mPlus)
+      .padding(.vertical, Spacing.m)
       .cardSurface(selected ? .accent : .neutral)
       .contentShape(RoundedRectangle(cornerRadius: Radius.large))
     }
@@ -60,7 +60,7 @@ private enum Layout {
   #Preview("Interactive") {
     @Previewable @State var picked = "new"
     InteractivePreview {
-      VStack(spacing: Spacing.m) {
+      VStack(spacing: Spacing.s) {
         ChoiceRow(
           title: String("Create a new account"),
           detail: String("Recommended. A standard account named Atlas."),

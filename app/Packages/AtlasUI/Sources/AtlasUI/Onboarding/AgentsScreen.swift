@@ -17,7 +17,7 @@ struct AgentsScreen: View {
       CardGroup(state.agents) { agent in
         AgentRow(agent: agent) { send(.setAgent(id: agent.id, on: $0)) }
       }
-      .padding(.top, Spacing.s)
+      .padding(.top, Spacing.xsPlus)
     } bottom: {
       WorkNoteLine(note: note)
     }

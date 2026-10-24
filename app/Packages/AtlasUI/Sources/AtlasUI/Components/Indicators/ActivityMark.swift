@@ -27,14 +27,14 @@ struct ActivityMark: View {
     case .quiet:
       Circle()
         .fill(Color.strokePressed)
-        .frame(width: IconSize.dot, height: IconSize.dot)
+        .frame(width: IconSize.xxs, height: IconSize.xxs)
     }
   }
 }
 
 #if DEBUG
   #Preview("Samples") {
-    HStack(spacing: Spacing.xl) {
+    HStack(spacing: Spacing.mPlus) {
       ActivityMark(kind: .live)
       ActivityMark(kind: .person)
       ActivityMark(kind: .failed)

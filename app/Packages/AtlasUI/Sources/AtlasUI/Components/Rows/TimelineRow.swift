@@ -17,7 +17,7 @@ struct TimelineRow<Mark: View, Trailing: View>: View {
   @ViewBuilder let trailing: Trailing
 
   var body: some View {
-    HStack(spacing: Spacing.l) {
+    HStack(spacing: Spacing.m) {
       Text(time)
         .font(Typography.font(.callout))
         .foregroundStyle(Color.textTertiary)
@@ -27,7 +27,7 @@ struct TimelineRow<Mark: View, Trailing: View>: View {
         .frame(width: Layout.timeWidth, alignment: .leading)
       mark
         .frame(width: Layout.markWidth)
-      VStack(alignment: .leading, spacing: Spacing.xxs) {
+      VStack(alignment: .leading, spacing: Spacing.half) {
         Text(title)
           .font(Typography.font(.body, weight: isLive ? .semibold : .regular))
           .foregroundStyle(Color.textPrimary)
@@ -41,7 +41,7 @@ struct TimelineRow<Mark: View, Trailing: View>: View {
       .frame(maxWidth: .infinity, alignment: .leading)
       trailing
     }
-    .frame(minHeight: ControlHeight.large)
+    .frame(minHeight: ControlHeight.xl)
     .padding(.vertical, Spacing.xs)
     .padding(.horizontal, Layout.inset)
     .overlay(alignment: .top) {

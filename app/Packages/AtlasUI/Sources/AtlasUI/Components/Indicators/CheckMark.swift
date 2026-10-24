@@ -3,7 +3,7 @@ import SwiftUI
 /// A green disc with a check.
 struct CheckMark: View {
   /// The disc's side, in points.
-  var size = IconSize.mark
+  var size = IconSize.sPlus
 
   var body: some View {
     ZStack {

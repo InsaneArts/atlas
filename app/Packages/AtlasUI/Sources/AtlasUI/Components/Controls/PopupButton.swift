@@ -22,7 +22,7 @@ struct PopupButton<Value: Hashable & Sendable>: View {
       .pickerStyle(.inline)
       .labelsHidden()
     } label: {
-      HStack(spacing: Spacing.s) {
+      HStack(spacing: Spacing.xsPlus) {
         Text(options.title(of: selection))
           .font(Typography.font(.callout))
         Image(systemName: "chevron.down")
@@ -30,18 +30,18 @@ struct PopupButton<Value: Hashable & Sendable>: View {
           .accessibilityHidden(true)
       }
       .foregroundStyle(Color.textPrimary)
-      .padding(.leading, Spacing.ml)
-      .padding(.trailing, Spacing.m)
-      .frame(height: ControlHeight.pill)
+      .padding(.leading, Spacing.sPlus)
+      .padding(.trailing, Spacing.s)
+      .frame(height: ControlHeight.xs)
       .background(
-        RoundedRectangle(cornerRadius: Radius.compact)
+        RoundedRectangle(cornerRadius: Radius.extraSmall)
           .fill(Color.fillControl)
       )
       .overlay(
-        RoundedRectangle(cornerRadius: Radius.compact)
+        RoundedRectangle(cornerRadius: Radius.extraSmall)
           .strokeBorder(Color.strokeStrong, lineWidth: Stroke.hairline)
       )
-      .contentShape(RoundedRectangle(cornerRadius: Radius.compact))
+      .contentShape(RoundedRectangle(cornerRadius: Radius.extraSmall))
     }
     .menuStyle(.button)
     .buttonStyle(.plain)

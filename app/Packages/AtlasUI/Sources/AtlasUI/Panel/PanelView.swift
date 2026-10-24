@@ -76,55 +76,55 @@ public struct PanelView: View {
   #Preview("Idle") {
     PanelView(state: PreviewStates.panelIdle) { _ in }
       .panelCard()
-      .padding(Spacing.page)
+      .padding(Spacing.xxxl)
   }
 
   #Preview("Working") {
     PanelView(state: PreviewStates.panelWorking) { _ in }
       .panelCard()
-      .padding(Spacing.page)
+      .padding(Spacing.xxxl)
   }
 
   #Preview("You have control") {
     PanelView(state: PreviewStates.panelControl) { _ in }
       .panelCard()
-      .padding(Spacing.page)
+      .padding(Spacing.xxxl)
   }
 
   #Preview("Needs you") {
     PanelView(state: PreviewStates.panelNeedsYou) { _ in }
       .panelCard()
-      .padding(Spacing.page)
+      .padding(Spacing.xxxl)
   }
 
   #Preview("Stopped") {
     PanelView(state: PreviewStates.panelStopped) { _ in }
       .panelCard()
-      .padding(Spacing.page)
+      .padding(Spacing.xxxl)
   }
 
   #Preview("Logged out") {
     PanelView(state: PreviewStates.panelLoggedOut) { _ in }
       .panelCard()
-      .padding(Spacing.page)
+      .padding(Spacing.xxxl)
   }
 
   #Preview("Not ready") {
     PanelView(state: PreviewStates.panelNotReady) { _ in }
       .panelCard()
-      .padding(Spacing.page)
+      .padding(Spacing.xxxl)
   }
 
   #Preview("Connecting") {
     PanelView(state: PreviewStates.panelConnecting) { _ in }
       .panelCard()
-      .padding(Spacing.page)
+      .padding(Spacing.xxxl)
   }
 
   #Preview("In use elsewhere") {
     PanelView(state: PreviewStates.panelInUseElsewhere) { _ in }
       .panelCard()
-      .padding(Spacing.page)
+      .padding(Spacing.xxxl)
   }
 
   #Preview("Interactive") {

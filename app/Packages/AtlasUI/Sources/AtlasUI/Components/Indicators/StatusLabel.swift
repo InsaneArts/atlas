@@ -9,9 +9,9 @@ struct StatusLabel: View {
   var showsLine = true
 
   var body: some View {
-    HStack(spacing: Spacing.ml) {
-      OrbitMark(height: IconSize.glyph)
-      HStack(spacing: Spacing.m) {
+    HStack(spacing: Spacing.sPlus) {
+      OrbitMark(height: IconSize.xs)
+      HStack(spacing: Spacing.s) {
         StatusDot(mark: status.mark, tone: status.tone)
         Text(status.label)
           .font(Typography.font(.body, weight: .semibold))

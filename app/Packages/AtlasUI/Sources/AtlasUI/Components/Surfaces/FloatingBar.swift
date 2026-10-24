@@ -8,17 +8,17 @@ struct FloatingBar<Content: View>: View {
   @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
   var body: some View {
-    HStack(spacing: Spacing.ml) {
+    HStack(spacing: Spacing.sPlus) {
       content
     }
-    .padding(Spacing.s)
+    .padding(Spacing.xsPlus)
     .background {
       if reduceTransparency {
         CapsuleEdge()
-          .fill(Color.fillBarSolid)
+          .fill(Color.fillFloatingSolid)
       } else {
         CapsuleEdge()
-          .fill(Color.fillBar)
+          .fill(Color.fillFloating)
           .background(.ultraThinMaterial, in: CapsuleEdge())
       }
     }
@@ -26,7 +26,7 @@ struct FloatingBar<Content: View>: View {
       CapsuleEdge()
         .strokeBorder(Color.strokeStrong, lineWidth: Stroke.hairline)
     )
-    .elevation(.bar)
+    .elevation(.floating)
     .environment(\.colorScheme, .dark)
   }
 }
@@ -36,13 +36,13 @@ struct FloatingBar<Content: View>: View {
     FloatingBar {
       Text(verbatim: "10:31:44 · 2560 × 1440")
         .font(Typography.font(.body, weight: .medium))
-        .padding(.horizontal, Spacing.l)
+        .padding(.horizontal, Spacing.m)
       Button(String("Copy")) {}
         .buttonStyle(.capsule(.glass, size: .small))
       Button(String("Close")) {}
         .buttonStyle(.capsule(.primary, size: .small))
     }
-    .padding(Spacing.page)
+    .padding(Spacing.xxxl)
     .sampleSurface()
   }
 #endif

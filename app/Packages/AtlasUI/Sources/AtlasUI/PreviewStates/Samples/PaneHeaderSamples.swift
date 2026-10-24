@@ -4,7 +4,7 @@
   /// The pane header's samples: one with a search field at its end, and one with nothing there.
   struct PaneHeaderSamples: View {
     var body: some View {
-      VStack(spacing: Spacing.l) {
+      VStack(spacing: Spacing.m) {
         PaneHeader(title: "Apps in the helper", meta: "5 apps · 6 windows, front to back") {
           SearchField(text: "", prompt: "Search apps") { _ in }
         }

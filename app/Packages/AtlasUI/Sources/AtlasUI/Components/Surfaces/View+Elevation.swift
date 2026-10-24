@@ -15,8 +15,8 @@ extension View {
     RoundedRectangle(cornerRadius: Radius.large)
       .fill(Color.fillCard)
       .frame(width: SampleWidth.narrow, height: SampleWidth.narrow / 2)
-      .elevation(.stage)
-      .padding(Spacing.page)
+      .elevation(.raised)
+      .padding(Spacing.xxxl)
       .sampleSurface()
   }
 #endif

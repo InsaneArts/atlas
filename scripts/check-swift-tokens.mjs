@@ -3,7 +3,10 @@
 // radius, line width, scale, tracking or animation duration in AtlasUI or
 // AtlasApp outside AtlasUI/DesignSystem, or on arithmetic that bends a token
 // with a literal: node scripts/check-swift-tokens.mjs [FOLDER...]. The domain
-// packages draw nothing and are not read, as jolt reads JoltUI alone.
+// packages draw nothing and are not read, as jolt reads JoltUI alone. Inside
+// the design system it fails on a name that holds a window or surface (the
+// standard's D1: a token says its role or size), and outside Colors.swift on
+// black or white at an opacity, which is a colour token's job (D3).
 //
 // A port of ../jolt-v2/Scripts/check_tokens.py, with its patterns. The design
 // system lives in DesignSystem/; everything else names it. A literal belongs
@@ -84,9 +87,11 @@ export const CHECKS = [
 // value swift-format wraps after `=` is still the constant's.
 const NAMED_CONSTANT = /\bstatic\s+let\s+\w+(?:\s*:\s*[\w.<>[\]?]+)?\s*=/g;
 
-// Exempt by path: the design system, samples, renders and the Orbit drawing.
+// The design system, where literals are at home and only names are checked.
+const DESIGN_SYSTEM = /\/AtlasUI\/DesignSystem\//;
+
+// Exempt by path: samples, renders and the Orbit drawing.
 const EXEMPT_PATHS = [
-  /\/AtlasUI\/DesignSystem\//,
   /\/PreviewStates\/Samples\//,
   /\/Rendering\//,
   /\/Components\/Brand\/Orbit\.swift$/,
@@ -121,9 +126,115 @@ function constantSpans(code) {
   return spans;
 }
 
+// The words a token may not be named with: the windows, panes and surfaces
+// that use tokens, today's and the ones the v3 redesign brings (the plan's
+// conflict C-T1). A name is split into its camel-case words, so `menuRow`
+// and `fillAlertButton` are caught and `fillPlaceholder` is not. `icon`
+// names a surface everywhere but in `iconSize`, the scale of icon sizes.
+const WINDOW_WORDS = new Set([
+  'about',
+  'activity',
+  'agent',
+  'alert',
+  'app',
+  'asker',
+  'bar',
+  'details',
+  'empty',
+  'helper',
+  'icon',
+  'inspector',
+  'menu',
+  'mini',
+  'onboarding',
+  'pairing',
+  'pane',
+  'panel',
+  'recent',
+  'screenshot',
+  'settings',
+  'setup',
+  'stage',
+  'viewer',
+  'welcome',
+]);
+// A declared name: a type, a constant, property or function, static or not.
+const DECLARATION = /\b(?:enum|struct|class|protocol|typealias|actor|let|var|func)\s+(\w+)/g;
+// An enum's cases, `case a, b(Int), c = 2`, to the end of the line. A switch
+// case (`case .a:`, `case (.a, _):`, `case let x:`) is not a declaration.
+const CASES = /\bcase\s+(?!let\b|var\b)([A-Za-z_][^\n:]*)$/gm;
+
+// Whether `name` holds a window word.
+function windowNamed(name) {
+  const words = name.split(/(?=[A-Z])/).map((word) => word.toLowerCase());
+  return words.some(
+    (word, index) => WINDOW_WORDS.has(word) && !(word === 'icon' && words[index + 1] === 'size'),
+  );
+}
+
+// Each name an enum case line declares, with its offset: the identifier
+// before each top-level comma.
+function caseNames(match) {
+  const names = [];
+  const list = match[1];
+  const offset = match.index + match[0].length - list.length;
+  let depth = 0;
+  let begin = 0;
+  for (let index = 0; index <= list.length; index += 1) {
+    const character = list[index];
+    if (character === '(') depth += 1;
+    else if (character === ')') depth -= 1;
+    else if (index === list.length || (character === ',' && depth === 0)) {
+      const part = list.slice(begin, index);
+      const name = /\s*(\w+)/.exec(part);
+      if (name)
+        names.push({ name: name[1], index: offset + begin + name[0].length - name[1].length });
+      begin = index + 1;
+    }
+  }
+  return names;
+}
+
+// Each design-system declaration whose name holds a window word, as
+// { line, rule, message }, in file order.
+function windowNamedTokens(code, line) {
+  const declared = [...code.matchAll(DECLARATION)].map((match) => ({
+    name: match[1],
+    index: match.index + match[0].length - match[1].length,
+  }));
+  for (const match of code.matchAll(CASES)) declared.push(...caseNames(match));
+  const rule = 'window-named token';
+  return declared
+    .filter(({ name }) => windowNamed(name))
+    .sort((a, b) => a.index - b.index)
+    .map(({ name, index }) => ({ line: line(index), rule, message: `${rule}: ${name}` }));
+}
+
+// A shadow or other colour written as black or white at an opacity: in the
+// design system that is a colour token, so it belongs in Colors.swift alone.
+const INLINE_SHADE = /(?:\bColor)?\.(?:black|white)\s*\.opacity\(/g;
+
+// Each black or white literal at an opacity, outside Colors.swift.
+function inlineShades(code, line, file) {
+  if (/\/DesignSystem\/Colors\.swift$/.test(`/${file}`)) return [];
+  const rule = 'inline shade in the design system';
+  return [...code.matchAll(INLINE_SHADE)].map((match) => ({
+    line: line(match.index),
+    rule,
+    message: rule,
+  }));
+}
+
 // Every match of every check outside a named constant, as
 // { line, rule, message }, in file order.
 export function violations(text, file = '') {
+  if (DESIGN_SYSTEM.test(`/${file}`)) {
+    const code = codeOnly(text);
+    const line = lineOf(code);
+    return [...windowNamedTokens(code, line), ...inlineShades(code, line, file)].sort(
+      (a, b) => a.line - b.line || a.rule.localeCompare(b.rule),
+    );
+  }
   if (EXEMPT_PATHS.some((pattern) => pattern.test(`/${file}`))) return [];
   const code = codeOnly(text);
   const line = lineOf(code);

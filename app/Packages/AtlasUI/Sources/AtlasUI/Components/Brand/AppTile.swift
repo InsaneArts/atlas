@@ -6,7 +6,7 @@ struct AppTile: View {
   /// The icon's pixels; nil draws the tile.
   let image: CGImage?
   /// The icon's side: an app's 34 by default, 16 beside a label.
-  var side = IconSize.avatar
+  var side = IconSize.xl
 
   var body: some View {
     icon
@@ -48,9 +48,9 @@ private enum Layout {
 
 #if DEBUG
   #Preview("Samples") {
-    HStack(spacing: Spacing.l) {
+    HStack(spacing: Spacing.m) {
       AppTile(image: nil)
-      AppTile(image: nil, side: IconSize.radio)
+      AppTile(image: nil, side: IconSize.s)
     }
     .sampleSurface()
   }

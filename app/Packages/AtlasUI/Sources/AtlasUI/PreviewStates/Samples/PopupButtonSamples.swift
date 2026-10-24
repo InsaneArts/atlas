@@ -21,7 +21,7 @@
     ]
 
     var body: some View {
-      HStack(spacing: Spacing.l) {
+      HStack(spacing: Spacing.m) {
         PopupButton(label: String("Picture"), options: Self.options, selection: .constant(.live))
         PopupButton(label: String("Picture"), options: Self.options, selection: .constant(.everyFiveSeconds))
       }

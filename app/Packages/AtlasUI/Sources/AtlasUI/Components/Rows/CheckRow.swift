@@ -10,20 +10,20 @@ struct CheckRow: View {
   var note: String?
 
   var body: some View {
-    HStack(spacing: Spacing.l) {
+    HStack(spacing: Spacing.m) {
       mark
-        .frame(width: IconSize.mark, height: IconSize.mark)
+        .frame(width: IconSize.sPlus, height: IconSize.sPlus)
       Text(text)
         .font(Typography.font(.body))
-      Spacer(minLength: Spacing.m)
+      Spacer(minLength: Spacing.s)
       if let note {
         Text(note)
           .font(Typography.font(.callout))
           .foregroundStyle(Color.textTertiary)
       }
     }
-    .padding(.horizontal, Spacing.xl)
-    .padding(.vertical, Spacing.l)
+    .padding(.horizontal, Spacing.mPlus)
+    .padding(.vertical, Spacing.m)
     .accessibilityElement(children: .combine)
     .accessibilityValue(state.spokenValue)
   }
@@ -34,7 +34,7 @@ struct CheckRow: View {
     case .done:
       CheckMark()
     case .busy:
-      Spinner(size: IconSize.glyphLarge)
+      Spinner(size: IconSize.xsPlus)
     case .failed:
       Image(systemName: "exclamationmark.circle.fill")
         .foregroundStyle(Color.attention)

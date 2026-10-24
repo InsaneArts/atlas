@@ -4,7 +4,7 @@
   /// The search field's samples: empty with its prompt, then with a query.
   struct SearchFieldSamples: View {
     var body: some View {
-      VStack(spacing: Spacing.l) {
+      VStack(spacing: Spacing.m) {
         SearchField(text: "", prompt: "Search activity") { _ in }
         SearchField(text: "Opie", prompt: "Search apps") { _ in }
       }

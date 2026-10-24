@@ -34,7 +34,7 @@
     ]
 
     var body: some View {
-      HStack(alignment: .bottom, spacing: Spacing.section) {
+      HStack(alignment: .bottom, spacing: Spacing.xxl) {
         CaptionStack(entries: Self.working)
         CaptionStack(entries: Self.failed)
       }

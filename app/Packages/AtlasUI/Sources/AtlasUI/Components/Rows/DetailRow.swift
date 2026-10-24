@@ -15,12 +15,12 @@ struct DetailRow: View {
   var isQuiet = false
 
   var body: some View {
-    HStack(alignment: .firstTextBaseline, spacing: Spacing.m) {
+    HStack(alignment: .firstTextBaseline, spacing: Spacing.s) {
       if let readiness {
         ReadinessMark(state: readiness)
           .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + Layout.markBaseline }
       }
-      VStack(alignment: .leading, spacing: Spacing.xxs) {
+      VStack(alignment: .leading, spacing: Spacing.half) {
         Text(name)
           .foregroundStyle(isQuiet ? Color.textTertiary : Color.textSecondary)
         if let note {
@@ -30,15 +30,15 @@ struct DetailRow: View {
             .fixedSize(horizontal: false, vertical: true)
         }
       }
-      Spacer(minLength: Spacing.m)
+      Spacer(minLength: Spacing.s)
       Text(value)
         .lineLimit(1)
         .truncationMode(.tail)
         .help(value)
     }
     .font(Typography.font(.body))
-    .padding(.vertical, note == nil ? .zero : Spacing.s)
-    .frame(minHeight: ControlHeight.compactRow)
+    .padding(.vertical, note == nil ? .zero : Spacing.xsPlus)
+    .frame(minHeight: ControlHeight.m)
     .accessibilityElement(children: .combine)
     .accessibilityValue(readiness?.spokenValue ?? "")
   }

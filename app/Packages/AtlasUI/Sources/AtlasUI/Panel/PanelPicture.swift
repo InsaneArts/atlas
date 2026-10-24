@@ -24,7 +24,7 @@ struct PanelPicture: View {
       }
       .buttonStyle(.plain)
       .frame(width: PanelLayout.picture.width, height: PanelLayout.picture.height)
-      .elevation(.stage)
+      .elevation(.raised)
       .help("Open the helper's screen in Atlas")
       .accessibilityLabel("The helper's screen")
       .accessibilityHint("Opens it in Atlas")

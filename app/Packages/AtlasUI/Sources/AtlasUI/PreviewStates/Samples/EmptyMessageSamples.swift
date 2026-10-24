@@ -5,7 +5,7 @@
   /// next step, the last in a small window.
   struct EmptyMessageSamples: View {
     var body: some View {
-      VStack(spacing: Spacing.l) {
+      VStack(spacing: Spacing.m) {
         EmptyMessage(
           state: EmptyMessageState(
             headline: "Connecting to the helper…",

@@ -36,7 +36,7 @@ struct ScreenChip: View {
 
 #if DEBUG
   #Preview("Samples") {
-    VStack(spacing: Spacing.l) {
+    VStack(spacing: Spacing.m) {
       ScreenChip(chip: .inControl)
       ScreenChip(chip: .paused)
       ScreenChip(chip: .typing(String("こんにちは")))

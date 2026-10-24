@@ -15,7 +15,7 @@ struct ViewerTopButtons: View {
   @State private var moreFrame = CGRect.zero
 
   var body: some View {
-    HStack(spacing: Spacing.m) {
+    HStack(spacing: Spacing.s) {
       if actions.showsClear {
         Button("Clear") { send(.clearOutline) }
           .buttonStyle(.capsule(.glass))
@@ -68,7 +68,7 @@ struct ViewerTopButtons: View {
       Button {
         send(.showKeys(below: keysFrame))
       } label: {
-        HStack(spacing: Spacing.s) {
+        HStack(spacing: Spacing.xsPlus) {
           Image(systemName: "keyboard")
           if fit < .keysGlyph {
             Text("Keys")

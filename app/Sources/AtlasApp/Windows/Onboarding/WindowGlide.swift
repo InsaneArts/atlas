@@ -26,7 +26,7 @@ final class WindowGlide {
   ///
   /// - Parameter frame: Where it lands.
   func move(to frame: NSRect) {
-    guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+    guard !Appearance.reduceMotion else {
       window.setFrame(frame, display: true)
       return
     }

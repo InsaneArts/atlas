@@ -13,7 +13,7 @@ struct SettingsGroup<Content: View>: View {
   @ViewBuilder let content: Content
 
   var body: some View {
-    VStack(alignment: .leading, spacing: Spacing.m) {
+    VStack(alignment: .leading, spacing: Spacing.s) {
       if !title.isEmpty {
         GroupLabel(text: title)
           .padding(.horizontal, Spacing.xs)

@@ -22,8 +22,8 @@ struct CreateScreen: View {
         FieldRow(label: "Verify", text: $form.verify, secure: true, isFlagged: state.flagged == .verify)
       }
       .disabled(!state.isFormEnabled)
-      .opacity(state.isFormEnabled ? 1 : Opacity.busy)
-      .padding(.top, Spacing.s)
+      .opacity(state.isFormEnabled ? 1 : Opacity.muted)
+      .padding(.top, Spacing.xsPlus)
     } bottom: {
       WorkNoteLine(note: state.note)
       ApprovalNote()

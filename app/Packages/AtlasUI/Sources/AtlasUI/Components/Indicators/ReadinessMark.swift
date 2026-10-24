@@ -32,7 +32,7 @@ private enum Layout {
 
 #if DEBUG
   #Preview("Samples") {
-    HStack(spacing: Spacing.l) {
+    HStack(spacing: Spacing.m) {
       ReadinessMark(state: .ready)
       ReadinessMark(state: .notReady)
       ReadinessMark(state: .unknown)

@@ -53,6 +53,32 @@ public enum Motion {
   /// A position indicator moving, such as the page dots: a spring with a little bounce.
   static var indicator: Animation { .spring(response: indicatorResponse, dampingFraction: indicatorDamping) }
 
+  /// The fade every transition takes under Reduce Motion, nothing moving: ease out over ``Duration/fade``. Each
+  /// surface adopts it as it is redesigned; until then each keeps its own fallback through
+  /// ``animation(_:reduceMotion:)`` or ``animation(_:reduceMotion:reduced:)``.
+  static var reduced: Animation { .easeOut(duration: Duration.fade.seconds) }
+
+  /// An animation, or none under Reduce Motion, so the change happens at once.
+  ///
+  /// - Parameters:
+  ///   - base: The animation, such as ``press`` or ``fade``.
+  ///   - reduceMotion: Whether the Reduce Motion setting is on.
+  /// - Returns: `base`, or `nil` under Reduce Motion.
+  static func animation(_ base: Animation, reduceMotion: Bool) -> Animation? {
+    reduceMotion ? nil : base
+  }
+
+  /// An animation, or a gentler one under Reduce Motion, such as a fade in place of a slide.
+  ///
+  /// - Parameters:
+  ///   - base: The animation, such as ``slide``.
+  ///   - reduceMotion: Whether the Reduce Motion setting is on.
+  ///   - reduced: What runs under Reduce Motion, such as ``fade``.
+  /// - Returns: `base`, or `reduced` under Reduce Motion.
+  static func animation(_ base: Animation, reduceMotion: Bool, reduced: Animation) -> Animation {
+    reduceMotion ? reduced : base
+  }
+
   /// The slide's spring response, in seconds.
   private static let slideResponse = 0.35
   /// The indicator's spring response, in seconds.

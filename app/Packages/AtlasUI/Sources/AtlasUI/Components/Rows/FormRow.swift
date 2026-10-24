@@ -28,8 +28,8 @@ struct FormRow<Trailing: View>: View {
   @ViewBuilder let trailing: Trailing
 
   var body: some View {
-    HStack(spacing: Spacing.l) {
-      VStack(alignment: .leading, spacing: Spacing.xxs) {
+    HStack(spacing: Spacing.m) {
+      VStack(alignment: .leading, spacing: Spacing.half) {
         HStack(spacing: accessoryGap) {
           lead
           Text(title)
@@ -45,15 +45,15 @@ struct FormRow<Trailing: View>: View {
       }
       .accessibilityElement(children: .combine)
       .accessibilityValue(spokenValue)
-      Spacer(minLength: Spacing.m)
-      HStack(spacing: Spacing.m) {
+      Spacer(minLength: Spacing.s)
+      HStack(spacing: Spacing.s) {
         trailing
       }
     }
     // The board's least height is its content's, with the 6 above and below outside it, so a row stands 56.
-    .frame(minHeight: ControlHeight.large)
-    .padding(.horizontal, Spacing.xl)
-    .padding(.vertical, Spacing.s)
+    .frame(minHeight: ControlHeight.xl)
+    .padding(.horizontal, Spacing.mPlus)
+    .padding(.vertical, Spacing.xsPlus)
   }
 
   /// The mark or tile before the title.
@@ -71,15 +71,15 @@ struct FormRow<Trailing: View>: View {
       Image(decorative: icon.image, scale: 1)
         .resizable()
         .interpolation(.high)
-        .frame(width: IconSize.agent, height: IconSize.agent)
+        .frame(width: IconSize.mPlus, height: IconSize.mPlus)
     }
   }
 
   /// The gap between the lead and the title: wider beside a tile than beside a mark.
   private var accessoryGap: CGFloat {
     switch accessory {
-    case .icon: Spacing.ml
-    case .none, .status, .readiness: Spacing.m
+    case .icon: Spacing.sPlus
+    case .none, .status, .readiness: Spacing.s
     }
   }
 }

@@ -28,7 +28,7 @@ struct TextLinkStyle: ButtonStyle {
       .contentShape(Rectangle())
       .opacity(configuration.isPressed ? Layout.pressed : 1)
       .opacity(enabled ? 1 : Opacity.disabled)
-      .animation(reduceMotion ? nil : Motion.press, value: configuration.isPressed)
+      .animation(Motion.animation(Motion.press, reduceMotion: reduceMotion), value: configuration.isPressed)
   }
 
   /// The words' font for the size.
@@ -48,7 +48,7 @@ private enum Layout {
 
 #if DEBUG
   #Preview("Samples") {
-    HStack(spacing: Spacing.xl) {
+    HStack(spacing: Spacing.mPlus) {
       Button(String("Open")) {}
         .buttonStyle(.textLink)
       Button {

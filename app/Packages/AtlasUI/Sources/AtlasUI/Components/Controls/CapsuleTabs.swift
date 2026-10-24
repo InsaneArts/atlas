@@ -16,7 +16,7 @@ struct CapsuleTabs<Tab: Hashable & Sendable>: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
-    HStack(spacing: Spacing.xxs) {
+    HStack(spacing: Spacing.half) {
       ForEach(state.tabs) { tab in
         Button(tab.title) { send(tab.id) }
           .buttonStyle(
@@ -35,7 +35,7 @@ struct CapsuleTabs<Tab: Hashable & Sendable>: View {
         .strokeBorder(Color.strokeStrong, lineWidth: Stroke.hairline)
     )
     .fixedSize()
-    .animation(reduceMotion ? Motion.fade : Motion.slide, value: state.selected)
+    .animation(Motion.animation(Motion.slide, reduceMotion: reduceMotion, reduced: Motion.fade), value: state.selected)
     .accessibilityElement(children: .contain)
     .accessibilityLabel(state.label)
   }

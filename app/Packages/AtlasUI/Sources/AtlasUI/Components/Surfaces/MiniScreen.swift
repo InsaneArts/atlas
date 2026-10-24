@@ -15,17 +15,17 @@ struct MiniScreen: View {
           FloatingChip(size: .mini) {
             chip
           }
-          .padding(Spacing.m)
+          .padding(Spacing.s)
         }
         .frame(width: Layout.size.width, height: Layout.size.height)
         // The shadow falls from the frame's shape alone, never blurred from the picture.
         .background(
           RoundedRectangle(cornerRadius: Radius.medium)
-            .stroke(Color.stageBackground, lineWidth: Stroke.hairline)
+            .stroke(Color.letterbox, lineWidth: Stroke.hairline)
             .background(
               RoundedRectangle(cornerRadius: Radius.medium)
-                .fill(Color.stageBackground)
-                .elevation(.mini)
+                .fill(Color.letterbox)
+                .elevation(.overlay)
             )
         )
     }

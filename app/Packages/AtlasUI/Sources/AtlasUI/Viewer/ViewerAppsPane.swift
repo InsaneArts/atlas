@@ -26,15 +26,15 @@ struct ViewerAppsPane: View {
   @ViewBuilder private var content: some View {
     if let empty = state.empty {
       EmptyMessage(state: empty, ground: .pane)
-        .padding(Spacing.xxl)
+        .padding(Spacing.l)
     } else {
       ScrollView {
-        LazyVStack(spacing: Spacing.ml) {
+        LazyVStack(spacing: Spacing.sPlus) {
           ForEach(state.apps) { app in
             AppCard(app: app, send: send)
           }
         }
-        .padding(.vertical, Spacing.xl)
+        .padding(.vertical, Spacing.mPlus)
         .padding(.horizontal, ViewerLayout.paneTextInset)
       }
       .scrollIndicators(.automatic)

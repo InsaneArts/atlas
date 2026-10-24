@@ -19,7 +19,7 @@ struct ChooseScreen: View {
           "A standard account on this Mac that only Atlas uses. Your own files and windows stay out of its reach."
       )
       list
-        .padding(.top, Spacing.s)
+        .padding(.top, Spacing.xsPlus)
     } bottom: {
       WorkNoteLine(note: note)
       footnote
@@ -56,7 +56,7 @@ struct ChooseScreen: View {
 
   /// A new account, when offered, then each standard account.
   private var rows: some View {
-    VStack(spacing: Spacing.m) {
+    VStack(spacing: Spacing.s) {
       if state.offersNewAccount {
         ChoiceRow(
           title: "Create a new account",

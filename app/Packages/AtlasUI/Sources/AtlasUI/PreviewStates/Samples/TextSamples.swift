@@ -26,7 +26,7 @@
 
     /// That component's samples, on the ground.
     var body: some View {
-      VStack(spacing: Spacing.xl) {
+      VStack(spacing: Spacing.mPlus) {
         switch kind {
         case .headline:
           Headline(title: String("Give your agents"), tail: String("a Mac of their own."))

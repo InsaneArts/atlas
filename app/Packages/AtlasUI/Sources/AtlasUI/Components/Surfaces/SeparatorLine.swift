@@ -27,8 +27,8 @@ struct SeparatorLine: View {
 
 #if DEBUG
   #Preview("Samples") {
-    HStack(spacing: Spacing.l) {
-      VStack(spacing: Spacing.l) {
+    HStack(spacing: Spacing.m) {
+      VStack(spacing: Spacing.m) {
         Text(verbatim: "Above")
         SeparatorLine()
         Text(verbatim: "Below")

@@ -46,7 +46,7 @@ struct ViewerDetails: View {
             }
           }
         }
-        .padding(.vertical, Spacing.xxl)
+        .padding(.vertical, Spacing.l)
         .padding(.horizontal, ViewerLayout.paneTextInset)
       }
       .scrollIndicators(.automatic)
@@ -64,7 +64,7 @@ struct ViewerDetails: View {
       send(.checkAgain)
     } label: {
       if state.isChecking {
-        Spinner(size: IconSize.glyph)
+        Spinner(size: IconSize.xs)
       } else {
         Image(systemName: "arrow.clockwise")
       }

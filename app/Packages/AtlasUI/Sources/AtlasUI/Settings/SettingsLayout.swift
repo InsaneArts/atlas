@@ -12,7 +12,7 @@ public enum SettingsLayout {
   /// 624: a pane's width inside its side insets.
   static let formWidth: CGFloat = window.width - 2 * sideInset
   /// 20 above and below, 28 at the sides: a pane's insets.
-  static let paneInsets = EdgeInsets(top: Spacing.group, leading: sideInset, bottom: Spacing.group, trailing: sideInset)
+  static let paneInsets = EdgeInsets(top: Spacing.xl, leading: sideInset, bottom: Spacing.xl, trailing: sideInset)
   /// 18: between a pane's groups.
   static let groupGap: CGFloat = 18
   /// 380: the widest About's sentence runs before it wraps.

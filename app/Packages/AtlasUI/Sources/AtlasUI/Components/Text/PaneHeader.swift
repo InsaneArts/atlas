@@ -13,13 +13,13 @@ struct PaneHeader<Trailing: View>: View {
 
   var body: some View {
     ViewThatFits(in: .horizontal) {
-      HStack(spacing: Spacing.l) {
+      HStack(spacing: Spacing.m) {
         heading
         Spacer(minLength: .zero)
         controls
       }
-      VStack(alignment: .leading, spacing: Spacing.l) {
-        HStack(spacing: Spacing.l) {
+      VStack(alignment: .leading, spacing: Spacing.m) {
+        HStack(spacing: Spacing.m) {
           heading
         }
         controls
@@ -27,7 +27,7 @@ struct PaneHeader<Trailing: View>: View {
       .frame(maxWidth: .infinity, alignment: .leading)
     }
     .lineLimit(1)
-    .padding(.vertical, Spacing.xl)
+    .padding(.vertical, Spacing.mPlus)
     .padding(.horizontal, Layout.inset)
     .overlay(alignment: .bottom) {
       SeparatorLine()
@@ -49,7 +49,7 @@ extension PaneHeader {
 
   /// The controls, in a row.
   private var controls: some View {
-    HStack(spacing: Spacing.ml) {
+    HStack(spacing: Spacing.sPlus) {
       trailing
     }
   }

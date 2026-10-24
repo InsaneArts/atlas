@@ -27,14 +27,14 @@ struct ViewerActivityPane: View {
   @ViewBuilder private var content: some View {
     if let empty = state.empty {
       EmptyMessage(state: empty, ground: .pane)
-        .padding(Spacing.xxl)
+        .padding(Spacing.l)
     } else {
       ScrollView {
         LazyVStack(alignment: .leading, spacing: .zero) {
           ForEach(state.groups) { group in
             GroupLabel(text: group.title)
-              .padding(.top, Spacing.xl)
-              .padding(.bottom, Spacing.s)
+              .padding(.top, Spacing.mPlus)
+              .padding(.bottom, Spacing.xsPlus)
               .padding(.horizontal, ViewerLayout.paneTextInset)
             ForEach(group.lines) { line in
               ActivityLineRow(line: line, send: send)

@@ -8,7 +8,7 @@ struct AppWindowRow: View {
   let show: @MainActor () -> Void
 
   var body: some View {
-    HStack(spacing: Spacing.ml) {
+    HStack(spacing: Spacing.sPlus) {
       Text(window.title)
         .font(Typography.font(.body))
         .lineLimit(1)
@@ -17,9 +17,9 @@ struct AppWindowRow: View {
         .foregroundStyle(Color.textTertiary)
         .monospacedDigit()
         .lineLimit(1)
-      Spacer(minLength: Spacing.l)
+      Spacer(minLength: Spacing.m)
       Button(action: show) {
-        HStack(spacing: Spacing.s) {
+        HStack(spacing: Spacing.xsPlus) {
           Image(systemName: "eye")
           Text("Show on screen")
         }
@@ -29,7 +29,7 @@ struct AppWindowRow: View {
       .accessibilityLabel(window.showLabel)
     }
     .padding(.leading, ViewerLayout.windowIndent)
-    .padding(.trailing, Spacing.xxl)
+    .padding(.trailing, Spacing.l)
     .frame(minHeight: ViewerLayout.windowRowHeight)
     .overlay(alignment: .top) {
       SeparatorLine()

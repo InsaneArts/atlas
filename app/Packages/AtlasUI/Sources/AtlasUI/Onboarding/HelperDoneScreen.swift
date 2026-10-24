@@ -14,9 +14,9 @@ struct HelperDoneScreen: View {
   /// A check, what happens from now on, and Switch Back.
   var body: some View {
     ScreenColumn(width: OnboardingLayout.helperDoneColumn) {
-      CheckMark(size: IconSize.hero)
+      CheckMark(size: IconSize.xxl)
       Headline(title: OnboardingScreen.helperDoneTitle, tail: state.tail)
-        .padding(.top, Spacing.s)
+        .padding(.top, Spacing.xsPlus)
       Lede(
         text:
           "You won't need to set anything up here again. Atlas starts in this account by itself whenever it is logged in, and finishes setting up in your own account."
@@ -26,7 +26,7 @@ struct HelperDoneScreen: View {
         .buttonStyle(.capsule(size: .large))
         .keyboardShortcut(.defaultAction)
         .disabled(isBusy)
-        .padding(.top, Spacing.ml)
+        .padding(.top, Spacing.sPlus)
       WorkNoteLine(note: note)
       Note(text: "Locks this account and opens the lock screen.")
     }

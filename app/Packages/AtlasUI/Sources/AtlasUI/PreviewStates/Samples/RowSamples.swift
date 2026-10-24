@@ -34,7 +34,7 @@
 
     /// That component's samples, on the ground.
     var body: some View {
-      VStack(spacing: Spacing.m) {
+      VStack(spacing: Spacing.s) {
         switch kind {
         case .step:
           StepRow(index: 1, title: String("Find Atlas in the list"), detail: String("Privacy & Security"), state: .done)

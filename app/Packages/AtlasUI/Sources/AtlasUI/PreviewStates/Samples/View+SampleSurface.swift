@@ -6,7 +6,7 @@
     ///
     /// - Returns: The sample on its ground.
     func sampleSurface() -> some View {
-      padding(Spacing.xxl)
+      padding(Spacing.l)
         .windowSurface()
     }
   }

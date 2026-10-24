@@ -15,17 +15,17 @@ extension View {
 
 #if DEBUG
   #Preview("Samples") {
-    VStack(spacing: Spacing.l) {
+    VStack(spacing: Spacing.m) {
       TitleDetail(title: String("A neutral card"), detail: String("Facts and settings sit on it."))
-        .padding(Spacing.l)
+        .padding(Spacing.m)
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface()
       TitleDetail(title: String("An accent card"), detail: String("The row chosen, or the step to do now."))
-        .padding(Spacing.l)
+        .padding(Spacing.m)
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface(.accent)
       TitleDetail(title: String("An attention card"), detail: String("Something needs the person."))
-        .padding(Spacing.l)
+        .padding(Spacing.m)
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface(.attention)
     }

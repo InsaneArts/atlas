@@ -13,8 +13,8 @@ struct PictureTreatment: ViewModifier {
   func body(content: Content) -> some View {
     content
       .saturation(look == .dimmed ? Layout.dimSaturation : 1)
-      .overlay(Color.stageBackground.opacity(look == .dimmed ? Layout.dimShade : 0))
-      .opacity(look == .paused ? Opacity.paused : 1)
+      .overlay(Color.letterbox.opacity(look == .dimmed ? Layout.dimShade : 0))
+      .opacity(look == .paused ? Opacity.dimmed : 1)
   }
 }
 

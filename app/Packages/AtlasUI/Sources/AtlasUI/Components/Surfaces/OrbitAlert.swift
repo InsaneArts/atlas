@@ -11,16 +11,16 @@ struct OrbitAlert<ID: Hashable & Sendable>: View {
   @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
   var body: some View {
-    VStack(spacing: Spacing.m) {
-      AppIcon(size: IconSize.hero)
-        .padding(.bottom, Spacing.s)
+    VStack(spacing: Spacing.s) {
+      AppIcon(size: IconSize.xxl)
+        .padding(.bottom, Spacing.xsPlus)
       Text(state.title)
         .font(Typography.font(.headline, weight: .bold))
         .accessibilityAddTraits(.isHeader)
       Text(state.message)
         .font(Typography.font(.callout))
-        .foregroundStyle(Color.textAlert)
-      VStack(spacing: Spacing.m) {
+        .foregroundStyle(Color.textOnGlass)
+      VStack(spacing: Spacing.s) {
         ForEach(state.buttons) { button in
           Button(button.title, role: button.role.buttonRole) { send(button.id) }
             .buttonStyle(.capsule(button.role.look, size: .small, fill: true))
@@ -44,15 +44,15 @@ struct OrbitAlert<ID: Hashable & Sendable>: View {
     .multilineTextAlignment(.center)
     .fixedSize(horizontal: false, vertical: true)
     .padding(.top, Layout.topInset)
-    .padding([.horizontal, .bottom], Spacing.xxl)
+    .padding([.horizontal, .bottom], Spacing.l)
     .frame(width: Layout.width)
     // The shadow falls from the ground's shape alone, so it is drawn from a path, never blurred from the content.
     .background {
       ground
-        .elevation(.alert)
+        .elevation(.modal)
     }
     .overlay(
-      RoundedRectangle(cornerRadius: Radius.alert)
+      RoundedRectangle(cornerRadius: Radius.extraLarge)
         .strokeBorder(Color.strokeStrong, lineWidth: Stroke.hairline)
     )
     .onExitCommand { if let escape = state.escape { send(escape) } }
@@ -62,13 +62,13 @@ struct OrbitAlert<ID: Hashable & Sendable>: View {
 
   /// The frosted ground, or the opaque one under Reduce Transparency.
   @ViewBuilder private var ground: some View {
-    let shape = RoundedRectangle(cornerRadius: Radius.alert)
+    let shape = RoundedRectangle(cornerRadius: Radius.extraLarge)
     if reduceTransparency {
       shape
-        .fill(Color.fillAlertSolid)
+        .fill(Color.fillOverlaySolid)
     } else {
       shape
-        .fill(Color.fillAlert)
+        .fill(Color.fillOverlay)
         .background(.ultraThinMaterial, in: shape)
     }
   }

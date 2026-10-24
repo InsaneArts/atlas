@@ -10,7 +10,7 @@ struct AppCard: View {
 
   var body: some View {
     VStack(spacing: .zero) {
-      HStack(spacing: Spacing.l) {
+      HStack(spacing: Spacing.m) {
         AppTile(image: app.icon?.image)
         Text(app.name)
           .font(Typography.font(.headline, weight: .semibold))
@@ -20,8 +20,8 @@ struct AppCard: View {
         }
         Spacer(minLength: .zero)
       }
-      .padding(.leading, Spacing.xl)
-      .padding(.trailing, Spacing.xxl)
+      .padding(.leading, Spacing.mPlus)
+      .padding(.trailing, Spacing.l)
       .frame(minHeight: ViewerLayout.appRowHeight)
       .accessibilityElement(children: .combine)
       .accessibilityAddTraits(.isHeader)
@@ -52,7 +52,7 @@ struct AppCard: View {
 #if DEBUG
   #Preview("Samples") {
     if case .apps(let apps) = PreviewStates.viewerApps.pane {
-      VStack(spacing: Spacing.ml) {
+      VStack(spacing: Spacing.sPlus) {
         ForEach(apps.apps) { app in
           AppCard(app: app) { _ in }
         }

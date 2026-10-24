@@ -5,9 +5,9 @@ enum PanelLayout {
   /// 352: the panel's width.
   static let width: CGFloat = 352
   /// 12: the panel's inset on every side.
-  static let inset = Spacing.l
+  static let inset = Spacing.m
   /// 10: between the header, the line, the picture, Recent and the buttons.
-  static let gap = Spacing.ml
+  static let gap = Spacing.sPlus
   /// 328 by 205: the picture's frame, the width inside the inset at the screen's 16:10.
   static let picture = CGSize(width: 328, height: 205)
   /// 12: the orbit beside "Atlas", by its height; only the panel's header draws one this size.
@@ -20,7 +20,7 @@ enum PanelLayout {
   /// 26: a Recent row's least height.
   static let recentRow: CGFloat = 26
   /// 8: the caption's inset from the picture's corner, closer than the main window's 14 in the smaller frame.
-  static let captionInset = Spacing.m
+  static let captionInset = Spacing.s
   /// The panel's ground: rgb(30, 30, 33) at 0.97 (mac.py:366).
   static let ground = Color(red: 30 / 255, green: 30 / 255, blue: 33 / 255)
     .opacity(0.97)

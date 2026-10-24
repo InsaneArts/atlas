@@ -24,7 +24,7 @@
     ]
 
     var body: some View {
-      VStack(spacing: Spacing.l) {
+      VStack(spacing: Spacing.m) {
         IconTabs(state: IconTabsState(tabs: Self.tabs, selected: .general, label: "Settings")) { _ in }
         IconTabs(state: IconTabsState(tabs: Self.tabs, selected: .about, label: "Settings")) { _ in }
       }

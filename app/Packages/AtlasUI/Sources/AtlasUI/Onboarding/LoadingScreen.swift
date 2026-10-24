@@ -16,10 +16,10 @@ struct LoadingScreen: View {
         Button("Try Again") { send(.checkAgain) }
           .buttonStyle(.capsule(size: .large))
           .keyboardShortcut(.defaultAction)
-          .padding(.top, Spacing.m)
+          .padding(.top, Spacing.s)
       }
     } else {
-      Spinner(size: IconSize.mark)
+      Spinner(size: IconSize.sPlus)
         // The spinner says nothing to VoiceOver, so the screen says what it waits for.
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Loading")

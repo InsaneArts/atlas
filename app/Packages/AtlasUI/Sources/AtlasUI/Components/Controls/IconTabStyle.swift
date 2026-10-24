@@ -23,11 +23,11 @@ struct IconTabStyle: ButtonStyle {
       .frame(width: Layout.width, height: Layout.height)
       .background(
         RoundedRectangle(cornerRadius: Radius.small)
-          .fill(isSelected ? Color.fillAlertButton : configuration.isPressed ? Color.fillControl : Color.clear)
+          .fill(isSelected ? Color.fillControlRaised : configuration.isPressed ? Color.fillControl : Color.clear)
       )
       .contentShape(RoundedRectangle(cornerRadius: Radius.small))
       .opacity(enabled ? 1 : Opacity.disabled)
-      .animation(reduceMotion ? nil : Motion.press, value: configuration.isPressed)
+      .animation(Motion.animation(Motion.press, reduceMotion: reduceMotion), value: configuration.isPressed)
   }
 }
 

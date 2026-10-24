@@ -16,7 +16,7 @@ struct SwitchScreen: View {
     ScreenColumn(width: OnboardingLayout.listColumn) {
       GroupLabel(text: "Helper account")
       Headline(title: state.title, tail: OnboardingScreen.switchTail)
-      VStack(spacing: Spacing.m) {
+      VStack(spacing: Spacing.s) {
         StepRow(index: 1, title: "Lock and switch", detail: state.logInDetail, state: state.progress.logIn)
           .lineLimit(OnboardingLayout.nameLines)
           .truncationMode(.middle)

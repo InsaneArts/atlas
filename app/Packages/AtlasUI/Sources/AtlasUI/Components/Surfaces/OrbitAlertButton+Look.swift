@@ -4,9 +4,9 @@ extension OrbitAlertButton.Role {
   /// The capsule's look: blue for the default button, red for a destructive one, quiet for the way out.
   var look: CapsuleButtonStyle.Look {
     switch self {
-    case .action, .safeCancel: .alertDefault
-    case .cancel: .alertOther
-    case .destructive: .alertDestructive
+    case .action, .safeCancel: .accent
+    case .cancel: .tinted
+    case .destructive: .destructive
     }
   }
 

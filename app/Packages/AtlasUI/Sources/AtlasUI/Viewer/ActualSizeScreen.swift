@@ -28,7 +28,7 @@ struct ActualSizeScreen<Input: View>: View {
       }
       .frame(width: size.width, height: size.height)
     }
-    .background(Color.stageBackground)
+    .background(Color.letterbox)
     .clipShape(RoundedRectangle(cornerRadius: Radius.large))
     .controlRim(look == .inControl, radius: Radius.large)
   }

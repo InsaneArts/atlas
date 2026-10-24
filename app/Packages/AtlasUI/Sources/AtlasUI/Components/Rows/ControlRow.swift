@@ -21,9 +21,9 @@ struct ControlRow<Label: View, Control: View>: View {
   @ViewBuilder let control: Control
 
   var body: some View {
-    HStack(spacing: Spacing.l) {
+    HStack(spacing: Spacing.m) {
       label
-      Spacer(minLength: Spacing.m)
+      Spacer(minLength: Spacing.s)
       control
     }
     .padding(.horizontal, inset)
@@ -34,8 +34,8 @@ struct ControlRow<Label: View, Control: View>: View {
   /// The space on each side of the row.
   private var inset: CGFloat {
     switch size {
-    case .menu: Spacing.m
-    case .regular, .tall: Spacing.xl
+    case .menu: Spacing.s
+    case .regular, .tall: Spacing.mPlus
     }
   }
 
@@ -43,15 +43,15 @@ struct ControlRow<Label: View, Control: View>: View {
   private var verticalInset: CGFloat {
     switch size {
     case .menu, .regular: .zero
-    case .tall: Spacing.l
+    case .tall: Spacing.m
     }
   }
 
   /// The row's height, or nil for a tall row, which takes its label's.
   private var height: CGFloat? {
     switch size {
-    case .menu: ControlHeight.row
-    case .regular: ControlHeight.large
+    case .menu: ControlHeight.sPlus
+    case .regular: ControlHeight.xl
     case .tall: nil
     }
   }

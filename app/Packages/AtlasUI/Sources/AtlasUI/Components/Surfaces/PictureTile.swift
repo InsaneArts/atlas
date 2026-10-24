@@ -13,7 +13,7 @@ struct PictureTile: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
-    Color.stageBackground
+    Color.letterbox
       .overlay {
         if let picture {
           Image(decorative: picture.image, scale: 1)
@@ -23,7 +23,7 @@ struct PictureTile: View {
             .transition(reduceMotion ? .identity : .opacity)
         }
       }
-      .animation(reduceMotion ? nil : Motion.fade, value: picture)
+      .animation(Motion.animation(Motion.fade, reduceMotion: reduceMotion), value: picture)
       .clipShape(RoundedRectangle(cornerRadius: radius))
       .overlay {
         if !isSelected {
@@ -53,7 +53,7 @@ struct PictureTile: View {
 
 #if DEBUG
   #Preview("Samples") {
-    HStack(spacing: Spacing.xxl) {
+    HStack(spacing: Spacing.l) {
       PictureTile(picture: SampleDesktop.picture, isSelected: true)
         .aspectRatio(ViewerLayout.placeholderAspect, contentMode: .fit)
         .frame(width: SampleWidth.narrow)
@@ -64,7 +64,7 @@ struct PictureTile: View {
         .aspectRatio(ViewerLayout.placeholderAspect, contentMode: .fit)
         .frame(width: SampleWidth.narrow)
     }
-    .padding(Spacing.m)
+    .padding(Spacing.s)
     .sampleSurface()
   }
 #endif

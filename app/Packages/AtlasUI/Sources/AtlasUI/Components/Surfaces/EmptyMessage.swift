@@ -45,12 +45,12 @@ struct EmptyMessage: View {
     }
     .multilineTextAlignment(.center)
     .fixedSize(horizontal: false, vertical: true)
-    .padding(Spacing.group)
+    .padding(Spacing.xl)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background {
       if ground == .stage {
         RoundedRectangle(cornerRadius: corner)
-          .fill(Color.stageEmpty)
+          .fill(Color.fillPlaceholder)
         RoundedRectangle(cornerRadius: corner)
           .strokeBorder(Color.separator, lineWidth: Stroke.hairline)
       }
@@ -74,8 +74,8 @@ struct EmptyMessage: View {
   /// Between the parts.
   private var gap: CGFloat {
     switch size {
-    case .regular: Spacing.xl
-    case .small: Spacing.l
+    case .regular: Spacing.mPlus
+    case .small: Spacing.m
     }
   }
 

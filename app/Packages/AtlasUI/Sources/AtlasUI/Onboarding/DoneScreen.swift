@@ -14,7 +14,7 @@ struct DoneScreen: View {
     ScreenColumn(width: OnboardingLayout.narrowColumn) {
       AppIcon(size: OnboardingLayout.doneIcon)
       Headline(title: OnboardingScreen.doneTitle)
-        .padding(.top, Spacing.m)
+        .padding(.top, Spacing.s)
       Lede(text: state.lede)
       CardGroup {
         SettingRow(
@@ -23,7 +23,7 @@ struct DoneScreen: View {
           isOn: Binding(get: { state.opensAtLogin }, set: { send(.setOpenAtLogin($0)) })
         )
       }
-      .padding(.top, Spacing.s)
+      .padding(.top, Spacing.xsPlus)
     } bottom: {
       WorkNoteLine(note: note)
       Note(text: "Getting Started… in the menu bar brings this window back.")

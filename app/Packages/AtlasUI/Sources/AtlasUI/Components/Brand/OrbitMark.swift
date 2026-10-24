@@ -45,10 +45,10 @@ extension OrbitMark {
 
 #if DEBUG
   #Preview("Orbit mark") {
-    HStack(spacing: Spacing.xl) {
-      OrbitMark(size: IconSize.mark)
-      OrbitMark(size: IconSize.disc)
-      OrbitMark(size: IconSize.avatarLarge)
+    HStack(spacing: Spacing.mPlus) {
+      OrbitMark(size: IconSize.sPlus)
+      OrbitMark(size: IconSize.m)
+      OrbitMark(size: IconSize.xxl)
     }
     .sampleSurface()
   }

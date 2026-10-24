@@ -16,7 +16,7 @@ struct AccentSwitchStyle: ToggleStyle {
 
 #if DEBUG
   #Preview("Samples") {
-    VStack(spacing: Spacing.l) {
+    VStack(spacing: Spacing.m) {
       Toggle(String("On"), isOn: .constant(true))
       Toggle(String("Off"), isOn: .constant(false))
       Toggle(String("Mini"), isOn: .constant(true))

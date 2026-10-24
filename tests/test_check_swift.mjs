@@ -46,7 +46,9 @@ test('the token checker flags a literal frame width outside the design system', 
     lines.join('\n'),
   );
   assert.deepEqual(
-    lines.map((line) => line.replace(/^[^:]+:/, '')),
+    lines
+      .filter((line) => line.startsWith('dirty/AtlasUI/Components/'))
+      .map((line) => line.replace(/^[^:]+:/, '')),
     [
       '7: inline font size',
       '8: inline padding',
@@ -65,6 +67,35 @@ test('the token checker flags a literal size passed through the glyph font door'
     lines.includes('dirty/AtlasUI/Components/Badge.swift:14: inline font size'),
     lines.join('\n'),
   );
+});
+
+test('the token checker flags every design-system name that holds a window, cases, properties and types included', () => {
+  const { status, lines } = check('tokens', 'dirty');
+  assert.equal(status, 1);
+  assert.deepEqual(
+    lines.filter((line) => line.includes('window-named token')),
+    [
+      'dirty/AtlasUI/DesignSystem/Radius.swift:9: window-named token: alert',
+      'dirty/AtlasUI/DesignSystem/Radius.swift:15: window-named token: stage',
+      'dirty/AtlasUI/DesignSystem/Radius.swift:15: window-named token: detailsSheet',
+      'dirty/AtlasUI/DesignSystem/Radius.swift:17: window-named token: menuRow',
+      'dirty/AtlasUI/DesignSystem/Radius.swift:19: window-named token: inspectorWidth',
+      'dirty/AtlasUI/DesignSystem/Radius.swift:24: window-named token: AppIcon',
+    ],
+  );
+});
+
+test('the token checker flags black or white at an opacity in the design system outside Colors.swift', () => {
+  const { lines } = check('tokens', 'dirty');
+  assert.deepEqual(
+    lines.filter((line) => line.includes('inline shade')),
+    ['dirty/AtlasUI/DesignSystem/Radius.swift:21: inline shade in the design system'],
+  );
+});
+
+test('the token checker passes names by size or role, iconSize included, and shades in Colors.swift', () => {
+  const { status, lines } = check('tokens', 'clean');
+  assert.equal(status, 0, lines.join('\n'));
 });
 
 test('the token checker accepts a documented constant in a Layout enum', () => {

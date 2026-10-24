@@ -8,18 +8,18 @@ struct ProgressPill: View {
   var done = false
 
   var body: some View {
-    HStack(spacing: Spacing.m) {
+    HStack(spacing: Spacing.s) {
       if done {
-        CheckMark(size: IconSize.glyph)
+        CheckMark(size: IconSize.xs)
       } else {
-        Spinner(size: IconSize.glyph)
+        Spinner(size: IconSize.xs)
       }
       Text(text)
         .font(Typography.font(.callout))
         .foregroundStyle(done ? Color.textSuccess : Color.textSecondary)
     }
-    .padding(.horizontal, Spacing.xl)
-    .frame(minHeight: ControlHeight.row)
+    .padding(.horizontal, Spacing.mPlus)
+    .frame(minHeight: ControlHeight.sPlus)
     .background(
       Capsule()
         .fill(Color.fillPill)

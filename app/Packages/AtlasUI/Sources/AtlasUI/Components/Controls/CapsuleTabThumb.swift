@@ -15,7 +15,7 @@ struct CapsuleTabThumb: View {
 #if DEBUG
   #Preview("Samples") {
     CapsuleTabThumb()
-      .frame(width: IconSize.hero, height: ControlHeight.menuRow)
+      .frame(width: IconSize.xxl, height: ControlHeight.s)
       .sampleSurface()
   }
 #endif

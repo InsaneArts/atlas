@@ -31,7 +31,7 @@ struct AgentConnection: View {
 
 #if DEBUG
   #Preview("Samples") {
-    VStack(alignment: .trailing, spacing: Spacing.l) {
+    VStack(alignment: .trailing, spacing: Spacing.m) {
       AgentConnection(connection: .connected) {}
       AgentConnection(connection: .connect(isEnabled: true)) {}
       AgentConnection(connection: .connecting) {}

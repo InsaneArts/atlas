@@ -10,7 +10,7 @@ struct WelcomeScreen: View {
     ScreenColumn {
       AppIcon(size: OnboardingLayout.welcomeIcon)
       Headline(title: OnboardingScreen.welcomeTitle, tail: OnboardingScreen.welcomeTail)
-        .padding(.top, Spacing.m)
+        .padding(.top, Spacing.s)
       Lede(
         text:
           "Atlas runs a hidden second login on this Mac. Your agents open their builds there, click through them and come back with screenshots, while you keep working."
@@ -18,7 +18,7 @@ struct WelcomeScreen: View {
       Button("Get Started") { send(.begin) }
         .buttonStyle(.capsule(size: .large))
         .keyboardShortcut(.defaultAction)
-        .padding(.top, Spacing.ml)
+        .padding(.top, Spacing.sPlus)
       Note(text: "You set this up once, in about five minutes. After that Atlas runs by itself.")
     }
   }

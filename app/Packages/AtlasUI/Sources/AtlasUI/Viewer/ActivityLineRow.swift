@@ -29,8 +29,8 @@ struct ActivityLineRow: View {
       Button {
         send(.openShot(shot.name))
       } label: {
-        HStack(spacing: Spacing.m) {
-          PictureTile(picture: shot.thumbnail, radius: Radius.compact)
+        HStack(spacing: Spacing.s) {
+          PictureTile(picture: shot.thumbnail, radius: Radius.extraSmall)
             .frame(width: ViewerLayout.lineThumbnail.width, height: ViewerLayout.lineThumbnail.height)
           Text("Open")
         }

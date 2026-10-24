@@ -13,7 +13,7 @@ struct FieldRow: View {
   var isFlagged = false
 
   var body: some View {
-    HStack(spacing: Spacing.l) {
+    HStack(spacing: Spacing.m) {
       Text(label)
         .font(Typography.font(.body))
         .foregroundStyle(isFlagged ? Color.textAttention : Color.textSecondary)
@@ -35,8 +35,8 @@ struct FieldRow: View {
           .accessibilityHidden(true)
       }
     }
-    .padding(.horizontal, Spacing.xl)
-    .frame(height: ControlHeight.field)
+    .padding(.horizontal, Spacing.mPlus)
+    .frame(height: ControlHeight.l)
     .background {
       if isFlagged {
         RoundedRectangle(cornerRadius: Radius.small)
@@ -48,7 +48,7 @@ struct FieldRow: View {
             RoundedRectangle(cornerRadius: Radius.small)
               .strokeBorder(Color.attention, lineWidth: Stroke.regular)
           )
-          .padding(Spacing.xxs)
+          .padding(Spacing.half)
       }
     }
   }

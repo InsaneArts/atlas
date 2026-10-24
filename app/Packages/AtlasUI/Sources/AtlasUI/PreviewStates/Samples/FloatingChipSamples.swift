@@ -4,7 +4,7 @@
   /// The floating chip's samples at each size: a notice, the chip at the top, and the mini screen's Live.
   struct FloatingChipSamples: View {
     var body: some View {
-      VStack(spacing: Spacing.m) {
+      VStack(spacing: Spacing.s) {
         FloatingChip {
           Text(verbatim: "Control released.")
         }

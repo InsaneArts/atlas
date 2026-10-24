@@ -7,7 +7,7 @@ struct CaptionStack: View {
   let entries: [ActivityEntry]
 
   var body: some View {
-    VStack(alignment: .leading, spacing: Spacing.s) {
+    VStack(alignment: .leading, spacing: Spacing.xsPlus) {
       // An entry's id is its place in the service's list of recent actions, the one identity the service gives.
       ForEach(entries) { entry in
         FloatingChip {

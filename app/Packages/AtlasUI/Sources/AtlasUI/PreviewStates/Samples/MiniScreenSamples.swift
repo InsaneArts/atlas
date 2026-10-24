@@ -6,13 +6,13 @@
     var body: some View {
       Group {
         if let picture = SampleDesktop.picture {
-          HStack(spacing: Spacing.section) {
+          HStack(spacing: Spacing.xxl) {
             MiniScreen(state: MiniScreenState(picture: picture)) {}
             MiniScreen(state: MiniScreenState(picture: picture, isPaused: true)) {}
           }
         }
       }
-      .padding(Spacing.section)
+      .padding(Spacing.xxl)
       .sampleSurface()
     }
   }

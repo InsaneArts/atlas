@@ -55,7 +55,7 @@ struct StatusDot: View {
   private var side: CGFloat {
     switch (mark, size) {
     case (.square, _): Layout.square
-    case (.small, _), (_, .small): IconSize.dot
+    case (.small, _), (_, .small): IconSize.xxs
     case (_, .regular): Layout.regular
     }
   }

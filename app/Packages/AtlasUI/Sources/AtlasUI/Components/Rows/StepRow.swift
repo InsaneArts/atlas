@@ -12,14 +12,14 @@ struct StepRow: View {
   let state: StepState
 
   var body: some View {
-    HStack(spacing: Spacing.l) {
+    HStack(spacing: Spacing.m) {
       Disc(content: disc, tone: discTone)
         .accessibilityHidden(true)
       TitleDetail(title: title, detail: detail, titleTone: state == .waiting ? .secondary : .primary, wraps: true)
       Spacer(minLength: .zero)
     }
-    .padding(.horizontal, Spacing.xl)
-    .padding(.vertical, Spacing.l)
+    .padding(.horizontal, Spacing.mPlus)
+    .padding(.vertical, Spacing.m)
     .cardSurface(state == .current ? .accent : .neutral)
     .accessibilityElement(children: .combine)
     .accessibilityValue(state.spokenValue)

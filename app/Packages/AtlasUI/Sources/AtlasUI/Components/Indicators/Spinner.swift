@@ -3,7 +3,7 @@ import SwiftUI
 /// A small turning arc; still when Reduce Motion is on.
 struct Spinner: View {
   /// The spinner's side, in points.
-  var size = IconSize.glyph
+  var size = IconSize.xs
   @State private var turning = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 

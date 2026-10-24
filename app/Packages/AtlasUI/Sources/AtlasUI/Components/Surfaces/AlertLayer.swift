@@ -19,7 +19,7 @@ struct AlertLayer<ID: Hashable & Sendable>: View {
         .transition(reduceMotion ? .identity : .opacity)
       }
     }
-    .animation(reduceMotion ? nil : Motion.fade, value: state == nil)
+    .animation(Motion.animation(Motion.fade, reduceMotion: reduceMotion), value: state == nil)
   }
 }
 

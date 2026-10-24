@@ -19,7 +19,7 @@ struct BlockedScreen: View {
       Button("Check Again") { send(.checkAgain) }
         .buttonStyle(.capsule(size: .large))
         .keyboardShortcut(.defaultAction)
-        .padding(.top, Spacing.m)
+        .padding(.top, Spacing.s)
     }
   }
 }

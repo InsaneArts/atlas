@@ -12,11 +12,11 @@ struct PermissionPanel<DragIcon: View>: View {
 
   /// The icon, what to do, both permissions, the pill and Back.
   var body: some View {
-    VStack(spacing: Spacing.xl) {
+    VStack(spacing: Spacing.mPlus) {
       GroupLabel(text: state.label)
       dragIcon
         .frame(width: OnboardingLayout.dragIcon, height: OnboardingLayout.dragIcon)
-      VStack(spacing: Spacing.s) {
+      VStack(spacing: Spacing.xsPlus) {
         Headline(title: state.instruction, size: .compact)
         Note(text: state.alreadyListed)
       }
@@ -25,13 +25,13 @@ struct PermissionPanel<DragIcon: View>: View {
         SeparatorLine()
         PermissionRow(permission: state.screenRecording, symbol: "rectangle.dashed", detail: "Take screenshots")
       }
-      Spacer(minLength: Spacing.m)
+      Spacer(minLength: Spacing.s)
       ProgressPill(text: state.pill, done: state.isOn)
       Button("Back") { send(.closePanel) }
         .buttonStyle(.capsule(.plain))
         .keyboardShortcut(.cancelAction)
     }
-    .padding(.horizontal, Spacing.section)
+    .padding(.horizontal, Spacing.xxl)
     .padding(.top, OnboardingLayout.panelTop)
     .padding(.bottom, OnboardingLayout.panelBottom)
   }
