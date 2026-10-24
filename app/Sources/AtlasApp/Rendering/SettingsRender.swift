@@ -33,6 +33,9 @@
       "23-helper-leftover",
       "24-helper-closing",
       "25-helper-still-logged-in",
+      "26-claude-code-only",
+      "27-claude-app-only",
+      "28-claude-partly-connected",
     ]
 
     /// Every Settings state drawn for visual checks, by file name.

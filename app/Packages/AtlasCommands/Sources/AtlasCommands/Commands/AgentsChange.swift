@@ -15,9 +15,11 @@ public struct AgentsChange: Decodable, Sendable {
 
   /// The agents it connected.
   public var connected: [AgentID] {
-    agents
-      .filter { $0.ok == true }
-      .compactMap { AgentID(rawValue: $0.agent) }
+    AgentID.allCases
+      .filter { id in
+        let parts = agents.filter { $0.agent == id.rawValue || (id == .claude && $0.agent == AgentsStatus.claudeAppID) }
+        return !parts.isEmpty && parts.allSatisfy { $0.ok == true }
+      }
   }
 
   /// The agents it could not connect, each with why, in the command's order; an agent this app does not know is
@@ -26,8 +28,11 @@ public struct AgentsChange: Decodable, Sendable {
     agents
       .filter { $0.ok != true }
       .compactMap { row in
-        AgentID(rawValue: row.agent)
-          .map { ($0, row.error ?? "") }
+        AgentID(rawValue: row.agent == AgentsStatus.claudeAppID ? AgentID.claude.rawValue : row.agent)
+          .map { id in
+            let reason = row.error ?? "it didn't connect"
+            return (id, id == .claude ? "\(AgentsStatus.partTitle(row.agent)): \(reason)" : reason)
+          }
       }
   }
 }

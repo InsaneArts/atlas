@@ -15,6 +15,10 @@ struct ViewerShotsFacts {
   var selected: String?
   /// Whether Esc cleared the selection, so none is ringed until one is picked or stepped to.
   var selectionCleared = false
+  /// Keyboard moves made, so only a deliberate move asks the grid to scroll.
+  var scrollRequest = 0
+  /// The column to return to after crossing a short row; reset by a click or a horizontal move.
+  var navigationColumn: Int?
   /// The screenshot shown large, by name; nil shows none.
   var large: String?
   /// The large screenshot as taken, once read.

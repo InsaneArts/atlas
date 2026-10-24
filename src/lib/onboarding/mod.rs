@@ -1553,6 +1553,11 @@ pub fn login(config_path: &Path, on: bool) -> Result<Value> {
 mod tests {
     #[test]
     fn setup_without_orphans_excludes_teardown_and_keeps_its_executor_after_caller_death() {
+        if !crate::transaction_test::isolated(
+            "onboarding::tests::setup_without_orphans_excludes_teardown_and_keeps_its_executor_after_caller_death",
+        ) {
+            return;
+        }
         for mode in ["selected", "allocated"] {
             crate::transaction_test::interrupted_executor(
                 "onboarding::tests::an_account_setup_test_caller",
@@ -1563,6 +1568,11 @@ mod tests {
 
     #[test]
     fn interactive_creation_keeps_its_worker_claim_after_the_caller_dies() {
+        if !crate::transaction_test::isolated(
+            "onboarding::tests::interactive_creation_keeps_its_worker_claim_after_the_caller_dies",
+        ) {
+            return;
+        }
         crate::transaction_test::interrupted_executor(
             "onboarding::tests::an_account_setup_test_caller",
             "interactive",
@@ -1578,7 +1588,7 @@ mod tests {
         if std::env::var("ATLAS_MUTATION_TEST_MODE").unwrap() == "interactive" {
             let controller = Controller::at(7001, &directory.join("state"));
             let _ = init::setup_transaction(&controller, || {
-                let script = r#"print -r -- $$ > "$4"; /usr/bin/touch "$2" "$3"; while [[ ! -e $1 ]]; do /bin/sleep 0.01; done"#;
+                let script = r#"print -r -- $$ > "$4"; /usr/bin/touch "$3" "$2"; while [[ ! -e $1 ]]; do /bin/sleep 0.01; done"#;
                 let paths = [
                     directory.join("continue"),
                     directory.join("paused"),
@@ -1606,6 +1616,11 @@ mod tests {
 
     #[test]
     fn setup_requires_its_own_acknowledgement_even_when_every_orphan_is_gone() {
+        if !crate::transaction_test::isolated(
+            "onboarding::tests::setup_requires_its_own_acknowledgement_even_when_every_orphan_is_gone",
+        ) {
+            return;
+        }
         for outcome in ["complete", "refused", "partial", "unknown"] {
             let directory = tempfile::tempdir().unwrap();
             let controller = Controller::at(7001, directory.path());
@@ -1650,6 +1665,11 @@ mod tests {
     }
     #[test]
     fn preparing_an_account_holds_every_orphan_and_records_interrupted_cleanup() {
+        if !crate::transaction_test::isolated(
+            "onboarding::tests::preparing_an_account_holds_every_orphan_and_records_interrupted_cleanup",
+        ) {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let controllers = [
             Controller::at(7001, dir.path()),
@@ -1938,6 +1958,11 @@ mod tests {
 
     #[test]
     fn every_leftover_login_closes_under_one_approval() {
+        if !crate::transaction_test::isolated(
+            "onboarding::tests::every_leftover_login_closes_under_one_approval",
+        ) {
+            return;
+        }
         let targets = [
             Target::Orphan(7001),
             Target::Leftover {
@@ -1987,6 +2012,11 @@ mod tests {
 
     #[test]
     fn closing_leftover_logins_holds_the_helper_and_keeps_an_unknown_outcome() {
+        if !crate::transaction_test::isolated(
+            "onboarding::tests::closing_leftover_logins_holds_the_helper_and_keeps_an_unknown_outcome",
+        ) {
+            return;
+        }
         let targets = [Target::Orphan(7001), Target::Orphan(503)];
         let dir = tempfile::tempdir().unwrap();
         let held = controller(dir.path());
@@ -2052,6 +2082,11 @@ mod tests {
 
     #[test]
     fn the_helper_is_logged_out_as_root_only_under_control_held_throughout() {
+        if !crate::transaction_test::isolated(
+            "onboarding::tests::the_helper_is_logged_out_as_root_only_under_control_held_throughout",
+        ) {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let held = controller(dir.path());
 
@@ -2098,6 +2133,11 @@ mod tests {
 
     #[test]
     fn a_log_out_as_root_stays_pending_until_the_login_is_seen_gone() {
+        if !crate::transaction_test::isolated(
+            "onboarding::tests::a_log_out_as_root_stays_pending_until_the_login_is_seen_gone",
+        ) {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let held = controller(dir.path());
 
@@ -2140,6 +2180,11 @@ mod tests {
 
     #[test]
     fn a_root_run_whose_reply_was_lost_stays_pending_though_the_login_looks_gone() {
+        if !crate::transaction_test::isolated(
+            "onboarding::tests::a_root_run_whose_reply_was_lost_stays_pending_though_the_login_looks_gone",
+        ) {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let held = controller(dir.path());
         let ownership = held.acquire(true).unwrap();
@@ -2163,6 +2208,11 @@ mod tests {
 
     #[test]
     fn a_log_out_root_never_started_leaves_nothing_pending() {
+        if !crate::transaction_test::isolated(
+            "onboarding::tests::a_log_out_root_never_started_leaves_nothing_pending",
+        ) {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let held = controller(dir.path());
         let ownership = held.acquire(true).unwrap();

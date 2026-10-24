@@ -41,13 +41,14 @@ struct OnboardingPresenterFinishingTests {
       agent.checked = true
       agent.found = found
       agent.connected = connected
+      agent.parts = [id.rawValue]
       return agent
     }
     var snapshot = Samples.snapshot(try Samples.person(Samples.helper(), finished: true))
     snapshot.agents = [agent(.claude, found: true, connected: true), agent(.codex, found: true, connected: false)]
     let state = OnboardingPresenter.agents(snapshot)
-    #expect(state.agents.map(\.title) == ["Claude Code", "Codex"])
-    #expect(state.agents.map(\.detail) == ["Connected", "Found"])
+    #expect(state.agents.map(\.title) == ["Claude", "Codex"])
+    #expect(state.agents.map(\.detail) == ["Claude Code · Connected", "Found"])
     #expect(state.agents.map(\.isOn) == [true, false], "a connected agent's switch is on")
     snapshot.agents[1].on = true
     #expect(OnboardingPresenter.agents(snapshot).agents[1].detail == "Gets the Atlas skill", "Continue connects it")
@@ -73,7 +74,7 @@ struct OnboardingPresenterFinishingTests {
     var snapshot = Samples.snapshot(try Samples.person(Samples.helper(), finished: true))
     snapshot.agents = AgentChoice.all
     #expect(
-      OnboardingPresenter.agents(snapshot).agents.map(\.icon) == [.tile(.symbol("asterisk")), .tile(.text(">_"))]
+      OnboardingPresenter.agents(snapshot).agents.map(\.icon) == [.app(AgentLogos.claude), .app(AgentLogos.codex)]
     )
     let pixel = try #require(
       CGContext(

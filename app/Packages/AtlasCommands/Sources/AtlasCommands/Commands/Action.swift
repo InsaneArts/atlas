@@ -42,6 +42,8 @@ public enum Action: Sendable, Equatable {
   case agentsStatus
   /// Connect these agents.
   case installAgents([AgentID])
+  /// Connect or disconnect the named CLI components in one command.
+  case changeAgentParts([String], remove: Bool)
   /// Connect the Claude app alone.
   case connectClaudeApp
   /// Take the Atlas section out of the project in this folder, and off the list of projects taught.
@@ -90,6 +92,9 @@ public enum Action: Sendable, Equatable {
     case .markWindow(let open): ["onboarding", "window", open ? "open" : "closed"]
     case .agentsStatus: ["agents", "status"]
     case .installAgents(let agents): ["agents", "install"] + agents.map { "--\($0.rawValue)" }
+    case .changeAgentParts(let parts, let remove):
+      ["agents", remove ? "remove" : "install"]
+        + parts.map { $0 == AgentsStatus.claudeAppID ? "--app" : "--\($0)" }
     case .connectClaudeApp: ["agents", "install", "--app"]
     // The person confirmed in Settings.
     case .forgetProject(let path): ["agents", "forget", path]

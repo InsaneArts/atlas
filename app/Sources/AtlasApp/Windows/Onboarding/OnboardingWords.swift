@@ -108,6 +108,9 @@ enum OnboardingWords {
   /// - Returns: "Codex: not installed."
   static func notConnected(_ agent: AgentID, _ message: String) -> String {
     let reason = message.isEmpty ? "it didn’t connect" : message
+    if agent == .claude, message.hasPrefix("Claude Code:") || message.hasPrefix("The Claude app:") {
+      return Words.sentence(reason)
+    }
     return "\(agentTitle(agent)): \(Words.sentence(reason))"
   }
 }

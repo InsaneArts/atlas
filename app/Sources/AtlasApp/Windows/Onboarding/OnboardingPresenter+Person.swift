@@ -122,7 +122,7 @@ extension OnboardingPresenter {
   static func agents(_ snapshot: OnboardingSnapshot) -> OnboardingAgentsScreenState {
     OnboardingAgentsScreenState(
       agents: snapshot.agents.map { agent in
-        let detail =
+        let status =
           if !agent.checked {
             snapshot.agentsFailed ? OnboardingWords.agentNotChecked : StatusWord.checking.text
           } else if agent.connected {
@@ -132,10 +132,13 @@ extension OnboardingPresenter {
           } else {
             OnboardingWords.agentMissing
           }
+        let parts = Words.agentParts(agent.parts)
+        let claudeDetail = agent.connected ? "\(parts) · \(OnboardingWords.agentConnected)" : parts
         return OnboardingAgentItem(
           id: agent.id.rawValue,
           title: OnboardingWords.agentTitle(agent.id),
-          detail: detail,
+          detail: agent.problem
+            ?? (agent.id == .claude && agent.found ? claudeDetail : status),
           icon: AgentRowIcons.icon(agent.id.rawValue, snapshot.agentIcons),
           isOn: agent.on || agent.connected,
           isEnabled: agent.found && !agent.connected

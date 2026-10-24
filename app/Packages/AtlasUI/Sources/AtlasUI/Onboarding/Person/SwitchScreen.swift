@@ -15,24 +15,27 @@ struct SwitchScreen: View {
       StepList(steps: Self.steps(state))
         .padding(.top, OnboardingLayout.Rhythm.paragraph)
       StatusSlot(line: status)
-        .lineLimit(Self.statusLines(state))
+        .lineLimit(Self.statusLines(state, note: note))
         .truncationMode(.middle)
     }
   }
 
   /// What happens next while nothing runs or failed, else the work note.
-  private var status: StatusLine? {
-    guard let waiting = state.waiting else { return StatusLine(note: note) }
+  var status: StatusLine? {
+    if let line = StatusLine(note: note) { return line }
+    guard let waiting = state.waiting else { return nil }
     return StatusLine(kind: .working, text: waiting)
   }
 
   /// How many lines the status line may take: two at most for what happens next, which names the helper and is cut in
   /// its middle; as many as a work note needs, so a failure never loses its cause or what to do.
   ///
-  /// - Parameter state: The switch screen.
+  /// - Parameters:
+  ///   - state: The switch screen.
+  ///   - note: Work or a problem, which takes as many lines as it needs.
   /// - Returns: The most lines, or nil for no limit.
-  static func statusLines(_ state: OnboardingSwitchScreenState) -> Int? {
-    state.waiting == nil ? nil : OnboardingLayout.nameLines
+  static func statusLines(_ state: OnboardingSwitchScreenState, note: WorkNote = .none) -> Int? {
+    state.waiting == nil || StatusLine(note: note) != nil ? nil : OnboardingLayout.nameLines
   }
 
   /// Logging in, Atlas opening there, and allowing it, each where the helper's progress puts it.

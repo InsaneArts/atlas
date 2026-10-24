@@ -18,7 +18,7 @@ final class ViewerController {
     didSet { dependencies.preferences.saveDetails(details.shown) }
   }
   /// The window is on screen.
-  @ObservationIgnored private(set) var shown = false
+  private(set) var shown = false
   /// What it reaches outside itself, which its parts are made from.
   @ObservationIgnored let dependencies: ViewerDependencies
   /// The moment a Recover that worked holds before its alert closes, which Done ends at once.
@@ -31,6 +31,9 @@ final class ViewerController {
   @ObservationIgnored private(set) lazy var panesModel = ViewerPanesModel(viewer: self, dependencies: dependencies)
   /// Waits for a state that asks something of the person to hold before VoiceOver says it.
   @ObservationIgnored private var announcing: Task<Void, Never>?
+
+  /// The asking text already scheduled or spoken; unchanged readings never restart its hold.
+  @ObservationIgnored private var announcedStatus: String?
 
   /// 1 s: how long a state that asks something of the person holds before VoiceOver says it, so a state that flickers
   /// says nothing and two in a row say only the last.
@@ -159,6 +162,8 @@ final class ViewerController {
   ///
   /// - Parameter text: What VoiceOver should say now, from ``askingStatus``.
   func announceSoon(_ text: String?) {
+    guard text != announcedStatus else { return }
+    announcedStatus = text
     announcing?.cancel()
     announcing = nil
     guard let text else {

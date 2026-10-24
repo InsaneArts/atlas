@@ -90,7 +90,9 @@ Examples:
 ## atlas agents status
 
 ```text
-Which agents are on this Mac and whether Atlas is connected
+Which agents are on this Mac and whether Atlas is connected.
+
+JSON keeps Claude Code (`claude`) and the Claude app (`claude-app`) as separate connection parts. Atlas.app groups them into one Claude row, connected only when every installed part is connected.
 
 Usage: atlas agents status [OPTIONS]
 
@@ -99,7 +101,7 @@ Options:
           One plain line for an agent's session start
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 
 Global options:
       --json
@@ -158,7 +160,9 @@ Global options:
 ## atlas agents install
 
 ```text
-Connect the plugin to Claude Code and/or Codex (all installed by default)
+Connect the plugin to Claude Code and/or Codex (all installed by default).
+
+Use --claude --app together to connect both Claude parts. Select only the parts installed on this Mac. JSON reports each part's result by id.
 
 Usage: atlas agents install [OPTIONS]
 
@@ -173,7 +177,7 @@ Options:
           Only the Claude app
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 
 Global options:
       --json
@@ -186,7 +190,9 @@ Global options:
 ## atlas agents remove
 
 ```text
-Disconnect the plugin from Claude Code and/or Codex
+Disconnect the plugin from Claude Code and/or Codex.
+
+Use --claude --app together to disconnect both Claude parts.
 
 Usage: atlas agents remove [OPTIONS]
 
@@ -201,7 +207,7 @@ Options:
           Only the Claude app
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 
 Global options:
       --json

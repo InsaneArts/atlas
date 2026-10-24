@@ -6,4 +6,12 @@ public enum ViewerAgentButton: Equatable, Sendable {
   ///
   /// - Parameter isEnabled: Whether it can be pressed: nothing else is asked of the service.
   case resume(isEnabled: Bool)
+
+  /// The full action name shared with the menu, even when the button shows a short word or symbol.
+  public var accessibilityLabel: String {
+    switch self {
+    case .stop: HelperActionNames.stopAgent
+    case .resume: HelperActionNames.resumeAgent
+    }
+  }
 }

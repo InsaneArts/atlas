@@ -33,19 +33,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     container.start()
   }
 
-  /// Atlas is asked to quit, from the Dock, a log-out or anywhere that did not go through Quit Atlas: the main
-  /// window's control goes back first, and Atlas quits once the service has answered.
+  /// Atlas is asked to terminate, from the panel's Quit, the Dock or the system: the main window's control goes back
+  /// first, and Atlas quits once the release is answered or its bounded wait ends.
   ///
   /// - Parameter sender: The app.
   /// - Returns: Now, with no control work under way; later, once it is answered.
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-    guard container.coordinator.holdsUpQuitting else { return .terminateNow }
-    // Unstructured, as AppKit asks synchronously: Atlas quits once the release is answered.
-    Task {
-      await container.coordinator.releaseBeforeQuitting()
+    container.coordinator.prepareToTerminate {
       sender.reply(toApplicationShouldTerminate: true)
     }
-    return .terminateLater
   }
 
   /// The Dock icon's menu: the main window's control, its agent and its picture, while it is open.
@@ -78,11 +74,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     NSApp.terminate(nil)
   }
 
-  /// Quit Atlas (⌘Q): the main window's control goes back, then Atlas quits (``WindowCoordinator/quit(_:)``).
+  /// Quit Atlas (⌘Q): gives control back and closes every window, keeping Atlas in the menu bar.
   ///
   /// - Parameter sender: The menu item.
   @objc func quitFromMenu(_ sender: Any?) {
-    container.coordinator.quit(sender)
+    container.coordinator.closeAllWindows()
   }
 
   /// Settings… (⌘,) in the Atlas menu.

@@ -18,7 +18,7 @@ extension PanelController {
     case .pausePicture:
       guard state.picture.showsScreen else { return false }
       send(.togglePause)
-    case .openAtlas, .openSettings, .quit:
+    case .openAtlas, .openSettings, .closeWindows:
       return false
     }
     return true

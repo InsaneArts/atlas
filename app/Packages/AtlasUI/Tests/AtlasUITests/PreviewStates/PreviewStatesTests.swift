@@ -140,6 +140,27 @@
       #expect(states.contains { $0.helper.ready.contains { $0.item.state != .ready } }, "a check not ready")
     }
 
+    @Test("setup and Settings previews and renders use the bundled original logos for every agent")
+    func agentPreviewsUseLogos() {
+      for preview in PreviewStates.settings {
+        #expect(preview.value.agents.agents.map(\.id) == ["claude", "codex"])
+        #expect(preview.value.agents.agents.first?.title == "Claude")
+        for agent in preview.value.agents.agents {
+          let expected = agent.id == "codex" ? AgentLogos.codex : AgentLogos.claude
+          #expect(agent.icon == .app(expected))
+        }
+      }
+      for preview in PreviewStates.onboarding {
+        guard case .screen(.agents(let screen)) = preview.value.content else { continue }
+        #expect(screen.agents.map(\.id) == ["claude", "codex"])
+        #expect(screen.agents.first?.title == "Claude")
+        for agent in screen.agents {
+          let expected = agent.id == "codex" ? AgentLogos.codex : AgentLogos.claude
+          #expect(agent.icon == .app(expected))
+        }
+      }
+    }
+
     @Test("the onboarding previews show every screen")
     func onboardingPreviewsCoverEveryScreen() {
       let shown = Set(

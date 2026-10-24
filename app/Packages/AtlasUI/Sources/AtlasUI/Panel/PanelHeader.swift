@@ -38,6 +38,7 @@ struct PanelHeader: View {
       }
       .help("More")
       .accessibilityLabel("More")
+      .accessibilityHint("Opens a menu")
     }
     .padding(.horizontal, Spacing.half)
   }

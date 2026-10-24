@@ -25,19 +25,27 @@ pub struct Account {
 }
 
 /// Parse `dscl . -list /Users UniqueID` into (name, uid) for ordinary logins.
-fn parse_accounts(listing: &str) -> Vec<(String, u32)> {
-    listing
-        .lines()
-        .filter_map(|line| {
-            let mut columns = line.split_whitespace();
-            let name = columns.next()?;
-            let uid = columns.next()?.parse::<u32>().ok()?;
-            // System accounts live below the first user ID or start with an
-            // underscore.
-            (uid >= crate::setup::FIRST_USER_UID && !name.starts_with('_'))
-                .then(|| (name.to_owned(), uid))
-        })
-        .collect()
+fn parse_accounts(listing: &str) -> Result<Vec<(String, u32)>> {
+    let mut accounts = Vec::new();
+    for line in listing.lines() {
+        let unreadable = || Error::new("switch", "Could not read an account's user ID");
+        let mut columns = line.split_whitespace();
+        let name = columns.next().ok_or_else(unreadable)?;
+        let uid = columns
+            .next()
+            .and_then(|word| word.parse::<i64>().ok())
+            .ok_or_else(unreadable)?;
+        if uid < 0 {
+            continue;
+        }
+        let uid = u32::try_from(uid).map_err(|_| unreadable())?;
+        // System accounts live below the first user ID or start with an
+        // underscore.
+        if uid >= crate::setup::FIRST_USER_UID && !name.starts_with('_') {
+            accounts.push((name.to_owned(), uid));
+        }
+    }
+    Ok(accounts)
 }
 
 /// Accounts other than this one, the helper first.
@@ -58,12 +66,13 @@ pub fn accounts(helper: Option<u32>) -> Result<Vec<Account>> {
     }
 
     let me = nix::unistd::getuid().as_raw();
-    Ok(listed(
-        &String::from_utf8_lossy(&output.stdout),
+    listed(
+        std::str::from_utf8(&output.stdout)
+            .map_err(|_| Error::new("switch", "Could not read the accounts"))?,
         me,
         helper,
         crate::setup::real_name,
-    ))
+    )
 }
 
 /// The ordinary logins in `listing` other than `me`, the helper first,
@@ -73,8 +82,8 @@ fn listed(
     me: u32,
     helper: Option<u32>,
     real_name: impl Fn(&str) -> Option<String>,
-) -> Vec<Account> {
-    let mut accounts: Vec<Account> = parse_accounts(listing)
+) -> Result<Vec<Account>> {
+    let mut accounts: Vec<Account> = parse_accounts(listing)?
         .into_iter()
         .filter(|(_, uid)| *uid != me)
         .map(|(name, uid)| Account {
@@ -85,7 +94,7 @@ fn listed(
         })
         .collect();
     accounts.sort_by_key(|account| (!account.helper, account.uid));
-    accounts
+    Ok(accounts)
 }
 
 /// The other accounts that are standard (not administrators): the ones
@@ -324,18 +333,29 @@ mod tests {
 
     #[test]
     fn only_ordinary_logins_are_offered() {
-        let listing = "_spotlight 89\nroot 0\ndaemon 1\natlastest 502\ntheiskaa 501\nnobody -2\n";
+        let listing = "_spotlight 89\nroot 0\ndaemon 1\n_unknown 99\natlastest 502\ntheiskaa 501\nnobody -2\n";
         assert_eq!(
-            parse_accounts(listing),
+            parse_accounts(listing).unwrap(),
             vec![("atlastest".into(), 502), ("theiskaa".into(), 501)]
         );
+    }
+
+    #[test]
+    fn account_lists_refuse_garbage_instead_of_omitting_an_account() {
+        for line in ["garbage", "broken NaN", "large 4294967296"] {
+            let listing = format!("nobody -2\ndaemon 1\n_unknown 99\n{line}\natlas 502\n");
+            assert!(
+                listed(&listing, 501, Some(502), |_| None).is_err(),
+                "{line}"
+            );
+        }
     }
 
     #[test]
     fn the_helper_is_listed_first_and_this_login_never() {
         let listing = "zed 504\nme 501\natlas 503\nann 502\n_hidden 600\n";
         let named = |name: &str| (name == "atlas").then(|| "Atlas".to_owned());
-        let accounts = listed(listing, 501, Some(503), named);
+        let accounts = listed(listing, 501, Some(503), named).unwrap();
         let order: Vec<(&str, bool)> = accounts
             .iter()
             .map(|account| (account.name.as_str(), account.helper))
@@ -348,7 +368,7 @@ mod tests {
         );
         assert_eq!(accounts[0].real_name.as_deref(), Some("Atlas"));
 
-        let without = listed(listing, 501, None, |_| None);
+        let without = listed(listing, 501, None, |_| None).unwrap();
         assert!(without.iter().all(|account| !account.helper));
         assert_eq!(without[0].uid, 502);
     }

@@ -177,9 +177,17 @@
           agent.checked = true
           agent.found = true
           agent.on = true
+          agent.parts = id == .claude ? [id.rawValue, AgentsStatus.claudeAppID] : [id.rawValue]
           return agent
         }
       agents.agentsLoaded = true
+      var claudeCode = agents
+      claudeCode.agents[0].parts = [AgentID.claude.rawValue]
+      var claudeApp = agents
+      claudeApp.agents[0].parts = [AgentsStatus.claudeAppID]
+      var claudeFailure = agents
+      claudeFailure.agents[0].hasConnection = true
+      claudeFailure.agents[0].problem = "The Claude app: could not write settings"
       var notChecked = loaded(try person(helper(), finished: true))
       notChecked.agents = AgentChoice.all
       notChecked.agentsFailed = true
@@ -198,7 +206,7 @@
       panel.guiding = .screenRecording
       var panelAllowed = loaded(try helperSide(accessibility: true))
       panelAllowed.guiding = .accessibility
-      let close = loaded(try person(leftovers: [502]))
+      let close = loaded(try person(helper(), leftovers: [502]))
       var closing = close
       closing.working = OnboardingWords.closing
       var cancelled = close
@@ -227,6 +235,9 @@
         "Finishing, failed": failed,
         "Agents": agents,
         "Agents, not checked": notChecked,
+        "Claude Code only": claudeCode,
+        "Claude app only": claudeApp,
+        "Claude connection failed": claudeFailure,
         "Done": done,
         "Helper allow": loaded(try helperSide(running: false)),
         "Helper allow, a long name": allowLong,

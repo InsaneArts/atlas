@@ -36,17 +36,18 @@ struct AttentionSignals {
   /// - Parameter status: The service's answer, or nil when the reading failed.
   mutating func read(_ status: ViewerStatus?) {
     guard let status else { return }
+    let firstAnswer = lastAnswer == nil
     let notice = RecoveryNotice.of(earlier: answerBefore, previous: lastAnswer, current: status.overview)
     answerBefore = lastAnswer
     lastAnswer = status.overview
     if let notice, preferences.loadNotify() { notifier.post(notice) }
     // A Needs you that has cleared leaves no notification behind whose Recover would act on what is over.
     let needsPerson = RecoveryNotice.needsPerson(previous: answerBefore, current: status.overview)
-    if neededPerson, !needsPerson { notifier.withdraw() }
+    if firstAnswer || neededPerson, !needsPerson { notifier.withdraw() }
     neededPerson = needsPerson
     // A helper logged in again leaves no notification behind saying it is logged out.
     let loggedOut = status.overview.mode == .loggedOut
-    if wasLoggedOut, !loggedOut { notifier.withdrawLoggedOut() }
+    if firstAnswer || wasLoggedOut, !loggedOut { notifier.withdrawLoggedOut() }
     wasLoggedOut = loggedOut
   }
 

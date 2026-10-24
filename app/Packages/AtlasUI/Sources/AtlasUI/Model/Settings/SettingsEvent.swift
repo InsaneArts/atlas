@@ -21,6 +21,8 @@ public enum SettingsEvent: Equatable, Sendable {
   case closeHelper
   /// Connects the agent with this id.
   case connect(String)
+  /// Disconnects every part of the agent with this id.
+  case disconnect(String)
   /// Asks to forget the project in this folder.
   case askForget(String)
   /// Checks whether a newer Atlas is published.

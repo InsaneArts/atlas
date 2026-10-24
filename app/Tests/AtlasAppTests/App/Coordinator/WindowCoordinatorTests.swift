@@ -67,20 +67,71 @@ struct WindowCoordinatorTests {
     #expect(parts.dockIcon.last == true)
   }
 
-  @Test("⌘Q quits Atlas whichever of its windows is in front")
-  func quitQuitsFromAnyWindow() async throws {
+  @Test("⌘Q closes every window and the panel while Atlas keeps running", arguments: 0..<4)
+  func commandQClosesEveryWindow(keyWindow: Int) async throws {
     let parts = StandInParts()
+    let panel = PanelController.scripted(ScriptedService())
+    parts.panel = panel
     let coordinator = parts.coordinator()
+    coordinator.showAlert(.recover)
     coordinator.openViewer()
+    coordinator.openSettings()
     coordinator.showOnboarding()
-    let viewer = try #require(parts.windows.first)
-    viewer.isKeyWindow = true
-    coordinator.quit(nil)
-    try await settle("Atlas never quit") { parts.terminations == 1 }
+    try #require(parts.windows.count == 4)
+    parts.windows[keyWindow].isKeyWindow = true
+    coordinator.closeAllWindows()
+    try await settle("Atlas never closed its panel") { parts.panelClosures == 1 }
+    #expect(parts.windows.allSatisfy { !$0.isPresented })
+    #expect(coordinator.viewer == nil)
+    #expect(coordinator.settings == nil)
+    #expect(coordinator.onboarding == nil)
+    #expect(coordinator.alert == nil)
+    #expect(parts.dockIcon.last == false)
+    #expect(parts.panelClosures == 1)
+    #expect(parts.panel === panel)
+    #expect(parts.terminations == 0)
+    coordinator.openViewer()
+    #expect(coordinator.viewer?.window.isPresented == true)
   }
 
-  @Test("⌘Q gives the main window's control back, and Atlas quits only once the service has answered the release")
-  func quitReleasesControlBeforeQuitting() async throws {
+  @Test("⌘Q waits for the release answer before closing any window", arguments: [true, false])
+  func commandQReleasesBeforeClosing(fromPanel: Bool) async throws {
+    let service = ScriptedService()
+    let controller = try await ViewerController.watching(service)
+    let parts = StandInParts()
+    parts.makeViewer = { controller }
+    let coordinator = parts.coordinator()
+    coordinator.showAlert(.recover)
+    coordinator.openViewer()
+    coordinator.openSettings()
+    coordinator.showOnboarding()
+    await controller.control.takeControl()
+    try #require(controller.control.lease == "lease")
+    service.hold = ["release"]
+    #expect(coordinator.holdsUpQuitting)
+    if fromPanel {
+      coordinator.panelLinks()
+        .closeWindows()
+    } else {
+      coordinator.closeAllWindows()
+    }
+    try await settle("the release never reached the service") { service.held["release"] != nil }
+    let clock = try #require(parts.clock as? ManualClock)
+    coordinator.closeAllWindows()
+    clock.advance(by: WindowCoordinator.quitWait)
+    #expect(parts.windows.allSatisfy { $0.isPresented })
+    #expect(parts.terminations == 0)
+    service.resume("release")
+    try await settle("Atlas never closed its panel") { parts.panelClosures == 1 }
+    #expect(parts.windows.allSatisfy { !$0.isPresented })
+    #expect(!controller.barrier.isBusy)
+    #expect(controller.control.lease == nil)
+    #expect(parts.terminations == 0)
+    controller.close()
+  }
+
+  @Test("the panel's Quit Atlas releases control before terminating")
+  func panelQuitReleasesBeforeTerminating() async throws {
     let service = ScriptedService()
     let controller = try await ViewerController.watching(service)
     let parts = StandInParts()
@@ -88,13 +139,16 @@ struct WindowCoordinatorTests {
     let coordinator = parts.coordinator()
     coordinator.openViewer()
     await controller.control.takeControl()
-    try #require(controller.control.lease == "lease")
-    #expect(coordinator.holdsUpQuitting)
+    service.hold = ["release"]
     var releasedFirst = false
     parts.quitting = {
       releasedFirst = service.log.contains("release lease") && !controller.barrier.isBusy
     }
-    coordinator.quit(nil)
+    coordinator.panelLinks()
+      .quit()
+    try await settle("the release never reached the service") { service.held["release"] != nil }
+    #expect(parts.terminations == 0)
+    service.resume("release")
     try await settle("Atlas never quit") { parts.terminations == 1 }
     #expect(releasedFirst, "the release reached the service and was answered before Atlas quit")
     #expect(controller.control.lease == nil)
@@ -102,11 +156,65 @@ struct WindowCoordinatorTests {
     controller.close()
   }
 
+  @Test("AppKit termination from Dock quit, log-out or shutdown proceeds immediately without control")
+  func terminationWithoutControl() {
+    let parts = StandInParts()
+    let coordinator = parts.coordinator()
+    let reply = coordinator.prepareToTerminate { Issue.record("unexpectedly deferred termination") }
+    #expect(reply == .terminateNow)
+  }
+
+  @Test("log-out or Dock quit proceeds after the answer or ceiling even while ⌘Q waits", arguments: [true, false])
+  func terminationWithControl(releaseAnswers: Bool) async throws {
+    let service = ScriptedService()
+    let controller = try await ViewerController.watching(service)
+    let parts = StandInParts()
+    let clock = try #require(parts.clock as? ManualClock)
+    parts.makeViewer = { controller }
+    let coordinator = parts.coordinator()
+    coordinator.openViewer()
+    await controller.control.takeControl()
+    service.hold = ["release"]
+    let replies = CallCount()
+    coordinator.closeAllWindows()
+    let reply = coordinator.prepareToTerminate { replies.count += 1 }
+    #expect(reply == .terminateLater)
+    try await settle("termination never sent the release") { service.held["release"] != nil }
+    try await clock.untilSleeping(for: WindowCoordinator.quitWait, "termination never started its ceiling")
+    #expect(replies.count == 0)
+    if releaseAnswers {
+      service.resume("release")
+    } else {
+      clock.advance(by: WindowCoordinator.quitWait)
+    }
+    try await settle("AppKit was never allowed to terminate") { replies.count == 1 }
+    #expect(controller.barrier.isBusy == !releaseAnswers)
+    service.resume("release")
+    try await settle("the release never settled") { !controller.barrier.isBusy }
+    controller.close()
+  }
+
+  @Test(
+    "Copy Diagnostics reports success and failure from Settings or setup without a viewer",
+    arguments: [true, false]
+  )
+  func diagnosticsWithoutAViewer(settings: Bool) async {
+    let parts = StandInParts()
+    let coordinator = parts.coordinator()
+    if settings { coordinator.openSettings() } else { coordinator.showOnboarding() }
+    await coordinator.copyDiagnostics()
+    parts.diagnostics = false
+    await coordinator.copyDiagnostics()
+    #expect(parts.diagnosticNotices == [MenuWords.diagnosticsCopied, MenuWords.diagnosticsFailed])
+    #expect(coordinator.viewer == nil)
+  }
+
   @Test("Copy Diagnostics says in the main window whether it copied")
   func copyDiagnosticsSaysWhetherItCopied() async throws {
     let parts = StandInParts()
     let coordinator = parts.coordinator()
     coordinator.openViewer()
+    parts.windows.first?.isKeyWindow = true
     await coordinator.copyDiagnostics()
     #expect(coordinator.viewer?.controller.session.notice == MenuWords.diagnosticsCopied)
     parts.diagnostics = false

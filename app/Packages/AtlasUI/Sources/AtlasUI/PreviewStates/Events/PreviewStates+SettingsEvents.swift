@@ -24,6 +24,12 @@
       case .connect(let id):
         if let index = next.agents.agents.firstIndex(where: { $0.id == id }) {
           next.agents.agents[index].connection = .connected
+          next.agents.agents[index].canDisconnect = true
+        }
+      case .disconnect(let id):
+        if let index = next.agents.agents.firstIndex(where: { $0.id == id }) {
+          next.agents.agents[index].connection = .connect(isEnabled: true)
+          next.agents.agents[index].canDisconnect = false
         }
       case .alertConfirm:
         if next.alert == settingsForget.alert { next.agents.projects.removeFirst() }

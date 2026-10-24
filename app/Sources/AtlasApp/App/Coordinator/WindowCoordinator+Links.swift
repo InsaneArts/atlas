@@ -28,6 +28,7 @@ extension WindowCoordinator {
         return viewer.controller.holdingControl
       },
       giveBack: { [weak self] in self?.releaseViewerControl() },
+      closeWindows: { [weak self] in self?.closeAllWindows() },
       quit: { [weak self] in self?.quit(nil) },
       read: { [weak self] status in self?.parts?.read(status) }
     )

@@ -36,6 +36,8 @@ struct ActionTests {
       (.agentsStatus, ["agents", "status"]),
       (.installAgents([.claude, .codex]), ["agents", "install", "--claude", "--codex"]),
       (.connectClaudeApp, ["agents", "install", "--app"]),
+      (.changeAgentParts(["claude", "claude-app"], remove: false), ["agents", "install", "--claude", "--app"]),
+      (.changeAgentParts(["claude", "claude-app"], remove: true), ["agents", "remove", "--claude", "--app"]),
       (.forgetProject(path: "/Users/me/dev/Opie"), ["agents", "forget", "/Users/me/dev/Opie"]),
       (.doctor, ["doctor", "--verbose"]),
       (.checkForUpdate, ["update", "--check"]),

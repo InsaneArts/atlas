@@ -16,8 +16,11 @@ extension AgentChoice {
   /// - Returns: The agents, in the same order.
   public static func merged(_ agents: [AgentChoice], with rows: [AgentsStatus.Agent]) -> [AgentChoice] {
     var merged = agents
-    for row in rows {
+    for row in AgentsStatus.grouped(rows) {
       guard let index = merged.firstIndex(where: { $0.id.rawValue == row.agent }) else { continue }
+      merged[index].parts = row.parts ?? []
+      merged[index].hasConnection = row.hasConnection == true
+      merged[index].problem = row.error
       merged[index].checked = true
       merged[index].found = row.installed == true
       merged[index].connected = row.connected == true

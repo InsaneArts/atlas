@@ -3,12 +3,15 @@ import AtlasUI
 import CoreGraphics
 import Foundation
 
-/// The icon each agent shows in a list, wherever the app lists agents: the agent's app's own where the app is on this
-/// Mac (the Claude app, and the Codex app, which is not the Codex command line but is the same agent), else a tile of
-/// its own. The icons are read through the caller's dependencies, never the workspace directly.
+/// The original logo each agent shows in a list: its installed app's live icon, else its bundled logo.
+/// Live icons are read through the caller's dependencies, never the workspace directly.
 enum AgentRowIcons {
   /// Each agent's app, by agent id, as its bundle's name.
-  static let apps = [AgentsStatus.claudeAppID: "Claude.app", AgentID.codex.rawValue: "Codex.app"]
+  static let apps = [
+    AgentID.claude.rawValue: "Claude.app",
+    AgentsStatus.claudeAppID: "Claude.app",
+    AgentID.codex.rawValue: "Codex.app",
+  ]
 
   /// The icons of the agents whose apps are installed, in /Applications or the person's own Applications folder.
   ///
@@ -33,7 +36,7 @@ enum AgentRowIcons {
     return icons
   }
 
-  /// An agent's icon: its app's own where the app is on this Mac, else a tile of its own, Claude Code's unlike Codex's.
+  /// An agent's original logo, preferring its installed app's live icon over the bundled image.
   ///
   /// - Parameters:
   ///   - id: The agent's id.
@@ -42,8 +45,8 @@ enum AgentRowIcons {
   static func icon(_ id: String, _ icons: [String: IconImage]) -> RowIcon {
     if let icon = icons[id] { return .app(icon) }
     return switch id {
-    case AgentID.claude.rawValue: .tile(.symbol("asterisk"))
-    case AgentsStatus.claudeAppID: .tile(.symbol("bubble.left"))
+    case AgentID.claude.rawValue, AgentsStatus.claudeAppID: .app(AgentLogos.claude)
+    case AgentID.codex.rawValue: .app(AgentLogos.codex)
     default: .tile(.text(">_"))
     }
   }

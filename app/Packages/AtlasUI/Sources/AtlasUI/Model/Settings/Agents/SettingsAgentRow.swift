@@ -30,6 +30,8 @@ public struct SettingsAgentRow: Equatable, Sendable, Identifiable {
   public var problem: String?
   /// Whether Show File stands beside Connect, opening the file the problem is in.
   public var showsFile: Bool
+  /// Whether any connected parts can be disconnected now.
+  public var canDisconnect: Bool
 
   /// Creates an agent's row.
   ///
@@ -41,6 +43,7 @@ public struct SettingsAgentRow: Equatable, Sendable, Identifiable {
   ///   - connection: Where it stands.
   ///   - problem: Why its last Connect failed; none by default.
   ///   - showsFile: Whether Show File stands beside Connect; not by default.
+  ///   - canDisconnect: Whether connected parts can be disconnected now.
   public init(
     id: String,
     title: String,
@@ -48,7 +51,8 @@ public struct SettingsAgentRow: Equatable, Sendable, Identifiable {
     icon: RowIcon,
     connection: Connection,
     problem: String? = nil,
-    showsFile: Bool = false
+    showsFile: Bool = false,
+    canDisconnect: Bool = false
   ) {
     self.id = id
     self.title = title
@@ -57,5 +61,6 @@ public struct SettingsAgentRow: Equatable, Sendable, Identifiable {
     self.connection = connection
     self.problem = problem
     self.showsFile = showsFile
+    self.canDisconnect = canDisconnect
   }
 }

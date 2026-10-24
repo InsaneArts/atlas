@@ -59,10 +59,10 @@ enum Words {
   /// An agent's name.
   ///
   /// - Parameter agent: The agent.
-  /// - Returns: "Claude Code" or "Codex".
+  /// - Returns: "Claude" or "Codex".
   static func agentTitle(_ agent: AgentID) -> String {
     switch agent {
-    case .claude: "Claude Code"
+    case .claude: "Claude"
     case .codex: "Codex"
     }
   }

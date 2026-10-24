@@ -15,6 +15,58 @@ struct OnboardingControllerCloseTests {
       with: #""candidates": [], "leftoverLogins": [{"uid": 502, "kind": "orphan"}]"#
     )
 
+  @Test(
+    "fresh setup with a leftover login asks for authorization once for either a new or an existing helper",
+    arguments: [true, false]
+  )
+  func freshSetupApprovesOnce(create: Bool) async throws {
+    let fresh = OnboardingReplies.freshMac
+      .replacingOccurrences(
+        of: #""candidates": []"#,
+        with: #""candidates": [{"name": "qa"}], "leftoverLogins": [{"uid": 502, "kind": "orphan"}]"#
+      )
+    let commands = ScriptedCommands([
+      "onboarding status": fresh,
+      "onboarding create": #"{"ok": true, "readied": true}"#,
+      "onboarding choose": #"{"ok": true, "readied": true}"#,
+    ])
+    // Each privileged command stands in for its authorization call; neither polling nor choosing New asks.
+    var authorizations = 0
+    commands.whileRunning { arguments in
+      if arguments.starts(with: ["onboarding", "create"])
+        || arguments.starts(with: ["onboarding", "choose"])
+        || arguments.starts(with: ["onboarding", "close"])
+      {
+        authorizations += 1
+        commands.answer("onboarding status", OnboardingReplies.switchingMac)
+      }
+    }
+    let controller = OnboardingController.scripted(commands)
+    try await controller.whileOpen { _ in
+      try await controller.untilLoaded()
+      #expect(controller.snapshot.step == .welcome)
+      controller.send(.begin)
+      #expect(controller.snapshot.step == .chooseHelper)
+      await controller.closeLeftovers()
+      #expect(authorizations == 0, "a stale standalone cleanup request cannot add an approval to setup")
+      controller.send(.pick(create ? .newAccount : .existing("qa")))
+      await controller.useHelper()
+      if create {
+        #expect(controller.snapshot.step == .createAccount)
+        #expect(authorizations == 0)
+        var form = controller.snapshot.form
+        form.password = "hunter2"
+        form.verify = "hunter2"
+        controller.update(form)
+        await controller.createAccount()
+      }
+      try await settle("the prepared helper was never read") { controller.snapshot.step == .switchToHelper }
+      #expect(authorizations == 1)
+      #expect(!commands.ran.contains(Action.closeLeftovers.arguments))
+      #expect(controller.snapshot.helperReadied)
+    }
+  }
+
   @Test("a deleted account's open login comes first, and Close It closes it under the person's approval")
   func closeItClosesTheLogin() async throws {
     let commands = ScriptedCommands([

@@ -6,7 +6,7 @@ import AppKit
 protocol WindowPresenting: AnyObject {
   /// Whether the window is open: from its presenting until it closes, minimised included.
   var isPresented: Bool { get }
-  /// Whether the window takes the keyboard now, as `NSWindow` says: ⌘Q closes the key window first.
+  /// Whether the window takes the keyboard now, as `NSWindow` says.
   var isKeyWindow: Bool { get }
   /// Opens the window, or brings it forward when open.
   func present()

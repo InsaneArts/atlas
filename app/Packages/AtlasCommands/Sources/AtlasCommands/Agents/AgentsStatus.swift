@@ -8,6 +8,12 @@ public struct AgentsStatus: Decodable, Sendable {
     public let installed: Bool?
     /// Whether it already knows how to use Atlas.
     public let connected: Bool?
+    /// Why this part could not be checked.
+    public let error: String?
+    /// The installed or connected parts represented by this row.
+    public var parts: [String]? = nil
+    /// Whether at least one part is connected and can be disconnected.
+    public var hasConnection: Bool? = nil
   }
 
   /// One project `atlas agents project` taught.

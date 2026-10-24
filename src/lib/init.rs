@@ -378,16 +378,10 @@ pub(crate) fn free_uid() -> Result<u32> {
         if !output.status.success() {
             return Err(problem("Could not list the user IDs in use"));
         }
-        String::from_utf8(output.stdout)
-            .map_err(|_| problem("Could not read the user IDs in use"))?
-            .lines()
-            .map(|line| {
-                line.split_whitespace()
-                    .last()
-                    .and_then(|word| word.parse().ok())
-                    .ok_or_else(|| problem("Could not read a user ID in use"))
-            })
-            .collect()
+        used_uids(
+            &String::from_utf8(output.stdout)
+                .map_err(|_| problem("Could not read the user IDs in use"))?,
+        )
     };
 
     let accounts = taken("/usr/bin/dscl", &["/Search", "-list", "/Users", "UniqueID"])?;
@@ -395,6 +389,24 @@ pub(crate) fn free_uid() -> Result<u32> {
     available_uid(&accounts, &running, |uid| {
         Ok(setup::account_with_uid(uid)?.is_some())
     })
+}
+
+/// Directory services can list negative system IDs, which cannot collide
+/// with the helper. Any unreadable ID still makes the whole list unusable.
+fn used_uids(listing: &str) -> Result<Vec<u32>> {
+    let mut uids = Vec::new();
+    for line in listing.lines() {
+        let unreadable = || problem("Could not read a user ID in use");
+        let uid = line
+            .split_whitespace()
+            .last()
+            .and_then(|word| word.parse::<i64>().ok())
+            .ok_or_else(unreadable)?;
+        if uid >= 0 {
+            uids.push(u32::try_from(uid).map_err(|_| unreadable())?);
+        }
+    }
+    Ok(uids)
 }
 
 fn available_uid(
@@ -1623,6 +1635,44 @@ async fn verify_step(client: &Client, config: &Config, config_path: &Path) -> Re
 #[cfg(test)]
 mod tests {
     #[test]
+    fn uid_lists_ignore_negative_system_ids_and_keep_nonnegative_ids() {
+        let accounts = super::used_uids(
+            "nobody                  -2\ndaemon                   1\n_unknown                99\nme                     501\n",
+        )
+        .unwrap();
+        assert_eq!(accounts, [1, 99, 501]);
+        let running = super::used_uids("   -2\n     1\n    99\n   502\n").unwrap();
+        assert_eq!(running, [1, 99, 502]);
+        assert_eq!(
+            super::available_uid(&accounts, &running, |_| Ok(false)).unwrap(),
+            503
+        );
+        assert_eq!(
+            super::used_uids("root 0\nhigh 4294967295\n").unwrap(),
+            [0, u32::MAX]
+        );
+    }
+
+    #[test]
+    fn uid_lists_refuse_garbage_missing_ids_and_out_of_range_numbers() {
+        for line in [
+            "garbage",
+            "broken NaN",
+            "",
+            "large 4294967296",
+            "huge 9223372036854775808",
+        ] {
+            let listing = format!("nobody -2\ndaemon 1\n_unknown 99\n{line}\nme 501\n");
+            let error = super::used_uids(&listing).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "Could not read a user ID in use",
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
     fn uid_allocation_skips_directory_accounts_and_processes_and_refuses_lookup_errors() {
         let uid = super::available_uid(&[501], &[502], |uid| Ok(uid == 503)).unwrap();
         assert_eq!(uid, 504);
@@ -1632,6 +1682,11 @@ mod tests {
 
     #[test]
     fn replacing_a_job_keeps_its_executor_claim_after_the_caller_dies() {
+        if !crate::transaction_test::isolated(
+            "init::tests::replacing_a_job_keeps_its_executor_claim_after_the_caller_dies",
+        ) {
+            return;
+        }
         for mode in ["retire", "install", "restore"] {
             crate::transaction_test::interrupted_executor(
                 "init::tests::a_job_installation_test_caller",
@@ -1642,6 +1697,11 @@ mod tests {
 
     #[test]
     fn preparing_and_installing_a_helper_excludes_teardown_after_the_caller_dies() {
+        if !crate::transaction_test::isolated(
+            "init::tests::preparing_and_installing_a_helper_excludes_teardown_after_the_caller_dies",
+        ) {
+            return;
+        }
         for mode in ["prepare", "fresh-install"] {
             crate::transaction_test::interrupted_executor(
                 "init::tests::a_job_installation_test_caller",
@@ -1701,6 +1761,11 @@ mod tests {
 
     #[test]
     fn installation_acknowledgements_settle_only_their_own_setup_mutations() {
+        if !crate::transaction_test::isolated(
+            "init::tests::installation_acknowledgements_settle_only_their_own_setup_mutations",
+        ) {
+            return;
+        }
         let directory = tempfile::tempdir().unwrap();
         let client = crate::transaction_test::client(directory.path());
         let controller = &client.controller;

@@ -25,9 +25,11 @@ struct ViewerTopButtons: View {
       keys
         .actionSlot(actions.keys != .hidden)
       wordOrSymbol(String("Stop"), symbol: .stop, event: .stopAgent, isEnabled: true)
+        .accessibilityLabel(ViewerAgentButton.stop.accessibilityLabel)
         .help(actions.agentHelp)
         .actionSlot(actions.agent == .stop)
       wordOrSymbol(String("Resume"), symbol: .resume, event: .resumeAgent, isEnabled: resumeEnabled)
+        .accessibilityLabel(ViewerAgentButton.resume(isEnabled: resumeEnabled).accessibilityLabel)
         .help(actions.agentHelp)
         .actionSlot(isResume)
       ViewerMainButton(control: actions.control, refusals: actions.refusals, send: send)
@@ -109,7 +111,6 @@ struct ViewerTopButtons: View {
       }
       .buttonStyle(.capsule(.glass, size: .small, outline: .circle))
       .disabled(!isEnabled)
-      .accessibilityLabel(Text(title))
     }
   }
 

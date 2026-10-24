@@ -14,6 +14,8 @@ struct PanelLinks {
   var holdingControl: @MainActor () -> Bool = { false }
   /// Ends the control Atlas's main window holds.
   var giveBack: @MainActor () -> Void = {}
+  /// Gives control back and closes every Atlas window, keeping the menu bar item running.
+  var closeWindows: @MainActor () -> Void = {}
   /// Quits Atlas.
   var quit: @MainActor () -> Void = {}
   /// Hands on each status reading that ended: the service's answer, or nil when the reading failed. The panel reads

@@ -25,6 +25,27 @@ struct LayerPictureTests {
     #expect(asked.keys.isEmpty, "no action was asked for: \\(asked.keys)")
   }
 
+  @Test("pause and resume ease saturation independently while new frames still replace contents immediately")
+  func pauseEasesColourOnly() throws {
+    let layer = CALayer()
+    let picture = LayerPicture(layer: layer)
+    let first = try Self.picture("one")
+    picture.show(ViewerLivePicture(picture: first, saturation: 1, corner: 12))
+    #expect(layer.animationKeys() == nil, "the first picture lands immediately")
+    for saturation in [0.5, 1.0] {
+      picture.show(ViewerLivePicture(picture: first, saturation: saturation, corner: 12))
+      let animation = try #require(layer.animation(forKey: LayerPicture.saturationPath) as? CABasicAnimation)
+      #expect(animation.toValue as? Double == saturation)
+      #expect(animation.duration == Motion.Duration.fade.seconds)
+      #expect(animation.timingFunction == CAMediaTimingFunction(name: .easeOut))
+      let next = try Self.picture("next")
+      picture.show(ViewerLivePicture(picture: next, saturation: saturation, corner: 12))
+      #expect((layer.contents as AnyObject?) === next.image)
+      #expect(layer.animationKeys() == [LayerPicture.saturationPath])
+      #expect(layer.animation(forKey: "contents") == nil)
+    }
+  }
+
   @Test("the window's live slot shows each new frame through its layer, without building its view again")
   @MainActor
   func theLiveSlotShowsEachNewFrame() throws {

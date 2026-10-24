@@ -10,6 +10,9 @@ public struct ViewerShotsState: Equatable, Sendable {
   /// The screenshot shown large over the whole window; nil shows none.
   public var large: ViewerLargeShot?
 
+  /// Keyboard moves made; a change asks the grid to reveal its selected tile.
+  public var scrollRequest: Int
+
   /// Creates the Screenshots pane's state.
   ///
   /// - Parameters:
@@ -17,15 +20,18 @@ public struct ViewerShotsState: Equatable, Sendable {
   ///   - days: The screenshots in their groups.
   ///   - empty: Why no screenshot shows.
   ///   - large: The screenshot shown large.
+  ///   - scrollRequest: Keyboard moves made.
   public init(
     meta: String,
     days: [ViewerShotDay],
     empty: EmptyMessageState? = nil,
-    large: ViewerLargeShot? = nil
+    large: ViewerLargeShot? = nil,
+    scrollRequest: Int = 0
   ) {
     self.meta = meta
     self.days = days
     self.empty = empty
     self.large = large
+    self.scrollRequest = scrollRequest
   }
 }

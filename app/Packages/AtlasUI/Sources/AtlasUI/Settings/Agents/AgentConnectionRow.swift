@@ -9,6 +9,8 @@ struct AgentConnectionRow: View {
   let agent: SettingsAgentRow
   /// Connects the agent.
   let connect: @MainActor () -> Void
+  /// Disconnects all the agent's parts.
+  let disconnect: @MainActor () -> Void
   /// Shows the file its problem is in.
   let showFile: @MainActor () -> Void
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -24,6 +26,10 @@ struct AgentConnectionRow: View {
       leadOpacity: agent.connection == .missing ? Opacity.muted : 1
     ) {
       HStack(spacing: Spacing.m) {
+        if agent.canDisconnect {
+          Button("Disconnect", action: disconnect)
+            .buttonStyle(.textLink(.small))
+        }
         if agent.showsFile {
           Button("Show File", action: showFile)
             .buttonStyle(.textLink(.small))
@@ -77,7 +83,7 @@ struct AgentConnectionRow: View {
     .buttonStyle(.capsule(.glass, size: .mini, isWorking: isWorking))
   }
 
-  /// The agent's icon: its app's own where the app is on this Mac, else its tile.
+  /// The agent's icon: its installed app's icon or its bundled original logo.
   private var lead: ListRow.Lead {
     switch agent.icon {
     case .app(let icon): .image(icon)

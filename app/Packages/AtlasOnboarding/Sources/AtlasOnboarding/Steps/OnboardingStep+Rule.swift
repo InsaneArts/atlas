@@ -10,9 +10,14 @@ extension OnboardingStep {
   }
 
   private static func step(_ facts: OnboardingFacts, _ choices: OnboardingChoices) -> OnboardingStep {
-    // A deleted account's open login can stall the next login, so it is closed first, whatever else is true; once
-    // closed, the screen says so until Continue.
-    if facts.role == .controller, !facts.leftoverLogins.isEmpty || choices.closedLeftovers { return .closeLeftovers }
+    // Creation and preparation close leftover logins inside their own approval. Standalone cleanup is only
+    // needed when setup can continue with the configured helper without choosing or creating an account.
+    let needsChoice = !facts.configured || !facts.helper.exists || (!facts.helper.paired && !facts.helper.answering)
+    if facts.role == .controller,
+      choices.closedLeftovers || (!needsChoice && !facts.leftoverLogins.isEmpty)
+    {
+      return .closeLeftovers
+    }
     if let problem = facts.appProblem { return .blocked(problem) }
     if let problem = facts.setupProblem { return .blocked(problem) }
     if facts.role == .helper {

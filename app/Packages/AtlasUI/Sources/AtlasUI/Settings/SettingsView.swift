@@ -11,20 +11,29 @@ public struct SettingsView: View {
   /// Receives what the person does.
   private let send: @MainActor (SettingsEvent) -> Void
 
+  /// Receives explicit results and alerts for VoiceOver, independently of routine helper status.
+  private let announce: @MainActor (String) -> Void
+
   /// Creates the window's view.
   ///
   /// - Parameters:
   ///   - state: What the window shows.
   ///   - edit: Receives the General pane as the person changed it.
+  ///   - announce: Posts explicit results and alerts to VoiceOver.
   ///   - send: Receives what the person does, and each pane's height.
   public init(
     state: SettingsState,
     edit: @escaping @MainActor (SettingsGeneralState) -> Void,
+    announce: @escaping @MainActor (String) -> Void = {
+      AccessibilityNotification.Announcement($0)
+        .post()
+    },
     send: @escaping @MainActor (SettingsEvent) -> Void
   ) {
     self.state = state
     self.edit = edit
     self.send = send
+    self.announce = announce
   }
 
   /// The header over the selected pane, and the alert over both when one is asked.
@@ -45,20 +54,12 @@ public struct SettingsView: View {
     // Each only when its words change, so a poll that reads the same says nothing.
     .onChange(of: state.alert?.shownTitle) { _, title in if let title { announce(title) } }
     .onChange(of: state.alert?.refusal) { _, refusal in if let refusal { announce(refusal) } }
-    .onChange(of: state.helper.account.status.label) { _, label in announce(label) }
     .onChange(of: state.helper.waiting) { _, waiting in if let waiting { announce(waiting) } }
     .onChange(of: state.helper.notice) { _, notice in if let notice { announce(notice.text) } }
     .onChange(of: state.agents.notice) { _, notice in if let notice { announce(notice.text) } }
     .onChange(of: state.about.status) { _, status in if let status { announce(status.text) } }
   }
 
-  /// Tells VoiceOver what changed.
-  ///
-  /// - Parameter text: The words, final from the state.
-  private func announce(_ text: String) {
-    AccessibilityNotification.Announcement(text)
-      .post()
-  }
 }
 
 #if DEBUG

@@ -36,7 +36,7 @@ enum PanelMoreMenu {
     menu.addItem(item(MenuWords.settings, key: PanelKeys.settings, run: actions.openSettings))
     menu.addItem(item(MenuWords.gettingStarted, key: "", run: actions.gettingStarted))
     menu.addItem(.separator())
-    menu.addItem(item(MenuWords.quit, key: PanelKeys.quit, run: actions.quit))
+    menu.addItem(item(MenuWords.quit, key: "", run: actions.quit))
     return menu
   }
 

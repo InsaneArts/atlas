@@ -547,6 +547,11 @@ mod tests {
 
     #[test]
     fn interrupted_acceptance_keeps_the_requesters_claim_until_its_worker_ends() {
+        if !crate::transaction_test::isolated(
+            "onboarding::acceptance::tests::interrupted_acceptance_keeps_the_requesters_claim_until_its_worker_ends",
+        ) {
+            return;
+        }
         for stage in [
             "prepare",
             "retire",
@@ -601,6 +606,11 @@ mod tests {
 
     #[test]
     fn acceptance_excludes_competing_teardown_through_completion_and_rollback() {
+        if !crate::transaction_test::isolated(
+            "onboarding::acceptance::tests::acceptance_excludes_competing_teardown_through_completion_and_rollback",
+        ) {
+            return;
+        }
         for stage in [
             "prepare",
             "retire",
@@ -836,18 +846,33 @@ mod tests {
 
     #[test]
     fn observing_a_matching_receipt_repairs_a_missing_helper_job_without_authorization() {
+        if !crate::transaction_test::isolated(
+            "onboarding::acceptance::tests::observing_a_matching_receipt_repairs_a_missing_helper_job_without_authorization",
+        ) {
+            return;
+        }
         observe_repair("absent", false, None, false);
         observe_repair("absent", true, Some(42), false);
     }
 
     #[test]
     fn observing_a_matching_receipt_repairs_a_stopped_helper_job_without_authorization() {
+        if !crate::transaction_test::isolated(
+            "onboarding::acceptance::tests::observing_a_matching_receipt_repairs_a_stopped_helper_job_without_authorization",
+        ) {
+            return;
+        }
         observe_repair("regular", true, None, false);
         observe_repair("regular", false, None, false);
     }
 
     #[test]
     fn observing_a_matching_receipt_retries_when_the_helper_cannot_report_its_job() {
+        if !crate::transaction_test::isolated(
+            "onboarding::acceptance::tests::observing_a_matching_receipt_retries_when_the_helper_cannot_report_its_job",
+        ) {
+            return;
+        }
         observe_repair("absent", false, None, true);
     }
 
@@ -889,6 +914,11 @@ mod tests {
 
     #[test]
     fn acceptance_refuses_a_stale_ticket_before_dispatching_setup() {
+        if !crate::transaction_test::isolated(
+            "onboarding::acceptance::tests::acceptance_refuses_a_stale_ticket_before_dispatching_setup",
+        ) {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let controller = Controller::at(7001, dir.path());
         let mut output = Vec::new();

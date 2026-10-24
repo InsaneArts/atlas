@@ -15,7 +15,7 @@
         newest: "just now",
         session: [
           Fact(name: "Logged in", value: "09:12"),
-          Fact(name: "Agents", value: "Claude Code, Codex"),
+          Fact(name: "Agents", value: "Claude, Codex"),
         ]
       )
       return state

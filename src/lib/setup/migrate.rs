@@ -1446,6 +1446,11 @@ mod tests {
 
     #[test]
     fn uncertain_outcomes_stay_pending_and_definitive_ones_settle() {
+        if !crate::transaction_test::isolated(
+            "setup::migrate::tests::uncertain_outcomes_stay_pending_and_definitive_ones_settle",
+        ) {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let mut migration = sandbox(dir.path());
         let step = |migration: &mut Migration| {
@@ -1478,6 +1483,11 @@ mod tests {
 
     #[test]
     fn only_pending_actions_this_setup_owns_let_it_continue() {
+        if !crate::transaction_test::isolated(
+            "setup::migrate::tests::only_pending_actions_this_setup_owns_let_it_continue",
+        ) {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let mut migration = sandbox(dir.path());
         migration.require_owned_pending().unwrap();

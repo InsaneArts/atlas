@@ -63,7 +63,7 @@ final class ViewerControl {
   /// The Mac's double-click speed, in seconds.
   @ObservationIgnored private let doubleClickInterval: @MainActor () -> TimeInterval
   /// The window takes the keyboard.
-  @ObservationIgnored private(set) var focused = true
+  private(set) var focused = true
   /// Numbers each acquisition and release, so a late reply knows it was overtaken.
   @ObservationIgnored private(set) var controlGeneration = 0
   /// The acquisition that waits for a fresh picture, Take Control having resumed a paused one; nil while none waits.

@@ -3,8 +3,8 @@ import AppKit
 /// The icons files show, as the Finder draws them, read through the workspace: the one place Settings' agent
 /// icons reach it.
 enum FileIcons {
-  /// 52: an icon's pixels, twice the 26-point row icon, so it stays sharp on a Retina display.
-  static let pixels: CGFloat = 52
+  /// 60: an icon's pixels, twice the 30-point row icon, so it stays sharp on a Retina display.
+  static let pixels: CGFloat = 60
 
   /// The icon a file or an app shows, by its path.
   ///

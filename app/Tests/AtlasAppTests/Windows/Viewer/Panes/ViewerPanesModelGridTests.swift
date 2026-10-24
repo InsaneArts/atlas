@@ -36,6 +36,61 @@ struct ViewerPanesModelGridTests {
     return viewer
   }
 
+  @Test("vertical arrows cross separate groups and short rows while retaining the preferred column")
+  func arrowsFollowGroupedRows() async throws {
+    let service = ScriptedService()
+    let now = Date(timeIntervalSince1970: 1_792_665_150)
+    let counts = [2, 1, 3, 2]
+    service.shots = counts.enumerated()
+      .flatMap { group, count in
+        (0..<count)
+          .map { column in
+            Screenshot(
+              name: "group-\(group)-\(column).png",
+              takenAt: now.addingTimeInterval(-Double(group) * 86_400 - Double(column))
+            )
+          }
+      }
+    let viewer = try await ViewerController.watching(service, wallClock: { now })
+    defer { viewer.close() }
+    viewer.send(.selectTab(.screenshots))
+    try await settle("the screenshots were never read") { viewer.panes.shots.shots != nil }
+    viewer.send(.shotColumns(2))
+    #expect(ViewerPresenter.shots(viewer.snapshot).days.map { $0.shots.count } == counts)
+    viewer.send(.selectShot("group-0-1.png"))
+    for name in ["group-1-0.png", "group-2-1.png", "group-2-2.png", "group-3-1.png"] {
+      viewer.send(.shotBelow)
+      #expect(ViewerPresenter.selectedShot(viewer.snapshot) == name)
+    }
+    viewer.send(.shotAbove)
+    #expect(ViewerPresenter.selectedShot(viewer.snapshot) == "group-2-2.png")
+    viewer.send(.shotAbove)
+    #expect(ViewerPresenter.selectedShot(viewer.snapshot) == "group-2-1.png")
+    let requests = viewer.panes.shots.scrollRequest
+    await viewer.panesModel.readShots(viewer.panesModel.work.generation)
+    #expect(viewer.panes.shots.scrollRequest == requests, "polling never requests a scroll")
+    viewer.send(.previousShot)
+    #expect(viewer.panes.shots.scrollRequest == requests + 1)
+  }
+
+  @Test("single screenshots in adjacent groups are vertically adjacent even with two columns")
+  func singleTilesInSeparateGroups() async throws {
+    let service = ScriptedService()
+    service.shots = [
+      Screenshot(name: "today.png", takenAt: Date(timeIntervalSince1970: 0)),
+      Screenshot(name: "yesterday.png", takenAt: Date(timeIntervalSince1970: -86_400)),
+    ]
+    let viewer = try await ViewerController.watching(service)
+    defer { viewer.close() }
+    viewer.send(.selectTab(.screenshots))
+    try await settle("the screenshots were never read") { viewer.panes.shots.shots != nil }
+    viewer.send(.shotColumns(2))
+    viewer.send(.shotBelow)
+    #expect(ViewerPresenter.selectedShot(viewer.snapshot) == "yesterday.png")
+    viewer.send(.shotAbove)
+    #expect(ViewerPresenter.selectedShot(viewer.snapshot) == "today.png")
+  }
+
   @Test("the up and down arrows move the selection a row of the grid, never past either end")
   func theArrowsMoveARow() async throws {
     let service = ScriptedService()

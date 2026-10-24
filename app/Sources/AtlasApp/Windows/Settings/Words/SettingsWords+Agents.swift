@@ -20,13 +20,17 @@ extension SettingsWords {
   /// - Returns: "Couldn't connect: its settings file has a mistake", "Couldn't connect: the agent wasn't found", or
   ///   "Couldn't connect".
   static func notConnected(_ message: String) -> String {
-    if isBadSettingsFile(message) { return "Couldn't connect: its settings file has a mistake" }
-    let clauses = message.split(separator: ";", maxSplits: 1)
-    let clause = clauses.first ?? ""
-    let reason = clause.trimmingCharacters(in: .whitespaces)
+    let reason =
+      message
+      .replacingOccurrences(
+        of: "The Claude app's settings file is not valid JSON; fix it or move it aside, then try again",
+        with: "its settings file has a mistake"
+      )
+      .replacingOccurrences(of: "settings file is not valid JSON", with: "settings file has a mistake")
+      .trimmingCharacters(in: .whitespaces)
     guard !reason.isEmpty else { return "Couldn't connect" }
     let line = reason.hasSuffix(".") ? String(reason.dropLast()) : reason
-    return "Couldn't connect: \(line.prefix(1).lowercased())\(line.dropFirst())"
+    return "Couldn't connect: \(line)"
   }
 
   /// Whether a Connect failed on a settings file the person must mend, as `atlas` says when the file isn't valid.

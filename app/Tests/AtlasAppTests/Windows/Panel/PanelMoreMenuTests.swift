@@ -44,7 +44,7 @@ struct PanelMoreMenuTests {
     #expect(titles.first == MenuWords.settings)
   }
 
-  @Test("every item is enabled, and each keeps its shortcut: ⌘O, ⌘, and ⌘Q")
+  @Test("every item is enabled, and only Open Atlas and Settings have shortcuts")
   func everyItemWorks() throws {
     let items = Self.menu(showsOpenAtlas: true)
       .items
@@ -54,14 +54,14 @@ struct PanelMoreMenuTests {
     #expect(keys[PanelWords.openAtlasItem] == "o")
     #expect(keys[MenuWords.settings] == ",")
     #expect(keys[MenuWords.gettingStarted] == "")
-    #expect(keys[MenuWords.quit] == "q")
+    #expect(keys[MenuWords.quit] == "")
   }
 
-  @Test("the panel's ⋯ Settings… and Getting Started… each run their own action")
+  @Test("the panel's ⋯ Settings…, Getting Started… and Quit Atlas each run their own action")
   func itemsRunTheirActions() throws {
     let chosen = ChoiceCount()
     let menu = Self.menu(showsOpenAtlas: true, chosen: chosen)
-    for title in [MenuWords.settings, MenuWords.gettingStarted] {
+    for title in [MenuWords.settings, MenuWords.gettingStarted, MenuWords.quit] {
       let item = try #require(menu.items.first { $0.title == title })
       // The item's own target and action, as the menu sends them: a test process has no running app to route
       // `performActionForItem` through.
@@ -69,14 +69,14 @@ struct PanelMoreMenuTests {
       let action = try #require(item.action)
       _ = target.perform(action, with: item)
     }
-    #expect(chosen.titles == [MenuWords.settings, MenuWords.gettingStarted])
+    #expect(chosen.titles == [MenuWords.settings, MenuWords.gettingStarted, MenuWords.quit])
   }
 
   @Test("the panel answers ⌘O, ⌘, and ⌘Q with Command alone, and lets every other key pass")
   func thePanelAnswersItsShortcuts() {
     #expect(PanelKeys.shortcut(characters: "o", modifiers: .command) == .openAtlas)
     #expect(PanelKeys.shortcut(characters: ",", modifiers: .command) == .openSettings)
-    #expect(PanelKeys.shortcut(characters: "q", modifiers: .command) == .quit)
+    #expect(PanelKeys.shortcut(characters: "q", modifiers: .command) == .closeWindows)
     #expect(PanelKeys.shortcut(characters: ".", modifiers: .command) == .stopOrResume)
     #expect(PanelKeys.shortcut(characters: "P", modifiers: [.command, .shift]) == .pausePicture)
     #expect(PanelKeys.shortcut(characters: "p", modifiers: .command) == nil)

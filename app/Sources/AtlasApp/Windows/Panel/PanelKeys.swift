@@ -1,6 +1,6 @@
 import AppKit
 
-/// The panel's shortcuts: ⌘O, ⌘, and ⌘Q, the same keys its ⋯ menu shows, and ⌘. and ⇧⌘P, the keys its Stop or Resume
+/// The panel's shortcuts: ⌘O and ⌘, as its ⋯ menu shows, ⌘Q to close all windows, and ⌘. and ⇧⌘P, the keys its Stop or Resume
 /// and its pause button name in their tooltips, as the main menu's items have them. While the panel is open Atlas
 /// has no main menu to answer them, so the panel answers them itself.
 enum PanelKeys {
@@ -8,8 +8,8 @@ enum PanelKeys {
   static let openAtlas = "o"
   /// Settings…: ⌘,.
   static let settings = ","
-  /// Quit Atlas: ⌘Q.
-  static let quit = "q"
+  /// Close all windows: ⌘Q.
+  static let closeWindows = "q"
   /// Stop Agent or Resume Agent: ⌘.
   static let stopOrResume = "."
   /// Pause Picture or Resume Picture: ⇧⌘P.
@@ -21,8 +21,8 @@ enum PanelKeys {
     case openAtlas
     /// Open Settings.
     case openSettings
-    /// Quit Atlas.
-    case quit
+    /// Give control back and close all windows.
+    case closeWindows
     /// Stop the agent, or resume agents once stopped.
     case stopOrResume
     /// Pause the panel's picture, or resume it.
@@ -45,7 +45,7 @@ enum PanelKeys {
     switch characters {
     case openAtlas: return .openAtlas
     case settings: return .openSettings
-    case quit: return .quit
+    case closeWindows: return .closeWindows
     case stopOrResume: return .stopOrResume
     default: return nil
     }

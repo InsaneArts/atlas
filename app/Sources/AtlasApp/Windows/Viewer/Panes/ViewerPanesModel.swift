@@ -127,8 +127,8 @@ final class ViewerPanesModel {
     case .toggleShot: toggleShot()
     case .previousShot: stepShot(by: -1)
     case .nextShot: stepShot(by: 1)
-    case .shotAbove: stepShot(by: -panes.shots.columns)
-    case .shotBelow: stepShot(by: panes.shots.columns)
+    case .shotAbove: stepRow(by: -1)
+    case .shotBelow: stepRow(by: 1)
     case .clearShotSelection: clearSelection()
     case .closeShot: closeShot()
     case .copyShot: copyShot()
@@ -248,12 +248,14 @@ final class ViewerPanesModel {
   ///
   /// - Parameter name: The screenshot's file name.
   private func select(_ name: String) {
+    panes.shots.navigationColumn = nil
     panes.shots.selected = name
     panes.shots.selectionCleared = false
   }
 
   /// Esc with nothing shown large: no screenshot is selected until one is picked or stepped to.
   private func clearSelection() {
+    panes.shots.navigationColumn = nil
     panes.shots.selected = nil
     panes.shots.selectionCleared = true
   }
@@ -280,6 +282,7 @@ final class ViewerPanesModel {
   /// - Parameter offset: −1 for Previous, 1 for Next, or a row's count either way.
   func stepShot(by offset: Int) {
     guard let viewer else { return }
+    panes.shots.scrollRequest += 1
     let order = ViewerPresenter.shotOrder(viewer.snapshot)
     guard let from = panes.shots.large ?? ViewerPresenter.selectedShot(viewer.snapshot) else {
       if let first = order.first { select(first) }
@@ -287,6 +290,37 @@ final class ViewerPanesModel {
     }
     guard let next = ShotGrouping.step(from: from, by: offset, in: order) else { return }
     select(next)
+    if panes.shots.large != nil { showLarge(next) }
+  }
+
+  /// Moves through the rows the grouped grids actually draw, retaining the preferred column across short rows.
+  ///
+  /// - Parameter offset: −1 for up, 1 for down.
+  func stepRow(by offset: Int) {
+    guard let viewer else { return }
+    let columns = max(1, panes.shots.columns)
+    let days = ViewerPresenter.shots(viewer.snapshot).days
+    let rows = days.flatMap { day in
+      stride(from: 0, to: day.shots.count, by: columns)
+        .map { start in
+          Array(day.shots[start..<min(start + columns, day.shots.count)])
+            .map(\.id)
+        }
+    }
+    panes.shots.scrollRequest += 1
+    guard let from = panes.shots.large ?? ViewerPresenter.selectedShot(viewer.snapshot),
+      let row = rows.firstIndex(where: { $0.contains(from) }),
+      let column = rows[row].firstIndex(of: from)
+    else {
+      if let first = rows.first?.first { select(first) }
+      return
+    }
+    guard rows.indices.contains(row + offset) else { return }
+    let preferred = panes.shots.navigationColumn ?? column
+    let nextRow = rows[row + offset]
+    let next = nextRow[min(preferred, nextRow.count - 1)]
+    select(next)
+    panes.shots.navigationColumn = preferred
     if panes.shots.large != nil { showLarge(next) }
   }
 

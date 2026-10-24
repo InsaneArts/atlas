@@ -25,13 +25,12 @@ extension SettingsController {
     }
     agents = SettingsAgents(
       choices: AgentChoice.merged(AgentChoice.all, with: status.agents),
-      app: status.claudeApp,
       projects: status.projects ?? [],
       failed: false
     )
   }
 
-  /// Connects one agent alone: Claude Code or Codex by name, or the Claude app, through the installs every window
+  /// Connects every installed part of one agent through the installs every window
   /// shares, so one runs at a time app-wide; the agents are read again after. Why it failed shows in the agent's own
   /// row, until the next Connect.
   ///
@@ -43,15 +42,27 @@ extension SettingsController {
     session.connectFailures[id] = nil
     let outcome: Outcome?
     if let agent = AgentID(rawValue: id) {
-      outcome = await installs.install([agent])
-    } else if id == AgentsStatus.claudeAppID {
-      outcome = await installs.connectClaudeApp()
+      outcome = await installs.install([agent], claudeParts: agents.choices.first { $0.id == .claude }?.parts ?? [])
     } else {
       return
     }
     guard let outcome else { return say(HelperWords.waitForAction, in: .agents, kind: .working) }
     if !outcome.ok {
       session.connectFailures.merge(Self.connectFailures(outcome, asked: id)) { _, newer in newer }
+    }
+    await loadAgents()
+  }
+
+  /// Disconnects all the installed parts in an agent's row, then reads their status again.
+  ///
+  /// - Parameter id: The displayed agent id.
+  func disconnect(_ id: String) async {
+    guard let choice = agents.choices.first(where: { $0.id.rawValue == id }), !choice.parts.isEmpty else { return }
+    session.connectFailures[id] = nil
+    guard let outcome = await dependencies.installs.disconnect(id, parts: choice.parts) else { return }
+    if !outcome.ok {
+      session.connectFailures[id] =
+        "Couldn't disconnect: " + (Self.connectFailures(outcome, asked: id)[id] ?? outcome.message)
     }
     await loadAgents()
   }
@@ -66,9 +77,12 @@ extension SettingsController {
   static func connectFailures(_ outcome: Outcome, asked id: String) -> [String: String] {
     let failed = (outcome.decode(AgentsChange.self)?.agents ?? [])
       .filter { $0.ok != true }
-      .map { ($0.agent, $0.error ?? "") }
+      .map { row in
+        let key = row.agent == AgentsStatus.claudeAppID ? AgentID.claude.rawValue : row.agent
+        return (key, "\(AgentsStatus.partTitle(row.agent)): \(row.error ?? "")")
+      }
     guard !failed.isEmpty else { return [id: outcome.message] }
-    return Dictionary(failed, uniquingKeysWith: { first, _ in first })
+    return Dictionary(failed, uniquingKeysWith: { first, next in "\(first); \(next)" })
   }
 
   /// Shows the file an agent's failed Connect is in, in the Finder: the Claude app's settings file.

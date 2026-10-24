@@ -31,23 +31,30 @@ struct ViewerShotsPane: View {
     if let empty = state.empty {
       EmptyMessage(state: empty, size: .stage, ground: .pane, symbol: .photos)
     } else {
-      ScrollView {
-        LazyVStack(alignment: .leading, spacing: .zero, pinnedViews: .sectionHeaders) {
-          ForEach(state.days) { day in
-            Section {
-              grid(day)
-            } header: {
-              PinnedHeader(title: day.title)
+      ScrollViewReader { scroll in
+        ScrollView {
+          LazyVStack(alignment: .leading, spacing: .zero, pinnedViews: .sectionHeaders) {
+            ForEach(state.days) { day in
+              Section {
+                grid(day)
+              } header: {
+                PinnedHeader(title: day.title)
+              }
             }
           }
+          .onGeometryChange(for: Int.self) { proxy in
+            Self.columns(across: proxy.size.width)
+          } action: { columns in
+            send(.shotColumns(columns))
+          }
         }
-        .onGeometryChange(for: Int.self) { proxy in
-          Self.columns(across: proxy.size.width)
-        } action: { columns in
-          send(.shotColumns(columns))
+        .scrollIndicators(paneSettled ? .automatic : .hidden)
+        .onChange(of: state.scrollRequest) { _, _ in
+          if let selected = state.days.flatMap(\.shots).first(where: \.isSelected) {
+            scroll.scrollTo(selected.id, anchor: .center)
+          }
         }
       }
-      .scrollIndicators(paneSettled ? .automatic : .hidden)
     }
   }
 
@@ -59,6 +66,7 @@ struct ViewerShotsPane: View {
     LazyVGrid(columns: columns, alignment: .leading, spacing: ViewerLayout.shotGap) {
       ForEach(day.shots) { tile in
         ShotTileView(tile: tile, isOpen: tile.id == state.large?.id, zoom: zoom, send: send)
+          .id(tile.id)
       }
     }
     .padding(.horizontal, ViewerLayout.swapInset)

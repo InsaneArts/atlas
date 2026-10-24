@@ -2,6 +2,7 @@ import AsyncSupportTesting
 import AtlasCommandsTesting
 import AtlasService
 import AtlasServiceTesting
+import AtlasUI
 import Observation
 
 @testable import AtlasApp
@@ -21,6 +22,8 @@ final class StandInParts: WindowParts {
   var makeViewer: @MainActor () -> ViewerController = { .scripted(ScriptedService()) }
   /// Whether Copy Diagnostics finds anything to copy.
   var diagnostics = true
+  /// App-level diagnostic results, without presenting a native alert.
+  var diagnosticNotices: [String] = []
   /// Runs as Atlas is asked to quit, before it is counted.
   var quitting: @MainActor () -> Void = {}
   /// Each Dock icon change the coordinator asked for, in order.
@@ -31,6 +34,8 @@ final class StandInParts: WindowParts {
   private(set) var settingsMade = 0
   /// How often Atlas was asked to quit.
   private(set) var terminations = 0
+  /// How often the panel was asked to close, leaving its controller running.
+  private(set) var panelClosures = 0
   /// Every window made, in order.
   private(set) var windows: [WindowStandIn] = []
 
@@ -49,7 +54,9 @@ final class StandInParts: WindowParts {
   /// - Parameter preferences: The main window's saved choices; in memory by default.
   /// - Returns: The coordinator.
   func coordinator(preferences: ViewerPreferences = .memory()) -> WindowCoordinator {
-    let coordinator = WindowCoordinator(windows: making, viewerPreferences: preferences)
+    let coordinator = WindowCoordinator(windows: making, viewerPreferences: preferences) { [weak self] in
+      self?.diagnosticNotices.append($0)
+    }
     coordinator.parts = self
     return coordinator
   }
@@ -79,21 +86,32 @@ final class StandInParts: WindowParts {
     OnboardingController.scripted(ScriptedCommands([:]))
   }
 
-  /// No alert window: the tests here open none.
+  /// An alert window's controller over a scripted service and commands.
   ///
   /// - Parameters:
-  ///   - alert: Not used.
-  ///   - links: Not used.
-  /// - Returns: Nil.
-  func alertController(_ alert: HelperAlert, links: AlertLinks) -> AlertController? { nil }
+  ///   - alert: The alert shown.
+  ///   - links: What the alert asks of the coordinator.
+  /// - Returns: The controller.
+  func alertController(_ alert: HelperAlert, links: AlertLinks) -> AlertController? {
+    let service = ScriptedService()
+    return AlertController(
+      alert: alert,
+      actions: HelperActions(
+        commands: ScriptedCommands([:]),
+        service: service,
+        barrier: ControlBarrier(service: service, clock: clock)
+      ),
+      links: links
+    )
+  }
 
   /// Records the change.
   ///
   /// - Parameter shown: Whether the Dock icon shows.
   func showDockIcon(_ shown: Bool) { dockIcon.append(shown) }
 
-  /// Nothing to close: there is no panel.
-  func closePanel() {}
+  /// Records closing the panel, without stopping its controller.
+  func closePanel() { panelClosures += 1 }
 
   /// Records the quit, which no test performs, after what runs as it is asked.
   ///

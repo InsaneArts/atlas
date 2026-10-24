@@ -511,9 +511,16 @@ fn build(options: &Options, stage: &Path, upload: &Path) -> Result<PathBuf> {
     compile_icon(&package.join("Resources/AppIcon.icon"), &app, stage)?;
 
     // The app icon for macOS before 26 and the helper account's picture,
-    // both drawn by app/Resources/AppIcon.swift. The icon replaces the flat
-    // one actool rendered from the Icon Composer icon.
-    for file in ["AppIcon.icns", "HelperPicture.png"] {
+    // both drawn by app/Resources/AppIcon.swift, plus original agent logos
+    // extracted from the installed apps. The icon replaces actool's flat one.
+    for file in [
+        "AppIcon.icns",
+        "HelperPicture.png",
+        "ClaudeLogo.png",
+        "ClaudeLogo@2x.png",
+        "CodexLogo.png",
+        "CodexLogo@2x.png",
+    ] {
         fs::copy(
             package.join("Resources").join(file),
             app.join("Contents/Resources").join(file),

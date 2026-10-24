@@ -24,9 +24,27 @@ extension WindowCoordinator {
     return menu
   }
 
-  /// Copy Diagnostics: what \`atlas doctor\` says goes on the clipboard, and the main window, when it is open, says so.
+  /// Copy Diagnostics: what \`atlas doctor\` says goes on the clipboard; the key viewer or an app-level notice says how it went.
   func copyDiagnostics() async {
     let copied = await parts?.copyDiagnostics() ?? false
-    viewer?.controller.say(copied ? MenuWords.diagnosticsCopied : MenuWords.diagnosticsFailed)
+    let text = copied ? MenuWords.diagnosticsCopied : MenuWords.diagnosticsFailed
+    if let viewer, viewer.window.isKeyWindow {
+      viewer.controller.say(text)
+    } else {
+      diagnosticsNotice(text)
+    }
+  }
+
+  /// Shows a result through the invoking window's sheet, or a modal notice when no window is key.
+  ///
+  /// - Parameter text: The result of Copy Diagnostics.
+  static func showDiagnosticsNotice(_ text: String) {
+    let alert = NSAlert()
+    alert.messageText = text
+    if let window = NSApp.keyWindow {
+      alert.beginSheetModal(for: window)
+    } else {
+      alert.runModal()
+    }
   }
 }

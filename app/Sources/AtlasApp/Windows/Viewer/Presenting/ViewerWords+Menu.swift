@@ -11,11 +11,11 @@ extension ViewerWords {
   /// The View menu's full screen item, which the system renames while in full screen.
   static let fullScreenItem = "Enter Full Screen"
   /// The Helper menu's item while an agent may act.
-  static let stopAgentItem = "Stop Agent"
+  static let stopAgentItem = HelperActionNames.stopAgent
   /// The Helper menu's item once agents are stopped.
-  static let resumeAgentItem = "Resume Agent"
+  static let resumeAgentItem = HelperActionNames.resumeAgent
   /// The Helper menu's item while this window holds control.
-  static let giveBackItem = "Give Back Control"
+  static let giveBackItem = HelperActionNames.giveBack
 
   /// A tab's word, in the top row and the View menu.
   ///

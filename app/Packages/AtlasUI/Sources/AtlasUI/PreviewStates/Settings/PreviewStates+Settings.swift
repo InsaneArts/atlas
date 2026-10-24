@@ -30,6 +30,9 @@
         PreviewState(name: "Helper, a deleted account still logged in", value: settingsHelperLeftover),
         PreviewState(name: "Helper, closing it", value: settingsHelperClosing),
         PreviewState(name: "Helper, still logged in", value: settingsHelperStale),
+        PreviewState(name: "Claude Code only", value: settingsClaudeCode),
+        PreviewState(name: "Claude app only", value: settingsClaudeApp),
+        PreviewState(name: "Claude partly connected", value: settingsClaudePartial),
       ]
     }
 

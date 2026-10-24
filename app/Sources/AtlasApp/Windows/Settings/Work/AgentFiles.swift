@@ -8,7 +8,7 @@ enum AgentFiles {
   /// - Parameter id: The agent's id.
   /// - Returns: Whether Show File can open its settings.
   static func knowsSettings(of id: String) -> Bool {
-    id == AgentsStatus.claudeAppID
+    id == AgentID.claude.rawValue || id == AgentsStatus.claudeAppID
   }
 
   /// The settings file of an agent, where Atlas knows it.

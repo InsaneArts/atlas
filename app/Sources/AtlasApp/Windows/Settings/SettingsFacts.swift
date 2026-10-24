@@ -17,6 +17,8 @@ struct SettingsFacts {
   var running: Set<HelperActions.Command> = []
   /// The agents being connected now, from any window, by id.
   var installing: Set<String> = []
+  /// Whether the shared agent change removes connections.
+  var isRemoving = false
   /// The app's version, when known.
   var version: String?
 }

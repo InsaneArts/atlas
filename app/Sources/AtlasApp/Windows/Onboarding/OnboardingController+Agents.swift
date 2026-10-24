@@ -63,17 +63,30 @@ extension OnboardingController {
       .filter(switchedOn.contains)
     if !chosen.isEmpty {
       let installs = dependencies.installs
-      guard let outcome = await act(OnboardingWords.connecting, { await installs.install(chosen) }) else { return }
+      guard
+        let outcome = await act(
+          OnboardingWords.connecting,
+          { await installs.install(chosen, claudeParts: snapshot.agents.first { $0.id == .claude }?.parts ?? []) }
+        )
+      else { return }
       let change = outcome.decode(AgentsChange.self)
       // A reply that names no agent connected them all when it worked.
       let connected = outcome.ok ? chosen : change?.connected ?? []
       for index in snapshot.agents.indices where connected.contains(snapshot.agents[index].id) {
         snapshot.agents[index].connected = true
+        snapshot.agents[index].problem = nil
       }
       guard outcome.ok else {
         let failures = (change?.failures ?? [])
           .map { OnboardingWords.notConnected($0.agent, $0.error) }
         if !failures.isEmpty { snapshot.problem = failures.joined(separator: " ") }
+        for index in snapshot.agents.indices {
+          let id = snapshot.agents[index].id
+          let reasons = (change?.failures ?? [])
+            .filter { $0.agent == id }
+            .map(\.error)
+          if !reasons.isEmpty { snapshot.agents[index].problem = reasons.joined(separator: "; ") }
+        }
         return
       }
     }

@@ -30,7 +30,7 @@ struct ViewerMainButton: View {
     .disabled(control?.isEnabled != true)
     .shakes(refusals)
     .help(control?.help ?? "")
-    .accessibilityLabel(control?.title ?? "")
+    .accessibilityLabel(control?.accessibilityLabel ?? "")
     .actionSlot(control != nil)
   }
 }

@@ -24,13 +24,24 @@ final class WindowCoordinator {
   /// The Settings window's controller, kept for the app's life once made: an update check, an install or a Connect a
   /// closed window started runs on, and the next window waits for it rather than starting another.
   private(set) var settingsController: SettingsController?
+  /// Whether Close All Windows is already waiting for control to be given back.
+  private var closingWindows = false
+
+  /// Reports Copy Diagnostics when its invoking window is not the viewer.
+  let diagnosticsNotice: @MainActor (String) -> Void
 
   /// Creates the coordinator, with no window open.
   ///
   /// - Parameters:
   ///   - windows: How each window is made.
   ///   - viewerPreferences: The main window's saved choices.
-  init(windows: WindowMaking, viewerPreferences: ViewerPreferences) {
+  ///   - diagnosticsNotice: Shows an app-level result when no key viewer can display it.
+  init(
+    windows: WindowMaking,
+    viewerPreferences: ViewerPreferences,
+    diagnosticsNotice: @escaping @MainActor (String) -> Void = WindowCoordinator.showDiagnosticsNotice
+  ) {
+    self.diagnosticsNotice = diagnosticsNotice
     self.windows = windows
     self.viewerPreferences = viewerPreferences
   }
@@ -93,7 +104,28 @@ final class WindowCoordinator {
   /// anyway, and a lease left unanswered ends by itself within its lifetime (``ControlBarrier/leaseLifetime``).
   static let quitWait: Duration = .seconds(2)
 
-  /// Quit Atlas, from ⌘Q in any window or the panel's Quit: the main window's control goes back first, through the
+  /// Closes every Atlas window and the panel, keeping the app and its menu bar item running. The main window stays
+  /// open until the service has answered its release; unlike termination, closing windows has no release ceiling.
+  func closeAllWindows() {
+    guard !closingWindows else { return }
+    closingWindows = true
+    // Unstructured, as the menu's action is synchronous: the windows close once the release is answered.
+    Task {
+      defer { closingWindows = false }
+      repeat {
+        releaseViewerControl()
+        _ = await controlBarrier?.settle()
+      } while viewerHoldsControl
+      parts?.closePanel()
+      viewer?.window.dismiss()
+      settings?.window.dismiss()
+      onboarding?.window.dismiss()
+      alert?.window.dismiss()
+      alert = nil
+    }
+  }
+
+  /// Quit Atlas, from the panel's Quit: the main window's control goes back first, through the
   /// release every other path uses, and Atlas quits once the service has answered it, or after ``quitWait``.
   ///
   /// - Parameter sender: The menu item.
@@ -103,6 +135,20 @@ final class WindowCoordinator {
       await releaseBeforeQuitting()
       parts?.terminate(sender)
     }
+  }
+
+  /// Allows AppKit's termination request, including Dock quit, log-out and shutdown, after a bounded release wait.
+  ///
+  /// - Parameter reply: Answers AppKit once the release wait ends.
+  /// - Returns: Now when no control work is under way; later otherwise. Never cancels termination.
+  func prepareToTerminate(reply: @escaping @MainActor () -> Void) -> NSApplication.TerminateReply {
+    guard holdsUpQuitting else { return .terminateNow }
+    // Unstructured, as AppKit asks synchronously: termination proceeds once the release wait ends.
+    Task {
+      await releaseBeforeQuitting()
+      reply()
+    }
+    return .terminateLater
   }
 
   /// Whether control work is under way that quitting should wait for: the main window holds or asks for control, or a

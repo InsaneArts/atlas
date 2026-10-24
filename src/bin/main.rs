@@ -592,6 +592,10 @@ enum OnOff {
 #[derive(Subcommand)]
 enum AgentsCommand {
     /// Which agents are on this Mac and whether Atlas is connected.
+    ///
+    /// JSON keeps Claude Code (`claude`) and the Claude app (`claude-app`)
+    /// as separate connection parts. Atlas.app groups them into one Claude
+    /// row, connected only when every installed part is connected.
     Status {
         /// One plain line for an agent's session start.
         #[arg(long)]
@@ -609,6 +613,9 @@ enum AgentsCommand {
         dir: Option<PathBuf>,
     },
     /// Connect the plugin to Claude Code and/or Codex (all installed by default).
+    ///
+    /// Use --claude --app together to connect both Claude parts. Select only
+    /// the parts installed on this Mac. JSON reports each part's result by id.
     Install {
         /// Only Claude Code.
         #[arg(long)]
@@ -621,6 +628,8 @@ enum AgentsCommand {
         app: bool,
     },
     /// Disconnect the plugin from Claude Code and/or Codex.
+    ///
+    /// Use --claude --app together to disconnect both Claude parts.
     Remove {
         /// Only Claude Code.
         #[arg(long)]

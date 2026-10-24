@@ -16,7 +16,7 @@ let strict: [SwiftSetting] = [
 // The design system, components, each window's state and events, its views
 // and previews. Atlas.app's executable package depends on it by path.
 //
-// Level 0. SwiftUI, Foundation and CoreGraphics only.
+// Level 0. SwiftUI, Foundation, CoreGraphics and ImageIO only.
 let package = Package(
   name: "AtlasUI",
   platforms: [.macOS(.v14)],

@@ -71,6 +71,7 @@ final class SettingsController {
         canPause: links.canPause(),
         running: actions.running,
         installing: dependencies.installs.installing,
+        isRemoving: dependencies.installs.isRemoving,
         version: dependencies.version
       )
     )
@@ -94,6 +95,7 @@ final class SettingsController {
     case .closeLeftovers: Task { await closeLogin(.closeLeftovers) }
     case .closeHelper: Task { await closeLogin(.closeHelper) }
     case .connect(let id): Task { await connect(id) }
+    case .disconnect(let id): Task { await disconnect(id) }
     case .askForget(let path): askForget(path)
     case .checkForUpdates: Task { await checkForUpdates() }
     case .askInstall: askInstall()

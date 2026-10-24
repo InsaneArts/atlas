@@ -6,7 +6,7 @@ extension OnboardingWords {
   /// An agent's name.
   ///
   /// - Parameter agent: The agent.
-  /// - Returns: "Claude Code" or "Codex".
+  /// - Returns: "Claude" or "Codex".
   static func agentTitle(_ agent: AgentID) -> String {
     Words.agentTitle(agent)
   }

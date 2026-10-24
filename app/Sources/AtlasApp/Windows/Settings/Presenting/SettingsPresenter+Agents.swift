@@ -3,7 +3,7 @@ import AtlasUI
 import Foundation
 
 extension SettingsPresenter {
-  /// The Agents pane: Claude Code, Codex and the Claude app, each connected, ready to connect, not installed, or
+  /// The Agents pane: Claude and Codex, each connected, ready to connect, not installed, or
   /// saying why its last Connect failed; then each project taught.
   ///
   /// - Parameter snapshot: What the controller holds and reads.
@@ -13,10 +13,14 @@ extension SettingsPresenter {
     let installing = snapshot.facts.installing
     let failures = snapshot.session.connectFailures
     let plugins = agents.choices.map { choice in
-      SettingsAgentRow(
+      let parts = choice.checked ? choice.parts : [AgentID.claude.rawValue, AgentsStatus.claudeAppID]
+      return SettingsAgentRow(
         id: choice.id.rawValue,
         title: Words.agentTitle(choice.id),
-        detail: detail(SettingsWords.usesAtlas, absent: choice.checked && !choice.found && !choice.connected),
+        detail: detail(
+          choice.id == .claude ? Words.agentParts(parts) : SettingsWords.usesAtlas,
+          absent: choice.checked && !choice.found && !choice.connected
+        ),
         icon: AgentRowIcons.icon(choice.id.rawValue, snapshot.icons),
         connection: connection(
           id: choice.id.rawValue,
@@ -24,29 +28,17 @@ extension SettingsPresenter {
           found: choice.found,
           connected: choice.connected,
           failed: agents.failed,
-          installing: installing
-        )
+          installing: installing,
+          isRemoving: snapshot.facts.isRemoving
+        ),
+        canDisconnect: choice.hasConnection && installing.isEmpty
       )
     }
-    let app = SettingsAgentRow(
-      id: AgentsStatus.claudeAppID,
-      title: SettingsWords.claudeApp,
-      detail: detail(
-        SettingsWords.showsHelper,
-        absent: agents.app.map { $0.installed != true && $0.connected != true } ?? false
-      ),
-      icon: AgentRowIcons.icon(AgentsStatus.claudeAppID, snapshot.icons),
-      connection: connection(
-        id: AgentsStatus.claudeAppID,
-        checked: agents.app != nil,
-        found: agents.app?.installed == true,
-        connected: agents.app?.connected == true,
-        failed: agents.failed,
-        installing: installing
-      )
-    )
     return SettingsAgentsState(
-      agents: (plugins + [app]).map { failing($0, failures[$0.id]) },
+      agents: plugins.map { row in
+        let reported = agents.choices.first { $0.id.rawValue == row.id }?.problem
+        return failing(row, failures[row.id] ?? reported)
+      },
       projects: snapshot.agents.projects.map(project),
       notice: notice(snapshot, in: .agents, busy: !installing.isEmpty)
     )
@@ -62,6 +54,7 @@ extension SettingsPresenter {
   ///   - connected: Whether it uses Atlas.
   ///   - failed: Whether the last reading failed.
   ///   - installing: The agents being connected now, from any window.
+  ///   - isRemoving: Whether the shared change disconnects its agents.
   /// - Returns: Its row's right side.
   static func connection(
     id: String,
@@ -69,9 +62,10 @@ extension SettingsPresenter {
     found: Bool,
     connected: Bool,
     failed: Bool,
-    installing: Set<String>
+    installing: Set<String>,
+    isRemoving: Bool = false
   ) -> SettingsAgentRow.Connection {
-    if installing.contains(id) { return .connecting }
+    if installing.contains(id) { return isRemoving ? .note("Disconnecting…") : .connecting }
     if connected { return .connected }
     if !checked { return .note(failed ? SettingsWords.notChecked : SettingsWords.checking) }
     if !found { return .missing }
@@ -88,7 +82,7 @@ extension SettingsPresenter {
     absent ? SettingsWords.notInstalled : uses
   }
 
-  /// An agent's row with why its last Connect failed, unless it is connected or connecting now: the reason in place
+  /// An agent's row with why its last change failed, unless it is connecting now: the reason in place
   /// of its detail, and Show File where the reason is a settings file that needs mending.
   ///
   /// - Parameters:
@@ -96,9 +90,9 @@ extension SettingsPresenter {
   ///   - failure: Why its last Connect failed, as the command said it; nil for none.
   /// - Returns: The row.
   static func failing(_ row: SettingsAgentRow, _ failure: String?) -> SettingsAgentRow {
-    guard let failure, row.connection != .connected, row.connection != .connecting else { return row }
+    guard let failure, row.connection != .connecting else { return row }
     var failing = row
-    failing.problem = SettingsWords.notConnected(failure)
+    failing.problem = failure.hasPrefix("Couldn't disconnect") ? failure : SettingsWords.notConnected(failure)
     failing.showsFile = SettingsWords.isBadSettingsFile(failure) && AgentFiles.knowsSettings(of: row.id)
     return failing
   }
@@ -106,7 +100,7 @@ extension SettingsPresenter {
   /// An agent's name by its id in `atlas agents` results.
   ///
   /// - Parameter id: The id, such as `claude` or `claude-app`.
-  /// - Returns: "Claude Code", "Codex", "Claude app", or the id itself for one this app does not know.
+  /// - Returns: "Claude", "Codex", "Claude app", or the id itself for one this app does not know.
   static func agentTitle(_ id: String) -> String {
     if let agent = AgentID(rawValue: id) { return Words.agentTitle(agent) }
     return id == AgentsStatus.claudeAppID ? SettingsWords.claudeApp : id

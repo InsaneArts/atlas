@@ -39,7 +39,8 @@ extension ViewerPresenter {
       meta: days.isEmpty ? "" : ViewerWords.shotsMeta(today: rules.countToday(shots)),
       days: groups,
       empty: days.isEmpty ? EmptyMessageState(headline: ViewerWords.noShots, message: ViewerWords.noShotsMessage) : nil,
-      large: largeShot(snapshot)
+      large: largeShot(snapshot),
+      scrollRequest: facts.scrollRequest
     )
   }
 

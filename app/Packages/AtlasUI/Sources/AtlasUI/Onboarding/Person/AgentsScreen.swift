@@ -29,7 +29,7 @@ struct AgentsScreen: View {
     }
   }
 
-  /// What leads an agent's row: its app's own icon, else its tile.
+  /// What leads an agent's row: its installed app's icon or its bundled original logo.
   ///
   /// - Parameter icon: The agent's icon.
   /// - Returns: The row's lead.

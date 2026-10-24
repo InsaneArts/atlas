@@ -1,28 +1,23 @@
 #if DEBUG
   extension PreviewStates {
-    /// The Agents pane: Claude Code and Codex connected, the Claude app ready to connect, and two projects taught.
+    /// The Agents pane: Claude and Codex connected, and two projects taught.
     static let settingsAgentsPane = SettingsAgentsState(
       agents: [
         SettingsAgentRow(
           id: "claude",
-          title: "Claude Code",
-          detail: "Uses Atlas in every project",
-          icon: .tile(.symbol("asterisk")),
-          connection: .connected
+          title: "Claude",
+          detail: "Claude Code and the Claude app",
+          icon: .app(AgentLogos.claude),
+          connection: .connected,
+          canDisconnect: true
         ),
         SettingsAgentRow(
           id: "codex",
           title: "Codex",
           detail: "Uses Atlas in every project",
-          icon: .tile(.text(">_")),
-          connection: .connected
-        ),
-        SettingsAgentRow(
-          id: "claude-app",
-          title: "Claude app",
-          detail: "Shows the helper in your chats",
-          icon: .tile(.symbol("bubble.left")),
-          connection: .connect(isEnabled: true)
+          icon: .app(AgentLogos.codex),
+          connection: .connected,
+          canDisconnect: true
         ),
       ],
       projects: [
@@ -37,10 +32,11 @@
       ]
     )
 
-    /// The Claude app connecting: Connect keeps its width with a spinner in its words' place.
+    /// Claude connecting: Connect keeps its width with a spinner in its words' place.
     @MainActor static let settingsAgentsConnecting: SettingsState = {
       var state = selecting(.agents)
-      state.agents.agents[2].connection = .connecting
+      state.agents.agents[0].connection = .connecting
+      state.agents.agents[0].canDisconnect = false
       return state
     }()
 
@@ -49,8 +45,9 @@
       var state = selecting(.agents)
       state.agents.agents[1].detail = "Not installed"
       state.agents.agents[1].connection = .missing
-      state.agents.agents[2].problem = "Couldn't connect: its settings file has a mistake"
-      state.agents.agents[2].showsFile = true
+      state.agents.agents[0].problem = "The Claude app couldn't connect: its settings file has a mistake"
+      state.agents.agents[0].showsFile = true
+      state.agents.agents[0].connection = .connect(isEnabled: true)
       state.agents.projects = []
       return state
     }()

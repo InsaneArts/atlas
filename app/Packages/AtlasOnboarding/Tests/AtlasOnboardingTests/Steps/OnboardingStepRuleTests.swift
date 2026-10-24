@@ -61,18 +61,20 @@ struct OnboardingStepRuleTests {
     }
   }
 
-  @Test("a deleted account's open login leads to the close screen, whatever else is true")
+  @Test("leftover logins share the helper choice's approval, while a configured helper offers standalone cleanup")
   func leftoverLogins() throws {
     var started = OnboardingChoices()
     started.started = true
-    #expect(step(try controller(leftovers: [502])) == .closeLeftovers, "before the welcome")
+    let fresh = try controller(leftovers: [502])
+    #expect(step(fresh) == .welcome)
+    #expect(step(fresh, started) == .chooseHelper)
+    started.creating = true
+    #expect(step(fresh, started) == .createAccount)
+    let unpaired = try controller(helper(answering: false, paired: false), leftovers: [502])
+    started.creating = false
+    #expect(step(unpaired, started) == .chooseHelper)
     #expect(step(try controller(helper(), finished: true, leftovers: [502]), started) == .closeLeftovers)
     #expect(step(try controller(helper(admin: true), leftovers: [502])) == .closeLeftovers)
-    let unsigned = try facts([
-      "role": "controller", "app": ["installed": true, "signed": false],
-      "leftoverLogins": [["uid": 502, "kind": "orphan"]],
-    ])
-    #expect(step(unsigned) == .closeLeftovers, "closing needs no signed app")
   }
 
   @Test("the close screen says it closed until Continue, then setup goes on")

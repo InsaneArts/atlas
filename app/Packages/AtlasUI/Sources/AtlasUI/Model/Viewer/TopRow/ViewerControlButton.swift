@@ -13,6 +13,11 @@ public struct ViewerControlButton: Equatable, Sendable {
   /// own.
   public var titles: [String]
 
+  /// The full action name, matching its menu item even when the visible word is shortened.
+  public var accessibilityLabel: String {
+    event == .giveBack ? HelperActionNames.giveBack : title
+  }
+
   /// Creates the control capsule.
   ///
   /// - Parameters:

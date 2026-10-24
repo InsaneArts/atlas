@@ -141,7 +141,7 @@
             agents: [
               OnboardingAgentItem(
                 id: "claude",
-                title: "Claude Code",
+                title: "Claude",
                 detail: "Not checked yet",
                 icon: onboardingClaudeIcon,
                 isOn: false,
@@ -217,8 +217,8 @@
       agents: [
         OnboardingAgentItem(
           id: "claude",
-          title: "Claude Code",
-          detail: "Gets the Atlas skill",
+          title: "Claude",
+          detail: "Claude Code and the Claude app",
           icon: onboardingClaudeIcon,
           isOn: true,
           isEnabled: true
@@ -234,11 +234,11 @@
       ]
     )
 
-    /// Claude Code's tile, where it has no app on this Mac, as Settings draws it.
-    @MainActor static let onboardingClaudeIcon = RowIcon.tile(.symbol("asterisk"))
+    /// Claude Code's bundled original logo, as Settings draws it without an installed app.
+    @MainActor static let onboardingClaudeIcon = RowIcon.app(AgentLogos.claude)
 
-    /// Codex's tile, where its app is not on this Mac, as Settings draws it.
-    @MainActor static let onboardingCodexIcon = RowIcon.tile(.text(">_"))
+    /// Codex's bundled original logo, as Settings draws it without an installed app.
+    @MainActor static let onboardingCodexIcon = RowIcon.app(AgentLogos.codex)
 
     /// Done, opening at login.
     @MainActor static let onboardingDoneScreen = OnboardingDoneScreenState(

@@ -62,6 +62,17 @@ struct MainMenuTests {
     #expect(Self.titles(menus["Help"]) == ["Getting Started…", "Copy Diagnostics"])
   }
 
+  @Test("Quit Atlas keeps its title and Command Q and uses the supplied action")
+  func quitKeepsItsTitleShortcutAndAction() throws {
+    let answerer = Answerer()
+    let item = try #require(Self.menus(answerer)["Atlas"]?.items.last)
+    #expect(item.title == "Quit Atlas")
+    #expect(item.keyEquivalent == "q")
+    #expect(item.keyEquivalentModifierMask == .command)
+    #expect(item.target === answerer)
+    #expect(item.action == #selector(Answerer.act(_:)))
+  }
+
   @Test("File opens with Open Atlas ⌘O, the way back to the main window, and Edit finds with ⌘F")
   func fileLeadsBackToTheMainWindow() throws {
     let answerer = Answerer()

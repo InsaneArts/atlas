@@ -145,8 +145,8 @@ final class PanelPopover: NSObject, NSPopoverDelegate {
     controller.setMoreOpen(false)
   }
 
-  /// Answers the panel's shortcuts while the panel shows and its ⋯ menu is closed: ⌘O, ⌘, and ⌘Q as the menu's items
-  /// would, which the menu answers itself while it is open, and ⌘. and ⇧⌘P as the buttons they name would. Other keys
+  /// Answers the panel's shortcuts while the panel shows and its ⋯ menu is closed: ⌘O and ⌘, as the menu's items
+  /// would, ⌘Q closes all windows, and ⌘. and ⇧⌘P act as the buttons they name would. Other keys
   /// pass on, so Escape still closes the panel.
   private func watchKeys() {
     stopWatchingKeys()
@@ -168,7 +168,7 @@ final class PanelPopover: NSObject, NSPopoverDelegate {
     switch shortcut {
     case .openAtlas: actions.openAtlas()
     case .openSettings: actions.openSettings()
-    case .quit: actions.quit()
+    case .closeWindows: controller.links.closeWindows()
     case .stopOrResume, .pausePicture: return controller.press(shortcut)
     }
     return true

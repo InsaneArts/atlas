@@ -18,6 +18,18 @@ struct AttentionSignalsTests {
     return status
   }
 
+  @Test("the first successful reading withdraws notifications that became stale before relaunch")
+  func theFirstReadingReconcilesDeliveredNotifications() {
+    let log = SignalLog()
+    var signals = log.signals
+    signals.read(nil)
+    #expect(log.withdrawn == 0 && log.withdrawnLoggedOut == 0)
+    signals.read(reading(.observing, .idle))
+    #expect(log.withdrawn == 1 && log.withdrawnLoggedOut == 1)
+    signals.read(reading(.observing, .idle))
+    #expect(log.withdrawn == 1 && log.withdrawnLoggedOut == 1)
+  }
+
   @Test(
     "nothing is posted while Notify me is off, a failed reading never tells twice, and turning Notify me on never tells of a state already there"
   )

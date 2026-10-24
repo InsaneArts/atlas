@@ -15,6 +15,8 @@ struct AgentsPane: View {
       GroupedSection(state.agents, notes: notes) { agent in
         AgentConnectionRow(agent: agent) {
           send(.connect(agent.id))
+        } disconnect: {
+          send(.disconnect(agent.id))
         } showFile: {
           send(.showAgentFile(agent.id))
         }

@@ -572,31 +572,37 @@ fn processes() -> Option<Vec<Process>> {
         .output()
         .ok()?;
 
-    output
-        .status
-        .success()
-        .then(|| parse_processes(&String::from_utf8_lossy(&output.stdout)))
+    if !output.status.success() {
+        return None;
+    }
+    parse_processes(std::str::from_utf8(&output.stdout).ok()?)
 }
 
 /// `ps -o uid=,pid=,etime=,comm=` lines; the command is the rest of a line.
-fn parse_processes(listing: &str) -> Vec<Process> {
-    listing
-        .lines()
-        .filter_map(|line| {
-            let mut words = line.split_whitespace();
-            let uid = words.next()?.parse().ok()?;
-            let pid = words.next()?.parse().ok()?;
-            let running = running_for(words.next()?)?;
-            let command = words.collect::<Vec<_>>().join(" ");
-
-            Some(Process {
-                uid,
-                pid,
-                running,
-                command,
-            })
-        })
-        .collect()
+fn parse_processes(listing: &str) -> Option<Vec<Process>> {
+    let mut processes = Vec::new();
+    for line in listing.lines() {
+        let mut words = line.split_whitespace();
+        let uid = words.next()?.parse::<i64>().ok()?;
+        // Negative system IDs cannot belong to a helper session.
+        if uid < 0 {
+            continue;
+        }
+        let uid = u32::try_from(uid).ok()?;
+        let pid = words.next()?.parse().ok()?;
+        let running = running_for(words.next()?)?;
+        let command = words.collect::<Vec<_>>().join(" ");
+        if command.is_empty() {
+            return None;
+        }
+        processes.push(Process {
+            uid,
+            pid,
+            running,
+            command,
+        });
+    }
+    Some(processes)
 }
 
 /// Whether `uid` is logged in to a desktop (its Dock runs); `None` when the
@@ -1032,6 +1038,10 @@ mod tests {
     use serde_json::json;
     use std::time::Duration;
 
+    fn listed_processes(listing: &str) -> Vec<Process> {
+        parse_processes(listing).expect("valid process list")
+    }
+
     #[test]
     fn only_a_helper_that_did_not_answer_is_explained() {
         assert!(silent(
@@ -1050,7 +1060,7 @@ mod tests {
     fn the_desktop_is_up_once_setup_assistant_is_gone_and_the_dock_and_finder_run() {
         let core = "/System/Library/CoreServices";
         let listing = |extra: &str| {
-            parse_processes(&format!(
+            listed_processes(&format!(
                 "502 10 00:10 {core}/Dock.app/Contents/MacOS/Dock\n\
                  502 11 00:10 {core}/Finder.app/Contents/MacOS/Finder\n\
                  502 12 00:10 {core}/KeyboardSetupAssistant.app/Contents/MacOS/KeyboardSetupAssistant\n\
@@ -1073,8 +1083,8 @@ mod tests {
     fn processes_are_read_from_ps_lines() {
         let listing = "  505  1158 04-00:04:57 /System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow\n\
                        501   700       05:32 /Applications/Some App.app/Contents/MacOS/Some App\n\
-                       not a process line\n";
-        let listed = parse_processes(listing);
+                       -2    40       00:10 /usr/sbin/system-service\n";
+        let listed = listed_processes(listing);
         assert_eq!(listed.len(), 2);
         assert_eq!((listed[0].uid, listed[0].pid), (505, 1158));
         assert_eq!(
@@ -1085,6 +1095,31 @@ mod tests {
             listed[1].command, "/Applications/Some App.app/Contents/MacOS/Some App",
             "a command keeps its spaces"
         );
+    }
+
+    #[test]
+    fn process_lists_ignore_negative_ids_but_refuse_unreadable_rows() {
+        let listing = "-2 40 00:10 /usr/sbin/system-service\n\
+                       1 41 00:10 /usr/sbin/daemon\n\
+                       99 42 00:10 /usr/sbin/unknown\n\
+                       502 43 00:10 /System/Library/CoreServices/Dock.app/Contents/MacOS/Dock\n";
+        let listed = parse_processes(listing).unwrap();
+        assert_eq!(
+            listed.iter().map(|process| process.uid).collect::<Vec<_>>(),
+            [1, 99, 502]
+        );
+        for line in [
+            "garbage",
+            "NaN 44 00:10 /Dock",
+            "4294967296 44 00:10 /Dock",
+            "502 bad 00:10 /Dock",
+            "502 44 bad /Dock",
+            "502 44 00:10",
+        ] {
+            let malformed = format!("{listing}{line}\n");
+            assert!(parse_processes(&malformed).is_none(), "{line}");
+            assert!(!gone_twice(&[502], || parse_processes(&malformed), || {}));
+        }
     }
 
     #[test]
@@ -1364,7 +1399,7 @@ mod tests {
         let core = "/System/Library/CoreServices";
         let classified = [(window(503, 130), Kind::Helper)];
 
-        let bare = parse_processes(&format!(
+        let bare = listed_processes(&format!(
             "503 10 02:10 {core}/loginwindow.app/Contents/MacOS/loginwindow\n"
         ));
         assert_eq!(
@@ -1372,12 +1407,12 @@ mod tests {
             [Blocker::StuckLogin { uid: 503 }]
         );
 
-        let assistant = parse_processes(&format!(
+        let assistant = listed_processes(&format!(
             "503 11 02:00 {core}/Setup Assistant.app/Contents/MacOS/Setup Assistant\n"
         ));
         assert!(blockers(&classified, &assistant).is_empty());
 
-        let docked = parse_processes(&format!(
+        let docked = listed_processes(&format!(
             "503 12 02:00 {core}/Dock.app/Contents/MacOS/Dock\n"
         ));
         assert!(blockers(&classified, &docked).is_empty());
@@ -1392,7 +1427,7 @@ mod tests {
     #[test]
     fn a_running_account_updater_and_deleted_accounts_block_a_login() {
         let updater =
-            parse_processes("0 40 00:05 /System/Library/CoreServices/UserAccountUpdater\n");
+            listed_processes("0 40 00:05 /System/Library/CoreServices/UserAccountUpdater\n");
         assert_eq!(blockers(&[], &updater), [Blocker::AccountUpdating]);
 
         let classified = [
@@ -1418,7 +1453,7 @@ mod tests {
     #[test]
     fn a_login_is_over_only_once_its_loginwindow_and_dock_are_both_gone() {
         let core = "/System/Library/CoreServices";
-        let both = parse_processes(&format!(
+        let both = listed_processes(&format!(
             "502 10 00:10 {core}/loginwindow.app/Contents/MacOS/loginwindow\n\
              502 11 00:10 {core}/Dock.app/Contents/MacOS/Dock\n"
         ));
@@ -1434,10 +1469,10 @@ mod tests {
         use std::{cell::RefCell, collections::VecDeque};
 
         let core = "/System/Library/CoreServices";
-        let dock = parse_processes(&format!(
+        let dock = listed_processes(&format!(
             "7001 11 00:10 {core}/Dock.app/Contents/MacOS/Dock\n"
         ));
-        let window = parse_processes(&format!(
+        let window = listed_processes(&format!(
             "7003 10 00:10 {core}/loginwindow.app/Contents/MacOS/loginwindow\n"
         ));
         let gone = |looks: Vec<Option<Vec<Process>>>| {
@@ -1469,7 +1504,7 @@ mod tests {
                     "503 11 {age} {core}/Dock.app/Contents/MacOS/Dock\n"
                 ));
             }
-            parse_processes(&text)
+            listed_processes(&text)
         };
         assert!(stale_in(&listing("04:00", true), 503));
         assert!(!stale_in(&listing("02:00", true), 503), "still starting");
@@ -1480,14 +1515,14 @@ mod tests {
     #[test]
     fn the_desktop_waits_for_the_account_updater_to_end() {
         let core = "/System/Library/CoreServices";
-        let listed = parse_processes(&format!(
+        let listed = listed_processes(&format!(
             "502 10 00:10 {core}/Dock.app/Contents/MacOS/Dock\n\
              502 11 00:10 {core}/Finder.app/Contents/MacOS/Finder\n"
         ));
         assert!(desktop_up_in(&listed, 502));
 
         let mut updating = listed.clone();
-        updating.extend(parse_processes(&format!(
+        updating.extend(listed_processes(&format!(
             "0 12 00:01 {core}/UserAccountUpdater\n"
         )));
         assert!(!desktop_up_in(&updating, 502));

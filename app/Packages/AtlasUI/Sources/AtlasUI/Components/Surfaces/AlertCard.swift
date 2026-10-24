@@ -27,8 +27,8 @@ struct AlertCard<ID: Hashable & Sendable>: View {
   /// The icon, the title, the message and the buttons, on the glass.
   var body: some View {
     VStack(spacing: .zero) {
-      AppIcon(tile: Layout.icon)
-        .frame(width: Layout.icon, height: Layout.icon)
+      AppIcon(tile: AlertCardLayout.icon)
+        .frame(width: AlertCardLayout.icon, height: AlertCardLayout.icon)
       AlertCardTitle(text: state.shownTitle)
         .padding(.top, Spacing.sPlus)
       AlertCardMessage(message: state.shownMessage, reserving: state.message, refusal: state.refusal)
@@ -39,7 +39,7 @@ struct AlertCard<ID: Hashable & Sendable>: View {
     .background { escapeKey }
     .padding(.top, Spacing.xl)
     .padding([.horizontal, .bottom], Spacing.l)
-    .frame(width: Layout.width)
+    .frame(width: AlertCardLayout.width)
     .glass(.thick, in: shape)
     .overlay(edge)
     .background { CutoutShadow(shape: shape, level: .modal) }
@@ -63,7 +63,7 @@ struct AlertCard<ID: Hashable & Sendable>: View {
       shape
         .strokeBorder(Color.strokeStrong, lineWidth: Stroke.hairline)
       shape
-        .strokeBorder(Layout.highlight, lineWidth: Stroke.hairline)
+        .strokeBorder(AlertCardLayout.highlight, lineWidth: Stroke.hairline)
     }
     .allowsHitTesting(false)
   }
@@ -86,7 +86,7 @@ struct AlertCard<ID: Hashable & Sendable>: View {
   /// - Parameter labels: The buttons' words as first asked.
   /// - Returns: The arrangement.
   nonisolated static func arrangement(labels: [String]) -> Arrangement {
-    labels.allSatisfy { $0.count <= Layout.shortLabel } ? .sideBySide : .stacked
+    labels.allSatisfy { $0.count <= AlertCardLayout.shortLabel } ? .sideBySide : .stacked
   }
 
   /// The buttons in the order they are drawn: the state lists the default first, which is the top of a stack; side
@@ -111,192 +111,6 @@ struct AlertCard<ID: Hashable & Sendable>: View {
   /// - Returns: Whether to shake.
   nonisolated static func shakes(on refusal: String?, reduceMotion: Bool) -> Bool {
     refusal != nil && !reduceMotion
-  }
-}
-
-/// The title, which swaps by opacity as it changes to the done title.
-private struct AlertCardTitle: View {
-  /// The title shown.
-  let text: String
-
-  var body: some View {
-    Text(text)
-      .textStyle(.body, weight: .bold)
-      .multilineTextAlignment(.center)
-      .fixedSize(horizontal: false, vertical: true)
-      .swapsText(on: text)
-      .accessibilityAddTraits(.isHeader)
-  }
-}
-
-/// What the alert means, the done message in its place once done, or, once its command was refused, why, centred in
-/// orange with no mark, as the card's own words are set. The asked message is laid out unseen beneath, so the card
-/// keeps its height when a shorter done message takes its place. A refusal fades in as the slot eases to its height,
-/// with no bounce.
-private struct AlertCardMessage: View {
-  /// What it means now: the asked message, or the done one.
-  let message: String
-  /// The asked message, whose height the slot keeps.
-  let reserving: String
-  /// Why its command was refused; nil until it was.
-  let refusal: String?
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-  var body: some View {
-    ZStack(alignment: .top) {
-      if let refusal {
-        Text(refusal)
-          .textStyle(.caption)
-          .foregroundStyle(Color.textAttention)
-          .multilineTextAlignment(.center)
-          .fixedSize(horizontal: false, vertical: true)
-          .frame(maxWidth: .infinity)
-          .transition(.opacity)
-      } else {
-        ZStack(alignment: .top) {
-          words(reserving)
-            .hidden()
-            .accessibilityHidden(true)
-          words(message)
-            .swapsText(on: message)
-        }
-        .transition(.opacity)
-      }
-    }
-    .animation(Motion.animation(Motion.arrive, reduceMotion: reduceMotion, reduced: Motion.reduced), value: refusal)
-  }
-
-  /// The message's words, centred under the title.
-  ///
-  /// - Parameter text: The words.
-  /// - Returns: The message.
-  private func words(_ text: String) -> some View {
-    Text(text)
-      .textStyle(.caption)
-      .foregroundStyle(Color.textOnGlass)
-      .multilineTextAlignment(.center)
-      .fixedSize(horizontal: false, vertical: true)
-  }
-}
-
-/// The buttons, side by side or stacked, each 28 high and sharing the width. Once done they fade out under one
-/// Done button that takes their place and the default's key, so the row keeps its height.
-private struct AlertCardButtons<ID: Hashable & Sendable>: View {
-  /// What the alert says and offers.
-  let state: AlertCardState<ID>
-  /// Receives the button the person presses.
-  let send: @MainActor (ID) -> Void
-
-  var body: some View {
-    ZStack {
-      asked
-        .opacity(state.isDone ? 0 : 1)
-        .allowsHitTesting(!state.isDone)
-        .accessibilityHidden(state.isDone)
-      if let done = state.doneButton {
-        AlertCardDoneButton(button: done, send: send)
-          .transition(.opacity)
-      }
-    }
-    .animation(Motion.textSwap, value: state.isDone)
-  }
-
-  /// The asked buttons in their arrangement.
-  @ViewBuilder private var asked: some View {
-    switch arrangement {
-    case .sideBySide:
-      HStack(spacing: Spacing.s) { buttons }
-    case .stacked:
-      VStack(spacing: Spacing.s) { buttons }
-    }
-  }
-
-  /// How the buttons sit.
-  private var arrangement: AlertCard<ID>.Arrangement {
-    AlertCard<ID>.arrangement(labels: state.buttons.map(\.title))
-  }
-
-  /// Each button in drawing order.
-  private var buttons: some View {
-    ForEach(AlertCard<ID>.ordered(state.buttons, in: arrangement)) { button in
-      AlertCardButtonView(button: button, state: state, send: send)
-    }
-  }
-}
-
-/// One asked button: its own word, after a spinner while its command runs, so its width never changes;
-/// VoiceOver hears the running word. Every button waits while the command runs; the one running it stays whole.
-private struct AlertCardButtonView<ID: Hashable & Sendable>: View {
-  /// The button.
-  let button: AlertCardButton<ID>
-  /// What the alert says and offers.
-  let state: AlertCardState<ID>
-  /// Receives the button the person presses.
-  let send: @MainActor (ID) -> Void
-
-  var body: some View {
-    Button(role: button.role.buttonRole) {
-      send(button.id)
-    } label: {
-      HStack(spacing: Layout.markGap) {
-        if state.isWorking(button) {
-          Spinner(size: IconSize.xs, arc: button.role.spinnerArc)
-            .transition(.opacity)
-        }
-        Text(state.label(of: button))
-      }
-      .animation(Motion.textSwap, value: state.isWorking(button))
-    }
-    .buttonStyle(.capsule(button.role.look, size: .compact, fill: true, isWorking: state.isWorking(button)))
-    .keyboardShortcut(state.isBusy ? nil : button.role.shortcut)
-    .disabled(state.isBusy)
-    .accessibilityLabel(state.spokenLabel(of: button))
-  }
-}
-
-/// The one button a done alert shows: a check, then its word, such as "Done", in the default's accent, which
-/// Return presses to close the alert now.
-private struct AlertCardDoneButton<ID: Hashable & Sendable>: View {
-  /// The button, which sends the way out.
-  let button: AlertCardButton<ID>
-  /// Receives the button the person presses.
-  let send: @MainActor (ID) -> Void
-
-  var body: some View {
-    Button {
-      send(button.id)
-    } label: {
-      HStack(spacing: Layout.markGap) {
-        Image(systemName: SymbolName.passed.rawValue)
-          .symbolRenderingMode(.palette)
-          .foregroundStyle(Color.accent, Color.onAccent)
-          .font(Typography.symbol(.control, weight: .semibold))
-          .accessibilityHidden(true)
-        Text(button.title)
-      }
-    }
-    .buttonStyle(.capsule(button.role.look, size: .compact, fill: true))
-    .keyboardShortcut(.defaultAction)
-  }
-}
-
-/// The alert card's own measures, at file scope because `AlertCard` is generic.
-private enum Layout {
-  /// 260: the alert's width.
-  static let width: CGFloat = 260
-  /// 52: the icon's tile; its canvas draws larger, past the frame.
-  static let icon: CGFloat = 52
-  /// 10: the longest label that still sits side by side.
-  static let shortLabel = 10
-  /// 7: between a button's mark and its word.
-  static let markGap: CGFloat = 7
-  /// The top highlight: the glass edge again, faded out by a fifth of the way down, where the corners end.
-  static var highlight: LinearGradient {
-    LinearGradient(
-      colors: [Color.strokeStrong, .clear],
-      startPoint: .top,
-      endPoint: UnitPoint(x: 0.5, y: 0.2)
-    )
   }
 }
 

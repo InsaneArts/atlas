@@ -91,7 +91,8 @@ runs() {
     (*) refuse "macOS could not list the processes of user ID $1" ;;
   esac
 }
-# No configured directory resolves this user ID, and no process runs as it.
+# No configured directory resolves this exact positive user ID, and no
+# process runs as it. Search directly rather than parsing system IDs.
 unused_uid() {
   local found
   found=$(/usr/bin/dscl /Search -search /Users UniqueID $1 </dev/null) || refuse "macOS could not look up user ID $1"
@@ -968,6 +969,43 @@ fn outcome(text: &str) -> Result<(), Refusal> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn combined_setup_with_leftover_logins_requests_authorization_once() {
+        for arguments in [
+            vec![
+                "create",
+                "atlas",
+                "/unused/Atlas",
+                "7004",
+                "Atlas",
+                "picture",
+                "7001",
+                "7002",
+            ],
+            vec![
+                "choose",
+                "atlas",
+                "/unused/Atlas",
+                "7004",
+                "identity",
+                "7001",
+                "7002",
+            ],
+        ] {
+            // Intercept at the Authorization boundary: no dialog or privileged program can run.
+            let ((result, ended), calls) = crate::approval::without_authorization(|| {
+                run_to_end(
+                    Via::Approval("Prepare the helper"),
+                    &arguments,
+                    Some(b"secret"),
+                )
+            });
+            assert_eq!(calls, 1);
+            assert_eq!(result, Err(Refusal::Unavailable));
+            assert!(ended);
+        }
+    }
+
+    #[test]
     fn account_replacement_during_the_last_age_lookup_prevents_bootout() {
         let dir = tempfile::tempdir().unwrap();
         let mut tools = helper_tools(501, 7004, "opie");
@@ -992,6 +1030,11 @@ mod tests {
 
     #[test]
     fn a_callers_death_does_not_release_a_paused_executors_claims() {
+        if !crate::transaction_test::isolated(
+            "onboarding::as_root::tests::a_callers_death_does_not_release_a_paused_executors_claims",
+        ) {
+            return;
+        }
         use std::{process::Stdio, time::Duration};
         for mode in ["approval", "command"] {
             let dir = tempfile::tempdir().unwrap();
@@ -1115,6 +1158,11 @@ mod tests {
 
     #[test]
     fn a_timed_out_executor_holds_control_and_claims_until_it_exits() {
+        if !crate::transaction_test::isolated(
+            "onboarding::as_root::tests::a_timed_out_executor_holds_control_and_claims_until_it_exits",
+        ) {
+            return;
+        }
         use std::{os::fd::OwnedFd, process::Stdio, sync::mpsc, time::Duration};
         let dir = tempfile::tempdir().unwrap();
         let gate = dir.path().join("continue");
@@ -1257,7 +1305,13 @@ if [[ $1 == -u && -e created ]]; then print 7003; else exit 1; fi"#,
     }
 
     fn refuses_occupied_uid(mode: &str) {
-        for failure in ["collision", "lookup", "processes", "process-lookup"] {
+        for failure in [
+            "collision",
+            "garbage",
+            "lookup",
+            "processes",
+            "process-lookup",
+        ] {
             let dir = tempfile::tempdir().unwrap();
             let mut tools = login_tools(501, &[]);
             replace(&mut tools, "/usr/bin/id", "exit 1");
@@ -1268,6 +1322,7 @@ if [[ $1 == -u && -e created ]]; then print 7003; else exit 1; fi"#,
                     "collision" => {
                         r#"[[ $1 == /Search ]] && print 'directory-person 7003'; exit 0"#
                     }
+                    "garbage" => "print garbage",
                     "lookup" => "exit 3",
                     _ => "exit 0",
                 },

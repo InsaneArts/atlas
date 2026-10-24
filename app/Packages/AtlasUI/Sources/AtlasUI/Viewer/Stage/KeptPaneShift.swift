@@ -9,10 +9,13 @@ import SwiftUI
 struct KeptPaneShift: ViewModifier {
   /// Whether the pane shows.
   let isShown: Bool
-  /// Whether the pane draws, faded in or out on its own animation as ``isShown`` changes; it is first built showing.
-  @State private var drawn = true
+  /// Whether the pane draws, faded in or out on its own animation as ``isShown`` changes; it starts clear on its first arrival.
+  @State private var drawn = false
   /// Whether the pane has finished fading in, so its scroll indicators may show.
-  @State private var settled = true
+  @State private var settled = false
+
+  /// Each switch invalidates completions from an interrupted fade.
+  @State private var generation = 0
 
   /// The pane, faded while hidden.
   func body(content: Content) -> some View {
@@ -24,19 +27,21 @@ struct KeptPaneShift: ViewModifier {
       .disabled(!isShown)
       .accessibilityHidden(!isShown)
       .zIndex(isShown ? 1 : 0)
-      .onChange(of: isShown) { _, shown in fade(shown) }
+      .onChange(of: isShown, initial: true) { _, shown in fade(shown) }
   }
 
   /// Fades the pane in or out; once in, its scroll indicators may show.
   ///
   /// - Parameter shown: Whether the pane shows now.
   private func fade(_ shown: Bool) {
+    generation += 1
+    let current = generation
     settled = false
     withAnimation(shown ? PaneShift.arrival : PaneShift.departure) {
       drawn = shown
     } completion: {
       // A fade turned back before it ended leaves the pane hidden, and its indicators with it.
-      settled = drawn
+      if generation == current { settled = drawn }
     }
   }
 }

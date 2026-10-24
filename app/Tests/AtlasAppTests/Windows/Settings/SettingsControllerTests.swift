@@ -66,15 +66,16 @@ struct SettingsControllerTests {
     #expect(notice?.isProblem == true, "drawn in the attention colour")
   }
 
-  @Test("Connect on the Claude app connects the Claude app alone")
+  @Test("Connect on Claude connects the installed Claude app alone")
   func connectingTheClaudeAppNamesOnlyIt() async {
     let commands = ScriptedCommands([
       "agents install": #"{"ok": true, "agents": [{"agent": "claude-app", "ok": true}]}"#,
-      "agents status": #"{"ok": true, "agents": []}"#,
+      "agents status": #"{"ok": true, "agents": [{"agent":"claude-app","installed":true,"connected":false}]}"#,
     ])
     let controller = SettingsController.scripted(commands: commands)
-    await controller.connect(AgentsStatus.claudeAppID)
-    #expect(commands.ran.first == ["agents", "install", "--app"])
+    await controller.loadAgents()
+    await controller.connect("claude")
+    #expect(commands.ran.contains(["agents", "install", "--app"]))
   }
 
   @Test(
@@ -248,10 +249,10 @@ struct SettingsControllerTests {
       return path == "/Applications/Claude.app" ? image : nil
     }
     let agents = controller.state.agents.agents
-    let app = try #require(agents.first { $0.id == AgentsStatus.claudeAppID })
+    let app = try #require(agents.first { $0.id == AgentID.claude.rawValue })
     #expect(app.icon == .app(IconImage(id: "/Applications/Claude.app", image: image)))
     let codex = try #require(agents.first { $0.id == AgentID.codex.rawValue })
-    #expect(codex.icon == .tile(.text(">_")), "an app the dependencies do not find keeps its tile, installed or not")
+    #expect(codex.icon == .app(AgentLogos.codex), "an absent app uses its bundled logo")
     #expect(asked.contains("/Applications/Codex.app"), "each app is looked for through the dependencies")
   }
 
