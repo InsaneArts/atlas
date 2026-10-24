@@ -60,7 +60,11 @@ struct ShotGroupingTests {
     ]
     let days = ShotGrouping(now: Self.now, calendar: Self.calendar)
       .days(shots, matching: "10:31") { date in
-        Words.clockTime(date, locale: Locale(identifier: "de_DE"), timeZone: Self.calendar.timeZone)
+        let style = Date.FormatStyle(locale: Locale(identifier: "de_DE"), timeZone: Self.calendar.timeZone)
+          .hour(.twoDigits(amPM: .abbreviated))
+          .minute(.twoDigits)
+          .second(.twoDigits)
+        return date.formatted(style)
       }
     #expect(days.flatMap(\.shots).map(\.name) == ["a-capture.png"])
   }

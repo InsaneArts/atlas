@@ -15,6 +15,8 @@ package struct ViewerClient: ViewerService {
   static let busy = 503
   /// What a request that timed out says.
   static let lateReply = "The helper did not answer in time."
+  /// The code of a Recover that gave no answer in time, which carries on in the service: the app says it still runs.
+  package static let stillRecoveringCode = "still-recovering"
 
   /// The capability URL every route is under.
   let base: URL
@@ -196,12 +198,13 @@ package struct ViewerClient: ViewerService {
   /// Recover the helper; whether it restarted (rather than starting input).
   ///
   /// - Returns: Whether the helper restarted.
-  /// - Throws: ``ServiceError`` when recovery did not run, or says it still runs when no answer came in time: the
-  ///   service carries on, so the caller reads the status rather than offering Recover again.
+  /// - Throws: ``ServiceError`` when recovery did not run, or one that ``ServiceError/isStillRecovering`` when no
+  ///   answer came in time: the service carries on, so the caller reads the status rather than offering Recover again.
+  ///   The message is generic; the app words these errors with `HelperRecovery.notice(_:)`.
   package func recover() async throws -> Bool {
     struct Body: Encodable {}
     struct Reply: Decodable { let restarted: Bool? }
-    let data = try await post("recover", Body(), timeout: Self.recoveryTimeout, late: Words.stillRecovering)
+    let data = try await post("recover", Body(), timeout: Self.recoveryTimeout, lateCode: Self.stillRecoveringCode)
     return Self.decoded(Reply.self, from: data)?.restarted == true
   }
 
@@ -211,21 +214,21 @@ package struct ViewerClient: ViewerService {
   ///   - route: The route, under the capability URL.
   ///   - body: The request's JSON body.
   ///   - timeout: How long the reply may take, in seconds.
-  ///   - late: What to say when no reply came in time.
+  ///   - lateCode: The code of the error when no reply came in time; nil for none.
   /// - Returns: The reply's body.
-  /// - Throws: ``ServiceError`` with the service's error, or `late` when no reply came in time.
+  /// - Throws: ``ServiceError`` with the service's error, or ``lateReply`` with `lateCode` when no reply came in time.
   func post(
     _ route: String,
     _ body: some Encodable & Sendable,
     timeout: TimeInterval = ViewerClient.timeout,
-    late: String = ViewerClient.lateReply
+    lateCode: String? = nil
   ) async throws -> Data {
     let data: Data
     let response: URLResponse
     do {
       (data, response) = try await session.data(for: request(route, body: body, timeout: timeout))
     } catch let error as URLError where error.code == .timedOut {
-      throw ServiceError(late)
+      throw ServiceError(Self.lateReply, code: lateCode)
     }
     let ok = Self.decoded(Acknowledgement.self, from: data)?.ok == true
     guard (response as? HTTPURLResponse)?.statusCode == 200, ok else {

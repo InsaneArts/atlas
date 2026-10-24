@@ -1,16 +1,38 @@
+import AtlasKit
+
 /// The helper's readiness checks in the app's words: each check the service names (`src/lib/session.rs`) gets a plain
 /// name and, when it fails, one plain sentence with no command in it, since the viewer offers buttons, not commands.
-package enum CheckWords {
+enum CheckWords {
   /// A check whose state cannot be observed yet.
-  package static let notKnown = "Not known yet"
+  static let notKnown = "Not known yet"
   /// A check that passed.
-  package static let ready = "Ready"
+  static let ready = "Ready"
+  /// The native Save and Open check, as the Ready card names it.
+  static let nativeDialogs = "Save and Open dialogs"
+  /// The native Save and Open check before it ran in this session.
+  static let notCheckedYet = "Not checked yet"
+
+  /// The native Save and Open check passed.
+  ///
+  /// - Parameter ageSeconds: How long ago it ran, in seconds; nil when unknown.
+  /// - Returns: "Worked 5 min ago", or "Worked" when its age is unknown.
+  static func worked(ageSeconds: Double?) -> String {
+    "Worked\(ago(ageSeconds))"
+  }
+
+  /// The native Save and Open check failed.
+  ///
+  /// - Parameter ageSeconds: How long ago it ran, in seconds; nil when unknown.
+  /// - Returns: "Didn't work 5 min ago.", or "Didn't work." when its age is unknown.
+  static func didNotWork(ageSeconds: Double?) -> String {
+    "Didn't work\(ago(ageSeconds))."
+  }
 
   /// The check's name as the Ready card shows it.
   ///
   /// - Parameter name: The check's name, as the service gives it.
   /// - Returns: A short plain name; a check this app does not know keeps its own.
-  package static func title(_ name: String) -> String {
+  static func title(_ name: String) -> String {
     switch name {
     case "Helper running", "Helper reachable from here": "Helper"
     case "Helper in the background": "In the background"
@@ -25,7 +47,7 @@ package enum CheckWords {
   ///
   /// - Parameter check: The failed check.
   /// - Returns: What is wrong and, when the app can do it, what to press.
-  package static func failed(_ check: ViewerStatus.Check) -> String {
+  static func failed(_ check: ViewerStatus.Check) -> String {
     let step = check.nextStep ?? ""
     // The service's own step, when it says to start input again, is what Recover does.
     let restartsInput = step.contains("start-input")
@@ -43,5 +65,10 @@ package enum CheckWords {
     case "Input service ready": return "Mouse and keyboard aren't ready."
     default: return step.isEmpty || step.contains("atlas ") ? "Not ready." : Words.sentence(step)
     }
+  }
+
+  /// " 5 min ago" after a native check's word, or nothing when its age is unknown.
+  private static func ago(_ seconds: Double?) -> String {
+    seconds.map { " \(Words.ago($0))" } ?? ""
   }
 }

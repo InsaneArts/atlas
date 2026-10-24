@@ -13,12 +13,13 @@ struct ModeTests {
     #expect(Mode.of(loggedOut.overview).kind == .loggedOut, "the service files it under not ready")
   }
 
-  @Test("a state reads in the service's word, or the app's own when the service gives none")
+  @Test("a state keeps the service's word, and none when the service gives none or an empty one")
   func serviceWord() throws {
     let worded = try status(["overview": ["mode": "agent", "state": "working", "label": "Busy"]])
     #expect(Mode.of(worded.overview) == Mode(.working, label: "Busy"))
     let bare = try status(["overview": ["mode": "agent", "state": "working"]])
-    #expect(Mode.of(bare.overview).label == "Working")
+    #expect(Mode.of(bare.overview).label == nil)
+    #expect(Mode(.working, label: "").label == nil)
   }
 
   @Test(

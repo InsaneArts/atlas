@@ -61,7 +61,8 @@ package protocol ViewerService: Sendable {
   /// Recovers the helper.
   ///
   /// - Returns: Whether it restarted the helper, rather than starting its input.
-  /// - Throws: ``ServiceError`` when recovery did not run.
+  /// - Throws: ``ServiceError`` when recovery did not run, or one that ``ServiceError/isStillRecovering`` when no
+  ///   answer came in time. Its message is generic, so the app words these errors with `HelperRecovery.notice(_:)`.
   func recover() async throws -> Bool
 
   /// Reads what was done in the helper lately. Reading it records nothing.

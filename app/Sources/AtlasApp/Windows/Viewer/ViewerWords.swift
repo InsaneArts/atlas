@@ -3,7 +3,7 @@
 ///
 /// The rule every window follows: fixed copy stays in AtlasUI's views; a presenter supplies only the words that
 /// depend on state, interpolated, chosen by a condition or derived from facts, and a list row's fixed name travels
-/// with its value. Words the window shares with another are AtlasKit's ``Words`` or the app's ``HelperWords``.
+/// with its value. Words the window shares with another are the app's shared ``Words`` or its ``HelperWords``.
 enum ViewerWords {
   /// The helper's name when the status gives none.
   static let helper = "Helper"

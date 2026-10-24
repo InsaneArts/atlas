@@ -50,7 +50,7 @@ enum StatusGlyph {
       return true
     }
     image.isTemplate = mark == nil
-    image.accessibilityDescription = PanelWords.statusItem(mode.label)
+    image.accessibilityDescription = PanelWords.statusItem(mode.word)
     return image
   }
 

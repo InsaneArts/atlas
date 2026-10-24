@@ -1,19 +1,11 @@
-/// One row of recent activity, as shown.
+/// One row of recent activity: who did it and the service's record of what was done, which the app words.
 package struct ActivityItem: Equatable, Sendable, Identifiable {
   /// Who did an action: the person through a viewer, or an agent.
   package enum Actor: Equatable, Sendable {
-    /// The person, through a viewer: "You".
+    /// The person, through a viewer.
     case you
-    /// An agent: "Agent".
+    /// An agent.
     case agent
-
-    /// The actor in words, as a row starts.
-    package var word: String {
-      switch self {
-      case .you: "You"
-      case .agent: "Agent"
-      }
-    }
   }
 
   /// The row's id from the service, which holds across readings; its place in the list, newest first, from a service
@@ -21,15 +13,11 @@ package struct ActivityItem: Equatable, Sendable, Identifiable {
   package let id: String
   /// Who did it.
   package let actor: Actor
-  /// What was done, in words.
-  package let text: String
-  /// How long ago, in words; empty when unknown.
-  package let when: String
-  /// Whether it worked.
-  package let ok: Bool
-  /// Seconds ago, when known.
-  package let age: Double?
+  /// What was done, as the service recorded it.
+  package let row: ViewerStatus.Activity
 
-  /// Who did what, in one line.
-  package var line: String { "\(actor.word) \(text)" }
+  /// Whether it worked.
+  package var ok: Bool { row.ok }
+  /// Seconds ago, when known.
+  package var age: Double? { row.ageSeconds }
 }

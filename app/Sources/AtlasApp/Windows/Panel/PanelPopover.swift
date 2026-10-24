@@ -51,7 +51,7 @@ final class PanelPopover: NSObject, NSPopoverDelegate {
       { [weak controller] in controller?.mode },
       apply: { [weak self] mode in
         self?.item.button?.image = StatusGlyph.image(for: mode)
-        self?.item.button?.toolTip = PanelWords.statusItem(mode.label)
+        self?.item.button?.toolTip = PanelWords.statusItem(mode.word)
       }
     )
     controller.watch(open: false)

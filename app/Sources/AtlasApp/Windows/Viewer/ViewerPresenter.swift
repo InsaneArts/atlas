@@ -3,7 +3,7 @@ import AtlasUI
 
 /// Builds the main window's state from what its controller holds. Pure: every choice the window shows is made here,
 /// from the snapshot, its rules (`ViewerSnapshot+Rules`, which the controller's guards follow too), the status table
-/// (`Mode+StatusSummary`) and AtlasKit's (``Mode``, ``StatusReading``, ``Words``, ``ActivityGrouping``,
+/// (`Mode+StatusSummary`), the shared ``Words`` and AtlasKit's (``Mode``, ``StatusReading``, ``ActivityGrouping``,
 /// ``ShotGrouping``). Its parts are in `ViewerPresenter+TopRow`, `+Screen`, `+Details`, `+Alert`, `+MoreMenu`,
 /// `+Activity`, `+Apps` and `+Shots`.
 enum ViewerPresenter {

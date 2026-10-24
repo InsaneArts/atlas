@@ -5,7 +5,7 @@ import AtlasKit
 ///
 /// The rule every window follows: fixed copy stays in AtlasUI's views; a presenter supplies only the words that
 /// depend on state, interpolated, chosen by a condition or derived from facts. Words the panel shares with another
-/// window are AtlasKit's ``Words`` or the helper commands' ``HelperWords``.
+/// window are the app's shared ``Words`` or the helper commands' ``HelperWords``.
 enum PanelWords {
   /// The person holds control in Atlas's window: the line beside the word.
   static let controlLine = "In Atlas · the agent waits"
@@ -60,10 +60,11 @@ enum PanelWords {
 
   /// Why agents can't use the helper yet, beside Not ready: the service's reason, else that it isn't answering.
   ///
-  /// - Parameter reason: The service's reason; empty, or the placeholder before any reason, for none.
+  /// - Parameter reason: The service's reason; nil before it gives one, or empty, for none.
   /// - Returns: The reason, or "Atlas isn't answering in the helper".
-  static func notReadyLine(_ reason: String) -> String {
-    reason.isEmpty || reason == Words.connecting ? notAnswering : reason
+  static func notReadyLine(_ reason: String?) -> String {
+    guard let reason, !reason.isEmpty else { return notAnswering }
+    return reason
   }
 
   /// What to do once the screen is locked for the helper.

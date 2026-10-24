@@ -21,7 +21,7 @@ extension ViewerSnapshot {
   }
 
   /// Why taking control must wait now, if it must.
-  var controlBlocked: String? {
+  var controlBlocked: StatusReading.ControlBlock? {
     session.holdingControl ? nil : reading.statusReading.controlBlocked
   }
 

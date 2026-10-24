@@ -1,6 +1,7 @@
+import AtlasKit
 import Testing
 
-@testable import AtlasKit
+@testable import AtlasApp
 
 @Suite("Words")
 struct WordsTests {

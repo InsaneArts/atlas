@@ -35,10 +35,10 @@ extension ViewerWords {
 
   /// Control ended because the status said input is not ready, in the status's own words.
   ///
-  /// - Parameter reason: The status's reason; empty, or the placeholder before any reason, for none.
+  /// - Parameter reason: The status's reason; nil before it gives one, or empty, for none.
   /// - Returns: "Control ended. Mouse and keyboard stopped in the helper. Recover starts them again."
-  static func controlEnded(_ reason: String) -> String {
-    let known = reason.isEmpty || reason == Words.connecting ? notReady : reason
+  static func controlEnded(_ reason: String?) -> String {
+    let known = reason.flatMap { $0.isEmpty ? nil : $0 } ?? notReady
     return "Control ended. \(Words.sentence(known))"
   }
 }

@@ -96,7 +96,7 @@ struct ViewerControllerTests {
     let viewer = ViewerController.scripted(service)
     viewer.setVisible(true)
     try await settle("the picture was never found unavailable") { viewer.reading.unavailable != nil }
-    #expect(viewer.reading.unavailable == viewer.reading.status.unobservableReason)
+    #expect(viewer.reading.unavailable == viewer.reading.status.unobservable?.word)
     #expect(viewer.reading.frame == nil)
     viewer.close()
   }

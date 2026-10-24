@@ -4,8 +4,8 @@ import AtlasKit
 struct RecoveryKey: Equatable {
   /// The helper's mode when the alert was set aside.
   let mode: HelperMode
-  /// Why recovery was needed then.
-  let reason: String
+  /// Why recovery was needed then, in words; nil while it ran.
+  let reason: String?
 
   /// The key of an alert offered for a status.
   ///
@@ -14,6 +14,10 @@ struct RecoveryKey: Equatable {
   ///   - status: The status it was offered for.
   init(_ recovery: Recovery, status: ViewerStatus) {
     mode = status.overview.mode
-    reason = recovery.reason
+    reason =
+      switch recovery {
+      case .running: nil
+      case .unknownOutcome(let reason), .notReady(let reason): reason.word
+      }
   }
 }

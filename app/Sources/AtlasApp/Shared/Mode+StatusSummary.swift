@@ -50,7 +50,7 @@ extension Mode {
   /// - Parameter line: The line beside the word.
   /// - Returns: The word, its colour, its mark and the line.
   func summary(line: String) -> StatusSummary {
-    StatusSummary(label: label, tone: tone, mark: mark, line: line)
+    StatusSummary(label: word, tone: tone, mark: mark, line: line)
   }
 
   /// The word's and the mark's colours: blue while working, the link colour in control, orange when the person is

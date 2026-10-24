@@ -14,8 +14,8 @@ extension ViewerPresenter {
     return ViewerDetailsState(
       helper: [
         Fact(name: ViewerWords.accountRow, value: account(snapshot.reading.status)),
-        Fact(name: ViewerWords.stateRow, value: facts.input),
-        Fact(name: Words.displayFact, value: facts.display),
+        Fact(name: ViewerWords.stateRow, value: facts.input.word),
+        Fact(name: Words.displayFact, value: Words.size(facts.display) ?? Words.unknown),
       ],
       ready: readyRows(reading.readinessItems),
       updates: updates(snapshot),

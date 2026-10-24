@@ -1,4 +1,4 @@
-/// One check in the viewer sidebar's Ready card.
+/// One check in the viewer sidebar's Ready card: what it checks, how it stands and what it found, which the app words.
 package struct StatusRow: Equatable, Sendable, Identifiable {
   /// How a check stands.
   package enum State: Sendable {
@@ -10,12 +10,12 @@ package struct StatusRow: Equatable, Sendable, Identifiable {
     case bad
   }
 
-  /// The check's name.
-  package let name: String
+  /// What it checks.
+  package let subject: Subject
   /// How it stands.
   package let state: State
-  /// What it says, in words.
-  package let text: String
-  /// The check's name, which is unique.
-  package var id: String { name }
+  /// What it found.
+  package let detail: Detail
+  /// What it checks, which is unique.
+  package var id: Subject { subject }
 }

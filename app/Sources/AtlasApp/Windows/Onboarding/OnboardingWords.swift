@@ -5,7 +5,7 @@ import AtlasKit
 ///
 /// The rule every window follows: fixed copy stays in AtlasUI's views; a presenter supplies only the words that
 /// depend on state, interpolated, chosen by a condition or derived from facts, and a list row's fixed name travels
-/// with its value. Words the window shares with the panel are AtlasKit's ``Words``.
+/// with its value. Words the window shares with the panel are the app's shared ``Words``.
 enum OnboardingWords {
 
   /// The first reading gave a reply that is not a status.

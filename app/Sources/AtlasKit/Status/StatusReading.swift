@@ -1,4 +1,4 @@
-/// What the panel and viewer show of a status: one place, so they agree.
+/// What the panel and viewer show of a status, as kinds: one place, so they agree. The app words them.
 package struct StatusReading: Equatable, Sendable {
   /// The status it reads.
   package let status: ViewerStatus
@@ -13,20 +13,13 @@ package struct StatusReading: Equatable, Sendable {
   /// Recent operations, newest first.
   ///
   /// - Parameter limit: The most rows. Default 6.
-  /// - Returns: Who did what and when, newest first.
+  /// - Returns: Who did what and how long ago, newest first.
   package func activity(limit: Int = 6) -> [ActivityItem] {
     status.overview.activity
       .prefix(limit)
       .enumerated()
       .map { index, row in
-        ActivityItem(
-          id: row.id ?? String(index),
-          actor: row.actor == "viewer" ? .you : .agent,
-          text: Words.describe(row),
-          when: row.ageSeconds.map(Words.ago) ?? "",
-          ok: row.ok,
-          age: row.ageSeconds
-        )
+        ActivityItem(id: row.id ?? String(index), actor: row.actor == "viewer" ? .you : .agent, row: row)
       }
   }
 
@@ -48,40 +41,40 @@ package struct StatusReading: Equatable, Sendable {
   /// The session's facts; this viewer knows whether it holds control.
   ///
   /// - Parameter holdingControl: Whether this viewer holds control.
-  /// - Returns: The display, input, control and pending actions, each in words.
+  /// - Returns: The display, input, control and pending actions.
   package func facts(holdingControl: Bool) -> SessionFacts {
-    let overview = status.overview
-    let input =
-      status.session.inputReady ? "Ready" : status.session.inputReachable ? "Not ready" : "Not answering"
+    let session = status.session
+    let input: SessionFacts.Input =
+      session.inputReady ? .ready : session.inputReachable ? .notReady : .notAnswering
     return SessionFacts(
-      display: Words.size(overview.display) ?? Words.unknown,
+      display: status.overview.display,
       input: input,
       control: availability(holdingControl: holdingControl),
-      pending: overview.pending > 0 ? String(overview.pending) : "None"
+      pending: status.overview.pending
     )
   }
 
   /// Whether this viewer could take control now, and if not, why.
-  func availability(holdingControl: Bool) -> String {
+  func availability(holdingControl: Bool) -> SessionFacts.Control {
     let mode = status.overview.mode
-    if mode.isControlled(byThisViewer: holdingControl) { return "This window" }
+    if mode.isControlled(byThisViewer: holdingControl) { return .thisWindow }
     return switch mode {
     // The person may take over while an agent works: its action under way finishes first (``controlBlocked``).
-    case .observing, .stopped, .agent: "Available"
-    case .controlling: "Another window"
-    case .recovering: "After recovery"
-    case .blocked, .unavailable: "Not ready"
-    case .loggedOut: "Logged out"
+    case .observing, .stopped, .agent: .available
+    case .controlling: .anotherWindow
+    case .recovering: .afterRecovery
+    case .blocked, .unavailable: .notReady
+    case .loggedOut: .loggedOut
     }
   }
 
-  /// Why a viewer that does not hold control must wait to take it, if it must, as a sentence; `nil` when nothing
-  /// blocks it. An agent at work never does: the person may always take over, and the service answers busy only while
-  /// one of its actions runs, which the viewer asks again after.
-  package var controlBlocked: String? {
+  /// Why a viewer that does not hold control must wait to take it, if it must; `nil` when nothing blocks it. An agent
+  /// at work never does: the person may always take over, and the service answers busy only while one of its actions
+  /// runs, which the viewer asks again after.
+  package var controlBlocked: ControlBlock? {
     switch status.overview.mode {
-    case .recovering: "Recover before taking control."
-    case .controlling: "\(Words.inUseElsewhereLine)."
+    case .recovering: .recovery
+    case .controlling: .anotherWindow
     default: nil
     }
   }
@@ -90,49 +83,44 @@ package struct StatusReading: Equatable, Sendable {
   ///
   /// - Parameter holdingControl: Whether this viewer holds control.
   /// - Returns: The service's reason, unless this viewer's control says more.
-  package func reason(holdingControl: Bool) -> String {
+  package func reason(holdingControl: Bool) -> Reason {
     let mode = status.overview.mode
-    if mode.isControlled(byThisViewer: holdingControl) {
-      return "You have mouse and keyboard control"
-    }
-    if mode == .controlling { return Words.inUseElsewhereLine }
-    // Idle says what an agent did last, in the words beside the status, not the service's reason.
-    if status.overview.state == .idle { return idleLine.isEmpty ? Words.nothingHappening : idleLine }
+    if mode.isControlled(byThisViewer: holdingControl) { return .yourControl }
+    if mode == .controlling { return .inUseElsewhere }
+    // Idle says what an agent did last, as the line beside the status does, not the service's reason.
+    if status.overview.state == .idle { return newestAgentAction.map(Reason.lastAction) ?? .nothingHappening }
     // A helper that is not ready gives its first step, which may name a command: its failed check says it plainly.
     if mode == .blocked, let check = status.checks.first(where: { $0.ok == false }) {
-      return CheckWords.failed(check)
+      return .failedCheck(check)
     }
-    return status.overview.reason.isEmpty ? Words.connecting : status.overview.reason
+    guard let reason = status.overview.reason, !reason.isEmpty else { return .connecting }
+    return .service(reason)
   }
 
-  /// Each readiness check in the app's words, then the native Save and Open check, which never counts as ready. An
-  /// unknown check is unobservable, not failed.
+  /// Each readiness check, then the native Save and Open check, which never counts as ready. An unknown check is
+  /// unobservable, not failed.
   package var statusRows: [StatusRow] {
-    // A silent helper's steps name commands; the overview says it in the app's words.
+    // A silent helper's steps name commands; the overview's reason stands for them.
     let silent = !status.overview.mode.answers
     var rows = status.checks.map { check in
-      let name = CheckWords.title(check.name)
+      let subject = StatusRow.Subject.check(check.name)
       return switch check.ok {
-      case true: StatusRow(name: name, state: .ready, text: CheckWords.ready)
-      case nil: StatusRow(name: name, state: .unknown, text: CheckWords.notKnown)
-      case false? where silent: StatusRow(name: name, state: .bad, text: status.overview.reason)
-      default: StatusRow(name: name, state: .bad, text: CheckWords.failed(check))
+      case true: StatusRow(subject: subject, state: .ready, detail: .passed)
+      case nil: StatusRow(subject: subject, state: .unknown, detail: .notKnown)
+      case false? where silent:
+        StatusRow(subject: subject, state: .bad, detail: .helperSilent(status.overview.reason))
+      default: StatusRow(subject: subject, state: .bad, detail: .failed(check))
       }
     }
     let native = status.capabilities.nativeDialogs
-    // "Worked 5 min ago", or "Worked" when its age is unknown.
-    let ago = native.ageSeconds.map { " \(Words.ago($0))" } ?? ""
-    let name = "Save and Open dialogs"
     switch native.state {
     case .passed:
-      rows.append(StatusRow(name: name, state: .ready, text: "Worked\(ago)"))
+      rows.append(StatusRow(subject: .nativeDialogs, state: .ready, detail: .worked(ageSeconds: native.ageSeconds)))
     case .failed:
-      rows.append(
-        StatusRow(name: name, state: .bad, text: "Didn't work\(ago).")
-      )
+      rows.append(StatusRow(subject: .nativeDialogs, state: .bad, detail: .didNotWork(ageSeconds: native.ageSeconds)))
     case .unchecked:
       if !native.reason.isEmpty {
-        rows.append(StatusRow(name: name, state: .unknown, text: "Not checked yet"))
+        rows.append(StatusRow(subject: .nativeDialogs, state: .unknown, detail: .notChecked))
       }
     }
     return rows
@@ -149,14 +137,11 @@ package struct StatusReading: Equatable, Sendable {
   /// - Parameters:
   ///   - holdingControl: Whether this viewer holds control.
   ///   - recovering: Whether this viewer is running recovery now.
-  /// - Returns: The alert's title, reason and whether it is busy, or `nil` when there is none.
+  /// - Returns: Running, or why recovery is offered, or `nil` when there is none.
   package func recovery(holdingControl: Bool, recovering: Bool) -> Recovery? {
-    if recovering {
-      return Recovery(title: Words.recovering, reason: "Restoring the helper.", busy: true)
-    }
+    if recovering { return .running }
     guard recoveryOffered(holdingControl: holdingControl) else { return nil }
-    let title =
-      status.overview.mode == .blocked ? "The helper isn't ready" : "The last action's outcome is unknown"
-    return Recovery(title: title, reason: reason(holdingControl: false), busy: false)
+    let reason = reason(holdingControl: false)
+    return status.overview.mode == .blocked ? .notReady(reason) : .unknownOutcome(reason)
   }
 }

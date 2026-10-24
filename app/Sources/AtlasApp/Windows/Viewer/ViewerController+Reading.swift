@@ -66,7 +66,7 @@ extension ViewerController {
       let reply = try await service.status()
       guard current() else { return }
       show(reply)
-      if let reason = reply.unobservableReason { throw ServiceError(reason) }
+      if let reason = reply.unobservable?.word { throw ServiceError(reason) }
       let next: Frame
       if let early = await early {
         next = early

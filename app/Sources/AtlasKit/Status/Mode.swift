@@ -1,6 +1,8 @@
-/// What the helper is doing, as the person reads it: one row of the status table, and its word. The service names
-/// the states every agent app shows (``OverviewState``); the app adds what only it can know: a helper logged out,
-/// a window still connecting, and control held by another window. How each looks is the UI's.
+/// What the helper is doing, as the person reads it: one row of the status table, and the service's word for it when
+/// it gives one; the app words the rest. The service names the states every agent app shows (``OverviewState``); the
+/// app adds what only it can know: a helper logged out, a window still connecting, and control held by another window.
+/// How each looks is the UI's. Two modes are equal only when their rows and the service's words both are, so a new
+/// word from the service is a change even on the same row.
 package struct Mode: Equatable, Sendable {
   /// The status table's rows.
   package enum Kind: Equatable, Sendable {
@@ -22,36 +24,21 @@ package struct Mode: Equatable, Sendable {
     case connecting
     /// Another window holds control.
     case inUseElsewhere
-
-    /// The row's own word, when the service gives none.
-    var word: String {
-      switch self {
-      case .idle: "Idle"
-      case .working: "Working"
-      case .control: "You have control"
-      case .needsYou: "Needs you"
-      case .stopped: "Stopped"
-      case .notReady: "Not ready"
-      case .loggedOut: "Logged out"
-      case .connecting: "Connecting"
-      case .inUseElsewhere: Words.inUseElsewhere
-      }
-    }
   }
 
   /// The row.
   package let kind: Kind
-  /// Its word, such as "Working": the service's own, else the row's.
-  package let label: String
+  /// The service's own word, such as "Working"; nil when it gives none, and the app says the row's.
+  package let label: String?
 
   /// Creates a mode.
   ///
   /// - Parameters:
   ///   - kind: The row.
-  ///   - label: Its word; nil or empty takes the row's own.
+  ///   - label: The service's word; nil or empty for none.
   package init(_ kind: Kind, label: String? = nil) {
     self.kind = kind
-    self.label = label.flatMap { $0.isEmpty ? nil : $0 } ?? kind.word
+    self.label = label.flatMap { $0.isEmpty ? nil : $0 }
   }
 
   /// A window before its first answer.

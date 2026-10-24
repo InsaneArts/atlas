@@ -23,7 +23,7 @@ extension StatusReading {
 
   /// Each readiness check, as the Ready card lists it.
   var readinessItems: [ReadinessItem] {
-    statusRows.map { ReadinessItem(name: $0.name, text: $0.text, state: $0.state.readiness) }
+    statusRows.map { ReadinessItem(name: $0.subject.word, text: $0.detail.word, state: $0.state.readiness) }
   }
 
   /// One action in AtlasUI's terms: what was done, by whom, and its mark, a warning sign for a failure and a quiet dot

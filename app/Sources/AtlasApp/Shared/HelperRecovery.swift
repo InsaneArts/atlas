@@ -12,4 +12,14 @@ struct HelperRecovery {
     guard outcome.ok else { return HelperWords.recoverRefused(outcome) }
     return action == .restart ? Words.recovered : Words.readyAgain
   }
+
+  /// What a window says when the viewer service's own Recover (``ViewerService/recover()``) failed: that it still
+  /// runs, when it gave no answer in time and carries on, else the service's words. Every caller of `recover()` words
+  /// its errors here, since the late one's message is generic.
+  ///
+  /// - Parameter error: Why the service's Recover failed.
+  /// - Returns: "The helper is still recovering. This can take a minute.", or the service's error as a sentence.
+  static func notice(_ error: ServiceError) -> String {
+    error.isStillRecovering ? Words.stillRecovering : Words.sentence(error.message)
+  }
 }

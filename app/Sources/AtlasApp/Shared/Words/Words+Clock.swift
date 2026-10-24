@@ -9,7 +9,7 @@ extension Words {
   ///   - locale: The person's locale, which picks the clock.
   ///   - timeZone: The person's time zone.
   /// - Returns: "10:31:42" on a 24-hour clock, "10:31:42 AM" on a 12-hour one.
-  package static func clockTime(_ date: Date, locale: Locale, timeZone: TimeZone) -> String {
+  static func clockTime(_ date: Date, locale: Locale, timeZone: TimeZone) -> String {
     let style = Date.FormatStyle(locale: locale, timeZone: timeZone)
       .hour(.twoDigits(amPM: .abbreviated))
       .minute(.twoDigits)
@@ -24,7 +24,7 @@ extension Words {
   ///   - locale: The person's locale.
   ///   - timeZone: The person's time zone.
   /// - Returns: "Mon 19 Oct", in the locale's own order.
-  package static func dayName(_ date: Date, locale: Locale, timeZone: TimeZone) -> String {
+  static func dayName(_ date: Date, locale: Locale, timeZone: TimeZone) -> String {
     let style = Date.FormatStyle(locale: locale, timeZone: timeZone)
       .weekday(.abbreviated)
       .day()

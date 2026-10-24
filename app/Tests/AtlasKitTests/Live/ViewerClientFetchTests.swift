@@ -39,6 +39,16 @@ struct ViewerClientFetchTests {
     }
   }
 
+  @Test("a recovery with no answer in time is reported as still recovering, a value with no words of its own")
+  func aLateRecoveryIsAValue() async throws {
+    let late = try client(.failure(.timedOut))
+    let error = await #expect(throws: ServiceError.self) { try await late.recover() }
+    #expect(error?.isStillRecovering == true)
+    let other = try client(.failure(.timedOut))
+    let screenshots = await #expect(throws: ServiceError.self) { try await other.screenshots() }
+    #expect(screenshots?.isStillRecovering == false, "only Recover carries on in the service")
+  }
+
   @Test("a screenshot comes back as its bytes, and any other reply than a 200 is the service's error")
   func aScreenshotIsItsBytes() async throws {
     let picture = Data([0x89, 0x50, 0x4E, 0x47])

@@ -7,8 +7,9 @@ extension ViewerStatus {
     package var state = OverviewState.notReady
     /// The state in the service's words, such as "Working"; empty when it gives none.
     package var label = ""
-    /// Why the helper is in its mode, in the service's words.
-    package var reason = Words.connecting
+    /// Why the helper is in its mode, in the service's words; nil before the service gives one, which the app reads as
+    /// connecting.
+    package var reason: String?
     /// Whether Recover fixes what keeps the helper not ready: its input stopped or lost its display.
     package var recoverable = false
     /// The helper's short account name.
@@ -87,7 +88,7 @@ extension ViewerStatus {
       mode = (try? container.decodeIfPresent(HelperMode.self, forKey: .mode)) ?? .unavailable
       state = (try? container.decodeIfPresent(OverviewState.self, forKey: .state)) ?? .notReady
       label = (try? container.decodeIfPresent(String.self, forKey: .label)) ?? ""
-      reason = (try? container.decodeIfPresent(String.self, forKey: .reason)) ?? reason
+      reason = try? container.decodeIfPresent(String.self, forKey: .reason)
       recoverable = (try? container.decodeIfPresent(Bool.self, forKey: .recoverable)) ?? false
       account = try? container.decodeIfPresent(String.self, forKey: .account)
       accountName = try? container.decodeIfPresent(String.self, forKey: .accountName)
