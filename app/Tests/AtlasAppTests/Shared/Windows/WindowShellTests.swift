@@ -21,7 +21,7 @@ struct WindowShellTests {
     let windows: [any WindowPresenting] = [
       live.viewer(.scripted(service)) { _ in },
       live.settings(.scripted(commands: commands)) { _ in },
-      live.onboarding(OnboardingControllerTests.controller(commands)) { _ in },
+      live.onboarding(OnboardingController.scripted(commands)) { _ in },
       live.alert(AlertController(alert: .recover, actions: actions, links: AlertLinks(clock: ManualClock()))),
     ]
     for (index, made) in windows.enumerated() {

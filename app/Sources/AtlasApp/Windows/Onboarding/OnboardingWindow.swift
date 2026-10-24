@@ -17,6 +17,9 @@ final class OnboardingWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   /// changes with every reading, and the window moves only when the placing asked for differs from this one
   /// (``OnboardingPlacement/placed(guiding:last:place:)``).
   private var placedGuiding: Bool?
+  /// The controller's `run()`, its reading loop and its queue, from the first `present()`; it ends by itself once the
+  /// controller has closed and a request under way has settled.
+  private var work: Task<Void, Never>?
   /// The drag ghost, which the permission panel's icon starts and the dock shows over System Settings.
   private let ghost = DragGhost()
   /// Moves the window. Made once the window exists, as it moves this window.
@@ -79,7 +82,8 @@ final class OnboardingWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     )
   }
 
-  /// Brings the window forward, reading the facts while it is open. The app shows its Dock icon first.
+  /// Brings the window forward, its controller reading the facts and performing its requests while it is open. The app
+  /// shows its Dock icon first.
   func present() {
     if !isPresented {
       setContentSize(OnboardingPlacement.size(guiding: false))
@@ -88,7 +92,11 @@ final class OnboardingWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     isPresented = true
     makeKeyAndOrderFront(nil)
     NSApp.activate()
-    controller.watch()
+    if work == nil {
+      // Unstructured, as AppKit's present() cannot wait: the controller runs while the window is open, and its run()
+      // ends by itself once the window has closed.
+      work = Task { [controller] in await controller.run() }
+    }
   }
 
   /// Moves to the card in the middle, coming in front again, or to the side panel beside System Settings, floating so

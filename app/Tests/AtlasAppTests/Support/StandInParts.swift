@@ -65,7 +65,7 @@ final class StandInParts: WindowParts {
   ///
   /// - Returns: The controller.
   func onboardingController() -> OnboardingController {
-    OnboardingControllerTests.controller(ScriptedCommands([:]))
+    OnboardingController.scripted(ScriptedCommands([:]))
   }
 
   /// No alert window: the tests here open none.

@@ -1,0 +1,67 @@
+import AtlasOnboarding
+import Foundation
+import Testing
+
+@testable import AtlasApp
+
+@Suite("OnboardingPresenter helper")
+struct OnboardingPresenterHelperTests {
+  /// The setup window's sample facts and snapshots, shared by the presenter's suites.
+  typealias Samples = OnboardingSamples
+
+  @Test("the panel counts its permission by this macOS's name and ticks its pill once the switch is on")
+  func panelPill() throws {
+    var snapshot = Samples.snapshot(try Samples.helperSide(accessibility: true))
+    snapshot.macOS = Samples.tahoe
+    let off = OnboardingPresenter.panel(.screenRecording, snapshot: snapshot)
+    #expect(off.label == "2 of 2 · Screen & System Audio Recording")
+    #expect(off.instruction == "Drag Atlas into the top list.")
+    #expect(off.pill == "Waiting for the switch…" && !off.isOn)
+    #expect(off.alreadyListed == "Already in the top list? Turn its switch on.")
+    let on = OnboardingPresenter.panel(.accessibility, snapshot: snapshot)
+    #expect(on.label == "1 of 2 · Accessibility")
+    #expect(on.pill == "Allowed" && on.isOn)
+    snapshot.macOS = OperatingSystemVersion(majorVersion: 27, minorVersion: 0, patchVersion: 0)
+    #expect(
+      OnboardingPresenter.panel(.accessibility, snapshot: snapshot).label == "1 of 2 · Device Control and Data Access"
+    )
+  }
+
+  @Test("Accessibility is allowed before Screen Recording, one at a time")
+  func accessibilityFirst() throws {
+    var neither = Samples.snapshot(try Samples.helperSide())
+    neither.macOS = Samples.tahoe
+    let first = OnboardingPresenter.permissions(neither)
+    #expect(first.accessibility.canAllow && !first.screenRecording.canAllow)
+    #expect(first.accessibility.status == "Off" && first.accessibility.allowTitle == "Allow…")
+    var one = Samples.snapshot(try Samples.helperSide(accessibility: true))
+    one.macOS = Samples.tahoe
+    let second = OnboardingPresenter.permissions(one)
+    #expect(!second.accessibility.canAllow && second.screenRecording.canAllow)
+    #expect(second.accessibility.status == "Allowed")
+    #expect(second.screenRecording.title == "Screen & System Audio Recording")
+    let both = OnboardingPresenter.permissions(
+      Samples.snapshot(try Samples.helperSide(accessibility: true, screen: true))
+    )
+    #expect(!both.accessibility.canAllow && !both.screenRecording.canAllow)
+  }
+
+  @Test("permissions not read yet show as being checked, with nothing to allow")
+  func unknownPermissions() throws {
+    var facts = try Samples.helperSide(accessibility: true)
+    facts.asker.permissionsKnown = false
+    let screen = OnboardingPresenter.permissions(Samples.snapshot(facts))
+    #expect(!screen.screenRecording.canAllow)
+    #expect(screen.screenRecording.status == "Checking…")
+  }
+
+  @Test("the helper's done screen names the account to switch back to, or the person's own")
+  func helperDoneTail() throws {
+    let asked = OnboardingPresenter.helperDone(try Samples.helperSide(accessibility: true, screen: true).asker)
+    #expect(asked.tail == "Switch back to Ismayil.")
+    let unasked = OnboardingPresenter.helperDone(
+      try Samples.helperSide(asker: "", accessibility: true, screen: true).asker
+    )
+    #expect(unasked.tail == "Switch back to your own account.")
+  }
+}

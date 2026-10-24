@@ -84,6 +84,7 @@ final class SettingsDock {
         to: NSRect(origin: OnboardingPlacement.shrunk(frame: size, from: window.frame, visible: visible), size: size)
       )
     }
+    // Unstructured and stored, as the window's placing cannot wait: it follows until `stop()` cancels it.
     following = Task { [weak self, clock] in
       var looks = 0
       while !Task.isCancelled {

@@ -26,33 +26,37 @@ private let choiceForgotten = """
 struct OnboardingControllerChoiceTests {
   @Test("choosing another account after creating one goes back to the list, not the account form")
   func chooseAnotherAfterCreating() async throws {
-    let commands = ScriptedCommands(["onboarding status": freshMac, "onboarding forget": #"{"ok": true}"#])
-    let controller = OnboardingControllerTests.controller(commands)
-    controller.refresh()
-    try await settle("the facts were never read") { controller.snapshot.loaded }
-    controller.send(.begin)
-    await controller.useHelper()
-    #expect(controller.snapshot.step == .createAccount)
-    commands.answer("onboarding status", choiceAsked)
-    controller.refresh()
-    try await settle("the switch step never showed") { controller.snapshot.step == .switchToHelper }
-    #expect(controller.state.footer.back?.title == .chooseAnother)
-    commands.answer("onboarding status", choiceForgotten)
-    controller.send(.chooseAnother)
-    try await settle("the helper was never given up") {
-      commands.ran.contains(["onboarding", "forget"]) && controller.snapshot.step != .switchToHelper
+    let commands = ScriptedCommands([
+      "onboarding status": OnboardingReplies.freshMac, "onboarding forget": #"{"ok": true}"#,
+    ])
+    let controller = OnboardingController.scripted(commands)
+    try await controller.whileOpen { _ in
+      try await controller.untilLoaded()
+      controller.send(.begin)
+      await controller.useHelper()
+      #expect(controller.snapshot.step == .createAccount)
+      commands.answer("onboarding status", choiceAsked)
+      controller.refresh()
+      try await settle("the switch step never showed") { controller.snapshot.step == .switchToHelper }
+      #expect(controller.state.footer.back?.title == .chooseAnother)
+      commands.answer("onboarding status", choiceForgotten)
+      controller.send(.chooseAnother)
+      try await settle("the helper was never given up") {
+        commands.ran.contains(["onboarding", "forget"]) && controller.snapshot.step != .switchToHelper
+      }
+      #expect(controller.snapshot.step == .chooseHelper, "landed on \(controller.snapshot.step)")
     }
-    #expect(controller.snapshot.step == .chooseHelper, "landed on \(controller.snapshot.step)")
   }
 
   @Test("skipping agents that could not be checked leaves no note about them on Done")
   func skippedAgentsLeavesNoProblem() async throws {
-    let commands = ScriptedCommands(["onboarding status": finishedMac])
-    let controller = OnboardingControllerTests.controller(commands)
-    controller.refresh()
-    try await settle("the agents check never failed") { controller.snapshot.agentsFailed }
-    controller.send(.connectAgents)
-    try await settle("Done never showed") { controller.snapshot.step == .done }
-    #expect(controller.snapshot.problem == nil, "Done shows: \(controller.snapshot.problem ?? "")")
+    let commands = ScriptedCommands(["onboarding status": OnboardingReplies.finishedMac])
+    let controller = OnboardingController.scripted(commands)
+    try await controller.whileOpen { _ in
+      try await settle("the agents check never failed") { controller.snapshot.agentsFailed }
+      controller.send(.connectAgents)
+      try await settle("Done never showed") { controller.snapshot.step == .done }
+      #expect(controller.snapshot.problem == nil, "Done shows: \(controller.snapshot.problem ?? "")")
+    }
   }
 }
