@@ -19,6 +19,19 @@ enum Typography {
     .system(size: style.pointSize, weight: weight, design: design)
   }
 
+  /// The system font from the scale with tabular digits, so numbers that change keep their width: Activity's times,
+  /// sizes, versions and Recent's times. v3 asks for SF Mono 12 (D1's "mono digits"); the system face's tabular
+  /// digits read as v3 means without a second face, and Activity's redesign compares both before choosing.
+  ///
+  /// - Parameters:
+  ///   - style: The size.
+  ///   - weight: The weight, or nil for the style's ``TextStyle/defaultWeight``.
+  /// - Returns: The system font at the style's size, its digits all one width.
+  static func digits(_ style: TextStyle, weight: Font.Weight? = nil) -> Font {
+    font(style, weight: weight ?? style.defaultWeight)
+      .monospacedDigit()
+  }
+
   /// A system font for a glyph sized from its frame rather than from the scale, such as a symbol at a fraction of the
   /// circle it sits in. Only for glyphs sized from a frame: the size is arithmetic on the frame's token, never a
   /// literal, which the token checker refuses.

@@ -102,29 +102,34 @@ struct DesignSystemTests {
     #expect(sizes.allSatisfy { $0 == $0.rounded() })
   }
 
-  @Test("strokes, opacities and durations ascend, no two steps alike")
+  @Test("strokes and opacities ascend with no two steps alike, and durations ascend as declared")
   func scalesAscend() {
-    let scales: [(String, [Double])] = [
-      ("stroke", [Stroke.hairline, Stroke.regular, Stroke.emphasis, Stroke.thick].map(Double.init)),
+    let scales: [(name: String, steps: [Double], distinct: Bool)] = [
+      ("stroke", [Stroke.hairline, Stroke.regular, Stroke.emphasis, Stroke.thick].map(Double.init), true),
       (
         "opacity",
         [
           Opacity.tint, Opacity.tintStrong, Opacity.edgeTintQuiet, Opacity.disabled, Opacity.dimmed, Opacity.muted,
           Opacity.edgeTint, Opacity.demonstration,
-        ]
+        ],
+        true
       ),
       (
         "duration",
         [
-          Motion.Duration.press, Motion.Duration.fade, Motion.Duration.entry, Motion.Duration.glide,
-          Motion.Duration.pulse, Motion.Duration.spin,
+          Motion.Duration.press, Motion.Duration.hoverIn, Motion.Duration.leave, Motion.Duration.fade,
+          Motion.Duration.hoverOut, Motion.Duration.reduced, Motion.Duration.entry, Motion.Duration.appearDelay,
+          Motion.Duration.glide, Motion.Duration.glideSoft, Motion.Duration.pulse, Motion.Duration.spin,
+          Motion.Duration.breathe, Motion.Duration.toast,
         ]
-        .map(\.seconds)
+        .map(\.seconds),
+        // Steps of different roles may share a length, such as fade, hoverOut and reduced.
+        false
       ),
     ]
-    for (name, steps) in scales {
+    for (name, steps, distinct) in scales {
       #expect(steps == steps.sorted(), "\(name)")
-      #expect(Set(steps).count == steps.count, "\(name)")
+      #expect(!distinct || Set(steps).count == steps.count, "\(name)")
     }
   }
 
@@ -136,10 +141,10 @@ struct DesignSystemTests {
     #expect(levels.map(\.y) == levels.map(\.y).sorted())
   }
 
-  @Test("every shadow is drawn in one of the two shadow colours")
+  @Test("every shadow is drawn in one of the shadow colours")
   func shadowsUseTheShadowColours() {
     for level in Elevation.allCases {
-      #expect([Color.dropShadow, Color.dropShadowStrong].contains(level.color), "\(level)")
+      #expect([Color.dropShadowSoft, Color.dropShadow, Color.dropShadowStrong].contains(level.color), "\(level)")
     }
   }
 
@@ -154,6 +159,62 @@ struct DesignSystemTests {
       + shadows
     for step in steps {
       #expect(step.truncatingRemainder(dividingBy: 2) == 0, "\(step)")
+    }
+  }
+
+  @Test("every colour wash is its base colour at the documented opacity")
+  func washesAreTheirBaseAtTheirOpacity() {
+    let washes: [(name: String, wash: Color, base: Color, opacity: Float)] = [
+      ("accentWash", .accentWash, .accent, 0.09),
+      ("accentTint", .accentTint, .accent, 0.07),
+      ("accentRing", .accentRing, .accent, 0.2),
+      ("attentionWash", .attentionWash, .attention, 0.09),
+      ("attentionFill", .attentionFill, .attention, 0.16),
+      ("fillGroup", .fillGroup, .white, 0.05),
+      ("fillRowHover", .fillRowHover, .white, 0.035),
+      ("fillControlHover", .fillControlHover, .white, 0.12),
+      ("fillGlass", .fillGlass, .ground, 0.66),
+      ("strokeHighlight", .strokeHighlight, .white, 0.12),
+      ("dropShadowSoft", .dropShadowSoft, .black, 0.4),
+    ]
+    let environment = EnvironmentValues()
+    for (name, wash, base, opacity) in washes {
+      let washed = wash.resolve(in: environment)
+      let solid = base.resolve(in: environment)
+      #expect(abs(washed.opacity - opacity) < 0.001, "\(name)")
+      #expect(abs(washed.red - solid.red) < 0.001, "\(name)")
+      #expect(abs(washed.green - solid.green) < 0.001, "\(name)")
+      #expect(abs(washed.blue - solid.blue) < 0.001, "\(name)")
+    }
+  }
+
+  @Test("a style's line height is never less than its point size")
+  func lineHeightsHoldTheirText() {
+    for style in TextStyle.allCases {
+      #expect(style.lineSpacing >= 0, "\(style)")
+      guard let lineHeight = style.lineHeight else {
+        #expect(style.lineSpacing == 0, "\(style) keeps the font's own height")
+        continue
+      }
+      #expect(lineHeight >= style.pointSize, "\(style)")
+    }
+  }
+
+  @Test("every new solid colour and glass tint is its documented value")
+  func newColoursHaveTheirValues() {
+    let colours: [(name: String, colour: Color, rgb: [Float], opacity: Float)] = [
+      ("fillPrimaryHover", .fillPrimaryHover, [0xFF, 0xFF, 0xFF], 1),
+      ("fillPrimaryPressed", .fillPrimaryPressed, [0xE3, 0xE3, 0xE8], 1),
+      ("fillGlassThick", .fillGlassThick, [38, 38, 42], 0.78),
+    ]
+    let environment = EnvironmentValues()
+    for (name, colour, rgb, opacity) in colours {
+      let resolved = colour.resolve(in: environment)
+      let channels = [resolved.red, resolved.green, resolved.blue]
+      for (channel, value) in zip(channels, rgb) {
+        #expect(abs(channel * 255 - value) < 0.5, "\(name)")
+      }
+      #expect(abs(resolved.opacity - opacity) < 0.001, "\(name)")
     }
   }
 }

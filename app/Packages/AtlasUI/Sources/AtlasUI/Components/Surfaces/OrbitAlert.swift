@@ -65,10 +65,10 @@ struct OrbitAlert<ID: Hashable & Sendable>: View {
     let shape = RoundedRectangle(cornerRadius: Radius.extraLarge)
     if reduceTransparency {
       shape
-        .fill(Color.fillOverlaySolid)
+        .fill(Color.fillModalSolid)
     } else {
       shape
-        .fill(Color.fillOverlay)
+        .fill(Color.fillModal)
         .background(.ultraThinMaterial, in: shape)
     }
   }
