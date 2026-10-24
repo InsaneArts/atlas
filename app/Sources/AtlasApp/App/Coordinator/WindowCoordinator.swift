@@ -104,6 +104,12 @@ final class WindowCoordinator {
     }
   }
 
+  /// Whether the main window holds control or is asking for it now.
+  var viewerHoldsControl: Bool {
+    guard let controller = viewer?.controller else { return false }
+    return controller.holdingControl || controller.session.acquiring
+  }
+
   /// Ends the main window's control, if it holds it: before one of the helper's commands runs.
   func releaseViewerControl() {
     viewer?.controller.releaseControl()

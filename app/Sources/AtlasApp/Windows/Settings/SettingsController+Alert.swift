@@ -6,12 +6,14 @@ extension SettingsController {
   /// - Parameter alert: The alert.
   func ask(_ alert: SettingsAlert) {
     guard !session.alertRunning else { return }
+    session.alertRefusal = nil
     session.alert = alert
   }
 
   /// The alert's way out, unless its command runs.
   func cancelAlert() {
     guard !session.alertRunning else { return }
+    session.alertRefusal = nil
     session.alert = nil
   }
 

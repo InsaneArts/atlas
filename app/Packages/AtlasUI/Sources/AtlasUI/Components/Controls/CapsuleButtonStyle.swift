@@ -18,11 +18,12 @@ struct CapsuleButtonStyle: ButtonStyle {
     case plain
     /// The pressed fill with a brighter edge: a capsule whose state is on, such as Keys while in control.
     case pressed
-    /// The accent with white text: a default action, such as an alert's.
+    /// The accent with white text: a default action, such as an alert's; brighter under the pointer.
     case accent
-    /// A raised quiet fill with plain text: another action beside the default, such as an alert's Cancel.
+    /// A raised quiet fill with plain text and a faint edge: another action beside the default, such as an alert's
+    /// Not Now; brighter under the pointer.
     case tinted
-    /// A raised quiet fill with red text: a destructive action, such as an alert's Log Out.
+    /// The tinted capsule with red text: a destructive action, such as an alert's Log Out.
     case destructive
   }
 
@@ -30,6 +31,8 @@ struct CapsuleButtonStyle: ButtonStyle {
   enum Size: Sendable {
     /// 26 high, 13-point text: in a settings row.
     case mini
+    /// 28 high, 13-point text: an alert's buttons (v3 A2).
+    case compact
     /// 30 high, 13-point text: in the panel, an alert and an empty message; a circle 30 across.
     case small
     /// 34 high, 13-point text: in a footer, a card or the top row; a circle 34 across.
@@ -66,6 +69,9 @@ struct CapsuleButtonStyle: ButtonStyle {
   var isOn = false
   /// What a glass look is laid on.
   var backing = Backing.fill
+  /// Whether its action runs now: it cannot be pressed, yet stays whole rather than dimming, so the spinner it holds
+  /// reads as work, not as a button turned off (v3 A3).
+  var isWorking = false
 
   /// Draws the label on its capsule or circle.
   ///
@@ -77,7 +83,8 @@ struct CapsuleButtonStyle: ButtonStyle {
 
   /// The capsule's fill (v3 P9, R2): a glass one steps 0.08 → 0.12 → 0.16 at rest, under the pointer and while held,
   /// and shows the held fill while what it toggles is on; the white one goes pure white under the pointer and #E3E3E8
-  /// while held. The other looks keep one fill. A disabled button keeps its resting fill.
+  /// while held; an alert's accent and tinted ones brighten under the pointer and while held (v3 `.acap:hover`). The
+  /// other looks keep one fill. A disabled button keeps its resting fill.
   ///
   /// - Parameters:
   ///   - look: How the capsule is painted.
@@ -103,18 +110,21 @@ struct CapsuleButtonStyle: ButtonStyle {
       if isOn || pressed { return .fillControlOn }
       return hovered ? .fillControlHover : .fillControl
     case .pressed: return .fillControlOn
-    case .tinted, .destructive: return .fillControlRaised
+    case .tinted, .destructive: return hovered || pressed ? .fillControlOn : .fillControlRaised
     case .plain: return .clear
-    case .accent: return .accent
+    case .accent: return hovered || pressed ? .accentHover : .accent
     }
   }
 
-  /// How opaque the button is: whole, or dimmed to the disabled opacity when it cannot be pressed.
+  /// How opaque the button is: whole, or dimmed to the disabled opacity when it cannot be pressed, unless its own
+  /// action is what runs.
   ///
-  /// - Parameter isEnabled: Whether it can be pressed.
+  /// - Parameters:
+  ///   - isEnabled: Whether it can be pressed.
+  ///   - isWorking: Whether its action runs now.
   /// - Returns: The opacity.
-  nonisolated static func opacity(isEnabled: Bool) -> Double {
-    isEnabled ? 1 : Opacity.disabled
+  nonisolated static func opacity(isEnabled: Bool, isWorking: Bool = false) -> Double {
+    isEnabled || isWorking ? 1 : Opacity.disabled
   }
 
   /// How a press moves the button: down over ``Motion/press``, back up on ``Motion/release``'s small spring (v3 X9).
@@ -171,6 +181,8 @@ struct CapsuleButtonStyle: ButtonStyle {
       Picker(String("Size"), selection: $size) {
         Text(verbatim: "Mini")
           .tag(CapsuleButtonStyle.Size.mini)
+        Text(verbatim: "Compact")
+          .tag(CapsuleButtonStyle.Size.compact)
         Text(verbatim: "Small")
           .tag(CapsuleButtonStyle.Size.small)
         Text(verbatim: "Regular")

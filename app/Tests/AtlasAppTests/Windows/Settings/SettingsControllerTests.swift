@@ -89,4 +89,34 @@ struct SettingsControllerTests {
     )
     #expect(reads.count == 1)
   }
+
+  @Test("Recover in Settings says Recovered for the hold on the clock, then closes and says what it did")
+  func recoverHoldsThenCloses() async throws {
+    let commands = ScriptedCommands(["start-input": #"{"ok": true}"#])
+    let clock = ManualClock()
+    let controller = SettingsController.scripted(commands: commands, clock: clock)
+    controller.send(.askRecover)
+    let confirming = Task { await controller.confirmAlert() }
+    let hold = Duration.seconds(Motion.Duration.doneHold.seconds)
+    try await clock.untilSleeping(for: hold, "Recover never held on Recovered")
+    #expect(controller.state.alert?.phase == .done(title: HelperWords.recovered))
+    controller.send(.alertCancel)
+    #expect(controller.session.alert == .recover, "nothing dismisses it while it holds")
+    clock.advance(by: hold)
+    await confirming.value
+    #expect(controller.session.alert == nil)
+    #expect(controller.state.helper.notice == SettingsNote(text: Words.readyAgain, isProblem: false))
+  }
+
+  @Test("a refused Recover in Settings keeps its alert, saying why, until Not Now")
+  func aRefusedRecoverStays() async {
+    let commands = ScriptedCommands(["start-input": #"{"ok": false, "code": "busy", "error": "busy"}"#])
+    let controller = SettingsController.scripted(commands: commands)
+    controller.send(.askRecover)
+    await controller.confirmAlert()
+    #expect(controller.state.alert?.phase == .refused(message: HelperWords.recoverBusy))
+    #expect(controller.state.alert?.isBusy == false, "its buttons come back")
+    controller.send(.alertCancel)
+    #expect(controller.state.alert == nil)
+  }
 }

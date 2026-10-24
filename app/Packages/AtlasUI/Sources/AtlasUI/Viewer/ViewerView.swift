@@ -96,7 +96,8 @@ public struct ViewerView<Input: View>: View {
     .windowSurface()
     .onChange(of: state.top.status.label) { _, label in announce(label) }
     .onChange(of: state.screen.notice) { _, notice in if let notice { announce(notice) } }
-    .onChange(of: state.alert?.title) { _, title in if let title { announce(title) } }
+    .onChange(of: state.alert?.shownTitle) { _, title in if let title { announce(title) } }
+    .onChange(of: state.alert?.refusal) { _, refusal in if let refusal { announce(refusal) } }
   }
 
   /// The Screen tab, or the selected tab's pane: Activity, Apps and Screenshots fill the frame inside the window's

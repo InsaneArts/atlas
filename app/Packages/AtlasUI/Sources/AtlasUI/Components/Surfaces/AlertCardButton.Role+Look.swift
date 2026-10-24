@@ -1,6 +1,6 @@
 import SwiftUI
 
-extension OrbitAlertButton.Role {
+extension AlertCardButton.Role {
   /// The capsule's look: blue for the default button, red for a destructive one, quiet for the way out.
   var look: CapsuleButtonStyle.Look {
     switch self {
@@ -19,8 +19,18 @@ extension OrbitAlertButton.Role {
     }
   }
 
+  /// The spinner's arc while this button's command runs: the button's own word colour, white on the accent and red on
+  /// a destructive button.
+  var spinnerArc: Color {
+    switch self {
+    case .action, .safeCancel: .onAccent
+    case .destructive: .textDestructive
+    case .cancel: .textPrimary
+    }
+  }
+
   /// The key that presses it: Return for the default button, Escape for the way out beside an action. A destructive
-  /// alert's way out takes Return here and Escape from the alert (``OrbitAlertState/escape``).
+  /// alert's way out takes Return here and Escape from the alert (``AlertCardState/escape``).
   var shortcut: KeyboardShortcut? {
     switch self {
     case .action, .safeCancel: .defaultAction

@@ -1,4 +1,5 @@
 import AtlasCommands
+import AtlasUI
 
 /// The Helper pane's commands: Check Again diagnoses the helper, and Recover, Switch and Log Out run through the
 /// helper's own commands, as the main window's do, each answered with a notice once it ends.
@@ -15,11 +16,25 @@ extension SettingsController {
     session.checking = false
   }
 
-  /// Recovers the helper as the panel and the main window do, through the shared commands.
+  /// Recovers the helper as the panel and the main window do, through the shared commands. Once it worked its alert
+  /// says Recovered for ``AtlasUI/Motion/Duration/doneHold`` on the injected clock, then closes with the notice;
+  /// refused, the alert stays, saying why.
   func recover() async {
+    session.alertRefusal = nil
     let recovery = await actions.recover()
-    session.alert = nil
-    say(recovery?.notice ?? HelperWords.waitForAction, in: .helper, problem: recovery?.outcome.ok != true)
+    if let recovery, recovery.outcome.ok {
+      session.alertDone = true
+      // A hold cut short only shortens the moment Recovered shows; the alert closes either way.
+      try? await dependencies.clock.sleep(for: .seconds(Motion.Duration.doneHold.seconds))
+      session.alertDone = false
+      session.alert = nil
+      say(recovery.notice, in: .helper)
+    } else if let recovery {
+      session.alertRefusal = recovery.notice
+    } else {
+      // Another window's Recover runs: the alert shows it running, and the pane says to wait.
+      say(HelperWords.waitForAction, in: .helper, problem: true)
+    }
     await dependencies.links.readStatus()
   }
 

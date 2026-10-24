@@ -22,6 +22,8 @@ public enum Motion {
     static let press = Duration(seconds: 0.1)
     /// 0.12: a fill or a reveal answering the pointer arriving (v3 `Motion.hover`, in).
     static let hoverIn = Duration(seconds: 0.12)
+    /// 0.15: an alert leaving, fading and shrinking a little (v3 A6).
+    static let dismiss = Duration(seconds: 0.15)
     /// 0.18: a chip, a row, a slot or a toast leaving (v3 `Motion.leave`).
     static let leave = Duration(seconds: 0.18)
     /// 0.2: a notice, an edge, content leaving.
@@ -32,6 +34,8 @@ public enum Motion {
     static let reduced = Duration(seconds: 0.2)
     /// 0.3: a check drawing itself along its stroke (v3 S3, X11: `trim` 0 → 1).
     static let draw = Duration(seconds: 0.3)
+    /// 0.36: an alert shaking once when its command is refused (v3 A4).
+    static let shake = Duration(seconds: 0.36)
     /// 0.4: content arriving.
     static let entry = Duration(seconds: 0.4)
     /// 0.4: how long a spinner or a placeholder waits before it shows, so a quick answer never flashes one (v3
@@ -42,6 +46,8 @@ public enum Motion {
     /// 0.5: a window gliding on ``Motion/glideSoftCurve``, which starts at once and lands softly (v3 `Duration.glide`,
     /// S7); it replaces ``glide`` when the setup window's glide is redesigned.
     public static let glideSoft = Duration(seconds: 0.5)
+    /// 0.7: how long a done alert stays, its check and Recovered showing, before it closes (v3 A5).
+    public static let doneHold = Duration(seconds: 0.7)
     /// 0.8: one breath of a status dot.
     static let pulse = Duration(seconds: 0.8)
     /// 0.9: one turn of the spinner.
@@ -132,6 +138,10 @@ public enum Motion {
     .easeOut(duration: Duration.fade.seconds)
       .delay(Duration.appearDelay.seconds)
   }
+
+  /// An alert leaving: ease in over ``Duration/dismiss`` (v3 A6). It shrinks as it fades, so under Reduce Motion it
+  /// becomes ``reduced``.
+  static var dismiss: Animation { .easeIn(duration: Duration.dismiss.seconds) }
 
   /// A fade: ease out over ``Duration/fade``.
   static var fade: Animation { .easeOut(duration: Duration.fade.seconds) }

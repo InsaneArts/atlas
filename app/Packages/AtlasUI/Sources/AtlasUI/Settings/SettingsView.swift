@@ -44,7 +44,8 @@ public struct SettingsView: View {
     }
     .windowSurface()
     // Each only when its words change, so a poll that reads the same says nothing.
-    .onChange(of: state.alert?.title) { _, title in if let title { announce(title) } }
+    .onChange(of: state.alert?.shownTitle) { _, title in if let title { announce(title) } }
+    .onChange(of: state.alert?.refusal) { _, refusal in if let refusal { announce(refusal) } }
     .onChange(of: state.helper.status.label) { _, label in announce(label) }
     .onChange(of: state.helper.notice) { _, notice in if let notice { announce(notice.text) } }
     .onChange(of: state.agents.notice) { _, notice in if let notice { announce(notice.text) } }

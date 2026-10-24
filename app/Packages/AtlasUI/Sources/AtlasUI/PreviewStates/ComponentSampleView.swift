@@ -22,7 +22,7 @@
       case .statusDots: IndicatorSamples(.statusDot)
       case .statusLabel: StatusLabelSamples()
       case .floatingChip: FloatingChipSamples()
-      case .orbitAlert: OrbitAlertSamples()
+      case .alertCard: AlertCardSamples()
       case .emptyMessage: EmptyMessageSamples()
       case .pictureFrame: PictureFrameSamples()
       case .miniScreen: MiniScreenSamples()

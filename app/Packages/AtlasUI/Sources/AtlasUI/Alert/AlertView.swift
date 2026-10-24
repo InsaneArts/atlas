@@ -1,30 +1,47 @@
 import SwiftUI
 
-/// The alert window's content: one alert in the widget's look on a clear ground, with room around it for its shadow.
-/// Atlas shows it when the menu bar panel asks to recover, switch to or log out the helper while no main window is
-/// open; the main window shows the same alert over its own scrim instead.
+/// The alert window's content: one alert on a clear ground, with room around it for its shadow. Atlas shows it when
+/// the menu bar panel asks to recover, switch to or log out the helper while no main window is open; the main window
+/// shows the same alert over its own scrim instead. The card settles from 1.06 to 1 as the window opens (v3 A6), or
+/// fades in under Reduce Motion.
 public struct AlertView: View {
   /// What the alert says and offers.
-  private let state: OrbitAlertState<AlertChoice>
+  private let state: AlertCardState<AlertChoice>
   /// Receives the button the person presses.
   private let send: @MainActor (AlertChoice) -> Void
+  /// Whether the card has settled since the window opened.
+  @State private var settled = false
+  @Environment(\.animatesArrivals) private var animatesArrivals
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   /// Creates the alert window's content.
   ///
   /// - Parameters:
   ///   - state: What the alert says and offers.
   ///   - send: Receives the button the person presses.
-  public init(state: OrbitAlertState<AlertChoice>, send: @escaping @MainActor (AlertChoice) -> Void) {
+  public init(state: AlertCardState<AlertChoice>, send: @escaping @MainActor (AlertChoice) -> Void) {
     self.state = state
     self.send = send
   }
 
   /// The alert, dark, with room around it for its shadow.
   public var body: some View {
-    OrbitAlert(state: state, send: send)
+    AlertCard(state: state, send: send)
+      .scaleEffect(AlertCardScale.arrival(settled: shown, reduceMotion: reduceMotion))
+      .opacity(shown ? 1 : .zero)
       .padding(AlertLayout.shadowRoom)
       .foregroundStyle(Color.textPrimary)
       .environment(\.colorScheme, .dark)
+      .onAppear {
+        withAnimation(Motion.animation(Motion.release, reduceMotion: reduceMotion, reduced: Motion.reduced)) {
+          settled = true
+        }
+      }
+  }
+
+  /// Whether the card shows settled: once it has, or at once where arrivals are not played, as in a render.
+  private var shown: Bool {
+    settled || !animatesArrivals
   }
 }
 
@@ -48,10 +65,9 @@ public struct AlertView: View {
         }
       }
       .fixedSize()
-      Toggle(String("Busy"), isOn: $state.isBusy)
     } content: {
-      AlertView(state: state) { _ in
-        state.isBusy = true
+      AlertView(state: state) { choice in
+        state.phase = choice == .confirm ? .running(label: AlertCardSamples.recovering) : .asking
       }
     }
   }

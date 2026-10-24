@@ -354,13 +354,16 @@ struct HelperCommandsControlTests {
       service: service,
       barrier: ControlBarrier(service: service, clock: ManualClock())
     )
-    let window = AlertController(alert: .recover, actions: actions, links: AlertLinks(clock: ManualClock()))
+    let clock = ManualClock()
+    let window = AlertController(alert: .recover, actions: actions, links: AlertLinks(clock: clock))
     window.send(.confirm)
     try await settle("Recover never ran") { commands.ran.count == 1 }
     window.show(.logOut)
     #expect(window.alert == .recover)
     #expect(window.state.message == HelperWords.waitForAction)
     held.open()
+    try await clock.untilSleeping(for: .seconds(Motion.Duration.doneHold.seconds), "Recover never held on Recovered")
+    clock.advance(by: .seconds(Motion.Duration.doneHold.seconds))
     try await settle("Recover never ended") { !window.running }
   }
 

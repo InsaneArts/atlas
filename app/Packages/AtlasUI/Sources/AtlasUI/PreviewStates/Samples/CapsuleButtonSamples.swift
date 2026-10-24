@@ -12,7 +12,7 @@
       case sizes
       /// Two capsules filling a row.
       case fill
-      /// A plain alert's buttons, then a destructive alert's.
+      /// A plain alert's buttons side by side, then a destructive alert's, the default on the right.
       case alert
       /// The round buttons: regular, small, on, disabled.
       case circles
@@ -69,14 +69,18 @@
           .frame(width: SampleWidth.narrow)
         case .alert:
           VStack(spacing: Spacing.s) {
-            Button(String("Recover")) {}
-              .buttonStyle(.capsule(.accent, size: .small, fill: true))
-            Button(String("Not Now")) {}
-              .buttonStyle(.capsule(.tinted, size: .small, fill: true))
-            Button(String("Cancel")) {}
-              .buttonStyle(.capsule(.accent, size: .small, fill: true))
-            Button(String("Log Out"), role: .destructive) {}
-              .buttonStyle(.capsule(.destructive, size: .small, fill: true))
+            HStack(spacing: Spacing.s) {
+              Button(String("Not Now")) {}
+                .buttonStyle(.capsule(.tinted, size: .compact, fill: true))
+              Button(String("Recover")) {}
+                .buttonStyle(.capsule(.accent, size: .compact, fill: true))
+            }
+            HStack(spacing: Spacing.s) {
+              Button(String("Log Out"), role: .destructive) {}
+                .buttonStyle(.capsule(.destructive, size: .compact, fill: true))
+              Button(String("Cancel")) {}
+                .buttonStyle(.capsule(.accent, size: .compact, fill: true))
+            }
           }
           .frame(width: SampleWidth.alert)
         case .circles:

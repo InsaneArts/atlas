@@ -185,12 +185,12 @@
     /// Recover asked for from the Helper pane, with the main window's words.
     @MainActor static let settingsRecover: SettingsState = {
       var state = selecting(.helper)
-      state.alert = OrbitAlertState(
+      state.alert = AlertCardState(
         title: "Recover the helper?",
         message: "Atlas checks the helper and starts it again. No action runs twice.",
         buttons: [
-          OrbitAlertButton(id: .confirm, title: "Recover", role: .action),
-          OrbitAlertButton(id: .cancel, title: "Not Now", role: .cancel),
+          AlertCardButton(id: .confirm, title: "Recover", role: .action),
+          AlertCardButton(id: .cancel, title: "Not Now", role: .cancel),
         ]
       )
       return state
@@ -199,12 +199,12 @@
     /// Log Out asked for from the Helper pane, with the main window's words.
     @MainActor static let settingsLogOut: SettingsState = {
       var state = selecting(.helper)
-      state.alert = OrbitAlertState(
+      state.alert = AlertCardState(
         title: "Log out the helper?",
         message: "Its apps quit, and agents can't use it until you log in to it again.",
         buttons: [
-          OrbitAlertButton(id: .cancel, title: "Cancel", role: .safeCancel),
-          OrbitAlertButton(id: .confirm, title: "Log Out", role: .destructive),
+          AlertCardButton(id: .cancel, title: "Cancel", role: .safeCancel),
+          AlertCardButton(id: .confirm, title: "Log Out", role: .destructive),
         ]
       )
       return state
@@ -213,13 +213,13 @@
     /// Forget asked for a project: it stays listed until the person confirms.
     @MainActor static let settingsForget: SettingsState = {
       var state = selecting(.agents)
-      state.alert = OrbitAlertState(
+      state.alert = AlertCardState(
         title: "Forget opie?",
         message:
           "Atlas takes its section out of the project's AGENTS.md and CLAUDE.md. Agents there stop testing in the helper.",
         buttons: [
-          OrbitAlertButton(id: .cancel, title: "Cancel", role: .safeCancel),
-          OrbitAlertButton(id: .confirm, title: "Forget", role: .destructive),
+          AlertCardButton(id: .cancel, title: "Cancel", role: .safeCancel),
+          AlertCardButton(id: .confirm, title: "Forget", role: .destructive),
         ]
       )
       return state
@@ -228,12 +228,12 @@
     /// Install asked for the newer version found.
     @MainActor static let settingsInstall: SettingsState = {
       var state = settingsAboutNewer
-      state.alert = OrbitAlertState(
+      state.alert = AlertCardState(
         title: "Install Atlas 0.2.0?",
         message: "Atlas checks the release's signature and installs it, then restarts itself to finish.",
         buttons: [
-          OrbitAlertButton(id: .confirm, title: "Install", role: .action),
-          OrbitAlertButton(id: .cancel, title: "Not Now", role: .cancel),
+          AlertCardButton(id: .confirm, title: "Install", role: .action),
+          AlertCardButton(id: .cancel, title: "Not Now", role: .cancel),
         ]
       )
       return state
@@ -242,13 +242,13 @@
     /// Switch asked for from the Helper pane, with the main window's words.
     @MainActor static let settingsSwitch: SettingsState = {
       var state = selecting(.helper)
-      state.alert = OrbitAlertState(
+      state.alert = AlertCardState(
         title: "Switch to the helper?",
         message:
           "Your screen locks so you can log in to the helper. Everything here keeps running, and you can switch back any time.",
         buttons: [
-          OrbitAlertButton(id: .confirm, title: "Switch", role: .action),
-          OrbitAlertButton(id: .cancel, title: "Cancel", role: .cancel),
+          AlertCardButton(id: .confirm, title: "Switch", role: .action),
+          AlertCardButton(id: .cancel, title: "Cancel", role: .cancel),
         ]
       )
       return state
@@ -257,23 +257,22 @@
     /// An app in the helper held the log-out up: Log Out Anyway asks again.
     @MainActor static let settingsLogOutAnyway: SettingsState = {
       var state = selecting(.helper)
-      state.alert = OrbitAlertState(
+      state.alert = AlertCardState(
         title: "The helper didn't log out",
         message:
           "An app in the helper is holding it up. Log Out Anyway quits it, and anything unsaved there is lost.",
         buttons: [
-          OrbitAlertButton(id: .cancel, title: "Cancel", role: .safeCancel),
-          OrbitAlertButton(id: .confirm, title: "Log Out Anyway", role: .destructive),
+          AlertCardButton(id: .cancel, title: "Cancel", role: .safeCancel),
+          AlertCardButton(id: .confirm, title: "Log Out Anyway", role: .destructive),
         ]
       )
       return state
     }()
 
-    /// Recover running from its alert: every button waits.
+    /// Recover running from its alert: a spinner in Recover while Not Now waits.
     @MainActor static let settingsRecovering: SettingsState = {
       var state = settingsRecover
-      state.alert?.buttons[0].title = "Recovering…"
-      state.alert?.isBusy = true
+      state.alert?.phase = .running(label: "Recovering…")
       state.helper.buttons.canRecover = false
       return state
     }()

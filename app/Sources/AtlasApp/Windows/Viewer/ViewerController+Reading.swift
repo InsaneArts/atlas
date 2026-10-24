@@ -142,7 +142,11 @@ extension ViewerController {
       releaseControl(ViewerWords.releasedElsewhere)
     }
     // Not Now covers one incident: once nothing needs recovery, a later one alerts again.
-    if snapshot.offeredRecovery == nil { session.recoveryLater = nil }
+    if snapshot.offeredRecovery == nil {
+      session.recoveryLater = nil
+      // A refusal belongs to the alert it answered: once nothing needs recovery it is gone with it.
+      if session.alert != .recover { session.recoveryRefusal = nil }
+    }
   }
 
   /// Shows a new picture, read with a status that says whether the helper takes input. A picture from a changed

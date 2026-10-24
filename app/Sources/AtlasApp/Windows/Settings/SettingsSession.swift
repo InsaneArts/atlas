@@ -8,6 +8,10 @@ struct SettingsSession: Equatable {
   var alert: SettingsAlert?
   /// Whether the alert's command runs now, so its buttons wait.
   var alertRunning = false
+  /// Why the alert's Recover was refused, shown in the alert until it is answered; nil for none.
+  var alertRefusal: String?
+  /// Whether the alert's Recover worked and the alert holds, saying Recovered, before it closes.
+  var alertDone = false
   /// Whether Check Again's reading runs now.
   var checking = false
   /// Where a check for updates stands.

@@ -50,7 +50,7 @@ struct CapsuleButtonBody: View {
       )
       .contentShape(Capsule())
       .modifier(PressScale(isPressed: configuration.isPressed, scale: Layout.pressedScale))
-      .opacity(CapsuleButtonStyle.opacity(isEnabled: isEnabled))
+      .opacity(CapsuleButtonStyle.opacity(isEnabled: isEnabled, isWorking: style.isWorking))
       .animation(CapsuleButtonStyle.pressAnimation(isPressed: configuration.isPressed), value: configuration.isPressed)
   }
 
@@ -76,7 +76,7 @@ struct CapsuleButtonBody: View {
       )
       .contentShape(Circle())
       .modifier(PressScale(isPressed: configuration.isPressed, scale: Layout.circlePressedScale))
-      .opacity(CapsuleButtonStyle.opacity(isEnabled: isEnabled))
+      .opacity(CapsuleButtonStyle.opacity(isEnabled: isEnabled, isWorking: style.isWorking))
       .animation(CapsuleButtonStyle.pressAnimation(isPressed: configuration.isPressed), value: configuration.isPressed)
   }
 

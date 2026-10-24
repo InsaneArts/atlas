@@ -8,13 +8,13 @@
 // - onboarding: --render-onboarding;
 // - settings: --render-settings;
 // - panel: --render --dark, once a mode in PANEL_MODES plus paused;
-// - alerts: --render --dark, once an entry in ALERT_RENDERS.
+// - alerts: --render --dark, once an entry in ALERT_RENDERS, then once a
+//   helper notice in NOTICE_RENDERS (the system alerts --notice shows).
 //
 // The panel and the alerts read a viewer service from the capability URL on
 // stdin. Here that is a stub on a free port answering every route with 404,
 // so the app falls back to an empty status and, in a debug build, the sample
-// screen: the renders never depend on the helper. The helper notices are
-// native alerts with no render yet, so they are not drawn.
+// screen: the renders never depend on the helper.
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -26,7 +26,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const GROUPS = ['viewer', 'onboarding', 'settings', 'panel', 'alerts', 'components'];
 
 // The one table of ATLAS_RENDER_* settings. It must match PanelRender.modes
-// and PanelRender.alerts in app/Sources/AtlasApp/Rendering/PanelRender.swift;
+// PanelRender.alerts and PanelRender.notices in
+// app/Sources/AtlasApp/Rendering/PanelRender.swift;
 // tests/test_render_table.mjs checks that it does.
 export const PANEL_MODES = [
   'observing',
@@ -64,6 +65,23 @@ export const ALERT_RENDERS = [
       ATLAS_RENDER_BUSY: '1',
     },
   },
+  {
+    file: 'alert-logging-out',
+    environment: { ATLAS_RENDER_ALERT: 'logOut', ATLAS_RENDER_BUSY: '1' },
+  },
+  {
+    file: 'alert-recovered',
+    environment: {
+      ATLAS_RENDER_ALERT: 'recover',
+      ATLAS_RENDER_MODE: 'recovering',
+      ATLAS_RENDER_ALERT_PHASE: 'done',
+    },
+  },
+];
+
+export const NOTICE_RENDERS = [
+  { file: 'notice-set-up', environment: { ATLAS_RENDER_NOTICE: 'setUp' } },
+  { file: 'notice-running-again', environment: { ATLAS_RENDER_NOTICE: 'runningAgain' } },
 ];
 
 export const PANEL_RENDERS = [
@@ -282,7 +300,12 @@ async function main() {
         await renderPanel(app, path.join(out, 'panel'), PANEL_RENDERS, stub);
       }
       if (only.includes('alerts')) {
-        await renderPanel(app, path.join(out, 'alerts'), ALERT_RENDERS, stub);
+        await renderPanel(
+          app,
+          path.join(out, 'alerts'),
+          [...ALERT_RENDERS, ...NOTICE_RENDERS],
+          stub,
+        );
       }
     } finally {
       await stub.close();

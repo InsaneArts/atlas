@@ -214,13 +214,13 @@
         )
       ),
       screen: ViewerScreenState(picture: SampleDesktop.picture, look: .dimmed),
-      alert: OrbitAlertState(
+      alert: AlertCardState(
         title: "Recover the helper?",
         message:
           "An action may not have finished. Atlas checks the helper and starts its mouse and keyboard again.",
         buttons: [
-          OrbitAlertButton(id: .confirm, title: "Recover", role: .action),
-          OrbitAlertButton(id: .cancel, title: "Not Now", role: .cancel),
+          AlertCardButton(id: .confirm, title: "Recover", role: .action),
+          AlertCardButton(id: .cancel, title: "Not Now", role: .cancel),
         ]
       )
     )
@@ -349,13 +349,13 @@
     /// Switch to the Helper… asks first, over a logged-out helper.
     @MainActor public static let viewerSwitch: ViewerState = {
       var state = viewerLoggedOut
-      state.alert = OrbitAlertState(
+      state.alert = AlertCardState(
         title: "Switch to the helper?",
         message:
           "Your screen locks so you can log in to the helper. Everything here keeps running, and you can switch back any time.",
         buttons: [
-          OrbitAlertButton(id: .confirm, title: "Switch", role: .action),
-          OrbitAlertButton(id: .cancel, title: "Cancel", role: .cancel),
+          AlertCardButton(id: .confirm, title: "Switch", role: .action),
+          AlertCardButton(id: .cancel, title: "Cancel", role: .cancel),
         ]
       )
       return state
@@ -364,12 +364,12 @@
     /// Log Out the Helper… asks first: Cancel in blue, Log Out in red.
     @MainActor public static let viewerLogOut: ViewerState = {
       var state = viewerIdle
-      state.alert = OrbitAlertState(
+      state.alert = AlertCardState(
         title: "Log out the helper?",
         message: "Its apps quit, and agents can't use it until you log in to it again.",
         buttons: [
-          OrbitAlertButton(id: .cancel, title: "Cancel", role: .safeCancel),
-          OrbitAlertButton(id: .confirm, title: "Log Out", role: .destructive),
+          AlertCardButton(id: .cancel, title: "Cancel", role: .safeCancel),
+          AlertCardButton(id: .confirm, title: "Log Out", role: .destructive),
         ]
       )
       return state
@@ -378,13 +378,13 @@
     /// An app held the log-out up: Log Out Anyway is offered.
     @MainActor public static let viewerLogOutAnyway: ViewerState = {
       var state = viewerIdle
-      state.alert = OrbitAlertState(
+      state.alert = AlertCardState(
         title: "The helper didn't log out",
         message:
           "An app in the helper is holding it up. Log Out Anyway quits it, and anything unsaved there is lost.",
         buttons: [
-          OrbitAlertButton(id: .cancel, title: "Cancel", role: .safeCancel),
-          OrbitAlertButton(id: .confirm, title: "Log Out Anyway", role: .destructive),
+          AlertCardButton(id: .cancel, title: "Cancel", role: .safeCancel),
+          AlertCardButton(id: .confirm, title: "Log Out Anyway", role: .destructive),
         ]
       )
       return state
@@ -393,12 +393,12 @@
     /// Restart the Helper… asks first.
     @MainActor public static let viewerRestart: ViewerState = {
       var state = viewerIdle
-      state.alert = OrbitAlertState(
+      state.alert = AlertCardState(
         title: "Restart the helper?",
         message: "Atlas starts its service in the helper again. Anything an agent is doing there stops.",
         buttons: [
-          OrbitAlertButton(id: .confirm, title: "Restart", role: .action),
-          OrbitAlertButton(id: .cancel, title: "Cancel", role: .cancel),
+          AlertCardButton(id: .confirm, title: "Restart", role: .action),
+          AlertCardButton(id: .cancel, title: "Cancel", role: .cancel),
         ]
       )
       return state

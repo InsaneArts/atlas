@@ -1,31 +1,70 @@
 import SwiftUI
 
-/// An alert over a whole window, top row and tabs included: the scrim, which takes every click, and the alert in its
-/// middle, fading in and out together, or appearing at once under Reduce Motion.
+/// An alert over a whole window, top row and tabs included (v3 A6): the scrim, which takes every click, fades in over
+/// ``Motion/Duration/fade`` while the card settles from 1.06 to 1 on ``Motion/release``; leaving, the card fades and
+/// shrinks to 0.97 over ``Motion/Duration/dismiss`` and the scrim fades on ``Motion/leave``. Under Reduce Motion
+/// both only fade, on ``Motion/reduced``. Nothing dismisses it but its own buttons.
 struct AlertLayer<ID: Hashable & Sendable>: View {
   /// What the alert says and offers; nil shows none.
-  let state: OrbitAlertState<ID>?
+  let state: AlertCardState<ID>?
   /// Receives the button the person presses.
   let send: @MainActor (ID) -> Void
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+  /// The scrim and the card, while there is an alert.
   var body: some View {
     ZStack {
       if let state {
-        ZStack {
-          Color.scrim
-          OrbitAlert(state: state, send: send)
-        }
-        .transition(reduceMotion ? .identity : .opacity)
+        Color.scrim
+          .transition(Self.scrimTransition(reduceMotion: reduceMotion))
+        AlertCard(state: state, send: send)
+          .transition(Self.cardTransition(reduceMotion: reduceMotion))
       }
     }
-    .animation(Motion.animation(Motion.fade, reduceMotion: reduceMotion), value: state == nil)
+    .animation(Motion.animation(Motion.fade, reduceMotion: reduceMotion, reduced: Motion.reduced), value: state == nil)
+  }
+
+  /// How the scrim comes and goes: a fade in, a quicker fade out; a plain fade under Reduce Motion.
+  ///
+  /// - Parameter reduceMotion: Whether Reduce Motion is on.
+  /// - Returns: The scrim's transition.
+  static func scrimTransition(reduceMotion: Bool) -> AnyTransition {
+    guard !reduceMotion else {
+      return AnyTransition.opacity
+        .animation(Motion.reduced)
+    }
+    return .asymmetric(
+      insertion: AnyTransition.opacity
+        .animation(Motion.fade),
+      removal: AnyTransition.opacity
+        .animation(Motion.leave)
+    )
+  }
+
+  /// How the card comes and goes: settling from a little larger, leaving a little smaller, fading both ways; a plain
+  /// fade under Reduce Motion.
+  ///
+  /// - Parameter reduceMotion: Whether Reduce Motion is on.
+  /// - Returns: The card's transition.
+  static func cardTransition(reduceMotion: Bool) -> AnyTransition {
+    guard !reduceMotion else {
+      return AnyTransition.opacity
+        .animation(Motion.reduced)
+    }
+    return .asymmetric(
+      insertion: AnyTransition.scale(scale: AlertCardScale.arriving)
+        .combined(with: .opacity)
+        .animation(Motion.release),
+      removal: AnyTransition.scale(scale: AlertCardScale.leaving)
+        .combined(with: .opacity)
+        .animation(Motion.dismiss)
+    )
   }
 }
 
 #if DEBUG
   #Preview("Samples") {
-    AlertLayer(state: OrbitAlertSamples.logOut(isBusy: false)) { _ in }
+    AlertLayer(state: AlertCardSamples.logOut) { _ in }
       .frame(width: SampleWidth.form, height: SampleWidth.form)
   }
 
@@ -34,7 +73,7 @@ struct AlertLayer<ID: Hashable & Sendable>: View {
     InteractivePreview {
       Toggle(String("Shown"), isOn: $shown)
     } content: {
-      AlertLayer(state: shown ? OrbitAlertSamples.logOut(isBusy: false) : nil) { _ in shown = false }
+      AlertLayer(state: shown ? AlertCardSamples.logOut : nil) { _ in shown = false }
         .frame(width: SampleWidth.form, height: SampleWidth.form)
     }
   }

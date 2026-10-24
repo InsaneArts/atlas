@@ -36,12 +36,14 @@ struct AlertControllerTests {
   ///   - service: The scripted service.
   ///   - commands: The scripted command line.
   ///   - seen: What the stand-in links give and record.
+  ///   - clock: The clock a done Recover holds on.
   /// - Returns: The controller.
   private static func alert(
     _ alert: HelperAlert,
     service: ScriptedService = ScriptedService(),
     commands: ScriptedCommands,
-    seen: Seen
+    seen: Seen,
+    clock: ManualClock = ManualClock()
   ) -> AlertController {
     AlertController(
       alert: alert,
@@ -58,7 +60,7 @@ struct AlertControllerTests {
           if let next = seen.nextOverview { seen.overview = next }
         },
         close: { _ in seen.closed += 1 },
-        clock: ManualClock()
+        clock: clock
       )
     )
   }
@@ -76,27 +78,81 @@ struct AlertControllerTests {
     return overview
   }
 
+  /// How long a done Recover holds on Recovered.
+  private static let hold = Duration.seconds(Motion.Duration.doneHold.seconds)
+
+  /// Presses the alert's default button and, once a Recover that worked holds on Recovered, lets the hold end.
+  ///
+  /// - Parameters:
+  ///   - controller: The alert window's controller.
+  ///   - clock: The clock the hold runs on.
+  /// - Throws: The failed requirement, when Recover never holds.
+  private static func confirmThroughTheHold(_ controller: AlertController, clock: ManualClock) async throws {
+    let confirming = Task { await controller.confirm() }
+    try await clock.untilSleeping(for: hold, "Recover never held on Recovered")
+    clock.advance(by: hold)
+    await confirming.value
+  }
+
   @Test("Recover reads the status once it runs, restarts a helper whose outcome is unknown, and closes once it worked")
-  func recoverRestartsAnUnknownOutcome() async {
+  func recoverRestartsAnUnknownOutcome() async throws {
     let commands = ScriptedCommands(["start-input": #"{"ok": true}"#, "restart": #"{"ok": true}"#])
     let seen = Seen()
     seen.overview = Self.overview(.blocked)
     let service = ScriptedService()
     // The outcome became unknown since the panel last read the status.
     service.reply = ["ready": true, "overview": ["mode": "recovering", "pending": 1]]
-    let controller = Self.alert(.recover, service: service, commands: commands, seen: seen)
-    await controller.confirm()
+    let clock = ManualClock()
+    let controller = Self.alert(.recover, service: service, commands: commands, seen: seen, clock: clock)
+    try await Self.confirmThroughTheHold(controller, clock: clock)
     #expect(commands.ran == [Action.restart.arguments])
     #expect(seen.closed == 1)
   }
 
-  @Test("the alert's command runs once however many times it is pressed")
-  func theCommandRunsOnce() async {
+  @Test("a successful recovery shows Recovered and closes 0.7 seconds later on the clock")
+  func aSuccessfulRecoveryHoldsThenCloses() async throws {
     let commands = ScriptedCommands(["start-input": #"{"ok": true}"#])
     let seen = Seen()
-    let controller = Self.alert(.recover, commands: commands, seen: seen)
+    let clock = ManualClock()
+    let controller = Self.alert(.recover, commands: commands, seen: seen, clock: clock)
+    let confirming = Task { await controller.confirm() }
+    try await clock.untilSleeping(for: Self.hold, "Recover never held on Recovered")
+    #expect(controller.state.phase == .done(title: HelperWords.recovered))
+    controller.cancel()
+    #expect(controller.state.isBusy, "nothing dismisses it while it holds")
+    clock.advance(by: Self.hold - .milliseconds(1))
+    await afterQueuedWork()
+    #expect(seen.closed == 0, "still showing a millisecond short of the hold")
+    clock.advance(by: .milliseconds(1))
+    await confirming.value
+    #expect(seen.closed == 1)
+  }
+
+  @Test("an alert asked while Recovered holds shows once the hold ends, in place of closing")
+  func anAlertAskedDuringTheHoldShowsAfter() async throws {
+    let commands = ScriptedCommands(["start-input": #"{"ok": true}"#])
+    let seen = Seen()
+    let clock = ManualClock()
+    let controller = Self.alert(.recover, commands: commands, seen: seen, clock: clock)
+    let confirming = Task { await controller.confirm() }
+    try await clock.untilSleeping(for: Self.hold, "Recover never held on Recovered")
+    controller.show(.logOut)
+    #expect(controller.alert == .recover, "Recovered still shows")
+    clock.advance(by: Self.hold)
+    await confirming.value
+    #expect(seen.closed == 0)
+    #expect(controller.alert == .logOut)
+    #expect(controller.state.phase == .asking)
+  }
+
+  @Test("the alert's command runs once however many times it is pressed")
+  func theCommandRunsOnce() async throws {
+    let commands = ScriptedCommands(["start-input": #"{"ok": true}"#])
+    let seen = Seen()
+    let clock = ManualClock()
+    let controller = Self.alert(.recover, commands: commands, seen: seen, clock: clock)
     commands.whileRunning { _ in await controller.confirm() }
-    await controller.confirm()
+    try await Self.confirmThroughTheHold(controller, clock: clock)
     #expect(commands.ran == [Action.startInput.arguments])
   }
 
@@ -108,7 +164,8 @@ struct AlertControllerTests {
     let seen = Seen()
     // The window reads the status again after its command; that read is held.
     seen.holdFrom = 1
-    let controller = Self.alert(.recover, commands: commands, seen: seen)
+    let clock = ManualClock()
+    let controller = Self.alert(.recover, commands: commands, seen: seen, clock: clock)
     let confirming = Task { await controller.confirm() }
     try await settle("the status was never read after the command") { seen.reads == 1 }
     #expect(controller.state.isBusy)
@@ -119,9 +176,10 @@ struct AlertControllerTests {
     #expect(seen.closed == 0, "the way out waits")
     #expect(controller.alert == .recover, "no other alert takes its place")
     seen.gate.open()
+    try await clock.untilSleeping(for: Self.hold, "Recover never held on Recovered")
+    clock.advance(by: Self.hold)
     await confirming.value
     #expect(seen.closed == 1, "the alert it started from closes once it worked")
-    #expect(!controller.state.isBusy)
   }
 
   @Test(
@@ -135,19 +193,21 @@ struct AlertControllerTests {
     let seen = Seen()
     let controller = Self.alert(.recover, commands: commands, seen: seen)
     await controller.confirm()
-    #expect(controller.state.message == words)
+    #expect(controller.state.phase == .refused(message: words))
+    #expect(!controller.state.isBusy, "its buttons come back")
     #expect(seen.closed == 0)
   }
 
   @Test("a Recover refused over an unknown outcome makes the next one a restart, though the status says nothing new")
-  func anUnknownOutcomeMakesTheNextRecoverARestart() async {
+  func anUnknownOutcomeMakesTheNextRecoverARestart() async throws {
     let commands = ScriptedCommands([
       "start-input": #"{"ok": false, "code": "uncertain", "error": "Run 'atlas restart'."}"#,
       "restart": #"{"ok": true}"#,
     ])
-    let controller = Self.alert(.recover, commands: commands, seen: Seen())
+    let clock = ManualClock()
+    let controller = Self.alert(.recover, commands: commands, seen: Seen(), clock: clock)
     await controller.confirm()
-    await controller.confirm()
+    try await Self.confirmThroughTheHold(controller, clock: clock)
     #expect(commands.ran == [Action.startInput.arguments, Action.restart.arguments])
   }
 
@@ -168,7 +228,7 @@ struct AlertControllerTests {
     seen.overview = Self.overview(.recovering)
     await controller.confirm()
     #expect(commands.ran.last == Action.logOut(force: true).arguments)
-    #expect(seen.closed == 1)
+    #expect(seen.closed == 1, "a log-out closes at once, with no hold")
   }
 
   @Test("a refused revoke stops the log-out and keeps the alert, saying why")
@@ -181,7 +241,7 @@ struct AlertControllerTests {
     let controller = Self.alert(.logOut, service: service, commands: commands, seen: seen)
     await controller.confirm()
     #expect(commands.ran.isEmpty)
-    #expect(controller.state.message == "revoke failed.")
+    #expect(controller.state.phase == .refused(message: "revoke failed."))
     #expect(!controller.state.isBusy)
   }
 
@@ -193,6 +253,6 @@ struct AlertControllerTests {
     let controller = Self.alert(.logOut, commands: commands, seen: seen)
     await controller.confirm()
     #expect(commands.ran.isEmpty)
-    #expect(controller.state.message == AlertWords.cannotLogOut)
+    #expect(controller.state.phase == .refused(message: AlertWords.cannotLogOut))
   }
 }

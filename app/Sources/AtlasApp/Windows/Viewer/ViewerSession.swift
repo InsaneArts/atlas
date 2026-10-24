@@ -15,6 +15,10 @@ struct ViewerSession {
   var notice: String?
   /// The recovery alert set aside with Not Now, until its reason changes.
   var recoveryLater: RecoveryKey?
+  /// Why this window's last Recover was refused, shown in its alert until it is answered or no longer needed.
+  var recoveryRefusal: String?
+  /// Whether this window's Recover worked and its alert holds, saying Recovered, before it closes.
+  var recoveryDone = false
   /// The alert the person asked for; nil leaves the recovery alert the helper's state calls for, if any.
   var alert: ViewerAlert?
   /// Whether the asked alert's command runs now, which holds its buttons.

@@ -4,17 +4,16 @@ extension CapsuleButtonStyle {
   /// The label's size: a step larger on a large capsule.
   var textStyle: TextStyle {
     switch size {
-    case .mini, .small, .regular: .body
+    case .mini, .compact, .small, .regular: .body
     case .large: .headline
     }
   }
 
-  /// The label's weight: regular for plain text, medium on an alert's buttons, semibold on a capsule.
+  /// The label's weight: regular for plain text, semibold on a capsule and on an alert's buttons (v3 `.acap`).
   var weight: Font.Weight {
     switch look {
     case .plain: .regular
-    case .accent, .tinted, .destructive: .medium
-    case .primary, .glass, .pressed: .semibold
+    case .primary, .glass, .pressed, .accent, .tinted, .destructive: .semibold
     }
   }
 
@@ -31,6 +30,7 @@ extension CapsuleButtonStyle {
   var height: CGFloat {
     switch size {
     case .mini: ControlHeight.xsPlus
+    case .compact: ControlHeight.s
     case .small: ControlHeight.sPlus
     case .regular: ControlHeight.mPlus
     case .large: ControlHeight.xl
@@ -38,9 +38,12 @@ extension CapsuleButtonStyle {
   }
 
   /// The space on each side of the label: wide for a large capsule, narrow for plain text or a capsule sharing
-  /// its row.
+  /// its row, none on an alert's.
   var inset: CGFloat {
     if size == .large { return Layout.largeInset }
+    // An alert's buttons share a narrow row and hold a mark beside their word, so they keep no room of their own
+    // beside it, as v3's `.acap` has none.
+    if size == .compact { return .zero }
     if look == .plain { return Spacing.m }
     return fill ? Spacing.sPlus : Layout.regularInset
   }
@@ -56,12 +59,14 @@ extension CapsuleButtonStyle {
     }
   }
 
-  /// The capsule's edge: a glass hairline, a brighter one while pressed, none otherwise.
+  /// The capsule's edge: a glass hairline, a brighter one while pressed, a faint one on an alert's quiet buttons
+  /// (v3 `.acap`), none otherwise.
   var edge: Color {
     switch look {
     case .glass: .strokeStrong
     case .pressed: .strokePressed
-    case .primary, .plain, .accent, .tinted, .destructive: .clear
+    case .tinted, .destructive: .separator
+    case .primary, .plain, .accent: .clear
     }
   }
 

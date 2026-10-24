@@ -14,15 +14,15 @@ enum Elevation: Sendable, CaseIterable {
   case overlay
   /// 0 16 40, ``Color/dropShadow``: a floating bar of buttons, as a menu floats (mac.py `MENU_SHADOW`).
   case floating
-  /// 0 24 60, ``Color/dropShadowStrong``: a modal surface over the scrim, such as an alert.
+  /// 0 24 60, ``Color/dropShadow``: a modal surface over the scrim, such as an alert (v3 `.alert2`).
   case modal
 
   /// The shadow's colour.
   var color: Color {
     switch self {
     case .resting: .dropShadowSoft
-    case .raised, .floating: .dropShadow
-    case .overlay, .modal: .dropShadowStrong
+    case .raised, .floating, .modal: .dropShadow
+    case .overlay: .dropShadowStrong
     }
   }
 

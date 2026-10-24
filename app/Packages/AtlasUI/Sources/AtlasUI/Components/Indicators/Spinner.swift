@@ -4,6 +4,8 @@ import SwiftUI
 struct Spinner: View {
   /// The spinner's side, in points.
   var size = IconSize.xs
+  /// The turning arc's colour: the accent, or white inside an accent button (v3 `.acap.accent .spin`).
+  var arc = Color.accent
   @State private var turning = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -13,7 +15,7 @@ struct Spinner: View {
         .stroke(Color.strokeStrong, lineWidth: Stroke.thick)
       Circle()
         .trim(from: 0, to: Layout.arc)
-        .stroke(Color.accent, style: StrokeStyle(lineWidth: Stroke.thick, lineCap: .round))
+        .stroke(arc, style: StrokeStyle(lineWidth: Stroke.thick, lineCap: .round))
         .rotationEffect(.degrees(turning ? 360 : 0))
     }
     .frame(width: size, height: size)

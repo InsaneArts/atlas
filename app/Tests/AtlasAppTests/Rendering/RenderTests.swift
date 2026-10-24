@@ -145,6 +145,21 @@
       #expect(image.pixelsWide > 0 && image.pixelsHigh > 0)
     }
 
+    @Test("every helper notice render draws the system alert", arguments: PanelRender.notices.map(\.file))
+    func everyNoticeRenderDraws(file: String) throws {
+      let directory = try Self.directory()
+      defer {
+        try? FileManager.default
+          .removeItem(at: directory)
+      }
+      let environment = try #require(PanelRender.notices.first { $0.file == file }?.environment)
+      let notice = try #require(PanelRenderOverrides(environment: environment).notice)
+      let drawn = directory.appendingPathComponent("\(file).png")
+      #expect(notice.draw(to: drawn.path, appearance: Appearance.dark))
+      let image = try #require(NSBitmapImageRep(data: Data(contentsOf: drawn)), "\(file) was not drawn")
+      #expect(image.pixelsWide > 0 && image.pixelsHigh > 0)
+    }
+
     @Test("the alert window renders draw every alert sample the previews list, each under a name of its own")
     func theAlertRendersDrawEverySample() throws {
       let drawn = try PanelRender.alerts

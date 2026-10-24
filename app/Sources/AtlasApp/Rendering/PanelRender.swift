@@ -19,7 +19,7 @@ enum PanelRender {
     "elsewhere",
   ]
   /// Each alert window render's file name with the `ATLAS_RENDER_*` settings that draw it: every alert, one whose
-  /// command did not run, and one whose command runs.
+  /// command did not run, one whose command runs, and Recover once it worked.
   nonisolated static let alerts: [(file: String, environment: [String: String])] = [
     ("alert-recover", ["ATLAS_RENDER_ALERT": "recover", "ATLAS_RENDER_MODE": "recovering"]),
     ("alert-switch", ["ATLAS_RENDER_ALERT": "switch"]),
@@ -36,10 +36,21 @@ enum PanelRender {
       "alert-recovering",
       ["ATLAS_RENDER_ALERT": "recover", "ATLAS_RENDER_MODE": "recovering", "ATLAS_RENDER_BUSY": "1"]
     ),
+    ("alert-logging-out", ["ATLAS_RENDER_ALERT": "logOut", "ATLAS_RENDER_BUSY": "1"]),
+    (
+      "alert-recovered",
+      ["ATLAS_RENDER_ALERT": "recover", "ATLAS_RENDER_MODE": "recovering", "ATLAS_RENDER_ALERT_PHASE": "done"]
+    ),
+  ]
+  /// Each helper notice render's file name with the `ATLAS_RENDER_NOTICE` setting that draws it (``NoticeRender``).
+  nonisolated static let notices: [(file: String, environment: [String: String])] = [
+    ("notice-set-up", ["ATLAS_RENDER_NOTICE": "setUp"]),
+    ("notice-running-again", ["ATLAS_RENDER_NOTICE": "runningAgain"]),
   ]
 
   /// Draws the panel and its menu bar glyph, as a person would see them, to a PNG at `path`, from what the viewer
-  /// service reports now, changed only by `overrides`; or, when they name one, the alert window's alert.
+  /// service reports now, changed only by `overrides`; or, when they name one, the alert window's alert or a helper
+  /// notice.
   ///
   /// - Parameters:
   ///   - service: The viewer service to read.
@@ -61,6 +72,9 @@ enum PanelRender {
     #if DEBUG
       if overrides.showsEverything, live.picture == nil { live.picture = SampleDesktop.picture }
     #endif
+    if let notice = overrides.notice {
+      return notice.draw(to: path, appearance: appearance)
+    }
     let snapshot = overrides.applied(to: live)
     if let alert = overrides.alertSnapshot(over: snapshot.status.overview) {
       return draw(alert: alert, to: path, appearance: appearance)

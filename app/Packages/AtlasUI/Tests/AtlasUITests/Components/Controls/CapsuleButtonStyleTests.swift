@@ -58,4 +58,20 @@ struct CapsuleButtonStyleTests {
     #expect(CapsuleButtonStyle.opacity(isEnabled: false) == Opacity.disabled)
     #expect(CapsuleButtonStyle.opacity(isEnabled: true) == 1)
   }
+
+  @Test("an alert's button whose command runs stays whole while it waits, and the others dim")
+  func aWorkingButtonStaysWhole() {
+    #expect(CapsuleButtonStyle.opacity(isEnabled: false, isWorking: true) == 1)
+    #expect(CapsuleButtonStyle.opacity(isEnabled: false, isWorking: false) == Opacity.disabled)
+  }
+
+  @Test("an alert's accent and quiet buttons brighten under the pointer, the accent to 1A8CFF")
+  func alertButtonsBrighten() {
+    #expect(CapsuleButtonStyle.fill(look: .accent, isHovered: true, isPressed: false, isEnabled: true) == .accentHover)
+    #expect(CapsuleButtonStyle.fill(look: .accent, isHovered: false, isPressed: false, isEnabled: true) == .accent)
+    let quiet = CapsuleButtonStyle.fill(look: .tinted, isHovered: true, isPressed: false, isEnabled: true)
+    #expect(quiet == .fillControlOn)
+    let waiting = CapsuleButtonStyle.fill(look: .destructive, isHovered: true, isPressed: false, isEnabled: false)
+    #expect(waiting == .fillControlRaised, "a waiting button keeps its resting fill")
+  }
 }

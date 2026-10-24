@@ -15,11 +15,17 @@ final class SignalLog {
   var posted: [RecoveryNotice] = []
   /// The badge labels set, in order; nil clears it.
   var badges: [String?] = []
+  /// How often Atlas needs you was taken out of Notification Center.
+  var withdrawn = 0
 
   /// Signals that post, badge and read their choices here.
   var signals: AttentionSignals {
     AttentionSignals(
-      notifier: Notifier(requestAuthorization: {}, post: { self.posted.append($0) }),
+      notifier: Notifier(
+        requestAuthorization: {},
+        post: { self.posted.append($0) },
+        withdraw: { self.withdrawn += 1 }
+      ),
       badge: DockBadge { self.badges.append($0) },
       preferences: SettingsPreferences(
         loadTab: { nil },

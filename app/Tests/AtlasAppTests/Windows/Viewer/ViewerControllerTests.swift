@@ -136,10 +136,15 @@ struct ViewerControllerTests {
       "overview": ["mode": "recovering", "reason": "Unknown outcome", "pending": 1],
     ]
     let commands = ScriptedCommands(["restart": #"{"ok": true}"#])
-    let viewer = try await ViewerController.watching(service, commands: commands)
+    let clock = ManualClock()
+    let viewer = try await ViewerController.watching(service, commands: commands, clock: clock)
     viewer.cancelAlert()
     #expect(viewer.snapshot.recovery == .setAside)
-    await viewer.recover()
+    let recovering = Task { await viewer.recover() }
+    let hold = Duration.seconds(Motion.Duration.doneHold.seconds)
+    try await clock.untilSleeping(for: hold, "Recover never held on Recovered")
+    clock.advance(by: hold)
+    await recovering.value
     #expect(commands.ran == [Action.restart.arguments])
     #expect(viewer.session.recoveryLater == nil)
     #expect(viewer.session.notice == Words.recovered)

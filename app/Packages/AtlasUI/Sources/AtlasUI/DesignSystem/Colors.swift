@@ -14,6 +14,9 @@ extension Color {
   static let textTertiary = Color(red: 0x8E / 255, green: 0x8E / 255, blue: 0x93 / 255)
   /// What is happening now, and the switches: system blue, #0A84FF.
   static let accent = Color(red: 0x0A / 255, green: 0x84 / 255, blue: 0xFF / 255)
+  /// The accent under the pointer, a step brighter, such as an alert's default button (v3 `.acap.accent:hover`):
+  /// #1A8CFF.
+  static let accentHover = Color(red: 0x1A / 255, green: 0x8C / 255, blue: 0xFF / 255)
   /// Text and glyphs on ``accent``: white.
   static let onAccent = Color.white
   /// The accent laid under the current step's row, as a wash (v3 `--accent-wash`): the accent at 0.09.
@@ -115,8 +118,8 @@ extension Color {
   /// `--glass-chip`, D12): the ground at 0.66.
   static let fillGlass = Color.ground
     .opacity(0.66)
-  /// The tint between a thick glass and its content on macOS 26, such as an alert's, until its alert phase settles
-  /// it by eye (v3 `--glass-thick`): rgb(38, 38, 42) at 0.78.
+  /// The tint of a thick glass, such as an alert's, between the system glass or the material and its content (v3
+  /// `--glass-thick`, A1): rgb(38, 38, 42) at 0.78.
   static let fillGlassThick = Color(red: 38 / 255, green: 38 / 255, blue: 42 / 255)
     .opacity(0.78)
   /// A divider and a card's edge: white at 0.08.
@@ -149,10 +152,11 @@ extension Color {
   /// black at 0.4.
   static let dropShadowSoft = Color.black
     .opacity(0.4)
-  /// A surface's shadow, such as a raised picture's or a floating bar's: black at 0.5.
+  /// A surface's shadow, such as a raised picture's, a floating bar's or an alert's: black at 0.5.
   static let dropShadow = Color.black
     .opacity(0.5)
-  /// A heavier shadow, for a surface over other content, such as the mini screen's or an alert's: black at 0.55.
+  /// A heavier shadow, for a surface over other content, such as the mini screen's or a large screenshot's:
+  /// black at 0.55.
   static let dropShadowStrong = Color.black
     .opacity(0.55)
 }

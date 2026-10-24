@@ -11,7 +11,7 @@ public struct SettingsState: Equatable, Sendable {
   /// The About pane.
   public var about: SettingsAboutState
   /// The alert over the whole window, if one is asked.
-  public var alert: OrbitAlertState<AlertChoice>?
+  public var alert: AlertCardState<AlertChoice>?
 
   /// Creates the window's state.
   ///
@@ -28,7 +28,7 @@ public struct SettingsState: Equatable, Sendable {
     helper: SettingsHelperState,
     agents: SettingsAgentsState,
     about: SettingsAboutState,
-    alert: OrbitAlertState<AlertChoice>? = nil
+    alert: AlertCardState<AlertChoice>? = nil
   ) {
     self.tabs = tabs
     self.general = general

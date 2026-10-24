@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { ALERT_RENDERS, PANEL_MODES } from '../scripts/render-app.mjs';
+import { ALERT_RENDERS, NOTICE_RENDERS, PANEL_MODES } from '../scripts/render-app.mjs';
 
 const swift = readFileSync(
   new URL('../app/Sources/AtlasApp/Rendering/PanelRender.swift', import.meta.url),
@@ -33,9 +33,10 @@ test('the render table names exactly the modes in PanelRender.modes', () => {
   assert.deepEqual(PANEL_MODES, modes);
 });
 
-test('the render table names exactly the files and settings in PanelRender.alerts', () => {
-  const tuples = [...arrayLiteral('alerts').matchAll(/\(\s*"([^"]+)",\s*\[([^\]]*)\]\s*\)/g)];
-  const alerts = tuples.map(([, file, pairs]) => ({
+// Each `("file", ["KEY": "value", ...])` in PanelRender.NAME.
+function renders(name) {
+  const tuples = [...arrayLiteral(name).matchAll(/\(\s*"([^"]+)",\s*\[([^\]]*)\]\s*\)/g)];
+  const found = tuples.map(([, file, pairs]) => ({
     file,
     environment: Object.fromEntries(
       [...pairs.matchAll(/"((?:[^"\\]|\\.)*)"\s*:\s*"((?:[^"\\]|\\.)*)"/g)].map(
@@ -43,6 +44,26 @@ test('the render table names exactly the files and settings in PanelRender.alert
       ),
     ),
   }));
-  assert.ok(alerts.length > 0, 'no alerts read from PanelRender.alerts');
-  assert.deepEqual(ALERT_RENDERS, alerts);
+  assert.ok(found.length > 0, `no renders read from PanelRender.${name}`);
+  return found;
+}
+
+test('the render table names exactly the files and settings in PanelRender.alerts', () => {
+  assert.deepEqual(ALERT_RENDERS, renders('alerts'));
+});
+
+test('the render table names exactly the files and settings in PanelRender.notices', () => {
+  assert.deepEqual(NOTICE_RENDERS, renders('notices'));
+});
+
+test('the alert renders draw each phase: running, as Recover and as a destructive Log Out, refused and done', () => {
+  const files = ALERT_RENDERS.map((render) => render.file);
+  for (const file of [
+    'alert-recovering',
+    'alert-logging-out',
+    'alert-recover-refused',
+    'alert-recovered',
+  ]) {
+    assert.ok(files.includes(file), `${file} has no render`);
+  }
 });

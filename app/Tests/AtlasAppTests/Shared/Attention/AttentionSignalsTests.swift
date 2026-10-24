@@ -35,6 +35,21 @@ struct AttentionSignalsTests {
     #expect(log.posted == [.unfinished], "a failed reading in between is not the state clearing")
   }
 
+  @Test("Atlas needs you is withdrawn from Notification Center once Needs you clears, and only then")
+  func needsYouIsWithdrawn() {
+    let log = SignalLog()
+    var signals = log.signals
+    signals.read(reading(.recovering, .needsYou))
+    signals.read(reading(.recovering, .needsYou))
+    #expect(log.withdrawn == 0, "still needed")
+    signals.read(nil)
+    #expect(log.withdrawn == 0, "a failed reading is not the state clearing")
+    signals.read(reading(.observing, .idle))
+    #expect(log.withdrawn == 1)
+    signals.read(reading(.observing, .idle))
+    #expect(log.withdrawn == 1, "withdrawn once")
+  }
+
   @Test("the badge shows only while Needs you lasts, the badge setting is on and the Dock icon shows")
   func badge() {
     let log = SignalLog()

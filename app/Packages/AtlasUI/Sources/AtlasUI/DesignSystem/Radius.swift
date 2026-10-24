@@ -11,6 +11,6 @@ enum Radius {
   static let medium: CGFloat = 10
   /// 12: a card, a row, a pane and a large picture's frame.
   static let large: CGFloat = 12
-  /// 22: a modal surface's corners, such as an alert's.
-  static let extraLarge: CGFloat = 22
+  /// 26: a modal surface's corners, such as an alert's (v3 A1, a macOS 26 alert).
+  static let extraLarge: CGFloat = 26
 }

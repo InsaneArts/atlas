@@ -37,14 +37,14 @@ enum GlassStyle: Sendable, CaseIterable {
   ///
   /// - Parameter backing: What the surface is drawn with.
   /// - Returns: For the system glass, none for the chrome and ``Color/fillGlassThick`` for a modal surface; for the
-  ///   material, ``Color/fillGlass`` or ``Color/fillModal``; under Reduce Transparency, the opaque
-  ///   ``Color/fillFloatingSolid`` or ``Color/fillModalSolid``.
+  ///   material, ``Color/fillGlass`` or ``Color/fillGlassThick`` again, as v3 draws an alert on either; under
+  ///   Reduce Transparency, the opaque ``Color/fillFloatingSolid`` or ``Color/fillModalSolid``.
   func fill(on backing: Backing) -> Color? {
     switch (self, backing) {
     case (.regular, .glass): nil
     case (.thick, .glass): .fillGlassThick
     case (.regular, .material): .fillGlass
-    case (.thick, .material): .fillModal
+    case (.thick, .material): .fillGlassThick
     case (.regular, .opaque): .fillFloatingSolid
     case (.thick, .opaque): .fillModalSolid
     }

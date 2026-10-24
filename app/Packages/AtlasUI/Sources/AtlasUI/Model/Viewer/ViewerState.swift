@@ -7,7 +7,7 @@ public struct ViewerState: Equatable, Sendable {
   /// The Details column beside the screen; nil hides it.
   public var details: ViewerDetailsState?
   /// The alert over the whole window; nil shows none.
-  public var alert: OrbitAlertState<AlertChoice>?
+  public var alert: AlertCardState<AlertChoice>?
   /// The helper's screen, small and live in the corner, over the Activity or Apps tab; nil shows none.
   public var mini: MiniScreenState?
   /// What shows under the top row: the screen, or the selected tab's pane.
@@ -26,7 +26,7 @@ public struct ViewerState: Equatable, Sendable {
     top: ViewerTopRowState,
     screen: ViewerScreenState,
     details: ViewerDetailsState? = nil,
-    alert: OrbitAlertState<AlertChoice>? = nil,
+    alert: AlertCardState<AlertChoice>? = nil,
     mini: MiniScreenState? = nil,
     pane: ViewerPane = .screen
   ) {

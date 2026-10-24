@@ -70,6 +70,8 @@
         "Log out anyway": AlertSnapshot(alert: .logOutAnyway),
         "Recover refused": AlertSnapshot(alert: .recover, failure: HelperWords.recoverBusy, overview: recovering),
         "Recovering": AlertSnapshot(alert: .recover, running: true, overview: recovering),
+        "Recovered": AlertSnapshot(alert: .recover, running: true, done: true, overview: recovering),
+        "Logging out": AlertSnapshot(alert: .logOut, running: true),
       ]
       #expect(Set(presented.keys) == Set(PreviewStates.alert.map(\.name)), "every sample has its facts, and no more")
       for preview in PreviewStates.alert {

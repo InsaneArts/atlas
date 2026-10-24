@@ -2,7 +2,7 @@ import AtlasService
 import AtlasStatus
 
 /// What Atlas shows outside its windows when it needs the person: a notification once per new recovery or log-out
-/// (``RecoveryNotice``), and a badge on the Dock icon while Needs you asks for the person
+/// (``RecoveryNotice``), withdrawn once Needs you clears, and a badge on the Dock icon while Needs you asks for the person
 /// (``RecoveryNotice/needsPerson(previous:current:)``). Both follow the viewer service's answers
 /// as the menu bar panel reads them; a reading that failed changes neither. Each waits for its choice in Settings,
 /// read as it applies, and the badge also for the Dock icon, which shows only while a window is open (``DockIcon``).
@@ -21,6 +21,8 @@ struct AttentionSignals {
   private var dockIconShown = false
   /// The badge shown now, so an unchanged one is not set again on every reading.
   private var shownBadge: String?
+  /// Whether the last answer needed the person, so Atlas needs you is withdrawn once one no longer does.
+  private var neededPerson = false
 
   /// Signals that have seen no answer yet, with no badge.
   ///
@@ -45,7 +47,19 @@ struct AttentionSignals {
     answerBefore = lastAnswer
     lastAnswer = status.overview
     if let notice, preferences.loadNotify() { notifier.post(notice) }
+    // A Needs you that has cleared leaves no notification behind whose Recover would act on what is over.
+    let needsPerson = RecoveryNotice.needsPerson(previous: answerBefore, current: status.overview)
+    if neededPerson, !needsPerson { notifier.withdraw() }
+    neededPerson = needsPerson
     settleBadge()
+  }
+
+  /// A Recover started from a notification did not run: a second notification says why, unless Notify me was turned
+  /// off meanwhile.
+  ///
+  /// - Parameter reason: Why, in plain words.
+  func tell(_ reason: String) {
+    if preferences.loadNotify() { notifier.postRefusal(reason) }
   }
 
   /// The Dock icon showed or hid.

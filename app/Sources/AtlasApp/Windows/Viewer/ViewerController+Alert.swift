@@ -1,7 +1,9 @@
 import AtlasUI
 
 /// The alerts: Recover, Switch, Log Out, Log Out Anyway and Restart, each asked first, run once however many times
-/// its button is pressed, and answered with a notice once its command ends.
+/// its button is pressed, and answered with a notice once its command ends. Recover answers in place: refused, the
+/// alert stays and says why; worked, it says Recovered for ``AtlasUI/Motion/Duration/doneHold`` on the injected clock
+/// before it closes.
 extension ViewerController {
   /// The alert over the window now: the one asked for, else the recovery alert the helper's state calls for.
   var shownAlert: ViewerAlert? {
@@ -17,7 +19,10 @@ extension ViewerController {
   func ask(_ alert: ViewerAlert) {
     guard !session.alertRunning, !session.recovering else { return say(HelperWords.waitForAction) }
     releaseControl()
-    if alert == .recover { session.recoveryLater = nil }
+    if alert == .recover {
+      session.recoveryLater = nil
+      session.recoveryRefusal = nil
+    }
     session.alert = alert
   }
 
@@ -25,6 +30,7 @@ extension ViewerController {
   func cancelAlert() {
     guard !session.alertRunning, !session.recovering, let shown = shownAlert else { return }
     session.alert = nil
+    session.recoveryRefusal = nil
     if shown == .recover, let offered = snapshot.offeredRecovery {
       session.recoveryLater = RecoveryKey(offered, status: reading.status)
     }
@@ -43,15 +49,31 @@ extension ViewerController {
   }
 
   /// Recovers the helper as the panel does, through the shared commands. Never while holding control; never repeats
-  /// an action.
+  /// an action. Once it worked the alert stays up, saying Recovered, through the hold, whatever the helper's state
+  /// says meanwhile, then closes with the notice; refused, it stays, saying why.
   func recover() async {
     guard !session.recovering, !holdingControl else { return }
     session.recovering = true
     session.recoveryLater = nil
+    session.recoveryRefusal = nil
     let recovery = await actions.recover()
+    if let recovery, recovery.outcome.ok {
+      session.alert = .recover
+      session.recoveryDone = true
+      say(nil)
+      // A hold cut short only shortens the moment Recovered shows; the alert closes either way.
+      try? await clock.sleep(for: .seconds(Motion.Duration.doneHold.seconds))
+      session.recoveryDone = false
+      session.alert = nil
+      // A notice said during the hold, such as to wait for another alert, stays.
+      if session.notice == nil { say(recovery.notice) }
+    } else if let recovery {
+      session.recoveryRefusal = recovery.notice
+    } else {
+      // Another window's Recover runs: the alert shows it running, and the notice says to wait.
+      say(HelperWords.waitForAction)
+    }
     session.recovering = false
-    session.alert = nil
-    say(recovery?.notice ?? HelperWords.waitForAction)
     // Read the outcome directly: a paused picture makes no requests.
     await readStatus()
     refresh()

@@ -13,8 +13,8 @@
     case statusLabel = "status-label"
     /// A chip floating over a picture.
     case floatingChip = "floating-chip"
-    /// The alert.
-    case orbitAlert = "orbit-alert"
+    /// The alert card, side by side and stacked, asked, running, refused and done.
+    case alertCard = "alert-card"
     /// A message in place of a picture.
     case emptyMessage = "empty-message"
     /// One letterboxed picture in each look.

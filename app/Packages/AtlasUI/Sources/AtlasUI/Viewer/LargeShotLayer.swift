@@ -53,7 +53,8 @@ struct LargeShotLayer: View {
       .background(
         RoundedRectangle(cornerRadius: Radius.large)
           .fill(Color.letterbox)
-          .elevation(.modal)
+          // The modal depth with the heavier shade it had before alerts moved to v3's; its own redesign settles it.
+          .shadow(color: Color.dropShadowStrong, radius: Elevation.modal.radius, y: Elevation.modal.y)
       )
       .accessibilityElement()
       .accessibilityLabel(shot.caption)

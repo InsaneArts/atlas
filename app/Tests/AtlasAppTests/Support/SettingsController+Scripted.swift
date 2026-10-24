@@ -14,11 +14,13 @@ extension SettingsController {
   ///   - commands: The scripted command line.
   ///   - statusReads: Counts each time it asks for the shared status to be read again.
   ///   - installs: The agent installs it shares with another window; its own over `commands` when nil.
+  ///   - clock: The clock its waits run on, such as a done Recover's hold.
   /// - Returns: The controller.
   static func scripted(
     commands: ScriptedCommands,
     statusReads: CallCount = CallCount(),
-    installs: AgentInstalls? = nil
+    installs: AgentInstalls? = nil,
+    clock: ManualClock = ManualClock()
   ) -> SettingsController {
     let service = ScriptedService()
     return SettingsController(
@@ -51,7 +53,7 @@ extension SettingsController {
           switchToHelper: { "" },
           gettingStarted: {}
         ),
-        clock: ManualClock()
+        clock: clock
       )
     )
   }

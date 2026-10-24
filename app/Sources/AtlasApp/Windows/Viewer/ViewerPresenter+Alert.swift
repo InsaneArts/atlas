@@ -6,7 +6,7 @@ extension ViewerPresenter {
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The alert, or nil for none.
-  static func alert(_ snapshot: ViewerSnapshot) -> OrbitAlertState<AlertChoice>? {
+  static func alert(_ snapshot: ViewerSnapshot) -> AlertCardState<AlertChoice>? {
     let session = snapshot.session
     if let asked = session.alert {
       return alert(asked, snapshot: snapshot)
@@ -15,38 +15,45 @@ extension ViewerPresenter {
     return alert(.recover, snapshot: snapshot)
   }
 
-  /// One alert's words and buttons, as every window builds them (``HelperAlert/state(overview:busy:failure:)``);
-  /// Restart, which only the main window asks, is a plain alert of its own.
+  /// One alert's words and buttons, as every window builds them (``HelperAlert/state(overview:progress:)``);
+  /// Restart, which only the main window asks, is a plain alert of its own. Recover shows its refusal and its
+  /// success in place.
   ///
   /// - Parameters:
   ///   - kind: Which alert.
   ///   - snapshot: What the controller holds.
   /// - Returns: The alert.
-  static func alert(_ kind: ViewerAlert, snapshot: ViewerSnapshot) -> OrbitAlertState<AlertChoice> {
-    let busy =
+  static func alert(_ kind: ViewerAlert, snapshot: ViewerSnapshot) -> AlertCardState<AlertChoice> {
+    let session = snapshot.session
+    let progress =
       kind == .recover
-      ? snapshot.session.recovering || snapshot.running.contains(.recovery) : snapshot.session.alertRunning
+      ? AlertProgress.of(
+        running: session.recovering || snapshot.running.contains(.recovery),
+        failure: session.recoveryRefusal,
+        done: session.recoveryDone
+      )
+      : AlertProgress.of(running: session.alertRunning, failure: nil)
     let overview = snapshot.reading.status.overview
     return switch kind {
     case .recover:
       HelperAlert.recover
-        .state(overview: overview, busy: busy)
+        .state(overview: overview, progress: progress)
     case .switchToHelper:
       HelperAlert.switchToHelper
-        .state(overview: overview, busy: busy)
+        .state(overview: overview, progress: progress)
     case .logOut:
       HelperAlert.logOut
-        .state(overview: overview, busy: busy)
+        .state(overview: overview, progress: progress)
     case .logOutAnyway:
       HelperAlert.logOutAnyway
-        .state(overview: overview, busy: busy)
+        .state(overview: overview, progress: progress)
     case .restart:
       HelperAlert.plain(
         ViewerWords.restartTitle,
         ViewerWords.restartMessage,
-        busy ? ViewerWords.restarting : ViewerWords.restartButton,
-        cancel: ViewerWords.cancel,
-        busy: busy
+        ViewerWords.restartButton,
+        cancel: HelperWords.cancel,
+        phase: progress.phase(running: ViewerWords.restarting, done: ViewerWords.restartTitle)
       )
     }
   }
