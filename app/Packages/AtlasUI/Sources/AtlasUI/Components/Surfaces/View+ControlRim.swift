@@ -11,3 +11,9 @@ extension View {
     modifier(ControlRim(isInControl: isInControl, radius: radius))
   }
 }
+
+#if DEBUG
+  #Preview("Samples") {
+    ModifierSamples(.controlRim)
+  }
+#endif

@@ -19,7 +19,8 @@
         .map { sample in
           let view = ComponentSampleView(sample)
             .environment(\.appIcon, AppIconImage.image)
-          let size = WindowShell.hostingView(view).fittingSize
+            .environment(\.accountPicture, AccountPictureImage.image)
+          let size = PNG.host(view).fittingSize
           return PNG.write(view, size: size, to: folder.appendingPathComponent("\(sample.rawValue).png"))
         }
         .allSatisfy { $0 }

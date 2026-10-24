@@ -20,7 +20,7 @@ struct LargeShotLayer: View {
             } label: {
               Image(systemName: "chevron.left")
             }
-            .buttonStyle(.circle())
+            .buttonStyle(.capsule(.glass, outline: .circle))
             .disabled(!shot.canGoBack)
             .help("The screenshot before")
             .accessibilityLabel("Previous")
@@ -30,7 +30,7 @@ struct LargeShotLayer: View {
             } label: {
               Image(systemName: "chevron.right")
             }
-            .buttonStyle(.circle())
+            .buttonStyle(.capsule(.glass, outline: .circle))
             .disabled(!shot.canGoForward)
             .help("The screenshot after")
             .accessibilityLabel("Next")

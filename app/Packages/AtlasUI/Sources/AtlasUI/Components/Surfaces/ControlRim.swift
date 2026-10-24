@@ -52,3 +52,9 @@ private enum Layout {
   /// 7: the glow's radius, half the board's 14-point CSS blur, as a shadow's radius spreads about twice as far.
   static let glowRadius: CGFloat = 7
 }
+
+#if DEBUG
+  #Preview("Samples") {
+    ModifierSamples(.controlRim)
+  }
+#endif

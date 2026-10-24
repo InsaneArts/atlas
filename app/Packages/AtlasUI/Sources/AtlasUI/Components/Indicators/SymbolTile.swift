@@ -4,9 +4,14 @@ import SwiftUI
 /// settings row.
 struct SymbolTile: View {
   /// How large the tile is.
-  enum Size: Sendable {
+  enum Size: Sendable, CaseIterable {
+    /// 22, with a row's symbol: an action's kind in Activity (v3 V8).
+    case small
     /// 26, with 11-point characters: an icon in a row, such as an agent's.
     case regular
+    /// 30: a ``ListRow``'s tile (v3's 30-point lead, which insets the separator 56). v3 names this size regular;
+    /// today's regular moves to it when its rows move to ``ListRow``.
+    case large
   }
 
   /// What the tile shows.
@@ -40,9 +45,17 @@ struct SymbolTile: View {
   /// The tile's side.
   private var side: CGFloat {
     switch size {
+    case .small: Layout.smallSide
     case .regular: IconSize.mPlus
+    case .large: IconSize.l
     }
   }
+}
+
+/// The tile's own measures.
+private enum Layout {
+  /// 22: a small tile, Activity's (v3 V8's 22 tile).
+  static let smallSide: CGFloat = 22
 }
 
 #if DEBUG
@@ -52,5 +65,9 @@ struct SymbolTile: View {
       SymbolTile(icon: .symbol("bubble.left"))
     }
     .sampleSurface()
+  }
+
+  #Preview("Sizes") {
+    IndicatorSamples(.symbolTile)
   }
 #endif

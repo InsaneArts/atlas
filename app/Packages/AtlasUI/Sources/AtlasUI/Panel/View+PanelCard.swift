@@ -20,3 +20,9 @@ extension View {
       )
   }
 }
+
+#if DEBUG
+  #Preview("Samples") {
+    ModifierSamples(.panelCard)
+  }
+#endif

@@ -17,3 +17,9 @@ struct PressScale: ViewModifier {
       .scaleEffect(isPressed && !reduceMotion ? scale : 1)
   }
 }
+
+#if DEBUG
+  #Preview("Samples") {
+    ModifierSamples(.pressScale)
+  }
+#endif

@@ -26,7 +26,7 @@ struct PanelControlRow: View {
       } label: {
         PauseGlyph(isPaused: controls.pause.isPaused)
       }
-      .buttonStyle(.circle(.small, isOn: controls.pause.isPaused))
+      .buttonStyle(.capsule(.glass, size: .small, outline: .circle, isOn: controls.pause.isPaused))
       .help(controls.pause.help)
       .accessibilityLabel(controls.pause.label)
       Button {
@@ -34,7 +34,7 @@ struct PanelControlRow: View {
       } label: {
         Image(systemName: "ellipsis")
       }
-      .buttonStyle(.circle(.small, isOn: controls.isMoreOpen))
+      .buttonStyle(.capsule(.glass, size: .small, outline: .circle, isOn: controls.isMoreOpen))
       .onGeometryChange(for: CGRect.self) {
         $0.frame(in: .global)
       } action: {

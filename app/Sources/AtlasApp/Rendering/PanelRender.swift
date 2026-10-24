@@ -76,7 +76,7 @@ enum PanelRender {
   ///   - appearance: The appearance of the menu bar strip around the panel.
   /// - Returns: Whether the PNG was written.
   static func draw(_ snapshot: PanelSnapshot, to path: String, appearance: NSAppearance?) -> Bool {
-    let content = WindowShell.hostingView(
+    let content = PNG.host(
       ShellRoot {
         PanelView(state: PanelPresenter.state(snapshot)) { _ in }
           .panelCard()
@@ -114,7 +114,7 @@ enum PanelRender {
   /// - Returns: Whether the PNG was written.
   static func draw(alert: AlertSnapshot, to path: String, appearance: NSAppearance?) -> Bool {
     let state = AlertPresenter.state(alert)
-    let content = WindowShell.hostingView(ShellRoot { AlertView(state: state) { _ in } })
+    let content = PNG.host(ShellRoot { AlertView(state: state) { _ in } })
     let size = content.fittingSize
     let canvas = NSView(frame: NSRect(origin: .zero, size: size))
     canvas.addSubview(fill(canvas.bounds, .windowBackgroundColor))

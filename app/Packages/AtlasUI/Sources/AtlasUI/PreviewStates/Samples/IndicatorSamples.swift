@@ -17,6 +17,12 @@
       case pageDots
       /// Waiting and done.
       case progressPill
+      /// The first, a middle and the last step of the track.
+      case progressTrack
+      /// Success and problem, settled.
+      case heroDisc
+      /// Each tile size, with a symbol and with characters.
+      case symbolTile
     }
 
     private let kind: Kind
@@ -74,6 +80,22 @@
         case .progressPill:
           ProgressPill(text: String("Waiting for Accessibility…"))
           ProgressPill(text: String("Accessibility is on"), done: true)
+        case .progressTrack:
+          ProgressTrack(index: 0, count: 6, label: String("Step 1 of 6"))
+          ProgressTrack(index: 2, count: 6, label: String("Step 3 of 6"))
+          ProgressTrack(index: 5, count: 6, label: String("Step 6 of 6"))
+        case .heroDisc:
+          HStack(spacing: Spacing.xl) {
+            HeroDisc(kind: .success)
+            HeroDisc(kind: .problem)
+          }
+        case .symbolTile:
+          ForEach(SymbolTile.Size.allCases, id: \.self) { size in
+            HStack(spacing: Spacing.m) {
+              SymbolTile(icon: .symbol(SymbolName.click.rawValue), size: size)
+              SymbolTile(icon: .text(String(">_")), size: size)
+            }
+          }
         }
       }
       .sampleSurface()

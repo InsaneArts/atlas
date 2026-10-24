@@ -19,9 +19,7 @@ struct PanelEmptyPicture: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background {
       RoundedRectangle(cornerRadius: Radius.medium)
-        .fill(Color.fillPlaceholder)
-      RoundedRectangle(cornerRadius: Radius.medium)
-        .strokeBorder(Color.separator, lineWidth: Stroke.hairline)
+        .filledOutline(Color.fillPlaceholder, border: Color.separator)
     }
     .accessibilityElement(children: .combine)
   }

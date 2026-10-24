@@ -16,3 +16,9 @@ struct SeparatedRows<Items: RandomAccessCollection, Row: View>: View where Items
     }
   }
 }
+
+#if DEBUG
+  #Preview("Samples") {
+    ModifierSamples(.separatedRows)
+  }
+#endif

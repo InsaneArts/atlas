@@ -8,13 +8,18 @@ struct GlassSurface<SurfaceShape: Shape>: ViewModifier {
   /// The surface's outline.
   let shape: SurfaceShape
   @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+  @Environment(\.drawsGlassEffect) private var drawsGlassEffect
 
   /// Lays the surface behind the content.
   ///
   /// - Parameter content: The view on the glass.
   /// - Returns: The view on its surface.
   func body(content: Content) -> some View {
-    let backing = GlassStyle.backing(glassAvailable: Self.glassAvailable, reduceTransparency: reduceTransparency)
+    let backing = GlassStyle.backing(
+      glassAvailable: Self.glassAvailable,
+      reduceTransparency: reduceTransparency,
+      drawsGlassEffect: drawsGlassEffect
+    )
     switch backing {
     case .glass:
       if #available(macOS 26, *) {

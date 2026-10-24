@@ -1,0 +1,110 @@
+import SwiftUI
+
+/// Rows in one group, as System Settings sets them (v3 D6): one quiet fill, a 0.5-point edge, and a separator above
+/// each row but the first, inset to that row's text. A long list can scroll inside its group, showing three and a
+/// half rows with its bottom edge fading (v3 D10), so the header and footer around it never move.
+struct GroupedList<Items: RandomAccessCollection, Row: View>: View where Items.Element: Identifiable {
+  /// How the group is drawn.
+  enum Style: Sendable {
+    /// Radius 12: setup's lists, the Apps tab and Details.
+    case regular
+    /// Radius 10: Settings' groups.
+    case compact
+  }
+
+  /// The rows' items, in order.
+  private let items: Items
+  /// How the group is drawn.
+  private let style: Style
+  /// The size of its rows when it scrolls past three and a half of them, or nil when it always grows.
+  private let scrolling: ListRow.Size?
+  /// Draws one item's row.
+  private let row: (Items.Element) -> Row
+
+  /// Creates a group of rows.
+  ///
+  /// - Parameters:
+  ///   - items: The rows' items, in order.
+  ///   - style: How the group is drawn; regular by default.
+  ///   - scrolling: The size of its rows, when it scrolls past three and a half of them; nil, by default, grows.
+  ///   - row: Draws one item's row, usually a ``ListRow``.
+  init(
+    _ items: Items,
+    style: Style = .regular,
+    scrolling: ListRow.Size? = nil,
+    @ViewBuilder row: @escaping (Items.Element) -> Row
+  ) {
+    self.items = items
+    self.style = style
+    self.scrolling = scrolling
+    self.row = row
+  }
+
+  /// The rows on their group, scrolling where they must.
+  var body: some View {
+    content
+      .clipShape(shape)
+      .background(
+        shape
+          .fill(Color.fillGroup)
+      )
+      .overlay(
+        shape
+          .strokeBorder(Color.separator, lineWidth: Stroke.hairline)
+      )
+  }
+
+  /// The rows, in a fading scroll view when they run past three and a half.
+  @ViewBuilder private var content: some View {
+    if let scrolling, GroupedListMetrics.scrolls(rowCount: items.count, rowHeight: scrolling.height) {
+      ScrollView {
+        rows
+      }
+      .scrollIndicators(.never)
+      .frame(height: GroupedListMetrics.scrollHeight(rowHeight: scrolling.height))
+      .mask { ScrollFade() }
+    } else {
+      rows
+    }
+  }
+
+  /// Every row, each but the first with its separator.
+  private var rows: some View {
+    VStack(spacing: .zero) {
+      ForEach(items) { item in
+        row(item)
+          .environment(\.drawsListSeparator, item.id != items.first?.id)
+      }
+    }
+  }
+
+  /// The group's outline.
+  private var shape: RoundedRectangle {
+    RoundedRectangle(cornerRadius: style == .regular ? Radius.large : Radius.medium)
+  }
+}
+
+/// The mask that fades a scrolling list's bottom edge. A mask reads only alpha: any opaque colour, here the ground,
+/// shows the rows whole, and clear hides them.
+private struct ScrollFade: View {
+  var body: some View {
+    LinearGradient(
+      stops: [
+        Gradient.Stop(color: .ground, location: 1 - GroupedListMetrics.scrollMask),
+        Gradient.Stop(color: .clear, location: 1),
+      ],
+      startPoint: .top,
+      endPoint: .bottom
+    )
+  }
+}
+
+#if DEBUG
+  #Preview("Choices") {
+    ListRowSamples(.choices)
+  }
+
+  #Preview("Scrolling") {
+    ListRowSamples(.scrolling)
+  }
+#endif

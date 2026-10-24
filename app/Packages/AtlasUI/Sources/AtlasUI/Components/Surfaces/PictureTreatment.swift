@@ -25,3 +25,9 @@ private enum Layout {
   /// 0.4: the black over a dimmed picture, which leaves it at the board's 0.6 brightness.
   static let dimShade = 0.4
 }
+
+#if DEBUG
+  #Preview("Looks") {
+    ModifierSamples(.pictureTreatment)
+  }
+#endif

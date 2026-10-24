@@ -9,3 +9,9 @@ extension View {
     modifier(PictureTreatment(look: look))
   }
 }
+
+#if DEBUG
+  #Preview("Looks") {
+    ModifierSamples(.pictureTreatment)
+  }
+#endif

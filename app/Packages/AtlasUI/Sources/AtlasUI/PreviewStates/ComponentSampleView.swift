@@ -32,6 +32,21 @@
       case .iconTabs: IconTabsSamples()
       case .formRow: FormRowSamples()
       case .popupButton: PopupButtonSamples()
+      case .appIconTiles: BrandSamples(.appIcon)
+      case .accountPictureSizes: BrandSamples(.accountPicture)
+      case .listRowChoices: ListRowSamples(.choices)
+      case .listRowLeads: ListRowSamples(.leads)
+      case .listRowTrailing: ListRowSamples(.trailing)
+      case .listRowSizes: ListRowSamples(.sizes)
+      case .groupedListScrolling: ListRowSamples(.scrolling)
+      case .statusLineKinds: StatusLineSamples(.kinds)
+      case .progressTrackSteps: IndicatorSamples(.progressTrack)
+      case .heroDiscKinds: IndicatorSamples(.heroDisc)
+      case .glassChipKinds: GlassChipSamples(.chips)
+      case .capsuleButtonCircles: CapsuleButtonSamples(.circles)
+      case .actionSlotActions: ActionSlotSamples(isInControl: true)
+      case .symbolTileSizes: IndicatorSamples(.symbolTile)
+      case .symbolNames: SymbolSamples()
       }
     }
   }

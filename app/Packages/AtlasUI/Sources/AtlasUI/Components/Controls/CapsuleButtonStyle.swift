@@ -1,8 +1,12 @@
 import SwiftUI
 
 /// Atlas's capsule buttons: white for the next step, glass beside it, plain for the quiet way out, and the accent,
-/// tinted and destructive looks an alert's buttons wear. A style, not a view, so the control stays a `Button` with
-/// its own label, role, shortcut and disabled state.
+/// tinted and destructive looks an alert's buttons wear; a circle of glass for a symbol alone. A style, not a view, so
+/// the control stays a `Button` with its own label, role, shortcut and disabled state.
+///
+/// Each answers the pointer (v3 P9, X9): a glass fill steps from 0.08 at rest to 0.12 under the pointer and 0.16 while
+/// held, the white capsule goes pure white and then #E3E3E8; it shrinks in 0.1 seconds as it is pressed and comes back
+/// on a small spring. Under Reduce Motion the fill still changes and the size does not.
 struct CapsuleButtonStyle: ButtonStyle {
   /// How the capsule is painted.
   enum Look: Sendable {
@@ -26,12 +30,28 @@ struct CapsuleButtonStyle: ButtonStyle {
   enum Size: Sendable {
     /// 26 high, 13-point text: in a settings row.
     case mini
-    /// 30 high, 13-point text: in the panel, an alert and an empty message.
+    /// 30 high, 13-point text: in the panel, an alert and an empty message; a circle 30 across.
     case small
-    /// 34 high, 13-point text: in a footer, a card or the top row.
+    /// 34 high, 13-point text: in a footer, a card or the top row; a circle 34 across.
     case regular
     /// 44 high, 14-point text: a screen's one main action.
     case large
+  }
+
+  /// The shape around the label.
+  enum Outline: Sendable {
+    /// A capsule around a title.
+    case pill
+    /// A circle the capsule's height across, for a button whose label is a symbol alone.
+    case circle
+  }
+
+  /// What a glass look is laid on.
+  enum Backing: Sendable {
+    /// Its fill alone, over the window's ground, as every surface draws it until it is redesigned.
+    case fill
+    /// The system's glass under its fill (v3 D12), opaque under Reduce Transparency: a button floating over a picture.
+    case glass
   }
 
   /// How the capsule is painted.
@@ -40,122 +60,70 @@ struct CapsuleButtonStyle: ButtonStyle {
   var size = Size.regular
   /// Whether it takes the whole width offered, so side-by-side buttons share a row.
   var fill = false
-  @Environment(\.isEnabled) private var enabled
+  /// The shape around the label.
+  var outline = Outline.pill
+  /// Whether what it toggles is on, which a glass button shows with the held fill.
+  var isOn = false
+  /// What a glass look is laid on.
+  var backing = Backing.fill
 
-  /// Draws the label on its capsule.
+  /// Draws the label on its capsule or circle.
   ///
   /// - Parameter configuration: The button's label and pressed state.
   /// - Returns: The styled button.
   func makeBody(configuration: Configuration) -> some View {
-    configuration.label
-      .font(Typography.font(textStyle, weight: weight))
-      .tracking(tracking)
-      .lineLimit(1)
-      .padding(.horizontal, inset)
-      .frame(maxWidth: fill ? .infinity : nil)
-      .frame(height: height)
-      .foregroundStyle(foreground)
-      .background(
-        Capsule()
-          .fill(background)
-      )
-      // A capsule's shape drawn as a rounded rectangle: a stroked `Capsule` leaves a hairline outside each end where
-      // AppKit draws the view into an image, as the design renders do, and this one draws the same edge without it.
-      .overlay(
-        RoundedRectangle(cornerRadius: height / 2, style: .circular)
-          .strokeBorder(edge, lineWidth: Stroke.hairline)
-      )
-      .contentShape(Capsule())
-      .modifier(PressScale(isPressed: configuration.isPressed, scale: Layout.pressedScale))
-      .opacity(enabled ? 1 : Opacity.disabled)
-      .animation(Motion.press, value: configuration.isPressed)
+    CapsuleButtonBody(configuration: configuration, style: self)
   }
 
-  /// The label's size: a step larger on a large capsule.
-  private var textStyle: TextStyle {
-    switch size {
-    case .mini, .small, .regular: .body
-    case .large: .headline
-    }
-  }
-
-  /// The label's weight: regular for plain text, medium on an alert's buttons, semibold on a capsule.
-  private var weight: Font.Weight {
+  /// The capsule's fill (v3 P9, R2): a glass one steps 0.08 → 0.12 → 0.16 at rest, under the pointer and while held,
+  /// and shows the held fill while what it toggles is on; the white one goes pure white under the pointer and #E3E3E8
+  /// while held. The other looks keep one fill. A disabled button keeps its resting fill.
+  ///
+  /// - Parameters:
+  ///   - look: How the capsule is painted.
+  ///   - isOn: Whether what it toggles is on.
+  ///   - isHovered: Whether the pointer is over it.
+  ///   - isPressed: Whether it is held down.
+  ///   - isEnabled: Whether it can be pressed.
+  /// - Returns: The fill.
+  nonisolated static func fill(
+    look: Look,
+    isOn: Bool = false,
+    isHovered: Bool,
+    isPressed: Bool,
+    isEnabled: Bool
+  ) -> Color {
+    let hovered = isEnabled && isHovered
+    let pressed = isEnabled && isPressed
     switch look {
-    case .plain: .regular
-    case .accent, .tinted, .destructive: .medium
-    case .primary, .glass, .pressed: .semibold
+    case .primary:
+      if pressed { return .fillPrimaryPressed }
+      return hovered ? .fillPrimaryHover : .textPrimary
+    case .glass:
+      if isOn || pressed { return .fillControlOn }
+      return hovered ? .fillControlHover : .fillControl
+    case .pressed: return .fillControlOn
+    case .tinted, .destructive: return .fillControlRaised
+    case .plain: return .clear
+    case .accent: return .accent
     }
   }
 
-  /// The label's letter spacing: drawn in on a capsule, as the boards set every capsule's word (v3.py `pill`); plain
-  /// text and an alert's buttons keep the font's own.
-  private var tracking: CGFloat {
-    switch look {
-    case .primary, .glass, .pressed: LetterSpacing.control
-    case .plain, .accent, .tinted, .destructive: 0
-    }
+  /// How opaque the button is: whole, or dimmed to the disabled opacity when it cannot be pressed.
+  ///
+  /// - Parameter isEnabled: Whether it can be pressed.
+  /// - Returns: The opacity.
+  nonisolated static func opacity(isEnabled: Bool) -> Double {
+    isEnabled ? 1 : Opacity.disabled
   }
 
-  /// The capsule's height.
-  private var height: CGFloat {
-    switch size {
-    case .mini: ControlHeight.xsPlus
-    case .small: ControlHeight.sPlus
-    case .regular: ControlHeight.mPlus
-    case .large: ControlHeight.xl
-    }
+  /// How a press moves the button: down over ``Motion/press``, back up on ``Motion/release``'s small spring (v3 X9).
+  ///
+  /// - Parameter isPressed: Whether it is held down now.
+  /// - Returns: The animation for the change.
+  nonisolated static func pressAnimation(isPressed: Bool) -> Animation {
+    isPressed ? Motion.press : Motion.release
   }
-
-  /// The space on each side of the label: wide for a large capsule, narrow for plain text or a capsule sharing
-  /// its row.
-  private var inset: CGFloat {
-    if size == .large { return Layout.largeInset }
-    if look == .plain { return Spacing.m }
-    return fill ? Spacing.sPlus : Layout.regularInset
-  }
-
-  private var foreground: Color {
-    switch look {
-    case .primary: .ground
-    case .glass, .pressed, .tinted: .textPrimary
-    case .plain: .textSecondary
-    case .accent: .onAccent
-    case .destructive: .textDestructive
-    }
-  }
-
-  /// The capsule's fill: near white for primary, a quiet fill for glass, pressed, tinted and destructive, none for
-  /// plain, and the accent colour itself, system blue, for the accent look.
-  private var background: Color {
-    switch look {
-    case .primary: .textPrimary
-    case .glass: .fillControl
-    case .tinted, .destructive: .fillControlRaised
-    case .pressed: .fillControlOn
-    case .plain: .clear
-    case .accent: .accent
-    }
-  }
-
-  /// The capsule's edge: a glass hairline, a brighter one while pressed, none otherwise.
-  private var edge: Color {
-    switch look {
-    case .glass: .strokeStrong
-    case .pressed: .strokePressed
-    case .primary, .plain, .accent, .tinted, .destructive: .clear
-    }
-  }
-}
-
-/// The capsule's own measures, off the spacing grid's steps.
-private enum Layout {
-  /// 26: a large capsule's label inset, so a screen's main action reads wider than its text.
-  static let largeInset: CGFloat = 26
-  /// 18: a regular capsule's label inset when it hugs its label.
-  static let regularInset: CGFloat = 18
-  /// 0.97: how far a capsule shrinks while pressed.
-  static let pressedScale: CGFloat = 0.97
 }
 
 #if DEBUG
@@ -173,6 +141,10 @@ private enum Layout {
 
   #Preview("Alert") {
     CapsuleButtonSamples(.alert)
+  }
+
+  #Preview("Circles") {
+    CapsuleButtonSamples(.circles)
   }
 
   #Preview("Interactive") {
@@ -208,9 +180,13 @@ private enum Layout {
       }
       Toggle(String("Enabled"), isOn: $isEnabled)
     } content: {
-      Button(String("Continue")) {}
-        .buttonStyle(.capsule(look, size: size))
-        .disabled(!isEnabled)
+      HStack(spacing: Spacing.s) {
+        Button(String("Continue")) {}
+          .buttonStyle(.capsule(look, size: size))
+        Button(String("Pause"), systemImage: SymbolName.pause.rawValue) {}
+          .buttonStyle(.capsule(.glass, size: size, outline: .circle))
+      }
+      .disabled(!isEnabled)
     }
   }
 #endif

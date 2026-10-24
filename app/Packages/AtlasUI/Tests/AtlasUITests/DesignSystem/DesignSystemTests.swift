@@ -117,8 +117,9 @@ struct DesignSystemTests {
       (
         "duration",
         [
-          Motion.Duration.press, Motion.Duration.hoverIn, Motion.Duration.leave, Motion.Duration.fade,
-          Motion.Duration.hoverOut, Motion.Duration.reduced, Motion.Duration.entry, Motion.Duration.appearDelay,
+          Motion.Duration.drawDelay, Motion.Duration.press, Motion.Duration.hoverIn, Motion.Duration.leave,
+          Motion.Duration.fade, Motion.Duration.hoverOut, Motion.Duration.reduced, Motion.Duration.draw,
+          Motion.Duration.entry, Motion.Duration.appearDelay,
           Motion.Duration.glide, Motion.Duration.glideSoft, Motion.Duration.pulse, Motion.Duration.spin,
           Motion.Duration.breathe, Motion.Duration.toast,
         ]

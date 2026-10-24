@@ -85,6 +85,12 @@ extension Color {
   /// An inactive page dot: white at 0.18.
   static let fillIndicator = Color.white
     .opacity(0.18)
+  /// A step still to come on a progress track (v3 D8 `.track i`): white at 0.14.
+  static let fillTrack = Color.white
+    .opacity(0.14)
+  /// A finished step on a progress track, light grey (v3 D8, S10 `.track i.done`): white at 0.42.
+  static let fillTrackDone = Color.white
+    .opacity(0.42)
   /// A chip floating over a picture, under its material: the ground at 0.75.
   static let fillChip = Color.ground
     .opacity(0.75)
@@ -133,6 +139,12 @@ extension Color {
   /// An unselected radio's ring: white at 0.30.
   static let strokeControl = Color.white
     .opacity(0.3)
+  /// The shade along a keycap's bottom edge, so it reads as a key (v3 V5 `.kc`'s inset): black at 0.3.
+  static let strokeShade = Color.black
+    .opacity(0.3)
+  /// The faint shadow outside a chip on the picture (v3 `.gchip`'s `0 4 14`): black at 0.25.
+  static let dropShadowFaint = Color.black
+    .opacity(0.25)
   /// A soft shadow under a surface resting on the ground, such as the live picture's (v3 `Elevation.stage`, R3):
   /// black at 0.4.
   static let dropShadowSoft = Color.black

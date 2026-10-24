@@ -38,3 +38,9 @@ private enum Layout {
   /// 50: a tab's height.
   static let height: CGFloat = 50
 }
+
+#if DEBUG
+  #Preview("Samples") {
+    ModifierSamples(.iconTab)
+  }
+#endif

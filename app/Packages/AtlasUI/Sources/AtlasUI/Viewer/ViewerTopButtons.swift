@@ -26,7 +26,7 @@ struct ViewerTopButtons: View {
       } label: {
         PauseGlyph(isPaused: actions.pause.isOn)
       }
-      .buttonStyle(.circle(isOn: actions.pause.isOn))
+      .buttonStyle(.capsule(.glass, outline: .circle, isOn: actions.pause.isOn))
       .help(actions.pause.help)
       .accessibilityLabel(actions.pause.label)
       keys
@@ -41,7 +41,7 @@ struct ViewerTopButtons: View {
       } label: {
         Image(systemName: "ellipsis")
       }
-      .buttonStyle(.circle(isOn: actions.more.isOn))
+      .buttonStyle(.capsule(.glass, outline: .circle, isOn: actions.more.isOn))
       .onGeometryChange(for: CGRect.self) {
         $0.frame(in: .global)
       } action: {
@@ -54,7 +54,7 @@ struct ViewerTopButtons: View {
       } label: {
         Image(systemName: "info.circle")
       }
-      .buttonStyle(.circle(isOn: actions.details.isOn))
+      .buttonStyle(.capsule(.glass, outline: .circle, isOn: actions.details.isOn))
       .help(actions.details.help)
       .accessibilityLabel(actions.details.label)
       .accessibilityAddTraits(actions.details.isOn ? .isSelected : [])

@@ -10,3 +10,9 @@ extension View {
       .environment(\.colorScheme, .dark)
   }
 }
+
+#if DEBUG
+  #Preview("Samples") {
+    ModifierSamples(.windowSurface)
+  }
+#endif

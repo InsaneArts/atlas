@@ -20,15 +20,17 @@ enum GlassStyle: Sendable, CaseIterable {
   }
 
   /// What draws a glass surface: the system glass where the system has it, the thin material before it, and an
-  /// opaque fill under Reduce Transparency on either.
+  /// opaque fill under Reduce Transparency on either. A design render, which cannot draw the system glass, gets the
+  /// material, v3's own fallback.
   ///
   /// - Parameters:
   ///   - glassAvailable: Whether the system has its glass, macOS 26 and later.
   ///   - reduceTransparency: Whether the Reduce Transparency setting is on.
+  ///   - drawsGlassEffect: Whether the system glass can be drawn here; false in a design render.
   /// - Returns: The backing.
-  static func backing(glassAvailable: Bool, reduceTransparency: Bool) -> Backing {
+  static func backing(glassAvailable: Bool, reduceTransparency: Bool, drawsGlassEffect: Bool = true) -> Backing {
     if reduceTransparency { return .opaque }
-    return glassAvailable ? .glass : .material
+    return glassAvailable && drawsGlassEffect ? .glass : .material
   }
 
   /// The fill laid between the backing and the content, or nil for none.

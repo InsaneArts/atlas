@@ -19,7 +19,7 @@ struct ViewerDetails: View {
         } label: {
           Image(systemName: "xmark")
         }
-        .buttonStyle(.circle(.small))
+        .buttonStyle(.capsule(.glass, size: .small, outline: .circle))
         .help("Hide Details (⌥⌘I)")
         .accessibilityLabel("Hide Details")
       }
@@ -69,7 +69,7 @@ struct ViewerDetails: View {
         Image(systemName: "arrow.clockwise")
       }
     }
-    .buttonStyle(.circle(.small))
+    .buttonStyle(.capsule(.glass, size: .small, outline: .circle))
     .help("Check the helper again")
     .accessibilityLabel("Check Again")
   }

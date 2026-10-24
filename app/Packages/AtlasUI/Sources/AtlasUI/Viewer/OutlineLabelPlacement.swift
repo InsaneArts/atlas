@@ -40,3 +40,9 @@ struct OutlineLabelPlacement: Layout {
     }
   }
 }
+
+#if DEBUG
+  #Preview("Near an edge") {
+    ModifierSamples(.outlineLabel)
+  }
+#endif

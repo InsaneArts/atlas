@@ -18,5 +18,6 @@ struct ShellRoot<Content: View>: View {
   var body: some View {
     content()
       .environment(\.appIcon, AppIconImage.image)
+      .environment(\.accountPicture, AccountPictureImage.image)
   }
 }

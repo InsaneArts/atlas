@@ -58,3 +58,9 @@ struct CardSurface: ViewModifier {
     }
   }
 }
+
+#if DEBUG
+  #Preview("Tints") {
+    ModifierSamples(.cardSurface)
+  }
+#endif

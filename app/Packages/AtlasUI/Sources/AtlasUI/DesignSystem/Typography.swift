@@ -32,6 +32,16 @@ enum Typography {
       .monospacedDigit()
   }
 
+  /// The font an SF Symbol takes in its role (v3 D13), at the weight of the text beside it.
+  ///
+  /// - Parameters:
+  ///   - scale: The symbol's role, such as ``SymbolScale/control``.
+  ///   - weight: The weight of the text it sits with, or nil for the system's regular.
+  /// - Returns: The system font at the role's size.
+  static func symbol(_ scale: SymbolScale, weight: Font.Weight? = nil) -> Font {
+    .system(size: scale.pointSize, weight: weight)
+  }
+
   /// A system font for a glyph sized from its frame rather than from the scale, such as a symbol at a fraction of the
   /// circle it sits in. Only for glyphs sized from a frame: the size is arithmetic on the frame's token, never a
   /// literal, which the token checker refuses.

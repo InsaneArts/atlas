@@ -82,13 +82,13 @@
         case .circles:
           HStack(spacing: Spacing.s) {
             Button(String("Pause"), systemImage: "pause.fill") {}
-              .buttonStyle(.circle())
+              .buttonStyle(.capsule(.glass, outline: .circle))
             Button(String("Sidebar"), systemImage: "sidebar.right") {}
-              .buttonStyle(.circle(.small))
+              .buttonStyle(.capsule(.glass, size: .small, outline: .circle))
             Button(String("Sidebar"), systemImage: "sidebar.right") {}
-              .buttonStyle(.circle(.small, isOn: true))
+              .buttonStyle(.capsule(.glass, size: .small, outline: .circle, isOn: true))
             Button(String("Pause"), systemImage: "pause.fill") {}
-              .buttonStyle(.circle())
+              .buttonStyle(.capsule(.glass, outline: .circle))
               .disabled(true)
           }
           .labelStyle(.iconOnly)

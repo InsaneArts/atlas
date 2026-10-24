@@ -16,6 +16,8 @@ public enum Motion {
       self.seconds = seconds
     }
 
+    /// 0.08: how long a drawn check waits after its disc before it draws (v3 S3, X11).
+    static let drawDelay = Duration(seconds: 0.08)
     /// 0.1: a button press.
     static let press = Duration(seconds: 0.1)
     /// 0.12: a fill or a reveal answering the pointer arriving (v3 `Motion.hover`, in).
@@ -28,6 +30,8 @@ public enum Motion {
     static let hoverOut = Duration(seconds: 0.2)
     /// 0.2: the fade every transition takes under Reduce Motion, the longest v3's policy keeps.
     static let reduced = Duration(seconds: 0.2)
+    /// 0.3: a check drawing itself along its stroke (v3 S3, X11: `trim` 0 → 1).
+    static let draw = Duration(seconds: 0.3)
     /// 0.4: content arriving.
     static let entry = Duration(seconds: 0.4)
     /// 0.4: how long a spinner or a placeholder waits before it shows, so a quick answer never flashes one (v3
@@ -113,6 +117,20 @@ public enum Motion {
   /// - Returns: The animation for the change to `isHovered`.
   static func hover(_ isHovered: Bool) -> Animation {
     .easeOut(duration: (isHovered ? Duration.hoverIn : Duration.hoverOut).seconds)
+  }
+
+  /// A check drawing itself: ease out over ``Duration/draw``, after ``Duration/drawDelay``, so its disc lands first.
+  /// It moves along a stroke, so under Reduce Motion the check appears whole instead.
+  static var draw: Animation {
+    .easeOut(duration: Duration.draw.seconds)
+      .delay(Duration.drawDelay.seconds)
+  }
+
+  /// Something waiting to show, such as a spinner: a fade over ``Duration/fade`` after ``Duration/appearDelay``, so a
+  /// quick answer never flashes it (v3 R12, S9). Only opacity changes, so Reduce Motion keeps it.
+  static var appear: Animation {
+    .easeOut(duration: Duration.fade.seconds)
+      .delay(Duration.appearDelay.seconds)
   }
 
   /// A fade: ease out over ``Duration/fade``.

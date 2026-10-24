@@ -4,11 +4,7 @@ import SwiftUI
 struct CapsuleTabThumb: View {
   var body: some View {
     CapsuleEdge()
-      .fill(Color.fillControlOn)
-      .overlay(
-        CapsuleEdge()
-          .strokeBorder(Color.strokeSelected, lineWidth: Stroke.hairline)
-      )
+      .filledOutline(Color.fillControlOn, border: Color.strokeSelected)
   }
 }
 

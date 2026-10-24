@@ -50,9 +50,7 @@ struct EmptyMessage: View {
     .background {
       if ground == .stage {
         RoundedRectangle(cornerRadius: corner)
-          .fill(Color.fillPlaceholder)
-        RoundedRectangle(cornerRadius: corner)
-          .strokeBorder(Color.separator, lineWidth: Stroke.hairline)
+          .filledOutline(Color.fillPlaceholder, border: Color.separator)
       }
     }
     .accessibilityElement(children: children)
