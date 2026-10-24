@@ -46,9 +46,9 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
       window: window,
       glide: glide,
       ghost: ghost,
-      waitingForSwitch: { [weak controller] in
-        guard case .permissionPanel(let panel) = controller?.state.content else { return false }
-        return !panel.isOn
+      waitingFor: { [weak controller] in
+        guard case .permissionPanel(let panel) = controller?.state.content, !panel.isOn else { return nil }
+        return panel.label
       },
       // System Settings closed or quit: back to the card, whose Allow… opens it again.
       lost: { [weak controller] in controller?.send(.closePanel) }

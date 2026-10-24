@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Atlas's icon, see-through, carried by a hand from the permission panel into System Settings' list, over and over:
+/// Atlas's icon, see-through, carried by a hand from the permission panel into System Settings' list, a few times:
 /// how to allow Atlas, shown rather than told. With Reduce Motion it rests where it lands. It takes no clicks, and
 /// VoiceOver skips it, as the panel says the same in words.
 package struct DragGhostView: View {
@@ -22,7 +22,7 @@ package struct DragGhostView: View {
         ghost(.landed)
       } else {
         TimelineView(.animation(minimumInterval: DragGhostTrack.frameInterval)) { context in
-          ghost(.at(context.date.timeIntervalSinceReferenceDate))
+          ghost(.at(context.date.timeIntervalSince(state.start)))
         }
       }
     }
@@ -57,7 +57,7 @@ package struct DragGhostView: View {
 
 #if DEBUG
   #Preview("Drag ghost") {
-    DragGhostView(state: DragGhostState(from: CGPoint(x: 80, y: 200), to: CGPoint(x: 420, y: 140)))
+    DragGhostView(state: DragGhostState(from: CGPoint(x: 80, y: 200), to: CGPoint(x: 420, y: 140), start: .now))
       .frame(width: SampleWidth.column, height: OnboardingLayout.side.height)
       .sampleSurface()
   }

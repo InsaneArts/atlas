@@ -144,6 +144,67 @@ async fn guided() -> bool {
     .unwrap_or(false)
 }
 
+/// How often the daemon looks for a Screen Recording grant it cannot use
+/// yet, while Atlas's setup window guides the person: every 2 s.
+const RECORDING_WATCH: Duration = Duration::from_secs(2);
+
+/// The least time between two restarts for Screen Recording: 60 s, so a
+/// grant that this process and a new one see differently never restarts it
+/// over and over.
+const RECORDING_RESTART_GAP: Duration = Duration::from_secs(60);
+
+/// While Atlas's setup window guides the person, restart this process as
+/// soon as a new one may use Screen Recording and this one may not. Only a
+/// new process gets the grant, and the window reads it from this one, so the
+/// window sees the switch on at once, whichever permission the person turned
+/// on first. It runs apart from the arrival's requests, which a moment off
+/// screen ends, and ends once this process may record.
+pub async fn restart_for_recording(restart: impl Fn()) {
+    loop {
+        tokio::time::sleep(RECORDING_WATCH).await;
+        if capture::permitted() {
+            return;
+        }
+
+        // The window first: a new process is started only while it guides.
+        if guided().await && screen_recording_now().await {
+            if !restarted_lately() {
+                restart();
+            }
+            return;
+        }
+    }
+}
+
+/// Whether this watcher restarted Atlas less than [`RECORDING_RESTART_GAP`]
+/// ago; when not, now is noted as its latest restart. The note outlives the
+/// restart, as the asked mark does.
+fn restarted_lately() -> bool {
+    let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
+        return false;
+    };
+
+    let path = home
+        .join(crate::setup::helper::ROOT)
+        .join("recording-restart");
+    let age = std::fs::metadata(&path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok());
+    let lately = within(age, RECORDING_RESTART_GAP);
+    if !lately {
+        let _ = std::fs::write(&path, b"restarted\n");
+    }
+
+    lately
+}
+
+/// Whether something `age` old (none when it never happened) is younger
+/// than `gap`.
+fn within(age: Option<Duration>, gap: Duration) -> bool {
+    age.is_some_and(|age| age < gap)
+}
+
 /// One arrival's requests, given up as soon as the helper leaves the screen.
 /// When the person has turned on what was asked for, Atlas says so here, so
 /// they know to switch back, and restarts this process if it cannot yet use
@@ -189,17 +250,7 @@ async fn ask(shown: &impl Fn() -> bool, restart: &impl Fn(), controller: u32) {
         let mut asking = Asking::default();
 
         while !accessibility() {
-            let guided = guided().await;
-
-            // The window lets the person turn Screen Recording on first:
-            // only a new process sees it, and the window reads it from this
-            // one, so restart at once rather than after Accessibility.
-            if guided && !capture::permitted() && screen_recording_now().await {
-                restart();
-                return;
-            }
-
-            match asking.pass(guided, 15) {
+            match asking.pass(guided().await, 15) {
                 Nudge::Request => request_accessibility(),
                 Nudge::OpenSettings => open_settings("Privacy_Accessibility"),
                 Nudge::Wait => {}
@@ -557,6 +608,14 @@ mod tests {
         (0..count)
             .map(|_| asking.pass(guided, settings_after))
             .collect()
+    }
+
+    #[test]
+    fn a_restart_for_screen_recording_waits_a_minute_after_the_last_one() {
+        let gap = RECORDING_RESTART_GAP;
+        assert!(!within(None, gap), "never restarted");
+        assert!(within(Some(Duration::from_secs(5)), gap), "just restarted");
+        assert!(!within(Some(gap + Duration::from_secs(1)), gap));
     }
 
     #[test]

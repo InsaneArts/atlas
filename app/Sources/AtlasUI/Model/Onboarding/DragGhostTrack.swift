@@ -8,12 +8,14 @@ package struct DragGhostTrack: Equatable, Sendable {
   /// 1.6 s: having travelled to the list.
   static let travel: TimeInterval = 1.6
   /// 2.0 s: having landed and faded.
-  static let land: TimeInterval = 2.0
+  package static let land: TimeInterval = 2.0
   /// 3.0 s: the whole loop, the rest unseen.
-  static let cycle: TimeInterval = 3.0
+  package static let cycle: TimeInterval = 3.0
+  /// 3: the loops it shows for one permission before it rests, so it shows the way without going on and on.
+  package static let loops = 3
   /// 0.15: how much smaller it ends as it lands, as if dropped into the list.
   static let landShrink = 0.15
-  /// A thirtieth of a second: how often it is drawn, smooth enough for a demonstration that may run for minutes.
+  /// A thirtieth of a second: how often it is drawn, smooth enough for a demonstration, and light while it runs.
   package static let frameInterval: TimeInterval = 1.0 / 30
 
   /// How far along from the panel's icon to the list, from 0 to 1.

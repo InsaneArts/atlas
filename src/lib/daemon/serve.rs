@@ -154,6 +154,10 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
             restarter.restarting.notify_one();
         },
     ));
+    let watcher = daemon.clone();
+    let recording = tokio::spawn(facts::restart_for_recording(move || {
+        watcher.restarting.notify_one();
+    }));
 
     let slots = Arc::new(Semaphore::new(CONNECTIONS));
     let mut tasks = JoinSet::new();
@@ -222,6 +226,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     }
 
     consent.abort();
+    recording.abort();
     outcome
 }
 

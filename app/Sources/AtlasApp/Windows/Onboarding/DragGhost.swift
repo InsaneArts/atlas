@@ -5,7 +5,8 @@ import SwiftUI
 
 /// The drag ghost's window: see-through and click-through, over System Settings and the permission panel, never
 /// taking focus. It shows ``DragGhostView`` from the panel's icon into System Settings' list while the panel waits
-/// for its switch, and hides while the person points at the icon or drags it.
+/// for its switch, and hides while the person points at the icon or drags it. Each time it appears it starts at the
+/// icon, and it rests after ``DragGhostTrack/loops`` loops for a permission (``DemonstrationBudget``).
 @MainActor
 @Observable
 final class DragGhost {
@@ -23,6 +24,8 @@ final class DragGhost {
   @ObservationIgnored private let panel: NSPanel
   /// Whether the person points at the icon or drags it.
   @ObservationIgnored private var busy = false
+  /// How much of this permission's demonstration is left.
+  @ObservationIgnored private var budget = DemonstrationBudget()
 
   /// Creates the overlay, hidden.
   init() {
@@ -55,11 +58,24 @@ final class DragGhost {
   /// - Parameter settings: System Settings' window frame, in AppKit's coordinates; nil hides the ghost.
   func show(into settings: CGRect?) {
     guard let settings, !busy, let source, let window = source.window, window.isVisible else { return hide() }
+    let now = Date.now
+    if state == nil {
+      guard !budget.isSpent else { return }
+      budget.appear(at: now)
+    }
+    let start = state?.start ?? now
+    guard budget.allows(at: now, loopStart: start) else { return hide() }
     let icon = window.convertToScreen(source.convert(source.bounds, to: nil))
-    let (area, next) = Self.path(icon: icon, settings: settings, window: window.frame)
+    let (area, next) = Self.path(icon: icon, settings: settings, window: window.frame, start: start)
     if panel.frame != area { panel.setFrame(area, display: false) }
     if state != next { state = next }
     if !panel.isVisible { panel.orderFront(nil) }
+  }
+
+  /// A new permission to show the way to: its loops start again.
+  func restart() {
+    hide()
+    budget = DemonstrationBudget()
   }
 
   /// The overlay's frame, over both windows and past their edges, and the ghost's path in it: from the middle of the
@@ -69,8 +85,14 @@ final class DragGhost {
   ///   - icon: The panel's icon, on screen.
   ///   - settings: System Settings' window frame.
   ///   - window: The setup window's frame.
+  ///   - start: When the ghost's loop began.
   /// - Returns: The overlay's frame, and the path.
-  static func path(icon: CGRect, settings: CGRect, window: CGRect) -> (area: CGRect, state: DragGhostState) {
+  static func path(
+    icon: CGRect,
+    settings: CGRect,
+    window: CGRect,
+    start: Date
+  ) -> (area: CGRect, state: DragGhostState) {
     let target = CGPoint(
       x: settings.minX + settings.width * landing.x,
       y: settings.maxY - settings.height * landing.y
@@ -78,11 +100,12 @@ final class DragGhost {
     let area = settings.union(window)
       .insetBy(dx: -margin, dy: -margin)
     let local = { (point: CGPoint) in CGPoint(x: point.x - area.minX, y: area.maxY - point.y) }
-    return (area, DragGhostState(from: local(CGPoint(x: icon.midX, y: icon.midY)), to: local(target)))
+    return (area, DragGhostState(from: local(CGPoint(x: icon.midX, y: icon.midY)), to: local(target), start: start))
   }
 
   /// Hides the ghost.
   func hide() {
+    budget.disappear(at: .now)
     state = nil
     if panel.isVisible { panel.orderOut(nil) }
   }
