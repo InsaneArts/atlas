@@ -14,7 +14,6 @@ struct ViewerControllerPictureTests {
     let pictures = RecordedPictures()
     let viewer = try await ViewerController.watching(
       service,
-      nap: ViewerController.untilCancelled,
       pictures: pictures.outlet
     )
     let asked = service.frameCalls

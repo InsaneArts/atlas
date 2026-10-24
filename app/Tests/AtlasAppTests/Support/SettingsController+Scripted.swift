@@ -1,3 +1,4 @@
+import AsyncSupportTesting
 import AtlasCommandsTesting
 import AtlasService
 import AtlasServiceTesting
@@ -23,7 +24,11 @@ extension SettingsController {
     return SettingsController(
       dependencies: SettingsDependencies(
         commands: commands,
-        actions: HelperActions(commands: commands, service: service, barrier: ControlBarrier(service: service)),
+        actions: HelperActions(
+          commands: commands,
+          service: service,
+          barrier: ControlBarrier(service: service, clock: ManualClock())
+        ),
         installs: installs ?? AgentInstalls(commands: commands),
         preferences: SettingsPreferences(
           loadTab: { nil },
@@ -45,7 +50,8 @@ extension SettingsController {
           choosePicture: { _ in },
           switchToHelper: { "" },
           gettingStarted: {}
-        )
+        ),
+        clock: ManualClock()
       )
     )
   }

@@ -37,14 +37,14 @@ struct OnboardingControllerTests {
   ///   - opened: Records the URLs opened.
   ///   - loginItem: The scripted login item.
   ///   - installs: The agent installs it shares with another window; its own over `commands` when nil.
-  ///   - pause: The tick's wait; none by default.
+  ///   - clock: The clock its waits run on; by default one nobody advances.
   /// - Returns: The controller.
   static func controller(
     _ commands: ScriptedCommands,
     opened: OpenedURLs = OpenedURLs(),
     loginItem: ScriptedLoginItem = ScriptedLoginItem(),
     installs: AgentInstalls? = nil,
-    pause: @escaping @Sendable (Duration) async -> Void = { _ in }
+    clock: ManualClock = ManualClock()
   ) -> OnboardingController {
     OnboardingController(
       dependencies: OnboardingDependencies(
@@ -52,7 +52,7 @@ struct OnboardingControllerTests {
         openURL: { opened.urls.append($0) },
         loginItem: loginItem.seam,
         installs: installs ?? AgentInstalls(commands: commands),
-        pause: pause
+        clock: clock
       )
     )
   }
@@ -166,14 +166,18 @@ struct OnboardingControllerTests {
   }
 
   @Test("a closed window starts no reading")
-  func aClosedWindowStartsNothing() async {
+  func aClosedWindowStartsNothing() async throws {
     let commands = ScriptedCommands(["onboarding status": freshMac])
     let controller = Self.controller(commands)
     await controller.close()
     controller.refresh()
-    // Proves an absence: a reading would have started well within this pause.
-    try? await Task.sleep(for: Ceiling.absence)
-    #expect(commands.ran.isEmpty)
+    // The sentinel goes the same way: an open window over the same command line reads once, after any reading the
+    // closed one started has set off for the command line.
+    await afterQueuedWork()
+    let open = Self.controller(commands)
+    open.refresh()
+    try await settle("the open window never read") { open.snapshot.loaded }
+    #expect(commands.ran == [Action.onboardingStatus.arguments], "only the open window read")
     #expect(!controller.snapshot.loaded)
   }
 
@@ -203,17 +207,21 @@ struct OnboardingControllerTests {
       "onboarding status": Self.helperReply(accessibility: false), "onboarding window": #"{"ok": true}"#,
     ])
     let controller = Self.controller(commands)
-    var overlapped: Bool?
-    // The person closes the window while the open mark runs.
+    let overlap = Overlap()
+    // The person closes the window while the open mark runs; a close that did not wait for the mark would have
+    // cleared it before the sentinel queued behind the close.
     commands.whileRunning { arguments in
       guard arguments == open else { return }
       Task { await controller.close() }
-      try? await Task.sleep(for: Ceiling.absence)
-      overlapped = commands.ran.contains(closed)
+      // Once the close has run to its wait, a command sent the same way: a clearing sent meanwhile lands first.
+      await afterQueuedWork()
+      let probe: any CommandRunning = commands
+      _ = await probe.run(["probe"], input: nil)
+      overlap.seen = commands.ran.contains(closed)
     }
     controller.refresh()
-    try await settle("the mark was never cleared") { overlapped != nil && commands.ran.contains(closed) }
-    #expect(overlapped == false, "the window was marked closed while the open mark still ran")
+    try await settle("the mark was never cleared") { overlap.seen != nil && commands.ran.contains(closed) }
+    #expect(overlap.seen == false, "the window was marked closed while the open mark still ran")
     #expect(commands.ran.last == closed)
   }
 
@@ -237,7 +245,11 @@ struct OnboardingControllerTests {
       Issue.record("an unsigned Atlas in your account is blocked")
       return
     }
-    try await Task.sleep(for: Ceiling.absence)
+    // A second reading: a mark the first one started would have reached the command line before it.
+    yours.refresh()
+    try await settle("the facts were never read again") {
+      person.ran.filter { $0 == Action.onboardingStatus.arguments }.count == 2
+    }
     #expect(!person.ran.contains(open))
   }
 
@@ -250,7 +262,9 @@ struct OnboardingControllerTests {
     }
     controller.refresh()
     try await settle("the check never ran") { commands.ran.contains(Action.finishSetup.arguments) }
-    try? await Task.sleep(for: Ceiling.absence)
+    // The check's own end is the sentinel: once it has ended, it has done all it ever will.
+    let check = try #require(controller.finishing, "the check is under way")
+    try await check.value("the check never ended")
     #expect(controller.snapshot.finish == .running, "the closed window took the check's outcome")
   }
 
@@ -281,7 +295,9 @@ struct OnboardingControllerTests {
     }
     controller.refresh()
     try await settle("the agents were never asked for") { commands.ran.contains(Action.agentsStatus.arguments) }
-    try? await Task.sleep(for: Ceiling.absence)
+    // The reading's own end is the sentinel: once it has ended, it has done all it ever will.
+    let reading = try #require(controller.loadingAgents, "the agents reading is under way")
+    try await reading.value("the agents reading never ended")
     #expect(!controller.snapshot.agentsLoaded, "the closed window took the agents' reply")
   }
 
@@ -531,13 +547,30 @@ struct OnboardingControllerTests {
     #expect(controller.snapshot.guiding == .screenRecording)
   }
 
+  @Test("the setup window reads again after its interval, and not before")
+  func theWindowReadsAgainAfterItsInterval() async throws {
+    let clock = ManualClock()
+    let commands = ScriptedCommands(["onboarding status": freshMac])
+    let controller = Self.controller(commands, clock: clock)
+    controller.watch()
+    try await clock.untilSleeping(for: OnboardingController.readEvery, "the first reading never paused")
+    #expect(commands.ran == [Action.onboardingStatus.arguments])
+    #expect(clock.waiting == [OnboardingController.readEvery])
+    clock.advance(by: OnboardingController.readEvery - .milliseconds(1))
+    #expect(clock.waiting == [.milliseconds(1)], "the pause has not ended a moment before its interval")
+    clock.advance(by: .milliseconds(1))
+    try await settle("the facts were never read again") { commands.ran.count == 2 }
+    controller.stop()
+  }
+
   @Test("the panel opens the next permission's page once its switch is on, and steps aside once both are")
   func thePanelMovesOn() async throws {
     let opened = OpenedURLs()
+    let clock = ManualClock()
     let commands = ScriptedCommands([
       "onboarding status": Self.helperReply(accessibility: false), "onboarding window": #"{"ok": true}"#,
     ])
-    let controller = Self.controller(commands, opened: opened)
+    let controller = Self.controller(commands, opened: opened, clock: clock)
     controller.refresh()
     try await settle("the facts were never read") { controller.snapshot.loaded }
     controller.send(.openSettings(id: Permission.accessibility.id))
@@ -548,10 +581,14 @@ struct OnboardingControllerTests {
     #expect(controller.snapshot.guiding == .accessibility, "still waiting for the switch")
     commands.answer("onboarding status", Self.helperReply(accessibility: true))
     controller.refresh()
+    try await clock.untilSleeping(for: OnboardingController.tickShown, "Accessibility's tick never showed")
+    clock.advance(by: OnboardingController.tickShown)
     try await settle("the panel never moved on") { controller.snapshot.guiding == .screenRecording }
     #expect(opened.urls == [Permission.accessibility, .screenRecording].compactMap(\.settingsURL))
     commands.answer("onboarding status", Self.helperReply(accessibility: true, screenCapture: true))
     controller.refresh()
+    try await clock.untilSleeping(for: OnboardingController.tickShown, "Screen Recording's tick never showed")
+    clock.advance(by: OnboardingController.tickShown)
     try await settle("the panel never stepped aside") { controller.snapshot.guiding == nil }
     #expect(controller.snapshot.step == .helperDone)
     #expect(opened.urls.count == 2, "each page opens once")
@@ -562,26 +599,28 @@ struct OnboardingControllerTests {
   )
   func aTickUnderWay() async throws {
     let opened = OpenedURLs()
-    let ticks = NapGate(holding: OnboardingController.tickShown)
+    let clock = ManualClock()
     let commands = ScriptedCommands([
       "onboarding status": Self.helperReply(accessibility: false), "onboarding window": #"{"ok": true}"#,
     ])
-    let controller = Self.controller(commands, opened: opened, pause: ticks.nap)
+    let controller = Self.controller(commands, opened: opened, clock: clock)
     controller.refresh()
     try await settle("the facts were never read") { controller.snapshot.loaded }
     controller.send(.openSettings(id: Permission.accessibility.id))
     commands.answer("onboarding status", Self.helperReply(accessibility: true))
     controller.refresh()
-    try await settle("the tick never started") { ticks.asked == 1 }
+    try await clock.untilSleeping(for: OnboardingController.tickShown, "the tick never started")
     controller.refresh()
     try await settle("the facts were never read again") {
       commands.ran.filter { $0 == Action.onboardingStatus.arguments }.count == 3
     }
-    #expect(ticks.asked == 1, "one tick however often the facts are read")
+    #expect(clock.waiting == [OnboardingController.tickShown], "one tick however often the facts are read")
+    let tick = try #require(controller.movingOn, "the tick is under way")
     controller.send(.closePanel)
     controller.send(.openSettings(id: Permission.accessibility.id))
-    ticks.gate.open()
-    try? await Task.sleep(for: Ceiling.absence)
+    #expect(clock.waiting.isEmpty, "Back ended the tick's wait")
+    // The tick's own end is the sentinel: once it has ended, it has done all it ever will.
+    try await tick.value("the stopped tick never ended")
     let accessibility = try #require(Permission.accessibility.settingsURL)
     #expect(opened.urls == [accessibility, accessibility], "Screen Recording's page never opened")
     #expect(controller.snapshot.guiding == .accessibility)

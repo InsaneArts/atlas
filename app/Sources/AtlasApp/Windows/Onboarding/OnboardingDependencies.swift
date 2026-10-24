@@ -2,7 +2,7 @@ import AppKit
 import AtlasCommands
 
 /// What the setup window's controller reaches outside itself, handed in so tests can stand in for each: the `atlas`
-/// command line, opening a URL, the login item and waiting.
+/// command line, opening a URL, the login item and the clock its waits run on.
 struct OnboardingDependencies {
   /// The `atlas` command line every action runs.
   var commands: any CommandRunning
@@ -17,20 +17,23 @@ struct OnboardingDependencies {
   var app =
     Bundle.main.bundleURL.pathExtension == "app"
     ? Bundle.main.bundleURL : URL(fileURLWithPath: "/Applications/Atlas.app")
-  /// Waits a while, as the window does before moving on from a permission just turned on.
-  var pause: @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
+  /// The clock every wait runs on: the pause between readings of the facts, a permission's tick before the panel
+  /// moves on, and the permission panel following System Settings. A cancelled wait ends at once.
+  var clock: any Clock<Duration>
 
-  /// The app's own: `commands`, NSWorkspace and the bundled login item.
+  /// The app's own: `commands`, NSWorkspace, the bundled login item and the app's clock.
   ///
   /// - Parameters:
   ///   - commands: The `atlas` command line.
   ///   - loginItem: The app's login item.
   ///   - installs: Connecting agents, shared with Settings.
+  ///   - clock: The app's clock.
   /// - Returns: The live dependencies.
   static func live(
     commands: any CommandRunning,
     loginItem: OpenAtLogin,
-    installs: AgentInstalls
+    installs: AgentInstalls,
+    clock: any Clock<Duration>
   ) -> OnboardingDependencies {
     OnboardingDependencies(
       commands: commands,
@@ -39,7 +42,8 @@ struct OnboardingDependencies {
           .open(url)
       },
       loginItem: loginItem,
-      installs: installs
+      installs: installs,
+      clock: clock
     )
   }
 }

@@ -21,8 +21,6 @@ final class ViewerController {
   /// One heartbeat tick: 500 ms, so a stale picture ends control within half a second; the lease is renewed every
   /// ``renewEvery`` ticks.
   static let heartbeatEvery: Duration = .milliseconds(500)
-  /// The pause between readings in the app: a sleep, which cancelling ends early.
-  static let sleep: @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
 
   /// What the last reading showed. Written only by the controller's own files; the shells call its methods.
   var reading = ViewerReading()
@@ -57,12 +55,12 @@ final class ViewerController {
   @ObservationIgnored var barrier: ControlBarrier { actions.barrier }
   /// Where the rate and Details are kept between windows.
   @ObservationIgnored let preferences: ViewerPreferences
-  /// The time now, in seconds of uptime, which never steps back.
-  @ObservationIgnored let clock: @MainActor () -> TimeInterval
+  /// The time now, in seconds of uptime, which never steps back: what a picture's age is told by.
+  @ObservationIgnored let uptime: @MainActor () -> TimeInterval
+  /// The clock every wait runs on; a cancelled wait ends at once.
+  @ObservationIgnored let clock: any Clock<Duration>
   /// One heartbeat tick; the lease is renewed every ``renewEvery`` ticks.
   @ObservationIgnored let heartbeatInterval: Duration
-  /// The pause between readings, and before Take Control asks again, which ends early when cancelled.
-  @ObservationIgnored let nap: @Sendable (Duration) async -> Void
   /// The Mac's double-click speed, in seconds.
   @ObservationIgnored let doubleClickInterval: @MainActor () -> TimeInterval
   /// Where a copied or saved picture goes.
@@ -136,9 +134,9 @@ final class ViewerController {
     service = dependencies.service
     actions = dependencies.actions
     preferences = dependencies.preferences
+    uptime = dependencies.uptime
     clock = dependencies.clock
     heartbeatInterval = dependencies.heartbeatInterval
-    nap = dependencies.nap
     doubleClickInterval = dependencies.doubleClickInterval
     pictures = dependencies.pictures
     switchToHelper = dependencies.switchToHelper
@@ -295,7 +293,7 @@ final class ViewerController {
 
   /// Reads the clock into ``now``, and tells Details' age row.
   func readClock() {
-    now = clock()
+    now = uptime()
     ticks += 1
   }
 }

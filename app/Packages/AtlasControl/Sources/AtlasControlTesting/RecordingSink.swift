@@ -1,9 +1,11 @@
 import AtlasControl
 import AtlasService
+import Observation
 
 /// An input sink that records each lease sent and each failure, and can hold
 /// one lease's send open until the test resumes it.
 @MainActor
+@Observable
 public final class RecordingSink: InputSink {
   /// The lease of each batch sent, in order.
   public var sent: [String] = []

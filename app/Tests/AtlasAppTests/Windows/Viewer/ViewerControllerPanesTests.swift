@@ -28,12 +28,7 @@ struct ViewerControllerPanesTests {
   ///   - message: What never came, as the failure says it.
   /// - Throws: The failed requirement, once the ceiling passes with the task still running.
   static func ended(_ task: Task<Void, Never>?, _ message: String) async throws {
-    var done = false
-    Task {
-      await task?.value
-      done = true
-    }
-    try await settle(message) { done }
+    try await task?.value(message)
   }
 
   /// Lets the oldest held screenshot request for `name` at that size answer, once it has been made.
@@ -64,7 +59,6 @@ struct ViewerControllerPanesTests {
     service.shots = shots
     let viewer = try await ViewerController.watching(
       service,
-      nap: ViewerController.untilCancelled,
       shotOutlet: shotOutlet
     )
     service.holdShots = true
@@ -76,7 +70,7 @@ struct ViewerControllerPanesTests {
   @Test("Activity stops reading when the window hides or leaves its tab")
   func activityStopsReading() async throws {
     let service = ScriptedService()
-    let viewer = try await ViewerController.watching(service, nap: ViewerController.untilCancelled)
+    let viewer = try await ViewerController.watching(service)
     viewer.send(.selectTab(.activity))
     try await settle("Activity was never read") { service.activityCalls == 1 }
     let first = viewer.paneWork.reading
@@ -98,17 +92,15 @@ struct ViewerControllerPanesTests {
     service.activityLog = ActivityLog(entries: [
       ActivityLog.Entry(id: "1", says: "took a screenshot", ageSeconds: 4, operation: "screenshot")
     ])
-    let clock = TestClock()
-    clock.now = 1_000
+    var now = Date(timeIntervalSince1970: 1_000)
     let viewer = try await ViewerController.watching(
       service,
-      nap: ViewerController.untilCancelled,
-      wallClock: { Date(timeIntervalSince1970: clock.now) }
+      wallClock: { now }
     )
     service.hold = ["screenshots"]
     viewer.send(.selectTab(.activity))
     try await settle("the screenshots were never asked for") { service.held["screenshots"] != nil }
-    clock.now = 1_030
+    now = Date(timeIntervalSince1970: 1_030)
     service.resume("screenshots")
     try await settle("the log was never kept") { viewer.panes.activity.readAt != nil }
     #expect(viewer.panes.activity.readAt == Date(timeIntervalSince1970: 1_000))
@@ -218,7 +210,7 @@ struct ViewerControllerPanesTests {
     let service = ScriptedService()
     service.shots = Self.shots
     service.fail = ["screenshot"]
-    let viewer = try await ViewerController.watching(service, nap: ViewerController.untilCancelled)
+    let viewer = try await ViewerController.watching(service)
     viewer.send(.selectTab(.screenshots))
     try await settle("the screenshots were never read") { viewer.panes.shots.shots != nil }
     viewer.send(.openShot(Self.newer))
@@ -267,7 +259,7 @@ struct ViewerControllerPanesTests {
         windows: [HelperWindow(id: 3, title: "Ring settings", x: 100, y: 80, width: 520, height: 860)]
       )
     ]
-    let viewer = try await ViewerController.watching(service, nap: ViewerController.untilCancelled)
+    let viewer = try await ViewerController.watching(service)
     viewer.send(.selectTab(.apps))
     try await settle("the apps were never read") { viewer.panes.apps.apps != nil }
     viewer.send(.selectTab(.screen))
@@ -285,7 +277,7 @@ struct ViewerControllerPanesTests {
     let service = ScriptedService()
     service.shots = Self.shots
     service.shot = png()
-    let viewer = try await ViewerController.watching(service, nap: ViewerController.untilCancelled)
+    let viewer = try await ViewerController.watching(service)
     viewer.send(.selectTab(.screenshots))
     try await settle("the screenshots were never read") { viewer.panes.shots.shots != nil }
     viewer.send(.searchShots("99:99"))

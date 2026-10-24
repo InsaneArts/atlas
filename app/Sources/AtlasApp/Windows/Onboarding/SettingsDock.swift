@@ -18,6 +18,8 @@ final class SettingsDock {
   private let window: NSWindow
   /// Moves the window.
   private let glide: WindowGlide
+  /// The clock the looks wait on.
+  private let clock: any Clock<Duration>
   /// The ghost showing the person where to drag Atlas.
   private let ghost: DragGhost
   /// Where System Settings' window is, in AppKit's coordinates; nil when it shows none.
@@ -44,6 +46,7 @@ final class SettingsDock {
   /// - Parameters:
   ///   - window: The setup window.
   ///   - glide: Moves the window.
+  ///   - clock: The clock the looks wait on; the setup window's.
   ///   - ghost: The drag ghost.
   ///   - settingsFrame: Where System Settings' window is.
   ///   - waitingFor: The permission the panel waits for, by its label.
@@ -51,6 +54,7 @@ final class SettingsDock {
   init(
     window: NSWindow,
     glide: WindowGlide,
+    clock: any Clock<Duration>,
     ghost: DragGhost,
     settingsFrame: @escaping @MainActor () -> CGRect? = SystemSettingsWindow.frame,
     waitingFor: @escaping @MainActor () -> String?,
@@ -58,6 +62,7 @@ final class SettingsDock {
   ) {
     self.window = window
     self.glide = glide
+    self.clock = clock
     self.ghost = ghost
     self.settingsFrame = settingsFrame
     self.waitingFor = waitingFor
@@ -80,11 +85,11 @@ final class SettingsDock {
         to: NSRect(origin: OnboardingPlacement.shrunk(frame: size, from: window.frame, visible: visible), size: size)
       )
     }
-    following = Task { [weak self] in
+    following = Task { [weak self, clock] in
       var looks = 0
       while !Task.isCancelled {
         // Cancelled while asleep: no step after, which would dock a card just put back.
-        do { try await Task.sleep(for: Self.followEvery) } catch { return }
+        do { try await clock.sleep(for: Self.followEvery) } catch { return }
         guard let self else { return }
         looks += 1
         catchUp(waited: looks >= Self.settingsPatience)

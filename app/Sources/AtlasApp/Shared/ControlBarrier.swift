@@ -34,8 +34,8 @@ final class ControlBarrier {
   private(set) var unconfirmed: String?
   /// The viewer service every release goes to.
   @ObservationIgnored private let service: any ViewerService
-  /// The pause while a lost acquisition is held, which a test stands in for.
-  @ObservationIgnored private let nap: @Sendable (Duration) async -> Void
+  /// The clock a lost acquisition's hold waits on, and the status readings that end it.
+  @ObservationIgnored private let clock: any Clock<Duration>
   /// Those waiting for every outstanding reply, by the number each wait took.
   @ObservationIgnored private var waiting: [Int: CheckedContinuation<Void, Never>] = [:]
   /// The number the next wait takes.
@@ -45,13 +45,10 @@ final class ControlBarrier {
   ///
   /// - Parameters:
   ///   - service: The viewer service every release goes to, and whose status ends a lost acquisition's hold.
-  ///   - nap: The pause while a lost acquisition is held; the app's sleeps.
-  init(
-    service: any ViewerService,
-    nap: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
-  ) {
+  ///   - clock: The clock a lost acquisition's hold waits on; the app's.
+  init(service: any ViewerService, clock: any Clock<Duration>) {
     self.service = service
-    self.nap = nap
+    self.clock = clock
   }
 
   /// Whether control work is under way, so Take Control waits.
@@ -77,7 +74,8 @@ final class ControlBarrier {
   func holdLostAcquisition() {
     begin()
     Task {
-      await nap(Self.lateGrant + Self.leaseLifetime)
+      // Never cancelled: the hold ends only once a lease granted meanwhile can no longer be alive.
+      try? await clock.sleep(for: Self.lateGrant + Self.leaseLifetime)
       unconfirmed = await answered(tries: Self.statusTries) ? nil : HelperWords.helperUnconfirmed
       end()
     }
@@ -89,7 +87,7 @@ final class ControlBarrier {
   /// - Returns: Whether one answered.
   private func answered(tries: Int) async -> Bool {
     for attempt in 0..<tries {
-      if attempt > 0 { await nap(Self.statusEvery) }
+      if attempt > 0 { try? await clock.sleep(for: Self.statusEvery) }
       if (try? await service.status()) != nil { return true }
     }
     return false

@@ -3,8 +3,8 @@ import AtlasUI
 import Foundation
 
 /// What the Settings window's controller reaches outside itself, handed in so tests can stand in for each: the
-/// `atlas` command line, the helper's own commands, the saved choices, the agents' app icons, the app's version and its
-/// links to the other windows.
+/// `atlas` command line, the helper's own commands, the saved choices, the agents' app icons, the app's version, its
+/// links to the other windows and the app's clock.
 struct SettingsDependencies {
   /// The `atlas` command line: the agents and updates run through it.
   var commands: any CommandRunning
@@ -20,20 +20,24 @@ struct SettingsDependencies {
   var version: String?
   /// What Settings shares with the other windows.
   var links: SettingsLinks
+  /// The clock any wait of the window runs on, so a test moves its time by hand; none waits yet.
+  var clock: any Clock<Duration>
 
-  /// The app's own: `commands`, `actions`, the standard defaults and Atlas.app's version.
+  /// The app's own: `commands`, `actions`, the standard defaults, Atlas.app's version and the app's clock.
   ///
   /// - Parameters:
   ///   - commands: The `atlas` command line.
   ///   - actions: The helper's own commands.
   ///   - installs: Connecting agents, shared with the setup window.
   ///   - links: What Settings shares with the other windows.
+  ///   - clock: The app's clock.
   /// - Returns: The live dependencies.
   @MainActor static func live(
     commands: any CommandRunning,
     actions: HelperActions,
     installs: AgentInstalls,
-    links: SettingsLinks
+    links: SettingsLinks,
+    clock: any Clock<Duration>
   ) -> SettingsDependencies {
     SettingsDependencies(
       commands: commands,
@@ -42,7 +46,8 @@ struct SettingsDependencies {
       preferences: .standard,
       agentIcons: AgentIcons.onThisMac,
       version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
-      links: links
+      links: links,
+      clock: clock
     )
   }
 }

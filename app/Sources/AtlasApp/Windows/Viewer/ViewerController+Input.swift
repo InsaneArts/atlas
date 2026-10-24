@@ -49,7 +49,7 @@ extension ViewerController {
         at: point,
         scale: scale(in: size),
         modifiers: modifiers,
-        now: clock(),
+        now: uptime(),
         repeatWithin: doubleClickInterval()
       )
     else { return }
@@ -82,7 +82,7 @@ extension ViewerController {
   func pointerUp(_ button: MouseButton, at location: CGPoint, in size: CGSize, modifiers: Modifiers) {
     guard let point = point(location, in: size, clamp: true) ?? gesture.last else { return }
     let movement = gesture.move(button, to: point, scale: scale(in: size), modifiers: modifiers)
-    guard let action = gesture.finish(button, at: point, modifiers: modifiers, now: clock()) else { return }
+    guard let action = gesture.finish(button, at: point, modifiers: modifiers, now: uptime()) else { return }
     enqueueCleanup([movement, action].compactMap { $0 })
   }
 
@@ -109,7 +109,7 @@ extension ViewerController {
   ///   - size: The view's size.
   func scrolled(dx: Double, dy: Double, precise: Bool, began: Bool, at location: CGPoint, in size: CGSize) {
     guard canInput, let point = point(location, in: size) else { return }
-    let now = clock()
+    let now = uptime()
     let paused = wheelHeardAt.map { Duration.seconds(now - $0) > Self.newScrollAfter } ?? true
     if began || (!precise && paused) { wheel.beginGesture() }
     wheelHeardAt = now
@@ -122,8 +122,8 @@ extension ViewerController {
   /// queued, it waits another gathering, so steady scrolling never piles batches up.
   private func sendWheelSoon() {
     guard wheelSending == nil else { return }
-    wheelSending = Task { [weak self] in
-      try? await Task.sleep(for: Self.scrollGathering)
+    wheelSending = Task { [weak self, clock] in
+      try? await clock.sleep(for: Self.scrollGathering)
       guard let self, !Task.isCancelled else { return }
       wheelSending = nil
       if input.holdsScroll { return sendWheelSoon() }

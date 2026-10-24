@@ -22,7 +22,7 @@ struct HelperActionsTests {
   ///   - commands: The scripted command line.
   /// - Returns: The commands.
   private static func actions(_ service: ScriptedService, _ commands: ScriptedCommands) -> HelperActions {
-    HelperActions(commands: commands, service: service, barrier: ControlBarrier(service: service))
+    HelperActions(commands: commands, service: service, barrier: ControlBarrier(service: service, clock: ManualClock()))
   }
 
   @Test("Recover and Restart are one reservation, so a restart asked from another window while one runs never starts")

@@ -19,22 +19,29 @@ struct PanelControllerTests {
   ///   - commands: The scripted command line, which by default knows no command.
   ///   - loginItem: The scripted login item.
   ///   - links: Stand-ins for the other windows.
-  ///   - nap: The pause between readings; one that never ends by default, so nothing is read twice unasked.
+  ///   - clock: The clock the pauses between readings run on; by default one nobody advances, so nothing is read
+  ///     twice unasked.
   /// - Returns: The panel's controller.
   private static func panel(
     _ service: ScriptedService = ScriptedService(),
     commands: ScriptedCommands = ScriptedCommands([:]),
     loginItem: ScriptedLoginItem = ScriptedLoginItem(),
     links: PanelLinks = PanelLinks(),
-    nap: SteppedNap = SteppedNap()
+    clock: ManualClock = ManualClock()
   ) -> PanelController {
     PanelController(
-      service: service,
-      commands: commands,
-      actions: HelperActions(commands: commands, service: service, barrier: ControlBarrier(service: service)),
-      loginItem: loginItem.seam,
-      links: links,
-      nap: nap.nap
+      dependencies: PanelDependencies(
+        service: service,
+        commands: commands,
+        actions: HelperActions(
+          commands: commands,
+          service: service,
+          barrier: ControlBarrier(service: service, clock: clock)
+        ),
+        loginItem: loginItem.seam,
+        links: links,
+        clock: clock
+      )
     )
   }
 
@@ -142,22 +149,22 @@ struct PanelControllerTests {
   @Test("the open panel reads the status and the picture every 2 s, and the closed panel the status every 5 s")
   func theReadingsKeepTheirIntervals() async throws {
     let service = ScriptedService()
-    let nap = SteppedNap()
-    let controller = Self.panel(service, nap: nap)
+    let clock = ManualClock()
+    let controller = Self.panel(service, clock: clock)
     controller.watch(open: true)
-    try await settle("the open panel never paused after reading") { nap.waitingCount == 2 }
+    try await clock.untilSleeping(2, for: PanelController.openEvery, "the open panel never paused after reading")
     #expect(service.statusCalls == 1 && service.frameCalls == 1)
-    #expect(nap.asked == [PanelController.openEvery, PanelController.openEvery])
-    nap.step()
-    try await settle("the open panel never read again") { nap.waitingCount == 2 && service.frameCalls == 2 }
-    #expect(service.statusCalls == 2)
+    #expect(clock.waiting == [PanelController.openEvery, PanelController.openEvery])
+    clock.advance(by: PanelController.openEvery)
+    try await clock.untilSleeping(2, for: PanelController.openEvery, "the open panel never read again")
+    #expect(service.statusCalls == 2 && service.frameCalls == 2)
     controller.watch(open: false)
-    try await settle("the closed panel never paused after reading") { nap.asked.last == PanelController.closedEvery }
+    try await clock.untilSleeping(for: PanelController.closedEvery, "the closed panel never paused after reading")
+    #expect(clock.waiting == [PanelController.closedEvery], "a closed panel reads no pictures")
     let pictures = service.frameCalls
-    nap.step()
+    clock.advance(by: PanelController.closedEvery)
     try await settle("the closed panel never read the status again") { service.statusCalls == 4 }
     #expect(service.frameCalls == pictures, "a closed panel reads no pictures")
-    nap.step()
   }
 
   @Test(
@@ -167,24 +174,27 @@ struct PanelControllerTests {
   func aLateCaptureIsDropped(pausing: Bool) async throws {
     let service = ScriptedService()
     service.picture = png()
-    let nap = SteppedNap()
-    let controller = Self.panel(service, nap: nap)
+    let clock = ManualClock()
+    let controller = Self.panel(service, clock: clock)
     controller.watch(open: true)
-    try await settle("the first picture never showed") { controller.picture != nil && nap.waitingCount == 2 }
+    try await clock.untilSleeping(2, for: PanelController.openEvery, "the open panel never paused after reading")
+    try await settle("the first picture never showed") { controller.picture != nil }
     let first = controller.picture?.id
     service.hold = ["frame"]
-    nap.step()
+    clock.advance(by: PanelController.openEvery)
     try await settle("the next capture was never asked for") { service.held["frame"] != nil }
     if pausing { controller.send(.togglePause) } else { controller.watch(open: false) }
     service.resume("frame")
-    nap.step()
+    // The status reading's next pause, open or closed, then the reading after it.
+    let next = pausing ? PanelController.openEvery : PanelController.closedEvery
+    try await clock.untilSleeping(for: next, "the status was never read again")
+    clock.advance(by: next)
     try await settle("the status was never read again") { service.statusCalls >= 3 }
     #expect(controller.picture?.id == first, "the late reply shows nothing")
     #expect(service.frameCalls == 2, "no picture is read meanwhile")
     if pausing { controller.send(.togglePause) } else { controller.watch(open: true) }
     try await settle("reopening never read a picture") { service.frameCalls == 3 }
     controller.watch(open: false)
-    nap.step()
   }
 
   @Test("switching locks the screen for the helper the service reports and says what to do next")

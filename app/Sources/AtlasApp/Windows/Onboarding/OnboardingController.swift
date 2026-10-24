@@ -43,18 +43,18 @@ final class OnboardingController {
   @ObservationIgnored private var markedOpen = false
   /// Setting that mark, while it runs.
   @ObservationIgnored private var marking: Task<Void, Never>?
-  /// The end-to-end check, while it runs: one at a time.
-  @ObservationIgnored private var finishing: Task<Void, Never>?
-  /// Reading which agents are installed and connected, while it runs.
-  @ObservationIgnored private var loadingAgents: Task<Void, Never>?
+  /// The end-to-end check, while it runs: one at a time; read by tests, which wait for its end.
+  @ObservationIgnored private(set) var finishing: Task<Void, Never>?
+  /// Reading which agents are installed and connected, while it runs; read by tests, which wait for its end.
+  @ObservationIgnored private(set) var loadingAgents: Task<Void, Never>?
   /// Readings of the facts since `atlas agents status` last failed.
   @ObservationIgnored private var readingsSinceAgentsFailed = 0
   /// Readings in a row whose permissions were unknown.
   @ObservationIgnored private var readingsUnknown = 0
   /// The window closed: nothing new starts, and late replies are dropped.
   @ObservationIgnored private var closed = false
-  /// Moving on from a permission just turned on, while its tick shows.
-  @ObservationIgnored private var movingOn: Task<Void, Never>?
+  /// Moving on from a permission just turned on, while its tick shows; read by tests, which wait for its end.
+  @ObservationIgnored private(set) var movingOn: Task<Void, Never>?
 
   /// Creates a controller that has read nothing yet.
   ///
@@ -113,11 +113,11 @@ final class OnboardingController {
   /// Reads the facts now and then every ``readEvery`` until ``stop()``.
   func watch() {
     guard polling == nil else { return }
-    polling = Task { [weak self] in
+    polling = Task { [weak self, clock = dependencies.clock] in
       // Ends once cancelled, or once the controller is gone.
       while !Task.isCancelled, let controller = self {
         await controller.read()
-        try? await Task.sleep(for: Self.readEvery)
+        try? await clock.sleep(for: Self.readEvery)
       }
     }
   }
@@ -203,9 +203,9 @@ final class OnboardingController {
   ///
   /// - Parameter permission: The permission just turned on.
   private func moveOn(from permission: Permission) {
-    let pause = dependencies.pause
+    let clock = dependencies.clock
     movingOn = Task {
-      await pause(Self.tickShown)
+      try? await clock.sleep(for: Self.tickShown)
       // Back during the tick: a panel opened again since is not this one's to move on.
       guard !Task.isCancelled else { return }
       movingOn = nil

@@ -26,7 +26,7 @@ struct HelperCommandsControlTests {
     let commands = ScriptedCommands(["switch": #"{"ok": true}"#])
     let seen = CommandLog()
     commands.whileRunning { _ in seen.serviceLogs.append(service.log) }
-    let viewer = try await ViewerController.watching(service, commands: commands, nap: ViewerController.untilCancelled)
+    let viewer = try await ViewerController.watching(service, commands: commands)
     service.hold = ["acquire"]
     let taking = Task { await viewer.takeControl() }
     try await settle("control was never asked for") { service.held["acquire"] != nil }
@@ -56,7 +56,7 @@ struct HelperCommandsControlTests {
       seen.serviceLogs.append(service.log)
       await gate.wait()
     }
-    let viewer = try await ViewerController.watching(service, commands: commands, nap: ViewerController.untilCancelled)
+    let viewer = try await ViewerController.watching(service, commands: commands)
     service.hold = ["acquire"]
     let taking = Task { await viewer.takeControl() }
     try await settle("control was never asked for") { service.held["acquire"] != nil }
@@ -82,7 +82,7 @@ struct HelperCommandsControlTests {
     let commands = ScriptedCommands(["start-input": #"{"ok": true}"#])
     let seen = CommandLog()
     commands.whileRunning { _ in seen.serviceLogs.append(service.log) }
-    let viewer = try await ViewerController.watching(service, commands: commands, nap: ViewerController.untilCancelled)
+    let viewer = try await ViewerController.watching(service, commands: commands)
     await viewer.takeControl()
     service.hold = ["release"]
     service.reply = ["ready": false, "canObserve": true, "overview": ["mode": "blocked", "recoverable": true]]
@@ -103,7 +103,7 @@ struct HelperCommandsControlTests {
   func aRefusedReleaseStopsRecover() async throws {
     let service = ScriptedService()
     let commands = ScriptedCommands(["start-input": #"{"ok": true}"#])
-    let viewer = try await ViewerController.watching(service, commands: commands, nap: ViewerController.untilCancelled)
+    let viewer = try await ViewerController.watching(service, commands: commands)
     await viewer.takeControl()
     service.fail = ["release"]
     viewer.releaseControl()
@@ -123,17 +123,24 @@ struct HelperCommandsControlTests {
     let service = ScriptedService()
     service.reply = Self.idle
     let commands = ScriptedCommands(["switch": #"{"ok": true}"#])
-    let actions = HelperActions(commands: commands, service: service, barrier: ControlBarrier(service: service))
+    let actions = HelperActions(
+      commands: commands,
+      service: service,
+      barrier: ControlBarrier(service: service, clock: ManualClock())
+    )
     let viewer = try await ViewerController.watching(service, commands: commands, actions: actions)
     await viewer.takeControl()
     service.hold = ["release"]
     viewer.close()
     try await settle("the release was never sent") { service.held["release"] != nil }
     let panel = PanelController(
-      service: service,
-      commands: commands,
-      actions: actions,
-      loginItem: ScriptedLoginItem().seam
+      dependencies: PanelDependencies(
+        service: service,
+        commands: commands,
+        actions: actions,
+        loginItem: ScriptedLoginItem().seam,
+        clock: ManualClock()
+      )
     )
     await panel.readStatus()
     let switching = Task { await panel.switchToHelper() }
@@ -155,16 +162,16 @@ struct HelperCommandsControlTests {
     let service = ScriptedService()
     service.reply = Self.idle
     let commands = ScriptedCommands(["switch": #"{"ok": true}"#])
-    let lifetime = NapGate(holding: ControlBarrier.lateGrant + ControlBarrier.leaseLifetime)
+    let lifetime = ControlBarrier.lateGrant + ControlBarrier.leaseLifetime
+    let clock = ManualClock()
     let actions = HelperActions(
       commands: commands,
       service: service,
-      barrier: ControlBarrier(service: service, nap: lifetime.nap)
+      barrier: ControlBarrier(service: service, clock: clock)
     )
     let viewer = try await ViewerController.watching(
       service,
       commands: commands,
-      nap: ViewerController.untilCancelled,
       actions: actions
     )
     service.lostAcquireReplies = 1
@@ -172,12 +179,16 @@ struct HelperCommandsControlTests {
     #expect(viewer.session.lease == nil)
     try #require(service.leaseHeld == true, "the service granted control though its reply was lost")
     let switching = Task { await actions.switchTo("atlas") }
-    try await settle("the switch never reached its wait") { actions.barrier.waiters == 1 && lifetime.asked == 1 }
+    try await clock.untilSleeping(for: lifetime, "the hold never waited out a lease's lifetime")
+    try await settle("the switch never reached its wait") { actions.barrier.waiters == 1 }
     #expect(commands.ran.isEmpty, "nothing runs while a lease it may have granted is alive")
     #expect(!viewer.state.top.actions.control.isEnabled)
     #expect(!service.revoked, "no viewer's control is revoked for it")
+    clock.advance(by: lifetime - .milliseconds(1))
+    #expect(clock.waiting == [.milliseconds(1)], "the hold lasts the whole lifetime")
+    #expect(commands.ran.isEmpty)
     // The lifetime passed; another viewer, such as an agent pane, may hold control now, which prolongs nothing.
-    lifetime.gate.open()
+    clock.advance(by: .milliseconds(1))
     try await settle("the switch never ran") { commands.ran.count == 1 && !actions.isBusy }
     #expect(await switching.value?.ok == true)
     viewer.close()
@@ -186,7 +197,7 @@ struct HelperCommandsControlTests {
   @Test("leaving and coming back to the window while a refused release is sent again keeps nothing of that attempt")
   func aCancelledAttemptKeepsNoGrant() async throws {
     let service = ScriptedService()
-    let viewer = try await ViewerController.watching(service, nap: ViewerController.untilCancelled)
+    let viewer = try await ViewerController.watching(service)
     await viewer.takeControl()
     service.fail = ["release"]
     viewer.releaseControl()
@@ -213,7 +224,7 @@ struct HelperCommandsControlTests {
     let service = ScriptedService()
     service.reply = ["ready": true, "canObserve": true, "overview": ["mode": "observing", "state": "idle"]]
     let commands = ScriptedCommands(["logout": #"{"ok": true}"#])
-    let viewer = try await ViewerController.watching(service, commands: commands, nap: ViewerController.untilCancelled)
+    let viewer = try await ViewerController.watching(service, commands: commands)
     await viewer.takeControl()
     // A newer viewer holds the lease now, so this window's token is obsolete.
     service.releaseRefusal = ServiceError("This token cannot release another controller", code: "lease-lost")
@@ -231,25 +242,31 @@ struct HelperCommandsControlTests {
     let service = ScriptedService()
     service.reply = Self.idle
     let commands = ScriptedCommands(["switch": #"{"ok": true}"#])
-    let lifetime = NapGate(holding: ControlBarrier.lateGrant + ControlBarrier.leaseLifetime)
+    let lifetime = ControlBarrier.lateGrant + ControlBarrier.leaseLifetime
+    let clock = ManualClock()
     let actions = HelperActions(
       commands: commands,
       service: service,
-      barrier: ControlBarrier(service: service, nap: lifetime.nap)
+      barrier: ControlBarrier(service: service, clock: clock)
     )
     let viewer = try await ViewerController.watching(
       service,
       commands: commands,
-      nap: ViewerController.untilCancelled,
       actions: actions
     )
     service.lostAcquireReplies = 1
     await viewer.takeControl()
     let switching = Task { await actions.switchTo("atlas") }
-    try await settle("the switch never reached its wait") { actions.barrier.waiters == 1 && lifetime.asked == 1 }
+    try await clock.untilSleeping(for: lifetime, "the hold never waited out a lease's lifetime")
+    try await settle("the switch never reached its wait") { actions.barrier.waiters == 1 }
     let asked = service.statusCalls
     service.fail = ["status"]
-    lifetime.gate.open()
+    clock.advance(by: lifetime)
+    // Each failed reading waits its second on the clock before the next.
+    for attempt in 1..<ControlBarrier.statusTries {
+      try await clock.untilSleeping(for: ControlBarrier.statusEvery, "reading \(attempt) never waited its second")
+      clock.advance(by: ControlBarrier.statusEvery)
+    }
     try await settle("the switch never ended") { !actions.isBusy }
     #expect(await switching.value?.message == HelperWords.helperUnconfirmed)
     #expect(service.statusCalls - asked == ControlBarrier.statusTries + 1, "it gave up after its tries, then once more")
@@ -263,7 +280,7 @@ struct HelperCommandsControlTests {
   func cancelCallsOffAWaitingCommand() async throws {
     let service = ScriptedService()
     let commands = ScriptedCommands(["start-input": #"{"ok": true}"#])
-    let viewer = try await ViewerController.watching(service, commands: commands, nap: ViewerController.untilCancelled)
+    let viewer = try await ViewerController.watching(service, commands: commands)
     await viewer.takeControl()
     service.hold = ["release"]
     viewer.releaseControl()
@@ -272,7 +289,7 @@ struct HelperCommandsControlTests {
     let alert = AlertController(
       alert: .recover,
       actions: viewer.actions,
-      links: AlertLinks(close: { _ in closed.count += 1 })
+      links: AlertLinks(close: { _ in closed.count += 1 }, clock: ManualClock())
     )
     alert.send(.confirm)
     try await settle("Recover never reached its wait") { viewer.actions.isWaiting(.recovery) }
@@ -291,8 +308,12 @@ struct HelperCommandsControlTests {
     let commands = ScriptedCommands(["start-input": #"{"ok": true}"#])
     let seen = CommandLog()
     commands.whileRunning { _ in seen.serviceLogs.append(service.log) }
-    let viewer = try await ViewerController.watching(service, commands: commands, nap: ViewerController.untilCancelled)
+    let clock = ManualClock()
+    let viewer = try await ViewerController.watching(service, commands: commands, clock: clock)
     await viewer.takeControl()
+    // The reading the grant asks for has ended once the heartbeat and the pause between pictures both wait, so the
+    // status held next is Recover's own.
+    try await clock.untilSleeping(2, for: ViewerController.controlEvery, "the viewer never came to rest in control")
     service.hold = ["status"]
     let recovering = Task { await viewer.actions.recover() }
     try await settle("Recover never read the status") { service.held["status"] != nil }
@@ -327,8 +348,12 @@ struct HelperCommandsControlTests {
     let commands = ScriptedCommands(["start-input": #"{"ok": true}"#])
     let held = ReleaseSignal()
     commands.whileRunning { _ in await held.wait() }
-    let actions = HelperActions(commands: commands, service: service, barrier: ControlBarrier(service: service))
-    let window = AlertController(alert: .recover, actions: actions, links: AlertLinks())
+    let actions = HelperActions(
+      commands: commands,
+      service: service,
+      barrier: ControlBarrier(service: service, clock: ManualClock())
+    )
+    let window = AlertController(alert: .recover, actions: actions, links: AlertLinks(clock: ManualClock()))
     window.send(.confirm)
     try await settle("Recover never ran") { commands.ran.count == 1 }
     window.show(.logOut)
@@ -341,7 +366,7 @@ struct HelperCommandsControlTests {
   @Test("the person's own input still in flight after Give Back holds Take Control until it is answered")
   func ownInputHoldsTakeControl() async throws {
     let service = ScriptedService()
-    let viewer = try await ViewerController.watching(service, nap: ViewerController.untilCancelled)
+    let viewer = try await ViewerController.watching(service)
     await viewer.takeControl()
     service.hold = ["input"]
     viewer.sendKey("escape")
@@ -358,7 +383,7 @@ struct HelperCommandsControlTests {
   func anUncertainReleaseIsSentAgain() async throws {
     let service = ScriptedService()
     let commands = ScriptedCommands(["start-input": #"{"ok": true}"#])
-    let viewer = try await ViewerController.watching(service, commands: commands, nap: ViewerController.untilCancelled)
+    let viewer = try await ViewerController.watching(service, commands: commands)
     await viewer.takeControl()
     service.releaseRefusal = ServiceError(
       "Control stopped accepting input, but native cleanup was not confirmed",
@@ -380,13 +405,15 @@ struct HelperCommandsControlTests {
     let service = ScriptedService()
     service.reply = ["ready": true, "canObserve": true, "overview": ["mode": "stopped", "state": "stopped"]]
     let commands = ScriptedCommands([:])
-    let viewer = try await ViewerController.watching(service, commands: commands, nap: ViewerController.untilCancelled)
+    let viewer = try await ViewerController.watching(service, commands: commands)
     let panel = PanelController(
-      service: service,
-      commands: commands,
-      actions: viewer.actions,
-      loginItem: ScriptedLoginItem().seam,
-      links: PanelLinks()
+      dependencies: PanelDependencies(
+        service: service,
+        commands: commands,
+        actions: viewer.actions,
+        loginItem: ScriptedLoginItem().seam,
+        clock: ManualClock()
+      )
     )
     service.hold = ["hold"]
     let stopping = Task { await viewer.setStopped(true) }

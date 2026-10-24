@@ -1,11 +1,14 @@
 import AtlasCommands
 import AtlasService
 import Foundation
+import Observation
 
 /// A stand-in command line: answers by the first arguments, records what ran and what it was given, and can run a
 /// step of the test while a command runs.
-/// It is main-actor bound, as every test that uses it is, so its state is only ever touched there.
+/// It is main-actor bound, as every test that uses it is, so its state is only ever touched there, and observable, so
+/// a test's `settle` hears each command it records.
 @MainActor
+@Observable
 public final class ScriptedCommands: CommandRunning {
   /// The reply to each command, by its first two arguments, or its first.
   private var answers: [String: String]

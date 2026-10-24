@@ -8,21 +8,18 @@ import Testing
 @testable import AtlasApp
 
 extension ViewerController {
-  /// A pause between readings that never ends by itself, only when the viewer cancels it to read again: a day, far
-  /// past any test's limit.
-  static let untilCancelled: @Sendable (Duration) async -> Void = { _ in try? await Task.sleep(for: .seconds(86_400)) }
-
-  /// A viewer over a scripted service, reaching nothing else: its preferences in memory, a fixed clock unless given
-  /// one, a heartbeat and a pause between readings as the app's unless given others, the Mac's double-click speed
-  /// out of the box unless given another, no clipboard or save panel, and the helper's commands over `commands`.
+  /// A viewer over a scripted service, reaching nothing else: its preferences in memory, a manual clock that moves only
+  /// when the test advances it (its uptime too, so pictures age only then), a heartbeat as the app's unless given
+  /// another, the Mac's double-click speed out of the box unless given another, no clipboard or save panel, and the
+  /// helper's commands over `commands`. A pause between readings never ends by itself, only when the viewer cancels it
+  /// to read again or the test advances the clock past it.
   ///
   /// - Parameters:
   ///   - service: The scripted service.
   ///   - commands: The scripted command line the helper's commands run; by default one that knows none.
   ///   - rate: The saved picture rate, in seconds; 0 for none.
-  ///   - clock: The time now; by default a fixed one, so pictures never age however slowly the tests run.
+  ///   - clock: The clock every wait runs on, and the viewer's uptime; by default one nobody advances.
   ///   - heartbeat: One heartbeat tick.
-  ///   - nap: The pause between readings, and before Take Control asks again.
   ///   - doubleClick: The double-click speed, in seconds.
   ///   - pictures: Where copied and saved pictures go; by default nowhere.
   ///   - switchToHelper: Stands in for locking the screen for the helper.
@@ -36,9 +33,8 @@ extension ViewerController {
     _ service: ScriptedService,
     commands: ScriptedCommands = ScriptedCommands([:]),
     rate: Double = 0,
-    clock: @escaping @MainActor () -> TimeInterval = { 0 },
+    clock: ManualClock = ManualClock(),
     heartbeat: Duration = ViewerController.heartbeatEvery,
-    nap: @escaping @Sendable (Duration) async -> Void = ViewerController.sleep,
     doubleClick: TimeInterval = 0.5,
     pictures: PictureOutlet = PictureOutlet(copy: { _ in }, save: { _ in nil }),
     switchToHelper: (@MainActor () async -> String)? = nil,
@@ -50,7 +46,11 @@ extension ViewerController {
     let viewer = WeakViewer()
     let actions =
       actions
-      ?? HelperActions(commands: commands, service: service, barrier: ControlBarrier(service: service)) {
+      ?? HelperActions(
+        commands: commands,
+        service: service,
+        barrier: ControlBarrier(service: service, clock: clock)
+      ) {
         viewer.controller?.releaseControl()
       }
     let controller = ViewerController(
@@ -58,9 +58,9 @@ extension ViewerController {
         service: service,
         actions: actions,
         preferences: .memory(rate: rate),
+        uptime: { clock.seconds },
         clock: clock,
         heartbeatInterval: heartbeat,
-        nap: nap,
         doubleClickInterval: { doubleClick },
         pictures: pictures,
         switchToHelper: switchToHelper,
@@ -79,9 +79,8 @@ extension ViewerController {
   ///   - service: The scripted service; its picture becomes a small PNG.
   ///   - commands: The scripted command line the helper's commands run.
   ///   - rate: The saved picture rate, in seconds; 0 for none.
-  ///   - clock: The time now; by default a fixed one.
+  ///   - clock: The clock every wait runs on, and the viewer's uptime; by default one nobody advances.
   ///   - heartbeat: One heartbeat tick.
-  ///   - nap: The pause between readings, and before Take Control asks again.
   ///   - doubleClick: The double-click speed, in seconds.
   ///   - pictures: Where copied and saved pictures go.
   ///   - actions: The helper's commands, when a test shares them with a panel.
@@ -93,9 +92,8 @@ extension ViewerController {
     _ service: ScriptedService,
     commands: ScriptedCommands = ScriptedCommands([:]),
     rate: Double = 0,
-    clock: @escaping @MainActor () -> TimeInterval = { 0 },
+    clock: ManualClock = ManualClock(),
     heartbeat: Duration = ViewerController.heartbeatEvery,
-    nap: @escaping @Sendable (Duration) async -> Void = ViewerController.sleep,
     doubleClick: TimeInterval = 0.5,
     pictures: PictureOutlet = PictureOutlet(copy: { _ in }, save: { _ in nil }),
     actions: HelperActions? = nil,
@@ -109,7 +107,6 @@ extension ViewerController {
       rate: rate,
       clock: clock,
       heartbeat: heartbeat,
-      nap: nap,
       doubleClick: doubleClick,
       pictures: pictures,
       actions: actions,

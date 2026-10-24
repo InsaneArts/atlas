@@ -24,17 +24,17 @@ extension ViewerController: InputSink {
   /// mouse sends it, at most once each ``inputReadEvery``.
   func inputSent() {
     guard inputReading == nil else { return }
-    let now = clock()
+    let now = uptime()
     let wait = inputReadAt.map { Self.inputReadEvery - .seconds(now - $0) } ?? .zero
     guard wait > .zero else {
       inputReadAt = now
       return refresh()
     }
-    inputReading = Task { [weak self] in
-      try? await Task.sleep(for: wait)
+    inputReading = Task { [weak self, clock] in
+      try? await clock.sleep(for: wait)
       guard let self, !Task.isCancelled else { return }
       inputReading = nil
-      inputReadAt = clock()
+      inputReadAt = uptime()
       refresh()
     }
   }

@@ -24,6 +24,8 @@ enum AtlasApp {
       executable: executable
     )
     let loginItem = OpenAtLogin.live(LoginItem())
+    // The one live clock: every window's waits run on it, and tests hand in a manual one.
+    let clock = ContinuousClock()
     var render: String?
     var dark = false
     let mode = LaunchArguments.mode(arguments)
@@ -33,7 +35,7 @@ enum AtlasApp {
     case .login(let change):
       LoginCommand.run(change, loginItem: loginItem)
     case .onboarding:
-      onboarding(commands: configuration.commands, loginItem: loginItem)
+      onboarding(commands: configuration.commands, loginItem: loginItem, clock: clock)
     #if DEBUG
       case .renderOnboarding(let folder):
         drawPreviews { OnboardingRender.draw(to: folder) }
@@ -65,7 +67,12 @@ enum AtlasApp {
     if let render {
       drawPanel(service: service, overrides: configuration.renderOverrides, to: render, dark: dark)
     }
-    let controller = AppController(commands: configuration.commands, service: service, loginItem: loginItem)
+    let controller = AppController(
+      commands: configuration.commands,
+      service: service,
+      loginItem: loginItem,
+      clock: clock
+    )
     app.delegate = controller
     listen(received: { line in controller.received(line) }, closed: { controller.parentClosed() })
     withExtendedLifetime(controller) { app.run() }
@@ -124,12 +131,18 @@ enum AtlasApp {
   /// - Parameters:
   ///   - commands: The `atlas` the window runs.
   ///   - loginItem: The app's login item.
+  ///   - clock: The clock the window's waits run on.
   /// - Returns: Never; the process exits.
-  static func onboarding(commands: Commands, loginItem: OpenAtLogin) -> Never {
+  static func onboarding(commands: Commands, loginItem: OpenAtLogin, clock: any Clock<Duration>) -> Never {
     let app = NSApplication.shared
     app.mainMenu = MainMenu.make()
     let controller = OnboardingController(
-      dependencies: .live(commands: commands, loginItem: loginItem, installs: AgentInstalls(commands: commands))
+      dependencies: .live(
+        commands: commands,
+        loginItem: loginItem,
+        installs: AgentInstalls(commands: commands),
+        clock: clock
+      )
     )
     let window = OnboardingWindow(controller: controller) { _ in NSApp.terminate(nil) }
     DockIcon.settle(windowOpen: true)

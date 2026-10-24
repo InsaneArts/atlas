@@ -1,7 +1,7 @@
 import AtlasUI
 
 /// The Activity, Apps and Screenshots tabs: each reads only while it shows and the window is on screen, one reading
-/// at a time on the injected pause, and a reply that arrives after its tab was left or the window hidden has no
+/// at a time on the injected clock, and a reply that arrives after its tab was left or the window hidden has no
 /// effect. Their events are answered here and in `+Activity`, `+Apps`, `+Shots` and `+Thumbnails`.
 extension ViewerController {
   /// 2 s: Activity's pause between readings. An agent acts every second or two, so a new line shows about as soon as
@@ -25,13 +25,12 @@ extension ViewerController {
     guard shown, session.tab != .screen else { return }
     let tab = session.tab
     let number = paneWork.generation
-    let nap = nap
-    paneWork.reading = Task { [weak self] in
+    paneWork.reading = Task { [weak self, clock] in
       while !Task.isCancelled {
         guard self?.paneWork.generation == number else { return }
         await self?.read(tab, number)
         guard self?.paneWork.generation == number, !Task.isCancelled else { return }
-        await nap(Self.pause(for: tab))
+        try? await clock.sleep(for: Self.pause(for: tab))
       }
     }
   }

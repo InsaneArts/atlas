@@ -6,6 +6,13 @@
       "rule": "inline color",
       "until": "Phase 14",
       "reason": "its .foregroundStyle(.secondary) is hierarchical, not Color.textSecondary's #A1A1A6, so a swap changes pixels; Settings' redesign settles it"
+    },
+    {
+      "path": "app/Packages/AsyncSupport/Sources/AsyncSupportTesting/Ceiling.swift",
+      "checkers": ["tests"],
+      "rule": "sleep",
+      "until": "kept for good",
+      "reason": "Ceiling.timer is the bound every wait has, not a pause: the one wall-clock wait a test may make, cancelled as soon as its event comes"
     }
   ],
   "reportOnly": [
@@ -13,12 +20,6 @@
       "checker": "docs",
       "until": "Phase 16",
       "reason": "doc coverage is reported, not gated, until the docs pass turns it into a gate"
-    },
-    {
-      "checker": "tests",
-      "rule": "sleep",
-      "until": "Phase 4",
-      "reason": "the tests that wait on wall-clock time move to injected clocks and sentinels in Phase 4"
     }
   ]
 }

@@ -87,17 +87,25 @@ struct CommandsTests {
 
   @Test("cancelling the caller stops the command")
   func cancellation() async throws {
-    // The command marks that it has started beside itself, then runs far longer than the ceiling.
-    let outcome = try await withScriptedAtlas(#"touch "$(dirname "$0")/started"; sleep 30; echo '{"ok": true}'"#) {
+    // The command says it has started through a pipe beside itself, then becomes a sleep far longer than the ceiling:
+    // `exec`, so stopping it stops the sleep too, which no shell is left holding the output for.
+    let outcome = try await withScriptedAtlas(#"echo started > "$(dirname "$0")/started"; exec sleep 30"#) {
       commands in
       let started = commands.executable
         .deletingLastPathComponent()
         .appendingPathComponent("started")
+      try #require(mkfifo(started.path, 0o600) == 0, "the pipe could not be made")
       let running = Task { await commands.run(["status"]) }
-      try await settle("the command never started") {
-        FileManager.default
-          .fileExists(atPath: started.path)
+      // Unstructured, so the ceiling bounds the read.
+      let said = Task {
+        await withCheckedContinuation { continuation in
+          // A thread of its own: opening the pipe blocks until the command opens its end, which is the sentinel.
+          Thread.detachNewThread {
+            continuation.resume(returning: FileHandle(forReadingAtPath: started.path)?.readDataToEndOfFile())
+          }
+        }
       }
+      #expect(try await said.value("the command never started") == Data("started\n".utf8))
       running.cancel()
       return try await running.value("the cancelled command never ended")
     }

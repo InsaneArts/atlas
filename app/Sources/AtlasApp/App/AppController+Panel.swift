@@ -70,7 +70,8 @@ extension AppController {
           guard let self, let window = alertWindow, window.controller === closing else { return }
           window.close()
           alertWindow = nil
-        }
+        },
+        clock: clock
       )
     )
     let window = AlertWindow(controller: controller)

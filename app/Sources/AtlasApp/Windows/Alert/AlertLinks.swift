@@ -10,4 +10,6 @@ struct AlertLinks {
   var switchToHelper: @MainActor () async -> Outcome? = { nil }
   /// Closes the alert window, if it still shows the given controller's alert: an older one never closes a newer.
   var close: @MainActor (AlertController) -> Void = { _ in }
+  /// The clock any wait of the alert runs on, so a test moves its time by hand; none waits yet.
+  var clock: any Clock<Duration>
 }

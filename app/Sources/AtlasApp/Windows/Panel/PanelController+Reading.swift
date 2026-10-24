@@ -43,11 +43,10 @@ extension PanelController {
   )
     -> Task<Void, Never>
   {
-    let nap = nap
-    return Task { [weak self] in
+    return Task { [weak self, clock] in
       while !Task.isCancelled {
         if let controller = self { await step(controller) } else { return }
-        await nap(pause)
+        try? await clock.sleep(for: pause)
       }
     }
   }

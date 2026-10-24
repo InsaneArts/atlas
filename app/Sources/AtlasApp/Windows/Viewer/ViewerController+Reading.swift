@@ -43,7 +43,8 @@ extension ViewerController {
       guard watching, number == generation, !Task.isCancelled else { return }
       if readAgain { continue }
       let pause = holdingControl ? Self.controlEvery : .seconds(rate.seconds)
-      let resting = Task { [nap = self.nap] in await nap(pause) }
+      // Its own task, so ``refresh()`` cancels the pause alone, not the loop; a cancelled pause ends at once.
+      let resting = Task<Void, Never> { [clock] in try? await clock.sleep(for: pause) }
       napping = resting
       await resting.value
       napping = nil
@@ -100,11 +101,11 @@ extension ViewerController {
     ticking?.cancel()
     ticking = nil
     guard running else { return }
-    ticking = Task { [weak self] in
+    ticking = Task { [weak self, clock] in
       while !Task.isCancelled {
         guard self != nil else { return }
         self?.readClock()
-        try? await Task.sleep(for: Self.tickEvery)
+        try? await clock.sleep(for: Self.tickEvery)
       }
     }
   }
@@ -158,7 +159,7 @@ extension ViewerController {
     reading.frame = frame
     reading.picture = decoded.picture
     reading.pictureSize = decoded.size
-    reading.frameAt = clock()
+    reading.frameAt = uptime()
     reading.unavailable = nil
     reading.ready = ready
   }

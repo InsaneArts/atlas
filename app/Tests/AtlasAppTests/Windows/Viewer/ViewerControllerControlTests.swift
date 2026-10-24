@@ -27,7 +27,7 @@ struct ViewerControllerControlTests {
   func afterGiveBackTheNextReadingComesAtOnce() async throws {
     let service = ScriptedService()
     // The pause between readings never ends by itself: a reading that waits for it never comes.
-    let viewer = try await ViewerController.watching(service, nap: ViewerController.untilCancelled)
+    let viewer = try await ViewerController.watching(service)
     await viewer.takeControl()
     service.hold = ["status"]
     try await settle("no reading started while in control") { service.held["status"] != nil }
@@ -120,7 +120,7 @@ struct ViewerControllerControlTests {
   @Test("a status that says no viewer holds control any more, as after Release Control in the menu bar, ends it")
   func aStatusWithNoViewerInControlEndsIt() async throws {
     let service = ScriptedService()
-    let viewer = try await ViewerController.watching(service, nap: ViewerController.untilCancelled)
+    let viewer = try await ViewerController.watching(service)
     await viewer.takeControl()
     try await service.revoke()
     await viewer.readStatus()
@@ -132,7 +132,7 @@ struct ViewerControllerControlTests {
   @Test("a status asked before the grant never ends the control it could not know of")
   func aStatusAskedBeforeTheGrantKeepsControl() async throws {
     let service = ScriptedService()
-    let viewer = try await ViewerController.watching(service, nap: ViewerController.untilCancelled)
+    let viewer = try await ViewerController.watching(service)
     service.hold = ["status"]
     viewer.refresh()
     try await settle("no reading started") { service.held["status"] != nil }
@@ -156,11 +156,13 @@ struct ViewerControllerControlTests {
 
   @Test("a stale picture ends control without further input")
   func aStalePictureEndsControlWithoutFurtherInput() async throws {
-    let clock = TestClock()
-    let viewer = try await ViewerController.watching(ScriptedService(), clock: clock.read, heartbeat: .milliseconds(5))
+    let clock = ManualClock()
+    let viewer = try await ViewerController.watching(ScriptedService(), clock: clock)
     await viewer.takeControl()
     viewer.watch(false)
-    clock.now = Freshness.stale
+    try await clock.untilSleeping(for: ViewerController.heartbeatEvery, "the heartbeat never slept")
+    // No picture arrives as the time passes; the heartbeat that wakes past it ends control.
+    clock.advance(by: .seconds(Freshness.stale))
     #expect(!viewer.canInput)
     try await settle("the stale picture never ended control") { viewer.session.lease == nil }
     #expect(viewer.session.notice == ViewerWords.stalePicture)
@@ -170,9 +172,16 @@ struct ViewerControllerControlTests {
   @Test("a failed renewal ends control")
   func aFailedRenewalEndsControl() async throws {
     let service = ScriptedService()
-    let viewer = try await ViewerController.watching(service, heartbeat: .milliseconds(5))
+    let clock = ManualClock()
+    let viewer = try await ViewerController.watching(service, clock: clock)
     service.fail = ["renew"]
     await viewer.takeControl()
+    // Readings stop, so the heartbeat is the clock's one sleeper; the picture stays fresh through five ticks.
+    viewer.watch(false)
+    for tick in 1...ViewerController.renewEvery {
+      try await clock.untilSleeping(for: ViewerController.heartbeatEvery, "heartbeat \(tick) never slept")
+      clock.advance(by: ViewerController.heartbeatEvery)
+    }
     try await settle("the failed renewal never ended control") { viewer.session.lease == nil }
     #expect(service.log.contains("renew"))
     #expect(viewer.session.notice == "renew failed")
@@ -219,23 +228,55 @@ struct ViewerControllerControlTests {
   func takeControlRetriesOnceWhileAnAgentActs() async throws {
     let service = ScriptedService()
     service.reply = ["ready": true, "canObserve": true, "overview": ["mode": "agent", "state": "working"]]
-    // The retry's wait ends at once; the pause between readings never ends by itself.
-    let retry = ViewerController.busyRetryAfter
-    let nap: @Sendable (Duration) async -> Void = { pause in
-      guard pause != retry else { return }
-      try? await Task.sleep(for: .seconds(86_400))
-    }
-    let viewer = try await ViewerController.watching(service, nap: nap)
+    let clock = ManualClock()
+    let viewer = try await ViewerController.watching(service, clock: clock)
+    // Readings stop, so the retry is the clock's one sleeper.
+    viewer.watch(false)
     #expect(viewer.state.top.actions.control.isEnabled, "Take Control stays offered while an agent works")
     service.busyAcquires = 2
-    await viewer.takeControl()
+    try await Self.takeControl(viewer, retryingOn: clock)
     #expect(service.log.filter { $0.hasPrefix("acquire") }.count == 2, "asked once, then once more")
     #expect(viewer.session.lease == nil)
     #expect(viewer.session.notice == ViewerWords.agentMidAction)
     service.busyAcquires = 1
-    await viewer.takeControl()
+    try await Self.takeControl(viewer, retryingOn: clock)
     #expect(viewer.session.lease == "lease", "the action ended within the wait, so the retry took control")
     viewer.close()
+  }
+
+  @Test("a held gesture ends when its clock passes the hold")
+  func aHeldGestureEndsWhenItsClockPassesTheHold() async throws {
+    let service = ScriptedService()
+    service.busyAcquires = 1
+    let clock = ManualClock()
+    let viewer = try await ViewerController.watching(service, clock: clock)
+    // Readings stop, so the retry is the clock's one sleeper.
+    viewer.watch(false)
+    // Take Control, answered busy, is held for the retry.
+    let taking = Task { await viewer.takeControl() }
+    try await clock.untilSleeping(for: ViewerController.busyRetryAfter, "Take Control was never held")
+    #expect(clock.waiting == [ViewerController.busyRetryAfter])
+    clock.advance(by: ViewerController.busyRetryAfter - .milliseconds(1))
+    #expect(clock.waiting == [.milliseconds(1)], "the hold lasts its whole second")
+    #expect(viewer.session.acquiring)
+    clock.advance(by: .milliseconds(1))
+    try await taking.value("the held Take Control never ended")
+    #expect(viewer.session.lease == "lease")
+    #expect(!viewer.session.acquiring)
+    viewer.close()
+  }
+
+  /// Takes control on a viewer that has stopped reading, moving the clock past the busy retry's wait.
+  ///
+  /// - Parameters:
+  ///   - viewer: The viewer.
+  ///   - clock: Its clock.
+  /// - Throws: The failed requirement, when Take Control never waits for its retry or never ends.
+  private static func takeControl(_ viewer: ViewerController, retryingOn clock: ManualClock) async throws {
+    let taking = Task { await viewer.takeControl() }
+    try await clock.untilSleeping(for: ViewerController.busyRetryAfter, "Take Control never waited to ask again")
+    clock.advance(by: ViewerController.busyRetryAfter)
+    try await taking.value("Take Control never ended")
   }
 
   @Test("text being composed is dropped once the picture is lost mid-composition")

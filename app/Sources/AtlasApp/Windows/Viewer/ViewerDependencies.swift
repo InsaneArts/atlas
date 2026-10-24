@@ -3,8 +3,8 @@ import AtlasCommands
 import AtlasService
 
 /// What the main window's controller reaches outside itself, handed in so tests can stand in for each: the viewer
-/// service, the helper's own commands, the clocks and pauses, the double-click speed, where pictures and screenshots
-/// go, the saved choices and switching to the helper.
+/// service, the helper's own commands, the clock its waits run on, the time now, the double-click speed, where pictures
+/// and screenshots go, the saved choices and switching to the helper.
 struct ViewerDependencies {
   /// The viewer service it reads and asks.
   var service: any ViewerService
@@ -12,12 +12,13 @@ struct ViewerDependencies {
   var actions: HelperActions
   /// Where the rate and Details are kept between windows.
   var preferences: ViewerPreferences
-  /// The time now, in seconds of uptime, which never steps back.
-  var clock: @MainActor () -> TimeInterval
+  /// The time now, in seconds of uptime, which never steps back: what a picture's age is told by.
+  var uptime: @MainActor () -> TimeInterval
+  /// The clock every wait runs on: the pause between readings and the tabs', the heartbeat, Details' tick, gathering
+  /// scrolls, the reading input asks for, and Take Control's retry. A cancelled wait ends at once.
+  var clock: any Clock<Duration>
   /// One heartbeat tick; the app passes ``ViewerController/heartbeatEvery``.
   var heartbeatInterval: Duration
-  /// The pause between readings, and before Take Control asks again, which must end early when cancelled.
-  var nap: @Sendable (Duration) async -> Void
   /// The Mac's double-click speed, in seconds, read at each click so a change in System Settings counts at once.
   var doubleClickInterval: @MainActor () -> TimeInterval
   /// Where a copied or saved picture goes.
@@ -39,21 +40,23 @@ struct ViewerDependencies {
   ///   - service: The viewer service.
   ///   - actions: The helper's own commands.
   ///   - commands: The `atlas` command line, which says which agents are connected.
+  ///   - clock: The app's clock.
   ///   - switchToHelper: Locks the screen for the helper, returning what to tell the person.
   /// - Returns: The live dependencies.
   @MainActor static func live(
     service: any ViewerService,
     actions: HelperActions,
     commands: any CommandRunning,
+    clock: any Clock<Duration>,
     switchToHelper: @escaping @MainActor () async -> String
   ) -> ViewerDependencies {
     ViewerDependencies(
       service: service,
       actions: actions,
       preferences: .standard,
-      clock: { ProcessInfo.processInfo.systemUptime },
+      uptime: { ProcessInfo.processInfo.systemUptime },
+      clock: clock,
       heartbeatInterval: ViewerController.heartbeatEvery,
-      nap: ViewerController.sleep,
       doubleClickInterval: { NSEvent.doubleClickInterval },
       pictures: .live,
       switchToHelper: switchToHelper,

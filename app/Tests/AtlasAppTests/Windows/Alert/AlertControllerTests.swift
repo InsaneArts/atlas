@@ -4,6 +4,7 @@ import AtlasCommandsTesting
 import AtlasService
 import AtlasServiceTesting
 import AtlasUI
+import Observation
 import Testing
 
 @testable import AtlasApp
@@ -11,8 +12,10 @@ import Testing
 @MainActor
 @Suite("AlertController")
 struct AlertControllerTests {
-  /// What a test's stand-in links saw: the overview they give, and how often the window closed.
+  /// What a test's stand-in links saw: the overview they give, and how often the window closed; observable, so a
+  /// test's `settle` hears each read.
   @MainActor
+  @Observable
   final class Seen {
     /// The overview the links give.
     var overview = ViewerStatus.Overview()
@@ -44,7 +47,11 @@ struct AlertControllerTests {
   ) -> AlertController {
     AlertController(
       alert: alert,
-      actions: HelperActions(commands: commands, service: service, barrier: ControlBarrier(service: service)),
+      actions: HelperActions(
+        commands: commands,
+        service: service,
+        barrier: ControlBarrier(service: service, clock: ManualClock())
+      ),
       links: AlertLinks(
         overview: { seen.overview },
         readStatus: {
@@ -52,7 +59,8 @@ struct AlertControllerTests {
           if let holdFrom = seen.holdFrom, seen.reads >= holdFrom { await seen.gate.wait() }
           if let next = seen.nextOverview { seen.overview = next }
         },
-        close: { _ in seen.closed += 1 }
+        close: { _ in seen.closed += 1 },
+        clock: ManualClock()
       )
     )
   }

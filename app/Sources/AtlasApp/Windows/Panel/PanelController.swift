@@ -47,8 +47,8 @@ final class PanelController {
   @ObservationIgnored let loginItem: OpenAtLogin
   /// What the panel asks of the rest of the app.
   @ObservationIgnored let links: PanelLinks
-  /// The pause between readings: a sleep, which cancelling ends early; a test stands in its own.
-  @ObservationIgnored let nap: @Sendable (Duration) async -> Void
+  /// The clock the pauses between readings run on; a cancelled pause ends at once.
+  @ObservationIgnored let clock: any Clock<Duration>
   /// The readings under way.
   @ObservationIgnored var polling: [Task<Void, Never>] = []
   /// Whether the panel is open, so the picture is read.
@@ -64,28 +64,15 @@ final class PanelController {
 
   /// Creates a panel that has read nothing yet.
   ///
-  /// - Parameters:
-  ///   - service: The viewer service.
-  ///   - commands: The `atlas` command line.
-  ///   - actions: The helper's own commands, shared with every window.
-  ///   - loginItem: The app's login item.
-  ///   - links: What the panel asks of the rest of the app.
-  ///   - nap: The pause between readings; the app's sleeps.
-  init(
-    service: any ViewerService,
-    commands: any CommandRunning,
-    actions: HelperActions,
-    loginItem: OpenAtLogin,
-    links: PanelLinks = PanelLinks(),
-    nap: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
-  ) {
-    self.service = service
-    self.commands = commands
-    self.actions = actions
-    self.loginItem = loginItem
-    self.links = links
-    self.nap = nap
-    opensAtLogin = loginItem.state
+  /// - Parameter dependencies: What it reaches outside itself.
+  init(dependencies: PanelDependencies) {
+    service = dependencies.service
+    commands = dependencies.commands
+    actions = dependencies.actions
+    loginItem = dependencies.loginItem
+    links = dependencies.links
+    clock = dependencies.clock
+    opensAtLogin = dependencies.loginItem.state
   }
 
   /// Everything the controller holds, as one value, with whether the main window holds control and which of the

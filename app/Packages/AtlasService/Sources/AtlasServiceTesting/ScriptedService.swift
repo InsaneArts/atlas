@@ -1,10 +1,13 @@
 import AtlasService
 import Foundation
+import Observation
 
 /// A stand-in viewer service: answers from fixed replies, can hold or fail a request until told, and records what it
 /// was asked.
-/// It is main-actor bound, as every test that uses it is, so its state is only ever touched there.
+/// It is main-actor bound, as every test that uses it is, so its state is only ever touched there, and observable, so
+/// a test's `settle` hears each request it records.
 @MainActor
+@Observable
 public final class ScriptedService: ViewerService {
   /// The status the service reports, as `status.json`'s fields.
   public var reply: [String: Any] = ["ready": true, "canObserve": true, "overview": ["mode": "observing"]]

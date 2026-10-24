@@ -14,6 +14,8 @@ final class AppController: NSObject, NSApplicationDelegate {
   let service: any ViewerService
   /// The app's login item, for the panel and the setup window.
   let loginItem: OpenAtLogin
+  /// The clock every window's waits run on: the one `AtlasApp` makes.
+  let clock: any Clock<Duration>
   /// The helper's own commands, which the panel and the main window share, so one of each runs at a time.
   private(set) var actions: HelperActions?
   /// Connecting agents, which the setup window and Settings share, so one install runs at a time and outlives the
@@ -43,10 +45,12 @@ final class AppController: NSObject, NSApplicationDelegate {
   ///   - commands: The `atlas` command line.
   ///   - service: The viewer service.
   ///   - loginItem: The app's login item.
-  init(commands: any CommandRunning, service: any ViewerService, loginItem: OpenAtLogin) {
+  ///   - clock: The clock every window's waits run on.
+  init(commands: any CommandRunning, service: any ViewerService, loginItem: OpenAtLogin, clock: any Clock<Duration>) {
     self.commands = commands
     self.service = service
     self.loginItem = loginItem
+    self.clock = clock
     installs = AgentInstalls(commands: commands)
     super.init()
   }
@@ -74,18 +78,21 @@ final class AppController: NSObject, NSApplicationDelegate {
     // The app's control work outlives any one main window: a release a closed window sent is still awaited by the
     // next command, and Take Control in a reopened window waits for it. Before a switch, a log-out or a restart, the
     // main window's control ends and its release joins the barrier.
-    let barrier = ControlBarrier(service: service)
+    let barrier = ControlBarrier(service: service, clock: clock)
     let actions = HelperActions(commands: commands, service: service, barrier: barrier) { [weak self] in
       self?.viewer?.controller.releaseControl()
     }
     self.actions = actions
     startSignals()
     let controller = PanelController(
-      service: service,
-      commands: commands,
-      actions: actions,
-      loginItem: loginItem,
-      links: panelLinks()
+      dependencies: PanelDependencies(
+        service: service,
+        commands: commands,
+        actions: actions,
+        loginItem: loginItem,
+        links: panelLinks(),
+        clock: clock
+      )
     )
     menuBar = PanelPopover(controller: controller) { [weak self] in self?.openSettings() }
     panel = controller
@@ -112,7 +119,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     }
     guard let actions else { return }
     let controller = ViewerController(
-      dependencies: .live(service: service, actions: actions, commands: commands) { [weak self] in
+      dependencies: .live(service: service, actions: actions, commands: commands, clock: clock) { [weak self] in
         await self?.panel?.logIn() ?? PanelWords.helperNotFound
       }
     )
@@ -184,7 +191,8 @@ final class AppController: NSObject, NSApplicationDelegate {
       commands: commands,
       actions: actions,
       installs: installs,
-      links: settingsLinks()
+      links: settingsLinks(),
+      clock: clock
     )
     dependencies.preferences = watchedPreferences()
     let controller = settingsController ?? SettingsController(dependencies: dependencies)
@@ -249,7 +257,7 @@ final class AppController: NSObject, NSApplicationDelegate {
       return
     }
     let controller = OnboardingController(
-      dependencies: .live(commands: commands, loginItem: loginItem, installs: installs)
+      dependencies: .live(commands: commands, loginItem: loginItem, installs: installs, clock: clock)
     )
     let window = OnboardingWindow(controller: controller) { [weak self] closed in
       guard let self, onboarding === closed else { return }

@@ -1,9 +1,11 @@
 import CoreGraphics
+import Observation
 
 @testable import AtlasApp
 
 /// Stands in for the clipboard and the save panel: records the pictures copied and saved, and touches neither.
 @MainActor
+@Observable
 final class RecordedPictures {
   /// The pictures copied, in order.
   var copied: [CGImage] = []

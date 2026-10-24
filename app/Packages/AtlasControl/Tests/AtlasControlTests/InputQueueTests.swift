@@ -56,7 +56,9 @@ struct InputQueueTests {
     queue.enqueue([.move(x: 1, y: 1), .scroll(x: 1, y: 1, dx: 0, dy: 3)], frame: "f")
     #expect(queue.holdsScroll)
     sink.hold?.resume()
-    try await settle("the scroll was never sent") { !queue.holdsScroll }
+    // A batch leaves the queue as it is sent, so the scroll sent means it no longer waits.
+    try await settle("the scroll was never sent") { sink.sent.count == 2 }
+    #expect(!queue.holdsScroll)
   }
 
   @Test("more than the queue's limit waiting ends control")

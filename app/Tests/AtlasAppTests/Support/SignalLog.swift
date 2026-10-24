@@ -1,10 +1,12 @@
 import AtlasStatus
+import Observation
 
 @testable import AtlasApp
 
 /// What a stand-in notifier and Dock badge were asked, and the choices Settings holds for them, so no test reaches
 /// Notification Center, the Dock or the real defaults.
 @MainActor
+@Observable
 final class SignalLog {
   /// Whether Notify me is on.
   var notify = false

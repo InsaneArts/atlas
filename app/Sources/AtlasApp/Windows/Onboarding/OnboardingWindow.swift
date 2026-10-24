@@ -45,6 +45,7 @@ final class OnboardingWindow: NSObject, NSWindowDelegate {
     dock = SettingsDock(
       window: window,
       glide: glide,
+      clock: controller.dependencies.clock,
       ghost: ghost,
       waitingFor: { [weak controller] in
         guard case .permissionPanel(let panel) = controller?.state.content, !panel.isOn else { return nil }

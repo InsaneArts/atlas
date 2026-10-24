@@ -118,7 +118,7 @@ extension ViewerController {
     do {
       return try await service.acquire(frame: frame)
     } catch let refusal as ServiceError where refusal.isBusy {
-      await nap(Self.busyRetryAfter)
+      try? await clock.sleep(for: Self.busyRetryAfter)
       guard generation == controlGeneration, let newest = reading.frame, !pictureStale else { throw refusal }
       return try await service.acquire(frame: newest.id)
     }
@@ -185,11 +185,11 @@ extension ViewerController {
   ///
   /// - Parameter granted: The lease just granted.
   func startHeartbeat(_ granted: String) {
-    heartbeat = Task { [weak self] in
+    heartbeat = Task { [weak self, clock] in
       var tick = 0
       while !Task.isCancelled {
         guard let interval = self?.heartbeatInterval else { return }
-        try? await Task.sleep(for: interval)
+        try? await clock.sleep(for: interval)
         guard !Task.isCancelled, let self, session.lease == granted else { return }
         guard !pictureStale else {
           releaseControl(ViewerWords.stalePicture)
@@ -227,7 +227,7 @@ extension ViewerController {
   /// The last picture is too old to aim input at.
   var pictureStale: Bool {
     guard let frameAt = reading.frameAt else { return true }
-    return clock() - frameAt >= Freshness.stale
+    return uptime() - frameAt >= Freshness.stale
   }
 
   /// Whether input may go to the helper now. Only the heartbeat ends control over a stale picture; this side just

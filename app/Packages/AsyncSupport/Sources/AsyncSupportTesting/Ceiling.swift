@@ -1,37 +1,30 @@
 import Testing
 
-/// How long a test waits on background work, each named for what it waits on; every Atlas test target shares this
-/// shape.
+/// How long a test waits on background work before it fails; every Atlas test target shares it.
 public enum Ceiling {
   /// The longest a test waits for background work before it fails: long beside the work it waits for, so a loaded
   /// machine never reaches it while the rule holds. A shared CI runner, running every suite at once, takes well over
   /// two seconds.
   public static let work: Duration = .seconds(10)
-  /// How long a test that proves an absence waits for what must not come: well beyond the milliseconds the work
-  /// would take had it started.
-  public static let absence: Duration = .milliseconds(100)
-}
 
-/// Wait until `done` holds, for code that works in the background; after `ceiling` the test fails with `message`,
-/// at the caller's line, and stops there, so nothing after the wait runs on a condition that never held. A condition
-/// that holds ends the wait at once, so the ceiling only matters on a slow machine.
-///
-/// - Parameters:
-///   - message: What never came, as the failure says it.
-///   - ceiling: The longest wait. Default ``Ceiling/work``.
-///   - sourceLocation: Where the failure is reported: the caller's line.
-///   - done: The condition.
-/// - Throws: The failed requirement, once `ceiling` passes with `done` still false.
-@MainActor
-public func settle(
-  _ message: String,
-  within ceiling: Duration = Ceiling.work,
-  sourceLocation: SourceLocation = #_sourceLocation,
-  _ done: () -> Bool
-) async throws {
-  let deadline = ContinuousClock.now + ceiling
-  while !done(), ContinuousClock.now < deadline {
-    try? await Task.sleep(for: .milliseconds(5))
+  /// Runs `passed` once `ceiling` has passed on the wall clock, unless cancelled first: the bound of every wait here.
+  ///
+  /// It is the one wall-clock wait in the tests, and a bound, never a pause: a wait whose event comes cancels it, so
+  /// a test that passes spends no time on it.
+  ///
+  /// - Parameters:
+  ///   - ceiling: How long to wait.
+  ///   - passed: What to do once it has passed.
+  /// - Returns: The timer, which the wait cancels once its event comes.
+  static func timer(_ ceiling: Duration, _ passed: @escaping @Sendable () -> Void) -> Task<Void, Never> {
+    // Unstructured, so it runs beside the wait it bounds and outlives none: the wait cancels it as it returns.
+    Task {
+      do {
+        try await Task.sleep(for: ceiling)
+      } catch {
+        return
+      }
+      passed()
+    }
   }
-  try #require(done(), Comment(rawValue: message), sourceLocation: sourceLocation)
 }

@@ -108,7 +108,7 @@ struct ViewerControllerTests {
   @Test("a status the service refuses to give, as a busy one does, leaves the picture and status as they were")
   func aRefusedStatusChangesNothing() async throws {
     let service = ScriptedService()
-    let viewer = try await ViewerController.watching(service, nap: ViewerController.untilCancelled)
+    let viewer = try await ViewerController.watching(service)
     let before = viewer.reading.status
     service.busy = true
     await viewer.read(viewer.generation)
@@ -180,10 +180,30 @@ struct ViewerControllerTests {
     viewer.close()
   }
 
+  @Test("a viewer reading waits one read interval on the injected clock before reading again")
+  func aReadingWaitsOneIntervalBeforeTheNext() async throws {
+    let service = ScriptedService()
+    let clock = ManualClock()
+    let viewer = try await ViewerController.watching(service, clock: clock)
+    // Details' tick stops, so the reading's pause is the clock's one sleeper.
+    viewer.ticking?.cancel()
+    let interval = Duration.seconds(ViewerPictureRate.live.seconds)
+    try await clock.untilSleeping(for: interval, "the reading never paused")
+    #expect(clock.waiting == [interval])
+    let asked = service.statusCalls
+    clock.advance(by: interval - .milliseconds(1))
+    #expect(clock.waiting == [.milliseconds(1)], "the pause has not ended a moment before its interval")
+    clock.advance(by: .milliseconds(1))
+    try await settle("the next reading never came") { service.statusCalls == asked + 1 }
+    viewer.close()
+  }
+
   @Test("the clock's tick moves the picture's age in Details, and redraws nothing else")
   func theTickRedrawsTheStatusLineAlone() async throws {
-    let clock = TestClock()
-    let viewer = try await ViewerController.watching(ScriptedService(), clock: clock.read)
+    let clock = ManualClock()
+    let viewer = try await ViewerController.watching(ScriptedService(), clock: clock)
+    // Readings stop, so no new picture arrives as the time passes; the tick is read by hand below.
+    viewer.watch(false)
     let window = OSAllocatedUnfairLock(initialState: false)
     let line = OSAllocatedUnfairLock(initialState: false)
     withObservationTracking {
@@ -196,7 +216,7 @@ struct ViewerControllerTests {
     } onChange: {
       line.withLock { $0 = true }
     }
-    clock.now = 10
+    clock.advance(by: .seconds(10))
     viewer.readClock()
     #expect(line.withLock { $0 }, "the age row draws again")
     #expect(viewer.newestPicture == "10 s ago")
@@ -239,7 +259,6 @@ struct ViewerControllerTests {
     let reads = CallCount()
     let viewer = ViewerController.scripted(
       service,
-      nap: ViewerController.untilCancelled,
       connectedAgents: {
         reads.count += 1
         return [AgentID.codex]
