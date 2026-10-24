@@ -35,8 +35,8 @@ struct SearchField: View {
       .font(Typography.font(.callout))
       .focused($focused)
       .onKeyPress(.escape) { escape() }
-      .onKeyPress(.upArrow) { move(-1) }
-      .onKeyPress(.downArrow) { move(1) }
+      .onKeyPress(.upArrow, phases: [.down, .repeat]) { move(-1, modifiers: $0.modifiers) }
+      .onKeyPress(.downArrow, phases: [.down, .repeat]) { move(1, modifiers: $0.modifiers) }
       .onSubmit { onOpen?() }
       if !text.isEmpty {
         Button {
@@ -111,10 +111,14 @@ struct SearchField: View {
 
   /// Routes result arrows only when the owner supports them and the query is nonempty.
   ///
-  /// - Parameter step: The requested direction.
+  /// - Parameters:
+  ///   - step: The requested direction.
+  ///   - modifiers: Keys held with the arrow; editing combinations stay with the field.
   /// - Returns: Whether result navigation consumed this key.
-  private func move(_ step: Int) -> KeyPress.Result {
-    guard !composing, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let onMove else {
+  private func move(_ step: Int, modifiers: EventModifiers) -> KeyPress.Result {
+    guard modifiers.intersection([.command, .option, .shift, .control]).isEmpty,
+      !composing, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let onMove
+    else {
       return .ignored
     }
     onMove(step)

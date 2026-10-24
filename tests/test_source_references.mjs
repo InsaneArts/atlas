@@ -29,6 +29,12 @@ const examples = [
   ['15', 'd'].join(''),
   ...[2, 3].map((number) => `item ${number}`),
   ...namedPlans,
+  ...['plan', 'phase'].flatMap((name) =>
+    ["'", '’'].flatMap((apostrophe) => [
+      `The ${name}${apostrophe}s aliases remain discoverable`,
+      `The ${name}${apostrophe}s search presentation cases`,
+    ]),
+  ),
   ['docs', 'implementation.md'].join('/'),
   ['review', 'finding'].join(' '),
   ['Codex', 'suggested'].join(' '),
@@ -103,6 +109,9 @@ test('the source checker accepts API names, symbols, versions, colours and integ
     'Review the proposed configuration before applying it.',
     'InputAction.Phase and phase: .down describe an input event.',
     'The environment planId identifies a previewed copy.',
+    "The environment plan's own lock protects its files.",
+    "A frozen plan's folder is retained until recovery.",
+    "The migration plan's two configurations are read lazily.",
   ].join('\n');
   assert.deepEqual(violations(source), []);
 });

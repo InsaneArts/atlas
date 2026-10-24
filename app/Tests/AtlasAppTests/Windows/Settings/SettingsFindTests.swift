@@ -7,10 +7,12 @@ import Testing
 @Suite("Settings Find")
 struct SettingsFindTests {
   @Test("the one menu Find action focuses Settings search and waits underneath an alert")
-  func settingsAnswersTheExistingFindAction() throws {
+  func settingsAnswersTheExistingFindAction() async throws {
     let commands = ScriptedCommands([:])
     let controller = SettingsController.scripted(commands: commands)
-    let window = SettingsWindow(controller: controller, closed: { _ in })
+    let keyboard = SettingsSearchKeyboard(controller)
+    defer { keyboard.close() }
+    let window = keyboard.window
     let menu = MainMenu.make(viewer: true)
     let shortcuts = menu.items
       .flatMap { $0.submenu?.items ?? [] }
@@ -19,11 +21,12 @@ struct SettingsFindTests {
     #expect(shortcuts.count == 1 && find.target == nil)
     #expect(find.action == #selector(FindMenuActions.findInTab(_:)))
     #expect(window.validateMenuItem(find))
-    window.findInTab(find)
+    let editor = try await keyboard.focus()
+    #expect(window.firstResponder === editor)
     #expect(controller.state.search.focusRequests == 1)
     controller.send(.askRecover)
     #expect(!window.validateMenuItem(find))
-    window.findInTab(find)
+    try await keyboard.press("f", code: 3, modifiers: .command)
     #expect(controller.state.search.focusRequests == 1)
     #expect(commands.ran.isEmpty)
   }

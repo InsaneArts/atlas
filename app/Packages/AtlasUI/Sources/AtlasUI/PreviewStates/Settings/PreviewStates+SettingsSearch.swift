@@ -2,7 +2,7 @@
   import Foundation
 
   extension PreviewStates {
-    /// The phase's search presentation cases, including the unchanged page for an empty query.
+    /// Search presentation cases, including the unchanged page for an empty query.
     @MainActor static var settingsSearch: [PreviewState<SettingsState>] {
       [
         PreviewState(name: "Search, empty query", value: searchSample("", targets: [])),
