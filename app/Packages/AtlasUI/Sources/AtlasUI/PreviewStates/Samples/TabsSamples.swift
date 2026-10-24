@@ -2,7 +2,7 @@
   import SwiftUI
 
   /// The tabs' samples: the main window's four tabs in a track by their words, then by their symbols with the last one
-  /// selected, then as symbols over words.
+  /// selected, then as symbols over words, then as a segment.
   struct TabsSamples: View {
     /// The main window's tabs, standing in for its own.
     enum Pane: Hashable, Sendable {
@@ -24,7 +24,7 @@
       CapsuleTab(id: Pane.screenshots, title: "Screenshots", symbol: .photos),
     ]
 
-    /// The three rows of tabs.
+    /// The four rows of tabs.
     var body: some View {
       VStack(spacing: Spacing.m) {
         Tabs(state: CapsuleTabsState(tabs: Self.tabs, selected: .screen, label: "What you see")) { _ in }
@@ -35,6 +35,10 @@
         Tabs(
           state: CapsuleTabsState(tabs: Self.tabs, selected: .activity, label: "What you see"),
           style: .symbolOverWord
+        ) { _ in }
+        Tabs(
+          state: CapsuleTabsState(tabs: Self.tabs, selected: .screen, label: "What you see"),
+          style: .segment
         ) { _ in }
       }
       .sampleSurface()

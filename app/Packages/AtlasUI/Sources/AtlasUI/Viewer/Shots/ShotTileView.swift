@@ -1,14 +1,23 @@
 import SwiftUI
 
-/// One screenshot in the grid: its thumbnail at the screen's shape, ringed while selected, and its time under it.
-/// A click selects it, a double click shows it large, and it can be dragged out where the app allows.
+/// One screenshot in the grid (v3 V10, `.stile`): its thumbnail at the screen's shape, lifting 2 points under the
+/// pointer, ringed while selected, and its time under it. A click selects it, a double click shows it large, zooming
+/// from here, and it can be dragged out where the app allows. While it is shown large its picture has left the grid
+/// for the large view, so its place stays empty.
 struct ShotTileView: View {
   /// The screenshot.
   let tile: ViewerShotTile
+  /// Whether it is the one shown large.
+  var isOpen = false
+  /// The namespace its picture zooms in, the window's.
+  let zoom: Namespace.ID
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
   @Environment(\.shotDrag) private var drag
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var isHovered = false
 
+  /// The tile, read as one button that opens it.
   var body: some View {
     draggable
       .onAppear { send(.thumbnailNeeded(tile.id)) }
@@ -30,13 +39,11 @@ struct ShotTileView: View {
 
   /// The thumbnail over its time, taking clicks.
   private var shown: some View {
-    VStack(alignment: .leading, spacing: Spacing.s) {
-      PictureTile(picture: tile.thumbnail, isSelected: tile.isSelected)
-        .aspectRatio(ViewerLayout.placeholderAspect, contentMode: .fit)
+    VStack(alignment: .leading, spacing: Spacing.xsPlus) {
+      picture
       Text(tile.time)
-        .font(Typography.font(.callout))
+        .font(Typography.digits(.caption))
         .foregroundStyle(Color.textTertiary)
-        .monospacedDigit()
         .lineLimit(1)
         .padding(.horizontal, Spacing.half)
     }
@@ -46,15 +53,40 @@ struct ShotTileView: View {
       TapGesture(count: 2)
         .onEnded { send(.openShot(tile.id)) }
     )
+    .onHover { isHovered = $0 }
+    // Its picture leaves for the large view and comes back on the zoom's spring, as the large view's does.
+    .animation(Motion.animation(Motion.zoom, reduceMotion: reduceMotion, reduced: Motion.reduced), value: isOpen)
+  }
+
+  /// The thumbnail, lifted while the pointer is on it; its place, empty, while it is shown large.
+  @ViewBuilder private var picture: some View {
+    if isOpen {
+      Color.clear
+        .aspectRatio(ViewerLayout.placeholderAspect, contentMode: .fit)
+    } else {
+      PictureTile(picture: tile.thumbnail, isSelected: tile.isSelected)
+        .aspectRatio(ViewerLayout.placeholderAspect, contentMode: .fit)
+        .shotZoom(id: tile.id, in: zoom)
+        .elevation(elevation)
+        .scaleEffect(ViewerLayout.shotScale(isHovered: isHovered, reduceMotion: reduceMotion))
+        .offset(y: -ViewerLayout.shotRise(isHovered: isHovered, reduceMotion: reduceMotion))
+        .animation(Motion.release, value: isHovered)
+    }
+  }
+
+  /// How far the thumbnail floats: resting, and a step higher while lifted.
+  private var elevation: Elevation {
+    isHovered ? .raised : .resting
   }
 }
 
 #if DEBUG
   #Preview("Samples") {
+    @Previewable @Namespace var zoom
     if case .screenshots(let shots) = PreviewStates.viewerShots.pane {
       HStack(spacing: Spacing.l) {
         ForEach(shots.days.flatMap(\.shots).prefix(2)) { tile in
-          ShotTileView(tile: tile) { _ in }
+          ShotTileView(tile: tile, zoom: zoom) { _ in }
             .frame(width: SampleWidth.narrow)
         }
       }

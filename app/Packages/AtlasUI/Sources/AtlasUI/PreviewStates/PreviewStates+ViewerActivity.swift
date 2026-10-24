@@ -10,6 +10,7 @@
             id: "38",
             time: "10:31:42",
             lead: .live,
+            kind: .pointer,
             text: "Turning Show Center off in Opie",
             label: "10:31:42, Turning Show Center off in Opie, now"
           ),
@@ -17,6 +18,7 @@
             id: "37",
             time: "10:31:38",
             lead: .quiet,
+            kind: .scroll,
             text: "Scrolled in Opie",
             label: "10:31:38, Scrolled in Opie"
           ),
@@ -24,6 +26,7 @@
             id: "36",
             time: "10:31:33",
             lead: .quiet,
+            kind: .pointer,
             text: "Clicked Ring in Opie",
             label: "10:31:33, Clicked Ring in Opie"
           ),
@@ -31,6 +34,7 @@
             id: "35",
             time: "10:31:20",
             lead: .quiet,
+            kind: .screenshot,
             text: "Took a screenshot",
             shot: ViewerActivityShot(name: shotNames[2], thumbnail: shotPicture(shotNames[2])),
             label: "10:31:20, Took a screenshot"
@@ -39,6 +43,7 @@
             id: "34",
             time: "10:31:12",
             lead: .quiet,
+            kind: .window,
             text: "Opened Opie",
             label: "10:31:12, Opened Opie"
           ),
@@ -52,6 +57,7 @@
             id: "33",
             time: "10:29:40",
             lead: .person,
+            kind: .control,
             text: "You gave back control",
             label: "10:29:40, You gave back control"
           ),
@@ -59,6 +65,7 @@
             id: "30",
             time: "10:29:05",
             lead: .person,
+            kind: .person,
             text: "You clicked in Opie ×3",
             label: "10:29:05, You clicked in Opie ×3"
           ),
@@ -66,6 +73,7 @@
             id: "29",
             time: "10:28:30",
             lead: .failed,
+            kind: .problem,
             text: "Couldn't click Show Centre in Opie",
             reason: "No element is named Show Centre",
             label: "10:28:30, Couldn't click Show Centre in Opie, No element is named Show Centre"
@@ -74,6 +82,7 @@
             id: "28",
             time: "10:27:58",
             lead: .quiet,
+            kind: .command,
             text: "Ran a command",
             label: "10:27:58, Ran a command"
           ),

@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// A small rounded tile with a symbol or a few monospaced characters on a quiet fill, such as an agent's `>_` in a
-/// settings row.
+/// settings row, or tinted by its tone, such as an action's kind in Activity.
 struct SymbolTile: View {
   /// How large the tile is.
   enum Size: Sendable, CaseIterable {
@@ -14,18 +14,33 @@ struct SymbolTile: View {
     case large
   }
 
+  /// How the tile is coloured.
+  enum Tone: Sendable, CaseIterable {
+    /// A control's fill under a bright glyph, as a settings row's.
+    case plain
+    /// A faint fill under a quiet glyph, as an agent's action in Activity (v3 V8).
+    case quiet
+    /// A blue tint under a blue glyph, as the person's own action.
+    case accent
+    /// An orange tint under an orange glyph, as an action that did not work.
+    case attention
+  }
+
   /// What the tile shows.
   let icon: TileIcon
   /// How large the tile is.
   var size = Size.regular
+  /// How the tile is coloured.
+  var tone = Tone.plain
 
+  /// The glyph on its tile.
   var body: some View {
     glyph
-      .foregroundStyle(Color.textPrimary)
+      .foregroundStyle(foreground)
       .frame(width: side, height: side)
       .background(
         RoundedRectangle(cornerRadius: Radius.extraSmall)
-          .fill(Color.fillControl)
+          .fill(fill)
       )
       .accessibilityHidden(true)
   }
@@ -39,6 +54,26 @@ struct SymbolTile: View {
     case .text(let text):
       Text(text)
         .font(Typography.font(.caption, design: .monospaced))
+    }
+  }
+
+  /// The glyph's colour.
+  private var foreground: Color {
+    switch tone {
+    case .plain: .textPrimary
+    case .quiet: .textSecondary
+    case .accent: .textLink
+    case .attention: .attention
+    }
+  }
+
+  /// The tile's fill.
+  private var fill: Color {
+    switch tone {
+    case .plain: .fillControl
+    case .quiet: .fillPill
+    case .accent: .accentFill
+    case .attention: .attentionFill
     }
   }
 

@@ -14,12 +14,12 @@ extension ViewerWords {
   /// A search that matches nothing: the sentence.
   static let noShotsMatchMessage = "Search by the time one was taken, such as 10:31."
 
-  /// How many screenshots were taken today, and how to use them, beside the title.
+  /// How many screenshots were taken today, and how to use them, beside the title; just "None today" with none.
   ///
   /// - Parameter today: The count.
-  /// - Returns: "6 today · Space opens one, drag one out to use it".
+  /// - Returns: "6 today · Space opens one, drag one out to use it", or "None today".
   static func shotsMeta(today: Int) -> String {
-    "\(today == 0 ? "None" : String(today)) today · Space opens one, drag one out to use it"
+    today == 0 ? "None today" : "\(today) today · Space opens one, drag one out to use it"
   }
 
   /// A group of screenshots' label.

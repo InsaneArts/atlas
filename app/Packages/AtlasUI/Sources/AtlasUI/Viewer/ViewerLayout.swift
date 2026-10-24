@@ -52,24 +52,48 @@ enum ViewerLayout {
   static let noticeLines = 3
   /// 520: the widest a notice over the screen runs before it wraps.
   static let noticeWidth: CGFloat = 520
-  /// 18: a pane's text inset, the board's (mac.py `head`), which its header and rows keep, between the grid's 16 and
-  /// 20.
-  static let paneTextInset: CGFloat = 18
-  /// 52: an app's row in the Apps pane, its 34 icon with 9 above and below.
-  static let appRowHeight: CGFloat = 52
-  /// 36: a window's row under its app.
-  static let windowRowHeight: CGFloat = 36
-  /// 34: the "No windows" row, a little lower than a window's.
-  static let noWindowsHeight: CGFloat = 34
-  /// 62: how far a window's row sits in, under its app's name (the board's 14 inset, 34 icon and 12 gap, and 2 more).
-  static let windowIndent: CGFloat = 62
-  /// 56 by 36: a screenshot's thumbnail on an Activity line, the board's 56 by 35 (the screen's 16 by 10) rounded to
-  /// an even point.
-  static let lineThumbnail = CGSize(width: 56, height: 36)
-  /// 4: the Screenshots pane's columns.
-  static let shotColumns = 4
-  /// 18: between the Screenshots pane's rows of tiles, the board's, a little more than between its columns.
-  static let shotRowGap: CGFloat = 18
+  /// 16: a pane's inset at its sides, which its header, rows and groups keep (v3 `.vlhead`, `.arow`, `.appg`).
+  static let paneInset = Spacing.l
+  /// 1: how long a new live line in Activity keeps its blue ring before it cools away (v3 V8, X10).
+  static let liveHold = 1.0
+  /// 46 by 29: a screenshot's thumbnail on an Activity line (v3 `.thumbm`).
+  static let lineThumbnail = CGSize(width: 46, height: 29)
+  /// 12: above the first of the Apps pane's groups, which sit 10 apart (v3 `.vlbody`'s `padding-top`, `.appg`).
+  static let appsTop = Spacing.m
+  /// 26: an app's icon at the head of its group (v3 `.appi`).
+  static let appIcon = IconSize.mPlus
+  /// 34: a window's row under its app, and the "No windows" row (v3 V9, `.wrow`).
+  static let windowRowHeight = ControlHeight.mPlus
+  /// 48: how far a window's row and its hairline sit in, under its app's name: the group's 12, the icon's 26 and 10
+  /// (v3 `.wrow`).
+  static let windowIndent: CGFloat = 48
+  /// 280: the least width a screenshot's tile takes before the grid drops a column, so a full window holds four and
+  /// a narrow one two (v3 V10's adaptive grid).
+  static let shotLeastWidth: CGFloat = 280
+  /// 14: between the Screenshots pane's tiles, across and down (v3 `.sgrid`).
+  static let shotGap = Spacing.mPlus
+  /// 2: how far a screenshot's tile lifts under the pointer (v3 V10, `.stile:hover`).
+  static let shotLift: CGFloat = 2
+  /// 1.015: how much it grows as it lifts.
+  static let shotLiftScale: CGFloat = 1.015
+  /// 0.72: the shade over the window behind a screenshot shown large (v3 V10, `.vlarge .scrim`).
+  static let shotScrim = 0.72
+  /// 6: how much the window blurs behind it.
+  static let shotScrimBlur: CGFloat = 6
+  /// 0.22: how long the shade and the blur take to fade in or out.
+  static let shotScrimFade = 0.22
+  /// The shade's, the blur's and the large view's buttons' fade, in and out: ease out over ``shotScrimFade``.
+  static var shotFade: Animation {
+    .easeOut(duration: shotScrimFade)
+  }
+  /// 26: from the window's bottom to the large screenshot's bar (v3 `.vlarge .lbar`).
+  static let shotBarInset: CGFloat = 26
+  /// 16: how far a new pane comes in from, on the side it comes from (v3 X3).
+  static let paneEnter: CGFloat = 16
+  /// 12: how far the old pane goes, toward the other side, as it fades.
+  static let paneLeave: CGFloat = 12
+  /// 0.05: how long the old pane shows alone before the new one starts in, so the stage is never blank (v3 X3, R15).
+  static let paneOverlap = 0.05
   /// 0.36: how dark the picture goes outside a window shown from the Apps tab (v3 V14, `.outline`).
   static let spotlightDim = 0.36
   /// 14: how much the last picture blurs behind Connecting's words (v3 V7, X4, `.vempty .lastframe`).
@@ -129,6 +153,52 @@ enum ViewerLayout {
     return 0
   }
 
+  /// How far a pane sits from its place as a tab switch brings it in or takes it away (v3 X3): the new pane comes in
+  /// from ``paneEnter`` on the side the tab lies, the old one leaves ``paneLeave`` toward the other side; none under
+  /// Reduce Motion, where the panes only crossfade.
+  ///
+  /// - Parameters:
+  ///   - isArriving: Whether the pane comes in, rather than goes.
+  ///   - direction: Which way the switch went, from ``ViewerTab/direction(from:to:)``: 1 to the right, −1 back.
+  ///   - reduceMotion: Whether the Reduce Motion setting is on.
+  /// - Returns: Its horizontal offset at its start, coming in, or at its end, going.
+  static func paneOffset(isArriving: Bool, direction: Int, reduceMotion: Bool) -> CGFloat {
+    guard !reduceMotion else { return .zero }
+    let side = CGFloat(direction)
+    return isArriving ? paneEnter * side : -paneLeave * side
+  }
+
+  /// How much the window blurs behind a screenshot shown large: ``shotScrimBlur`` while one shows, else none.
+  ///
+  /// - Parameter isShown: Whether a screenshot shows large.
+  /// - Returns: The blur's radius.
+  static func shotBlur(isShown: Bool) -> CGFloat {
+    isShown ? shotScrimBlur : .zero
+  }
+
+  /// How far a screenshot's tile rises under the pointer: ``shotLift``, or not at all at rest or under Reduce Motion.
+  ///
+  /// - Parameters:
+  ///   - isHovered: Whether the pointer is over it.
+  ///   - reduceMotion: Whether the Reduce Motion setting is on.
+  /// - Returns: Its upward lift.
+  static func shotRise(isHovered: Bool, reduceMotion: Bool) -> CGFloat {
+    guard isHovered, !reduceMotion else { return .zero }
+    return shotLift
+  }
+
+  /// How large a screenshot's tile draws under the pointer: ``shotLiftScale``, or its own size at rest or under
+  /// Reduce Motion.
+  ///
+  /// - Parameters:
+  ///   - isHovered: Whether the pointer is over it.
+  ///   - reduceMotion: Whether the Reduce Motion setting is on.
+  /// - Returns: Its scale.
+  static func shotScale(isHovered: Bool, reduceMotion: Bool) -> CGFloat {
+    guard isHovered, !reduceMotion else { return 1 }
+    return shotLiftScale
+  }
+
   /// The status's leading inset: clear of the window buttons, or the buttons' own inset in full screen.
   ///
   /// - Parameter isFullScreen: Whether the window is in full screen, which hides its buttons.
@@ -159,9 +229,9 @@ enum ViewerLayout {
 
   /// The width a large screenshot leaves beside it: Previous and Next, each with its gap and the page margin.
   private static let largeShotBeside = (ControlHeight.mPlus + Spacing.mPlus + Spacing.xxxl) * 2
-  /// The height a large screenshot leaves under it: the bar's row with its padding above and below, the gap over the
-  /// bar, and the page margin top and bottom.
-  private static let largeShotUnder = ControlHeight.sPlus + Spacing.xsPlus * 2 + Spacing.mPlus + Spacing.xxxl * 2
+  /// The height a large screenshot leaves above and below it, as it is centred: the bar at the window's foot, its
+  /// inset under it and a gap over it, on each side.
+  private static let largeShotUnder = (shotBarInset + ControlHeight.mPlus + Spacing.mPlus) * 2
 
   /// How large a screenshot is drawn in the large view: at its own shape, within ``largeShotLargest``, and within a
   /// window `window` large with room for Previous and Next beside it and the bar under it.

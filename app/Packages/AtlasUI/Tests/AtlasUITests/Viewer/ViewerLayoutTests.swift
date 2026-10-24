@@ -38,8 +38,8 @@ struct ViewerLayoutTests {
     arguments: [
       (CGSize(width: 16, height: 10), CGSize(width: 1440, height: 900), CGSize(width: 1040, height: 650)),
       (CGSize(width: 16, height: 9), CGSize(width: 1440, height: 900), CGSize(width: 1040, height: 585)),
-      // 800 by 500 leaves 640 across beside Previous and Next, and 380 down above the bar.
-      (CGSize(width: 16, height: 10), CGSize(width: 800, height: 500), CGSize(width: 608, height: 380)),
+      // 800 by 508 leaves 640 across beside Previous and Next, and 360 down, centred clear of the bar at its foot.
+      (CGSize(width: 16, height: 10), CGSize(width: 800, height: 508), CGSize(width: 576, height: 360)),
     ] as [(CGSize, CGSize, CGSize)]
   )
   func largeShotSize(aspect: CGSize, window: CGSize, size: CGSize) {

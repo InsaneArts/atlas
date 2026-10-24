@@ -1,91 +1,131 @@
 import SwiftUI
 
-/// One screenshot large over the whole window, top row included: the scrim, which takes every click, the picture at
-/// its own shape between Previous and Next, and a bar with its time and size, Copy, Show in Finder and Close.
+/// A screenshot large over the whole window, top row included (v3 V10, `.vlarge`): a deep shade that takes every
+/// click, closing it, and fades over 0.22 seconds, the picture zoomed from its tile to the centre between Previous
+/// and Next, and one glass bar at the window's foot with its time and size, Copy, Show in Finder and Close. Closing
+/// zooms the picture back to its tile. Under Reduce Motion the picture fades in and out in place.
 struct LargeShotLayer: View {
-  /// The screenshot shown.
-  let shot: ViewerLargeShot
+  /// The screenshot shown large; nil shows none.
+  let shot: ViewerLargeShot?
+  /// The namespace the picture zooms in from its tile, the window's.
+  let zoom: Namespace.ID
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+  /// The shade, the picture and its buttons, over the window.
   var body: some View {
     GeometryReader { proxy in
       ZStack {
-        Color.scrim
-          .contentShape(Rectangle())
-        VStack(spacing: Spacing.mPlus) {
-          HStack(spacing: Spacing.mPlus) {
-            Button {
-              send(.previousShot)
-            } label: {
-              Image(systemName: "chevron.left")
-            }
-            .buttonStyle(.capsule(.glass, outline: .circle))
-            .disabled(!shot.canGoBack)
-            .help("The screenshot before")
-            .accessibilityLabel("Previous")
-            picture(ViewerLayout.largeShotSize(aspect: shot.aspect, in: proxy.size))
-            Button {
-              send(.nextShot)
-            } label: {
-              Image(systemName: "chevron.right")
-            }
-            .buttonStyle(.capsule(.glass, outline: .circle))
-            .disabled(!shot.canGoForward)
-            .help("The screenshot after")
-            .accessibilityLabel("Next")
-          }
-          bar
-        }
+        scrim
+        picture(in: proxy.size)
+        chrome(in: proxy.size)
       }
     }
     .accessibilityElement(children: .contain)
-    .accessibilityAddTraits(.isModal)
+    .accessibilityAddTraits(shot == nil ? [] : .isModal)
   }
 
-  /// The picture at `size`, lifted off the scrim.
-  ///
-  /// - Parameter size: The picture's size.
-  /// - Returns: The picture.
-  private func picture(_ size: CGSize) -> some View {
-    PictureTile(picture: shot.picture, radius: Radius.large)
-      .frame(width: size.width, height: size.height)
-      .background(
-        RoundedRectangle(cornerRadius: Radius.large)
-          .fill(Color.letterbox)
-          // The modal depth with the heavier shade it had before alerts moved to v3's; its own redesign settles it.
-          .shadow(color: Color.dropShadowStrong, radius: Elevation.modal.radius, y: Elevation.modal.y)
-      )
-      .accessibilityElement()
-      .accessibilityLabel(shot.caption)
-      .accessibilityAddTraits(.isImage)
-  }
-
-  /// The bar under the picture.
-  private var bar: some View {
-    FloatingBar {
-      Text(shot.caption)
-        .font(Typography.font(.body, weight: .medium))
-        .monospacedDigit()
-        .padding(.horizontal, Spacing.m)
-      Button("Copy") { send(.copyShot) }
-        .buttonStyle(.capsule(.glass, size: .small))
-        .help("Copy this screenshot as taken")
-      Button("Show in Finder") { send(.showShotInFinder) }
-        .buttonStyle(.capsule(.glass, size: .small))
-        .disabled(!shot.canShowInFinder)
-        .help("Show this screenshot's file in the Finder")
-      Button("Close") { send(.closeShot) }
-        .buttonStyle(.capsule(.primary, size: .small))
-        .help("Back to the screenshots")
+  /// The shade over the window, which takes every click while a screenshot shows; a click on it closes the screenshot.
+  private var scrim: some View {
+    ZStack {
+      if shot != nil {
+        Color.letterbox
+          .opacity(ViewerLayout.shotScrim)
+          .contentShape(Rectangle())
+          .onTapGesture { send(.closeShot) }
+          .transition(.opacity)
+      }
     }
+    .animation(ViewerLayout.shotFade, value: shot == nil)
+  }
+
+  /// The picture at its own shape in the centre, zooming from and back to its tile.
+  ///
+  /// - Parameter window: The window's size.
+  /// - Returns: The picture, or nothing.
+  private func picture(in window: CGSize) -> some View {
+    ZStack {
+      if let shot {
+        let size = ViewerLayout.largeShotSize(aspect: shot.aspect, in: window)
+        PictureTile(picture: shot.picture, radius: Radius.large)
+          .frame(width: size.width, height: size.height)
+          .shotZoom(id: shot.id, in: zoom)
+          .background(
+            RoundedRectangle(cornerRadius: Radius.large)
+              .filledOutline(Color.letterbox, border: Color.strokeStrong)
+              .elevation(.modal)
+          )
+          .accessibilityElement()
+          .accessibilityLabel(shot.caption)
+          .accessibilityAddTraits(.isImage)
+          .transition(.opacity)
+      }
+    }
+    .animation(Motion.animation(Motion.zoom, reduceMotion: reduceMotion, reduced: Motion.reduced), value: shot == nil)
+  }
+
+  /// Previous and Next beside the picture, and the bar at the window's foot, fading in and out with the shade.
+  ///
+  /// - Parameter window: The window's size.
+  /// - Returns: The buttons and the bar, or nothing.
+  private func chrome(in window: CGSize) -> some View {
+    ZStack {
+      if let shot {
+        let size = ViewerLayout.largeShotSize(aspect: shot.aspect, in: window)
+        HStack(spacing: Spacing.mPlus) {
+          step(.back, label: "Previous", help: "The screenshot before", enabled: shot.canGoBack) {
+            send(.previousShot)
+          }
+          Color.clear
+            .frame(width: size.width, height: size.height)
+            .accessibilityHidden(true)
+          step(.next, label: "Next", help: "The screenshot after", enabled: shot.canGoForward) {
+            send(.nextShot)
+          }
+        }
+        .transition(.opacity)
+        LargeShotBar(shot: shot, send: send)
+          .fixedSize()
+          .frame(maxHeight: .infinity, alignment: .bottom)
+          .padding(.bottom, ViewerLayout.shotBarInset)
+          .transition(.opacity)
+      }
+    }
+    .animation(ViewerLayout.shotFade, value: shot == nil)
+  }
+
+  /// A round glass button stepping to the screenshot before or after.
+  ///
+  /// - Parameters:
+  ///   - symbol: Its chevron.
+  ///   - label: What VoiceOver calls it.
+  ///   - help: Its tooltip.
+  ///   - enabled: Whether there is a screenshot that way.
+  ///   - action: What it does.
+  /// - Returns: The button.
+  private func step(
+    _ symbol: SymbolName,
+    label: String,
+    help: String,
+    enabled: Bool,
+    action: @escaping @MainActor () -> Void
+  ) -> some View {
+    Button(action: action) {
+      Image(systemName: symbol.rawValue)
+    }
+    .buttonStyle(.capsule(.glass, size: .regular, outline: .circle))
+    .disabled(!enabled)
+    .help(help)
+    .accessibilityLabel(label)
   }
 }
 
 #if DEBUG
   #Preview("Large") {
-    if case .screenshots(let shots) = PreviewStates.viewerShotLarge.pane, let large = shots.large {
-      LargeShotLayer(shot: large) { _ in }
+    @Previewable @Namespace var zoom
+    if case .screenshots(let shots) = PreviewStates.viewerShotLarge.pane {
+      LargeShotLayer(shot: shots.large, zoom: zoom) { _ in }
         .frame(width: PreviewStates.viewerSize.width, height: PreviewStates.viewerSize.height)
         .windowSurface()
     }
@@ -93,9 +133,10 @@ struct LargeShotLayer: View {
 
   #Preview("Interactive") {
     @Previewable @State var state = PreviewStates.viewerShotLarge
+    @Previewable @Namespace var zoom
     InteractivePreview {
-      if case .screenshots(let shots) = state.pane, let large = shots.large {
-        LargeShotLayer(shot: large) { event in
+      if case .screenshots(let shots) = state.pane {
+        LargeShotLayer(shot: shots.large, zoom: zoom) { event in
           state = PreviewStates.viewer(state, applying: event)
         }
         .frame(width: PreviewStates.viewerSize.width, height: PreviewStates.viewerSize.height)

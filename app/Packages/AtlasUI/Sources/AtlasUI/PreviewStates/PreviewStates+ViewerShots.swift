@@ -95,7 +95,7 @@
       var state = viewerShots
       state.pane = .screenshots(
         ViewerShotsState(
-          meta: "None today · Space opens one, drag one out to use it",
+          meta: "None today",
           query: "",
           days: [],
           empty: EmptyMessageState(

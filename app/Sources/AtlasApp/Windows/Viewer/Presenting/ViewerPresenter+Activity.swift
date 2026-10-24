@@ -58,8 +58,8 @@ extension ViewerPresenter {
     return ViewerActivityGroup(id: id, title: title, lines: group.runs.map { line($0, snapshot) })
   }
 
-  /// A line: its start on the person's clock, its mark, its words with the repeat count, why it failed, and the
-  /// screenshot it took with its thumbnail once read.
+  /// A line: its start on the person's clock, its mark and kind, its words with the repeat count, why it failed, and
+  /// the screenshot it took with its thumbnail once read.
   ///
   /// - Parameters:
   ///   - run: The line's rows.
@@ -76,6 +76,7 @@ extension ViewerPresenter {
       id: run.id,
       time: time,
       lead: lead,
+      kind: kind(entry),
       text: text,
       reason: reason,
       shot: run.shot.map { ViewerActivityShot(name: $0, thumbnail: snapshot.panes.thumbnails[$0]) },
@@ -93,6 +94,26 @@ extension ViewerPresenter {
     case (.failed, _): .failed
     case (.worked, .you): .person
     case (.worked, .agent), (.worked, .someoneElse): .quiet
+    }
+  }
+
+  /// What kind of thing a line did, for its tile's symbol (v3 V8): a problem whatever it tried, the person's own as
+  /// theirs unless it handed control over, and anyone else's by what it did.
+  ///
+  /// - Parameter entry: The line's row.
+  /// - Returns: The kind.
+  static func kind(_ entry: ActivityLog.Entry) -> ViewerActivityKind {
+    let action = ActivityAction(entry)
+    if entry.outcome == .failed { return .problem }
+    if entry.actor == .you, action != .control { return .person }
+    switch action {
+    case .pointer: return .pointer
+    case .keys: return .keys
+    case .scroll: return .scroll
+    case .screenshot: return .screenshot
+    case .window: return .window
+    case .control: return .control
+    case .command: return .command
     }
   }
 

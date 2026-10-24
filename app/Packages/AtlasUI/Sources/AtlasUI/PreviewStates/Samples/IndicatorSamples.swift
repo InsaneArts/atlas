@@ -98,6 +98,11 @@
               SymbolTile(icon: .text(String(">_")), size: size)
             }
           }
+          HStack(spacing: Spacing.m) {
+            ForEach(SymbolTile.Tone.allCases, id: \.self) { tone in
+              SymbolTile(icon: .symbol(SymbolName.person.rawValue), size: .small, tone: tone)
+            }
+          }
         case .statusPill:
           HStack(spacing: Spacing.m) {
             StatusPill(label: String("Idle"), tone: .quiet)

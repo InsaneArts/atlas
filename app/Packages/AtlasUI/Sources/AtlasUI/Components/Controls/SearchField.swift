@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// A pane's search field: a magnifying glass, then the query, on a quiet rounded field, 220 wide where there is room
+/// A pane's search field: a magnifying glass, then the query, on a quiet rounded field, 200 wide where there is room
 /// and narrower, down to 120, where there is not. It holds its own focus; the query belongs to the owner, which
 /// receives each edit.
 struct SearchField: View {
@@ -12,17 +12,18 @@ struct SearchField: View {
   let onChange: @MainActor (String) -> Void
   @FocusState private var focused: Bool
 
+  /// The glass and the query on their quiet rounded field.
   var body: some View {
     HStack(spacing: Spacing.xsPlus) {
-      Image(systemName: "magnifyingglass")
-        .font(Typography.font(.body))
+      Image(systemName: SymbolName.search.rawValue)
+        .font(Typography.font(.callout))
         .foregroundStyle(Color.textTertiary)
         .accessibilityHidden(true)
       TextField(text: query, prompt: Text(prompt).foregroundStyle(Color.textTertiary)) {
         Text(prompt)
       }
       .textFieldStyle(.plain)
-      .font(Typography.font(.body))
+      .font(Typography.font(.callout))
       .focused($focused)
     }
     .padding(.horizontal, Spacing.sPlus)
@@ -49,10 +50,10 @@ struct SearchField: View {
   }
 }
 
-/// The field's own measures, from the board (mac.py `search`).
+/// The field's own measures, from v3's pane header (`.search`).
 private enum Layout {
-  /// 220: the field's width where there is room.
-  static let width: CGFloat = 220
+  /// 200: the field's width where there is room.
+  static let width: CGFloat = 200
   /// 120: the least it narrows to, still holding a short query such as a time beside its glass.
   static let leastWidth: CGFloat = 120
 }

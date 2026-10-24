@@ -2,7 +2,8 @@ import SwiftUI
 
 /// Why there is nothing to show, on the empty stage: a quiet orbit, a headline, a sentence and, at most, one button.
 /// It reads as one unless it offers a button to reach. On the main window's stage it takes v3's waiting pattern (V7):
-/// the mark at 64, a 17-point title, one line and one button, the mark ringed while something connects.
+/// the mark at 64, a 17-point title, one line and one button, the mark ringed while something connects; in a pane's
+/// body the mark gives way to the pane's own symbol in a quiet tile.
 struct EmptyMessage: View {
   /// How large the message is drawn.
   enum Size: Sendable {
@@ -28,6 +29,9 @@ struct EmptyMessage: View {
   var size = Size.regular
   /// What it stands on: the empty stage by default.
   var ground = Ground.stage
+  /// The symbol drawn in a quiet tile in the mark's place on the stage, such as a pane's (v3 `vEmpty` with `sym`);
+  /// nil draws the mark.
+  var symbol: SymbolName?
   /// Whether a ring traces round the mark, while something connects.
   var tracesMark = false
   /// Receives a press of its button.
@@ -73,16 +77,41 @@ struct EmptyMessage: View {
       OrbitMark(height: orbit)
         .foregroundStyle(Color.textTertiary)
     case .stage:
-      OrbitMark(size: IconSize.xxl)
-        .foregroundStyle(Color.textPrimary)
-        .overlay {
-          if tracesMark {
-            OrbitRing()
-              .transition(.opacity)
-          }
-        }
-        .animation(Motion.fade, value: tracesMark)
+      if let symbol {
+        symbolTile(symbol)
+      } else {
+        stageMark
+      }
     }
+  }
+
+  /// A pane's symbol in its quiet tile, in the mark's place.
+  ///
+  /// - Parameter symbol: The symbol.
+  /// - Returns: The tile.
+  private func symbolTile(_ symbol: SymbolName) -> some View {
+    Image(systemName: symbol.rawValue)
+      .font(Typography.font(size: IconSize.m))
+      .foregroundStyle(Color.textSecondary)
+      .frame(width: Layout.symbolTile, height: Layout.symbolTile)
+      .background(
+        RoundedRectangle(cornerRadius: Layout.symbolTileRadius)
+          .fill(Color.fillControl)
+      )
+      .accessibilityHidden(true)
+  }
+
+  /// Atlas's mark at 64, ringed while something connects.
+  private var stageMark: some View {
+    OrbitMark(size: IconSize.xxl)
+      .foregroundStyle(Color.textPrimary)
+      .overlay {
+        if tracesMark {
+          OrbitRing()
+            .transition(.opacity)
+        }
+      }
+      .animation(Motion.fade, value: tracesMark)
   }
 
   /// How VoiceOver reads it: as one, unless it holds a button to reach.
@@ -170,6 +199,10 @@ private enum Layout {
   static let stageWidth: CGFloat = 340
   /// 18: under the mark and over the button on the stage (v3 `.vempty .em`, `.cap`).
   static let stageGap: CGFloat = 18
+  /// 52: a pane's symbol tile on the stage (v3 `vEmpty`'s `sym`).
+  static let symbolTile: CGFloat = 52
+  /// 14: its corner.
+  static let symbolTileRadius: CGFloat = 14
 }
 
 #if DEBUG

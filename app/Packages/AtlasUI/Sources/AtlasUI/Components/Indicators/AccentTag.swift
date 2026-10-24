@@ -5,8 +5,9 @@ struct AccentTag: View {
   /// The word.
   let text: String
 
+  /// The word on its blue tint.
   var body: some View {
-    Text(text)
+    Text(verbatim: text)
       .font(Typography.font(.caption, weight: .semibold))
       .foregroundStyle(Color.textLink)
       .lineLimit(1)

@@ -27,6 +27,8 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case reload = "arrow.clockwise"
   /// The previous screenshot.
   case back = "chevron.left"
+  /// The next screenshot.
+  case next = "chevron.right"
   /// Copy.
   case copy = "doc.on.doc"
   /// Show in Finder, and a project.

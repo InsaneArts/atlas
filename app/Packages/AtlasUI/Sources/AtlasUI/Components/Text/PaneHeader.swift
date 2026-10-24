@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// A pane's header: its title, a quiet count or note beside it, and its controls at the end, over a hairline. Where
-/// they don't fit on one line, as in a narrow window with Details open, the controls move to a second line under the
-/// title, and there they share what width there is, a search field giving up some of its own.
+/// A pane's header (v3 `.vlhead`): its title, a quiet count or note beside it, and its controls at the end, over a
+/// hairline. Where they don't fit on one line, as in a narrow window with Details open, the controls move to a second
+/// line under the title, and there they share what width there is, a search field giving up some of its own.
 struct PaneHeader<Trailing: View>: View {
   /// The pane's title, such as "Activity".
   let title: String
@@ -11,6 +11,7 @@ struct PaneHeader<Trailing: View>: View {
   /// The controls at the end, such as a search field and filters.
   @ViewBuilder let trailing: Trailing
 
+  /// The title and note with the controls beside them, or the controls under them where they don't fit.
   var body: some View {
     ViewThatFits(in: .horizontal) {
       HStack(spacing: Spacing.m) {
@@ -27,8 +28,9 @@ struct PaneHeader<Trailing: View>: View {
       .frame(maxWidth: .infinity, alignment: .leading)
     }
     .lineLimit(1)
-    .padding(.vertical, Spacing.mPlus)
-    .padding(.horizontal, Layout.inset)
+    .padding(.top, Spacing.mPlus)
+    .padding(.bottom, Spacing.m)
+    .padding(.horizontal, Spacing.l)
     .overlay(alignment: .bottom) {
       SeparatorLine()
     }
@@ -43,8 +45,8 @@ extension PaneHeader {
       .layoutPriority(1)
       .accessibilityAddTraits(.isHeader)
     Text(meta)
-      .font(Typography.font(.body))
-      .foregroundStyle(Color.textTertiary)
+      .font(Typography.font(.callout))
+      .foregroundStyle(Color.textSecondary)
   }
 
   /// The controls, in a row.
@@ -53,12 +55,6 @@ extension PaneHeader {
       trailing
     }
   }
-}
-
-/// At file scope because `PaneHeader` is generic.
-private enum Layout {
-  /// 18: the pane's text inset, the board's (mac.py `head`), which its rows share, between the grid's 16 and 20.
-  static let inset: CGFloat = 18
 }
 
 extension PaneHeader where Trailing == EmptyView {

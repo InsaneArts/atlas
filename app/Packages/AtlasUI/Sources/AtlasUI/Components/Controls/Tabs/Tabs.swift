@@ -1,9 +1,10 @@
 import SwiftUI
 
-/// One row of tabs (v3 U-10, V1, G1). As a `track`, the tabs sit side by side in a capsule track, each its word or its
-/// symbol, the selected one on a brighter thumb that glides to it (`matchedGeometryEffect(id: "thumb")`, ``Motion/tab``;
-/// under Reduce Motion it moves on the short ``Motion/reduced``). As `symbolOverWord`, each tab is its symbol over its
-/// word, the selected one on a filled tile with its symbol in blue, as a settings window's. Each tab is a button
+/// One row of tabs (v3 U-10, V1, G1, X3). As a `track`, the tabs sit side by side in a capsule track, each its word or
+/// its symbol, the selected one on a brighter thumb that glides to it (`matchedGeometryEffect(id: "thumb")`,
+/// ``Motion/tab``; under Reduce Motion it moves in 0.15 seconds, ``Motion/crossfadeReduced``). As a `segment` they
+/// sit the same way in a small rounded track, as a pane's filters. As `symbolOverWord`, each tab is its symbol over
+/// its word, the selected one on a filled tile with its symbol in blue, as a settings window's. Each tab is a button
 /// VoiceOver reads as selected or not; anything a tab carries beside its word, such as a dot for something new, comes
 /// from `accessory`.
 struct Tabs<Tab: Hashable & Sendable, Accessory: View>: View {
@@ -51,6 +52,7 @@ struct Tabs<Tab: Hashable & Sendable, Accessory: View>: View {
   var body: some View {
     switch style {
     case .track: track
+    case .segment: segment
     case .symbolOverWord: tiles
     }
   }
@@ -83,7 +85,10 @@ struct Tabs<Tab: Hashable & Sendable, Accessory: View>: View {
         .strokeBorder(Color.separator, lineWidth: Stroke.hairline)
     )
     .fixedSize()
-    .animation(Motion.animation(Motion.tab, reduceMotion: reduceMotion, reduced: Motion.reduced), value: state.selected)
+    .animation(
+      Motion.animation(Motion.tab, reduceMotion: reduceMotion, reduced: Motion.crossfadeReduced),
+      value: state.selected
+    )
     .accessibilityElement(children: .contain)
     .accessibilityLabel(state.label)
   }
@@ -99,6 +104,37 @@ struct Tabs<Tab: Hashable & Sendable, Accessory: View>: View {
     } else {
       Text(tab.title)
     }
+  }
+
+  /// The tabs in a small rounded track, each its word, as a pane's filters (v3 `.seg`).
+  private var segment: some View {
+    HStack(spacing: .zero) {
+      ForEach(state.tabs) { tab in
+        Button {
+          send(tab.id)
+        } label: {
+          HStack(spacing: Spacing.xs) {
+            Text(tab.title)
+            accessory(tab.id)
+          }
+        }
+        .buttonStyle(SegmentTabStyle(isSelected: tab.id == state.selected, thumb: thumb))
+        .accessibilityLabel(tab.title)
+        .accessibilityAddTraits(tab.id == state.selected ? .isSelected : [])
+      }
+    }
+    .padding(Spacing.half)
+    .background(
+      RoundedRectangle(cornerRadius: Radius.small)
+        .fill(Color.fillControl)
+    )
+    .fixedSize()
+    .animation(
+      Motion.animation(Motion.tab, reduceMotion: reduceMotion, reduced: Motion.crossfadeReduced),
+      value: state.selected
+    )
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel(state.label)
   }
 
   /// The tabs as tiles, each its symbol over its word.
@@ -171,7 +207,7 @@ private struct TrackTabStyle: ButtonStyle {
       .background {
         if isSelected {
           TabsThumb()
-            .matchedGeometryEffect(id: Layout.thumbID, in: thumb)
+            .matchedGeometryEffect(id: TabsStyle.thumbID, in: thumb)
         }
       }
       .contentShape(Capsule())
@@ -199,49 +235,6 @@ private struct TabsThumb: View {
   }
 }
 
-/// A tab as a tile (v3 G1, `.stabs button`): its symbol over its word, both quiet; under the pointer a faint fill
-/// and the word brightens; selected, the tile filled and the symbol blue. Held, it dips a little (v3 X9: 0.95).
-private struct TileTabStyle: ButtonStyle {
-  /// Whether it is the selected tab.
-  let isSelected: Bool
-
-  func makeBody(configuration: Configuration) -> some View {
-    TileTabBody(configuration: configuration, isSelected: isSelected)
-  }
-}
-
-/// The tile a ``TileTabStyle`` draws, answering the pointer.
-private struct TileTabBody: View {
-  /// The tab's label and pressed state.
-  let configuration: ButtonStyleConfiguration
-  /// Whether it is the selected tab.
-  let isSelected: Bool
-  @State private var isHovered = false
-  @Environment(\.isEnabled) private var enabled
-
-  var body: some View {
-    configuration.label
-      .foregroundStyle(isSelected || isHovered ? Color.textPrimary : Color.textSecondary)
-      .frame(width: Layout.tile.width, height: Layout.tile.height)
-      .background(
-        RoundedRectangle(cornerRadius: Radius.medium)
-          .fill(fill)
-      )
-      .contentShape(RoundedRectangle(cornerRadius: Radius.medium))
-      .modifier(PressScale(isPressed: configuration.isPressed, scale: Layout.tilePressedScale))
-      .opacity(enabled ? 1 : Opacity.disabled)
-      .onHover { isHovered = $0 }
-      .animation(Motion.hover(isHovered), value: isHovered)
-      .animation(CapsuleButtonStyle.pressAnimation(isPressed: configuration.isPressed), value: configuration.isPressed)
-  }
-
-  /// The tile's fill: the held fill while selected, a faint one under the pointer, none otherwise.
-  private var fill: Color {
-    if isSelected { return .fillControlOn }
-    return isHovered ? .fillRowHover : .clear
-  }
-}
-
 /// The tabs' own measures, from v3's track (`.vtabs`) and tiles (G1). At file scope because `Tabs` is generic.
 private enum Layout {
   /// 28: a track tab's height, and the thumb's.
@@ -256,14 +249,8 @@ private enum Layout {
   static let thumbShadow: CGFloat = 1.5
   /// 1: how far the thumb's shadow falls.
   static let thumbDrop: CGFloat = 1
-  /// 74 by 50: a tile (v3 G1).
-  static let tile = CGSize(width: 74, height: 50)
   /// 3: between a tile's symbol and its word.
   static let tileGap: CGFloat = 3
-  /// 0.95: how far a held tile dips (v3 `.stabs button:active`).
-  static let tilePressedScale: CGFloat = 0.95
-  /// The thumb's one identity, which it keeps as it glides from tab to tab.
-  static let thumbID = "thumb"
 }
 
 #if DEBUG

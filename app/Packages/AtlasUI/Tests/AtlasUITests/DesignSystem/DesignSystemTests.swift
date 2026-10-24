@@ -175,6 +175,7 @@ struct DesignSystemTests {
       ("accentRing", .accentRing, .accent, 0.2),
       ("attentionWash", .attentionWash, .attention, 0.09),
       ("attentionFill", .attentionFill, .attention, 0.16),
+      ("accentFill", .accentFill, .accent, 0.16),
       ("fillGroup", .fillGroup, .white, 0.05),
       ("fillRowHover", .fillRowHover, .white, 0.035),
       ("fillControlHover", .fillControlHover, .white, 0.12),
@@ -213,6 +214,7 @@ struct DesignSystemTests {
       ("fillGlassThick", .fillGlassThick, [38, 38, 42], 0.78),
       ("accentHover", .accentHover, [0x1A, 0x8C, 0xFF], 1),
       ("onAttention", .onAttention, [0x1C, 0x12, 0x03], 1),
+      ("fillPinned", .fillPinned, [28, 28, 31], 0.9),
     ]
     let environment = EnvironmentValues()
     for (name, colour, rgb, opacity) in colours {

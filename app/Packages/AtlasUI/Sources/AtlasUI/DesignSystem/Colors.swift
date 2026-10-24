@@ -29,6 +29,10 @@ extension Color {
   /// A ring in the accent: a rim, a focus ring or a selection's edge (v3 `--accent-ring`): the accent at 0.20.
   static let accentRing = Color.accent
     .opacity(0.2)
+  /// A tile behind the person's own symbol, such as their line's in Activity (v3 `.arow.you .ic`), beside
+  /// ``attentionFill``: the accent at 0.16.
+  static let accentFill = Color.accent
+    .opacity(0.16)
   /// Done and ready: system green, #30D158.
   static let success = Color(red: 0x30 / 255, green: 0xD1 / 255, blue: 0x58 / 255)
   /// Text that says something is done, such as "Allowed": #32D74B.
@@ -64,6 +68,10 @@ extension Color {
   /// A row under the pointer (v3 `--fill-row-hover`): white at 0.035.
   static let fillRowHover = Color.white
     .opacity(0.035)
+  /// A section's header pinned over a list scrolling under it, such as Activity's (v3 `.vsec`): rgb(28, 28, 31) at
+  /// 0.9.
+  static let fillPinned = Color(red: 28 / 255, green: 28 / 255, blue: 31 / 255)
+    .opacity(0.9)
   /// A control's fill, such as a glass capsule, a symbol tile or a hovered menu row: white at 0.08.
   static let fillControl = Color.white
     .opacity(0.08)

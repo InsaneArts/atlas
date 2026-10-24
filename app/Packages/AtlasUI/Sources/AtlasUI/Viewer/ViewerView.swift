@@ -16,6 +16,12 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
   private let input: Input
   /// Draws the newest picture.
   private let livePicture: (ViewerLivePicture) -> LivePicture
+  /// The tab the stage last settled on, which the next switch goes from.
+  @State private var settledTab: ViewerTab
+  /// Which way the last switch went, from ``ViewerTab/direction(from:to:)``.
+  @State private var settledDirection = 0
+  /// The namespace a screenshot zooms in between its tile and the large view.
+  @Namespace private var zoom
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   /// Creates the window's content.
@@ -39,6 +45,7 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
     self.newest = newest
     self.input = input()
     self.livePicture = livePicture
+    _settledTab = State(initialValue: state.pane.tab)
   }
 
   /// The top row in the title bar, the stage under it with Details beside it, a screenshot shown large over all of
@@ -58,7 +65,13 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
             ViewerInspector(details: state.details, newest: newest, send: send)
           }
       }
-      .overlay { largeShotLayer }
+      // The window blurs behind a screenshot shown large, as its shade fades in (v3 V10).
+      .blur(radius: ViewerLayout.shotBlur(isShown: largeShot != nil))
+      .animation(ViewerLayout.shotFade, value: largeShot == nil)
+      .overlay {
+        LargeShotLayer(shot: largeShot, zoom: zoom, send: send)
+          .allowsHitTesting(largeShot != nil)
+      }
       .overlay {
         AlertLayer(state: state.alert) { send($0 == .confirm ? .alertConfirm : .alertCancel) }
       }
@@ -70,23 +83,29 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
     .onChange(of: state.alert?.shownTitle) { _, title in if let title { announce(title) } }
     .onChange(of: state.alert?.refusal) { _, refusal in if let refusal { announce(refusal) } }
     .onChange(of: state.toast) { _, toast in if let toast { announce(toast) } }
+    .onChange(of: state.pane.tab) { old, new in settle(from: old, to: new) }
   }
 
   /// The stage: the Screen tab or the selected tab's pane, in the frame every tab shares, the window's inset at its
   /// sides and below and none above, so the picture starts right under the bar (v3 `.vpane`); the small screen in its
   /// corner and the toast at its top.
   private var stage: some View {
-    pane
-      .padding([.horizontal, .bottom], Spacing.m)
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
-      // The small screen keeps to the stage's corner, clear of Details.
-      .overlay(alignment: .bottomTrailing) {
-        if let mini = state.mini {
-          MiniScreen(state: mini) { send(.selectTab(.screen)) }
-            .padding(ViewerLayout.miniInset)
-        }
+    ZStack {
+      pane
+        .id(state.pane.tab)
+        .transition(PaneShift.transition(reduceMotion: reduceMotion))
+    }
+    .environment(\.paneDirection, paneDirection)
+    .padding([.horizontal, .bottom], Spacing.m)
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    // The small screen keeps to the stage's corner, clear of Details.
+    .overlay(alignment: .bottomTrailing) {
+      if let mini = state.mini {
+        MiniScreen(state: mini) { send(.selectTab(.screen)) }
+          .padding(ViewerLayout.miniInset)
       }
-      .overlay(alignment: .top) { toast }
+    }
+    .overlay(alignment: .top) { toast }
   }
 
   /// Whether Details shows.
@@ -94,18 +113,11 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
     state.details != nil
   }
 
-  /// A screenshot shown large over the whole window, fading in and out.
-  private var largeShotLayer: some View {
-    ZStack {
-      if let large = largeShot {
-        LargeShotLayer(shot: large, send: send)
-          .transition(.opacity)
-      }
-    }
-    .animation(
-      Motion.animation(Motion.fade, reduceMotion: reduceMotion, reduced: Motion.reduced),
-      value: largeShot == nil
-    )
+  /// Which way the stage moves for the tab it shows now: from the tab it last settled on as the switch begins, so
+  /// the pane leaving and the pane arriving read the same side in the same moment, and that side once settled.
+  private var paneDirection: Int {
+    let tab = state.pane.tab
+    return tab == settledTab ? settledDirection : ViewerTab.direction(from: settledTab, to: tab)
   }
 
   /// The Screen tab, or the selected tab's pane: Activity, Apps and Screenshots fill the frame inside the window's
@@ -119,7 +131,7 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
     case .apps(let apps):
       ViewerAppsPane(state: apps, send: send)
     case .screenshots(let shots):
-      ViewerShotsPane(state: shots, send: send)
+      ViewerShotsPane(state: shots, zoom: zoom, send: send)
     }
   }
 
@@ -148,6 +160,16 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
   private var largeShot: ViewerLargeShot? {
     guard case .screenshots(let shots) = state.pane else { return nil }
     return shots.large
+  }
+
+  /// Settles the stage on a new tab once its switch has begun, keeping the way it went.
+  ///
+  /// - Parameters:
+  ///   - old: The tab left.
+  ///   - new: The tab shown.
+  private func settle(from old: ViewerTab, to new: ViewerTab) {
+    settledDirection = ViewerTab.direction(from: old, to: new)
+    settledTab = new
   }
 
   /// VoiceOver says what changed.
