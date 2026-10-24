@@ -33,7 +33,7 @@
         PreviewState(name: "Claude Code only", value: settingsClaudeCode),
         PreviewState(name: "Claude app only", value: settingsClaudeApp),
         PreviewState(name: "Claude partly connected", value: settingsClaudePartial),
-      ] + settingsPages
+      ] + settingsPages + settingsSearch
     }
 
     /// The four tabs, each its symbol over its word.

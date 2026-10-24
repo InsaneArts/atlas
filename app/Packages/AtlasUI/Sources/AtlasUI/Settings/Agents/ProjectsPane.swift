@@ -18,6 +18,7 @@ struct ProjectsPane: View {
       } else {
         GroupedSection(state.projects, notes: notes) { project in
           ProjectRow(project: project) { send(.askForget(project.id)) }
+            .settingsTarget(.project(project.id))
         }
       }
     }

@@ -2,7 +2,7 @@ import Foundation
 
 /// What the main menu's View, File, Edit and Helper items, the Dock menu's and the main window's ⋯ menu ask of the
 /// window in front. The main window answers each and validates its item against the same state its buttons draw.
-@objc protocol ViewerMenuActions {
+@objc protocol ViewerMenuActions: FindMenuActions {
   /// Screen, Activity, Apps or Screenshots, by the item's tag (``ViewerTab/menuTag``).
   ///
   /// - Parameter sender: The menu item.
@@ -35,8 +35,4 @@ import Foundation
   ///
   /// - Parameter sender: The menu item.
   func chooseRate(_ sender: Any?)
-  /// Find…: the shown tab's search field takes the focus.
-  ///
-  /// - Parameter sender: The menu item.
-  func findInTab(_ sender: Any?)
 }

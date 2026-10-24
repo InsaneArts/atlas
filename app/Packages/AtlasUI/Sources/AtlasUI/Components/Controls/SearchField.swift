@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// A pane's search field: a magnifying glass, then the query, and a clear button while there is one, on a quiet
@@ -14,6 +15,10 @@ struct SearchField: View {
   var focusRequests = 0
   /// Receives each edit.
   let onChange: @MainActor (String) -> Void
+  /// Optional owner-level result navigation, leaving ordinary text editing with the field.
+  var onMove: (@MainActor (Int) -> Void)?
+  /// Opens a selected location only after the text field commits Return.
+  var onOpen: (@MainActor () -> Void)?
   @FocusState private var focused: Bool
 
   /// The glass, the query and its clear button on their quiet rounded field.
@@ -30,9 +35,13 @@ struct SearchField: View {
       .font(Typography.font(.callout))
       .focused($focused)
       .onKeyPress(.escape) { escape() }
+      .onKeyPress(.upArrow) { move(-1) }
+      .onKeyPress(.downArrow) { move(1) }
+      .onSubmit { onOpen?() }
       if !text.isEmpty {
         Button {
           onChange("")
+          focused = true
         } label: {
           Image(systemName: SymbolName.clearText.rawValue)
             .font(Typography.font(.callout))
@@ -85,11 +94,30 @@ struct SearchField: View {
   ///
   /// - Returns: Handled, so the key goes no further.
   private func escape() -> KeyPress.Result {
+    guard !composing else { return .ignored }
     if text.isEmpty {
       focused = false
     } else {
       onChange("")
     }
+    return .handled
+  }
+
+  /// Leaves input-method candidate navigation with the native field editor.
+  private var composing: Bool {
+    let editor = NSApp.keyWindow?.firstResponder as? NSTextView
+    return editor?.hasMarkedText() == true
+  }
+
+  /// Routes result arrows only when the owner supports them and the query is nonempty.
+  ///
+  /// - Parameter step: The requested direction.
+  /// - Returns: Whether result navigation consumed this key.
+  private func move(_ step: Int) -> KeyPress.Result {
+    guard !composing, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let onMove else {
+      return .ignored
+    }
+    onMove(step)
     return .handled
   }
 }

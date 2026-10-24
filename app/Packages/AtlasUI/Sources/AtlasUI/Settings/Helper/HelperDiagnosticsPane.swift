@@ -12,18 +12,23 @@ struct HelperDiagnosticsPane: View {
     VStack(alignment: .leading, spacing: SettingsLayout.sectionGap) {
       VStack(alignment: .leading, spacing: SettingsLayout.titleGap) {
         HelperReadyHeader { send(.checkAgain) }
+          .settingsTarget(.readiness)
         GroupedSection(state.ready, notes: [state.readyNote?.sectionNote].compactMap { $0 }) { row in
           HelperReadyRow(row: row, buttons: state.buttons) { send(.askRecover) }
+            .settingsTarget(.check(row.searchID))
         }
       }
       .environment(\.marksSwapAtOnce, true)
       GroupedSection(
         [HelperAction.recover],
-        title: "Support",
-        description: "Copy Atlas's diagnostic report for support.",
+        title: SettingsSearchCatalog.support.section,
+        description: SettingsSearchCatalog.support.sectionDetail,
         notes: [state.waiting.map { .status(.working, $0) }, state.notice?.sectionNote].compactMap { $0 }
       ) { _ in
-        ListRow("Copy Diagnostics", trailing: .button("Copy Diagnostics"), size: .compact) { send(.copyDiagnostics) }
+        ListRow(SettingsSearchCatalog.support.title, trailing: .button("Copy Diagnostics"), size: .compact) {
+          send(.copyDiagnostics)
+        }
+        .settingsTarget(.support)
       }
     }
   }

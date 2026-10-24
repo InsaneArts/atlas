@@ -4,6 +4,10 @@ import AtlasUI
 struct SettingsSession: Equatable {
   /// Visits during this window session.
   var navigation = SettingsNavigation(initial: .root(.general))
+  /// The query and selection belong to this window session, never saved preferences.
+  var search = SettingsSearchState()
+  /// The latest explicit search-result reveal.
+  var reveal: SettingsReveal?
   /// The existing content pane owned by the current destination.
   var tab: SettingsTab { navigation.destination?.root.pane ?? .general }
   /// The alert asked, if any.

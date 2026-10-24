@@ -1,7 +1,7 @@
 import AppKit
 
 /// The app's menus: Atlas · File · Edit · View · Helper · Window · Help. Edit makes typing and pasting work in fields as
-/// in any app, and Find… finds in the main window's tab; File, View and Helper ask the window in front through the
+/// in any app, and Find… focuses search in Settings or the main window's tab; File, View and Helper ask the window in front through the
 /// responder chain (`MainMenu+File`, `+View`, `+Helper`), so with no window in front that answers them their items
 /// wait. Every shortcut here is registered once; the window's buttons carry none.
 enum MainMenu {
@@ -99,7 +99,7 @@ enum MainMenu {
   }
 
   /// Undo, Redo, Cut, Copy, Paste and Select All, and with the main window, Find… (⌘F), which puts the focus in the
-  /// shown tab's search. Copy copies what the main window shows while nothing else there has a selection: the window
+  /// key window's search. Copy copies what the main window shows while nothing else there has a selection: the window
   /// answers `copy:` once no field does.
   ///
   /// - Parameter viewer: Whether the main window can open, so Find… is offered.
@@ -116,7 +116,7 @@ enum MainMenu {
     edit.addItem(withTitle: MenuWords.selectAll, action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
     if viewer {
       edit.addItem(.separator())
-      edit.addItem(withTitle: MenuWords.find, action: #selector(ViewerMenuActions.findInTab(_:)), keyEquivalent: "f")
+      edit.addItem(withTitle: MenuWords.find, action: #selector(FindMenuActions.findInTab(_:)), keyEquivalent: "f")
     }
     return edit
   }

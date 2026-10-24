@@ -12,7 +12,29 @@
       case .selectTab(let tab):
         next.tabs.selected = tab
       case .navigate(let destination):
+        next.search.query = ""
         next.destination = destination
+      case .search(let query):
+        next.search.query = query
+        next.search.results = settingsSearchMatches(query, in: next)
+        next.search.selection = next.search.results.first?.id
+      case .find:
+        next.search.focusRequests += 1
+      case .selectSearchResult(let target):
+        next.search.selection = target
+      case .moveSearchSelection(let step):
+        let index = next.search.results.firstIndex { $0.id == next.search.selection } ?? 0
+        if !next.search.results.isEmpty {
+          next.search.selection = next.search.results[min(max(index + step, 0), next.search.results.count - 1)].id
+        }
+      case .openSelectedSearchResult, .openSearchResult:
+        let target: SettingsSearchTarget?
+        if case .openSearchResult(let selected) = event { target = selected } else { target = next.search.selection }
+        if let target, next.search.results.contains(where: { $0.id == target }) {
+          next.search.query = ""
+          next.destination = target.destination
+          next.reveal = SettingsReveal(target: target, request: (next.reveal?.request ?? 0) + 1)
+        }
       case .setOpenAtLogin(let on):
         next.general.opensAtLogin = on
       case .choosePicture(let picture):

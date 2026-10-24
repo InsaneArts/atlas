@@ -11,7 +11,12 @@ struct AboutPane: View {
   var body: some View {
     VStack(alignment: .leading, spacing: SettingsLayout.sectionGap) {
       identity
-      GroupedSection([GeneralRow.picture], title: "Updates", description: "Check for a newer Atlas release") { _ in
+        .settingsTarget(.identity)
+      GroupedSection(
+        [GeneralRow.picture],
+        title: SettingsSearchCatalog.updates.section,
+        description: SettingsSearchCatalog.updates.sectionDetail
+      ) { _ in
         VStack(spacing: Spacing.m) {
           AboutUpdateButton(update: state.update, send: send)
           AboutUpdateStatus(status: state.status, send: send)
@@ -19,9 +24,17 @@ struct AboutPane: View {
         .multilineTextAlignment(.center)
         .frame(maxWidth: .infinity)
         .padding(Spacing.m)
+        .settingsTarget(.updates)
       }
-      GroupedSection([GeneralRow.openAtLogin], title: "Setup", description: "Open Atlas's setup window.") { _ in
-        ListRow("Getting Started…", trailing: .button("Getting Started…"), size: .compact) { send(.gettingStarted) }
+      GroupedSection(
+        [GeneralRow.openAtLogin],
+        title: SettingsSearchCatalog.setup.section,
+        description: SettingsSearchCatalog.setup.sectionDetail
+      ) { _ in
+        ListRow(SettingsSearchCatalog.setup.title, trailing: .button("Getting Started…"), size: .compact) {
+          send(.gettingStarted)
+        }
+        .settingsTarget(.setup)
       }
     }
   }
@@ -32,7 +45,7 @@ struct AboutPane: View {
       // Laid out by its visible tile; the icon's transparent margin overhangs.
       AppIcon(tile: SettingsLayout.aboutTile)
         .frame(width: SettingsLayout.aboutTile, height: SettingsLayout.aboutTile)
-      Text(verbatim: "Atlas")
+      Text(verbatim: SettingsSearchCatalog.identity.title)
         .textStyle(.title2, weight: .bold)
         .accessibilityAddTraits(.isHeader)
         .padding(.top, Spacing.mPlus)
@@ -40,7 +53,7 @@ struct AboutPane: View {
         .font(Typography.digits(.callout))
         .foregroundStyle(Color.textSecondary)
         .padding(.top, Spacing.half)
-      Text(verbatim: "A hidden second desktop where agents test your apps while you work.")
+      Text(verbatim: SettingsSearchCatalog.identity.detail)
         .textStyle(.body)
         .foregroundStyle(Color.textSecondary)
         .frame(maxWidth: SettingsLayout.aboutTextWidth)

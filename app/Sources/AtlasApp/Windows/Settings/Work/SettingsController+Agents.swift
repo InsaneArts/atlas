@@ -31,6 +31,7 @@ extension SettingsController {
       projectsReading: .loaded,
       failed: false
     )
+    session.search.selection = state.search.selection
   }
 
   /// Connects every installed part of one agent through the installs every window

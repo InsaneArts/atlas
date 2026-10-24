@@ -14,11 +14,11 @@ struct HelperReadyHeader: View {
   var body: some View {
     HStack(alignment: .top) {
       VStack(alignment: .leading, spacing: Spacing.half) {
-        Text("Ready to act")
+        Text(SettingsSearchCatalog.readiness.title)
           .textStyle(.heading)
           .foregroundStyle(Color.textPrimary)
           .accessibilityAddTraits(headingTraits)
-        Text("Check the helper and the permissions it needs.")
+        Text(SettingsSearchCatalog.readiness.detail)
           .textStyle(.callout)
           .foregroundStyle(Color.textSecondary)
       }

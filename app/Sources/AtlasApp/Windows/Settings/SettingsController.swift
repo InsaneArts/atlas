@@ -30,6 +30,8 @@ final class SettingsController {
   @ObservationIgnored var agentsGeneration = 0
   /// Updates the native window title without changing its frame.
   @ObservationIgnored var nameWindow: (@MainActor (String) -> Void)?
+  /// Normalized local metadata, reused until the loaded presentation changes.
+  @ObservationIgnored var searchIndex: SettingsSearchIndex?
 
   /// Creates the window's controller on the pane last shown, with the person's saved choices.
   ///
@@ -74,7 +76,12 @@ final class SettingsController {
   }
 
   /// The window as it should look now.
-  var state: SettingsState { SettingsPresenter.state(snapshot) }
+  var state: SettingsState {
+    var state = SettingsPresenter.state(snapshot)
+    state.search = searchState(for: state)
+    state.reveal = session.reveal
+    return state
+  }
 
   /// Applies one of the window's events.
   ///
@@ -84,6 +91,16 @@ final class SettingsController {
     switch event {
     case .selectTab(let tab): selectTab(tab)
     case .navigate(let destination): navigate(destination)
+    case .search(let query): search(query)
+    case .find:
+      if session.alert == nil { session.search.focusRequests += 1 }
+    case .moveSearchSelection(let step): moveSearchSelection(step)
+    case .selectSearchResult(let target):
+      if session.alert == nil, state.search.results.contains(where: { $0.id == target }) {
+        session.search.selection = target
+      }
+    case .openSearchResult(let target): openSearchResult(target)
+    case .openSelectedSearchResult: openSearchResult(state.search.selection)
     case .setOpenAtLogin(let on):
       var general = SettingsPresenter.general(snapshot)
       general.opensAtLogin = on
@@ -150,6 +167,9 @@ final class SettingsController {
   ///
   /// - Parameter destination: The requested root or detail.
   func navigate(_ destination: SettingsDestination) {
+    session.reveal = nil
+    session.search.query = ""
+    session.search.selection = nil
     guard destination != session.navigation.destination else { return }
     session.navigation.visit(destination)
     enteredDestination()
@@ -167,6 +187,8 @@ final class SettingsController {
   func close() {
     agentsReading?.cancel()
     agentsReading = nil
+    session.search = SettingsSearchState()
+    session.reveal = nil
     let root = session.navigation.destination?.root ?? .general
     session.navigation = SettingsNavigation(initial: .root(root))
   }

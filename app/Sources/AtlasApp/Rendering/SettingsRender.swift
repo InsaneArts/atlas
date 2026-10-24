@@ -58,6 +58,13 @@
       "48-update-misplaced",
       "49-update-installed",
       "50-cleanup-failed",
+      "51-search-empty",
+      "52-search-ranked",
+      "53-search-one",
+      "54-search-none",
+      "55-search-long-query",
+      "56-search-long-breadcrumbs",
+      "57-search-alert",
     ]
 
     /// Every Settings state drawn for visual checks, by file name.

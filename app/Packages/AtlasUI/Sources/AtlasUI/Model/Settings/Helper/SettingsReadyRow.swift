@@ -9,6 +9,8 @@ public struct SettingsReadyRow: Equatable, Sendable, Identifiable {
   public var isChecking: Bool
   /// The row's place in its section, the first 0, which staggers its mark's landing after the rows above it.
   public var index: Int
+  /// The service check's stable identity, independent of its displayed words.
+  public var searchID: String
 
   /// Creates a row.
   ///
@@ -17,11 +19,19 @@ public struct SettingsReadyRow: Equatable, Sendable, Identifiable {
   ///   - offersRecover: Whether Recover… stands on this row; not by default.
   ///   - isChecking: Whether Check Again is checking it now.
   ///   - index: The row's place in its section, the first 0.
-  public init(item: ReadinessItem, offersRecover: Bool = false, isChecking: Bool = false, index: Int = 0) {
+  ///   - searchID: The raw service identity; the sample's name when omitted.
+  public init(
+    item: ReadinessItem,
+    offersRecover: Bool = false,
+    isChecking: Bool = false,
+    index: Int = 0,
+    searchID: String? = nil
+  ) {
     self.item = item
     self.offersRecover = offersRecover
     self.isChecking = isChecking
     self.index = index
+    self.searchID = searchID ?? item.id
   }
 
   /// The check's name, which no other check shares.
