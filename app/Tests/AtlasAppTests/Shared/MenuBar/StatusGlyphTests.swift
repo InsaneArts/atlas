@@ -75,6 +75,8 @@ struct StatusGlyphTests {
       if quiet.contains(kind) { #expect(look.badge == .none, "\(kind)") }
     }
     #expect(StatusGlyph.dimAlpha == 0.42)
+    #expect(StatusGlyph.opacity(of: .dimmed) == 0.42)
+    #expect(StatusGlyph.opacity(of: .template) == 1 && StatusGlyph.opacity(of: .accent) == 1)
   }
 
   @Test("only working, needs you and stopped carry a badge, and stopped's is a square")
@@ -127,7 +129,7 @@ struct StatusGlyphTests {
     let badge = StatusBadge()
     let bounds = CGRect(x: 0, y: 0, width: 22, height: 24)
     let dark = NSAppearance(named: .darkAqua) ?? NSAppearance.currentDrawing()
-    badge.show(StatusGlyph.look(for: .working), in: bounds, flipped: true, appearance: dark, reduceMotion: false)
+    badge.show(StatusGlyph.look(for: .working), in: bounds, flipped: true, appearance: dark, motion: .all)
     let breath = badge.layer.animation(forKey: StatusBadge.breathKey) as? CABasicAnimation
     #expect(breath?.keyPath == "opacity")
     #expect(breath?.fromValue as? Int == 1)
@@ -135,10 +137,10 @@ struct StatusGlyphTests {
     #expect(breath?.autoreverses == true)
     #expect(breath?.repeatCount == .infinity)
     #expect((breath?.duration ?? 0) * 2 == 1.6, "one breath in and out takes 1.6 seconds")
-    badge.show(StatusGlyph.look(for: .needsYou), in: bounds, flipped: true, appearance: dark, reduceMotion: false)
+    badge.show(StatusGlyph.look(for: .needsYou), in: bounds, flipped: true, appearance: dark, motion: .all)
     #expect(badge.layer.animation(forKey: StatusBadge.breathKey) == nil)
     #expect(!badge.layer.isHidden)
-    badge.show(StatusGlyph.look(for: .idle), in: bounds, flipped: true, appearance: dark, reduceMotion: false)
+    badge.show(StatusGlyph.look(for: .idle), in: bounds, flipped: true, appearance: dark, motion: .all)
     #expect(badge.layer.isHidden)
   }
 
@@ -148,12 +150,12 @@ struct StatusGlyphTests {
     let bounds = CGRect(x: 0, y: 0, width: 22, height: 22)
     let dark = NSAppearance(named: .darkAqua) ?? NSAppearance.currentDrawing()
     let working = StatusGlyph.look(for: .working)
-    badge.show(working, in: bounds, flipped: true, appearance: dark, reduceMotion: true)
+    badge.show(working, in: bounds, flipped: true, appearance: dark, motion: .still)
     #expect(badge.layer.animation(forKey: StatusBadge.breathKey) == nil)
     #expect(!badge.layer.isHidden)
-    badge.show(working, in: bounds, flipped: true, appearance: dark, reduceMotion: false)
+    badge.show(working, in: bounds, flipped: true, appearance: dark, motion: .all)
     #expect(badge.layer.animation(forKey: StatusBadge.breathKey) != nil)
-    badge.show(working, in: bounds, flipped: true, appearance: dark, reduceMotion: true)
+    badge.show(working, in: bounds, flipped: true, appearance: dark, motion: .still)
     #expect(badge.layer.animation(forKey: StatusBadge.breathKey) == nil, "turning Reduce Motion on stops a breath")
   }
 

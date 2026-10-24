@@ -32,6 +32,10 @@ public enum Motion {
     static let hoverOut = Duration(seconds: 0.2)
     /// 0.2: the fade every transition takes under Reduce Motion, the longest v3's policy keeps.
     static let reduced = Duration(seconds: 0.2)
+    /// 0.2: the menu bar badge's colour and shape crossfading from one state to the next (v3 M4, X14).
+    public static let crossfade = Duration(seconds: 0.2)
+    /// 0.25: the menu bar orbit's dim fading in or out (v3 M4, X14).
+    public static let dim = Duration(seconds: 0.25)
     /// 0.3: a check drawing itself along its stroke (v3 S3, X11: `trim` 0 → 1).
     static let draw = Duration(seconds: 0.3)
     /// 0.36: an alert shaking once when its command is refused (v3 A4).

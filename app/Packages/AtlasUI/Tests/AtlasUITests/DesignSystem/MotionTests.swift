@@ -30,6 +30,23 @@ struct MotionTests {
     }
   }
 
+  @Test("a layer spring reproduces the duration and bounce of the spring it is made from")
+  func layerSpringsKeepTheirFeeling() {
+    for (name, _, duration, bounce) in Self.springs {
+      let layer = Motion.LayerSpring(duration: duration, bounce: bounce)
+      // Undamped, the mass swings once in 2π √(m / k); the damping ratio c / (2 √(k m)) is 1 − bounce.
+      let swing = 2 * .pi * sqrt(layer.mass / layer.stiffness)
+      let ratio = layer.damping / (2 * (layer.stiffness * layer.mass).squareRoot())
+      #expect(abs(swing - duration) < Self.tolerance, "\(name)")
+      #expect(abs((1 - ratio) - bounce) < Self.tolerance, "\(name)")
+      // SwiftUI reads the same numbers back as the same spring.
+      let read = Spring(mass: layer.mass, stiffness: layer.stiffness, damping: layer.damping)
+      #expect(abs(read.duration - duration) < Self.tolerance, "\(name)")
+      #expect(abs(read.bounce - bounce) < Self.tolerance, "\(name)")
+    }
+    #expect(Motion.LayerSpring.pop == Motion.LayerSpring(duration: 0.35, bounce: 0.3))
+  }
+
   @Test("the slide and indicator are still today's springs, exactly")
   func slideAndIndicatorKeepTheirSprings() {
     #expect(Motion.slide == Animation.spring(response: 0.35, dampingFraction: 1))

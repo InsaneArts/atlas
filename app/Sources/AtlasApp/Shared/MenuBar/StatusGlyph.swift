@@ -20,7 +20,8 @@ enum StatusGlyph {
     case template
     /// The system's blue, not a template: the person holds control.
     case accent
-    /// The template at ``StatusGlyph/dimAlpha``: present, but not ready for agents.
+    /// The template, faded to ``StatusGlyph/dimAlpha`` by the status button's layer: present, but not ready for
+    /// agents.
     case dimmed
   }
 
@@ -49,6 +50,15 @@ enum StatusGlyph {
   /// 0.42: the dimmed template's alpha.
   static let dimAlpha: CGFloat = 0.42
 
+  /// How opaque the orbit shows for a tint. The image is always drawn whole, and the dim is the opacity of the layer
+  /// that holds it, so it can fade (v3 M4).
+  ///
+  /// - Parameter tint: The tint.
+  /// - Returns: ``dimAlpha`` when dimmed, otherwise 1.
+  static func opacity(of tint: Tint) -> CGFloat {
+    tint == .dimmed ? dimAlpha : Layout.whole
+  }
+
   /// The look for a state of the helper, per v3's menu bar table. In use elsewhere, which only a window sees, looks
   /// idle.
   ///
@@ -65,7 +75,8 @@ enum StatusGlyph {
     }
   }
 
-  /// The orbit for a look, centred in the item's square, with the badge's ring knocked out of it.
+  /// The orbit for a look, centred in the item's square and drawn whole (a dimmed look fades it with
+  /// ``opacity(of:)``), with the badge's ring knocked out of it.
   ///
   /// - Parameter look: The look.
   /// - Returns: The image for the status item's button: a template unless the orbit is blue.
@@ -76,8 +87,7 @@ enum StatusGlyph {
       ink(look.tint)
         .set()
       context.saveGState()
-      // Drawn opaque in one layer, then faded as a whole, so overlapping strokes never darken.
-      context.setAlpha(look.tint == .dimmed ? dimAlpha : 1)
+      // Drawn in one layer, so the knockout cuts the orbit alone.
       context.beginTransparencyLayer(auxiliaryInfo: nil)
       Orbit(
         center: CGPoint(x: side / 2, y: side / 2),
@@ -108,16 +118,16 @@ enum StatusGlyph {
     badge == .none ? nil : Layout.badge
   }
 
-  /// A badge's outline in a box of its own size.
+  /// A badge's outline in a box of its own size: a rounded square either way, its corners half its side for the
+  /// disc, so the disc and the square share one shape of path and one can turn into the other.
   ///
   /// - Parameters:
   ///   - badge: The badge.
   ///   - box: The badge's box.
   /// - Returns: A disc, or a rounded square for Stopped.
   static func outline(of badge: Badge, in box: CGRect) -> CGPath {
-    badge == .attentionSquare
-      ? CGPath(roundedRect: box, cornerWidth: Layout.squareCorner, cornerHeight: Layout.squareCorner, transform: nil)
-      : CGPath(ellipseIn: box, transform: nil)
+    let corner = badge == .attentionSquare ? Layout.squareCorner : min(box.width, box.height) / 2
+    return CGPath(roundedRect: box, cornerWidth: corner, cornerHeight: corner, transform: nil)
   }
 
   /// A badge's colour.
@@ -186,6 +196,8 @@ private enum Layout {
   static let squareCorner: CGFloat = 2
   /// 1.5: the ring knocked out of the orbit around the badge.
   static let ring: CGFloat = 1.5
+  /// 1: an orbit shown whole.
+  static let whole: CGFloat = 1
   /// 2: the pixels a point is taken to have when no context is current, a Retina display's.
   static let fallbackScale: CGFloat = 2
 }

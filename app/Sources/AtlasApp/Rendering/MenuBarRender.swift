@@ -84,7 +84,13 @@ enum MenuBarRender {
         .withAlphaComponent(1) ?? label
     }
     let badge = StatusBadge()
-    badge.show(look, in: bounds, flipped: false, appearance: appearance, reduceMotion: true)
-    return MenuBarItemView(image: StatusGlyph.image(for: look), ink: ink, badge: badge.layer, frame: bounds)
+    badge.show(look, in: bounds, flipped: false, appearance: appearance, motion: .still)
+    return MenuBarItemView(
+      image: StatusGlyph.image(for: look),
+      opacity: StatusGlyph.opacity(of: look.tint),
+      ink: ink,
+      badge: badge.layer,
+      frame: bounds
+    )
   }
 }
