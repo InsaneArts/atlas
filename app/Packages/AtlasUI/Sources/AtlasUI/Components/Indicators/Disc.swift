@@ -38,7 +38,10 @@ struct Disc: View {
     case regular
     /// 34: an avatar in a choice row.
     case avatar
-    /// 56: a large avatar, such as the account asking for access on the helper's allow screen.
+    /// 48: the asking account's avatar in the helper's allow pairing, beside Atlas's tile of the same size (v3
+    /// `.pairing`).
+    case pairing
+    /// 56: a large avatar, as the boards draw it.
     case large
   }
 
@@ -82,6 +85,7 @@ struct Disc: View {
     case (.regular, .number): Typography.font(.callout, weight: .bold)
     case (.regular, _): Typography.font(.caption, weight: .bold)
     case (.avatar, _): Typography.font(.body, weight: .semibold)
+    case (.pairing, _): Typography.font(.title3, weight: .semibold)
     case (.large, _): Typography.font(.title3, weight: .semibold)
     }
   }
@@ -91,6 +95,7 @@ struct Disc: View {
     case .mark: IconSize.sPlus
     case .regular: IconSize.m
     case .avatar: IconSize.xl
+    case .pairing: Layout.pairingSide
     case .large: Layout.largeSide
     }
   }
@@ -128,6 +133,8 @@ private enum Layout {
   /// 56: a large disc's side, the boards' large avatar (the shared `IconSize.avatarLarge` until Phase 6a, which only
   /// this size used).
   static let largeSide: CGFloat = 56
+  /// 48: a pairing disc's side (v3 `.pairing .av2`).
+  static let pairingSide: CGFloat = 48
 }
 
 #if DEBUG

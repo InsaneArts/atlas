@@ -11,7 +11,7 @@ struct Headline: View {
     case hero
     /// A title over the viewer's stage.
     case title
-    /// The permission panel's narrow title.
+    /// The permission panel's narrow title: 20 points (v3 `.ttl.side`).
     case compact
   }
 
@@ -35,7 +35,7 @@ struct Headline: View {
     switch size {
     case .hero: stepping
     case .title: fixed(.title)
-    case .compact: fixed(.title2)
+    case .compact: fixed(.title3)
     }
   }
 

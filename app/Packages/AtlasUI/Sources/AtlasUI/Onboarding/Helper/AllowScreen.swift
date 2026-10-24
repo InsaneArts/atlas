@@ -1,13 +1,14 @@
 import SwiftUI
 
-/// In the helper: whether to let the account that asked use this one through Atlas. Allow is the footer's.
+/// In the helper: whether to let the account that asked use this one through Atlas, under the pairing of that
+/// account's avatar handing over to Atlas at one size (v3 08). Allow is the footer's.
 struct AllowScreen: View {
   /// Who asked, and what allowing means.
   let state: OnboardingAllowScreenState
-  /// The line under what allowing means.
+  /// The status under what allowing means while Allow runs or failed.
   let note: WorkNote
 
-  /// The asking account handing over to Atlas, what it means, the work note and how to undo it.
+  /// The pairing, what allowing means, the status and how to undo it.
   var body: some View {
     ScrollColumn(width: OnboardingLayout.column) {
       OnboardingHeader(
@@ -16,18 +17,14 @@ struct AllowScreen: View {
         tail: OnboardingScreen.allowTail,
         lede: state.lede
       ) {
-        HStack(spacing: Spacing.mPlus) {
-          Disc(content: .letter(state.initial), tone: .avatar, size: .large)
-          Image(systemName: "arrow.right")
-            .foregroundStyle(Color.textTertiary)
-          AppIcon(size: OnboardingLayout.allowIcon)
-        }
-        .accessibilityHidden(true)
+        AllowPairing(initial: state.initial)
       }
     } bottom: {
-      WorkNoteLine(note: note)
-        .padding(.top, OnboardingLayout.Rhythm.content)
-        .pagePiece(.status)
+      if let status = StatusLine(note: note) {
+        status
+          .padding(.top, OnboardingLayout.Rhythm.content)
+          .pagePiece(.status)
+      }
       Note(text: "Atlas can be removed from both accounts at any time.")
         .padding(.top, OnboardingLayout.Rhythm.status)
         .pagePiece(.status)

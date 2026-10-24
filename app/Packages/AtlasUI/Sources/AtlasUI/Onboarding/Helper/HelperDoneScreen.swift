@@ -1,13 +1,14 @@
 import SwiftUI
 
-/// In the helper: set up, so the person switches back to their own account. Switch Back is the footer's.
+/// In the helper: set up, so the person switches back to their own account, under the success hero whose check draws
+/// itself once (v3 D5, S8). Switch Back is the footer's.
 struct HelperDoneScreen: View {
   /// Who to switch back to.
   let state: OnboardingHelperDoneScreenState
-  /// The line under what happens from now on.
+  /// The status under what happens from now on while Switch Back runs or failed.
   let note: WorkNote
 
-  /// A check, what happens from now on, the work note and what Switch Back does.
+  /// The success hero, what happens from now on, the status and what Switch Back does.
   var body: some View {
     ScrollColumn(width: OnboardingLayout.column) {
       OnboardingHeader(
@@ -16,12 +17,14 @@ struct HelperDoneScreen: View {
         lede:
           "You won't need to set anything up here again. Atlas starts in this account by itself whenever it is logged in, and finishes setting up in your own account."
       ) {
-        CheckMark(size: IconSize.xxl)
+        HeroDisc(kind: .success)
       }
     } bottom: {
-      WorkNoteLine(note: note)
-        .padding(.top, OnboardingLayout.Rhythm.content)
-        .pagePiece(.status)
+      if let status = StatusLine(note: note) {
+        status
+          .padding(.top, OnboardingLayout.Rhythm.content)
+          .pagePiece(.status)
+      }
       Note(text: "Locks this account and opens the lock screen.")
         .padding(.top, OnboardingLayout.Rhythm.status)
         .pagePiece(.status)

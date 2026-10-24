@@ -28,6 +28,9 @@ public enum Motion {
     static let drawDelay = Duration(seconds: 0.08)
     /// 0.1: a button press.
     static let press = Duration(seconds: 0.1)
+    /// 0.1: a window's content fading out before the window glides to a new place and size, so nothing reflows on
+    /// the way (v3 S7, X13); AppKit reads it.
+    public static let contentOut = Duration(seconds: 0.1)
     /// 0.12: a fill or a reveal answering the pointer arriving (v3 `Motion.hover`, in).
     static let hoverIn = Duration(seconds: 0.12)
     /// 0.12: a pane leaving as another takes its place (v3 G2, X2).
@@ -121,6 +124,10 @@ public enum Motion {
   /// The setup window's glide curve: it starts at once and lands softly (v3 S7, X13), as a cubic Bézier's two
   /// control points, for `CAMediaTimingFunction(controlPoints:)`.
   public static let glideSoftCurve = (x1: Float(0.25), y1: Float(1), x2: Float(0.5), y2: Float(1))
+
+  /// 0.8: how far through a glide the window's content starts fading back in, over ``Duration/fade`` (v3 S7: "in
+  /// 0.2 s at 80%").
+  public static let glideReveal = 0.8
 
   /// A window's resize curve: it leaves its start gently and settles softly (v3 G2, X2), as a cubic Bézier's two
   /// control points, for `CAMediaTimingFunction(controlPoints:)`.

@@ -31,7 +31,10 @@
       ("08-helper-allow", PreviewStates.onboardingAllow),
       ("08-helper-allow-long", PreviewStates.onboardingAllowLong),
       ("09-helper-permissions", PreviewStates.onboardingPermissions),
+      ("09-helper-permissions-start", PreviewStates.onboardingPermissionsStart),
+      ("09-helper-permissions-checking", PreviewStates.onboardingPermissionsChecking),
       ("10-helper-permission-panel", PreviewStates.onboardingPermissionPanel),
+      ("10-helper-permission-panel-allowed", PreviewStates.onboardingPermissionPanelAllowed),
       ("11-helper-done", PreviewStates.onboardingHelperDone),
       ("12-blocked", PreviewStates.onboardingBlocked),
     ]

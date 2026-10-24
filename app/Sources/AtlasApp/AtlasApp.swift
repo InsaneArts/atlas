@@ -31,7 +31,7 @@ enum AtlasApp {
       OnboardingAlone.run(commands: configuration.commands, loginItem: loginItem, clock: clock)
     #if DEBUG
       case .renderOnboarding(let folder):
-        drawPreviews { OnboardingRender.draw(to: folder) }
+        drawPreviews { OnboardingRender.draw(to: folder) && DockedRender.draw(to: folder) }
       case .renderViewer(let folder):
         drawPreviews {
           ViewerRender.draw(to: folder) && ComponentRender.draw(to: folder + "/components")

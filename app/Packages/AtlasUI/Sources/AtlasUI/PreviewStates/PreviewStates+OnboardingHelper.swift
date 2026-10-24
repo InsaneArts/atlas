@@ -21,6 +21,36 @@
       isBusy: false
     )
 
+    /// In the helper: neither permission on yet, Accessibility first.
+    @MainActor public static let onboardingPermissionsStart = OnboardingState(
+      content: .screen(
+        .permissions(
+          OnboardingPermissionsScreenState(
+            accessibility: onboardingAccessibilityOff,
+            screenRecording: onboardingScreenRecordingWaiting
+          )
+        )
+      ),
+      footer: OnboardingFooterState(track: onboardingTrack(1, of: 3)),
+      note: .none,
+      isBusy: false
+    )
+
+    /// In the helper: both permissions being checked while Atlas's job restarts.
+    @MainActor public static let onboardingPermissionsChecking = OnboardingState(
+      content: .screen(
+        .permissions(
+          OnboardingPermissionsScreenState(
+            accessibility: onboardingPermissionChecking("accessibility", "Accessibility"),
+            screenRecording: onboardingPermissionChecking("screenRecording", "Screen & System Audio Recording")
+          )
+        )
+      ),
+      footer: OnboardingFooterState(track: onboardingTrack(1, of: 3)),
+      note: .none,
+      isBusy: false
+    )
+
     /// In the helper: both permissions on.
     @MainActor public static let onboardingHelperDone = OnboardingState(
       content: .screen(.helperDone(onboardingHelperDoneScreen)),

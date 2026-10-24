@@ -13,7 +13,7 @@ import SwiftUI
       form: Binding<OnboardingAccountForm>,
       send: @escaping @MainActor (OnboardingEvent) -> Void
     ) {
-      self.init(state: state, form: form, dragIcon: AppIcon(size: OnboardingLayout.dragIcon), send: send)
+      self.init(state: state, form: form, dragIcon: .dragSample, send: send)
     }
   }
 #endif

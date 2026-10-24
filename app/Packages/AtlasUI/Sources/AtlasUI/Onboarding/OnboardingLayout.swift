@@ -23,20 +23,18 @@ public enum OnboardingLayout {
   static let barInset: CGFloat = 20
   /// 20: the helper's work note's least height, so the screen does not jump as it comes and goes.
   static let workNoteHeight: CGFloat = 20
-  /// 44: above the permission panel's content, clear of the title bar.
-  static let panelTop: CGFloat = 44
-  /// 18: below the permission panel's content.
-  static let panelBottom: CGFloat = 18
   /// 88: the app icon's visible tile on the welcome screen (v3 B1, C-T1).
   static let welcomeTile: CGFloat = 88
   /// 80: the app icon's visible tile on the done screen (v3 S8, C-T1).
   static let doneTile: CGFloat = 80
-  /// 72: the app icon on the helper's allow screen.
-  static let allowIcon: CGFloat = 72
-  /// 72: Atlas's icon in the permission panel, dragged into System Settings.
-  static let dragIcon: CGFloat = 72
-  /// 30: the hand carrying the drag ghost.
-  static let ghostHand: CGFloat = 30
+  /// 312: the permission panel's one column beside System Settings (v3 `.win2.side .col2`).
+  static let sideColumn: CGFloat = 312
+  /// 48: Atlas's visible tile in the helper's allow pairing, the asking account's avatar's size (v3 `.pairing`).
+  static let pairingTile: CGFloat = 48
+  /// 64: Atlas's visible tile in the permission panel, dragged into System Settings, and the drag ghost's.
+  static let dragTile: CGFloat = 64
+  /// 26: the hand carrying the drag ghost, twice a control's symbol.
+  static let ghostHand = SymbolScale.control.pointSize * 2
   /// The hand's symbol font, at ``ghostHand``: a symbol of its own size, not text on the type scale.
   static let ghostHandFont = Font.system(size: ghostHand)
   /// 14: how far past the ghost's icon, right and down, the hand holds it.

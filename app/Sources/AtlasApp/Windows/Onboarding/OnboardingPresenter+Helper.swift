@@ -27,7 +27,8 @@ extension OnboardingPresenter {
     )
   }
 
-  /// One permission as its row shows it, named as this Mac's System Settings names it.
+  /// One permission as its row shows it, named as this Mac's System Settings names it; while it cannot be read, it is
+  /// being checked, never off.
   ///
   /// - Parameters:
   ///   - permission: The permission.
@@ -42,7 +43,8 @@ extension OnboardingPresenter {
       isOn: on,
       status: status(on: on, known: asker.permissionsKnown),
       allowTitle: OnboardingWords.allowButton,
-      canAllow: asker.permissionsKnown && Permission.toGuide(after: nil, asker: asker) == permission
+      canAllow: asker.permissionsKnown && Permission.toGuide(after: nil, asker: asker) == permission,
+      isKnown: asker.permissionsKnown
     )
   }
 

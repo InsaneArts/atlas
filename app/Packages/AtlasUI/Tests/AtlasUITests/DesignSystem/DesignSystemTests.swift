@@ -118,7 +118,7 @@ struct DesignSystemTests {
         "duration",
         [
           Motion.Duration.stagger, Motion.Duration.crossfadeDelay, Motion.Duration.pageDelay,
-          Motion.Duration.drawDelay, Motion.Duration.press, Motion.Duration.hoverIn,
+          Motion.Duration.drawDelay, Motion.Duration.press, Motion.Duration.contentOut, Motion.Duration.hoverIn,
           Motion.Duration.crossfadeOut, Motion.Duration.step, Motion.Duration.crossfadeReduced,
           Motion.Duration.dismiss, Motion.Duration.followUp,
           Motion.Duration.leave, Motion.Duration.fade, Motion.Duration.hoverOut, Motion.Duration.reduced,

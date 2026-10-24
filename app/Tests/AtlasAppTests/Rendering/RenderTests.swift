@@ -39,6 +39,22 @@
       }
     }
 
+    @Test("every docked render draws the panel beside System Settings, the ghost over both")
+    func everyDockedRenderDraws() throws {
+      let directory = try Self.directory()
+      defer {
+        try? FileManager.default
+          .removeItem(at: directory)
+      }
+      #expect(DockedRender.draw(to: directory.path))
+      for render in DockedRender.renders {
+        let file = directory.appendingPathComponent("\(render.file).png")
+        let image = try #require(NSBitmapImageRep(data: Data(contentsOf: file)), "\(render.file) was not drawn")
+        #expect(image.pixelsWide == Int(DockedRender.size.width) * PNG.scale, "\(render.file)")
+        #expect(image.pixelsHigh == Int(DockedRender.size.height) * PNG.scale, "\(render.file)")
+      }
+    }
+
     // One case a render, so drawing them, about a second each with their frosted chips and alerts, never holds
     // the main actor long enough to starve another suite's wait.
     @Test("every main window render draws at the boards' window size", arguments: await ViewerRender.names)

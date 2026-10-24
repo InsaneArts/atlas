@@ -27,7 +27,7 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case reload = "arrow.clockwise"
   /// The previous screenshot.
   case back = "chevron.left"
-  /// The next screenshot.
+  /// The next screenshot, and the helper's allow pairing: the asking account handing over to Atlas.
   case next = "chevron.right"
   /// Copy.
   case copy = "doc.on.doc"
@@ -73,4 +73,10 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case lock
   /// A popup button's choices (v3 `.popup`).
   case popup = "chevron.up.chevron.down"
+  /// Screen Recording: the area a screenshot takes.
+  case screenArea = "rectangle.dashed"
+  /// The drag ghost's hand, its edge.
+  case hand = "hand.point.up.left"
+  /// The drag ghost's hand, its fill.
+  case handFill = "hand.point.up.left.fill"
 }

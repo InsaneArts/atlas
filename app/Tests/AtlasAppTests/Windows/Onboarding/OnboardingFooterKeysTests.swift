@@ -20,10 +20,12 @@
         case .loading(problem: nil), .permissionPanel:
           #expect(state.footer.next == nil, "\(preview.name)")
           #expect(pressed.isEmpty, "\(preview.name)")
-        case .screen(.permissions):
-          // Each row keeps its own Allow… (Q-D3), and Return allows the next permission, as it always has.
+        case .screen(.permissions(let screen)):
+          // Each row keeps its own Allow… (Q-D3), and Return allows the next permission, as it always has; nothing
+          // while both are being checked.
           #expect(state.footer.next == nil, "\(preview.name)")
-          #expect(pressed == [.openSettings(id: "screenRecording")], "\(preview.name)")
+          let next = [screen.accessibility, screen.screenRecording].first { $0.canAllow && !$0.isOn }
+          #expect(pressed == (next.map { [.openSettings(id: $0.id)] } ?? []), "\(preview.name)")
         case .loading, .screen:
           let next = try #require(state.footer.next, "\(preview.name) has no main action")
           let presses = next.isEnabled && next.isDefault

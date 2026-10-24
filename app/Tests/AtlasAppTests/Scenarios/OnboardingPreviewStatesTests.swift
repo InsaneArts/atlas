@@ -190,6 +190,10 @@
       allowLong.problem = "Atlas could not finish setting up here: the login item could not be added."
       var panel = loaded(try helperSide(accessibility: true))
       panel.guiding = .screenRecording
+      var panelAllowed = loaded(try helperSide(accessibility: true))
+      panelAllowed.guiding = .accessibility
+      var checkingFacts = try helperSide()
+      checkingFacts.asker.permissionsKnown = false
       let presented: [String: OnboardingSnapshot] = [
         "Loading": OnboardingSnapshot(),
         "Loading, failed": loadingFailed,
@@ -213,7 +217,10 @@
         "Done": done,
         "Helper allow": loaded(try helperSide(running: false)),
         "Helper allow, a long name": allowLong,
+        "Helper permissions, none yet": loaded(try helperSide()),
         "Helper permissions": loaded(try helperSide(accessibility: true)),
+        "Helper permissions, checking": loaded(checkingFacts),
+        "Helper permission panel, allowed": panelAllowed,
         "Helper permission panel": panel,
         "Helper done": loaded(try helperSide(accessibility: true, screen: true)),
         "Blocked": loaded(try person(installed: false)),

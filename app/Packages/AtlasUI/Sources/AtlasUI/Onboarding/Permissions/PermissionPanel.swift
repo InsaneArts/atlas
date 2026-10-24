@@ -1,0 +1,69 @@
+import SwiftUI
+
+/// The narrow window beside System Settings while one permission is allowed (v3's side panel, restyled for item 3):
+/// which permission, Atlas's icon in its well to drag into the list, what to do there and the way for Atlas listed
+/// already, both permissions as two steps on a rail, the one allowed now lit, and one status line: waiting for its
+/// switch, then Allowed. Back is the footer's, at its bottom left.
+struct PermissionPanel<DragIcon: View>: View {
+  /// The permission allowed now, and both permissions.
+  let state: OnboardingPermissionPanelState
+  /// Atlas's icon, which the person drags into System Settings: the app hands in its own, as no drag starts here.
+  let dragIcon: DragIcon
+
+  /// The label, the icon's well and the title, the two steps, then the status line.
+  var body: some View {
+    ScrollColumn(width: OnboardingLayout.sideColumn) {
+      OnboardingHeader(
+        label: state.label,
+        title: state.instruction,
+        lede: state.alreadyListed,
+        titleSize: .compact
+      ) {
+        DragWell(icon: dragIcon)
+      }
+      StepList(steps: Self.steps(state))
+        .padding(.top, OnboardingLayout.Rhythm.paragraph)
+        .pagePiece(.content)
+    } bottom: {
+      StatusLine(kind: state.isOn ? .done : .working, text: state.pill)
+        .padding(.top, OnboardingLayout.Rhythm.content)
+        .pagePiece(.status)
+    }
+    .padding(.top, OnboardingLayout.contentTop)
+  }
+
+  /// Accessibility, then Screen Recording, each under its name as this macOS names it: done once on, lit while it is
+  /// the one to allow, else waiting. As one turns on, its disc draws its check, the rail below turns green and the
+  /// next lights up a moment later (v3 S3), before its System Settings page opens.
+  ///
+  /// - Parameter state: The panel.
+  /// - Returns: The two steps.
+  static func steps(_ state: OnboardingPermissionPanelState) -> [StepList.Step] {
+    [
+      step(state.accessibility, detail: "Click, type, read buttons"),
+      step(state.screenRecording, detail: "Take screenshots"),
+    ]
+  }
+
+  /// One permission as a step.
+  ///
+  /// - Parameters:
+  ///   - permission: The permission.
+  ///   - detail: What it lets agents do, in a few words.
+  /// - Returns: The step.
+  private static func step(_ permission: OnboardingPermissionItem, detail: String) -> StepList.Step {
+    let state: StepState =
+      if permission.isOn { .done } else if permission.canAllow { .current } else { .waiting }
+    return StepList.Step(title: permission.title, detail: detail, state: state)
+  }
+}
+
+#if DEBUG
+  #Preview("Permission panel") {
+    PermissionPanel(
+      state: PreviewStates.onboardingPermissionPanelState,
+      dragIcon: AppIcon(tile: OnboardingLayout.dragTile)
+    )
+    .onboardingSample(OnboardingLayout.side)
+  }
+#endif

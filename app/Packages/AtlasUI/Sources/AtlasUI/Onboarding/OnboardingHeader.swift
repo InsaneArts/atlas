@@ -17,6 +17,8 @@ struct OnboardingHeader<Hero: View>: View {
   private let lede: String?
   /// Whether a new title replaces the last with a blur, on a screen whose title changes in place.
   private let swapsTitle: Bool
+  /// How large the title is: a screen's, or the narrow permission panel's.
+  private let titleSize: Headline.Size
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   /// Creates a screen's header with a hero.
@@ -27,6 +29,7 @@ struct OnboardingHeader<Hero: View>: View {
   ///   - tail: The title's quieter second line, if any.
   ///   - lede: The paragraph under the title, if any.
   ///   - swapsTitle: Whether a new title replaces the last with a blur; false by default.
+  ///   - titleSize: How large the title is; a screen's by default.
   ///   - hero: The icon, pairing or mark above the title.
   init(
     label: String? = nil,
@@ -34,6 +37,7 @@ struct OnboardingHeader<Hero: View>: View {
     tail: String? = nil,
     lede: String? = nil,
     swapsTitle: Bool = false,
+    titleSize: Headline.Size = .hero,
     @ViewBuilder hero: () -> Hero
   ) {
     self.hero = hero()
@@ -42,6 +46,7 @@ struct OnboardingHeader<Hero: View>: View {
     self.tail = tail
     self.lede = lede
     self.swapsTitle = swapsTitle
+    self.titleSize = titleSize
   }
 
   /// The hero, the label and the title, then the paragraph.
@@ -75,13 +80,13 @@ struct OnboardingHeader<Hero: View>: View {
   @ViewBuilder private var headline: some View {
     if swapsTitle {
       ZStack {
-        Headline(title: title, tail: tail)
+        Headline(title: title, tail: tail, size: titleSize)
           .id([title, tail])
           .transition(Motion.transition(AnyTransition(.blurReplace(.downUp)), reduceMotion: reduceMotion))
       }
       .animation(Motion.animation(Motion.state, reduceMotion: reduceMotion, reduced: Motion.reduced), value: title)
     } else {
-      Headline(title: title, tail: tail)
+      Headline(title: title, tail: tail, size: titleSize)
     }
   }
 }
@@ -102,6 +107,7 @@ extension OnboardingHeader where Hero == EmptyView {
     self.tail = tail
     self.lede = lede
     self.swapsTitle = swapsTitle
+    self.titleSize = .hero
   }
 }
 
@@ -123,7 +129,7 @@ extension OnboardingHeader where Hero == EmptyView {
       title: String("Let Christopher Alexander Montgomery-Smith use this account"),
       tail: String("through Atlas?")
     ) {
-      AppIcon(size: OnboardingLayout.allowIcon)
+      AppIcon(tile: OnboardingLayout.pairingTile)
     }
     .frame(width: SampleWidth.column)
     .sampleSurface()

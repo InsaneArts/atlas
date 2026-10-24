@@ -12,6 +12,8 @@ public struct OnboardingPermissionItem: Equatable, Sendable, Identifiable {
   public var allowTitle: String
   /// Whether it is the one to allow next, its button showing where the row takes a press.
   public var canAllow: Bool
+  /// Whether it was read: Atlas's job did not answer while it restarts, so it is being checked, never off.
+  public var isKnown: Bool
 
   /// Creates one permission as the helper shows it.
   ///
@@ -22,12 +24,22 @@ public struct OnboardingPermissionItem: Equatable, Sendable, Identifiable {
   ///   - status: Whether it is on, in words.
   ///   - allowTitle: The button that opens its switch in System Settings.
   ///   - canAllow: Whether it is the one to allow next.
-  public init(id: String, title: String, isOn: Bool, status: String, allowTitle: String, canAllow: Bool = false) {
+  ///   - isKnown: Whether it was read; true by default.
+  public init(
+    id: String,
+    title: String,
+    isOn: Bool,
+    status: String,
+    allowTitle: String,
+    canAllow: Bool = false,
+    isKnown: Bool = true
+  ) {
     self.id = id
     self.title = title
     self.isOn = isOn
     self.status = status
     self.allowTitle = allowTitle
     self.canAllow = canAllow
+    self.isKnown = isKnown
   }
 }
