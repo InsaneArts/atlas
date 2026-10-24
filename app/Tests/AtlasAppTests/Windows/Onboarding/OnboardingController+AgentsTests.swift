@@ -26,7 +26,7 @@ struct OnboardingControllerAgentsTests {
       commands.whileRunning { arguments in
         if arguments.starts(with: ["agents", "install"]) { await controller.close() }
       }
-      await controller.connectAgents()
+      await controller.connectAgents(controller.agentsSwitchedOn)
       #expect(commands.ran.contains(Action.installAgents([.claude]).arguments), "the running command settled")
       #expect(!controller.snapshot.choices.agentsDone, "the closed window moved on to nothing")
     }
@@ -96,14 +96,14 @@ struct OnboardingControllerAgentsTests {
     try await controller.whileOpen { _ in
       try await controller.untilLoaded()
       try await settle("the agents were never read") { controller.snapshot.agentsLoaded }
-      await controller.connectAgents()
+      await controller.connectAgents(controller.agentsSwitchedOn)
       #expect(commands.ran.contains(Action.installAgents([.claude, .codex]).arguments))
       #expect(controller.snapshot.problem == OnboardingWords.notConnected(.codex, "codex plugin install failed"))
       #expect(controller.snapshot.agents.first { $0.id == .claude }?.connected == true)
       #expect(!controller.snapshot.choices.agentsDone)
       // Codex switched off, Continue moves on without the failed install's note.
       controller.send(.setAgent(id: "codex", on: false))
-      await controller.connectAgents()
+      await controller.connectAgents(controller.agentsSwitchedOn)
       #expect(commands.ran.count { $0.starts(with: ["agents", "install"]) } == 1)
       #expect(controller.snapshot.problem == nil)
       #expect(controller.snapshot.choices.agentsDone)
@@ -143,7 +143,7 @@ struct OnboardingControllerAgentsTests {
       let connecting = Task { await settings.connect("codex") }
       try await settle("Settings' Connect never started") { installs.isBusy }
       #expect(onboarding.state.footer.next?.isEnabled == false, "Continue waits for the other window's install")
-      await onboarding.connectAgents()
+      await onboarding.connectAgents(onboarding.agentsSwitchedOn)
       #expect(onboarding.snapshot.problem == HelperWords.waitForAction)
       gate.open()
       await connecting.value
@@ -160,7 +160,7 @@ struct OnboardingControllerAgentsTests {
       try await controller.untilLoaded()
       try await settle("the failed agents reading was never shown") { controller.snapshot.agentsFailed }
       #expect(controller.snapshot.problem == OnboardingWords.agentsCheckFailed)
-      await controller.connectAgents()
+      await controller.connectAgents(controller.agentsSwitchedOn)
       #expect(!commands.ran.contains { $0.starts(with: ["agents", "install"]) })
       #expect(controller.snapshot.problem == nil)
       #expect(controller.snapshot.choices.agentsDone)
@@ -177,7 +177,7 @@ struct OnboardingControllerAgentsTests {
     try await controller.whileOpen { _ in
       try await controller.untilLoaded()
       try await settle("the agents were never read") { controller.snapshot.agentsLoaded }
-      await controller.connectAgents()
+      await controller.connectAgents(controller.agentsSwitchedOn)
       #expect(commands.ran.contains(Action.installAgents([.claude]).arguments))
       #expect(controller.snapshot.agents.first?.connected == true)
       #expect(controller.snapshot.problem == nil)
@@ -195,7 +195,7 @@ struct OnboardingControllerAgentsTests {
     try await controller.whileOpen { _ in
       try await controller.untilLoaded()
       try await settle("the agents were never read") { controller.snapshot.agentsLoaded }
-      await controller.connectAgents()
+      await controller.connectAgents(controller.agentsSwitchedOn)
       #expect(commands.ran.contains(Action.installAgents([.claude]).arguments))
       #expect(controller.snapshot.agents.allSatisfy { !$0.connected })
       #expect(!controller.snapshot.choices.agentsDone)
@@ -203,11 +203,15 @@ struct OnboardingControllerAgentsTests {
     }
   }
 
-  @Test("an event sent while a command runs waits its turn, then runs")
-  func anEventWaitsItsTurn() async throws {
+  @Test("Continue pressed while the agents are read waits its turn, then connects the agents switched on when pressed")
+  func continueWaitsItsTurn() async throws {
     let gate = ReleaseSignal()
     let commands = ScriptedCommands([
-      "onboarding status": OnboardingReplies.finishedMac, "agents status": Self.claudeFound,
+      "onboarding status": OnboardingReplies.finishedMac,
+      "agents status": """
+      {"ok": true, "agents": [{"agent": "claude", "installed": true, "connected": false},
+                              {"agent": "codex", "installed": true, "connected": false}]}
+      """,
       "agents install": #"{"ok": true}"#,
     ])
     commands.whileRunning { arguments in
@@ -217,13 +221,44 @@ struct OnboardingControllerAgentsTests {
     try await controller.whileOpen { _ in
       try await controller.untilLoaded()
       try await settle("the agents were never asked for") { commands.ran.contains(Action.agentsStatus.arguments) }
+      controller.send(.setAgent(id: "claude", on: true))
       controller.send(.connectAgents)
       await afterQueuedWork()
       #expect(!commands.ran.contains { $0.starts(with: ["agents", "install"]) }, "Continue waits for the reading")
-      #expect(!controller.snapshot.choices.agentsDone, "nor moves on without the agents it finds")
+      #expect(!controller.snapshot.choices.agentsDone, "nor moves on before it")
       gate.open()
       try await settle("Continue never ran") { controller.snapshot.choices.agentsDone }
-      #expect(commands.ran.contains(Action.installAgents([.claude]).arguments), "it connects what the reading found")
+      let installed = commands.ran.filter { $0.starts(with: ["agents", "install"]) }
+      #expect(installed == [Action.installAgents([.claude]).arguments], "Codex, found after the press, stays out")
+    }
+  }
+
+  @Test("skipping an agents check that failed connects nothing, even when the retry under way finds agents")
+  func skippingAFailedCheckConnectsNothing() async throws {
+    let gate = ReleaseSignal()
+    let commands = ScriptedCommands([
+      "onboarding status": OnboardingReplies.finishedMac, "agents install": #"{"ok": true}"#,
+    ])
+    let controller = OnboardingController.scripted(commands)
+    try await controller.whileOpen { _ in
+      try await controller.untilLoaded()
+      try await settle("the failed agents reading was never shown") { controller.snapshot.agentsFailed }
+      // The retry finds Claude Code, but only once Continue has been pressed to skip.
+      commands.answer("agents status", Self.claudeFound)
+      commands.whileRunning { arguments in
+        if arguments == Action.agentsStatus.arguments { await gate.wait() }
+      }
+      // The readings since the failure count up to the retry.
+      try await settle("the agents were never asked for again") {
+        controller.refresh()
+        return commands.ran.count { $0 == Action.agentsStatus.arguments } == 2
+      }
+      #expect(controller.state.footer.next?.isEnabled == true, "Continue skips the step")
+      controller.send(.connectAgents)
+      gate.open()
+      try await settle("Continue never ran") { controller.snapshot.choices.agentsDone }
+      #expect(controller.snapshot.agentsLoaded, "the retry landed first")
+      #expect(!commands.ran.contains { $0.starts(with: ["agents", "install"]) }, "the skip installed an agent")
     }
   }
 }

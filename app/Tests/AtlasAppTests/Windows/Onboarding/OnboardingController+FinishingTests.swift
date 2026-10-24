@@ -67,6 +67,23 @@ struct OnboardingControllerFinishingTests {
     }
   }
 
+  @Test("the passed check's Continue lights up and takes presses only once the pass has shown a moment")
+  func continueFollowsThePass() async throws {
+    let clock = ManualClock()
+    let commands = ScriptedCommands([
+      "onboarding status": OnboardingReplies.checkingMac, "onboarding finish": #"{"ok": true}"#,
+    ])
+    let controller = OnboardingController.scripted(commands, clock: clock)
+    try await controller.whileOpen { _ in
+      try await settle("the check never passed") { controller.snapshot.finish == .passed }
+      #expect(controller.state.footer.next?.isEnabled == false, "Continue waits while the pass shows")
+      try await clock.untilSleeping(for: OnboardingController.continueFollows, "Continue never waited")
+      clock.advance(by: OnboardingController.continueFollows)
+      try await settle("Continue never lit up") { controller.state.footer.next?.isEnabled == true }
+      #expect(controller.state.footer.next?.event == .continueFinishing)
+    }
+  }
+
   @Test("Done sets Open at Login and opens Atlas, then the window closes")
   func doneClosesTheWindow() async {
     let commands = ScriptedCommands(["onboarding login": #"{"ok": true}"#, "menubar": #"{"ok": true}"#])

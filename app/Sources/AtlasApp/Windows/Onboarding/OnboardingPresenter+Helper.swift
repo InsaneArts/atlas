@@ -73,22 +73,25 @@ extension OnboardingPresenter {
   }
 
   /// The panel beside System Settings while `permission` is allowed: which of how many, where to drag Atlas, the way
-  /// for Atlas listed already, both permissions, and its pill ticked once it is on.
+  /// for Atlas listed already, both permissions, and its pill ticked once it is on, or reading Checking… while the
+  /// permissions cannot be read, as Atlas's job restarts.
   ///
   /// - Parameters:
   ///   - permission: The permission allowed now.
   ///   - snapshot: What the controller holds.
   /// - Returns: The panel.
   static func panel(_ permission: Permission, snapshot: OnboardingSnapshot) -> OnboardingPermissionPanelState {
-    let on = permission.granted(to: snapshot.facts.asker)
+    let asker = snapshot.facts.asker
+    let on = permission.granted(to: asker)
     let title = permission.title(on: snapshot.macOS)
+    let waiting = asker.permissionsKnown ? OnboardingWords.waitingForSwitch : OnboardingWords.permissionUnknown
     return OnboardingPermissionPanelState(
       label: OnboardingWords.panelLabel(permission.number, of: Permission.allCases.count, title),
       instruction: OnboardingWords.dragInto(permission),
       alreadyListed: OnboardingWords.alreadyListed(permission),
       accessibility: item(.accessibility, snapshot: snapshot),
       screenRecording: item(.screenRecording, snapshot: snapshot),
-      pill: on ? OnboardingWords.permissionOn : OnboardingWords.waitingForSwitch,
+      pill: on ? OnboardingWords.permissionOn : waiting,
       isOn: on
     )
   }

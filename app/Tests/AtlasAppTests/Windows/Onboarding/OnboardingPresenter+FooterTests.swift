@@ -46,6 +46,8 @@ struct OnboardingPresenterFooterTests {
     finishing.finish = .running
     #expect(OnboardingPresenter.state(finishing).footer.next?.isEnabled == false)
     finishing.finish = .passed
+    #expect(OnboardingPresenter.state(finishing).footer.next?.isEnabled == false, "a moment after it passes")
+    finishing.passSettled = true
     let passed = try #require(OnboardingPresenter.state(finishing).footer.next)
     #expect(passed.isEnabled && !passed.isDefault, "Return does not skip the check's result")
     var agents = Samples.snapshot(try Samples.person(Samples.helper(), finished: true))

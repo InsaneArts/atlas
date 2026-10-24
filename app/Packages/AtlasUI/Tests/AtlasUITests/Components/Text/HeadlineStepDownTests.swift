@@ -4,7 +4,8 @@ import Testing
 
 @testable import AtlasUI
 
-/// Here, not in AtlasUI's tests, because measuring laid-out text needs AppKit, which AtlasUI never imports.
+/// Measures laid-out text through AppKit's hosting view, which only this test target imports: AtlasUI itself never
+/// does.
 @MainActor
 @Suite("Headline step down")
 struct HeadlineStepDownTests {

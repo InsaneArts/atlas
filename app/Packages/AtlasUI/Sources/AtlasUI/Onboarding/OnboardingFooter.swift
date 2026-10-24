@@ -48,22 +48,20 @@ struct OnboardingFooter: View {
           .id(action.event)
           // Only opacity changes, so Reduce Motion keeps it.
           .transition(.opacity.animation(Motion.fade))
-          .animation(Self.enabling(action, reduceMotion: reduceMotion), value: action.isEnabled)
+          .animation(Self.enabling(reduceMotion: reduceMotion), value: action.isEnabled)
       }
     }
     .frame(maxWidth: .infinity, alignment: alignment)
   }
 
-  /// How a button lights up or waits: a moment after the success it follows (``Motion/followUp``), else at once
-  /// (``Motion/state``); under Reduce Motion, a short fade at once.
+  /// How a button lights up or waits: at once (``Motion/state``), the moment its state says it can be pressed, so it
+  /// never looks unlike what a press does; under Reduce Motion, a short fade. A button that follows a success, such as
+  /// Continue once the check passes, is held back by its state, not here (v3 S5).
   ///
-  /// - Parameters:
-  ///   - action: The button.
-  ///   - reduceMotion: Whether the Reduce Motion setting is on.
+  /// - Parameter reduceMotion: Whether the Reduce Motion setting is on.
   /// - Returns: The animation for a change to whether it can be pressed.
-  nonisolated static func enabling(_ action: OnboardingFooterAction, reduceMotion: Bool) -> Animation {
-    let moving = action.followsSuccess && action.isEnabled ? Motion.followUp : Motion.state
-    return Motion.animation(moving, reduceMotion: reduceMotion, reduced: Motion.reduced)
+  nonisolated static func enabling(reduceMotion: Bool) -> Animation {
+    Motion.animation(Motion.state, reduceMotion: reduceMotion, reduced: Motion.reduced)
   }
 
   /// A footer button: plain on the left, filled on the right. Escape presses Back; Return presses the main action

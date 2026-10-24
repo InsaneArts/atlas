@@ -33,8 +33,9 @@ struct PermissionPanel<DragIcon: View>: View {
   }
 
   /// Accessibility, then Screen Recording, each under its name as this macOS names it: done once on, lit while it is
-  /// the one to allow, else waiting. As one turns on, its disc draws its check, the rail below turns green and the
-  /// next lights up a moment later (v3 S3), before its System Settings page opens.
+  /// the one to allow, else waiting, and reading Checking… in place of what it lets agents do while it cannot be read.
+  /// As one turns on, its disc draws its check, the rail below turns green and the next lights up a moment later (v3
+  /// S3), before its System Settings page opens.
   ///
   /// - Parameter state: The panel.
   /// - Returns: The two steps.
@@ -54,7 +55,8 @@ struct PermissionPanel<DragIcon: View>: View {
   private static func step(_ permission: OnboardingPermissionItem, detail: String) -> StepList.Step {
     let state: StepState =
       if permission.isOn { .done } else if permission.canAllow { .current } else { .waiting }
-    return StepList.Step(title: permission.title, detail: detail, state: state)
+    let checking = !permission.isOn && !permission.isKnown
+    return StepList.Step(title: permission.title, detail: checking ? permission.status : detail, state: state)
   }
 }
 

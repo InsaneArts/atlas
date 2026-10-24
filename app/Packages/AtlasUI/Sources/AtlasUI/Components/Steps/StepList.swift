@@ -3,28 +3,6 @@ import SwiftUI
 /// Numbered steps in one group (v3 D6): each a ``StepRow``, joined by a rail that turns green below each finished step
 /// (v3 S3, X8).
 struct StepList: View {
-  /// One step's words and where it stands.
-  struct Step: Equatable, Sendable {
-    /// What to do.
-    let title: String
-    /// Where or how.
-    let detail: String
-    /// Where the step stands.
-    let state: StepState
-  }
-
-  /// One step placed in the list: its number, and where its neighbours put the rail.
-  struct Placed: Identifiable, Equatable, Sendable {
-    /// Its number, from 1, which is also its identity.
-    let id: Int
-    /// The step.
-    let step: Step
-    /// Where the step above stands; nil for the first.
-    let above: StepState?
-    /// Whether a step follows.
-    let continues: Bool
-  }
-
   /// The steps, in order.
   let steps: [Step]
 

@@ -46,6 +46,22 @@ extension OnboardingController {
     return try await body(running)
   }
 
+  /// Waits, a turn of the main actor at a time, for the queue to take the request just sent, and returns its work
+  /// before it begins: the queue starts that work as a main-actor job of its own, queued behind the turn the test
+  /// takes next, so the test acts between the taking and the start.
+  ///
+  /// - Parameter sourceLocation: Where a failure is reported: the caller's line.
+  /// - Returns: The request's work, not yet begun.
+  /// - Throws: The failed requirement, when the queue never takes it.
+  func untilTaken(sourceLocation: SourceLocation = #_sourceLocation) async throws -> Task<Void, Never> {
+    // Far more turns than the queue needs: it takes a request in the turn after it was sent.
+    for _ in 0..<100 {
+      if let performing { return performing.work }
+      await Task.yield()
+    }
+    return try #require(performing?.work, "the queue never took the request", sourceLocation: sourceLocation)
+  }
+
   /// Waits for the window's first reading of the facts to land.
   ///
   /// - Parameter sourceLocation: Where a failure is reported: the caller's line.

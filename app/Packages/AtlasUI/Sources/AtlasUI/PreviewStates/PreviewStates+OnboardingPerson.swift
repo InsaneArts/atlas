@@ -50,13 +50,7 @@
     @MainActor public static let onboardingFinishing = OnboardingState(
       content: .screen(.finishing(onboardingFinishingScreen)),
       footer: OnboardingFooterState(
-        next: OnboardingFooterAction(
-          title: .continue,
-          event: .continueFinishing,
-          isEnabled: false,
-          isDefault: false,
-          followsSuccess: true
-        ),
+        next: OnboardingFooterAction(title: .continue, event: .continueFinishing, isEnabled: false, isDefault: false),
         track: onboardingTrack(3, of: 6)
       ),
       note: .none

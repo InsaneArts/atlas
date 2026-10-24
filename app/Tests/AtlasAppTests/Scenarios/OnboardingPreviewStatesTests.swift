@@ -163,6 +163,7 @@
       finishing.finish = .running
       var passed = finishing
       passed.finish = .passed
+      passed.passSettled = true
       var failed = finishing
       failed.finish = .failed("The test screenshot never arrived.")
       var agents = loaded(try person(helper(), finished: true))

@@ -56,12 +56,14 @@ struct OnboardingPresenterHelperTests {
     #expect(!screen.screenRecording.canAllow, "nothing to allow while it is unknown")
     #expect(!screen.screenRecording.isKnown)
     #expect(screen.screenRecording.status == "Checking…")
+    let standing = OnboardingPermissionStanding.of(screen.screenRecording, offersAllow: true)
+    #expect(standing == .checking("Checking…"), "its row shows a spinner and Checking…")
     let panel = OnboardingPresenter.panel(.screenRecording, snapshot: snapshot)
-    for (permission, offersAllow) in [(screen.screenRecording, true), (panel.screenRecording, false)] {
-      let standing = OnboardingPermissionStanding.of(permission, offersAllow: offersAllow)
-      #expect(standing == .checking("Checking…"), "its row shows a spinner and Checking…")
-      #expect(standing != .off("Off"))
-    }
+    #expect(panel.pill == "Checking…", "the panel never says it waits for a switch it cannot read")
+    #expect(!panel.isOn)
+    #expect(!panel.screenRecording.isKnown && panel.screenRecording.status == "Checking…")
+    let read = OnboardingPresenter.panel(.screenRecording, snapshot: Samples.snapshot(try Samples.helperSide()))
+    #expect(read.pill == "Waiting for the switch…", "a permission read as off waits for its switch")
     #expect(
       OnboardingPermissionStanding.of(screen.accessibility, offersAllow: true) == .allowed("Allowed"),
       "one known to be on stays Allowed"

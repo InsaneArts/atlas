@@ -21,6 +21,9 @@ struct OnboardingSnapshot {
   var form = OnboardingAccountForm()
   /// Where the end-to-end check stands.
   var finish = FinishCheck.idle
+  /// Whether the passed check has shown for ``OnboardingController/continueFollows``, so its Continue lights up and
+  /// takes presses (v3 S5).
+  var passSettled = false
   /// The agents, as reported and switched.
   var agents: [AgentChoice] = []
   /// Whether `atlas agents status` has said which agents are installed.

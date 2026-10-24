@@ -3,7 +3,8 @@ import SwiftUI
 /// A centred column of one width, its pieces stacked with no gaps of their own: each piece brings its own space above
 /// it, as its window's rhythm says. While everything fits, the column sits in the middle; when it is taller than its
 /// room, as a long account name or a long problem can make it, the pieces scroll under a 24-point fade (v3 D9) and the
-/// bottom stays pinned under them, so a problem is never out of sight.
+/// bottom stays pinned under them, so a problem is never out of sight. Its page arrives once for both
+/// arrangements (``PageArrivalScope``), so its pieces stay shown as it starts or stops scrolling.
 struct ScrollColumn<Content: View, Bottom: View>: View {
   /// The column's widest.
   private let width: CGFloat
@@ -30,6 +31,8 @@ struct ScrollColumn<Content: View, Bottom: View>: View {
       fitting
       scrolling
     }
+    // Above the choice, which draws the pieces once in each arrangement.
+    .modifier(PageArrivalScope())
   }
 
   /// The pieces over the bottom, centred.

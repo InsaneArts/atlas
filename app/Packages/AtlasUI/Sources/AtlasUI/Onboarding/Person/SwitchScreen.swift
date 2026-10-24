@@ -18,7 +18,7 @@ struct SwitchScreen: View {
     } bottom: {
       if let status {
         status
-          .lineLimit(OnboardingLayout.nameLines)
+          .lineLimit(Self.statusLines(state))
           .truncationMode(.middle)
           .padding(.top, OnboardingLayout.Rhythm.content)
           .pagePiece(.status)
@@ -30,6 +30,15 @@ struct SwitchScreen: View {
   private var status: StatusLine? {
     guard let waiting = state.waiting else { return StatusLine(note: note) }
     return StatusLine(kind: .working, text: waiting)
+  }
+
+  /// How many lines the status line may take: two at most for what happens next, which names the helper and is cut in
+  /// its middle; as many as a work note needs, so a failure never loses its cause or what to do.
+  ///
+  /// - Parameter state: The switch screen.
+  /// - Returns: The most lines, or nil for no limit.
+  static func statusLines(_ state: OnboardingSwitchScreenState) -> Int? {
+    state.waiting == nil ? nil : OnboardingLayout.nameLines
   }
 
   /// Lock and switch, Atlas opening there, and allowing it, each where the helper's progress puts it.

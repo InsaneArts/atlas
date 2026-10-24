@@ -117,14 +117,13 @@ extension OnboardingPresenter {
       if case .failed = snapshot.finish {
         return OnboardingFooterState(next: main(.tryAgain, .retryFinish, isEnabled: true), track: step.track)
       }
-      // Return never presses it, so a press meant for the check never skips past its result. It lights up a moment
-      // after the check passes (v3 S5).
+      // Return never presses it, so a press meant for the check never skips past its result. It lights up, and takes
+      // presses, a moment after the check passes (v3 S5).
       let next = OnboardingFooterAction(
         title: .continue,
         event: .continueFinishing,
-        isEnabled: snapshot.finish == .passed,
-        isDefault: false,
-        followsSuccess: true
+        isEnabled: snapshot.finish == .passed && snapshot.passSettled,
+        isDefault: false
       )
       return OnboardingFooterState(next: next, track: step.track)
     case .agents:

@@ -31,32 +31,49 @@ struct WindowGlideTests {
 
   @Test("a move reads Reduce Motion as it starts, and counts as gliding until it lands")
   func aMoveFollowsReduceMotion() {
-    let window = NSWindow(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: true)
-    window.isReleasedWhenClosed = false
-    /// The person's setting, which the test turns off between moves, and the moves asked for.
-    final class Record {
-      var reduced = true
-      var steps: [GlideSteps] = []
-      var landings: [@MainActor () -> Void] = []
-    }
-    let record = Record()
-    let glide = WindowGlide(
-      window: window,
-      reduceMotion: { record.reduced },
-      animate: { _, _, steps, landed in
-        record.steps.append(steps)
-        record.landings.append(landed)
-      }
-    )
+    let window = Self.window()
+    let glides = HeldGlides()
+    var reduced = true
+    let glide = WindowGlide(window: window, reduceMotion: { reduced }, motion: glides.motion)
     let target = NSRect(x: 40, y: 60, width: 300, height: 200)
     glide.move(to: target)
-    #expect(record.steps.last?.fading == .window)
+    #expect(window.alphaValue == 0, "the whole window fades out")
     #expect(glide.isGliding)
-    record.landings.removeFirst()()
+    glides.endAll()
+    #expect(window.frame == target)
+    #expect(window.alphaValue == 1, "and back in once it has landed")
     #expect(!glide.isGliding)
-    record.reduced = false
-    glide.move(to: target.offsetBy(dx: 100, dy: 0))
-    #expect(record.steps.last?.fading == .content, "the borderless window starts at no size, so this one resizes")
+    reduced = false
+    glide.move(to: NSRect(x: 40, y: 60, width: 360, height: 240))
+    #expect(glides.contentFades == [0], "a move that resizes fades the content, not the window")
     #expect(glide.isGliding)
+  }
+
+  @Test("Back during a move's fade out lands the window where Back asked, with its content shown")
+  func aNewerMoveSupersedesTheOneUnderWay() {
+    let card = NSRect(x: 40, y: 60, width: 300, height: 200)
+    let panel = NSRect(x: 400, y: 60, width: 200, height: 400)
+    let window = Self.window(card)
+    let glides = HeldGlides()
+    let glide = WindowGlide(window: window, reduceMotion: { false }, motion: glides.motion)
+    glide.move(to: panel)
+    // Back while the content fades out: the window is still the card's size, so this move glides alone.
+    glide.move(to: card)
+    // The first move's fade out ends after Back's move began.
+    glides.endAll()
+    #expect(glides.travels == [card], "the superseded move never travelled")
+    #expect(window.frame == card)
+    #expect(window.contentView?.alphaValue == 1, "the content the first move faded out shows again")
+    #expect(!glide.isGliding)
+  }
+
+  /// A borderless window that is never shown, at `frame`.
+  ///
+  /// - Parameter frame: Where it is.
+  /// - Returns: The window.
+  private static func window(_ frame: NSRect = .zero) -> NSWindow {
+    let window = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: true)
+    window.isReleasedWhenClosed = false
+    return window
   }
 }

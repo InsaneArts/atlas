@@ -1,10 +1,11 @@
+import AtlasCommands
 import AtlasOnboarding
 
 /// One thing the setup window does in its queue, which ``OnboardingController/run()`` performs in order, one at a time
 /// (`OnboardingController+Queue`): the person's actions, the check and the agents reading a step starts by itself, and
 /// item 3's permission panel. A reading, ``refresh``, never waits in the queue: the reading loop takes it at once.
 ///
-/// A request already waiting or under way is not queued again.
+/// A request already waiting or under way is not queued again (``repeats(_:)``).
 nonisolated enum OnboardingRequest: Hashable, Sendable {
   /// Continue on the account choice: the form for a new account, else the picked account set up as the helper.
   case useHelper
@@ -15,7 +16,11 @@ nonisolated enum OnboardingRequest: Hashable, Sendable {
   /// Choose Another Account, while the helper asked never answered.
   case chooseAnother
   /// Continue on the agents: connect the chosen ones.
-  case connectAgents
+  ///
+  /// - Parameter chosen: The agents switched on when Continue was pressed. Only these are connected, so a reading
+  ///   that lands while Continue waits its turn, switching on the agents it finds, connects none the person did not
+  ///   choose, and a skipped step stays skipped.
+  case connectAgents(chosen: [AgentID])
   /// Done: Open at Login set, Atlas opened, the window closed.
   case complete
   /// Allow, in the helper: the account that asked.
@@ -37,6 +42,18 @@ nonisolated enum OnboardingRequest: Hashable, Sendable {
   ///
   /// - Parameter permission: The permission just turned on.
   case moveOn(from: Permission)
+
+  /// Whether it does what `other` does, so it is not queued while `other` waits or runs: the same request, or a second
+  /// Continue on the agents, whatever each had chosen.
+  ///
+  /// - Parameter other: The request waiting or under way.
+  /// - Returns: Whether it does.
+  func repeats(_ other: OnboardingRequest) -> Bool {
+    switch (self, other) {
+    case (.connectAgents, .connectAgents): true
+    default: self == other
+    }
+  }
 
   /// Whether Back stops it, waiting or under way: the lock's wait, which leaves nothing half done. A command that sets
   /// something up, an account, a helper, an install or the check, always runs to its end.

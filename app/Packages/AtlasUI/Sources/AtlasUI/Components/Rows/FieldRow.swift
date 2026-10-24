@@ -20,6 +20,9 @@ struct FieldRow: View {
   /// Called as the field takes or loses the focus, so the form knows where the person types.
   var focusChanged: @MainActor (Bool) -> Void = { _ in }
   @FocusState private var isFocused: Bool
+  /// ``isOtherFieldFocused`` as it is now, which the flag's deferred focus reads once its turn comes: the view value
+  /// the task captured holds it as it was when the flag arrived.
+  @State private var otherFieldFocusedNow = false
   @Environment(\.drawsListSeparator) private var drawsSeparator
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -53,11 +56,14 @@ struct FieldRow: View {
     .animation(Motion.animation(Motion.state, reduceMotion: reduceMotion, reduced: Motion.reduced), value: isFlagged)
     .animation(Motion.fade, value: isFocused)
     // The focus only takes once the field is in the window's focus system, a turn after it appears, so the flag
-    // moves it from a task tied to the flag, one turn later, never at once.
+    // moves it from a task tied to the flag, one turn later, never at once. A flag cleared during that turn cancels
+    // the task, and a field the person focused during it keeps the focus.
     .task(id: isFlagged) {
       await Task.yield()
-      if Self.takesFocus(isFlagged: isFlagged, isOtherFieldFocused: isOtherFieldFocused) { isFocused = true }
+      guard !Task.isCancelled else { return }
+      if Self.takesFocus(isFlagged: isFlagged, isOtherFieldFocused: otherFieldFocusedNow) { isFocused = true }
     }
+    .onChange(of: isOtherFieldFocused, initial: true) { _, focused in otherFieldFocusedNow = focused }
     .onChange(of: isFocused) { _, focused in focusChanged(focused) }
   }
 

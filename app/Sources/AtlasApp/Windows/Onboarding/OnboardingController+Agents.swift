@@ -46,9 +46,21 @@ extension OnboardingController {
     snapshot.agents[index].on = on
   }
 
-  /// Connects the chosen agents. Agents that cannot be connected are each named with why, and the window stays.
-  func connectAgents() async {
+  /// The agents switched on now, in the screen's order: what Continue chooses as it is pressed.
+  var agentsSwitchedOn: [AgentID] {
+    snapshot.agents
+      .filter(\.on)
+      .map(\.id)
+  }
+
+  /// Connects the agents chosen as Continue was pressed that still need connecting now. Agents that cannot be
+  /// connected are each named with why, and the window stays.
+  ///
+  /// - Parameter switchedOn: The agents switched on when Continue was pressed (``agentsSwitchedOn``): one a reading
+  ///   switched on since is left out.
+  func connectAgents(_ switchedOn: [AgentID]) async {
     let chosen = AgentChoice.toConnect(snapshot.agents)
+      .filter(switchedOn.contains)
     if !chosen.isEmpty {
       let installs = dependencies.installs
       guard let outcome = await act(OnboardingWords.connecting, { await installs.install(chosen) }) else { return }

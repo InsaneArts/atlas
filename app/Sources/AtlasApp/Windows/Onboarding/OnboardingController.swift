@@ -29,6 +29,9 @@ final class OnboardingController {
   static let restartReadings = 20
   /// How long a permission just turned on shows its tick before the next one is allowed: 1.2 s.
   static let tickShown: Duration = .milliseconds(1200)
+  /// How long the passed check shows before its Continue lights up and takes presses: ``Motion/Duration/followUp``
+  /// (v3 S5).
+  static let continueFollows: Duration = .seconds(Motion.Duration.followUp.seconds)
 
   /// Everything the window shows, as one value. Whenever a change moves the window to another screen, the way it
   /// moved is kept with it (``OnboardingStep/direction(from:to:)``), so the screen slides in the way the person goes.
@@ -44,12 +47,16 @@ final class OnboardingController {
 
   /// What the controller reaches outside itself.
   @ObservationIgnored let dependencies: OnboardingDependencies
-  /// The queued requests, in order, for the queue in ``run()``.
-  @ObservationIgnored let requests: AsyncStream<OnboardingRequest>
-  /// Where the window queues a request.
-  @ObservationIgnored let queue: AsyncStream<OnboardingRequest>.Continuation
-  /// The requests queued and not yet started, so one already waiting is not queued twice, and Back can drop one.
-  @ObservationIgnored var pending: Set<OnboardingRequest> = []
+  /// The tickets of the queued requests, in order, for the queue in ``run()``.
+  @ObservationIgnored let requests: AsyncStream<Int>
+  /// Where the window queues a request's ticket.
+  @ObservationIgnored let queue: AsyncStream<Int>.Continuation
+  /// The requests queued and not yet started, by their tickets, so one already waiting is not queued twice, and Back
+  /// can drop one. Each queuing takes a ticket of its own, so a request dropped and queued again runs in its new place,
+  /// never its old one.
+  @ObservationIgnored var pending: [Int: OnboardingRequest] = [:]
+  /// The ticket the last queued request took.
+  @ObservationIgnored var lastTicket = 0
   /// The request the queue performs now, with its work, which Back can stop; nil between requests. Read by tests,
   /// which wait for its end.
   @ObservationIgnored var performing: (request: OnboardingRequest, work: Task<Void, Never>)?
@@ -77,7 +84,7 @@ final class OnboardingController {
   /// - Parameter dependencies: The `atlas` command line and the system pieces it reaches.
   init(dependencies: OnboardingDependencies) {
     self.dependencies = dependencies
-    let (requests, queue) = AsyncStream.makeStream(of: OnboardingRequest.self)
+    let (requests, queue) = AsyncStream.makeStream(of: Int.self)
     self.requests = requests
     self.queue = queue
   }
@@ -107,7 +114,7 @@ final class OnboardingController {
     case .checkAgain, .continueFinishing: enqueue(.refresh)
     case .retryFinish: retryFinish()
     case .setAgent(let id, let on): setAgent(id, on: on)
-    case .connectAgents: enqueue(.connectAgents)
+    case .connectAgents: enqueue(.connectAgents(chosen: agentsSwitchedOn))
     case .setOpenAtLogin(let on): snapshot.opensAtLogin = on
     case .complete: enqueue(.complete)
     case .allow: enqueue(.allow)

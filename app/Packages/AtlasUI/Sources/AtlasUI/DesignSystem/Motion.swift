@@ -42,9 +42,9 @@ public enum Motion {
     static let crossfadeReduced = Duration(seconds: 0.15)
     /// 0.15: an alert leaving, fading and shrinking a little (v3 A6).
     static let dismiss = Duration(seconds: 0.15)
-    /// 0.15: how long what follows a success waits: the ring after its tile, and Continue after the last check (v3
-    /// X11, S5).
-    static let followUp = Duration(seconds: 0.15)
+    /// 0.15: how long what follows a success waits: the ring after its tile, and Continue after the last check, which
+    /// the setup window's controller waits on its clock, so Continue takes no press before it lights up (v3 X11, S5).
+    public static let followUp = Duration(seconds: 0.15)
     /// 0.18: a chip, a row, a slot or a toast leaving (v3 `Motion.leave`).
     static let leave = Duration(seconds: 0.18)
     /// 0.2: a notice, an edge, content leaving.
@@ -186,12 +186,6 @@ public enum Motion {
   /// A step lighting up as the one before it finishes: ``state``, after ``Duration/step`` (v3 S3, X8).
   static var stepLight: Animation {
     state.delay(Duration.step.seconds)
-  }
-
-  /// What follows a success lighting up, such as Continue after the last check passes: ``state``, after
-  /// ``Duration/followUp`` (v3 S5).
-  static var followUp: Animation {
-    state.delay(Duration.followUp.seconds)
   }
 
   /// A tab's thumb and its pane: ``Springs/tab``.
