@@ -1,7 +1,7 @@
 /// The Settings window: its tab row, its four panes and the alert over it. The selected pane lives only in the tabs.
 public struct SettingsState: Equatable, Sendable {
-  /// The tab row, with the pane shown selected.
-  public var tabs: IconTabsState<SettingsTab>
+  /// The tab row, each tab its symbol over its word, with the pane shown selected.
+  public var tabs: CapsuleTabsState<SettingsTab>
   /// The General pane.
   public var general: SettingsGeneralState
   /// The Helper pane.
@@ -23,7 +23,7 @@ public struct SettingsState: Equatable, Sendable {
   ///   - about: The About pane.
   ///   - alert: The alert over the whole window, if one is asked.
   public init(
-    tabs: IconTabsState<SettingsTab>,
+    tabs: CapsuleTabsState<SettingsTab>,
     general: SettingsGeneralState,
     helper: SettingsHelperState,
     agents: SettingsAgentsState,
@@ -36,5 +36,10 @@ public struct SettingsState: Equatable, Sendable {
     self.agents = agents
     self.about = about
     self.alert = alert
+  }
+
+  /// The selected pane's name, which the title bar shows (v3 G1).
+  public var title: String {
+    tabs.tabs.first { $0.id == tabs.selected }?.title ?? ""
   }
 }

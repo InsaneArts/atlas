@@ -1,7 +1,10 @@
 import AsyncSupportTesting
 import AtlasCommands
 import AtlasCommandsTesting
+import AtlasService
+import AtlasServiceTesting
 import AtlasUI
+import CoreGraphics
 import Foundation
 import Testing
 
@@ -85,7 +88,7 @@ struct SettingsControllerTests {
     #expect(commands.ran == [Action.doctor.arguments])
     #expect(
       controller.state.helper.notice
-        == SettingsNote(text: "Start the helper: run atlas init (safe to run again).", isProblem: true)
+        == SettingsNote(text: "Start the helper: run atlas init (safe to run again).", kind: .problem)
     )
     #expect(reads.count == 1)
   }
@@ -105,7 +108,7 @@ struct SettingsControllerTests {
     clock.advance(by: hold)
     await confirming.value
     #expect(controller.session.alert == nil)
-    #expect(controller.state.helper.notice == SettingsNote(text: Words.readyAgain, isProblem: false))
+    #expect(controller.state.helper.notice == SettingsNote(text: Words.readyAgain, kind: .quiet))
   }
 
   @Test("a refused Recover in Settings keeps its alert, saying why, until Not Now")
@@ -118,5 +121,69 @@ struct SettingsControllerTests {
     #expect(controller.state.alert?.isBusy == false, "its buttons come back")
     controller.send(.alertCancel)
     #expect(controller.state.alert == nil)
+  }
+
+  @Test("a busy helper action makes the buttons wait and says why")
+  func aBusyHelperActionMakesTheButtonsWait() async throws {
+    let commands = ScriptedCommands(["start-input": #"{"ok": true}"#])
+    let gate = ReleaseSignal()
+    commands.whileRunning { _ in await gate.wait() }
+    let service = ScriptedService()
+    let actions = HelperActions(
+      commands: commands,
+      service: service,
+      barrier: ControlBarrier(service: service, clock: ManualClock())
+    )
+    let controller = SettingsController.scripted(commands: commands, actions: actions)
+    #expect(controller.state.helper.waiting == nil)
+    // Another window's Recover, through the commands every window shares.
+    let elsewhere = Task { await actions.recover() }
+    try await settle("the other Recover never ran") { commands.ran.contains(Action.startInput.arguments) }
+    let helper = controller.state.helper
+    #expect(helper.waiting == HelperWords.waitForAction, "a line with a spinner says why")
+    #expect(helper.notice == nil, "not an orange sentence")
+    #expect(!helper.buttons.canSwitch)
+    #expect(!helper.buttons.canRecover)
+    #expect(!helper.buttons.canLogOut)
+    #expect(helper.buttons.canCheck, "Check Again still reads")
+    gate.open()
+    _ = await elsewhere.value
+    #expect(controller.state.helper.waiting == nil, "the line goes once the action ends")
+    #expect(controller.state.helper.buttons.canSwitch)
+  }
+
+  @Test("an agent's icon comes from Settings' dependencies, never the workspace directly")
+  func anAgentsIconComesFromTheDependencies() throws {
+    let image = try Self.image()
+    var asked: [String] = []
+    let controller = SettingsController.scripted(commands: ScriptedCommands([:])) { path in
+      asked.append(path)
+      return path == "/Applications/Claude.app" ? image : nil
+    }
+    let agents = controller.state.agents.agents
+    let app = try #require(agents.first { $0.id == AgentsStatus.claudeAppID })
+    #expect(app.icon == .app(IconImage(id: "/Applications/Claude.app", image: image)))
+    let codex = try #require(agents.first { $0.id == AgentID.codex.rawValue })
+    #expect(codex.icon == .tile(.text(">_")), "an app the dependencies do not find keeps its tile, installed or not")
+    #expect(asked.contains("/Applications/Codex.app"), "each app is looked for through the dependencies")
+  }
+
+  /// A one-pixel image.
+  ///
+  /// - Returns: The image.
+  /// - Throws: The failed requirement, when the image cannot be made.
+  static func image() throws -> CGImage {
+    let context = try #require(
+      CGContext(
+        data: nil,
+        width: 1,
+        height: 1,
+        bitsPerComponent: 8,
+        bytesPerRow: 0,
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+      )
+    )
+    return try #require(context.makeImage())
   }
 }

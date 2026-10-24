@@ -1,17 +1,18 @@
 import AtlasUI
+import Foundation
 import Observation
 
 /// The Settings window's one observed object: the pane shown, the alert asked, the agents and projects, and the
 /// person's choices. Values another window also shows (the helper's status, Open at Login, the picture) are read
 /// through ``SettingsLinks`` each time the window draws, so they stay one value; ``SettingsPresenter`` decides what
-/// the window shows. Its parts are in `SettingsController+Helper`, `+Agents`, `+Updates` and `+Alert`.
+/// the window shows. Its parts are in `SettingsController+Helper`, `+Agents`, `+Updates`, `+Alert` and `+Window`.
 @Observable
 final class SettingsController {
   /// What the window is doing. Written only by the controller's own files.
   var session = SettingsSession()
   /// The agents as `atlas agents status` last reported them. Written only by the controller's own files.
   var agents = SettingsAgents()
-  /// The icons of the agents whose apps are on this Mac, by agent id: read once.
+  /// The icons of the agents whose apps are on this Mac, by agent id: read once, through the dependencies.
   private(set) var icons: [String: IconImage] = [:]
   /// Whether Notify me is on.
   private(set) var notify = false
@@ -27,6 +28,11 @@ final class SettingsController {
   @ObservationIgnored var agentsReading: Task<Void, Never>?
   /// Numbers each agents reading, so only the newest one started is kept.
   @ObservationIgnored var agentsGeneration = 0
+  /// How tall each pane last drew, its insets included, by pane. Written only by the controller's own files.
+  @ObservationIgnored var paneHeights: [SettingsTab: CGFloat] = [:]
+  /// Shapes the window to the pane shown: its name for the title bar, and the window's content height, nil until
+  /// the pane has drawn. The window sets it.
+  @ObservationIgnored var reshape: (@MainActor (_ title: String, _ contentHeight: CGFloat?) -> Void)?
 
   /// Creates the window's controller on the pane last shown, with the person's saved choices.
   ///
@@ -39,7 +45,9 @@ final class SettingsController {
       .flatMap(SettingsTab.init(rawValue:)) ?? .general
     notify = preferences.loadNotify()
     badge = preferences.loadBadge()
-    icons = dependencies.agentIcons()
+    icons = AgentIcons.onThisMac(home: FileManager.default.homeDirectoryForCurrentUser) { path in
+      dependencies.icon(forFile: path)
+    }
   }
 
   /// The helper's own commands, shared with the panel and the main window.
@@ -80,6 +88,7 @@ final class SettingsController {
     // Unstructured, as `send` is the view's synchronous callback: each async event runs in a task of its own.
     switch event {
     case .selectTab(let tab): selectTab(tab)
+    case .paneHeight(let tab, let height): fit(tab, height: height)
     case .checkAgain: Task { await checkAgain() }
     case .askSwitch: ask(.switchToHelper)
     case .askRecover: ask(.recover)
@@ -126,6 +135,7 @@ final class SettingsController {
     guard tab != session.tab else { return }
     session.tab = tab
     dependencies.preferences.saveTab(tab.rawValue)
+    reshapeWindow()
     if tab == .agents { readAgents() }
   }
 
@@ -148,8 +158,8 @@ final class SettingsController {
   /// - Parameters:
   ///   - text: The line, or nil to show none.
   ///   - tab: The pane it shows in.
-  ///   - problem: Whether it says something went wrong or could not run, which draws it in the attention colour.
-  func say(_ text: String?, in tab: SettingsTab, problem: Bool = false) {
-    session.notice = text.map { SettingsNotice(tab: tab, text: $0, isProblem: problem) }
+  ///   - kind: How it reads: quiet by default, a spinner while what it waits for runs, or the problem line.
+  func say(_ text: String?, in tab: SettingsTab, kind: SettingsNote.Kind = .quiet) {
+    session.notice = text.map { SettingsNotice(tab: tab, text: $0, kind: kind) }
   }
 }

@@ -67,5 +67,9 @@
     case tabs
     /// An inspector's facts and checks (V3).
     case facts
+    /// Settings' sections: a name, rows of each kind, small print and the status lines under a group (G3, G5–G8).
+    case groupedSection = "grouped-section"
+    /// The status pill in each tone (G4).
+    case statusPill = "status-pill"
   }
 #endif

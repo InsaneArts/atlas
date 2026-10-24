@@ -31,7 +31,9 @@
         next.alert = nil
       case .alertCancel:
         next.alert = nil
-      case .askSwitch, .checkAgain, .gettingStarted:
+      case .askSwitch:
+        next.alert = settingsSwitch.alert
+      case .checkAgain, .gettingStarted, .paneHeight:
         break
       }
       return next

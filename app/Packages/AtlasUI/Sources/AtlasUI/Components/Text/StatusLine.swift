@@ -14,6 +14,24 @@ struct StatusLine: View {
     case done
   }
 
+  /// How large the sentence is set.
+  enum Size: Sendable {
+    /// Callout, as a screen's status line.
+    case regular
+    /// Caption, as small print under a group (v3 `.sgfoot`).
+    case small
+
+    /// The sentence's style.
+    var textStyle: TextStyle {
+      self == .regular ? .callout : .caption
+    }
+
+    /// The mark's inset from the top, so the 13-point mark centres on the first line.
+    var markInset: CGFloat {
+      self == .regular ? Layout.markInset : Layout.smallMarkInset
+    }
+  }
+
   /// 13: the mark's side (v3 D4), a step under the callout's line.
   static let markSide: CGFloat = 13
 
@@ -21,15 +39,19 @@ struct StatusLine: View {
   let kind: Kind
   /// The sentence.
   let text: String
+  /// How large the sentence is set; callout by default.
+  var size = Size.regular
+  /// Whether the mark pops in as the line appears, such as About's green check (v3 G9).
+  var popsMark = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   /// The mark, then the sentence.
   var body: some View {
     HStack(alignment: .top, spacing: Layout.gap) {
-      OutcomeMark(kind: kind)
-        .padding(.top, Layout.markInset)
+      mark
+        .padding(.top, size.markInset)
       Text(text)
-        .textStyle(.callout)
+        .textStyle(size.textStyle)
         .foregroundStyle(Self.color(kind))
         .multilineTextAlignment(.leading)
         .fixedSize(horizontal: false, vertical: true)
@@ -41,6 +63,16 @@ struct StatusLine: View {
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(kind.spokenValue)
     .accessibilityValue(text)
+  }
+
+  /// The mark, popping in as the line appears where asked.
+  @ViewBuilder private var mark: some View {
+    if popsMark {
+      OutcomeMark(kind: kind)
+        .popsIn()
+    } else {
+      OutcomeMark(kind: kind)
+    }
   }
 
   /// The sentence's colour: orange for a problem, green once done, secondary while work runs.
@@ -62,6 +94,8 @@ private enum Layout {
   static let gap: CGFloat = 7
   /// 1.5: the mark's inset from the top, so a 13-point mark centres on the first 16-point line.
   static let markInset: CGFloat = 1.5
+  /// 0.5: the same on a 14-point caption line.
+  static let smallMarkInset: CGFloat = 0.5
 }
 
 #if DEBUG

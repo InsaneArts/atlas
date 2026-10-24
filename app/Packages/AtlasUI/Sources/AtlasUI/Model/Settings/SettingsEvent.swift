@@ -1,7 +1,12 @@
-/// What the person does in the Settings window, other than the General pane's values, which its binding carries.
+import CoreGraphics
+
+/// What the person does in the Settings window, other than the General pane's values, which its binding carries, and
+/// how tall a pane draws, so the window can fit it.
 public enum SettingsEvent: Equatable, Sendable {
   /// Shows a pane.
   case selectTab(SettingsTab)
+  /// A pane drew at this height, its insets included and the tab row not (v3 G2).
+  case paneHeight(SettingsTab, CGFloat)
   /// Reads the helper's readiness again now.
   case checkAgain
   /// Asks to switch this Mac's screen to the helper.

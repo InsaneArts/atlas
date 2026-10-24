@@ -10,7 +10,7 @@ struct IconTabLabel: View {
   var body: some View {
     VStack(spacing: Spacing.xs) {
       glyph
-        .foregroundStyle(.secondary)
+        .foregroundStyle(Color.textSecondary)
       Text(title)
         .font(Typography.font(.caption, weight: .medium))
         .lineLimit(1)

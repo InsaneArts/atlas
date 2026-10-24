@@ -114,10 +114,20 @@
         }
       )
       #expect(updates == ["check", "checking", "install", "installing"])
-      #expect(
-        Set(states.compactMap(\.about.answer)).count >= 5,
-        "up to date, newer, failed, install failed, unpublished"
+      let statuses = Set(
+        states.compactMap { state in
+          switch state.about.status {
+          case .done: "done"
+          case .available: "available"
+          case .installing: "installing"
+          case .problem: "problem"
+          case .note: "note"
+          case nil: nil
+          }
+        }
       )
+      #expect(statuses == ["done", "available", "installing", "problem", "note"])
+      #expect(states.contains { $0.helper.waiting != nil }, "the buttons waiting on another action")
       #expect(states.contains { $0.agents.projects.isEmpty }, "no project taught")
       #expect(states.contains { $0.helper.ready.contains { $0.item.state != .ready } }, "a check not ready")
     }

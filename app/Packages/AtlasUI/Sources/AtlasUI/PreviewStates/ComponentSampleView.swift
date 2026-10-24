@@ -49,6 +49,8 @@
       case .symbolNames: SymbolSamples()
       case .tabs: TabsSamples()
       case .facts: FactSamples()
+      case .groupedSection: GroupedSectionSamples()
+      case .statusPill: IndicatorSamples(.statusPill)
       }
     }
   }

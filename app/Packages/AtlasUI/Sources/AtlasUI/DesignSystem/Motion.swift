@@ -16,12 +16,18 @@ public enum Motion {
       self.seconds = seconds
     }
 
+    /// 0.06: how long a pane arriving waits before it fades in, so the one leaving has begun to go (v3 G2, X2).
+    static let crossfadeDelay = Duration(seconds: 0.06)
     /// 0.08: how long a drawn check waits after its disc before it draws (v3 S3, X11).
     static let drawDelay = Duration(seconds: 0.08)
     /// 0.1: a button press.
     static let press = Duration(seconds: 0.1)
     /// 0.12: a fill or a reveal answering the pointer arriving (v3 `Motion.hover`, in).
     static let hoverIn = Duration(seconds: 0.12)
+    /// 0.12: a pane leaving as another takes its place (v3 G2, X2).
+    static let crossfadeOut = Duration(seconds: 0.12)
+    /// 0.15: a pane's crossfade under Reduce Motion, both ways (v3 X2).
+    static let crossfadeReduced = Duration(seconds: 0.15)
     /// 0.15: an alert leaving, fading and shrinking a little (v3 A6).
     static let dismiss = Duration(seconds: 0.15)
     /// 0.18: a chip, a row, a slot or a toast leaving (v3 `Motion.leave`).
@@ -41,6 +47,9 @@ public enum Motion {
     /// 0.3: a piece moving to a new state, ``Motion/state``'s length; AppKit reads it for the menu bar panel's height
     /// easing to fit (v3 P10, X6).
     public static let state = Duration(seconds: 0.3)
+    /// 0.35: a window's height easing to fit its pane on ``Motion/resizeCurve``, its top edge fixed (v3 G2, X2);
+    /// AppKit reads it.
+    public static let resize = Duration(seconds: 0.35)
     /// 0.36: an alert shaking once when its command is refused (v3 A4).
     static let shake = Duration(seconds: 0.36)
     /// 0.4: content arriving.
@@ -94,6 +103,10 @@ public enum Motion {
   /// The setup window's glide curve: it starts at once and lands softly (v3 S7, X13), as a cubic Bézier's two
   /// control points, for `CAMediaTimingFunction(controlPoints:)`.
   public static let glideSoftCurve = (x1: Float(0.25), y1: Float(1), x2: Float(0.5), y2: Float(1))
+
+  /// A window's resize curve: it leaves its start gently and settles softly (v3 G2, X2), as a cubic Bézier's two
+  /// control points, for `CAMediaTimingFunction(controlPoints:)`.
+  public static let resizeCurve = (x1: Float(0.25), y1: Float(0.1), x2: Float(0.25), y2: Float(1))
 
   /// A button's press: ease out over ``Duration/press``.
   static var press: Animation { .easeOut(duration: Duration.press.seconds) }
@@ -151,6 +164,19 @@ public enum Motion {
   /// An alert leaving: ease in over ``Duration/dismiss`` (v3 A6). It shrinks as it fades, so under Reduce Motion it
   /// becomes ``reduced``.
   static var dismiss: Animation { .easeIn(duration: Duration.dismiss.seconds) }
+
+  /// A pane leaving as another takes its place: ease in over ``Duration/crossfadeOut`` (v3 X2).
+  static var crossfadeOut: Animation { .easeIn(duration: Duration.crossfadeOut.seconds) }
+
+  /// A pane arriving in another's place: ease out over ``Duration/crossfade``, after ``Duration/crossfadeDelay`` (v3
+  /// X2).
+  static var crossfadeIn: Animation {
+    .easeOut(duration: Duration.crossfade.seconds)
+      .delay(Duration.crossfadeDelay.seconds)
+  }
+
+  /// A pane's crossfade under Reduce Motion, both ways: ease out over ``Duration/crossfadeReduced`` (v3 X2).
+  static var crossfadeReduced: Animation { .easeOut(duration: Duration.crossfadeReduced.seconds) }
 
   /// A fade: ease out over ``Duration/fade``.
   static var fade: Animation { .easeOut(duration: Duration.fade.seconds) }

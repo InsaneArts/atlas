@@ -47,7 +47,7 @@ extension AppContainer: WindowParts {
         actions: actions,
         installs: installs,
         preferences: watchedPreferences(),
-        agentIcons: { AgentIcons.onThisMac(NSWorkspace.shared) },
+        fileIcon: FileIcons.icon(forFile:),
         version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
         links: links,
         clock: clock

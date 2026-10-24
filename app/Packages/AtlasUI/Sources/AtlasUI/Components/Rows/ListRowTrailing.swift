@@ -4,6 +4,8 @@ import SwiftUI
 struct ListRowTrailing: View {
   /// What ends the row.
   let trailing: ListRow.Trailing
+  /// The row's title, which names its switch for VoiceOver.
+  var label = ""
   /// What its switch or button does.
   let action: (@MainActor () -> Void)?
 
@@ -26,7 +28,7 @@ struct ListRowTrailing: View {
           .lineLimit(1)
       }
     case .toggle(let isOn):
-      Toggle(String(), isOn: switchBinding(isOn))
+      Toggle(label, isOn: switchBinding(isOn))
         .toggleStyle(.accentSwitch)
         .labelsHidden()
     case .button(let title):

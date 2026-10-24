@@ -69,4 +69,6 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case photos = "photo.on.rectangle"
   /// Something locked.
   case lock
+  /// A popup button's choices (v3 `.popup`).
+  case popup = "chevron.up.chevron.down"
 }

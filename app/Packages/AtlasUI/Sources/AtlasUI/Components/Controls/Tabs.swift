@@ -103,16 +103,17 @@ struct Tabs<Tab: Hashable & Sendable, Accessory: View>: View {
 
   /// The tabs as tiles, each its symbol over its word.
   private var tiles: some View {
-    HStack(spacing: Spacing.half) {
+    HStack(spacing: Spacing.xs) {
       ForEach(state.tabs) { tab in
         Button {
           send(tab.id)
         } label: {
-          VStack(spacing: Spacing.half) {
+          VStack(spacing: Layout.tileGap) {
             if let symbol = tab.symbol {
               Image(systemName: symbol.rawValue)
                 .font(Typography.symbol(.tab))
-                .foregroundStyle(tab.id == state.selected ? Color.textLink : Color.textSecondary)
+                .foregroundStyle(tab.id == state.selected ? Color.accent : Color.textSecondary)
+                .frame(height: SymbolScale.tab.pointSize)
             }
             HStack(spacing: Spacing.xs) {
               Text(tab.title)
@@ -122,6 +123,7 @@ struct Tabs<Tab: Hashable & Sendable, Accessory: View>: View {
           }
         }
         .buttonStyle(TileTabStyle(isSelected: tab.id == state.selected))
+        .accessibilityLabel(tab.title)
         .accessibilityAddTraits(tab.id == state.selected ? .isSelected : [])
       }
     }
@@ -197,24 +199,46 @@ private struct TabsThumb: View {
   }
 }
 
-/// A tab as a tile (v3 G1): its symbol over its word, both quiet; selected, the tile filled and the symbol blue.
+/// A tab as a tile (v3 G1, `.stabs button`): its symbol over its word, both quiet; under the pointer a faint fill
+/// and the word brightens; selected, the tile filled and the symbol blue. Held, it dips a little (v3 X9: 0.95).
 private struct TileTabStyle: ButtonStyle {
   /// Whether it is the selected tab.
   let isSelected: Bool
-  @Environment(\.isEnabled) private var enabled
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   func makeBody(configuration: Configuration) -> some View {
+    TileTabBody(configuration: configuration, isSelected: isSelected)
+  }
+}
+
+/// The tile a ``TileTabStyle`` draws, answering the pointer.
+private struct TileTabBody: View {
+  /// The tab's label and pressed state.
+  let configuration: ButtonStyleConfiguration
+  /// Whether it is the selected tab.
+  let isSelected: Bool
+  @State private var isHovered = false
+  @Environment(\.isEnabled) private var enabled
+
+  var body: some View {
     configuration.label
-      .foregroundStyle(isSelected ? Color.textPrimary : Color.textSecondary)
+      .foregroundStyle(isSelected || isHovered ? Color.textPrimary : Color.textSecondary)
       .frame(width: Layout.tile.width, height: Layout.tile.height)
       .background(
-        RoundedRectangle(cornerRadius: Radius.small)
-          .fill(isSelected || configuration.isPressed ? Color.fillControlOn : Color.clear)
+        RoundedRectangle(cornerRadius: Radius.medium)
+          .fill(fill)
       )
-      .contentShape(RoundedRectangle(cornerRadius: Radius.small))
+      .contentShape(RoundedRectangle(cornerRadius: Radius.medium))
+      .modifier(PressScale(isPressed: configuration.isPressed, scale: Layout.tilePressedScale))
       .opacity(enabled ? 1 : Opacity.disabled)
-      .animation(Motion.animation(Motion.press, reduceMotion: reduceMotion), value: configuration.isPressed)
+      .onHover { isHovered = $0 }
+      .animation(Motion.hover(isHovered), value: isHovered)
+      .animation(CapsuleButtonStyle.pressAnimation(isPressed: configuration.isPressed), value: configuration.isPressed)
+  }
+
+  /// The tile's fill: the held fill while selected, a faint one under the pointer, none otherwise.
+  private var fill: Color {
+    if isSelected { return .fillControlOn }
+    return isHovered ? .fillRowHover : .clear
   }
 }
 
@@ -234,6 +258,10 @@ private enum Layout {
   static let thumbDrop: CGFloat = 1
   /// 74 by 50: a tile (v3 G1).
   static let tile = CGSize(width: 74, height: 50)
+  /// 3: between a tile's symbol and its word.
+  static let tileGap: CGFloat = 3
+  /// 0.95: how far a held tile dips (v3 `.stabs button:active`).
+  static let tilePressedScale: CGFloat = 0.95
   /// The thumb's one identity, which it keeps as it glides from tab to tab.
   static let thumbID = "thumb"
 }

@@ -23,6 +23,8 @@
       case heroDisc
       /// Each tile size, with a symbol and with characters.
       case symbolTile
+      /// A status pill in each tone.
+      case statusPill
     }
 
     private let kind: Kind
@@ -95,6 +97,13 @@
               SymbolTile(icon: .symbol(SymbolName.click.rawValue), size: size)
               SymbolTile(icon: .text(String(">_")), size: size)
             }
+          }
+        case .statusPill:
+          HStack(spacing: Spacing.m) {
+            StatusPill(label: String("Idle"), tone: .quiet)
+            StatusPill(label: String("Ready"), tone: .ready)
+            StatusPill(label: String("Working"), tone: .active)
+            StatusPill(label: String("Needs you"), tone: .attention)
           }
         }
       }

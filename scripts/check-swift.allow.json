@@ -1,13 +1,6 @@
 {
   "waivers": [
     {
-      "path": "app/Packages/AtlasUI/Sources/AtlasUI/Components/Controls/IconTabLabel.swift",
-      "checkers": ["tokens"],
-      "rule": "inline color",
-      "until": "Phase 14",
-      "reason": "its .foregroundStyle(.secondary) is hierarchical, not Color.textSecondary's #A1A1A6, so a swap changes pixels; Settings' redesign settles it"
-    },
-    {
       "path": "app/Packages/AsyncSupport/Sources/AsyncSupportTesting/Ceiling.swift",
       "checkers": ["tests"],
       "rule": "sleep",

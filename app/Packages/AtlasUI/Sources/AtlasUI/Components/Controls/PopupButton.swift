@@ -25,7 +25,7 @@ struct PopupButton<Value: Hashable & Sendable>: View {
       HStack(spacing: Spacing.xsPlus) {
         Text(options.title(of: selection))
           .font(Typography.font(.callout))
-        Image(systemName: "chevron.down")
+        Image(systemName: SymbolName.popup.rawValue)
           .font(Typography.font(.footnote, weight: .semibold))
           .accessibilityHidden(true)
       }

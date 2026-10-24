@@ -81,10 +81,13 @@
       #expect(Set(names).count == names.count)
     }
 
-    @Test("every settings render draws at its window's size", arguments: SettingsRender.files)
+    @Test("every settings render draws at Settings' width and its pane's height", arguments: SettingsRender.files)
     func everySettingsRenderDraws(file: String) throws {
-      let size = SettingsLayout.window
       let state = try #require(SettingsRender.renders.first { $0.file == file }?.state)
+      let size = SettingsRender.size(of: state)
+      #expect(size.width == SettingsLayout.width)
+      #expect(size.height > SettingsLayout.header, "the pane said how tall it draws")
+      #expect(size.height != SettingsLayout.firstHeight, "the pane said how tall it draws")
       let directory = try Self.directory()
       defer {
         try? FileManager.default

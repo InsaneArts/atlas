@@ -11,12 +11,34 @@ struct ListRow: View {
     case none
     /// A small tile with a symbol or characters, such as a permission's or an agent's.
     case tile(TileIcon)
+    /// An app's own icon, such as an agent's app.
+    case image(IconImage)
     /// The helper account's picture in a circle.
     case picture
     /// An account's first letter on an avatar disc.
     case letter(String)
     /// A check's mark: a spinner, a green check or an orange round "!".
     case check(CheckState)
+    /// A check not run yet: an empty ring in a check mark's place.
+    case pending
+  }
+
+  /// How a row's detail is set.
+  enum DetailStyle: Equatable, Sendable {
+    /// Secondary text.
+    case plain
+    /// The attention text colour: a failing check's fix (v3 `.srow .tx span.bad`, G5).
+    case problem
+    /// A folder's path, monospaced (v3 G8).
+    case path
+
+    /// The detail's colour.
+    var color: Color {
+      switch self {
+      case .plain, .path: .textSecondary
+      case .problem: .textAttention
+      }
+    }
   }
 
   /// What ends the row.
@@ -64,10 +86,24 @@ struct ListRow: View {
     /// 34: a window under its app.
     case tight
 
-    /// The space above and below the row's content: v3's 10 on a setup row; the tighter rows keep 4, so their least
-    /// height sets their rhythm.
+    /// The space above and below the row's content: v3's 10 on a setup row, 7 in a Settings group (v3 `.srow`); the
+    /// tighter rows keep 4, so their least height sets their rhythm.
     var verticalInset: CGFloat {
-      self == .regular ? Spacing.sPlus : Spacing.xs
+      switch self {
+      case .regular: Spacing.sPlus
+      case .compact: Layout.compactVerticalInset
+      case .dense, .tight: Spacing.xs
+      }
+    }
+
+    /// The row's inset on each side: 14, or 12 in a Settings group (v3 `.srow`).
+    var inset: CGFloat {
+      self == .compact ? Spacing.m : Spacing.mPlus
+    }
+
+    /// The detail's style: callout, or caption in a Settings group, its 11-point detail (v3 G3).
+    var detailStyle: TextStyle {
+      self == .compact ? .caption : .callout
     }
 
     /// The row's least height.
@@ -85,6 +121,8 @@ struct ListRow: View {
   private let title: String
   /// The detail under it, or nil for none.
   private let detail: String?
+  /// How the detail is set.
+  private let detailStyle: DetailStyle
   /// What leads the row.
   private let lead: Lead
   /// What ends the row.
@@ -94,13 +132,13 @@ struct ListRow: View {
   /// What the row's control does: flips its switch, presses its button or picks its choice.
   private let action: (@MainActor () -> Void)?
   @State private var isHovered = false
-  @Environment(\.drawsListSeparator) private var drawsSeparator
 
   /// Creates a row.
   ///
   /// - Parameters:
   ///   - title: The title.
   ///   - detail: The detail under it, or nil for none.
+  ///   - detailStyle: How the detail is set; secondary text by default.
   ///   - lead: What leads the row; nothing by default.
   ///   - trailing: What ends the row; nothing by default.
   ///   - size: How tall the row is; a setup list's by default.
@@ -108,6 +146,7 @@ struct ListRow: View {
   init(
     _ title: String,
     detail: String? = nil,
+    detailStyle: DetailStyle = .plain,
     lead: Lead = .none,
     trailing: Trailing = .none,
     size: Size = .regular,
@@ -115,6 +154,7 @@ struct ListRow: View {
   ) {
     self.title = title
     self.detail = detail
+    self.detailStyle = detailStyle
     self.lead = lead
     self.trailing = trailing
     self.size = size
@@ -136,39 +176,21 @@ struct ListRow: View {
     }
   }
 
-  /// The lead, the title over its detail, and the trailing control, with the separator above.
+  /// The row's body with its trailing control, its fill answering the pointer over a choice.
   private var content: some View {
-    HStack(spacing: Layout.gap) {
-      ListRowLead(lead: lead)
-      VStack(alignment: .leading, spacing: Layout.lineGap) {
-        Text(title)
-          .textStyle(.body, weight: Self.titleWeight(lead))
-          .foregroundStyle(Color.textPrimary)
-          .lineLimit(2)
-          .truncationMode(.middle)
-        if let detail {
-          Text(detail)
-            .textStyle(.callout)
-            .foregroundStyle(Color.textSecondary)
-        }
-      }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      ListRowTrailing(trailing: trailing, action: action)
+    ListRowBody(
+      title,
+      detail: detail,
+      detailStyle: detailStyle,
+      lead: lead,
+      size: size,
+      fill: rowFill,
+      accessibilityChildren: accessibilityChildren
+    ) {
+      ListRowTrailing(trailing: trailing, label: title, action: action)
     }
-    .padding(.horizontal, Layout.inset)
-    .padding(.vertical, size.verticalInset)
-    .frame(minHeight: size.height)
-    .background(rowFill)
-    .overlay(alignment: .top) {
-      if drawsSeparator {
-        SeparatorLine()
-          .padding(.leading, Self.separatorInset(lead))
-      }
-    }
-    .contentShape(Rectangle())
     .onHover { isHovered = $0 }
     .animation(Motion.hover(isHovered), value: isHovered)
-    .accessibilityElement(children: accessibilityChildren)
   }
 
   /// How VoiceOver reads the row: as one element, except where it ends in a switch or a button, which stays its own
@@ -191,47 +213,53 @@ struct ListRow: View {
     return true
   }
 
+  /// 12: between the lead, the text and the trailing control.
+  nonisolated static let gap = Spacing.m
+
   /// Where the separator above a row starts: where its title starts, past its inset, its lead and the gap after it.
   ///
-  /// - Parameter lead: What leads the row.
+  /// - Parameters:
+  ///   - lead: What leads the row.
+  ///   - size: How tall the row is, which sets its inset; a setup list's by default.
   /// - Returns: The separator's inset from the row's leading edge: 14 with nothing leading, 42 after a check's mark,
-  ///   56 after a tile, a picture or a letter (v3's `--sep`).
-  nonisolated static func separatorInset(_ lead: Lead) -> CGFloat {
+  ///   56 after a tile, a picture or a letter (v3's `--sep`); 2 less in a Settings group.
+  nonisolated static func separatorInset(_ lead: Lead, size: Size = .regular) -> CGFloat {
     let width = leadWidth(lead)
-    return width == 0 ? Layout.inset : Layout.inset + width + Layout.gap
+    return width == 0 ? size.inset : size.inset + width + gap
   }
 
   /// How wide a row's lead is.
   ///
   /// - Parameter lead: What leads the row.
-  /// - Returns: None for nothing, 16 for a check's mark, 30 for a tile, a picture or a letter.
+  /// - Returns: None for nothing, 16 for a check's mark or a ring, 30 for a tile, an icon, a picture or a letter.
   nonisolated static func leadWidth(_ lead: Lead) -> CGFloat {
     switch lead {
     case .none: 0
-    case .check: IconSize.s
-    case .tile, .picture, .letter: IconSize.l
+    case .check, .pending: IconSize.s
+    case .tile, .image, .picture, .letter: IconSize.l
     }
   }
 
   /// The title's weight: medium, so a list reads as content (v3 D1), but regular in a checklist, where the mark says
-  /// how the line stands.
+  /// how the line stands, and in a Settings group, whose rows are labels for their controls (v3 G3).
   ///
-  /// - Parameter lead: What leads the row.
+  /// - Parameters:
+  ///   - lead: What leads the row.
+  ///   - size: How tall the row is; a setup list's by default.
   /// - Returns: The weight.
-  nonisolated static func titleWeight(_ lead: Lead) -> Font.Weight {
-    if case .check = lead { return .regular }
-    return .medium
+  nonisolated static func titleWeight(_ lead: Lead, size: Size = .regular) -> Font.Weight {
+    if size == .compact { return .regular }
+    switch lead {
+    case .check, .pending: return .regular
+    case .none, .tile, .image, .picture, .letter: return .medium
+    }
   }
 }
 
 /// A row's own measures, from v3's `.row`.
 private enum Layout {
-  /// 14: the row's inset on each side.
-  static let inset = Spacing.mPlus
-  /// 12: between the lead, the text and the trailing control.
-  static let gap = Spacing.m
-  /// 1: between the title and its detail.
-  static let lineGap = Spacing.hairline
+  /// 7: above and below a Settings row's content (v3 `.srow`).
+  static let compactVerticalInset: CGFloat = 7
   /// 48: a setup list's row (v3 D6).
   static let regularHeight: CGFloat = 48
   /// 38: an Activity row (v3 D6, V8).

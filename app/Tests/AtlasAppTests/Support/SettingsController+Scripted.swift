@@ -3,6 +3,7 @@ import AtlasCommandsTesting
 import AtlasService
 import AtlasServiceTesting
 import AtlasUI
+import CoreGraphics
 
 @testable import AtlasApp
 
@@ -15,22 +16,27 @@ extension SettingsController {
   ///   - statusReads: Counts each time it asks for the shared status to be read again.
   ///   - installs: The agent installs it shares with another window; its own over `commands` when nil.
   ///   - clock: The clock its waits run on, such as a done Recover's hold.
+  ///   - actions: The helper's commands it shares with another window; its own over `commands` when nil.
+  ///   - fileIcon: The icon a file shows, by its path; none by default.
   /// - Returns: The controller.
   static func scripted(
     commands: ScriptedCommands,
     statusReads: CallCount = CallCount(),
     installs: AgentInstalls? = nil,
-    clock: ManualClock = ManualClock()
+    clock: ManualClock = ManualClock(),
+    actions: HelperActions? = nil,
+    fileIcon: @escaping @MainActor (String) -> CGImage? = { _ in nil }
   ) -> SettingsController {
     let service = ScriptedService()
     return SettingsController(
       dependencies: SettingsDependencies(
         commands: commands,
-        actions: HelperActions(
-          commands: commands,
-          service: service,
-          barrier: ControlBarrier(service: service, clock: ManualClock())
-        ),
+        actions: actions
+          ?? HelperActions(
+            commands: commands,
+            service: service,
+            barrier: ControlBarrier(service: service, clock: ManualClock())
+          ),
         installs: installs ?? AgentInstalls(commands: commands),
         preferences: SettingsPreferences(
           loadTab: { nil },
@@ -40,7 +46,7 @@ extension SettingsController {
           loadBadge: { false },
           saveBadge: { _ in }
         ),
-        agentIcons: { [:] },
+        fileIcon: fileIcon,
         version: "0.1.0",
         links: SettingsLinks(
           status: { (ViewerStatus(), false) },

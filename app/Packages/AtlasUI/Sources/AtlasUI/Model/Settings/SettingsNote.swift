@@ -1,18 +1,31 @@
-/// A line under a settings group saying what a command just did: quiet small print, or, for a problem, in the
-/// attention colour.
+/// A line under a settings group saying what a command just did: quiet small print, a spinner while something it
+/// waits for runs, or, for a problem, an orange mark and words (v3 `.sgfoot`).
 public struct SettingsNote: Equatable, Sendable {
+  /// How the line reads.
+  public enum Kind: Equatable, Sendable {
+    /// Quiet small print.
+    case quiet
+    /// Something it waits for runs: a spinner beside the words.
+    case working
+    /// Something went wrong or could not run: an orange mark and words.
+    case problem
+  }
+
   /// The line.
   public var text: String
-  /// Whether it says something went wrong or could not run.
-  public var isProblem: Bool
+  /// How the line reads.
+  public var kind: Kind
 
   /// Creates a note.
   ///
   /// - Parameters:
   ///   - text: The line.
-  ///   - isProblem: Whether it says something went wrong or could not run.
-  public init(text: String, isProblem: Bool) {
+  ///   - kind: How the line reads.
+  public init(text: String, kind: Kind) {
     self.text = text
-    self.isProblem = isProblem
+    self.kind = kind
   }
+
+  /// Whether it says something went wrong or could not run.
+  public var isProblem: Bool { kind == .problem }
 }
