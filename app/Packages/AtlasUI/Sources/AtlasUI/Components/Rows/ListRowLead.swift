@@ -36,7 +36,11 @@ struct ListRowLead: View {
       OutcomeMark(kind: StatusLine.Kind(state), side: ListRow.leadWidth(lead))
         .id(state)
         .transition(
-          Motion.transition(.scale(scale: Layout.markArrival).combined(with: .opacity), reduceMotion: reduceMotion)
+          Motion.transition(
+            AnyTransition.scale(scale: Layout.markArrival)
+              .combined(with: .opacity),
+            reduceMotion: reduceMotion
+          )
         )
     case .pending:
       Circle()

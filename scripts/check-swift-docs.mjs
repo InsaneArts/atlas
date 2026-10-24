@@ -8,15 +8,27 @@
 // initializer, subscript, property, type alias and enum case declared at file
 // level or in a type's body, and reports one that is neither `private` nor
 // `fileprivate`, nor a member of a private type, and has no `///` line above
-// it and its attributes. Declarations inside a function, closure or accessor
-// are local and never read; an `extension` is not a declaration. A heuristic
-// over source text, with comments and strings blanked first.
+// it and its attributes. A member written on its type's own line, after the
+// `{`, has no line of its own for a doc, so it is reported too, but for an
+// enum's `case` list, such as `enum CodingKeys: String, CodingKey { case id }`,
+// which its enum's doc names. Inside a
+// function, closure or accessor only a local struct, enum, class or actor is
+// read, with its members, as a wire type's `Body` and `Reply` are: other
+// local declarations are never read. An `extension` is not a declaration. A
+// heuristic over source text, with comments and strings blanked first.
 import { fileURLToPath } from 'node:url';
 import { codeOnly, packageFolders, run } from './swift-source.mjs';
 
 const MODIFIER = String.raw`(?:@\w+(?:\([^)]*\))?\s+|(?:public|package|internal|open|private|fileprivate)(?:\(set\))?\s+|(?:static|class|final|override|mutating|nonmutating|nonisolated(?:\(unsafe\))?|lazy|weak|unowned|indirect|convenience|required|dynamic|isolated|consuming|borrowing)\s+)*`;
 const DECLARATION = new RegExp(
   String.raw`^\s*(${MODIFIER})(struct|enum|class|actor|protocol|extension|func|var|let|init[?!]?|subscript|typealias|associatedtype|case)(?!\w)`,
+);
+// A type declared inside a function, closure or accessor.
+// A name follows, so `actor = …` is an assignment, not a type.
+const LOCAL_TYPE = new RegExp(String.raw`^\s*(${MODIFIER})(struct|enum|class|actor)(?=\s+\w)`);
+// A member right after the `{` that opens its type, on the type's line.
+const SAME_LINE_MEMBER = new RegExp(
+  String.raw`^\s*(${MODIFIER})(struct|enum|class|actor|func|var|let|init[?!]?|subscript|typealias)(?!\w)`,
 );
 const TYPE_KINDS = new Set(['struct', 'enum', 'class', 'actor', 'protocol', 'extension']);
 const PRIVATE = /\b(?:private|fileprivate)\b(?!\(set\))/;
@@ -42,7 +54,8 @@ export function violations(text) {
   for (let index = 0; index < code.length; index += 1) {
     const line = code[index];
     const scope = stack.at(-1) ?? 'type';
-    const match = scope === 'code' || parentheses > 0 ? null : DECLARATION.exec(line);
+    const pattern = scope === 'code' ? LOCAL_TYPE : DECLARATION;
+    const match = parentheses > 0 ? null : pattern.exec(line);
     if (match) {
       const kind = match[2];
       const isPrivate = PRIVATE.test(match[1]) || scope === 'private type';
@@ -50,6 +63,15 @@ export function violations(text) {
       else pending = 'code';
       if (kind !== 'extension' && !isPrivate && !documented(lines, index)) {
         found.push({ line: index + 1, rule: 'doc', message: `${kind} without a doc comment` });
+      }
+      const opening = line.indexOf('{', match[0].length);
+      const member = opening < 0 ? null : SAME_LINE_MEMBER.exec(line.slice(opening + 1));
+      if (pending === 'type' && kind !== 'extension' && member && !PRIVATE.test(member[1])) {
+        found.push({
+          line: index + 1,
+          rule: 'doc',
+          message: `${member[2]} on its type's line, without a doc comment: give it a line and a doc`,
+        });
       }
     }
     for (const character of line) {

@@ -3,8 +3,9 @@ import SwiftUI
 /// The panel's picture (v3 P2–P4, P8, P11): the helper's screen resting on the ground, which opens the main window on
 /// Screen when clicked and shows the expand symbol under the pointer to say so. Its look tells its state: the blue rim
 /// of control, greyed and darkened under an orange badge while the helper needs the person, greyed and darkened
-/// alone while paused. The newest action floats over its corner on glass while an agent works, and the pause button
-/// sits in the other corner, pausing the picture only. With no screen to show, the empty stage says why.
+/// alone while paused. The newest action floats over its corner on glass while an agent works, orange when it failed,
+/// and the pause button sits in the other corner, pausing the picture only. With no screen to show, the empty stage
+/// says why.
 struct PanelPicture: View {
   /// What the frame shows, and how.
   let state: PanelPictureState
@@ -75,11 +76,12 @@ struct PanelPicture: View {
       .accessibilityHidden(true)
   }
 
-  /// The newest action on glass while an agent works, a new one replacing the last with a blur (v3 P8).
+  /// The newest action on glass while an agent works, on the panel's smaller chip, a new one replacing the last with
+  /// a blur (v3 P8).
   private var caption: some View {
     ZStack(alignment: .bottomLeading) {
       if let caption = state.caption {
-        GlassChip(lead: .pulsing(.active), time: caption.time.isEmpty ? nil : caption.time) {
+        GlassChip(lead: Self.lead(caption), time: caption.time.isEmpty ? nil : caption.time, size: .small) {
           Text(caption.text)
             .truncationMode(.tail)
         }
@@ -112,65 +114,14 @@ struct PanelPicture: View {
     .accessibilityLabel(state.pause.label)
     .padding(PanelLayout.captionInset)
   }
-}
 
-/// The screen in its frame, resting on the ground (v3 P3): letterboxed on black, greyed and darkened while dimmed,
-/// with a fine light inner edge and a soft shadow; the empty stage until the first picture arrives.
-private struct PanelScreen: View {
-  /// The screen; nil shows the empty stage.
-  let picture: DesktopPicture?
-  /// Whether the screen is greyed and darkened.
-  let isDimmed: Bool
-
-  var body: some View {
-    ZStack {
-      if let picture {
-        Color.letterbox
-        Image(decorative: picture.image, scale: 1)
-          .resizable()
-          .interpolation(.high)
-          .aspectRatio(contentMode: .fit)
-          .saturation(isDimmed ? PanelLayout.dimSaturation : 1)
-          .overlay(Color.letterbox.opacity(isDimmed ? PanelLayout.dimShade : 0))
-      } else {
-        Color.fillPlaceholder
-      }
-    }
-    .frame(width: PanelLayout.picture.width, height: PanelLayout.picture.height)
-    .clipShape(shape)
-    .overlay(
-      shape
-        .strokeBorder(Color.strokeHighlight, lineWidth: Stroke.hairline)
-    )
-    .elevation(.resting)
-  }
-
-  /// The frame's outline.
-  private var shape: RoundedRectangle {
-    RoundedRectangle(cornerRadius: Radius.medium)
-  }
-}
-
-/// Control's edge round the picture (v3 P4): a fine accent rim just outside it and a soft accent ring outside that,
-/// settling in from a little larger; none out of control, and only a fade under Reduce Motion.
-private struct PanelControlRim: View {
-  /// Whether the person holds control.
-  let isShown: Bool
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-  var body: some View {
-    ZStack {
-      RoundedRectangle(cornerRadius: PanelLayout.ringCorner)
-        .strokeBorder(Color.accentRing, lineWidth: PanelLayout.ringWidth)
-        .padding(-PanelLayout.ringReach)
-      RoundedRectangle(cornerRadius: PanelLayout.rimCorner)
-        .strokeBorder(Color.accent, lineWidth: PanelLayout.rimWidth)
-        .padding(-PanelLayout.rimReach)
-    }
-    .scaleEffect(isShown || reduceMotion ? 1 : PanelLayout.rimArrival)
-    .opacity(isShown ? 1 : 0)
-    .allowsHitTesting(false)
-    .accessibilityHidden(true)
+  /// What leads the caption: an orange dot when its action failed, as the viewer's captions mark a failure, else the
+  /// breathing blue dot of work under way.
+  ///
+  /// - Parameter caption: The newest action.
+  /// - Returns: The chip's lead.
+  nonisolated static func lead<Content: View>(_ caption: PanelCaption) -> GlassChip<Content>.Lead {
+    caption.isFailed ? .dot(.attention) : .pulsing(.active)
   }
 }
 

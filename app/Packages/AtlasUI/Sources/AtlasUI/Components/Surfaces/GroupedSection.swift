@@ -47,24 +47,6 @@ struct GroupedSection<Items: RandomAccessCollection, Row: View>: View where Item
   }
 }
 
-/// One line under a section's group.
-private struct GroupedSectionNoteView: View {
-  /// The line.
-  let note: GroupedSectionNote
-
-  var body: some View {
-    switch note {
-    case .text(let text):
-      Text(text)
-        .textStyle(.caption)
-        .foregroundStyle(Color.textTertiary)
-        .fixedSize(horizontal: false, vertical: true)
-    case .status(let kind, let text):
-      StatusLine(kind: kind, text: text, size: .small)
-    }
-  }
-}
-
 /// A section's own measures (v3 `.spane`'s 6 gap plus `.sghead`'s and `.sgfoot`'s 4).
 private enum Layout {
   /// 10: between the name, the group and each note.

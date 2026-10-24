@@ -3,12 +3,12 @@ import AtlasCommands
 import AtlasCommandsTesting
 import AtlasService
 import AtlasServiceTesting
-import AtlasUI
 import CoreGraphics
 import Foundation
 import Testing
 
 @testable import AtlasApp
+@testable import AtlasUI
 
 @Suite("SettingsController")
 struct SettingsControllerTests {
@@ -91,6 +91,24 @@ struct SettingsControllerTests {
         == SettingsNote(text: "Start the helper: run atlas init (safe to run again).", kind: .problem)
     )
     #expect(reads.count == 1)
+  }
+
+  @Test("while Check Again reads, VoiceOver hears each check as Checking, never the result it is replacing")
+  func checkAgainSpeaksChecking() async throws {
+    let commands = ScriptedCommands(["doctor": #"{"ok": true, "ready": true}"#])
+    let gate = ReleaseSignal()
+    commands.whileRunning { _ in await gate.wait() }
+    let checks: [[String: Any]] = [["name": "helperRunning", "ok": true], ["name": "inputReady", "ok": false]]
+    let controller = SettingsController.scripted(commands: commands, status: try status(["checks": checks]))
+    let before = controller.state.helper.ready
+    try #require(!before.isEmpty, "the Helper pane lists its checks")
+    #expect(!before.contains { $0.spokenValue == "Checking" })
+    controller.send(.checkAgain)
+    try await settle("Check Again never started") { controller.state.helper.ready.allSatisfy(\.isChecking) }
+    #expect(controller.state.helper.ready.allSatisfy { $0.spokenValue == "Checking" })
+    gate.open()
+    try await settle("Check Again never ended") { !controller.state.helper.ready.contains(where: \.isChecking) }
+    #expect(controller.state.helper.ready.map(\.spokenValue) == before.map(\.spokenValue), "the result is heard again")
   }
 
   @Test("Recover in Settings says Recovered for the hold on the clock, then closes and says what it did")

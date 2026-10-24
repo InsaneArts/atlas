@@ -16,7 +16,7 @@ struct HelperPane: View {
         HelperAccountRow(account: account, buttons: state.buttons, send: send)
       }
       GroupedSection(state.ready, title: "Ready to act") { row in
-        HelperReadyRow(row: row, index: index(of: row), buttons: state.buttons) { send(.checkAgain) }
+        HelperReadyRow(row: row, buttons: state.buttons) { send(.checkAgain) }
       }
       GroupedSection(HelperAction.allCases, title: "When something goes wrong", notes: notes) { action in
         actionRow(action)
@@ -53,14 +53,6 @@ struct HelperPane: View {
   private var notes: [GroupedSectionNote] {
     [state.waiting.map { GroupedSectionNote.status(.working, $0) }, state.notice?.sectionNote]
       .compactMap { $0 }
-  }
-
-  /// A check's place in its section.
-  ///
-  /// - Parameter row: The check.
-  /// - Returns: Its index, the first 0.
-  private func index(of row: SettingsReadyRow) -> Int {
-    state.ready.firstIndex { $0.id == row.id } ?? 0
   }
 }
 

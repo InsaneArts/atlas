@@ -2,7 +2,8 @@ import SwiftUI
 
 /// One of Recent's rows (v3 P5): what was done and, on the right, how long ago in digits that count rather than jump
 /// (v3 R11). No mark leads it unless it carries state: a warning sign for what did not work, and a blue dot on the live
-/// row that cools away after a second. VoiceOver reads it as one.
+/// row that cools away after a second. Under Reduce Motion the dot only fades as it cools: its place stays while the
+/// row is live, so the words never move. VoiceOver reads it as one.
 struct PanelRecentRow: View {
   /// The action.
   let entry: PanelRecentEntry
@@ -20,15 +21,15 @@ struct PanelRecentRow: View {
       }
       StatusDot(mark: .dot, tone: .active, size: .small)
         .opacity(isGlowing ? 1 : 0)
-        .frame(width: isGlowing ? IconSize.xxs : .zero, alignment: .leading)
-        .padding(.trailing, isGlowing ? Spacing.s : .zero)
+        .frame(width: holdsDot ? IconSize.xxs : .zero, alignment: .leading)
+        .padding(.trailing, holdsDot ? Spacing.s : .zero)
       Text(entry.line)
         .truncationMode(.tail)
         .frame(maxWidth: .infinity, alignment: .leading)
       Text(entry.when)
         .font(Typography.digits(.callout))
         .foregroundStyle(Color.textTertiary)
-        .contentTransition(reduceMotion ? .opacity : .numericText())
+        .contentTransition(Motion.contentTransition(.numericText(), reduceMotion: reduceMotion))
         .animation(
           Motion.animation(Motion.state, reduceMotion: reduceMotion, reduced: Motion.reduced),
           value: entry.when
@@ -47,6 +48,24 @@ struct PanelRecentRow: View {
   /// Whether the blue dot shows: on the live row until it cools.
   private var isGlowing: Bool {
     entry.isLive && !isCooled
+  }
+
+  /// Whether the dot keeps its place before the words.
+  private var holdsDot: Bool {
+    Self.holdsDot(isLive: entry.isLive, isCooled: isCooled, reduceMotion: reduceMotion)
+  }
+
+  /// Whether the dot keeps its place before the words: while it glows, so the words close the gap as it cools away;
+  /// under Reduce Motion for as long as the row is live, so cooling only fades the dot and nothing moves.
+  ///
+  /// - Parameters:
+  ///   - isLive: Whether the row is live.
+  ///   - isCooled: Whether its dot has cooled away.
+  ///   - reduceMotion: Whether the Reduce Motion setting is on.
+  /// - Returns: Whether the dot's place stays.
+  nonisolated static func holdsDot(isLive: Bool, isCooled: Bool, reduceMotion: Bool) -> Bool {
+    if reduceMotion { return isLive }
+    return isLive && !isCooled
   }
 
   /// Cools the live row's dot away after ``PanelLayout/liveHold``, through the animation's own delay, never a sleep.

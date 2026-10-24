@@ -36,7 +36,7 @@ enum PanelPresenter {
   /// The picture (v3 P2, P4, P6, P11): the empty stage saying why while the helper is logged out or not ready, the
   /// mark breathing while connecting; else the screen, inside the rim while in control, greyed under the badge while
   /// it needs the person, greyed alone while paused, with the newest action over it while an agent works and the
-  /// picture is live. The pause button on it pauses the picture only.
+  /// picture is live, in orange when it failed. The pause button on it pauses the picture only.
   ///
   /// - Parameters:
   ///   - snapshot: What the controller holds.
@@ -61,7 +61,7 @@ enum PanelPresenter {
     let newest = mode.kind == .working && !paused ? reading.captionEntries.last : nil
     var state = PanelPictureState(
       look: look,
-      caption: newest.map { PanelCaption(text: $0.line, time: $0.when) },
+      caption: newest.map { PanelCaption(text: $0.line, time: $0.when, isFailed: $0.mark == .failed) },
       pause: PanelPause(
         isPaused: paused,
         label: paused ? PanelWords.resumePicture : PanelWords.pausePicture,

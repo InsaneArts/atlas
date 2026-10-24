@@ -131,9 +131,15 @@ public struct ViewerClient: ViewerService {
   /// - Throws: ``ServiceError`` when control is not granted.
   public func acquire(frame: String) async throws -> String {
     /// The request: the id of the picture acted on.
-    struct Body: Encodable { let frame: String }
+    struct Body: Encodable {
+      /// The id of the picture the person acts on.
+      let frame: String
+    }
     /// The reply: the lease granted.
-    struct Reply: Decodable { let lease: String }
+    struct Reply: Decodable {
+      /// The lease the service granted.
+      let lease: String
+    }
     let data = try await post("control/acquire", Body(frame: frame))
     guard let reply = Self.decoded(Reply.self, from: data) else {
       throw ServiceError("Control was not granted")
@@ -150,7 +156,9 @@ public struct ViewerClient: ViewerService {
   public func renew(lease: String, frame: String) async throws {
     /// The request: the lease to renew, and the id of the picture now shown.
     struct Body: Encodable {
+      /// The lease to renew.
       let lease: String
+      /// The id of the picture now shown.
       let frame: String
     }
     _ = try await post("control/renew", Body(lease: lease, frame: frame))
@@ -162,7 +170,10 @@ public struct ViewerClient: ViewerService {
   /// - Throws: ``ServiceError`` when the service refuses.
   public func release(lease: String) async throws {
     /// The request: the lease to end.
-    struct Body: Encodable { let lease: String }
+    struct Body: Encodable {
+      /// The lease to end.
+      let lease: String
+    }
     _ = try await post("control/release", Body(lease: lease))
   }
 
@@ -181,7 +192,10 @@ public struct ViewerClient: ViewerService {
   /// - Throws: ``ServiceError`` when the service refuses.
   public func setStopped(_ stopped: Bool) async throws {
     /// The request: whether agents stop.
-    struct Body: Encodable { let on: Bool }
+    struct Body: Encodable {
+      /// Whether agents stop.
+      let on: Bool
+    }
     _ = try await post("control/hold", Body(on: stopped))
   }
 
@@ -196,8 +210,11 @@ public struct ViewerClient: ViewerService {
     /// The request: the lease the input belongs to, the id of the picture its coordinates refer to, and the actions
     /// in order.
     struct Body: Encodable {
+      /// The lease the input belongs to.
       let lease: String
+      /// The id of the picture the input's coordinates refer to.
       let frame: String
+      /// The actions, in order.
       let actions: [InputAction]
     }
     _ = try await post("input", Body(lease: lease, frame: frame, actions: actions))
@@ -213,7 +230,10 @@ public struct ViewerClient: ViewerService {
     /// The request, with nothing in it.
     struct Body: Encodable {}
     /// The reply: whether the helper restarted; missing counts as not.
-    struct Reply: Decodable { let restarted: Bool? }
+    struct Reply: Decodable {
+      /// Whether the helper restarted; missing counts as not.
+      let restarted: Bool?
+    }
     let data = try await post("recover", Body(), timeout: Self.recoveryTimeout, lateCode: Self.stillRecoveringCode)
     return Self.decoded(Reply.self, from: data)?.restarted == true
   }
@@ -254,7 +274,9 @@ public struct ViewerClient: ViewerService {
   static func failure(_ data: Data, fallback: String) -> ServiceError {
     /// A refusal: the service's error and its code, either of which may be missing.
     struct Reply: Decodable {
+      /// The service's error, in words.
       let error: String?
+      /// The error's code, such as the one for a helper still recovering.
       let code: String?
     }
     let reply = decoded(Reply.self, from: data)

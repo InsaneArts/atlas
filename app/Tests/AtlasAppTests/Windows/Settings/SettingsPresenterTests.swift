@@ -38,4 +38,12 @@ struct SettingsPresenterTests {
     #expect(!SettingsPresenter.ready(items).contains { $0.isChecking })
     #expect(SettingsPresenter.ready(items).last?.offersCheck == true)
   }
+
+  @Test("each readiness row carries its place in the list, which staggers its mark's pop, checking or not")
+  func eachRowCarriesItsPlace() {
+    let items = ["Helper is running", "Mouse and keyboard", "Screen pictures"]
+      .map { ReadinessItem(name: $0, text: "", state: .ready) }
+    #expect(SettingsPresenter.ready(items).map(\.index) == [0, 1, 2])
+    #expect(SettingsPresenter.ready(items, checking: true).map(\.index) == [0, 1, 2])
+  }
 }

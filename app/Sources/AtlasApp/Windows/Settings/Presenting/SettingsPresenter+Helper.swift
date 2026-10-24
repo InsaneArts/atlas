@@ -47,20 +47,23 @@ extension SettingsPresenter {
   }
 
   /// The readiness checks as the pane lists them: what to do only under a check that is not ready, Check Again on
-  /// the last row, and a spinner in every mark's place while Check Again reads.
+  /// the last row, a spinner in every mark's place while Check Again reads, and each row's place, which staggers its
+  /// mark's pop.
   ///
   /// - Parameters:
   ///   - items: Each check, as the status reads it.
   ///   - checking: Whether Check Again's reading runs now.
   /// - Returns: The rows.
   static func ready(_ items: [ReadinessItem], checking: Bool = false) -> [SettingsReadyRow] {
-    items.map { item in
-      SettingsReadyRow(
-        item: ReadinessItem(name: item.name, text: item.state == .ready ? "" : item.text, state: item.state),
-        offersCheck: item.id == items.last?.id,
-        isChecking: checking
-      )
-    }
+    items.enumerated()
+      .map { index, item in
+        SettingsReadyRow(
+          item: ReadinessItem(name: item.name, text: item.state == .ready ? "" : item.text, state: item.state),
+          offersCheck: item.id == items.last?.id,
+          isChecking: checking,
+          index: index
+        )
+      }
   }
 
   /// What the last command said, if it ran in `tab`. A note that waits on something running shows only while it

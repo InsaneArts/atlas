@@ -8,6 +8,16 @@ package struct Status: Sendable {
   package init(name: String) {
     self.name = name
   }
+
+  /// Posts the name.
+  package func post() {
+    struct Body: Encodable {
+      let name: String
+    }
+    /// The reply: whether it went.
+    struct Reply: Decodable { let ok: Bool }
+    _ = Body(name: name)
+  }
 }
 
 package enum Word {

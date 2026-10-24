@@ -121,18 +121,21 @@ test('the modifier checker passes calls that each start a line, and calls inside
   assert.equal(status, 0, lines.join('\n'));
 });
 
-test('the docs checker flags a package declaration without a doc comment', () => {
+test("the docs checker flags a package declaration, a local wire type or its field, and a field on its type's line, without a doc comment", () => {
   const { status, lines, stdout } = check('docs', 'dirty');
   assert.equal(status, 1);
   assert.deepEqual(lines, [
     'dirty/Status.swift:3: let without a doc comment',
-    'dirty/Status.swift:13: enum without a doc comment',
-    'dirty/Status.swift:14: case without a doc comment',
+    'dirty/Status.swift:14: struct without a doc comment',
+    'dirty/Status.swift:15: let without a doc comment',
+    "dirty/Status.swift:18: let on its type's line, without a doc comment: give it a line and a doc",
+    'dirty/Status.swift:23: enum without a doc comment',
+    'dirty/Status.swift:24: case without a doc comment',
   ]);
   assert.equal(stdout, '');
 });
 
-test('the docs checker passes documented, private and local declarations', () => {
+test('the docs checker passes documented, private and local declarations, documented local wire types and one-line key lists', () => {
   const { status, lines } = check('docs', 'clean');
   assert.equal(status, 0, lines.join('\n'));
 });
@@ -288,18 +291,37 @@ test('with no allow list nothing is waived and every rule is a gate', () => {
   assert.equal(list.reportsOnly('docs', undefined), false);
 });
 
-test("the tests checker passes the ceiling's one wall-clock wait and fails the same wait anywhere else", (t) => {
+test('the tests checker passes the wait inside Ceiling.timer and fails any other wall-clock wait, in that file or elsewhere', (t) => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-check-swift-'));
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
   const testing = path.join(base, 'app/Packages/AsyncSupport/Sources/AsyncSupportTesting');
   fs.mkdirSync(testing, { recursive: true });
+  const ceiling = [
+    'enum Ceiling {',
+    '  static func timer(_ ceiling: Duration, _ passed: @escaping @Sendable () -> Void) -> Task<Void, Never> {',
+    '    Task {',
+    '      do {',
+    '        try await Task.sleep(for: ceiling)',
+    '      } catch {',
+    '        return',
+    '      }',
+    '      passed()',
+    '    }',
+    '  }',
+    '',
+    '  static func wait() async throws {',
+    '    try await Task.sleep(for: .seconds(1))',
+    '  }',
+    '}',
+    '',
+  ].join('\n');
   const wait = [
     'func wait() async throws {',
     '  try await Task.sleep(for: .seconds(1))',
     '}',
     '',
   ].join('\n');
-  fs.writeFileSync(path.join(testing, 'Ceiling.swift'), wait);
+  fs.writeFileSync(path.join(testing, 'Ceiling.swift'), ceiling);
   fs.writeFileSync(path.join(testing, 'Pause.swift'), wait);
   const { status, lines } = check(
     'tests',
@@ -308,6 +330,7 @@ test("the tests checker passes the ceiling's one wall-clock wait and fails the s
   );
   assert.equal(status, 1);
   assert.deepEqual(lines, [
+    'app/Packages/AsyncSupport/Sources/AsyncSupportTesting/Ceiling.swift:14: wall-clock sleep in a test: wait on a sentinel or a manual clock',
     'app/Packages/AsyncSupport/Sources/AsyncSupportTesting/Pause.swift:2: wall-clock sleep in a test: wait on a sentinel or a manual clock',
   ]);
 });

@@ -48,8 +48,11 @@ public struct Outcome: Sendable {
   public static func parse(status: Int32, stdout: Data, stderr: Data) -> Outcome {
     /// What the command printed: whether it worked, and its error and code when it did not.
     struct Reply: Decodable {
+      /// Whether the command worked; missing counts as worked when it exited 0.
       let ok: Bool?
+      /// What went wrong, in words, when it did not work.
       let error: String?
+      /// What went wrong, as a code, when it did not work.
       let code: String?
     }
     let decoder = JSONDecoder()

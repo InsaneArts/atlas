@@ -32,35 +32,6 @@ extension View {
   }
 }
 
-/// The card's top highlight (v3 `.panel2`'s `inset 0 .5px 0`, R3): the light edge along the top, fading out where
-/// the corners end.
-private enum PanelCardHighlight {
-  /// The highlight's paint, from the top edge to a tenth of the way down.
-  static var gradient: LinearGradient {
-    LinearGradient(
-      colors: [Color.strokeHighlight, .clear],
-      startPoint: .top,
-      endPoint: UnitPoint(x: 0.5, y: 0.1)
-    )
-  }
-}
-
-/// Where the card's shadow may show: everywhere but under the card, so the glass never darkens over its own shadow.
-private struct PanelCardShadowMask: View {
-  /// The card's outline.
-  let shape: RoundedRectangle
-
-  var body: some View {
-    Rectangle()
-      .padding(-PanelLayout.shadowRoom)
-      .overlay {
-        shape
-          .blendMode(.destinationOut)
-      }
-      .compositingGroup()
-  }
-}
-
 #if DEBUG
   #Preview("Samples") {
     ModifierSamples(.panelCard)

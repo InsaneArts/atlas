@@ -311,6 +311,17 @@ public enum Motion {
     reduceMotion ? .opacity : moving
   }
 
+  /// How changing content redraws: a morph, such as digits counting or words interpolating, or a crossfade under
+  /// Reduce Motion, so nothing slides or reshapes.
+  ///
+  /// - Parameters:
+  ///   - moving: The content transition, such as `.numericText()`.
+  ///   - reduceMotion: Whether the Reduce Motion setting is on.
+  /// - Returns: `moving`, or `.opacity` under Reduce Motion.
+  static func contentTransition(_ moving: ContentTransition, reduceMotion: Bool) -> ContentTransition {
+    reduceMotion ? .opacity : moving
+  }
+
   /// Whether a loop runs, such as a breath or a spinning ring: never under Reduce Motion.
   ///
   /// - Parameter reduceMotion: Whether the Reduce Motion setting is on.

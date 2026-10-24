@@ -2,12 +2,11 @@ import SwiftUI
 
 /// One readiness check (v3 G5): its mark, its name, and, while it is not ready, its fix in orange under it; the last
 /// carries Check Again. While Check Again reads, each mark turns to a spinner, and as the reading lands each new mark
-/// pops in ``SettingsLayout/checkStagger(index:)`` after the row's start, so the rows pass one after another.
+/// pops in ``SettingsLayout/checkStagger(index:)`` after the row's start, so the rows pass one after another. VoiceOver
+/// hears Checking while it reads, never the result it is replacing.
 struct HelperReadyRow: View {
   /// The check.
   let row: SettingsReadyRow
-  /// The row's place in the section, the first 0.
-  let index: Int
   /// Which buttons can run now.
   let buttons: SettingsHelperButtons
   /// Runs Check Again.
@@ -33,7 +32,7 @@ struct HelperReadyRow: View {
         .help("Check the helper again now")
       }
     }
-    .accessibilityValue(row.item.state.spokenValue)
+    .accessibilityValue(row.spokenValue)
     .animation(stagger, value: lead)
   }
 
@@ -51,6 +50,6 @@ struct HelperReadyRow: View {
   /// The mark's pop, later for each row down; a plain fade, still staggered, under Reduce Motion.
   private var stagger: Animation {
     Motion.animation(Motion.pop, reduceMotion: reduceMotion, reduced: Motion.reduced)
-      .delay(SettingsLayout.checkStagger(index: index))
+      .delay(SettingsLayout.checkStagger(index: row.index))
   }
 }

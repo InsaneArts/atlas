@@ -92,6 +92,43 @@ struct PanelPictureTests {
     #expect(!isOrange(live.colour(x: Self.badge.x, y: Self.badge.y)), "the live picture carries none")
   }
 
+  @Test("a failed newest action leads the picture's caption with an orange dot, any other with the breathing blue one")
+  func aFailedCaptionIsOrange() throws {
+    let working = PanelCaption(text: "Clicked Save", time: "just now")
+    let failed = PanelCaption(text: "Clicked Save", time: "just now", isFailed: true)
+    #expect(PanelPicture.lead(working) == GlassChip<EmptyView>.Lead.pulsing(.active))
+    #expect(PanelPicture.lead(failed) == GlassChip<EmptyView>.Lead.dot(.attention))
+    // The chip's leading end: past the caption's corner inset, across the small chip's end inset and its dot, on the
+    // chip's middle line.
+    let left = Self.margin + Int(PanelLayout.captionInset)
+    let across = left..<(left + Int(Spacing.sPlus) + Int(IconSize.xxs) * 2)
+    let middle = Self.margin + Int(PanelLayout.picture.height - PanelLayout.captionInset - ControlHeight.xsPlus / 2)
+    func marks(_ caption: PanelCaption) throws -> (isBlue: Bool, isOrange: Bool) {
+      let state = PanelPictureState(
+        look: .live,
+        caption: caption,
+        pause: PanelPause(isPaused: false, label: "Pause picture", help: "")
+      )
+      // The system's glass draws nothing offscreen; its tint stands in, as the renders draw it.
+      let drawn = try PanelPixels(
+        PanelPicture(state: state) { _ in }
+          .padding(Spacing.l)
+          .environment(\.drawsGlassEffect, false)
+      )
+      let rows = (middle - 2)...(middle + 2)
+      let pixels = across.flatMap { x in rows.map { y in drawn.colour(x: x, y: y) } }
+      return (
+        // The breathing dot may draw at a low point of its breath, so blue need only lead clearly.
+        pixels.contains { $0.blue > 0.4 && $0.blue > $0.red * 2 && $0.blue > $0.green * 1.3 },
+        pixels.contains { $0.red > 0.85 && $0.green > 0.45 && $0.green < 0.8 && $0.blue < 0.3 }
+      )
+    }
+    let busy = try marks(working)
+    let failure = try marks(failed)
+    #expect(busy.isBlue && !busy.isOrange, "work under way breathes blue")
+    #expect(failure.isOrange && !failure.isBlue, "a failure is orange")
+  }
+
   @Test("the control row draws Stop before the main action only when its state shows it")
   func theRowDrawsStopOnlyWhenShown() throws {
     let main = PanelMainButton(title: "Open Atlas", help: "", event: .openAtlas)

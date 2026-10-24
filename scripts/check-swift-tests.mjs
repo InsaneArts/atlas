@@ -14,9 +14,10 @@
 // - `empty`: an `@Test` whose body is empty, or an `#expect` or `#require` of
 //   the literal `true`, which cannot fail.
 // - `sleep`: a wall-clock wait, `Task.sleep` or `Thread.sleep`; a test waits
-//   on a sentinel or a manual clock instead. The one exception is CEILING,
-//   `Ceiling.timer`: the bound every wait has, not a pause, cancelled as soon
-//   as the event it bounds comes.
+//   on a sentinel or a manual clock instead. The one exception is the wait
+//   inside `Ceiling.timer`'s body in CEILING: the bound every wait has, not a
+//   pause, cancelled as soon as the event it bounds comes. Any other sleep in
+//   that file is reported like one anywhere else.
 //
 // The `force` and `empty` rules port ../jolt-v2/Scripts/check_tests.py. A
 // text heuristic over Swift, with comments and string contents blanked
@@ -53,8 +54,10 @@ const LOOKBACK = 200;
 const MARKER = '// swift-format-ignore: NeverForceUnwrap';
 const OPENERS = { ')': '(', ']': '[', '>': '<' };
 const WALL_CLOCK = /\b(?:Task|Thread)\s*\.\s*sleep\b/g;
-// The one file whose wall-clock wait is the tests' ceiling, not a pause.
+// The one file whose wall-clock wait is the tests' ceiling, not a pause, and
+// the function in it that holds that wait.
 const CEILING = 'app/Packages/AsyncSupport/Sources/AsyncSupportTesting/Ceiling.swift';
+const TIMER = /\bfunc\s+timer\s*(?:<[^<>{};]*>)?\s*\(/g;
 
 // The index of the parenthesis closing the one at `opening`, or null.
 function closing(code, opening) {
@@ -65,6 +68,27 @@ function closing(code, opening) {
       depth -= 1;
       if (depth === 0) return index;
     }
+  }
+  return null;
+}
+
+// The span [start, end) of `Ceiling.timer`'s body in `code`, the blanked
+// source of CEILING, or null when it declares no timer.
+function timerBody(code) {
+  for (const timer of code.matchAll(TIMER)) {
+    const parameters = closing(code, timer.index + timer[0].length - 1);
+    if (parameters === null) return null;
+    const start = code.indexOf('{', parameters);
+    if (start < 0) return null;
+    let depth = 0;
+    for (let index = start; index < code.length; index += 1) {
+      if (code[index] === '{') depth += 1;
+      else if (code[index] === '}') {
+        depth -= 1;
+        if (depth === 0) return [start, index + 1];
+      }
+    }
+    return null;
   }
   return null;
 }
@@ -251,7 +275,9 @@ export function violations(text, file = '') {
     }
   }
   found.push(...bangs.values());
-  for (const sleep of file === CEILING ? [] : code.matchAll(WALL_CLOCK)) {
+  const bound = file === CEILING ? timerBody(code) : null;
+  for (const sleep of code.matchAll(WALL_CLOCK)) {
+    if (bound && sleep.index >= bound[0] && sleep.index < bound[1]) continue;
     found.push({ line: line(sleep.index), rule: 'sleep', message: SLEEP });
   }
   return found.sort((a, b) => a.line - b.line);

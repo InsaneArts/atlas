@@ -15,7 +15,10 @@ extension ViewerStatus {
     enum CodingKeys: String, CodingKey { case user, inputService }
 
     /// The session's user.
-    struct User: Decodable { var name: String? }
+    struct User: Decodable {
+      /// The user's short name; nil when the session does not say.
+      var name: String?
+    }
 
     /// The input service, as the session reports it.
     struct Input: Decodable {

@@ -16,17 +16,16 @@ struct AgentConnectionRow: View {
       ZStack(alignment: .trailing) {
         connection
           .id(isConnected)
-          .transition(
-            Motion.transition(.scale(scale: Layout.arrival).combined(with: .opacity), reduceMotion: reduceMotion)
-          )
+          .transition(Motion.transition(arrival, reduceMotion: reduceMotion))
       }
       .animation(Motion.animation(Motion.pop, reduceMotion: reduceMotion, reduced: Motion.reduced), value: isConnected)
     }
   }
 
-  /// Where the agent stands, at the row's end.
+  /// Where the agent stands, at the row's end. Connect and Connecting… are one branch, so they are one button whose
+  /// label morphs, never two that swap.
   @ViewBuilder private var connection: some View {
-    switch agent.connection {
+    switch Self.trailing(agent.connection) {
     case .connected:
       HStack(spacing: Spacing.xsPlus) {
         OutcomeMark(kind: .done)
@@ -35,12 +34,9 @@ struct AgentConnectionRow: View {
           .foregroundStyle(Color.textSuccess)
       }
       .accessibilityElement(children: .combine)
-    case .connect(let isEnabled):
-      connectButton(isWorking: false)
+    case .button(let isWorking, let isEnabled):
+      connectButton(isWorking: isWorking)
         .disabled(!isEnabled)
-    case .connecting:
-      connectButton(isWorking: true)
-        .disabled(true)
     case .note(let text):
       Text(text)
         .textStyle(.callout)
@@ -64,6 +60,26 @@ struct AgentConnectionRow: View {
     switch agent.icon {
     case .app(let icon): .image(icon)
     case .tile(let tile): .tile(tile)
+    }
+  }
+
+  /// How Connected's check and word pop in: from small as they fade in.
+  private var arrival: AnyTransition {
+    AnyTransition.scale(scale: Layout.arrival)
+      .combined(with: .opacity)
+  }
+
+  /// What stands at the row's end for a connection: Connect and Connecting… as one button, so its place and identity
+  /// hold while the connection runs.
+  ///
+  /// - Parameter connection: Where the agent stands.
+  /// - Returns: The row's end.
+  nonisolated static func trailing(_ connection: SettingsAgentRow.Connection) -> Trailing {
+    switch connection {
+    case .connected: .connected
+    case .connect(let isEnabled): .button(isWorking: false, isEnabled: isEnabled)
+    case .connecting: .button(isWorking: true, isEnabled: false)
+    case .note(let text): .note(text)
     }
   }
 

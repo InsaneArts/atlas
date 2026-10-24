@@ -26,6 +26,52 @@ struct PanelLayoutTests {
     }
   }
 
+  @Test("Stop grows in and shrinks away on the slot's own curves, fourth in the cascade with the buttons")
+  func stopMovesWithTheButtons() {
+    let buttons = PanelLayout.cascadeDelay(index: PanelLayout.Piece.buttons.rawValue)
+    #expect(buttons > 0, "after the word, the line and the picture")
+    #expect(PanelLayout.slot(isShown: true, reduceMotion: false) == Motion.arrive.delay(buttons))
+    #expect(PanelLayout.slot(isShown: false, reduceMotion: false) == Motion.leave.delay(buttons))
+    #expect(
+      PanelLayout.slot(isShown: true, reduceMotion: true) == Motion.reduced,
+      "under Reduce Motion: a fade, at once"
+    )
+    #expect(PanelLayout.slot(isShown: false, reduceMotion: true) == Motion.reduced)
+  }
+
+  @Test("under Reduce Motion the live row's dot only fades as it cools, its place held while the row is live")
+  func theLiveDotOnlyFadesUnderReduceMotion() {
+    #expect(PanelRecentRow.holdsDot(isLive: true, isCooled: false, reduceMotion: false))
+    #expect(!PanelRecentRow.holdsDot(isLive: true, isCooled: true, reduceMotion: false), "the words close the gap")
+    #expect(PanelRecentRow.holdsDot(isLive: true, isCooled: false, reduceMotion: true))
+    #expect(PanelRecentRow.holdsDot(isLive: true, isCooled: true, reduceMotion: true), "cooling moves nothing")
+    for reduceMotion in [false, true] {
+      for isCooled in [false, true] {
+        #expect(!PanelRecentRow.holdsDot(isLive: false, isCooled: isCooled, reduceMotion: reduceMotion))
+      }
+    }
+  }
+
+  @Test("the panel's caption chip is v3's small chip, and the working sample's caption fits it whole")
+  @MainActor
+  func theCaptionFitsItsChip() throws {
+    let size = GlassChip<EmptyView>.Size.small
+    #expect(size.height == 26 && size.inset == 10 && size.gap == 7)
+    let regular = GlassChip<EmptyView>.Size.regular
+    #expect(regular.height == 28 && regular.inset == 12 && regular.gap == 8, "the viewer's chip stays as it was")
+    let caption = try #require(PreviewStates.panelWorking.picture.caption)
+    func width(_ size: GlassChip<Text>.Size) throws -> CGFloat {
+      let renderer = ImageRenderer(
+        content: GlassChip(lead: .pulsing(.active), time: caption.time, size: size) { Text(caption.text) }
+          .fixedSize()
+      )
+      renderer.scale = 1
+      return CGFloat(try #require(renderer.cgImage, "nothing was drawn").width)
+    }
+    #expect(try width(.small) <= PanelLayout.captionWidth, "the small chip holds it without cutting it")
+    #expect(try width(.regular) > PanelLayout.captionWidth, "the viewer's chip would have cut it")
+  }
+
   @Test("the panel's ground is tinted over the glass, and opaque under Reduce Transparency")
   func theGroundIsTintedOverTheGlass() {
     #expect(PanelLayout.groundOpacity(reduceTransparency: false) == 0.8)

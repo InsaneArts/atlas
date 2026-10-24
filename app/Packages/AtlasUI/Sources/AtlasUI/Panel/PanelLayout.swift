@@ -117,6 +117,23 @@ enum PanelLayout {
     )
   }
 
+  /// How Stop comes and goes in its slot (v3 D11, P7): growing in on ``Motion/arrive`` and shrinking away on
+  /// ``Motion/leave``, as every slot does, but fourth in the cascade with the buttons, never ahead of the word; the
+  /// short fade ``Motion/reduced`` at once under Reduce Motion.
+  ///
+  /// - Parameters:
+  ///   - isShown: Whether Stop shows now.
+  ///   - reduceMotion: Whether the Reduce Motion setting is on.
+  /// - Returns: The slot's animation.
+  static func slot(isShown: Bool, reduceMotion: Bool) -> Animation {
+    let base = isShown ? Motion.arrive : Motion.leave
+    return Motion.animation(
+      base.delay(cascadeDelay(index: Piece.buttons.rawValue)),
+      reduceMotion: reduceMotion,
+      reduced: Motion.reduced
+    )
+  }
+
   /// The ground's opacity: the tint over the popover's glass, or whole under Reduce Transparency (v3 P3).
   ///
   /// - Parameter reduceTransparency: Whether the Reduce Transparency setting is on.

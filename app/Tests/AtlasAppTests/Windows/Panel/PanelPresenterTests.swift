@@ -178,6 +178,18 @@ struct PanelPresenterTests {
     #expect(PanelPresenter.state(snapshot).picture.caption == nil)
   }
 
+  @Test("while an agent works a newest action that failed keeps its failure on the picture's caption")
+  func aFailedNewestActionKeepsItsFailure() throws {
+    var snapshot = try Self.snapshot("Working")
+    snapshot.status.overview.activity = [
+      .init(operation: "input", ok: false, ageSeconds: 2, says: "clicked Save"),
+      .init(operation: "input", ok: true, ageSeconds: 9, says: "opened TextEdit"),
+    ]
+    #expect(PanelPresenter.state(snapshot).picture.caption?.isFailed == true)
+    snapshot.status.overview.activity[0].ok = true
+    #expect(PanelPresenter.state(snapshot).picture.caption?.isFailed == false)
+  }
+
   @Test(
     "Recover… is offered only where it fixes something, by the main window's rule: an unknown outcome or input it starts"
   )

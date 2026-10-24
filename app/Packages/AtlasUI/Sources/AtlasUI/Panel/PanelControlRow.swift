@@ -1,13 +1,14 @@
 import SwiftUI
 
 /// The panel's buttons, the actions on the agent (v3 P2): Stop in its slot only while an agent works, growing in and
-/// out as the main action makes room, then the white main action filling the row. Each says what it does in its
-/// tooltip; the panel registers no shortcuts.
+/// out as the main action makes room, then the white main action filling the row. The row moves fourth in the panel's
+/// cascade (v3 P7), its slot included. Each says what it does in its tooltip; the panel registers no shortcuts.
 struct PanelControlRow: View {
   /// The buttons' states.
   let controls: PanelControls
   /// Receives what the person does.
   let send: @MainActor (PanelEvent) -> Void
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   /// Stop in its slot, then the main action filling the row.
   var body: some View {
@@ -21,7 +22,8 @@ struct PanelControlRow: View {
         .disabled(!controls.main.isEnabled)
         .help(controls.main.help)
     }
-    .animatesActionSlots(controls.showsStop)
+    // The slot's own row animation would start at once, ahead of the cascade; the panel's waits for the buttons' turn.
+    .animation(PanelLayout.slot(isShown: controls.showsStop, reduceMotion: reduceMotion), value: controls.showsStop)
   }
 }
 

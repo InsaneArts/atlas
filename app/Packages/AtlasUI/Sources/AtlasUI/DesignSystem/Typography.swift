@@ -40,8 +40,9 @@ enum Typography {
   }
 
   /// A system font for a glyph sized from its frame rather than from the scale, such as a symbol at a fraction of the
-  /// circle it sits in. Only for glyphs sized from a frame: the size is arithmetic on the frame's token, never a
-  /// literal, which the token checker refuses.
+  /// circle it sits in, or for words at a size between the scale's steps that one component's design asks for, such
+  /// as the panel's small chip at 11.5. The size is arithmetic on a token or a named measure of that component, never
+  /// a literal, which the token checker refuses.
   ///
   /// - Parameters:
   ///   - size: The glyph's size in points, derived from its frame.
