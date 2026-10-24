@@ -8,8 +8,8 @@ import Testing
 @MainActor
 @Suite("SuccessIcon")
 struct SuccessIconTests {
-  @Test("the done screen's ring plays once per arrival, not on every redraw")
-  func ringPlaysOncePerArrival() {
+  @Test("the done screen's icon settles once per arrival, not on every redraw")
+  func iconSettlesOncePerArrival() {
     let plays = PlayCount()
     let window = NSWindow(
       contentRect: NSRect(origin: .zero, size: OnboardingLayout.card),

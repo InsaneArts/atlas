@@ -1,7 +1,7 @@
 import AtlasUI
 import CoreGraphics
 
-/// Where the Settings window goes as it fits a pane (v3 G2, X2): as tall as the pane, its top edge where it is, and
+/// Where the Settings window goes as it fits a pane: as tall as the pane, its top edge where it is, and
 /// never taller than the screen nor past its bottom. The window has a full-size content view, so its frame is as tall
 /// as its content.
 enum SettingsWindowFrame {

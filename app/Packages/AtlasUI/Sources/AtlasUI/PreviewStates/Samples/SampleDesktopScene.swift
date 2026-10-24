@@ -5,7 +5,7 @@
   /// three buttons and a few lines of text. Its colours, sizes and words are a sample desktop's, not the app's, so
   /// they are not tokens (``SampleDesktop``).
   struct SampleDesktopScene: View {
-    /// A display's size, in points, at the boards' 16 by 10.
+    /// A display's size, in points, at a 16-by-10 aspect ratio.
     private let display = CGSize(width: 1440, height: 900)
 
     /// A blue ground with a menu bar strip and one window on it, in light mode.

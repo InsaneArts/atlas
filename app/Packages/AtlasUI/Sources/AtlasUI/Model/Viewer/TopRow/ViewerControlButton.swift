@@ -3,13 +3,15 @@
 public struct ViewerControlButton: Equatable, Sendable {
   /// The button's title.
   public var title: String
-  /// Whether it can be pressed: an action that exists and waits for something, such as Take Control while the
-  /// picture is paused (v3 D11).
+  /// Whether it can be pressed: an action that exists and waits for something.
   public var isEnabled: Bool
   /// Its tooltip, with its shortcut.
   public var help: String
   /// What pressing it sends.
   public var event: ViewerEvent
+  /// Every title the capsule can show, so it keeps the widest one's width whichever it shows; none keeps the title's
+  /// own.
+  public var titles: [String]
 
   /// Creates the control capsule.
   ///
@@ -18,10 +20,12 @@ public struct ViewerControlButton: Equatable, Sendable {
   ///   - isEnabled: Whether it can be pressed.
   ///   - help: Its tooltip, with its shortcut.
   ///   - event: What pressing it sends.
-  public init(title: String, isEnabled: Bool, help: String, event: ViewerEvent) {
+  ///   - titles: Every title the capsule can show; none by default.
+  public init(title: String, isEnabled: Bool, help: String, event: ViewerEvent, titles: [String] = []) {
     self.title = title
     self.isEnabled = isEnabled
     self.help = help
     self.event = event
+    self.titles = titles
   }
 }

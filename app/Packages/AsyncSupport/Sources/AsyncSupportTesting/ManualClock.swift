@@ -1,19 +1,21 @@
 import os
 
-/// A clock a test moves by hand: `sleep` waits until ``advance(by:)`` reaches its deadline, so a test of an interval,
-/// a heartbeat or a pause runs at once and never sleeps on the wall clock. The app's controllers take it where the app
-/// passes `ContinuousClock()`.
+/// A clock a test moves by hand: `sleep` waits until ``advance(by:)`` reaches its deadline, so a test of an
+/// interval, a heartbeat or a pause runs at once and never sleeps on the wall clock. The app's controllers
+/// take it where the app passes `ContinuousClock()`.
 ///
-/// A test learns that something sleeps from ``sleepers()`` (or ``untilSleeping(_:for:_:within:sourceLocation:)``),
-/// never by yielding or polling: it waits for the sleeper it expects, then advances. ``advance(by:)`` wakes every
-/// sleeper it reaches in deadline order, the earliest first and two with one deadline in the order they began. A
-/// cancelled sleeper throws `CancellationError` and is forgotten at once, whether it was cancelled while waiting or
-/// before it began to wait, so the clock holds nothing for a sleeper that has returned.
+/// A test learns that something sleeps from ``sleepers()`` (or
+/// ``untilSleeping(_:for:_:within:sourceLocation:)``), never by yielding or polling: it waits for the sleeper
+/// it expects, then advances. ``advance(by:)`` wakes every sleeper it reaches in deadline order, the earliest
+/// first and two with one deadline in the order they began. A cancelled sleeper throws `CancellationError`
+/// and is forgotten at once, whether it was cancelled while waiting or before it began to wait, so the clock
+/// holds nothing for a sleeper that has returned.
 ///
-/// It is a class guarded by a lock rather than an actor because a sleeper's cancellation handler runs synchronously on
-/// any thread and must remove the sleeper at once. Each change records the deadlines left waiting under the lock, and
-/// they are handed to readers only outside it, under a second lock no handler takes, in the order the changes
-/// happened. This is jolt's `ManualClock`, on `OSAllocatedUnfairLock` since Atlas runs on macOS 14.
+/// It is a class guarded by a lock rather than an actor because a sleeper's cancellation handler runs
+/// synchronously on any thread and must remove the sleeper at once. Each change records the deadlines left
+/// waiting under the lock, and they are handed to readers only outside it, under a second lock no handler
+/// takes, in the order the changes happened. Uses `OSAllocatedUnfairLock` to coordinate test tasks on macOS
+/// 14 and later.
 public final class ManualClock: Clock, Sendable {
   /// A point on the manual clock: the time advanced since the clock was made.
   public struct Instant: InstantProtocol {

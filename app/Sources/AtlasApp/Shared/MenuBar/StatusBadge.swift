@@ -4,11 +4,13 @@ import AtlasUI
 /// The menu bar item's badge: a shape layer over the status button's image, in the hole ``StatusGlyph`` knocks out of
 /// the orbit for it. Its shape and colour come from the look.
 ///
-/// A state change moves it (v3 M4, X14): a badge arriving scales in from nothing on ``Motion/LayerSpring/pop``, and
-/// one badge giving way to another crossfades its colour and its shape, disc to square and back, over
+/// A disc or a square is filled; a ring is stroked, its fill clear, so the menu bar shows through its middle.
+///
+/// A state change moves it: a badge arriving scales in from nothing on ``Motion/LayerSpring/pop``, and one badge giving
+/// way to another crossfades its fill, its stroke and its shape, disc to square or ring and back, over
 /// ``Motion/Duration/crossfade``, letting a pop that runs finish. A badge leaving goes at once, with the ring the
 /// orbit closes around it. While the look breathes, a Core Animation repeat fades it 100 → 50% and back over
-/// ``Motion/Duration/breathe`` (M3), never a timer; the breath moves its opacity and the pop its scale, so neither
+/// ``Motion/Duration/breathe``, never a timer; the breath moves its opacity and the pop its scale, so neither
 /// stops the other, and when the breath stops its opacity settles back to whole over the crossfade. Under Reduce
 /// Motion a new state swaps in at once and nothing breathes; while a menu is open a new state swaps in at once, a
 /// breath that runs keeps running, and none starts. The model values are always the new state's, set at once, so a
@@ -22,10 +24,12 @@ final class StatusBadge {
   static let colourKey = "colour"
   /// The shape crossfade's key on the layer.
   static let shapeKey = "shape"
+  /// The stroke's colour crossfade's key on the layer.
+  static let strokeKey = "stroke"
   /// The key of the opacity settling to whole when the breath stops.
   static let settleKey = "settle"
   /// The keys of every animation a state change starts, as opposed to the breath.
-  static let changeKeys = [popKey, colourKey, shapeKey, settleKey]
+  static let changeKeys = [popKey, colourKey, shapeKey, strokeKey, settleKey]
 
   /// The layer, added to the status button's own layer.
   let layer = CAShapeLayer()
@@ -40,6 +44,7 @@ final class StatusBadge {
     layer.isHidden = true
     layer.zPosition = Layout.above
     layer.actions = Self.still
+    layer.lineWidth = StatusGlyph.ringStroke
   }
 
   /// Shows the badge a look asks for, or hides it.
@@ -69,19 +74,23 @@ final class StatusBadge {
     let now = layer.presentation() ?? layer
     layer.frame = Self.place(box, in: image, flipped: flipped)
     let path = StatusGlyph.outline(of: look.badge, in: CGRect(origin: .zero, size: box.size))
-    var fill: CGColor?
-    appearance.performAsCurrentDrawingAppearance { fill = colour.cgColor }
+    var ink: CGColor?
+    appearance.performAsCurrentDrawingAppearance { ink = colour.cgColor }
+    let clear = NSColor.clear.cgColor
+    let hollow = StatusGlyph.isHollow(look.badge)
+    let paint = Paint(fill: hollow ? clear : ink, stroke: hollow ? ink : clear)
     if before != look.badge {
-      change(from: before, now: now, path: path, fill: fill, moves: motion == .all)
+      change(from: before, now: now, path: path, paint: paint, moves: motion == .all)
     }
     layer.path = path
-    layer.fillColor = fill
+    layer.fillColor = paint.fill
+    layer.strokeColor = paint.stroke
     layer.isHidden = false
     breathe(look.breathes, now: now, motion: motion)
   }
 
   /// Stops every animation a state change started, leaving the badge as its model values say, final; the breath
-  /// keeps running. For a menu opening, so nothing moves in the frame its tracking starts (v3 R16).
+  /// keeps running. For a menu opening, so nothing moves in the frame its tracking starts.
   func settle() {
     for key in Self.changeKeys {
       layer.removeAnimation(forKey: key)
@@ -89,29 +98,32 @@ final class StatusBadge {
   }
 
   /// Moves the badge from the one shown before to a new one, about to be set: a pop when none showed, a crossfade
-  /// of colour and shape from what shows now when one did, letting a pop that runs finish, or, when nothing may
-  /// move, no animation at all, every one still running from an earlier change stopped.
+  /// of fill, stroke and shape from what shows now when one did, letting a pop that runs finish, or, when nothing
+  /// may move, no animation at all, every one still running from an earlier change stopped.
   ///
   /// - Parameters:
   ///   - before: The badge shown before.
   ///   - now: The layer as it shows now.
   ///   - path: The new badge's outline.
-  ///   - fill: The new badge's colour.
+  ///   - paint: The new badge's fill and stroke.
   ///   - moves: Whether the change may animate.
-  private func change(from before: StatusGlyph.Badge, now: CAShapeLayer, path: CGPath, fill: CGColor?, moves: Bool) {
+  private func change(from before: StatusGlyph.Badge, now: CAShapeLayer, path: CGPath, paint: Paint, moves: Bool) {
     guard moves else {
       settle()
       return
     }
-    for key in [Self.colourKey, Self.shapeKey, Self.settleKey] {
+    for key in [Self.colourKey, Self.shapeKey, Self.strokeKey, Self.settleKey] {
       layer.removeAnimation(forKey: key)
     }
     guard before != .none else {
       run(Self.pop(), forKey: Self.popKey)
       return
     }
-    if now.fillColor != fill {
-      run(Self.crossfade("fillColor", from: now.fillColor, to: fill), forKey: Self.colourKey)
+    if now.fillColor != paint.fill {
+      run(Self.crossfade("fillColor", from: now.fillColor, to: paint.fill), forKey: Self.colourKey)
+    }
+    if now.strokeColor != paint.stroke {
+      run(Self.crossfade("strokeColor", from: now.strokeColor, to: paint.stroke), forKey: Self.strokeKey)
     }
     if now.path != path {
       run(Self.crossfade("path", from: now.path, to: path), forKey: Self.shapeKey)
@@ -173,7 +185,7 @@ final class StatusBadge {
   /// A crossfade of one of the badge's properties, easing out over ``Motion/Duration/crossfade``.
   ///
   /// - Parameters:
-  ///   - keyPath: The property: its colour or its outline.
+  ///   - keyPath: The property: its fill, its stroke or its outline.
   ///   - from: What it shows now.
   ///   - to: What it shows next.
   /// - Returns: The animation.
@@ -219,6 +231,7 @@ final class StatusBadge {
   private static let still: [String: any CAAction] = [
     "path": NSNull(),
     "fillColor": NSNull(),
+    "strokeColor": NSNull(),
     "hidden": NSNull(),
     "position": NSNull(),
     "bounds": NSNull(),
@@ -227,7 +240,7 @@ final class StatusBadge {
 
 /// The badge's own measures.
 private enum Layout {
-  /// 0.5: the badge's opacity at the bottom of a breath (v3 M3).
+  /// 0.5: the badge's opacity at the bottom of a breath.
   static let breathLow = 0.5
   /// 1: above anything the button draws in its own layer.
   static let above: CGFloat = 1

@@ -18,12 +18,7 @@ enum OnboardingPresenter {
       case .loading(let problem): loadingFooter(failed: problem != nil)
       case .permissionPanel: panelFooter
       }
-    return OnboardingState(
-      content: content,
-      footer: footer,
-      note: note(snapshot),
-      direction: snapshot.direction.page
-    )
+    return OnboardingState(content: content, footer: footer, note: note(snapshot))
   }
 
   /// The permission panel while a permission is allowed, the first reading until it lands, or the step's screen.
@@ -55,20 +50,39 @@ enum OnboardingPresenter {
     case .finishing: .finishing(finishing(snapshot))
     case .agents: .agents(agents(snapshot))
     case .done: .done(done(snapshot))
-    case .allow: .allow(allow(snapshot.facts))
+    case .allow: .allow(allow(snapshot))
     case .permissions: .permissions(permissions(snapshot))
     case .helperDone: .helperDone(helperDone(snapshot.facts.asker))
+    case .closeLeftovers: .closeLeftovers(close(snapshot))
     case .blocked(let reason): .blocked(reason)
     }
   }
 
-  /// The line under a screen's controls: what runs, else what went wrong, else nothing.
+  /// The line under a screen's controls: what runs, else what went wrong, unless the choice shows it in the row of
+  /// the account it is about; else, on the switch, that the helper's first login is slow while Atlas waits for it;
+  /// else, on the agents, that Atlas reads them while Continue waits; else nothing.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The work note.
   static func note(_ snapshot: OnboardingSnapshot) -> WorkNote {
     if let working = snapshot.working { return .working(working) }
-    if let problem = snapshot.problem { return .problem(problem) }
+    let step = snapshot.step
+    if let problem = snapshot.problem {
+      return step == .chooseHelper && problemAccount(snapshot) != nil ? .none : .problem(problem)
+    }
+    if snapshot.slowFirstLogin, step == .switchToHelper { return .working(OnboardingWords.slowFirstLogin) }
+    if step == .agents, !snapshot.agentsLoaded, !snapshot.agentsFailed {
+      return .working(OnboardingWords.checkingAgents)
+    }
     return .none
+  }
+
+  /// The account the last problem is about, while the choice lists it.
+  ///
+  /// - Parameter snapshot: What the controller holds.
+  /// - Returns: Its short name, or nil when the problem is about no account listed.
+  static func problemAccount(_ snapshot: OnboardingSnapshot) -> String? {
+    guard snapshot.problem != nil, let name = snapshot.problemAbout else { return nil }
+    return snapshot.facts.candidates.contains { $0.name == name } ? name : nil
   }
 }

@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// The stage while there is no picture (v3 V7): Not ready, Logged out, Connecting, or a picture paused before the
-/// first, each as one pattern of mark, title, line and button on the empty stage. Connecting again keeps the last
-/// picture behind its words, blurred and dimmed, so nothing goes black (v3 R8, X4), and rings the mark once it has
-/// waited a moment (R12).
+/// The stage while there is no picture: Not ready, Logged out, Connecting, or a picture paused before the
+/// first, each as one pattern of mark, title, line and button on the empty stage. Connecting again keeps the
+/// last picture behind its words, blurred and dimmed, so nothing goes black, and rings the mark once it has
+/// waited a moment.
 struct WaitingStage: View {
   /// Why there is no picture.
   let empty: ViewerEmpty

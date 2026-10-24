@@ -49,7 +49,7 @@ struct OnboardingPresenterFooterTests {
     #expect(OnboardingPresenter.state(finishing).footer.next?.isEnabled == false, "a moment after it passes")
     finishing.passSettled = true
     let passed = try #require(OnboardingPresenter.state(finishing).footer.next)
-    #expect(passed.isEnabled && !passed.isDefault, "Return does not skip the check's result")
+    #expect(passed.isEnabled && passed.isDefault, "once the result has shown a moment, Return presses Continue")
     var agents = Samples.snapshot(try Samples.person(Samples.helper(), finished: true))
     #expect(OnboardingPresenter.state(agents).footer.next?.isEnabled == false, "agents not read yet")
     agents.agentsLoaded = true

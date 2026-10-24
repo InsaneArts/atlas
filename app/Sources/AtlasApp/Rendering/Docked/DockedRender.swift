@@ -3,7 +3,7 @@
   import AtlasUI
   import SwiftUI
 
-  /// Item 3's docked renders: the permission panel beside a sample System Settings window, tops aligned at its gap,
+  /// Docked renders: the permission panel beside a sample System Settings window, tops aligned at its gap,
   /// with the drag ghost over both at one moment of its loop, or resting at the list under Reduce Motion.
   enum DockedRender {
     /// Each docked render, by file name: the ghost's moment in its loop, and whether Reduce Motion is on.

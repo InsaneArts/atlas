@@ -1,5 +1,5 @@
-/// Every SF Symbol Atlas draws, by name (v3 D13's grid), so a state carries a symbol by value, never as a string
-/// literal. Each is drawn at its text's weight in one of ``SymbolScale``'s sizes.
+/// Every SF Symbol Atlas draws, by name, so a state carries a symbol by value, never as a string literal.
+/// Each is drawn at its text's weight in one of ``SymbolScale``'s sizes.
 public enum SymbolName: String, CaseIterable, Sendable {
   /// Pause the picture.
   case pause = "pause.fill"
@@ -9,8 +9,10 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case stop = "stop.fill"
   /// Resume the agent, where a narrow window keeps the symbol alone; not play, which the picture's pause becomes.
   case resume = "forward.fill"
-  /// Clear the window shown on the screen, where a narrow window keeps the symbol alone.
+  /// Stop showing the window outlined on the screen, in its label.
   case clear = "xmark"
+  /// Empty a search field.
+  case clearText = "xmark.circle.fill"
   /// Keys, while in control.
   case keyboard
   /// More.
@@ -49,9 +51,9 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case handRaised = "hand.raised"
   /// A problem.
   case problem = "exclamationmark.triangle.fill"
-  /// A problem's round mark, in a status line, a checklist or a row's word (v3's round "!").
+  /// A problem's round mark, in a status line, a checklist or a row's word.
   case attention = "exclamationmark.circle.fill"
-  /// A problem hero's bare mark, on its orange-tinted disc (v3 D5).
+  /// A problem hero's bare mark, on its orange-tinted disc.
   case exclamation = "exclamationmark"
   /// A check that passed.
   case passed = "checkmark.circle.fill"
@@ -71,7 +73,7 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case photos = "photo.on.rectangle"
   /// Something locked.
   case lock
-  /// A popup button's choices (v3 `.popup`).
+  /// A popup button's choices.
   case popup = "chevron.up.chevron.down"
   /// Screen Recording: the area a screenshot takes.
   case screenArea = "rectangle.dashed"

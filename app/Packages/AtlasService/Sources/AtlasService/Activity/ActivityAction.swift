@@ -1,7 +1,7 @@
-/// What kind of thing a row did in the helper, read from what the service says it did and its operation, so the
-/// viewer can mark each line with its kind (v3 V8). The service's words lead with the verb Atlas wrote for the row
-/// ("clicked Save in TextEdit", "couldn't scroll", "opening TextEdit…"), so the verb decides; a row that says nothing
-/// Atlas knows reads by its operation.
+/// What kind of thing a row did in the helper, read from what the service says it did and its operation, so
+/// the viewer can mark each line with its kind. The service's words lead with the verb Atlas wrote for the
+/// row ("clicked Save in TextEdit", "couldn't scroll", "opening TextEdit…"), so the verb decides; a row that
+/// says nothing Atlas knows reads by its operation.
 public enum ActivityAction: Equatable, Sendable {
   /// A click, a drag or the pointer moved, and mouse-and-keyboard input with no finer verb.
   case pointer

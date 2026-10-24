@@ -1,11 +1,11 @@
 import SwiftUI
 
-/// The helper's screen, small, over another tab: live with a blue dot, or faded with a pause glyph while the picture
-/// is paused. Pressing it goes back to the screen either way. It fills the room it is given, so the window sizes it in
-/// its corner, and the same frame can grow from the stage's picture and back (v3 V16).
+/// The helper's screen, small, over another tab: live with a blue dot, or faded with a pause glyph while the
+/// picture is paused. Pressing it goes back to the screen either way. It fills the room it is given, so the
+/// window sizes it in its corner, and the same frame can grow from the stage's picture and back.
 ///
-/// The picture is the window's own: the same live slot the stage draws (v3 V17), fitted at its own shape in the
-/// colour its look keeps; the black that darkens a paused picture is laid over it here.
+/// The picture is the window's own: the same live slot the stage draws, fitted at its own shape in the colour
+/// its look keeps; the black that darkens a paused picture is laid over it here.
 struct MiniScreen<Picture: View>: View {
   /// The picture, and whether it is paused.
   let state: MiniScreenState

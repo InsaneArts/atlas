@@ -28,6 +28,7 @@ extension ViewerController {
   ///   - connectedAgents: Stands in for reading the agents connected to Atlas; by default none can be read.
   ///   - wallClock: The date and time now; by default a fixed one.
   ///   - shotOutlet: Where copied screenshots go and how files are shown; by default nowhere.
+  ///   - preferences: The window's saved choices; by default in memory, with `rate` saved.
   /// - Returns: The viewer, closed until it is shown.
   static func scripted(
     _ service: ScriptedService,
@@ -41,7 +42,8 @@ extension ViewerController {
     actions: HelperActions? = nil,
     connectedAgents: @escaping @MainActor () async -> [AgentID]? = { nil },
     wallClock: @escaping @MainActor () -> Date = { Date(timeIntervalSince1970: 0) },
-    shotOutlet: ShotOutlet = ShotOutlet(copy: { _ in }, reveal: { _ in })
+    shotOutlet: ShotOutlet = ShotOutlet(copy: { _ in }, reveal: { _ in }),
+    preferences: ViewerPreferences? = nil
   ) -> ViewerController {
     let viewer = WeakViewer()
     let actions =
@@ -57,7 +59,7 @@ extension ViewerController {
       dependencies: ViewerDependencies(
         service: service,
         actions: actions,
-        preferences: .memory(rate: rate),
+        preferences: preferences ?? .memory(rate: rate),
         uptime: { clock.seconds },
         clock: clock,
         heartbeatInterval: heartbeat,

@@ -29,7 +29,10 @@ struct ViewerPresenterTests {
     var snapshot = watching(try status(["overview": ["mode": "observing", "state": "idle"]]))
     #expect(ViewerPresenter.state(snapshot).top.status.label == "Idle")
     snapshot.session.paused = true
-    #expect(ViewerPresenter.state(snapshot).top.status.line == Words.pausedLine, "a paused picture is Idle's line")
+    #expect(
+      ViewerPresenter.state(snapshot).top.status.line == Words.readyLine,
+      "a paused picture keeps the agent's own line; the screen's chip says it is paused"
+    )
     snapshot.reading.unavailable = "Gone"
     #expect(ViewerPresenter.state(snapshot).top.status.label == "Connecting")
     snapshot.reading.status = try status(["overview": ["mode": "stopped", "state": "stopped"]])
@@ -49,7 +52,7 @@ struct ViewerPresenterTests {
   }
 
   @Test(
-    "Take Control is enabled with a fresh reading of a ready helper, an agent at work included, and waits otherwise"
+    "Take Control is enabled with a fresh reading of a ready helper, an agent at work or a paused picture included, and waits otherwise"
   )
   func takeControlWaitsForEverything() throws {
     let ready = watching(try status(["ready": true, "overview": ["mode": "observing"]]))
@@ -69,7 +72,10 @@ struct ViewerPresenterTests {
     #expect(ViewerPresenter.state(elsewhere).top.actions.control?.isEnabled != true)
     var paused = ready
     paused.session.paused = true
-    #expect(ViewerPresenter.state(paused).top.actions.control?.isEnabled != true)
+    #expect(
+      ViewerPresenter.state(paused).top.actions.control?.isEnabled == true,
+      "pressed while paused, it resumes the picture first"
+    )
     var acquiring = ready
     acquiring.acquiring = true
     #expect(ViewerPresenter.state(acquiring).top.actions.control?.isEnabled != true)
@@ -247,7 +253,7 @@ struct ViewerPresenterTests {
     #expect(all.map(\.name) == ["Ready to act"])
     #expect(all.first?.value == "All checks pass")
     let some = ViewerPresenter.readyRows([ready, keys, dialogs])
-    #expect(some.map(\.name) == ["Mouse and keyboard", "Save and Open dialogs", "1 other passes"])
+    #expect(some.map(\.name) == ["Mouse and keyboard", "Save and Open dialogs", "1 more check passes"])
     #expect(some.map(\.mark) == [.notReady, .unknown, .ready], "the count of those that pass has a green check")
     #expect(some.map(\.note) == ["Accessibility is off", "Not checked yet", nil])
     #expect(ViewerPresenter.readyRows([keys]).map(\.name) == ["Mouse and keyboard"], "no count when none pass")

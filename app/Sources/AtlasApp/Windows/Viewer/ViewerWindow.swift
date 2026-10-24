@@ -2,11 +2,13 @@ import AppKit
 import AtlasUI
 import SwiftUI
 
-/// The main window: dark, resizable, its one quiet row in the title bar. It reads only while on screen, gives
-/// control back whenever it closes, hides or loses focus, opens the top row's menus, hands a dragged screenshot to
-/// the system, reads the Screenshots tab's keys (``ShotKeys``), and answers the main menu's View, File and Helper
-/// items (`ViewerWindow+Menus`) as the window itself, which the responder chain reaches. Built on the one shell
-/// (``WindowShell``), and opened and closed by the coordinator (``WindowPresenting``).
+/// The main window: dark, resizable, its one quiet row in the title bar, titled with the helper's name for the Window
+/// menu. It reads only while on screen, gives control back whenever it closes, hides or loses focus, opens the top
+/// row's menus under their buttons' trailing edges, hands a dragged screenshot to the system, reads the Screenshots
+/// tab's keys (``ShotKeys``) and Escape for a window outlined on the Screen, hands VoiceOver the states that ask
+/// something of the person (``ViewerController/askingStatus``), and answers the main menu's View, File, Edit and
+/// Helper items (`ViewerWindow+Menus`) as the window itself, which the responder chain reaches. Built on the one
+/// shell (``WindowShell``), and opened and closed by the coordinator (``WindowPresenting``).
 final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   /// The name its frame is saved under. Shipped, so it never changes.
   static let autosaveName = "AtlasViewer"
@@ -55,7 +57,7 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     toolbar = rowToolbar
     toolbarStyle = .unified
     isReleasedWhenClosed = false
-    // The system's zoom in and shrink out, as a document opens and closes (v3 X1); AppKit honours Reduce Motion.
+    // The system's zoom in and shrink out, as a document opens and closes; AppKit honours Reduce Motion.
     animationBehavior = .documentWindow
     contentMinSize = Self.leastSize
     collectionBehavior.insert(.fullScreenPrimary)
@@ -80,12 +82,38 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
       )
     }
     setFrameAutosaveName(Self.autosaveName)
+    followTitle()
+    followAnnouncements()
   }
 
-  /// Brings the window forward, where it was left, and reads while it is on screen. The app shows its Dock icon
-  /// first (``DockIcon``). Opening, its content lays out and draws before it shows, so the zoom carries the last
-  /// picture the panel read rather than Connecting (v3 X1). Ordered front is not on screen: while the screen is locked
-  /// or asleep the window is occluded, and reading starts with the occlusion change once it shows.
+  /// Titles the window with the helper's name once it is known, so the Window menu tells it from the setup window.
+  private func followTitle() {
+    StateTracking.follow { [weak self] in
+      self.map { window in
+        let reading = window.controller.reading
+        return reading.hasStatus
+          ? ViewerWords.windowTitle(helper: ViewerPresenter.account(reading.status)) : ViewerWords.windowTitle
+      }
+    } apply: { [weak self] title in
+      if self?.title != title { self?.title = title }
+    }
+  }
+
+  /// Hands VoiceOver each state that asks something of the person, once it holds
+  /// (``ViewerController/announceSoon(_:)``).
+  private func followAnnouncements() {
+    StateTracking.follow { [weak self] () -> String?? in
+      guard let self else { return nil }
+      return .some(controller.askingStatus)
+    } apply: { [weak self] (text: String?) in
+      self?.controller.announceSoon(text)
+    }
+  }
+
+  /// Brings the window forward, where it was left, and reads while it is on screen. The app shows its Dock
+  /// icon first (``DockIcon``). Opening, its content lays out and draws before it shows, so the zoom carries
+  /// the last picture the panel read rather than Connecting. Ordered front is not on screen: while the screen
+  /// is locked or asleep the window is occluded, and reading starts with the occlusion change once it shows.
   func present() {
     if !isPresented && !setFrameUsingName(Self.autosaveName) { center() }
     if !isVisible {
@@ -123,19 +151,28 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   ///   - kind: Which menu.
   private func open(_ menu: NSMenu, below frame: CGRect, as kind: ViewerMenu) {
     guard let content = contentView else { return }
-    // Nothing animates in the frame the menu's tracking loop starts, nor as it ends (v3 R16): an animation under way
+    // Nothing animates in the frame the menu's tracking loop starts, nor as it ends: an animation under way
     // then would stop halfway until the menu closes.
     var still = Transaction(animation: nil)
     still.disablesAnimations = true
     withTransaction(still) { controller.setOpenMenu(kind) }
-    // The hosting view is flipped, as SwiftUI's frames are: down is a larger y.
-    let point = NSPoint(x: frame.minX, y: frame.maxY + Self.menuGap)
-    menu.popUp(positioning: nil, at: point, in: content)
+    menu.popUp(positioning: nil, at: Self.menuOrigin(below: frame, width: menu.size.width), in: content)
     withTransaction(still) { controller.setOpenMenu(nil) }
   }
 
-  /// Reads the Screenshots tab's keys before the window does: Space, ← and → and Esc, unless a field takes the keys or
-  /// an alert is up.
+  /// Where a top-row menu opens: under its button, ``menuGap`` below it, its trailing edge on the button's, as the
+  /// buttons sit at the bar's trailing end. The hosting view is flipped, as SwiftUI's frames are: down is a larger y.
+  ///
+  /// - Parameters:
+  ///   - frame: The button's frame in the window's content, top left first.
+  ///   - width: The menu's width.
+  /// - Returns: The menu's top left corner.
+  static func menuOrigin(below frame: CGRect, width: CGFloat) -> NSPoint {
+    NSPoint(x: frame.maxX - width, y: frame.maxY + menuGap)
+  }
+
+  /// Reads the Screenshots tab's keys before the window does, and Escape on the Screen while a window is outlined,
+  /// unless a field takes the keys or an alert is up.
   private func watchShotKeys() {
     guard shotKeys == nil else { return }
     // AppKit runs a local monitor's handler on the main thread, and its handler type is not `@Sendable`, so the
@@ -152,14 +189,35 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   /// - Parameter event: The key.
   /// - Returns: The key, to pass on, or nil once handled.
   private func shotKey(_ event: NSEvent) -> NSEvent? {
-    guard event.window === self, controller.session.tab == .screenshots, controller.state.alert == nil,
-      !(firstResponder is NSText)
-    else { return event }
+    guard event.window === self, controller.state.alert == nil, !(firstResponder is NSText) else { return event }
     let held = event.modifierFlags.intersection([.command, .control, .option])
+    if controller.session.tab == .screen {
+      return outlineKey(event, hasModifiers: !held.isEmpty)
+    }
+    guard controller.session.tab == .screenshots else { return event }
     let largeShown = controller.panes.shots.large != nil
     guard let shot = ShotKeys.event(keyCode: event.keyCode, hasModifiers: !held.isEmpty, largeShown: largeShown)
     else { return event }
     controller.send(shot)
+    return nil
+  }
+
+  /// Escape on the Screen stops showing the window outlined there, as its label's × does; while this window holds
+  /// control every key is the helper's.
+  ///
+  /// - Parameters:
+  ///   - event: The key.
+  ///   - hasModifiers: Whether ⌘, ⌃ or ⌥ is held with it.
+  /// - Returns: The key, to pass on, or nil once handled.
+  private func outlineKey(_ event: NSEvent, hasModifiers: Bool) -> NSEvent? {
+    let key = ShotKeys.screenEvent(
+      keyCode: event.keyCode,
+      hasModifiers: hasModifiers,
+      holdingControl: controller.holdingControl,
+      outlineShown: controller.state.screen.outline != nil
+    )
+    guard let key else { return event }
+    controller.send(key)
     return nil
   }
 

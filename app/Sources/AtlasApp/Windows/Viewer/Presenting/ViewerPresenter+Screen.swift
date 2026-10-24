@@ -17,11 +17,19 @@ extension ViewerPresenter {
       empty: reading.picture == nil ? empty(snapshot) : nil,
       chip: chip(snapshot),
       notice: session.notice,
-      captions: snapshot.holdingControl || session.paused ? [] : reading.statusReading.captionEntries,
+      captions: captions(snapshot),
       actualSize: session.actualSize && reading.picture != nil
         ? display.map { CGSize(width: $0.width, height: $0.height) } : nil,
       outline: outline(snapshot)
     )
+  }
+
+  /// The latest actions laid over the picture: none while this window holds control or the picture is paused.
+  ///
+  /// - Parameter snapshot: What the controller holds.
+  /// - Returns: The actions, oldest first.
+  static func captions(_ snapshot: ViewerSnapshot) -> [ActivityEntry] {
+    snapshot.holdingControl || snapshot.session.paused ? [] : snapshot.reading.statusReading.captionEntries
   }
 
   /// How the picture is drawn: inside control's rim, faded while paused, dimmed while the helper needs the person.
@@ -34,9 +42,10 @@ extension ViewerPresenter {
     return snapshot.mode.kind == .needsYou ? .dimmed : .live
   }
 
-  /// Why there is no picture (v3 V7): logged out, paused before the first, still connecting, or not ready; the first
-  /// and the last with the white button that helps. Not ready keeps the last picture behind its words as connecting
-  /// does: a helper restarting answers as not ready while it is silent, and the stage should not go blank for it.
+  /// Why there is no picture: logged out, paused before the first, still connecting, or not ready; the first
+  /// and the last with the white button that helps. Not ready keeps the last picture behind its words as
+  /// connecting does: a helper restarting answers as not ready while it is silent, and the stage should not
+  /// go blank for it.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The message and what its button sends.
@@ -70,8 +79,9 @@ extension ViewerPresenter {
     )
   }
 
-  /// Connecting: the first time, why it takes a moment; again, after a picture was lost, the last picture kept behind
-  /// the words with Reconnecting… (v3 X4, R12). The ring round the mark shows once the window has waited a moment.
+  /// Connecting: the first time, why it takes a moment; again, after a picture was lost, the last picture
+  /// kept behind the words with Reconnecting…. The ring round the mark shows once the window has waited a
+  /// moment.
   ///
   /// - Parameter reading: What the last reading showed.
   /// - Returns: The message, the last picture and the ring.

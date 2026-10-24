@@ -7,8 +7,8 @@ extension ViewerWords {
   static let agentStopped = "Agent stopped."
   /// Once Resume ran.
   static let agentResumed = "Agent resumed."
-  /// Take Control still refused after its one retry: an agent's action holds the helper.
-  static let agentMidAction = "The agent is mid-action. Try again in a moment."
+  /// Take Control still refused once the wait for the agent's step ran out: an agent's action holds the helper.
+  static let agentMidAction = "The agent didn't finish its step. Try again."
   /// Once the helper restarted.
   static let helperRestarted = "The helper was restarted. Take control again when ready."
   /// The helper's session or display changed, which ended control.
@@ -17,6 +17,8 @@ extension ViewerWords {
   static let notReady = "The helper isn't ready for mouse and keyboard."
   /// The service said no viewer holds control any more: it was released from the menu bar, say.
   static let releasedElsewhere = "Control ended outside this window. Take control again when ready."
+  /// Take Control pressed while paused resumed the picture, and no fresh one came in time to aim at.
+  static let noFreshPicture = "No fresh picture arrived. Take control again once one shows."
   /// A stale picture ended control.
   static let stalePicture = "The picture stopped updating. Wait for a fresh one, then take control again."
   /// Typed text held a grapheme longer than the helper takes in one go.

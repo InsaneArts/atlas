@@ -11,7 +11,7 @@
   /// facts.
   @Suite("PreviewStates+Viewer")
   struct ViewerPreviewStatesTests {
-    /// An agent's latest actions, as the boards show them, newest first.
+    /// An agent's latest actions, in the sample log, newest first.
     static let working: [[String: Any]] = [
       ["operation": "input", "says": "turning Show Center off in Opie", "ok": true, "ageSeconds": 2],
       ["operation": "input", "says": "scrolled in Opie", "ok": true, "ageSeconds": 5],

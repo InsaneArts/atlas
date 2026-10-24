@@ -13,6 +13,13 @@ extension ViewerSnapshot {
       && controlBlocked == nil
   }
 
+  /// Whether Take Control can be pressed while the picture is paused: everything else that would allow it holds, so
+  /// pressing it resumes the picture and takes control once a fresh one arrives (``canTakeControl`` then decides).
+  var canTakeControlOnceResumed: Bool {
+    session.paused && !acquiring && !holdingControl && !controlBusy && running.isEmpty && !session.alertRunning
+      && !session.recovering && reading.ready && controlBlocked == nil
+  }
+
   /// Whether the picture is too old to aim input at, as of the snapshot's time: control ends over one, and none is
   /// taken.
   var pictureStale: Bool {

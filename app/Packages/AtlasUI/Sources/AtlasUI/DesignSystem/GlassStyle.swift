@@ -1,12 +1,12 @@
 import SwiftUI
 
-/// How thick a glass surface is (v3 D12, R4). Glass goes only on what floats over the window's ground, never on the
-/// ground itself. v3 names these `Material.chrome` and `Material.alert`; `Material` is SwiftUI's own type and "alert"
-/// names a surface, so they are named by thickness here.
+/// How thick a glass surface is. Glass goes only on what floats over the window's ground, never on the ground
+/// itself. Names describe thickness so each backing can be shared by several surfaces.
 enum GlassStyle: Sendable, CaseIterable {
   /// The chrome: a chip over the picture, the tab track, the large screenshot's bar, the panel.
   case regular
-  /// A modal surface over the scrim, such as an alert.
+  /// A modal surface over the scrim, such as an alert: near opaque on the material, never the clear system glass,
+  /// which is meant for controls and would let what is behind show through its paragraphs.
   case thick
 
   /// What a glass surface is drawn with.
@@ -19,9 +19,9 @@ enum GlassStyle: Sendable, CaseIterable {
     case opaque
   }
 
-  /// What draws a glass surface: the system glass where the system has it, the thin material before it, and an
-  /// opaque fill under Reduce Transparency on either. A design render, which cannot draw the system glass, gets the
-  /// material, v3's own fallback.
+  /// What draws a glass surface: the system glass where the system has it, the thin material before it, and
+  /// an opaque fill under Reduce Transparency on either. A design render, which cannot draw the system glass,
+  /// gets the material with its tint so the surface remains legible.
   ///
   /// - Parameters:
   ///   - glassAvailable: Whether the system has its glass, macOS 26 and later.
@@ -33,11 +33,28 @@ enum GlassStyle: Sendable, CaseIterable {
     return glassAvailable && drawsGlassEffect ? .glass : .material
   }
 
+  /// What draws a surface of this thickness: the chrome's backing as the type's own `backing` says, and for a modal
+  /// surface the material where the chrome would get the system glass.
+  ///
+  /// - Parameters:
+  ///   - glassAvailable: Whether the system has its glass, macOS 26 and later.
+  ///   - reduceTransparency: Whether the Reduce Transparency setting is on.
+  ///   - drawsGlassEffect: Whether the system glass can be drawn here; false in a design render.
+  /// - Returns: The backing.
+  func backing(glassAvailable: Bool, reduceTransparency: Bool, drawsGlassEffect: Bool = true) -> Backing {
+    let backing = Self.backing(
+      glassAvailable: glassAvailable,
+      reduceTransparency: reduceTransparency,
+      drawsGlassEffect: drawsGlassEffect
+    )
+    return self == .thick && backing == .glass ? .material : backing
+  }
+
   /// The fill laid between the backing and the content, or nil for none.
   ///
   /// - Parameter backing: What the surface is drawn with.
   /// - Returns: For the system glass, none for the chrome and ``Color/fillGlassThick`` for a modal surface; for the
-  ///   material, ``Color/fillGlass`` or ``Color/fillGlassThick`` again, as v3 draws an alert on either; under
+  ///   material, ``Color/fillGlass`` or ``Color/fillGlassThick`` again; under
   ///   Reduce Transparency, the opaque ``Color/fillFloatingSolid`` or ``Color/fillModalSolid``.
   func fill(on backing: Backing) -> Color? {
     switch (self, backing) {

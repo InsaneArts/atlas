@@ -1,14 +1,14 @@
 import SwiftUI
 
-/// The Screen tab (v3 V4): the helper's screen as the only object on the stage, fitted at the picture's own shape
-/// inside the frame every tab shares and centred there, with 12-point corners, a fine light inner edge and a short
-/// shadow on the window's ground; or at actual size in a view that scrolls; with what is happening laid over the
-/// picture and control's rim round it (v3 V5). With no picture, why, on the waiting stage (v3 V7).
+/// The Screen tab: the helper's screen as the only object on the stage, fitted at the picture's own shape
+/// inside the frame every tab shares and centred there, with 12-point corners, a fine light inner edge and a
+/// short shadow on the window's ground; or at actual size in a view that scrolls; with what is happening laid
+/// over the picture and control's rim round it. With no picture, why, on the waiting stage.
 ///
-/// The picture itself comes from `livePicture`, the app's layer that swaps each frame whole (v3 V17), or an image in
-/// previews and renders; the black that darkens a look is laid over it here. The shell's input surface covers exactly
-/// the picture, so a click lands where the picture shows it. Fitted, the picture is the one that shrinks into the
-/// corner as the Screen is left and grows back out of it (``ScreenZoom``, v3 V16).
+/// The picture itself comes from `livePicture`, the app's layer that swaps each frame whole, or an image in
+/// previews and renders; the black that darkens a look is laid over it here. The shell's input surface covers
+/// exactly the picture, so a click lands where the picture shows it. Fitted, the picture is the one that
+/// shrinks into the corner as the Screen is left and grows back out of it (``ScreenZoom``).
 struct ViewerScreen<Input: View, LivePicture: View>: View {
   /// What the screen shows.
   let state: ViewerScreenState
@@ -41,8 +41,8 @@ struct ViewerScreen<Input: View, LivePicture: View>: View {
     if let actual = state.actualSize {
       ActualSizeScreen(size: actual) {
         treated(picture)
-        spotlight(size)
         input
+        spotlight(size)
       }
       .overlay { ScreenOverlay(state: state) }
       .overlay { ViewerControlRim(isInControl: state.look == .inControl) }
@@ -50,8 +50,8 @@ struct ViewerScreen<Input: View, LivePicture: View>: View {
       ZStack {
         Color.letterbox
         treated(picture)
-        spotlight(size)
         input
+        spotlight(size)
         ScreenOverlay(state: state)
       }
       .clipShape(shape)
@@ -71,15 +71,15 @@ struct ViewerScreen<Input: View, LivePicture: View>: View {
     }
   }
 
-  /// A window shown from the Apps tab, as a spotlight over the picture, fading in and out (v3 V14); showing another
-  /// window glides it there.
+  /// A window shown from the Apps tab, as a spotlight over the picture and its input surface, so the label's × takes
+  /// its click, fading in and out; showing another window glides it there.
   ///
   /// - Parameter picture: The picture's size in pixels.
   /// - Returns: The spotlight, or nothing.
   private func spotlight(_ picture: CGSize) -> some View {
     ZStack {
       if let outline = state.outline {
-        ScreenOutline(outline: outline, picture: picture)
+        ScreenOutline(outline: outline, picture: picture, send: send)
           .transition(.opacity)
       }
     }

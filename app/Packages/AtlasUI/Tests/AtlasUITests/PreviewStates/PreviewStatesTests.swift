@@ -38,8 +38,10 @@
       #expect(states.contains { $0.picture.caption != nil }, "the newest action over the screen")
       #expect(states.contains { $0.recent.contains(where: \.isLive) }, "a live row in Recent")
       #expect(states.contains { $0.picture.pause.isPaused }, "the pause button showing play")
-      #expect(Set(states.map(\.controls.main.title)).count == 5, "Open Atlas, Give Back, Recover, Resume, Switch")
-      #expect(states.contains { !$0.controls.main.isEnabled })
+      #expect(Set(states.map(\.controls.main.title)).count == 5, "Open Atlas, Give Back, Recover, Switch, Settings")
+      #expect(states.allSatisfy { $0.controls.main.isEnabled }, "no main action is ever greyed")
+      #expect(states.contains { $0.controls.agent == .stop }, "Stop while an agent works")
+      #expect(states.contains { $0.controls.agent == .resume(isEnabled: true) }, "Resume once agents are stopped")
       #expect(states.contains { $0.notice != nil })
       #expect(states.contains { $0.recent.isEmpty } && states.contains { !$0.recent.isEmpty })
     }
@@ -90,7 +92,7 @@
         }
       )
       #expect(panes == ["screen", "activity", "activity, empty", "apps", "shots", "large", "shots, empty"])
-      #expect(states.contains { $0.screen.outline != nil && $0.top.actions.showsClear })
+      #expect(states.contains { $0.screen.outline != nil })
     }
 
     @Test("the settings previews show every pane, alert and update step")
@@ -117,17 +119,23 @@
       let statuses = Set(
         states.compactMap { state in
           switch state.about.status {
+          case .working: "working"
           case .done: "done"
           case .available: "available"
           case .installing: "installing"
           case .problem: "problem"
+          case .misplaced: "misplaced"
           case .note: "note"
           case nil: nil
           }
         }
       )
-      #expect(statuses == ["done", "available", "installing", "problem", "note"])
+      #expect(statuses == ["working", "done", "available", "installing", "problem", "misplaced", "note"])
       #expect(states.contains { $0.helper.waiting != nil }, "the buttons waiting on another action")
+      #expect(states.contains { $0.helper.readyNote != nil }, "what Check Again found")
+      #expect(states.contains { $0.helper.ready.contains(where: \.offersRecover) }, "Recover… on a failing check")
+      #expect(states.contains { $0.agents.agents.contains { $0.problem != nil } }, "a Connect that failed")
+      #expect(states.contains { $0.agents.agents.contains { $0.connection == .missing } }, "an agent not installed")
       #expect(states.contains { $0.agents.projects.isEmpty }, "no project taught")
       #expect(states.contains { $0.helper.ready.contains { $0.item.state != .ready } }, "a check not ready")
     }
@@ -151,6 +159,7 @@
             case .allow: "allow"
             case .permissions: "permissions"
             case .helperDone: "helperDone"
+            case .closeLeftovers: "closeLeftovers"
             case .blocked: "blocked"
             }
           }
@@ -160,7 +169,7 @@
         shown == [
           "loading", "permissionPanel", "welcome", "choose", "create", "switchToHelper", "finishing", "agents", "done",
           "allow",
-          "permissions", "helperDone", "blocked",
+          "permissions", "helperDone", "blocked", "closeLeftovers",
         ]
       )
       let notes = PreviewStates.onboarding

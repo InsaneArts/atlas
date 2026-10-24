@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// The form for a new helper account, in one group (v3 D6). Its four fields edit the window's `OnboardingAccountForm`
-/// in place; a field the status is about washes orange and takes the focus (v3 X12). While the account is made the
-/// form dims. Create Account is the footer's.
+/// The form for a new helper account, in one group. Its four fields edit the window's `OnboardingAccountForm` in
+/// place, and the first empty one takes the focus as the form appears; a field the status is about washes orange and
+/// takes the focus. While the account is made the form dims. Create Account is the footer's.
 struct CreateScreen: View {
   /// What the screen shows around the form.
   let state: OnboardingCreateScreenState
@@ -11,11 +11,9 @@ struct CreateScreen: View {
   /// The field the person types in, if any, which a flag never takes the focus from.
   @State private var typingIn: AccountFormField?
 
-  /// The form, the status under it, then why macOS will ask for an administrator's approval. The three scroll as one
-  /// when the window is too short for them all, so the card goes under the fade, never the form or its status (v3
-  /// `03-create-bad-name`).
+  /// The form, the status under it in its kept place, then why macOS will ask for a password.
   var body: some View {
-    ScrollColumn(width: OnboardingLayout.column) {
+    ScreenColumn {
       OnboardingHeader(label: "New account", title: OnboardingScreen.createTitle, tail: state.tail)
       GroupedList(AccountFormField.allCases) { field in
         FieldRow(
@@ -24,7 +22,8 @@ struct CreateScreen: View {
           secure: field.isSecure,
           placeholder: field.placeholder,
           isFlagged: field.isFlagged(state.flagged),
-          isOtherFieldFocused: typingIn.map { $0 != field } ?? false
+          isOtherFieldFocused: typingIn.map { $0 != field } ?? false,
+          focusesOnAppear: field == Self.firstEmpty(form)
         ) { focused in
           typingIn = Self.typingIn(after: typingIn, field: field, focused: focused)
         }
@@ -32,16 +31,19 @@ struct CreateScreen: View {
       .disabled(!state.isFormEnabled)
       .opacity(state.isFormEnabled ? 1 : Opacity.muted)
       .padding(.top, OnboardingLayout.Rhythm.paragraph)
-      .pagePiece(.content)
-      if let status = StatusLine(note: state.note) {
-        status
-          .padding(.top, OnboardingLayout.Rhythm.content)
-          .pagePiece(.status)
-      }
+      StatusSlot(note: state.note)
       ApprovalNote()
         .padding(.top, OnboardingLayout.Rhythm.content)
-        .pagePiece(.status)
     }
+  }
+
+  /// The form's first empty field, where the person starts typing: the password, once both names are filled in.
+  ///
+  /// - Parameter form: The form as it reads.
+  /// - Returns: The field, or nil when every field is filled in.
+  static func firstEmpty(_ form: OnboardingAccountForm) -> AccountFormField? {
+    AccountFormField.allCases
+      .first { form[keyPath: $0.value].isEmpty }
   }
 
   /// Where the person types once a field takes or loses the focus.

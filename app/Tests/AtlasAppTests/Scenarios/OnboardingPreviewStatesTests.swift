@@ -20,6 +20,7 @@
     ///   - installed: Whether Atlas.app is where it must be.
     ///   - candidates: The standard accounts that could be the helper, by short and full name.
     ///   - onlyChoice: Whether the helper chosen before was prepared, so it is the one choice.
+    ///   - leftovers: The user IDs of deleted accounts whose logins are still open.
     /// - Returns: The facts.
     /// - Throws: When the reply is not a status.
     func person(
@@ -27,12 +28,14 @@
       finished: Bool = false,
       installed: Bool = true,
       candidates: [(String, String)] = [("testaccount", "Test Account")],
-      onlyChoice: Bool = false
+      onlyChoice: Bool = false,
+      leftovers: [Int] = []
     ) throws -> OnboardingFacts {
       var reply: [String: Any] = [
         "ok": true, "role": "controller", "me": ["name": "me"], "app": ["installed": installed, "signed": true],
         "configured": helper != nil, "finished": finished, "onlyChoice": onlyChoice,
         "candidates": candidates.map { ["name": $0.0, "realName": $0.1] },
+        "leftoverLogins": leftovers.map { ["uid": $0, "kind": "orphan"] },
       ]
       if let helper { reply["helper"] = helper }
       return try facts(reply)
@@ -130,8 +133,9 @@
         try person(candidates: [("testaccount", "Test Account"), ("kid", "Guest Kid")]),
         started: true
       )
-      chooseProblem.picked = .newAccount
+      chooseProblem.picked = .existing("kid")
       chooseProblem.problem = "macOS could not say whether kid is an administrator."
+      chooseProblem.problemAbout = "kid"
       var only = loaded(
         try person(
           helper(signedIn: false, answering: false, allowed: false, paired: false),
@@ -150,7 +154,7 @@
           )
         )
       )
-      switchLong.problem = "The screen could not be locked: loginwindow did not answer within ten seconds."
+      switchLong.problem = OnboardingWords.lockFailed("Maria Fernanda Montgomery-Castellanos de la Vega")
       var loadingFailed = OnboardingSnapshot()
       loadingFailed.problem = PreviewStates.onboardingLoadingProblem
       var create = choose
@@ -175,6 +179,7 @@
           agent.on = true
           return agent
         }
+      agents.agentsLoaded = true
       var notChecked = loaded(try person(helper(), finished: true))
       notChecked.agents = AgentChoice.all
       notChecked.agentsFailed = true
@@ -193,6 +198,13 @@
       panel.guiding = .screenRecording
       var panelAllowed = loaded(try helperSide(accessibility: true))
       panelAllowed.guiding = .accessibility
+      let close = loaded(try person(leftovers: [502]))
+      var closing = close
+      closing.working = OnboardingWords.closing
+      var cancelled = close
+      cancelled.problem = "It’s still open. Close it before you switch."
+      var closed = loaded(try person())
+      closed.choices.closedLeftovers = true
       var checkingFacts = try helperSide()
       checkingFacts.asker.permissionsKnown = false
       let presented: [String: OnboardingSnapshot] = [
@@ -225,6 +237,10 @@
         "Helper permission panel": panel,
         "Helper done": loaded(try helperSide(accessibility: true, screen: true)),
         "Blocked": loaded(try person(installed: false)),
+        "Close": close,
+        "Close, closing": closing,
+        "Close, cancelled": cancelled,
+        "Close, closed": closed,
       ]
       #expect(
         Set(presented.keys) == Set(PreviewStates.onboarding.map(\.name)),

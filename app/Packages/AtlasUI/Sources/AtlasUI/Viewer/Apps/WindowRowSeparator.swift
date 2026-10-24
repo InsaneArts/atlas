@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The hairline above a row under an app's head, inset to where the window's words start (v3 `.wrow::before`); the
-/// group draws it on every row but its first (``EnvironmentValues/drawsListSeparator``).
+/// The hairline above a row under an app's head, inset to where the window's words start; the group draws it
+/// on every row but its first (``EnvironmentValues/drawsListSeparator``).
 struct WindowRowSeparator: ViewModifier {
   @Environment(\.drawsListSeparator) private var drawsSeparator
 

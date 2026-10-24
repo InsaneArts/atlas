@@ -22,6 +22,10 @@ public enum Action: Sendable, Equatable {
   case createAccount(account: String, fullName: String)
   /// Take back the request of a helper that never answered, to choose another account.
   case forgetHelper
+  /// Close the logins deleted accounts left open; macOS asks the person to approve.
+  case closeLeftovers
+  /// Log out the helper whose Atlas isn't answering, as root; macOS asks the person to approve.
+  case closeHelper
   /// Run the end-to-end check of the helper.
   case finishSetup
   /// Turn Open at Login on or off at the end of setup.
@@ -74,6 +78,9 @@ public enum Action: Sendable, Equatable {
     case .createAccount(let account, let fullName):
       ["onboarding", "create", "--account", account, "--full-name", fullName]
     case .forgetHelper: ["onboarding", "forget"]
+    // macOS's approval dialog is the confirmation.
+    case .closeLeftovers: ["onboarding", "close"]
+    case .closeHelper: ["onboarding", "close", "--helper"]
     case .finishSetup: ["onboarding", "finish"]
     case .setOpensAtLogin(let on): ["onboarding", "login", on ? "on" : "off"]
     case .openMenuBar: ["menubar"]

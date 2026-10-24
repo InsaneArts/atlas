@@ -53,6 +53,7 @@ objc2-core-foundation = { version = "0.3.2", default-features = false, features 
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGBase", "CGBitmapContext", "CGColorSpace", "CGContext", "CGDirectDisplay", "CGEvent", "CGEventSource", "CGEventTypes", "CGImage", "CGRemoteOperation", "CGSession", "CGWindow"] }
 objc2-image-io = { version = "0.3.2", default-features = false, features = ["std", "CGImageDestination", "CGImageSource", "objc2-core-graphics"] }
 objc2-security = { version = "0.3.2", default-features = false, features = ["std", "AuthSession", "Authorization"] }
+oslog = { version = "0.2", default-features = false }
 
 [lints]
 workspace = true

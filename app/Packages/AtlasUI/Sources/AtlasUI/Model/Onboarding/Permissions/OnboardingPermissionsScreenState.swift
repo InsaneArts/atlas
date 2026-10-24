@@ -1,4 +1,4 @@
-/// In the helper: the two permissions, the next one still off with its button.
+/// In the helper: the two permissions, each with where it stands; the next one to allow is the footer's button.
 public struct OnboardingPermissionsScreenState: Equatable, Sendable {
   /// Accessibility, for input.
   public var accessibility: OnboardingPermissionItem

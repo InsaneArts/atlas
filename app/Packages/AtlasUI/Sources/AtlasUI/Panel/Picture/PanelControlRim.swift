@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Control's edge round the panel's picture (v3 P4): a fine accent rim just outside it and a soft accent ring outside
+/// Control's edge round the panel's picture: a fine accent rim just outside it and a soft accent ring outside
 /// that, settling in from a little larger; none out of control, and only a fade under Reduce Motion.
 struct PanelControlRim: View {
   /// Whether the person holds control.
@@ -39,7 +39,7 @@ struct PanelControlRim: View {
     } content: {
       PanelScreen(picture: SampleDesktop.picture, isDimmed: false)
         .overlay { PanelControlRim(isShown: isShown) }
-        .animation(PanelLayout.cascade(.picture, reduceMotion: false), value: isShown)
+        .animation(PanelLayout.change, value: isShown)
         .padding(Spacing.xxl)
     }
   }

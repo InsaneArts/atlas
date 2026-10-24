@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// A two-line title: the statement, then its quieter tail. A setup screen's title is 24 points, and steps down to 20
-/// when a long name inside would take it past two lines, its lines then cut in the middle at three, so a long name
-/// keeps both its ends and never shrinks the type (v3 D10). The other sizes take at most two lines each, cut in the
-/// middle.
+/// A two-line title: the statement, then its quieter tail. A setup screen's title is 24 points, and steps
+/// down to 20 when a long name inside would take it past two lines, its lines then cut in the middle at
+/// three, so a long name keeps both its ends and never shrinks the type. The other sizes take at most two
+/// lines each, cut in the middle.
 struct Headline: View {
   /// How large the title is.
   enum Size: Sendable {
@@ -11,7 +11,7 @@ struct Headline: View {
     case hero
     /// A title over the viewer's stage.
     case title
-    /// The permission panel's narrow title: 20 points (v3 `.ttl.side`).
+    /// The permission panel's narrow title: 20 points.
     case compact
   }
 
@@ -102,7 +102,7 @@ struct Headline: View {
   }
 }
 
-/// v3's D10 step down.
+/// The title sizes tried in order to fit the available width.
 private enum Layout {
   /// 2: the most lines a statement takes at 24 points.
   static let titleLines = 2

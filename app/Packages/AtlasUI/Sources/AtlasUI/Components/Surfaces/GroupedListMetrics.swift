@@ -3,10 +3,9 @@ import CoreGraphics
 /// The measures a ``GroupedList`` lays its rows out by, apart from the list's generic type so they can be read and
 /// tested on their own.
 enum GroupedListMetrics {
-  /// 3.5: how many rows a scrolling list shows before it scrolls, so the half row says there is more (v3 D10).
+  /// 3.5: how many rows a scrolling list shows before it scrolls, so the half row says there is more.
   static let visibleRows: CGFloat = 3.5
-  /// 0.22: how much of a scrolling list's height its bottom edge fades over (v3 `.group.scrolls`' mask, clear from
-  /// 78%).
+  /// 0.22: how much of a scrolling list's height its bottom edge fades over.
   static let scrollMask: CGFloat = 0.22
 
   /// The height a scrolling list stops growing at.

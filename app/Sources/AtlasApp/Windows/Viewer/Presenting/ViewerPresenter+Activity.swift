@@ -3,9 +3,9 @@ import AtlasUI
 import Foundation
 
 extension ViewerPresenter {
-  /// The Activity pane: today's count, the search and the filters, and the lines in their groups, or why none shows
-  /// (MacActivity). Times are the person's own clock (``Words/clockTime(_:locale:timeZone:)``), as Details' Logged in
-  /// is.
+  /// The Activity pane: today's count, the search and the filters, and the lines in their groups, or why none shows.
+  /// With nothing in the log yet the header says nothing beside its title, and there is nothing to search or filter.
+  /// Times are the person's own clock (``Words/clockTime(_:locale:timeZone:)``), as Details' Logged in is.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The pane.
@@ -20,7 +20,14 @@ extension ViewerPresenter {
       let failed = facts.failure.map {
         EmptyMessageState(headline: ViewerWords.activityFailed, message: Words.sentence($0))
       }
-      return ViewerActivityState(meta: "", query: facts.query, filters: filters, groups: [], empty: failed)
+      return ViewerActivityState(
+        meta: "",
+        query: facts.query,
+        filters: filters,
+        groups: [],
+        empty: failed,
+        isSearchable: false
+      )
     }
     let rules = ActivityGrouping(log: log, readAt: readAt, now: snapshot.date, calendar: snapshot.zonedCalendar)
     let groups = rules.groups(
@@ -29,11 +36,13 @@ extension ViewerPresenter {
       captures: snapshot.panes.shots.shots ?? []
     )
     return ViewerActivityState(
-      meta: ViewerWords.actionsToday(rules.countToday),
+      meta: log.entries.isEmpty ? "" : ViewerWords.actionsToday(rules.countToday),
       query: facts.query,
       filters: filters,
       groups: groups.map { group($0, snapshot) },
-      empty: groups.isEmpty ? activityEmpty(log, facts) : nil
+      empty: groups.isEmpty ? activityEmpty(log, facts) : nil,
+      isSearchable: !log.entries.isEmpty,
+      findRequests: facts.findRequests
     )
   }
 
@@ -97,7 +106,7 @@ extension ViewerPresenter {
     }
   }
 
-  /// What kind of thing a line did, for its tile's symbol (v3 V8): a problem whatever it tried, the person's own as
+  /// What kind of thing a line did, for its tile's symbol: a problem whatever it tried, the person's own as
   /// theirs unless it handed control over, and anyone else's by what it did.
   ///
   /// - Parameter entry: The line's row.

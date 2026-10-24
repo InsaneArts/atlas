@@ -17,6 +17,7 @@ extension WindowCoordinator {
       openSettings: { [weak self] in
         self?.parts?.closePanel()
         self?.openSettings()
+        self?.settings?.controller.selectTab(.helper)
       },
       showAlert: { [weak self] alert in
         self?.parts?.closePanel()
@@ -27,7 +28,7 @@ extension WindowCoordinator {
         return viewer.controller.holdingControl
       },
       giveBack: { [weak self] in self?.releaseViewerControl() },
-      quit: { [weak self] in self?.parts?.terminate(nil) },
+      quit: { [weak self] in self?.quit(nil) },
       read: { [weak self] status in self?.parts?.read(status) }
     )
   }
@@ -42,7 +43,7 @@ extension WindowCoordinator {
     return SettingsLinks(
       status: { [weak self] in
         guard let panel = self?.parts?.panel else { return (ViewerStatus(), true) }
-        return (panel.status, panel.answered == nil)
+        return (panel.status, panel.connecting)
       },
       readStatus: { [weak self] in await self?.parts?.panel?.readStatus() },
       opensAtLogin: { [weak self] in

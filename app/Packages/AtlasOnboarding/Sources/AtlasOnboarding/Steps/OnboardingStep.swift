@@ -1,5 +1,5 @@
 /// The onboarding's screens, in the order the person meets them. The person's screens come first, then the helper's,
-/// then `blocked`.
+/// then `closeLeftovers` and `blocked`.
 public enum OnboardingStep: Equatable, Hashable, Sendable {
   /// What Atlas is, before anything is set up.
   case welcome
@@ -22,6 +22,9 @@ public enum OnboardingStep: Equatable, Hashable, Sendable {
   case permissions
   /// The helper is set up; switch back.
   case helperDone
+
+  /// A deleted account's login is still open: Atlas closes it before anything goes on, then says so.
+  case closeLeftovers
 
   /// What only the person can fix, in words.
   case blocked(String)

@@ -38,7 +38,7 @@ public struct SettingsState: Equatable, Sendable {
     self.alert = alert
   }
 
-  /// The selected pane's name, which the title bar shows (v3 G1).
+  /// The selected pane's name, which the title bar shows.
   public var title: String {
     tabs.tabs.first { $0.id == tabs.selected }?.title ?? ""
   }

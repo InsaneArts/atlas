@@ -235,7 +235,7 @@ you found it:
    (`retainedDirectories`).
 3. Delete files you made with `atlas run -- /bin/rm FILE...`, one command
    on its own rather than an `rm` inside `sh -c` or beside other commands,
-   so a reviewer of your commands can see what goes.
+   so the person reading your commands can see what goes.
 
 Screenshots are deleted by Atlas after a week; you need not remove them.
 

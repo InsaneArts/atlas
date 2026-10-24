@@ -31,8 +31,8 @@
       state.content = .screen(
         .create(
           OnboardingCreateScreenState(
-            tail: "You'll approve it once in macOS.",
-            note: .problem("Account names can't have spaces. Try “atlas-helper”."),
+            tail: "You’ll approve it once in macOS.",
+            note: .problem("Account names can’t have spaces. Try “atlas-helper”."),
             isFormEnabled: true,
             flagged: .accountName
           )
@@ -47,20 +47,14 @@
       state.content = .screen(
         .create(
           OnboardingCreateScreenState(
-            tail: "You'll approve it once in macOS.",
-            note: .working(
-              "Approve in the macOS dialog. It says Atlas can change your Mac. "
-                + "That covers only the three steps below."
-            ),
+            tail: "You’ll approve it once in macOS.",
+            note: .working(onboardingCreating),
             isFormEnabled: false
           )
         )
       )
       state.footer.back?.isEnabled = false
-      state.note = .working(
-        "Approve in the macOS dialog. It says Atlas can change your Mac. "
-          + "That covers only the three steps below."
-      )
+      state.note = .working(onboardingCreating)
       return state
     }()
 
@@ -83,8 +77,8 @@
       return state
     }()
 
-    /// The account choice with an account whose name is longer than two lines, picked: its row cuts the name in its
-    /// middle.
+    /// The account choice with an account whose name is longer than its row, picked: its row cuts the name at its end,
+    /// and the footnote names no account.
     @MainActor public static let onboardingChooseLong: OnboardingState = {
       var state = onboardingChoose
       var long = onboardingAccount(
@@ -97,26 +91,28 @@
           OnboardingChooseScreenState(
             isNewAccountPicked: false,
             accounts: [long, onboardingAccount("Test Account", "testaccount")],
-            approval:
-              "You'll approve once in macOS so Atlas can get Maria Fernanda Montgomery-Castellanos de la Vega y Rodríguez-Hernández del Valle Alto de San Sebastián y Monteverde de los Ríos ready: Atlas opens there by itself, and an account never used yet skips macOS's welcome questions. Nothing in the account is removed or replaced."
+            approval: onboardingApproveToReady
           )
         )
       )
       return state
     }()
 
-    /// The account choice with two standard accounts, and why the last choice failed.
+    /// The account choice with two standard accounts, and why setting up the one picked failed, in its own row.
     @MainActor public static let onboardingChooseProblem: OnboardingState = {
       var state = onboardingChoose
+      var kid = onboardingAccount("Guest Kid", "kid")
+      kid.isSelected = true
+      kid.problem = "macOS could not say whether kid is an administrator."
       state.content = .screen(
         .choose(
           OnboardingChooseScreenState(
-            isNewAccountPicked: true,
-            accounts: [onboardingAccount("Test Account", "testaccount"), onboardingAccount("Guest Kid", "kid")]
+            isNewAccountPicked: false,
+            accounts: [onboardingAccount("Test Account", "testaccount"), kid],
+            approval: onboardingApproveToReady
           )
         )
       )
-      state.note = .problem("macOS could not say whether kid is an administrator.")
       return state
     }()
 
@@ -185,9 +181,18 @@
       ]
     )
 
+    /// What approving in macOS does for an existing account picked.
+    @MainActor static let onboardingApproveToReady =
+      "You’ll approve once in macOS. Atlas then opens there by itself and skips macOS’s welcome questions; nothing in "
+      + "the account is removed."
+
+    /// What the account form says while macOS's dialog waits.
+    @MainActor static let onboardingCreating =
+      "Approve in the macOS dialog. It says Atlas can change your Mac; that means only what’s below."
+
     /// The form ready to fill.
     @MainActor static let onboardingCreateScreen = OnboardingCreateScreenState(
-      tail: "You'll approve it once in macOS.",
+      tail: "You’ll approve it once in macOS.",
       note: .none,
       isFormEnabled: true
     )

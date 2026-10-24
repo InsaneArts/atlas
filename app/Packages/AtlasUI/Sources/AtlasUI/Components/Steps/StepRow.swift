@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// One step of a ``StepList`` (v3 D6, S3, X8): its disc, a medium title over its detail, and the rail that joins it to
+/// One step of a ``StepList``: its disc, a medium title over its detail, and the rail that joins it to
 /// the steps above and below. The step to do now carries the only colour, an accent wash; a waiting or finished step
 /// steps back to grey, a finished one with its green check. As a step finishes, the rail below it turns green, and the
 /// step it leads to lights up a moment later.
@@ -92,13 +92,13 @@ struct StepRow: View {
   }
 }
 
-/// v3's step row (`.row.step`).
+/// The step row's own measures.
 private enum Layout {
-  /// 48: a setup list's row (v3 D6).
+  /// 48: a setup list's row.
   static let height: CGFloat = 48
   /// 2: the most lines its title or detail takes, a long name cut in its middle.
   static let lines = 2
-  /// 50: where the separator above a step starts, past the disc (v3 `--sep`).
+  /// 50: where the separator above a step starts, past the disc.
   static let separatorInset: CGFloat = 50
   /// 24.25: the rail's leading edge, so its 1.5 points centre on the disc: the row's 14 inset plus half the disc,
   /// less half the rail.

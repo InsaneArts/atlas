@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// A part of a picture picked out as a spotlight (v3 V14): everything outside it dimmed, and a blue ring with a soft
-/// blue halo around it. It takes the whole space it is given; `frame` is in that space. Its frame animates, so the
-/// spotlight glides from one part to the next on whatever animation the change carries.
+/// A part of a picture picked out as a spotlight: everything outside it dimmed, and a blue ring with a soft
+/// blue halo around it. It takes the whole space it is given; `frame` is in that space. Its frame animates,
+/// so the spotlight glides from one part to the next on whatever animation the change carries.
 struct OutlineHighlight: View {
   /// The part picked out, in the view's own space.
   let frame: CGRect
@@ -28,7 +28,7 @@ struct OutlineHighlight: View {
   }
 }
 
-/// The outline's own measures, from v3's `.outline`.
+/// The outline's own measures for its edge.
 private enum Layout {
   /// 2: the blue ring, just outside the part picked out.
   static let ringWidth = Stroke.thick

@@ -7,7 +7,9 @@
     /// Recover's running word.
     static let recovering = "Recovering…"
     /// Recover's done title.
-    static let recovered = "Recovered"
+    static let ready = "The helper is ready"
+    /// Recover's done message.
+    static let workAgain = "Mouse and keyboard work again."
     /// Why a Recover was refused.
     static let refusal = "The helper is in use. Try Recover again once it's free."
 
@@ -43,7 +45,8 @@
 
     /// Recover in each of its phases after it is asked.
     static let phases: [AlertCardState<String>] = [
-      AlertCardPhase.running(label: recovering), .refused(message: refusal), .done(title: recovered),
+      AlertCardPhase.running(label: recovering), .refused(message: refusal),
+      .done(title: ready, message: workAgain, button: "Done"),
     ]
     .map { phase in
       var state = recover

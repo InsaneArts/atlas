@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// A group's header pinned over the list scrolling under it (v3 `.vsec`): its label, small and quiet, on a nearly
-/// solid ground so the rows passing under it never show through its words.
+/// A group's header pinned over the list scrolling under it: its label, small and quiet, on a nearly solid
+/// ground so the rows passing under it never show through its words.
 struct PinnedHeader: View {
   /// The group's label, such as "Now" or "Today".
   let title: String

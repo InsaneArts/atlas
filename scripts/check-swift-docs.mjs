@@ -4,7 +4,7 @@
 //
 // swift-format's `AllPublicDeclarationsHaveDocumentation` sees only `public`
 // declarations, which only the local packages have; the rest are `package` or
-// internal (standard DOC1). This checker reads every type, function,
+// internal. This checker reads every type, function,
 // initializer, subscript, property, type alias and enum case declared at file
 // level or in a type's body, and reports one that is neither `private` nor
 // `fileprivate`, nor a member of a private type, and has no `///` line above

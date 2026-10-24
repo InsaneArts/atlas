@@ -40,7 +40,7 @@ public struct SettingsView: View {
       AlertLayer(state: state.alert) { send($0 == .confirm ? .alertConfirm : .alertCancel) }
     }
     .windowSurface()
-    // The header sits in the title bar, beside the window buttons, as v3 draws it.
+    // The header sits in the title bar, beside the window buttons.
     .ignoresSafeArea(.container, edges: .top)
     // Each only when its words change, so a poll that reads the same says nothing.
     .onChange(of: state.alert?.shownTitle) { _, title in if let title { announce(title) } }

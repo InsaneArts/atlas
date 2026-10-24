@@ -1,7 +1,7 @@
 #if DEBUG
   import SwiftUI
 
-  /// Samples for the modifiers, layouts and styles that have no view of their own to preview (U-12), each drawn as a
+  /// Samples for the modifiers, layouts and styles that have no view of their own to preview, each drawn as a
   /// window would use it.
   struct ModifierSamples: View {
     /// Which modifier the samples show.
@@ -18,8 +18,6 @@
       case panelCard
       /// A window outlined near the picture's right edge, its label moved inside the outline.
       case outlineLabel
-      /// A control at its own size and pressed.
-      case pressScale
     }
 
     private let kind: Kind
@@ -76,17 +74,6 @@
           }
           .frame(width: SampleWidth.narrow, height: 140)
           .background(Color.fillPlaceholder)
-        case .pressScale:
-          HStack(spacing: Spacing.xl) {
-            Capsule()
-              .fill(Color.textPrimary)
-              .frame(width: 120, height: ControlHeight.mPlus)
-              .modifier(PressScale(isPressed: false, scale: 0.97))
-            Capsule()
-              .fill(Color.textPrimary)
-              .frame(width: 120, height: ControlHeight.mPlus)
-              .modifier(PressScale(isPressed: true, scale: 0.97))
-          }
         }
       }
       .sampleSurface()

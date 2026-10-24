@@ -5,7 +5,8 @@ import AtlasService
 /// helper, and the setup window. Reached through closures, so Settings never holds another window, and a value the
 /// panel or the main window also shows stays one value.
 struct SettingsLinks {
-  /// The helper's latest status, and whether no reading has answered yet.
+  /// The helper's latest status, and whether Atlas waits for the service: before its first answer, and again after a
+  /// reading that failed.
   var status: @MainActor () -> (status: ViewerStatus, connecting: Bool)
   /// Reads the helper's status again now.
   var readStatus: @MainActor () async -> Void

@@ -63,9 +63,9 @@ struct StatusMotionTests {
     let duration = 2 * .pi * sqrt(pop.mass / pop.stiffness)
     let bounce = 1 - pop.damping / (2 * (pop.stiffness * pop.mass).squareRoot())
     #expect(abs(duration - 0.35) < Self.tolerance)
-    #expect(abs(bounce - 0.3) < Self.tolerance)
+    #expect(abs(bounce - 0.15) < Self.tolerance)
     // Core Animation's own conversion agrees.
-    let apple = CASpringAnimation(perceptualDuration: 0.35, bounce: 0.3)
+    let apple = CASpringAnimation(perceptualDuration: 0.35, bounce: 0.15)
     #expect(abs(pop.mass - apple.mass) < 1e-6)
     #expect(abs(pop.stiffness - apple.stiffness) < 1e-6)
     #expect(abs(pop.damping - apple.damping) < 1e-6)

@@ -2,26 +2,37 @@ import AtlasService
 import AtlasUI
 
 /// The alerts as every window draws them: the main window, the alert window and Settings build them here, so a
-/// question reads the same wherever it is asked, from ``HelperWords``. A plain alert's action is the blue default
-/// and its way out quiet; a destructive one's Cancel is the blue default and its action red. Where its command
+/// question reads the same wherever it is asked, from ``HelperWords``. Its way out is Cancel when the person asked for
+/// it, and Not Now for the Recover alert Atlas raises by itself. A plain alert's action is the blue default and its way
+/// out quiet; a destructive one's Cancel is the blue default and its action red. Where its command
 /// stands shows in place (``AlertProgress``): running in its action's button, refused as a problem line in place of
-/// the sentence, and, for Recover, done as Recovered before it closes.
+/// the sentence, and, for Recover, done as the helper ready, with one Done button, before it closes.
 extension HelperAlert {
   /// The alert as it should read now.
   ///
   /// - Parameters:
   ///   - overview: The service's latest overview, which says why Recover helps.
   ///   - progress: Where its command stands.
+  ///   - askedByPerson: Whether the person asked for it, so its way out is Cancel; false for the Recover alert Atlas
+  ///     raises by itself, whose way out is Not Now.
   /// - Returns: The alert.
-  func state(overview: ViewerStatus.Overview, progress: AlertProgress) -> AlertCardState<AlertChoice> {
+  func state(
+    overview: ViewerStatus.Overview,
+    progress: AlertProgress,
+    askedByPerson: Bool = false
+  ) -> AlertCardState<AlertChoice> {
     switch self {
     case .recover:
       Self.plain(
         HelperWords.recoverTitle,
         progress.note ?? Self.recoverMessage(overview),
         HelperWords.recover,
-        cancel: HelperWords.notNow,
-        phase: progress.phase(running: HelperWords.recovering, done: HelperWords.recovered)
+        cancel: askedByPerson ? HelperWords.cancel : HelperWords.notNow,
+        phase: progress.phase(
+          running: HelperWords.recovering,
+          done: HelperWords.recovered,
+          doneMessage: HelperWords.recoveredMessage
+        )
       )
     case .switchToHelper:
       Self.plain(
@@ -29,21 +40,33 @@ extension HelperAlert {
         progress.note ?? HelperWords.switchMessage,
         HelperWords.switchButton,
         cancel: HelperWords.cancel,
-        phase: progress.phase(running: HelperWords.switching, done: HelperWords.switchTitle)
+        phase: progress.phase(
+          running: HelperWords.switching,
+          done: HelperWords.switchTitle,
+          doneMessage: HelperWords.switchMessage
+        )
       )
     case .logOut:
       Self.destructive(
         HelperWords.logOutTitle,
         progress.note ?? HelperWords.logOutMessage,
         HelperWords.logOutButton,
-        phase: progress.phase(running: HelperWords.loggingOut, done: HelperWords.logOutTitle)
+        phase: progress.phase(
+          running: HelperWords.loggingOut,
+          done: HelperWords.logOutTitle,
+          doneMessage: HelperWords.logOutMessage
+        )
       )
     case .logOutAnyway:
       Self.destructive(
         HelperWords.logOutHeldTitle,
         progress.note ?? HelperWords.logOutHeldMessage,
         HelperWords.logOutAnyway,
-        phase: progress.phase(running: HelperWords.loggingOut, done: HelperWords.logOutHeldTitle)
+        phase: progress.phase(
+          running: HelperWords.loggingOut,
+          done: HelperWords.logOutHeldTitle,
+          doneMessage: HelperWords.logOutHeldMessage
+        )
       )
     }
   }

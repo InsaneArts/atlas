@@ -1,9 +1,9 @@
 import SwiftUI
 
 extension InsettableShape {
-  /// The shape filled and bordered inside its edge: the one drawing behind every bordered surface, capsule and
-  /// circle (U-9), in place of a fill and a hairline written out by hand. The border is laid over the fill, as the
-  /// hand-written pairs lay it, so a pair moved here draws the same pixels.
+  /// The shape filled and bordered inside its edge: the one drawing behind every bordered surface, capsule
+  /// and circle, in place of a fill and a hairline written out by hand. The border is laid over the fill, as
+  /// the hand-written pairs lay it, so a pair moved here draws the same pixels.
   ///
   /// - Parameters:
   ///   - fill: The fill: a colour, a gradient or another shape style.

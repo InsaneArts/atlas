@@ -27,7 +27,7 @@
         "Details": shown(idle) {
           $0.detailsShown = true
           $0.agents = [.claude, .codex]
-          // 09:12 in UTC, told as a German clock tells it, as the board does.
+          // 09:12 in UTC, told as a German clock tells it, for deterministic timestamps.
           $0.loggedInAt = Date(timeIntervalSince1970: 9 * 3600 + 12 * 60)
           $0.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
           $0.locale = Locale(identifier: "de_DE")

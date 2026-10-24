@@ -8,9 +8,10 @@ import Observation
 /// at a time on the injected clock, and a reply that arrives after its tab was left or the window hidden has no
 /// effect. Activity reads the log, and the screenshots with it while a screenshot's row can show its capture. Apps
 /// decodes each app's icon once off the main actor, and Show on screen outlines a window on the Screen tab and acts on
-/// nothing in the helper. Screenshots has the selection, the large view with Previous and Next, Copy and Show in
-/// Finder: Copy puts the picture as taken on the clipboard, and Show in Finder shows only a listed screenshot in the
-/// folder the service names; nothing is ever saved. The screenshots' thumbnails, which Activity's screenshot lines
+/// nothing in the helper. Screenshots has the selection, which the arrows move and Esc clears, the large view with
+/// Previous and Next, Copy, Save and Show in Finder: Copy and Save take the picture as taken, of the large screenshot
+/// or else the selected one, Save only where the person picks in a save panel, and Show in Finder shows only a listed
+/// screenshot in the folder the service names. The screenshots' thumbnails, which Activity's screenshot lines
 /// and the Screenshots grid share, are read through one queue a couple at a time as their tiles come into view,
 /// decoded off the main actor, kept by name within a bound, and dropped when they come back after the queue was let
 /// go. ``ViewerController`` owns one; its state is written here alone.
@@ -120,12 +121,15 @@ final class ViewerPanesModel {
     case .searchApps(let query): panes.apps.query = query
     case .showWindow(let app, let window): showWindow(app: app, window: window)
     case .clearOutline: panes.apps.shown = nil
-    case .searchShots(let query): panes.shots.query = query
-    case .selectShot(let name): panes.shots.selected = name
+    case .shotColumns(let columns): if panes.shots.columns != columns { panes.shots.columns = columns }
+    case .selectShot(let name): select(name)
     case .openShot(let name): openShot(name)
     case .toggleShot: toggleShot()
     case .previousShot: stepShot(by: -1)
     case .nextShot: stepShot(by: 1)
+    case .shotAbove: stepShot(by: -panes.shots.columns)
+    case .shotBelow: stepShot(by: panes.shots.columns)
+    case .clearShotSelection: clearSelection()
     case .closeShot: closeShot()
     case .copyShot: copyShot()
     case .showShotInFinder: showShotInFinder()
@@ -229,16 +233,38 @@ final class ViewerPanesModel {
     panes.shots.folder = list.folder
   }
 
-  /// Shows a screenshot large on the Screenshots tab, from its grid or an Activity line's Open; a search that hides
-  /// it gives way, so Previous and Next go from it.
+  /// Shows a screenshot large on the Screenshots tab, from its grid or an Activity line's Open, so Previous and Next
+  /// go from it.
   ///
   /// - Parameter name: The screenshot's file name.
   func openShot(_ name: String) {
     guard let viewer else { return }
     if viewer.session.tab != .screenshots { viewer.selectTab(.screenshots) }
-    panes.shots.selected = name
-    if !ViewerPresenter.shotOrder(viewer.snapshot).contains(name) { panes.shots.query = "" }
+    select(name)
     showLarge(name)
+  }
+
+  /// Selects a screenshot, ringing it in the grid.
+  ///
+  /// - Parameter name: The screenshot's file name.
+  private func select(_ name: String) {
+    panes.shots.selected = name
+    panes.shots.selectionCleared = false
+  }
+
+  /// Esc with nothing shown large: no screenshot is selected until one is picked or stepped to.
+  private func clearSelection() {
+    panes.shots.selected = nil
+    panes.shots.selectionCleared = true
+  }
+
+  /// Find: the search field of the tab shown takes the focus, Activity's or Apps'.
+  func find() {
+    switch viewer?.session.tab {
+    case .activity: panes.activity.findRequests += 1
+    case .apps: panes.apps.findRequests += 1
+    default: return
+    }
   }
 
   /// Space: closes the large view, or shows the selected screenshot large.
@@ -248,17 +274,19 @@ final class ViewerPanesModel {
     showLarge(name)
   }
 
-  /// Previous or Next, ← or →: the screenshot `offset` places along in the grid's order, never past either end; the
-  /// large one while it shows, else the selection.
+  /// Previous or Next, ← or →, or a row up or down, ↑ or ↓: the screenshot `offset` places along in the grid's order,
+  /// never past either end; from the large one while it shows, else from the selection, else the first is selected.
   ///
-  /// - Parameter offset: −1 for Previous, 1 for Next.
+  /// - Parameter offset: −1 for Previous, 1 for Next, or a row's count either way.
   func stepShot(by offset: Int) {
     guard let viewer else { return }
     let order = ViewerPresenter.shotOrder(viewer.snapshot)
-    guard let from = panes.shots.large ?? ViewerPresenter.selectedShot(viewer.snapshot),
-      let next = ShotGrouping.step(from: from, by: offset, in: order)
-    else { return }
-    panes.shots.selected = next
+    guard let from = panes.shots.large ?? ViewerPresenter.selectedShot(viewer.snapshot) else {
+      if let first = order.first { select(first) }
+      return
+    }
+    guard let next = ShotGrouping.step(from: from, by: offset, in: order) else { return }
+    select(next)
     if panes.shots.large != nil { showLarge(next) }
   }
 
@@ -269,20 +297,44 @@ final class ViewerPanesModel {
     panes.shots.full = nil
   }
 
-  /// Copy: the large screenshot as taken goes to the clipboard, read first if it has not arrived yet. Each Copy
-  /// overtakes any before it, so an older one still reading never lands over it.
+  /// The screenshot Copy and Save act on: the one shown large, else the one selected; nil while none is.
+  var actedShot: String? {
+    guard let viewer else { return nil }
+    return panes.shots.large ?? ViewerPresenter.selectedShot(viewer.snapshot)
+  }
+
+  /// Copy: the large screenshot, else the selected one, goes to the clipboard as taken, read first if it has not
+  /// arrived yet. Each Copy or Save overtakes any before it, so an older one still reading never lands over it.
   func copyShot() {
+    withShot { [shotOutlet] png, _ in shotOutlet.copy(png) }
+  }
+
+  /// Save Screenshot…: the large screenshot, else the selected one, as taken, where the person picks in a save panel,
+  /// read first if it has not arrived yet.
+  func saveShot() {
+    withShot { [weak self, shotOutlet] png, name in
+      guard let self, let viewer else { return }
+      let file = ViewerPresenter.shotFileName(name, viewer.snapshot)
+      if shotOutlet.save(png, file) == false { viewer.say(ViewerWords.shotNotSaved) }
+    }
+  }
+
+  /// Runs `use` with the screenshot Copy and Save act on, as taken: at once when the large one has arrived, else once
+  /// it is read. A newer Copy or Save overtakes it.
+  ///
+  /// - Parameter use: What to do with its PNG and its file name.
+  private func withShot(_ use: @escaping @MainActor (Data, String) -> Void) {
     work.large.copyGeneration += 1
     work.large.copy?.cancel()
     work.large.copy = nil
-    if let png = panes.shots.full?.png { return shotOutlet.copy(png) }
-    guard let name = panes.shots.large else { return }
+    guard let name = actedShot else { return }
+    if name == panes.shots.large, let png = panes.shots.full?.png { return use(png, name) }
     let number = work.large.copyGeneration
     work.large.copy = Task { [weak self, service] in
-      // A screenshot that cannot be read copies nothing; the person can copy again.
+      // A screenshot that cannot be read gives nothing; the person can ask again.
       let png = try? await service.screenshot(name: name, full: true)
       guard let self, let png, number == work.large.copyGeneration else { return }
-      shotOutlet.copy(png)
+      use(png, name)
     }
   }
 

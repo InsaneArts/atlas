@@ -1,6 +1,6 @@
 #if DEBUG
   extension PreviewStates {
-    /// The Activity sample's lines, as MacActivity lists them, read at 10:31:42.
+    /// The Activity sample's lines, newest first, read at 10:31:42.
     @MainActor static let activityGroups = [
       ViewerActivityGroup(
         id: "now",
@@ -107,9 +107,11 @@
       )
     }
 
-    /// The Activity tab while an agent works, with the live screen in the corner (MacActivity).
+    /// The Activity tab while an agent works, with the live screen in the corner.
     @MainActor public static let viewerActivity: ViewerState = {
       var state = viewerWorking
+      // Off the Screen no caption says what the agent is doing, so the line beside the word does.
+      state.top.status.line = "Turning Show Center off in Opie"
       state.top.tabs = viewerTabs(.activity)
       state.mini = SampleDesktop.picture
         .map { MiniScreenState(picture: $0) }
@@ -122,20 +124,21 @@
     /// The Activity tab before anything was done in the helper.
     @MainActor public static let viewerActivityEmpty: ViewerState = {
       var state = viewerIdle
-      state.top.status = StatusSummary(label: "Idle", tone: .quiet, mark: .dot, line: "")
+      state.top.status = StatusSummary(label: "Idle", tone: .quiet, mark: .dot, line: "Ready for your agents")
       state.top.tabs = viewerTabs(.activity)
       state.mini = SampleDesktop.picture
         .map { MiniScreenState(picture: $0) }
       state.pane = .activity(
         ViewerActivityState(
-          meta: "No actions today",
+          meta: "",
           query: "",
           filters: activityFilters(),
           groups: [],
           empty: EmptyMessageState(
             headline: "Nothing has happened yet",
             message: "What agents and you do in the helper shows up here."
-          )
+          ),
+          isSearchable: false
         )
       )
       return state

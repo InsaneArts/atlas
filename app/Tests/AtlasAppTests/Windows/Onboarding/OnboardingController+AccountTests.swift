@@ -93,6 +93,32 @@ struct OnboardingControllerAccountTests {
     }
   }
 
+  @Test("a problem setting up an existing account is that account's, for its row, and the next command clears it")
+  func aProblemWithAnAccountIsItsOwn() async throws {
+    let withQA = OnboardingReplies.freshMac
+      .replacingOccurrences(
+        of: #""candidates": []"#,
+        with: #""candidates": [{"name": "qa"}]"#
+      )
+    let controller = OnboardingController.scripted(ScriptedCommands(["onboarding status": withQA]))
+    try await controller.whileOpen { _ in
+      try await controller.untilLoaded()
+      controller.send(.begin)
+      controller.send(.pick(.existing("qa")))
+      await controller.useHelper()
+      #expect(controller.snapshot.problemAbout == "qa")
+      guard case .screen(.choose(let choose)) = controller.state.content else {
+        Issue.record("the choice is not shown")
+        return
+      }
+      #expect(choose.accounts.first?.problem == "unknown command.")
+      #expect(controller.state.note == .none, "the row says it, not the line under the list")
+      controller.send(.pick(.newAccount))
+      await controller.lockAndSwitch()
+      #expect(controller.snapshot.problemAbout == nil)
+    }
+  }
+
   @Test("two quick presses of Create Account run the command once")
   func twoQuickPressesCreateOnce() async throws {
     let commands = ScriptedCommands([

@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// A step's disc (v3 `.sdisc`): its number in a faint ring while it waits, white on the accent while it is the one to
+/// A step's disc: its number in a faint ring while it waits, white on the accent while it is the one to
 /// do, and a green disc with a drawn check once done. As a step finishes, the number shrinks away, the disc turns green
-/// and pops, and the check draws; as a step lights up, it pops a little after the step before it finishes (v3 S3, X8).
+/// and pops, and the check draws; as a step lights up, it pops a little after the step before it finishes.
 /// Under Reduce Motion the colours change and the check appears whole.
 struct StepDisc: View {
   /// The step's number.
@@ -59,7 +59,7 @@ struct StepDisc: View {
     }
   }
 
-  /// 22: the disc's side (v3 `.sdisc`).
+  /// 22: the disc's side.
   nonisolated static let side: CGFloat = 22
 
   /// Whether the step is done.
@@ -110,7 +110,7 @@ struct StepDisc: View {
   }
 }
 
-/// v3's step disc (`.sdisc`, `advance`).
+/// The step disc's own measures.
 private enum Layout {
   /// 11: the drawn check's frame.
   static let check: CGFloat = 11

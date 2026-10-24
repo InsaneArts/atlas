@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// The newest actions under the picture (v3 P5, P8): "Recent" with All activity on its right as a link, then a row
-/// for each. A new action pushes in from the top and the oldest folds away; under Reduce Motion they fade.
+/// The newest actions under the picture: "Recent" with All activity on its right as a link, then a row for each. A new
+/// action fades in at the top as the rows below move down with no bounce, and the oldest fades away; under Reduce
+/// Motion the rows below take a short fade instead of moving.
 struct PanelRecent: View {
   /// The actions, newest first.
   let entries: [PanelRecentEntry]
@@ -36,16 +37,14 @@ struct PanelRecent: View {
     }
   }
 
-  /// How a row comes and goes: a new one pushes in from the top as it fades in, the oldest fades as it folds away;
-  /// under Reduce Motion both only fade.
+  /// How a row comes and goes, in place: a new one fades in over ``Motion/Duration/fade`` and the oldest fades out over
+  /// ``Motion/Duration/dismiss``. Only opacity changes, so Reduce Motion keeps it.
   private var arriving: AnyTransition {
-    Motion.transition(
-      .asymmetric(
-        insertion: AnyTransition.move(edge: .top)
-          .combined(with: .opacity),
-        removal: .opacity
-      ),
-      reduceMotion: reduceMotion
+    .asymmetric(
+      insertion: AnyTransition.opacity
+        .animation(Motion.fade),
+      removal: AnyTransition.opacity
+        .animation(Motion.dismiss)
     )
   }
 }

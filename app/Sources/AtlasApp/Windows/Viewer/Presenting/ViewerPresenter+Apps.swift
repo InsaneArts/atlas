@@ -4,8 +4,9 @@ import AtlasUI
 import CoreGraphics
 
 extension ViewerPresenter {
-  /// The Apps pane: how many apps and windows are open, the search, and the apps front to back with their windows, or
-  /// why none shows (MacApps).
+  /// The Apps pane: how many apps and windows are open, the search once any is, and the apps front to back with their
+  /// windows, or why none shows. With no app open the header says nothing beside its title, and there is nothing to
+  /// search.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The pane.
@@ -15,7 +16,7 @@ extension ViewerPresenter {
       let failed = facts.failure.map {
         EmptyMessageState(headline: ViewerWords.appsFailed, message: Words.sentence($0))
       }
-      return ViewerAppsState(meta: "", query: facts.query, apps: [], empty: failed)
+      return ViewerAppsState(meta: "", query: facts.query, apps: [], empty: failed, isSearchable: false)
     }
     let rows = apps.compactMap { $0.matching(facts.query) }
       .map { appRow($0, icons: facts.icons) }
@@ -31,7 +32,9 @@ extension ViewerPresenter {
       meta: ViewerWords.appsMeta(apps: apps.count, windows: apps.map(\.windows.count).reduce(0, +)),
       query: facts.query,
       apps: rows,
-      empty: empty
+      empty: empty,
+      isSearchable: !apps.isEmpty,
+      findRequests: facts.findRequests
     )
   }
 
@@ -59,8 +62,8 @@ extension ViewerPresenter {
     )
   }
 
-  /// The window shown from the Apps tab, outlined over the picture: its edges as shares of the helper's display,
-  /// which the view letterboxes as a click maps (MacShowOnScreen). None before the picture's display is known.
+  /// The window shown from the Apps tab, outlined over the picture: its edges as shares of the helper's
+  /// display, which the view letterboxes as a click maps. None before the picture's display is known.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The outline, or nil.

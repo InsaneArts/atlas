@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// One line of the Activity pane (v3 V8): its time, its kind's symbol in a tile tinted by how it went, what was done
-/// and why it failed, and "now" while it runs or the screenshot it took with Open. The live line's tile has a blue
-/// ring that cools a second after it arrives. It reads as one, with Open as its action.
+/// One line of the Activity pane: its time, its kind's symbol in a tile tinted by how it went, what was done
+/// and why it failed, and "now" while it runs or the screenshot it took with Open. The live line's tile has a
+/// blue ring that cools a second after it arrives. It reads as one, with Open as its action.
 struct ActivityLineRow: View {
   /// The line.
   let line: ViewerActivityLine
@@ -49,9 +49,9 @@ struct ActivityLineRow: View {
   }
 }
 
-/// The line's own measures, from v3's Activity row (`.arow`).
+/// The line's own measures for Activity rows.
 private enum Layout {
-  /// 5: the screenshot's thumbnail corner (v3 `.thumbm`).
+  /// 5: the screenshot's thumbnail corner.
   static let thumbnailRadius: CGFloat = 5
 }
 

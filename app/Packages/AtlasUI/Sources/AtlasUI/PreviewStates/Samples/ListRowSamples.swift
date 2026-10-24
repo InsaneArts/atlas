@@ -1,8 +1,7 @@
 #if DEBUG
   import SwiftUI
 
-  /// The list rows' samples, each in its grouped list at a setup column's width, as v3's Components block draws
-  /// them (D6, D7).
+  /// The list rows' samples, each in its grouped list at a setup column's width.
   struct ListRowSamples: View {
     /// Which samples to show.
     enum Kind: Sendable, CaseIterable {
@@ -18,7 +17,7 @@
       case scrolling
     }
 
-    /// Choose's two accounts, as v3's Components block draws them.
+    /// Choose's two accounts, with the new account selected.
     static let accounts = [
       SampleListItem(
         id: 0,

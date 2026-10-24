@@ -1,10 +1,8 @@
-// Counts the pixels that differ between pairs of PNGs, for compare-renders.mjs:
-//   swift scripts/compare-renders.swift [--diff-dir DIR] A1 B1 NAME1 [A2 B2 NAME2 ...]
-// Prints one line a pair, in order: its index from 0, a tab, then the count
-// of differing pixels, or "size WxH vs WxH", or which side is unreadable.
-// With --diff-dir, each pair with differing pixels also gets
-// DIR/diff-NAME.png: changed pixels magenta on a faded grey copy of A. NAME
-// must be a plain file name; nothing is written outside DIR.
+// Counts the pixels that differ between pairs of PNGs, for compare-renders.mjs: swift
+// scripts/compare-renders.swift [--diff-dir DIR] BEFORE AFTER NAME [BEFORE AFTER NAME ...] Prints one line a
+// pair, in order: its index from 0, a tab, then the count of differing pixels, or "size WxH vs WxH", or which
+// side is unreadable. With --diff-dir, each pair with differing pixels also gets DIR/diff-NAME.png: changed
+// pixels magenta on a faded grey copy of A. NAME must be a plain file name; nothing is written outside DIR.
 import CoreGraphics
 import Foundation
 import ImageIO

@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// The live picture's slot drawn as an image (v3 V17): what previews and renders pass, and what the screen drew
-/// before the app drew its picture through a layer. It fits the picture at its own shape and keeps the colour its look
-/// keeps.
+/// The live picture's slot drawn as an image: what previews and renders pass, and what the screen drew before
+/// the app drew its picture through a layer. It fits the picture at its own shape and keeps the colour its
+/// look keeps.
 public struct StillPicture: View {
   /// What the slot draws.
   private let live: ViewerLivePicture

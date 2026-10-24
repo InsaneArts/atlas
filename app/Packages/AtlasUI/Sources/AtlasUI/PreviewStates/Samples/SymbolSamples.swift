@@ -1,7 +1,7 @@
 #if DEBUG
   import SwiftUI
 
-  /// Every symbol Atlas draws (v3 D13), each at a row's size beside its name, in two columns.
+  /// Every symbol Atlas draws, each at a row's size beside its name, in two columns.
   struct SymbolSamples: View {
     /// The grid's columns.
     private static let columns = [

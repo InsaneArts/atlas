@@ -5,7 +5,8 @@ import Foundation
 
 /// The person's account side: the helper chosen, created or given up.
 extension OnboardingController {
-  /// Continue on the choice: the form for a new account, else set the picked account up as the helper.
+  /// Continue on the choice: the form for a new account, else set the picked account up as the helper. A problem
+  /// setting it up is noted as that account's, so the choice shows it in the account's row.
   func useHelper() async {
     switch snapshot.shownPick {
     case .newAccount: snapshot.choices.creating = true
@@ -13,7 +14,9 @@ extension OnboardingController {
       let title = snapshot.facts.candidates.first { $0.name == name }?.title ?? name
       // The account Atlas was set up in before needs no approval.
       let words = snapshot.facts.onlyChoice ? OnboardingWords.choosing(title) : OnboardingWords.settingUp(title)
-      noteReadied(await act(.chooseHelper(name), words))
+      let outcome = await act(.chooseHelper(name), words)
+      if outcome?.ok == false { snapshot.problemAbout = name }
+      noteReadied(outcome)
     case nil: break
     }
   }
@@ -48,9 +51,14 @@ extension OnboardingController {
   }
 
   /// Gives up the helper picked but never set up and goes back to the choice: the list, never the account form,
-  /// even when the account was just created there.
+  /// even when the account was just created there. When that account's login is still open, the choice says to log
+  /// it out before deleting it.
   func chooseAnother() async {
     guard let outcome = await act(.forgetHelper, OnboardingWords.backToChoice), outcome.ok else { return }
     snapshot.choices.creating = false
+    // Nothing is deleted; an account whose login is still open is logged out before anyone deletes it.
+    if outcome.decode(HelperForgotten.self)?.loggedIn == true {
+      snapshot.problem = OnboardingWords.logOutBeforeDeleting
+    }
   }
 }

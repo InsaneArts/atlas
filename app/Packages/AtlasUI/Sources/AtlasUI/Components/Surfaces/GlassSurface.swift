@@ -15,7 +15,7 @@ struct GlassSurface<SurfaceShape: Shape>: ViewModifier {
   /// - Parameter content: The view on the glass.
   /// - Returns: The view on its surface.
   func body(content: Content) -> some View {
-    let backing = GlassStyle.backing(
+    let backing = style.backing(
       glassAvailable: Self.glassAvailable,
       reduceTransparency: reduceTransparency,
       drawsGlassEffect: drawsGlassEffect

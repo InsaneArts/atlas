@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// How a picture of the helper's screen is drawn for its look: greyed and darkened while dimmed, a little less while
-/// paused (v3 V11), as it is otherwise. The fitted frame, the screen at actual size and the live picture's layer share
-/// its two numbers, so none drops a treatment.
+/// How a picture of the helper's screen is drawn for its look: greyed and darkened while dimmed, a little
+/// less while paused, as it is otherwise. The fitted frame, the screen at actual size and the live picture's
+/// layer share its two numbers, so none drops a treatment.
 struct PictureTreatment: ViewModifier {
   /// How the picture is drawn.
   let look: PictureLook
@@ -45,15 +45,15 @@ struct PictureTreatment: ViewModifier {
   }
 }
 
-/// The treatment's own measures, from the boards (v3.py `stage`) and v3 V11.
+/// The treatment's own measures for dimmed and paused pictures.
 private enum Layout {
   /// 0.55: how much colour a dimmed picture keeps.
   static let dimSaturation = 0.55
-  /// 0.4: the black over a dimmed picture, which leaves it at the board's 0.6 brightness.
+  /// 0.4: the black over a dimmed picture, which leaves it at 0.6 brightness.
   static let dimShade = 0.4
-  /// 0.5: how much colour a paused picture keeps (v3 V11, `pausedSaturation`).
+  /// 0.5: how much colour a paused picture keeps.
   static let pausedSaturation = 0.5
-  /// 0.3: the black over a paused picture, which leaves it at v3's 0.7 brightness (`pausedBrightness`).
+  /// 0.3: the black over a paused picture, which leaves it at 0.7 brightness.
   static let pausedShade = 0.3
 }
 

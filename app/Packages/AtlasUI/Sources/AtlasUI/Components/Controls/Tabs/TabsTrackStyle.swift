@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// A tab in the track: its label bright on the thumb while selected, quiet otherwise and brightening while held, which
-/// also dips it a little (v3 X9: tabs 0.96).
+/// A tab in the track: its label bright on the thumb while selected, quiet otherwise and brightening while held; it
+/// never shrinks.
 struct TrackTabStyle: ButtonStyle {
   /// Whether it is the selected tab.
   let isSelected: Bool
@@ -26,16 +26,9 @@ struct TrackTabStyle: ButtonStyle {
         }
       }
       .contentShape(Capsule())
-      .modifier(PressScale(isPressed: configuration.isPressed, scale: Layout.pressedScale))
       .opacity(enabled ? 1 : Opacity.disabled)
       .animation(CapsuleButtonStyle.pressAnimation(isPressed: configuration.isPressed), value: configuration.isPressed)
   }
-}
-
-/// A track tab's own measures.
-private enum Layout {
-  /// 0.96: how far a held tab dips (v3 X9).
-  static let pressedScale: CGFloat = 0.96
 }
 
 #if DEBUG

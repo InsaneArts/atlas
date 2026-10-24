@@ -831,7 +831,7 @@ fn only_generations_nothing_will_settle_are_unresolved() {
 
     let held = controller.quarantine().unwrap();
     controller.clear().unwrap();
-    assert!(controller.pending().unwrap().is_empty());
+    assert_eq!(controller.pending().unwrap(), vec![held.to_string()]);
     assert!(
         !orphan.exists(),
         "recovery sweeps unlisted abandoned claims"

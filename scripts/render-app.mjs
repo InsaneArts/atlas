@@ -1,4 +1,4 @@
-// Draws every Atlas.app render group into OUT, for comparing one phase's
+// Draws every Atlas.app render group into OUT, for comparing a change's
 // renders with the last: node scripts/render-app.mjs OUT [--only a,b].
 //
 // It builds the debug AtlasApp, whose preview states only a debug build
@@ -325,8 +325,12 @@ async function renderMenuBar(app, folder) {
 
 async function main() {
   const { out, only } = parse(process.argv.slice(2));
-  if (inside(out, path.join(root, 'docs/evidence/redesign-v3/before'))) {
-    throw new Error('OUT is inside the v3 Before set; choose another folder');
+  const baselineFile = path.join(root, 'local/render-baselines.json');
+  const baselines = fs.existsSync(baselineFile)
+    ? JSON.parse(fs.readFileSync(baselineFile, 'utf8'))
+    : [];
+  for (const { directory, message } of baselines) {
+    if (inside(out, path.resolve(root, directory))) throw new Error(message);
   }
   for (const folder of [...only, '.render-viewer']) checkReplaceable(path.join(out, folder));
   const app = build();

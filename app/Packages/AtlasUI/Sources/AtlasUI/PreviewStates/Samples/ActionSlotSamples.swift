@@ -1,8 +1,8 @@
 #if DEBUG
   import SwiftUI
 
-  /// The viewer's actions as v3 draws them (D11, V1): circles for symbols, glass capsules for words, one white capsule
-  /// for the main action, and Keys and Stop in slots that show only while the person has control.
+  /// The viewer's action controls: circles for symbols, glass capsules for words, one white capsule for the
+  /// main action, and Keys and Stop in slots that show only while the person has control.
   struct ActionSlotSamples: View {
     /// Whether the person has control, so Keys and Stop show.
     let isInControl: Bool

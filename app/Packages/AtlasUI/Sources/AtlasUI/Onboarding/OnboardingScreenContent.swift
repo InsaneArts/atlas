@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// One setup screen, filling the window above the footer. The footer is not part of it, so it stays put while the
-/// screens change (v3 S1).
+/// screens change.
 struct OnboardingScreenContent: View {
   /// The screen and what it shows.
   let screen: OnboardingScreen
@@ -39,9 +39,11 @@ struct OnboardingScreenContent: View {
     case .allow(let state):
       AllowScreen(state: state, note: note)
     case .permissions(let state):
-      PermissionsScreen(state: state, send: send)
+      PermissionsScreen(state: state)
     case .helperDone(let state):
       HelperDoneScreen(state: state, note: note)
+    case .closeLeftovers(let state):
+      CloseLeftoversScreen(state: state, note: note)
     case .blocked(let reason):
       BlockedScreen(reason: reason)
     }

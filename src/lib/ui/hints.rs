@@ -39,6 +39,9 @@ pub fn fix(code: &str) -> Option<&'static str> {
         }
         "menubar" => "The rest of Atlas works without the menu bar.",
         "no-environment" => "Use atlas run, or set one up with atlas environment profile.",
+        "not-ready" => {
+            "Run atlas doctor. A deleted account's login closes in Atlas › Settings › Helper or with atlas init; otherwise wait a minute and try again."
+        }
         "on-console" => {
             "Switch back to your own account. Atlas works while the helper is in the background."
         }

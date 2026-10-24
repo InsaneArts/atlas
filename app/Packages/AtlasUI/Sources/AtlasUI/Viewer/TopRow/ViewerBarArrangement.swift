@@ -1,11 +1,11 @@
 import SwiftUI
 
-/// The top row's three columns (v3 `.vtop`'s `minmax(0, 1fr) auto minmax(0, 1fr)`): the tabs centred on the window, the
-/// status from the leading edge and the buttons to the trailing edge, each side column as wide as the other. Its
-/// ideal width is what the row needs for both sides to hold their own content, so ``ViewThatFits`` can tell whether a
-/// layout fits: the wider side counts twice, as the tabs stay centred. Should even the narrowest layout not fit, the
-/// tabs move off centre, never under the buttons. Its subviews are the status, the tabs and the buttons, in that order;
-/// the status takes the room left of the tabs and cuts its line short within it.
+/// The top row's three columns: the tabs centred on the window, the status from the leading edge and the
+/// buttons to the trailing edge, each side column as wide as the other. Its ideal width is what the row needs
+/// for both sides to hold their own content, so ``ViewThatFits`` can tell whether a layout fits: the wider
+/// side counts twice, as the tabs stay centred. Should even the narrowest layout not fit, the tabs move off
+/// centre, never under the buttons. Its subviews are the status, the tabs and the buttons, in that order; the
+/// status takes the room left of the tabs and cuts its line short within it.
 struct ViewerBarArrangement: Layout {
   /// Between the side columns and the tabs.
   let gap: CGFloat

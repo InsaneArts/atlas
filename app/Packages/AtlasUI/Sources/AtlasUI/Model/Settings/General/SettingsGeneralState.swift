@@ -11,8 +11,6 @@ public struct SettingsGeneralState: Equatable, Sendable {
   public var pictureOptions: [PopupOption<SettingsPicture>]
   /// Whether Atlas notifies the person when it needs them.
   public var notify: Bool
-  /// Whether Atlas badges its Dock icon when it needs the person.
-  public var badge: Bool
 
   /// Creates the pane's state.
   ///
@@ -22,20 +20,17 @@ public struct SettingsGeneralState: Equatable, Sendable {
   ///   - picture: How often the windows show the helper's screen.
   ///   - pictureOptions: The picture's choices, in menu order.
   ///   - notify: Whether Atlas notifies the person when it needs them.
-  ///   - badge: Whether Atlas badges its Dock icon when it needs the person.
   public init(
     opensAtLogin: Bool,
     canOpenAtLogin: Bool,
     picture: SettingsPicture,
     pictureOptions: [PopupOption<SettingsPicture>],
-    notify: Bool,
-    badge: Bool
+    notify: Bool
   ) {
     self.opensAtLogin = opensAtLogin
     self.canOpenAtLogin = canOpenAtLogin
     self.picture = picture
     self.pictureOptions = pictureOptions
     self.notify = notify
-    self.badge = badge
   }
 }

@@ -1,25 +1,24 @@
 import AtlasStatus
 
-/// What Atlas says outside its windows: each notification's title, body and actions, and the Dock badge.
+/// What Atlas says outside its windows: each notification's title, body and actions.
 /// `nonisolated`: constants and a pure function, which Notification Center's delegate reads off the main actor.
 nonisolated enum NotificationWords {
-  /// Whether Atlas needs you offers Recover beside Open Atlas (v3 A8, Q-A8). The Recover action runs the alert's own
-  /// recovery, with its guards, without asking first; set it to false to offer Open Atlas alone, where the alert asks.
+  /// Whether The helper needs you offers Recover, its one action. The Recover action runs the alert's own recovery,
+  /// with its guards, without asking first; set it to false to offer Open Atlas instead, where the alert asks. A click
+  /// on the notification itself opens Atlas either way.
   static let offersRecover = true
-  /// The Dock badge while Atlas needs the person: one thing waits on them.
-  static let badge = "1"
   /// The notification's action that recovers the helper without opening Atlas.
   static let recover = "Recover"
   /// The notification's action that opens Atlas on its main window.
   static let openAtlas = "Open Atlas"
-  /// Atlas needs you's kind, which carries its actions.
+  /// The helper needs you's kind, which carries its action.
   static let attentionCategory = "atlas.attention"
   /// Recover's identifier, as Notification Center hands it back.
   static let recoverAction = "atlas.recover"
   /// Open Atlas's identifier, as Notification Center hands it back.
   static let openAction = "atlas.open"
-  /// Atlas needs you's title, for every reason.
-  static let needsYou = "Atlas needs you"
+  /// The helper needs you's title, for every reason.
+  static let needsYou = "The helper needs you"
 
   /// A notification's words.
   struct Note: Equatable {
@@ -27,12 +26,14 @@ nonisolated enum NotificationWords {
     let title: String
     /// The sentence under it.
     let body: String
-    /// Whether it carries Atlas needs you's actions.
+    /// Whether it carries The helper needs you's action.
     let acts: Bool
+    /// Whether it plays a sound: not for news the person needn't act on, such as the helper logging out.
+    var sounds = true
   }
 
-  /// The words for what Atlas tells the person: Atlas needs you says the reason, and with Recover offered, nothing
-  /// more, since its actions say what to do next.
+  /// The words for what Atlas tells the person: The helper needs you says the reason, and with Recover offered,
+  /// nothing more, since its action says what to do next. The helper logging out is told quietly, with no sound.
   ///
   /// - Parameter notice: What to tell them.
   /// - Returns: The notification's title and body.
@@ -51,11 +52,16 @@ nonisolated enum NotificationWords {
         acts: true
       )
     case .loggedOut:
-      Note(title: "The helper logged out", body: "Agents can't use it until you log in to it again.", acts: false)
+      Note(
+        title: "The helper logged out",
+        body: "Agents can't use it until you log in to it again.",
+        acts: false,
+        sounds: false
+      )
     }
   }
 
-  /// The words when a Recover started from the notification did not run: Atlas needs you again, saying why.
+  /// The words when a Recover started from the notification did not run: The helper needs you again, saying why.
   ///
   /// - Parameter reason: Why, in plain words.
   /// - Returns: The notification's title and body.

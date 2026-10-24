@@ -11,45 +11,12 @@ import Testing
 
 @Suite("PanelController")
 struct PanelControllerTests {
-  /// A panel over scripted parts that opens no window.
-  ///
-  /// - Parameters:
-  ///   - service: The scripted service.
-  ///   - commands: The scripted command line, which by default knows no command.
-  ///   - loginItem: The scripted login item.
-  ///   - links: Stand-ins for the other windows.
-  ///   - clock: The clock the pauses between readings run on; by default one nobody advances, so nothing is read
-  ///     twice unasked.
-  /// - Returns: The panel's controller.
-  private static func panel(
-    _ service: ScriptedService = ScriptedService(),
-    commands: ScriptedCommands = ScriptedCommands([:]),
-    loginItem: ScriptedLoginItem = ScriptedLoginItem(),
-    links: PanelLinks = PanelLinks(),
-    clock: ManualClock = ManualClock()
-  ) -> PanelController {
-    PanelController(
-      dependencies: PanelDependencies(
-        service: service,
-        commands: commands,
-        actions: HelperActions(
-          commands: commands,
-          service: service,
-          barrier: ControlBarrier(service: service, clock: clock)
-        ),
-        loginItem: loginItem.seam,
-        links: links,
-        clock: clock
-      )
-    )
-  }
-
   @Test("the panel shows the service's status, and no picture when capture fails")
   func showsTheServiceStatus() async {
     let service = ScriptedService()
     service.reply = ["overview": ["mode": "recovering", "account": "atlas"]]
     service.fail = ["frame"]
-    let controller = Self.panel(service)
+    let controller = PanelController.scripted(service)
     await controller.readStatus()
     await controller.readFrame()
     #expect(controller.status.overview.mode == .recovering)
@@ -61,7 +28,7 @@ struct PanelControllerTests {
     let service = ScriptedService()
     // Every field at its default, as a failed reading also shows: an answer all the same.
     service.reply = [:]
-    let controller = Self.panel(service)
+    let controller = PanelController.scripted(service)
     #expect(controller.answer == nil && controller.answered == nil)
     await controller.readStatus()
     #expect(controller.answer == ViewerStatus())
@@ -70,12 +37,30 @@ struct PanelControllerTests {
     #expect(controller.answer == nil && controller.answered == false)
   }
 
+  @Test("a reading that fails after answers reads as Reconnecting…, and the next answer ends it")
+  func aFailedReadingReconnects() async {
+    let service = ScriptedService()
+    service.reply = ["overview": ["mode": "observing", "state": "idle"]]
+    let controller = PanelController.scripted(service)
+    #expect(controller.mode.kind == .connecting)
+    #expect(controller.state.status.line == "Starting the helper…")
+    await controller.readStatus()
+    #expect(controller.mode.kind == .idle)
+    service.fail = ["status"]
+    await controller.readStatus()
+    #expect(controller.mode.kind == .connecting)
+    #expect(controller.state.status.line == "Reconnecting…")
+    service.fail = []
+    await controller.readStatus()
+    #expect(controller.mode.kind == .idle)
+  }
+
   @Test("each reading is handed to the rest of the app, the service's answer as itself and a failed one as nil")
   func readingsAreHandedOn() async {
     let service = ScriptedService()
     service.reply = ["overview": ["mode": "recovering", "state": "needsYou"]]
     var read: [ViewerStatus?] = []
-    let controller = Self.panel(service, links: PanelLinks(read: { read.append($0) }))
+    let controller = PanelController.scripted(service, links: PanelLinks(read: { read.append($0) }))
     await controller.readStatus()
     service.fail = ["status"]
     await controller.readStatus()
@@ -85,7 +70,7 @@ struct PanelControllerTests {
   @Test("the picture opens the main window on Screen, All activity on Activity and Open Atlas on the tab it shows")
   func theOpenersOpenTheirTabs() {
     var opened: [ViewerTab?] = []
-    let controller = Self.panel(links: PanelLinks(openViewer: { opened.append($0) }))
+    let controller = PanelController.scripted(links: PanelLinks(openViewer: { opened.append($0) }))
     controller.send(.openScreen)
     controller.send(.openActivity)
     controller.send(.openAtlas)
@@ -96,18 +81,25 @@ struct PanelControllerTests {
   func theHelperCommandsAskFirst() {
     var asked: [HelperAlert] = []
     let commands = ScriptedCommands([:])
-    let controller = Self.panel(commands: commands, links: PanelLinks(showAlert: { asked.append($0) }))
+    let controller = PanelController.scripted(commands: commands, links: PanelLinks(showAlert: { asked.append($0) }))
     controller.send(.askRecover)
     controller.send(.askSwitch)
-    controller.askLogOut()
-    #expect(asked == [.recover, .switchToHelper, .logOut])
+    #expect(asked == [.recover, .switchToHelper])
     #expect(commands.ran.isEmpty)
+  }
+
+  @Test("Open Settings opens the Settings window")
+  func openSettingsOpensSettings() {
+    var opened = 0
+    let controller = PanelController.scripted(links: PanelLinks(openSettings: { opened += 1 }))
+    controller.send(.openSettings)
+    #expect(opened == 1)
   }
 
   @Test("stopping the agent asks the service, and resuming lets it go on")
   func stoppingTheAgent() async {
     let service = ScriptedService()
-    let controller = Self.panel(service)
+    let controller = PanelController.scripted(service)
     await controller.stopAgent()
     await controller.resumeAgent()
     #expect(service.log == ["stop", "resume"])
@@ -118,7 +110,7 @@ struct PanelControllerTests {
   func refusedStop() async {
     let service = ScriptedService()
     service.fail = ["hold"]
-    let controller = Self.panel(service)
+    let controller = PanelController.scripted(service)
     await controller.stopAgent()
     #expect(controller.state.notice == "hold failed.")
     controller.watch(open: true)
@@ -130,7 +122,7 @@ struct PanelControllerTests {
   func stopNeverWaits() async throws {
     let service = ScriptedService()
     service.hold = ["hold"]
-    let controller = Self.panel(service)
+    let controller = PanelController.scripted(service)
     let first = Task { await controller.stopAgent() }
     try await settle("the first stop never reached the service") { service.held["hold"] != nil }
     await controller.resumeAgent()
@@ -149,7 +141,7 @@ struct PanelControllerTests {
   func theReadingsKeepTheirIntervals() async throws {
     let service = ScriptedService()
     let clock = ManualClock()
-    let controller = Self.panel(service, clock: clock)
+    let controller = PanelController.scripted(service, clock: clock)
     controller.watch(open: true)
     try await clock.untilSleeping(2, for: PanelController.openEvery, "the open panel never paused after reading")
     #expect(service.statusCalls == 1 && service.frameCalls == 1)
@@ -174,7 +166,7 @@ struct PanelControllerTests {
     let service = ScriptedService()
     service.picture = png()
     let clock = ManualClock()
-    let controller = Self.panel(service, clock: clock)
+    let controller = PanelController.scripted(service, clock: clock)
     controller.watch(open: true)
     try await clock.untilSleeping(2, for: PanelController.openEvery, "the open panel never paused after reading")
     try await settle("the first picture never showed") { controller.picture != nil }
@@ -204,7 +196,7 @@ struct PanelControllerTests {
     service.picture = png()
     let commands = ScriptedCommands([:])
     let clock = ManualClock()
-    let controller = Self.panel(service, commands: commands, clock: clock)
+    let controller = PanelController.scripted(service, commands: commands, clock: clock)
     controller.watch(open: true)
     try await clock.untilSleeping(2, for: PanelController.openEvery, "the open panel never paused after reading")
     try await settle("opening never listed the helper") { !commands.ran.isEmpty }
@@ -225,7 +217,7 @@ struct PanelControllerTests {
     let service = ScriptedService()
     service.reply = ["overview": ["mode": "loggedOut", "account": "atlas", "accountName": "Atlas"]]
     let commands = ScriptedCommands(["switch": #"{"ok": true}"#])
-    let controller = Self.panel(service, commands: commands)
+    let controller = PanelController.scripted(service, commands: commands)
     await controller.readStatus()
     #expect(await controller.logIn() == PanelWords.logInThenSwitchBack(to: "Atlas"))
     #expect(commands.ran == [Action.switchTo("atlas").arguments])
@@ -234,7 +226,7 @@ struct PanelControllerTests {
   @Test("a helper not found at launch is listed again when the panel opens, and a later failed listing keeps it known")
   func theHelperIsListedAgainOnOpening() async throws {
     let commands = ScriptedCommands([:])
-    let controller = Self.panel(commands: commands)
+    let controller = PanelController.scripted(commands: commands)
     await controller.findHelper()
     #expect(controller.helper == nil)
     commands.answer("switch --list", #"{"ok": true, "accounts": [{"name": "atlas", "helper": true}]}"#)
@@ -250,7 +242,7 @@ struct PanelControllerTests {
   @Test("switching with no helper account found says where to look, and runs nothing")
   func switchWithNoHelperSaysWhereToLook() async {
     let commands = ScriptedCommands([:])
-    let controller = Self.panel(commands: commands)
+    let controller = PanelController.scripted(commands: commands)
     #expect(await controller.logIn() == PanelWords.helperNotFound)
     #expect(commands.ran == [Action.listAccounts.arguments], "it only looked for the helper")
   }
@@ -260,7 +252,7 @@ struct PanelControllerTests {
     let service = ScriptedService()
     service.reply = ["overview": ["mode": "loggedOut", "account": "atlas"]]
     let commands = ScriptedCommands(["switch": #"{"ok": false, "error": "The screen could not lock"}"#])
-    let controller = Self.panel(service, commands: commands)
+    let controller = PanelController.scripted(service, commands: commands)
     await controller.readStatus()
     #expect(await controller.logIn() == "The screen could not lock")
   }
@@ -271,7 +263,7 @@ struct PanelControllerTests {
     let commands = ScriptedCommands(["menubar --login": #"{"ok": true}"#])
     // The command turns the login item on or off, as the app's own --login does.
     commands.whileRunning { arguments in loginItem.enabled = arguments.last == "on" }
-    let controller = Self.panel(commands: commands, loginItem: loginItem)
+    let controller = PanelController.scripted(commands: commands, loginItem: loginItem)
     await controller.setOpenAtLogin(true)
     #expect(commands.ran == [Action.openAtLogin(true).arguments])
     #expect(controller.opensAtLogin == OpenAtLogin.State(isAvailable: true, isEnabled: true))
@@ -288,7 +280,7 @@ struct PanelControllerTests {
   func openAtLoginChangesRunOneAtATime() async {
     let loginItem = ScriptedLoginItem(available: true)
     let commands = ScriptedCommands(["menubar --login": #"{"ok": true}"#])
-    let controller = Self.panel(commands: commands, loginItem: loginItem)
+    let controller = PanelController.scripted(commands: commands, loginItem: loginItem)
     let seen = LoginChangeObservation()
     commands.whileRunning { arguments in
       loginItem.enabled = arguments.last == "on"
@@ -311,7 +303,7 @@ struct PanelControllerTests {
   @Test("a status the service refuses to give, as a busy one does, leaves the last one standing")
   func aRefusedStatusLeavesTheLastOne() async {
     let service = ScriptedService()
-    let controller = Self.panel(service)
+    let controller = PanelController.scripted(service)
     await controller.readStatus()
     service.busy = true
     await controller.readStatus()
@@ -319,17 +311,17 @@ struct PanelControllerTests {
     #expect(controller.answer != nil)
   }
 
-  @Test("each opening reads Open at Login again, so a change made elsewhere meanwhile shows in its tick")
+  @Test("each opening reads Open at Login again, so a change made elsewhere meanwhile shows in Settings")
   func openAtLoginIsReadAgainOnOpening() {
     let loginItem = ScriptedLoginItem(available: true, enabled: true)
-    let controller = Self.panel(loginItem: loginItem)
+    let controller = PanelController.scripted(loginItem: loginItem)
     controller.watch(open: true)
-    #expect(controller.moreMenu.opensAtLogin == true)
+    #expect(controller.opensAtLogin.isEnabled)
     controller.watch(open: false)
     // Getting Started turns it off while the panel is closed.
     loginItem.enabled = false
     controller.watch(open: true)
-    #expect(controller.moreMenu.opensAtLogin == false)
+    #expect(!controller.opensAtLogin.isEnabled)
     controller.watch(open: false)
   }
 }

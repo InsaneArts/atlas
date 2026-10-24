@@ -18,7 +18,8 @@ enum MenuBarRender {
     ("connecting", .connecting),
     ("inUseElsewhere", .inUseElsewhere),
   ]
-  /// The two menu bars each state is drawn on, by file suffix: v3's menu bar colours for its light and dark cells.
+  /// The two menu bars each state is drawn on, by file suffix: light and dark menu bar backgrounds for
+  /// contrast checks.
   static let bars: [(suffix: String, appearance: NSAppearance?, ground: NSColor)] = [
     ("light", Appearance.light, NSColor(srgbRed: 236 / 255, green: 236 / 255, blue: 240 / 255, alpha: 1)),
     ("dark", Appearance.dark, NSColor(srgbRed: 28 / 255, green: 28 / 255, blue: 30 / 255, alpha: 1)),

@@ -22,6 +22,8 @@ struct ActionTests {
         ["onboarding", "create", "--account", "atlas", "--full-name", "Atlas"]
       ),
       (.forgetHelper, ["onboarding", "forget"]),
+      (.closeLeftovers, ["onboarding", "close"]),
+      (.closeHelper, ["onboarding", "close", "--helper"]),
       (.finishSetup, ["onboarding", "finish"]),
       (.setOpensAtLogin(true), ["onboarding", "login", "on"]),
       (.setOpensAtLogin(false), ["onboarding", "login", "off"]),

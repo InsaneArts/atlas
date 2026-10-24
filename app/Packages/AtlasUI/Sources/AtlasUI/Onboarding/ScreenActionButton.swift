@@ -1,9 +1,8 @@
 import SwiftUI
 
 /// A screen's main action drawn above the footer as a large button, as the screens drew Get Started, Lock and Switch,
-/// Try Again, Check Again, Allow and Switch Back before they moved to the footer (v3 D3). It shows only while
-/// ``SwiftUICore/EnvironmentValues/mainActionInFooter`` is off: the back-out kept until Phase 16. Otherwise it draws
-/// nothing.
+/// Try Again, Check Again, Allow and Switch Back before they moved to the footer. It shows only while
+/// ``SwiftUICore/EnvironmentValues/mainActionInFooter`` is off. Otherwise it draws nothing.
 struct ScreenActionButton: View {
   /// The screen's main action, from the footer's state.
   let action: OnboardingFooterAction?

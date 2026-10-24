@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// An alert over a whole window, top row and tabs included (v3 A6): the scrim, which takes every click, fades in over
-/// ``Motion/Duration/fade`` while the card settles from 1.06 to 1 on ``Motion/release``; leaving, the card fades and
-/// shrinks to 0.97 over ``Motion/Duration/dismiss`` and the scrim fades on ``Motion/leave``. Under Reduce Motion
+/// An alert over a whole window, top row and tabs included: the scrim, which takes every click, fades in over
+/// ``Motion/Duration/fade`` while the card fades in and settles from 1.04 to 1 on ``Motion/arrive``, with no bounce;
+/// leaving, the card fades and shrinks to 0.97 over ``Motion/Duration/dismiss`` and the scrim fades on
+/// ``Motion/leave``. Under Reduce Motion
 /// both only fade, on ``Motion/reduced``. Nothing dismisses it but its own buttons.
 struct AlertLayer<ID: Hashable & Sendable>: View {
   /// What the alert says and offers; nil shows none.
@@ -54,7 +55,7 @@ struct AlertLayer<ID: Hashable & Sendable>: View {
     return .asymmetric(
       insertion: AnyTransition.scale(scale: AlertCardScale.arriving)
         .combined(with: .opacity)
-        .animation(Motion.release),
+        .animation(Motion.arrive),
       removal: AnyTransition.scale(scale: AlertCardScale.leaving)
         .combined(with: .opacity)
         .animation(Motion.dismiss)

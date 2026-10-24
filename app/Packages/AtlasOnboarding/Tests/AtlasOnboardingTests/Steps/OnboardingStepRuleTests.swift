@@ -54,15 +54,43 @@ struct OnboardingStepRuleTests {
       Issue.record("an administrator helper is refused")
       return
     }
-    guard case .blocked = step(try controller(helper(leftover: true))) else {
-      Issue.record("a leftover session asks for a restart")
-      return
-    }
     let unsigned = try facts(["role": "controller", "app": ["installed": true, "signed": false]])
     guard case .blocked = step(unsigned) else {
       Issue.record("an unsigned app is refused")
       return
     }
+  }
+
+  @Test("a deleted account's open login leads to the close screen, whatever else is true")
+  func leftoverLogins() throws {
+    var started = OnboardingChoices()
+    started.started = true
+    #expect(step(try controller(leftovers: [502])) == .closeLeftovers, "before the welcome")
+    #expect(step(try controller(helper(), finished: true, leftovers: [502]), started) == .closeLeftovers)
+    #expect(step(try controller(helper(admin: true), leftovers: [502])) == .closeLeftovers)
+    let unsigned = try facts([
+      "role": "controller", "app": ["installed": true, "signed": false],
+      "leftoverLogins": [["uid": 502, "kind": "orphan"]],
+    ])
+    #expect(step(unsigned) == .closeLeftovers, "closing needs no signed app")
+  }
+
+  @Test("the close screen says it closed until Continue, then setup goes on")
+  func closedLeftovers() throws {
+    var choices = OnboardingChoices()
+    choices.closedLeftovers = true
+    let facts = try controller(helper(), finished: true)
+    #expect(step(facts, choices) == .closeLeftovers)
+    choices.closedLeftovers = false
+    #expect(step(facts, choices) == .agents)
+  }
+
+  @Test("the helper's own window never offers to close another account's login")
+  func helperNeverCloses() throws {
+    var closed = OnboardingChoices()
+    closed.closedLeftovers = true
+    let facts = try asker(installed: true, running: true, ax: true, screen: true)
+    #expect(step(facts, closed) == .helperDone)
   }
 
   @Test("a helper whose account was deleted is chosen again")
@@ -81,6 +109,29 @@ struct OnboardingStepRuleTests {
     #expect(step(try asker(installed: true, running: true, ax: true, screen: false)) == .permissions)
     #expect(step(try asker(installed: true, running: true, ax: false, screen: true)) == .permissions)
     #expect(step(try asker(installed: true, running: true, ax: true, screen: true)) == .helperDone)
+  }
+
+  @Test("recorded Allow waits for the requesting Atlas instead of asking again")
+  func acceptedHelperWaits() throws {
+    let waiting = try facts([
+      "role": "helper",
+      "helper": ["accepted": true, "installed": false, "running": false],
+    ])
+    guard case .blocked(let message) = step(waiting) else {
+      Issue.record("accepted setup must explain how to finish in the requesting account")
+      return
+    }
+    #expect(message.contains("own account"))
+  }
+
+  @Test("an interrupted accepted setup keeps its recovery problem visible")
+  func acceptanceRecoveryIsVisible() throws {
+    let interrupted = try facts([
+      "role": "controller", "configured": true,
+      "setupProblem": "Unfinished setup remains pending until recovery.",
+      "helper": helper(),
+    ])
+    #expect(step(interrupted) == .blocked("Unfinished setup remains pending until recovery."))
   }
 
   @Test("a job that does not run is allowed again when an account asks")

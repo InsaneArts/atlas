@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// The hero over a screen that says how something ended (v3 D5): a green disc whose check draws itself, or an
-/// orange-tinted disc with an orange mark. It plays once, as it arrives: the disc pops, then the check draws. Under
-/// Reduce Motion the disc and check appear whole; a render draws them settled.
+/// The hero over a screen that says how something ended: a green disc whose check draws itself, or an
+/// orange-tinted disc with an orange mark. It plays once, as it arrives: the disc pops, then the check draws.
+/// Under Reduce Motion the disc and check appear whole; a render draws them settled.
 struct HeroDisc: View {
   /// How it ended.
   enum Kind: Sendable {
@@ -66,13 +66,13 @@ struct HeroDisc: View {
   }
 }
 
-/// v3's heroes (`.sdone`, `.sprob`).
+/// The success and problem heroes' own measures.
 private enum Layout {
   /// 56: the disc.
   static let side: CGFloat = 56
   /// 26: the check's frame, and the problem mark's size.
   static let check: CGFloat = 26
-  /// 4: the check's stroke, v3's 2 on a 12-point square drawn at 26.
+  /// 4: the check's stroke, 2 on a 12-point square drawn at 26.
   static let checkWidth: CGFloat = 4
   /// 0.5: where the disc pops from.
   static let arrivingScale: CGFloat = 0.5

@@ -20,7 +20,7 @@
       message: "An action may not have finished. Atlas checks the helper and starts its mouse and keyboard again.",
       buttons: [
         AlertCardButton(id: .confirm, title: "Recover", role: .action),
-        AlertCardButton(id: .cancel, title: "Not Now", role: .cancel),
+        AlertCardButton(id: .cancel, title: "Cancel", role: .cancel),
       ]
     )
 
@@ -55,7 +55,7 @@
       ]
     )
 
-    /// Recover while it runs: a spinner in Recover, which says what it does, while Not Now waits.
+    /// Recover while it runs: a spinner in Recover, which says what it does, while Cancel waits.
     static let alertRecovering: AlertCardState<AlertChoice> = {
       var state = alertRecover
       state.phase = .running(label: "Recovering…")
@@ -69,15 +69,16 @@
       return state
     }()
 
-    /// Recover once it worked: a check in the button and Recovered as the title, just before it closes.
+    /// Recover once it worked: the helper ready as the title, what works again in the message's place, and one Done
+    /// button with its check in place of the two, just before it closes.
     static let alertRecovered: AlertCardState<AlertChoice> = {
       var state = alertRecover
-      state.phase = .done(title: "Recovered")
+      state.phase = .done(title: "The helper is ready", message: "Mouse and keyboard work again.", button: "Done")
       return state
     }()
 
-    /// A Recover the helper refused while it was in use: why, as a problem line in place of the sentence, with
-    /// the buttons back to try again.
+    /// A Recover the helper refused while it was in use: why, centred in orange in place of the sentence, with the
+    /// buttons back to try again.
     static let alertRecoverRefused: AlertCardState<AlertChoice> = {
       var state = alertRecover
       state.phase = .refused(message: "The helper is in use. Try Recover again once it's free.")

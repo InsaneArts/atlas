@@ -3,8 +3,8 @@ import SwiftUI
 /// The main window: one quiet bar at the top, the helper's screen under it, the Details column beside it on request,
 /// a toast when Take Control is refused, and an alert over everything when one is asked. It draws its state and sends
 /// what the person does; it decides nothing. The shell supplies `input`, the surface over the screen that takes the
-/// mouse and keyboard while in control, and `livePicture`, which draws the newest picture through a layer (v3 V17), so
-/// this view never sees AppKit; previews pass no input and an image.
+/// mouse and keyboard while in control, and `livePicture`, which draws the newest picture through a layer, so this
+/// view never sees AppKit; previews pass no input and an image.
 public struct ViewerView<Input: View, LivePicture: View>: View {
   /// What the window shows.
   private let state: ViewerState
@@ -18,24 +18,20 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
   private let livePicture: (ViewerLivePicture) -> LivePicture
   /// The tab the stage last settled on, which the next switch goes from.
   @State private var settledTab: ViewerTab
-  /// Which way the last switch went, from ``ViewerTab/direction(from:to:)``.
-  @State private var settledDirection = 0
   /// Whether the last switch moved the picture between the stage and the corner, from ``ScreenZoom``.
   @State private var settledZoom = false
-  /// The tab the last settled switch left, whose kept pane fades out toward the side away from the new one.
-  @State private var settledLeft: ViewerTab?
-  /// Activity, Apps and Screenshots as each last showed, kept built once shown, so a switch back moves and fades the
-  /// pane already there instead of building it again (``KeptPaneShift``).
+  /// Activity, Apps and Screenshots as each last showed, kept built once shown, so a switch back fades the pane
+  /// already there instead of building it again (``KeptPaneShift``).
   @State private var kept: [ViewerTab: ViewerPane] = [:]
-  /// The corner the small screen keeps to, where the person last let go of it.
-  @State private var miniCorner = MiniCorner.bottomTrailing
+  /// The corner the small screen keeps to: where the person last let go of it, as the window remembers it.
+  @State private var miniCorner: MiniCorner
   /// How far the small screen is being dragged from its corner; zero while it rests.
   @State private var miniDrag = CGSize.zero
-  /// The stage's size, which the small screen's corners are reckoned in.
+  /// The stage's size, which the small screen's size and corners are reckoned in.
   @State private var stageSize = CGSize.zero
   /// The namespace a screenshot zooms in between its tile and the large view.
   @Namespace private var zoom
-  /// The namespace the helper's screen moves in between the stage and the corner (v3 V16).
+  /// The namespace the helper's screen moves in between the stage and the corner.
   @Namespace private var screenZoom
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -61,30 +57,33 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
     self.input = input()
     self.livePicture = livePicture
     _settledTab = State(initialValue: state.pane.tab)
+    _miniCorner = State(initialValue: state.miniCorner)
   }
 
-  /// The top row in the title bar, the stage under it with Details beside it, a screenshot shown large over all of
-  /// it, and the alert over that.
+  /// The top row in the title bar, the stage under it with Details beside it or, in a narrow window, floating over
+  /// its edge, a screenshot shown large over all of it, and the alert over that.
   public var body: some View {
     GeometryReader { proxy in
+      let floats = ViewerLayout.detailsFloats(windowWidth: proxy.size.width)
       VStack(spacing: .zero) {
         // The top row fills the title bar, whatever its height.
         ViewerTopRow(state: state.top, send: send)
           .frame(height: max(proxy.safeAreaInsets.top, ViewerLayout.topRowHeight))
         // On the Screen the stage gives Details its room on Details' own slide, so the picture shrinks and recentres
-        // in step with the column coming in, and turns back with it; the other tabs, and Reduce Motion, take it at once.
+        // in step with the column coming in, and turns back with it; the other tabs, and Reduce Motion, take it at once
+        // as Details fades in over them.
         stage
-          .padding(.trailing, ViewerLayout.stageTrailing(showsDetails: showsDetails))
+          .padding(.trailing, ViewerLayout.stageTrailing(showsDetails: showsDetails, floats: floats))
           .animation(ViewerLayout.stageSlide(tab: state.pane.tab, reduceMotion: reduceMotion), value: showsDetails)
           .overlay(alignment: .trailing) {
-            ViewerInspector(details: state.details, newest: newest, send: send)
+            ViewerInspector(
+              details: state.details,
+              slides: ViewerLayout.detailsSlides(tab: state.pane.tab, reduceMotion: reduceMotion),
+              floats: floats,
+              newest: newest,
+              send: send
+            )
           }
-      }
-      // The window blurs behind a screenshot shown large, as its shade fades in (v3 V10); under Reduce Motion the blur
-      // comes at once. The animation is scoped to the blur, so nothing else in the window rides on it.
-      .animation(ViewerLayout.shotBlurring(reduceMotion: reduceMotion)) { window in
-        window
-          .blur(radius: ViewerLayout.shotBlur(isShown: largeShot != nil))
       }
       .overlay {
         LargeShotLayer(shot: largeShot, zoom: zoom, send: send)
@@ -96,51 +95,43 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
       .ignoresSafeArea(.container, edges: .top)
     }
     .windowSurface()
-    .onChange(of: state.top.status.label) { _, label in announce(label) }
+    .onChange(of: state.announcement) { _, text in if let text { announce(text) } }
     .onChange(of: state.screen.notice) { _, notice in if let notice { announce(notice) } }
     .onChange(of: state.alert?.shownTitle) { _, title in if let title { announce(title) } }
     .onChange(of: state.alert?.refusal) { _, refusal in if let refusal { announce(refusal) } }
     .onChange(of: state.toast) { _, toast in if let toast { announce(toast) } }
     .onChange(of: state.pane.tab) { old, new in settle(from: old, to: new) }
     .onChange(of: state.pane, initial: true) { _, pane in keep(pane) }
+    .onChange(of: state.miniCorner) { _, corner in miniCorner = corner }
   }
 
   /// The stage: the Screen tab or the selected tab's pane, in the frame every tab shares, the window's inset at its
-  /// sides and below and none above, so the picture starts right under the bar (v3 `.vpane`); the small screen in its
-  /// corner and the toast at its top. The Screen is built as it shows and goes as it is left, so its picture and the
-  /// surface that takes input exist only while it shows; Activity, Apps and Screenshots are kept once shown and only
-  /// move and fade as the tab changes. A switch between the Screen and a tab with the small screen moves the picture
-  /// between the two on ``Motion/zoom`` (v3 V16); every other switch keeps the panes' own timing.
+  /// sides and below and none above, so the picture starts right under the bar; the small screen in its corner and the
+  /// toast at its top. The Screen is built as it shows and goes as it is left, so its picture and the surface that
+  /// takes input exist only while it shows; Activity, Apps and Screenshots are kept once shown and only fade as the tab
+  /// changes, the new one over the old. A switch between the Screen and a tab with the small screen moves the picture
+  /// between the two on ``Motion/zoom``, the one thing that travels; every other switch only crossfades.
   private var stage: some View {
     ZStack {
       if state.pane.tab == .screen {
         ViewerScreen(state: state.screen, send: send, input: input, livePicture: livePicture, zoom: screenZoom)
-          .transition(PaneShift.transition(isScreen: true, reduceMotion: reduceMotion))
+          .transition(PaneShift.transition(isScreen: true))
+          .zIndex(1)
       }
       ForEach(ViewerTab.keptTabs, id: \.self) { tab in
         if let pane = pane(for: tab) {
           KeptPane(pane: pane, zoom: zoom, send: send)
-            .modifier(
-              KeptPaneShift(
-                isShown: tab == state.pane.tab,
-                offset: ViewerLayout.keptPaneOffset(
-                  tab,
-                  shown: state.pane.tab,
-                  left: leftTab,
-                  reduceMotion: reduceMotion
-                )
-              )
-            )
+            .modifier(KeptPaneShift(isShown: tab == state.pane.tab))
             .transition(
               .asymmetric(
-                insertion: PaneShift.transition(isScreen: false, reduceMotion: reduceMotion),
+                insertion: PaneShift.transition(isScreen: false),
                 removal: .identity
               )
             )
         }
       }
     }
-    .environment(\.paneDirection, paneDirection)
+    .environment(\.miniClearance, miniClearance)
     .padding([.horizontal, .bottom], Spacing.m)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     // The small screen keeps to a corner of the stage, clear of Details.
@@ -152,10 +143,12 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
 
   /// The helper's screen, small and live in a corner of the stage over Activity and Apps: the same live slot as the
   /// stage's picture, which it grows out of as the Screen is left and turns back into as it is chosen again, in
-  /// whichever corner it keeps to. The person can drag it anywhere; let go, it springs to the nearest corner (at once
-  /// under Reduce Motion), and a click with no drag still goes back to the Screen.
+  /// whichever corner it keeps to, sized to the stage. The person can drag it anywhere, or throw it; let go, it lands
+  /// in the corner its momentum heads for, at the speed it was thrown (at once under Reduce Motion), and a click with
+  /// no drag still goes back to the Screen.
   private var corner: some View {
-    ZStack {
+    let size = ViewerLayout.miniSize(stageWidth: stageSize.width)
+    return ZStack {
       if let mini = state.mini {
         MiniScreen(state: mini) {
           send(.selectTab(.screen))
@@ -169,7 +162,7 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
           )
         }
         .screenZoom(in: screenZoom)
-        .frame(width: ViewerLayout.miniSize.width, height: ViewerLayout.miniSize.height)
+        .frame(width: size.width, height: size.height)
         .offset(miniDrag)
         .highPriorityGesture(miniDragging)
         .padding(ViewerLayout.miniInset)
@@ -177,8 +170,6 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: miniCorner.alignment)
-    // Let go, the corner and the drag change together on the spring; while dragged it follows the pointer at once.
-    .animation(ViewerLayout.miniSnap(reduceMotion: reduceMotion), value: miniDrag == .zero)
     .onGeometryChange(for: CGSize.self) { proxy in
       proxy.size
     } action: { size in
@@ -186,17 +177,37 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
     }
   }
 
-  /// Dragging the small screen: it follows the pointer freely, then settles in the corner nearest where it was let go,
-  /// springing there from that place as its corner and its drag change together.
+  /// Dragging the small screen: it follows the pointer freely, then lands in the corner nearest where its momentum
+  /// would carry it, going on from where it was let go at the speed it was going, as its corner and its drag change
+  /// together; the window remembers the corner.
   private var miniDragging: some Gesture {
     DragGesture(minimumDistance: ViewerLayout.miniDragStart, coordinateSpace: .global)
       .onChanged { drag in
         miniDrag = drag.translation
       }
       .onEnded { drag in
-        miniCorner = miniCorner.settling(after: drag.translation, in: stageSize)
-        miniDrag = .zero
+        let landing = miniCorner.settling(after: drag.predictedEndTranslation, in: stageSize)
+        let velocity = miniCorner.landingVelocity(
+          to: landing,
+          after: drag.translation,
+          velocity: drag.velocity,
+          in: stageSize
+        )
+        withAnimation(ViewerLayout.miniLanding(velocity: velocity, reduceMotion: reduceMotion)) {
+          miniCorner = landing
+          miniDrag = .zero
+        }
+        if landing != state.miniCorner { send(.moveCorner(landing)) }
       }
+  }
+
+  /// How far the panes' lists keep clear of the small screen: at the end of its corner while it shows, else not at all.
+  private var miniClearance: MiniClearance {
+    guard state.mini != nil else { return MiniClearance() }
+    return MiniClearance(
+      edges: miniCorner.isTop ? .top : .bottom,
+      length: ViewerLayout.miniRoom(stageWidth: stageSize.width)
+    )
   }
 
   /// Whether Details shows.
@@ -204,15 +215,9 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
     state.details != nil
   }
 
-  /// Which way the stage moves for the tab it shows now: from the tab it last settled on as the switch begins, so
-  /// the pane leaving and the pane arriving read the same side in the same moment, and that side once settled.
-  private var paneDirection: Int {
-    let tab = state.pane.tab
-    return tab == settledTab ? settledDirection : ViewerTab.direction(from: settledTab, to: tab)
-  }
-
   /// Whether the picture moves between the stage and the corner for the tab shown now: from the tab last settled on
-  /// as the switch begins, and that answer once settled, as ``paneDirection`` is.
+  /// as the switch begins, and that answer once settled, so the Screen's pane leaving reads the same answer from its
+  /// first frame to its last.
   private var screenZooms: Bool {
     let tab = state.pane.tab
     guard tab != settledTab else { return settledZoom }
@@ -233,30 +238,16 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
     state.pane.tab == tab ? state.pane : kept[tab]
   }
 
-  /// The tab the switch under way leaves, as the switch begins, and the one the last switch left once it settles: the
-  /// kept pane fading out toward the side away from the new tab.
-  private var leftTab: ViewerTab? {
-    state.pane.tab == settledTab ? settledLeft : settledTab
-  }
-
-  /// Why Take Control was just refused, at the top of the stage: it arrives on a small spring and leaves by itself;
-  /// under Reduce Motion it fades (v3 V12).
+  /// Why Take Control was just refused, at the top of the stage: it comes down a little as it fades in and fades out
+  /// by itself; under Reduce Motion it only fades (``ViewerToastChip/transition(reduceMotion:)``).
   private var toast: some View {
     ZStack {
       if let toast = state.toast {
         ViewerToastChip(text: toast)
           .padding(.top, Spacing.m)
-          .transition(
-            Motion.transition(
-              AnyTransition.move(edge: .top)
-                .combined(with: .opacity),
-              reduceMotion: reduceMotion
-            )
-          )
+          .transition(ViewerToastChip.transition(reduceMotion: reduceMotion))
       }
     }
-    // In on a small spring, out quickly, as an action's slot comes and goes; a fade under Reduce Motion.
-    .animation(ActionSlot.animation(isShown: state.toast != nil, reduceMotion: reduceMotion), value: state.toast)
     .allowsHitTesting(false)
   }
 
@@ -266,14 +257,12 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
     return shots.large
   }
 
-  /// Settles the stage on a new tab once its switch has begun, keeping the way it went and whether the picture moved.
+  /// Settles the stage on a new tab once its switch has begun, keeping whether the picture moved.
   ///
   /// - Parameters:
   ///   - old: The tab left.
   ///   - new: The tab shown.
   private func settle(from old: ViewerTab, to new: ViewerTab) {
-    settledLeft = old
-    settledDirection = ViewerTab.direction(from: old, to: new)
     settledZoom = ScreenZoom.zooms(from: old, to: new, screen: state.screen, reduceMotion: reduceMotion)
     settledTab = new
   }

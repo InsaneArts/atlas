@@ -1,9 +1,9 @@
 import CoreGraphics
 
-/// Gaps and insets, on a 2-point grid, named by size as jolt's are: `xs` 4, `s` 8, `m` 12, `l` 16, `xl` 20, `xxl` 24
-/// and `xxxl` 32, with `half` 2 and `hairline` 1 below them. A `Plus` step is the value 2 points above its named
-/// step, for the grid's 6, 10 and 14. A value only one window uses lives in that window's layout; a value off the
-/// grid that a component cannot derive is a private constant in the component, with its reason.
+/// Gaps and insets, on a 2-point grid, named by size: `xs` 4, `s` 8, `m` 12, `l` 16, `xl` 20, `xxl` 24 and
+/// `xxxl` 32, with `half` 2 and `hairline` 1 below them. A `Plus` step is the value 2 points above its named
+/// step, for the grid's 6, 10 and 14. A value only one window uses lives in that window's layout; a value off
+/// the grid that a component cannot derive is a private constant in the component, with its reason.
 enum Spacing {
   /// 1: a hairline, the one step off the grid.
   static let hairline: CGFloat = 1

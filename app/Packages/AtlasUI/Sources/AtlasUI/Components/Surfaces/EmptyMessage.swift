@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// Why there is nothing to show, on the empty stage: a quiet orbit, a headline, a sentence and, at most, one button.
-/// It reads as one unless it offers a button to reach. On the main window's stage it takes v3's waiting pattern (V7):
-/// the mark at 64, a 17-point title, one line and one button, the mark ringed while something connects; in a pane's
-/// body the mark gives way to the pane's own symbol in a quiet tile.
+/// Why there is nothing to show, on the empty stage: a quiet orbit, a headline, a sentence and, at most, one
+/// button. It reads as one unless it offers a button to reach. On the main window's stage it uses the waiting
+/// stage's layout: the mark at 64, a 17-point title, one line and one button, the mark ringed while something
+/// connects; in a pane's body the mark gives way to the pane's own symbol in a quiet tile.
 struct EmptyMessage: View {
   /// How large the message is drawn.
   enum Size: Sendable {
@@ -11,7 +11,7 @@ struct EmptyMessage: View {
     case regular
     /// In a small window: a 26 orbit, a 14 headline and a 12 sentence.
     case small
-    /// On the main window's stage, waiting on the helper (v3 V7): a 64 mark, a 17 title, a 13 line and a 34 button.
+    /// On the main window's stage, waiting on the helper: a 64 mark, a 17 title, a 13 line and a 34 button.
     case stage
   }
 
@@ -29,8 +29,7 @@ struct EmptyMessage: View {
   var size = Size.regular
   /// What it stands on: the empty stage by default.
   var ground = Ground.stage
-  /// The symbol drawn in a quiet tile in the mark's place on the stage, such as a pane's (v3 `vEmpty` with `sym`);
-  /// nil draws the mark.
+  /// The symbol drawn in a quiet tile in the mark's place on the stage, such as a pane's; nil draws the mark.
   var symbol: SymbolName?
   /// Whether a ring traces round the mark, while something connects.
   var tracesMark = false
@@ -185,7 +184,7 @@ struct EmptyMessage: View {
   }
 }
 
-/// The message's own measures, from the boards (mac.py `empty`, MacEmpty's small windows) and v3 (`.vempty`).
+/// The message's own measures for compact windows and the waiting stage.
 private enum Layout {
   /// 30: the orbit's height in the main window; only an empty message draws an orbit this large.
   static let orbit: CGFloat = 30
@@ -195,11 +194,11 @@ private enum Layout {
   static let width: CGFloat = 380
   /// 360: the widest it runs in a small window.
   static let smallWidth: CGFloat = 360
-  /// 340: the widest the line runs on the stage (v3 `.vempty p`).
+  /// 340: the widest the line runs on the stage.
   static let stageWidth: CGFloat = 340
-  /// 18: under the mark and over the button on the stage (v3 `.vempty .em`, `.cap`).
+  /// 18: under the mark and over the button on the stage.
   static let stageGap: CGFloat = 18
-  /// 52: a pane's symbol tile on the stage (v3 `vEmpty`'s `sym`).
+  /// 52: a pane's symbol tile on the stage.
   static let symbolTile: CGFloat = 52
   /// 14: its corner.
   static let symbolTileRadius: CGFloat = 14

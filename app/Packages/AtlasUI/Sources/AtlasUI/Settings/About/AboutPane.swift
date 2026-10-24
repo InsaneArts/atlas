@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The About pane (v3 G9): Atlas's icon, name, version and what it is, then the update button beside Getting
-/// Started…, and what it says about updates in one spot under them.
+/// The About pane: Atlas's icon, name, version and what it is, then the update button with Getting Started… as a
+/// link beside it, and what it says about updates in one spot under them, which keeps its height whatever it says.
 struct AboutPane: View {
   /// What the pane shows.
   let state: SettingsAboutState
@@ -11,7 +11,7 @@ struct AboutPane: View {
   /// What it draws, from its state.
   var body: some View {
     VStack(spacing: .zero) {
-      // Laid out by its visible tile, as v3 spaces it; the icon's transparent margin overhangs.
+      // Laid out by its visible tile; the icon's transparent margin overhangs.
       AppIcon(tile: SettingsLayout.aboutTile)
         .frame(width: SettingsLayout.aboutTile, height: SettingsLayout.aboutTile)
       Text(verbatim: "Atlas")
@@ -22,19 +22,19 @@ struct AboutPane: View {
         .font(Typography.digits(.callout))
         .foregroundStyle(Color.textSecondary)
         .padding(.top, Spacing.half)
-      Text(verbatim: "A hidden second desktop where agents test apps while you keep working.")
+      Text(verbatim: "A hidden second desktop where agents test your apps while you work.")
         .textStyle(.body)
         .foregroundStyle(Color.textSecondary)
         .frame(maxWidth: SettingsLayout.aboutTextWidth)
         .fixedSize(horizontal: false, vertical: true)
         .padding(.top, Spacing.sPlus)
-      HStack(spacing: Spacing.s) {
+      HStack(spacing: Spacing.m) {
         AboutUpdateButton(update: state.update, send: send)
         Button("Getting Started…") { send(.gettingStarted) }
-          .buttonStyle(.capsule(.glass, size: .mini))
+          .buttonStyle(.textLink(.regular))
       }
       .padding(.top, Spacing.xl)
-      AboutUpdateStatus(status: state.status)
+      AboutUpdateStatus(status: state.status, send: send)
         .padding(.top, Spacing.m)
     }
     .multilineTextAlignment(.center)

@@ -13,7 +13,7 @@
       ViewerWindowRow(id: id, title: title, size: size, showLabel: "Show \(title) on the screen")
     }
 
-    /// The Apps sample's apps, front to back (MacApps).
+    /// The Apps sample's apps, front to back.
     @MainActor static let sampleApps = [
       ViewerAppRow(
         id: 501,
@@ -43,13 +43,13 @@
       ViewerAppRow(id: 505, name: "Finder", icon: SampleAppIcons.icons[SampleAppIcons.finder], windows: []),
     ]
 
-    /// The Apps tab while the helper is idle, with the live screen in the corner (MacApps).
+    /// The Apps tab while the helper is idle, with the live screen in the corner.
     @MainActor public static let viewerApps: ViewerState = {
       var state = viewerIdle
       state.top.tabs = viewerTabs(.apps)
       state.mini = SampleDesktop.picture
         .map { MiniScreenState(picture: $0) }
-      state.pane = .apps(ViewerAppsState(meta: "5 apps · 5 windows, front to back", query: "", apps: sampleApps))
+      state.pane = .apps(ViewerAppsState(meta: "5 apps · 5 windows", query: "", apps: sampleApps))
       return state
     }()
 
@@ -63,12 +63,11 @@
       return state
     }()
 
-    /// Opie's Ring settings window outlined on the screen, from the Apps tab (MacShowOnScreen): 520 × 860 at 1064, 80
-    /// on a 1728 × 1080 display.
+    /// Opie's Ring settings window outlined on the screen, from the Apps tab: 520 × 860 at 1064, 80 on a 1728
+    /// × 1080 display.
     @MainActor public static let viewerShowOnScreen: ViewerState = {
       var state = viewerIdle
       state.top.status = StatusSummary(label: "Idle", tone: .quiet, mark: .dot, line: "Showing Opie's window")
-      state.top.actions.showsClear = true
       state.screen.outline = ViewerWindowOutline(
         frame: CGRect(
           x: 1064.0 / 1728,

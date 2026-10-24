@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Rows in one group, as System Settings sets them (v3 D6): one quiet fill, a 0.5-point edge, and a separator above
-/// each row but the first, inset to that row's text. A long list can scroll inside its group, showing three and a
-/// half rows with its bottom edge fading (v3 D10), so the header and footer around it never move.
+/// Rows in one group, as System Settings sets them: one quiet fill, a 0.5-point edge, and a separator above
+/// each row but the first, inset to that row's text. A long list can scroll inside its group, showing three
+/// and a half rows with its bottom edge fading, so the header and footer around it never move.
 struct GroupedList<Items: RandomAccessCollection, Row: View>: View where Items.Element: Identifiable {
   /// How the group is drawn.
   enum Style: Sendable {

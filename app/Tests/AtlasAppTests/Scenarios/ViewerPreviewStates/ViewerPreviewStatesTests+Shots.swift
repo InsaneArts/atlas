@@ -8,8 +8,8 @@
   import AtlasUI
 
   extension ViewerPreviewStatesTests {
-    /// The Screenshots tab's samples' facts, by the sample's name: times on a German clock in UTC, as the boards
-    /// tell them.
+    /// The Screenshots tab's samples' facts, by the sample's name: times on a German clock in UTC, for
+    /// deterministic timestamps.
     ///
     /// - Returns: What the presenter shows for each.
     /// - Throws: A decoding error, which a fixed reply never gives.

@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// A tab as a tile (v3 G1, `.stabs button`): its symbol over its word, both quiet; under the pointer a faint fill
-/// and the word brightens; selected, the tile filled and the symbol blue. Held, it dips a little (v3 X9: 0.95).
+/// A tab as a tile: its symbol over its word, both quiet; under the pointer a faint fill and the word
+/// brightens; selected, the tile filled and the symbol blue. Held, it scales to 0.95 for press feedback.
 struct TileTabStyle: ButtonStyle {
   /// Whether it is the selected tab.
   let isSelected: Bool

@@ -6,7 +6,7 @@ import Observation
 
 /// The menu bar panel's one observed object: it holds the latest status, the helper's screen and what the panel is
 /// doing, reads them on a schedule (`PanelController+Reading`), and runs what the panel's events ask
-/// (`PanelController+Actions`). Recover…, Switch… and Log Out… ask first in an alert that ``WindowCoordinator`` places;
+/// (`PanelController+Actions`). Recover… and Switch… ask first in an alert that ``WindowCoordinator`` places;
 /// ``PanelPresenter`` decides what the panel shows.
 ///
 /// Each part of the snapshot is its own stored property, so the menu bar glyph, which reads only the status, is not
@@ -19,6 +19,9 @@ final class PanelController {
   /// Between status readings with the panel closed: 5 s, often enough for the menu bar glyph to follow the helper's
   /// mode, rarely enough to cost nothing.
   static let closedEvery: Duration = .seconds(5)
+  /// How long a state that asks something of the person holds before VoiceOver hears it: 1 s, as in the main window,
+  /// so a state that passes at once is never said.
+  static let announceAfter: Duration = .seconds(1)
 
   /// The latest status the service reported: every field at its safe default, as a service that cannot be reached
   /// reads, before the first reading ends and after one that fails, which the panel shows alike.
@@ -60,6 +63,11 @@ final class PanelController {
   @ObservationIgnored var wantedAtLogin: Bool?
   /// Whether a change to Open at Login runs now: one at a time, so the system ends where the person last asked.
   @ObservationIgnored var changingAtLogin = false
+  /// What VoiceOver was last handed (``askingStatus``), so a reading that says the same again, or the panel opening
+  /// on it, says nothing more.
+  @ObservationIgnored var askedBefore: String?
+  /// The wait before the newest asking state is said; nil while none waits.
+  @ObservationIgnored var announcing: Task<Void, Never>?
 
   /// Creates a panel that has read nothing yet.
   ///
@@ -79,7 +87,8 @@ final class PanelController {
   var snapshot: PanelSnapshot {
     PanelSnapshot(
       status: status,
-      connecting: answered == nil,
+      connecting: connecting,
+      reconnecting: answered == false,
       picture: picture,
       session: session,
       holdingControl: links.holdingControl(),
@@ -88,6 +97,10 @@ final class PanelController {
       opensAtLogin: opensAtLogin
     )
   }
+
+  /// Whether the panel waits for the service: before its first answer, and again after a reading that failed, until it
+  /// answers once more, as the main window reconnects.
+  var connecting: Bool { answered != true }
 
   /// The service's last answer, which the viewer opens on; nil before the first reading ends and after one that
   /// failed.
@@ -107,7 +120,7 @@ final class PanelController {
   /// redrawn when a picture arrives or a command starts.
   var mode: Mode {
     PanelPresenter.mode(
-      PanelSnapshot(status: status, connecting: answered == nil, holdingControl: links.holdingControl())
+      PanelSnapshot(status: status, connecting: connecting, holdingControl: links.holdingControl())
     )
   }
 
@@ -125,14 +138,10 @@ final class PanelController {
     case .giveBack: giveBack()
     case .askRecover: links.showAlert(.recover)
     case .askSwitch: links.showAlert(.switchToHelper)
+    case .openSettings: links.openSettings()
     case .togglePause: togglePause()
     case .showMore: break
     }
-  }
-
-  /// Asks before logging the helper out, from the ⋯ menu.
-  func askLogOut() {
-    links.showAlert(.logOut)
   }
 
   /// Marks the ⋯ menu open or closed, so its button draws pressed while it is open.

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The dot after Activity's word while it holds actions the person has not seen (v3 V2): blue, or orange once one of
+/// The dot after Activity's word while it holds actions the person has not seen: blue, or orange once one of
 /// them failed. It pops in (``Motion/pop``; a fade under Reduce Motion) and goes as the tab is chosen.
 struct ViewerUnseenDot: View {
   /// What Activity holds unseen.

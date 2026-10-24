@@ -27,7 +27,7 @@ use std::{
 };
 
 /// Why a step under the approval did not start, or did not finish.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
     /// The person cancelled macOS's dialog.
     Cancelled,
@@ -72,10 +72,33 @@ fn execute() -> Option<Execute> {
     (!symbol.is_null()).then(|| unsafe { std::mem::transmute::<*mut c_void, Execute>(symbol) })
 }
 
+#[cfg(test)]
+thread_local! {
+    static AUTHORIZATION_CALLS: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// Count and refuse authorization in a test without opening a macOS dialog.
+#[cfg(test)]
+pub(crate) fn without_authorization<T>(act: impl FnOnce() -> T) -> (T, usize) {
+    AUTHORIZATION_CALLS.with(|calls| calls.set(Some(0)));
+    let result = act();
+    let count = AUTHORIZATION_CALLS.with(|calls| calls.replace(None).unwrap());
+    (result, count)
+}
+
 /// Ask macOS for one administrator approval, `prompt` shown in its dialog,
 /// then run `program` with `arguments` as root. Gives the socket that is the
 /// approved program's standard input and output.
 pub fn run(program: &Path, arguments: &[&str], prompt: &str) -> Result<UnixStream, Refusal> {
+    #[cfg(test)]
+    if AUTHORIZATION_CALLS.with(|calls| {
+        calls.get().is_some_and(|count| {
+            calls.set(Some(count + 1));
+            true
+        })
+    }) {
+        return Err(Refusal::Unavailable);
+    }
     let execute = execute().ok_or(Refusal::Unavailable)?;
     let text = |value: &[u8]| {
         CString::new(value).map_err(|_| Refusal::Failed("An argument held a NUL byte".into()))

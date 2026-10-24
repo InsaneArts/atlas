@@ -69,6 +69,8 @@ pub enum Request {
     FirstLogin { uid: u32, opener: bool },
     /// Take away a waiting opener.
     ForgetOpener { uid: u32 },
+    /// Start the managed helper job after installation if launchd has not.
+    Kickstart { uid: u32 },
 }
 
 impl Request {
@@ -79,7 +81,8 @@ impl Request {
             | Self::Retire { uid, .. }
             | Self::Restore { uid, .. }
             | Self::FirstLogin { uid, .. }
-            | Self::ForgetOpener { uid } => *uid,
+            | Self::ForgetOpener { uid }
+            | Self::Kickstart { uid } => *uid,
             Self::Install { agent } => agent.uid,
         }
     }
@@ -177,9 +180,39 @@ pub fn text_sha256(text: &str) -> String {
 pub struct Layout {
     pub uid: u32,
     pub home: PathBuf,
+    /// Expected account for a setup worker; ordinary read-only layouts have none.
+    pub(crate) guard: Option<Guard>,
 }
 
 impl Layout {
+    /// Describe an account's paths without granting permission to mutate them.
+    pub fn new(uid: u32, home: PathBuf) -> Self {
+        Self {
+            uid,
+            home,
+            guard: None,
+        }
+    }
+
+    /// Revalidate the worker's account and home after all waiting checks,
+    /// immediately before a filesystem or launchd mutation.
+    pub(super) fn check(&self) -> Result<()> {
+        if let Some(guard) = &self.guard {
+            let account = checked_account(
+                guard,
+                || observe(self.uid),
+                || crate::session::confirm_gone(&[self.uid]),
+                || crate::session::logged_out(self.uid) == Some(true),
+            )?;
+            if account.home != self.home {
+                return Err(problem(
+                    "The helper's home changed, so nothing more was changed",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub fn root(&self) -> PathBuf {
         self.home.join(ROOT)
     }
@@ -214,9 +247,67 @@ impl Layout {
     }
 }
 
-/// Run one request as the helper and report JSON. The requested UID must be
-/// this process's own; the home comes from directory services, not `$HOME`.
-pub fn run(request: &str) -> Result<Value> {
+/// What a request checks of its own account before it does anything.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Guard {
+    /// The GeneratedUID the account must have: the helper as recorded.
+    pub account: Option<super::identity::Identity>,
+    /// The account must be logged out: no loginwindow and no Dock.
+    pub logged_out: bool,
+}
+
+/// Read the account, its persistent identity, and its home as one observation.
+/// A changed directory mapping is refused, rather than joining two accounts' facts.
+fn observe(uid: u32) -> Result<(super::Account, super::identity::Identity)> {
+    let account = account_with_uid(uid)?.ok_or_else(|| problem("Helper account not found"))?;
+    let identity = super::identity::current(&account)
+        .ok_or_else(|| problem("macOS could not read the helper's account identity"))?;
+    if account_with_uid(uid)?.as_ref() != Some(&account) {
+        return Err(problem("The helper account changed while it was checked"));
+    }
+    Ok((account, identity))
+}
+
+/// Resolve the expected account again after logout verification, then observe
+/// processes once more. No identity or home captured before the wait is trusted.
+fn checked_account(
+    guard: &Guard,
+    mut read: impl FnMut() -> Result<(super::Account, super::identity::Identity)>,
+    wait: impl FnOnce() -> bool,
+    out_now: impl FnOnce() -> bool,
+) -> Result<super::Account> {
+    let expected = guard.account.as_ref().ok_or_else(|| {
+        problem("Setup needs the identity of the explicitly chosen helper account")
+    })?;
+    let check = |account: &super::Account, identity: &super::identity::Identity| {
+        if identity != expected || account.uid != expected.uid || account.name != expected.name {
+            Err(problem(
+                "This account is no longer the helper Atlas chose, so nothing more was changed",
+            ))
+        } else {
+            Ok(())
+        }
+    };
+    let (account, identity) = read()?;
+    check(&account, &identity)?;
+    if guard.logged_out && !wait() {
+        return Err(problem(
+            "The helper is logged in again, so nothing more was changed",
+        ));
+    }
+    let (account, identity) = read()?;
+    check(&account, &identity)?;
+    if guard.logged_out && !out_now() {
+        return Err(problem(
+            "The helper is logged in again, so nothing more was changed",
+        ));
+    }
+    Ok(account)
+}
+
+/// Run a setup request only as its expected account, with identity and home
+/// revalidated after waits and before each mutation.
+pub fn run_guarded(request: &str, guard: &Guard) -> Result<Value> {
     let request: Request = serde_json::from_str(request)?;
     let uid = nix::unistd::getuid().as_raw();
     // Never as root with the helper's real user ID: files would be root's,
@@ -230,10 +321,16 @@ pub fn run(request: &str) -> Result<Value> {
         ));
     }
 
-    let account = account_with_uid(uid)?.ok_or_else(|| problem("Helper account not found"))?;
+    let account = checked_account(
+        guard,
+        || observe(uid),
+        || crate::session::confirm_gone(&[uid]),
+        || crate::session::logged_out(uid) == Some(true),
+    )?;
     let layout = Layout {
         uid,
         home: account.home,
+        guard: Some(guard.clone()),
     };
 
     match request {
@@ -249,6 +346,18 @@ pub fn run(request: &str) -> Result<Value> {
         Request::Restore { label, sha256, .. } => restore(&layout, &label, &sha256),
         Request::FirstLogin { opener, .. } => super::first_login::first_login(&layout, opener),
         Request::ForgetOpener { .. } => super::first_login::forget_opener(&layout),
+        Request::Kickstart { .. } => {
+            layout.check()?;
+            let output = Command::new("/bin/launchctl")
+                .args(["kickstart", &format!("gui/{uid}/{LABEL}")])
+                .output()?;
+            if !output.status.success() {
+                return Err(
+                    problem("The helper job did not start; reopen Atlas in the helper").uncertain(),
+                );
+            }
+            Ok(json!({"ok":true}))
+        }
     }
 }
 
@@ -485,6 +594,7 @@ fn prepare(layout: &Layout, controller: &str) -> Result<Value> {
     let mut changed = Vec::new();
 
     for ((path, shared), granted) in directories.iter().zip(grants) {
+        layout.check()?;
         match fs::DirBuilder::new().mode(0o700).create(path) {
             Ok(()) => changed.push(path.clone()),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
@@ -493,11 +603,13 @@ fn prepare(layout: &Layout, controller: &str) -> Result<Value> {
 
         if fs::symlink_metadata(path)?.mode() & 0o7777 != 0o700 {
             // A deleted socket directory comes back 0755 from the capture daemon.
+            layout.check()?;
             fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
             changed.push(path.clone());
         }
 
         if *shared && !granted {
+            layout.check()?;
             let status = Command::new("/bin/chmod")
                 .args(["+a", &format!("user:{controller} allow search")])
                 .arg(path)
@@ -539,7 +651,9 @@ fn install(layout: &Layout, agent: &Agent) -> Result<Value> {
     match file(&path)? {
         File::Regular(sha256) if sha256 == text_sha256(&text) => {}
         File::Absent => {
+            layout.check()?;
             fs::create_dir_all(path.parent().unwrap_or(&layout.home))?;
+            layout.check()?;
             crate::config::write_atomic(&path, text.as_bytes(), 0o644)?;
         }
         // An earlier Atlas's definition is replaced only from outside the
@@ -563,6 +677,7 @@ pub(super) fn loaded(layout: &Layout, label: &str, path: &Path) -> Result<Option
     let (pid, from) = match as_loaded(job(layout, label)?) {
         Some(loaded) => loaded,
         None => {
+            layout.check()?;
             launchctl(&["bootstrap", &layout.domain(), &path.to_string_lossy()])?;
             wait_for(layout, label, "loaded", as_loaded)?
         }
@@ -581,6 +696,7 @@ pub(super) fn loaded(layout: &Layout, label: &str, path: &Path) -> Result<Option
 /// Unload `label` if launchd has it, whatever its definition.
 pub(super) fn unload(layout: &Layout, label: &str) -> Result<()> {
     if job(layout, label)? != Job::Absent {
+        layout.check()?;
         launchctl(&["bootout", &format!("{}/{label}", layout.domain())])?;
         wait_for(layout, label, "unloaded", |job| {
             (job == Job::Absent).then_some(())
@@ -629,6 +745,7 @@ fn retire(layout: &Layout, label: &str, sha256: &str, missing_ok: bool) -> Resul
             )));
         }
 
+        layout.check()?;
         launchctl(&["bootout", &format!("{}/{label}", layout.domain())])?;
         wait_for(layout, label, "unloaded", |job| {
             (job == Job::Absent).then_some(())
@@ -636,6 +753,7 @@ fn retire(layout: &Layout, label: &str, sha256: &str, missing_ok: bool) -> Resul
     }
 
     if let File::Regular(_) = plist {
+        layout.check()?;
         match file(&backup)? {
             File::Absent => fs::rename(&path, &backup)?,
             // Identical bytes are already preserved; the source may go.
@@ -661,7 +779,9 @@ fn restore(layout: &Layout, label: &str, sha256: &str) -> Result<Value> {
     match file(&path)? {
         File::Regular(current) if current == sha256 => {}
         File::Absent if file(&backup)? == File::Regular(sha256.to_owned()) => {
+            layout.check()?;
             fs::create_dir_all(path.parent().unwrap_or(&layout.home))?;
+            layout.check()?;
             fs::rename(&backup, &path)?;
         }
         File::Absent => return Err(problem(format!("No backup of {label} with that hash"))),
@@ -679,6 +799,110 @@ fn restore(layout: &Layout, label: &str, sha256: &str) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn setup_refuses_an_account_replaced_while_authorization_or_login_was_pending() {
+        let identity = super::super::identity::Identity {
+            uid: 7001,
+            name: "helper".into(),
+            generated_uid: "6DB4B7AF-BE3C-486C-BD46-1B4558946919".into(),
+        };
+        let account = super::super::Account {
+            uid: identity.uid,
+            name: identity.name.clone(),
+            home: "/Users/helper".into(),
+        };
+        let replacement = super::super::identity::Identity {
+            generated_uid: "11111111-2222-3333-4444-555555555555".into(),
+            ..identity.clone()
+        };
+        let guard = Guard {
+            account: Some(identity),
+            logged_out: false,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let result = checked_account(
+            &guard,
+            || Ok((account.clone(), replacement.clone())),
+            || unreachable!(),
+            || unreachable!(),
+        );
+        if result.is_ok() {
+            fs::write(dir.path().join("mutation"), b"changed").unwrap();
+        }
+        assert!(result.is_err());
+        assert!(!dir.path().join("mutation").exists());
+        assert!(checked_account(&Guard::default(), || unreachable!(), || true, || true).is_err());
+    }
+
+    #[test]
+    fn logout_verification_refreshes_identity_and_home_before_a_write() {
+        use std::cell::Cell;
+        let identity = super::super::identity::Identity {
+            uid: 7001,
+            name: "helper".into(),
+            generated_uid: "6DB4B7AF-BE3C-486C-BD46-1B4558946919".into(),
+        };
+        let guard = Guard {
+            account: Some(identity.clone()),
+            logged_out: true,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let account = super::super::Account {
+            uid: identity.uid,
+            name: identity.name.clone(),
+            home: dir.path().join("original"),
+        };
+        let waited = Cell::new(false);
+        let result = checked_account(
+            &guard,
+            || {
+                let mut now = identity.clone();
+                let mut account = account.clone();
+                if waited.get() {
+                    now.generated_uid = "11111111-2222-3333-4444-555555555555".into();
+                    account.home = dir.path().join("replacement");
+                }
+                Ok((account, now))
+            },
+            || {
+                waited.set(true);
+                true
+            },
+            || true,
+        );
+        if let Ok(account) = &result {
+            fs::write(&account.home, b"changed").unwrap();
+        }
+        assert!(result.is_err());
+        assert!(!account.home.exists());
+        assert!(!dir.path().join("replacement").exists());
+
+        let fresh = checked_account(
+            &guard,
+            || {
+                let mut account = account.clone();
+                if waited.get() {
+                    account.home = dir.path().join("fresh-home");
+                }
+                Ok((account, identity.clone()))
+            },
+            || true,
+            || true,
+        )
+        .unwrap();
+        assert_eq!(fresh.home, dir.path().join("fresh-home"));
+        assert!(
+            checked_account(
+                &guard,
+                || Ok((account.clone(), identity.clone())),
+                || true,
+                || false
+            )
+            .is_err(),
+            "a login starting during the final account lookup is observed"
+        );
+    }
+
     use super::*;
 
     #[test]
@@ -844,7 +1068,10 @@ mod tests {
     fn the_worker_refuses_another_account() {
         let other = nix::unistd::getuid().as_raw() + 1;
         let request = json!({"action": "inspect", "uid": other, "labels": []}).to_string();
-        assert_eq!(run(&request).unwrap_err().code, "setup");
+        assert_eq!(
+            run_guarded(&request, &Guard::default()).unwrap_err().code,
+            "setup"
+        );
     }
 
     #[test]
@@ -852,6 +1079,7 @@ mod tests {
         let layout = Layout {
             uid: nix::unistd::getuid().as_raw(),
             home: "/nonexistent-home".into(),
+            guard: None,
         };
 
         let agent = |label: &str, socket: PathBuf| Agent {
@@ -907,6 +1135,7 @@ mod tests {
         let layout = Layout {
             uid: nix::unistd::getuid().as_raw(),
             home: fs::canonicalize(dir.path()).unwrap(),
+            guard: None,
         };
         fs::create_dir_all(layout.home.join("Library/LaunchAgents")).unwrap();
         // A label launchd has never seen: inspection is real and read-only.

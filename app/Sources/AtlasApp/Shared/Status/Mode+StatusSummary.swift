@@ -2,27 +2,33 @@ import AtlasStatus
 import AtlasUI
 
 /// The status table, in one place: each row's word colour and mark, and its line in the main window and in the
-/// panel (docs/atlas-app-build-plan.md, "Status").
+/// panel. Every word has a line beside it, so a state never stands alone, except where the stage right under it says
+/// the same: the main window's Logged out, whose stage says so at length.
 extension Mode {
-  /// The mode as the main window shows it, beside its word.
+  /// The mode as the main window shows it, beside its word. A paused picture keeps the agent's own line, since the
+  /// screen's chip is what says the picture is paused.
   ///
   /// - Parameters:
   ///   - reading: What the window last read.
-  ///   - paused: Whether the picture is paused, which Idle says in place of what was done last.
   ///   - app: The app whose window the screen outlines, which Idle says next; nil for none.
+  ///   - reconnecting: Whether answers came before and stopped, so connecting reads as Reconnecting….
   /// - Returns: The word, its colour, its mark and the window's line.
-  func windowSummary(_ reading: StatusReading, paused: Bool, showing app: String? = nil) -> StatusSummary {
+  func windowSummary(
+    _ reading: StatusReading,
+    showing app: String? = nil,
+    reconnecting: Bool = false
+  ) -> StatusSummary {
     let line =
       switch kind {
-      case .idle: paused ? Words.pausedLine : app.map(Words.showingLine(app:)) ?? reading.idleLine
+      case .idle: app.map(Words.showingLine(app:)) ?? reading.idleLine
       case .working: reading.workingLine(withAge: false)
       case .control: Words.controlLine
       case .needsYou: reading.needsYouLine
       case .stopped: Words.stoppedLine
       case .inUseElsewhere: Words.inUseElsewhereLine
       case .notReady: PanelWords.notReadyLine(reading.status.overview.reason)
-      case .loggedOut: PanelWords.loggedOutLine
-      case .connecting: ""
+      case .loggedOut: ""
+      case .connecting: Self.connectingLine(reconnecting: reconnecting)
       }
     return summary(line: line)
   }
@@ -31,22 +37,32 @@ extension Mode {
   ///
   /// - Parameters:
   ///   - reading: What the panel last read.
-  ///   - paused: Whether the panel's picture is paused, which Idle says in place of what was done last (v3 P11).
+  ///   - paused: Whether the panel's picture is paused, which Idle says in place of what was done last, as the
+  ///     panel's picture carries no word of its own for it.
+  ///   - reconnecting: Whether answers came before and stopped, so connecting reads as Reconnecting….
   /// - Returns: The word, its colour, its mark and the panel's line.
-  func panelSummary(_ reading: StatusReading, paused: Bool) -> StatusSummary {
+  func panelSummary(_ reading: StatusReading, paused: Bool, reconnecting: Bool = false) -> StatusSummary {
     let line =
       switch kind {
       case .idle: paused ? PanelWords.pausedLine : reading.idleLine
       case .working: reading.workingLine(withAge: true)
-      case .control: PanelWords.controlLine
+      case .control: Words.controlLine
       case .needsYou: reading.needsYouLine
       case .stopped: Words.stoppedLine
       case .notReady: PanelWords.notReadyLine(reading.status.overview.reason)
       case .loggedOut: PanelWords.loggedOutLine
       case .inUseElsewhere: Words.inUseElsewhereLine
-      case .connecting: ""
+      case .connecting: Self.connectingLine(reconnecting: reconnecting)
       }
     return summary(line: line)
+  }
+
+  /// The line beside Connecting: the helper starting, the first time, or reconnecting after answers stopped.
+  ///
+  /// - Parameter reconnecting: Whether answers came before and stopped.
+  /// - Returns: The line.
+  static func connectingLine(reconnecting: Bool) -> String {
+    reconnecting ? Words.reconnectingLine : Words.startingLine
   }
 
   /// The mode with `line` beside it.

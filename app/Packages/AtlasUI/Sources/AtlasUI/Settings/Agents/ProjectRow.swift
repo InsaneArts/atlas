@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// One project Atlas taught (v3 G8): a folder's tile, its name over its path in monospaced type, or that its files no
-/// longer have the Atlas section, and Forget, which asks first.
+/// One project Atlas taught: a folder's tile, its name over its path on one line, cut in the middle when it is long,
+/// or that its files no longer have the Atlas section, and Forget…, which asks first.
 struct ProjectRow: View {
   /// The project.
   let project: SettingsProjectRow
@@ -17,7 +17,7 @@ struct ProjectRow: View {
       lead: .tile(.symbol(SymbolName.folder.rawValue)),
       size: .compact
     ) {
-      Button("Forget", action: forget)
+      Button("Forget…", action: forget)
         .buttonStyle(.capsule(.glass, size: .mini))
         .accessibilityLabel(project.forgetLabel)
     }

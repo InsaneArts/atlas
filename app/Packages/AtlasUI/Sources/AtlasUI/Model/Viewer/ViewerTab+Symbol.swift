@@ -1,5 +1,5 @@
 extension ViewerTab {
-  /// The tab's symbol, which a narrow window draws in place of its word (v3 V15).
+  /// The tab's symbol, which a narrow window draws in place of its word.
   public var symbol: SymbolName {
     switch self {
     case .screen: .display

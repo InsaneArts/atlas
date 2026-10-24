@@ -23,7 +23,7 @@ extension MainMenu {
     )
     details.keyEquivalentModifierMask = [.command, .option]
     let pause = view.addItem(
-      withTitle: ViewerWords.pausePictureItem,
+      withTitle: Words.pausePictureItem,
       action: #selector(ViewerMenuActions.togglePicturePause(_:)),
       keyEquivalent: "p"
     )

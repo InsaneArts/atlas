@@ -14,7 +14,8 @@ struct OnboardingPresenterAccountTests {
     var choose = Samples.snapshot(try Samples.person(nil), Samples.choices())
     #expect(OnboardingPresenter.choose(choose).approval == nil, "nothing picked")
     choose.picked = .existing("testaccount")
-    #expect(OnboardingPresenter.choose(choose).approval == OnboardingWords.approveToReady("Test Account"))
+    #expect(OnboardingPresenter.choose(choose).approval == OnboardingWords.approveToReady)
+    #expect(OnboardingWords.approveToReady.contains("Test") == false, "the footnote names no account")
     choose.picked = .newAccount
     #expect(OnboardingPresenter.choose(choose).approval == nil, "the form explains a new account")
   }
@@ -50,6 +51,20 @@ struct OnboardingPresenterAccountTests {
     snapshot.working = OnboardingWords.creating
     let working = OnboardingPresenter.create(snapshot)
     #expect(working.note == .working(OnboardingWords.creating))
-    #expect(working.tail == "You'll approve it once in macOS." && !working.isFormEnabled)
+    #expect(working.tail == "You’ll approve it once in macOS." && !working.isFormEnabled)
+  }
+
+  @Test("a problem setting up an account shows in that account's row, not under the list")
+  func aProblemWithAnAccountShowsInItsRow() throws {
+    var snapshot = Samples.snapshot(try Samples.person(nil), Samples.choices())
+    snapshot.picked = .existing("testaccount")
+    snapshot.problem = "macOS could not say whether testaccount is an administrator."
+    snapshot.problemAbout = "testaccount"
+    let row = try #require(OnboardingPresenter.choose(snapshot).accounts.first)
+    #expect(row.problem == snapshot.problem)
+    #expect(OnboardingPresenter.note(snapshot) == .none, "the line under the list stays empty")
+    snapshot.problemAbout = nil
+    #expect(OnboardingPresenter.choose(snapshot).accounts.first?.problem == nil)
+    #expect(OnboardingPresenter.note(snapshot) == .problem(try #require(snapshot.problem)))
   }
 }

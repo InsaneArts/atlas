@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// Numbered steps in one group (v3 D6): each a ``StepRow``, joined by a rail that turns green below each finished step
-/// (v3 S3, X8).
+/// Numbered steps in one group: each a ``StepRow``, joined by a rail that turns green below each finished step.
 struct StepList: View {
   /// The steps, in order.
   let steps: [Step]

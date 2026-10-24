@@ -64,11 +64,14 @@ pub(crate) fn forward(
 /// Like `attended`, but timestamped log lines on standard error (as
 /// sysadminctl writes) are dropped; anything else, such as a password
 /// question, is shown as it arrives. On failure the dropped lines are shown.
-fn quietly_attended(program: &str, args: &[&str], why: &str) -> Result<()> {
-    let mut child = Command::new(program)
-        .args(args)
-        .stderr(std::process::Stdio::piped())
-        .spawn()?;
+pub(crate) fn quietly_attended(mut child: std::process::Child, why: &str) -> Result<()> {
+    let output = child.stdout.take().map(|mut stream| {
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut bytes = Vec::new();
+            stream.read_to_end(&mut bytes).map(|_| bytes)
+        })
+    });
 
     let stream = child
         .stderr
@@ -116,12 +119,17 @@ fn quietly_attended(program: &str, args: &[&str], why: &str) -> Result<()> {
     }
 
     let status = child.wait()?;
+    let output = output
+        .and_then(|reader| reader.join().ok())
+        .transpose()?
+        .unwrap_or_default();
     if status.success() {
         return Ok(());
     }
 
     let _ = terminal.write_all(&dropped);
     let _ = terminal.write_all(&pending);
+    let _ = terminal.write_all(&output);
 
     Err(problem(why.to_owned()))
 }
@@ -226,7 +234,7 @@ pub(crate) fn valid_account_name(name: &str) -> std::result::Result<(), String> 
 
 /// Choose an existing standard account, or (only when asked for, and
 /// confirmed) create one.
-fn choose_helper() -> Result<setup::Account> {
+fn choose_helper() -> Result<(setup::Account, setup::identity::Identity)> {
     let candidates = crate::switch::standard_accounts()?;
     let mut items: Vec<String> = candidates
         .iter()
@@ -245,8 +253,10 @@ fn choose_helper() -> Result<setup::Account> {
     };
 
     if let Some(account) = candidates.get(choice) {
-        return setup::account_named(&account.name)?
-            .ok_or_else(|| problem("That account disappeared"));
+        return selected(
+            setup::account_named(&account.name)?
+                .ok_or_else(|| problem("That account disappeared"))?,
+        );
     }
 
     let name = prompt::input(
@@ -275,17 +285,43 @@ fn choose_helper() -> Result<setup::Account> {
     }
 
     say("macOS asks for your administrator password, then a password for the new account.");
-    // sysadminctl logs every step to the terminal; only its questions show.
-    let mut args = vec![SYSADMINCTL.to_owned()];
-    args.extend(add_user_args(&name, FULL_NAME, free_uid()?));
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    quietly_attended(
-        "/usr/bin/sudo",
-        &args,
-        "The helper account could not be created",
-    )?;
+    let orphans = crate::session::sessions(None)
+        .map(|sessions| sessions.leftover_uids(crate::session::Kind::Orphan))
+        .ok_or_else(|| problem("macOS could not list its logins, so no account was made"))?;
+    let uid = free_uid()?;
+    crate::onboarding::closing_first(uid, &orphans, || {
+        crate::onboarding::as_root::create_in_terminal(&name, uid, FULL_NAME, &orphans)
+    })?
+    .map_err(|refusal| {
+        problem(format!(
+            "The helper account could not be created: {refusal:?}"
+        ))
+    })?;
 
-    setup::account_named(&name)?.ok_or_else(|| problem("The new account was not found"))
+    selected(setup::account_named(&name)?.ok_or_else(|| problem("The new account was not found"))?)
+}
+
+/// Capture the account and its permanent identity at selection time.
+fn selected(helper: setup::Account) -> Result<(setup::Account, setup::identity::Identity)> {
+    let identity = setup::identity::current(&helper)
+        .ok_or_else(|| problem("macOS could not identify the selected helper account"))?;
+    Ok((helper, identity))
+}
+
+/// Keep the selected account through configuration, refusing UID reassignment
+/// before recording it. The recorder also checks its permanent identity.
+fn record_selected(
+    helper: &setup::Account,
+    expected: &setup::identity::Identity,
+    lookup: impl FnOnce(u32) -> Result<Option<setup::Account>>,
+    record: impl FnOnce(&setup::Account, &setup::identity::Identity) -> Result<()>,
+) -> Result<()> {
+    if lookup(helper.uid)?.as_ref() != Some(helper) {
+        return Err(problem(
+            "The chosen helper account changed; choose it again",
+        ));
+    }
+    record(helper, expected)
 }
 
 /// The full name a new helper account gets.
@@ -342,18 +378,36 @@ pub(crate) fn free_uid() -> Result<u32> {
         if !output.status.success() {
             return Err(problem("Could not list the user IDs in use"));
         }
-        Ok(String::from_utf8_lossy(&output.stdout)
-            .split_whitespace()
-            .filter_map(|word| word.parse().ok())
-            .collect())
+        String::from_utf8(output.stdout)
+            .map_err(|_| problem("Could not read the user IDs in use"))?
+            .lines()
+            .map(|line| {
+                line.split_whitespace()
+                    .last()
+                    .and_then(|word| word.parse().ok())
+                    .ok_or_else(|| problem("Could not read a user ID in use"))
+            })
+            .collect()
     };
 
-    let accounts = taken("/usr/bin/dscl", &[".", "-list", "/Users", "UniqueID"])?;
+    let accounts = taken("/usr/bin/dscl", &["/Search", "-list", "/Users", "UniqueID"])?;
     let running = taken("/bin/ps", &["-axo", "uid="])?;
+    available_uid(&accounts, &running, |uid| {
+        Ok(setup::account_with_uid(uid)?.is_some())
+    })
+}
 
-    (setup::FIRST_USER_UID..600)
-        .find(|uid| !accounts.contains(uid) && !running.contains(uid))
-        .ok_or_else(|| problem("No free user ID for the helper account"))
+fn available_uid(
+    accounts: &[u32],
+    running: &[u32],
+    mut resolves: impl FnMut(u32) -> Result<bool>,
+) -> Result<u32> {
+    for uid in setup::FIRST_USER_UID..600 {
+        if !accounts.contains(&uid) && !running.contains(&uid) && !resolves(uid)? {
+            return Ok(uid);
+        }
+    }
+    Err(problem("No free user ID for the helper account"))
 }
 
 /// The configuration for `helper` in the managed private layout.
@@ -361,6 +415,7 @@ pub(crate) fn proposed(helper: &setup::Account) -> Result<Config> {
     let layout = Layout {
         uid: helper.uid,
         home: helper.home.clone(),
+        guard: None,
     };
 
     Ok(Config {
@@ -457,6 +512,7 @@ fn helper_agent(helper: &setup::Account, executable: &Path) -> Result<(Agent, La
     let layout = Layout {
         uid: helper.uid,
         home: helper.home.clone(),
+        guard: None,
     };
 
     let agent = Agent {
@@ -472,8 +528,13 @@ fn helper_agent(helper: &setup::Account, executable: &Path) -> Result<(Agent, La
 
 /// Run one setup-helper request as the helper, inside its own login, with
 /// the administrator rights init holds.
-fn as_helper(executable: &Path, helper: &setup::Account, request: &Request) -> Result<Value> {
-    let (succeeded, reply) = setup::request_as_helper(executable, helper, request, true)?;
+fn as_helper(
+    executable: &Path,
+    helper: &setup::Account,
+    request: &Request,
+    expected: &setup::identity::Identity,
+) -> Result<Value> {
+    let (succeeded, reply) = setup::request_as_helper(executable, helper, request, true, expected)?;
     if !succeeded || reply["ok"] != true {
         return Err(problem(format!(
             "Setting up the helper failed: {}",
@@ -617,16 +678,18 @@ async fn new_daemon_answers(client: &Client, before: &Value) -> bool {
 async fn replace_job(
     client: &Client,
     helper: &setup::Account,
-    executable: &Path,
     agent: Agent,
     layout: &Layout,
+    run: impl Fn(&Request) -> Result<Value>,
 ) -> Result<()> {
     let _exclusion = client.controller.acquire(true)?;
     let before = client.status().await["daemon"]["pid"].clone();
     let pending = client.controller.quarantine()?;
 
-    let run = |request: &Request| as_helper(executable, helper, request);
-    install_job(run, helper.uid, agent, &layout.logs()).map_err(Error::uncertain)?;
+    {
+        let _executors = crate::control::ExecutorClaims::new(std::slice::from_ref(&pending))?;
+        install_job(run, helper.uid, agent, &layout.logs()).map_err(Error::uncertain)?;
+    }
 
     if !new_daemon_answers(client, &before).await {
         return Err(problem(format!(
@@ -651,19 +714,23 @@ async fn current_daemon_step(
     helper: &setup::Account,
     executable: &Path,
     done_steps: &mut Vec<Value>,
+    expected: &setup::identity::Identity,
 ) -> Result<()> {
     let (agent, layout) = helper_agent(helper, executable)?;
-    let expected = setup::helper::text_sha256(&setup::helper::plist(&agent, &layout.logs()));
+    let expected_hash = setup::helper::text_sha256(&setup::helper::plist(&agent, &layout.logs()));
     let job = setup::migrate::managed_job(client).await?;
 
-    if outdated_job(&job, &expected) {
+    if outdated_job(&job, &expected_hash) {
         administrator_rights(
             "  macOS asks for your password once, to replace the helper's background job with \
              this version's.",
         )?;
 
         let _spinner = Spinner::new("Replacing the helper's background job…");
-        replace_job(client, helper, executable, agent, &layout).await?;
+        replace_job(client, helper, agent, &layout, |request| {
+            as_helper(executable, helper, request, expected)
+        })
+        .await?;
         done("Helper job", "replaced with this version's");
         done_steps.push(json!({"step": "daemon", "label": LABEL, "replaced": true}));
 
@@ -820,18 +887,32 @@ fn ready() {
 }
 
 /// Lock the screen for the person, if they want, so they can switch to
-/// `name`; otherwise say how.
-fn offer_lock(name: &str) -> Result<()> {
+/// the helper `name` (user ID `uid`); otherwise say how. Refused with
+/// `not-ready`, and nothing locked, while a new login could hang.
+fn offer_lock(name: &str, uid: u32) -> Result<()> {
+    let account = crate::switch::Account {
+        name: name.to_owned(),
+        uid,
+        real_name: None,
+        helper: true,
+    };
+    // Checked before asking: a new login waits while another could hang it.
+    crate::switch::check(&account)?;
+
     if prompt::confirm(
         &format!("Lock the screen now so you can switch to {name}?"),
         true,
         "switch accounts yourself",
     )? {
-        match crate::switch::lock_screen() {
-            Ok(_) => done(
-                "Screen locked",
-                &format!("click Switch User and choose {name}"),
-            ),
+        match crate::switch::to(&account) {
+            Ok(_) => {
+                let _ = LOCKED.set(std::time::Instant::now());
+                done(
+                    "Screen locked",
+                    &format!("click Switch User and choose {name}"),
+                );
+            }
+            Err(error) if error.code == "not-ready" => return Err(error),
             Err(error) => skipped("Screen not locked", &error.error),
         }
     } else {
@@ -841,6 +922,20 @@ fn offer_lock(name: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// When init locked the screen for the person to switch to the helper.
+static LOCKED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// Note in the login timing that the helper reached `step` (`answering`,
+/// `hidden`) this long after init locked the screen for it.
+fn mark_since_lock(step: &str) {
+    if let Some(locked) = LOCKED.get() {
+        crate::login_log::mark(&format!(
+            "helper.{step} after={}",
+            crate::login_log::seconds(locked.elapsed())
+        ));
+    }
 }
 
 /// The permissions the helper still lacks, by their System Settings names.
@@ -873,11 +968,13 @@ pub async fn run(config_path: &Path) -> Result<Value> {
     say("");
 
     let executable = app_step(&mut done_steps)?;
-    let (config, helper) = helper_step(config_path)?;
+    let (config, helper, expected) = helper_step(config_path)?;
     let name = helper.name.clone();
     // Whether an earlier run already finished setup (decides the first-run steps).
     let settled_before = setup::migrate::settled(helper.uid);
     let client = Client::new(config.clone())?;
+
+    client.bootstrap_probe()?;
 
     // Only a helper that answers in the background with Accessibility can
     // be recovered now; otherwise the steps below start it first.
@@ -905,13 +1002,20 @@ pub async fn run(config_path: &Path) -> Result<Value> {
     done_steps.push(json!({"step": "config", "path": config_path, "helper": name}));
 
     if !daemon_answers(&client, config.helper_uid).await {
-        start_helper(&client, &config, &helper, &executable, &mut done_steps).await?;
+        start_helper(
+            &client,
+            &config,
+            &helper,
+            &executable,
+            &mut done_steps,
+            &expected,
+        )
+        .await?;
     }
 
-    // The session checks below run this executable in the helper.
-    client.install()?;
+    // The probe installed above is ready for the session checks below.
     permissions_step(&client, &config, &name).await?;
-    current_daemon_step(&client, &helper, &executable, &mut done_steps).await?;
+    current_daemon_step(&client, &helper, &executable, &mut done_steps, &expected).await?;
     verify_step(&client, &config, config_path).await?;
     done("Checked", "the helper works");
     done_steps.push(json!({"step": "verified"}));
@@ -943,9 +1047,9 @@ fn app_step(done_steps: &mut Vec<Value>) -> Result<PathBuf> {
 }
 
 /// The settings and the standard helper account they name: chosen (or
-/// created) when there are none or their account is gone, and following
-/// whichever account has the user ID now.
-fn helper_step(config_path: &Path) -> Result<(Config, setup::Account)> {
+/// created) when there are none or their account is gone, retaining its
+/// permanent identity throughout configuration and setup.
+fn helper_step(config_path: &Path) -> Result<(Config, setup::Account, setup::identity::Identity)> {
     // The path is the one the command line resolved (the installed one by
     // default); a configuration is created only where none exists, and an
     // existing one that does not load is reported, never replaced.
@@ -953,34 +1057,75 @@ fn helper_step(config_path: &Path) -> Result<(Config, setup::Account)> {
         fs::symlink_metadata(config_path),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound
     );
+    // Whether the person chose the helper in this run: only then may its
+    // record replace one of another account.
+    let mut choice = None;
     let mut config = if absent {
-        let helper = choose_helper()?;
+        let (helper, identity) = choose_helper()?;
         let config = proposed(&helper)?;
+        choice = Some((helper, identity));
         write_config(config_path, &config)?;
         config
     } else {
         Config::load(config_path)?
     };
 
-    // The account the settings name was deleted: choose (or create) another.
-    if setup::account_with_uid(config.helper_uid)?.is_none() {
+    // The account the settings name was deleted, or its user ID now belongs
+    // to another account than the helper Atlas recorded: choose (or create)
+    // another, before anything is changed or recorded.
+    let account = setup::account_with_uid(config.helper_uid)?;
+    let gone = account.is_none();
+    let other = match &account {
+        Some(account) if choice.is_none() => replaced(account)?,
+        _ => false,
+    };
+    if choice.is_none() && (gone || other) {
         say(&format!(
-            "  The helper account in {} (user ID {}) no longer exists.",
-            text::tilde(config_path),
-            config.helper_uid
+            "  {} (user ID {}) {}.",
+            if gone {
+                format!("The helper account in {}", text::tilde(config_path))
+            } else {
+                "The account".to_owned()
+            },
+            config.helper_uid,
+            if gone {
+                "no longer exists"
+            } else {
+                "is not the helper Atlas set up"
+            }
         ));
 
-        let helper = choose_helper()?;
+        let (helper, identity) = choose_helper()?;
         let replacement = proposed(&helper)?;
         replace_config(config_path, &config, &replacement)?;
         config = replacement;
+        choice = Some((helper, identity));
     }
 
-    let helper = setup::account_with_uid(config.helper_uid)?
-        .ok_or_else(|| problem("The helper account was not created"))?;
+    let chosen = choice.is_some();
+    let (helper, identity) = match choice {
+        Some(selected) => selected,
+        None => {
+            let helper = account.ok_or_else(|| problem("The helper account was not created"))?;
+            let identity = match setup::identity::standing_of(&helper) {
+                setup::identity::Standing::Same(identity) => identity,
+                _ => {
+                    return Err(problem(
+                        "Choose the helper account again before setting it up",
+                    ));
+                }
+            };
+            (helper, identity)
+        }
+    };
+    record_selected(
+        &helper,
+        &identity,
+        setup::account_with_uid,
+        |helper, identity| setup::identity::remember_as(helper, identity, chosen),
+    )?;
 
-    // Another account now has the user ID (with its own home): every path
-    // in the settings follows the account that is there now.
+    // Keep the socket paths in the selected account's home.
     if !config.socket_path.starts_with(&helper.home) {
         let fresh = proposed(&helper)?;
         let current = Config {
@@ -1008,14 +1153,14 @@ fn helper_step(config_path: &Path) -> Result<(Config, setup::Account)> {
         }
     }
 
-    // An older account with the same user ID was deleted while logged in:
-    // its session still runs and would be mistaken for the helper's.
-    if crate::session::leftover_session(helper.uid, &helper.name, &helper.home) {
-        return Err(problem(format!(
-            "macOS still runs a session of a deleted account with {name}'s user ID, and \
-             mixes it up with {name}. Restart the Mac, then run atlas init again."
-        )));
-    }
+    // Which account this is, so nothing later acts on another account that
+    // is given its user ID. Unrecorded, nothing later ends a login under
+    // its user ID or deletes it.
+    setup::identity::remember_as(&helper, &identity, chosen)?;
+
+    // An account deleted while logged in leaves its login running, which
+    // can stall the next login, or be mistaken for the helper's.
+    close_leftovers(helper.uid, Some(&identity))?;
 
     done(
         "Helper account",
@@ -1026,7 +1171,99 @@ fn helper_step(config_path: &Path) -> Result<(Config, setup::Account)> {
         say("  Set aside a setup record left by an earlier account with the same ID.");
     }
 
-    Ok((config, helper))
+    Ok((config, helper, identity))
+}
+
+/// Whether the account with the helper's user ID is not the helper Atlas
+/// recorded: another account took the user ID. A record that cannot be
+/// compared stops init before anything changes.
+fn replaced(account: &setup::Account) -> Result<bool> {
+    use setup::identity::{OnFile, Standing};
+
+    match setup::identity::standing_of(account) {
+        Standing::Replaced | Standing::Unrecorded(_) => Ok(true),
+        Standing::Unknown if setup::identity::on_file(account.uid) != OnFile::Nothing => {
+            Err(problem(format!(
+                "macOS could not say whether {} is still the helper Atlas set up; run atlas init \
+                 again",
+                account.name
+            )))
+        }
+        Standing::Same(_) | Standing::Unknown => Ok(false),
+    }
+}
+
+/// Close the logins deleted accounts left open, once the person agrees:
+/// under sudo, which asks for their password here, all in one run as root.
+/// Root checks each user ID again itself; only a login the helper's user ID
+/// (`uid`, its account as just recorded: `helper`) was given after is closed
+/// while its account exists, and then without killing anything.
+fn close_leftovers(uid: u32, helper: Option<&crate::setup::identity::Identity>) -> Result<()> {
+    use crate::onboarding;
+
+    let Some(sessions) = crate::session::sessions(Some(uid)) else {
+        return Ok(());
+    };
+    let still_open =
+        || problem("It's still open. Close it before you switch: run atlas init again.");
+    let failed = |refusal| match refusal {
+        crate::approval::Refusal::Failed(reason) => problem(format!(
+            "macOS didn't close it: {reason}. Restart the Mac to clear it, then run atlas init again."
+        )),
+        _ => still_open(),
+    };
+    let targets = onboarding::leftover_targets(&sessions, helper).map_err(failed)?;
+    close_targets(&targets)
+}
+
+/// Close the logins `targets`, once the person agrees: under sudo, which
+/// asks for their password here, all in one run as root under control of
+/// every user ID it touches, recorded as pending until they are seen gone.
+fn close_targets(targets: &[crate::onboarding::as_root::Target]) -> Result<()> {
+    use crate::onboarding::{self, as_root::Via};
+
+    if targets.is_empty() {
+        return Ok(());
+    }
+    let still_open =
+        || problem("It's still open. Close it before you switch: run atlas init again.");
+    let failed = |refusal| match refusal {
+        crate::approval::Refusal::Failed(reason) => problem(format!(
+            "macOS didn't close it: {reason}. Restart the Mac to clear it, then run atlas init again."
+        )),
+        _ => still_open(),
+    };
+
+    heading("A deleted account is still logged in");
+    say(
+        "  macOS kept a login open for an account that was deleted. Close it before you go on,\n  \
+         or the next login can stall.",
+    );
+    if !prompt::confirm("Close it now? macOS asks for your password.", true, "")? {
+        return Err(still_open());
+    }
+
+    attended(
+        "/usr/bin/sudo",
+        &["-v"],
+        "Administrator rights were not granted",
+    )?;
+    keep_sudo_alive();
+
+    let uids: Vec<u32> = targets.iter().map(|target| target.uid()).collect();
+    onboarding::close_batch(
+        &onboarding::controllers_of(&uids)?,
+        targets,
+        |targets| crate::onboarding::as_root::close(targets, Via::Sudo { ask: false }),
+        crate::session::confirm_gone,
+    )
+    .map_err(|held| match held {
+        onboarding::Held::State(error) => error,
+        onboarding::Held::Refused(refusal) => failed(refusal),
+    })?;
+
+    done("Closed", "the login the deleted account left open");
+    Ok(())
 }
 
 /// An earlier action of unknown outcome is recovered before anything else
@@ -1071,6 +1308,7 @@ async fn start_helper(
     helper: &setup::Account,
     executable: &Path,
     done_steps: &mut Vec<Value>,
+    expected: &setup::identity::Identity,
 ) -> Result<()> {
     let name = &helper.name;
     // Set up before: the helper's job is installed and starts by itself
@@ -1105,11 +1343,19 @@ async fn start_helper(
                 uid: helper.uid,
                 opener: false,
             };
-            let step = match setup::request_before_login(executable, helper, &request) {
-                Ok((_, reply)) if reply["ok"] == true => {
+            let step = match setup_transaction(&client.controller, || {
+                let (succeeded, reply) =
+                    setup::request_before_login(executable, helper, &request, expected)?;
+                if !succeeded || reply["ok"] != true {
+                    return Err(
+                        problem("The helper did not acknowledge first-login setup").uncertain()
+                    );
+                }
+                Ok(reply)
+            }) {
+                Ok(reply) => {
                     json!({"step": "firstLogin", "answered": reply["answered"]})
                 }
-                Ok((_, reply)) => json!({"step": "firstLogin", "error": reply["error"]}),
                 Err(error) => json!({"step": "firstLogin", "error": error.error}),
             };
             done_steps.push(step);
@@ -1130,7 +1376,7 @@ async fn start_helper(
             ));
         }
 
-        offer_lock(name)?;
+        offer_lock(name, helper.uid)?;
 
         {
             let _spinner = Spinner::new(format!(
@@ -1147,6 +1393,9 @@ async fn start_helper(
     if installed {
         let _spinner = Spinner::new("Waiting for the helper to start…");
         started = daemon_answers_within(client, config.helper_uid, Duration::from_secs(2)).await;
+        if started {
+            mark_since_lock("answering");
+        }
     }
 
     if !started {
@@ -1167,18 +1416,21 @@ async fn start_helper(
             .ok_or_else(|| problem("This account cannot be resolved"))?;
         let (agent, layout) = helper_agent(helper, executable)?;
 
-        let run = |request: &Request| as_helper(executable, helper, request);
-        run(&Request::Prepare {
-            uid: helper.uid,
-            controller: controller.name.clone(),
-        })?;
-
-        install_job(run, helper.uid, agent, &layout.logs())?;
+        prepare_and_install(
+            &client.controller,
+            &controller.name,
+            agent,
+            &layout.logs(),
+            |request| as_helper(executable, helper, request, expected),
+        )?;
 
         spinner.set("Starting the helper…");
         let answered =
             daemon_answers_within(client, config.helper_uid, Duration::from_secs(1)).await;
         drop(spinner);
+        if answered {
+            mark_since_lock("answering");
+        }
 
         if !answered {
             return Err(problem(format!(
@@ -1195,6 +1447,39 @@ async fn start_helper(
     Ok(())
 }
 
+/// Hold and claim synchronous setup before any worker can change the helper.
+/// Only a complete acknowledgement settles this transaction's generation.
+pub(crate) fn setup_transaction<T>(
+    controller: &crate::control::Controller,
+    act: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let _ownership = controller.acquire(true)?;
+    let pending = controller.quarantine()?;
+    let _executors = crate::control::ExecutorClaims::new(std::slice::from_ref(&pending))?;
+    let outcome = act();
+    if outcome.is_ok() {
+        controller.clear_if(&pending)?;
+    }
+    outcome
+}
+
+/// Prepare and install under one claim, including rollback dispatches.
+fn prepare_and_install(
+    controller: &crate::control::Controller,
+    controller_name: &str,
+    agent: Agent,
+    logs: &Path,
+    run: impl Fn(&Request) -> Result<Value>,
+) -> Result<Value> {
+    setup_transaction(controller, || {
+        run(&Request::Prepare {
+            uid: agent.uid,
+            controller: controller_name.to_owned(),
+        })?;
+        install_job(run, agent.uid, agent, logs)
+    })
+}
+
 /// Unless `status` has the helper in the background, wait until it is.
 async fn wait_until_back(client: &Client, uid: u32, status: &Value) -> Result<()> {
     if crate::session::require_hidden(status, uid).is_err() {
@@ -1205,6 +1490,7 @@ async fn wait_until_back(client: &Client, uid: u32, status: &Value) -> Result<()
                 .then_some(())
         })
         .await?;
+        mark_since_lock("hidden");
     }
 
     Ok(())
@@ -1239,7 +1525,7 @@ async fn permissions_step(client: &Client, config: &Config, name: &str) -> Resul
         loop {
             // The person is here, in their own account: offer the way over.
             if client.status().await["session"]["onConsole"] != true {
-                offer_lock(name)?;
+                offer_lock(name, config.helper_uid)?;
             }
 
             // Done once the helper has been on screen and is hidden again (or
@@ -1336,15 +1622,151 @@ async fn verify_step(client: &Client, config: &Config, config_path: &Path) -> Re
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn uid_allocation_skips_directory_accounts_and_processes_and_refuses_lookup_errors() {
+        let uid = super::available_uid(&[501], &[502], |uid| Ok(uid == 503)).unwrap();
+        assert_eq!(uid, 504);
+        let error = super::available_uid(&[], &[], |_| Err(super::problem("lookup failed")));
+        assert!(error.is_err());
+    }
+
+    #[test]
+    fn replacing_a_job_keeps_its_executor_claim_after_the_caller_dies() {
+        for mode in ["retire", "install", "restore"] {
+            crate::transaction_test::interrupted_executor(
+                "init::tests::a_job_installation_test_caller",
+                mode,
+            );
+        }
+    }
+
+    #[test]
+    fn preparing_and_installing_a_helper_excludes_teardown_after_the_caller_dies() {
+        for mode in ["prepare", "fresh-install"] {
+            crate::transaction_test::interrupted_executor(
+                "init::tests::a_job_installation_test_caller",
+                mode,
+            );
+        }
+    }
+
+    /// A subprocess entry point; all effects stay in its explicit temporary directory.
+    #[tokio::test]
+    async fn a_job_installation_test_caller() {
+        let Some(directory) = crate::transaction_test::directory() else {
+            return;
+        };
+        let client = crate::transaction_test::client(&directory);
+        let helper = setup::Account {
+            uid: 7001,
+            name: "helper".into(),
+            home: directory.join("home"),
+        };
+        let layout = Layout {
+            uid: helper.uid,
+            home: helper.home.clone(),
+            guard: None,
+        };
+        let agent = Agent {
+            label: LABEL.into(),
+            program: directory.join("atlas"),
+            uid: helper.uid,
+            controller_uid: nix::unistd::getuid().as_raw(),
+            socket: layout.socket(),
+        };
+        let mode = std::env::var("ATLAS_MUTATION_TEST_MODE").unwrap();
+        let run = |request: &Request| {
+            let pause = matches!(
+                (mode.as_str(), request),
+                ("retire", Request::Retire { .. })
+                    | ("install" | "fresh-install", Request::Install { .. })
+                    | ("restore", Request::Restore { .. })
+                    | ("prepare", Request::Prepare { .. })
+            );
+            if pause {
+                crate::transaction_test::pause_executor(&directory);
+            }
+            if mode == "restore" && matches!(request, Request::Install { .. }) {
+                return Err(problem("installation was refused"));
+            }
+            Ok(json!({"ok": true, "jobs": {LABEL: {"plistSha256": "b".repeat(64)}}}))
+        };
+        if matches!(mode.as_str(), "prepare" | "fresh-install") {
+            let _ =
+                prepare_and_install(&client.controller, "controller", agent, &layout.logs(), run);
+        } else {
+            let _ = replace_job(&client, &helper, agent, &layout, run).await;
+        }
+    }
+
+    #[test]
+    fn installation_acknowledgements_settle_only_their_own_setup_mutations() {
+        let directory = tempfile::tempdir().unwrap();
+        let client = crate::transaction_test::client(directory.path());
+        let controller = &client.controller;
+        let other = controller.quarantine().unwrap();
+        drop(other);
+        setup_transaction(controller, || Ok(())).unwrap();
+        assert_eq!(controller.pending().unwrap().len(), 1);
+        let outcome: Result<()> =
+            setup_transaction(controller, || Err(problem("reply lost").uncertain()));
+        assert!(outcome.is_err());
+        assert_eq!(controller.pending().unwrap().len(), 2);
+    }
     use super::*;
+
+    #[test]
+    fn a_selected_account_is_never_replaced_while_its_configuration_is_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let helper = setup::Account {
+            uid: 7001,
+            name: "selected".into(),
+            home: dir.path().join("selected"),
+        };
+        let expected = setup::identity::Identity {
+            uid: helper.uid,
+            name: helper.name.clone(),
+            generated_uid: "6DB4B7AF-BE3C-486C-BD46-1B4558946919".into(),
+        };
+        let configuration = proposed(&helper).unwrap();
+        write_config(&dir.path().join("atlas.toml"), &configuration).unwrap();
+        let replacement = setup::Account {
+            name: "replacement".into(),
+            home: dir.path().join("replacement"),
+            ..helper.clone()
+        };
+        let recorded = std::cell::RefCell::new(None);
+        let record = |_: &setup::Account, identity: &setup::identity::Identity| {
+            recorded.replace(Some(identity.clone()));
+            Ok(())
+        };
+        let outcome = record_selected(&helper, &expected, |_| Ok(Some(replacement)), record);
+        assert!(
+            outcome.is_err(),
+            "a reused UID must require another explicit selection"
+        );
+        assert!(
+            recorded.borrow().is_none(),
+            "a replacement must never be recorded"
+        );
+        record_selected(&helper, &expected, |_| Ok(Some(helper.clone())), record).unwrap();
+        assert_eq!(recorded.into_inner(), Some(expected));
+    }
 
     #[test]
     fn quiet_commands_hide_log_lines_and_keep_their_outcome() {
         let script = "echo '2026-10-11 14:28:19.767 sysadminctl[1:2] noise' >&2; \
                       printf 'User password:' >&2; sleep 0.4; echo >&2; exit $0";
-        assert!(quietly_attended("/bin/sh", &["-c", script, "0"], "failed").is_ok());
+        let run = |status| {
+            Command::new("/bin/sh")
+                .args(["-c", script, status])
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap()
+        };
+        assert!(quietly_attended(run("0"), "failed").is_ok());
 
-        let failed = quietly_attended("/bin/sh", &["-c", script, "3"], "it failed").unwrap_err();
+        let failed = quietly_attended(run("3"), "it failed").unwrap_err();
         assert_eq!(failed.error, "it failed");
     }
 

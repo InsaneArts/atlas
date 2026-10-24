@@ -1,7 +1,7 @@
 /// The account screens' words: the choice of an account to be the helper, and the form that creates one.
 extension OnboardingWords {
   /// The form's tail.
-  static let approveOnce = "You'll approve it once in macOS."
+  static let approveOnce = "You’ll approve it once in macOS."
 
   /// A standard account's row detail.
   ///

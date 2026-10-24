@@ -7,6 +7,8 @@ protocol WindowParts: AnyObject {
   var panel: PanelController? { get }
   /// The clock the windows' waits run on.
   var clock: any Clock<Duration> { get }
+  /// The app's control work not yet answered, which quitting waits for; nil before launch has made it.
+  var controlBarrier: ControlBarrier? { get }
 
   /// A main window's controller.
   ///
@@ -41,12 +43,17 @@ protocol WindowParts: AnyObject {
   /// Closes the menu bar panel, as opening a window or an alert from it does.
   func closePanel()
 
-  /// Quits Atlas: the panel's Quit, and ⌘Q with no window of Atlas's in front.
+  /// Quits Atlas, once the coordinator has given the main window's control back.
   ///
   /// - Parameter sender: What asked, as AppKit's `terminate(_:)` takes it.
   func terminate(_ sender: Any?)
 
-  /// Hands the panel's latest reading to the notification and the Dock badge.
+  /// Puts what `atlas doctor` says on the clipboard, for a bug report.
+  ///
+  /// - Returns: Whether it was read and copied.
+  func copyDiagnostics() async -> Bool
+
+  /// Hands the panel's latest reading to the notifications.
   ///
   /// - Parameter status: The reading, or nil when it failed.
   func read(_ status: ViewerStatus?)

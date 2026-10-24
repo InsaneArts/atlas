@@ -15,7 +15,7 @@ public enum AccountNameRule {
     if name.isEmpty { return nil }
     let reason: String
     if name.contains(where: \.isWhitespace) {
-      reason = "Account names can't have spaces."
+      reason = "Account names can’t have spaces."
     } else if !name.utf8.allSatisfy(allowed) {
       reason = "Account names can only use letters, numbers, dots, dashes and underscores."
     } else if name.hasPrefix(".") || name.hasPrefix("-") {

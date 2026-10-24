@@ -14,7 +14,7 @@ struct ActivityEntryCaptionMarkTests {
     ActivityEntry(id: "0", line: "Agent typed", when: "now", mark: mark, isNewest: isNewest)
   }
 
-  @Test("a failure is marked whatever its age; otherwise only the newest action breathes")
+  @Test("a failure is marked whatever its age; otherwise only the newest action is marked")
   func failureFirstThenNewest() {
     #expect(entry(.failed, isNewest: false).captionMark == .failed)
     #expect(entry(.failed, isNewest: true).captionMark == .failed)

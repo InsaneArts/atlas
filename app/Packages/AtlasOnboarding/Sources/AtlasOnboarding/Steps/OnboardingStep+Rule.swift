@@ -10,15 +10,24 @@ extension OnboardingStep {
   }
 
   private static func step(_ facts: OnboardingFacts, _ choices: OnboardingChoices) -> OnboardingStep {
+    // A deleted account's open login can stall the next login, so it is closed first, whatever else is true; once
+    // closed, the screen says so until Continue.
+    if facts.role == .controller, !facts.leftoverLogins.isEmpty || choices.closedLeftovers { return .closeLeftovers }
     if let problem = facts.appProblem { return .blocked(problem) }
+    if let problem = facts.setupProblem { return .blocked(problem) }
     if facts.role == .helper {
       let asker = facts.asker
       if !asker.installed || !asker.running {
+        if asker.accepted {
+          return .blocked(
+            "Allowed. Keep Atlas open in your own account to finish setup. If setup was interrupted, reopen Atlas here, then return to your own account to retry."
+          )
+        }
         // Asked by an account: allow it (again, over a job that does not
         // run, such as an old Atlas's). Asked by no one: nothing to allow here.
         return asker.name.isEmpty
           ? .blocked(
-            "Atlas isn't running in this account. In your own account, open Atlas and choose this account as the helper again."
+            "Atlas isn’t running in this account. In your own account, open Atlas and choose this account as the helper account again."
           )
           : .allow
       }
@@ -33,11 +42,6 @@ extension OnboardingStep {
     if helper.administrator == true {
       return .blocked(
         "\(helper.title) administers this Mac. Make it a standard account in System Settings › Users & Groups, or choose another account."
-      )
-    }
-    if helper.leftoverSession {
-      return .blocked(
-        "macOS still runs a session of a deleted account with \(helper.title)'s user ID. Restart the Mac, then open Atlas again."
       )
     }
     if facts.finished { return choices.agentsDone ? .done : .agents }

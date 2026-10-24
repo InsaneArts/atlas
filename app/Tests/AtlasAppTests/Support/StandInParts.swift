@@ -2,16 +2,27 @@ import AsyncSupportTesting
 import AtlasCommandsTesting
 import AtlasService
 import AtlasServiceTesting
+import Observation
 
 @testable import AtlasApp
 
 /// The app's parts as the coordinator sees them, standing in for the container: scripted controllers, the Dock icon's
 /// changes recorded, and every window made a ``WindowStandIn``, so no test reaches a screen, the Dock or a service.
+/// Observed, so a test can wait for Atlas to be asked to quit.
+@Observable
 final class StandInParts: WindowParts {
   /// No panel: a test's windows open on nothing it read.
   var panel: PanelController?
   /// A clock nobody advances.
   let clock: any Clock<Duration> = ManualClock()
+  /// No control work of the app's own: a test's control work is its main window's.
+  var controlBarrier: ControlBarrier? { nil }
+  /// Makes each main window's controller: one over a scripted service by default.
+  var makeViewer: @MainActor () -> ViewerController = { .scripted(ScriptedService()) }
+  /// Whether Copy Diagnostics finds anything to copy.
+  var diagnostics = true
+  /// Runs as Atlas is asked to quit, before it is counted.
+  var quitting: @MainActor () -> Void = {}
   /// Each Dock icon change the coordinator asked for, in order.
   private(set) var dockIcon: [Bool] = []
   /// How many main windows' controllers were made.
@@ -49,7 +60,7 @@ final class StandInParts: WindowParts {
   /// - Returns: The controller.
   func viewerController(switchToHelper: @escaping @MainActor () async -> String) -> ViewerController? {
     viewersMade += 1
-    return .scripted(ScriptedService())
+    return makeViewer()
   }
 
   /// A Settings controller over a scripted command line.
@@ -84,10 +95,18 @@ final class StandInParts: WindowParts {
   /// Nothing to close: there is no panel.
   func closePanel() {}
 
-  /// Records the quit, which no test performs.
+  /// Records the quit, which no test performs, after what runs as it is asked.
   ///
   /// - Parameter sender: Not used.
-  func terminate(_ sender: Any?) { terminations += 1 }
+  func terminate(_ sender: Any?) {
+    quitting()
+    terminations += 1
+  }
+
+  /// Copies nothing anywhere: says whether there was anything to copy.
+  ///
+  /// - Returns: ``diagnostics``.
+  func copyDiagnostics() async -> Bool { diagnostics }
 
   /// Nothing to read into.
   ///

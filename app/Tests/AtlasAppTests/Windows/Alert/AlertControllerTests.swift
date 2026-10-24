@@ -109,17 +109,31 @@ struct AlertControllerTests {
     #expect(seen.closed == 1)
   }
 
-  @Test("a successful recovery shows Recovered and closes 0.7 seconds later on the clock")
+  @Test("Done closes a recovery that worked at once, without waiting for the hold")
+  func doneClosesAtOnce() async throws {
+    let commands = ScriptedCommands(["start-input": #"{"ok": true}"#])
+    let seen = Seen()
+    let clock = ManualClock()
+    let controller = Self.alert(.recover, commands: commands, seen: seen, clock: clock)
+    let confirming = Task { await controller.confirm() }
+    try await clock.untilSleeping(for: Self.hold, "Recover never held on its done words")
+    controller.send(.cancel)
+    await confirming.value
+    #expect(seen.closed == 1, "closed with the clock never advanced")
+  }
+
+  @Test("a successful recovery says the helper is ready and closes 0.7 seconds later on the clock")
   func aSuccessfulRecoveryHoldsThenCloses() async throws {
     let commands = ScriptedCommands(["start-input": #"{"ok": true}"#])
     let seen = Seen()
     let clock = ManualClock()
     let controller = Self.alert(.recover, commands: commands, seen: seen, clock: clock)
     let confirming = Task { await controller.confirm() }
-    try await clock.untilSleeping(for: Self.hold, "Recover never held on Recovered")
-    #expect(controller.state.phase == .done(title: HelperWords.recovered))
-    controller.cancel()
-    #expect(controller.state.isBusy, "nothing dismisses it while it holds")
+    try await clock.untilSleeping(for: Self.hold, "Recover never held on its done words")
+    #expect(
+      controller.state.phase
+        == .done(title: HelperWords.recovered, message: HelperWords.recoveredMessage, button: HelperWords.done)
+    )
     clock.advance(by: Self.hold - .milliseconds(1))
     await afterQueuedWork()
     #expect(seen.closed == 0, "still showing a millisecond short of the hold")

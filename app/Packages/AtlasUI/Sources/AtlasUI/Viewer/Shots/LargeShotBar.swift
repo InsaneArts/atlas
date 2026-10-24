@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The large screenshot's one glass bar (v3 V10, `.lbar`): its time and size, Copy, Show in Finder and Close.
+/// The large screenshot's one glass bar: its time and size, Copy, Show in Finder and Close.
 struct LargeShotBar: View {
   /// The screenshot shown large.
   let shot: ViewerLargeShot
@@ -53,7 +53,7 @@ struct LargeShotBar: View {
   }
 }
 
-/// The bar's own measures, from v3's (`.vlarge .lbar`).
+/// The bar's own measures for its floating controls.
 private enum Layout {
   /// 5: the bar's inset above, below and after its buttons; its words start 14 in.
   static let inset: CGFloat = 5

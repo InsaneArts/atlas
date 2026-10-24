@@ -1,4 +1,4 @@
-/// What the Activity tab holds that the person has not seen (v3 V2): actions that arrived while another tab showed.
+/// What the Activity tab holds that the person has not seen: actions that arrived while another tab showed.
 public enum ViewerUnseen: Equatable, Sendable {
   /// Nothing new, or Activity shows.
   case none

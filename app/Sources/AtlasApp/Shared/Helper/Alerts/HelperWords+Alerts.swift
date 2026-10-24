@@ -1,7 +1,7 @@
 /// The helper alerts' words, the same in every window that asks them: recovery, the switch, and log out and its
 /// forced form, each with its title, sentence and buttons, their running words and Recover's done title.
 extension HelperWords {
-  /// The way out of an alert.
+  /// The way out of an alert the person asked for.
   static let cancel = "Cancel"
   /// The recovery alert's title.
   static let recoverTitle = "Recover the helper?"
@@ -11,13 +11,17 @@ extension HelperWords {
   /// The recovery alert's sentence while the helper's input stopped.
   static let recoverInput = "Mouse and keyboard stopped in the helper. Atlas checks the helper and starts them again."
   /// The recovery alert's sentence when it was asked for otherwise.
-  static let recoverAsked = "Atlas checks the helper and starts it again. No action runs twice."
+  static let recoverAsked = "Atlas checks the helper and starts it again."
   /// The recovery alert's button.
   static let recover = "Recover"
   /// The recovery alert's button while recovery runs.
   static let recovering = "Recovering…"
-  /// The recovery alert's title and button once it worked, just before it closes (v3 A5).
-  static let recovered = "Recovered"
+  /// The recovery alert's title once it worked, just before it closes.
+  static let recovered = "The helper is ready"
+  /// The recovery alert's message once it worked, in the message's place.
+  static let recoveredMessage = "Mouse and keyboard work again."
+  /// The one button a done alert shows, which closes it.
+  static let done = "Done"
   /// The switch alert's title.
   static let switchTitle = "Switch to the helper?"
   /// The switch alert's sentence.

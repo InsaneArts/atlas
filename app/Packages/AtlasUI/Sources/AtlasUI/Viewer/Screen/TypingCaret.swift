@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The typing chip's caret (v3 V13): a thin accent bar after the text being typed that blinks once a second, held
+/// The typing chip's caret: a thin accent bar after the text being typed that blinks once a second, held
 /// still under Reduce Motion and in a render.
 struct TypingCaret: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -29,7 +29,7 @@ struct TypingCaret: View {
       .accessibilityHidden(true)
   }
 
-  /// Half a blink: shown, then hidden, each for half a second (v3 `caret 1s steps(1)`).
+  /// Half a blink: shown, then hidden, each for half a second.
   private static let half = 0.5
 }
 

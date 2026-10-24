@@ -8,7 +8,8 @@ import Testing
 struct ViewerTopRowTests {
   @Test("the status line shows in the widest bar alone, and is gone once the tabs show symbols")
   func theStatusLineGoesBeforeTheTabWords() throws {
-    let state = PreviewStates.viewerWorking.top
+    // Off the Screen, where no caption says what the agent is doing, Working carries its line.
+    let state = PreviewStates.viewerActivity.top
     var bare = state
     bare.status.line = ""
     // 1,440 across holds the widest layout: the line draws.

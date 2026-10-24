@@ -20,6 +20,11 @@ public struct ViewerStatus: Decodable, Equatable, Sendable {
   public var capabilities = Capabilities()
   /// What is happening in the helper, summed up.
   public var overview = Overview()
+  /// The user IDs of deleted accounts whose logins are still open; Atlas can close them.
+  public var leftoverLogins: [Int] = []
+  /// Whether the helper is logged in with its desktop up while Atlas there stays silent, so only logging it out
+  /// starts it again.
+  public var helperStale = false
 
   /// Creates a status with every field at its safe default.
   public init() {}
@@ -27,7 +32,8 @@ public struct ViewerStatus: Decodable, Equatable, Sendable {
   /// The root fields of `status.json`.
   enum CodingKeys: String, CodingKey {
     /// Each field by the name the service writes.
-    case ready, canObserve, checks, nextSteps, error, controlActive, session, capabilities, overview
+    case ready, canObserve, checks, nextSteps, error, controlActive, session, capabilities, overview, leftoverLogins,
+      helperStale
   }
 
   /// Decodes a status, keeping the default of every field that is missing or of the wrong type.
@@ -45,5 +51,7 @@ public struct ViewerStatus: Decodable, Equatable, Sendable {
     session = (try? container.decodeIfPresent(Session.self, forKey: .session)) ?? Session()
     capabilities = (try? container.decodeIfPresent(Capabilities.self, forKey: .capabilities)) ?? Capabilities()
     overview = (try? container.decodeIfPresent(Overview.self, forKey: .overview)) ?? Overview()
+    leftoverLogins = (try? container.decodeIfPresent([Int].self, forKey: .leftoverLogins)) ?? []
+    helperStale = (try? container.decodeIfPresent(Bool.self, forKey: .helperStale)) == true
   }
 }

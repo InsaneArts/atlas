@@ -37,6 +37,10 @@
       ("10-helper-permission-panel-allowed", PreviewStates.onboardingPermissionPanelAllowed),
       ("11-helper-done", PreviewStates.onboardingHelperDone),
       ("12-blocked", PreviewStates.onboardingBlocked),
+      ("14-close", PreviewStates.onboardingClose),
+      ("14-close-closing", PreviewStates.onboardingCloseClosing),
+      ("14-close-cancelled", PreviewStates.onboardingCloseCancelled),
+      ("14-close-closed", PreviewStates.onboardingCloseClosed),
     ]
 
     /// Draws every setup window sample to a PNG named after it in `directory`, at Retina scale and at its window's

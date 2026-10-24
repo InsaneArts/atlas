@@ -39,9 +39,9 @@ struct ScreenZoomRulesTests {
     // Moving, the stage's picture or the small screen arrives whole at the other's place; the one leaving fades.
     #expect(ScreenZoom.opacity(isArriving: true, isAway: true, zooms: true) == 1)
     #expect(ScreenZoom.opacity(isArriving: false, isAway: true, zooms: true) == 0)
-    // Arriving on its own, the small screen fades in from a little smaller.
+    // Arriving on its own, the small screen fades in from a little smaller, 96% of its size.
     #expect(ScreenZoom.opacity(isArriving: true, isAway: true, zooms: false) == 0)
-    #expect(ViewerLayout.miniScale(isComing: true, growsFromStage: false, reduceMotion: false) == 0.9)
+    #expect(ViewerLayout.miniScale(isComing: true, growsFromStage: false, reduceMotion: false) == 0.96)
     #expect(ViewerLayout.miniScale(isComing: true, growsFromStage: true, reduceMotion: false) == 1)
     // Under Reduce Motion nothing moves: no switch zooms, so the small screen and the stage fade, at their own size.
     for (old, new) in [(ViewerTab.screen, ViewerTab.activity), (.apps, .screen)] {

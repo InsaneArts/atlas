@@ -13,13 +13,16 @@ extension OnboardingController {
   ///   - loginItem: The scripted login item.
   ///   - installs: The agent installs it shares with another window; its own over `commands` when nil.
   ///   - clock: The clock its waits run on; by default one nobody advances.
-  /// - Returns: The controller.
+  ///   - mark: Where its login timing's markers go; nowhere by default, never this Mac's log.
+  /// - Returns: The controller, which reads no icon or picture from this Mac and reveals what it shows in the Finder
+  ///   into `opened`.
   static func scripted(
     _ commands: ScriptedCommands,
     opened: OpenedURLs = OpenedURLs(),
     loginItem: ScriptedLoginItem = ScriptedLoginItem(),
     installs: AgentInstalls? = nil,
-    clock: ManualClock = ManualClock()
+    clock: ManualClock = ManualClock(),
+    mark: @escaping @MainActor (String) -> Void = { _ in }
   ) -> OnboardingController {
     OnboardingController(
       dependencies: OnboardingDependencies(
@@ -27,7 +30,11 @@ extension OnboardingController {
         openURL: { opened.urls.append($0) },
         loginItem: loginItem.seam,
         installs: installs ?? AgentInstalls(commands: commands),
-        clock: clock
+        clock: clock,
+        mark: mark,
+        agentIcons: { [:] },
+        accountPicture: { _ in nil },
+        reveal: { opened.urls.append($0) }
       )
     )
   }
@@ -46,20 +53,29 @@ extension OnboardingController {
     return try await body(running)
   }
 
-  /// Waits, a turn of the main actor at a time, for the queue to take the request just sent, and returns its work
-  /// before it begins: the queue starts that work as a main-actor job of its own, queued behind the turn the test
-  /// takes next, so the test acts between the taking and the start.
+  /// Runs `act` the moment the queue takes its next request, before the request's work starts, and waits for that
+  /// taking. `act` runs inside the queue's own turn of the main actor, which the work's start waits behind, so it
+  /// always lands between the taking and the start. Polling the queue from the test, a turn at a time, could not
+  /// promise that: the order in which the main actor runs the test's turn and the work's start is not fixed.
   ///
-  /// - Parameter sourceLocation: Where a failure is reported: the caller's line.
-  /// - Returns: The request's work, not yet begun.
-  /// - Throws: The failed requirement, when the queue never takes it.
-  func untilTaken(sourceLocation: SourceLocation = #_sourceLocation) async throws -> Task<Void, Never> {
-    // Far more turns than the queue needs: it takes a request in the turn after it was sent.
-    for _ in 0..<100 {
-      if let performing { return performing.work }
-      await Task.yield()
+  /// - Parameters:
+  ///   - sourceLocation: Where a failure is reported: the caller's line.
+  ///   - act: What happens between the taking and the start, such as Back.
+  /// - Returns: The request's work, which may have run by the time this returns.
+  /// - Throws: The failed requirement, when the queue took no request.
+  func untilTaken(
+    sourceLocation: SourceLocation = #_sourceLocation,
+    acting act: @escaping @MainActor () -> Void
+  ) async throws -> Task<Void, Never> {
+    let work = await withCheckedContinuation { (taken: CheckedContinuation<Task<Void, Never>?, Never>) in
+      taking = { [weak self] _ in
+        self?.taking = nil
+        let work = self?.performing?.work
+        act()
+        taken.resume(returning: work)
+      }
     }
-    return try #require(performing?.work, "the queue never took the request", sourceLocation: sourceLocation)
+    return try #require(work, "the queue took no request", sourceLocation: sourceLocation)
   }
 
   /// Waits for the window's first reading of the facts to land.

@@ -5,54 +5,54 @@
 
   /// The viewer window's design renders. Debug builds only, since the samples are.
   enum ViewerRender {
-    /// Every main window state drawn for checking against the boards, at the boards' window size, one for each sample
-    /// the previews list (``PreviewStates/viewer``), which `RenderTests` checks. Each render's name is its file's,
-    /// numbered in the order the renders were added.
+    /// Every main window state drawn for visual checks, at the standard window size, one for each sample the
+    /// previews list (``PreviewStates/viewer``), which `RenderTests` checks. Each render's name is its
+    /// file's, numbered in the order the renders were added.
     static var renders: [PreviewState<ViewerState>] {
       [
-        board("01-working", PreviewStates.viewerWorking),
-        board("02-idle", PreviewStates.viewerIdle),
-        board("03-control", PreviewStates.viewerControl),
-        board("04-needs-you", PreviewStates.viewerNeedsYou),
-        board("05-stopped", PreviewStates.viewerStopped),
-        board("06-in-use-elsewhere", PreviewStates.viewerInUseElsewhere),
-        board("07-paused", PreviewStates.viewerPaused),
-        board("08-details", PreviewStates.viewerDetails),
-        board("09-not-ready", PreviewStates.viewerNotReady),
-        board("10-logged-out", PreviewStates.viewerLoggedOut),
-        board("11-connecting", PreviewStates.viewerConnecting),
-        board("12-switch", PreviewStates.viewerSwitch),
-        board("13-log-out", PreviewStates.viewerLogOut),
-        board("14-log-out-anyway", PreviewStates.viewerLogOutAnyway),
-        board("15-restart", PreviewStates.viewerRestart),
-        board("16-typing", PreviewStates.viewerTyping),
-        board("17-mid-action", PreviewStates.viewerMidAction),
-        board("18-actual-size-paused", PreviewStates.viewerActualSizePaused),
-        board("19-actual-size-needs-you", PreviewStates.viewerActualSizeNeedsYou),
-        board("20-activity", PreviewStates.viewerActivity),
-        board("21-activity-nothing-yet", PreviewStates.viewerActivityEmpty),
-        board("22-apps", PreviewStates.viewerApps),
-        board("23-show-on-screen", PreviewStates.viewerShowOnScreen),
-        board("24-screenshots", PreviewStates.viewerShots),
-        board("25-screenshot-large", PreviewStates.viewerShotLarge),
-        board("26-screenshots-none-yet", PreviewStates.viewerShotsEmpty),
-        board("27-activity-paused", PreviewStates.viewerActivityPaused),
-        board("28-apps-paused", PreviewStates.viewerAppsPaused),
-        board("29-show-on-screen-right-edge", PreviewStates.viewerShowOnScreenRightEdge),
-        board("30-details-checks", PreviewStates.viewerDetailsChecks),
+        sample("01-working", PreviewStates.viewerWorking),
+        sample("02-idle", PreviewStates.viewerIdle),
+        sample("03-control", PreviewStates.viewerControl),
+        sample("04-needs-you", PreviewStates.viewerNeedsYou),
+        sample("05-stopped", PreviewStates.viewerStopped),
+        sample("06-in-use-elsewhere", PreviewStates.viewerInUseElsewhere),
+        sample("07-paused", PreviewStates.viewerPaused),
+        sample("08-details", PreviewStates.viewerDetails),
+        sample("09-not-ready", PreviewStates.viewerNotReady),
+        sample("10-logged-out", PreviewStates.viewerLoggedOut),
+        sample("11-connecting", PreviewStates.viewerConnecting),
+        sample("12-switch", PreviewStates.viewerSwitch),
+        sample("13-log-out", PreviewStates.viewerLogOut),
+        sample("14-log-out-anyway", PreviewStates.viewerLogOutAnyway),
+        sample("15-restart", PreviewStates.viewerRestart),
+        sample("16-typing", PreviewStates.viewerTyping),
+        sample("17-mid-action", PreviewStates.viewerMidAction),
+        sample("18-actual-size-paused", PreviewStates.viewerActualSizePaused),
+        sample("19-actual-size-needs-you", PreviewStates.viewerActualSizeNeedsYou),
+        sample("20-activity", PreviewStates.viewerActivity),
+        sample("21-activity-nothing-yet", PreviewStates.viewerActivityEmpty),
+        sample("22-apps", PreviewStates.viewerApps),
+        sample("23-show-on-screen", PreviewStates.viewerShowOnScreen),
+        sample("24-screenshots", PreviewStates.viewerShots),
+        sample("25-screenshot-large", PreviewStates.viewerShotLarge),
+        sample("26-screenshots-none-yet", PreviewStates.viewerShotsEmpty),
+        sample("27-activity-paused", PreviewStates.viewerActivityPaused),
+        sample("28-apps-paused", PreviewStates.viewerAppsPaused),
+        sample("29-show-on-screen-right-edge", PreviewStates.viewerShowOnScreenRightEdge),
+        sample("30-details-checks", PreviewStates.viewerDetailsChecks),
       ]
     }
 
     /// The render names, in order, for a test to list as its arguments.
     static var names: [String] { renders.map(\.name) }
 
-    /// A render at the boards' window size.
+    /// A render at the standard window size.
     ///
     /// - Parameters:
     ///   - name: Its file's name.
     ///   - state: The state it draws.
     /// - Returns: The render.
-    private static func board(_ name: String, _ state: ViewerState) -> PreviewState<ViewerState> {
+    private static func sample(_ name: String, _ state: ViewerState) -> PreviewState<ViewerState> {
       PreviewState(name: name, value: state, size: PreviewStates.viewerSize)
     }
 
@@ -60,9 +60,9 @@
     /// each side of a step (`ViewerLayout.topRowFit`).
     nonisolated static let narrowWidths: [CGFloat] = [860, 900, 1040]
 
-    /// The narrow renders, each named by its file and drawn at its window's width and the boards' height: Working,
-    /// Stopped and You have control at each of ``narrowWidths``, then Activity, Apps and Screenshots with Details open
-    /// at the least width, where their headers have the least room.
+    /// The narrow renders, each named by its file and drawn at its window's width and the standard height:
+    /// Working, Stopped and You have control at each of ``narrowWidths``, then Activity, Apps and Screenshots
+    /// with Details open at the least width, where their headers have the least room.
     static var narrowRenders: [PreviewState<ViewerState>] {
       let states = [
         ("working", PreviewStates.viewerWorking), ("stopped", PreviewStates.viewerStopped),
@@ -81,7 +81,7 @@
     /// The narrow render names, in order, for a test to list as its arguments.
     static var narrowNames: [String] { narrowRenders.map(\.name) }
 
-    /// A render in a narrow window, as tall as the boards'.
+    /// A render in a narrow window, at the standard height.
     ///
     /// - Parameters:
     ///   - name: Its file's name.
@@ -111,9 +111,9 @@
       ]
     }
 
-    /// The sizes the frame renders draw the four tabs at: the boards' window with Details, the narrower steps with
-    /// and without it, and two full screens, so every tab can be seen to stand in the same frame. The design check
-    /// draws them; the tests draw each state once, at the boards' size or a narrow one.
+    /// The sizes the frame renders draw the four tabs at: the standard window with Details, the narrower
+    /// steps with and without it, and two full screens, so every tab can be seen to stand in the same frame.
+    /// The design check draws them; the tests draw each state once, at the standard size or a narrow one.
     private static let frameSizes: [(name: String, size: NSSize, details: Bool, fullScreen: Bool)] = [
       ("1440-details", NSSize(width: 1440, height: 900), true, false),
       ("1040", NSSize(width: 1040, height: 900), false, false),
@@ -136,8 +136,8 @@
       }
     }
 
-    /// Draws every main window state to PNGs in `directory`, at Retina scale (``PNG/scale``): the boards' renders,
-    /// the narrow ones, then the frames, each at its size.
+    /// Draws every main window state to PNGs in `directory`, at Retina scale (``PNG/scale``): the standard
+    /// renders, the narrow ones, then the frames, each at its size.
     ///
     /// - Parameter directory: Where the PNGs go.
     /// - Returns: Whether every state was drawn.

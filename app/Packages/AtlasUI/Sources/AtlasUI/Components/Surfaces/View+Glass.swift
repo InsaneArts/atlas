@@ -1,7 +1,7 @@
 import SwiftUI
 
 extension View {
-  /// Sets the view on glass in a shape (v3 D12): the system glass on macOS 26 and later, the thin material under a
+  /// Sets the view on glass in a shape: the system glass on macOS 26 and later, the thin material under a
   /// tint before it, and an opaque fill under Reduce Transparency.
   ///
   /// - Parameters:

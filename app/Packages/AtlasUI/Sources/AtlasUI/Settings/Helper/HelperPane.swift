@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// The Helper pane (v3 G4–G6): the helper as an account with its status and Switch, whether it is ready to act with
-/// Check Again, and Recover and Log Out for when something goes wrong. While another action runs, the buttons wait
-/// and a line with a spinner says why.
+/// The Helper pane: the helper as an account with its status and Switch, a login Atlas can close while there is
+/// one, whether it is ready to act with Check Again, and Recover and Log Out for when something goes wrong. While
+/// another action runs, the buttons wait and a line with a spinner names it. When Check Again ends, VoiceOver hears
+/// it once.
 struct HelperPane: View {
   /// What the pane shows.
   let state: SettingsHelperState
@@ -15,12 +16,26 @@ struct HelperPane: View {
       GroupedSection([state.account]) { account in
         HelperAccountRow(account: account, buttons: state.buttons, send: send)
       }
-      GroupedSection(state.ready, title: "Ready to act") { row in
-        HelperReadyRow(row: row, buttons: state.buttons) { send(.checkAgain) }
+      if let row = state.closeLogin {
+        GroupedSection([row], notes: row.status.map { [.status(.working, $0)] } ?? []) { row in
+          ListRow(row.title, detail: row.detail, trailing: .button(row.button), size: .compact) { send(row.event) }
+            .disabled(!row.canRun)
+        }
       }
+      VStack(alignment: .leading, spacing: SettingsLayout.titleGap) {
+        HelperReadyHeader { send(.checkAgain) }
+        GroupedSection(state.ready, notes: readyNotes) { row in
+          HelperReadyRow(row: row, buttons: state.buttons) { send(.askRecover) }
+        }
+      }
+      // Check Again always lasts long enough to show, so its marks need no wait before their spinners.
+      .environment(\.marksSwapAtOnce, true)
       GroupedSection(HelperAction.allCases, title: "When something goes wrong", notes: notes) { action in
         actionRow(action)
       }
+    }
+    .onChange(of: state.buttons.isChecking) { _, isChecking in
+      if !isChecking { announceChecked() }
     }
   }
 
@@ -32,8 +47,8 @@ struct HelperPane: View {
     switch action {
     case .recover:
       ListRow(
-        "Recover",
-        detail: "Checks the helper and starts its mouse and keyboard again",
+        "Recover the helper",
+        detail: "Restarts its mouse and keyboard",
         trailing: .button("Recover…"),
         size: .compact
       ) { send(.askRecover) }
@@ -41,7 +56,7 @@ struct HelperPane: View {
     case .logOut:
       ListRow(
         "Log out the helper",
-        detail: "Its apps quit. You log in to it again to use it",
+        detail: "Quits its apps until you log in again",
         trailing: .button("Log Out…"),
         size: .compact
       ) { send(.askLogOut) }
@@ -49,24 +64,45 @@ struct HelperPane: View {
     }
   }
 
+  /// The line under "Ready to act": what Check Again found when something isn't ready.
+  private var readyNotes: [GroupedSectionNote] {
+    [state.readyNote?.sectionNote]
+      .compactMap { $0 }
+  }
+
   /// The lines under the last section: why the buttons wait, then what the last command said.
   private var notes: [GroupedSectionNote] {
     [state.waiting.map { GroupedSectionNote.status(.working, $0) }, state.notice?.sectionNote]
       .compactMap { $0 }
   }
+
+  /// Tells VoiceOver once that Check Again ended, and how things stand.
+  private func announceChecked() {
+    let ready = state.ready.allSatisfy { $0.item.state == .ready }
+    AccessibilityNotification.Announcement(ready ? "Checked. All ready." : "Checked. Not everything is ready.")
+      .post()
+  }
 }
 
 #if DEBUG
   #Preview("Helper") {
-    FormColumn(insets: SettingsLayout.paneInsets) {
+    FormColumn(insets: SettingsLayout.swapInsets) {
       HelperPane(state: PreviewStates.settingsHelper.helper) { _ in }
     }
     .frame(width: SettingsLayout.width)
     .sampleSurface()
   }
 
+  #Preview("Helper, a deleted account still logged in") {
+    FormColumn(insets: SettingsLayout.swapInsets) {
+      HelperPane(state: PreviewStates.settingsHelperLeftover.helper) { _ in }
+    }
+    .frame(width: SettingsLayout.width)
+    .sampleSurface()
+  }
+
   #Preview("Helper not ready") {
-    FormColumn(insets: SettingsLayout.paneInsets) {
+    FormColumn(insets: SettingsLayout.swapInsets) {
       HelperPane(state: PreviewStates.settingsHelperNotReady.helper) { _ in }
     }
     .frame(width: SettingsLayout.width)

@@ -1,5 +1,5 @@
-/// The main window's one quiet row at the top (v3 V1): the helper's status on the left, the tabs in the middle and
-/// the buttons on the right, on the window's own ground, washed blue while this window holds control (v3 V5).
+/// The main window's one quiet row at the top: the helper's status on the left, the tabs in the middle and
+/// the buttons on the right, on the window's own ground, washed blue while this window holds control.
 public struct ViewerTopRowState: Equatable, Sendable {
   /// The helper's state as this window sees it, with its mark and its line.
   public var status: StatusSummary

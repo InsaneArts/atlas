@@ -1,7 +1,7 @@
 import AtlasUI
 import Foundation
 
-/// How the setup window moves to a new place (v3 S7, X13), as times: its content fades out, the window glides on
+/// How the setup window moves to a new place, as times: its content fades out, the window glides on
 /// ``Motion/glideSoftCurve``, and the content fades back in from 80% of the way, so nothing reflows on the way. A move
 /// that keeps the window's size glides alone, as nothing reflows. Under Reduce Motion nothing travels: the window
 /// fades out, lands, and fades in.

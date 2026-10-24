@@ -2,7 +2,7 @@
   import CoreGraphics
 
   extension PreviewStates {
-    /// The size the main window's samples are drawn at: the boards' window, so renders compare with them one to one.
+    /// The standard size for main window samples, so renders compare at the same dimensions.
     public static let viewerSize = CGSize(width: 1440, height: 900)
     /// 860: the least width the main window shrinks to, where its top row takes its narrowest layout.
     public static let viewerNarrowest: CGFloat = 860
@@ -51,13 +51,13 @@
     static func viewerTabs(_ selected: ViewerTab = .screen) -> CapsuleTabsState<ViewerTab> {
       CapsuleTabsState(
         tabs: [
-          CapsuleTab(id: .screen, title: "Screen", symbol: .display),
-          CapsuleTab(id: .activity, title: "Activity", symbol: .list),
-          CapsuleTab(id: .apps, title: "Apps", symbol: .windows),
-          CapsuleTab(id: .screenshots, title: "Screenshots", symbol: .photos),
+          CapsuleTab(id: .screen, title: "Screen", symbol: .display, help: "Screen (⌘1)"),
+          CapsuleTab(id: .activity, title: "Activity", symbol: .list, help: "Activity (⌘2)"),
+          CapsuleTab(id: .apps, title: "Apps", symbol: .windows, help: "Apps (⌘3)"),
+          CapsuleTab(id: .screenshots, title: "Screenshots", symbol: .photos, help: "Screenshots (⌘4)"),
         ],
         selected: selected,
-        label: "What you see"
+        label: "View"
       )
     }
 
@@ -67,8 +67,8 @@
     /// - Returns: The toggle.
     static func viewerPause(paused: Bool = false) -> ViewerToggle {
       paused
-        ? ViewerToggle(isOn: true, label: "Resume picture", help: "Resume Picture (⇧⌘P)")
-        : ViewerToggle(isOn: false, label: "Pause picture", help: "Pause Picture (⇧⌘P)")
+        ? ViewerToggle(isOn: true, label: "Resume Picture", help: "Resume Picture (⇧⌘P)")
+        : ViewerToggle(isOn: false, label: "Pause Picture", help: "Pause Picture (⇧⌘P)")
     }
 
     /// The Details button.
@@ -77,8 +77,8 @@
     /// - Returns: The toggle.
     static func viewerDetailsToggle(shown: Bool = false) -> ViewerToggle {
       shown
-        ? ViewerToggle(isOn: true, label: "Hide details", help: "Hide Details (⌥⌘I)")
-        : ViewerToggle(isOn: false, label: "Show details", help: "Show Details (⌥⌘I)")
+        ? ViewerToggle(isOn: true, label: "Hide Details", help: "Hide Details (⌥⌘I)")
+        : ViewerToggle(isOn: false, label: "Show Details", help: "Show Details (⌥⌘I)")
     }
 
     /// Take Control, as offered.
@@ -89,10 +89,14 @@
       ViewerControlButton(
         title: "Take Control",
         isEnabled: isEnabled,
-        help: "Use your mouse and keyboard in the helper (⌃⇧⎋)",
-        event: .takeControl
+        help: "Take Control (⌃⇧⎋)",
+        event: .takeControl,
+        titles: viewerControlTitles
       )
     }
+
+    /// Every title the white capsule can show, which it keeps the widest of.
+    static let viewerControlTitles = ["Take Control", "Give Back", "Connecting…", "Recover…"]
 
     /// The top row's buttons.
     ///
@@ -104,6 +108,7 @@
     ///   - showsPause: Whether there is a picture to pause.
     ///   - refusals: Take Control's refusals counted.
     ///   - details: Whether Details shows.
+    ///   - showsMore: Whether there is a picture for ⋯ to act on.
     /// - Returns: The buttons.
     static func viewerActions(
       keys: ViewerKeysButton = .hidden,
@@ -112,7 +117,8 @@
       paused: Bool = false,
       showsPause: Bool = true,
       refusals: Int = 0,
-      details: Bool = false
+      details: Bool = false,
+      showsMore: Bool = true
     ) -> ViewerTopActions {
       ViewerTopActions(
         pause: showsPause ? viewerPause(paused: paused) : nil,
@@ -121,7 +127,7 @@
         agentHelp: agentHelp(agent),
         control: control,
         refusals: refusals,
-        more: ViewerToggle(isOn: false, label: "More", help: "The picture and the helper"),
+        more: showsMore ? ViewerToggle(isOn: false, label: "More", help: "More") : nil,
         details: viewerDetailsToggle(shown: details)
       )
     }
@@ -132,8 +138,8 @@
     /// - Returns: Its tooltip, with its shortcut; empty for neither.
     private static func agentHelp(_ agent: ViewerAgentButton?) -> String {
       switch agent {
-      case .stop: "Stop what the agent is doing in the helper, until you resume (⌘.)"
-      case .resume: "Let agents act in the helper again (⌘.)"
+      case .stop: "Stop Agent (⌘.)"
+      case .resume: "Resume Agent (⌘.)"
       case nil: ""
       }
     }

@@ -1,5 +1,5 @@
 /// A line under a settings group saying what a command just did: quiet small print, a spinner while something it
-/// waits for runs, or, for a problem, an orange mark and words (v3 `.sgfoot`).
+/// waits for runs, or, for a problem, an orange mark and words.
 public struct SettingsNote: Equatable, Sendable {
   /// How the line reads.
   public enum Kind: Equatable, Sendable {

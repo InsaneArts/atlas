@@ -1,10 +1,10 @@
 import AppKit
 import AtlasUI
 
-/// The main menu's View, File and Helper items, and the ⋯ menu's, as the window in front answers them. Each item is
-/// validated against the same state field its button draws (``ViewerPresenter``), never a rule of its own. While
-/// this window holds control, the screen's key monitor sees every key first, so these shortcuts reach the helper
-/// instead, all but Control-Shift-Escape.
+/// The main menu's View, File, Edit and Helper items, the Dock menu's and the ⋯ menu's, as the window in front answers
+/// them. Each item is validated against the same state field its button draws (``ViewerPresenter``), never a rule of
+/// its own. While this window holds control, the screen's key monitor sees every key first, so these shortcuts reach
+/// the helper instead, all but Control-Shift-Escape.
 extension ViewerWindow: ViewerMenuActions, HelperMenuActions {
   /// Shows the tab the item's tag names.
   ///
@@ -19,10 +19,14 @@ extension ViewerWindow: ViewerMenuActions, HelperMenuActions {
   /// - Parameter sender: The menu item.
   func toggleDetails(_ sender: Any?) { controller.send(.toggleDetails) }
 
-  /// Pauses or resumes the picture.
+  /// Pauses or resumes the picture, as the pause button does; not while this window holds control, where the button
+  /// is gone.
   ///
   /// - Parameter sender: The menu item.
-  func togglePicturePause(_ sender: Any?) { controller.send(.togglePause) }
+  func togglePicturePause(_ sender: Any?) {
+    guard controller.state.top.actions.pause != nil else { return }
+    controller.send(.togglePause)
+  }
 
   /// Draws the screen at actual size, or fits it again.
   ///
@@ -50,23 +54,40 @@ extension ViewerWindow: ViewerMenuActions, HelperMenuActions {
     }
   }
 
-  /// Copies the picture on screen.
+  /// Copies what the window shows: the screenshot shown large or selected on the Screenshots tab, else the picture.
   ///
   /// - Parameter sender: The menu item.
-  @objc func copy(_ sender: Any?) { controller.readingLoop.copyPicture() }
-
-  /// Saves the picture on screen.
-  ///
-  /// - Parameter sender: The menu item.
-  func savePicture(_ sender: Any?) { controller.readingLoop.savePicture() }
-
-  /// Live, every five seconds, or paused, by the item's tag.
-  ///
-  /// - Parameter sender: The menu item.
-  func choosePicture(_ sender: Any?) {
-    guard let choice = ((sender as? NSMenuItem)?.tag).flatMap(ViewerPictureChoice.init(rawValue:)) else { return }
-    controller.choosePicture(choice)
+  @objc func copy(_ sender: Any?) {
+    if controller.moreMenu.actsOnShot {
+      controller.send(.copyShot)
+    } else {
+      controller.readingLoop.copyPicture()
+    }
   }
+
+  /// Saves what the window shows: the screenshot shown large or selected on the Screenshots tab, else the picture.
+  ///
+  /// - Parameter sender: The menu item.
+  func savePicture(_ sender: Any?) {
+    if controller.moreMenu.actsOnShot {
+      controller.panesModel.saveShot()
+    } else {
+      controller.readingLoop.savePicture()
+    }
+  }
+
+  /// Live or every five seconds, by the item's tag: how often pictures arrive, or will once the picture resumes.
+  ///
+  /// - Parameter sender: The menu item.
+  func chooseRate(_ sender: Any?) {
+    guard let rate = ((sender as? NSMenuItem)?.tag).flatMap(ViewerPictureRate.init(menuTag:)) else { return }
+    controller.readingLoop.setRate(rate)
+  }
+
+  /// Find…: the search field of the tab shown takes the focus.
+  ///
+  /// - Parameter sender: The menu item.
+  func findInTab(_ sender: Any?) { controller.panesModel.find() }
 
   /// Asks before recovering the helper.
   ///
@@ -105,30 +126,66 @@ extension ViewerWindow: ViewerMenuActions, HelperMenuActions {
       item.title = state.top.actions.details.isOn ? ViewerWords.hideDetailsItem : ViewerWords.showDetailsItem
       return true
     case #selector(ViewerMenuActions.togglePicturePause(_:)):
-      item.title = state.top.actions.pause?.isOn == true ? ViewerWords.resumePictureItem : ViewerWords.pausePictureItem
-      return true
-    case #selector(ViewerMenuActions.choosePicture(_:)):
-      item.state = item.tag == menu.picture.rawValue ? .on : .off
+      item.title = controller.session.paused ? Words.resumePictureItem : Words.pausePictureItem
+      return state.top.actions.pause != nil
+    case #selector(ViewerMenuActions.chooseRate(_:)):
+      item.state = item.tag == menu.rate.menuTag ? .on : .off
       return true
     case #selector(ViewerMenuActions.toggleActualSize(_:)):
-      item.state = state.screen.actualSize == nil ? .off : .on
+      item.state = menu.actualSize ? .on : .off
       return menu.hasPicture
     case #selector(ViewerMenuActions.toggleControl(_:)):
       return validateControl(item, state.top.actions.control) && !alertUp
     case #selector(ViewerMenuActions.toggleAgent(_:)):
       return validateAgent(item, state.top.actions.agent) && !alertUp
-    case #selector(NSText.copy(_:)), #selector(ViewerMenuActions.savePicture(_:)):
-      return menu.hasPicture
-    case #selector(HelperMenuActions.askRecover(_:)): return menu.helper.canRecover && !alertUp
-    case #selector(HelperMenuActions.askRestart(_:)): return menu.helper.canRestart && !alertUp
-    case #selector(HelperMenuActions.askSwitch(_:)): return menu.helper.canSwitch && !alertUp
-    case #selector(HelperMenuActions.askLogOut(_:)): return menu.helper.canLogOut && !alertUp
-    default: return super.validateMenuItem(item)
+    case #selector(NSText.copy(_:)):
+      return menu.actsOnShot || menu.hasPicture
+    case #selector(ViewerMenuActions.savePicture(_:)):
+      item.title = menu.actsOnShot ? ViewerWords.saveScreenshot : ViewerWords.savePicture
+      return menu.actsOnShot || menu.hasPicture
+    case #selector(ViewerMenuActions.findInTab(_:)):
+      return searchable(state.pane)
+    default:
+      return validateHelper(item, alertUp: alertUp) ?? super.validateMenuItem(item)
     }
   }
 
-  /// Take Control or Give Back, as the white capsule reads; while it reads Recover…, or is not drawn, Take Control
-  /// waits.
+  /// The helper's commands, as the window offers them, with the helper's name in Switch and Log Out once it is known.
+  ///
+  /// - Parameters:
+  ///   - item: The item.
+  ///   - alertUp: Whether an alert is over the window.
+  /// - Returns: Whether it can be chosen, or nil for an item that is not one of them.
+  private func validateHelper(_ item: NSMenuItem, alertUp: Bool) -> Bool? {
+    let helper = controller.snapshot.helperMenu
+    let name = controller.reading.hasStatus ? ViewerPresenter.account(controller.reading.status) : nil
+    switch item.action {
+    case #selector(HelperMenuActions.askRecover(_:)): return helper.canRecover && !alertUp
+    case #selector(HelperMenuActions.askRestart(_:)): return helper.canRestart && !alertUp
+    case #selector(HelperMenuActions.askSwitch(_:)):
+      item.title = MenuWords.switchTo(name)
+      return helper.canSwitch && !alertUp
+    case #selector(HelperMenuActions.askLogOut(_:)):
+      item.title = MenuWords.logOut(name)
+      return helper.canLogOut && !alertUp
+    default: return nil
+    }
+  }
+
+  /// Whether the pane shown has a search field to find in.
+  ///
+  /// - Parameter pane: The pane shown.
+  /// - Returns: Whether Find can focus one.
+  private func searchable(_ pane: ViewerPane) -> Bool {
+    switch pane {
+    case .activity(let activity): activity.isSearchable
+    case .apps(let apps): apps.isSearchable
+    case .screen, .screenshots: false
+    }
+  }
+
+  /// Take Control or Give Back Control, as the white capsule reads; while it reads Recover…, or is not drawn, Take
+  /// Control waits.
   ///
   /// - Parameters:
   ///   - item: The item.
@@ -140,7 +197,7 @@ extension ViewerWindow: ViewerMenuActions, HelperMenuActions {
       return false
     }
     let toggles = control.event == .takeControl || control.event == .giveBack
-    item.title = control.event == .giveBack ? ViewerWords.giveBack : ViewerWords.takeControl
+    item.title = control.event == .giveBack ? ViewerWords.giveBackItem : ViewerWords.takeControl
     return toggles && control.isEnabled
   }
 

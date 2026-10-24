@@ -2,7 +2,7 @@ import AtlasUI
 
 extension SettingsPresenter {
   /// The About pane: the version, the one update button as the check goes, and what it says about updates in one
-  /// spot (v3 G9).
+  /// spot.
   ///
   /// - Parameter snapshot: What the controller holds and reads.
   /// - Returns: The pane.
@@ -15,7 +15,7 @@ extension SettingsPresenter {
     )
   }
 
-  /// The update button: Install Update… once a newer version is found, each holding a spinner while it runs.
+  /// The update button: Install Update… once a newer version is found, each waiting while it runs.
   ///
   /// - Parameter update: Where the check stands.
   /// - Returns: The button.
@@ -28,21 +28,24 @@ extension SettingsPresenter {
     }
   }
 
-  /// What About says about updates: a green check once up to date or updated, the newer version found, the install
-  /// under way, the problem line for a failure, or small print while no release is published.
+  /// What About says about updates: a check under way, a green check once up to date or updated, the newer version
+  /// found, the install under way, the problem line for a failure, with Show in Finder when Atlas must move first, or
+  /// plain words while no release is published.
   ///
   /// - Parameter update: Where the check stands.
-  /// - Returns: The status, or nil before any answer and while a check runs.
+  /// - Returns: The status, or nil before any check.
   static func status(_ update: SettingsUpdate) -> SettingsUpdateStatus? {
     switch update {
-    case .idle, .checking: nil
+    case .idle: nil
+    case .checking: .working(SettingsWords.checkingForUpdates)
     case .answered(.upToDate): .done(SettingsWords.upToDate)
     case .answered(.newer(let version)): .available(SettingsWords.available(version))
     case .installing(let version): .installing(SettingsWords.installingVersion(version))
     case .answered(.failed): .problem(SettingsWords.checkFailed)
     case .answered(.unpublished): .note(SettingsWords.unpublished)
     case .installed: .done(SettingsWords.installed)
-    case .installFailed(let message): .problem(message)
+    case .installFailed(let message):
+      SettingsWords.isMisplaced(message) ? .misplaced(SettingsWords.moveToApplications) : .problem(message)
     }
   }
 }

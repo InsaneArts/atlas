@@ -12,7 +12,7 @@
     ///
     /// - Parameters:
     ///   - controls: Toggles and pickers that change the component's inputs.
-    ///   - content: The component under review.
+    ///   - content: The component to interact with.
     init(@ViewBuilder controls: () -> Controls, @ViewBuilder content: () -> Content) {
       self.controls = controls()
       self.content = content()
@@ -33,7 +33,7 @@
   extension InteractivePreview where Controls == EmptyView {
     /// Creates the frame for a component that is interactive on its own, such as a switch.
     ///
-    /// - Parameter content: The component under review.
+    /// - Parameter content: The component to interact with.
     init(@ViewBuilder content: () -> Content) {
       self.init(controls: { EmptyView() }, content: content)
     }

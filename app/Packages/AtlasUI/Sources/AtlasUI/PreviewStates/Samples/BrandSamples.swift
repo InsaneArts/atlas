@@ -1,12 +1,13 @@
 #if DEBUG
   import SwiftUI
 
-  /// The brand marks' samples at the sizes v3's brand sheet checks (B1): the app icon by its tile, and the account
-  /// picture in its circle.
+  /// The brand marks' samples at their supported sizes: the app icon by its tile, and the account picture in
+  /// its circle.
   struct BrandSamples: View {
     /// Which mark the samples show.
     enum Kind: Sendable {
-      /// The app icon at each tile v3 names: Welcome 88, About 84, Done 80, alerts 52, pairing 48, then 32 and 16.
+      /// The app icon at each tile size: Welcome 88, About 84, Done 80, alerts 52, pairing 48, then 32 and
+      /// 16.
       case appIcon
       /// The account picture at 64, the Helper pane's 40 and Choose's 30.
       case accountPicture

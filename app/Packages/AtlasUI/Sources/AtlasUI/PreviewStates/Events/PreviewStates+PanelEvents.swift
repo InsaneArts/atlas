@@ -16,7 +16,7 @@
         return panelIdle
       case .togglePause:
         return state.picture.pause.isPaused ? panelIdle : panelPaused
-      case .openAtlas, .openScreen, .openActivity, .askRecover, .askSwitch, .showMore:
+      case .openAtlas, .openScreen, .openActivity, .askRecover, .askSwitch, .openSettings, .showMore:
         return state
       }
     }

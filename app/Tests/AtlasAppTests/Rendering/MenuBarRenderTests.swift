@@ -66,6 +66,8 @@ struct MenuBarRenderTests {
     let black = try Self.colour(.idle, on: "light", at: sphere)
     #expect(black.redComponent < 0.05 && black.greenComponent < 0.05 && black.blueComponent < 0.05)
     let control = try Self.colour(.control, on: "dark", at: sphere)
-    #expect(control.blueComponent > 0.9 && control.redComponent < 0.2, "control's orbit is blue")
+    #expect(control.redComponent > 0.95 && control.blueComponent > 0.95, "control's orbit keeps the bar's ink")
+    let controlBadge = try Self.colour(.control, on: "dark", at: badge)
+    #expect(controlBadge.blueComponent > 0.9 && controlBadge.redComponent < 0.2, "control's badge is a blue dot")
   }
 }

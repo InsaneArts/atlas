@@ -32,7 +32,7 @@
           )
         )
       }
-      .frame(width: ViewerLayout.miniSize.width, height: ViewerLayout.miniSize.height)
+      .frame(width: ViewerLayout.miniLargest.width, height: ViewerLayout.miniLargest.height)
     }
   }
 #endif

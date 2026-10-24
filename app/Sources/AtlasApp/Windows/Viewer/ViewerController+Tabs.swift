@@ -16,10 +16,11 @@ extension ViewerController {
     panesModel.followPane()
   }
 
-  /// What the person has seen of the helper's activity (v3 V2). While the Activity tab shows, everything it shows is
-  /// seen: its own log once read, which reads on while the picture is paused, else the status's actions. At the first
-  /// reading the status's actions are seen, so what the helper did before the window opened is never new. Otherwise
-  /// an unseen action that failed is remembered until Activity shows, even once newer ones push it out of the status.
+  /// What the person has seen of the helper's activity. While the Activity tab shows, everything it shows is
+  /// seen: its own log once read, which reads on while the picture is paused, else the status's actions. At
+  /// the first reading the status's actions are seen, so what the helper did before the window opened is
+  /// never new. Otherwise an unseen action that failed is remembered until Activity shows, even once newer
+  /// ones push it out of the status.
   func noteActivitySeen() {
     guard reading.hasStatus else { return }
     let status = reading.statusReading.activity(limit: .max)
@@ -36,13 +37,18 @@ extension ViewerController {
   }
 
   /// Check Again in Details: reads the status and Details' own facts now, then the next picture at once; once at a
-  /// time, its button showing a spinner meanwhile.
+  /// time, its button taking no press meanwhile. It holds for at least ``AtlasUI/Motion/Duration/leastWork`` on the
+  /// window's clock, so a check that answers at once still reads as checked rather than a flicker.
   func checkAgain() async {
     guard !session.checkingAgain else { return }
     session.checkingAgain = true
     defer { session.checkingAgain = false }
+    let clock = dependencies.clock
+    // Unstructured, so the least time runs beside the readings, not after them.
+    let least = Task { try? await clock.sleep(for: .seconds(Motion.Duration.leastWork.seconds)) }
     await readingLoop.readStatus()
     readingLoop.refresh()
     await readDetails()
+    await least.value
   }
 }

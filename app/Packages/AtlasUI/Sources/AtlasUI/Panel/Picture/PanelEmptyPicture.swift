@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The panel's picture frame with no screen to show (v3 P6): Atlas's mark on the empty stage over one quiet line saying
+/// The panel's picture frame with no screen to show: Atlas's mark on the empty stage over one quiet line saying
 /// why. While connecting, the mark alone breathes, only after ``Motion/Duration/appearDelay`` so a quick answer never
 /// flashes it; under Reduce Motion it holds still. VoiceOver reads the line.
 struct PanelEmptyPicture: View {
@@ -47,7 +47,7 @@ struct PanelEmptyPicture: View {
     !Motion.loops(reduceMotion: reduceMotion) || !animatesArrivals
   }
 
-  /// The mark's opacity: at rest on an empty stage that says why; while connecting, swinging between v3's low and high
+  /// The mark's opacity: at rest on an empty stage that says why; while connecting, swinging between its low and high
   /// points, or held at the still point.
   ///
   /// - Parameters:
@@ -80,7 +80,7 @@ struct PanelEmptyPicture: View {
 #if DEBUG
   #Preview("Not ready") {
     PanelEmptyPicture(
-      message: String("Atlas checks again by itself. Settings shows what the helper needs"),
+      message: String("Atlas checks again by itself. Settings shows what the helper needs."),
       breathes: false
     )
     .frame(width: PanelLayout.picture.width, height: PanelLayout.picture.height)

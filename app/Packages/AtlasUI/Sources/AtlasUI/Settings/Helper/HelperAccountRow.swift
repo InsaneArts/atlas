@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The helper as an account, at the top of the Helper pane (v3 G4, `.shero`): its picture, its name over what it is,
+/// The helper as an account, at the top of the Helper pane: its picture, its name over what it is,
 /// its status as a pill, and Switch to the Helper….
 struct HelperAccountRow: View {
   /// The account.

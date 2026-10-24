@@ -15,10 +15,16 @@ final class ViewerControl {
   static let heartbeatEvery: Duration = .milliseconds(500)
   /// The lease is renewed every this many heartbeat ticks: 5, every 2.5 s at ``heartbeatEvery``.
   static let renewEvery = 5
-  /// How long Take Control waits before asking once more after the service answers busy: 1 s. The service is busy
-  /// while one of an agent's actions runs, and a click or a short burst of keys ends well within a second; a longer
-  /// action is not worth holding the button for, so the person is told to try again instead.
+  /// How long Take Control waits before asking again after the service answers busy: 1 s. The service is busy while
+  /// one of an agent's actions runs, and a click or a short burst of keys ends well within a second.
   static let busyRetryAfter: Duration = .seconds(1)
+  /// How many times Take Control asks again while the service answers busy: 4, a second apart, so the press is
+  /// accepted and control comes as soon as the agent's step ends, within about five seconds; a step longer than that
+  /// is not worth holding the button for, so the person is told to try again instead.
+  static let busyRetries = 4
+  /// How long Take Control pressed while the picture is paused waits for the first fresh picture after resuming it:
+  /// 5 s, several readings' worth even at the slower rate.
+  static let freshPictureWait: Duration = .seconds(5)
   /// Scroll events are gathered this long, then sent as whole lines: 70 ms, short enough to feel immediate and long
   /// enough to gather a trackpad's burst into one batch.
   static let scrollGathering: Duration = .milliseconds(70)
@@ -60,6 +66,10 @@ final class ViewerControl {
   @ObservationIgnored private(set) var focused = true
   /// Numbers each acquisition and release, so a late reply knows it was overtaken.
   @ObservationIgnored private(set) var controlGeneration = 0
+  /// The acquisition that waits for a fresh picture, Take Control having resumed a paused one; nil while none waits.
+  @ObservationIgnored private(set) var pictureWait: Int?
+  /// Ends that wait once it has gone on too long.
+  @ObservationIgnored private var pictureWaitEnd: Task<Void, Never>?
   /// The status reading under way when the lease was granted: only a later one can say the lease has ended.
   @ObservationIgnored private(set) var controlSince = 0
   /// Renews the lease and ends control over a stale picture.
@@ -97,7 +107,8 @@ final class ViewerControl {
     input.sink = self
   }
 
-  /// Take Control from any tab: the Screen tab shows first, since control acts on the picture.
+  /// Take Control from any tab: the Screen tab shows first, since control acts on the picture. Pressed while the
+  /// picture is paused, it resumes the picture first and takes control once a fresh one arrives.
   func takeControlOnScreen() async {
     if let viewer, viewer.session.tab != .screen { viewer.selectTab(.screen) }
     await takeControl()
@@ -109,10 +120,16 @@ final class ViewerControl {
   /// work under way (``ControlBarrier``), so the helper's commands wait for it; a grant that arrives after the attempt
   /// was cancelled, or once one of the helper's commands started, is given back before that work ends, and a reply
   /// that was lost holds the barrier until a lease it may have granted can no longer be alive. A busy service is
-  /// asked once more after ``busyRetryAfter``; still busy, a toast says the agent is mid-action and the button shakes
-  /// (``ViewerController/refuse(_:)``).
+  /// asked again every ``busyRetryAfter``, up to ``busyRetries`` times, the button saying Connecting… meanwhile; still
+  /// busy, a toast says the agent didn't finish its step and the button shakes (``ViewerController/refuse(_:)``).
+  /// With the picture paused, it resumes it and waits for a fresh one first (``awaitFreshPicture()``).
   func takeControl() async {
-    guard let viewer, viewer.snapshot.canTakeControl else { return }
+    guard let viewer else { return }
+    if viewer.session.paused {
+      if viewer.snapshot.canTakeControlOnceResumed { awaitFreshPicture() }
+      return
+    }
+    guard viewer.snapshot.canTakeControl else { return }
     acquiring = true
     controlGeneration += 1
     let generation = controlGeneration
@@ -193,8 +210,8 @@ final class ViewerControl {
     viewer?.readingLoop.refresh()
   }
 
-  /// Asks for control over `frame`, and once more over the newest picture after ``busyRetryAfter`` when the service
-  /// answers busy, unless the person moved on meanwhile.
+  /// Asks for control over `frame`, and again over the newest picture every ``busyRetryAfter`` while the service
+  /// answers busy, up to ``busyRetries`` times, unless the person moved on meanwhile.
   ///
   /// - Parameters:
   ///   - frame: The picture the person acts on.
@@ -202,14 +219,57 @@ final class ViewerControl {
   /// - Returns: The lease granted.
   /// - Throws: The service's refusal: the second busy one, or the first when the picture went stale meanwhile.
   private func acquire(frame: String, generation: Int) async throws -> String {
-    do {
-      return try await service.acquire(frame: frame)
-    } catch let refusal as ServiceError where refusal.isBusy {
-      // A wait cut short only retries sooner; the guard below drops a retry the person moved on from.
-      try? await clock.sleep(for: Self.busyRetryAfter)
-      guard generation == controlGeneration, let newest = viewer?.reading.frame, !pictureStale else { throw refusal }
-      return try await service.acquire(frame: newest.id)
+    var asked = frame
+    var retries = 0
+    while true {
+      do {
+        return try await service.acquire(frame: asked)
+      } catch let refusal as ServiceError where refusal.isBusy {
+        guard retries < Self.busyRetries else { throw refusal }
+        retries += 1
+        // A wait cut short only retries sooner; the guard below drops a retry the person moved on from.
+        try? await clock.sleep(for: Self.busyRetryAfter)
+        guard generation == controlGeneration, let newest = viewer?.reading.frame, !pictureStale else { throw refusal }
+        asked = newest.id
+      }
     }
+  }
+
+  /// Take Control pressed while the picture is paused: the picture resumes, which gives back nothing, as nothing is
+  /// held, and forgets the old frame; the button says Connecting… while the window waits for a fresh picture, which
+  /// takes control as it arrives (``pictureArrived()``). Leaving the tab or the window, pausing again or Give Back
+  /// ends the wait, as they end any acquisition (``releaseControl(_:)``); one that lasts ``freshPictureWait`` gives
+  /// up, saying so.
+  private func awaitFreshPicture() {
+    viewer?.togglePause()
+    acquiring = true
+    controlGeneration += 1
+    let generation = controlGeneration
+    pictureWait = generation
+    // Unstructured, as the wait ends by itself while the window goes on; a newer acquisition or a release ends it.
+    pictureWaitEnd = Task { [weak self, clock] in
+      try? await clock.sleep(for: Self.freshPictureWait)
+      guard let self, !Task.isCancelled, pictureWait == generation else { return }
+      endPictureWait()
+      acquiring = false
+      self.viewer?.say(ViewerWords.noFreshPicture)
+    }
+  }
+
+  /// A fresh picture arrived: the acquisition that waited for it goes on, as Take Control pressed now would.
+  func pictureArrived() {
+    guard let waited = pictureWait, waited == controlGeneration else { return }
+    endPictureWait()
+    acquiring = false
+    // Unstructured, as a picture lands synchronously; Take Control checks everything again before it asks.
+    Task { await takeControl() }
+  }
+
+  /// Ends the wait for a fresh picture, if one waits.
+  private func endPictureWait() {
+    pictureWait = nil
+    pictureWaitEnd?.cancel()
+    pictureWaitEnd = nil
   }
 
   /// Give control back: at once here, then to the service through the app's barrier, which counts the release until
@@ -222,6 +282,7 @@ final class ViewerControl {
     let previous = lease
     lease = nil
     acquiring = false
+    endPictureWait()
     heartbeat?.cancel()
     heartbeat = nil
     clearInput()

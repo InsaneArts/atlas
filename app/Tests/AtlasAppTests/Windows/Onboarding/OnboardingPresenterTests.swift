@@ -48,18 +48,19 @@ struct OnboardingPresenterTests {
     #expect(footer.next == nil && footer.track == nil)
   }
 
-  @Test("the person's side counts six segments and the helper's three; a blocked screen shows no track")
+  @Test("the person's side counts six segments and the helper's three; the close and blocked screens show no track")
   func track() {
     #expect(OnboardingStep.welcome.track == OnboardingFooterState.Track(index: 0, count: 6, label: "Step 1 of 6"))
     #expect(OnboardingStep.createAccount.track == OnboardingStep.chooseHelper.track, "the form shares the choice's")
     #expect(OnboardingStep.done.track?.index == 5)
     #expect(OnboardingStep.helperDone.track == OnboardingFooterState.Track(index: 2, count: 3, label: "Step 3 of 3"))
     #expect(OnboardingStep.blocked("x").track == nil)
+    #expect(OnboardingStep.closeLeftovers.track == nil)
   }
 
   /// What blocks a helper whose Atlas does not run, when no account asked.
   private static let notRunning =
-    "Atlas isn't running in this account. In your own account, open Atlas and choose this account as the helper again."
+    "Atlas isn’t running in this account. In your own account, open Atlas and choose this account as the helper account again."
 }
 
 extension OnboardingContent {

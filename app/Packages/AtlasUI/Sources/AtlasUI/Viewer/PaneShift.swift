@@ -1,14 +1,13 @@
 import SwiftUI
 
 /// How the Screen comes and goes as the tab changes, and how Activity, Apps and Screenshots come in the first time
-/// they show; once shown, those three are kept and move by ``KeptPaneShift`` instead (v3 X3): the new one fades in from 16 points on the side its tab
-/// lies, after the old one has shown alone for 50 milliseconds, so the stage is never blank (R15); the old one fades
-/// out 12 points toward the other side. The side comes from ``EnvironmentValues/paneDirection``. Under Reduce Motion
-/// both only crossfade, over 0.15 seconds.
+/// they show; once shown, those three are kept and fade by ``KeptPaneShift`` instead. A tab's content swaps in place,
+/// as a segmented control's does: the new pane fades in over the old one at once, eased out, and the old one fades out
+/// a little quicker, eased in. Nothing slides, so the words in both stay where they are. Only opacity changes, so
+/// Reduce Motion keeps the same crossfade.
 ///
 /// While the picture moves between the stage and the corner (``ScreenZoom``, ``EnvironmentValues/screenZooms``), the
-/// Screen's pane does not slide: it arrives whole as it grows out of the corner, or fades in place as it shrinks into
-/// it, so its picture and the mini screen's stay one.
+/// Screen's pane arrives whole as it grows out of the corner, so its picture and the mini screen's stay one.
 struct PaneShift: ViewModifier {
   /// Whether the pane comes in, rather than goes.
   let isArriving: Bool
@@ -16,67 +15,36 @@ struct PaneShift: ViewModifier {
   let isAway: Bool
   /// Whether the pane is the Screen's, whose picture moves to and from the corner.
   let isScreen: Bool
-  @Environment(\.paneDirection) private var direction
   @Environment(\.screenZooms) private var screenZooms
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-  /// The pane, faded and moved while it is away.
+  /// The pane, faded while it is away.
   func body(content: Content) -> some View {
     content
-      .opacity(ScreenZoom.opacity(isArriving: isArriving, isAway: isAway, zooms: zooms))
-      .offset(x: isAway ? offset : .zero)
+      .opacity(ScreenZoom.opacity(isArriving: isArriving, isAway: isAway, zooms: isScreen && screenZooms))
   }
 
-  /// Whether this pane's picture moves between the stage and the corner.
-  private var zooms: Bool {
-    isScreen && screenZooms
-  }
-
-  /// How far the pane sits from its place while it is away: none while its picture moves.
-  private var offset: CGFloat {
-    guard !zooms else { return .zero }
-    return ViewerLayout.paneOffset(isArriving: isArriving, direction: direction, reduceMotion: reduceMotion)
-  }
-
-  /// The panes' transition: in on ``Motion/tab`` after the overlap, out on ``Motion/crossfadeOut``; both on
-  /// ``Motion/crossfadeReduced`` under Reduce Motion.
+  /// The panes' transition: in on ``arrival``, out on ``departure``.
   ///
-  /// - Parameters:
-  ///   - isScreen: Whether the pane is the Screen's.
-  ///   - reduceMotion: Whether the Reduce Motion setting is on.
+  /// - Parameter isScreen: Whether the pane is the Screen's.
   /// - Returns: The transition.
-  static func transition(isScreen: Bool, reduceMotion: Bool) -> AnyTransition {
+  static func transition(isScreen: Bool) -> AnyTransition {
     .asymmetric(
       insertion: AnyTransition.modifier(
         active: PaneShift(isArriving: true, isAway: true, isScreen: isScreen),
         identity: PaneShift(isArriving: true, isAway: false, isScreen: isScreen)
       )
-      .animation(arrival(reduceMotion: reduceMotion)),
+      .animation(arrival),
       removal: AnyTransition.modifier(
         active: PaneShift(isArriving: false, isAway: true, isScreen: isScreen),
         identity: PaneShift(isArriving: false, isAway: false, isScreen: isScreen)
       )
-      .animation(departure(reduceMotion: reduceMotion))
+      .animation(departure)
     )
   }
 
-  /// An old pane's animation as it leaves: the quick fade, or the short crossfade under Reduce Motion.
-  ///
-  /// - Parameter reduceMotion: Whether the Reduce Motion setting is on.
-  /// - Returns: The animation.
-  static func departure(reduceMotion: Bool) -> Animation {
-    Motion.animation(Motion.crossfadeOut, reduceMotion: reduceMotion, reduced: Motion.crossfadeReduced)
-  }
+  /// A new pane's fade in over the old one: at once, eased out over ``Motion/Duration/swapIn``.
+  static var arrival: Animation { Motion.swapIn }
 
-  /// A new pane's animation: the tab spring after the overlap, or the short crossfade under Reduce Motion.
-  ///
-  /// - Parameter reduceMotion: Whether the Reduce Motion setting is on.
-  /// - Returns: The animation.
-  static func arrival(reduceMotion: Bool) -> Animation {
-    Motion.animation(
-      Motion.tab.delay(ViewerLayout.paneOverlap),
-      reduceMotion: reduceMotion,
-      reduced: Motion.crossfadeReduced
-    )
-  }
+  /// An old pane's fade out as the new one comes: eased in over ``Motion/Duration/swapOut``.
+  static var departure: Animation { Motion.swapOut }
 }

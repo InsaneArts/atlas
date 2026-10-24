@@ -26,10 +26,14 @@
         PreviewState(name: "Installing", value: settingsAboutInstalling),
         PreviewState(name: "Install failed", value: settingsAboutInstallFailed),
         PreviewState(name: "No public release", value: settingsAboutUnpublished),
+        PreviewState(name: "Helper waiting", value: settingsHelperWaiting),
+        PreviewState(name: "Helper, a deleted account still logged in", value: settingsHelperLeftover),
+        PreviewState(name: "Helper, closing it", value: settingsHelperClosing),
+        PreviewState(name: "Helper, still logged in", value: settingsHelperStale),
       ]
     }
 
-    /// The four tabs, each its symbol over its word (v3 G1).
+    /// The four tabs, each its symbol over its word.
     static let settingsTabs = [
       CapsuleTab(id: SettingsTab.general, title: "General", symbol: .gear),
       CapsuleTab(id: SettingsTab.helper, title: "Helper", symbol: .display),
@@ -37,8 +41,7 @@
       CapsuleTab(id: SettingsTab.about, title: "About", symbol: .info),
     ]
 
-    /// v3's General pane: opening at login and notifying on, the picture live, no badge; the other panes as v3 draws
-    /// them.
+    /// The General pane: opening at login and notifying on, the screen live; the other panes at rest.
     @MainActor static let settingsGeneral = SettingsState(
       tabs: CapsuleTabsState(tabs: settingsTabs, selected: .general, label: "Settings"),
       general: SettingsGeneralState(
@@ -47,24 +50,23 @@
         picture: .live,
         pictureOptions: [
           PopupOption(id: .live, title: "Live"),
-          PopupOption(id: .everyFiveSeconds, title: "Every 5 seconds"),
+          PopupOption(id: .everyFiveSeconds, title: "Every 5 Seconds"),
           PopupOption(id: .paused, title: "Paused", isEnabled: false),
         ],
-        notify: true,
-        badge: false
+        notify: true
       ),
       helper: settingsHelperPane,
       agents: settingsAgentsPane,
       about: SettingsAboutState(version: "Version 0.1.0", update: .check)
     )
 
-    /// v3's Helper pane.
+    /// The Helper pane.
     @MainActor static let settingsHelper: SettingsState = selecting(.helper)
 
-    /// v3's Agents pane.
+    /// The Agents pane.
     @MainActor static let settingsAgents: SettingsState = selecting(.agents)
 
-    /// v3's About pane.
+    /// The About pane.
     @MainActor static let settingsAbout: SettingsState = selecting(.about)
 
     /// The General sample with another pane selected.

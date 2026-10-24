@@ -34,6 +34,9 @@ Options:
       --verbose
           Include the helper's full status (in --json too)
 
+      --login-timing
+          Show how long the last login of the past two hours took, step by step
+
   -h, --help
           Print help
 
@@ -47,6 +50,7 @@ Global options:
 Examples:
   atlas doctor
   atlas doctor --verbose
+  atlas doctor --login-timing
 ```
 
 ## atlas agents
@@ -1173,7 +1177,7 @@ Global options:
 ```text
 Remove Atlas from this Mac (asks first).
 
-The helper account and its files stay; the app goes to the Trash.
+The helper is logged out first. Its account and files stay unless you pass --remove-helper; the app goes to the Trash.
 
 Usage: atlas uninstall [OPTIONS]
 
@@ -1184,6 +1188,9 @@ Options:
       --yes
           Do not ask
 
+      --remove-helper
+          Also delete the helper account and its files, once it is logged out
+
   -h, --help
           Print help (see a summary with '-h')
 
@@ -1193,6 +1200,10 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+Examples:
+  atlas uninstall
+  atlas uninstall --remove-helper
 ```
 
 ## atlas install

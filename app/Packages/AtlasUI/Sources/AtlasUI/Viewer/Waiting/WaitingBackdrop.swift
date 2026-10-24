@@ -1,11 +1,12 @@
 import SwiftUI
 
-/// The last picture behind the waiting stage's words while the viewer connects again (v3 V7, X4): filling the stage,
-/// blurred, its colour faded and its light dimmed, a little larger than the stage so the blur's soft edges fall
-/// outside it. Only drawn, never aimed at.
+/// The last picture behind the waiting stage's words while the viewer connects again: filling the stage,
+/// blurred, its colour faded and its light dimmed, a little larger than the stage so the blur's soft edges
+/// fall outside it. Only drawn, never aimed at.
 ///
-/// The picture is first shrunk to a few dozen pixels and drawn back up smoothly, which blurs it on its own, so the
-/// stage looks the same where SwiftUI's blur is not drawn, as in a render; the window blurs it further.
+/// The picture is first shrunk to a few dozen pixels and drawn back up smoothly, which blurs it on its own,
+/// so the stage looks the same where SwiftUI's blur is not drawn, as in a render; the window blurs it
+/// further.
 struct WaitingBackdrop: View {
   /// The last picture shown.
   let picture: DesktopPicture
@@ -59,8 +60,8 @@ struct WaitingBackdrop: View {
 
 /// The backdrop's own measures.
 private enum Layout {
-  /// 48: how many pixels across the shrunk picture keeps, about one for every 30 points of a wide stage, so drawn
-  /// back up it blurs about as much as v3's 14-point blur.
+  /// 48: how many pixels across the shrunk picture keeps, about one for every 30 points of a wide stage, so
+  /// drawn back up it blurs about as much as a 14-point blur.
   static let sampleWidth = 48
   /// 8: bits for each colour of a shrunk pixel.
   static let bitsPerComponent = 8

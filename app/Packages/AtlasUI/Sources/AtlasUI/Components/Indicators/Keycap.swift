@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// A key on the keyboard, drawn as a small cap holding its symbol or letter (v3 V5), so a shortcut reads as keys:
-/// ⌃ ⇧ ⎋ gives control back.
+/// A key on the keyboard, drawn as a small cap holding its symbol or letter, so a shortcut reads as keys: ⌃ ⇧
+/// ⎋ gives control back.
 struct Keycap: View {
   /// What the cap shows.
   enum Face: Equatable, Sendable {
@@ -46,7 +46,7 @@ struct Keycap: View {
   }
 }
 
-/// v3's keycap (`.kc`).
+/// The keycap's own measures for its label and edge.
 private enum Layout {
   /// 18: the cap's height, and its least width.
   static let side: CGFloat = 18

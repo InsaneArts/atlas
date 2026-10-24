@@ -186,6 +186,7 @@ fn owned_folder(layout: &Layout, relative: &str) -> Result<PathBuf> {
     let mut path = layout.home.clone();
     for part in Path::new(relative) {
         path.push(part);
+        layout.check()?;
         match fs::DirBuilder::new().mode(0o700).create(&path) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
@@ -288,6 +289,7 @@ fn ready(
             (layout.home.join(SKIP), String::new()),
         ];
         for (path, text) in files {
+            layout.check()?;
             if write_if_absent(&path, text.as_bytes())? {
                 answered.push(path);
             }
@@ -303,6 +305,7 @@ fn ready(
             let written = match file(&path)? {
                 File::Regular(sha256) if sha256 == text_sha256(&text) => false,
                 File::Absent | File::Regular(_) => {
+                    layout.check()?;
                     crate::config::write_atomic(&path, text.as_bytes(), 0o644)?;
                     true
                 }
@@ -374,6 +377,7 @@ pub(crate) fn forget_opener(layout: &Layout) -> Result<Value> {
     let removed = match file(&path)? {
         File::Absent => false,
         File::Regular(_) => {
+            layout.check()?;
             fs::remove_file(&path)?;
             true
         }
@@ -440,11 +444,15 @@ fn wanted_here(layout: &Layout) -> bool {
 /// asked for loses the opener without anything opening; a desktop or window
 /// that never comes leaves it for the next login.
 pub fn open_at_login() -> Result<()> {
+    use crate::login_log::{mark, seconds};
+
     let uid = nix::unistd::getuid().as_raw();
     let layout = Layout {
         uid,
         home: crate::config::home()?,
+        guard: None,
     };
+    mark(&format!("opener.start uid={uid}"));
 
     let deadline = Instant::now() + REQUEST_PATIENCE;
     while !wanted_here(&layout) {
@@ -455,8 +463,11 @@ pub fn open_at_login() -> Result<()> {
         std::thread::sleep(Duration::from_secs(1));
     }
 
-    let deadline = Instant::now() + DESKTOP_PATIENCE;
+    let waiting = Instant::now();
+    let deadline = waiting + DESKTOP_PATIENCE;
+    let mut assistant = false;
     while wanted_here(&layout) && crate::session::desktop_up(uid) != Some(true) {
+        assistant |= crate::session::setup_assistant(uid) == Some(true);
         if Instant::now() >= deadline {
             return Err(problem(
                 "The desktop never came up; Atlas opens at the next login",
@@ -464,6 +475,10 @@ pub fn open_at_login() -> Result<()> {
         }
         std::thread::sleep(Duration::from_secs(2));
     }
+    mark(&format!(
+        "opener.desktop waited={} setupAssistant={assistant}",
+        seconds(waiting.elapsed())
+    ));
 
     // Asked again once the desktop is up: the choice may have changed while
     // Setup Assistant waited for the person.
@@ -475,6 +490,7 @@ pub fn open_at_login() -> Result<()> {
     // The Dock and the Finder are up; give the login a moment to settle.
     std::thread::sleep(Duration::from_secs(2));
     let app = crate::update::installed_app()?;
+    mark("opener.open");
     let status = Command::new("/usr/bin/open")
         .args(["-n", "-a"])
         .arg(&app)
@@ -483,7 +499,8 @@ pub fn open_at_login() -> Result<()> {
         return Err(problem(format!("{} could not be opened", app.display())));
     }
 
-    let deadline = Instant::now() + WINDOW_PATIENCE;
+    let opening = Instant::now();
+    let deadline = opening + WINDOW_PATIENCE;
     while !crate::onboarding::window_open(&layout.home) {
         if Instant::now() >= deadline {
             return Err(problem(
@@ -492,6 +509,10 @@ pub fn open_at_login() -> Result<()> {
         }
         std::thread::sleep(Duration::from_millis(500));
     }
+    mark(&format!(
+        "opener.window waited={}",
+        seconds(opening.elapsed())
+    ));
 
     forget_opener(&layout)?;
     Ok(())
@@ -526,6 +547,7 @@ mod tests {
         let layout = Layout {
             uid: nix::unistd::getuid().as_raw(),
             home: dir.path().to_path_buf(),
+            guard: None,
         };
         (dir, layout)
     }

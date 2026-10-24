@@ -6,7 +6,7 @@
     /// A pane header with a search field, and one without tools.
     var body: some View {
       VStack(spacing: Spacing.m) {
-        PaneHeader(title: "Apps in the helper", meta: "5 apps · 6 windows, front to back") {
+        PaneHeader(title: "Apps", meta: "5 apps · 6 windows") {
           SearchField(text: "", prompt: "Search apps") { _ in }
         }
         PaneHeader(title: "Activity", meta: "38 actions today")

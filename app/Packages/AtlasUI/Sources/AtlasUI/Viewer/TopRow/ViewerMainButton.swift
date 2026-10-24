@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// The white capsule in its slot (v3 X5, V12): Take Control, Give Back or Recover…, its title morphing in place in a
-/// capsule at least 116 wide, so the row does not move. A refused Take Control shakes it once.
+/// The white capsule in its slot: Take Control, Give Back, Connecting… or Recover…, as wide as the widest of them
+/// whichever it shows, so it never changes width because of its own state; a new title swaps in place by opacity. A
+/// refused Take Control shakes it once.
 struct ViewerMainButton: View {
   /// The button; nil while the stage offers what to do instead.
   let control: ViewerControlButton?
@@ -9,20 +10,21 @@ struct ViewerMainButton: View {
   let refusals: Int
   /// Receives the press.
   let send: @MainActor (ViewerEvent) -> Void
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-  /// The capsule, its title morphing in place.
+  /// The capsule, its title swapping in place over the room the widest takes.
   var body: some View {
     Button {
       if let control { send(control.event) }
     } label: {
-      Text(control?.title ?? "")
-        .contentTransition(.interpolate)
-        .frame(minWidth: Layout.labelMinWidth)
-        .animation(
-          Motion.animation(Motion.arrive, reduceMotion: reduceMotion, reduced: Motion.reduced),
-          value: control?.title
-        )
+      ZStack {
+        ForEach(control?.titles ?? [], id: \.self) { title in
+          Text(title)
+            .hidden()
+        }
+        Text(control?.title ?? "")
+          .swapsText(on: control?.title)
+      }
+      .frame(minWidth: Layout.labelMinWidth)
     }
     .buttonStyle(.capsule(size: .small))
     .disabled(control?.isEnabled != true)
@@ -37,7 +39,7 @@ struct ViewerMainButton: View {
 private enum Layout {
   /// 18: a capsule's inset each side of its title (``CapsuleButtonStyle``'s for a capsule that hugs its title).
   static let capsuleInset: CGFloat = 18
-  /// 80: its title's least width, the capsule's 116 less its inset each side (v3 `min-width: 116px`).
+  /// 80: its title's least width, the capsule's 116 less its inset each side.
   static let labelMinWidth = ViewerLayout.mainButtonMinWidth - capsuleInset * 2
 }
 

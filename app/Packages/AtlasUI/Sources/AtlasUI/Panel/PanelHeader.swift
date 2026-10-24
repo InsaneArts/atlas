@@ -1,9 +1,8 @@
 import SwiftUI
 
-/// The panel's header, which leads with the status (v3 P1): its mark and word as the heading, in the word's colour,
-/// the line under them, and ⋯ at the trailing edge (v3 P2). A new word or line replaces the old with a blur (v3 P8,
-/// R11), the word first and the line a beat after (v3 P7); under Reduce Motion they fade. VoiceOver reads the status as
-/// one, then the line.
+/// The panel's header, which leads with the status: its mark and word as the heading, in the word's colour, the line
+/// under them, and ⋯ at the trailing edge. A new word or line swaps in place of the old by opacity, the same under
+/// Reduce Motion. VoiceOver reads the status as one, then the line.
 struct PanelHeader: View {
   /// The helper's status, with its line.
   let status: StatusSummary
@@ -15,16 +14,15 @@ struct PanelHeader: View {
   let send: @MainActor (PanelEvent) -> Void
   /// Where ⋯ is in the panel, so its menu opens under it.
   @State private var moreFrame = CGRect.zero
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   /// The status's word and line on the leading edge, ⋯ on the trailing one.
   var body: some View {
     HStack(alignment: .top, spacing: Spacing.sPlus) {
       VStack(alignment: .leading, spacing: Spacing.half) {
         heading
-          .animation(PanelLayout.cascade(.word, reduceMotion: reduceMotion), value: status.label)
+          .animation(PanelLayout.change, value: status.label)
         lineRow
-          .animation(PanelLayout.cascade(.line, reduceMotion: reduceMotion), value: line)
+          .animation(PanelLayout.change, value: line)
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       Button {
@@ -38,7 +36,7 @@ struct PanelHeader: View {
       } action: {
         moreFrame = $0
       }
-      .help("Atlas and the helper")
+      .help("More")
       .accessibilityLabel("More")
     }
     .padding(.horizontal, Spacing.half)
@@ -52,8 +50,7 @@ struct PanelHeader: View {
         .textStyle(.heading)
         .foregroundStyle(status.tone.wordColor)
         .lineLimit(1)
-        .id(status.label)
-        .transition(changing)
+        .swapsText(on: status.label)
     }
     .accessibilityElement(children: .combine)
     .accessibilityAddTraits(.updatesFrequently)
@@ -68,19 +65,13 @@ struct PanelHeader: View {
         .foregroundStyle(notice == nil ? Color.textSecondary : Color.textAttention)
         .lineLimit(1)
         .truncationMode(.tail)
-        .id(line)
-        .transition(changing)
+        .swapsText(on: line)
     }
   }
 
   /// The words under the heading: the notice when there is one, else the status's line.
   private var line: String {
     notice ?? status.line
-  }
-
-  /// How a word gives way to the next: a blur, or a fade under Reduce Motion.
-  private var changing: AnyTransition {
-    Motion.transition(AnyTransition(.blurReplace(.downUp)), reduceMotion: reduceMotion)
   }
 }
 

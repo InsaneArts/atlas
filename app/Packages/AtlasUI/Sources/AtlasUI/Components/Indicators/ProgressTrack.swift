@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// How far through the steps the person is, as a short track (v3 D8, S10): finished steps light grey, the current
-/// step longer and in the accent, the steps to come faint. Moving on stretches the current segment as one piece and
-/// crossfades the colours.
+/// How far through the steps the person is, as a short track: finished steps light grey, the current step
+/// longer and in the accent, the steps to come faint. Moving on stretches the current segment as one piece
+/// and crossfades the colours.
 struct ProgressTrack: View {
   /// How a segment of the track stands.
   enum Segment: Sendable {
@@ -70,7 +70,7 @@ struct ProgressTrack: View {
   }
 }
 
-/// v3's track (`.track i`).
+/// The progress track's own measures for its step segments.
 private enum Layout {
   /// 14: a segment's width.
   static let width: CGFloat = 14

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The panel card's top highlight (v3 `.panel2`'s `inset 0 .5px 0`, R3): the light edge along the top, fading out
+/// The panel card's top highlight: the light edge along the top, fading out
 /// where the corners end.
 enum PanelCardHighlight {
   /// The highlight's paint, from the top edge to a tenth of the way down.

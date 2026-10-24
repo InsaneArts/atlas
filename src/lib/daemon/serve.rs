@@ -128,6 +128,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
 
     let manager = facts::manager_name();
     require_graphical_session(uid, &manager)?;
+    crate::login_log::mark(&format!("daemon.start uid={uid}"));
     facts::type_exactly();
 
     let daemon = Arc::new(Daemon::new(
@@ -421,7 +422,15 @@ async fn handle(stream: UnixStream, daemon: Arc<Daemon>, controller: bool) -> Re
     });
     let reply = match request {
         Err(reply) => reply,
-        Ok(Request::Hello) => facts::hello(&daemon.manager),
+        Ok(Request::Hello) => {
+            // The first hello of this login: Atlas answers in the helper.
+            static GREETED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !GREETED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                crate::login_log::mark("daemon.firstHello");
+            }
+            facts::hello(&daemon.manager)
+        }
         Ok(Request::Apps) => match tokio::task::spawn_blocking(apps::running).await {
             Ok(apps) => json!({"ok": true, "apps": apps}),
             Err(_) => failure("apps", "Running applications could not be listed"),

@@ -192,10 +192,14 @@ pub fn managed(config: &Config, layout: &Layout) -> Config {
 }
 
 fn helper_argv(client: &Client, request: &Request) -> Result<Vec<String>> {
+    let expected = super::identity::verified(client.config.helper_uid)
+        .ok_or_else(|| problem("Choose the helper account in Atlas before setting it up"))?;
     Ok(vec![
         client.config.identity_probe.to_string_lossy().into_owned(),
         "setup-helper".to_owned(),
         serde_json::to_string(request)?,
+        "--account".into(),
+        serde_json::to_string(&expected)?,
     ])
 }
 
@@ -305,6 +309,7 @@ impl Migration {
         Layout {
             uid: self.log.plan.uid,
             home: self.log.plan.home.clone(),
+            guard: None,
         }
     }
 
@@ -786,6 +791,7 @@ fn basis(config_path: &Path) -> Result<Basis> {
     let layout = Layout {
         uid: config.helper_uid,
         home: account.home.clone(),
+        guard: None,
     };
 
     Ok(Basis {
@@ -1188,6 +1194,7 @@ mod tests {
         let layout = Layout {
             uid: 502,
             home: "/Users/atlastest".into(),
+            guard: None,
         };
         let target = managed(&config(), &layout);
         assert_eq!(

@@ -1,11 +1,11 @@
 import SwiftUI
 
-/// A radio, the one mark of a choice (v3 D7): off, a faint fill in a fine white ring; on, the accent with a white dot
-/// that pops in. The row around it never turns blue.
+/// A radio, the one mark of a choice: off, a faint fill in a fine white ring; on, the accent with a white dot. The fill
+/// crossfades over ``Motion/markFill`` with nothing scaling, as the system's radio does. The row around it never turns
+/// blue.
 struct RadioMark: View {
   /// Whether this choice is the one picked.
   let isOn: Bool
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   /// The ring and its dot.
   var body: some View {
@@ -15,11 +15,10 @@ struct RadioMark: View {
       Circle()
         .fill(Color.onAccent)
         .frame(width: IconSize.xxs, height: IconSize.xxs)
-        .scaleEffect(dotScale)
         .opacity(isOn ? 1 : 0)
     }
     .frame(width: IconSize.s, height: IconSize.s)
-    .animation(Motion.animation(Motion.pop, reduceMotion: reduceMotion, reduced: Motion.reduced), value: isOn)
+    .animation(Motion.markFill, value: isOn)
     .accessibilityHidden(true)
   }
 
@@ -31,11 +30,6 @@ struct RadioMark: View {
   /// The ring's edge: a fine white ring when off, none on the accent.
   private var edge: Color {
     isOn ? .clear : .strokePressed
-  }
-
-  /// The dot's scale: whole when on, none when off; under Reduce Motion it stays whole and only fades.
-  private var dotScale: CGFloat {
-    isOn || reduceMotion ? 1 : 0
   }
 }
 

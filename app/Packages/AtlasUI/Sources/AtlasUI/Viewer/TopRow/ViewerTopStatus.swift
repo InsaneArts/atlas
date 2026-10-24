@@ -1,32 +1,31 @@
 import SwiftUI
 
-/// The helper's status at the top row's leading edge (v3 V1): its mark, its word in its tone (blue while this window
-/// holds control), and in the row's widest layout its line in grey, cut short first and gone once too little of it
-/// would show; every narrower layout has no line at all, so the line goes before the tabs' words do (V15). A new word
-/// or line replaces the old with a blur, a fade under Reduce Motion. VoiceOver reads it as one.
+/// The helper's status at the top row's leading edge: its mark, its word in its tone (blue while this window
+/// holds control), and in the row's widest layout its line in grey, cut short first and gone once too little
+/// of it would show; every narrower layout has no line at all, so the line goes before the tabs' words do. A
+/// new word swaps in place by opacity and the dot eases to its new colour; the line, which changes every
+/// second or so while an agent works, changes with no transition at all. VoiceOver reads it as one.
 struct ViewerTopStatus: View {
   /// The status.
   let status: StatusSummary
   /// Whether the line shows, asking the row for room for it: in the widest layout alone.
   let reservesLine: Bool
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   /// The mark, the word and the line.
   var body: some View {
     HStack(spacing: Spacing.s) {
       StatusDot(mark: status.mark, tone: status.tone, size: .large)
+        .animation(Motion.fade, value: status.tone)
       Text(status.label)
         .font(Typography.font(.body, weight: .semibold))
         .foregroundStyle(status.tone.wordColor)
         .fixedSize()
-        .id(status.label)
-        .transition(changing)
+        .swapsText(on: status.label)
       if reservesLine {
         line
       }
     }
     .lineLimit(1)
-    .animation(Motion.animation(Motion.state, reduceMotion: reduceMotion, reduced: Motion.reduced), value: status)
     .accessibilityElement(children: .combine)
     .accessibilityAddTraits(.updatesFrequently)
   }
@@ -48,13 +47,6 @@ struct ViewerTopStatus: View {
         .frame(width: .zero, height: .zero)
     }
     .frame(minWidth: .zero, idealWidth: ViewerLayout.statusLineRoom, maxWidth: .infinity, alignment: .leading)
-    .id(status.line)
-    .transition(changing)
-  }
-
-  /// How a word gives way to the next: a blur, or a fade under Reduce Motion.
-  private var changing: AnyTransition {
-    Motion.transition(AnyTransition(.blurReplace(.downUp)), reduceMotion: reduceMotion)
   }
 }
 

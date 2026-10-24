@@ -44,25 +44,40 @@ struct ViewerControllerAlertTests {
     // The third press reaches the controller while the command still waits, before it is let go.
     await afterQueuedWork()
     release.open()
-    try await settle("Recover never held on Recovered") { viewer.session.recoveryDone }
+    try await clock.untilSleeping(for: Self.hold, "Recover never held on its done words")
     clock.advance(by: Self.hold)
     try await settle("Recover never ended") { !viewer.session.recovering }
     #expect(commands.ran == [Action.restart.arguments])
     viewer.close()
   }
 
-  @Test("a successful recovery shows Recovered in the main window and closes once the hold ends")
+  @Test("a successful recovery says the helper is ready in the main window and closes once the hold ends")
   func aSuccessfulRecoveryHoldsThenCloses() async throws {
     let commands = ScriptedCommands(["restart": #"{"ok": true}"#])
     let clock = ManualClock()
     let viewer = try await ViewerController.watching(Self.needsYou(), commands: commands, clock: clock)
     viewer.send(.alertConfirm)
-    try await settle("Recover never held on Recovered") { viewer.session.recoveryDone }
-    #expect(viewer.state.alert?.phase == .done(title: HelperWords.recovered))
-    viewer.send(.alertCancel)
-    #expect(viewer.state.alert != nil, "nothing dismisses it while it holds")
+    try await clock.untilSleeping(for: Self.hold, "Recover never held on its done words")
+    #expect(
+      viewer.state.alert?.phase
+        == .done(title: HelperWords.recovered, message: HelperWords.recoveredMessage, button: HelperWords.done)
+    )
     clock.advance(by: Self.hold)
     try await settle("the alert never closed") { !viewer.session.recovering }
+    #expect(viewer.session.alert == nil)
+    #expect(viewer.session.notice == Words.recovered)
+    viewer.close()
+  }
+
+  @Test("Done in the main window closes a recovery that worked at once, without waiting for the hold")
+  func doneClosesAtOnce() async throws {
+    let commands = ScriptedCommands(["restart": #"{"ok": true}"#])
+    let clock = ManualClock()
+    let viewer = try await ViewerController.watching(Self.needsYou(), commands: commands, clock: clock)
+    viewer.send(.alertConfirm)
+    try await clock.untilSleeping(for: Self.hold, "Recover never held on its done words")
+    viewer.send(.alertCancel)
+    try await settle("Done never closed the alert") { !viewer.session.recovering }
     #expect(viewer.session.alert == nil)
     #expect(viewer.session.notice == Words.recovered)
     viewer.close()
@@ -99,7 +114,7 @@ struct ViewerControllerAlertTests {
     let clock = ManualClock()
     let viewer = try await ViewerController.watching(Self.needsYou(), commands: commands, clock: clock)
     viewer.send(.alertConfirm)
-    try await settle("Recover never held on Recovered") { viewer.session.recoveryDone }
+    try await clock.untilSleeping(for: Self.hold, "Recover never held on its done words")
     viewer.ask(.logOut)
     #expect(viewer.session.notice == HelperWords.waitForAction)
     clock.advance(by: Self.hold)

@@ -1,17 +1,18 @@
 import AppKit
 
-/// What Atlas shows outside its windows when it needs the person: the notification and the Dock badge
-/// (``AttentionSignals``), fed by the panel's readings, the Dock icon and the choices in Settings.
+/// What Atlas shows outside its windows when it needs the person: the notification (``AttentionSignals``), fed by
+/// the panel's readings and the choices in Settings.
 extension AppContainer {
   /// Makes the signals at launch. Nothing asks for consent here: Settings asks when the person turns Notify me on.
-  /// Clicking a notification, or its Open Atlas, opens the main window on Screen; its Recover recovers the helper.
+  /// Clicking a notification opens the main window on Screen; its Recover recovers the helper.
   func startSignals() {
     signals = AttentionSignals(
       notifier: .live(
         open: { [weak coordinator] in coordinator?.openViewer(tab: .screen) },
-        recover: { [weak self] in await self?.recoverFromNotification() }
+        recover: { [weak self] in await self?.recoverFromNotification() },
+        // On screen, not merely open: a minimised main window says nothing.
+        viewerShows: { [weak coordinator] in (coordinator?.viewer?.window as? NSWindow)?.isVisible == true }
       ),
-      badge: .live,
       preferences: settingsPreferences
     )
   }
@@ -34,29 +35,22 @@ extension AppContainer {
     await recovery.run()
   }
 
-  /// Shows or hides the Dock icon, and settles its badge with it.
+  /// Shows or hides the Dock icon.
   ///
   /// - Parameter shown: Whether the Dock icon shows: while any window is open.
   func showDockIcon(_ shown: Bool) {
     DockIcon.settle(windowOpen: shown)
-    signals?.dockIcon(shown: shown)
   }
 
-  /// Settings' saved choices, which also tell the signals when Notify me or the badge changes, so turning Notify me
-  /// on asks for consent and the badge follows its choice at once.
+  /// Settings' saved choices, which also tell the signals when Notify me changes, so turning it on asks for consent.
   ///
   /// - Returns: The preferences.
   func watchedPreferences() -> SettingsPreferences {
     var preferences = settingsPreferences
     let saveNotify = preferences.saveNotify
-    let saveBadge = preferences.saveBadge
     preferences.saveNotify = { [weak self] on in
       saveNotify(on)
       self?.signals?.notifyChanged(on)
-    }
-    preferences.saveBadge = { [weak self] on in
-      saveBadge(on)
-      self?.signals?.badgeChanged()
     }
     return preferences
   }

@@ -6,7 +6,7 @@ import Testing
 /// Here, not in AtlasUI's tests, because measuring a font's line height needs AppKit, which AtlasUI never imports.
 @Suite("TextStyle line height")
 struct TextStyleLineHeightTests {
-  @Test("each style's line spacing makes its lines v3's line height, measured against the system font")
+  @Test("each style's line spacing produces its specified line height against the system font")
   func lineSpacingMakesTheLineHeight() {
     let layout = NSLayoutManager()
     for style in TextStyle.allCases {

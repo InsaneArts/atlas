@@ -3,8 +3,8 @@ import AtlasCommands
 import AtlasService
 
 /// Everything the running app builds, each live object once, with every connection made: the helper's commands and
-/// the control work they share, agent installs, the menu bar panel (`AppContainer+Panel`), the notification and the
-/// Dock badge (`AppContainer+Attention`), the saved choices, each window's controller and its dependencies
+/// the control work they share, agent installs, the menu bar panel (`AppContainer+Panel`), the notification
+/// (`AppContainer+Attention`), the saved choices, each window's controller and its dependencies
 /// (`AppContainer+Parts`), and the coordinator that opens the windows. The one live clock comes from `AtlasApp`, and
 /// this is the one place the app's standard defaults are reached.
 final class AppContainer {
@@ -22,7 +22,7 @@ final class AppContainer {
   /// The main window's choices that outlast it, in the standard defaults; Settings saves the rate in them while no
   /// main window is open.
   let viewerPreferences: ViewerPreferences
-  /// Settings' choices that outlast it, in the standard defaults; the signals read Notify me and the badge from them.
+  /// Settings' choices that outlast it, in the standard defaults; the signals read Notify me from them.
   let settingsPreferences: SettingsPreferences
   /// Opens and closes every window.
   let coordinator: WindowCoordinator
@@ -33,7 +33,7 @@ final class AppContainer {
   var panel: PanelController?
   /// The menu bar item's panel; made at launch.
   var menuBar: PanelPopover?
-  /// The notification and the Dock badge for when Atlas needs the person; made at launch.
+  /// The notification for when Atlas needs the person; made at launch.
   var signals: AttentionSignals?
   /// The app's lifetime work: the task group the panel's `run()`, the one controller that has one, is a child of.
   /// Started once at launch; it ends once the panel has learned the helper.

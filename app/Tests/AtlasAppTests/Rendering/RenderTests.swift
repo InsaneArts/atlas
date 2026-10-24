@@ -57,7 +57,7 @@
 
     // One case a render, so drawing them, about a second each with their frosted chips and alerts, never holds
     // the main actor long enough to starve another suite's wait.
-    @Test("every main window render draws at the boards' window size", arguments: await ViewerRender.names)
+    @Test("every main window render draws at the standard window size", arguments: await ViewerRender.names)
     func everyViewerRenderDraws(file: String) throws {
       let size = PreviewStates.viewerSize
       let render = try #require(ViewerRender.renders.first { $0.name == file })

@@ -5,8 +5,8 @@ import CoreGraphics
 enum IconSize {
   /// 6: a page dot's height and a small status dot.
   static let xxs: CGFloat = 6
-  /// 12: a small spinner, beside a pill's or a message's text, and the Orbit beside a status, by its height (the
-  /// board's 13, rounded to the panel's 12 so both windows draw one Orbit).
+  /// 12: a small spinner, beside a pill's or a message's text, and the Orbit beside a status, by its height
+  /// (12 points high so both windows draw one Orbit).
   static let xs: CGFloat = 12
   /// 14: a spinner in a checklist row.
   static let xsPlus: CGFloat = 14

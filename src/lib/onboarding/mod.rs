@@ -4,25 +4,30 @@
 //! checks before it acts.
 //!
 //! In the person's account the window chooses or creates the helper and
-//! finishes; in the helper's account (Atlas opened there once) it installs
-//! the helper's background job as that account itself, with no
-//! administrator rights, once that account allows the one shown. Passwords
+//! finishes; the helper's Allow records acceptance and opens an unprivileged
+//! worker connection. The requesting Atlas holds its own control state while
+//! driving setup through that connection. Passwords
 //! are never stored, logged or put in a command line: the one Atlas handles
 //! (a new account's) goes from the window, through a pipe, straight into
 //! macOS's own password prompt.
-mod as_root;
+mod acceptance;
+pub(crate) mod as_root;
+pub use acceptance::accept_worker;
 
 use crate::{
     approval::Refusal,
     client::Client,
     config::{self, Config},
+    control::{Controller, Ownership},
     error::{Error, Result},
     init,
     setup::{
         self,
-        helper::{Agent, LABEL, Layout, Request},
+        helper::{Agent, LABEL, Layout},
+        identity::Identity,
     },
 };
+use as_root::Target;
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -50,12 +55,16 @@ fn problem(message: impl Into<String>) -> Error {
 }
 
 /// An account (the controller) asking another one to be its helper.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Pairing {
+    /// A fresh request identity; old acceptance never grants a new request.
+    pub ticket: String,
     pub controller_uid: u32,
     pub controller_name: String,
     pub helper_uid: u32,
     pub helper_name: String,
+    /// The account chosen before any authorization or login wait.
+    pub helper_identity: setup::identity::Identity,
 }
 
 /// Read the shared request, trusting it only when it is a plain file the
@@ -93,11 +102,26 @@ fn read_request(path: &Path) -> Option<Pairing> {
     (&mut file).take(64 * 1024).read_to_end(&mut body).ok()?;
     let value: Value = serde_json::from_slice(&body).ok()?;
     let request = Pairing {
+        ticket: match value.get("ticket") {
+            Some(Value::String(ticket)) => ticket.clone(),
+            None => setup::helper::text_sha256(&String::from_utf8_lossy(&body))
+                [..crate::control::TOKEN_BYTES * 2]
+                .to_owned(),
+            _ => return None,
+        },
         controller_uid: value["controllerUid"].as_u64()?.try_into().ok()?,
         controller_name: value["controllerName"].as_str()?.to_owned(),
         helper_uid: value["helperUid"].as_u64()?.try_into().ok()?,
         helper_name: value["helperName"].as_str()?.to_owned(),
+        helper_identity: serde_json::from_value(value["helperIdentity"].clone()).ok()?,
     };
+    if request.ticket.len() != crate::control::TOKEN_BYTES * 2
+        || !request.ticket.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || request.helper_identity.uid != request.helper_uid
+        || request.helper_identity.name != request.helper_name
+    {
+        return None;
+    }
     let folder_safe = folder.is_dir()
         && (folder.uid() == request.controller_uid || folder.uid() == 0)
         && folder.mode() & 0o022 == 0;
@@ -108,10 +132,12 @@ fn read_request(path: &Path) -> Option<Pairing> {
 /// Write the request, readable by every account and changed only by this one.
 fn write_request(path: &Path, request: &Pairing) -> Result<()> {
     let body = json!({
+        "ticket": request.ticket,
         "controllerUid": request.controller_uid,
         "controllerName": request.controller_name,
         "helperUid": request.helper_uid,
         "helperName": request.helper_name,
+        "helperIdentity": request.helper_identity,
     });
 
     config::write_atomic(path, serde_json::to_string_pretty(&body)?.as_bytes(), 0o644)
@@ -140,7 +166,7 @@ fn home() -> Result<PathBuf> {
 /// Whether Atlas is set up in this account as someone's helper already
 /// (its background job is installed here, as `atlas init` leaves it).
 fn helper_job_here(uid: u32) -> bool {
-    home().is_ok_and(|home| Layout { uid, home }.agent_plist(LABEL).exists())
+    home().is_ok_and(|home| Layout::new(uid, home).agent_plist(LABEL).exists())
 }
 
 /// The app this runs from, whether it is signed by Atlas's developer, and
@@ -191,6 +217,7 @@ pub async fn status(config_path: &Path) -> Result<Value> {
             }));
         }
 
+        let (leftovers, blockers) = logins(None);
         return Ok(json!({
             "ok": true,
             "role": "controller",
@@ -199,10 +226,13 @@ pub async fn status(config_path: &Path) -> Result<Value> {
             "configured": false,
             "candidates": candidates()?,
             "menubarLogin": crate::menubar::login_decided(),
+            "leftoverLogins": leftovers,
+            "blockers": blockers,
         }));
     }
 
     let config = Config::load(config_path)?;
+    let (leftovers, blockers) = logins(Some(config.helper_uid));
     let Some(helper) = setup::account_with_uid(config.helper_uid)? else {
         return Ok(json!({
             "ok": true,
@@ -213,11 +243,12 @@ pub async fn status(config_path: &Path) -> Result<Value> {
             "helper": {"exists": false, "uid": config.helper_uid},
             "candidates": candidates()?,
             "menubarLogin": crate::menubar::login_decided(),
+            "leftoverLogins": leftovers,
+            "blockers": blockers,
         }));
     };
 
     let admin = setup::administrator(&helper.name);
-    let leftover = crate::session::leftover_session(helper.uid, &helper.name, &helper.home);
 
     // This account asked this helper: its request names it (the window), or
     // a setup with it is recorded (`atlas init`, or the window's finish).
@@ -225,6 +256,13 @@ pub async fn status(config_path: &Path) -> Result<Value> {
     let signed_in = crate::session::logged_in(helper.uid) == Some(true);
 
     let client = Client::new(config.clone())?;
+    let acceptance = if let Some(pairing) = request()
+        .filter(|pairing| pairing.controller_uid == uid && pairing.helper_uid == helper.uid)
+    {
+        acceptance::observe(&config, pairing).await
+    } else {
+        json!(null)
+    };
     let reply = client.status().await;
     let hidden = crate::session::require_hidden(&reply, config.helper_uid).is_ok();
     let answering = hidden || reply["daemon"]["pid"].is_number();
@@ -271,7 +309,6 @@ pub async fn status(config_path: &Path) -> Result<Value> {
             "name": helper.name,
             "realName": setup::real_name(&helper.name),
             "administrator": admin,
-            "leftoverSession": leftover,
             "paired": paired,
             "forgettable": forgettable,
             "signedIn": signed_in,
@@ -283,16 +320,30 @@ pub async fn status(config_path: &Path) -> Result<Value> {
                 "accessibility": reply["permissions"]["accessibility"] == true,
             },
         },
+        "setupProblem": acceptance["error"].as_str().map(|error| format!("{error}. Open Atlas in the helper, then return here to retry. Any unfinished setup stays pending until recovery.")),
+        "acceptance": acceptance,
         "finished": finished,
         "menubarLogin": crate::menubar::login_decided(),
+        "leftoverLogins": leftovers,
+        "blockers": blockers,
     }))
+}
+
+/// The logins of deleted accounts that are still open, and what would hold
+/// up a new login now, as the window reads them; `helper` is the configured
+/// helper. Both are empty when the process list could not be read.
+fn logins(helper: Option<u32>) -> (Value, Value) {
+    match crate::session::sessions(helper) {
+        Some(sessions) => (json!(sessions.leftovers()), json!(sessions.blockers)),
+        None => (json!([]), json!([])),
+    }
 }
 
 /// The helper's side of the status: who asked (unknown when `atlas init`
 /// set it up), whether its job runs here, and its permissions as that job,
 /// the process that uses them, reports them.
 async fn helper_side(uid: u32, pairing: Option<&Pairing>) -> Value {
-    let layout = home().map(|home| Layout { uid, home });
+    let layout = home().map(|home| Layout::new(uid, home));
 
     // Installed for the account asking now: a job left by an earlier Atlas
     // (another app, another account) needs Allow again.
@@ -305,6 +356,15 @@ async fn helper_side(uid: u32, pairing: Option<&Pairing>) -> Value {
                 .is_ok_and(|agent| text == setup::helper::plist(&agent, &layout.logs())),
         }
     });
+    let accepted = pairing.is_some_and(acceptance::accepted);
+    // A lost acceptance process changes no jobs on its own. Reopening this
+    // window can safely restore its listener using the same consent record.
+    if accepted
+        && !acceptance::listening(uid)
+        && let Some(pairing) = pairing
+    {
+        let _ = acceptance::signal(pairing);
+    }
     let running = layout
         .as_ref()
         .is_ok_and(|layout| setup::helper::job_pid(layout, LABEL).is_some());
@@ -335,6 +395,7 @@ async fn helper_side(uid: u32, pairing: Option<&Pairing>) -> Value {
     json!({
         "controller": controller,
         "installed": installed,
+        "accepted": accepted,
         "running": running,
         "permissions": permissions,
     })
@@ -401,6 +462,7 @@ fn prepared(helper: &setup::Account) -> bool {
     let layout = Layout {
         uid: helper.uid,
         home: helper.home.clone(),
+        guard: None,
     };
 
     fs::metadata(layout.daemon()).is_ok_and(|metadata| metadata.is_dir())
@@ -469,10 +531,14 @@ fn choosable(name: &str, controller: u32) -> Result<setup::Account> {
         }
     }
 
-    if crate::session::leftover_session(helper.uid, &helper.name, &helper.home) {
+    if crate::session::sessions(Some(helper.uid)).is_some_and(|sessions| {
+        !sessions
+            .leftover_uids(crate::session::Kind::HelperLeftover)
+            .is_empty()
+    }) {
         return Err(problem(format!(
-            "macOS still runs a session of a deleted account with {name}'s user ID. Restart \
-             the Mac, then choose {name} again."
+            "A deleted account is still logged in with {name}'s user ID. Restart the Mac, then \
+             choose {name} again."
         )));
     }
 
@@ -501,10 +567,14 @@ pub fn choose(config_path: &Path, name: &str) -> Result<Value> {
     let helper = choosable(name, uid)?;
     ready_to_choose(config_path, uid)?;
 
+    let expected = setup::identity::current(&helper)
+        .ok_or_else(|| problem("macOS could not identify the chosen helper account"))?;
     // Atlas already answering there needs nothing readied.
     let mut readied = true;
-    if !init::proposed(&helper).is_ok_and(|config| answers(&config)) {
-        match as_root::ready(name, helper.uid) {
+    let orphans = orphans_now()?;
+    if !orphans.is_empty() || !init::proposed(&helper).is_ok_and(|config| answers(&config)) {
+        // Root readies this account only while it is still the one checked.
+        match closing_first(helper.uid, &orphans, || as_root::ready(&expected, &orphans))? {
             Ok(()) => {}
             // Without the approval call the account is chosen unreadied:
             // Atlas is opened there by hand, as the window then says.
@@ -520,14 +590,18 @@ pub fn choose(config_path: &Path, name: &str) -> Result<Value> {
         }
     }
 
-    let mut chosen = use_helper(config_path, &helper)?;
+    let mut chosen = use_helper(config_path, &helper, &expected)?;
     chosen["readied"] = json!(readied);
     Ok(chosen)
 }
 
 /// Make `helper` the helper: the shared executable, the request Atlas in
 /// the helper reads, and the settings.
-fn use_helper(config_path: &Path, helper: &setup::Account) -> Result<Value> {
+fn use_helper(
+    config_path: &Path,
+    helper: &setup::Account,
+    expected: &setup::identity::Identity,
+) -> Result<Value> {
     let (uid, me_name, _) = me()?;
     let executable = signed_executable()?;
     let previous = settings(config_path)?;
@@ -559,18 +633,31 @@ fn use_helper(config_path: &Path, helper: &setup::Account) -> Result<Value> {
     // A setup record left by an earlier account with this user ID.
     setup::migrate::archive_foreign(helper.uid, &helper.home)?;
 
+    // Which account this is, so nothing later acts on another account that
+    // is given its user ID. Unrecorded, nothing later ends a login under
+    // its user ID or deletes it.
+    if setup::identity::current(helper).as_ref() != Some(expected) {
+        return Err(problem(
+            "The chosen account changed while Atlas waited; choose it again",
+        ));
+    }
+    setup::identity::remember_as(helper, expected, true)?;
+
     // The shared executable (which also makes /Users/Shared/Atlas) and the
     // request first, the settings last: a choice cut short leaves no
     // settings that point at a helper that was never asked.
-    Client::new(config.clone())?.install()?;
+    Client::new(config.clone())?.bootstrap_probe()?;
 
+    let _ownership = Controller::new(helper.uid)?.acquire(true)?;
     write_request(
         Path::new(REQUEST),
         &Pairing {
+            ticket: crate::control::token(),
             controller_uid: uid,
             controller_name: me_name,
             helper_uid: helper.uid,
             helper_name: helper.name.clone(),
+            helper_identity: expected.clone(),
         },
     )?;
 
@@ -588,13 +675,390 @@ fn use_helper(config_path: &Path, helper: &setup::Account) -> Result<Value> {
     }))
 }
 
+/// The user IDs of deleted accounts whose logins are still open, which
+/// creating or readying a helper closes first. Logins that cannot be listed
+/// are never taken for none.
+fn orphans_now() -> Result<Vec<u32>> {
+    crate::session::sessions(None)
+        .map(|sessions| sessions.leftover_uids(crate::session::Kind::Orphan))
+        .ok_or_else(|| problem("macOS could not list its logins. Try again."))
+}
+
+/// Run `act`, the one run as root that closes the deleted accounts' logins
+/// `orphans` before it makes or readies `helper_uid`. Every affected UID,
+/// including the helper with no orphans, is held and claimed until setup
+/// acknowledges completion and orphan cleanup is verified.
+pub(crate) fn closing_first(
+    helper_uid: u32,
+    orphans: &[u32],
+    act: impl FnOnce() -> std::result::Result<(), as_root::Unclosed>,
+) -> Result<std::result::Result<(), Refusal>> {
+    let gone = || orphans.is_empty() || crate::session::confirm_gone(orphans);
+    closing_first_using(helper_uid, orphans, Controller::new, act, gone)
+}
+
+/// Select every affected controller before entering the setup transaction.
+fn closing_first_using(
+    helper_uid: u32,
+    orphans: &[u32],
+    controller: impl Fn(u32) -> Result<Controller>,
+    act: impl FnOnce() -> std::result::Result<(), as_root::Unclosed>,
+    gone: impl FnOnce() -> bool,
+) -> Result<std::result::Result<(), Refusal>> {
+    let mut affected = orphans.to_vec();
+    affected.push(helper_uid);
+    affected.sort_unstable();
+    affected.dedup();
+    let controllers = affected
+        .into_iter()
+        .map(controller)
+        .collect::<Result<Vec<_>>>()?;
+    setup_batch(&controllers, act, gone)
+}
+
+/// Hold setup and its cleanup together. Orphan absence alone cannot settle
+/// a failed setup that may already have changed the helper.
+fn setup_batch(
+    controllers: &[Controller],
+    act: impl FnOnce() -> std::result::Result<(), as_root::Unclosed>,
+    gone: impl FnOnce() -> bool,
+) -> Result<std::result::Result<(), Refusal>> {
+    let acknowledged = std::cell::Cell::new(false);
+    match owned(
+        controllers,
+        || {
+            let outcome = act();
+            acknowledged.set(outcome.is_ok());
+            outcome
+        },
+        || acknowledged.get() && gone(),
+    ) {
+        Ok(()) => Ok(Ok(())),
+        Err(Held::Refused(refusal)) => Ok(Err(refusal)),
+        Err(Held::State(error)) => Err(error),
+    }
+}
+
+/// Create the account without macOS's approval call, through sysadminctl's
+/// own dialog (`interactive`), which runs nothing as root that could close
+/// a deleted account's login first: refused while one is open (`orphans`),
+/// so no account is made under it.
+fn without_approval<T>(orphans: &[u32], interactive: impl FnOnce() -> Result<T>) -> Result<T> {
+    if !orphans.is_empty() {
+        return Err(problem(format!(
+            "A deleted account is still logged in, and macOS can't ask for your approval to \
+             close it here, so no account was made. In Terminal, run: {}, then try again.",
+            orphans
+                .iter()
+                .map(|uid| format!("sudo launchctl bootout user/{uid}"))
+                .collect::<Vec<_>>()
+                .join(" && ")
+        )));
+    }
+
+    interactive()
+}
+
+/// What macOS asks the person to approve when Atlas closes leftover logins.
+const CLOSE_PROMPT: &str = "Atlas will close a login left open by a deleted account.";
+
+/// The logins deleted accounts left open, as root closes them: each
+/// deleted account's login, and one still running under the user ID the
+/// helper (`helper`, as recorded and still that account) was given after
+/// it. Without a verified record of the helper, a login under its user ID
+/// is never closed.
+pub(crate) fn leftover_targets(
+    sessions: &crate::session::Sessions,
+    helper: Option<&Identity>,
+) -> std::result::Result<Vec<Target>, Refusal> {
+    use crate::session::Kind;
+
+    sessions
+        .logins
+        .iter()
+        .filter_map(|(window, kind)| match kind {
+            Kind::Orphan => Some(Ok(Target::Orphan(window.uid))),
+            Kind::HelperLeftover => Some(match helper {
+                Some(helper) if helper.uid == window.uid => Ok(Target::Leftover {
+                    helper: helper.clone(),
+                    pid: window.pid,
+                }),
+                _ => Err(Refusal::Failed(
+                    "Atlas can't tell that the account with the helper's user ID is still its \
+                     helper"
+                        .into(),
+                )),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Close every login in `targets` with one run as root (`close`), so the
+/// person approves once, then see them all gone (`gone`). Control of every
+/// user ID the batch touches (`controllers`, one per user ID: any of them
+/// may be a helper's) is held throughout, and the run is recorded as
+/// pending with each before root is asked, as [`owned`] does. The user IDs
+/// closed.
+pub(crate) fn close_batch(
+    controllers: &[Controller],
+    targets: &[Target],
+    close: impl FnOnce(&[Target]) -> std::result::Result<Vec<u32>, as_root::Unclosed>,
+    gone: impl FnOnce(&[u32]) -> bool,
+) -> std::result::Result<Vec<u32>, Held> {
+    if targets.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let uids: Vec<u32> = targets.iter().map(Target::uid).collect();
+    owned(controllers, || close(targets), || gone(&uids))?;
+
+    Ok(uids)
+}
+
+/// The controllers of user IDs `uids`, one each: every user ID a run as
+/// root closes a login of may be a helper's, whose control it must hold.
+pub(crate) fn controllers_of(uids: &[u32]) -> Result<Vec<Controller>> {
+    let mut uids = uids.to_vec();
+    uids.sort_unstable();
+    uids.dedup();
+    uids.into_iter().map(Controller::new).collect()
+}
+
+/// Close the logins deleted accounts left open, the one the helper's user
+/// ID was given after it among them, under the person's one approval; then
+/// check, twice, that they are gone. Root checks each user ID again itself.
+pub fn close_leftovers(config_path: &Path) -> Result<Value> {
+    let helper = settings(config_path)?.map(|config| config.helper_uid);
+    let sessions = crate::session::sessions(helper)
+        .ok_or_else(|| problem("macOS could not list its logins. Try again."))?;
+    let identity = helper.and_then(setup::identity::verified);
+    let all: Vec<u32> = sessions
+        .logins
+        .iter()
+        .filter(|(_, kind)| {
+            matches!(
+                kind,
+                crate::session::Kind::Orphan | crate::session::Kind::HelperLeftover
+            )
+        })
+        .map(|(window, _)| window.uid)
+        .collect();
+    let targets = leftover_targets(&sessions, identity.as_ref())
+        .map_err(|refusal| not_closed(refusal, &all))?;
+
+    let uids: Vec<u32> = targets.iter().map(Target::uid).collect();
+    let closed = close_batch(
+        &controllers_of(&uids)?,
+        &targets,
+        |targets| as_root::close(targets, as_root::Via::Approval(CLOSE_PROMPT)),
+        crate::session::confirm_gone,
+    )
+    .map_err(|held| match held {
+        Held::State(error) => error,
+        Held::Refused(refusal) => not_closed(refusal, &all),
+    })?;
+
+    Ok(json!({"ok": true, "closed": closed}))
+}
+
+/// Log out the helper whose Atlas is silent, as root under the person's
+/// approval, through launchd and without killing anything: only the
+/// configured helper, still the account recorded, logged in with its
+/// desktop up for minutes, off screen, and with nothing answering at its
+/// socket. Root checks it again itself. Control of the helper is held
+/// throughout, so no other controller starts there meanwhile.
+pub fn close_helper(config_path: &Path) -> Result<Value> {
+    let config = Config::load(config_path)?;
+    let client = Client::new(config.clone())?;
+    let uid = config.helper_uid;
+    let me = nix::unistd::getuid().as_raw();
+    let prompt = "Atlas will log out its helper, where Atlas isn't answering.";
+
+    let checks = || {
+        if uid == me || crate::session::console_owner() == Some(uid) {
+            return Err(problem(
+                "The helper is on screen. Switch back to your own account first.",
+            ));
+        }
+        if answers(&config) {
+            return Err(problem(
+                "Atlas answers in the helper, so log it out with Log Out instead.",
+            ));
+        }
+        if crate::session::stale(uid) != Some(true) {
+            return Err(problem(
+                "The helper isn't logged in, or is still logging in. Try again in a minute.",
+            ));
+        }
+
+        setup::identity::verified(uid).ok_or_else(|| {
+            problem(
+                "Atlas can't tell that the account with the helper's user ID is still its \
+                 helper. Run atlas init, then try again.",
+            )
+        })
+    };
+
+    close_helper_held(
+        &client.controller,
+        checks,
+        |helper| as_root::close(&[Target::Helper(helper)], as_root::Via::Approval(prompt)),
+        || crate::session::confirm_gone(&[uid]),
+    )
+    .map_err(|error| match error {
+        Held::State(error) => error,
+        Held::Refused(refusal) => not_closed(refusal, &[uid]),
+    })?;
+
+    Ok(json!({"ok": true, "closed": [uid]}))
+}
+
+/// Why a log-out as root under held control did not finish.
+#[derive(Debug)]
+pub(crate) enum Held {
+    /// Control could not be taken, a check refused, or the claim could not
+    /// be kept.
+    State(Error),
+    /// Root did not end the login, or it is not seen gone.
+    Refused(Refusal),
+}
+
+impl From<Error> for Held {
+    fn from(error: Error) -> Self {
+        Self::State(error)
+    }
+}
+
+/// [`close_helper`]'s order: take control of the helper, run `checks`
+/// under it, then [`end_as_root`].
+fn close_helper_held(
+    controller: &Controller,
+    checks: impl FnOnce() -> Result<Identity>,
+    end: impl FnOnce(Identity) -> std::result::Result<Vec<u32>, as_root::Unclosed>,
+    gone: impl FnOnce() -> bool,
+) -> std::result::Result<(), Held> {
+    // A log-out is the person's way out of an unknown outcome, as atlas
+    // logout --force is: it may run with one pending.
+    let ownership = controller.acquire(true)?;
+    let helper = checks()?;
+
+    end_as_root(controller, &ownership, || end(helper), gone)
+}
+
+/// End the helper's login as root (`end`) under control already held
+/// (`_ownership`), as [`claimed`] records and settles it.
+pub(crate) fn end_as_root(
+    controller: &Controller,
+    _ownership: &Ownership,
+    end: impl FnOnce() -> std::result::Result<Vec<u32>, as_root::Unclosed>,
+    gone: impl FnOnce() -> bool,
+) -> std::result::Result<(), Held> {
+    let mut verified = false;
+    let outcome = claimed(&[controller], end, || {
+        verified = gone();
+        verified
+    });
+    if verified {
+        Ok(())
+    } else {
+        outcome.map(|_| ())
+    }
+}
+
+/// Take control of the helper each of `controllers` keeps (every user ID a
+/// run as root may touch), then run `act` as [`claimed`] records and
+/// settles it, all under that control.
+pub(crate) fn owned<T>(
+    controllers: &[Controller],
+    act: impl FnOnce() -> std::result::Result<T, as_root::Unclosed>,
+    gone: impl FnOnce() -> bool,
+) -> std::result::Result<T, Held> {
+    let _held = controllers
+        .iter()
+        .map(|controller| controller.acquire(true))
+        .collect::<Result<Vec<_>>>()?;
+    let controllers: Vec<&Controller> = controllers.iter().collect();
+
+    claimed(&controllers, act, gone)
+}
+
+/// Run `act`, one run as root, recorded as pending with each of
+/// `controllers` before root is asked, so a run cut short or a reply that
+/// never came leaves it for recovery. The claims are settled only when root
+/// stopped before it acted, or once root is known to have ended and the
+/// logins it acted on are then seen gone (`gone`, which checks strictly).
+/// While root may still be acting, the claims stay held by this process,
+/// so recovery cannot settle them while it lasts.
+fn claimed<T>(
+    controllers: &[&Controller],
+    act: impl FnOnce() -> std::result::Result<T, as_root::Unclosed>,
+    gone: impl FnOnce() -> bool,
+) -> std::result::Result<T, Held> {
+    let claims = controllers
+        .iter()
+        .map(|controller| controller.quarantine())
+        .collect::<Result<Vec<_>>>()?;
+    let _executors = crate::control::ExecutorClaims::new(&claims)?;
+    let settle = |claims: &[crate::control::Pending]| -> Result<()> {
+        for (controller, claim) in controllers.iter().zip(claims) {
+            controller.clear_if(claim)?;
+        }
+        Ok(())
+    };
+
+    match act() {
+        Err(unclosed) if !unclosed.ended => {
+            // No executor exit was established. Keep a live claim so even
+            // recovery in this process must refuse further work.
+            for claim in claims {
+                std::mem::forget(claim);
+            }
+            Err(Held::Refused(unclosed.refusal))
+        }
+        Err(unclosed) if !unclosed.acted => {
+            settle(&claims)?;
+            Err(Held::Refused(unclosed.refusal))
+        }
+        outcome if gone() => {
+            settle(&claims)?;
+            outcome.map_err(|unclosed| Held::Refused(unclosed.refusal))
+        }
+        // Root may have acted, and a login is not seen gone: the outcome
+        // stays pending until recovery.
+        outcome => Err(Held::Refused(match outcome {
+            Ok(_) => Refusal::Failed("it is still running".into()),
+            Err(unclosed) => unclosed.refusal,
+        })),
+    }
+}
+
+/// Why leftover logins `uids` were not closed, in the window's words.
+fn not_closed(refusal: Refusal, uids: &[u32]) -> Error {
+    problem(match refusal {
+        Refusal::Cancelled => "It's still open. Close it before you switch.".to_owned(),
+        Refusal::Failed(reason) => format!(
+            "macOS didn't close it: {reason}. Restart the Mac to clear it, then open Atlas again."
+        ),
+        Refusal::Unavailable => format!(
+            "macOS can't ask for your approval here. In Terminal, run: {}",
+            uids.iter()
+                .map(|uid| format!("sudo launchctl bootout user/{uid}"))
+                .collect::<Vec<_>>()
+                .join(" && ")
+        ),
+    })
+}
+
 /// Take back this account's request of the helper its settings name, so
 /// the window can offer the choice again: only while that helper never
 /// answered, was never prepared for this account and has no setup recorded.
-/// The settings stay; choosing another account replaces them.
+/// The settings stay; choosing another account replaces them. No account is
+/// deleted; the reply says whether the helper's login is still open.
 pub fn forget(config_path: &Path) -> Result<Value> {
     let (uid, _, _) = me()?;
     let config = Config::load(config_path)?;
+    let _ownership = Controller::new(config.helper_uid)?.acquire(true)?;
     let helper = setup::account_with_uid(config.helper_uid)?
         .ok_or_else(|| problem("The helper account no longer exists."))?;
 
@@ -621,7 +1085,10 @@ pub fn forget(config_path: &Path) -> Result<Value> {
         Err(error) => return Err(error.into()),
     }
 
-    Ok(json!({"ok": true, "forgotten": helper.name}))
+    // Forgetting deletes no account. One whose login is still open must be
+    // logged out before anyone deletes it, or its login lives on.
+    let logged_in = crate::session::login(helper.uid).is_some();
+    Ok(json!({"ok": true, "forgotten": helper.name, "loggedIn": logged_in}))
 }
 
 /// Create a standard account and make it the helper. Its password arrives
@@ -655,16 +1122,23 @@ pub fn create(config_path: &Path, name: &str, full_name: &str) -> Result<Value> 
     let password = Secret(read_secret(std::io::stdin())?);
     let next_uid = init::free_uid()?;
     let mut readied = true;
-    let account = match as_root::create(name, next_uid, full_name, &password.0) {
+    let orphans = orphans_now()?;
+    let made = closing_first(next_uid, &orphans, || {
+        as_root::create(name, next_uid, full_name, &password.0, &orphans)
+    })?;
+    let account = match made {
         Ok(()) => created(name, None)?,
-        Err(Refusal::Unavailable) => {
-            readied = false;
-            let mut args = init::add_user_args(name, full_name, next_uid);
-            args.push("interactive".to_owned());
-            let args: Vec<&str> = args.iter().map(String::as_str).collect();
-            let result = answer_prompts(init::SYSADMINCTL, &args, &password.0, APPROVAL);
-            created(name, result.err().map(|error| error.error))?
-        }
+        // Looked at again: a login may have been left open since.
+        Err(Refusal::Unavailable) => init::setup_transaction(&Controller::new(next_uid)?, || {
+            without_approval(&orphans_now()?, || {
+                readied = false;
+                let mut args = init::add_user_args(name, full_name, next_uid);
+                args.push("interactive".to_owned());
+                let args: Vec<&str> = args.iter().map(String::as_str).collect();
+                answer_prompts(init::SYSADMINCTL, &args, &password.0, APPROVAL)?;
+                created(name, None)
+            })
+        })?,
         Err(Refusal::Cancelled) => {
             return Err(problem(
                 "The account was not created. Approve the macOS dialog to create it.",
@@ -689,7 +1163,9 @@ pub fn create(config_path: &Path, name: &str, full_name: &str) -> Result<Value> 
     }
 
     let account = choosable(&account.name, uid)?;
-    let chosen = use_helper(config_path, &account)?;
+    let expected = setup::identity::current(&account)
+        .ok_or_else(|| problem("macOS could not identify the new account"))?;
+    let chosen = use_helper(config_path, &account, &expected)?;
     Ok(json!({
         "ok": true,
         "created": {"name": account.name, "uid": account.uid},
@@ -762,22 +1238,34 @@ fn read_secret(input: impl Read) -> Result<Vec<u8>> {
     Ok(secret)
 }
 
-/// Run `program` in a pseudo-terminal (`script`) and type `secret` each time
-/// it asks for a password, waiting until it has asked so the answer is not
-/// flushed away. The secret is cut out of anything kept from its output.
+/// Bind the terminal worker before it executes `program`, then type `secret`
+/// only when asked. Its exact PID stays in the transaction's live claim even
+/// if the caller dies; the secret is cut out of anything kept from output.
 fn answer_prompts(
     program: &str,
     args: &[&str],
     secret: &[u8],
     patience: Duration,
 ) -> Result<String> {
-    let mut child = Command::new("/usr/bin/script")
-        .args(["-q", "/dev/null", program])
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+    let script = [as_root::EXECUTOR, "exec \"$@\"\n"].concat();
+    let (mut child, executor) = as_root::start_executor(
+        Command::new("/usr/bin/script")
+            .args([
+                "-q",
+                "/dev/null",
+                "/bin/zsh",
+                "-f",
+                "-c",
+                &script,
+                "zsh",
+                program,
+            ])
+            .args(args)
+            .stderr(Stdio::piped()),
+    )
+    .map_err(|refusal| {
+        problem(format!("The terminal worker did not start: {refusal:?}")).uncertain()
+    })?;
 
     let mut input = child.stdin.take().ok_or_else(|| problem("No input pipe"))?;
     let output = child
@@ -804,12 +1292,14 @@ fn answer_prompts(
     if let Err(error) = answered {
         let _ = child.kill();
         let _ = child.wait();
+        as_root::wait_until_ended(executor);
         seen.fill(0);
         return Err(error);
     }
 
     drop(input);
     let status = child.wait()?;
+    as_root::wait_until_ended(executor);
 
     // The secret is cut out byte for byte, never copied into a string.
     let kept = without(&seen, secret);
@@ -900,79 +1390,21 @@ fn without(bytes: &[u8], secret: &[u8]) -> Vec<u8> {
     kept
 }
 
-/// In the helper: let the account that asked use this one, by installing
-/// Atlas's background job here as this account itself. Only for the
+/// In the helper: record Allow and open a setup worker, without authorization
+/// or changing jobs. The requesting account drives setup. Only for the
 /// account the person was shown (`controller_uid`, `controller_name`): a
 /// request changed meanwhile is refused.
 pub fn accept(controller_uid: u32, controller_name: &str) -> Result<Value> {
     let (uid, my_name, _) = me()?;
 
-    if config::installed_path().is_ok_and(|path| path.exists()) {
-        return Err(problem(
-            "This account has Atlas settings of its own, so it cannot be a helper",
-        ));
-    }
-
-    let request = request()
-        .filter(|request| request.helper_uid == uid && request.helper_name == my_name)
-        .ok_or_else(|| problem("No account has chosen this one as its helper"))?;
-    if request.controller_uid != controller_uid || request.controller_name != controller_name {
-        return Err(problem(
-            "The account asking changed since this window showed it; open Atlas again",
-        ));
-    }
-
-    if setup::administrator(&my_name) != Some(false) {
-        return Err(problem(
-            "This account administers the Mac; a helper must be a standard account",
-        ));
-    }
-
-    let controller = setup::account_with_uid(request.controller_uid)?
-        .filter(|account| account.name == request.controller_name)
-        .ok_or_else(|| problem("The account that asked no longer exists"))?;
-
-    signed_executable()?;
-
-    let layout = Layout { uid, home: home()? };
-    let run = |request: &Request| -> Result<Value> {
-        let reply = setup::helper::run(&serde_json::to_string(request)?)?;
-        if reply["ok"] != true {
-            return Err(problem(format!(
-                "Setting up this account failed: {}",
-                reply["error"].as_str().unwrap_or("no reply")
-            )));
-        }
-
-        Ok(reply)
-    };
-
-    run(&Request::Prepare {
-        uid,
-        controller: controller.name.clone(),
-    })?;
-
-    let agent = expected_agent(&layout, controller.uid)?;
-    let installed = init::install_job(run, uid, agent, &layout.logs())?;
-
-    // Atlas is set up here now: an opener still waiting would only open
-    // this window again at the next login.
-    let _ = setup::first_login::forget_opener(&layout);
-
-    // Install waits for the job to load, not to run; a job launchd has not
-    // started yet (or gave up on earlier) is started now.
-    if installed["pid"].is_null() {
-        let output = Command::new("/bin/launchctl")
-            .args(["kickstart", &format!("gui/{uid}/{LABEL}")])
-            .output()?;
-        if !output.status.success() {
-            return Err(problem(
-                "Atlas was set up here but did not start; log out of this account, log in again and open Atlas",
-            ));
-        }
-    }
-
-    Ok(json!({"ok": true, "controller": controller.name, "installed": installed}))
+    acceptance::allow(
+        (controller_uid, controller_name),
+        (uid, &my_name),
+        config::installed_path().is_ok_and(|path| path.exists()),
+        setup::administrator(&my_name),
+        request(),
+        acceptance::signal,
+    )
 }
 
 /// This Atlas.app's executable, refused unless Atlas's developer signed it.
@@ -1053,6 +1485,7 @@ pub fn window_open(home: &Path) -> bool {
 pub async fn finish(config_path: &Path) -> Result<Value> {
     let config = Config::load(config_path)?;
     let client = Client::new(config.clone())?;
+    client.bootstrap_probe()?;
     let status = client.status().await;
     crate::session::require_hidden(&status, config.helper_uid)?;
 
@@ -1070,7 +1503,6 @@ pub async fn finish(config_path: &Path) -> Result<Value> {
         setup::migrate::archive_foreign(helper.uid, &helper.home)?;
     }
 
-    client.install()?;
     client.start_input().await?;
 
     let ownership = client.controller.acquire(true)?;
@@ -1119,6 +1551,143 @@ pub fn login(config_path: &Path, on: bool) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn setup_without_orphans_excludes_teardown_and_keeps_its_executor_after_caller_death() {
+        for mode in ["selected", "allocated"] {
+            crate::transaction_test::interrupted_executor(
+                "onboarding::tests::an_account_setup_test_caller",
+                mode,
+            );
+        }
+    }
+
+    #[test]
+    fn interactive_creation_keeps_its_worker_claim_after_the_caller_dies() {
+        crate::transaction_test::interrupted_executor(
+            "onboarding::tests::an_account_setup_test_caller",
+            "interactive",
+        );
+    }
+
+    /// A subprocess entry point using only temporary state and a harmless executor.
+    #[test]
+    fn an_account_setup_test_caller() {
+        let Some(directory) = crate::transaction_test::directory() else {
+            return;
+        };
+        if std::env::var("ATLAS_MUTATION_TEST_MODE").unwrap() == "interactive" {
+            let controller = Controller::at(7001, &directory.join("state"));
+            let _ = init::setup_transaction(&controller, || {
+                let script = r#"print -r -- $$ > "$4"; /usr/bin/touch "$2" "$3"; while [[ ! -e $1 ]]; do /bin/sleep 0.01; done"#;
+                let paths = [
+                    directory.join("continue"),
+                    directory.join("paused"),
+                    directory.join("changed"),
+                    directory.join("executor"),
+                ];
+                let paths: Vec<&str> = paths.iter().map(|path| path.to_str().unwrap()).collect();
+                let mut args = vec!["-f", "-c", script, "zsh"];
+                args.extend(paths);
+                answer_prompts("/bin/zsh", &args, b"unused", Duration::from_secs(30))
+            });
+            return;
+        }
+        let _ = closing_first_using(
+            7001,
+            &[],
+            |uid| Ok(Controller::at(uid, &directory.join("state"))),
+            || {
+                crate::transaction_test::pause_executor(&directory);
+                Ok(())
+            },
+            || true,
+        );
+    }
+
+    #[test]
+    fn setup_requires_its_own_acknowledgement_even_when_every_orphan_is_gone() {
+        for outcome in ["complete", "refused", "partial", "unknown"] {
+            let directory = tempfile::tempdir().unwrap();
+            let controller = Controller::at(7001, directory.path());
+            let competing_teardown = controller.acquire(true).unwrap();
+            let blocked = closing_first_using(
+                7001,
+                &[],
+                |uid| Ok(Controller::at(uid, directory.path())),
+                || panic!("setup cannot dispatch while teardown owns the helper"),
+                || true,
+            );
+            assert!(matches!(blocked, Err(error) if error.code == "busy"));
+            drop(competing_teardown);
+            let directory = tempfile::tempdir().unwrap();
+            let controller = Controller::at(7001, directory.path());
+            let result = closing_first_using(
+                7001,
+                &[],
+                |uid| Ok(Controller::at(uid, directory.path())),
+                || {
+                    assert!(controller.acquire(true).is_err());
+                    assert_eq!(controller.pending().unwrap().len(), 1);
+                    if outcome == "complete" {
+                        Ok(())
+                    } else {
+                        Err(as_root::Unclosed {
+                            refusal: Refusal::Failed("setup did not complete".into()),
+                            acted: outcome != "refused",
+                            ended: outcome != "unknown",
+                        })
+                    }
+                },
+                || true,
+            )
+            .unwrap();
+            assert_eq!(result.is_ok(), outcome == "complete");
+            assert_eq!(
+                controller.pending().unwrap().len(),
+                usize::from(matches!(outcome, "partial" | "unknown"))
+            );
+        }
+    }
+    #[test]
+    fn preparing_an_account_holds_every_orphan_and_records_interrupted_cleanup() {
+        let dir = tempfile::tempdir().unwrap();
+        let controllers = [
+            Controller::at(7001, dir.path()),
+            Controller::at(7002, dir.path()),
+        ];
+        for busy in &controllers {
+            let other = busy.acquire(true).unwrap();
+            let result = setup_batch(
+                &controllers,
+                || -> std::result::Result<(), as_root::Unclosed> {
+                    unreachable!("setup never runs while an orphan is controlled")
+                },
+                || true,
+            );
+            assert!(matches!(result, Err(error) if error.code == "busy"));
+            drop(other);
+        }
+        let result = setup_batch(
+            &controllers,
+            || -> std::result::Result<(), as_root::Unclosed> {
+                for controller in &controllers {
+                    assert!(controller.acquire(true).is_err());
+                    assert_eq!(controller.pending().unwrap().len(), 1);
+                }
+                Err(as_root::Unclosed {
+                    refusal: Refusal::Failed("cleanup was interrupted".into()),
+                    acted: true,
+                    ended: true,
+                })
+            },
+            || false,
+        );
+        assert!(matches!(result, Ok(Err(Refusal::Failed(_)))));
+        for controller in controllers {
+            assert_eq!(controller.pending().unwrap().len(), 1);
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -1177,10 +1746,16 @@ mod tests {
 
     fn pairing(controller: u32) -> Pairing {
         Pairing {
+            ticket: "a".repeat(crate::control::TOKEN_BYTES * 2),
             controller_uid: controller,
             controller_name: "person".into(),
             helper_uid: controller + 1,
             helper_name: "helper".into(),
+            helper_identity: setup::identity::Identity {
+                uid: controller + 1,
+                name: "helper".into(),
+                generated_uid: "6DB4B7AF-BE3C-486C-BD46-1B4558946919".into(),
+            },
         }
     }
 
@@ -1195,6 +1770,15 @@ mod tests {
 
         write_request(&path, &pairing(me)).unwrap();
         assert_eq!(read_request(&path), Some(pairing(me)));
+
+        // Existing requests can finish without repeating account preparation.
+        let mut legacy: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        legacy.as_object_mut().unwrap().remove("ticket");
+        config::write_atomic(&path, &serde_json::to_vec(&legacy).unwrap(), 0o644).unwrap();
+        let read = read_request(&path).unwrap();
+        assert_eq!(read.controller_uid, me);
+        assert_eq!(read.ticket.len(), crate::control::TOKEN_BYTES * 2);
+        assert_eq!(read_request(&path), Some(read));
 
         // Written by someone else than the controller it names: ignored.
         write_request(&path, &pairing(me + 7)).unwrap();
@@ -1255,6 +1839,7 @@ mod tests {
         let layout = Layout {
             uid: helper.uid,
             home: helper.home.clone(),
+            guard: None,
         };
         fs::create_dir_all(layout.root()).unwrap();
         assert!(!prepared(&helper), "only its root");
@@ -1299,5 +1884,320 @@ mod tests {
 
         fs::remove_file(root.join(WINDOW_MARKER)).unwrap();
         assert!(!window_open(dir.path()));
+    }
+
+    fn opie() -> Identity {
+        Identity {
+            uid: 503,
+            name: "opie".into(),
+            generated_uid: "6DB4B7AF-BE3C-486C-BD46-1B4558946919".into(),
+        }
+    }
+
+    fn sessions(logins: &[(u32, u32, crate::session::Kind)]) -> crate::session::Sessions {
+        crate::session::Sessions {
+            logins: logins
+                .iter()
+                .map(|(uid, pid, kind)| {
+                    let window = crate::session::Window {
+                        uid: *uid,
+                        pid: *pid,
+                        age: Duration::from_secs(600),
+                    };
+                    (window, *kind)
+                })
+                .collect(),
+            blockers: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_login_under_the_helpers_user_id_is_closed_only_as_the_recorded_helpers() {
+        use crate::session::Kind;
+
+        let found = sessions(&[
+            (7001, 11, Kind::Orphan),
+            (503, 22, Kind::HelperLeftover),
+            (501, 33, Kind::Mine),
+            (504, 44, Kind::OtherPerson),
+        ]);
+        assert_eq!(
+            leftover_targets(&found, Some(&opie())),
+            Ok(vec![
+                Target::Orphan(7001),
+                Target::Leftover {
+                    helper: opie(),
+                    pid: 22
+                },
+            ])
+        );
+        assert!(leftover_targets(&found, None).is_err(), "nothing recorded");
+        let other = Identity { uid: 505, ..opie() };
+        assert!(leftover_targets(&found, Some(&other)).is_err());
+    }
+
+    #[test]
+    fn every_leftover_login_closes_under_one_approval() {
+        let targets = [
+            Target::Orphan(7001),
+            Target::Leftover {
+                helper: opie(),
+                pid: 22,
+            },
+            Target::Orphan(7003),
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        let held = controller(dir.path());
+        for controllers in [&[][..], std::slice::from_ref(&held)] {
+            let asked = std::cell::Cell::new(0);
+            let closed = close_batch(
+                controllers,
+                &targets,
+                |all| {
+                    asked.set(asked.get() + 1);
+                    assert_eq!(all, targets, "every target in the one run");
+                    Ok(all.iter().map(Target::uid).collect())
+                },
+                |uids| uids == [7001, 503, 7003],
+            );
+            assert_eq!(closed.unwrap(), [7001, 503, 7003]);
+            assert_eq!(asked.get(), 1, "one approval");
+        }
+        assert!(held.pending().unwrap().is_empty());
+
+        let none = close_batch(
+            std::slice::from_ref(&held),
+            &[],
+            |_| unreachable!("nothing to close"),
+            |_| true,
+        );
+        assert_eq!(none.unwrap(), Vec::<u32>::new());
+
+        let still = close_batch(
+            &[],
+            &targets,
+            |all| Ok(all.iter().map(Target::uid).collect()),
+            |_| false,
+        );
+        assert!(
+            matches!(still, Err(Held::Refused(Refusal::Failed(why))) if why == "it is still running"),
+            "seen gone, not taken on root's word"
+        );
+    }
+
+    #[test]
+    fn closing_leftover_logins_holds_the_helper_and_keeps_an_unknown_outcome() {
+        let targets = [Target::Orphan(7001), Target::Orphan(503)];
+        let dir = tempfile::tempdir().unwrap();
+        let held = controller(dir.path());
+
+        // Another controller holds the helper: root is never asked.
+        let other = held.acquire(true).unwrap();
+        let busy = close_batch(
+            std::slice::from_ref(&held),
+            &targets,
+            |_| unreachable!("root is not asked"),
+            |_| true,
+        );
+        assert!(matches!(busy, Err(Held::State(error)) if error.code == "busy"));
+        drop(other);
+
+        // Held throughout, and recorded before root is asked.
+        let interrupted = close_batch(
+            std::slice::from_ref(&held),
+            &targets,
+            |_| {
+                assert!(controller(dir.path()).acquire(true).is_err(), "taken");
+                assert_eq!(controller(dir.path()).pending().unwrap().len(), 1);
+                Err(as_root::Unclosed {
+                    refusal: Refusal::Failed("macOS didn't close the login of user ID 503".into()),
+                    acted: true,
+                    ended: true,
+                })
+            },
+            |_| false,
+        );
+        assert!(interrupted.is_err());
+        assert_eq!(held.pending().unwrap().len(), 1, "kept for recovery");
+    }
+
+    #[test]
+    fn creating_without_the_approval_call_waits_while_a_deleted_accounts_login_is_open() {
+        let error = without_approval(&[7001], || -> Result<()> {
+            unreachable!("no account is made")
+        })
+        .unwrap_err();
+        assert!(
+            error
+                .error
+                .contains("sudo launchctl bootout user/7001, then try again"),
+            "{}",
+            error.error
+        );
+        assert_eq!(without_approval(&[], || Ok(7)).unwrap(), 7);
+    }
+
+    /// A controller kept in `dir`, and the generations it has pending.
+    fn controller(dir: &Path) -> Controller {
+        Controller::at(60001, &dir.join("state"))
+    }
+
+    fn untouched(refusal: Refusal) -> as_root::Unclosed {
+        as_root::Unclosed {
+            refusal,
+            acted: false,
+            ended: true,
+        }
+    }
+
+    #[test]
+    fn the_helper_is_logged_out_as_root_only_under_control_held_throughout() {
+        let dir = tempfile::tempdir().unwrap();
+        let held = controller(dir.path());
+
+        // Another controller holds the helper: root is never asked.
+        let other = held.acquire(true).unwrap();
+        let busy = close_helper_held(
+            &held,
+            || Ok(opie()),
+            |_| unreachable!("root is not asked"),
+            || true,
+        );
+        assert!(matches!(busy, Err(Held::State(error)) if error.code == "busy"));
+        drop(other);
+
+        // Held while root runs and while the login is looked at.
+        let ended = (0..50)
+            .find_map(|_| {
+                let result = close_helper_held(
+                    &held,
+                    || Ok(opie()),
+                    |helper| {
+                        assert!(controller(dir.path()).acquire(true).is_err(), "taken");
+                        assert_eq!(helper, opie());
+                        Ok(vec![503])
+                    },
+                    || {
+                        assert!(controller(dir.path()).acquire(true).is_err(), "taken");
+                        true
+                    },
+                );
+                match result {
+                    Err(Held::State(error)) if error.code == "busy" => {
+                        std::thread::sleep(Duration::from_millis(20));
+                        None
+                    }
+                    result => Some(result),
+                }
+            })
+            .expect("a child that inherited the old lock finishes its exec");
+        assert!(ended.is_ok());
+        assert!(held.pending().unwrap().is_empty(), "settled once seen gone");
+        assert!(held.acquire(false).is_ok(), "let go after");
+    }
+
+    #[test]
+    fn a_log_out_as_root_stays_pending_until_the_login_is_seen_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let held = controller(dir.path());
+
+        // Recorded before root is asked, so a run cut short leaves it.
+        let ownership = held.acquire(true).unwrap();
+        let lost = end_as_root(
+            &held,
+            &ownership,
+            || {
+                assert_eq!(controller(dir.path()).pending().unwrap().len(), 1);
+                Err(as_root::Unclosed {
+                    refusal: Refusal::Failed(
+                        "Atlas stopped waiting for the approved step, which may still finish"
+                            .into(),
+                    ),
+                    acted: true,
+                    ended: false,
+                })
+            },
+            || false,
+        );
+        assert!(matches!(lost, Err(Held::Refused(Refusal::Failed(_)))));
+        assert_eq!(
+            held.pending().unwrap().len(),
+            1,
+            "a lost reply stays pending"
+        );
+
+        // Root said it closed it, but it is still seen: pending too.
+        let stayed = end_as_root(&held, &ownership, || Ok(vec![503]), || false);
+        assert!(stayed.is_err());
+        assert_eq!(held.pending().unwrap().len(), 2);
+        drop(ownership);
+        assert_eq!(
+            held.acquire(false).unwrap_err().code,
+            "uncertain",
+            "recovery comes first"
+        );
+    }
+
+    #[test]
+    fn a_root_run_whose_reply_was_lost_stays_pending_though_the_login_looks_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let held = controller(dir.path());
+        let ownership = held.acquire(true).unwrap();
+
+        // The desktop is gone for now, but root may still be waiting to act.
+        let lost = end_as_root(
+            &held,
+            &ownership,
+            || {
+                Err(as_root::Unclosed {
+                    refusal: Refusal::Failed("The step did not finish".into()),
+                    acted: true,
+                    ended: false,
+                })
+            },
+            || unreachable!("how the login looks proves nothing yet"),
+        );
+        assert!(matches!(lost, Err(Held::Refused(_))));
+        assert_eq!(held.pending().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_log_out_root_never_started_leaves_nothing_pending() {
+        let dir = tempfile::tempdir().unwrap();
+        let held = controller(dir.path());
+        let ownership = held.acquire(true).unwrap();
+
+        for refusal in [
+            Refusal::Cancelled,
+            Refusal::Unavailable,
+            Refusal::Failed(
+                "the helper is on screen; switch back to your own account first".into(),
+            ),
+        ] {
+            let ended = end_as_root(
+                &held,
+                &ownership,
+                || Err(untouched(refusal.clone())),
+                || false,
+            );
+            assert!(matches!(ended, Err(Held::Refused(said)) if said == refusal));
+        }
+        assert!(held.pending().unwrap().is_empty());
+
+        // Root stopped after it acted, but the login is gone: settled.
+        let late = end_as_root(
+            &held,
+            &ownership,
+            || {
+                Err(as_root::Unclosed {
+                    refusal: Refusal::Failed("macOS didn't end the login of user ID 503".into()),
+                    acted: true,
+                    ended: true,
+                })
+            },
+            || true,
+        );
+        assert!(late.is_ok());
+        assert!(held.pending().unwrap().is_empty());
     }
 }

@@ -16,6 +16,10 @@ public enum OnboardingEvent: Hashable, Sendable {
   case lockAndSwitch
   /// Choose Another Account, while the helper asked never answered.
   case chooseAnother
+  /// Close It…, to close a deleted account's login that is still open.
+  case closeLeftovers
+  /// Continue once it is closed: on to what the facts lead to next.
+  case continueAfterClose
   /// Check Again when blocked: read the facts again.
   case checkAgain
   /// Try Again after a failed check.
@@ -36,6 +40,10 @@ public enum OnboardingEvent: Hashable, Sendable {
   case complete
   /// Allow, in the helper.
   case allow
+  /// Not Now, in the helper: the window closes and nothing is allowed.
+  case notNow
+  /// Show in Finder, when Atlas.app itself must move or be installed again first.
+  case showInFinder
   /// Allow a permission: open its page in System Settings, with the permission panel beside it.
   ///
   /// - Parameter permission: The permission's id.

@@ -17,8 +17,7 @@ extension SettingsPresenter {
         PopupOption(id: .everyFiveSeconds, title: SettingsWords.everyFiveSeconds),
         PopupOption(id: .paused, title: SettingsWords.paused, isEnabled: facts.canPause || facts.picture == .paused),
       ],
-      notify: snapshot.notify,
-      badge: snapshot.badge
+      notify: snapshot.notify
     )
   }
 

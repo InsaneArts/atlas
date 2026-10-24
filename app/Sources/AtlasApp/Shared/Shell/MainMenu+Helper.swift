@@ -1,9 +1,10 @@
 import AppKit
 
 extension MainMenu {
-  /// Take Control ⌃⇧⎋ and Stop Agent ⌘.; Recover… and Restart the Helper…; Switch to the Helper… and Log Out the
-  /// Helper…. While the main window holds control, its screen's key monitor answers ⌃⇧⎋ first, giving control back,
-  /// and sends ⌘. to the helper.
+  /// Take Control ⌃⇧⎋ (Give Back Control while in control) and Stop Agent ⌘. (Resume Agent); Recover…, with Restart
+  /// Helper… in its place while Option is held, since only someone who knows Recover cannot help should reach for it;
+  /// then Switch to and Log Out, which name the helper once the window in front knows it. While the main window holds
+  /// control, its screen's key monitor answers ⌃⇧⎋ first, giving control back, and sends ⌘. to the helper.
   ///
   /// - Returns: The menu.
   static func helper() -> NSMenu {
@@ -20,14 +21,30 @@ extension MainMenu {
       keyEquivalent: "."
     )
     helper.addItem(.separator())
-    // Recover… then Restart; Switch and Log Out after a separator, as the board stands them.
-    for item in HelperMenuItems.make(target: nil) {
-      helper.addItem(item)
-      if item.action == #selector(HelperMenuActions.askRecover(_:)) {
-        helper.addItem(HelperMenuItems.restart(target: nil))
-        helper.addItem(.separator())
-      }
-    }
+    let recover = helper.addItem(
+      withTitle: HelperWords.recoverItem,
+      action: #selector(HelperMenuActions.askRecover(_:)),
+      keyEquivalent: ""
+    )
+    recover.keyEquivalentModifierMask = []
+    let restart = helper.addItem(
+      withTitle: MenuWords.restartHelper,
+      action: #selector(HelperMenuActions.askRestart(_:)),
+      keyEquivalent: ""
+    )
+    restart.keyEquivalentModifierMask = .option
+    restart.isAlternate = true
+    helper.addItem(.separator())
+    helper.addItem(
+      withTitle: MenuWords.switchTo(nil),
+      action: #selector(HelperMenuActions.askSwitch(_:)),
+      keyEquivalent: ""
+    )
+    helper.addItem(
+      withTitle: MenuWords.logOut(nil),
+      action: #selector(HelperMenuActions.askLogOut(_:)),
+      keyEquivalent: ""
+    )
     return helper
   }
 }

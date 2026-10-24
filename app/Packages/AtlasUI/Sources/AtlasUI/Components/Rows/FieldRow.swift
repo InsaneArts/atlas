@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// A labelled text field, one row of a ``GroupedList`` (v3 D6): its name in a column on the left, the field filling the
-/// rest. Focused, it draws a fine ring inside the row (v3 S6). Flagged, it shows what the line under the form is about
-/// (v3 X12): the row washes orange, its name turns orange, it gains the round "!" at its end, and the focus moves to
-/// it as the flag arrives, unless the person is typing in another field.
+/// A labelled text field, one row of a ``GroupedList``: its name in a column on the left, the field filling
+/// the rest. Focused, it draws a fine ring inside the row. Flagged, it shows what the line under the form is
+/// about: the row washes orange, its name turns orange, it gains the round "!" at its end, and the focus
+/// moves to it as the flag arrives, unless the person is typing in another field.
 struct FieldRow: View {
   /// The field's name, on the left.
   let label: String
@@ -17,6 +17,9 @@ struct FieldRow: View {
   var isFlagged = false
   /// Whether another field of the form holds the focus, which a flag never takes away from.
   var isOtherFieldFocused = false
+  /// Whether the field takes the focus as it appears, such as a form's first empty field, unless the person is
+  /// typing in another field by then.
+  var focusesOnAppear = false
   /// Called as the field takes or loses the focus, so the form knows where the person types.
   var focusChanged: @MainActor (Bool) -> Void = { _ in }
   @FocusState private var isFocused: Bool
@@ -62,6 +65,13 @@ struct FieldRow: View {
       await Task.yield()
       guard !Task.isCancelled else { return }
       if Self.takesFocus(isFlagged: isFlagged, isOtherFieldFocused: otherFieldFocusedNow) { isFocused = true }
+    }
+    // The same deferred focus, once, for the field that starts the form.
+    .task {
+      guard focusesOnAppear else { return }
+      await Task.yield()
+      guard !Task.isCancelled, !otherFieldFocusedNow else { return }
+      isFocused = true
     }
     .onChange(of: isOtherFieldFocused, initial: true) { _, focused in otherFieldFocusedNow = focused }
     .onChange(of: isFocused) { _, focused in focusChanged(focused) }
@@ -109,11 +119,11 @@ struct FieldRow: View {
   }
 }
 
-/// v3's field row (`.row.field`).
+/// The field row's own measures for its label and focus ring.
 private enum Layout {
   /// 112: the labels' column, wide enough for "Account name" so the fields line up.
   static let labelWidth: CGFloat = 112
-  /// 3: the focus ring's soft halo, half of it outside the fine edge (v3's `0 0 0 3px` ring).
+  /// 3: the focus ring's soft halo, half of it outside the fine edge.
   static let haloWidth: CGFloat = 3
 }
 

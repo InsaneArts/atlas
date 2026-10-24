@@ -1,9 +1,9 @@
 import AppKit
 import SwiftUI
 
-/// The AppKit host of every SwiftUI view Atlas puts on screen: each window, the alert, the panel's popover and the drag
-/// ghost's overlay call one of these, so the hosting view, ``ShellRoot`` and the dark appearance (``Appearance/dark``)
-/// are written once. Atlas's windows are opaque on `NSColor.ground`, unlike jolt's clear ones; the alert and the
+/// The AppKit host of every SwiftUI view Atlas puts on screen: each window, the alert, the panel's popover
+/// and the drag ghost's overlay call one of these, so the hosting view, ``ShellRoot`` and the dark appearance
+/// (``Appearance/dark``) are written once. Atlas's windows are opaque on `NSColor.ground`; the alert and the
 /// ghost are the clear ones, drawing their own surface inside the window's frame.
 enum WindowShell {
   /// Makes a SwiftUI view an opaque window's content: dark, on the ground, so a resize never flashes another colour,

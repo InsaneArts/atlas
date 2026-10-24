@@ -2,7 +2,7 @@ import AtlasUI
 import Foundation
 
 extension ViewerPresenter {
-  /// Details: the helper, its readiness checks, the picture and the session (MacDetails).
+  /// Details: the helper, its readiness checks, the picture and the session.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The column.
@@ -53,7 +53,7 @@ extension ViewerPresenter {
   static func session(_ snapshot: ViewerSnapshot) -> [Fact] {
     var rows: [Fact] = []
     if let login = snapshot.loggedInAt {
-      // The hour in two digits, as the board's 09:12, on the person's own 12- or 24-hour clock.
+      // The hour in two digits, such as 09:12, on the person's own 12- or 24-hour clock.
       let style = Date.FormatStyle(locale: snapshot.locale, timeZone: snapshot.timeZone)
         .hour(.twoDigits(amPM: .abbreviated))
         .minute(.twoDigits)

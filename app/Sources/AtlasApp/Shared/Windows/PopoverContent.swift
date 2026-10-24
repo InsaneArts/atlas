@@ -1,9 +1,9 @@
 import AppKit
 
-/// A popover's content controller that holds a view at its top and lets its owner size the popover: the view keeps
-/// its own height, and each size it asks for goes to `follow`, which sets the popover's size, at once or easing. A
-/// popover that follows its content controller's size by itself animates the change its own way; this one leaves the
-/// timing to its owner (v3 P10). The container carries the popover's name for VoiceOver.
+/// A popover's content controller that holds a view at its top and lets its owner size the popover: the view
+/// keeps its own height, and each size it asks for goes to `follow`, which sets the popover's size, at once
+/// or easing. A popover that follows its content controller's size by itself animates the change its own way;
+/// this one leaves the timing to its owner. The container carries the popover's name for VoiceOver.
 final class PopoverContent: NSViewController {
   /// The view's own controller, a child of this one.
   private let content: NSViewController

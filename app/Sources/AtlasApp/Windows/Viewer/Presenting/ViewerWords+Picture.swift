@@ -1,31 +1,26 @@
-/// The ⋯ menu's words: how often pictures arrive, Copy and Save Picture and what follows them, and the helper's
-/// note.
+/// The ⋯ menu's words: how often pictures arrive, Copy and Save for the picture and for a screenshot, and what follows
+/// them. Every item is in title case, as the menus' are.
 extension ViewerWords {
   /// Pictures as often as the window reads them.
   static let live = "Live"
   /// A picture every five seconds.
-  static let everyFiveSeconds = "Every 5 seconds"
+  static let everyFiveSeconds = "Every 5 Seconds"
   /// No new pictures.
   static let paused = "Paused"
-  /// The ⋯ menu's picture header.
-  static let pictureHeader = "Picture"
+  /// The ⋯ menu's header over how often pictures arrive.
+  static let updatesHeader = "Updates"
   /// Copy Picture.
   static let copyPicture = "Copy Picture"
   /// Save Picture….
   static let savePicture = "Save Picture…"
+  /// Copy Screenshot, on the Screenshots tab with one shown large or selected.
+  static let copyScreenshot = "Copy Screenshot"
+  /// Save Screenshot…, on the Screenshots tab with one shown large or selected.
+  static let saveScreenshot = "Save Screenshot…"
   /// Once the picture is on the clipboard.
   static let pictureCopied = "Picture copied."
   /// A picture that could not be written.
   static let pictureNotSaved = "Atlas couldn't save the picture."
-
-  /// The ⋯ menu's note: the helper and its display.
-  ///
-  /// - Parameters:
-  ///   - account: The helper as people know it.
-  ///   - display: Its display, when known.
-  /// - Returns: "Helper “Atlas” · 2560 × 1440".
-  static func helperNote(account: String, display: String?) -> String {
-    let name = "Helper “\(account)”"
-    return display.map { "\(name) · \($0)" } ?? name
-  }
+  /// A screenshot that could not be written.
+  static let shotNotSaved = "Atlas couldn't save the screenshot."
 }

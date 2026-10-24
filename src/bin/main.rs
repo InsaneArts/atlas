@@ -118,7 +118,15 @@ enum Command {
         rollback: bool,
     },
     #[command(hide = true)]
-    SetupHelper { request: String },
+    SetupHelper {
+        request: String,
+        /// Refuse unless this account matches this JSON account identity.
+        #[arg(long)]
+        account: Option<String>,
+        /// Refuse unless this account is logged out.
+        #[arg(long)]
+        logged_out: bool,
+    },
     /// Show where Atlas keeps its settings, sockets and screenshots.
     Config,
     /// Show the helper: who it is, where it is and what it may do.
@@ -128,6 +136,9 @@ enum Command {
         /// Include the helper's full status (in --json too).
         #[arg(long)]
         verbose: bool,
+        /// Show how long the last login of the past two hours took, step by step.
+        #[arg(long, conflicts_with = "verbose")]
+        login_timing: bool,
     },
     /// Check that native Save and Open dialogs work in the helper.
     ///
@@ -486,7 +497,7 @@ enum Command {
     Init,
     /// Remove Atlas from this Mac (asks first).
     ///
-    /// The helper account and its files stay; the app goes to the Trash.
+    /// The helper is logged out first. Its account and files stay unless you pass --remove-helper; the app goes to the Trash.
     Uninstall {
         /// Keep configuration, setup records and logs.
         #[arg(long)]
@@ -494,6 +505,9 @@ enum Command {
         /// Do not ask.
         #[arg(long)]
         yes: bool,
+        /// Also delete the helper account and its files, once it is logged out.
+        #[arg(long)]
+        remove_helper: bool,
     },
     /// Connect Claude Code and Codex, or show which are connected.
     ///
@@ -535,6 +549,12 @@ enum OnboardingCommand {
         #[arg(long = "controller-name")]
         controller_name: String,
     },
+    /// Serve the unprivileged setup connection after Allow.
+    #[command(hide = true)]
+    AcceptWorker {
+        #[arg(long)]
+        ticket: String,
+    },
     /// Mark the window open or closed in this account.
     Window {
         #[arg(value_enum)]
@@ -542,6 +562,12 @@ enum OnboardingCommand {
     },
     /// Take back this account's request of a helper that never answered.
     Forget,
+    /// Close the logins deleted accounts left open (macOS asks to approve).
+    Close {
+        /// Log out the helper instead, where Atlas isn't answering.
+        #[arg(long)]
+        helper: bool,
+    },
     /// Back in the person's account: start input and check everything.
     Finish,
     /// Open the menu bar at login (on or off), decided once.
@@ -975,7 +1001,10 @@ fn view(command: &Command) -> View {
     let at = |x: f64, y: f64| format!("{}, {}", text::number(x), text::number(y));
 
     match command {
-        Command::Doctor { verbose } => View::Doctor { verbose: *verbose },
+        Command::Doctor {
+            login_timing: true, ..
+        } => View::LoginTiming,
+        Command::Doctor { verbose, .. } => View::Doctor { verbose: *verbose },
         Command::Status => View::Status,
         Command::Config => View::Config,
         Command::Screenshot { .. } => View::Capture,
@@ -1210,15 +1239,37 @@ async fn doctor(client: &Client, verbose: bool) -> Value {
     // Both states make the helper unusable; init refuses them too.
     let mut first_steps = Vec::new();
 
-    if let Some(account) = &account {
-        if atlas::session::leftover_session(uid, &account.name, &account.home) {
-            first_steps.push(format!(
-                "macOS still runs a session of a deleted account with {}'s user ID and mixes it \
-                 up with the helper. Restart the Mac.",
-                account.name
-            ));
-        }
+    // A deleted account's login left running can stall the next login, or
+    // be mistaken for the helper's.
+    let sessions = tokio::task::spawn_blocking(move || atlas::session::sessions(Some(uid)))
+        .await
+        .ok()
+        .flatten();
+    let leftover = sessions.as_ref().map(|sessions| {
+        sessions
+            .leftover_uids(atlas::session::Kind::Orphan)
+            .into_iter()
+            .chain(sessions.leftover_uids(atlas::session::Kind::HelperLeftover))
+            .next()
+    });
+    let left = leftover.flatten().map(|uid| {
+        format!(
+            "A deleted account (user ID {uid}) is still logged in. Close it in Atlas › Settings › \
+             Helper, or run atlas init."
+        )
+    });
+    if let Some(checks) = report["checks"].as_array_mut() {
+        checks.push(json!({
+            "name": "No logins left by deleted accounts",
+            "ok": leftover.map(|uid| uid.is_none()),
+            "nextStep": left,
+        }));
+    }
+    if let Some(step) = left {
+        first_steps.push(step);
+    }
 
+    if let Some(account) = &account {
         match atlas::setup::administrator(&account.name) {
             Some(false) => {}
             Some(true) => first_steps.push(format!(
@@ -1310,7 +1361,19 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             controller_uid,
             socket,
         } => input_service(uid, controller_uid, socket).await,
-        Command::SetupHelper { request } => atlas::setup::helper::run(&request),
+        Command::SetupHelper {
+            request,
+            account,
+            logged_out,
+        } => atlas::setup::helper::run_guarded(
+            &request,
+            &atlas::setup::helper::Guard {
+                account: account
+                    .map(|text| serde_json::from_str(&text))
+                    .transpose()?,
+                logged_out,
+            },
+        ),
         Command::Update {
             check: true,
             version,
@@ -1346,10 +1409,15 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
                     controller_uid,
                     controller_name,
                 } => onboarding::accept(controller_uid, &controller_name),
+                OnboardingCommand::AcceptWorker { ticket } => {
+                    onboarding::accept_worker(&ticket).await
+                }
                 OnboardingCommand::Window { state } => {
                     onboarding::window(state == WindowState::Open)
                 }
                 OnboardingCommand::Forget => onboarding::forget(&config),
+                OnboardingCommand::Close { helper: false } => onboarding::close_leftovers(&config),
+                OnboardingCommand::Close { helper: true } => onboarding::close_helper(&config),
                 OnboardingCommand::Finish => onboarding::finish(&config).await,
                 OnboardingCommand::Login { state } => {
                     onboarding::login(&config, state == OnOff::On)
@@ -1382,9 +1450,13 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
                 }
             }
         }
-        Command::Uninstall { keep_config, yes } => {
+        Command::Uninstall {
+            keep_config,
+            yes,
+            remove_helper,
+        } => {
             as_yourself("uninstall")?;
-            atlas::uninstall::run(&config, keep_config, yes).await
+            atlas::uninstall::run(&config, keep_config, yes, remove_helper).await
         }
         Command::Menubar {
             login: Some(login), ..
@@ -1417,7 +1489,10 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             Ok(json!({ "ok": true, "config": client.config, "path": config }))
         }
         Command::Status => Ok(client()?.status().await),
-        Command::Doctor { verbose } => Ok(doctor(&client()?, verbose).await),
+        Command::Doctor {
+            login_timing: true, ..
+        } => atlas::login_log::timing(),
+        Command::Doctor { verbose, .. } => Ok(doctor(&client()?, verbose).await),
         Command::VerifyNative { fixture } => atlas::capability::verify(&client()?, &fixture).await,
         Command::Environment {
             manifest,

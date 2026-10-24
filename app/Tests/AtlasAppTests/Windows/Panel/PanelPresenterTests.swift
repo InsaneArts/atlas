@@ -42,15 +42,15 @@ struct PanelPresenterTests {
   ]
 
   @Test(
-    "each state offers its one main action",
+    "each state offers its one main action, never greyed: Open Atlas while connecting, and Open Settings where Recover can't help",
     arguments: [
       ("Idle", "Open Atlas", PanelEvent.openAtlas),
       ("Working", "Open Atlas", .openAtlas),
       ("You have control", "Give Back", .giveBack),
       ("Needs you", "Recover…", .askRecover),
-      ("Stopped", "Resume", .resumeAgent),
+      ("Stopped", "Open Atlas", .openAtlas),
       ("Logged out", "Switch to the Helper…", .askSwitch),
-      ("Not ready", "Recover…", .askRecover),
+      ("Not ready", "Open Settings", .openSettings),
       ("Connecting", "Open Atlas", .openAtlas),
       ("In use elsewhere", "Open Atlas", .openAtlas),
     ]
@@ -60,21 +60,27 @@ struct PanelPresenterTests {
     #expect(panel.status.label == row, "the facts read as \(row)")
     #expect(panel.controls.main.title == title)
     #expect(panel.controls.main.event == event)
-    // Connecting waits, and so does Recover… for a helper that isn't answering, which Recover cannot fix.
-    #expect(panel.controls.main.isEnabled == (row != "Connecting" && row != "Not ready"))
-    #expect(panel.controls.showsStop == (row == "Working"), "Stop stands before it only while an agent works")
+    #expect(panel.controls.main.isEnabled)
   }
 
-  @Test("a main action that asks for one of the helper's commands waits while that command runs from any window")
-  func theMainActionWaitsForItsCommand() throws {
+  @Test("Recover… opens its alert while a recovery runs, which shows it running; Switch… waits while a switch runs")
+  func theMainActionWaitsOnlyForASwitch() throws {
     var needsYou = try Self.snapshot("Needs you")
-    needsYou.running = [.switchToHelper]
-    #expect(PanelPresenter.state(needsYou).controls.main.isEnabled, "another command does not hold it")
     needsYou.running = [.recovery]
-    #expect(!PanelPresenter.state(needsYou).controls.main.isEnabled)
+    #expect(PanelPresenter.state(needsYou).controls.main.isEnabled)
     var loggedOut = try Self.snapshot("Logged out")
     loggedOut.running = [.switchToHelper]
     #expect(!PanelPresenter.state(loggedOut).controls.main.isEnabled)
+  }
+
+  @Test("stopped offers Resume in glass before Open Atlas, the pair working offers with Stop")
+  func stoppedPairsResumeWithOpenAtlas() throws {
+    let stopped = PanelPresenter.state(try Self.snapshot("Stopped")).controls
+    #expect(stopped.agent == .resume(isEnabled: true))
+    #expect(stopped.main.event == .openAtlas)
+    var resuming = try Self.snapshot("Stopped")
+    resuming.session.requests = 1
+    #expect(PanelPresenter.state(resuming).controls.agent == .resume(isEnabled: false), "Resume waits for an answer")
   }
 
   @Test(
@@ -145,15 +151,30 @@ struct PanelPresenterTests {
     }
   }
 
-  @Test("the bottom row shows Stop only while the agent works")
+  @Test("the bottom row shows Stop only while the agent works, and Resume only once agents are stopped")
   func stopShowsOnlyWhileWorking() throws {
     for row in Self.rows {
-      #expect(PanelPresenter.state(try Self.snapshot(row)).controls.showsStop == (row == "Working"), "\(row)")
+      let agent = PanelPresenter.state(try Self.snapshot(row)).controls.agent
+      let expected: ViewerAgentButton? =
+        switch row {
+        case "Working": .stop
+        case "Stopped": .resume(isEnabled: true)
+        default: nil
+        }
+      #expect(agent == expected, "\(row)")
     }
     var stopping = try Self.snapshot("Working")
     stopping.session.requests = 1
     stopping.agentRequests = 1
-    #expect(PanelPresenter.state(stopping).controls.showsStop, "a Stop under way leaves Stop in place")
+    #expect(PanelPresenter.state(stopping).controls.agent == .stop, "a Stop under way leaves Stop in place")
+  }
+
+  @Test("connecting says the helper is starting the first time, and reconnecting once answers came and stopped")
+  func connectingSaysWhichKind() throws {
+    var snapshot = try Self.snapshot("Connecting")
+    #expect(PanelPresenter.state(snapshot).status.line == "Starting the helper…")
+    snapshot.reconnecting = true
+    #expect(PanelPresenter.state(snapshot).status.line == "Reconnecting…")
   }
 
   @Test("an idle helper with the picture paused says so, and that work in the helper goes on")
@@ -191,12 +212,14 @@ struct PanelPresenterTests {
   }
 
   @Test(
-    "Recover… is offered only where it fixes something, by the main window's rule: an unknown outcome or input it starts"
+    "Recover… is the main action only where it fixes something, by the main window's rule: an unknown outcome or input it starts"
   )
   func recoverIsOfferedOnlyWhereItHelps() throws {
-    #expect(!PanelPresenter.moreMenu(try Self.snapshot("Idle")).helper.canRecover)
-    #expect(PanelPresenter.moreMenu(try Self.snapshot("Needs you")).helper.canRecover)
-    #expect(!PanelPresenter.moreMenu(try Self.snapshot("Not ready")).helper.canRecover, "an unreachable service")
+    func main(_ snapshot: PanelSnapshot) -> PanelEvent {
+      PanelPresenter.state(snapshot).controls.main.event
+    }
+    #expect(main(try Self.snapshot("Needs you")) == .askRecover)
+    #expect(main(try Self.snapshot("Not ready")) == .openSettings, "an unreachable service")
     let blocked = { (recoverable: Bool) throws -> PanelSnapshot in
       PanelSnapshot(
         status: try status([
@@ -204,17 +227,16 @@ struct PanelPresenterTests {
         ])
       )
     }
-    #expect(PanelPresenter.moreMenu(try blocked(true)).helper.canRecover, "input Recover starts again")
-    #expect(!PanelPresenter.moreMenu(try blocked(false)).helper.canRecover, "a block Recover can't fix")
+    #expect(main(try blocked(true)) == .askRecover, "input Recover starts again")
+    #expect(main(try blocked(false)) == .openSettings, "a block Recover can't fix")
   }
 
-  @Test("Open at Login shows in the ⋯ menu only when the app carries the login item")
-  func openAtLogin() throws {
-    var snapshot = try Self.snapshot("Idle")
-    #expect(PanelPresenter.moreMenu(snapshot).opensAtLogin == nil)
-    snapshot.opensAtLogin = OpenAtLogin.State(isAvailable: false, isEnabled: false)
-    #expect(PanelPresenter.moreMenu(snapshot).opensAtLogin == nil)
-    snapshot.opensAtLogin = OpenAtLogin.State(isAvailable: true, isEnabled: true)
-    #expect(PanelPresenter.moreMenu(snapshot).opensAtLogin == true)
+  @Test("the ⋯ menu offers Open Atlas only while the main button is something else")
+  func openAtlasIsNeverOfferedTwice() throws {
+    for row in Self.rows {
+      let snapshot = try Self.snapshot(row)
+      let mainOpens = PanelPresenter.state(snapshot).controls.main.event == .openAtlas
+      #expect(PanelPresenter.moreMenu(snapshot).showsOpenAtlas == !mainOpens, "\(row)")
+    }
   }
 }

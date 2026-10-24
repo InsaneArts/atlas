@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// One of an app's windows under its head (v3 V9, `.wrow`): its title and size, a faint fill under the pointer, and
-/// Show on Screen, which shows only while the pointer is on this row, or the keyboard is on the button, instead of
+/// One of an app's windows under its head: its title and size, a faint fill under the pointer, and Show on
+/// Screen, which shows only while the pointer is on this row, or the keyboard is on the button, instead of
 /// repeating on every row. It reads as one, with Show on Screen as its action.
 struct AppWindowRow: View {
   /// The window.

@@ -4,8 +4,7 @@
 // that is already there but never adds one before a chained call, so this
 // checker does: node scripts/check-swift-modifiers.mjs [FOLDER...].
 //
-// A port of ../jolt-v2/Scripts/check_modifiers.py, with its rules. On the
-// source with comments and string contents blanked, a call is `.name(` or
+// On the source with comments and string contents blanked, a call is `.name(` or
 // `.name {` with a lowercase-initial name, written right after an
 // expression: after a name, `]`, `)` or `}`, with an optional `?` or `!`
 // between, and spaces allowed only after `)` or `}`. A call at the start of

@@ -1,14 +1,15 @@
 import SwiftUI
 
-/// The app's own icon, from the `appIcon` environment value, or a placeholder tile where none is supplied. The icon
-/// file is one square canvas whose visible tile is 824 of its 1024 points, with Apple's shape, shadow and transparent
-/// margin around it; it is drawn whole in one square frame, never re-masked or cropped (v3 B1).
+/// The app's own icon, from the `appIcon` environment value, or a placeholder tile where none is supplied.
+/// The icon file is one square canvas whose visible tile is 824 of its 1024 points, with Apple's shape,
+/// shadow and transparent margin around it; it is drawn whole in one square frame, never re-masked or
+/// cropped.
 public struct AppIcon: View {
   /// The square canvas's side, in points: the whole icon file, margin included.
   let size: CGFloat
   @Environment(\.appIcon) private var icon
 
-  /// Creates the icon by the tile it shows (v3 B1): the canvas is drawn larger by the margin around the tile.
+  /// Creates the icon by the tile it shows: the canvas is drawn larger by the margin around the tile.
   ///
   /// - Parameter tile: The visible tile's side, in points, such as a window layout's welcome or About tile.
   init(tile: CGFloat) {

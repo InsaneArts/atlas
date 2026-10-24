@@ -1,5 +1,5 @@
 extension ViewerActivityKind {
-  /// The symbol a line of this kind shows in its tile (v3 V8's nine).
+  /// The symbol a line of this kind shows in its tile.
   public var symbol: SymbolName {
     switch self {
     case .pointer: .click

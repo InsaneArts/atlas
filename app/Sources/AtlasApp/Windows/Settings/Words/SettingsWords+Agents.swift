@@ -7,24 +7,34 @@ extension SettingsWords {
   static let showsHelper = "Shows the helper in your chats"
   /// The Claude app's name.
   static let claudeApp = "Claude app"
-  /// An agent before `atlas agents status` has answered.
-  static let checking = "Checking…"
+  /// An agent before `atlas agents status` has answered: the app's one word for a check under way.
+  static let checking = StatusWord.checking.text
   /// An agent `atlas agents status` could not report.
   static let notChecked = "Couldn't check"
-  /// An agent not on this Mac.
+  /// An agent not on this Mac, under its name.
   static let notInstalled = "Not installed"
-  /// What an agent not on this Mac is, under its name (v3 G7).
-  static let notOnThisMac = "Not on this Mac"
 
-  /// An agent that did not connect, and why.
+  /// Why an agent did not connect, in its own row: one line, no full stop.
   ///
-  /// - Parameters:
-  ///   - agent: The agent's name.
-  ///   - message: Why, in one line; empty when the command gave no reason.
-  /// - Returns: "Claude app: its settings file is not valid JSON."
-  static func notConnected(_ agent: String, _ message: String) -> String {
-    let reason = message.isEmpty ? "it didn't connect" : message
-    return "\(agent): \(Words.sentence(reason))"
+  /// - Parameter message: Why, as the command said it; empty when it gave no reason.
+  /// - Returns: "Couldn't connect: its settings file has a mistake", "Couldn't connect: the agent wasn't found", or
+  ///   "Couldn't connect".
+  static func notConnected(_ message: String) -> String {
+    if isBadSettingsFile(message) { return "Couldn't connect: its settings file has a mistake" }
+    let clauses = message.split(separator: ";", maxSplits: 1)
+    let clause = clauses.first ?? ""
+    let reason = clause.trimmingCharacters(in: .whitespaces)
+    guard !reason.isEmpty else { return "Couldn't connect" }
+    let line = reason.hasSuffix(".") ? String(reason.dropLast()) : reason
+    return "Couldn't connect: \(line.prefix(1).lowercased())\(line.dropFirst())"
+  }
+
+  /// Whether a Connect failed on a settings file the person must mend, as `atlas` says when the file isn't valid.
+  ///
+  /// - Parameter message: Why, as the command said it.
+  /// - Returns: Whether Show File helps.
+  static func isBadSettingsFile(_ message: String) -> Bool {
+    message.contains("settings file is not valid JSON")
   }
 
   /// Forget's name for VoiceOver.
@@ -38,14 +48,13 @@ extension SettingsWords {
   /// The Forget alert's title.
   ///
   /// - Parameter project: The folder's name.
-  /// - Returns: "Forget opie?".
+  /// - Returns: "Forget “opie”?".
   static func forgetTitle(_ project: String) -> String {
-    "Forget \(project)?"
+    "Forget “\(project)”?"
   }
 
-  /// The Forget alert's sentence: the section leaves the project's files.
-  static let forgetMessage =
-    "Atlas takes its section out of the project's AGENTS.md and CLAUDE.md. Agents there stop testing in the helper."
+  /// The Forget alert's sentence: what leaves the project, in plain words.
+  static let forgetMessage = "Atlas removes its instructions from this project. Agents there stop using the helper."
   /// The Forget alert's button.
   static let forget = "Forget"
   /// The Forget alert's button while it runs.

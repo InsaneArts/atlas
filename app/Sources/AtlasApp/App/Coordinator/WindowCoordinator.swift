@@ -1,8 +1,9 @@
 import AppKit
 import AtlasUI
 
-/// The one object that knows more than one window: it opens each window, brings an open one forward, closes the key
-/// window on ⌘Q, routes the panel's alerts, and builds every window's links to the others (`WindowCoordinator+Links`).
+/// The one object that knows more than one window: it opens each window, brings an open one forward, gives the main
+/// window's control back before Atlas quits, routes the panel's alerts, and builds every window's links to the others
+/// (`WindowCoordinator+Links`), the Dock's menu (`WindowCoordinator+Dock`) and the Help menu's diagnostics.
 /// One of each window at a time. The main window, Settings and the setup window show the Dock icon while open
 /// (``DockIcon``); the alert window does not.
 final class WindowCoordinator {
@@ -88,22 +89,47 @@ final class WindowCoordinator {
     )
   }
 
-  /// Quit Atlas (⌘Q) in a window closes that window: the menu bar and the helper's service keep running. The alert
-  /// window's Escape is its Cancel. Quit Atlas in the panel, logging out and the service going away all quit.
+  /// 2 s: the longest Atlas waits, quitting, for the service to answer the main window's release; past it Atlas quits
+  /// anyway, and a lease left unanswered ends by itself within its lifetime (``ControlBarrier/leaseLifetime``).
+  static let quitWait: Duration = .seconds(2)
+
+  /// Quit Atlas, from ⌘Q in any window or the panel's Quit: the main window's control goes back first, through the
+  /// release every other path uses, and Atlas quits once the service has answered it, or after ``quitWait``.
   ///
   /// - Parameter sender: The menu item.
   func quit(_ sender: Any?) {
-    if let alert, alert.window.isKeyWindow {
-      alert.controller.cancel()
-    } else if let onboarding, onboarding.window.isPresented, onboarding.window.isKeyWindow {
-      onboarding.window.dismiss()
-    } else if let settings, settings.window.isPresented, settings.window.isKeyWindow {
-      settings.window.dismiss()
-    } else if let viewer, viewer.window.isPresented, viewer.window.isKeyWindow {
-      viewer.window.dismiss()
-    } else {
+    // Unstructured, as the menu's action is synchronous: Atlas quits once the release is answered.
+    Task {
+      await releaseBeforeQuitting()
       parts?.terminate(sender)
     }
+  }
+
+  /// Whether control work is under way that quitting should wait for: the main window holds or asks for control, or a
+  /// release it sent is not answered yet.
+  var holdsUpQuitting: Bool {
+    viewerHoldsControl || controlBarrier?.isBusy == true
+  }
+
+  /// Gives the main window's control back and waits, at most ``quitWait``, for every release under way to be
+  /// answered, a refused one sent once more: what quitting does first, however it was asked.
+  func releaseBeforeQuitting() async {
+    releaseViewerControl()
+    guard let barrier = controlBarrier, barrier.isBusy || !barrier.unreleased.isEmpty else { return }
+    let settling = Task { _ = await barrier.settle() }
+    let clock = parts?.clock
+    // Unstructured, so the ceiling runs beside the wait and calls it off once it passes.
+    let ceiling = Task {
+      try? await clock?.sleep(for: Self.quitWait)
+      settling.cancel()
+    }
+    await settling.value
+    ceiling.cancel()
+  }
+
+  /// The app's control work, which outlives any one main window: the open window's, else the app's own.
+  private var controlBarrier: ControlBarrier? {
+    viewer?.controller.barrier ?? parts?.controlBarrier
   }
 
   /// Whether the main window holds control or is asking for it now.

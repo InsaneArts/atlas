@@ -30,16 +30,16 @@
       note: .none
     )
 
-    /// The helper logged in, off screen, with Atlas not open there yet.
+    /// The helper logged in, off screen, with Atlas not open there yet: the line says what Atlas waits for.
     @MainActor public static let onboardingSwitchOpenAtlas: OnboardingState = {
       var state = onboardingSwitch
       state.content = .screen(
         .switchToHelper(
           OnboardingSwitchScreenState(
             title: "Now log in to the Atlas account.",
-            logInDetail: "Choose the Atlas account on the lock screen",
+            logInTitle: "Log in to the Atlas account",
             progress: .init(logIn: .done, openAtlas: .current, allow: .waiting),
-            waiting: "Next: Lock and Switch, then allow Atlas there."
+            waiting: "Waiting for Atlas to open in the Atlas account…"
           )
         )
       )
@@ -56,16 +56,17 @@
       note: .none
     )
 
-    /// The check passed: Continue opens.
+    /// The check passed: Continue opens, and Return presses it.
     @MainActor public static let onboardingFinishingPassed: OnboardingState = {
       var state = onboardingFinishing
       var screen = onboardingFinishingScreen
       screen.title = "Everything works."
       screen.tail = "Your agents have a Mac now."
       screen.live = .done
-      screen.liveNote = "passed"
+      screen.liveNote = "Passed"
       state.content = .screen(.finishing(screen))
       state.footer.next?.isEnabled = true
+      state.footer.next?.isDefault = true
       return state
     }()
 
@@ -82,11 +83,11 @@
       return state
     }()
 
-    /// The agents, both found, before `atlas agents status` has answered.
+    /// The agents, both found and switched on.
     @MainActor public static let onboardingAgents = OnboardingState(
       content: .screen(.agents(onboardingAgentsScreen)),
       footer: OnboardingFooterState(
-        next: OnboardingFooterAction(title: .continue, event: .connectAgents, isEnabled: false, isDefault: true),
+        next: OnboardingFooterAction(title: .continue, event: .connectAgents, isEnabled: true, isDefault: true),
         track: onboardingTrack(4, of: 6)
       ),
       note: .none
@@ -103,7 +104,7 @@
       note: .none
     )
 
-    /// The first reading failed: why, and Try Again.
+    /// The first reading failed, Atlas's command line not running at all: why, in plain words, and Try Again.
     @MainActor public static let onboardingLoadingFailed = OnboardingState(
       content: .loading(problem: onboardingLoadingProblem),
       footer: OnboardingFooterState(
@@ -112,21 +113,22 @@
       note: .problem(onboardingLoadingProblem)
     )
 
-    /// A helper with a long name, never answered, and a switch that failed: Choose Another Account in Back's place.
+    /// A helper with a long name, called by its given name, never answered, and a screen that didn't lock: Choose
+    /// Another Account in Back's place.
     @MainActor public static let onboardingSwitchLong: OnboardingState = {
       var state = onboardingSwitch
-      let name = "Maria Fernanda Montgomery-Castellanos de la Vega"
+      let name = "Maria Fernanda"
       state.content = .screen(
         .switchToHelper(
           OnboardingSwitchScreenState(
             title: "Now log in to \(name).",
-            logInDetail: "Choose \(name) on the lock screen",
+            logInTitle: "Log in to \(name)",
             progress: .init(logIn: .current, openAtlas: .waiting, allow: .waiting),
             waiting: nil
           )
         )
       )
-      state.note = .problem("The screen could not be locked: loginwindow did not answer within ten seconds.")
+      state.note = .problem("The screen didn’t lock. Press Control-Command-Q, then choose \(name).")
       return state
     }()
 
@@ -140,14 +142,16 @@
               OnboardingAgentItem(
                 id: "claude",
                 title: "Claude Code",
-                detail: "Not checked yet.",
+                detail: "Not checked yet",
+                icon: onboardingClaudeIcon,
                 isOn: false,
                 isEnabled: false
               ),
               OnboardingAgentItem(
                 id: "codex",
                 title: "Codex",
-                detail: "Not checked yet.",
+                detail: "Not checked yet",
+                icon: onboardingCodexIcon,
                 isOn: false,
                 isEnabled: false
               ),
@@ -156,7 +160,7 @@
         )
       )
       state.footer.next?.isEnabled = true
-      state.note = .problem("Atlas couldn't check your agents. Continue to skip this, or wait while it tries again.")
+      state.note = .problem("Atlas couldn’t check your agents. Continue to skip this, or wait while it tries again.")
       return state
     }()
 
@@ -178,12 +182,12 @@
       isDefault: false
     )
 
-    /// The first of the three switch steps.
+    /// The first of the three switch steps, before Lock and Switch: no line under them.
     @MainActor static let onboardingSwitchScreen = OnboardingSwitchScreenState(
       title: "Now log in to the Atlas account.",
-      logInDetail: "Choose the Atlas account on the lock screen",
+      logInTitle: "Log in to the Atlas account",
       progress: .init(logIn: .current, openAtlas: .waiting, allow: .waiting),
-      waiting: "Next: Lock and Switch, then log in to the Atlas account."
+      waiting: nil
     )
 
     /// The checklist with its live check running.
@@ -191,8 +195,9 @@
       title: "Checking everything",
       tail: "end to end.",
       loggedIn: "The Atlas account is logged in",
+      permissionsNote: "Allowed",
       live: .busy,
-      liveNote: "checking…",
+      liveNote: "Checking…",
       failure: nil
     )
 
@@ -200,42 +205,50 @@
     @MainActor static let onboardingFinishingFailedScreen: OnboardingFinishingScreenState = {
       var screen = onboardingFinishingScreen
       screen.title = "Almost there."
-      screen.tail = "One check didn't pass."
+      screen.tail = "One check didn’t pass."
       screen.live = .failed
-      screen.liveNote = "failed"
+      screen.liveNote = "Failed"
       screen.failure = "The test screenshot never arrived."
       return screen
     }()
 
-    /// Claude Code and Codex found, both switched on.
+    /// Claude Code and Codex are available and switched on, so both get the Atlas skill.
     @MainActor static let onboardingAgentsScreen = OnboardingAgentsScreenState(
       agents: [
         OnboardingAgentItem(
           id: "claude",
           title: "Claude Code",
-          detail: "Found. Adds the Atlas skill to every session.",
+          detail: "Gets the Atlas skill",
+          icon: onboardingClaudeIcon,
           isOn: true,
           isEnabled: true
         ),
         OnboardingAgentItem(
           id: "codex",
           title: "Codex",
-          detail: "Found. Adds the Atlas skill to every session.",
+          detail: "Gets the Atlas skill",
+          icon: onboardingCodexIcon,
           isOn: true,
           isEnabled: true
         ),
       ]
     )
 
+    /// Claude Code's tile, where it has no app on this Mac, as Settings draws it.
+    @MainActor static let onboardingClaudeIcon = RowIcon.tile(.symbol("asterisk"))
+
+    /// Codex's tile, where its app is not on this Mac, as Settings draws it.
+    @MainActor static let onboardingCodexIcon = RowIcon.tile(.text(">_"))
+
     /// Done, opening at login.
     @MainActor static let onboardingDoneScreen = OnboardingDoneScreenState(
       lede:
-        "That was the whole setup. Atlas lives in your menu bar: ask your agent to check something on screen, and watch it work from there. After a restart, just log in to the Atlas account again; Atlas does the rest. Atlas doesn't need administrator access again. Removing it later asks once more, to stop it in the helper.",
+        "Atlas lives in your menu bar. Ask your agent to check something on screen and watch it work there. After a restart, log in to the Atlas account once and Atlas does the rest.",
       opensAtLogin: true
     )
 
-    /// Why the first reading failed, as the command said it.
+    /// Why the first reading failed, when Atlas's command line could not run at all.
     @MainActor public static let onboardingLoadingProblem =
-      "Atlas could not run its command line at /Applications/Atlas.app/Contents/MacOS/atlas."
+      "Atlas’s files look incomplete. Reinstall Atlas, then open it again."
   }
 #endif

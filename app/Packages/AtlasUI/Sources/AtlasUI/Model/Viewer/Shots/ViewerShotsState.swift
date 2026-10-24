@@ -1,10 +1,8 @@
-/// The Screenshots pane: how many were taken today, the search by time, the screenshots in their groups or why there
-/// are none, and the one shown large.
+/// The Screenshots pane: how many were taken today, the screenshots in their groups or why there are none, and the one
+/// shown large.
 public struct ViewerShotsState: Equatable, Sendable {
-  /// The note beside the title, such as "6 today · Space opens one, drag one out to use it".
+  /// The note beside the title, such as "6 today"; empty while none was taken.
   public var meta: String
-  /// The search by time, as the person typed it.
-  public var query: String
   /// The screenshots in their groups, newest first.
   public var days: [ViewerShotDay]
   /// Why no screenshot shows, in place of them; nil while some show or before the first reading.
@@ -16,19 +14,16 @@ public struct ViewerShotsState: Equatable, Sendable {
   ///
   /// - Parameters:
   ///   - meta: The note beside the title.
-  ///   - query: The search by time.
   ///   - days: The screenshots in their groups.
   ///   - empty: Why no screenshot shows.
   ///   - large: The screenshot shown large.
   public init(
     meta: String,
-    query: String,
     days: [ViewerShotDay],
     empty: EmptyMessageState? = nil,
     large: ViewerLargeShot? = nil
   ) {
     self.meta = meta
-    self.query = query
     self.days = days
     self.empty = empty
     self.large = large

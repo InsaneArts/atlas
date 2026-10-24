@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// A section of a form, as System Settings sets one (v3 G3, U-17): its name above the group, the rows in a compact
-/// ``GroupedList``, and its notes under it, each the group's width. Sections stack in a ``FormColumn``.
+/// A section of a form, as System Settings sets one: its name above the group and its notes under it, each inset to
+/// where the rows' words start, and the rows in a compact ``GroupedList``. Sections stack in a ``FormColumn``.
 struct GroupedSection<Items: RandomAccessCollection, Row: View>: View where Items.Element: Identifiable {
   /// The rows' items, in order.
   private let items: Items
@@ -36,18 +36,18 @@ struct GroupedSection<Items: RandomAccessCollection, Row: View>: View where Item
     VStack(alignment: .leading, spacing: Layout.gap) {
       if !title.isEmpty {
         GroupLabel(text: title)
-          .padding(.horizontal, Spacing.xs)
+          .padding(.horizontal, Spacing.m)
       }
       GroupedList(items, style: .compact, row: row)
       ForEach(notes.indices, id: \.self) { index in
         GroupedSectionNoteView(note: notes[index])
-          .padding(.horizontal, Spacing.xs)
+          .padding(.horizontal, Spacing.m)
       }
     }
   }
 }
 
-/// A section's own measures (v3 `.spane`'s 6 gap plus `.sghead`'s and `.sgfoot`'s 4).
+/// A section's own measures.
 private enum Layout {
   /// 10: between the name, the group and each note.
   static let gap = Spacing.sPlus

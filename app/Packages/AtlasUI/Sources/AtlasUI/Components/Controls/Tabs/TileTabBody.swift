@@ -19,7 +19,6 @@ struct TileTabBody: View {
           .fill(fill)
       )
       .contentShape(RoundedRectangle(cornerRadius: Radius.medium))
-      .modifier(PressScale(isPressed: configuration.isPressed, scale: Layout.tilePressedScale))
       .opacity(enabled ? 1 : Opacity.disabled)
       .onHover { isHovered = $0 }
       .animation(Motion.hover(isHovered), value: isHovered)
@@ -33,12 +32,10 @@ struct TileTabBody: View {
   }
 }
 
-/// A tile's own measures (v3 G1, `.stabs`).
+/// A tile's own measures.
 private enum Layout {
   /// 74 by 50: a tile.
   static let tile = CGSize(width: 74, height: 50)
-  /// 0.95: how far a held tile dips (v3 `.stabs button:active`).
-  static let tilePressedScale: CGFloat = 0.95
 }
 
 #if DEBUG

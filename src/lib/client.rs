@@ -144,26 +144,39 @@ pub fn timestamp() -> u128 {
 
 impl Client {
     pub fn install(&self) -> Result<Value> {
+        self.install_probe(false)
+    }
+
+    /// Repair the probe under recovery exclusion without settling previous work.
+    pub(crate) fn bootstrap_probe(&self) -> Result<Value> {
+        self.install_probe(true)
+    }
+
+    fn install_probe(&self, recovery: bool) -> Result<Value> {
         let source = fs::canonicalize(std::env::current_exe()?)?;
         let target = &self.config.identity_probe;
 
-        // Only Atlas's own shared folder is repaired; a custom location keeps
-        // the permissions its owner chose.
-        if let Some(parent) = target.parent()
-            && Path::new(crate::handoff::ROOT).parent() == Some(parent)
-        {
-            shared_folder(parent)?;
-        }
-
-        // A link already pointing at this executable (or this executable
-        // itself) changes nothing, so it needs no exclusion and works while
-        // an earlier action still awaits recovery. A copy is always replaced.
-        if fs::canonicalize(target).ok().as_ref() == Some(&source) {
+        let shared = target
+            .parent()
+            .filter(|parent| Path::new(crate::handoff::ROOT).parent() == Some(*parent));
+        let folder_ready = shared.is_none_or(|parent| {
+            fs::symlink_metadata(parent).is_ok_and(|metadata| {
+                metadata.is_dir()
+                    && (metadata.uid() == nix::unistd::getuid().as_raw()
+                        && metadata.mode() & 0o777 == 0o755
+                        || metadata.uid() == 0 && metadata.mode() & 0o022 == 0)
+            })
+        });
+        // An unchanged link and folder need no mutation or exclusion.
+        // A copy is always replaced, using a fresh inode.
+        if folder_ready && fs::canonicalize(target).ok().as_ref() == Some(&source) {
             return Ok(json!({ "ok": true, "path": target, "alreadyInstalled": true }));
         }
 
-        let _ownership = self.controller.acquire(false)?;
-
+        let _ownership = self.controller.acquire(recovery)?;
+        if let Some(parent) = shared {
+            shared_folder(parent)?;
+        }
         if fs::canonicalize(target).ok().as_ref() == Some(&source) {
             return Ok(json!({ "ok": true, "path": target, "alreadyInstalled": true }));
         }
@@ -1100,12 +1113,18 @@ impl Client {
         let claim = self.controller.quarantine()?;
         let outcome = self.restart_claimed(&before).await;
 
+        self.settle_restart(&claim, outcome)
+    }
+
+    /// Settle this restart after verified recovery or a definite refusal.
+    /// Other live mutations retain their own claims.
+    fn settle_restart(&self, claim: &str, outcome: Result<Value>) -> Result<Value> {
         let refused = match &outcome {
             Ok(reply) => reply["ok"] != true && reply["uncertain"] != true,
             Err(error) => !error.uncertain,
         };
-        if refused {
-            self.controller.clear_if(&claim)?;
+        if refused || outcome.as_ref().is_ok_and(|reply| reply["ok"] == true) {
+            self.controller.clear_if(claim).map_err(Error::uncertain)?;
         }
 
         outcome
@@ -1206,7 +1225,13 @@ impl Client {
     /// `force` ends the session without asking the apps, and may run with
     /// outcomes still unknown: it is the person's way out of one.
     pub async fn logout(&self, force: bool) -> Result<Value> {
-        let _ownership = self.controller.acquire(force)?;
+        let ownership = self.controller.acquire(force)?;
+        self.logout_held(&ownership, force).await
+    }
+
+    /// [`Client::logout`] under control already held (`_ownership`), for a
+    /// caller that keeps it across more than the log-out, such as uninstall.
+    pub async fn logout_held(&self, _ownership: &Ownership, force: bool) -> Result<Value> {
         self.identity().await?;
         let claim = self.controller.quarantine()?;
 
@@ -1260,31 +1285,28 @@ impl Client {
         .uncertain())
     }
 
-    /// Whether the helper's desktop goes away within `seconds`: no Dock, seen
-    /// twice in a row (a Dock that restarts is not a log-out), and its
+    /// Whether the helper's login goes away within `seconds`: no
+    /// loginwindow and no Dock of it, seen twice in a row half a second
+    /// apart (a Dock alone can restart in a login that lives on), and its
     /// daemon no longer answering. A look that fails counts as present.
     async fn desktop_gone(&self, seconds: u64) -> bool {
         let uid = self.config.helper_uid;
-        let gone = async {
-            let mut absent = 0;
-            while absent < 2 {
-                tokio::time::sleep(Duration::from_millis(500)).await;
-                let desktop = tokio::task::spawn_blocking(move || crate::session::logged_in(uid));
-                absent = if desktop.await.ok().flatten() == Some(false) {
-                    absent + 1
-                } else {
-                    0
-                };
-            }
-
-            while self.transport.call(&json!({"op": "hello"})).await.is_ok() {
-                tokio::time::sleep(Duration::from_millis(500)).await;
-            }
+        let looked = move || async move {
+            tokio::task::spawn_blocking(move || crate::session::logged_out(uid))
+                .await
+                .ok()
+                .flatten()
+                == Some(true)
         };
+        let answers = || async { self.transport.call(&json!({"op": "hello"})).await.is_ok() };
 
-        tokio::time::timeout(Duration::from_secs(seconds), gone)
-            .await
-            .is_ok()
+        gone_within(
+            looked,
+            answers,
+            Duration::from_secs(seconds),
+            Duration::from_millis(500),
+        )
+        .await
     }
 
     async fn mutate(
@@ -1617,9 +1639,116 @@ fn require_accessibility(status: &Value) -> Result<()> {
     Ok(())
 }
 
+/// Whether a login is seen gone within `limit`: `looked` (no loginwindow
+/// and no Dock) true twice in a row, `pause` apart, and then `answers` (its
+/// daemon says hello) false. The processes are looked at all the while: a
+/// login seen again, even while its daemon still answers, starts the count
+/// over. Only silence after two looks that found it gone, and a third look
+/// after that silence (the daemon's answer can take a while, and the login
+/// can come back meanwhile), ends the wait.
+async fn gone_within<L, A>(
+    mut looked: impl FnMut() -> L,
+    mut answers: impl FnMut() -> A,
+    limit: Duration,
+    pause: Duration,
+) -> bool
+where
+    L: std::future::Future<Output = bool>,
+    A: std::future::Future<Output = bool>,
+{
+    let gone = async {
+        let mut absent = 0;
+        loop {
+            tokio::time::sleep(pause).await;
+            if !looked().await {
+                absent = 0;
+                continue;
+            }
+
+            absent += 1;
+            if absent >= 2 && !answers().await {
+                if looked().await {
+                    return;
+                }
+                absent = 0;
+            }
+        }
+    };
+
+    tokio::time::timeout(limit, gone).await.is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_interrupted_setup_can_repair_its_probe_without_settling_pending_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut client = client_in(dir.path());
+        client.controller = Controller::at(60001, &dir.path().join("state"));
+        let previous = client.controller.quarantine().unwrap();
+        let generation = previous.generation().to_owned();
+        drop(previous);
+        assert!(!client.config.identity_probe.exists());
+        assert!(client.install().is_err());
+        let competing = client.controller.acquire(true).unwrap();
+        assert!(client.bootstrap_probe().is_err());
+        assert!(!client.config.identity_probe.exists());
+        drop(competing);
+        client.bootstrap_probe().unwrap();
+        assert!(client.config.identity_probe.is_file());
+        assert_eq!(
+            file_sha256(&client.config.identity_probe).unwrap(),
+            file_sha256(&std::env::current_exe().unwrap()).unwrap()
+        );
+        assert_eq!(
+            client.controller.pending().unwrap(),
+            std::slice::from_ref(&generation)
+        );
+        assert!(client.controller.acquire(false).is_err());
+        fs::write(&client.config.identity_probe, b"interrupted copy").unwrap();
+        client.bootstrap_probe().unwrap();
+        assert_eq!(
+            file_sha256(&client.config.identity_probe).unwrap(),
+            file_sha256(&std::env::current_exe().unwrap()).unwrap()
+        );
+        assert_eq!(client.controller.pending().unwrap(), [generation]);
+        let owned = client.controller.acquire(true).unwrap();
+        client.controller.clear().unwrap();
+        drop(owned);
+        assert!(client.controller.acquire(false).is_ok());
+    }
+
+    #[test]
+    fn a_successful_recovery_allows_the_next_normal_acquisition() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut client = client_in(dir.path());
+        client.controller = Controller::at(60001, &dir.path().join("state"));
+        let ownership = client.controller.acquire(true).unwrap();
+        drop(client.controller.quarantine().unwrap());
+        let claim = client.controller.quarantine().unwrap();
+        // The verified recovery clears abandoned work while retaining its
+        // own live claim, which the restart success path must then settle.
+        client.controller.clear().unwrap();
+        client
+            .settle_restart(&claim, Ok(json!({"ok": true, "restarted": true})))
+            .unwrap();
+        drop(claim);
+        drop(ownership);
+        assert!(client.controller.pending().unwrap().is_empty());
+        assert!(client.controller.acquire(false).is_ok());
+
+        let other = client.controller.quarantine().unwrap();
+        let claim = client.controller.quarantine().unwrap();
+        client.controller.clear().unwrap();
+        client
+            .settle_restart(&claim, Ok(json!({"ok": true, "restarted": true})))
+            .unwrap();
+        drop(claim);
+        assert_eq!(client.controller.pending().unwrap(), [other.generation()]);
+        assert!(client.controller.acquire(false).is_err());
+    }
 
     /// A client for a configuration kept in `dir`.
     fn client_in(dir: &Path) -> Client {
@@ -1627,6 +1756,110 @@ mod tests {
                     identity_probe = \"probe\"\ninput_socket = \"i.sock\"\n";
         let config = Config::parse(text.as_bytes(), &dir.join("u.toml")).unwrap();
         Client::new(config).unwrap()
+    }
+
+    /// A login is gone only once it is seen gone twice in a row and its
+    /// daemon stopped answering; a look in between that sees it again
+    /// starts the count over.
+    #[tokio::test]
+    async fn a_login_is_gone_only_when_seen_gone_twice_and_silent() {
+        use std::{cell::RefCell, collections::VecDeque};
+
+        let pause = Duration::from_millis(1);
+        let limit = Duration::from_secs(5);
+        let run = |looks: &[bool], hellos: &[bool]| {
+            let looks = RefCell::new(looks.iter().copied().collect::<VecDeque<_>>());
+            let hellos = RefCell::new(hellos.iter().copied().collect::<VecDeque<_>>());
+            let seen = RefCell::new(0);
+            async move {
+                let gone = gone_within(
+                    || {
+                        *seen.borrow_mut() += 1;
+                        let look = looks.borrow_mut().pop_front().unwrap_or(false);
+                        async move { look }
+                    },
+                    || {
+                        let hello = hellos.borrow_mut().pop_front().unwrap_or(false);
+                        async move { hello }
+                    },
+                    limit,
+                    pause,
+                )
+                .await;
+                (gone, seen.into_inner())
+            }
+        };
+
+        assert_eq!(run(&[true, true, true], &[]).await, (true, 3));
+        assert_eq!(
+            run(&[true, false, true, true, true], &[]).await,
+            (true, 5),
+            "a login seen again starts the count over"
+        );
+        assert_eq!(
+            run(&[true, true, true, true, true], &[true, true]).await,
+            (true, 5),
+            "waits for the daemon to go quiet, looking all the while"
+        );
+        assert_eq!(
+            run(&[true, true, false, true, true, true], &[true, false]).await,
+            (true, 6),
+            "a login back after the second look starts the count over"
+        );
+        assert_eq!(
+            run(&[true, true, false, true, true, true], &[false, false]).await,
+            (true, 6),
+            "a login back while the daemon was asked starts the count over"
+        );
+
+        // Back after the second look, then its daemon goes quiet: still
+        // logged in, never gone.
+        let back = Duration::from_millis(50);
+        let looks = std::cell::Cell::new(0);
+        let hellos = std::cell::Cell::new(0);
+        let returned = gone_within(
+            || {
+                looks.set(looks.get() + 1);
+                let look = looks.get() <= 2;
+                async move { look }
+            },
+            || {
+                hellos.set(hellos.get() + 1);
+                let hello = hellos.get() == 1;
+                async move { hello }
+            },
+            back,
+            pause,
+        )
+        .await;
+        assert!(!returned, "a login that came back is not gone");
+
+        // It logs in again while the daemon is still being asked, and the
+        // daemon then says nothing: still logged in.
+        let again = std::cell::Cell::new(false);
+        let returned = gone_within(
+            || {
+                let look = !again.get();
+                async move { look }
+            },
+            || {
+                again.set(true);
+                async move {
+                    tokio::time::sleep(pause).await;
+                    false
+                }
+            },
+            back,
+            pause,
+        )
+        .await;
+        assert!(!returned, "back while its daemon was asked");
+
+        let short = Duration::from_millis(50);
+        let stays = gone_within(|| async { false }, || async { false }, short, pause).await;
+        assert!(!stays, "a login that stays is not gone");
+        let answering = gone_within(|| async { true }, || async { true }, short, pause).await;
+        assert!(!answering, "a daemon that keeps answering is not gone");
     }
 
     #[tokio::test]

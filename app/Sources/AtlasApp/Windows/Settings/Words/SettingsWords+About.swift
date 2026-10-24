@@ -12,8 +12,21 @@ extension SettingsWords {
   static let upToDate = "Atlas is up to date."
   /// The check did not answer.
   static let checkFailed = "Atlas couldn't check for updates."
-  /// No release is published yet.
-  static let unpublished = "Atlas has no public release yet. Check atlas.insanearts.io for news."
+  /// No release is published yet, its site a Markdown link, which About shows live.
+  static let unpublished =
+    "Atlas has no public release yet. Check [atlas.insanearts.io](https://atlas.insanearts.io) for news."
+  /// A check runs, under the button, which holds no spinner of its own.
+  static let checkingForUpdates = "Checking for updates…"
+  /// The install stopped because Atlas isn't where the helper account can run it.
+  static let moveToApplications = "Move Atlas to the Applications folder, then try again."
+
+  /// Whether an install failed because Atlas isn't where the helper account can run it, as `atlas update` says.
+  ///
+  /// - Parameter message: The install's failure.
+  /// - Returns: Whether Atlas must move to the Applications folder first.
+  static func isMisplaced(_ message: String) -> Bool {
+    message.contains("where the helper account can run it")
+  }
   /// Once the newer version is installed, in the moment before Atlas restarts itself to finish.
   static let installed = "Atlas is updated and restarts itself to finish."
 

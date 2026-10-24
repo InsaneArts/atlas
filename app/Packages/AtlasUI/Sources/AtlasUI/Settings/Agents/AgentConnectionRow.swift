@@ -1,24 +1,44 @@
 import SwiftUI
 
-/// One agent in the Agents pane (v3 G7): its real icon, its name over what Atlas does in it, then where it stands:
-/// a green check and Connected, which pops in; Connect, which keeps its label and gains a spinner as Connecting…; or
-/// why it can't be connected.
+/// One agent in the Agents pane: its real icon, its name over what Atlas does in it, then where it stands: a green
+/// check and Connected, which pops in; Connect, which keeps its width with a spinner in its words' place as
+/// Connecting…; or, for an agent not on this Mac, "Not installed" under its faded icon and nothing at its end. A
+/// Connect that failed says why in the row, in orange, with Show File where a file needs mending.
 struct AgentConnectionRow: View {
   /// The agent.
   let agent: SettingsAgentRow
   /// Connects the agent.
   let connect: @MainActor () -> Void
+  /// Shows the file its problem is in.
+  let showFile: @MainActor () -> Void
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   /// What it draws, from its state.
   var body: some View {
-    ListRowBody(agent.title, detail: agent.detail, lead: lead, size: .compact) {
-      ZStack(alignment: .trailing) {
-        connection
-          .id(isConnected)
-          .transition(Motion.transition(arrival, reduceMotion: reduceMotion))
+    ListRowBody(
+      agent.title,
+      detail: agent.problem ?? agent.detail,
+      detailStyle: agent.problem == nil ? .plain : .problem,
+      lead: lead,
+      size: .compact,
+      leadOpacity: agent.connection == .missing ? Opacity.muted : 1
+    ) {
+      HStack(spacing: Spacing.m) {
+        if agent.showsFile {
+          Button("Show File", action: showFile)
+            .buttonStyle(.textLink(.small))
+            .help("Show the file in the Finder")
+        }
+        ZStack(alignment: .trailing) {
+          connection
+            .id(isConnected)
+            .transition(Motion.transition(arrival, reduceMotion: reduceMotion))
+        }
+        .animation(
+          Motion.animation(Motion.pop, reduceMotion: reduceMotion, reduced: Motion.reduced),
+          value: isConnected
+        )
       }
-      .animation(Motion.animation(Motion.pop, reduceMotion: reduceMotion, reduced: Motion.reduced), value: isConnected)
     }
   }
 
@@ -31,12 +51,14 @@ struct AgentConnectionRow: View {
         OutcomeMark(kind: .done)
         Text(verbatim: "Connected")
           .textStyle(.callout)
-          .foregroundStyle(Color.textSuccess)
+          .foregroundStyle(Color.textSecondary)
       }
       .accessibilityElement(children: .combine)
     case .button(let isWorking, let isEnabled):
       connectButton(isWorking: isWorking)
         .disabled(!isEnabled)
+    case .none:
+      EmptyView()
     case .note(let text):
       Text(text)
         .textStyle(.callout)
@@ -50,7 +72,7 @@ struct AgentConnectionRow: View {
   /// - Returns: The button.
   private func connectButton(isWorking: Bool) -> some View {
     Button(action: connect) {
-      WorkingLabel(title: isWorking ? "Connecting…" : "Connect", isWorking: isWorking)
+      WorkingLabel(title: "Connect", isWorking: isWorking, workingTitle: "Connecting…")
     }
     .buttonStyle(.capsule(.glass, size: .mini, isWorking: isWorking))
   }
@@ -79,6 +101,7 @@ struct AgentConnectionRow: View {
     case .connected: .connected
     case .connect(let isEnabled): .button(isWorking: false, isEnabled: isEnabled)
     case .connecting: .button(isWorking: true, isEnabled: false)
+    case .missing: .none
     case .note(let text): .note(text)
     }
   }
@@ -89,7 +112,7 @@ struct AgentConnectionRow: View {
   }
 }
 
-/// The row's own measures (v3's Connect → Connected pop).
+/// The row's own measures.
 private enum Layout {
   /// 0.5: how small Connected's check and word start as they pop in.
   static let arrival: CGFloat = 0.5

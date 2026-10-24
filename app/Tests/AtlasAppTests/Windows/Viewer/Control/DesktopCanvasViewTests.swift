@@ -157,7 +157,7 @@ struct DesktopCanvasViewTests {
       )
     )
     #expect(canvas.intercept(commandQ) === commandQ, "this Mac's menu gets it")
-    let quit = try #require(KeysMenu.menu(for: viewer).items.first { $0.title == "Quit app" } as? HandlerMenuItem)
+    let quit = try #require(KeysMenu.menu(for: viewer).items.first { $0.title == "Quit App" } as? HandlerMenuItem)
     quit.fire()
     // Input leaves in order, so the Keys menu's ⌘Q arriving alone means the intercepted one sent nothing.
     try await settle("Quit app never reached the helper") { !service.actions.isEmpty }

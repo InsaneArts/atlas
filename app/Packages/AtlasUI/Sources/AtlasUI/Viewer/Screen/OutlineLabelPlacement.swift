@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// Places a window outline's label over the picture (v3 V14): just above the outline at its left edge, or, near an
-/// edge where that would leave the picture, inside the outline at its top right, as for a window docked at the right
-/// with a long name. Never wider than the picture less an inset each side, and never past its edges.
+/// Places a window outline's label over the picture: just above the outline at its left edge, or, near an
+/// edge where that would leave the picture, inside the outline at its top right, as for a window docked at
+/// the right with a long name. Never wider than the picture less an inset each side, and never past its
+/// edges.
 struct OutlineLabelPlacement: Layout {
   /// Where the window lies, in the picture.
   let outline: CGRect
@@ -63,7 +64,7 @@ struct OutlineLabelPlacement: Layout {
 }
 
 extension OutlineLabelPlacement {
-  /// The label's own measures (v3 `.outline .olabel`).
+  /// The label's own measures.
   enum Metrics {
     /// 10: between the label's bottom and the outline's top, when it sits above.
     static let gap = Spacing.sPlus

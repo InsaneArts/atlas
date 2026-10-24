@@ -4,7 +4,7 @@ import AppKit
 /// helper from a menu under the Keys button, which leaves the window in front and control where it is. An AppKit
 /// menu, so its key equivalents are only shown, never registered as this app's.
 enum KeysMenu {
-  /// 240: the menu's width (mac.py:152).
+  /// 240: the menu's width, giving shortcuts room beside their labels.
   static let width: CGFloat = 240
 
   /// The menu of keys under its two headers, each item sending its key to `controller`.

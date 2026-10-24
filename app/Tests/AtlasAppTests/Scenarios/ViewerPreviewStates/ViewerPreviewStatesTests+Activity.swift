@@ -8,8 +8,8 @@
   import AtlasUI
 
   extension ViewerPreviewStatesTests {
-    /// The Activity tab's samples' facts, by the sample's name: times on a German clock in UTC, as the boards tell
-    /// them.
+    /// The Activity tab's samples' facts, by the sample's name: times on a German clock in UTC, for
+    /// deterministic timestamps.
     ///
     /// - Returns: What the presenter shows for each.
     /// - Throws: A decoding error, which a fixed reply never gives.
@@ -43,7 +43,7 @@
     /// 10:31:42 on 22 October 2026, in UTC: when the Activity sample's log is read.
     static let activityReadAt = Date(timeIntervalSince1970: 1_792_665_102)
 
-    /// The Activity sample's log, newest first (MacActivity), read at 10:31:42.
+    /// The Activity sample's log, newest first, read at 10:31:42.
     static let activityLog = ActivityLog(entries: [
       ActivityLog.Entry(id: "38", says: "turning Show Center off in Opie", outcome: .running, ageSeconds: 0),
       ActivityLog.Entry(id: "37", says: "scrolled in Opie", ageSeconds: 4),

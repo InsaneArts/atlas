@@ -1,6 +1,6 @@
 #if DEBUG
   extension PreviewStates {
-    /// v3's Agents pane: Claude Code and Codex connected, the Claude app ready to connect, and two projects taught.
+    /// The Agents pane: Claude Code and Codex connected, the Claude app ready to connect, and two projects taught.
     static let settingsAgentsPane = SettingsAgentsState(
       agents: [
         SettingsAgentRow(
@@ -37,20 +37,21 @@
       ]
     )
 
-    /// The Claude app connecting: Connect keeps its place and gains a spinner.
+    /// The Claude app connecting: Connect keeps its width with a spinner in its words' place.
     @MainActor static let settingsAgentsConnecting: SettingsState = {
       var state = selecting(.agents)
       state.agents.agents[2].connection = .connecting
       return state
     }()
 
-    /// Codex not on this Mac, no project taught yet, and a Connect that failed.
+    /// Codex not on this Mac, no project taught yet, and a Connect that failed on the Claude app's settings file.
     @MainActor static let settingsAgentsEmpty: SettingsState = {
       var state = selecting(.agents)
-      state.agents.agents[1].detail = "Not on this Mac"
-      state.agents.agents[1].connection = .note("Not installed")
+      state.agents.agents[1].detail = "Not installed"
+      state.agents.agents[1].connection = .missing
+      state.agents.agents[2].problem = "Couldn't connect: its settings file has a mistake"
+      state.agents.agents[2].showsFile = true
       state.agents.projects = []
-      state.agents.notice = SettingsNote(text: "Claude app: its settings file is not valid JSON.", kind: .problem)
       return state
     }()
   }

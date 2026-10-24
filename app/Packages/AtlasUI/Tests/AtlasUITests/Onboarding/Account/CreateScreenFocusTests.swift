@@ -60,13 +60,36 @@ struct CreateScreenFocusTests {
     #expect(editor.delegate === password, "the flag took the focus from the field the person typed in")
   }
 
+  @Test("the form's first empty field takes the focus as the form appears: the password, once both names are in")
+  func theFirstEmptyFieldTakesTheFocus() async throws {
+    let window = NSWindow(
+      contentRect: NSRect(origin: .zero, size: OnboardingLayout.card),
+      styleMask: [.titled],
+      backing: .buffered,
+      defer: false
+    )
+    let form = OnboardingAccountForm(fullName: "Atlas", accountName: "atlas", password: "", verify: "")
+    let host = NSHostingView(
+      rootView: CreateScreen(state: PreviewStates.onboardingCreateScreen, form: .constant(form))
+        .environment(\.animatesArrivals, false)
+    )
+    window.contentView = host
+    host.layoutSubtreeIfNeeded()
+    for _ in 0..<Self.turns where !(window.firstResponder is NSText) {
+      await Task.yield()
+    }
+    let editor = try #require(window.firstResponder as? NSText, "a field has the focus")
+    let password = try #require(Self.fields(in: host).first { $0 is NSSecureTextField }, "the password field")
+    #expect(editor.delegate === password, "the password, the first empty field, has the focus")
+  }
+
   /// How many turns of the main actor the focus may take to land.
   private static let turns = 20
 
   /// The form with its account name flagged.
   private static let flagged = OnboardingCreateScreenState(
-    tail: "You'll approve it once in macOS.",
-    note: .problem("Account names can't have spaces."),
+    tail: "You’ll approve it once in macOS.",
+    note: .problem("Account names can’t have spaces."),
     isFormEnabled: true,
     flagged: .accountName
   )

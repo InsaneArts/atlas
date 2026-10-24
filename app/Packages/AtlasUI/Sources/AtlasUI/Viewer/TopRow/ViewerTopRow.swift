@@ -1,15 +1,14 @@
 import SwiftUI
 
-/// The main window's one quiet bar (v3 V1): what the helper is doing at the leading edge, the four tabs centred in
-/// their glass track, and only the actions that apply at the trailing edge, straight on the window's ground; a faint
-/// accent wash lies across it while this window holds control (v3 V5). A narrowing window takes the widest of the bar's
-/// layouts that fits (v3 V15, ``ViewerLayout/barLayouts``).
+/// The main window's one quiet bar: what the helper is doing at the leading edge, the four tabs centred in
+/// their glass track, and only the actions that apply at the trailing edge, straight on the window's ground;
+/// a faint accent wash lies across it while this window holds control. A narrowing window takes the widest of
+/// the bar's layouts that fits.
 struct ViewerTopRow: View {
   /// What the row shows.
   let state: ViewerTopRowState
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   /// The widest layout that fits, washed in the accent while in control.
   var body: some View {
@@ -22,12 +21,10 @@ struct ViewerTopRow: View {
     .padding(.trailing, Spacing.mPlus)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background {
+      // A colour change rides a curve, never a spring; only opacity changes, so Reduce Motion keeps it.
       Color.accentTint
         .opacity(state.isInControl ? 1 : 0)
-        .animation(
-          Motion.animation(Motion.state, reduceMotion: reduceMotion, reduced: Motion.reduced),
-          value: state.isInControl
-        )
+        .animation(Motion.fade, value: state.isInControl)
     }
   }
 
@@ -46,7 +43,12 @@ struct ViewerTopRow: View {
           ViewerUnseenDot(unseen: state.activityUnseen)
         }
       }
-      ViewerTopButtons(actions: state.actions, actionWords: fit.actionWords, send: send)
+      ViewerTopButtons(
+        actions: state.actions,
+        actionWords: fit.actionWords,
+        showsPause: fit.showsPause,
+        send: send
+      )
     }
   }
 }

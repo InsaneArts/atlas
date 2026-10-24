@@ -1,10 +1,10 @@
 import CoreGraphics
 
-/// How large an alert card draws as it comes and goes (v3 A6): settling from a little larger, leaving a little
-/// smaller. The window layer and the alert window both read it.
+/// How large an alert card draws as it comes and goes: settling from a little larger, leaving a little smaller. The
+/// window layer and the alert window both read it.
 enum AlertCardScale {
-  /// 1.06: how large the card starts before it settles.
-  static let arriving: CGFloat = 1.06
+  /// 1.04: how large the card starts before it settles, small enough that settling reads as arriving, not zooming.
+  static let arriving: CGFloat = 1.04
   /// 0.97: how small the card ends as it leaves.
   static let leaving: CGFloat = 0.97
 

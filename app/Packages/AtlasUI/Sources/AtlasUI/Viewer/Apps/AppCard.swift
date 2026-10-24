@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// An app open in the helper as one group (v3 V9, `.appg`): its real icon, its name and whether it is in front, then
-/// its windows front to back with their sizes, or "No windows". Show on Screen shows only on the window row under
+/// An app open in the helper as one group: its real icon, its name and whether it is in front, then its
+/// windows front to back with their sizes, or "No windows". Show on Screen shows only on the window row under
 /// the pointer.
 struct AppCard: View {
   /// One row of the group: the app's head, one of its windows, or the note that it has none.

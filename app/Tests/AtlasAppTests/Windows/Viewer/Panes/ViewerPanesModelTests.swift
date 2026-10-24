@@ -268,13 +268,12 @@ struct ViewerPanesModelTests {
     let before = viewer.state
     viewer.send(.showWindow(app: 7, window: 3))
     try #require(viewer.state.screen.outline != nil, "the window was outlined")
-    #expect(viewer.state.top.actions.showsClear)
     viewer.send(.clearOutline)
     #expect(viewer.state == before)
     viewer.close()
   }
 
-  @Test("Open on an Activity line shows its screenshot large on the Screenshots tab, past a search that hid it")
+  @Test("Open on an Activity line shows its screenshot large on the Screenshots tab")
   func openShowsTheScreenshotLarge() async throws {
     let service = ScriptedService()
     service.shots = Self.shots
@@ -282,8 +281,6 @@ struct ViewerPanesModelTests {
     let viewer = try await ViewerController.watching(service)
     viewer.send(.selectTab(.screenshots))
     try await settle("the screenshots were never read") { viewer.panes.shots.shots != nil }
-    viewer.send(.searchShots("99:99"))
-    try #require(!ViewerPresenter.shotOrder(viewer.snapshot).contains(Self.newer), "the search hides the screenshot")
     viewer.send(.selectTab(.activity))
     viewer.send(.openShot(Self.newer))
     #expect(viewer.state.top.tabs.selected == .screenshots)
@@ -292,7 +289,6 @@ struct ViewerPanesModelTests {
       return
     }
     #expect(shots.large?.id == Self.newer)
-    #expect(shots.query.isEmpty, "the search that hid it gives way")
     viewer.close()
   }
 }

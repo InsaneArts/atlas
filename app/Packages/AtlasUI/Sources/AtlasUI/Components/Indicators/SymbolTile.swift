@@ -5,12 +5,11 @@ import SwiftUI
 struct SymbolTile: View {
   /// How large the tile is.
   enum Size: Sendable, CaseIterable {
-    /// 22, with a row's symbol: an action's kind in Activity (v3 V8).
+    /// 22, with a row's symbol: an action's kind in Activity.
     case small
     /// 26, with 11-point characters: an icon in a row, such as an agent's.
     case regular
-    /// 30: a ``ListRow``'s tile (v3's 30-point lead, which insets the separator 56). v3 names this size regular;
-    /// today's regular moves to it when its rows move to ``ListRow``.
+    /// 30: a ``ListRow``'s tile, with room for a symbol and its inset.
     case large
   }
 
@@ -18,7 +17,7 @@ struct SymbolTile: View {
   enum Tone: Sendable, CaseIterable {
     /// A control's fill under a bright glyph, as a settings row's.
     case plain
-    /// A faint fill under a quiet glyph, as an agent's action in Activity (v3 V8).
+    /// A faint fill under a quiet glyph, as an agent's action in Activity.
     case quiet
     /// A blue tint under a blue glyph, as the person's own action.
     case accent
@@ -89,7 +88,7 @@ struct SymbolTile: View {
 
 /// The tile's own measures.
 private enum Layout {
-  /// 22: a small tile, Activity's (v3 V8's 22 tile).
+  /// 22: a small tile, Activity's.
   static let smallSide: CGFloat = 22
 }
 

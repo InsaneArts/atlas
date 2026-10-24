@@ -29,9 +29,13 @@
       "19-about-installing",
       "20-about-install-failed",
       "21-about-unpublished",
+      "22-helper-waiting",
+      "23-helper-leftover",
+      "24-helper-closing",
+      "25-helper-still-logged-in",
     ]
 
-    /// Every Settings state drawn for checking against the board, by file name.
+    /// Every Settings state drawn for visual checks, by file name.
     static var renders: [(file: String, state: SettingsState)] {
       Array(zip(files, PreviewStates.settings.map(\.value)))
     }
@@ -51,8 +55,8 @@
         .allSatisfy { $0 }
     }
 
-    /// Draws one Settings state to `file`.png in `folder`, at Retina scale, Settings' width and its pane's height, as
-    /// the window fits it (v3 G2).
+    /// Draws one Settings state to `file`.png in `folder`, at Retina scale, Settings' width and its pane's
+    /// height, as the window fits it.
     ///
     /// - Parameters:
     ///   - file: The PNG's name, without its extension.

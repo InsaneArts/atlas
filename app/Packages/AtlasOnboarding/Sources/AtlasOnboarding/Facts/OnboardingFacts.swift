@@ -8,7 +8,9 @@ public struct OnboardingFacts: Equatable, Sendable {
   /// This account's full name, else its short one.
   public var myName = ""
   /// Something wrong with the app itself (moved, or not signed).
-  var appProblem: String?
+  public var appProblem: String?
+  /// Why helper setup needs attention in this account after acceptance.
+  var setupProblem: String?
   /// Whether a helper has been chosen.
   public var configured = false
   /// The accounts that could be the helper.
@@ -23,6 +25,8 @@ public struct OnboardingFacts: Equatable, Sendable {
   var loginDecided = false
   /// In the helper: the account that asked, and this account's own state.
   public var asker = Asker()
+  /// The user IDs of deleted accounts whose logins are still open, which Atlas closes before setup goes on.
+  public var leftoverLogins: [Int] = []
 
   /// Atlas.app is not in Applications, where the helper can run it.
   static let notInApplications =
@@ -46,11 +50,14 @@ public struct OnboardingFacts: Equatable, Sendable {
     } else if raw.app?.signed == false {
       appProblem = Self.notSigned
     }
+    setupProblem = raw.setupProblem
     configured = raw.configured ?? false
     candidates = raw.candidates ?? []
     onlyChoice = raw.onlyChoice ?? false
     finished = raw.finished ?? false
     loginDecided = raw.menubarLogin ?? false
+    leftoverLogins = (raw.leftoverLogins ?? [])
+      .compactMap(\.uid)
     guard let side = raw.helper else { return }
     switch role {
     case .controller:
@@ -58,7 +65,6 @@ public struct OnboardingFacts: Equatable, Sendable {
       helper.name = side.name ?? ""
       helper.realName = side.realName
       helper.administrator = side.administrator
-      helper.leftoverSession = side.leftoverSession ?? false
       helper.paired = side.paired ?? false
       helper.forgettable = side.forgettable ?? false
       helper.signedIn = side.signedIn ?? false
@@ -71,6 +77,7 @@ public struct OnboardingFacts: Equatable, Sendable {
       asker.uid = side.controller?.uid ?? 0
       asker.name = side.controller?.name ?? ""
       asker.realName = side.controller?.realName
+      asker.accepted = side.accepted ?? false
       asker.installed = side.installed ?? false
       asker.running = side.running ?? false
       asker.screenCapture = side.permissions?.screenCapture ?? false

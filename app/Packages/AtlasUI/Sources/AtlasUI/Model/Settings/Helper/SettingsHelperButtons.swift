@@ -28,6 +28,6 @@ public struct SettingsHelperButtons: Equatable, Sendable {
     self.switchHelp = switchHelp
   }
 
-  /// Whether Check Again's reading runs now, so its button shows a spinner.
+  /// Whether Check Again's reading runs now, so each check's mark shows a spinner.
   public var isChecking: Bool { !canCheck }
 }

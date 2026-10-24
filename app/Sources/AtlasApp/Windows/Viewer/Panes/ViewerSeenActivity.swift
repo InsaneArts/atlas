@@ -1,6 +1,6 @@
 import AtlasStatus
 
-/// What of the helper's activity the person has seen (v3 V2): whatever is newer than all of it is unseen, and
+/// What of the helper's activity the person has seen: whatever is newer than all of it is unseen, and
 /// Activity's tab carries a dot for it until it is chosen, orange once an unseen action failed.
 struct ViewerSeenActivity: Equatable {
   /// The actions seen, by id: those the Activity tab showed, or those the first reading held, so what the helper did

@@ -9,7 +9,7 @@ extension CapsuleButtonStyle {
     }
   }
 
-  /// The label's weight: regular for plain text, semibold on a capsule and on an alert's buttons (v3 `.acap`).
+  /// The label's weight: regular for plain text, semibold on a capsule and on an alert's buttons.
   var weight: Font.Weight {
     switch look {
     case .plain: .regular
@@ -17,8 +17,8 @@ extension CapsuleButtonStyle {
     }
   }
 
-  /// The label's letter spacing: drawn in on a capsule, as the boards set every capsule's word (v3.py `pill`); plain
-  /// text and an alert's buttons keep the font's own.
+  /// The label's letter spacing: drawn in on a capsule, to keep short control labels compact; plain text and
+  /// an alert's buttons keep the font's own.
   var tracking: CGFloat {
     switch look {
     case .primary, .glass, .pressed: LetterSpacing.control
@@ -41,8 +41,8 @@ extension CapsuleButtonStyle {
   /// its row, none on an alert's.
   var inset: CGFloat {
     if size == .large { return Layout.largeInset }
-    // An alert's buttons share a narrow row and hold a mark beside their word, so they keep no room of their own
-    // beside it, as v3's `.acap` has none.
+    // An alert's buttons share a narrow row and hold a mark beside their word. No extra space is reserved
+    // beside the mark, so the button's label stays centred.
     if size == .compact { return .zero }
     if look == .plain { return Spacing.m }
     return fill ? Spacing.sPlus : Layout.regularInset
@@ -59,8 +59,8 @@ extension CapsuleButtonStyle {
     }
   }
 
-  /// The capsule's edge: a glass hairline, a brighter one while pressed, a faint one on an alert's quiet buttons
-  /// (v3 `.acap`), none otherwise.
+  /// The capsule's edge: a glass hairline, a brighter one while pressed, a faint one on an alert's quiet
+  /// buttons, none otherwise.
   var edge: Color {
     switch look {
     case .glass: .strokeStrong

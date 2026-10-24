@@ -137,6 +137,7 @@ async fn guided() -> bool {
                 || crate::setup::first_login::opener_waiting(&crate::setup::helper::Layout {
                     uid,
                     home,
+                    guard: None,
                 })
         })
     })
@@ -230,7 +231,7 @@ async fn ask(shown: &impl Fn() -> bool, restart: &impl Fn(), controller: u32) {
     // now: say so (and pick up the grant).
     if accessibility() && recording().await {
         if asked(false) {
-            done_notice();
+            done_notice(controller);
         } else if just_logged_in().await {
             back_notice(controller);
         }
@@ -291,7 +292,7 @@ async fn ask(shown: &impl Fn() -> bool, restart: &impl Fn(), controller: u32) {
 
     if shown() {
         asked(false);
-        done_notice();
+        done_notice(controller);
         if !capture::permitted() {
             restart();
         }
@@ -351,14 +352,32 @@ fn asked(remember: bool) -> bool {
     was
 }
 
-/// Tell the person, in the helper, that it is set up and they can go back.
-fn done_notice() {
+/// Tell the person, in the helper, that it is set up, with a button that
+/// switches back to `controller` when that account is known.
+fn done_notice(controller: u32) {
+    let account = crate::setup::account_with_uid(controller).ok().flatten();
+    let title = account.as_ref().map(|account| {
+        crate::setup::real_name(&account.name).unwrap_or_else(|| account.name.clone())
+    });
     notice(
-        "Atlas is set up here",
-        "Screen Recording and Accessibility are on. Switch back to your own account; Atlas \
-         carries on there by itself.",
-        None,
+        "Atlas is set up",
+        &done_message(title.as_deref()),
+        account.as_ref().map(|account| account.name.as_str()),
     );
+}
+
+/// What the set-up notice says: who to switch back to, by name when known.
+fn done_message(title: Option<&str>) -> String {
+    let back = title.unwrap_or("your own account");
+    format!(
+        "Screen Recording and Accessibility are on. {}",
+        switch_back(back)
+    )
+}
+
+/// The sentence that sends the person back to `title`'s account.
+fn switch_back(title: &str) -> String {
+    format!("Switch back to {title} — Atlas keeps running there.")
 }
 
 /// Tell the person, just logged in to the helper, that Atlas runs here
@@ -371,7 +390,7 @@ fn back_notice(controller: u32) {
     let title = crate::setup::real_name(&account.name).unwrap_or_else(|| account.name.clone());
     notice(
         "Atlas is running here again",
-        &format!("Switch back to {title}; Atlas carries on there by itself."),
+        &switch_back(&title),
         Some(&account.name),
     );
 }
@@ -681,6 +700,23 @@ mod tests {
         );
         let after = passes(&mut asking, false, 15, QUIET_PASSES as usize);
         assert_eq!(after.last(), Some(&Nudge::OpenSettings));
+    }
+
+    #[test]
+    fn the_set_up_notice_names_the_account_to_switch_back_to() {
+        assert_eq!(
+            done_message(Some("Alex")),
+            "Screen Recording and Accessibility are on. Switch back to Alex — Atlas keeps running there."
+        );
+        assert_eq!(
+            done_message(None),
+            "Screen Recording and Accessibility are on. Switch back to your own account — Atlas keeps \
+             running there."
+        );
+        assert!(
+            !switch_back("Alex").contains(';'),
+            "one plain sentence, no semicolon"
+        );
     }
 
     #[test]

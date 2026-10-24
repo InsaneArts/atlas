@@ -1,7 +1,7 @@
 #if DEBUG
   import SwiftUI
 
-  /// Settings' sections at a form's width (G3, G5–G8): rows with a switch and a button under no name, then a named
+  /// Settings' sections at a form's width: rows with a switch and a button under no name, then a named
   /// section of checks, one failing with its fix, and a project's path, with each kind of note under it.
   struct GroupedSectionSamples: View {
     /// A section of controls.

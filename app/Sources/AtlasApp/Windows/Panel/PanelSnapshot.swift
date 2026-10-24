@@ -5,8 +5,11 @@ import AtlasUI
 struct PanelSnapshot {
   /// The latest status the service reported.
   var status = ViewerStatus()
-  /// Whether no status reading has ended yet, so the panel says it is connecting.
+  /// Whether the panel waits for the service's answer, before the first one or after a reading that failed, so it
+  /// says it is connecting.
   var connecting = false
+  /// Whether answers came before and the last reading failed, so connecting reads as Reconnecting….
+  var reconnecting = false
   /// The helper's screen, when the last capture gave one.
   var picture: DesktopPicture?
   /// What the panel is doing: paused, an action of its own under way, its notice and its ⋯ menu.

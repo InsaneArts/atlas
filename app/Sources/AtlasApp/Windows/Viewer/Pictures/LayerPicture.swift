@@ -3,12 +3,12 @@ import CoreImage
 import QuartzCore
 import os
 
-/// The live picture's layer and what it shows (v3 V17, X4), as ``LayerPictureView``'s coordinator: each new picture
-/// replaces the layer's contents inside a transaction with actions disabled, so a frame lands whole in one display
-/// tick, never crossfading from the last, and SwiftUI never rebuilds the picture's view for it. The colour a look
-/// keeps is a Core Image filter on the layer; the black that darkens it lies over the view.
+/// The live picture's layer and what it shows, as ``LayerPictureView``'s coordinator: each new picture
+/// replaces the layer's contents inside a transaction with actions disabled, so a frame lands whole in one
+/// display tick, never crossfading from the last, and SwiftUI never rebuilds the picture's view for it. The
+/// colour a look keeps is a Core Image filter on the layer; the black that darkens it lies over the view.
 final class LayerPicture {
-  /// Marks each swap, so Instruments shows the main thread's time per frame (the X4 check).
+  /// Marks each swap, so Instruments shows the main thread's time per frame.
   private static let signposter = OSSignposter(subsystem: "com.insanearts.atlas", category: "Viewer")
 
   /// The layer the picture is drawn in, fitted at its own shape.

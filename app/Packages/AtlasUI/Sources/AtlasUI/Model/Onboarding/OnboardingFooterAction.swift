@@ -18,19 +18,31 @@ public struct OnboardingFooterAction: Equatable, Sendable {
     case tryAgain
     /// Check Again, when something only the person can fix comes first.
     case checkAgain
+    /// Close It…, for a deleted account's login that is still open.
+    case closeIt
     /// Done.
     case done
     /// Allow, in the helper.
     case allow
+    /// Not Now, beside Allow in the helper: the window closes and nothing is allowed.
+    case notNow
+    /// Allow and the permission's name, on the helper's permissions screen: the next permission to allow.
+    ///
+    /// - Parameter permission: The permission's name, as System Settings shows it on this Mac.
+    case allowPermission(String)
+    /// Show in Finder, when Atlas.app itself must move or be installed again first.
+    case showInFinder
     /// Switch Back, in the helper.
     case switchBack
 
-    /// Whether the screen drew this button itself before every main action moved to the footer (v3 D3): the
-    /// buttons the footer hands back to the screen while ``SwiftUICore/EnvironmentValues/mainActionInFooter`` is off.
+    /// Whether the screen drew this button itself before every main action moved to the footer: the buttons the
+    /// footer hands back to the screen while ``SwiftUICore/EnvironmentValues/mainActionInFooter`` is off.
     var isScreenAction: Bool {
       switch self {
       case .getStarted, .lockAndSwitch, .tryAgain, .checkAgain, .allow, .switchBack: true
-      case .back, .chooseAnother, .continue, .createAccount, .done: false
+      case .back, .chooseAnother, .continue, .createAccount, .done, .closeIt, .notNow, .allowPermission,
+        .showInFinder:
+        false
       }
     }
   }

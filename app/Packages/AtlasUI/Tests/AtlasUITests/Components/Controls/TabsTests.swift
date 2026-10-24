@@ -44,7 +44,13 @@ struct TabsTests {
     .background(Color.ground)
   }
 
-  /// Whether two drawings put the same colour at every point.
+  /// 0.2: how far apart a channel may be at one point and still count as the same drawing. Text's edges can render a
+  /// shade apart from one drawing to the next on a busy Mac; a word moved by even a point changes its edges by far
+  /// more, and the blue dot changes its pixels by more still.
+  static let sameWithin = 0.2
+
+  /// Whether two drawings lay everything out in the same place: the same size, and at every point colours within
+  /// ``sameWithin`` of each other.
   ///
   /// - Parameters:
   ///   - one: A drawing.
@@ -53,8 +59,16 @@ struct TabsTests {
   static func same(_ one: PanelPixels, _ other: PanelPixels) -> Bool {
     guard one.width == other.width, one.height == other.height else { return false }
     for y in 0..<one.height {
-      for x in 0..<one.width where one.colour(x: x, y: y) != other.colour(x: x, y: y) {
-        return false
+      for x in 0..<one.width {
+        let left = one.colour(x: x, y: y)
+        let right = other.colour(x: x, y: y)
+        let apart = max(
+          abs(left.red * left.alpha - right.red * right.alpha),
+          abs(left.green * left.alpha - right.green * right.alpha),
+          abs(left.blue * left.alpha - right.blue * right.alpha),
+          abs(left.alpha - right.alpha)
+        )
+        if apart > sameWithin { return false }
       }
     }
     return true

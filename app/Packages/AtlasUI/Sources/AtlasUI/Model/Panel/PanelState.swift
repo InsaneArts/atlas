@@ -1,4 +1,4 @@
-/// Everything the menu bar panel draws, decided before it reaches the view (MacPanel, v3 P1–P11).
+/// Everything the menu bar panel draws, decided before it reaches the view.
 public struct PanelState: Equatable, Sendable {
   /// The helper's status, which leads the panel: its mark and word as the heading, and the line under them; an empty
   /// line hides its row.
@@ -14,6 +14,9 @@ public struct PanelState: Equatable, Sendable {
   public var recent: [PanelRecentEntry]
   /// The row of buttons at the foot: Stop while an agent works, and the main action.
   public var controls: PanelControls
+  /// What VoiceOver should say about the helper now: a state that asks something of the person, once it has held;
+  /// nil for nothing.
+  public var announcement: String?
 
   /// Creates the panel's state.
   ///
@@ -24,13 +27,15 @@ public struct PanelState: Equatable, Sendable {
   ///   - picture: The helper's screen and how it looks, or why there is none.
   ///   - recent: The newest actions, newest first, at most three; empty hides Recent.
   ///   - controls: The row of buttons at the foot.
+  ///   - announcement: What VoiceOver should say about the helper now; nil by default.
   public init(
     status: StatusSummary,
     notice: String? = nil,
     isMoreOpen: Bool = false,
     picture: PanelPictureState,
     recent: [PanelRecentEntry],
-    controls: PanelControls
+    controls: PanelControls,
+    announcement: String? = nil
   ) {
     self.status = status
     self.notice = notice
@@ -38,5 +43,6 @@ public struct PanelState: Equatable, Sendable {
     self.picture = picture
     self.recent = recent
     self.controls = controls
+    self.announcement = announcement
   }
 }

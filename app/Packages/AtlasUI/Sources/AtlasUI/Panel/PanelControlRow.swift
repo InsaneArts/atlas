@@ -1,29 +1,60 @@
 import SwiftUI
 
-/// The panel's buttons, the actions on the agent (v3 P2): Stop in its slot only while an agent works, growing in and
-/// out as the main action makes room, then the white main action filling the row. The row moves fourth in the panel's
-/// cascade (v3 P7), its slot included. Each says what it does in its tooltip; the panel registers no shortcuts.
+/// The panel's buttons, the actions on the agent: Stop while an agent works, or Resume once the person stopped agents,
+/// in a glass slot that grows in and out as the main action makes room, then the white main action filling the row.
+/// Each names its menu item and shortcut in its tooltip, as the main window's buttons do.
 struct PanelControlRow: View {
   /// The buttons' states.
   let controls: PanelControls
   /// Receives what the person does.
   let send: @MainActor (PanelEvent) -> Void
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-  /// Stop in its slot, then the main action filling the row.
+  /// Stop or Resume in its slot, then the main action filling the row.
   var body: some View {
     HStack(spacing: Spacing.s) {
-      Button("Stop") { send(.stopAgent) }
-        .buttonStyle(.capsule(.glass, size: .small))
-        .help("Stop what the agent is doing in the helper, and let it do nothing more until you resume")
-        .actionSlot(controls.showsStop)
+      Button {
+        send(agentEvent)
+      } label: {
+        // Laid out at Resume's width either way, so pressing Stop never changes the button's width.
+        ZStack {
+          Text(verbatim: "Resume")
+            .hidden()
+          Text(agentTitle)
+            .swapsText(on: agentTitle)
+        }
+      }
+      .buttonStyle(.capsule(.glass, size: .small))
+      .disabled(!agentIsEnabled)
+      .help(controls.agentHelp)
+      .actionSlot(controls.agent != nil)
       Button(controls.main.title) { send(controls.main.event) }
         .buttonStyle(.capsule(size: .small, fill: true))
         .disabled(!controls.main.isEnabled)
         .help(controls.main.help)
     }
-    // The slot's own row animation would start at once, ahead of the cascade; the panel's waits for the buttons' turn.
-    .animation(PanelLayout.slot(isShown: controls.showsStop, reduceMotion: reduceMotion), value: controls.showsStop)
+    .animatesActionSlots(controls.agent != nil)
+  }
+
+  /// The glass button's word: Resume once agents are stopped, else Stop.
+  private var agentTitle: String {
+    isResume ? "Resume" : "Stop"
+  }
+
+  /// What the glass button sends.
+  private var agentEvent: PanelEvent {
+    isResume ? .resumeAgent : .stopAgent
+  }
+
+  /// Whether the glass button can be pressed: Stop always, Resume once nothing else is asked of the service.
+  private var agentIsEnabled: Bool {
+    guard case .resume(let isEnabled) = controls.agent else { return true }
+    return isEnabled
+  }
+
+  /// Whether the glass button is Resume.
+  private var isResume: Bool {
+    guard case .resume = controls.agent else { return false }
+    return true
   }
 }
 
@@ -34,8 +65,8 @@ struct PanelControlRow: View {
       .sampleSurface()
   }
 
-  #Preview("Not ready") {
-    PanelControlRow(controls: PreviewStates.panelNotReady.controls) { _ in }
+  #Preview("Stopped") {
+    PanelControlRow(controls: PreviewStates.panelStopped.controls) { _ in }
       .frame(width: PanelLayout.picture.width)
       .sampleSurface()
   }

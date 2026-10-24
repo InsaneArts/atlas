@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// One row of tabs (v3 U-10, V1, G1, X3). As a `track`, the tabs sit side by side in a capsule track, each its word or
-/// its symbol, the selected one on a brighter thumb that glides to it (`matchedGeometryEffect(id: "thumb")`,
-/// ``Motion/tab``; under Reduce Motion it moves in 0.15 seconds, ``Motion/crossfadeReduced``). As a `segment` they
+/// One row of tabs. As a `track`, the tabs sit side by side in a capsule track, each its word or its symbol, the
+/// selected one on a brighter thumb that glides to it (`matchedGeometryEffect(id: "thumb")`) in 0.25 seconds with no
+/// overshoot, as a segmented control's does, and jumps there at once under Reduce Motion
+/// (``TabsLayout/thumbGlide(reduceMotion:)``). As a `segment` they
 /// sit the same way in a small rounded track, as a pane's filters. As `symbolOverWord`, each tab is its symbol over
 /// its word, the selected one on a filled tile with its symbol in blue, as a settings window's. Each tab is a button
 /// VoiceOver reads as selected or not; anything a tab carries beside its word, such as a dot for something new, comes
@@ -68,7 +69,7 @@ struct Tabs<Tab: Hashable & Sendable, Accessory: View>: View {
             .modifier(hanging(tab.id, gap: face == .symbol ? Spacing.xs : Spacing.xsPlus))
         }
         .buttonStyle(TrackTabStyle(isSelected: tab.id == state.selected, face: face, thumb: thumb))
-        .help(face == .symbol ? tab.title : "")
+        .help(tab.help ?? (face == .symbol ? tab.title : ""))
         .accessibilityLabel(tab.title)
         .accessibilityAddTraits(tab.id == state.selected ? .isSelected : [])
       }
@@ -83,10 +84,7 @@ struct Tabs<Tab: Hashable & Sendable, Accessory: View>: View {
         .strokeBorder(Color.separator, lineWidth: Stroke.hairline)
     )
     .fixedSize()
-    .animation(
-      Motion.animation(Motion.tab, reduceMotion: reduceMotion, reduced: Motion.crossfadeReduced),
-      value: state.selected
-    )
+    .animation(TabsLayout.thumbGlide(reduceMotion: reduceMotion), value: state.selected)
     .accessibilityElement(children: .contain)
     .accessibilityLabel(state.label)
   }
@@ -104,7 +102,7 @@ struct Tabs<Tab: Hashable & Sendable, Accessory: View>: View {
     }
   }
 
-  /// The tabs in a small rounded track, each its word, as a pane's filters (v3 `.seg`).
+  /// The tabs in a small rounded track, each its word, as a pane's filters.
   private var segment: some View {
     HStack(spacing: .zero) {
       ForEach(state.tabs) { tab in
@@ -125,10 +123,7 @@ struct Tabs<Tab: Hashable & Sendable, Accessory: View>: View {
         .fill(Color.fillControl)
     )
     .fixedSize()
-    .animation(
-      Motion.animation(Motion.tab, reduceMotion: reduceMotion, reduced: Motion.crossfadeReduced),
-      value: state.selected
-    )
+    .animation(TabsLayout.thumbGlide(reduceMotion: reduceMotion), value: state.selected)
     .accessibilityElement(children: .contain)
     .accessibilityLabel(state.label)
   }

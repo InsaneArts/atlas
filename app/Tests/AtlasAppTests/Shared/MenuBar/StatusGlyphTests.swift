@@ -56,39 +56,48 @@ struct StatusGlyphTests {
     }
   }
 
-  @Test("control tints the whole orbit blue and carries no badge")
-  func controlIsABlueOrbit() {
-    let look = StatusGlyph.look(for: .control)
-    #expect(look == StatusGlyph.Look(tint: .accent, badge: .none, breathes: false))
-    #expect(!StatusGlyph.image(for: look).isTemplate)
-    for (kind, look) in Self.looks where kind != .control {
-      #expect(look.tint != .accent, "\(kind)")
-      #expect(StatusGlyph.image(for: look).isTemplate, "\(kind) keeps the template look")
+  @Test("the orbit is a template in every state, so it reads on a tinted menu bar, and control is a blue dot on it")
+  func everyStateKeepsTheTemplate() {
+    for (kind, look) in Self.looks {
+      #expect(StatusGlyph.image(for: look).isTemplate, "\(kind)")
     }
+    #expect(StatusGlyph.look(for: .control) == StatusGlyph.Look(tint: .template, badge: .accentDot, breathes: false))
   }
 
-  @Test("logged out, not ready and connecting dim the orbit and carry no badge")
+  @Test("only logged out and connecting dim the orbit")
   func theQuietStatesDim() {
-    let quiet: [Mode.Kind] = [.loggedOut, .notReady, .connecting]
+    let quiet: [Mode.Kind] = [.loggedOut, .connecting]
     for (kind, look) in Self.looks {
       #expect((look.tint == .dimmed) == quiet.contains(kind), "\(kind)")
-      if quiet.contains(kind) { #expect(look.badge == .none, "\(kind)") }
     }
     #expect(StatusGlyph.dimAlpha == 0.42)
     #expect(StatusGlyph.opacity(of: .dimmed) == 0.42)
-    #expect(StatusGlyph.opacity(of: .template) == 1 && StatusGlyph.opacity(of: .accent) == 1)
+    #expect(StatusGlyph.opacity(of: .template) == 1)
   }
 
-  @Test("only working, needs you and stopped carry a badge, and stopped's is a square")
-  func onlyThreeStatesCarryABadge() throws {
+  @Test("no two states look alike: each has its own tint and badge, and only idle and connecting carry no badge")
+  func everyStateLooksItsOwn() throws {
     let badges = Dictionary(uniqueKeysWithValues: Self.looks.map { ($0.kind, $0.look.badge) })
     #expect(badges[.working] == .accentDot)
+    #expect(badges[.control] == .accentDot)
     #expect(badges[.needsYou] == .attentionDot)
     #expect(badges[.stopped] == .attentionSquare)
-    for (kind, badge) in badges where ![.working, .needsYou, .stopped].contains(kind) {
-      #expect(badge == .none, "\(kind)")
-      #expect(StatusGlyph.frame(of: badge) == nil, "\(kind)")
+    #expect(badges[.notReady] == .attentionRing)
+    #expect(badges[.loggedOut] == .quietRing)
+    #expect(badges[.inUseElsewhere] == .quietDot)
+    #expect(badges[.idle] == StatusGlyph.Badge.none && badges[.connecting] == StatusGlyph.Badge.none)
+    #expect(StatusGlyph.frame(of: .none) == nil)
+    let looks = Self.looks
+      .map(\.look)
+    for (index, look) in looks.enumerated() {
+      #expect(!looks[(index + 1)...].contains(look), "\(Self.looks[index].kind) shares its look")
     }
+    #expect(StatusGlyph.colour(of: .quietRing) == .systemGray && StatusGlyph.colour(of: .quietDot) == .systemGray)
+    #expect(StatusGlyph.colour(of: .attentionRing) == .systemOrange)
+    #expect(StatusGlyph.isHollow(.attentionRing) && StatusGlyph.isHollow(.quietRing))
+    #expect(!StatusGlyph.isHollow(.accentDot) && !StatusGlyph.isHollow(.attentionSquare))
+    let ring = StatusGlyph.outline(of: .attentionRing, in: CGRect(x: 0, y: 0, width: 7, height: 7))
+    #expect(ring.boundingBox == CGRect(x: 0.75, y: 0.75, width: 5.5, height: 5.5), "the stroke fills the box exactly")
     #expect(try #require(StatusGlyph.frame(of: .accentDot)).width == 7)
     let square = try #require(StatusGlyph.frame(of: .attentionSquare))
     #expect(square == StatusGlyph.frame(of: .accentDot), "the square shares the disc's box")
@@ -98,23 +107,22 @@ struct StatusGlyphTests {
     #expect(StatusGlyph.colour(of: .attentionSquare) == .systemOrange)
   }
 
-  @Test("the badge's ring is knocked out of the orbit, so the menu bar shows through around it")
+  @Test("a 1-point gap is knocked out of the orbit round the badge, so the menu bar shows through around it")
   func theRingIsAKnockout() throws {
     let plain = try Self.bitmap(StatusGlyph.image(for: StatusGlyph.look(for: .idle)))
     let cut = try Self.bitmap(StatusGlyph.image(for: StatusGlyph.look(for: .needsYou)))
     let badge = try #require(StatusGlyph.frame(of: .attentionDot))
-    // The ring's outer circle, top down, 1.5 past the badge; the bitmap runs top down too.
-    let ring = badge.insetBy(dx: -1.5, dy: -1.5)
+    // The gap's outer circle, top down, 1 past the badge; the bitmap runs top down too.
+    let gap = badge.width / 2 + 1
     var inkedBefore = 0
     var inkedAfter = 0
     for row in 0..<plain.pixelsHigh {
       for column in 0..<plain.pixelsWide {
         let point = CGPoint(x: (CGFloat(column) + 0.5) / 2, y: (CGFloat(row) + 0.5) / 2)
-        let offset = CGPoint(x: point.x - ring.midX, y: point.y - ring.midY)
-        // Half a pixel in from the edge, where antialiasing is.
-        guard (offset.x * offset.x + offset.y * offset.y).squareRoot() < ring.width / 2 - 0.5 else { continue }
-        if (plain.colorAt(x: column, y: row)?.alphaComponent ?? 0) > 0.5 { inkedBefore += 1 }
-        if (cut.colorAt(x: column, y: row)?.alphaComponent ?? 0) > 0.05 { inkedAfter += 1 }
+        let distance = hypot(point.x - badge.midX, point.y - badge.midY)
+        if distance < gap, (plain.colorAt(x: column, y: row)?.alphaComponent ?? 0) > 0.5 { inkedBefore += 1 }
+        // A quarter point in from the edge, where antialiasing is.
+        if distance < gap - 0.25, (cut.colorAt(x: column, y: row)?.alphaComponent ?? 0) > 0.05 { inkedAfter += 1 }
       }
     }
     #expect(inkedBefore > 0, "the orbit reaches under the badge")

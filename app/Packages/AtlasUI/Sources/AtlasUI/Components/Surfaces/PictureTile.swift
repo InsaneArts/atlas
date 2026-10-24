@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// A picture's thumbnail cut to its frame: the picture fills it edge to edge, on black until it arrives, with a fine
-/// edge, or a blue ring and a soft blue halo around it while it is the one selected (v3 `.stile.sel`). The caller
-/// gives its size. A picture that arrives fades in, or simply appears under Reduce Motion.
+/// edge, a brighter 1-point ring under the pointer, or a blue ring and a soft blue halo around it while it is the one
+/// selected. The caller gives its size. A picture that arrives fades in, or simply appears under Reduce Motion.
 struct PictureTile: View {
   /// The picture; nil shows black until it arrives.
   let picture: DesktopPicture?
@@ -10,6 +10,8 @@ struct PictureTile: View {
   var radius = Radius.medium
   /// Whether it is the one selected, which its ring shows.
   var isSelected = false
+  /// Whether the pointer is over it, which a brighter ring shows; nothing moves.
+  var isHighlighted = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   /// The picture in its frame, with its edge or its ring.
@@ -29,7 +31,10 @@ struct PictureTile: View {
       .overlay {
         if !isSelected {
           RoundedRectangle(cornerRadius: radius)
-            .strokeBorder(Color.strokeStrong, lineWidth: Stroke.hairline)
+            .strokeBorder(
+              isHighlighted ? Color.strokeHover : Color.strokeStrong,
+              lineWidth: isHighlighted ? Stroke.regular : Stroke.hairline
+            )
         }
       }
       .background {
@@ -39,8 +44,7 @@ struct PictureTile: View {
       }
   }
 
-  /// The selected ring: blue just outside the frame, then the soft accent ring outside that (v3 `0 0 0 2px accent,
-  /// 0 0 0 5px ring`).
+  /// The selected ring: blue just outside the frame, then the soft accent ring outside that.
   private var ring: some View {
     ZStack {
       RoundedRectangle(cornerRadius: radius + Layout.haloReach)
@@ -55,7 +59,7 @@ struct PictureTile: View {
 
 /// The tile's own measures.
 private enum Layout {
-  /// 5: how far the soft ring reaches outside the frame, past the blue one's 2 (v3 `.stile.sel`).
+  /// 5: how far the soft ring reaches outside the frame, past the blue one's 2.
   static let haloReach: CGFloat = 5
 }
 

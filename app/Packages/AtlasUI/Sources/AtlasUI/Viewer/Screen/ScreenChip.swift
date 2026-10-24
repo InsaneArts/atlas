@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// The chip at the top of the screen, on glass (v3 V5, V11, V13): control and how to give it back, as keycaps; a paused
-/// picture and that work goes on; or the text being typed, with a caret, which takes control's place in the same slot.
+/// The chip at the top of the screen, on glass: control and how to give it back, as keycaps, Escape spelled out as the
+/// system's shortcut displays spell it, so it never reads as a refresh arrow; a paused picture and that work goes on;
+/// or the text being typed, with a caret, which takes control's place in the same slot.
 struct ScreenChip: View {
   /// Which chip.
   let chip: ViewerScreenChip
@@ -24,10 +25,10 @@ struct ScreenChip: View {
         HStack(spacing: ViewerLayout.keycapGap) {
           Keycap(face: .text("⌃"))
           Keycap(face: .text("⇧"))
-          Keycap(face: .text("⎋"))
+          Keycap(face: .text("esc"))
         }
         .accessibilityLabel(Text(verbatim: "Control-Shift-Escape"))
-        Text(verbatim: "gives it back")
+        Text(verbatim: "to give back")
           .fontWeight(.regular)
           .foregroundStyle(Color.textSecondary)
       }

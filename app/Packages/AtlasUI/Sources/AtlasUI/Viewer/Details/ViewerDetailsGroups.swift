@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Details' groups of facts (v3 `.vdetails .sec`): the helper; Ready to act, one row while every check passes, else
-/// each check that does not with what it means and a count of those that do; the picture; and the session. A group
-/// with nothing known yet is left out.
+/// Details' groups of facts: the helper; Ready to act, one row while every check passes, else each check that
+/// does not with what it means and a count of those that do; the picture; and the session. A group with
+/// nothing known yet is left out.
 struct ViewerDetailsGroups: View {
   /// What the inspector shows.
   let state: ViewerDetailsState

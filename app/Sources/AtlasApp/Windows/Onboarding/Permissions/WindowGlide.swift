@@ -2,8 +2,8 @@ import AppKit
 import AtlasUI
 
 /// Moves the setup window to a new place on the screen in ``GlideSteps``: its content fades out, the window glides on
-/// ``Motion/glideSoftCurve``, starting at once and landing softly, and the content fades back in near the end (v3 S7,
-/// X13); under Reduce Motion the window fades out, lands and fades in. Until the latest move lands it counts as
+/// ``Motion/glideSoftCurve``, starting at once and landing softly, and the content fades back in near the end;
+/// under Reduce Motion the window fades out, lands and fades in. Until the latest move lands it counts as
 /// gliding, so nothing else moves the window meanwhile.
 ///
 /// A move supersedes the one before it: the earlier move's later steps do nothing, so Back during a fade out lands

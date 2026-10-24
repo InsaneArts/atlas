@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// A place for a control that shows only while its action applies (v3 D11, "nothing disabled for show"), such as Keys
-/// while the person has control. The control grows in from its leading edge and shrinks away there; the row it sits
-/// in carries the animation (``ActionSlotRow``), so the controls beside it slide to close the gap as the slot goes
-/// from nothing to its width and back. Under Reduce Motion it only fades.
+/// A place for a control that shows only while its action applies, such as Keys while the person has control.
+/// The control grows in from its leading edge and shrinks away there; the row it sits in carries the
+/// animation (``ActionSlotRow``), so the controls beside it slide to close the gap as the slot goes from
+/// nothing to its width and back. Under Reduce Motion it only fades.
 struct ActionSlot: ViewModifier {
   /// Whether the action applies, so the control shows.
   let isShown: Bool
@@ -40,8 +40,9 @@ struct ActionSlot: ViewModifier {
 
 /// The slot's own measures.
 private enum Layout {
-  /// 0.85: the scale a control grows from and shrinks to (v3 D11).
-  static let scale: CGFloat = 0.85
+  /// 0.94: the scale a control grows from and shrinks to, close to its own size, so it reads as arriving rather
+  /// than popping.
+  static let scale: CGFloat = 0.94
 }
 
 #if DEBUG

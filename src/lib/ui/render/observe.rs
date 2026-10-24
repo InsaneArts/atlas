@@ -24,6 +24,88 @@ fn display(value: &Value) -> Option<String> {
     ))
 }
 
+/// The last login, one step a line, then any plugin of macOS's account
+/// update that never finished.
+pub fn login_timing(value: &Value) -> String {
+    if value["found"] != true {
+        return format!("{} No login in the last 2 hours", style::unknown());
+    }
+
+    let steps = &value["steps"];
+    let seconds = |key: &str| {
+        steps[key].as_f64().map_or_else(
+            || style::dim("unknown"),
+            |seconds| format!("{seconds:.1} s"),
+        )
+    };
+    let slowest = value["slowestPlugin"]["plugin"]
+        .as_str()
+        .zip(value["slowestPlugin"]["seconds"].as_f64())
+        .map(|(plugin, seconds)| {
+            style::dim(format!(
+                " (slowest: {}, {seconds:.1} s)",
+                text::printable(plugin)
+            ))
+        })
+        .unwrap_or_default();
+    let assistant = match steps["setupAssistant"].as_bool() {
+        Some(true) => "shown".to_owned(),
+        Some(false) => "skipped".to_owned(),
+        None => style::dim("unknown"),
+    };
+
+    let mut lines = vec![
+        style::bold("The last login, step by step"),
+        format!(
+            "  Password → account update   {}",
+            seconds("passwordToUpdater")
+        ),
+        if value["unfinished"]
+            .as_array()
+            .is_some_and(|plugins| !plugins.is_empty())
+        {
+            format!(
+                "  Account update              {}",
+                style::dim("never finished")
+            )
+        } else {
+            format!(
+                "  Account update              {}{slowest}",
+                seconds("updater")
+            )
+        },
+        format!("  Setup Assistant             {assistant}"),
+        format!(
+            "  Login complete → desktop    {}",
+            seconds("loginCompleteToDesktop")
+        ),
+        format!(
+            "  Desktop → Atlas open        {}",
+            seconds("desktopToAtlas")
+        ),
+        format!(
+            "  Password → desktop          {}",
+            seconds("passwordToDesktop")
+        ),
+    ];
+
+    let unfinished: Vec<&str> = value["unfinished"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    if !unfinished.is_empty() {
+        lines.push(format!(
+            "{} Never finished: {}",
+            style::warn(),
+            text::printable(&unfinished.join(", "))
+        ));
+    }
+
+    lines.join("\n")
+}
+
 /// Ready in one line; otherwise each check and the numbered fixes. Verbose
 /// adds the facts behind them.
 pub fn doctor(value: &Value, verbose: bool) -> String {

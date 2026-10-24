@@ -2,9 +2,9 @@ import AppKit
 import AtlasUI
 import SwiftUI
 
-/// The live picture drawn through a layer (v3 V17), the app's view for ``ViewerView``'s picture slot: a layer-hosting
-/// view whose layer (``LayerPicture``) takes each new picture whole. SwiftUI only hands it the newest picture; it never
-/// rebuilds the view or crossfades frames.
+/// The live picture drawn through a layer, the app's view for ``ViewerView``'s picture slot: a layer-hosting
+/// view whose layer (``LayerPicture``) takes each new picture whole. SwiftUI only hands it the newest
+/// picture; it never rebuilds the view or crossfades frames.
 struct LayerPictureView: NSViewRepresentable {
   /// What the slot draws.
   let live: ViewerLivePicture

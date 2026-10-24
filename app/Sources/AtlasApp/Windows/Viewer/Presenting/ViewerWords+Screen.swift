@@ -5,7 +5,7 @@ extension ViewerWords {
   static let connectingHeadline = "Connecting to the helper…"
   /// Connecting's sentence.
   static let connectingMessage = "This takes a moment after the Mac starts."
-  /// Connecting again, after the picture was lost, over the last picture (v3 X4, R12).
+  /// Connecting again, after the picture was lost, over the last picture.
   static let reconnectingHeadline = "Reconnecting…"
   /// A logged-out helper's headline.
   static let loggedOutHeadline = "The helper is logged out"

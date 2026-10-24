@@ -24,7 +24,7 @@ struct StatusReadingLinesTests {
     #expect(reading.idleLine == "Last: turning Show Center off in Opie · 2 min ago")
     let quiet = StatusReading(try status(["overview": ["reason": "An agent is acting in the helper."]]))
     #expect(quiet.workingLine(withAge: true) == "An agent is acting in the helper", "a status line, not a sentence")
-    #expect(quiet.idleLine.isEmpty)
+    #expect(quiet.idleLine == "Ready for your agents", "Idle never stands alone")
   }
 
   @Test("Working with no action and no reason yet reads as connecting")

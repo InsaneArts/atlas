@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// One screenshot in the grid (v3 V10, `.stile`): its thumbnail at the screen's shape, lifting 2 points under the
-/// pointer, ringed while selected, and its time under it. A click selects it, a double click shows it large, zooming
+/// One screenshot in the grid: its thumbnail at the screen's shape, a brighter ring under the pointer with nothing
+/// moving, as a Finder icon highlights rather than jumps, ringed in blue while selected, and its time under it. A click selects it, a double click shows it large, zooming
 /// from here, and it can be dragged out where the app allows. While it is shown large its picture has left the grid
 /// for the large view, so its place stays empty.
 struct ShotTileView: View {
@@ -24,6 +24,8 @@ struct ShotTileView: View {
       .onAppear { send(.thumbnailNeeded(tile.id)) }
       // A kept pane's tiles do not appear anew as it shows again; a thumbnail let go meanwhile is asked for again.
       .onChange(of: paneShows) { _, shows in if shows { send(.thumbnailNeeded(tile.id)) } }
+      // How to use a tile lives on the tile, so the pane's header says only how many there are.
+      .help(String("Space to open · Drag to use"))
       .accessibilityElement(children: .combine)
       .accessibilityLabel(tile.label)
       .accessibilityAddTraits(tile.isSelected ? [.isButton, .isSelected] : .isButton)
@@ -61,25 +63,18 @@ struct ShotTileView: View {
     .animation(Motion.animation(Motion.zoom, reduceMotion: reduceMotion, reduced: Motion.reduced), value: isOpen)
   }
 
-  /// The thumbnail, lifted while the pointer is on it; its place, empty, while it is shown large.
+  /// The thumbnail, ringed while the pointer is on it; its place, empty, while it is shown large.
   @ViewBuilder private var picture: some View {
     if isOpen {
       Color.clear
         .aspectRatio(ViewerLayout.placeholderAspect, contentMode: .fit)
     } else {
-      PictureTile(picture: tile.thumbnail, isSelected: tile.isSelected)
+      PictureTile(picture: tile.thumbnail, isSelected: tile.isSelected, isHighlighted: isHovered)
         .aspectRatio(ViewerLayout.placeholderAspect, contentMode: .fit)
         .shotZoom(id: tile.id, in: zoom)
-        .elevation(elevation)
-        .scaleEffect(ViewerLayout.shotScale(isHovered: isHovered, reduceMotion: reduceMotion))
-        .offset(y: -ViewerLayout.shotRise(isHovered: isHovered, reduceMotion: reduceMotion))
-        .animation(Motion.release, value: isHovered)
+        .elevation(.resting)
+        .animation(Motion.hover(isHovered), value: isHovered)
     }
-  }
-
-  /// How far the thumbnail floats: resting, and a step higher while lifted.
-  private var elevation: Elevation {
-    isHovered ? .raised : .resting
   }
 }
 

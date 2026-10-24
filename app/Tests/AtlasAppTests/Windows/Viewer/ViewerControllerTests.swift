@@ -128,8 +128,10 @@ struct ViewerControllerTests {
   func detailsReadsAgentsWhenItOpens() async throws {
     let service = ScriptedService()
     let reads = CallCount()
+    let clock = ManualClock()
     let viewer = ViewerController.scripted(
       service,
+      clock: clock,
       connectedAgents: {
         reads.count += 1
         return [AgentID.codex]
@@ -143,9 +145,43 @@ struct ViewerControllerTests {
     try await settle("the agents were never read") { viewer.details.agents == [.codex] }
     await viewer.readingLoop.read(viewer.readingLoop.generation)
     #expect(reads.count == 1, "a reading leaves them be")
-    await viewer.checkAgain()
+    let checking = Task { await viewer.checkAgain() }
+    try await settle("Check Again never read the agents") { reads.count == 2 }
+    // Check Again holds its least time on the window's clock before it ends.
+    try await clock.untilSleeping(for: .seconds(Motion.Duration.leastWork.seconds), "Check Again never held")
+    clock.advance(by: .seconds(Motion.Duration.leastWork.seconds))
+    try await checking.value("Check Again never ended")
     #expect(reads.count == 2)
     #expect(viewer.state.details?.session.map(\.value) == ["Codex"])
+    viewer.close()
+  }
+
+  @Test("the small screen's corner is kept for the next window")
+  func theCornerIsRemembered() async throws {
+    let preferences = ViewerPreferences.memory()
+    let first = ViewerController.scripted(ScriptedService(), preferences: preferences)
+    #expect(first.state.miniCorner == .bottomTrailing)
+    first.send(.moveCorner(.topLeading))
+    #expect(first.state.miniCorner == .topLeading)
+    let next = ViewerController.scripted(ScriptedService(), preferences: preferences)
+    #expect(next.state.miniCorner == .topLeading)
+  }
+
+  @Test("Check Again holds for 0.6 seconds on the window's clock, however quickly the helper answers")
+  func checkAgainHoldsItsLeastTime() async throws {
+    let service = ScriptedService()
+    let clock = ManualClock()
+    let viewer = try await ViewerController.watching(service, clock: clock)
+    let least = Duration.seconds(Motion.Duration.leastWork.seconds)
+    let checking = Task { await viewer.checkAgain() }
+    try await clock.untilSleeping(for: least, "Check Again never held")
+    try await settle("Check Again never read the status") { service.statusCalls >= 2 }
+    clock.advance(by: least - .milliseconds(1))
+    await Task.yield()
+    #expect(viewer.session.checkingAgain, "it holds its whole 0.6 seconds")
+    clock.advance(by: .milliseconds(1))
+    try await checking.value("Check Again never ended")
+    #expect(!viewer.session.checkingAgain)
     viewer.close()
   }
 }

@@ -4,9 +4,9 @@ import SwiftUI
 /// tinted and destructive looks an alert's buttons wear; a circle of glass for a symbol alone. A style, not a view, so
 /// the control stays a `Button` with its own label, role, shortcut and disabled state.
 ///
-/// Each answers the pointer (v3 P9, X9): a glass fill steps from 0.08 at rest to 0.12 under the pointer and 0.16 while
-/// held, the white capsule goes pure white and then #E3E3E8; it shrinks in 0.1 seconds as it is pressed and comes back
-/// on a small spring. Under Reduce Motion the fill still changes and the size does not.
+/// Each answers the pointer: a glass fill steps from 0.08 at rest to 0.12 under the pointer and 0.16 while held, the
+/// white capsule goes pure white and then #E3E3E8, and the accent darkens a tenth while held. The held fill lands at
+/// once on mouse-down and eases back over 0.12 seconds once let go; the button never changes size.
 struct CapsuleButtonStyle: ButtonStyle {
   /// How the capsule is painted.
   enum Look: Sendable {
@@ -31,7 +31,7 @@ struct CapsuleButtonStyle: ButtonStyle {
   enum Size: Sendable {
     /// 26 high, 13-point text: in a settings row.
     case mini
-    /// 28 high, 13-point text: an alert's buttons (v3 A2).
+    /// 28 high, 13-point text: an alert's buttons.
     case compact
     /// 30 high, 13-point text: in the panel, an alert and an empty message; a circle 30 across.
     case small
@@ -51,9 +51,9 @@ struct CapsuleButtonStyle: ButtonStyle {
 
   /// What a glass look is laid on.
   enum Backing: Sendable {
-    /// Its fill alone, over the window's ground, as every surface draws it until it is redesigned.
+    /// Its fill alone, for controls resting on the window's ground.
     case fill
-    /// The system's glass under its fill (v3 D12), opaque under Reduce Transparency: a button floating over a picture.
+    /// The system's glass under its fill, opaque under Reduce Transparency: a button floating over a picture.
     case glass
   }
 
@@ -69,8 +69,8 @@ struct CapsuleButtonStyle: ButtonStyle {
   var isOn = false
   /// What a glass look is laid on.
   var backing = Backing.fill
-  /// Whether its action runs now: it cannot be pressed, yet stays whole rather than dimming, so the spinner it holds
-  /// reads as work, not as a button turned off (v3 A3).
+  /// Whether its action runs now: it cannot be pressed, yet stays whole rather than dimming, so the spinner
+  /// it holds reads as work, not as a button turned off.
   var isWorking = false
 
   /// Draws the label on its capsule or circle.
@@ -81,10 +81,11 @@ struct CapsuleButtonStyle: ButtonStyle {
     CapsuleButtonBody(configuration: configuration, style: self)
   }
 
-  /// The capsule's fill (v3 P9, R2): a glass one steps 0.08 → 0.12 → 0.16 at rest, under the pointer and while held,
-  /// and shows the held fill while what it toggles is on; the white one goes pure white under the pointer and #E3E3E8
-  /// while held; an alert's accent and tinted ones brighten under the pointer and while held (v3 `.acap:hover`). The
-  /// other looks keep one fill. A disabled button keeps its resting fill.
+  /// The capsule's fill: a glass one steps 0.08 → 0.12 → 0.16 at rest, under the pointer and while held, and
+  /// shows the held fill while what it toggles is on; the white one goes pure white under the pointer and
+  /// #E3E3E8 while held; an alert's tinted ones brighten under the pointer and while held, and its accent one
+  /// brightens under the pointer and darkens while held. The other looks keep one fill. A disabled button
+  /// keeps its resting fill.
   ///
   /// - Parameters:
   ///   - look: How the capsule is painted.
@@ -112,7 +113,9 @@ struct CapsuleButtonStyle: ButtonStyle {
     case .pressed: return .fillControlOn
     case .tinted, .destructive: return hovered || pressed ? .fillControlOn : .fillControlRaised
     case .plain: return .clear
-    case .accent: return hovered || pressed ? .accentHover : .accent
+    case .accent:
+      if pressed { return .accentPressed }
+      return hovered ? .accentHover : .accent
     }
   }
 
@@ -127,12 +130,13 @@ struct CapsuleButtonStyle: ButtonStyle {
     isEnabled || isWorking ? 1 : Opacity.disabled
   }
 
-  /// How a press moves the button: down over ``Motion/press``, back up on ``Motion/release``'s small spring (v3 X9).
+  /// How a press changes the fill: at once on mouse-down, so the answer is immediate, and back over
+  /// ``Motion/pressRelease`` once let go.
   ///
   /// - Parameter isPressed: Whether it is held down now.
-  /// - Returns: The animation for the change.
-  nonisolated static func pressAnimation(isPressed: Bool) -> Animation {
-    isPressed ? Motion.press : Motion.release
+  /// - Returns: The animation for the change, or nil for none.
+  nonisolated static func pressAnimation(isPressed: Bool) -> Animation? {
+    isPressed ? nil : Motion.pressRelease
   }
 }
 

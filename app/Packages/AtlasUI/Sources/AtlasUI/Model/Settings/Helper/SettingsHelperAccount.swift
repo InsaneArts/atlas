@@ -1,4 +1,4 @@
-/// The helper as an account, which the Helper pane opens with (v3 G4): its name, what it is, and its status as a pill.
+/// The helper as an account, which the Helper pane opens with: its name, what it is, and its status as a pill.
 public struct SettingsHelperAccount: Equatable, Sendable, Identifiable {
   /// The helper as people know it, such as "Atlas".
   public var name: String

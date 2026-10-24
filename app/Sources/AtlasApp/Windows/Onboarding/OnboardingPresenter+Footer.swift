@@ -1,16 +1,15 @@
 import AtlasOnboarding
 import AtlasUI
 
-/// The footer under every screen (v3 D3): Back, or Choose Another Account in its place, on the left; the track in the
-/// middle; the screen's one main action on the right. One function per family of screens.
+/// The footer under every screen: Back, Not Now or Choose Another Account on the left; the track in the middle; the
+/// screen's one main action on the right. One function per family of screens.
 extension OnboardingPresenter {
   /// The footer's buttons and track. Back shows on the account choice (before a helper is set up), on the form and on
-  /// Done, and Choose Another Account in its place on the switch while the helper asked never answered. Every screen
-  /// but the permissions screen hands its main action to the right: the permissions' rows keep their own Allow… (Q-D3),
-  /// and the screen moves on by itself once both are on. A button that starts a command waits while one runs, and
-  /// each also for its own condition: an account picked, a form that can be sent, a passed check, the agents read or
-  /// skipped. Return presses the main action, except the passed check's Continue, so Return never skips past the
-  /// check's result.
+  /// Done, Choose Another Account in its place on the switch while the helper asked never answered, and Not Now beside
+  /// Allow in the helper. Every screen hands its main action to the right, the permissions screen the next permission
+  /// to allow. A button that starts a command waits while one runs, and each also for its own condition: an account
+  /// picked, a form that can be sent, a passed check that has shown a moment, the agents read or skipped. Return
+  /// presses the main action wherever it can be pressed.
   ///
   /// - Parameters:
   ///   - snapshot: What the controller holds.
@@ -21,7 +20,9 @@ extension OnboardingPresenter {
     case .chooseHelper, .createAccount: accountFooter(snapshot, step: step)
     case .switchToHelper: switchFooter(snapshot, step: step)
     case .finishing, .agents, .done: finishFooter(snapshot, step: step)
-    case .welcome, .allow, .permissions, .helperDone, .blocked: oneActionFooter(snapshot, step: step)
+    case .closeLeftovers: closeFooter(snapshot)
+    case .allow: allowFooter(snapshot, step: step)
+    case .welcome, .permissions, .helperDone, .blocked: oneActionFooter(snapshot, step: step)
     }
   }
 
@@ -41,7 +42,10 @@ extension OnboardingPresenter {
     )
   }
 
-  /// The welcome and the helper's screens: each one's own action, and none on the permissions screen.
+  /// The welcome, the helper's permissions and done screens, and a blocked one: each one's own action. On the
+  /// permissions screen it allows the permission whose turn it is, and there is none while the permissions cannot be
+  /// read. Blocked by Atlas.app itself, which must move or be installed again before anything can pass, it shows the
+  /// app in the Finder; blocked by anything else, it checks again.
   ///
   /// - Parameters:
   ///   - snapshot: What the controller holds.
@@ -52,12 +56,46 @@ extension OnboardingPresenter {
     let next: OnboardingFooterAction? =
       switch step {
       case .welcome: main(.getStarted, .begin, isEnabled: true)
-      case .allow: main(.allow, .allow, isEnabled: idle)
+      case .permissions:
+        turn(snapshot)
+          .map { allow($0, snapshot: snapshot, isEnabled: idle) }
       case .helperDone: main(.switchBack, .switchBack, isEnabled: idle)
+      case .blocked where snapshot.facts.appProblem != nil: main(.showInFinder, .showInFinder, isEnabled: true)
       case .blocked: main(.checkAgain, .checkAgain, isEnabled: true)
       default: nil
       }
     return OnboardingFooterState(next: next, track: step.track)
+  }
+
+  /// The helper's allow screen: Allow, and Not Now beside it, which closes the window with nothing allowed.
+  ///
+  /// - Parameters:
+  ///   - snapshot: What the controller holds.
+  ///   - step: The allow screen.
+  /// - Returns: The footer.
+  private static func allowFooter(_ snapshot: OnboardingSnapshot, step: OnboardingStep) -> OnboardingFooterState {
+    let idle = snapshot.working == nil
+    return OnboardingFooterState(
+      back: OnboardingFooterAction(title: .notNow, event: .notNow, isEnabled: idle, isDefault: false),
+      next: main(.allow, .allow, isEnabled: idle),
+      track: step.track
+    )
+  }
+
+  /// The button that opens a permission's list in System Settings, named as the permission's row names it on this
+  /// Mac.
+  ///
+  /// - Parameters:
+  ///   - permission: The permission whose turn it is.
+  ///   - snapshot: What the controller holds.
+  ///   - isEnabled: Whether it can be pressed now.
+  /// - Returns: The button.
+  private static func allow(
+    _ permission: Permission,
+    snapshot: OnboardingSnapshot,
+    isEnabled: Bool
+  ) -> OnboardingFooterAction {
+    main(.allowPermission(permission.title(on: snapshot.macOS)), .openSettings(id: permission.id), isEnabled: isEnabled)
   }
 
   /// The account choice and the form: Continue or Create Account, and Back, on the choice only before a helper was
@@ -117,13 +155,14 @@ extension OnboardingPresenter {
       if case .failed = snapshot.finish {
         return OnboardingFooterState(next: main(.tryAgain, .retryFinish, isEnabled: true), track: step.track)
       }
-      // Return never presses it, so a press meant for the check never skips past its result. It lights up, and takes
-      // presses, a moment after the check passes (v3 S5).
+      // It lights up, and takes presses, Return's too, a moment after the check passes, so a press meant for the check
+      // never skips past its result.
+      let settled = snapshot.finish == .passed && snapshot.passSettled
       let next = OnboardingFooterAction(
         title: .continue,
         event: .continueFinishing,
-        isEnabled: snapshot.finish == .passed && snapshot.passSettled,
-        isDefault: false
+        isEnabled: settled,
+        isDefault: settled
       )
       return OnboardingFooterState(next: next, track: step.track)
     case .agents:

@@ -35,7 +35,7 @@ struct AttentionSignalsTests {
     #expect(log.posted == [.unfinished], "a failed reading in between is not the state clearing")
   }
 
-  @Test("Atlas needs you is withdrawn from Notification Center once Needs you clears, and only then")
+  @Test("The helper needs you is withdrawn from Notification Center once Needs you clears, and only then")
   func needsYouIsWithdrawn() {
     let log = SignalLog()
     var signals = log.signals
@@ -50,33 +50,18 @@ struct AttentionSignalsTests {
     #expect(log.withdrawn == 1, "withdrawn once")
   }
 
-  @Test("the badge shows only while Needs you lasts, the badge setting is on and the Dock icon shows")
-  func badge() {
+  @Test("the helper logged out is withdrawn from Notification Center once it is logged in again, and only then")
+  func loggedOutIsWithdrawn() {
     let log = SignalLog()
     var signals = log.signals
+    signals.read(reading(.loggedOut, .notReady))
+    signals.read(nil)
+    #expect(log.withdrawnLoggedOut == 0, "a failed reading is not the helper coming back")
+    signals.read(reading(.loggedOut, .notReady))
+    #expect(log.withdrawnLoggedOut == 0, "still logged out")
     signals.read(reading(.observing, .idle))
-    signals.read(reading(.recovering, .needsYou))
-    signals.dockIcon(shown: true)
-    #expect(log.badges.isEmpty, "the badge setting is off")
-    log.badge = true
-    signals.badgeChanged()
-    #expect(log.badges == [NotificationWords.badge])
-    signals.dockIcon(shown: false)
-    signals.dockIcon(shown: true)
+    #expect(log.withdrawnLoggedOut == 1)
     signals.read(reading(.observing, .idle))
-    #expect(log.badges == [NotificationWords.badge, nil, NotificationWords.badge, nil])
-  }
-
-  @Test("the badge waits for input that stays stopped, so a helper logging in never badges the Dock")
-  func badgeWaitsForStoppedInput() {
-    let log = SignalLog()
-    log.badge = true
-    var signals = log.signals
-    signals.dockIcon(shown: true)
-    signals.read(reading(.observing, .idle))
-    signals.read(reading(.blocked, .needsYou))
-    #expect(log.badges.isEmpty, "input may still start by itself")
-    signals.read(reading(.blocked, .needsYou))
-    #expect(log.badges == [NotificationWords.badge])
+    #expect(log.withdrawnLoggedOut == 1, "withdrawn once")
   }
 }

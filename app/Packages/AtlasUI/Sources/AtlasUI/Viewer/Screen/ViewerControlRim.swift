@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// Control's edge round the picture (v3 V5): a 2-point accent rim 2 points outside it, the ground showing between, and
-/// a 4-point soft accent ring outside that. It settles in from a little larger on ``Motion/state`` while this window
-/// holds control and goes the same way; under Reduce Motion it only fades. It never tints the picture.
+/// Control's edge round the picture: a 2-point accent rim 2 points outside it, the ground showing between,
+/// and a 4-point soft accent ring outside that. It settles in from a little larger on ``Motion/state`` while
+/// this window holds control and goes the same way; under Reduce Motion it only fades. It never tints the
+/// picture.
 struct ViewerControlRim: View {
   /// Whether this window holds control.
   let isInControl: Bool

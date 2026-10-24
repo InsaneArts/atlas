@@ -1,4 +1,5 @@
 import CoreGraphics
+import SwiftUI
 import Testing
 
 @testable import AtlasUI
@@ -56,5 +57,21 @@ struct CaptionStackTests {
     #expect(CaptionStack.moving(reduceMotion: true) == nil)
     #expect(CaptionStack.fading(reduceMotion: false) == Motion.state)
     #expect(CaptionStack.fading(reduceMotion: true) == Motion.reduced)
+  }
+
+  @Test("the newest chip leads with a steady blue dot, since only the window's status dot breathes")
+  func theNewestChipsDotIsSteady() {
+    let newest = ActivityEntry(id: "1", line: "Clicked in Opie", when: "", isNewest: true)
+    #expect(CaptionStack.lead(newest) == GlassChip<EmptyView>.Lead.dot(.active))
+  }
+
+  @Test("the chips behind the front one show only their shells until the pile fans out")
+  func olderChipsHideTheirWordsUntilFanned() {
+    typealias Layout = CaptionStack.Layout
+    #expect(Layout.showsWords(depth: 0, fanned: false))
+    for depth in 1..<Layout.limit {
+      #expect(!Layout.showsWords(depth: depth, fanned: false), "\(depth)")
+      #expect(Layout.showsWords(depth: depth, fanned: true), "\(depth)")
+    }
   }
 }

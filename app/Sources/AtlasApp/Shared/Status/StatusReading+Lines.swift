@@ -17,9 +17,10 @@ extension StatusReading {
     return withAge && !newest.when.isEmpty ? "\(action) · \(newest.when)" : action
   }
 
-  /// What an agent did last, and when, beside Idle; empty before any agent acted.
+  /// What an agent did last, and when, beside Idle; before any agent acted, that the helper is ready for them, so Idle
+  /// never stands alone.
   var idleLine: String {
-    newestAgentAction.map { Words.idleLine(last: $0.text, ago: $0.when) } ?? ""
+    newestAgentAction.map { Words.idleLine(last: $0.text, ago: $0.when) } ?? Words.readyLine
   }
 
   /// Why the helper needs the person, beside Needs you: input Recover starts again, else an unfinished action.

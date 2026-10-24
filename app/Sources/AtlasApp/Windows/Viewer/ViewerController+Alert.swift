@@ -2,8 +2,8 @@ import AtlasUI
 
 /// The alerts: Recover, Switch, Log Out, Log Out Anyway and Restart, each asked first, run once however many times
 /// its button is pressed, and answered with a notice once its command ends. Recover answers in place: refused, the
-/// alert stays and says why; worked, it says Recovered for ``AtlasUI/Motion/Duration/doneHold`` on the injected clock
-/// before it closes.
+/// alert stays and says why; worked, it says the helper is ready for ``AtlasUI/Motion/Duration/doneHold`` on the
+/// injected clock, or until Done, before it closes.
 extension ViewerController {
   /// The alert over the window now: the one asked for, else the recovery alert the helper's state calls for.
   var shownAlert: ViewerAlert? {
@@ -37,8 +37,10 @@ extension ViewerController {
     }
   }
 
-  /// The alert's way out: Cancel, or Not Now, which sets the recovery alert aside until its reason changes.
+  /// The alert's way out: Cancel, or Not Now, which sets the recovery alert aside until its reason changes. Once a
+  /// Recover worked it is Done, which ends the hold, so the alert closes now.
   func cancelAlert() {
+    if doneHold.isHolding { return doneHold.end() }
     guard !session.alertRunning, !session.recovering, let shown = shownAlert else { return }
     session.alert = nil
     session.recoveryRefusal = nil
@@ -60,8 +62,8 @@ extension ViewerController {
   }
 
   /// Recovers the helper as the panel does, through the shared commands. Never while holding control; never repeats
-  /// an action. Once it worked the alert stays up, saying Recovered, through the hold, whatever the helper's state
-  /// says meanwhile, then closes with the notice; refused, it stays, saying why.
+  /// an action. Once it worked the alert stays up, saying the helper is ready, through the hold or until Done,
+  /// whatever the helper's state says meanwhile, then closes with the notice; refused, it stays, saying why.
   func recover() async {
     guard !session.recovering, !holdingControl else { return }
     session.recovering = true
@@ -72,8 +74,7 @@ extension ViewerController {
       session.alert = .recover
       session.recoveryDone = true
       say(nil)
-      // A hold cut short only shortens the moment Recovered shows; the alert closes either way.
-      try? await dependencies.clock.sleep(for: .seconds(Motion.Duration.doneHold.seconds))
+      await doneHold.hold(on: dependencies.clock)
       session.recoveryDone = false
       session.alert = nil
       // A notice said during the hold, such as to wait for another alert, stays.

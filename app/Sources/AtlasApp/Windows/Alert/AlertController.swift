@@ -5,11 +5,11 @@ import Observation
 
 /// The alert window's one observed object: which alert shows, whether its command runs, and why it did not run.
 /// Its command runs through the helper's shared commands (``HelperActions``), once however many times its button is
-/// pressed, after the app's control work is answered; once it worked the window closes, a Recover first saying
-/// Recovered for ``AtlasUI/Motion/Duration/doneHold`` on the injected clock, and when it did not, the alert stays and
-/// says why. A log-out an app held up asks again, offering Log Out Anyway. Its buttons wait from the
-/// press until the status is read again and the outcome shows, and a command closes only the alert it started from
-/// (``generation``). ``AlertPresenter`` decides what the alert says.
+/// pressed, after the app's control work is answered; once it worked the window closes, a Recover first saying the
+/// helper is ready for ``AtlasUI/Motion/Duration/doneHold`` on the injected clock or until Done, and when it did not,
+/// the alert stays and says why. A log-out an app held up asks again, offering Log Out Anyway. Its buttons wait from
+/// the press until the status is read again and the outcome shows, and a command closes only the alert it started
+/// from (``generation``). ``AlertPresenter`` decides what the alert says.
 @Observable
 final class AlertController {
   /// Which alert shows.
@@ -20,7 +20,7 @@ final class AlertController {
   private(set) var failure: String?
   /// Whether a Recover worked and the alert holds, saying so, before it closes.
   private(set) var done = false
-  /// An alert asked while a Recover holds on Recovered: it shows once the hold ends, in place of closing.
+  /// An alert asked while a Recover holds on its done words: it shows once the hold ends, in place of closing.
   @ObservationIgnored private(set) var next: HelperAlert?
   /// Numbers the alert shown: a new alert or a way out moves it on, so a command's ending closes only the alert it
   /// started from.
@@ -31,6 +31,8 @@ final class AlertController {
   @ObservationIgnored private var confirming: Task<Void, Never>?
   /// What the alert window asks of the rest of the app.
   @ObservationIgnored let links: AlertLinks
+  /// The moment a Recover that worked holds before the window closes, which Done ends at once.
+  @ObservationIgnored private let doneHold = DoneHold()
 
   /// Creates the alert window's controller.
   ///
@@ -52,7 +54,8 @@ final class AlertController {
   }
 
   /// Shows another alert in place of this one. While this one's command runs, the new one is not dropped unseen: the
-  /// alert says to try again once its command ends, or, once a Recover holds on Recovered, shows it after the hold.
+  /// alert says to try again once its command ends, or, once a Recover holds on its done words, shows it after the
+  /// hold.
   ///
   /// - Parameter next: The alert to show.
   func show(_ next: HelperAlert) {
@@ -87,8 +90,13 @@ final class AlertController {
   }
 
   /// The way out: closes the window. While its command runs it waits, unless the command is still waiting for this
-  /// app's control to be given back: it has not run, so it is called off and the window closes.
+  /// app's control to be given back: it has not run, so it is called off and the window closes. Once a Recover worked
+  /// it is Done, which ends the hold, so the window closes, or shows an alert asked meanwhile, now.
   func cancel() {
+    if doneHold.isHolding {
+      doneHold.end()
+      return
+    }
     if running {
       guard let command = alert.command, actions.isWaiting(command) else { return }
       confirming?.cancel()
@@ -140,16 +148,15 @@ final class AlertController {
     await finish(outcome, started: started)
   }
 
-  /// Shows a Recover that worked as Recovered, its buttons still waiting, for ``AtlasUI/Motion/Duration/doneHold``
-  /// on the injected clock (v3 A5).
+  /// Shows a Recover that worked as done, with its Done button, for ``AtlasUI/Motion/Duration/doneHold`` on the
+  /// injected clock, or until Done is pressed.
   private func holdDone() async {
     done = true
-    // A hold cut short only shortens the moment Recovered shows; the window closes either way.
-    try? await links.clock.sleep(for: .seconds(Motion.Duration.doneHold.seconds))
+    await doneHold.hold(on: links.clock)
   }
 
   /// Ends a command: the status is read again with the buttons still waiting, then the window closes once it
-  /// worked, a Recover after holding on Recovered, or the alert says why not, and only then can its buttons be
+  /// worked, a Recover after holding on its done words, or the alert says why not, and only then can its buttons be
   /// pressed again. Nothing closes or changes when the alert shown is no longer the one the command started from.
   ///
   /// - Parameters:

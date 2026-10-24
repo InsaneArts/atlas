@@ -1,4 +1,4 @@
-/// The newest action while an agent works, floating over the picture's corner on glass (v3 P8): what it does, how
+/// The newest action while an agent works, floating over the picture's corner on glass: what it does, how
 /// long ago, and whether it failed.
 public struct PanelCaption: Equatable, Sendable {
   /// What the agent does, in one line, such as "Turning Show Center off in Opie".

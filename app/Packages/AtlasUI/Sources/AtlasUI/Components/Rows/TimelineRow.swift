@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// A line of what was done, a log you can scan (v3 V8, `.arow`): its time in a column of even digits, its mark, what
-/// was done with why it failed under it, and something at its end, such as "now" or a screenshot to open; 38 high,
-/// a faint fill under the pointer, and a hairline above it from its mark's end when it follows another line
+/// A line of what was done, a log you can scan: its time in a column of even digits, its mark, what was done
+/// with why it failed under it, and something at its end, such as "now" or a screenshot to open; 38 high, a
+/// faint fill under the pointer, and a hairline above it from its mark's end when it follows another line
 /// (``EnvironmentValues/drawsListSeparator``).
 struct TimelineRow<Mark: View, Trailing: View>: View {
   /// When it started, such as "10:31:42".
@@ -24,7 +24,7 @@ struct TimelineRow<Mark: View, Trailing: View>: View {
       Text(time)
         .font(Typography.digits(.callout))
         .foregroundStyle(Color.textTertiary)
-        .contentTransition(.numericText())
+        // A clock time takes no rolling digits: it names a moment, it does not count.
         .lineLimit(1)
         .minimumScaleFactor(Layout.leastTimeScale)
         .frame(width: Layout.timeWidth, alignment: .leading)
@@ -71,13 +71,13 @@ struct TimelineRow<Mark: View, Trailing: View>: View {
   }
 }
 
-/// The row's own measures, from v3's Activity row (`.arow`). At file scope because `TimelineRow` is generic.
+/// The row's own measures for Activity entries. At file scope because `TimelineRow` is generic.
 private enum Layout {
-  /// 38: the row's least height, its 4-point insets included (v3 V8).
+  /// 38: the row's least height, its 4-point insets included.
   static let height: CGFloat = 38
   /// 30: the least height inside its 4-point insets.
   static let inner = height - Spacing.xs * 2
-  /// 72: the time's column, wide enough for "10:31:42" (v3 V8).
+  /// 72: the time's column, wide enough for "10:31:42".
   static let timeWidth: CGFloat = 72
   /// 0.85: the least the time shrinks to stay in its column, as a 12-hour clock's "10:31:42 AM" needs.
   static let leastTimeScale: CGFloat = 0.85
@@ -87,7 +87,7 @@ private enum Layout {
   static let gap = Spacing.sPlus
   /// 16: the row's inset at each side, the pane's.
   static let inset = Spacing.l
-  /// 120: where the hairline above a following row starts, at its mark's end (v3 `.arow + .arow::before`).
+  /// 120: where the hairline above a following row starts, at its mark's end.
   static let separatorInset = inset + timeWidth + gap + markWidth
 }
 

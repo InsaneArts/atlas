@@ -1,17 +1,14 @@
 import SwiftUI
 
-/// In the helper: Accessibility and Screen Recording, allowed one after the other in System Settings, in one group
-/// (v3 D6). Each row keeps its own Allow…, so the footer holds no main action here, and Return allows the next one
-/// (Q-D3).
+/// In the helper: Accessibility and Screen Recording, allowed one after the other in System Settings, in one group.
+/// The rows only say where each stands; the footer's button allows the next one, and Return presses it.
 struct PermissionsScreen: View {
   /// The two permissions.
   let state: OnboardingPermissionsScreenState
-  /// Receives the permission to allow next.
-  let send: @MainActor (OnboardingEvent) -> Void
 
   /// Why Atlas asks, the two permissions, and how Atlas notices them.
   var body: some View {
-    ScrollColumn(width: OnboardingLayout.column) {
+    ScreenColumn {
       OnboardingHeader(
         label: "Permissions",
         title: OnboardingScreen.permissionsTitle,
@@ -22,15 +19,12 @@ struct PermissionsScreen: View {
         PermissionRow(
           permission: permission,
           symbol: Self.symbol(permission, in: state),
-          detail: Self.detail(permission, in: state),
-          send: send
+          detail: Self.detail(permission, in: state)
         )
       }
       .padding(.top, OnboardingLayout.Rhythm.paragraph)
-      .pagePiece(.content)
-      Note(text: "Allow opens the list in System Settings. Atlas notices each one on its own.")
+      Note(text: "Each button opens the list in System Settings. Atlas notices each one on its own.")
         .padding(.top, OnboardingLayout.Rhythm.status)
-        .pagePiece(.status)
     }
   }
 
@@ -58,7 +52,7 @@ struct PermissionsScreen: View {
 
 #if DEBUG
   #Preview("Helper permissions") {
-    PermissionsScreen(state: PreviewStates.onboardingPermissionsScreen) { _ in }
+    PermissionsScreen(state: PreviewStates.onboardingPermissionsScreen)
       .onboardingSample()
   }
 #endif

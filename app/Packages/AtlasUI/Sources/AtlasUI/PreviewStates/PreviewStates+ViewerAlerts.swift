@@ -2,7 +2,7 @@
   import CoreGraphics
 
   extension PreviewStates {
-    /// An action may not have finished: the picture dims under the recovery alert (MacRecover).
+    /// An action may not have finished: the picture dims under the recovery alert.
     @MainActor public static let viewerNeedsYou = ViewerState(
       top: viewerTop(
         StatusSummary(label: "Needs you", tone: .attention, mark: .dot, line: "An action may not have finished"),
@@ -12,7 +12,8 @@
             title: "Recover…",
             isEnabled: true,
             help: "Check the helper and start its mouse and keyboard again",
-            event: .askRecover
+            event: .askRecover,
+            titles: viewerControlTitles
           )
         )
       ),
@@ -72,15 +73,15 @@
       return state
     }()
 
-    /// Restart the Helper… asks first.
+    /// Restart Helper… asks first: anything an agent is doing stops, so Cancel is the default and Restart red.
     @MainActor public static let viewerRestart: ViewerState = {
       var state = viewerIdle
       state.alert = AlertCardState(
         title: "Restart the helper?",
         message: "Atlas starts its service in the helper again. Anything an agent is doing there stops.",
         buttons: [
-          AlertCardButton(id: .confirm, title: "Restart", role: .action),
-          AlertCardButton(id: .cancel, title: "Cancel", role: .cancel),
+          AlertCardButton(id: .cancel, title: "Cancel", role: .safeCancel),
+          AlertCardButton(id: .confirm, title: "Restart", role: .destructive),
         ]
       )
       return state

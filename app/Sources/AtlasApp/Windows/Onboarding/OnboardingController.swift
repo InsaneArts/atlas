@@ -29,19 +29,16 @@ final class OnboardingController {
   static let restartReadings = 20
   /// How long a permission just turned on shows its tick before the next one is allowed: 1.2 s.
   static let tickShown: Duration = .milliseconds(1200)
-  /// How long the passed check shows before its Continue lights up and takes presses: ``Motion/Duration/followUp``
-  /// (v3 S5).
+  /// How long the passed check shows before its Continue lights up and takes presses: ``Motion/Duration/followUp``.
   static let continueFollows: Duration = .seconds(Motion.Duration.followUp.seconds)
+  /// How long a command runs before its working line shows: ``Motion/Duration/noteDelay``, the line's own wait, so a
+  /// command that ends sooner never shows one.
+  static let workingShows: Duration = .seconds(Motion.Duration.noteDelay.seconds)
+  /// The least time a working line stays once it shows: ``Motion/Duration/leastWork``, so a line never flashes.
+  static let workingStays: Duration = .seconds(Motion.Duration.leastWork.seconds)
 
-  /// Everything the window shows, as one value. Whenever a change moves the window to another screen, the way it
-  /// moved is kept with it (``OnboardingStep/direction(from:to:)``), so the screen slides in the way the person goes.
-  var snapshot = OnboardingSnapshot() {
-    didSet {
-      let step = snapshot.step
-      let last = oldValue.step
-      if step != last { snapshot.direction = OnboardingStep.direction(from: last, to: step) }
-    }
-  }
+  /// Everything the window shows, as one value.
+  var snapshot = OnboardingSnapshot()
   /// The window's work is done: setup finished, or the helper locked for the switch back. The window closes itself.
   var closeRequested = false
 
@@ -76,8 +73,18 @@ final class OnboardingController {
   @ObservationIgnored var readingsSinceAgentsFailed = 0
   /// Readings in a row whose permissions were unknown.
   @ObservationIgnored var readingsUnknown = 0
+  /// In the helper: the account whose picture was read last, by its short name, so it is read once.
+  @ObservationIgnored var askerPictured: String?
   /// The window closed: nothing new starts, nothing queued runs, and late replies are dropped.
   @ObservationIgnored var closed = false
+  /// The time since Lock and Switch, while the helper's login is timed; nil otherwise.
+  @ObservationIgnored var sinceSwitch: (@Sendable () -> Duration)?
+  /// Told each time the queue takes a request, once it is the request under way and before its work starts, which
+  /// waits for the turn of the main actor the telling runs in to end: Back or the window's close can come in that gap,
+  /// and a test acts there.
+  @ObservationIgnored var taking: (@MainActor (OnboardingRequest) -> Void)?
+  /// The steps of the helper's login noted so far: "answering" and "hidden".
+  @ObservationIgnored var timed: Set<String> = []
 
   /// Creates a controller that has read nothing yet.
   ///
@@ -87,6 +94,7 @@ final class OnboardingController {
     let (requests, queue) = AsyncStream.makeStream(of: Int.self)
     self.requests = requests
     self.queue = queue
+    snapshot.agentIcons = dependencies.agentIcons()
   }
 
   /// The `atlas` command line every action runs.
@@ -111,6 +119,8 @@ final class OnboardingController {
     case .createAccount: enqueue(.createAccount)
     case .lockAndSwitch: enqueue(.lockAndSwitch)
     case .chooseAnother: enqueue(.chooseAnother)
+    case .closeLeftovers: enqueue(.closeLeftovers)
+    case .continueAfterClose: snapshot.choices.closedLeftovers = false
     case .checkAgain, .continueFinishing: enqueue(.refresh)
     case .retryFinish: retryFinish()
     case .setAgent(let id, let on): setAgent(id, on: on)
@@ -118,6 +128,9 @@ final class OnboardingController {
     case .setOpenAtLogin(let on): snapshot.opensAtLogin = on
     case .complete: enqueue(.complete)
     case .allow: enqueue(.allow)
+    // Nothing is allowed: the window closes, and the helper asks again the next time Atlas opens there.
+    case .notNow: closeRequested = true
+    case .showInFinder: dependencies.reveal(dependencies.app)
     case .openSettings(let id):
       if let permission = Permission.allCases.first(where: { $0.id == id }) { enqueue(.openSettings(permission)) }
     case .closePanel: closePanel()
@@ -168,7 +181,9 @@ final class OnboardingController {
     }
   }
 
-  /// Runs one command, with its words shown while it runs; one at a time, and none once the window has closed.
+  /// Runs one command, with its words shown while it runs; one at a time, and none once the window has closed. A
+  /// command that ran past ``workingShows`` has shown its line, which stays ``workingStays`` before the next screen or
+  /// line takes its place; a problem shows at once.
   ///
   /// A command already running when the window closes settles, but its outcome is dropped, so a workflow awaiting it
   /// stops there and starts no further command. So is one whose wait Back stopped (``OnboardingRequest/endsOnBack``).
@@ -194,16 +209,29 @@ final class OnboardingController {
     guard !closed, snapshot.working == nil else { return nil }
     snapshot.working = words
     snapshot.problem = nil
-    let ran = await command()
+    snapshot.problemAbout = nil
+    let ran = Self.stopwatch(dependencies.clock)
+    let outcome = await command()
+    if outcome?.ok == true { await keepWorkingLine(shownFor: ran()) }
     snapshot.working = nil
     guard !closed, !Task.isCancelled else { return nil }
-    guard let outcome = ran else {
+    guard let outcome else {
       snapshot.problem = HelperWords.waitForAction
       return nil
     }
     if !outcome.ok { snapshot.problem = Words.sentence(outcome.message) }
     refresh()
     return outcome
+  }
+
+  /// Keeps a working line that has shown until it has stayed ``workingStays``; one whose command ended before it
+  /// showed goes at once. Cancelled, as by Back or the window's close, it ends at once.
+  ///
+  /// - Parameter elapsed: How long the command ran.
+  private func keepWorkingLine(shownFor elapsed: Duration) async {
+    let left = Self.workingShows + Self.workingStays - elapsed
+    guard elapsed > Self.workingShows, left > .zero else { return }
+    try? await dependencies.clock.sleep(for: left)
   }
 
   /// Back to the screen before: the welcome from the choice, the choice from the form, the agents from Done. It is

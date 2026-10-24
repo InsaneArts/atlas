@@ -1,5 +1,5 @@
 /// The panel's picture: the helper's screen in the look of its state, with the newest action over its corner while an
-/// agent works and the pause button on it; or, with no screen to show, the empty stage (v3 P2, P4, P6, P11).
+/// agent works and the pause button on it; or, with no screen to show, the empty stage.
 public struct PanelPictureState: Equatable, Sendable {
   /// How the picture looks.
   public enum Look: Equatable, Sendable {

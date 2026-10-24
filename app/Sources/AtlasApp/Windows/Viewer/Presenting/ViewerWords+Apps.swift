@@ -21,14 +21,14 @@ extension ViewerWords {
   /// - Parameters:
   ///   - apps: The apps.
   ///   - windows: Their windows.
-  /// - Returns: "5 apps · 6 windows, front to back", or "No apps".
+  /// - Returns: "5 apps · 6 windows", or nothing with no app open, where the pane says why.
   static func appsMeta(apps: Int, windows: Int) -> String {
-    guard apps > 0 else { return "No apps" }
+    guard apps > 0 else { return "" }
     let appWord = apps == 1 ? "1 app" : "\(apps) apps"
     switch windows {
     case 0: return "\(appWord) · no windows"
     case 1: return "\(appWord) · 1 window"
-    default: return "\(appWord) · \(windows) windows, front to back"
+    default: return "\(appWord) · \(windows) windows"
     }
   }
 

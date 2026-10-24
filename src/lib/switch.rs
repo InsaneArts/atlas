@@ -5,7 +5,10 @@
 //! The login framework's per-account switch takes an undocumented
 //! dictionary, and its login-window call does nothing from a command-line
 //! process, so the screen lock (confirmed by the window server) is used.
-use crate::error::{Error, Result};
+use crate::{
+    error::{Error, Result},
+    session::Blocker,
+};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::process::Command;
@@ -161,9 +164,151 @@ pub fn lock_screen() -> Result<Value> {
     Ok(json!({"ok": true, "locked": true}))
 }
 
-/// Lock the screen so the person can switch to `account` from it.
+/// What the switch needs to know of the account it switches to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Target {
+    /// Its user ID.
+    pub uid: u32,
+    /// It is the configured helper, whose account must be fit for Atlas.
+    pub helper: bool,
+    /// It is the person this account is the helper of: switching to it is
+    /// switching back.
+    pub back: bool,
+    /// Its desktop already runs: its loginwindow and its Dock.
+    pub logged_in: bool,
+    /// Its account exists.
+    pub exists: bool,
+    /// Its home folder exists and belongs to it.
+    pub home_owned: bool,
+    /// Whether it administers this Mac; unknown when `None`.
+    pub administrator: Option<bool>,
+    /// It is on screen already.
+    pub on_console: bool,
+}
+
+/// The refusal for a switch that must wait, after "Atlas can't switch yet:".
+fn not_ready(why: &str) -> Error {
+    Error::new("not-ready", format!("Atlas can't switch yet: {why}"))
+}
+
+/// Whether the switch to `target` may go ahead, given what would make a
+/// new login hang now (`blockers`, `None` when they could not be read).
+/// Nothing is locked when it may not. Only switching back from the helper
+/// to the person's own desktop, already running and an account of its own,
+/// starts no login and may pass what would hold up a new one, so the person
+/// is never kept in the helper; even then a deleted account's login under
+/// the helper's user ID, or anything about the person's own login, stops
+/// it.
+pub fn ready_to_switch(target: &Target, blockers: Option<&[Blocker]>) -> Result<()> {
+    let Some(blockers) = blockers else {
+        return Err(not_ready("macOS didn't list its logins. Try again."));
+    };
+    let back = target.back && !target.helper && target.logged_in && target.exists;
+    let holds = |blocker: &Blocker| {
+        !back
+            || matches!(blocker, Blocker::HelperLeftover { .. })
+            || blocker.uid() == Some(target.uid)
+    };
+    if let Some(blocker) = blockers.iter().find(|blocker| holds(blocker)) {
+        return Err(not_ready(blocker.words()));
+    }
+
+    if target.helper {
+        if !target.exists {
+            return Err(not_ready("the helper account no longer exists."));
+        }
+        if !target.home_owned {
+            return Err(not_ready(
+                "the helper's home folder is missing or isn't its own.",
+            ));
+        }
+        if target.administrator != Some(false) {
+            return Err(not_ready(
+                "the helper must be a standard account, not an administrator.",
+            ));
+        }
+        if target.on_console {
+            return Err(not_ready("the helper is already on screen."));
+        }
+    }
+
+    Ok(())
+}
+
+/// The person this account is the helper of: the one whose request named
+/// it, else the one its own background job works for.
+fn person_of_this_helper() -> Option<u32> {
+    let me = nix::unistd::getuid().as_raw();
+    if let Some(pairing) = crate::onboarding::request().filter(|pairing| pairing.helper_uid == me) {
+        return Some(pairing.controller_uid);
+    }
+
+    let layout = crate::setup::helper::Layout {
+        uid: me,
+        home: crate::config::home().ok()?,
+        guard: None,
+    };
+    let plist = std::fs::read_to_string(layout.agent_plist(crate::setup::helper::LABEL)).ok()?;
+    controller_in(&plist)
+}
+
+/// The account a helper job's definition `plist` works for.
+fn controller_in(plist: &str) -> Option<u32> {
+    let strings: Vec<&str> = plist
+        .split("<string>")
+        .skip(1)
+        .filter_map(|rest| rest.split_once("</string>").map(|(value, _)| value))
+        .collect();
+    let at = strings
+        .iter()
+        .position(|value| *value == "--controller-uid")?;
+
+    strings.get(at + 1)?.parse().ok()
+}
+
+/// [`Target`] for `account` as this Mac shows it now.
+fn target(account: &Account) -> Target {
+    use std::os::unix::fs::MetadataExt;
+
+    let found = crate::setup::account_with_uid(account.uid).ok().flatten();
+    let home_owned = found.as_ref().is_some_and(|found| {
+        std::fs::symlink_metadata(&found.home)
+            .is_ok_and(|metadata| metadata.is_dir() && metadata.uid() == account.uid)
+    });
+
+    Target {
+        uid: account.uid,
+        helper: account.helper,
+        back: !account.helper && person_of_this_helper() == Some(account.uid),
+        logged_in: crate::session::desktop_runs(account.uid) == Some(true),
+        exists: found.is_some(),
+        home_owned,
+        administrator: crate::setup::administrator(&account.name),
+        on_console: crate::session::console_owner() == Some(account.uid),
+    }
+}
+
+/// Check that the switch to `account` may go ahead now, as
+/// [`ready_to_switch`] decides, and note the check in the login timing.
+pub fn check(account: &Account) -> Result<()> {
+    let helper = account.helper.then_some(account.uid);
+    let blockers = crate::session::blockers_now(helper);
+    crate::login_log::mark(&format!(
+        "switch.check blockers={}",
+        blockers.as_ref().map_or(-1, |found| found.len() as i64)
+    ));
+
+    ready_to_switch(&target(account), blockers.as_deref())
+}
+
+/// Lock the screen so the person can switch to `account` from it, once
+/// [`check`] lets the switch go ahead.
 pub fn to(account: &Account) -> Result<Value> {
+    check(account)?;
     let mut reply = lock_screen()?;
+    if account.helper {
+        crate::login_log::mark(&format!("switch.locked helper={}", account.uid));
+    }
     let name = account.real_name.as_deref().unwrap_or(&account.name);
     reply["choose"] = json!(name);
     reply["next"] = json!(format!(
@@ -218,6 +363,194 @@ mod tests {
                 .iter()
                 .all(|account| account.uid >= crate::setup::FIRST_USER_UID)
         );
+    }
+
+    fn helper() -> Target {
+        Target {
+            uid: 503,
+            helper: true,
+            back: false,
+            logged_in: false,
+            exists: true,
+            home_owned: true,
+            administrator: Some(false),
+            on_console: false,
+        }
+    }
+
+    /// The person's own desktop, switched back to from the helper.
+    fn back() -> Target {
+        Target {
+            uid: 501,
+            helper: false,
+            back: true,
+            logged_in: true,
+            administrator: Some(true),
+            ..helper()
+        }
+    }
+
+    fn refusal(target: &Target, blockers: Option<&[Blocker]>) -> String {
+        let error = ready_to_switch(target, blockers).unwrap_err();
+        assert_eq!(error.code, "not-ready");
+        error.error
+    }
+
+    #[test]
+    fn a_new_login_waits_while_another_could_hang_it() {
+        assert!(ready_to_switch(&helper(), Some(&[])).is_ok());
+
+        let cases = [
+            (
+                Blocker::Orphan { uid: 502 },
+                "Atlas can't switch yet: a deleted account is still logged in.",
+            ),
+            (
+                Blocker::HelperLeftover { uid: 503 },
+                "Atlas can't switch yet: a deleted account is still logged in.",
+            ),
+            (
+                Blocker::StuckLogin { uid: 504 },
+                "Atlas can't switch yet: another account is still logging in.",
+            ),
+            (
+                Blocker::AccountUpdating,
+                "Atlas can't switch yet: macOS is still setting up an account.",
+            ),
+        ];
+        for (blocker, words) in cases {
+            assert_eq!(refusal(&helper(), Some(&[blocker])), words);
+        }
+
+        assert_eq!(
+            refusal(&helper(), None),
+            "Atlas can't switch yet: macOS didn't list its logins. Try again."
+        );
+    }
+
+    #[test]
+    fn switching_back_to_the_persons_own_running_desktop_passes_what_holds_a_new_login() {
+        for blocker in [
+            Blocker::Orphan { uid: 502 },
+            Blocker::StuckLogin { uid: 504 },
+            Blocker::AccountUpdating,
+        ] {
+            assert!(
+                ready_to_switch(&back(), Some(&[blocker])).is_ok(),
+                "{blocker:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_helpers_running_dock_never_lets_a_switch_pass_a_leftover() {
+        let leftover = [Blocker::HelperLeftover { uid: 503 }];
+        let running = Target {
+            logged_in: true,
+            ..helper()
+        };
+        assert_eq!(
+            refusal(&running, Some(&leftover)),
+            "Atlas can't switch yet: a deleted account is still logged in."
+        );
+        assert_eq!(
+            refusal(&running, Some(&[Blocker::Orphan { uid: 502 }])),
+            "Atlas can't switch yet: a deleted account is still logged in.",
+            "the helper is never switched back to"
+        );
+        assert_eq!(
+            refusal(&back(), Some(&leftover)),
+            "Atlas can't switch yet: a deleted account is still logged in.",
+            "not even when switching back"
+        );
+    }
+
+    #[test]
+    fn only_the_persons_own_verified_desktop_counts_as_switching_back() {
+        let orphan = [Blocker::Orphan { uid: 502 }];
+        let cases = [
+            Target {
+                back: false,
+                ..back()
+            },
+            Target {
+                logged_in: false,
+                ..back()
+            },
+            Target {
+                exists: false,
+                ..back()
+            },
+            Target {
+                helper: true,
+                ..back()
+            },
+        ];
+        for target in cases {
+            assert!(
+                ready_to_switch(&target, Some(&orphan)).is_err(),
+                "{target:?}"
+            );
+        }
+
+        // Its own login stuck, or unknown logins: it waits too.
+        assert!(ready_to_switch(&back(), Some(&[Blocker::StuckLogin { uid: 501 }])).is_err());
+        assert!(ready_to_switch(&back(), None).is_err());
+    }
+
+    #[test]
+    fn a_helper_job_names_the_person_it_works_for() {
+        use crate::setup::helper::{Agent, plist};
+
+        let agent = Agent {
+            label: "com.insanearts.atlas.helper".into(),
+            program: "/Applications/Atlas.app/Contents/MacOS/atlas".into(),
+            uid: 503,
+            controller_uid: 501,
+            socket: "/Users/opie/s.sock".into(),
+        };
+        assert_eq!(
+            controller_in(&plist(&agent, std::path::Path::new("/tmp"))),
+            Some(501)
+        );
+        assert_eq!(controller_in("<plist></plist>"), None);
+    }
+
+    #[test]
+    fn the_helper_must_be_a_standard_account_with_its_own_home_off_screen() {
+        let cases = [
+            (
+                Target {
+                    exists: false,
+                    ..helper()
+                },
+                "Atlas can't switch yet: the helper account no longer exists.",
+            ),
+            (
+                Target {
+                    home_owned: false,
+                    ..helper()
+                },
+                "Atlas can't switch yet: the helper's home folder is missing or isn't its own.",
+            ),
+            (
+                Target {
+                    administrator: None,
+                    ..helper()
+                },
+                "Atlas can't switch yet: the helper must be a standard account, not an administrator.",
+            ),
+            (
+                Target {
+                    on_console: true,
+                    ..helper()
+                },
+                "Atlas can't switch yet: the helper is already on screen.",
+            ),
+        ];
+        for (target, words) in cases {
+            assert_eq!(refusal(&target, Some(&[])), words);
+        }
     }
 
     #[test]

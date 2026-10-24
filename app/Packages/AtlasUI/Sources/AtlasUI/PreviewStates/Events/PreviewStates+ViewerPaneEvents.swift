@@ -29,7 +29,7 @@
         next.pane = .screenshots(shotsSample(shots, applying: event))
       case (_, .openShot(let name)):
         next = viewerShots
-        next.pane = .screenshots(shotsSample(query: "", selected: name, large: name))
+        next.pane = .screenshots(shotsSample(selected: name, large: name))
       default:
         return state
       }
@@ -84,36 +84,34 @@
       let selected = tiles.first(where: \.isSelected)?.id
       let large = shots.large?.id
       switch event {
-      case .searchShots(let query): return shotsSample(query: query, selected: selected, large: nil)
-      case .selectShot(let name): return shotsSample(query: shots.query, selected: name, large: large)
-      case .openShot(let name): return shotsSample(query: shots.query, selected: name, large: name)
-      case .toggleShot: return shotsSample(query: shots.query, selected: selected, large: large == nil ? selected : nil)
-      case .closeShot: return shotsSample(query: shots.query, selected: selected, large: nil)
+      case .selectShot(let name): return shotsSample(selected: name, large: large)
+      case .openShot(let name): return shotsSample(selected: name, large: name)
+      case .toggleShot: return shotsSample(selected: selected, large: large == nil ? selected : nil)
+      case .closeShot: return shotsSample(selected: selected, large: nil)
       case .previousShot, .nextShot:
         let ids = tiles.map(\.id)
         let from = ids.firstIndex(of: large ?? selected ?? "") ?? 0
         let to = min(max(from + (event == .nextShot ? 1 : -1), 0), max(ids.count - 1, 0))
         guard ids.indices.contains(to) else { return shots }
-        return shotsSample(query: shots.query, selected: ids[to], large: large == nil ? nil : ids[to])
+        return shotsSample(selected: ids[to], large: large == nil ? nil : ids[to])
       default: return shots
       }
     }
 
-    /// The Screenshots sample with the captures a search by time keeps, one selected and one perhaps large.
+    /// The Screenshots sample with one capture selected and one perhaps large.
     ///
     /// - Parameters:
-    ///   - query: The search by time.
-    ///   - selected: The capture selected; the first kept when it is not kept.
+    ///   - selected: The capture selected; the first when it is not one of them.
     ///   - large: The capture shown large.
     /// - Returns: The pane.
-    @MainActor private static func shotsSample(query: String, selected: String?, large: String?) -> ViewerShotsState {
-      let kept = shotTimes.filter { query.isEmpty || $0.1.contains(query) }
+    @MainActor private static func shotsSample(selected: String?, large: String?) -> ViewerShotsState {
+      let kept = shotTimes
       let ids = kept.map { shotNames[$0.0] }
       let picked = ids.contains(selected ?? "") ? selected : ids.first
       let tiles = kept.map { shotTile($0.0, $0.1, isSelected: shotNames[$0.0] == picked) }
       let days = [
-        ViewerShotDay(id: "hour", title: "Today", shots: tiles.filter { $0.time.hasPrefix("10:31") }),
-        ViewerShotDay(id: "morning", title: "This morning", shots: tiles.filter { !$0.time.hasPrefix("10:31") }),
+        ViewerShotDay(id: "hour", title: "Now", shots: tiles.filter { $0.time.hasPrefix("10:31") }),
+        ViewerShotDay(id: "morning", title: "Earlier today", shots: tiles.filter { !$0.time.hasPrefix("10:31") }),
       ]
       .filter { !$0.shots.isEmpty }
       let largeShot = large.flatMap { name in tiles.first { $0.id == name } }
@@ -128,15 +126,7 @@
             canShowInFinder: true
           )
         }
-      return ViewerShotsState(
-        meta: "6 today · Space opens one, drag one out to use it",
-        query: query,
-        days: days,
-        empty: days.isEmpty
-          ? EmptyMessageState(headline: "No screenshots at that time", message: "Search by the time one was taken.")
-          : nil,
-        large: largeShot
-      )
+      return ViewerShotsState(meta: "6 today", days: days, large: largeShot)
     }
   }
 #endif

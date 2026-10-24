@@ -50,7 +50,11 @@ extension AppContainer: WindowParts {
         fileIcon: FileIcons.icon(forFile:),
         version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
         links: links,
-        clock: clock
+        clock: clock,
+        revealFile: { path in
+          let workspace = NSWorkspace.shared
+          workspace.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+        }
       )
     )
   }

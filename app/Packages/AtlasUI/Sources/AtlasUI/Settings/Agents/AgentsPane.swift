@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// The Agents pane: each agent with its icon and whether it is connected, then, when `atlas agents project` taught
-/// any, each project with Forget, which asks first. What the last Connect or Forget said sits under the agents.
+/// any, each project with Forget…, which asks first. Why a Connect failed sits in its agent's row; what else the last
+/// command said sits under the agents.
 struct AgentsPane: View {
   /// What the pane shows.
   let state: SettingsAgentsState
@@ -11,10 +12,13 @@ struct AgentsPane: View {
   /// What it draws, from its state.
   var body: some View {
     VStack(alignment: .leading, spacing: SettingsLayout.sectionGap) {
-      GroupedSection(state.agents, title: "Connected", notes: notes) { agent in
-        AgentConnectionRow(agent: agent) { send(.connect(agent.id)) }
+      GroupedSection(state.agents, notes: notes) { agent in
+        AgentConnectionRow(agent: agent) {
+          send(.connect(agent.id))
+        } showFile: {
+          send(.showAgentFile(agent.id))
+        }
       }
-      .padding(.top, SettingsLayout.firstTitleInset)
       if !state.projects.isEmpty {
         GroupedSection(
           state.projects,
@@ -38,7 +42,7 @@ struct AgentsPane: View {
 
 #if DEBUG
   #Preview("Agents") {
-    FormColumn(insets: SettingsLayout.paneInsets) {
+    FormColumn(insets: SettingsLayout.swapInsets) {
       AgentsPane(state: PreviewStates.settingsAgents.agents) { _ in }
     }
     .frame(width: SettingsLayout.width)

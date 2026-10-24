@@ -1,4 +1,4 @@
-/// One of the two permissions Atlas needs in the helper, and whether it is on.
+/// One of the two permissions Atlas needs in the helper, and where it stands.
 public struct OnboardingPermissionItem: Equatable, Sendable, Identifiable {
   /// The permission's id: what opening its settings sends.
   public var id: String
@@ -6,12 +6,10 @@ public struct OnboardingPermissionItem: Equatable, Sendable, Identifiable {
   public var title: String
   /// Whether it is on.
   public var isOn: Bool
-  /// Whether it is on, in words.
-  public var status: String
-  /// The button that opens its switch in System Settings.
-  public var allowTitle: String
-  /// Whether it is the one to allow next, its button showing where the row takes a press.
-  public var canAllow: Bool
+  /// Where it stands, in words.
+  public var standing: OnboardingPermissionStanding
+  /// Whether it is the one allowed now: on the screen, the next to allow; in the panel, the one the panel guides.
+  public var isCurrent: Bool
   /// Whether it was read: Atlas's job did not answer while it restarts, so it is being checked, never off.
   public var isKnown: Bool
 
@@ -21,25 +19,22 @@ public struct OnboardingPermissionItem: Equatable, Sendable, Identifiable {
   ///   - id: The permission's id: what opening its settings sends.
   ///   - title: Its name, as System Settings shows it.
   ///   - isOn: Whether it is on.
-  ///   - status: Whether it is on, in words.
-  ///   - allowTitle: The button that opens its switch in System Settings.
-  ///   - canAllow: Whether it is the one to allow next.
+  ///   - standing: Where it stands, in words.
+  ///   - isCurrent: Whether it is the one allowed now; false by default.
   ///   - isKnown: Whether it was read; true by default.
   public init(
     id: String,
     title: String,
     isOn: Bool,
-    status: String,
-    allowTitle: String,
-    canAllow: Bool = false,
+    standing: OnboardingPermissionStanding,
+    isCurrent: Bool = false,
     isKnown: Bool = true
   ) {
     self.id = id
     self.title = title
     self.isOn = isOn
-    self.status = status
-    self.allowTitle = allowTitle
-    self.canAllow = canAllow
+    self.standing = standing
+    self.isCurrent = isCurrent
     self.isKnown = isKnown
   }
 }

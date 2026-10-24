@@ -16,9 +16,9 @@ extension ViewerWords {
   /// The quiet count of the checks that pass, under those that do not.
   ///
   /// - Parameter count: How many pass.
-  /// - Returns: "1 other passes" or "2 others pass".
+  /// - Returns: "1 more check passes" or "2 more checks pass".
   static func othersPass(_ count: Int) -> String {
-    count == 1 ? "1 other passes" : "\(count) others pass"
+    count == 1 ? "1 more check passes" : "\(count) more checks pass"
   }
 
   /// No agent is connected to Atlas yet.

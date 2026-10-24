@@ -20,6 +20,8 @@ public enum OnboardingScreen: Equatable, Sendable {
   case permissions(OnboardingPermissionsScreenState)
   /// In the helper: set up; switch back.
   case helperDone(OnboardingHelperDoneScreenState)
+  /// A deleted account's login is still open: Atlas closes it first.
+  case closeLeftovers(OnboardingCloseScreenState)
   /// Something only the person can fix first.
   ///
   /// - Parameter reason: What to fix, in words.

@@ -16,7 +16,7 @@ extension OnboardingScreen {
   /// Its second line.
   static let agentsTail = "to test on screen."
   /// The done screen's headline.
-  static let doneTitle = "You're set."
+  static let doneTitle = "You’re set."
   /// The allow screen's second line.
   static let allowTail = "through Atlas?"
   /// The permissions screen's headline.
@@ -26,7 +26,7 @@ extension OnboardingScreen {
   /// The helper's done screen's headline.
   static let helperDoneTitle = "All set here."
   /// The first reading's headline once it failed.
-  static let loadingFailedTitle = "Atlas couldn't start its setup."
+  static let loadingFailedTitle = "Atlas couldn’t start its setup."
   /// The blocked screen's headline.
   static let blockedTitle = "One thing first."
 
@@ -44,6 +44,7 @@ extension OnboardingScreen {
       case .allow(let state): [state.title, Self.allowTail]
       case .permissions: [Self.permissionsTitle, Self.permissionsTail]
       case .helperDone(let state): [Self.helperDoneTitle, state.tail]
+      case .closeLeftovers(let state): [state.title, state.lede ?? ""]
       case .blocked(let reason): [Self.blockedTitle, reason]
       }
     return lines.joined(separator: " ")

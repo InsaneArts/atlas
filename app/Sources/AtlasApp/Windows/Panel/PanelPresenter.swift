@@ -13,16 +13,17 @@ enum PanelPresenter {
     let mode = mode(snapshot)
     let reading = StatusReading(snapshot.status)
     return PanelState(
-      status: mode.panelSummary(reading, paused: snapshot.session.paused),
+      status: mode.panelSummary(reading, paused: snapshot.session.paused, reconnecting: snapshot.reconnecting),
       notice: snapshot.session.notice,
       isMoreOpen: snapshot.session.moreOpen,
       picture: picture(snapshot, mode: mode, reading: reading),
       recent: hidesRecent(mode) ? [] : recent(reading, mode: mode),
-      controls: controls(snapshot, mode: mode)
+      controls: controls(snapshot, mode: mode),
+      announcement: snapshot.session.announcement
     )
   }
 
-  /// The helper's mode as the panel and the menu bar glyph show it: connecting before the first answer, You have
+  /// The helper's mode as the panel and the menu bar glyph show it: connecting while no answer stands, You have
   /// control while Atlas's main window holds it, In use elsewhere while another window does, else the service's
   /// state.
   ///
@@ -33,7 +34,7 @@ enum PanelPresenter {
     return Mode.seen(by: snapshot.status.overview, holdingControl: snapshot.holdingControl)
   }
 
-  /// The picture (v3 P2, P4, P6, P11): the empty stage saying why while the helper is logged out or not ready, the
+  /// The picture: the empty stage saying why while the helper is logged out or not ready, the
   /// mark breathing while connecting; else the screen, inside the rim while in control, greyed under the badge while
   /// it needs the person, greyed alone while paused, with the newest action over it while an agent works and the
   /// picture is live, in orange when it failed. The pause button on it pauses the picture only.
@@ -64,15 +65,15 @@ enum PanelPresenter {
       caption: newest.map { PanelCaption(text: $0.line, time: $0.when, isFailed: $0.mark == .failed) },
       pause: PanelPause(
         isPaused: paused,
-        label: paused ? PanelWords.resumePicture : PanelWords.pausePicture,
-        help: paused ? PanelWords.resumePictureHelp : PanelWords.pausePictureHelp
+        label: paused ? Words.resumePictureItem : Words.pausePictureItem,
+        help: paused ? ShortcutWords.resumePicture : ShortcutWords.pausePicture
       )
     )
     state.picture = state.showsScreen ? snapshot.picture : nil
     return state
   }
 
-  /// Recent's rows, newest first (v3 P5): the newest is live only while an agent works, so only it carries the blue
+  /// Recent's rows, newest first: the newest is live only while an agent works, so only it carries the blue
   /// dot, and only then.
   ///
   /// - Parameters:

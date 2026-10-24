@@ -22,6 +22,8 @@ extension OnboardingScreen {
     case permissions
     /// The helper's done screen.
     case helperDone
+    /// The close screen, before and once it closed: the same screen, redrawn in place.
+    case closeLeftovers
     /// A blocked screen, one per reason.
     ///
     /// - Parameter reason: What to fix.
@@ -41,6 +43,7 @@ extension OnboardingScreen {
     case .allow: .allow
     case .permissions: .permissions
     case .helperDone: .helperDone
+    case .closeLeftovers: .closeLeftovers
     case .blocked(let reason): .blocked(reason)
     }
   }

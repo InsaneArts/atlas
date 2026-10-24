@@ -20,6 +20,8 @@ extension OnboardingController {
         await self.perform(request)
       }
       performing = (request, work)
+      // The work cannot start before this turn of the main actor ends, so whatever runs here comes before its start.
+      taking?(request)
       await withTaskCancellationHandler {
         await work.value
       } onCancel: {
@@ -66,8 +68,9 @@ extension OnboardingController {
     switch request {
     case .useHelper: await useHelper()
     case .createAccount: await createAccount()
-    case .lockAndSwitch: await act(.switchTo(snapshot.facts.helper.name), Words.locking)
+    case .lockAndSwitch: await lockAndSwitch()
     case .chooseAnother: await chooseAnother()
+    case .closeLeftovers: await closeLeftovers()
     case .connectAgents(let chosen): await connectAgents(chosen)
     case .complete: await complete()
     case .allow: await allow()

@@ -1,9 +1,11 @@
 import SwiftUI
 
-/// The latest actions as one pile of glass chips in the screen's corner (v3 V6): the newest in front with a breathing
-/// blue dot, at most two older ones behind it, each a step higher, smaller and fainter, peeking over its top. The
-/// pointer fans them out. A new action pushes in at the front with a blur; the oldest folds away. A failure keeps its
-/// orange dot wherever it stands. Under Reduce Motion the chips fade in and out and the fan opens at once.
+/// The latest actions as one pile of glass chips in the screen's corner: the newest in front with a steady
+/// blue dot, since the window's status dot is the one that breathes, at most two older ones behind it, each
+/// a step higher, smaller and fainter, peeking over its top as a shell with no words, so their words never show
+/// through the front chip's. The pointer fans them out, and their words fade in. A new action fades in at the
+/// front, rising 6 points; the oldest fades away. A failure keeps its orange dot wherever it stands. Under Reduce
+/// Motion the chips only fade, and the fan opens at once.
 struct CaptionStack: View {
   /// The actions, oldest first; the newest few show.
   let entries: [ActivityEntry]
@@ -16,7 +18,7 @@ struct CaptionStack: View {
     let shown = Self.shown(entries)
     ZStack(alignment: .bottomLeading) {
       ForEach(shown) { item in
-        chip(item.entry)
+        chip(item.entry, showsWords: Layout.showsWords(depth: item.depth, fanned: isFanned))
           // Where a chip stands moves on the state spring, at once under Reduce Motion; how faint it is fades either
           // way. Each is scoped to its own effect, so nothing moves while a new action arrives under Reduce Motion.
           .animation(Self.moving(reduceMotion: reduceMotion)) { chip in
@@ -42,32 +44,40 @@ struct CaptionStack: View {
     .accessibilityLabel(Text(verbatim: "Latest actions"))
   }
 
-  /// One action's chip: its mark, what was done, and how long ago in tertiary digits.
+  /// One action's chip: its mark, what was done, and how long ago in tertiary digits; behind the front chip, only its
+  /// shell and mark, its words fading in as the pile fans out.
   ///
-  /// - Parameter entry: The action.
+  /// - Parameters:
+  ///   - entry: The action.
+  ///   - showsWords: Whether its words show.
   /// - Returns: The chip.
-  private func chip(_ entry: ActivityEntry) -> some View {
+  private func chip(_ entry: ActivityEntry, showsWords: Bool) -> some View {
     GlassChip(lead: Self.lead(entry)) {
-      Text(entry.line)
-      Text(entry.when)
-        .font(Typography.digits(.callout))
-        .foregroundStyle(Color.textTertiary)
-        .contentTransition(.numericText())
+      Group {
+        Text(entry.line)
+        // A time changes every second, so it takes no transition.
+        Text(entry.when)
+          .font(Typography.digits(.callout))
+          .foregroundStyle(Color.textTertiary)
+      }
+      .opacity(showsWords ? 1 : 0)
+      .animation(Motion.textSwap, value: showsWords)
     }
   }
 
-  /// How a chip comes and goes: in at the front with a blur, the oldest fading as it folds away; a fade under Reduce
-  /// Motion, on its own short animation, since nothing else moves then.
+  /// How a chip comes and goes: in at the front fading and rising on the state spring, out fading over 0.15
+  /// seconds; a fade under Reduce Motion, on its own short animation, since nothing else moves then.
   private var arrival: AnyTransition {
     guard !reduceMotion else {
       return AnyTransition.opacity
         .animation(Self.fading(reduceMotion: reduceMotion))
     }
     return .asymmetric(
-      insertion: AnyTransition(.blurReplace(.downUp))
-        .animation(Motion.arrive),
+      insertion: AnyTransition.opacity
+        .combined(with: .offset(y: Layout.rise))
+        .animation(Motion.state),
       removal: AnyTransition.opacity
-        .animation(Motion.leave)
+        .animation(Motion.dismiss)
     )
   }
 
@@ -99,14 +109,14 @@ struct CaptionStack: View {
       .map { index, entry in Shown(entry: entry, depth: newest.count - 1 - index) }
   }
 
-  /// What leads a chip: an orange dot for a failure, a breathing blue dot for the newest, nothing otherwise.
+  /// What leads a chip: an orange dot for a failure, a steady blue dot for the newest, nothing otherwise.
   ///
   /// - Parameter entry: The action.
   /// - Returns: The chip's lead.
   nonisolated static func lead<Content: View>(_ entry: ActivityEntry) -> GlassChip<Content>.Lead {
     switch entry.captionMark {
     case .failed: .dot(.attention)
-    case .newest: .pulsing(.active)
+    case .newest: .dot(.active)
     case nil: .none
     }
   }
@@ -124,7 +134,7 @@ extension CaptionStack {
     var id: String { entry.id }
   }
 
-  /// The pile's geometry (v3 V6, `.vtrail`).
+  /// The pile's geometry.
   enum Layout {
     /// 3: the most chips the pile shows.
     static let limit = 3
@@ -136,6 +146,8 @@ extension CaptionStack {
     static let shrink: CGFloat = 0.05
     /// 0.35: how much fainter each step back draws.
     static let fade = 0.35
+    /// 6: how far below its place a new chip starts as it fades in.
+    static let rise: CGFloat = 6
 
     /// How far up a chip sits.
     ///
@@ -165,6 +177,16 @@ extension CaptionStack {
     /// - Returns: The opacity.
     static func opacity(depth: Int, fanned: Bool) -> Double {
       fanned ? 1 : 1 - fade * Double(depth)
+    }
+
+    /// Whether a chip's words show: the front chip's always, the others' only once the pile fans out.
+    ///
+    /// - Parameters:
+    ///   - depth: How many chips stand in front of it.
+    ///   - fanned: Whether the pile is fanned out.
+    /// - Returns: Whether its words show.
+    static func showsWords(depth: Int, fanned: Bool) -> Bool {
+      depth == 0 || fanned
     }
 
     /// How tall the pile stands: the front chip and the reach of the highest one behind it.

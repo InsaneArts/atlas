@@ -35,6 +35,12 @@ extension OnboardingFacts {
       let realName: String?
     }
 
+    /// A deleted account's login that is still open.
+    struct Leftover: Decodable {
+      /// The user ID it runs as.
+      let uid: Int?
+    }
+
     /// The helper side: the helper as seen from the person's account, or this account as the helper.
     struct Side: Decodable {
       /// Whether the chosen account still exists.
@@ -45,8 +51,6 @@ extension OnboardingFacts {
       let realName: String?
       /// Whether it administers this Mac.
       let administrator: Bool?
-      /// Whether macOS still runs a session of a deleted account with its user ID.
-      let leftoverSession: Bool?
       /// This account asked this helper: its request names it, or a setup with it is recorded.
       let paired: Bool?
       /// This account asked it, and it never answered: the request may be taken back to choose another account.
@@ -65,6 +69,8 @@ extension OnboardingFacts {
       let controller: Controller?
       /// In the helper: whether Atlas's job is installed for the account asking now.
       let installed: Bool?
+      /// In the helper: whether Allow was recorded for this request.
+      let accepted: Bool?
       /// In the helper: whether Atlas's job runs.
       let running: Bool?
     }
@@ -83,9 +89,13 @@ extension OnboardingFacts {
     let onlyChoice: Bool?
     /// Whether setup has finished.
     let finished: Bool?
+    /// Why accepted helper setup could not finish.
+    let setupProblem: String?
     /// Open at Login was decided once already, so the person's choice stands.
     let menubarLogin: Bool?
     /// The helper, as this account sees it, or this account as the helper.
     let helper: Side?
+    /// The deleted accounts' logins that are still open.
+    let leftoverLogins: [Leftover]?
   }
 }

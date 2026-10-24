@@ -6,6 +6,16 @@ import Testing
 
 @Suite("ViewerStatus")
 struct ViewerStatusTests {
+  @Test("the deleted accounts' open logins and a silent helper's login are read, and none by default")
+  func leftoverLogins() throws {
+    let reading = try status(["leftoverLogins": [502, 504], "helperStale": true])
+    #expect(reading.leftoverLogins == [502, 504])
+    #expect(reading.helperStale)
+    let older = try status(["ready": true])
+    #expect(older.leftoverLogins.isEmpty)
+    #expect(!older.helperStale)
+  }
+
   @Test("a status report decodes the session, the mode, the helper's names, its display and what it did")
   func decodes() throws {
     let reading = try status([

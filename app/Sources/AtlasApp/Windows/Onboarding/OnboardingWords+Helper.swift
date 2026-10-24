@@ -1,14 +1,8 @@
 import AtlasOnboarding
 
-/// The helper's side of setup: allowing the account that asked, each permission and its guide beside System
-/// Settings, and the helper's last screen.
+/// The helper's side of setup: allowing the account that asked, each permission's guide beside System Settings, and
+/// the helper's last screen. Where a permission stands is in ``StatusWord``'s words.
 extension OnboardingWords {
-  /// A permission that is on.
-  static let permissionOn = "Allowed"
-  /// A permission that is off.
-  static let permissionOff = "Off"
-  /// A permission not read yet: Atlas's job did not answer.
-  static let permissionUnknown = "Checking…"
   /// The helper's done tail when no account asked.
   static let switchBackToOwn = "Switch back to your own account."
 
@@ -33,11 +27,10 @@ extension OnboardingWords {
   /// - Parameter asker: The asking account as people know it.
   /// - Returns: The allow screen's lede.
   static func allowLede(_ asker: String) -> String {
-    "\(asker)'s agents will open apps here, click and type, while \(asker) keeps working in their own account. You allow this once; Atlas then starts here by itself."
+    let name = named(asker)
+    return
+      "\(name)’s agents will open apps here, click and type, while \(name) keeps working in their own account. You allow this once; Atlas then starts here by itself."
   }
-
-  /// The button that opens a permission's list in System Settings.
-  static let allowButton = "Allow…"
 
   /// What to do in System Settings: drag Atlas into the list; for Screen Recording, the top one of its two lists
   /// (the lower one grants sound only).
@@ -77,9 +70,6 @@ extension OnboardingWords {
   static func panelLabel(_ number: Int, of count: Int, _ permission: String) -> String {
     "\(number) of \(count) · \(permission)"
   }
-
-  /// The panel's pill while it waits.
-  static let waitingForSwitch = "Waiting for the switch…"
 
   /// The helper's done tail.
   ///

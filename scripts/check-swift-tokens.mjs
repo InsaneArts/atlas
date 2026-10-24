@@ -3,13 +3,12 @@
 // radius, line width, scale, tracking or animation duration in AtlasUI or
 // AtlasApp outside AtlasUI/DesignSystem, or on arithmetic that bends a token
 // with a literal: node scripts/check-swift-tokens.mjs [FOLDER...]. The domain
-// packages draw nothing and are not read, as jolt reads JoltUI alone. Inside
-// the design system it fails on a name that holds a window or surface (the
-// standard's D1: a token says its role or size), and outside Colors.swift on
-// black or white at an opacity, which is a colour token's job (D3).
+// packages draw nothing and are not read. Inside
+// the design system it fails on a name that holds a window or surface:
+// a token says its role or size. Outside Colors.swift it also fails on
+// black or white at an opacity, which is a colour token's job.
 //
-// A port of ../jolt-v2/Scripts/check_tokens.py, with its patterns. The design
-// system lives in DesignSystem/; everything else names it. A literal belongs
+// The design system lives in DesignSystem/; everything else names it. A literal belongs
 // in a named `static let` constant, such as one in a component's private
 // `Layout` enum. One check is Atlas's own: a literal passed through
 // `Typography.font(size:)`, the door for a glyph sized from its frame, which
@@ -127,8 +126,7 @@ function constantSpans(code) {
 }
 
 // The words a token may not be named with: the windows, panes and surfaces
-// that use tokens, today's and the ones the v3 redesign brings (the plan's
-// conflict C-T1). A name is split into its camel-case words, so `menuRow`
+// that use tokens. A name is split into its camel-case words, so `menuRow`
 // and `fillAlertButton` are caught and `fillPlaceholder` is not. `icon`
 // names a surface everywhere but in `iconSize`, the scale of icon sizes.
 const WINDOW_WORDS = new Set([

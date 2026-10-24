@@ -1,6 +1,6 @@
 #if DEBUG
   extension PreviewStates {
-    /// Idle, with Details beside the screen (MacDetails).
+    /// Idle, with Details beside the screen.
     @MainActor public static let viewerDetails: ViewerState = {
       var state = viewerIdle
       state.top.actions.details = viewerDetailsToggle(shown: true)
@@ -29,7 +29,7 @@
           id: "Mouse and keyboard",
           name: "Mouse and keyboard",
           mark: .notReady,
-          note: "Mouse and keyboard aren't ready. Recover starts them again."
+          note: "Not ready. Recover… starts them again."
         ),
         ViewerReadyRow(
           id: "Save and Open dialogs",
@@ -37,7 +37,7 @@
           mark: .unknown,
           note: "Not checked yet"
         ),
-        ViewerReadyRow(id: "others", name: "1 other passes", mark: .ready, isQuiet: true),
+        ViewerReadyRow(id: "others", name: "1 more check passes", mark: .ready, isQuiet: true),
       ]
       return state
     }()

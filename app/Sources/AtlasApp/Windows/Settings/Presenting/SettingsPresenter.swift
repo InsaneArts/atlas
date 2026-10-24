@@ -18,7 +18,7 @@ enum SettingsPresenter {
     )
   }
 
-  /// The tab row: General, Helper, Agents and About, each its symbol over its word, `selected` shown (v3 G1).
+  /// The tab row: General, Helper, Agents and About, each its symbol over its word, `selected` shown.
   ///
   /// - Parameter selected: The pane shown.
   /// - Returns: The tab row.
@@ -31,7 +31,7 @@ enum SettingsPresenter {
   }
 
   /// A tab's symbol: a gear, a display, sparkles for the agents, and an info circle for About, where the orbit no
-  /// longer stands (v3 G1).
+  /// longer stands.
   ///
   /// - Parameter tab: The tab.
   /// - Returns: Its symbol.

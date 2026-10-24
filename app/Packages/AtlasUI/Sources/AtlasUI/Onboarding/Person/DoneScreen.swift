@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Setup is done: the icon settles once with its ring (v3 S8, X11), where Atlas lives now, and whether it opens at
-/// login, in one group (v3 D6). Done is the footer's.
+/// Setup is done: the icon settles into place once, where Atlas lives now, and whether it opens at login, in one
+/// group. Done is the footer's.
 struct DoneScreen: View {
   /// What the screen shows.
   let state: OnboardingDoneScreenState
@@ -12,7 +12,7 @@ struct DoneScreen: View {
 
   /// The icon, what happens from now on, the setting, the status and how to come back.
   var body: some View {
-    ScrollColumn(width: OnboardingLayout.column) {
+    ScreenColumn {
       OnboardingHeader(title: OnboardingScreen.doneTitle, lede: state.lede) {
         SuccessIcon(tile: OnboardingLayout.doneTile)
       }
@@ -23,16 +23,9 @@ struct DoneScreen: View {
       }
       .controlSize(.small)
       .padding(.top, OnboardingLayout.Rhythm.paragraph)
-      .pagePiece(.content)
-    } bottom: {
-      if let status = StatusLine(note: note) {
-        status
-          .padding(.top, OnboardingLayout.Rhythm.content)
-          .pagePiece(.status)
-      }
-      Note(text: "Getting Started… in the menu bar brings this window back.")
+      StatusSlot(note: note)
+      Note(text: "Getting Started… in Atlas’s menu brings this window back.")
         .padding(.top, OnboardingLayout.Rhythm.status)
-        .pagePiece(.status)
     }
   }
 

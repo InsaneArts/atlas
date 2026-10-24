@@ -1,9 +1,8 @@
 import SwiftUI
 
-/// The top of every setup screen, in the window's one rhythm (v3 D2): a hero if the screen has one, a label, the
-/// title, and the paragraph under it. The hero, the label and the title arrive as the screen's header, the paragraph
-/// with its content (v3 S2). A screen whose title changes in place, as the check's does once it passes, swaps it with
-/// a blur (v3 S5); under Reduce Motion it fades.
+/// The top of every setup screen, in the window's one rhythm: a hero if the screen has one, a label, the title, and
+/// the paragraph under it. A screen whose title changes in place, as the check's does once it passes, swaps it by
+/// opacity, the same under Reduce Motion.
 struct OnboardingHeader<Hero: View>: View {
   /// The icon, pairing or mark above the title, if any.
   private let hero: Hero?
@@ -15,11 +14,10 @@ struct OnboardingHeader<Hero: View>: View {
   private let tail: String?
   /// The paragraph under the title, if any.
   private let lede: String?
-  /// Whether a new title replaces the last with a blur, on a screen whose title changes in place.
+  /// Whether a new title swaps in place of the last by opacity, on a screen whose title changes in place.
   private let swapsTitle: Bool
   /// How large the title is: a screen's, or the narrow permission panel's.
   private let titleSize: Headline.Size
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   /// Creates a screen's header with a hero.
   ///
@@ -28,7 +26,7 @@ struct OnboardingHeader<Hero: View>: View {
   ///   - title: The title's statement.
   ///   - tail: The title's quieter second line, if any.
   ///   - lede: The paragraph under the title, if any.
-  ///   - swapsTitle: Whether a new title replaces the last with a blur; false by default.
+  ///   - swapsTitle: Whether a new title swaps in place of the last by opacity; false by default.
   ///   - titleSize: How large the title is; a screen's by default.
   ///   - hero: The icon, pairing or mark above the title.
   init(
@@ -66,25 +64,23 @@ struct OnboardingHeader<Hero: View>: View {
         }
         headline
       }
-      .pagePiece(.header)
       if let lede {
         Lede(text: lede)
           .padding(.top, OnboardingLayout.Rhythm.title)
-          .pagePiece(.content)
       }
     }
   }
 
-  /// The title; on a screen whose title changes in place, swapped with a blur as it changes. The swap is left off
-  /// where a title never changes, as the blur would draw the title through an offscreen pass.
+  /// The title; on a screen whose title changes in place, swapped by opacity as it changes. The swap is
+  /// left off where a title never changes.
   @ViewBuilder private var headline: some View {
     if swapsTitle {
       ZStack {
         Headline(title: title, tail: tail, size: titleSize)
           .id([title, tail])
-          .transition(Motion.transition(AnyTransition(.blurReplace(.downUp)), reduceMotion: reduceMotion))
+          .transition(.opacity)
       }
-      .animation(Motion.animation(Motion.state, reduceMotion: reduceMotion, reduced: Motion.reduced), value: title)
+      .animation(Motion.textSwap, value: title)
     } else {
       Headline(title: title, tail: tail, size: titleSize)
     }
@@ -99,7 +95,7 @@ extension OnboardingHeader where Hero == EmptyView {
   ///   - title: The title's statement.
   ///   - tail: The title's quieter second line, if any.
   ///   - lede: The paragraph under the title, if any.
-  ///   - swapsTitle: Whether a new title replaces the last with a blur; false by default.
+  ///   - swapsTitle: Whether a new title swaps in place of the last by opacity; false by default.
   init(label: String? = nil, title: String, tail: String? = nil, lede: String? = nil, swapsTitle: Bool = false) {
     self.hero = nil
     self.label = label

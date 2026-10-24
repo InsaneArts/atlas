@@ -1,11 +1,11 @@
 #if DEBUG
   import SwiftUI
 
-  /// The status line's samples: each kind with v3's own sentences (D4), and its marks alone.
+  /// The status line's samples: each kind with a representative status sentence, and its marks alone.
   struct StatusLineSamples: View {
     /// Which samples to show.
     enum Kind: Sendable {
-      /// Working, a problem and done, as v3's Components block draws them.
+      /// Working, a problem and done, each with its corresponding mark.
       case kinds
       /// The three marks.
       case marks
@@ -20,10 +20,10 @@
       self.kind = kind
     }
 
-    /// v3's sentence for a kind.
+    /// A representative status sentence for a kind.
     ///
     /// - Parameter kind: How things stand.
-    /// - Returns: The sentence v3's Components block shows for it.
+    /// - Returns: The status sentence shown for it.
     static func sentence(_ kind: StatusLine.Kind) -> String {
       switch kind {
       case .working: String("Next: Lock and Switch, then log in to the Atlas account.")
@@ -52,9 +52,9 @@
     }
   }
 
-  /// v3's spacing in its Components block.
+  /// Spacing that separates status samples for comparison.
   private enum Layout {
-    /// 18: between two status lines, v3's 4-point gap and each line's 14 above it.
+    /// 18: between two status lines, a 4-point gap and each line's 14 above it.
     static let lineGap: CGFloat = 18
   }
 #endif

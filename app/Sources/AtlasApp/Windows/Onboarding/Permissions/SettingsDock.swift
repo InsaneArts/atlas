@@ -2,11 +2,16 @@ import AppKit
 
 /// Keeps the permission panel beside System Settings' window while it guides, and shows the drag ghost there while
 /// the panel waits for its switch. System Settings may take a moment to open: the panel waits where the card was, then
-/// glides beside it once (or to the screen's left should it show no window by then), and moves with it at once after.
+/// glides beside it once (or to the screen's left should it show no window by then), and moves with it after: every
+/// frame while a mouse button is down, as the person drags System Settings, at once while its place is near, and on a
+/// spring with no bounce after a jump (``DockFollow``).
 final class SettingsDock {
   /// How often the panel looks for System Settings' window to follow it: 8 times a second, so it keeps up with a
   /// window the person moves.
   static let followEvery: Duration = .milliseconds(125)
+  /// How often the panel follows System Settings while the person drags it, or while the panel catches up: one frame
+  /// of a 60 Hz display, so it moves with the window rather than snapping after it.
+  static let followFrame: Duration = .seconds(1.0 / 60)
   /// How many looks the panel waits for System Settings' window before going to the screen's left: 8, about a second.
   static let settingsPatience = 8
   /// How many looks the ghost waits once the panel sits beside System Settings, or its page changed: 8, about a
@@ -27,6 +32,10 @@ final class SettingsDock {
   private let waitingFor: @MainActor () -> String?
   /// Runs once System Settings, docked beside, shows no window for ``settingsPatience`` looks: closed or quit.
   private let lost: @MainActor () -> Void
+  /// Whether a mouse button is down now: the person dragging a window, or dragging Atlas in.
+  private let mouseDown: @MainActor () -> Bool
+  /// How the panel keeps to its place, look by look.
+  private var follow = DockFollow()
   /// Following System Settings' window, while the panel guides.
   private var following: Task<Void, Never>?
   /// Whether the window sits beside System Settings: following it from there is instant, not a glide.
@@ -50,6 +59,7 @@ final class SettingsDock {
   ///   - settingsFrame: Where System Settings' window is.
   ///   - waitingFor: The permission the panel waits for, by its label.
   ///   - lost: Runs once System Settings, docked beside, is closed or quit.
+  ///   - mouseDown: Whether a mouse button is down now; the Mac's own by default.
   init(
     window: NSWindow,
     glide: WindowGlide,
@@ -57,7 +67,8 @@ final class SettingsDock {
     ghost: DragGhost,
     settingsFrame: @escaping @MainActor () -> CGRect? = SystemSettingsWindow.frame,
     waitingFor: @escaping @MainActor () -> String?,
-    lost: @escaping @MainActor () -> Void
+    lost: @escaping @MainActor () -> Void,
+    mouseDown: @escaping @MainActor () -> Bool = { NSEvent.pressedMouseButtons != 0 }
   ) {
     self.window = window
     self.glide = glide
@@ -66,6 +77,7 @@ final class SettingsDock {
     self.settingsFrame = settingsFrame
     self.waitingFor = waitingFor
     self.lost = lost
+    self.mouseDown = mouseDown
   }
 
   /// Moves the panel beside System Settings, or, while it shows no window yet, shrinks it where the card was; then
@@ -87,12 +99,21 @@ final class SettingsDock {
     // Unstructured and stored, as the window's placing cannot wait: it follows until `stop()` cancels it.
     following = Task { [weak self, clock] in
       var looks = 0
+      var sinceLook = Duration.zero
       while !Task.isCancelled {
+        let step = self?.isFollowingClosely == true ? Self.followFrame : Self.followEvery - sinceLook
         // Cancelled while asleep: no step after, which would dock a card just put back.
-        do { try await clock.sleep(for: Self.followEvery) } catch { return }
+        do { try await clock.sleep(for: step) } catch { return }
         guard let self else { return }
+        sinceLook += step
+        guard sinceLook >= Self.followEvery else {
+          keepUp(after: step)
+          continue
+        }
+        // A whole look: System Settings checked for, the ghost shown or hidden, as every eighth of a second.
+        sinceLook = .zero
         looks += 1
-        catchUp(waited: looks >= Self.settingsPatience)
+        catchUp(waited: looks >= Self.settingsPatience, after: step)
       }
     }
   }
@@ -113,15 +134,50 @@ final class SettingsDock {
     missed = 0
     shown = nil
     settled = 0
+    follow = DockFollow()
   }
 
-  /// One step of following, the ghost shown a moment after the panel sits beside System Settings while its switch is
-  /// off, and hidden while a mouse button is down (the person moving a window, or dragging Atlas in) or the window
-  /// glides.
+  /// Whether the panel follows System Settings frame by frame now: docked, while a mouse button is down or while it
+  /// catches up after a jump.
+  private var isFollowingClosely: Bool {
+    docked && (mouseDown() || follow.isCatchingUp)
+  }
+
+  /// One frame between looks: the panel keeps to System Settings' window, nothing else.
   ///
-  /// - Parameter waited: Whether System Settings has had its time to show a window.
-  private func catchUp(waited: Bool) {
-    guard window.isVisible, !glide.isGliding, NSEvent.pressedMouseButtons == 0 else { return ghost.hide() }
+  /// - Parameter elapsed: The time since the last frame or look.
+  private func keepUp(after elapsed: Duration) {
+    guard window.isVisible, docked, !glide.isGliding, let settings = settingsFrame(),
+      let origin = origin(size: window.frame.size, beside: settings)
+    else { return }
+    move(toward: origin, after: elapsed)
+  }
+
+  /// Moves the docked panel toward its place, at once when it is near, else on the catching-up spring.
+  ///
+  /// - Parameters:
+  ///   - origin: Where it belongs.
+  ///   - elapsed: The time since the last move.
+  private func move(toward origin: CGPoint, after elapsed: Duration) {
+    let distance = hypot(origin.x - window.frame.minX, origin.y - window.frame.minY)
+    guard distance >= OnboardingPlacement.followSlack || follow.isCatchingUp else { return }
+    let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
+    window.setFrameOrigin(follow.next(from: window.frame.origin, toward: origin, after: seconds))
+  }
+
+  /// One look of following, the ghost shown a moment after the panel sits beside System Settings while its switch is
+  /// off, and hidden while a mouse button is down (the person moving a window, or dragging Atlas in) or the window
+  /// glides. With a mouse button down the panel still keeps to System Settings.
+  ///
+  /// - Parameters:
+  ///   - waited: Whether System Settings has had its time to show a window.
+  ///   - elapsed: The time since the last frame or look.
+  private func catchUp(waited: Bool, after elapsed: Duration) {
+    guard window.isVisible, !glide.isGliding else { return ghost.hide() }
+    guard !mouseDown() else {
+      ghost.hide()
+      return keepUp(after: elapsed)
+    }
     let size = window.frame.size
     let settings = settingsFrame()
     defer { demonstrate(settings) }
@@ -137,11 +193,9 @@ final class SettingsDock {
       return
     }
     missed = 0
-    let distance = hypot(origin.x - window.frame.minX, origin.y - window.frame.minY)
-    guard distance >= OnboardingPlacement.followSlack else { return }
     if docked {
-      window.setFrameOrigin(origin)
-    } else {
+      move(toward: origin, after: elapsed)
+    } else if hypot(origin.x - window.frame.minX, origin.y - window.frame.minY) >= OnboardingPlacement.followSlack {
       docked = true
       glide.move(to: NSRect(origin: origin, size: size))
     }

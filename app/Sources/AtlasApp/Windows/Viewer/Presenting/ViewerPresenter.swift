@@ -23,8 +23,10 @@ enum ViewerPresenter {
       // its own.
       mini: tab.keepsScreenInCorner
         ? snapshot.reading.picture.map { MiniScreenState(picture: $0, isPaused: snapshot.session.paused) } : nil,
+      miniCorner: snapshot.session.corner,
       pane: pane(snapshot),
-      toast: snapshot.session.toast
+      toast: snapshot.session.toast,
+      announcement: snapshot.session.announcement
     )
   }
 

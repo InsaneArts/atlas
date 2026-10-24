@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// Details' header (v3 `.vdetails .hd`): its name, and Check Again as a small round ↻, a spinner in its place while
-/// the check runs.
+/// Details' header: its name, and Check Again as a small round ↻. While the check runs the ↻ stays as it is and takes
+/// no press, so nothing flashes for a check that ends in a moment; the controller holds the check for at least
+/// ``Motion/Duration/leastWork`` so its answer reads as checked.
 struct ViewerDetailsHeader: View {
   /// Whether Check Again is reading the helper now.
   let isChecking: Bool
@@ -19,14 +20,11 @@ struct ViewerDetailsHeader: View {
       Button {
         send(.checkAgain)
       } label: {
-        if isChecking {
-          Spinner(size: IconSize.xs)
-        } else {
-          Image(systemName: SymbolName.reload.rawValue)
-        }
+        Image(systemName: SymbolName.reload.rawValue)
       }
-      .buttonStyle(.capsule(.glass, size: .mini, outline: .circle))
-      .help(Text(verbatim: "Check the helper again"))
+      .buttonStyle(.capsule(.glass, size: .mini, outline: .circle, isWorking: isChecking))
+      .disabled(isChecking)
+      .help(Text(verbatim: "Check Again"))
       .accessibilityLabel(Text(verbatim: "Check Again"))
     }
   }

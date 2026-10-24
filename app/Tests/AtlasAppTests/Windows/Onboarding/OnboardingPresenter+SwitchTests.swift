@@ -9,22 +9,36 @@ struct OnboardingPresenterSwitchTests {
   typealias Samples = OnboardingSamples
 
   @Test(
-    "the switch screen names the next step until the person switches back",
+    "the switch screen says nothing until the person has logged in to the helper, then what Atlas waits for",
     arguments: [
-      (false, false, true, false, "Next: Lock and Switch, then log in to the Atlas account."),
+      (false, false, true, false, nil),
       (true, false, false, false, "Waiting for Atlas to open in the Atlas account…"),
-      (true, false, true, false, "Next: Lock and Switch, then allow Atlas there."),
+      (true, false, true, false, "Waiting for Atlas to open in the Atlas account…"),
       (true, true, true, false, "Waiting for the two permissions…"),
       (true, true, false, true, "Waiting for you to switch back…"),
-    ] as [(Bool, Bool, Bool, Bool, String)]
+    ] as [(Bool, Bool, Bool, Bool, String?)]
   )
-  func switchWaiting(signedIn: Bool, answering: Bool, hidden: Bool, allowed: Bool, waiting: String) throws {
+  func switchWaiting(signedIn: Bool, answering: Bool, hidden: Bool, allowed: Bool, waiting: String?) throws {
     var snapshot = Samples.snapshot(
       try Samples.person(Samples.helper(signedIn: signedIn, answering: answering, hidden: hidden, allowed: allowed))
     )
     #expect(Self.switchScreen(OnboardingPresenter.state(snapshot))?.waiting == waiting)
     snapshot.working = Words.locking
     #expect(Self.switchScreen(OnboardingPresenter.state(snapshot))?.waiting == nil, "the work note shows instead")
+  }
+
+  @Test("the first step names the helper to log in to, by its given name when it has a long one")
+  func logInStep() throws {
+    let atlas = try Samples.person(Samples.helper(signedIn: false, answering: false))
+    let short = try #require(Self.switchScreen(OnboardingPresenter.state(Samples.snapshot(atlas))))
+    #expect(short.logInTitle == "Log in to the Atlas account")
+    var long = Samples.helper(signedIn: false, answering: false)
+    long["realName"] = "Maria Fernanda Montgomery-Castellanos de la Vega"
+    let named = try #require(
+      Self.switchScreen(OnboardingPresenter.state(Samples.snapshot(try Samples.person(long))))
+    )
+    #expect(named.logInTitle == "Log in to Maria Fernanda")
+    #expect(named.title == "Now log in to Maria Fernanda.")
   }
 
   @Test("Lock and Switch shows until the helper is signed in on screen")

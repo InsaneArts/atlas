@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// What the window shows before the first reading: a spinner while it runs, held back a moment so a quick reading
-/// never flashes it (v3 S9), or why it failed, under the problem's hero (v3 D5). Try Again is the footer's.
+/// never flashes it, or why it failed, under the problem's hero. Try Again is the footer's.
 struct LoadingScreen: View {
   /// Why the first reading failed; nil while it runs.
   let problem: String?
@@ -10,13 +10,11 @@ struct LoadingScreen: View {
   var body: some View {
     Group {
       if let problem {
-        ScrollColumn(width: OnboardingLayout.column) {
+        ScreenColumn {
           OnboardingHeader(title: OnboardingScreen.loadingFailedTitle) {
             HeroDisc(kind: .problem)
           }
-          StatusLine(kind: .problem, text: problem)
-            .padding(.top, OnboardingLayout.Rhythm.content)
-            .pagePiece(.status)
+          StatusSlot(line: StatusLine(kind: .problem, text: problem))
         }
       } else {
         Spinner(size: IconSize.sPlus)

@@ -1,4 +1,4 @@
-/// One of Recent's rows (v3 P5): what was done and how long ago, with no mark unless it carries state: a warning sign
+/// One of Recent's rows: what was done and how long ago, with no mark unless it carries state: a warning sign
 /// for what did not work, and a blue dot, cooling away, on the newest row while an action runs.
 public struct PanelRecentEntry: Equatable, Sendable, Identifiable {
   /// The action's id from the service, which holds as newer actions arrive, so a row keeps its place and a new one

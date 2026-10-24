@@ -20,12 +20,12 @@ struct Badge: View {
 
 /// The badge's own measures.
 private enum Layout {
-  /// 22: the badge's side, from the board.
+  /// 22: the badge's side, sized to fit beside a row's text.
   static let side: CGFloat = 22
   /// 0.6: how far a muted badge dims.
   static let dimmed = 0.6
   /// 0.5: the star is half the badge.
   static let glyphScale: CGFloat = 0.5
-  /// The preview's frame, from the board.
+  /// The preview's frame for comparing badge sizes.
   static let sample = CGSize(width: 120, height: 40)
 }

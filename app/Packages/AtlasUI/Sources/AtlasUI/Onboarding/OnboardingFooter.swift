@@ -1,9 +1,10 @@
 import SwiftUI
 
-/// The bar under every setup screen and the permission panel (v3 D3): Back, or Choose Another Account in its place, on
-/// the left; the track in the middle; the screen's main action on the right, the one button Return presses. It sits
-/// outside the screens, so it stays put while they change: its words swap in place and the track moves (v3 S1, S10).
-/// No rule above it; a scrolling screen fades out over it instead (v3 D9).
+/// The bar under every setup screen and the permission panel: Back, Not Now or Choose Another Account on the left; the
+/// track in the middle; the screen's main action on the right, the one button Return presses. It sits outside the
+/// screens, so it stays put while they change. Each side keeps one button from screen to screen: its words swap in
+/// place by opacity as the capsule eases to their width, so two buttons never cross through each other. No rule above
+/// it.
 struct OnboardingFooter: View {
   /// What the bar shows.
   let footer: OnboardingFooterState
@@ -33,7 +34,8 @@ struct OnboardingFooter: View {
     return next
   }
 
-  /// One side of the bar, half of what the track leaves, holding its button at its outer edge.
+  /// One side of the bar, half of what the track leaves, holding its button at its outer edge. A side that gains or
+  /// loses its button fades it.
   ///
   /// - Parameters:
   ///   - action: The side's button, or nil for none.
@@ -43,47 +45,86 @@ struct OnboardingFooter: View {
     ZStack(alignment: alignment) {
       if let action {
         button(action, leading: alignment == .leading)
-          // A new identity for each event: SwiftUI keeps a shortcut's first action while the button's title stays
-          // the same, so a Continue that now does something else would otherwise send what it did before.
-          .id(action.event)
           // Only opacity changes, so Reduce Motion keeps it.
           .transition(.opacity.animation(Motion.fade))
-          .animation(Self.enabling(reduceMotion: reduceMotion), value: action.isEnabled)
       }
     }
     .frame(maxWidth: .infinity, alignment: alignment)
   }
 
-  /// How a button lights up or waits: at once (``Motion/state``), the moment its state says it can be pressed, so it
-  /// never looks unlike what a press does; under Reduce Motion, a short fade. A button that follows a success, such as
-  /// Continue once the check passes, is held back by its state, not here (v3 S5).
-  ///
-  /// - Parameter reduceMotion: Whether the Reduce Motion setting is on.
-  /// - Returns: The animation for a change to whether it can be pressed.
-  nonisolated static func enabling(reduceMotion: Bool) -> Animation {
-    Motion.animation(Motion.state, reduceMotion: reduceMotion, reduced: Motion.reduced)
-  }
-
-  /// A footer button: plain on the left, filled on the right. Escape presses Back; Return presses the main action
-  /// alone, and only when its state says so.
+  /// A footer button: plain on the left, filled on the right. The button seen keeps its identity, so a new title
+  /// swaps in place; its key is carried apart (``shortcutCarrier(_:key:)``).
   ///
   /// - Parameters:
   ///   - action: The button.
   ///   - leading: Whether it is Back's side.
   /// - Returns: The button.
-  @ViewBuilder private func button(_ action: OnboardingFooterAction, leading: Bool) -> some View {
-    if leading {
-      Button(action.title.words) { send(action.event) }
-        .buttonStyle(.capsule(.plain))
-        .disabled(!action.isEnabled)
-        // Escape goes back; it never lets a helper go.
-        .keyboardShortcut(action.title == .back ? .cancelAction : nil)
-    } else {
-      Button(action.title.words) { send(action.event) }
-        .buttonStyle(.capsule())
-        .disabled(!action.isEnabled)
-        .keyboardShortcut(action.isDefault ? .defaultAction : nil)
+  private func button(_ action: OnboardingFooterAction, leading: Bool) -> some View {
+    Button {
+      send(action.event)
+    } label: {
+      Text(action.title.words)
+        .contentTransition(.opacity)
     }
+    .buttonStyle(.capsule(leading ? .plain : .primary))
+    .disabled(!action.isEnabled)
+    .background { shortcutCarrier(action, key: leading ? Self.leadingKey(action) : Self.trailingKey(action)) }
+    // The new words fade in as the capsule eases to their width: opacity and a short resize, kept under Reduce Motion.
+    .animation(Motion.textSwap, value: action.title)
+    .animation(Self.enabling(reduceMotion: reduceMotion), value: action.isEnabled)
+  }
+
+  /// The key that presses a button, on a button of its own that is never seen and takes a new identity for each event:
+  /// SwiftUI keeps a key's first action while its button's title stays the same, so a Continue that now does
+  /// something else would otherwise send what it did before.
+  ///
+  /// - Parameters:
+  ///   - action: The button the key presses.
+  ///   - key: The key, or nil for none.
+  /// - Returns: The carrier, or nothing for a button with no key.
+  @ViewBuilder private func shortcutCarrier(_ action: OnboardingFooterAction, key: KeyboardShortcut?) -> some View {
+    if let key {
+      Button(action.title.words) { send(action.event) }
+        .keyboardShortcut(key)
+        .disabled(!action.isEnabled)
+        .frame(width: .zero, height: .zero)
+        .opacity(.zero)
+        .accessibilityHidden(true)
+        .id(action.event)
+    }
+  }
+
+  /// The key a button on the left takes: Escape for Not Now and for Back on the permission panel, where nothing is
+  /// typed; Command-[ for Back on a screen, as Setup Assistant's Back, so Escape while typing a password never goes
+  /// back; none for Choose Another Account, which lets a helper go.
+  ///
+  /// - Parameter action: The button.
+  /// - Returns: Its key, or nil for none.
+  nonisolated static func leadingKey(_ action: OnboardingFooterAction) -> KeyboardShortcut? {
+    switch action.title {
+    case .notNow: .cancelAction
+    case .back where action.event == .closePanel: .cancelAction
+    case .back: KeyboardShortcut("[", modifiers: .command)
+    default: nil
+    }
+  }
+
+  /// The key the main action takes: Return, when its state says so.
+  ///
+  /// - Parameter action: The button.
+  /// - Returns: Return, or nil for none.
+  nonisolated static func trailingKey(_ action: OnboardingFooterAction) -> KeyboardShortcut? {
+    action.isDefault ? .defaultAction : nil
+  }
+
+  /// How a button lights up or waits: at once (``Motion/state``), the moment its state says it can be pressed, so it
+  /// never looks unlike what a press does; under Reduce Motion, a short fade. A button that follows a success, such as
+  /// Continue once the check passes, is held back by its state, not here.
+  ///
+  /// - Parameter reduceMotion: Whether the Reduce Motion setting is on.
+  /// - Returns: The animation for a change to whether it can be pressed.
+  nonisolated static func enabling(reduceMotion: Bool) -> Animation {
+    Motion.animation(Motion.state, reduceMotion: reduceMotion, reduced: Motion.reduced)
   }
 }
 

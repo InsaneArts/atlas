@@ -1,4 +1,5 @@
 import CoreGraphics
+import SwiftUI
 import Testing
 
 @testable import AtlasUI
@@ -34,8 +35,38 @@ struct MiniCornerTests {
     for corner in MiniCorner.allCases {
       #expect(MiniCorner.nearest(to: corner.centre(in: Self.stage), in: Self.stage) == corner, "\(corner)")
     }
-    // Let go, it springs there; under Reduce Motion it moves at once.
-    #expect(ViewerLayout.miniSnap(reduceMotion: false) == Motion.release)
-    #expect(ViewerLayout.miniSnap(reduceMotion: true) == nil)
+  }
+
+  @Test("a thrown small screen lands in the corner its momentum heads for, going on at the speed it was thrown")
+  func aThrownSmallScreenLandsWhereItWasThrown() {
+    let home = MiniCorner.bottomTrailing
+    // The pointer stopped a little way left, but the throw carries it across the middle: it lands bottom left.
+    #expect(home.settling(after: CGSize(width: -200, height: 0), in: Self.stage) == .bottomTrailing)
+    #expect(home.settling(after: CGSize(width: -900, height: 0), in: Self.stage) == .bottomLeading)
+    // Thrown toward the corner it lands in, it keeps its speed as a share of the way left each second.
+    let way =
+      MiniCorner.bottomLeading
+      .centre(in: Self.stage).x - home.centre(in: Self.stage).x + 200
+    let velocity = home.landingVelocity(
+      to: .bottomLeading,
+      after: CGSize(width: -200, height: 0),
+      velocity: CGSize(width: -2000, height: 0),
+      in: Self.stage
+    )
+    #expect(abs(velocity - 2000 / Double(-way)) < 1e-9)
+    // Thrown away from it, or already there, it sets off from rest.
+    #expect(
+      home.landingVelocity(to: .bottomLeading, after: .zero, velocity: CGSize(width: 900, height: 0), in: Self.stage)
+        == 0
+    )
+    #expect(home.landingVelocity(to: home, after: .zero, velocity: CGSize(width: 900, height: 0), in: Self.stage) == 0)
+    // It lands on a spring with a little bounce, the one bounce in the window; under Reduce Motion at once.
+    #expect(abs(ViewerLayout.miniThrown.bounce - 0.1) < 1e-6)
+    #expect(abs(ViewerLayout.miniThrown.duration - 0.4) < 1e-6)
+    #expect(
+      ViewerLayout.miniLanding(velocity: 3, reduceMotion: false)
+        == .interpolatingSpring(ViewerLayout.miniThrown, initialVelocity: 3)
+    )
+    #expect(ViewerLayout.miniLanding(velocity: 3, reduceMotion: true) == nil)
   }
 }

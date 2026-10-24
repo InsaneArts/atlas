@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// A group of facts in an inspector (v3 V3, `.vdetails .sec`): its name in small print over its rows, which stand
-/// straight on the inspector with a hairline above each.
+/// A group of facts in an inspector: its name in small print over its rows, which stand straight on the
+/// inspector with a hairline above each.
 struct FactGroup<Content: View>: View {
   /// The group's name, such as "Helper".
   private let title: String

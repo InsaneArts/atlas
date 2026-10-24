@@ -1,7 +1,7 @@
 import SwiftUI
 
 extension View {
-  /// Shows the control only while its action applies, growing it in and out of its place (v3 D11). The row around it
+  /// Shows the control only while its action applies, growing it in and out of its place. The row around it
   /// says ``animatesActionSlots(_:)`` so its neighbours move with it.
   ///
   /// - Parameter isShown: Whether the action applies.
@@ -10,7 +10,7 @@ extension View {
     modifier(ActionSlot(isShown: isShown))
   }
 
-  /// Animates a row of controls as its slots come and go, so every control in it moves together (v3 D11).
+  /// Animates a row of controls as its slots come and go, so every control in it moves together.
   ///
   /// - Parameter isShown: Whether the slots' controls show.
   /// - Returns: The row, animated as one.

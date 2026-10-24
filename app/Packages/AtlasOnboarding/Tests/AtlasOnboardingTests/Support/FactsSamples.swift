@@ -4,13 +4,18 @@ import Foundation
 @testable import AtlasOnboarding
 
 /// Facts as the person's account reads them, with `helper` as its helper side.
-func controller(_ helper: [String: Any]? = nil, finished: Bool = false) throws -> OnboardingFacts {
+func controller(
+  _ helper: [String: Any]? = nil,
+  finished: Bool = false,
+  leftovers: [Int] = []
+) throws -> OnboardingFacts {
   var reply: [String: Any] = [
     "ok": true, "role": "controller",
     "me": ["name": "theiskaa", "realName": "Ismayil"],
     "app": ["installed": true, "signed": true, "linked": true],
     "configured": helper != nil, "finished": finished,
     "candidates": [["name": "qa", "realName": "QA Account"]],
+    "leftoverLogins": leftovers.map { ["uid": $0, "kind": "orphan"] },
   ]
   if let helper { reply["helper"] = helper }
   return try facts(reply)
@@ -23,12 +28,11 @@ func helper(
   hidden: Bool = true,
   allowed: Bool = true,
   admin: Bool = false,
-  leftover: Bool = false,
   paired: Bool = true
 ) -> [String: Any] {
   [
     "exists": true, "name": "atlas", "realName": "Atlas",
-    "administrator": admin, "leftoverSession": leftover, "paired": paired,
+    "administrator": admin, "paired": paired,
     "signedIn": signedIn, "answering": answering, "onConsole": !hidden, "hidden": hidden,
     "permissions": ["screenCapture": allowed, "accessibility": allowed],
   ]

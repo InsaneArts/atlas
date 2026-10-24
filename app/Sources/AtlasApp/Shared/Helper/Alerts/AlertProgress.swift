@@ -34,18 +34,19 @@ enum AlertProgress: Equatable {
     return nil
   }
 
-  /// The alert's phase, worded.
+  /// The alert's phase, worded. Once done, one Done button closes it.
   ///
   /// - Parameters:
-  ///   - running: The word the running button shows, such as "Recovering…".
-  ///   - done: The title once done, such as "Recovered".
+  ///   - running: What VoiceOver hears for the running button, such as "Recovering…".
+  ///   - done: The title once done, such as "The helper is ready".
+  ///   - doneMessage: The message once done, such as "Mouse and keyboard work again.".
   /// - Returns: The phase.
-  func phase(running: String, done: String) -> AlertCardPhase {
+  func phase(running: String, done: String, doneMessage: String) -> AlertCardPhase {
     switch self {
     case .asking: .asking
     case .running: .running(label: running)
     case .refused(let message): .refused(message: message)
-    case .done: .done(title: done)
+    case .done: .done(title: done, message: doneMessage, button: HelperWords.done)
     }
   }
 }

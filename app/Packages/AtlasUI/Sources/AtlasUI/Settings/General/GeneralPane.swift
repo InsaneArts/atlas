@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The General pane: opening at login and the picture, then when Atlas needs the person. Its values change through
-/// the binding.
+/// The General pane: opening at login and how often the screen updates, then when Atlas needs the person. Its values
+/// change through the binding.
 struct GeneralPane: View {
   /// The pane's values.
   @Binding var state: SettingsGeneralState
@@ -33,8 +33,8 @@ struct GeneralPane: View {
       ) { state.opensAtLogin.toggle() }
       .disabled(!state.canOpenAtLogin)
     case .picture:
-      ListRowBody("Picture", detail: "How often Atlas's windows show the helper's screen", size: .compact) {
-        PopupButton(label: "Picture", options: state.pictureOptions, selection: $state.picture)
+      ListRowBody("Screen updates", detail: "How often Atlas's windows show the helper's screen", size: .compact) {
+        PopupButton(label: "Screen updates", options: state.pictureOptions, selection: $state.picture)
       }
     case .notify:
       ListRow(
@@ -43,17 +43,13 @@ struct GeneralPane: View {
         trailing: .toggle(isOn: state.notify),
         size: .compact
       ) { state.notify.toggle() }
-    case .badge:
-      ListRow("Show a badge on the Dock icon", trailing: .toggle(isOn: state.badge), size: .compact) {
-        state.badge.toggle()
-      }
     }
   }
 }
 
 #if DEBUG
   #Preview("General") {
-    FormColumn(insets: SettingsLayout.paneInsets) {
+    FormColumn(insets: SettingsLayout.swapInsets) {
       GeneralPane(state: .constant(PreviewStates.settingsGeneral.general))
     }
     .frame(width: SettingsLayout.width)

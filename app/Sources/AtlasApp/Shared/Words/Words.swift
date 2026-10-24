@@ -19,18 +19,26 @@ enum Words {
   static let connecting = "Connecting to the helper"
   /// Why the helper's desktop cannot be watched, when the service says neither what to do next nor what went wrong.
   static let helperUnavailable = "Helper unavailable"
+  /// The View menu's item while pictures arrive, and the pause button's name.
+  static let pausePictureItem = "Pause Picture"
+  /// The View menu's item while the picture is paused, and the pause button's name.
+  static let resumePictureItem = "Resume Picture"
   /// This window holds control: the reason a window gives.
   static let yourControl = "You have mouse and keyboard control"
   /// Another window holds control: the mode's word.
   static let inUseElsewhere = "In use elsewhere"
   /// Another window holds control: the line beside the word, and the reason a window gives.
-  static let inUseElsewhereLine = "Another window has control"
-  /// The person holds control: the main window's line beside the word.
+  static let inUseElsewhereLine = "Another Atlas viewer has control"
+  /// The person holds control: the line beside the word, in the panel and the main window.
   static let controlLine = "The agent waits"
-  /// The line beside the word while the picture is paused.
-  static let pausedLine = "Picture paused"
   /// The person stopped agents: the line beside the word.
-  static let stoppedLine = "The agent waits for you"
+  static let stoppedLine = "Resume when you're ready"
+  /// Nothing is happening and no agent has acted yet: the line beside Idle, so a fresh helper says what it is for.
+  static let readyLine = "Ready for your agents"
+  /// No answer has come yet since Atlas opened: the line beside the word.
+  static let startingLine = "Starting the helper…"
+  /// No answer has come since the helper's answers stopped: the line beside the word.
+  static let reconnectingLine = "Reconnecting…"
   /// An action's outcome is unknown: the line beside the word.
   static let unfinishedLine = "An action may not have finished"
   /// The helper's input stopped, which Recover starts again: the line beside the word.

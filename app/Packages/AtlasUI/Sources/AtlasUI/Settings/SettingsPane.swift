@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// The selected pane under the Settings window's header, each in a ``FormColumn`` that says how tall it draws. A new
-/// pane crossfades with the last (v3 G2, X2): the old one out over 0.12 seconds, the new one in over 0.2 after 0.06;
-/// under Reduce Motion both over 0.15. The window fits the new height meanwhile, in AppKit.
+/// pane crossfades with the last: the new one in over 0.15 seconds at once, above the old one leaving over
+/// 0.1. Only opacity changes, so Reduce Motion keeps it. The window fits the new height meanwhile, in AppKit.
 struct SettingsPane: View {
   /// What the window shows.
   let state: SettingsState
@@ -10,17 +10,16 @@ struct SettingsPane: View {
   let edit: @MainActor (SettingsGeneralState) -> Void
   /// Receives what the person does, and the pane's height.
   let send: @MainActor (SettingsEvent) -> Void
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   /// What it draws, from its state.
   var body: some View {
     ZStack(alignment: .top) {
       pane(state.tabs.selected)
         .id(state.tabs.selected)
-        .transition(transition)
+        .transition(Self.transition)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-    .animation(reduceMotion ? Motion.crossfadeReduced : Motion.crossfadeIn, value: state.tabs.selected)
+    .animation(Motion.swapIn, value: state.tabs.selected)
   }
 
   /// A pane in its column, at its insets, saying how tall it draws.
@@ -30,15 +29,15 @@ struct SettingsPane: View {
   @ViewBuilder private func pane(_ tab: SettingsTab) -> some View {
     switch tab {
     case .general:
-      FormColumn(insets: SettingsLayout.paneInsets, fits: fits(.general)) {
+      FormColumn(insets: SettingsLayout.swapInsets, fits: fits(.general)) {
         GeneralPane(state: Binding(get: { state.general }, set: edit))
       }
     case .helper:
-      FormColumn(insets: SettingsLayout.paneInsets, fits: fits(.helper)) {
+      FormColumn(insets: SettingsLayout.swapInsets, fits: fits(.helper)) {
         HelperPane(state: state.helper, send: send)
       }
     case .agents:
-      FormColumn(insets: SettingsLayout.paneInsets, fits: fits(.agents)) {
+      FormColumn(insets: SettingsLayout.swapInsets, fits: fits(.agents)) {
         AgentsPane(state: state.agents, send: send)
       }
     case .about:
@@ -56,18 +55,13 @@ struct SettingsPane: View {
     { height in send(.paneHeight(tab, height)) }
   }
 
-  /// The crossfade: the old pane leaves quickly, the new one arrives just after it begins; one short fade each way
-  /// under Reduce Motion.
-  private var transition: AnyTransition {
-    if reduceMotion {
-      return AnyTransition.opacity
-        .animation(Motion.crossfadeReduced)
-    }
-    return AnyTransition.asymmetric(
+  /// The crossfade: the new pane fades in at once, the old one fades out a little faster.
+  private static var transition: AnyTransition {
+    AnyTransition.asymmetric(
       insertion: AnyTransition.opacity
-        .animation(Motion.crossfadeIn),
+        .animation(Motion.swapIn),
       removal: AnyTransition.opacity
-        .animation(Motion.crossfadeOut)
+        .animation(Motion.swapOut)
     )
   }
 }

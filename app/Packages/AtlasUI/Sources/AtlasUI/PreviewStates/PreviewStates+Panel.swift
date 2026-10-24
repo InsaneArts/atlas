@@ -2,8 +2,7 @@
   import SwiftUI
 
   extension PreviewStates {
-    /// Every panel sample, in the order v3's gallery (`#pgallery`) and the renders list them, then a stop the service
-    /// refused, which no card draws.
+    /// Every panel sample, in the order the renders list them, then a stop the service refused, which no card draws.
     @MainActor public static var panel: [PreviewState<PanelState>] {
       [
         PreviewState(name: "Idle", value: panelIdle),
@@ -23,15 +22,15 @@
     /// The pause button while pictures arrive.
     private static let pictureLive = PanelPause(
       isPaused: false,
-      label: "Pause picture",
-      help: "Stop updating the helper's screen here"
+      label: "Pause Picture",
+      help: "Pause Picture (⇧⌘P)"
     )
 
     /// The pause button once the picture is paused.
     private static let picturePaused = PanelPause(
       isPaused: true,
-      label: "Resume picture",
-      help: "Update the helper's screen here again"
+      label: "Resume Picture",
+      help: "Resume Picture (⇧⌘P)"
     )
 
     /// The helper's screen in a look, with no caption.
@@ -80,12 +79,12 @@
         recent(1, "Clicked Ring in Opie", "9 s"),
         recent(2, "Opened Opie", "31 s"),
       ],
-      controls: PanelControls(showsStop: true, main: openAtlas)
+      controls: PanelControls(agent: .stop, agentHelp: "Stop Agent (⌘.)", main: openAtlas)
     )
 
     /// The person holds control in Atlas's window: the blue rim, and Give Back.
     @MainActor static let panelControl = PanelState(
-      status: StatusSummary(label: "You have control", tone: .link, mark: .dot, line: "In Atlas · the agent waits"),
+      status: StatusSummary(label: "You have control", tone: .link, mark: .dot, line: "The agent waits"),
       picture: screen(.control),
       recent: earlier,
       controls: PanelControls(
@@ -106,14 +105,12 @@
       controls: PanelControls(main: recover)
     )
 
-    /// The person stopped agents: Resume.
+    /// The person stopped agents: Resume in glass before Open Atlas, as Stop stands before it while an agent works.
     @MainActor static let panelStopped = PanelState(
-      status: StatusSummary(label: "Stopped", tone: .attention, mark: .square, line: "The agent waits for you"),
+      status: StatusSummary(label: "Stopped", tone: .attention, mark: .square, line: "Resume when you're ready"),
       picture: screen(.live),
       recent: earlier,
-      controls: PanelControls(
-        main: PanelMainButton(title: "Resume", help: "Let agents act in the helper again", event: .resumeAgent)
-      )
+      controls: PanelControls(agent: .resume(isEnabled: true), agentHelp: "Resume Agent (⌘.)", main: openAtlas)
     )
 
     /// The helper is logged out: the mark on the empty stage and no Recent, and Switch to the Helper….
@@ -135,7 +132,8 @@
       )
     )
 
-    /// Atlas isn't answering in the helper: the mark on the empty stage and no Recent, and Recover… waiting.
+    /// Atlas isn't answering in the helper: the mark on the empty stage and no Recent, and Open Settings, which shows
+    /// what the helper needs.
     @MainActor static let panelNotReady = PanelState(
       status: StatusSummary(
         label: "Not ready",
@@ -144,21 +142,26 @@
         line: "Atlas isn't answering in the helper"
       ),
       picture: PanelPictureState(
-        look: .empty(message: "Atlas checks again by itself. Settings shows what the helper needs"),
+        look: .empty(message: "Atlas checks again by itself. Settings shows what the helper needs."),
         pause: pictureLive
       ),
       recent: [],
-      controls: PanelControls(main: recoverWaiting)
+      controls: PanelControls(
+        main: PanelMainButton(
+          title: "Open Settings",
+          help: "See what the helper needs in Settings",
+          event: .openSettings
+        )
+      )
     )
 
-    /// Before the first answer: the mark breathing on the empty stage, and Open Atlas waiting.
+    /// Before the first answer: the mark breathing on the empty stage, and Open Atlas, whose window has a connecting
+    /// stage of its own.
     @MainActor static let panelConnecting = PanelState(
-      status: StatusSummary(label: "Connecting", tone: .quiet, mark: .dot),
+      status: StatusSummary(label: "Connecting", tone: .quiet, mark: .dot, line: "Starting the helper…"),
       picture: PanelPictureState(look: .connecting, pause: pictureLive),
       recent: [],
-      controls: PanelControls(
-        main: PanelMainButton(title: "Open Atlas", isEnabled: false, help: "Open Atlas's window", event: .openAtlas)
-      )
+      controls: PanelControls(main: openAtlas)
     )
 
     /// The person paused the panel's picture: it greys and darkens with no badge, the pause button shows play, and
@@ -172,7 +175,12 @@
 
     /// Another window holds control: Open Atlas.
     @MainActor static let panelInUseElsewhere = PanelState(
-      status: StatusSummary(label: "In use elsewhere", tone: .quiet, mark: .dot, line: "Another window has control"),
+      status: StatusSummary(
+        label: "In use elsewhere",
+        tone: .quiet,
+        mark: .dot,
+        line: "Another Atlas viewer has control"
+      ),
       picture: screen(.live),
       recent: earlier,
       controls: PanelControls(main: openAtlas)
@@ -188,14 +196,6 @@
     /// Recover…, the main action while the helper needs recovering.
     private static let recover = PanelMainButton(
       title: "Recover…",
-      help: "Check the helper and start its mouse and keyboard again",
-      event: .askRecover
-    )
-
-    /// Recover…, waiting while the helper isn't ready for a reason Recover can't fix.
-    private static let recoverWaiting = PanelMainButton(
-      title: "Recover…",
-      isEnabled: false,
       help: "Check the helper and start its mouse and keyboard again",
       event: .askRecover
     )

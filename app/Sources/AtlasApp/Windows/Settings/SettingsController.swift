@@ -16,14 +16,14 @@ final class SettingsController {
   private(set) var icons: [String: IconImage] = [:]
   /// Whether Notify me is on.
   private(set) var notify = false
-  /// Whether the Dock badge is on.
-  private(set) var badge = false
   /// Counts the times the window came forward and a choice was kept where no other window shows it, so what the
   /// links read is read again then.
   private(set) var revision = 0
 
   /// What it reaches outside itself.
   @ObservationIgnored let dependencies: SettingsDependencies
+  /// The moment a Recover that worked holds before its alert closes, which Done ends at once.
+  @ObservationIgnored let doneHold = DoneHold()
   /// Reads the agents; the newest reading replaces any still under way.
   @ObservationIgnored var agentsReading: Task<Void, Never>?
   /// Numbers each agents reading, so only the newest one started is kept.
@@ -44,8 +44,7 @@ final class SettingsController {
       preferences.loadTab()
       .flatMap(SettingsTab.init(rawValue:)) ?? .general
     notify = preferences.loadNotify()
-    badge = preferences.loadBadge()
-    icons = AgentIcons.onThisMac(home: FileManager.default.homeDirectoryForCurrentUser) { path in
+    icons = AgentRowIcons.onThisMac(home: FileManager.default.homeDirectoryForCurrentUser) { path in
       dependencies.icon(forFile: path)
     }
   }
@@ -64,7 +63,6 @@ final class SettingsController {
       agents: agents,
       icons: icons,
       notify: notify,
-      badge: badge,
       facts: SettingsFacts(
         status: helper.status,
         connecting: helper.connecting,
@@ -93,18 +91,22 @@ final class SettingsController {
     case .askSwitch: ask(.switchToHelper)
     case .askRecover: ask(.recover)
     case .askLogOut: ask(.logOut)
+    case .closeLeftovers: Task { await closeLogin(.closeLeftovers) }
+    case .closeHelper: Task { await closeLogin(.closeHelper) }
     case .connect(let id): Task { await connect(id) }
     case .askForget(let path): askForget(path)
     case .checkForUpdates: Task { await checkForUpdates() }
     case .askInstall: askInstall()
     case .gettingStarted: dependencies.links.gettingStarted()
+    case .showAppInFinder: dependencies.revealFile(Bundle.main.bundlePath)
+    case .showAgentFile(let id): showAgentFile(id)
     case .alertConfirm: Task { await confirmAlert() }
     case .alertCancel: cancelAlert()
     }
   }
 
   /// Writes what changed in the General pane where each value belongs: Open at Login through the panel's command,
-  /// the picture to the main window or its saved rate, and Notify me and the badge to the saved choices.
+  /// the picture to the main window or its saved rate, and Notify me to the saved choices.
   ///
   /// - Parameter general: The pane as the person left it.
   func update(_ general: SettingsGeneralState) {
@@ -121,10 +123,6 @@ final class SettingsController {
     if general.notify != notify {
       notify = general.notify
       dependencies.preferences.saveNotify(notify)
-    }
-    if general.badge != badge {
-      badge = general.badge
-      dependencies.preferences.saveBadge(badge)
     }
   }
 
@@ -159,7 +157,8 @@ final class SettingsController {
   ///   - text: The line, or nil to show none.
   ///   - tab: The pane it shows in.
   ///   - kind: How it reads: quiet by default, a spinner while what it waits for runs, or the problem line.
-  func say(_ text: String?, in tab: SettingsTab, kind: SettingsNote.Kind = .quiet) {
-    session.notice = text.map { SettingsNotice(tab: tab, text: $0, kind: kind) }
+  ///   - fromCheck: Whether Check Again said it, which places it under "Ready to act"; not by default.
+  func say(_ text: String?, in tab: SettingsTab, kind: SettingsNote.Kind = .quiet, fromCheck: Bool = false) {
+    session.notice = text.map { SettingsNotice(tab: tab, text: $0, kind: kind, fromCheck: fromCheck) }
   }
 }

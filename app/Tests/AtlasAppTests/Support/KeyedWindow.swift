@@ -40,18 +40,17 @@
     /// - Returns: What the buttons sent.
     func press(_ key: Key) -> [OnboardingEvent] {
       sent = []
-      let characters = key == .return ? "\r" : "\u{1b}"
       if let event = NSEvent.keyEvent(
         with: .keyDown,
         location: .zero,
-        modifierFlags: [],
+        modifierFlags: key.modifiers,
         timestamp: 0,
         windowNumber: window.windowNumber,
         context: nil,
-        characters: characters,
-        charactersIgnoringModifiers: characters,
+        characters: key.characters,
+        charactersIgnoringModifiers: key.characters,
         isARepeat: false,
-        keyCode: key == .return ? 36 : 53
+        keyCode: key.code
       ) {
         _ = window.performKeyEquivalent(with: event)
       }

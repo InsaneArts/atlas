@@ -1,4 +1,4 @@
-/// The pause button on the panel's picture (v3 P2, P11): whether the picture is paused, and what the button says for
+/// The pause button on the panel's picture: whether the picture is paused, and what the button says for
 /// that. It pauses only the picture; work in the helper goes on.
 public struct PanelPause: Equatable, Sendable {
   /// Whether the picture is paused, which turns the button's pause symbol into play.

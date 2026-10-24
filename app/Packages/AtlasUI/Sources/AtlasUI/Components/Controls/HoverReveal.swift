@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// A control that shows only while the pointer is over its row (v3 R7, V9: hover reveals, it does not add chrome),
-/// such as Show on Screen on the window it would show. It fades in with a 4-point slide over ``Motion/hover(_:)``'s
-/// 0.12 seconds and back over 0.2; under Reduce Motion it only fades. It also shows while it holds the keyboard's
-/// focus, so Tab and Full Keyboard Access reach it. Hidden, it takes no clicks.
+/// A control that shows only while the pointer is over its row, such as Show on Screen on the window it would
+/// show. It fades in with a 4-point slide over ``Motion/hover(_:)``'s 0.12 seconds and back over 0.2; under
+/// Reduce Motion it only fades. It also shows while it holds the keyboard's focus, so Tab and Full Keyboard
+/// Access reach it. Hidden, it takes no clicks.
 struct HoverReveal: ViewModifier {
   /// Whether the pointer is over the row.
   let isRevealed: Bool

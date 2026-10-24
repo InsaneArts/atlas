@@ -7,8 +7,9 @@ extension ViewerPresenter {
   /// 16 by 10: a large screenshot's shape before its picture or size is known, the screen's.
   static let shotAspect = CGSize(width: 16, height: 10)
 
-  /// The Screenshots pane: today's count, the search by time, the screenshots in their groups with the selected one
-  /// ringed, or why none shows, and the one shown large (MacShots, MacShotLarge). Times are the person's own clock.
+  /// The Screenshots pane: today's count, the screenshots in their groups with the selected one ringed, or why none
+  /// shows, and the one shown large. The groups are Activity's: the last hour is Now and the rest of today one group,
+  /// however the day's parts would split it. Times are the person's own clock.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The pane.
@@ -18,41 +19,37 @@ extension ViewerPresenter {
       let failed = facts.failure.map {
         EmptyMessageState(headline: ViewerWords.shotsFailed, message: Words.sentence($0))
       }
-      return ViewerShotsState(meta: "", query: facts.query, days: [], empty: failed)
+      return ViewerShotsState(meta: "", days: [], empty: failed)
     }
     let rules = ShotGrouping(now: snapshot.date, calendar: snapshot.zonedCalendar)
     let days = shotDays(snapshot)
     let selected = selectedShot(snapshot)
-    let empty: EmptyMessageState? =
-      if !days.isEmpty {
-        nil
-      } else if shots.filter({ !$0.name.isEmpty }).isEmpty {
-        EmptyMessageState(headline: ViewerWords.noShots, message: ViewerWords.noShotsMessage)
+    var groups: [ViewerShotDay] = []
+    for day in days {
+      let title = ViewerWords.shotPeriod(day.period, day: dayName(day.period, snapshot))
+      let tiles = day.shots.map { shotTile($0, selected: selected, snapshot) }
+      // Parts of a day that read the same, as the rest of today does, are one group under the first one's id.
+      if let last = groups.indices.last, groups[last].title == title {
+        groups[last].shots += tiles
       } else {
-        EmptyMessageState(headline: ViewerWords.noShotsMatch(facts.query), message: ViewerWords.noShotsMatchMessage)
+        groups.append(ViewerShotDay(id: shotDayID(day.period), title: title, shots: tiles))
       }
+    }
     return ViewerShotsState(
-      meta: ViewerWords.shotsMeta(today: rules.countToday(shots)),
-      query: facts.query,
-      days: days.map { day in
-        ViewerShotDay(
-          id: shotDayID(day.period),
-          title: ViewerWords.shotPeriod(day.period, day: dayName(day.period, snapshot)),
-          shots: day.shots.map { shotTile($0, selected: selected, snapshot) }
-        )
-      },
-      empty: empty,
+      meta: days.isEmpty ? "" : ViewerWords.shotsMeta(today: rules.countToday(shots)),
+      days: groups,
+      empty: days.isEmpty ? EmptyMessageState(headline: ViewerWords.noShots, message: ViewerWords.noShotsMessage) : nil,
       large: largeShot(snapshot)
     )
   }
 
-  /// The screenshots the pane lists, in their groups, newest first, those the search by time keeps.
+  /// The screenshots the pane lists, in their groups, newest first.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The groups.
   static func shotDays(_ snapshot: ViewerSnapshot) -> [ShotDay] {
     let rules = ShotGrouping(now: snapshot.date, calendar: snapshot.zonedCalendar)
-    return rules.days(snapshot.panes.shots.shots ?? [], matching: snapshot.panes.shots.query) { clock($0, snapshot) }
+    return rules.days(snapshot.panes.shots.shots ?? [], matching: "") { clock($0, snapshot) }
   }
 
   /// The screenshots in the order the grid lists them, by name: what Previous and Next walk.
@@ -65,13 +62,15 @@ extension ViewerPresenter {
       .map(\.name)
   }
 
-  /// The selected screenshot: the one picked while it is listed, else the first.
+  /// The selected screenshot: the one picked while it is listed, else the first, unless Esc cleared the selection.
   ///
   /// - Parameter snapshot: What the controller holds.
-  /// - Returns: Its name, or nil when none is listed.
+  /// - Returns: Its name, or nil when none is listed or selected.
   static func selectedShot(_ snapshot: ViewerSnapshot) -> String? {
+    let facts = snapshot.panes.shots
+    guard !facts.selectionCleared else { return nil }
     let order = shotOrder(snapshot)
-    if let picked = snapshot.panes.shots.selected, order.contains(picked) { return picked }
+    if let picked = facts.selected, order.contains(picked) { return picked }
     return order.first
   }
 

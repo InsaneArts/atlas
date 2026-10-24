@@ -1,6 +1,7 @@
 import AtlasCommands
 import AtlasOnboarding
 import AtlasService
+import Foundation
 
 /// The Agents pane's work: reading which agents are connected and which projects are taught, connecting one agent,
 /// and forgetting a project.
@@ -31,13 +32,15 @@ extension SettingsController {
   }
 
   /// Connects one agent alone: Claude Code or Codex by name, or the Claude app, through the installs every window
-  /// shares, so one runs at a time app-wide; the agents are read again after.
+  /// shares, so one runs at a time app-wide; the agents are read again after. Why it failed shows in the agent's own
+  /// row, until the next Connect.
   ///
   /// - Parameter id: The agent's id, as its row names it.
   func connect(_ id: String) async {
     let installs = dependencies.installs
     guard !installs.isBusy else { return say(HelperWords.waitForAction, in: .agents, kind: .working) }
     say(nil, in: .agents)
+    session.connectFailures[id] = nil
     let outcome: Outcome?
     if let agent = AgentID(rawValue: id) {
       outcome = await installs.install([agent])
@@ -47,19 +50,33 @@ extension SettingsController {
       return
     }
     guard let outcome else { return say(HelperWords.waitForAction, in: .agents, kind: .working) }
-    if !outcome.ok { say(Self.connectFailure(outcome), in: .agents, kind: .problem) }
+    if !outcome.ok {
+      session.connectFailures.merge(Self.connectFailures(outcome, asked: id)) { _, newer in newer }
+    }
     await loadAgents()
   }
 
-  /// Why a Connect did not work: each agent that failed, with why, else the command's own message.
+  /// Why a Connect did not work, by agent: each agent the command says failed, with why; else the agent asked for,
+  /// with the command's own message.
   ///
-  /// - Parameter outcome: The failed command's outcome.
-  /// - Returns: The line.
-  static func connectFailure(_ outcome: Outcome) -> String {
+  /// - Parameters:
+  ///   - outcome: The failed command's outcome.
+  ///   - id: The agent asked for.
+  /// - Returns: Why, by the agent's id.
+  static func connectFailures(_ outcome: Outcome, asked id: String) -> [String: String] {
     let failed = (outcome.decode(AgentsChange.self)?.agents ?? [])
       .filter { $0.ok != true }
-      .map { SettingsWords.notConnected(SettingsPresenter.agentTitle($0.agent), $0.error ?? "") }
-    return failed.isEmpty ? Words.sentence(outcome.message) : failed.joined(separator: " ")
+      .map { ($0.agent, $0.error ?? "") }
+    guard !failed.isEmpty else { return [id: outcome.message] }
+    return Dictionary(failed, uniquingKeysWith: { first, _ in first })
+  }
+
+  /// Shows the file an agent's failed Connect is in, in the Finder: the Claude app's settings file.
+  ///
+  /// - Parameter id: The agent's id.
+  func showAgentFile(_ id: String) {
+    guard let file = AgentFiles.settings(of: id, home: FileManager.default.homeDirectoryForCurrentUser) else { return }
+    dependencies.revealFile(file.path)
   }
 
   /// Asks before forgetting a project taught.

@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// One fact in an inspector (v3 V3, `.vdetails .kv` and `.chk`), at 12 points with a hairline above it: a quiet name
-/// on the left and its value on the right in tabular digits; or, for a check, its mark, its name and, under the name,
-/// what it means, orange while it fails.
+/// One fact in an inspector, at 12 points with a hairline above it: a quiet name on the left and its value on
+/// the right in tabular digits; or, for a check, its mark, its name and, under the name, what it means,
+/// orange while it fails.
 struct FactRow: View {
   /// The name, such as "Account" or "Mouse and keyboard".
   private let name: String
@@ -66,7 +66,7 @@ struct FactRow: View {
     }
   }
 
-  /// The colour of the line under a check's name: orange while it fails, secondary otherwise (v3 `.chk small`).
+  /// The colour of the line under a check's name: orange while it fails, secondary otherwise.
   ///
   /// - Parameter mark: How the check stands.
   /// - Returns: The colour.
@@ -75,11 +75,11 @@ struct FactRow: View {
   }
 }
 
-/// The row's own measures (v3 `.vdetails .kv`).
+/// The row's own measures.
 private enum Layout {
   /// 6: above and below the row's text.
   static let inset = Spacing.xsPlus
-  /// 1: how far a check's mark drops to centre on its name's first line (v3 `.chk .mk`'s margin).
+  /// 1: how far a check's mark drops to centre on its name's first line.
   static let markDrop = Spacing.hairline
 }
 
@@ -91,7 +91,7 @@ private enum Layout {
       FactRow(String("Ready to act"), value: String("All checks pass"), mark: .ready)
       FactRow(
         String("Mouse and keyboard"),
-        value: String("Mouse and keyboard aren't ready. Recover starts them again."),
+        value: String("Not ready. Recover… starts them again."),
         mark: .notReady
       )
       FactRow(String("Save and Open dialogs"), value: String("Not checked yet"), mark: .unknown)

@@ -1,11 +1,11 @@
 import SwiftUI
 
-/// The helper's screen as one picture between the stage and the corner (v3 V16): the Screen tab's fitted picture and
-/// the mini screen carry one geometry identity, so leaving the Screen for Activity or Apps shrinks the picture into
-/// the corner and coming back grows it out, on ``Motion/zoom``. Both draw the window's one live slot (v3 V17), so the
-/// side that arrives comes whole at the other's place and the side that leaves fades under or over it: the two read
-/// as one picture moving, and the live layer is only moved, never drawn again for it. Under Reduce Motion it carries
-/// none, and the corner crossfades.
+/// The helper's screen as one picture between the stage and the corner: the Screen tab's fitted picture and
+/// the mini screen carry one geometry identity, so leaving the Screen for Activity or Apps shrinks the
+/// picture into the corner and coming back grows it out, on ``Motion/zoom``. Both draw the window's one live
+/// slot, so the side that arrives comes whole at the other's place and the side that leaves fades under or
+/// over it: the two read as one picture moving, and the live layer is only moved, never drawn again for it.
+/// Under Reduce Motion it carries none, and the corner crossfades.
 struct ScreenZoom: ViewModifier {
   /// The identity the stage's picture and the mini screen share.
   static let id = "screen"

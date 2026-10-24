@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Atlas's icon, see-through, carried by a hand from the permission panel into System Settings' list, a few times:
 /// how to allow Atlas, shown rather than told. Under Reduce Motion there is no flight, only a still hint resting where
-/// it lands (R13). It takes no clicks, and VoiceOver skips it, as the panel says the same in words.
+/// it lands. It takes no clicks, and VoiceOver skips it, as the panel says the same in words.
 public struct DragGhostView: View {
   /// Where it travels.
   private let state: DragGhostState
@@ -65,7 +65,7 @@ public struct DragGhostView: View {
       AppIcon(tile: OnboardingLayout.dragTile)
       ZStack {
         Image(systemName: SymbolName.handFill.rawValue)
-          .foregroundStyle(Color.scrim)
+          .foregroundStyle(Color.fillHand)
         Image(systemName: SymbolName.hand.rawValue)
           .foregroundStyle(Color.onAccent)
       }

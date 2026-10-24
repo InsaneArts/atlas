@@ -13,4 +13,6 @@ struct ViewerAppsFacts {
   var query = ""
   /// The window outlined on the screen; nil shows none.
   var shown: ViewerShownWindow?
+  /// Counts Find's asks for the search field's focus.
+  var findRequests = 0
 }

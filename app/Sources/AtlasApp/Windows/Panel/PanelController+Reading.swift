@@ -8,12 +8,14 @@ extension PanelController {
   /// Reads the status now and then at the open or closed rate, and the picture at the open rate while open and not
   /// paused, until called again. The two run apart, so a slow capture never holds the status back. Opening also reads
   /// Open at Login and the helper's account again, since Getting Started or the system may have changed them
-  /// meanwhile, and drops what the last action said.
+  /// meanwhile, and drops what the last action said. Opening or closing starts VoiceOver's announcements afresh.
   ///
   /// - Parameter open: Whether the panel is open.
   func watch(open: Bool) {
     stop()
+    let turning = open != isOpen
     isOpen = open
+    if turning { restartAnnouncements() }
     if open {
       session.notice = nil
       readOpenAtLogin()

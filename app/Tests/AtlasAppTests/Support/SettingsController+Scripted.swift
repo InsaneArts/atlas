@@ -44,9 +44,7 @@ extension SettingsController {
           loadTab: { nil },
           saveTab: { _ in },
           loadNotify: { false },
-          saveNotify: { _ in },
-          loadBadge: { false },
-          saveBadge: { _ in }
+          saveNotify: { _ in }
         ),
         fileIcon: fileIcon,
         version: "0.1.0",

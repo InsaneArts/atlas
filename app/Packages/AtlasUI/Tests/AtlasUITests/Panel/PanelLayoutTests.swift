@@ -5,38 +5,23 @@ import Testing
 
 @Suite("PanelLayout")
 struct PanelLayoutTests {
-  @Test("the cascade's pieces start 30 milliseconds apart and end within 0.4 seconds")
-  func theCascadeIsOneBeat() {
-    let pieces = PanelLayout.Piece.allCases
-    #expect(pieces == [.word, .line, .picture, .buttons], "the word and its dot, then the line, picture and buttons")
-    let starts = pieces.map { PanelLayout.cascadeDelay(index: $0.rawValue) }
-    #expect(starts.first == 0, "the word moves at once")
-    for (earlier, later) in zip(starts, starts.dropFirst()) {
-      #expect(abs(later - earlier - 0.03) < 1e-9)
-    }
-    let last = starts.last ?? .infinity
-    #expect(last + Motion.Springs.state.duration <= 0.4, "the last piece settles within 0.4 seconds")
-    #expect(Motion.Duration.state.seconds == Motion.Springs.state.duration, "AppKit's step is the spring's length")
-    for piece in pieces {
-      #expect(PanelLayout.cascade(piece, reduceMotion: true) == Motion.reduced, "under Reduce Motion: a fade, at once")
-      #expect(
-        PanelLayout.cascade(piece, reduceMotion: false)
-          == Motion.state.delay(PanelLayout.cascadeDelay(index: piece.rawValue))
-      )
-    }
+  @Test("a state change moves every piece of the panel together, easing out over 0.2 seconds with no bounce")
+  func aStateChangeMovesTogether() {
+    #expect(PanelLayout.change == .easeOut(duration: 0.2))
   }
 
-  @Test("Stop grows in and shrinks away on the slot's own curves, fourth in the cascade with the buttons")
-  func stopMovesWithTheButtons() {
-    let buttons = PanelLayout.cascadeDelay(index: PanelLayout.Piece.buttons.rawValue)
-    #expect(buttons > 0, "after the word, the line and the picture")
-    #expect(PanelLayout.slot(isShown: true, reduceMotion: false) == Motion.arrive.delay(buttons))
-    #expect(PanelLayout.slot(isShown: false, reduceMotion: false) == Motion.leave.delay(buttons))
-    #expect(
-      PanelLayout.slot(isShown: true, reduceMotion: true) == Motion.reduced,
-      "under Reduce Motion: a fade, at once"
-    )
-    #expect(PanelLayout.slot(isShown: false, reduceMotion: true) == Motion.reduced)
+  @Test("Recent's time rolls its digits only while its unit stays, and crossfades when the words change")
+  func theTimeRollsOnlyWithinAUnit() {
+    #expect(PanelRecentRow.unit(of: "9 s") == PanelRecentRow.unit(of: "12 s"), "digits to digits: one text")
+    #expect(PanelRecentRow.unit(of: "59 s") != PanelRecentRow.unit(of: "1 min"), "a new unit is a new text")
+    #expect(PanelRecentRow.unit(of: "now") != PanelRecentRow.unit(of: "1 s"), "words to digits: a new text")
+  }
+
+  @Test("the empty picture's mark breathes only while connecting, and holds still beside a line")
+  func theMarkBreathesOnlyWhileConnecting() {
+    let pause = PanelPause(isPaused: false, label: "", help: "")
+    #expect(PanelPictureState(look: .connecting, pause: pause).breathes)
+    #expect(!PanelPictureState(look: .empty(message: "The helper is logged out"), pause: pause).breathes)
   }
 
   @Test("under Reduce Motion the live row's dot only fades as it cools, its place held while the row is live")
@@ -52,7 +37,7 @@ struct PanelLayoutTests {
     }
   }
 
-  @Test("the panel's caption chip is v3's small chip, and the working sample's caption fits it whole")
+  @Test("the panel's caption chip is the small chip, and the working sample's caption fits it whole")
   @MainActor
   func theCaptionFitsItsChip() throws {
     let size = GlassChip<EmptyView>.Size.small
@@ -62,7 +47,7 @@ struct PanelLayoutTests {
     let caption = try #require(PreviewStates.panelWorking.picture.caption)
     func width(_ size: GlassChip<Text>.Size) throws -> CGFloat {
       let renderer = ImageRenderer(
-        content: GlassChip(lead: .pulsing(.active), time: caption.time, size: size) { Text(caption.text) }
+        content: GlassChip(lead: .dot(.active), time: caption.time, size: size) { Text(caption.text) }
           .fixedSize()
       )
       renderer.scale = 1

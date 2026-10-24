@@ -1,10 +1,12 @@
 import AppKit
 
-/// The ⋯ menu under its button (mac.py:347): the picture's choices, Copy and Save Picture, the helper's commands
-/// (``HelperMenuItems``) and a note on the helper. Built from the presenter's ``ViewerMoreMenu``; each item asks the
-/// window, which validates it against the state its buttons draw, so its key equivalents are only shown.
+/// The ⋯ menu under its button: only what acts on this window's picture. Copy and Save, for the picture or, on the
+/// Screenshots tab, the screenshot shown large or selected; Actual Size, ticked while on; then how often pictures
+/// arrive under its header, ticking the rate the picture resumes at while paused, so the menu never contradicts the
+/// pause button, which with ⇧⌘P alone pauses. Built from the presenter's ``ViewerMoreMenu``; each item asks the window,
+/// which validates it against the state its buttons draw, so its key equivalents are only shown.
 enum MoreMenu {
-  /// 250: the menu's width (mac.py:347).
+  /// 250: the menu's width.
   static let width: CGFloat = 250
 
   /// The menu.
@@ -17,42 +19,42 @@ enum MoreMenu {
     let menu = NSMenu()
     menu.appearance = Appearance.dark
     menu.minimumWidth = width
-    menu.addItem(.sectionHeader(title: ViewerWords.pictureHeader))
-    for choice in ViewerPictureChoice.allCases {
-      let item = NSMenuItem(
-        title: title(choice),
-        action: #selector(ViewerMenuActions.choosePicture(_:)),
-        keyEquivalent: choice == .paused ? "p" : ""
+    let copy = value.actsOnShot ? ViewerWords.copyScreenshot : ViewerWords.copyPicture
+    let save = value.actsOnShot ? ViewerWords.saveScreenshot : ViewerWords.savePicture
+    menu.addItem(item(copy, #selector(NSText.copy(_:)), key: "c", target: target))
+    menu.addItem(item(save, #selector(ViewerMenuActions.savePicture(_:)), key: "s", target: target))
+    let actualSize = item(
+      ViewerWords.actualSizeItem,
+      #selector(ViewerMenuActions.toggleActualSize(_:)),
+      key: "0",
+      target: target
+    )
+    actualSize.state = value.actualSize ? .on : .off
+    menu.addItem(actualSize)
+    menu.addItem(.separator())
+    menu.addItem(.sectionHeader(title: ViewerWords.updatesHeader))
+    for rate in ViewerPictureRate.allCases {
+      let choice = NSMenuItem(
+        title: title(rate),
+        action: #selector(ViewerMenuActions.chooseRate(_:)),
+        keyEquivalent: ""
       )
-      item.keyEquivalentModifierMask = [.command, .shift]
-      item.tag = choice.rawValue
-      item.state = choice == value.picture ? .on : .off
-      item.target = target
-      menu.addItem(item)
+      choice.tag = rate.menuTag
+      choice.state = rate == value.rate ? .on : .off
+      choice.target = target
+      menu.addItem(choice)
     }
-    menu.addItem(.separator())
-    menu.addItem(item(ViewerWords.copyPicture, #selector(NSText.copy(_:)), key: "c", target: target))
-    menu.addItem(item(ViewerWords.savePicture, #selector(ViewerMenuActions.savePicture(_:)), key: "s", target: target))
-    menu.addItem(.separator())
-    for helperItem in HelperMenuItems.make(target: target) {
-      menu.addItem(helperItem)
-    }
-    menu.addItem(.separator())
-    let note = NSMenuItem(title: value.note, action: nil, keyEquivalent: "")
-    note.isEnabled = false
-    menu.addItem(note)
     return menu
   }
 
-  /// A picture choice's title.
+  /// A rate's title.
   ///
-  /// - Parameter choice: The choice.
-  /// - Returns: "Live", "Every 5 seconds" or "Paused".
-  static func title(_ choice: ViewerPictureChoice) -> String {
-    switch choice {
+  /// - Parameter rate: The rate.
+  /// - Returns: "Live" or "Every 5 Seconds".
+  static func title(_ rate: ViewerPictureRate) -> String {
+    switch rate {
     case .live: ViewerWords.live
     case .everyFiveSeconds: ViewerWords.everyFiveSeconds
-    case .paused: ViewerWords.paused
     }
   }
 

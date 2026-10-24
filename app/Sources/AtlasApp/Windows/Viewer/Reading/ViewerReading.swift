@@ -14,11 +14,11 @@ struct ViewerReading {
   var frame: Frame?
   /// The latest picture, ready to draw; the panel's, until the first reading of the window's own.
   var picture: DesktopPicture?
-  /// The last picture drawn, kept when the picture is lost, so the stage keeps it behind its words, blurred, while the
-  /// window connects again (v3 V7, X4). Only drawn: input is never mapped through it.
+  /// The last picture drawn, kept when the picture is lost, so the stage keeps it behind its words, blurred,
+  /// while the window connects again. Only drawn: input is never mapped through it.
   var lastPicture: DesktopPicture?
-  /// Whether the window has waited for a picture longer than ``Motion/Duration/appearDelay``, after which the waiting
-  /// stage rings its mark (v3 R12); false again once a picture arrives.
+  /// Whether the window has waited for a picture longer than ``Motion/Duration/appearDelay``, after which the
+  /// waiting stage rings its mark; false again once a picture arrives.
   var waitedLong = false
   /// The latest picture's size in points, which input is mapped through.
   var pictureSize: CGSize?

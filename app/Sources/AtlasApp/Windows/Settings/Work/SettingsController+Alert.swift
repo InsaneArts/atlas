@@ -10,8 +10,10 @@ extension SettingsController {
     session.alert = alert
   }
 
-  /// The alert's way out, unless its command runs.
+  /// The alert's way out, unless its command runs. Once a Recover worked it is Done, which ends the hold, so the
+  /// alert closes now.
   func cancelAlert() {
+    if doneHold.isHolding { return doneHold.end() }
     guard !session.alertRunning else { return }
     session.alertRefusal = nil
     session.alert = nil

@@ -16,9 +16,9 @@ enum Typography {
     .system(size: style.pointSize, weight: weight, design: design)
   }
 
-  /// The system font from the scale with tabular digits, so numbers that change keep their width: Activity's times,
-  /// sizes, versions and Recent's times. v3 asks for SF Mono 12 (D1's "mono digits"); the system face's tabular
-  /// digits read as v3 means without a second face, and Activity's redesign compares both before choosing.
+  /// The system font from the scale with tabular digits, so numbers that change keep their width: Activity's
+  /// times, sizes, versions and Recent's times. The system face's tabular digits keep numeric columns aligned
+  /// without introducing a second typeface.
   ///
   /// - Parameters:
   ///   - style: The size.
@@ -29,7 +29,7 @@ enum Typography {
       .monospacedDigit()
   }
 
-  /// The font an SF Symbol takes in its role (v3 D13), at the weight of the text beside it.
+  /// The font an SF Symbol takes in its role, at the weight of the text beside it.
   ///
   /// - Parameters:
   ///   - scale: The symbol's role, such as ``SymbolScale/control``.

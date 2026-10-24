@@ -1,5 +1,6 @@
 import AtlasCommands
 import AtlasOnboarding
+import AtlasService
 import AtlasUI
 
 /// The reading loop: the facts read now and every ``OnboardingController/readEvery``, one reading at a time, beside the
@@ -48,6 +49,13 @@ extension OnboardingController {
         restarting: readingsUnknown <= Self.restartReadings
       )
       snapshot.facts = facts
+      for permission in Permission.allCases where permission.granted(to: facts.asker) {
+        snapshot.allowedBefore.insert(permission)
+      }
+      if facts.role == .helper, facts.asker.name != askerPictured {
+        askerPictured = facts.asker.name
+        snapshot.askerPicture = dependencies.accountPicture(facts.asker.name)
+      }
       if !snapshot.loaded {
         snapshot.opensAtLogin = facts.opensAtLogin(enabledNow: dependencies.loginItem.isEnabled())
         // A failed first reading's message goes with it.
@@ -56,10 +64,22 @@ extension OnboardingController {
       snapshot.loaded = true
       // A pick the choice no longer shows, or none yet, gives way to the default.
       if snapshot.shownPick == nil { snapshot.picked = facts.defaultPick.map(OnboardingAccountPick.init(name:)) }
+      timeFirstLogin()
       await advance()
     } else if !snapshot.loaded {
-      snapshot.problem = outcome.ok ? OnboardingWords.notUnderstood : Words.sentence(outcome.message)
+      snapshot.problem = Self.firstReadingProblem(outcome)
     }
+  }
+
+  /// Why the first reading failed, in words: a reply this window does not understand; Atlas's command line that
+  /// could not run at all, answering nothing, said as a plain cause and what to do; else the command's own reason.
+  ///
+  /// - Parameter outcome: The first reading's outcome.
+  /// - Returns: The problem.
+  static func firstReadingProblem(_ outcome: Outcome) -> String {
+    if outcome.ok { return OnboardingWords.notUnderstood }
+    if outcome.reply.isEmpty { return OnboardingWords.filesIncomplete }
+    return Words.sentence(outcome.message)
   }
 
   /// Starts what a step needs as soon as it is shown, moves the permission panel on once its permission is on, and

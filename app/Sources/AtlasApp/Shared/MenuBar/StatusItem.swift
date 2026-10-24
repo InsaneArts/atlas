@@ -3,14 +3,14 @@ import AtlasStatus
 import AtlasUI
 
 /// Atlas's item in the menu bar: it owns the system's status item and its button, which the panel's popover opens
-/// from (``PanelPopover``). One width in every state (v3 M1), so the items to its left never move; the button shows
+/// from (``PanelPopover``). One width in every state, so the items to its left never move; the button shows
 /// the orbit (``StatusGlyph``) and a ``StatusBadge`` layer over it.
 ///
-/// A state change moves (v3 M4, X14): the badge pops and crossfades, and the orbit's dim fades over
+/// A state change moves: the badge pops and crossfades, and the orbit's dim fades over
 /// ``Motion/Duration/dim`` as the button's own layer, which holds the template image, changes its opacity, so the
 /// menu bar still inks the template. Under Reduce Motion, and while a menu is open, a new state swaps in at once
 /// (``StatusMotion``); a menu opening stops whatever a state change set moving, so nothing moves in the frame its
-/// tracking starts (v3 R16). Once a change's animations end, the button draws again, so a screen that only
+/// tracking starts. Once a change's animations end, the button draws again, so a screen that only
 /// composites what the app commits, such as the off-console helper's, shows the final state.
 final class StatusItem {
   /// The item's measures.
@@ -32,8 +32,7 @@ final class StatusItem {
   private let tracking: () -> Bool
   /// The look shown now; nil before the first.
   private var look: StatusGlyph.Look?
-  /// How many menus have begun tracking and not yet ended, so a state change while one is open swaps in at once (v3
-  /// R16). It counts only while the run loop tracks, so a lost end cannot hold it open.
+  /// How many menus have begun tracking and not yet ended, so a state change while one is open swaps in at once. It counts only while the run loop tracks, so a lost end cannot hold it open.
   private var menusOpen = 0
   /// The watches that lay the badge out again when the menu bar's appearance or the display's scale changes.
   private var watches: [NSKeyValueObservation] = []

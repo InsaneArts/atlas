@@ -256,6 +256,7 @@ final class ViewerReadingLoop {
     reading.frameAt = uptime()
     reading.unavailable = nil
     reading.ready = ready
+    viewer?.control.pictureArrived()
   }
 
   /// No picture: say why, and give control back.
@@ -271,9 +272,10 @@ final class ViewerReadingLoop {
     awaitPicture()
   }
 
-  /// Rings the waiting stage's mark once the window has waited ``Motion/Duration/appearDelay`` for a picture, on the
-  /// window's clock, so a quick answer never flashes it (v3 R12). It starts as reading starts with no picture and as
-  /// the picture is lost; a picture's arrival, or reading stopping, ends the wait and puts the ring away.
+  /// Rings the waiting stage's mark once the window has waited ``Motion/Duration/appearDelay`` for a picture,
+  /// on the window's clock, so a quick answer never flashes it. It starts as reading starts with no picture
+  /// and as the picture is lost; a picture's arrival, or reading stopping, ends the wait and puts the ring
+  /// away.
   private func awaitPicture() {
     guard reading.picture == nil, waiting == nil, !reading.waitedLong else { return }
     // Unstructured, as the wait runs while readings go on; cancelled the moment a picture arrives.

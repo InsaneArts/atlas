@@ -54,7 +54,7 @@
       ]
     }
 
-    /// The Apps sample's apps, front to back (MacApps).
+    /// The Apps sample's apps, front to back.
     static let apps = [
       HelperApp(
         pid: 501,

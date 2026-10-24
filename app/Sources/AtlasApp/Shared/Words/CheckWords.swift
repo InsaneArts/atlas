@@ -62,8 +62,25 @@ enum CheckWords {
       return "Mouse and keyboard stopped in the helper. Recover starts them again."
     case "Accessibility allowed": return "Turn on Atlas in the helper's Accessibility settings."
     case "Input service ready" where step.contains("Accessibility"): return "Needs Accessibility first."
-    case "Input service ready": return "Mouse and keyboard aren't ready. Recover starts them again."
+    case "Input service ready": return "Not ready. Recover… starts them again."
     default: return step.isEmpty || step.contains("atlas ") ? "Not ready." : Words.sentence(step)
+    }
+  }
+
+  /// The short line a failed check shows where Recover… stands beside it, since the button says what to do: nil for a
+  /// check Recover doesn't fix.
+  ///
+  /// - Parameter check: The failed check.
+  /// - Returns: "Stopped in the helper." for input that stopped, "Not ready in the helper." for input that isn't
+  ///   ready, else nil.
+  static func recoverLine(_ check: ViewerStatus.Check) -> String? {
+    let step = check.nextStep ?? ""
+    let restartsInput = step.contains("start-input")
+    switch check.name {
+    case "Accessibility allowed" where restartsInput, "Input service ready" where restartsInput:
+      return "Stopped in the helper."
+    case "Input service ready" where !step.contains("Accessibility"): return "Not ready in the helper."
+    default: return nil
     }
   }
 

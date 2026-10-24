@@ -1,8 +1,8 @@
 #if DEBUG
   import SwiftUI
 
-  /// The chips on the picture, as v3's Components block draws them (V5, V6): control with its keycaps, paused, and an
-  /// action with its time; and the keycaps alone.
+  /// The chips on the picture: control with its keycaps, paused, and an action with its time; and the keycaps
+  /// alone.
   struct GlassChipSamples: View {
     /// Which samples to show.
     enum Kind: Sendable {

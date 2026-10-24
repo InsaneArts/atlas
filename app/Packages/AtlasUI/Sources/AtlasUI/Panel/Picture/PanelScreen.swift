@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The screen in the panel's picture frame, resting on the ground (v3 P3): letterboxed on black, greyed and darkened
+/// The screen in the panel's picture frame, resting on the ground: letterboxed on black, greyed and darkened
 /// while dimmed, with a fine light inner edge and a soft shadow; the empty stage until the first picture arrives.
 struct PanelScreen: View {
   /// The screen; nil shows the empty stage.

@@ -33,7 +33,9 @@
         next.alert = nil
       case .askSwitch:
         next.alert = settingsSwitch.alert
-      case .checkAgain, .gettingStarted, .paneHeight:
+      case .closeLeftovers, .closeHelper:
+        next.helper.closeLogin = nil
+      case .checkAgain, .gettingStarted, .paneHeight, .showAppInFinder, .showAgentFile:
         break
       }
       return next

@@ -14,4 +14,6 @@ enum Opacity {
   static let muted = 0.5
   /// 0.55: a tinted fill's edge.
   static let edgeTint = 0.55
+  /// 0.6: a step whose turn has not come yet, such as the second permission while the first is allowed.
+  static let notYet = 0.6
 }

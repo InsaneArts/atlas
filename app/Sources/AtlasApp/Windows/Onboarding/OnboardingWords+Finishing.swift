@@ -1,4 +1,5 @@
-/// The finishing screen's words: Atlas checking the helper works, and what failed when it does not.
+/// The finishing screen's words: Atlas checking the helper works, and what failed when it does not. The live check's
+/// own word is ``StatusWord``'s.
 extension OnboardingWords {
   /// The headline while the check runs or failed.
   static let checking = "Checking everything"
@@ -11,13 +12,7 @@ extension OnboardingWords {
   /// The headline once the check failed.
   static let almostThere = "Almost there."
   /// Its tail.
-  static let oneCheckFailed = "One check didn't pass."
-  /// The live check's note while it runs.
-  static let checkingNote = "checking…"
-  /// Its note once passed.
-  static let passed = "passed"
-  /// Its note once failed.
-  static let failed = "failed"
+  static let oneCheckFailed = "One check didn’t pass."
 
   /// The first check, naming the helper.
   ///

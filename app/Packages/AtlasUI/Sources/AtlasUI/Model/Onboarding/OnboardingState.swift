@@ -6,8 +6,6 @@ public struct OnboardingState: Equatable, Sendable {
   public var footer: OnboardingFooterState
   /// The line under a screen's controls.
   public var note: WorkNote
-  /// Which way the window moved to this screen, so it slides in the way the person goes.
-  public var direction: PageDirection
 
   /// Creates the setup window's state.
   ///
@@ -15,16 +13,9 @@ public struct OnboardingState: Equatable, Sendable {
   ///   - content: What fills the window: the first reading, the permission panel beside System Settings, or a screen.
   ///   - footer: The bar under it: Back, the track and the screen's main action.
   ///   - note: The line under a screen's controls.
-  ///   - direction: Which way the window moved to this screen; forward unless it went back.
-  public init(
-    content: OnboardingContent,
-    footer: OnboardingFooterState,
-    note: WorkNote,
-    direction: PageDirection = .forward
-  ) {
+  public init(content: OnboardingContent, footer: OnboardingFooterState, note: WorkNote) {
     self.content = content
     self.footer = footer
     self.note = note
-    self.direction = direction
   }
 }

@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// About's one update button (v3 G9), whatever the check's state: white Check for Updates, a spinner in it while it
-/// checks, blue Install Update… once a newer version is found, and a spinner in that while it installs. It is one
-/// button throughout, its label morphing from one word to the next.
+/// About's one update button, whatever the check's state: glass Check for Updates, then blue Install Update… once a
+/// newer version is found. It holds no spinner: while its check or install runs it waits, plain, and the line under
+/// it says what runs. It lays out at its widest word, so it never changes width.
 struct AboutUpdateButton: View {
   /// Where the check stands.
   let update: SettingsUpdateButton
@@ -14,10 +14,18 @@ struct AboutUpdateButton: View {
     Button {
       if let event = update.event { send(event) }
     } label: {
-      WorkingLabel(title: update.title, isWorking: update.isWorking, arc: update.arc)
+      ZStack {
+        // Untracked, the widest any look sets them, so the glass and the blue button share one width.
+        ForEach(SettingsUpdateButton.titles, id: \.self) { title in
+          Text(title)
+            .tracking(LetterSpacing.natural)
+            .hidden()
+        }
+        Text(update.title)
+          .swapsText(on: update.title)
+      }
     }
-    // A working button cannot be pressed yet stays whole, so its spinner reads as work, not as a button turned off.
-    .buttonStyle(.capsule(update.look, size: .mini, isWorking: update.isWorking))
+    .buttonStyle(.capsule(update.look, size: .mini))
     .disabled(update.isWorking)
   }
 }

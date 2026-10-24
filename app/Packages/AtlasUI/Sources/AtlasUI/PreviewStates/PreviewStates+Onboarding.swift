@@ -32,6 +32,10 @@
         PreviewState(name: "Helper permission panel", value: onboardingPermissionPanel),
         PreviewState(name: "Helper done", value: onboardingHelperDone),
         PreviewState(name: "Blocked", value: onboardingBlocked),
+        PreviewState(name: "Close", value: onboardingClose),
+        PreviewState(name: "Close, closing", value: onboardingCloseClosing),
+        PreviewState(name: "Close, cancelled", value: onboardingCloseCancelled),
+        PreviewState(name: "Close, closed", value: onboardingCloseClosed),
       ]
     }
   }

@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// The label a ``CapsuleButtonStyle`` draws: on its capsule or in its circle, filled for the pointer and the press,
-/// shrinking while held unless Reduce Motion is on.
+/// The label a ``CapsuleButtonStyle`` draws: on its capsule or in its circle, filled for the pointer and the press, at
+/// one size whatever its state, as AppKit's buttons darken rather than shrink. A capsule focused from the keyboard
+/// draws a ring in its own shape.
 struct CapsuleButtonBody: View {
   /// The button's label and pressed state.
   let configuration: ButtonStyleConfiguration
@@ -9,6 +10,7 @@ struct CapsuleButtonBody: View {
   let style: CapsuleButtonStyle
   @State private var isHovered = false
   @Environment(\.isEnabled) private var isEnabled
+  @Environment(\.isFocused) private var isFocused
 
   /// The capsule or the circle, answering the pointer.
   var body: some View {
@@ -49,7 +51,8 @@ struct CapsuleButtonBody: View {
           .strokeBorder(style.edge, lineWidth: Stroke.hairline)
       )
       .contentShape(Capsule())
-      .modifier(PressScale(isPressed: configuration.isPressed, scale: Layout.pressedScale))
+      .overlay { focusRing(RoundedRectangle(cornerRadius: style.height / 2 + Layout.focusGap, style: .circular)) }
+      .focusEffectDisabled()
       .opacity(CapsuleButtonStyle.opacity(isEnabled: isEnabled, isWorking: style.isWorking))
       .animation(CapsuleButtonStyle.pressAnimation(isPressed: configuration.isPressed), value: configuration.isPressed)
   }
@@ -75,9 +78,23 @@ struct CapsuleButtonBody: View {
           .strokeBorder(Color.strokeStrong, lineWidth: Stroke.hairline)
       )
       .contentShape(Circle())
-      .modifier(PressScale(isPressed: configuration.isPressed, scale: Layout.circlePressedScale))
+      .overlay { focusRing(Circle()) }
+      .focusEffectDisabled()
       .opacity(CapsuleButtonStyle.opacity(isEnabled: isEnabled, isWorking: style.isWorking))
       .animation(CapsuleButtonStyle.pressAnimation(isPressed: configuration.isPressed), value: configuration.isPressed)
+  }
+
+  /// The keyboard focus ring: the focus colour just outside the outline, in its shape, while the button has focus.
+  ///
+  /// - Parameter shape: The outline, grown to sit outside the button.
+  /// - Returns: The ring, or nothing.
+  @ViewBuilder private func focusRing<Ring: InsettableShape>(_ shape: Ring) -> some View {
+    if isFocused {
+      shape
+        .strokeBorder(Color.strokeFocus, lineWidth: Stroke.regular)
+        .padding(-Layout.focusGap)
+        .allowsHitTesting(false)
+    }
   }
 
   /// The fill for the pointer and the press now.
@@ -92,12 +109,10 @@ struct CapsuleButtonBody: View {
   }
 }
 
-/// The press's own measures.
+/// The body's own measures.
 private enum Layout {
-  /// 0.97: how far a capsule shrinks while pressed.
-  static let pressedScale: CGFloat = 0.97
-  /// 0.94: how far a circle shrinks while pressed; further than a capsule, as it is smaller.
-  static let circlePressedScale: CGFloat = 0.94
+  /// 2: how far outside the outline the focus ring sits, so it reads as a ring rather than an edge.
+  static let focusGap = Spacing.half
   /// 0.38: a circle's symbol against its side, so it sits with room around it at either size.
   static let symbolScale: CGFloat = 0.38
 }

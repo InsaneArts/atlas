@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// A check's 14-point mark in an inspector (v3 `.chk .mk`): a green check when it passes, an orange round "!" when it
-/// fails, an empty ring before it is checked.
+/// A check's 14-point mark in an inspector: a green check when it passes, an orange round "!" when it fails,
+/// an empty ring before it is checked.
 struct FactMark: View {
   /// How the check stands.
   let state: ReadinessState
@@ -22,7 +22,7 @@ struct FactMark: View {
   }
 }
 
-/// The mark's own measure (v3 `.chk .mk`).
+/// The mark's own measure.
 private enum Layout {
   /// 14: the mark's side.
   static let side = IconSize.xsPlus

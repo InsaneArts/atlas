@@ -28,8 +28,13 @@ struct PanelAccessibilityTests {
       )
     )
     // A status bar of its own, which shows in no menu bar.
-    let panel = PanelPopover(controller: controller, item: StatusItem(bar: NSStatusBar()) { false }) {}
-    // Its heading is now the status, not Atlas's name (v3 P1), so the popover carries the name itself.
+    let panel = PanelPopover(
+      controller: controller,
+      item: StatusItem(bar: NSStatusBar()) { false },
+      openSettings: {},
+      gettingStarted: {}
+    )
+    // Its heading is the status, not Atlas's name, so the popover carries the name itself.
     #expect(controller.state.status.label != "Atlas")
     let content = try #require(panel.popover.contentViewController?.view)
     #expect(content.isAccessibilityElement())

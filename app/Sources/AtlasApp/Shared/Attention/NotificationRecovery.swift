@@ -1,6 +1,6 @@
 import AtlasService
 
-/// Recover from Atlas needs you (v3 A8). A notification can be old, so it first reads the status afresh and goes
+/// Recover from Atlas needs you. A notification can be old, so it first reads the status afresh and goes
 /// ahead only while Needs you still holds (an unknown outcome, or a blocked helper Recover fixes) and this app holds
 /// no control; otherwise it opens Atlas, where the alert asks. Going ahead is the alert's own recovery,
 /// ``HelperActions/recover()``, so there is no second path: it ends this app's control and waits for every

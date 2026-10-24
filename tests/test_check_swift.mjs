@@ -189,13 +189,21 @@ test('a report-only rule is counted and never fails', (t) => {
   assert.match(stdout, /check-swift-tests: 1 reported/);
 });
 
-test('an allow list entry without its phase or its reason is refused', (t) => {
+test('an allow list entry without its expiry condition or its reason is refused', (t) => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-check-swift-'));
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
   const list = path.join(base, 'allow.json');
   fs.writeFileSync(
     list,
-    JSON.stringify({ waivers: [{ path: '**', checkers: ['tokens'], until: 'Phase 9' }] }),
+    JSON.stringify({
+      waivers: [
+        {
+          path: '**',
+          checkers: ['tokens'],
+          until: 'the undocumented declarations gain documentation',
+        },
+      ],
+    }),
   );
   assert.throws(() => allowList(list), /has no reason/);
   fs.writeFileSync(list, JSON.stringify({ reportOnly: [{ checker: 'docs', reason: 'why' }] }));

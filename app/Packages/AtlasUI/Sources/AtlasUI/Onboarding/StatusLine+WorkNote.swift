@@ -1,5 +1,5 @@
 extension StatusLine {
-  /// A setup screen's work note as its status line (v3 D4): what runs now, with a spinner, or what went wrong, in
+  /// A setup screen's work note as its status line: what runs now, with a spinner, or what went wrong, in
   /// orange; nothing when the note is empty.
   ///
   /// - Parameter note: The window's work note.

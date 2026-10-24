@@ -5,8 +5,13 @@ extension OnboardingWords {
   static let waitingForPermissions = "Waiting for the two permissions…"
   /// The helper is ready, on screen.
   static let waitingForSwitchBack = "Waiting for you to switch back…"
-  /// The helper is logged in but not on screen, and Atlas not set up there yet.
-  static let lockThenAllow = "Next: Lock and Switch, then allow Atlas there."
+  /// The switch to the helper did not lock the screen: a plain cause and the way to do it by hand.
+  ///
+  /// - Parameter helper: The helper as people know it.
+  /// - Returns: "The screen didn’t lock. Press Control-Command-Q, then choose the Atlas account."
+  static func lockFailed(_ helper: String) -> String {
+    "The screen didn’t lock. Press Control-Command-Q, then choose \(named(helper))."
+  }
 
   /// The switch screen's headline.
   ///
@@ -16,20 +21,12 @@ extension OnboardingWords {
     "Now log in to \(named(helper))."
   }
 
-  /// Where to choose the helper.
+  /// The first step: log in to the helper.
   ///
   /// - Parameter helper: The helper as people know it.
-  /// - Returns: "Choose the Atlas account on the lock screen"
-  static func chooseOnLockScreen(_ helper: String) -> String {
-    "Choose \(named(helper)) on the lock screen"
-  }
-
-  /// The helper has not logged in yet.
-  ///
-  /// - Parameter helper: The helper as people know it.
-  /// - Returns: "Next: Lock and Switch, then log in to the Atlas account."
-  static func lockThenLogIn(to helper: String) -> String {
-    "Next: Lock and Switch, then log in to \(named(helper))."
+  /// - Returns: "Log in to the Atlas account"
+  static func logInStep(to helper: String) -> String {
+    "Log in to \(named(helper))"
   }
 
   /// The helper is on screen, and Atlas not open there yet.

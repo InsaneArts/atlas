@@ -10,8 +10,9 @@ use fs2::FileExt;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use std::{
+    cell::RefCell,
     fs::{self, File, OpenOptions},
-    io::Write,
+    io::{Read, Seek, SeekFrom, Write},
     os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::Arc,
@@ -195,10 +196,70 @@ impl Drop for Pending {
         // replacement can only appear once this one is gone, so a path that
         // still names the locked file stays ours until it is removed here.
         // The lock goes with the descriptor.
-        if self.names_own_file() {
+        if self.names_own_file() && !executor_running(&self.lock) {
             let _ = fs::remove_file(&self.live);
         }
     }
+}
+
+thread_local! {
+    /// Claims for the synchronous privileged dispatch on this thread.
+    static EXECUTOR_CLAIMS: RefCell<Vec<File>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Bind durable claims to every executor dispatched in this scope. Before
+/// acknowledging an executor, its PID is synced into each claim file. If the
+/// caller dies, recovery still refuses while that executor can act.
+pub(crate) struct ExecutorClaims(Vec<File>);
+
+impl ExecutorClaims {
+    pub(crate) fn new(claims: &[Pending]) -> Result<Self> {
+        let files = claims
+            .iter()
+            .map(|claim| claim.lock.try_clone())
+            .collect::<std::io::Result<Vec<_>>>()?;
+        Ok(Self(EXECUTOR_CLAIMS.with(|bound| bound.replace(files))))
+    }
+}
+
+impl Drop for ExecutorClaims {
+    fn drop(&mut self) {
+        EXECUTOR_CLAIMS.with(|bound| bound.replace(std::mem::take(&mut self.0)));
+    }
+}
+
+/// Persist the executor before allowing it past its initial handshake.
+pub(crate) fn record_executor(pid: nix::unistd::Pid) -> Result<()> {
+    EXECUTOR_CLAIMS.with(|claims| {
+        for mut file in claims.borrow().iter() {
+            file.set_len(0)?;
+            file.seek(SeekFrom::Start(0))?;
+            writeln!(file, "{}", pid.as_raw())?;
+            file.sync_all()?;
+        }
+        Ok(())
+    })
+}
+
+/// A recycled PID can conservatively delay recovery; it never authorizes
+/// clearing active work. Only a definite missing process counts as ended,
+/// including when the caller cannot signal a root executor.
+fn executor_running(mut file: &File) -> bool {
+    let mut text = String::new();
+    if file
+        .seek(SeekFrom::Start(0))
+        .and_then(|_| file.read_to_string(&mut text))
+        .is_err()
+    {
+        return true;
+    }
+    if text.is_empty() {
+        return false;
+    }
+    let Some(pid) = text.trim().parse::<i32>().ok().filter(|pid| *pid > 0) else {
+        return true;
+    };
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None) != Err(nix::errno::Errno::ESRCH)
 }
 
 /// Exclusive control of one helper, held until dropped.
@@ -259,12 +320,24 @@ impl Controller {
     /// Whether this process may keep its locks and claims here at all. An
     /// agent's sandbox may forbid writing, and the error then says so.
     pub fn writable(&self) -> Result<()> {
+        if fs::symlink_metadata(&self.directory).is_ok() {
+            real_directory(&self.directory)?;
+        }
         probe_write(&self.directory)
     }
 
-    pub fn acquire(&self, recovery: bool) -> Result<Ownership> {
+    /// The state folder, made if missing, and refused when it is a link:
+    /// locks and records kept through a link would be another folder's once
+    /// the link is changed or removed, and a second controller could take a
+    /// lock of its own.
+    fn make_directory(&self) -> Result<()> {
         fs::create_dir_all(&self.directory)
             .map_err(|error| Error::writing(&self.directory, error))?;
+        real_directory(&self.directory)
+    }
+
+    pub fn acquire(&self, recovery: bool) -> Result<Ownership> {
+        self.make_directory()?;
 
         let lock = open_lock(&self.lock)?;
         if FileExt::try_lock_exclusive(&lock).is_err() {
@@ -281,6 +354,17 @@ impl Controller {
         // Nobody held it, so a note left by a viewer that ended is stale.
         let _ = fs::remove_file(&self.person);
 
+        if recovery
+            && self
+                .pending()?
+                .iter()
+                .any(|generation| self.in_progress(generation))
+        {
+            return Err(Error::new(
+                "busy",
+                "An Atlas executor is still carrying out an action. Wait for it to end before recovering.",
+            ));
+        }
         if !recovery {
             self.require_known()?;
         }
@@ -298,9 +382,11 @@ impl Controller {
 
     /// Note that the person stopped agents (`on`), or let them go on.
     pub fn note_stop(&self, on: bool) -> Result<()> {
+        if fs::symlink_metadata(&self.directory).is_ok() {
+            real_directory(&self.directory)?;
+        }
         if on {
-            fs::create_dir_all(&self.directory)
-                .map_err(|error| Error::writing(&self.directory, error))?;
+            self.make_directory()?;
             fs::write(&self.stopped, b"").map_err(|error| Error::writing(&self.directory, error))
         } else {
             match fs::remove_file(&self.stopped) {
@@ -333,8 +419,7 @@ impl Controller {
     }
 
     fn lock_marker(&self) -> Result<File> {
-        fs::create_dir_all(&self.directory)
-            .map_err(|error| Error::writing(&self.directory, error))?;
+        self.make_directory()?;
         let file = open_lock(&self.marker_lock)?;
         FileExt::lock_exclusive(&file)?;
 
@@ -379,7 +464,7 @@ impl Controller {
             .read(true)
             .custom_flags(libc::O_NOFOLLOW)
             .open(live)
-            .is_ok_and(|file| FileExt::try_lock_shared(&file).is_err())
+            .is_ok_and(|file| FileExt::try_lock_shared(&file).is_err() || executor_running(&file))
     }
 
     /// Record a pending mutation this process is carrying out.
@@ -396,8 +481,7 @@ impl Controller {
             .live(generation)
             .ok_or_else(|| Error::new("state", "Pending generations are hexadecimal tokens"))?;
 
-        fs::create_dir_all(&self.directory)
-            .map_err(|error| Error::writing(&self.directory, error))?;
+        self.make_directory()?;
         let file = open_lock(&live)?;
         FileExt::try_lock_exclusive(&file)
             .map_err(|_| Error::new("busy", "That generation is already being carried out"))?;
@@ -448,10 +532,16 @@ impl Controller {
         }
     }
 
-    /// Verified recovery settles every pending mutation and removes every
-    /// claim file no live mutation holds, listed or not.
+    /// Verified recovery settles every pending mutation no live claim holds
+    /// and removes every claim file no live mutation holds, listed or not. A
+    /// mutation still being carried out (an approved root run among them)
+    /// stays pending: only its own end settles it.
     pub fn clear(&self) -> Result<()> {
         let _lock = self.lock_marker()?;
+        let running: Vec<String> = pending(&self.marker)?
+            .into_iter()
+            .filter(|generation| self.in_progress(generation))
+            .collect();
         let prefix = format!("{}.", self.name);
 
         for entry in fs::read_dir(&self.directory)?.flatten() {
@@ -467,8 +557,33 @@ impl Controller {
             }
         }
 
-        remove_marker(&self.marker)
+        if running.is_empty() {
+            remove_marker(&self.marker)
+        } else {
+            write_private(&self.marker, &serde_json::to_vec(&running)?)
+        }
     }
+}
+
+/// Refuse `directory` unless it is a real folder of this account, not a
+/// link to one.
+fn real_directory(directory: &Path) -> Result<()> {
+    let metadata =
+        fs::symlink_metadata(directory).map_err(|error| Error::writing(directory, error))?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_dir()
+        || metadata.uid() != nix::unistd::getuid().as_raw()
+    {
+        return Err(Error::new(
+            "state",
+            format!(
+                "{} is a link or not a folder of this account. Remove it, then try again.",
+                directory.display()
+            ),
+        ));
+    }
+
+    Ok(())
 }
 
 /// Pending generations in a marker; an unreadable one stays pending as unknown.
@@ -684,6 +799,53 @@ mod tests {
 
         let unwritable = Controller::at(505, Path::new("/dev/null/Atlas"));
         assert_eq!(unwritable.writable().unwrap_err().code, "io");
+    }
+
+    #[test]
+    fn a_state_folder_that_is_a_link_is_refused_before_any_lock_or_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("elsewhere");
+        fs::create_dir(&target).unwrap();
+        let link = dir.path().join("Atlas");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let controller = Controller::at(505, &link);
+
+        assert_eq!(controller.acquire(true).unwrap_err().code, "state");
+        assert_eq!(controller.quarantine().unwrap_err().code, "state");
+        assert_eq!(controller.pending().unwrap_err().code, "state");
+        assert_eq!(controller.writable().unwrap_err().code, "state");
+        assert_eq!(controller.note_stop(false).unwrap_err().code, "state");
+        assert_eq!(controller.note_stop(true).unwrap_err().code, "state");
+        assert_eq!(
+            fs::read_dir(&target).unwrap().count(),
+            0,
+            "nothing kept through the link"
+        );
+    }
+
+    #[test]
+    fn recovery_never_settles_a_mutation_still_being_carried_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, &dir.path().join("Atlas"));
+        let lost = controller.quarantine().unwrap();
+        drop(lost);
+        let running = controller.quarantine().unwrap();
+
+        assert_eq!(controller.acquire(true).unwrap_err().code, "busy");
+
+        // Recovery from another process, while the run goes on.
+        Controller::at(505, &dir.path().join("Atlas"))
+            .clear()
+            .unwrap();
+        assert_eq!(
+            controller.pending().unwrap(),
+            [running.generation().to_owned()]
+        );
+        assert!(controller.require_known().is_err());
+
+        controller.clear_if(&running).unwrap();
+        drop(running);
+        assert!(controller.pending().unwrap().is_empty());
     }
 
     /// While the person holds control through a viewer, an agent finding

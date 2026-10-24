@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// One of Recent's rows (v3 P5): what was done and, on the right, how long ago in digits that count rather than jump
-/// (v3 R11). No mark leads it unless it carries state: a warning sign for what did not work, and a blue dot on the live
-/// row that cools away after a second. Under Reduce Motion the dot only fades as it cools: its place stays while the
+/// One of Recent's rows: what was done and, on the right, how long ago, whose digits count rather than jump while the
+/// unit stays, and which swaps by opacity when the words change, as from "now" to "1 s" or from seconds to minutes. No
+/// mark leads it unless it carries state: a warning sign for what did not work, and a blue dot on the live row that
+/// cools away after a second. Under Reduce Motion the dot only fades as it cools: its place stays while the
 /// row is live, so the words never move. VoiceOver reads it as one.
 struct PanelRecentRow: View {
   /// The action.
@@ -26,15 +27,17 @@ struct PanelRecentRow: View {
       Text(entry.line)
         .truncationMode(.tail)
         .frame(maxWidth: .infinity, alignment: .leading)
-      Text(entry.when)
-        .font(Typography.digits(.callout))
-        .foregroundStyle(Color.textTertiary)
-        .contentTransition(Motion.contentTransition(.numericText(), reduceMotion: reduceMotion))
-        .animation(
-          Motion.animation(Motion.state, reduceMotion: reduceMotion, reduced: Motion.reduced),
-          value: entry.when
-        )
-        .padding(.leading, Spacing.s)
+      ZStack(alignment: .trailing) {
+        Text(entry.when)
+          .font(Typography.digits(.callout))
+          .foregroundStyle(Color.textTertiary)
+          .contentTransition(Motion.contentTransition(.numericText(), reduceMotion: reduceMotion))
+          // A new unit, or words in place of digits, is a new text, which crossfades instead of rolling.
+          .id(Self.unit(of: entry.when))
+          .transition(.opacity)
+      }
+      .animation(Motion.textSwap, value: entry.when)
+      .padding(.leading, Spacing.s)
     }
     .font(Typography.font(.callout))
     .lineLimit(1)
@@ -66,6 +69,17 @@ struct PanelRecentRow: View {
   nonisolated static func holdsDot(isLive: Bool, isCooled: Bool, reduceMotion: Bool) -> Bool {
     if reduceMotion { return isLive }
     return isLive && !isCooled
+  }
+
+  /// What a time's digits count in: its unit when it is a number and a unit, such as "s" for "9 s"; else the words
+  /// themselves, such as "now", so a change between them, or between units, is a new text.
+  ///
+  /// - Parameter time: How long ago, such as "9 s" or "now".
+  /// - Returns: The unit, or the whole words.
+  nonisolated static func unit(of time: String) -> String {
+    let parts = time.split(separator: " ", maxSplits: 1)
+    guard parts.count == 2, parts[0].allSatisfy(\.isNumber) else { return time }
+    return String(parts[1])
   }
 
   /// Cools the live row's dot away after ``PanelLayout/liveHold``, through the animation's own delay, never a sleep.

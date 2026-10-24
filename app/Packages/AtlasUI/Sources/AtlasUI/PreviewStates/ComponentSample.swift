@@ -25,11 +25,11 @@
     case groupLabel = "group-label"
     /// The popup button.
     case popupButton = "popup-button"
-    /// The app icon at every tile v3 names (B1).
+    /// The app icon at every supported tile size.
     case appIconTiles = "app-icon-tiles"
-    /// The account picture in its circle at each size (B1).
+    /// The account picture in its circle at each size.
     case accountPictureSizes = "account-picture-sizes"
-    /// Choose's accounts in a grouped list, the new one picked (D6, D7).
+    /// Choose's accounts in a grouped list, the new one picked.
     case listRowChoices = "list-row-choices"
     /// A list row with each lead.
     case listRowLeads = "list-row-leads"
@@ -37,31 +37,31 @@
     case listRowTrailing = "list-row-trailing"
     /// A list row at each height, in its group.
     case listRowSizes = "list-row-sizes"
-    /// A grouped list scrolling past three and a half rows (D10).
+    /// A grouped list scrolling past three and a half rows.
     case groupedListScrolling = "grouped-list-scrolling"
-    /// The status line, working, a problem and done (D4).
+    /// The status line, working, a problem and done.
     case statusLineKinds = "status-line-kinds"
-    /// The progress track at its first, a middle and its last step (D8).
+    /// The progress track at its first, a middle and its last step.
     case progressTrackSteps = "progress-track-steps"
-    /// The heroes, success and problem (D5).
+    /// The heroes, success and problem.
     case heroDiscKinds = "hero-disc-kinds"
-    /// The chips on the picture (V5, V6).
+    /// The chips on the picture.
     case glassChipKinds = "glass-chip-kinds"
-    /// The round glass buttons, by the capsule style (U-8).
+    /// The round glass buttons, by the capsule style.
     case capsuleButtonCircles = "capsule-button-circles"
-    /// The viewer's actions, Keys and Stop in their slots (D11).
+    /// The viewer's actions, Keys and Stop in their slots.
     case actionSlotActions = "action-slot-actions"
-    /// The symbol tile at each size (U-7).
+    /// The symbol tile at each size.
     case symbolTileSizes = "symbol-tile-sizes"
-    /// Every symbol Atlas draws (D13).
+    /// Every symbol Atlas draws.
     case symbolNames = "symbol-names"
-    /// The tabs in a track by word and by symbol, and as symbols over words (U-10, V1, V15, G1).
+    /// The tabs in a track by word and by symbol, and as symbols over words.
     case tabs
-    /// An inspector's facts and checks (V3).
+    /// An inspector's facts and checks.
     case facts
-    /// Settings' sections: a name, rows of each kind, small print and the status lines under a group (G3, G5–G8).
+    /// Settings' sections: a name, rows of each kind, small print and the status lines under a group.
     case groupedSection = "grouped-section"
-    /// The status pill in each tone (G4).
+    /// The status pill in each tone.
     case statusPill = "status-pill"
   }
 #endif

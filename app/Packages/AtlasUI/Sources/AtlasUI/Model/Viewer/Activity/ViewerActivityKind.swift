@@ -1,4 +1,4 @@
-/// What kind of thing an Activity line did, which its tile's symbol shows (v3 V8): the kind is information, so each
+/// What kind of thing an Activity line did, which its tile's symbol shows: the kind is information, so each
 /// has its own symbol; a problem and the person's own lines take theirs whatever they did.
 public enum ViewerActivityKind: Equatable, Sendable, CaseIterable {
   /// A click, a drag or the pointer moved.

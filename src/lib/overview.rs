@@ -49,10 +49,36 @@ pub async fn report(client: &Client, until: Instant) -> Value {
         None
     };
 
+    let silent = crate::session::silent(&reply);
     let mut status = crate::capability::doctor(reply, uid);
     if let Some(absence) = &absence {
         absence.explain(&mut status);
     }
+
+    // Logins Atlas can close: deleted accounts' logins, and the helper's own
+    // when its desktop is up but Atlas there stays silent. Unknown is none.
+    let looking = tokio::task::spawn_blocking(move || {
+        let leftovers = crate::session::sessions(Some(uid))
+            .map(|sessions| {
+                sessions
+                    .leftover_uids(crate::session::Kind::Orphan)
+                    .into_iter()
+                    .chain(sessions.leftover_uids(crate::session::Kind::HelperLeftover))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        (
+            leftovers,
+            silent && crate::session::stale(uid) == Some(true),
+        )
+    });
+    let (leftovers, stale) = tokio::time::timeout_at(until, looking)
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_default();
+    status["leftoverLogins"] = json!(leftovers);
+    status["helperStale"] = json!(stale);
 
     // A Stop kept on the person's side counts as one the helper holds.
     if client.controller.stop_noted() && status["session"]["inputService"].is_object() {

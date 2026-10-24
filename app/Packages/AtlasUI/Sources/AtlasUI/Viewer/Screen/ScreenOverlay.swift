@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// What lies over the screen: the chip and the notice at the top, which take no clicks, and the latest actions piled
-/// in the bottom corner, which fan out under the pointer (v3 V6). One chip replaces another in the same place with a
-/// blur, as the typing chip takes control's (v3 V13); a notice fades in and out. Under Reduce Motion both fade.
+/// in the bottom corner, which fan out under the pointer. One chip replaces another in the same place by a fade
+/// of 0.2 seconds, as the typing chip takes control's; a notice fades in and out.
 struct ScreenOverlay: View {
   /// What the screen shows.
   let state: ViewerScreenState
@@ -28,13 +28,10 @@ struct ScreenOverlay: View {
         if let chip = state.chip {
           ScreenChip(chip: chip)
             .id(Self.slot(chip))
-            .transition(Motion.transition(AnyTransition(.blurReplace(.downUp)), reduceMotion: reduceMotion))
+            .transition(.opacity)
         }
       }
-      .animation(
-        Motion.animation(Motion.arrive, reduceMotion: reduceMotion, reduced: Motion.reduced),
-        value: state.chip.map(Self.slot)
-      )
+      .animation(Motion.fade, value: state.chip.map(Self.slot))
       if let notice = state.notice {
         FloatingChip(lines: ViewerLayout.noticeLines) {
           Text(notice)

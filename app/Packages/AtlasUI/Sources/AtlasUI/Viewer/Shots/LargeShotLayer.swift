@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// A screenshot large over the whole window, top row included (v3 V10, `.vlarge`): a deep shade that takes every
-/// click, closing it, and fades over 0.22 seconds, the picture zoomed from its tile to the centre between Previous
+/// A screenshot large over the whole window, top row included: a deep shade that takes every click, closing it, and
+/// fades over 0.2 seconds with nothing blurred under it, the picture zoomed from its tile to the centre between Previous
 /// and Next, and one glass bar at the window's foot with its time and size, Copy, Show in Finder and Close. Closing
 /// zooms the picture back to its tile. Under Reduce Motion the picture fades in and out in place.
 struct LargeShotLayer: View {
@@ -37,7 +37,7 @@ struct LargeShotLayer: View {
           .transition(.opacity)
       }
     }
-    .animation(ViewerLayout.shotFading(reduceMotion: reduceMotion), value: shot == nil)
+    .animation(ViewerLayout.shotFade, value: shot == nil)
   }
 
   /// The picture at its own shape in the centre, zooming from and back to its tile.
@@ -94,7 +94,7 @@ struct LargeShotLayer: View {
           .transition(.opacity)
       }
     }
-    .animation(ViewerLayout.shotFading(reduceMotion: reduceMotion), value: shot == nil)
+    .animation(ViewerLayout.shotFade, value: shot == nil)
   }
 
   /// A round glass button stepping to the screenshot before or after.

@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// One shake from side to side each time `trigger` changes (v3 A4, V12, X12): left 5, right 5, left 3, right 3 and home
-/// over ``Motion/Duration/shake``, for a command refused, such as an alert's Recover or the viewer's Take Control. Under
-/// Reduce Motion it never moves; the words that come with the refusal say it. The trigger is the refusals alone, so
-/// turning Reduce Motion on or off never sets a shake off by itself.
+/// One shake from side to side each time `trigger` changes: left 5, right 5, left 3, right 3 and home over
+/// ``Motion/Duration/shake``, for a command refused, such as an alert's Recover or the viewer's Take Control.
+/// Under Reduce Motion it never moves; the words that come with the refusal say it. The trigger is the
+/// refusals alone, so turning Reduce Motion on or off never sets a shake off by itself.
 struct Shake: ViewModifier {
   /// Counts the refusals seen: each change shakes once.
   let trigger: Int
@@ -18,7 +18,7 @@ struct Shake: ViewModifier {
       .keyframeAnimator(initialValue: CGFloat.zero, trigger: trigger) { shaken, offset in
         shaken.offset(x: offset)
       } keyframes: { _ in
-        // v3's `@keyframes shake`: left 5, right 5, left 3, right 3, home, in five even steps; read as the refusal
+        // The refusal shake: left 5, right 5, left 3, right 3, home, in five even steps; read as the refusal
         // comes, so under Reduce Motion every step stays home.
         let swings = Self.swings(reduceMotion: reduceMotion)
         KeyframeTrack {
@@ -42,7 +42,7 @@ struct Shake: ViewModifier {
   }
 }
 
-/// v3's shake (`@keyframes shake`).
+/// The shake's horizontal offsets, shrinking as the motion settles.
 private enum Layout {
   /// 5: the first, furthest swing.
   static let far: CGFloat = 5

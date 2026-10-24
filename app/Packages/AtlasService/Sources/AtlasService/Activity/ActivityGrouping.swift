@@ -5,10 +5,9 @@ import Foundation
 /// capture a screenshot row took. Time comes in and is never read: when the log was read, the time now and the
 /// person's calendar.
 public struct ActivityGrouping: Sendable {
-  /// 120 s: how recent a row is to read as Now. An agent's run of work is a string of actions seconds apart (the
-  /// board's five within half a minute); two minutes holds that run whole, while a pause longer than a glance away
-  /// moves it to Earlier today. The app's `Words.ago` stops counting in seconds at 90, so Now never outlasts
-  /// "1 min ago" by much.
+  /// 120 s: how recent a row is to read as Now. An agent's run of work is a string of actions seconds apart;
+  /// two minutes holds that run whole, while a pause longer than a glance away moves it to Earlier today. The
+  /// app's `Words.ago` stops counting in seconds at 90, so Now never outlasts "1 min ago" by much.
   static let nowSpan: TimeInterval = 120
   /// 3 s: how far a capture's time may lie from its screenshot row's start and still be that row's. The service writes
   /// the row a moment after the capture's file, and a row's age comes in whole seconds, so its start reads up to a

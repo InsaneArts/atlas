@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// The ring round Atlas's mark while something connects (v3 V7, `.orbitring`): an oval 14 points outside the mark,
-/// along which a bright quarter travels, one linear turn every ``Motion/Duration/trace``. Under Reduce Motion, and in a
-/// render, it holds still as a faint whole oval instead.
+/// The ring round Atlas's mark while something connects: an oval 14 points outside the mark, along which a bright
+/// quarter travels, one linear turn every ``Motion/Duration/trace``. It shows only once ``Motion/appear``'s delay has
+/// passed, so a connection that is quick never flashes it. Under Reduce Motion, and in a render, it holds still as a
+/// faint whole oval instead.
 struct OrbitRing: View {
   /// Where along the oval the bright quarter starts, a fraction of one turn.
   @State private var phase = Layout.start
@@ -25,6 +26,7 @@ struct OrbitRing: View {
       }
     }
     .padding(-Layout.reach)
+    .appearsAfterDelay()
     .accessibilityHidden(true)
     .onAppear(perform: trace)
     .onChange(of: isStill) { trace() }
@@ -45,7 +47,7 @@ struct OrbitRing: View {
   }
 }
 
-/// The ring's own measures (v3 `.orbitring`).
+/// The ring's own measures.
 private enum Layout {
   /// 14: how far outside the mark's box the oval lies.
   static let reach = Spacing.mPlus

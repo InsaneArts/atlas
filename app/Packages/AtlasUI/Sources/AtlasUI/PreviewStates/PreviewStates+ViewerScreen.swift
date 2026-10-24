@@ -2,7 +2,7 @@
   import CoreGraphics
 
   extension PreviewStates {
-    /// An agent's three latest actions, oldest first, as captions show them (mac.py `WORKING`).
+    /// An agent's three latest actions, oldest first, as captions show them.
     static let workingCaptions = [
       ActivityEntry(
         id: "2",
@@ -19,10 +19,11 @@
       ),
     ]
 
-    /// An agent acts in the helper while the person watches (MacWorking).
+    /// An agent acts in the helper while the person watches.
     @MainActor public static let viewerWorking = ViewerState(
       top: viewerTop(
-        StatusSummary(label: "Working", tone: .active, mark: .pulsing, line: "Turning Show Center off in Opie"),
+        // The newest caption on the picture says what the agent is doing, so the line beside the word is quiet.
+        StatusSummary(label: "Working", tone: .active, mark: .pulsing, line: ""),
         viewerActions(agent: .stop, control: viewerTakeControl(isEnabled: true))
       ),
       screen: ViewerScreenState(picture: SampleDesktop.picture, captions: workingCaptions)
@@ -40,7 +41,7 @@
     /// The person stopped agents: Resume stands where Stop was.
     @MainActor public static let viewerStopped = ViewerState(
       top: viewerTop(
-        StatusSummary(label: "Stopped", tone: .attention, mark: .square, line: "The agent waits for you"),
+        StatusSummary(label: "Stopped", tone: .attention, mark: .square, line: "Resume when you're ready"),
         viewerActions(agent: .resume(isEnabled: true), control: viewerTakeControl(isEnabled: true))
       ),
       screen: ViewerScreenState(picture: SampleDesktop.picture)
@@ -49,17 +50,18 @@
     /// Another window holds control, so Take Control waits.
     @MainActor public static let viewerInUseElsewhere = ViewerState(
       top: viewerTop(
-        StatusSummary(label: "In use elsewhere", tone: .quiet, mark: .dot, line: "Another window has control"),
+        StatusSummary(label: "In use elsewhere", tone: .quiet, mark: .dot, line: "Another Atlas viewer has control"),
         viewerActions(control: viewerTakeControl(isEnabled: false))
       ),
       screen: ViewerScreenState(picture: SampleDesktop.picture)
     )
 
-    /// The picture is paused; work in the helper goes on (MacEmpty).
+    /// The picture is paused; work in the helper goes on. The status keeps the agent's own line, and the screen's
+    /// chip says the picture is paused.
     @MainActor public static let viewerPaused = ViewerState(
       top: viewerTop(
-        StatusSummary(label: "Idle", tone: .quiet, mark: .dot, line: "Picture paused"),
-        viewerActions(control: viewerTakeControl(isEnabled: false), paused: true)
+        StatusSummary(label: "Idle", tone: .quiet, mark: .dot, line: "Last: turned Show Center off · 2 min ago"),
+        viewerActions(control: viewerTakeControl(isEnabled: true), paused: true)
       ),
       screen: ViewerScreenState(picture: SampleDesktop.picture, look: .paused, chip: .paused)
     )

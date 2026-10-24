@@ -8,6 +8,8 @@ extension OnboardingFacts {
     public var name = ""
     /// The asking account's full name, when it has one.
     var realName: String?
+    /// Whether Allow was recorded for the current request.
+    var accepted = false
     /// Whether Atlas's job is installed in this account.
     var installed = false
     /// Whether that job runs.

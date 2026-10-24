@@ -18,7 +18,7 @@ public enum ViewerEvent: Equatable, Sendable {
   ///
   /// - Parameter below: The button's frame in the window's content, top left first, which the menu opens under.
   case showKeys(below: CGRect)
-  /// ⋯: offer the picture's and the helper's commands, in a menu under the button.
+  /// ⋯: offer the commands that act on the window's picture, in a menu under the button.
   ///
   /// - Parameter below: The button's frame in the window's content, top left first, which the menu opens under.
   case showMore(below: CGRect)
@@ -56,12 +56,16 @@ public enum ViewerEvent: Equatable, Sendable {
   ///   - app: The app's process id.
   ///   - window: The window's number.
   case showWindow(app: Int, window: Int)
-  /// Clear: stop outlining the window.
+  /// The outlined window's ×, or Escape: stop outlining it.
   case clearOutline
-  /// The Screenshots pane's search by time changed.
+  /// The small screen let go of in a corner, which the window remembers.
   ///
-  /// - Parameter query: The search as typed.
-  case searchShots(String)
+  /// - Parameter corner: The corner it settled in.
+  case moveCorner(MiniCorner)
+  /// How many screenshots stand in each of the grid's rows now, which ↑ and ↓ step by.
+  ///
+  /// - Parameter columns: The grid's columns.
+  case shotColumns(Int)
   /// A screenshot picked in the grid.
   ///
   /// - Parameter name: The screenshot's file name.
@@ -78,6 +82,12 @@ public enum ViewerEvent: Equatable, Sendable {
   case nextShot
   /// Close, or Esc: close the large view.
   case closeShot
+  /// ↑: the screenshot a row above the selected one.
+  case shotAbove
+  /// ↓: the screenshot a row below the selected one.
+  case shotBelow
+  /// Esc with no screenshot shown large: no screenshot selected.
+  case clearShotSelection
   /// Copy: put the large screenshot, as taken, on the clipboard.
   case copyShot
   /// Show in Finder: show the large screenshot's file.

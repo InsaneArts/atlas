@@ -4,8 +4,8 @@ import Foundation
 /// a search by time keeps, and where Previous and Next go. Time comes in and is never read: the time now and the
 /// person's calendar.
 public struct ShotGrouping: Sendable {
-  /// 3600 s: the board's "Today" is the last hour, the captures of the work under way; the rest of today reads by the
-  /// part of the day it was taken in (MacShots puts 10:31 under Today and 10:12 under This morning).
+  /// 3600 s: "Today" is the last hour, the captures of the work under way; the rest of today reads by the
+  /// part of the day it was taken in; for example, 10:31 falls under Today and 10:12 under This morning.
   static let lastHour: TimeInterval = 3600
   /// 12: the hour the afternoon starts, as people say it.
   static let noon = 12

@@ -52,7 +52,7 @@ final class OnboardingWindow: NSWindow, NSWindowDelegate, WindowPresenting {
       backing: .buffered,
       defer: false
     )
-    title = "Atlas"
+    title = "Getting Started"
     titleVisibility = .hidden
     titlebarAppearsTransparent = true
     isReleasedWhenClosed = false

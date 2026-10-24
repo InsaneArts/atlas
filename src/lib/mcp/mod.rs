@@ -767,7 +767,9 @@ impl Server {
         }))
     }
 
-    /// Lock the person's screen so they can log in to the helper there.
+    /// Lock the person's screen so they can log in to the helper there;
+    /// refused (`not-ready`), with nothing locked, while a new login could
+    /// hang.
     async fn switch_helper(&self) -> Result<Value> {
         let helper = self.client.config.helper_uid;
         tokio::task::spawn_blocking(move || {

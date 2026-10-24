@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// The narrow window beside System Settings while one permission is allowed (v3's side panel, restyled for item 3):
-/// which permission, Atlas's icon in its well to drag into the list, what to do there and the way for Atlas listed
-/// already, both permissions as two steps on a rail, the one allowed now lit, and one status line: waiting for its
-/// switch, then Allowed. Back is the footer's, at its bottom left.
+/// The narrow window beside System Settings while one permission is allowed: which permission, Atlas's icon in its well
+/// to drag into the list, what to do there and the way for Atlas listed already, both permissions as two steps on a
+/// rail, only the one guided now lit, and one status line in the same words as the permissions screen: Waiting for
+/// you… with no spinner, as the person acts, then Allowed. Back is the footer's, at its bottom left.
 struct PermissionPanel<DragIcon: View>: View {
   /// The permission allowed now, and both permissions.
   let state: OnboardingPermissionPanelState
@@ -12,7 +12,7 @@ struct PermissionPanel<DragIcon: View>: View {
 
   /// The label, the icon's well and the title, the two steps, then the status line.
   var body: some View {
-    ScrollColumn(width: OnboardingLayout.sideColumn) {
+    PageColumn(width: OnboardingLayout.sideColumn, top: OnboardingLayout.contentTop + Spacing.l) {
       OnboardingHeader(
         label: state.label,
         title: state.instruction,
@@ -23,19 +23,31 @@ struct PermissionPanel<DragIcon: View>: View {
       }
       StepList(steps: Self.steps(state))
         .padding(.top, OnboardingLayout.Rhythm.paragraph)
-        .pagePiece(.content)
-    } bottom: {
-      StatusLine(kind: state.isOn ? .done : .working, text: state.pill)
-        .padding(.top, OnboardingLayout.Rhythm.content)
-        .pagePiece(.status)
+      StatusSlot { status }
     }
-    .padding(.top, OnboardingLayout.contentTop)
   }
 
-  /// Accessibility, then Screen Recording, each under its name as this macOS names it: done once on, lit while it is
-  /// the one to allow, else waiting, and reading Checking… in place of what it lets agents do while it cannot be read.
-  /// As one turns on, its disc draws its check, the rail below turns green and the next lights up a moment later (v3
-  /// S3), before its System Settings page opens.
+  /// The status line for where the permission guided now stands: Allowed with its check, Checking… with a spinner
+  /// while Atlas reads it, else the waiting words alone, with no mark, as the person acts, not Atlas.
+  @ViewBuilder private var status: some View {
+    switch state.status {
+    case .allowed(let word):
+      StatusLine(kind: .done, text: word)
+    case .checking(let word):
+      StatusLine(kind: .working, text: word)
+    case .waiting(let word), .next(let word), .turnedOff(let word):
+      Text(word)
+        .textStyle(.callout)
+        .foregroundStyle(Color.textSecondary)
+        .swapsText(on: word)
+    case .yourTurn:
+      EmptyView()
+    }
+  }
+
+  /// Accessibility, then Screen Recording, each under its name as this macOS names it: done once on, lit only while
+  /// it is the one guided now, else waiting, and reading Checking… in place of what it lets agents do while it cannot
+  /// be read. The header, the steps and the status change together as the panel moves on.
   ///
   /// - Parameter state: The panel.
   /// - Returns: The two steps.
@@ -54,9 +66,11 @@ struct PermissionPanel<DragIcon: View>: View {
   /// - Returns: The step.
   private static func step(_ permission: OnboardingPermissionItem, detail: String) -> StepList.Step {
     let state: StepState =
-      if permission.isOn { .done } else if permission.canAllow { .current } else { .waiting }
-    let checking = !permission.isOn && !permission.isKnown
-    return StepList.Step(title: permission.title, detail: checking ? permission.status : detail, state: state)
+      if permission.isOn { .done } else if permission.isCurrent { .current } else { .waiting }
+    guard case .checking(let word) = permission.standing else {
+      return StepList.Step(title: permission.title, detail: detail, state: state)
+    }
+    return StepList.Step(title: permission.title, detail: word, state: state)
   }
 }
 

@@ -1,11 +1,13 @@
 import SwiftUI
 
-/// A small turning arc; still when Reduce Motion is on.
+/// A small turning arc on a faint ring, at one size whatever it shows; still when Reduce Motion is on.
 struct Spinner: View {
   /// The spinner's side, in points.
   var size = IconSize.xs
-  /// The turning arc's colour: the accent, or white inside an accent button (v3 `.acap.accent .spin`).
+  /// The turning arc's colour: the accent, or white inside an accent button.
   var arc = Color.accent
+  /// The faint ring the arc turns on: white at 0.16 by default, which a white button needs darker to show.
+  var track = Color.strokeStrong
   @State private var turning = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -13,7 +15,7 @@ struct Spinner: View {
   var body: some View {
     ZStack {
       Circle()
-        .stroke(Color.strokeStrong, lineWidth: Stroke.thick)
+        .stroke(track, lineWidth: Stroke.thick)
       Circle()
         .trim(from: 0, to: Layout.arc)
         .stroke(arc, style: StrokeStyle(lineWidth: Stroke.thick, lineCap: .round))

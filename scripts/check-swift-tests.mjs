@@ -19,10 +19,9 @@
 //   pause, cancelled as soon as the event it bounds comes. Any other sleep in
 //   that file is reported like one anywhere else.
 //
-// The `force` and `empty` rules port ../jolt-v2/Scripts/check_tests.py. A
-// text heuristic over Swift, with comments and string contents blanked
-// first: it catches the spellings its fixtures show, and a deliberate evasion
-// is a review finding, not a checker bug.
+// A text heuristic over Swift, with comments and string contents blanked
+// first: it catches the spellings its fixtures show. Other spellings may
+// need additional patterns to enforce the same rules.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

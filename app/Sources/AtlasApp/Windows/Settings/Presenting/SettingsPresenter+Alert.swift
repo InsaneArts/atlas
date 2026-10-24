@@ -17,30 +17,38 @@ extension SettingsPresenter {
     return switch kind {
     case .recover:
       HelperAlert.recover
-        .state(overview: overview, progress: progress)
+        .state(overview: overview, progress: progress, askedByPerson: true)
     case .switchToHelper:
       HelperAlert.switchToHelper
-        .state(overview: overview, progress: progress)
+        .state(overview: overview, progress: progress, askedByPerson: true)
     case .logOut:
       HelperAlert.logOut
-        .state(overview: overview, progress: progress)
+        .state(overview: overview, progress: progress, askedByPerson: true)
     case .logOutAnyway:
       HelperAlert.logOutAnyway
-        .state(overview: overview, progress: progress)
+        .state(overview: overview, progress: progress, askedByPerson: true)
     case .forget(let path):
       HelperAlert.destructive(
         SettingsWords.forgetTitle(projectName(path)),
         SettingsWords.forgetMessage,
         SettingsWords.forget,
-        phase: progress.phase(running: SettingsWords.forgetting, done: SettingsWords.forget)
+        phase: progress.phase(
+          running: SettingsWords.forgetting,
+          done: SettingsWords.forget,
+          doneMessage: SettingsWords.forgetMessage
+        )
       )
     case .install(let version):
       HelperAlert.plain(
         SettingsWords.installTitle(version),
         SettingsWords.installMessage,
         SettingsWords.install,
-        cancel: HelperWords.notNow,
-        phase: progress.phase(running: SettingsWords.installing, done: SettingsWords.install)
+        cancel: HelperWords.cancel,
+        phase: progress.phase(
+          running: SettingsWords.installing,
+          done: SettingsWords.install,
+          doneMessage: SettingsWords.installMessage
+        )
       )
     }
   }

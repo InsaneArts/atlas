@@ -6,7 +6,7 @@ public struct SettingsProjectRow: Equatable, Sendable, Identifiable {
   public var name: String
   /// Where it is, such as "~/dev/opie", or that its files no longer have the Atlas section.
   public var detail: String
-  /// Whether the detail is the folder's path, set monospaced (v3 G8).
+  /// Whether the detail is the folder's path, set on one line and cut in the middle when long.
   public var detailIsPath: Bool
   /// Forget's name for VoiceOver, such as "Forget opie".
   public var forgetLabel: String

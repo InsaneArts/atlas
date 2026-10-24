@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// A check drawn as one open stroke, so it can draw itself along its length with `trim` (v3 S3, X11). The path is
-/// v3's `M2.2 6.3 L4.9 8.9 L9.8 3.3` on a 12-point square, scaled to the frame.
+/// A check drawn as one open stroke, so it can draw itself along its length with `trim`. The path is `M2.2
+/// 6.3 L4.9 8.9 L9.8 3.3` on a 12-point square, scaled to the frame.
 struct CheckStroke: Shape {
   /// The check's path in the frame.
   ///
@@ -15,7 +15,7 @@ struct CheckStroke: Shape {
     return path
   }
 
-  /// A point of v3's 12-point square, scaled into the frame.
+  /// A point of the path's 12-point square, scaled into the frame.
   ///
   /// - Parameters:
   ///   - unit: The point on the 12-point square.
@@ -29,7 +29,7 @@ struct CheckStroke: Shape {
   }
 }
 
-/// v3's check path (`ckSvg`).
+/// The check path's coordinate space and stroke width.
 private enum Layout {
   /// 12: the square the path is drawn on.
   static let square: CGFloat = 12

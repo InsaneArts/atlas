@@ -8,7 +8,7 @@ import Testing
 
 @Suite("KeysMenu")
 struct KeysMenuTests {
-  @Test("the Keys menu offers exactly the board's six keys")
+  @Test("the Keys menu offers exactly six keys in title case, under Mac Shortcuts and App Shortcuts")
   func theKeysMenuOffersTheBoardsSixKeys() async throws {
     let service = ScriptedService()
     let viewer = try await ViewerController.watching(service)
@@ -16,9 +16,10 @@ struct KeysMenuTests {
     let menu = KeysMenu.menu(for: viewer)
     let items = menu.items.compactMap { $0 as? HandlerMenuItem }
     #expect(
-      items.map(\.title) == ["Switch apps", "Spotlight", "Mission Control", "Close window", "Quit app", "Escape"]
+      items.map(\.title) == ["Switch Apps", "Spotlight", "Mission Control", "Close Window", "Quit App", "Escape"]
     )
     #expect(items.map(\.keyEquivalentModifierMask) == [.command, .command, .control, .command, .command, []])
+    #expect(menu.items.filter(\.isSectionHeader).map(\.title) == ["Mac Shortcuts", "App Shortcuts"])
     for item in items { item.fire() }
     try await settle("the keys were never all sent") { service.actions.count == items.count }
     #expect(
@@ -34,7 +35,7 @@ struct KeysMenuTests {
     let viewer = try await ViewerController.watching(service)
     let items = KeysMenu.menu(for: viewer).items
       .compactMap { $0 as? HandlerMenuItem }
-    let switchApps = try #require(items.first { $0.title == "Switch apps" })
+    let switchApps = try #require(items.first { $0.title == "Switch Apps" })
     let escape = try #require(items.first { $0.title == "Escape" })
     switchApps.fire()
     // Input leaves in order, so a key sent once in control arriving alone means the first key sent nothing.

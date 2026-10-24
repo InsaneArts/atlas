@@ -2,6 +2,6 @@
 enum ViewerMenu: Equatable {
   /// The keys this Mac would keep.
   case keys
-  /// ⋯: the picture and the helper.
+  /// ⋯: what acts on the picture.
   case more
 }

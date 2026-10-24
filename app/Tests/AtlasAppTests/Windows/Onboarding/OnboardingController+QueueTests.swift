@@ -17,8 +17,7 @@ struct OnboardingControllerQueueTests {
     try await controller.whileOpen { _ in
       try await controller.untilLoaded()
       controller.send(.lockAndSwitch)
-      let work = try await controller.untilTaken()
-      controller.send(.back)
+      let work = try await controller.untilTaken { controller.send(.back) }
       await work.value
       #expect(!commands.ran.contains(Action.switchTo("atlas").arguments), "the screen locked after Back")
       #expect(controller.snapshot.working == nil)
@@ -27,6 +26,8 @@ struct OnboardingControllerQueueTests {
 
   @Test("closing the window between the queue taking a permission's page and its start keeps the page shut")
   func closingBeforeARequestStartsStopsIt() async throws {
+    // The close starts within the queue's turn, as only a task that runs at once until its first wait can.
+    guard #available(macOS 26, *) else { return }
     let opened = OpenedURLs()
     let commands = ScriptedCommands([
       "onboarding status": OnboardingReplies.helper(accessibility: false), "onboarding window": #"{"ok": true}"#,
@@ -35,9 +36,12 @@ struct OnboardingControllerQueueTests {
     try await controller.whileOpen { _ in
       try await controller.untilLoaded()
       controller.send(.openSettings(id: Permission.accessibility.id))
-      let work = try await controller.untilTaken()
-      await controller.close()
+      var closing: Task<Void, Never>?
+      let work = try await controller.untilTaken {
+        closing = Task.immediate { await controller.close() }
+      }
       await work.value
+      await closing?.value
       #expect(opened.urls.isEmpty, "System Settings opened after the window closed")
       #expect(controller.snapshot.guiding == nil)
     }

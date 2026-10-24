@@ -1,5 +1,5 @@
-// Swift source helpers the check-swift-*.mjs checkers share, ported from
-// ../jolt-v2/Scripts/swift_source.py. Each checker reads Swift as text,
+// Swift source helpers the check-swift-*.mjs checkers share.
+// Each checker reads Swift as text,
 // deliberately simply; blanking comments and string contents first keeps a
 // pattern from firing inside either. It also holds the allow list and the
 // file walk, so every checker reads them one way.
@@ -201,7 +201,7 @@ function globPattern(glob) {
 // The allow list: `waivers`, each { path, checkers, rule?, until, reason },
 // waive a checker (or one rule of it) for the paths a glob names, and
 // `reportOnly`, each { checker, rule?, until, reason }, turn a checker or one
-// of its rules into a report that never fails. Every entry names the phase
+// of its rules into a report that never fails. Every entry names the condition
 // that removes it and its reason; one without either throws. With no file,
 // nothing is waived and every rule is a gate.
 export function allowList(file = path.join(repository, 'scripts/check-swift.allow.json')) {

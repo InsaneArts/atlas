@@ -1,8 +1,7 @@
 import CoreGraphics
 
-/// The sizes an SF Symbol takes, one per role (v3 D13): every symbol is drawn at its text's weight through
-/// `Typography.symbol(_:weight:)`, never at a size of its own. v3 names the first `bar`; it is named here for what
-/// it sits on, a control.
+/// The sizes an SF Symbol takes, one per role: every symbol is drawn at its text's weight through
+/// `Typography.symbol(_:weight:)`, never at a size of its own. Roles keep symbols consistent across controls.
 enum SymbolScale: CaseIterable, Sendable {
   /// 13: a control's symbol, such as a bar's circle button or a capsule's leading symbol.
   case control

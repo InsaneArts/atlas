@@ -10,8 +10,8 @@
   @MainActor
   @Suite("OnboardingView")
   struct OnboardingViewTests {
-    @Test("the footer stays in place, drawn the same, while the screen above it slides to the next")
-    func theFooterStaysWhileTheScreenSlides() throws {
+    @Test("the footer stays in place, drawn the same, while the screen above it fades into the next")
+    func theFooterStaysWhileTheScreenFades() throws {
       let window = NSWindow(
         contentRect: NSRect(origin: .zero, size: OnboardingLayout.card),
         styleMask: [.borderless],
@@ -22,14 +22,15 @@
       // The next screen under the very same footer, so only the screen above it has anything to change.
       var next = first
       next.content = PreviewStates.onboardingWelcome.content
-      next.direction = .forward
       let host = NSHostingView(rootView: Self.window(first))
+      // As the app hosts it: the window keeps its size, whatever the content would like.
+      host.sizingOptions = []
       window.contentView = host
       host.layoutSubtreeIfNeeded()
       let before = try Self.picture(host)
       host.rootView = Self.window(next)
       host.layoutSubtreeIfNeeded()
-      // Part way through the slide, which takes about half a second.
+      // Part way through the fade, which takes under a fifth of a second.
       RunLoop.main
         .run(until: Date(timeIntervalSinceNow: Self.partWay))
       host.layoutSubtreeIfNeeded()
@@ -42,14 +43,13 @@
       )
     }
 
-    /// How long into the slide the window is drawn again: past the new screen's wait to come in, and short of its end.
-    private static let partWay: TimeInterval = 0.2
+    /// How long into the fade the window is drawn again: short of its end.
+    private static let partWay: TimeInterval = 0.08
 
     /// How far apart the points compared are, in points.
     private static let step: CGFloat = 4
 
-    /// The window's content as `state` shows it, drawn settled, as a render draws it, so a screen's pieces show at
-    /// once and only the slide moves.
+    /// The window's content as `state` shows it, drawn settled, as a render draws it, so only the fade plays.
     ///
     /// - Parameter state: What the window shows.
     /// - Returns: The content.

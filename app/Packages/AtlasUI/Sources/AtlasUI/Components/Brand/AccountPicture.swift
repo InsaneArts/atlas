@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The helper account's picture in a circle, as macOS shows every account picture (v3 B1): the picture fills a
-/// square frame and is clipped round, never stretched. Where no picture is supplied, as in previews, the avatar disc
+/// The helper account's picture in a circle, as macOS shows every account picture: the picture fills a square
+/// frame and is clipped round, never stretched. Where no picture is supplied, as in previews, the avatar disc
 /// stands in.
 struct AccountPicture: View {
   /// The circle's side, in points, from its window's layout, such as Choose's 30 or the Helper pane's 40.

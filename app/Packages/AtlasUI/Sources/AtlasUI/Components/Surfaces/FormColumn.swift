@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// A form's sections in a column at their insets (U-17), scrolling only when the window is shorter than they are,
-/// and saying how tall they are, insets included, so a window can fit them (v3 G2).
+/// A form's sections in a column at their insets, scrolling only when the window is shorter than they are,
+/// and saying how tall they are, insets included, so a window can fit them.
 struct FormColumn<Content: View>: View {
   /// The column's insets.
   private let insets: EdgeInsets

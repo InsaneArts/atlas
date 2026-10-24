@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Pops a mark in as it appears (v3 G9, `Motion.pop`): from a little under half its size to whole, with a fade. Under
-/// Reduce Motion it fades only; where arrivals do not play, such as a render, it shows whole at once.
+/// Pops a mark in as it appears: from a little under half its size to whole, with a fade. Under Reduce Motion
+/// it fades only; where arrivals do not play, such as a render, it shows whole at once.
 struct PopIn: ViewModifier {
   @State private var hasArrived = false
   @Environment(\.animatesArrivals) private var animatesArrivals
@@ -28,7 +28,7 @@ struct PopIn: ViewModifier {
   }
 }
 
-/// The mark's own measures (v3's `scale(.4)` → `scale(1)`).
+/// The mark's own measures.
 private enum Layout {
   /// 0.4: how small the mark starts.
   static let arrivingScale: CGFloat = 0.4

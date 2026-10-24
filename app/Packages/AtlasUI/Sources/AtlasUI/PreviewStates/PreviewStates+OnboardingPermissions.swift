@@ -9,7 +9,8 @@
       note: .none
     )
 
-    /// In the helper: the panel the moment Accessibility turns on, before Screen Recording's page opens by itself.
+    /// In the helper: the panel the moment Accessibility turns on, before Screen Recording's page opens by itself:
+    /// the header, the steps and the status still about Accessibility, Screen Recording not lit yet.
     @MainActor public static let onboardingPermissionPanelAllowed = OnboardingState(
       content: .permissionPanel(
         OnboardingPermissionPanelState(
@@ -17,9 +18,8 @@
           instruction: "Drag Atlas into the list.",
           alreadyListed: "Already in the list? Turn its switch on.",
           accessibility: onboardingAccessibilityOn,
-          screenRecording: onboardingScreenRecordingOff,
-          pill: "Allowed",
-          isOn: true
+          screenRecording: onboardingScreenRecordingTurn(isCurrent: false),
+          status: .allowed("Allowed")
         )
       ),
       footer: onboardingPanelFooter,
@@ -36,37 +36,38 @@
       id: "accessibility",
       title: "Accessibility",
       isOn: true,
-      status: "Allowed",
-      allowTitle: "Allow…"
+      standing: .allowed("Allowed")
     )
 
-    /// Accessibility off, the one to allow first.
-    @MainActor static let onboardingAccessibilityOff = OnboardingPermissionItem(
+    /// Accessibility off, the one to allow first: its row says nothing, as the footer offers it.
+    @MainActor static let onboardingAccessibilityTurn = OnboardingPermissionItem(
       id: "accessibility",
       title: "Accessibility",
       isOn: false,
-      status: "Off",
-      allowTitle: "Allow…",
-      canAllow: true
+      standing: .yourTurn,
+      isCurrent: true
     )
 
-    /// Screen Recording off, as macOS 26 names it, the one to allow next.
-    @MainActor static let onboardingScreenRecordingOff = OnboardingPermissionItem(
-      id: "screenRecording",
-      title: "Screen & System Audio Recording",
-      isOn: false,
-      status: "Off",
-      allowTitle: "Allow…",
-      canAllow: true
-    )
+    /// Screen Recording off, as macOS 26 names it, its turn come: its row says nothing.
+    ///
+    /// - Parameter isCurrent: Whether it is the one allowed now.
+    /// - Returns: The permission.
+    @MainActor static func onboardingScreenRecordingTurn(isCurrent: Bool) -> OnboardingPermissionItem {
+      OnboardingPermissionItem(
+        id: "screenRecording",
+        title: "Screen & System Audio Recording",
+        isOn: false,
+        standing: .yourTurn,
+        isCurrent: isCurrent
+      )
+    }
 
     /// Screen Recording off, waiting its turn behind Accessibility.
-    @MainActor static let onboardingScreenRecordingWaiting = OnboardingPermissionItem(
+    @MainActor static let onboardingScreenRecordingNext = OnboardingPermissionItem(
       id: "screenRecording",
       title: "Screen & System Audio Recording",
       isOn: false,
-      status: "Off",
-      allowTitle: "Allow…"
+      standing: .next("Next")
     )
 
     /// A permission not read yet, while Atlas's job restarts.
@@ -76,27 +77,20 @@
     ///   - title: Its name.
     /// - Returns: The permission, being checked.
     @MainActor static func onboardingPermissionChecking(_ id: String, _ title: String) -> OnboardingPermissionItem {
-      OnboardingPermissionItem(
-        id: id,
-        title: title,
-        isOn: false,
-        status: "Checking…",
-        allowTitle: "Allow…",
-        isKnown: false
-      )
+      OnboardingPermissionItem(id: id, title: title, isOn: false, standing: .checking("Checking…"), isKnown: false)
     }
 
-    /// One permission in each standing a row shows: Allow…, Allowed, Checking… and Off.
+    /// One permission in each standing a row shows: Allowed, Checking…, Next and Turned off.
     @MainActor static let onboardingPermissionSamples = [
-      onboardingAccessibilityOff,
-      OnboardingPermissionItem(id: "on", title: "Accessibility", isOn: true, status: "Allowed", allowTitle: "Allow…"),
+      onboardingAccessibilityOn,
       onboardingPermissionChecking("checking", "Screen & System Audio Recording"),
+      onboardingScreenRecordingNext,
       OnboardingPermissionItem(
-        id: "off",
-        title: "Screen & System Audio Recording",
+        id: "turnedOff",
+        title: "Accessibility",
         isOn: false,
-        status: "Off",
-        allowTitle: "Allow…"
+        standing: .turnedOff("Turned off"),
+        isCurrent: true
       ),
     ]
 
@@ -106,9 +100,8 @@
       instruction: "Drag Atlas into the top list.",
       alreadyListed: "Already in the top list? Turn its switch on.",
       accessibility: onboardingAccessibilityOn,
-      screenRecording: onboardingScreenRecordingOff,
-      pill: "Waiting for the switch…",
-      isOn: false
+      screenRecording: onboardingScreenRecordingTurn(isCurrent: true),
+      status: .waiting("Waiting for you…")
     )
   }
 #endif

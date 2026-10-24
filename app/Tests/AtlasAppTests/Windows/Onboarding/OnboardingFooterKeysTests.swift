@@ -20,20 +20,32 @@
         case .loading(problem: nil), .permissionPanel:
           #expect(state.footer.next == nil, "\(preview.name)")
           #expect(pressed.isEmpty, "\(preview.name)")
-        case .screen(.permissions(let screen)):
-          // Each row keeps its own Allow… (Q-D3), and Return allows the next permission, as it always has; nothing
-          // while both are being checked.
-          #expect(state.footer.next == nil, "\(preview.name)")
-          let next = [screen.accessibility, screen.screenRecording].first { $0.canAllow && !$0.isOn }
-          #expect(pressed == (next.map { [.openSettings(id: $0.id)] } ?? []), "\(preview.name)")
+        case .screen(.permissions(let screen)) where !screen.accessibility.isKnown:
+          #expect(state.footer.next == nil, "\(preview.name): nothing to allow while both are checked")
+          #expect(pressed.isEmpty, "\(preview.name)")
         case .loading, .screen:
           let next = try #require(state.footer.next, "\(preview.name) has no main action")
           let presses = next.isEnabled && next.isDefault
           #expect(pressed == (presses ? [next.event] : []), "\(preview.name)")
         }
-        let back = state.footer.back
-        let escapes = back.map { $0.title == .back && $0.isEnabled } ?? false
+      }
+    }
+
+    @Test("Escape never goes back on a screen, where it could land while typing a password, and Command-[ does")
+    func escapeNeverGoesBackOnAScreen() {
+      let window = KeyedWindow()
+      for preview in PreviewStates.onboarding {
+        let state = preview.value
+        window.show(state)
+        let back = state.footer.back.flatMap { $0.isEnabled ? $0 : nil }
+        // Escape answers only where nothing is typed: Not Now in the helper, and Back on the permission panel.
+        let escapes = back.map { $0.title == .notNow || $0.event == .closePanel } ?? false
         #expect(window.press(.escape) == (escapes ? back.map { [$0.event] } ?? [] : []), "\(preview.name): Escape")
+        let goesBack = back.map { $0.title == .back && $0.event == .back } ?? false
+        #expect(
+          window.press(.commandBracket) == (goesBack ? [.back] : []),
+          "\(preview.name): Command-["
+        )
       }
     }
 

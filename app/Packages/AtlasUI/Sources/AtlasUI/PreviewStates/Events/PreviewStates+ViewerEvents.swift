@@ -30,14 +30,14 @@
         return viewerLogOut
       case .askRestart:
         return viewerRestart
-      case .showKeys, .showMore, .copyShot, .showShotInFinder, .thumbnailNeeded:
+      case .showKeys, .showMore, .copyShot, .showShotInFinder, .thumbnailNeeded, .shotColumns, .moveCorner:
         return state
       case .showWindow:
         return viewerShowOnScreen
       case .clearOutline:
         return viewerIdle
-      case .searchActivity, .filterActivity, .searchApps, .searchShots, .selectShot, .openShot, .toggleShot,
-        .previousShot, .nextShot, .closeShot:
+      case .searchActivity, .filterActivity, .searchApps, .selectShot, .openShot, .toggleShot, .previousShot,
+        .nextShot, .shotAbove, .shotBelow, .clearShotSelection, .closeShot:
         return viewerPane(state, applying: event)
       }
     }

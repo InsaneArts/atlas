@@ -3,7 +3,7 @@ import AtlasOnboarding
 
 /// One thing the setup window does in its queue, which ``OnboardingController/run()`` performs in order, one at a time
 /// (`OnboardingController+Queue`): the person's actions, the check and the agents reading a step starts by itself, and
-/// item 3's permission panel. A reading, ``refresh``, never waits in the queue: the reading loop takes it at once.
+/// the permission panel's own requests. A reading, ``refresh``, never waits in the queue: the reading loop takes it at once.
 ///
 /// A request already waiting or under way is not queued again (``repeats(_:)``).
 nonisolated enum OnboardingRequest: Hashable, Sendable {
@@ -15,6 +15,8 @@ nonisolated enum OnboardingRequest: Hashable, Sendable {
   case lockAndSwitch
   /// Choose Another Account, while the helper asked never answered.
   case chooseAnother
+  /// Close It…: the logins deleted accounts left open.
+  case closeLeftovers
   /// Continue on the agents: connect the chosen ones.
   ///
   /// - Parameter chosen: The agents switched on when Continue was pressed. Only these are connected, so a reading
@@ -56,12 +58,12 @@ nonisolated enum OnboardingRequest: Hashable, Sendable {
   }
 
   /// Whether Back stops it, waiting or under way: the lock's wait, which leaves nothing half done. A command that sets
-  /// something up, an account, a helper, an install or the check, always runs to its end.
+  /// something up, an account, a helper, an install, the check or closing a login, always runs to its end.
   var endsOnBack: Bool {
     switch self {
     case .lockAndSwitch, .switchBack: true
-    case .useHelper, .createAccount, .chooseAnother, .connectAgents, .complete, .allow, .refresh, .check, .readAgents,
-      .openSettings, .moveOn:
+    case .useHelper, .createAccount, .chooseAnother, .closeLeftovers, .connectAgents, .complete, .allow, .refresh,
+      .check, .readAgents, .openSettings, .moveOn:
       false
     }
   }
@@ -70,8 +72,8 @@ nonisolated enum OnboardingRequest: Hashable, Sendable {
   var endsWithPanel: Bool {
     switch self {
     case .openSettings, .moveOn: true
-    case .useHelper, .createAccount, .lockAndSwitch, .chooseAnother, .connectAgents, .complete, .allow, .switchBack,
-      .refresh, .check, .readAgents:
+    case .useHelper, .createAccount, .lockAndSwitch, .chooseAnother, .closeLeftovers, .connectAgents, .complete,
+      .allow, .switchBack, .refresh, .check, .readAgents:
       false
     }
   }

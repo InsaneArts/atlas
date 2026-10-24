@@ -1,10 +1,10 @@
 import SwiftUI
 
-/// Durations and the animations built from them. v3's motion (D14) is written as springs, `spring(duration:bounce:)`,
-/// beside the older ease-out curves, which stay until their surfaces are redesigned. Under Reduce Motion an
-/// animation becomes ``reduced`` through ``animation(_:reduceMotion:reduced:)``, a moving transition becomes a fade
-/// through ``transition(_:reduceMotion:)``, and a loop stops through ``loops(reduceMotion:)``: colour and opacity
-/// changes of at most 0.2 seconds are kept, and movement, scale, blur and loops are dropped (v3's policy).
+/// Durations and the animations built from them: springs, `spring(duration:bounce:)`, alongside ease-out
+/// curves for changes that should settle without bounce. Under Reduce Motion an animation becomes ``reduced``
+/// through ``animation(_:reduceMotion:reduced:)``, a moving transition becomes a fade through
+/// ``transition(_:reduceMotion:)``, and a loop stops through ``loops(reduceMotion:)``: colour and opacity
+/// changes of at most 0.2 seconds are kept, and movement, scale, blur and loops are dropped.
 public enum Motion {
   /// One step of the duration scale, shortest first. Its initializer is private, so only the scale's steps exist; an
   /// AppKit animation reads ``seconds``. Steps that play different roles may share a length.
@@ -16,123 +16,132 @@ public enum Motion {
       self.seconds = seconds
     }
 
-    /// 0.03: between the pieces of a setup screen arriving one after another: its header, then its content, then its
-    /// status (v3 S2, X7).
-    static let stagger = Duration(seconds: 0.03)
-    /// 0.06: how long a pane arriving waits before it fades in, so the one leaving has begun to go (v3 G2, X2).
-    static let crossfadeDelay = Duration(seconds: 0.06)
-    /// 0.07: how long a new setup screen waits as the last one leaves, so it starts when the last is 40% gone (v3 S2,
-    /// R9).
-    static let pageDelay = Duration(seconds: 0.07)
-    /// 0.08: how long a drawn check waits after its disc before it draws (v3 S3, X11).
+    /// 0.08: how long a drawn check waits after its disc before it draws.
     static let drawDelay = Duration(seconds: 0.08)
-    /// 0.1: a button press.
+    /// 0.1: a text link's press.
     static let press = Duration(seconds: 0.1)
-    /// 0.1: a window's content fading out before the window glides to a new place and size, so nothing reflows on
-    /// the way (v3 S7, X13); AppKit reads it.
+    /// 0.1: a window's content fading out before the window glides to a new place and size, so nothing
+    /// reflows on the way; AppKit reads it.
     public static let contentOut = Duration(seconds: 0.1)
-    /// 0.12: a fill or a reveal answering the pointer arriving (v3 `Motion.hover`, in).
+    /// 0.1: a tab's pane fading out as another takes its place, eased in.
+    static let swapOut = Duration(seconds: 0.1)
+    /// 0.12: a fill or a reveal answering the pointer arriving.
     static let hoverIn = Duration(seconds: 0.12)
-    /// 0.12: a pane leaving as another takes its place (v3 G2, X2).
+    /// 0.12: a pane leaving as another takes its place.
     static let crossfadeOut = Duration(seconds: 0.12)
-    /// 0.12: a step finishing: its number shrinking away, and how long the next step waits before it lights up (v3
-    /// S3, X8).
+    /// 0.12: a step finishing: its number shrinking away, and how long the next step waits before it lights
+    /// up.
     static let step = Duration(seconds: 0.12)
-    /// 0.15: a pane's crossfade under Reduce Motion, both ways (v3 X2).
+    /// 0.12: a setup page fading out as the next comes, eased in.
+    static let pageOut = Duration(seconds: 0.12)
+    /// 0.12: a button's pressed fill easing back once it is let go; the fill itself lands on mouse-down with no
+    /// animation, as AppKit's buttons darken.
+    static let pressRelease = Duration(seconds: 0.12)
+    /// 0.15: a pane's crossfade under Reduce Motion, both ways.
     static let crossfadeReduced = Duration(seconds: 0.15)
-    /// 0.15: an alert leaving, fading and shrinking a little (v3 A6).
+    /// 0.15: an alert leaving, fading and shrinking a little, or a caption fading away.
     static let dismiss = Duration(seconds: 0.15)
-    /// 0.15: how long what follows a success waits: the ring after its tile, and Continue after the last check, which
-    /// the setup window's controller waits on its clock, so Continue takes no press before it lights up (v3 X11, S5).
+    /// 0.15: how long what follows a success waits, such as Continue after the last check, which the setup window's
+    /// controller waits on its clock, so Continue takes no press before it lights up.
     public static let followUp = Duration(seconds: 0.15)
-    /// 0.18: a chip, a row, a slot or a toast leaving (v3 `Motion.leave`).
+    /// 0.15: a tab's pane fading in over the last, eased out, with no delay.
+    static let swapIn = Duration(seconds: 0.15)
+    /// 0.15: changing words swapping in place by opacity, the old fading as the new come.
+    static let textSwap = Duration(seconds: 0.15)
+    /// 0.18: a setup page fading in over the last, eased out, with no delay.
+    static let pageIn = Duration(seconds: 0.18)
+    /// 0.18: a chip, a row, a slot or a toast leaving.
     static let leave = Duration(seconds: 0.18)
     /// 0.2: a notice, an edge, content leaving.
     public static let fade = Duration(seconds: 0.2)
-    /// 0.2: a fill or a reveal going back as the pointer leaves (v3 `Motion.hover`, out).
+    /// 0.2: a fill or a reveal going back as the pointer leaves.
     static let hoverOut = Duration(seconds: 0.2)
-    /// 0.2: the fade every transition takes under Reduce Motion, the longest v3's policy keeps.
+    /// 0.2: the fade every transition takes under Reduce Motion, the maximum duration retained for reduced
+    /// motion.
     static let reduced = Duration(seconds: 0.2)
-    /// 0.2: the menu bar badge's colour and shape crossfading from one state to the next (v3 M4, X14).
+    /// 0.2: the menu bar badge's colour and shape crossfading from one state to the next.
     public static let crossfade = Duration(seconds: 0.2)
-    /// 0.25: the menu bar orbit's dim fading in or out (v3 M4, X14).
+    /// 0.25: the menu bar orbit's dim fading in or out.
     public static let dim = Duration(seconds: 0.25)
-    /// 0.26: one piece of a setup screen fading in as the screen arrives (v3 X7).
-    static let piece = Duration(seconds: 0.26)
-    /// 0.3: a check drawing itself along its stroke (v3 S3, X11: `trim` 0 → 1).
-    static let draw = Duration(seconds: 0.3)
-    /// 0.3: a piece moving to a new state, ``Motion/state``'s length; AppKit reads it for the menu bar panel's height
-    /// easing to fit (v3 P10, X6).
-    public static let state = Duration(seconds: 0.3)
-    /// 0.35: a window's height easing to fit its pane on ``Motion/resizeCurve``, its top edge fixed (v3 G2, X2);
+    /// 0.25: a window's height easing to fit its pane on ``Motion/resizeCurve``, its top edge fixed;
     /// AppKit reads it.
-    public static let resize = Duration(seconds: 0.35)
-    /// 0.36: an alert shaking once when its command is refused (v3 A4).
+    public static let resize = Duration(seconds: 0.25)
+    /// 0.3: how long a working note waits before it shows, so work that ends sooner never flashes it; a problem shows
+    /// at once.
+    public static let noteDelay = Duration(seconds: 0.3)
+    /// 0.3: a check drawing itself along its stroke.
+    static let draw = Duration(seconds: 0.3)
+    /// 0.3: a piece moving to a new state, ``Motion/state``'s length; AppKit reads it for the menu bar
+    /// panel's height easing to fit.
+    public static let state = Duration(seconds: 0.3)
+    /// 0.36: an alert shaking once when its command is refused.
     static let shake = Duration(seconds: 0.36)
-    /// 0.4: how long a spinner or a placeholder waits before it shows, so a quick answer never flashes one (v3
-    /// `Duration.appearDelay`, R12).
+    /// 0.4: how long a spinner or a placeholder waits before it shows, so a quick answer never flashes one.
     public static let appearDelay = Duration(seconds: 0.4)
-    /// 0.5: a window gliding on ``Motion/glideSoftCurve``, which starts at once and lands softly (v3 `Duration.glide`,
-    /// S7).
+    /// 0.5: a window gliding on ``Motion/glideSoftCurve``, which starts at once and lands softly.
     public static let glideSoft = Duration(seconds: 0.5)
-    /// 0.7: how long a done alert stays, its check and Recovered showing, before it closes (v3 A5).
+    /// 0.6: the least time work shows once it shows, such as a check: shorter reads as a flicker, and 0.6 seconds
+    /// reads as "it checked". A controller waits it on its injected clock.
+    public static let leastWork = Duration(seconds: 0.6)
+    /// 0.7: how long a done alert stays, its check and Recovered showing, before it closes.
     public static let doneHold = Duration(seconds: 0.7)
     /// 0.8: one breath of a status dot.
     static let pulse = Duration(seconds: 0.8)
     /// 0.9: one turn of the spinner.
     static let spin = Duration(seconds: 0.9)
-    /// 0.9: one ring in a success tile's shape expanding and fading (v3 S8, X11).
-    static let echo = Duration(seconds: 0.9)
-    /// 1.6: one breath of the live badge (v3 `Duration.breathe`).
+    /// 1.6: one breath of the live badge.
     public static let breathe = Duration(seconds: 1.6)
-    /// 2.4: how long a toast stays (v3 `Duration.toast`).
+    /// 2.4: how long a toast stays.
     public static let toast = Duration(seconds: 2.4)
-    /// 2.4: one turn of the ring tracing round Atlas's mark while the viewer connects (v3 V7: one 2.4 s turn, linear).
+    /// 2.4: one turn of the ring tracing round Atlas's mark while the viewer connects.
     static let trace = Duration(seconds: 2.4)
   }
 
-  /// The springs behind the animations, kept as values so their duration and bounce can be read back.
+  /// The springs behind the animations, kept as values so their duration and bounce can be read back. A spring
+  /// bounces only where something earned it: a mark popping in once, and a success tile
+  /// settling. Nothing the person did not throw overshoots.
   enum Springs {
-    /// A button coming back up and an alert settling: 0.3 seconds, bounce 0.2.
-    static let release = Spring(duration: 0.3, bounce: 0.2)
+    /// A button's spring and an alert settling: 0.3 seconds, no bounce.
+    static let release = Spring(duration: 0.3, bounce: 0)
     /// A tint, a rim, a colour or a row moving: 0.3 seconds, no bounce.
     static let state = Spring(duration: 0.3, bounce: 0)
-    /// A chip, a row, a slot or a toast appearing: 0.3 seconds, bounce 0.15.
-    static let arrive = Spring(duration: 0.3, bounce: 0.15)
-    /// One setup screen giving way to the next: 0.42 seconds, no bounce.
-    static let page = Spring(duration: 0.42, bounce: 0)
-    /// A check, a badge or a symbol popping in: 0.35 seconds, bounce 0.3.
-    static let pop = Spring(duration: 0.35, bounce: 0.3)
-    /// A success tile settling into place: 0.5 seconds, bounce 0.2 (v3 `icon`, S8).
+    /// A chip, a row, a slot, a toast or an alert appearing: 0.25 seconds, no bounce.
+    static let arrive = Spring(duration: 0.25, bounce: 0)
+    /// A check, a badge or a symbol popping in: 0.35 seconds, bounce 0.15.
+    static let pop = Spring(duration: 0.35, bounce: 0.15)
+    /// A success tile settling into place: 0.5 seconds, bounce 0.2.
     static let settle = Spring(duration: 0.5, bounce: 0.2)
-    /// A tab's thumb and its pane: 0.32 seconds, bounce 0.12.
-    static let tab = Spring(duration: 0.32, bounce: 0.12)
+    /// A tab's thumb gliding to the tab chosen: 0.25 seconds, no bounce.
+    static let tab = Spring(duration: 0.25, bounce: 0)
     /// A side column sliding in: 0.35 seconds, no bounce (``Motion/slide``).
     static let slide = Spring(duration: 0.35, bounce: 0)
-    /// A window or a pane changing height: 0.35 seconds, no bounce.
-    static let resize = Spring(duration: 0.35, bounce: 0)
-    /// A screenshot zooming, or the screen turning into the small screen and back: 0.4 seconds, bounce 0.12.
-    static let zoom = Spring(duration: 0.4, bounce: 0.12)
-    /// A position indicator moving: 0.45 seconds, bounce 0.2, the curve of today's ``Motion/indicator``.
-    static let indicator = Spring(duration: 0.45, bounce: 0.2)
+    /// A window or a pane changing height: 0.25 seconds, no bounce.
+    static let resize = Spring(duration: 0.25, bounce: 0)
+    /// A screenshot zooming, or the screen turning into the small screen and back: 0.35 seconds, no bounce, as Quick
+    /// Look's zoom lands.
+    static let zoom = Spring(duration: 0.35, bounce: 0)
+    /// A position indicator moving, such as the page dots: 0.3 seconds, no bounce.
+    static let indicator = Spring(duration: 0.3, bounce: 0)
   }
 
-  /// The setup window's glide curve: it starts at once and lands softly (v3 S7, X13), as a cubic Bézier's two
-  /// control points, for `CAMediaTimingFunction(controlPoints:)`.
+  /// The setup window's glide curve: it starts at once and lands softly, as a cubic Bézier's two control
+  /// points, for `CAMediaTimingFunction(controlPoints:)`.
   public static let glideSoftCurve = (x1: Float(0.25), y1: Float(1), x2: Float(0.5), y2: Float(1))
 
-  /// 0.8: how far through a glide the window's content starts fading back in, over ``Duration/fade`` (v3 S7: "in
-  /// 0.2 s at 80%").
+  /// 0.8: how far through a glide the window's content starts fading back in, over ``Duration/fade``.
   public static let glideReveal = 0.8
 
-  /// A window's resize curve: it leaves its start gently and settles softly (v3 G2, X2), as a cubic Bézier's two
-  /// control points, for `CAMediaTimingFunction(controlPoints:)`.
+  /// A window's resize curve: it leaves its start gently and settles softly, as a cubic Bézier's two control
+  /// points, for `CAMediaTimingFunction(controlPoints:)`.
   public static let resizeCurve = (x1: Float(0.25), y1: Float(0.1), x2: Float(0.25), y2: Float(1))
 
-  /// A button's press: ease out over ``Duration/press``.
+  /// A text link's press: ease out over ``Duration/press``.
   static var press: Animation { .easeOut(duration: Duration.press.seconds) }
 
-  /// A button's release and an alert's settle: ``Springs/release``.
+  /// A button's pressed fill easing back once it is let go: ease out over ``Duration/pressRelease``.
+  static var pressRelease: Animation { .easeOut(duration: Duration.pressRelease.seconds) }
+
+  /// Something coming back to rest with no bounce: ``Springs/release``.
   static var release: Animation { .spring(Springs.release) }
 
   /// A tint, a rim, a colour or a row moving to its new state: ``Springs/state``.
@@ -144,51 +153,22 @@ public enum Motion {
   /// The same leaving: ease in over ``Duration/leave``.
   static var leave: Animation { .easeIn(duration: Duration.leave.seconds) }
 
-  /// A setup screen giving way to the next: ``Springs/page``.
-  static var page: Animation { .spring(Springs.page) }
-
-  /// A setup screen arriving: ``page``, after ``Duration/pageDelay``, so it starts while the last one leaves on
-  /// ``leave`` (v3 S2, R9).
-  static var pageEntry: Animation {
-    page.delay(Duration.pageDelay.seconds)
-  }
-
-  /// One piece of an arriving setup screen fading in: ease out over ``Duration/piece``, after the screen's
-  /// ``Duration/pageDelay`` and one ``Duration/stagger`` for each piece before it, so its header, content and status
-  /// come in 30 ms apart (v3 S2, X7). Only opacity changes, but it outlasts what Reduce Motion keeps, so under Reduce
-  /// Motion a piece arrives with its screen's crossfade instead.
-  ///
-  /// - Parameter place: How many pieces arrive before this one: 0 for the header.
-  /// - Returns: The piece's fade.
-  static func pieceArrival(_ place: Int) -> Animation {
-    .easeOut(duration: Duration.piece.seconds)
-      .delay(Duration.pageDelay.seconds + Double(place) * Duration.stagger.seconds)
-  }
-
   /// A check, a badge or a symbol popping in: ``Springs/pop``.
   static var pop: Animation { .spring(Springs.pop) }
 
-  /// A success tile settling from 92% into place: ``Springs/settle`` (v3 S8, X11).
+  /// A success tile settling from 92% into place: ``Springs/settle``.
   static var settle: Animation { .spring(Springs.settle) }
 
-  /// One ring in a success tile's shape expanding and fading, once: over ``Duration/echo`` on a curve that leaves
-  /// fast and lands softly, after ``Duration/followUp``, so the tile has begun to settle first (v3 S8, X11). It scales,
-  /// so under Reduce Motion the ring is not drawn at all.
-  static var echo: Animation {
-    .timingCurve(echoCurve.x1, echoCurve.y1, echoCurve.x2, echoCurve.y2, duration: Duration.echo.seconds)
-      .delay(Duration.followUp.seconds)
-  }
-
-  /// A step's number shrinking away as the step finishes: ease out over ``Duration/step`` (v3 S3, X8). It scales, so
+  /// A step's number shrinking away as the step finishes: ease out over ``Duration/step``. It scales, so
   /// under Reduce Motion a view passes it through ``animation(_:reduceMotion:reduced:)``.
   static var stepOut: Animation { .easeOut(duration: Duration.step.seconds) }
 
-  /// A step lighting up as the one before it finishes: ``state``, after ``Duration/step`` (v3 S3, X8).
+  /// A step lighting up as the one before it finishes: ``state``, after ``Duration/step``.
   static var stepLight: Animation {
     state.delay(Duration.step.seconds)
   }
 
-  /// A tab's thumb and its pane: ``Springs/tab``.
+  /// A tab's thumb gliding to the tab chosen: ``Springs/tab``.
   static var tab: Animation { .spring(Springs.tab) }
 
   /// A window or a pane changing height: ``Springs/resize``.
@@ -213,28 +193,50 @@ public enum Motion {
       .delay(Duration.drawDelay.seconds)
   }
 
-  /// Something waiting to show, such as a spinner: a fade over ``Duration/fade`` after ``Duration/appearDelay``, so a
-  /// quick answer never flashes it (v3 R12, S9). Only opacity changes, so Reduce Motion keeps it.
+  /// Something waiting to show, such as a spinner: a fade over ``Duration/fade`` after
+  /// ``Duration/appearDelay``, so a quick answer never flashes it. Only opacity changes, so Reduce Motion
+  /// keeps it.
   static var appear: Animation {
     .easeOut(duration: Duration.fade.seconds)
       .delay(Duration.appearDelay.seconds)
   }
 
-  /// An alert leaving: ease in over ``Duration/dismiss`` (v3 A6). It shrinks as it fades, so under Reduce Motion it
-  /// becomes ``reduced``.
-  static var dismiss: Animation { .easeIn(duration: Duration.dismiss.seconds) }
-
-  /// A pane leaving as another takes its place: ease in over ``Duration/crossfadeOut`` (v3 X2).
-  static var crossfadeOut: Animation { .easeIn(duration: Duration.crossfadeOut.seconds) }
-
-  /// A pane arriving in another's place: ease out over ``Duration/crossfade``, after ``Duration/crossfadeDelay`` (v3
-  /// X2).
-  static var crossfadeIn: Animation {
-    .easeOut(duration: Duration.crossfade.seconds)
-      .delay(Duration.crossfadeDelay.seconds)
+  /// A working note showing: a fade over ``Duration/fade`` after ``Duration/noteDelay``, so work that ends sooner
+  /// never flashes it. Only opacity changes, so Reduce Motion keeps it.
+  static var noteAppear: Animation {
+    .easeOut(duration: Duration.fade.seconds)
+      .delay(Duration.noteDelay.seconds)
   }
 
-  /// A pane's crossfade under Reduce Motion, both ways: ease out over ``Duration/crossfadeReduced`` (v3 X2).
+  /// An alert or a caption leaving: ease in over ``Duration/dismiss``. An alert shrinks as it fades, so under
+  /// Reduce Motion it becomes ``reduced``.
+  static var dismiss: Animation { .easeIn(duration: Duration.dismiss.seconds) }
+
+  /// A pane leaving as another takes its place, such as the small screen's: ease in over
+  /// ``Duration/crossfadeOut``.
+  static var crossfadeOut: Animation { .easeIn(duration: Duration.crossfadeOut.seconds) }
+
+  /// A tab's pane arriving over the last: ease out over ``Duration/swapIn``, at once.
+  static var swapIn: Animation { .easeOut(duration: Duration.swapIn.seconds) }
+
+  /// A tab's pane leaving as another arrives: ease in over ``Duration/swapOut``.
+  static var swapOut: Animation { .easeIn(duration: Duration.swapOut.seconds) }
+
+  /// A setup page arriving over the last: ease out over ``Duration/pageIn``, at once.
+  static var pageIn: Animation { .easeOut(duration: Duration.pageIn.seconds) }
+
+  /// A setup page leaving as the next arrives: ease in over ``Duration/pageOut``.
+  static var pageOut: Animation { .easeIn(duration: Duration.pageOut.seconds) }
+
+  /// A choice's mark filling or emptying, such as a radio's: ease out over ``Duration/hoverIn``. Only colour and
+  /// opacity change, so Reduce Motion keeps it.
+  static var markFill: Animation { .easeOut(duration: Duration.hoverIn.seconds) }
+
+  /// Changing words swapping in place: ease out over ``Duration/textSwap``. Only opacity changes, so
+  /// Reduce Motion keeps it.
+  static var textSwap: Animation { .easeOut(duration: Duration.textSwap.seconds) }
+
+  /// A pane's crossfade under Reduce Motion, both ways: ease out over ``Duration/crossfadeReduced``.
   static var crossfadeReduced: Animation { .easeOut(duration: Duration.crossfadeReduced.seconds) }
 
   /// A fade: ease out over ``Duration/fade``.
@@ -246,14 +248,14 @@ public enum Motion {
       .repeatForever(autoreverses: true)
   }
 
-  /// A mark breathing in and out for as long as it shows, one breath in and out over ``Duration/breathe``, each way
-  /// half of it (v3 `breathe`, as the menu bar badge breathes). A loop, so only where ``loops(reduceMotion:)`` allows.
+  /// A mark breathing in and out for as long as it shows, one breath in and out over ``Duration/breathe``,
+  /// each way half of it. A loop, so only where ``loops(reduceMotion:)`` allows.
   static var breathe: Animation {
     .easeInOut(duration: Duration.breathe.seconds / 2)
       .repeatForever(autoreverses: true)
   }
 
-  /// A ring tracing round a mark for as long as it shows, one linear turn over ``Duration/trace`` (v3 V7). A loop, so
+  /// A ring tracing round a mark for as long as it shows, one linear turn over ``Duration/trace``. A loop, so
   /// only where ``loops(reduceMotion:)`` allows.
   static var trace: Animation {
     .linear(duration: Duration.trace.seconds)
@@ -266,18 +268,17 @@ public enum Motion {
       .repeatForever(autoreverses: false)
   }
 
-  /// A side column sliding in, such as the viewer's Details: ``Springs/slide``, a spring with no bounce that turns
-  /// back from where it is when asked to reverse mid-way (v3 V3, R17). The same curve as the response-0.35, damping-1
-  /// spring it replaced.
+  /// A side column sliding in, such as the viewer's Details: ``Springs/slide``, a spring with no bounce that
+  /// turns back from where it is when asked to reverse mid-way. The same curve as the response-0.35,
+  /// damping-1 spring it replaced.
   static var slide: Animation { .spring(Springs.slide) }
 
-  /// A position indicator moving, such as the page dots: a spring with a little bounce. v3's ``Springs/indicator``
-  /// draws the same curve and takes over when its surface is redesigned.
-  static var indicator: Animation { .spring(response: indicatorResponse, dampingFraction: indicatorDamping) }
+  /// A position indicator moving, such as the page dots: ``Springs/indicator``, with no bounce.
+  static var indicator: Animation { .spring(Springs.indicator) }
 
-  /// The fade every transition takes under Reduce Motion, nothing moving: ease out over ``Duration/reduced``. Each
-  /// surface adopts it as it is redesigned; until then each keeps its own fallback through
-  /// ``animation(_:reduceMotion:)`` or ``animation(_:reduceMotion:reduced:)``.
+  /// The shared fade for transitions under Reduce Motion: ease out over ``Duration/reduced``, with no
+  /// movement. Callers can choose a fallback through ``animation(_:reduceMotion:)`` or
+  /// ``animation(_:reduceMotion:reduced:)``.
   static var reduced: Animation { .easeOut(duration: Duration.reduced.seconds) }
 
   /// An animation, or none under Reduce Motion, so the change happens at once.
@@ -329,12 +330,4 @@ public enum Motion {
   public static func loops(reduceMotion: Bool) -> Bool {
     !reduceMotion
   }
-
-  /// The echo's curve, as a cubic Bézier's two control points: it leaves fast and lands softly (v3
-  /// `cubic-bezier(.2, .7, .3, 1)`).
-  private static let echoCurve = (x1: 0.2, y1: 0.7, x2: 0.3, y2: 1.0)
-  /// The indicator's spring response, in seconds.
-  private static let indicatorResponse = 0.45
-  /// The indicator's spring damping: 0.8 leaves a small settle.
-  private static let indicatorDamping = 0.8
 }

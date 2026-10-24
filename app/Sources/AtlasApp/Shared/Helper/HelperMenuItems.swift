@@ -1,7 +1,8 @@
 import AppKit
 
-/// The helper's menu items, built once for every menu that lists them: Recover…, Switch to the Helper… and Log Out the
-/// Helper…. Each asks its window (``HelperMenuActions``), which validates it against the same state its buttons draw.
+/// The helper's menu items for a menu that lists them all as they are: Recover…, Switch to the Helper… and Log Out the
+/// Helper…. The main menu's Helper menu builds its own, naming the helper (`MainMenu+Helper`). Each asks its window
+/// (``HelperMenuActions``), which validates it against the same state its buttons draw.
 enum HelperMenuItems {
   /// The three items, in order.
   ///
@@ -14,14 +15,6 @@ enum HelperMenuItems {
       item(HelperWords.switchItem, #selector(HelperMenuActions.askSwitch(_:)), target: target),
       item(HelperWords.logOutItem, #selector(HelperMenuActions.askLogOut(_:)), target: target),
     ]
-  }
-
-  /// Restart the Helper…, which only the main menu lists.
-  ///
-  /// - Parameter target: Who answers it, or nil for the responder chain.
-  /// - Returns: The item.
-  static func restart(target: AnyObject?) -> NSMenuItem {
-    item(HelperWords.restartItem, #selector(HelperMenuActions.askRestart(_:)), target: target)
   }
 
   /// One item with no key equivalent.

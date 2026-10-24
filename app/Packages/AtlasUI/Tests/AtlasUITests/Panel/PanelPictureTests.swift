@@ -92,11 +92,11 @@ struct PanelPictureTests {
     #expect(!isOrange(live.colour(x: Self.badge.x, y: Self.badge.y)), "the live picture carries none")
   }
 
-  @Test("a failed newest action leads the picture's caption with an orange dot, any other with the breathing blue one")
+  @Test("a failed newest action leads the picture's caption with an orange dot, any other with the steady blue one")
   func aFailedCaptionIsOrange() throws {
     let working = PanelCaption(text: "Clicked Save", time: "just now")
     let failed = PanelCaption(text: "Clicked Save", time: "just now", isFailed: true)
-    #expect(PanelPicture.lead(working) == GlassChip<EmptyView>.Lead.pulsing(.active))
+    #expect(PanelPicture.lead(working) == GlassChip<EmptyView>.Lead.dot(.active))
     #expect(PanelPicture.lead(failed) == GlassChip<EmptyView>.Lead.dot(.attention))
     // The chip's leading end: past the caption's corner inset, across the small chip's end inset and its dot, on the
     // chip's middle line.
@@ -136,12 +136,39 @@ struct PanelPictureTests {
     let lead = (x: Int(ControlHeight.sPlus) / 2, y: Int(ControlHeight.sPlus) / 2)
     for showsStop in [false, true] {
       let pixel = try PanelPixels(
-        PanelControlRow(controls: PanelControls(showsStop: showsStop, main: main)) { _ in }
+        PanelControlRow(controls: PanelControls(agent: showsStop ? .stop : nil, main: main)) { _ in }
           .frame(width: PanelLayout.picture.width)
       )
       .colour(x: lead.x, y: lead.y)
       let isWhite = pixel.alpha > 0.9 && min(pixel.red, pixel.green, pixel.blue) > 0.9
       #expect(isWhite == !showsStop, "Stop \(showsStop ? "leads" : "is gone")")
     }
+  }
+
+  @Test("pressing Stop turns it into Resume without changing its width, so the main action never moves")
+  func stopAndResumeShareOneWidth() throws {
+    let main = PanelMainButton(title: "Open Atlas", help: "", event: .openAtlas)
+    let middle = Int(ControlHeight.sPlus) / 2
+    func mainStart(_ agent: ViewerAgentButton) throws -> Int? {
+      let pixels = try PanelPixels(
+        PanelControlRow(controls: PanelControls(agent: agent, main: main)) { _ in }
+          .frame(width: PanelLayout.picture.width)
+      )
+      func isWhite(_ x: Int) -> Bool {
+        let pixel = pixels.colour(x: x, y: middle)
+        return pixel.alpha > 0.9 && min(pixel.red, pixel.green, pixel.blue) > 0.9
+      }
+      // The white fill, a long run of white, not the glass button's white words.
+      let run = 24
+      let starts = 0..<(pixels.width - run)
+      return starts.first { x in
+        let span = x..<(x + run)
+        return span.allSatisfy(isWhite)
+      }
+    }
+    let stop = try mainStart(.stop)
+    let resume = try mainStart(.resume(isEnabled: true))
+    #expect(stop != nil, "the white main action is drawn")
+    #expect(resume == stop)
   }
 }

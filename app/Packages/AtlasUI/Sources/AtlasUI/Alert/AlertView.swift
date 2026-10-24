@@ -2,8 +2,8 @@ import SwiftUI
 
 /// The alert window's content: one alert on a clear ground, with room around it for its shadow. Atlas shows it when
 /// the menu bar panel asks to recover, switch to or log out the helper while no main window is open; the main window
-/// shows the same alert over its own scrim instead. The card settles from 1.06 to 1 as the window opens (v3 A6), or
-/// fades in under Reduce Motion.
+/// shows the same alert over its own scrim instead. The card fades in, settling from 1.04 to 1 with no bounce as the
+/// window opens, or only fades in under Reduce Motion.
 public struct AlertView: View {
   /// What the alert says and offers.
   private let state: AlertCardState<AlertChoice>
@@ -33,7 +33,7 @@ public struct AlertView: View {
       .foregroundStyle(Color.textPrimary)
       .environment(\.colorScheme, .dark)
       .onAppear {
-        withAnimation(Motion.animation(Motion.release, reduceMotion: reduceMotion, reduced: Motion.reduced)) {
+        withAnimation(Motion.animation(Motion.arrive, reduceMotion: reduceMotion, reduced: Motion.reduced)) {
           settled = true
         }
       }

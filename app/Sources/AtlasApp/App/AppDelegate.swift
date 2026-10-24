@@ -26,9 +26,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       settings: (self, #selector(settingsFromMenu(_:))),
       checkForUpdates: (self, #selector(checkForUpdatesFromMenu(_:))),
       gettingStarted: (self, #selector(gettingStartedFromMenu(_:))),
+      openViewer: (self, #selector(openViewerFromMenu(_:))),
+      copyDiagnostics: (self, #selector(copyDiagnosticsFromMenu(_:))),
       viewer: true
     )
     container.start()
+  }
+
+  /// Atlas is asked to quit, from the Dock, a log-out or anywhere that did not go through Quit Atlas: the main
+  /// window's control goes back first, and Atlas quits once the service has answered.
+  ///
+  /// - Parameter sender: The app.
+  /// - Returns: Now, with no control work under way; later, once it is answered.
+  func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    guard container.coordinator.holdsUpQuitting else { return .terminateNow }
+    // Unstructured, as AppKit asks synchronously: Atlas quits once the release is answered.
+    Task {
+      await container.coordinator.releaseBeforeQuitting()
+      sender.reply(toApplicationShouldTerminate: true)
+    }
+    return .terminateLater
+  }
+
+  /// The Dock icon's menu: the main window's control, its agent and its picture, while it is open.
+  ///
+  /// - Parameter sender: The app.
+  /// - Returns: The menu, or nil for none.
+  func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+    container.coordinator.dockMenu()
   }
 
   /// The app is quitting: the screenshots dragged out of the main window leave no copy behind.
@@ -53,7 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     NSApp.terminate(nil)
   }
 
-  /// Quit Atlas (⌘Q): in a window it closes that window (``WindowCoordinator/quit(_:)``).
+  /// Quit Atlas (⌘Q): the main window's control goes back, then Atlas quits (``WindowCoordinator/quit(_:)``).
   ///
   /// - Parameter sender: The menu item.
   @objc func quitFromMenu(_ sender: Any?) {
@@ -72,6 +97,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// - Parameter sender: The menu item.
   @objc func checkForUpdatesFromMenu(_ sender: Any?) {
     container.coordinator.checkForUpdates()
+  }
+
+  /// Open Atlas (⌘O) in the File menu: the main window, brought forward.
+  ///
+  /// - Parameter sender: The menu item.
+  @objc func openViewerFromMenu(_ sender: Any?) {
+    container.coordinator.openViewer()
+  }
+
+  /// Copy Diagnostics in the Help menu.
+  ///
+  /// - Parameter sender: The menu item.
+  @objc func copyDiagnosticsFromMenu(_ sender: Any?) {
+    // Unstructured, as the menu's action is synchronous.
+    Task { await container.coordinator.copyDiagnostics() }
   }
 
   /// Getting Started… in the Help menu.

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// One line under a ``GroupedSection``'s group (v3 `.sgfoot`): quiet small print, or a small status line.
+/// One line under a ``GroupedSection``'s group: quiet small print, or a small status line.
 struct GroupedSectionNoteView: View {
   /// The line.
   let note: GroupedSectionNote

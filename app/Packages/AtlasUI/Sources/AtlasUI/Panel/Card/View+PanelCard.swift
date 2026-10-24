@@ -1,8 +1,8 @@
 import SwiftUI
 
 extension View {
-  /// Draws the panel as the board does where no popover holds it, as in a design render or a preview (v3 P3): the
-  /// glass under the panel's tinted ground, opaque under Reduce Transparency, its corners, a fine edge with a brighter
+  /// Draws the panel's surface where no popover holds it, as in a design render or a preview: the glass under
+  /// the panel's tinted ground, opaque under Reduce Transparency, its corners, a fine edge with a brighter
   /// 0.5-point highlight along the top, and its shadow.
   ///
   /// - Returns: The panel on its card.

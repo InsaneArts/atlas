@@ -10,40 +10,55 @@ import Testing
 struct ScreenZoomTests {
   @Test("the small screen and the stage share one geometry id")
   func theSmallScreenAndTheStageShareOneGeometryID() throws {
-    let leaving = ViewerHost(try Self.state(.screen))
     // On the Screen, the stage's picture fills the middle of the window.
-    #expect(try leaving.colour(at: Self.middle) == .stage)
+    #expect(try ViewerHost(try Self.state(.screen)).colour(at: Self.middle) == .stage)
     // Activity's first frame draws the small screen where the stage's picture was, whole over it: one picture, about
     // to shrink into the corner. Two pictures would leave the stage's own in the middle as it fades.
-    leaving.show(try Self.state(.activity))
-    #expect(try leaving.colour(at: Self.middle) == .corner)
-
-    let coming = ViewerHost(try Self.state(.activity))
+    let leaving = try ViewerHost.firstFrame(
+      from: try Self.state(.screen),
+      to: try Self.state(.activity),
+      at: [Self.middle]
+    )
+    #expect(leaving == [.corner])
     // Over Activity, the small screen sits in its corner, drawn through the window's live slot (which paints its
     // picture blue here), and Activity has the middle.
-    #expect(try coming.colour(at: Self.middle) == nil)
-    #expect(try coming.colour(at: Self.corner) == .corner)
+    let settled = try ViewerHost(try Self.state(.activity))
+      .colours(at: [Self.middle, Self.corner])
+    #expect(settled == [nil, .corner])
     // Back on the Screen, the stage's picture starts from the corner, under the small screen it grows out of, and
     // never in the middle, where it would stand apart from it.
-    coming.show(try Self.state(.screen))
-    #expect(try coming.colour(at: Self.middle) == nil)
-    #expect(try coming.colour(at: Self.corner) == .corner)
+    let coming = try ViewerHost.firstFrame(
+      from: try Self.state(.activity),
+      to: try Self.state(.screen),
+      at: [Self.middle, Self.corner]
+    )
+    #expect(coming == [nil, .corner])
   }
 
   @Test("a switch to Activity turned straight back keeps one picture on the stage, never a gap")
   func aSwitchTurnedBackKeepsOnePicture() throws {
-    let host = ViewerHost(try Self.state(.screen))
-    host.show(try Self.state(.activity))
-    host.show(try Self.state(.screen))
+    let clock = ContinuousClock()
+    var colours: [PictureColour?] = []
+    // The two switches' frame must be drawn before the first switch's move has gone far, as a person turning straight
+    // back sees it; a busy Mac that draws it later tries again in a fresh window.
+    for _ in 0..<ViewerHost.firstFrameTries {
+      let host = ViewerHost(try Self.state(.screen))
+      let started = clock.now
+      host.show(try Self.state(.activity))
+      host.show(try Self.state(.screen))
+      colours = try host.colours(at: [Self.middle, Self.corner])
+      if clock.now - started <= ViewerHost.firstFrameWithin { break }
+    }
     // The small screen had not left the stage's middle, so the picture coming back starts there, whole: the middle
     // shows one picture or the other, never the empty stage, and the corner holds no second small screen.
-    #expect(try host.colour(at: Self.middle) != nil, "the stage's middle was empty as the switch turned back")
-    #expect(try host.colour(at: Self.corner) == nil, "a small screen was left in the corner")
+    #expect(colours[0] != nil, "the stage's middle was empty as the switch turned back")
+    #expect(colours[1] == nil, "a small screen was left in the corner")
   }
 
   /// A point in the middle of the stage, clear of the corner.
   static let middle = CGPoint(x: PreviewStates.viewerSize.width / 3, y: PreviewStates.viewerSize.height / 2)
-  /// The middle of the small screen in its corner: 26 from the window's right and bottom edges, 248 by 155.
+  /// The middle of the small screen in its corner: 26 from the stage's right and bottom edges, 248 by 155 in a window
+  /// this wide.
   static let corner = CGPoint(x: PreviewStates.viewerSize.width - 150, y: PreviewStates.viewerSize.height - 103)
 
   /// The window on the Screen or on Activity with the small screen in its corner. The stage and the corner read one

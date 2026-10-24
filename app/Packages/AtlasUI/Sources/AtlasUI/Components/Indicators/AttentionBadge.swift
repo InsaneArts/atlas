@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// A small orange disc with a bold "!", set on a picture's corner to say the person is needed there (v3 P4, `.warn`).
-/// The words beside the picture say why, so VoiceOver skips it.
+/// A small orange disc with a bold "!", set on a picture's corner to say the person is needed there. The
+/// words beside the picture say why, so VoiceOver skips it.
 struct AttentionBadge: View {
   /// The disc's side.
   let side: CGFloat
@@ -22,7 +22,7 @@ struct AttentionBadge: View {
 
 /// The badge's own measures.
 private enum Layout {
-  /// 0.6: the "!" against the disc's side, v3's 12-point mark on its 20-point disc.
+  /// 0.6: the "!" against the disc's side, a 12-point mark on its 20-point disc.
   static let glyphScale: CGFloat = 0.6
 }
 

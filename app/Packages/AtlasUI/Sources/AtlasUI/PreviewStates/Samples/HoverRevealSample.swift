@@ -1,7 +1,7 @@
 #if DEBUG
   import SwiftUI
 
-  /// A window row whose Show on Screen appears only under the pointer (v3 R7, V9).
+  /// A window row whose Show on Screen appears only under the pointer.
   struct HoverRevealSample: View {
     @State private var isHovered = false
 

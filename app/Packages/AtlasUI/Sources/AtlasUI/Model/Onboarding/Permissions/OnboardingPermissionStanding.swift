@@ -1,25 +1,23 @@
-/// What ends a permission's row (v3 D4, Q-D3): its Allow… while it is the one to allow next, a check and Allowed once
-/// on, a spinner and Checking… while it cannot be read, else a quiet Off.
+/// Where a permission stands, in the same words on the permissions screen's rows and in the panel beside System
+/// Settings: a word for each situation, never a verdict for a permission whose turn has not come.
 public enum OnboardingPermissionStanding: Hashable, Sendable {
-  /// Allow…, which opens its list in System Settings.
-  case allow(String)
-  /// On, in words.
+  /// On: a green check and its word, Allowed.
   case allowed(String)
-  /// Not read yet, in words: never shown as off.
+  /// Its turn, with System Settings open on its list: the person acts there, so its word, Waiting for you…, has no
+  /// spinner.
+  case waiting(String)
+  /// Its turn, its list not opened yet: the footer's button offers it, so the row says nothing.
+  case yourTurn
+  /// Its turn has not come yet: a quiet Next, the row dimmed.
+  case next(String)
+  /// Allowed once and off again, the one real problem: Turned off, in orange.
+  case turnedOff(String)
+  /// Not read yet, as Atlas's job restarts: a spinner and Checking…, after a moment, never shown as off.
   case checking(String)
-  /// Off, and not the one to allow next.
-  case off(String)
 
-  /// Where `permission` stands on its row.
-  ///
-  /// - Parameters:
-  ///   - permission: The permission.
-  ///   - offersAllow: Whether the row takes a press: the screen's rows do, the panel's only show.
-  /// - Returns: Its standing.
-  public static func of(_ permission: OnboardingPermissionItem, offersAllow: Bool) -> OnboardingPermissionStanding {
-    if permission.isOn { return .allowed(permission.status) }
-    if !permission.isKnown { return .checking(permission.status) }
-    if offersAllow && permission.canAllow { return .allow(permission.allowTitle) }
-    return .off(permission.status)
+  /// Whether the row it ends is dimmed, its turn not come yet.
+  public var dimsRow: Bool {
+    if case .next = self { return true }
+    return false
   }
 }

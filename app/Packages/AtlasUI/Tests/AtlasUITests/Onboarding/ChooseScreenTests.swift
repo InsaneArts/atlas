@@ -28,6 +28,20 @@
       #expect(changed.allSatisfy(radio.contains), "pixels changed outside the radios, at x \(Set(changed).sorted())")
     }
 
+    @Test("one account alone is no choice, so its row has no radio, and the new account carries its Recommended tag")
+    func aSingleAccountHasNoRadio() {
+      let rows = ChooseScreen.rows(PreviewStates.onboardingChooseScreen)
+      #expect(rows.first?.tag == "Recommended")
+      #expect(rows.allSatisfy { if case .radio = $0.trailing { true } else { false } })
+      guard case .screen(.choose(let only)) = PreviewStates.onboardingChooseOnly.content else {
+        Issue.record("not the choice")
+        return
+      }
+      let single = ChooseScreen.rows(only)
+      #expect(single.count == 1 && single.first?.trailing == ListRow.Trailing.none)
+      #expect(single.first?.titleFit == .oneLine, "an account's name keeps to one line")
+    }
+
     /// The choice's rows in their group, as the screen draws them.
     ///
     /// - Parameter state: The choice.

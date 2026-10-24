@@ -39,7 +39,7 @@
       )
     }
 
-    /// The Screenshots tab an hour on, 10:31:44 selected (MacShots).
+    /// The Screenshots tab an hour on, 10:31:44 selected.
     @MainActor public static let viewerShots: ViewerState = {
       var state = viewerIdle
       state.top.status = StatusSummary(
@@ -51,12 +51,11 @@
       state.top.tabs = viewerTabs(.screenshots)
       state.pane = .screenshots(
         ViewerShotsState(
-          meta: "6 today · Space opens one, drag one out to use it",
-          query: "",
+          meta: "6 today",
           days: [
             ViewerShotDay(
               id: "hour",
-              title: "Today",
+              title: "Now",
               shots: [
                 shotTile(0, "10:31:45"), shotTile(1, "10:31:44", isSelected: true), shotTile(2, "10:31:20"),
                 shotTile(3, "10:31:14"),
@@ -64,7 +63,7 @@
             ),
             ViewerShotDay(
               id: "morning",
-              title: "This morning",
+              title: "Earlier today",
               shots: [shotTile(4, "10:12:03"), shotTile(5, "09:58:41")]
             ),
           ]
@@ -73,7 +72,7 @@
       return state
     }()
 
-    /// 10:31:44 shown large over the whole window (MacShotLarge).
+    /// 10:31:44 shown large over the whole window.
     @MainActor public static let viewerShotLarge: ViewerState = {
       var state = viewerShots
       guard case .screenshots(var shots) = state.pane, let picture = SampleDesktop.picture else { return state }
@@ -95,8 +94,7 @@
       var state = viewerShots
       state.pane = .screenshots(
         ViewerShotsState(
-          meta: "None today",
-          query: "",
+          meta: "",
           days: [],
           empty: EmptyMessageState(
             headline: "No screenshots yet",

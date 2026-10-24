@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// A status as a small pill (v3 `.pill`, G4): a dot and the word in the status's colour on a faint wash of it, or on
-/// a quiet fill when there is nothing to say.
+/// A status as a small pill: a dot and the word in the status's colour on a faint wash of it, or on a quiet
+/// fill when there is nothing to say.
 struct StatusPill: View {
   /// The status in words, such as "Idle".
   let label: String
@@ -64,7 +64,7 @@ struct StatusPill: View {
   }
 }
 
-/// The pill's own measures (v3 `.pill`).
+/// The pill's own measures.
 private enum Layout {
   /// 20: the pill's height.
   static let height: CGFloat = 20

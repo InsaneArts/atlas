@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// One line that says how things stand (v3 D4): a small mark and a sentence, in the same place on every screen. Work
-/// shows a spinner, which waits before it shows; a problem is orange; done is green. A new sentence replaces the old
-/// with a blur (v3 R11); under Reduce Motion it fades.
+/// One line that says how things stand: a small mark and a sentence, in the same place on every screen. Work
+/// shows a spinner; a problem is orange; done is green. A line that says work runs waits ``Motion/noteAppear``'s
+/// delay before it shows, so work that ends sooner never flashes it, while a problem or a success shows at once.
+/// A new sentence swaps in place of the old by opacity, the same under Reduce Motion.
 struct StatusLine: View {
   /// How things stand.
   enum Kind: Equatable, Sendable {
@@ -18,7 +19,7 @@ struct StatusLine: View {
   enum Size: Sendable {
     /// Callout, as a screen's status line.
     case regular
-    /// Caption, as small print under a group (v3 `.sgfoot`).
+    /// Caption, as small print under a group.
     case small
 
     /// The sentence's style.
@@ -32,7 +33,7 @@ struct StatusLine: View {
     }
   }
 
-  /// 13: the mark's side (v3 D4), a step under the callout's line.
+  /// 13: the mark's side, a step under the callout's line.
   static let markSide: CGFloat = 13
 
   /// How things stand.
@@ -41,9 +42,8 @@ struct StatusLine: View {
   let text: String
   /// How large the sentence is set; callout by default.
   var size = Size.regular
-  /// Whether the mark pops in as the line appears, such as About's green check (v3 G9).
+  /// Whether the mark pops in as the line appears, such as About's green check.
   var popsMark = false
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   /// The mark, then the sentence.
   var body: some View {
@@ -55,11 +55,10 @@ struct StatusLine: View {
         .foregroundStyle(Self.color(kind))
         .multilineTextAlignment(.leading)
         .fixedSize(horizontal: false, vertical: true)
-        .id(text)
-        .transition(Motion.transition(AnyTransition(.blurReplace(.downUp)), reduceMotion: reduceMotion))
+        .swapsText(on: text)
     }
-    .animation(Motion.animation(Motion.state, reduceMotion: reduceMotion, reduced: Motion.reduced), value: text)
-    .animation(Motion.animation(Motion.state, reduceMotion: reduceMotion, reduced: Motion.reduced), value: kind)
+    .animation(Motion.textSwap, value: kind)
+    .appearsAsNote(holds: kind == .working)
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(kind.spokenValue)
     .accessibilityValue(text)
@@ -88,7 +87,7 @@ struct StatusLine: View {
   }
 }
 
-/// v3's status line (`.stl`).
+/// The status line's own measures for its mark and text.
 private enum Layout {
   /// 7: between the mark and the sentence.
   static let gap: CGFloat = 7

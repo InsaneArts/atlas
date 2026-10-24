@@ -1,7 +1,7 @@
 import AppKit
 
 extension PanelPopover {
-  /// Gives the popover the size its panel asks for (v3 P10): easing on ``PanelResize`` while it shows, so the height
+  /// Gives the popover the size its panel asks for easing on ``PanelResize`` while it shows, so the height
   /// follows Recent and the line as they come and go, and at once while it is closed or under Reduce Motion.
   ///
   /// - Parameter size: The size the panel asks for.

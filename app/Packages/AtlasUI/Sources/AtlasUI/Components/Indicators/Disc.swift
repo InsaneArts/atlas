@@ -38,8 +38,7 @@ struct Disc: View {
     case regular
     /// 34: an avatar in a choice row.
     case avatar
-    /// 48: the asking account's avatar in the helper's allow pairing, beside Atlas's tile of the same size (v3
-    /// `.pairing`).
+    /// 48: the asking account's avatar in the helper's allow pairing, beside Atlas's tile of the same size.
     case pairing
   }
 
@@ -127,7 +126,7 @@ struct Disc: View {
 private enum Layout {
   /// 0.2: the soft accent under the person's own initial, stronger than a tint so it reads at disc size.
   static let accentSoft = 0.2
-  /// 48: a pairing disc's side (v3 `.pairing .av2`).
+  /// 48: a pairing disc's side.
   static let pairingSide: CGFloat = 48
 }
 

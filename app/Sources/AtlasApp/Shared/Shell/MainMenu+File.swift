@@ -1,12 +1,19 @@
 import AppKit
 
 extension MainMenu {
-  /// Save Picture…, where the main window can open, and Close.
+  /// Open Atlas (⌘O), the way back to the main window, then Save Picture…, where the main window can open, and Close.
   ///
-  /// - Parameter viewer: Whether the main window can open, so Save Picture… is offered.
+  /// - Parameters:
+  ///   - viewer: Whether the main window can open, so Save Picture… is offered.
+  ///   - openViewer: What Open Atlas does; nil leaves it out.
   /// - Returns: The menu.
-  static func fileMenu(viewer: Bool) -> NSMenu {
+  static func fileMenu(viewer: Bool, openViewer: Command? = nil) -> NSMenu {
     let file = NSMenu(title: MenuWords.file)
+    if let openViewer {
+      let open = file.addItem(withTitle: MenuWords.openAtlas, action: openViewer.action, keyEquivalent: "o")
+      open.target = openViewer.target
+      file.addItem(.separator())
+    }
     if viewer {
       file.addItem(
         withTitle: ViewerWords.savePicture,

@@ -1,3 +1,4 @@
+import AtlasOnboardingTesting
 import Foundation
 import Testing
 
@@ -9,6 +10,14 @@ struct OnboardingFactsTests {
   func refused() {
     #expect(OnboardingFacts(json: Data("not json".utf8)) == nil)
     #expect(OnboardingFacts(json: Data("[]".utf8)) == nil)
+  }
+
+  @Test("the deleted accounts' open logins are read by user ID, and none when the reply has none")
+  func leftoverLogins() throws {
+    #expect(try controller(leftovers: [502, 504]).leftoverLogins == [502, 504])
+    #expect(try controller().leftoverLogins.isEmpty)
+    let older = try facts(["role": "controller", "configured": false])
+    #expect(older.leftoverLogins.isEmpty, "a reply without the field")
   }
 
   @Test("each side reads its own names: the person's account and candidates, or the account that asked")

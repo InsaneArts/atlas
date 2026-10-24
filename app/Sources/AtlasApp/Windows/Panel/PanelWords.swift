@@ -5,11 +5,9 @@
 /// depend on state, interpolated, chosen by a condition or derived from facts. Words the panel shares with another
 /// window are the app's shared ``Words`` or the helper commands' ``HelperWords``.
 enum PanelWords {
-  /// What VoiceOver calls the panel: Atlas, though its heading is now the status (v3 P1, C-11).
+  /// What VoiceOver calls the panel: Atlas, though its heading is the status.
   static let name = "Atlas"
-  /// The person holds control in Atlas's window: the line beside the word.
-  static let controlLine = "In Atlas · the agent waits"
-  /// The panel's picture is paused while nothing acts: the line under Idle (v3 P11).
+  /// The panel's picture is paused while nothing acts: the line under Idle.
   static let pausedLine = "Picture paused · work in the helper goes on"
   /// The helper is logged out: the line beside the word.
   static let loggedOutLine = "Agents can't use the helper until you log in"
@@ -21,7 +19,7 @@ enum PanelWords {
   static let notReadyPicture = "Recover checks the helper and starts it again"
   /// The empty stage's words while the helper isn't ready for a reason Recover can't fix, such as a service that
   /// isn't answering.
-  static let notReadyWaitPicture = "Atlas checks again by itself. Settings shows what the helper needs"
+  static let notReadyWaitPicture = "Atlas checks again by itself. Settings shows what the helper needs."
   /// The main action that opens the main window.
   static let openAtlas = "Open Atlas"
   /// Open Atlas's tooltip.
@@ -30,24 +28,15 @@ enum PanelWords {
   static let giveBack = "Give Back"
   /// Give Back's tooltip.
   static let giveBackHelp = "Give control back to the agent"
-  /// The main action once agents are stopped.
-  static let resume = "Resume"
-  /// Resume's tooltip.
-  static let resumeHelp = "Let agents act in the helper again"
+  /// The main action while the helper isn't ready for a reason Recover can't fix: the Settings window, which shows
+  /// what the helper needs.
+  static let openSettings = "Open Settings"
+  /// Open Settings' tooltip.
+  static let openSettingsHelp = "See what the helper needs in Settings"
   /// Recover…'s tooltip.
   static let recoverHelp = "Check the helper and start its mouse and keyboard again"
-  /// The pause button on the picture, for VoiceOver, while pictures arrive.
-  static let pausePicture = "Pause picture"
-  /// The pause button, for VoiceOver, while the picture is paused.
-  static let resumePicture = "Resume picture"
-  /// The pause button's tooltip while pictures arrive.
-  static let pausePictureHelp = "Stop updating the helper's screen here"
-  /// The pause button's tooltip while the picture is paused.
-  static let resumePictureHelp = "Update the helper's screen here again"
   /// The ⋯ menu's item that opens the main window.
   static let openAtlasItem = "Open Atlas"
-  /// The ⋯ menu's Open at Login item.
-  static let openAtLoginItem = "Open at Login"
   /// Switch found no helper account.
   static let helperNotFound = "Atlas couldn't find the helper account. Open Getting Started to check it."
 

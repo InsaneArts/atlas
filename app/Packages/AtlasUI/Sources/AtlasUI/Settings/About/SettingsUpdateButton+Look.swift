@@ -1,35 +1,32 @@
 import SwiftUI
 
 extension SettingsUpdateButton {
-  /// The button's word.
+  /// The button's word: Check for Updates until a newer version is found, then Install Update…. It keeps its word
+  /// while its check or install runs; the line under it says so.
   var title: String {
     switch self {
-    case .check: "Check for Updates"
-    case .checking: "Checking…"
-    case .install: "Install Update…"
-    case .installing: "Installing…"
+    case .check, .checking: "Check for Updates"
+    case .install, .installing: "Install Update…"
     }
   }
 
-  /// How it is painted: white to check, blue once a newer version waits, the one time About asks for something.
+  /// Every word the button can show, so it lays out at the widest and never changes width.
+  static let titles = ["Check for Updates", "Install Update…"]
+
+  /// How it is painted: glass to check, blue once a newer version waits, the one time About asks for something.
   var look: CapsuleButtonStyle.Look {
     switch self {
-    case .check, .checking: .primary
+    case .check, .checking: .glass
     case .install, .installing: .accent
     }
   }
 
-  /// Whether its check or install runs now, which shows a spinner in it and holds it.
+  /// Whether its check or install runs now, which holds it.
   var isWorking: Bool {
     switch self {
     case .checking, .installing: true
     case .check, .install: false
     }
-  }
-
-  /// The spinner's arc: the ground's colour on white, white on the accent.
-  var arc: Color {
-    look == .accent ? .onAccent : .ground
   }
 
   /// What a press sends, or nil while it works.

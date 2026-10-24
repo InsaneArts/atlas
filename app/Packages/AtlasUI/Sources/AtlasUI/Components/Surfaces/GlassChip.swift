@@ -1,18 +1,17 @@
 import SwiftUI
 
-/// A chip on glass floating over the picture (v3 V5, V6): 28 high, 12-point medium words, an optional mark before
-/// them and an optional time after them in tabular digits, which count rather than jump (v3 R11). The panel's picture
-/// takes the small one, 26 high with 11.5-point words (v3 `.chip`). Under Reduce Transparency the glass turns opaque.
+/// A chip on glass floating over the picture: 28 high, 12-point medium words, an optional mark before them
+/// and an optional time after them in tabular digits, which changes every second, so it takes no transition.
+/// The panel's picture takes the small one, 26 high with 11.5-point words. Under Reduce Transparency the
+/// glass turns opaque.
 struct GlassChip<Content: View>: View {
   /// What leads the words.
   enum Lead: Equatable, Sendable {
     /// Nothing.
     case none
-    /// A status dot in a tone, such as the active blue of the newest action.
+    /// A status dot in a tone, such as the active blue of the newest action. It never breathes: one dot breathes in
+    /// a window, the status's.
     case dot(StatusTone)
-    /// A status dot that breathes while something works, such as the newest action's on the panel's picture;
-    /// steady under Reduce Motion.
-    case pulsing(StatusTone)
     /// A spinner, which waits before it shows.
     case spinner
     /// A symbol, such as pause.
@@ -21,10 +20,9 @@ struct GlassChip<Content: View>: View {
 
   /// How large the chip draws.
   enum Size: Equatable, Sendable {
-    /// The viewer's chip (v3 `.gchip`): 28 high, 12-point words, 12 points in from each end, 8 between its parts.
+    /// The viewer's chip: 28 high, 12-point words, 12 points in from each end, 8 between its parts.
     case regular
-    /// The panel caption's chip (v3 `.chip`): 26 high, 11.5-point words, 10 points in from each end, 7 between its
-    /// parts.
+    /// The panel caption's chip: 26 high, 11.5-point words, 10 points in from each end, 7 between its parts.
     case small
 
     /// The chip's height.
@@ -98,7 +96,6 @@ struct GlassChip<Content: View>: View {
               .monospacedDigit()
           )
           .foregroundStyle(Color.textSecondary)
-          .contentTransition(.numericText())
       }
     }
     .font(size.font(weight: .medium))
@@ -117,15 +114,13 @@ struct GlassChip<Content: View>: View {
     .accessibilityElement(children: .combine)
   }
 
-  /// The dot, the breathing dot, the spinner, the symbol, or nothing.
+  /// The dot, the spinner, the symbol, or nothing.
   @ViewBuilder private var leadMark: some View {
     switch lead {
     case .none:
       EmptyView()
     case .dot(let tone):
       StatusDot(mark: .dot, tone: tone, size: .small)
-    case .pulsing(let tone):
-      StatusDot(mark: .pulsing, tone: tone, size: .small)
     case .spinner:
       Spinner()
         .appearsAfterDelay()
@@ -142,8 +137,8 @@ struct GlassChip<Content: View>: View {
   }
 }
 
-/// The chip's shadow, drawn only outside its outline, as CSS draws v3's `box-shadow`: a blurred shape cut away under
-/// the chip, so nothing darkens the glass or the words on it.
+/// The chip's shadow, drawn only outside its outline, as CSS draws `box-shadow`: a blurred shape cut away
+/// under the chip, so nothing darkens the glass or the words on it.
 private struct ChipShadow: View {
   /// The chip's outline.
   let shape: RoundedRectangle
@@ -166,13 +161,13 @@ private struct ChipShadow: View {
   }
 }
 
-/// v3's chip (`.gchip`).
+/// The chip's own measures for its floating shadow.
 private enum Layout {
-  /// 11.5: the small chip's words (v3 `.chip`'s `font-size: 11.5px`), between the scale's caption and callout.
+  /// 11.5: the small chip's words, between the scale's caption and callout.
   static let smallText: CGFloat = 11.5
-  /// 7: between the small chip's parts (v3 `.chip`'s `gap: 7px`).
+  /// 7: between the small chip's parts.
   static let smallGap: CGFloat = 7
-  /// 7: the shadow's blur, half v3's 14.
+  /// 7: the shadow's blur, half the equivalent 14-point CSS blur.
   static let shadowRadius: CGFloat = 7
   /// 4: how far the shadow falls.
   static let shadowDrop: CGFloat = 4

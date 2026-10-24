@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// A pane's header (v3 `.vlhead`): its title, a quiet count or note beside it, and its controls at the end, over a
-/// hairline. Where they don't fit on one line, as in a narrow window with Details open, the controls move to a second
+/// A pane's header: its title, a quiet count or note beside it, and its controls at the end, over a hairline.
+/// Where they don't fit on one line, as in a narrow window with Details open, the controls move to a second
 /// line under the title, and there they share what width there is, a search field giving up some of its own.
 struct PaneHeader<Trailing: View>: View {
   /// The pane's title, such as "Activity".

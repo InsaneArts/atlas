@@ -110,23 +110,24 @@ struct DesignSystemTests {
         "opacity",
         [
           Opacity.tint, Opacity.tintStrong, Opacity.edgeTintQuiet, Opacity.disabled, Opacity.dimmed, Opacity.muted,
-          Opacity.edgeTint,
+          Opacity.edgeTint, Opacity.notYet,
         ],
         true
       ),
       (
         "duration",
         [
-          Motion.Duration.stagger, Motion.Duration.crossfadeDelay, Motion.Duration.pageDelay,
-          Motion.Duration.drawDelay, Motion.Duration.press, Motion.Duration.contentOut, Motion.Duration.hoverIn,
-          Motion.Duration.crossfadeOut, Motion.Duration.step, Motion.Duration.crossfadeReduced,
-          Motion.Duration.dismiss, Motion.Duration.followUp,
-          Motion.Duration.leave, Motion.Duration.fade, Motion.Duration.hoverOut, Motion.Duration.reduced,
-          Motion.Duration.crossfade, Motion.Duration.dim, Motion.Duration.piece,
-          Motion.Duration.draw, Motion.Duration.state, Motion.Duration.resize, Motion.Duration.shake,
+          Motion.Duration.drawDelay, Motion.Duration.press, Motion.Duration.contentOut, Motion.Duration.swapOut,
+          Motion.Duration.hoverIn, Motion.Duration.crossfadeOut, Motion.Duration.step, Motion.Duration.pageOut,
+          Motion.Duration.pressRelease, Motion.Duration.crossfadeReduced,
+          Motion.Duration.dismiss, Motion.Duration.followUp, Motion.Duration.swapIn, Motion.Duration.textSwap,
+          Motion.Duration.pageIn, Motion.Duration.leave, Motion.Duration.fade, Motion.Duration.hoverOut,
+          Motion.Duration.reduced, Motion.Duration.crossfade, Motion.Duration.dim,
+          Motion.Duration.resize, Motion.Duration.noteDelay,
+          Motion.Duration.draw, Motion.Duration.state, Motion.Duration.shake,
           Motion.Duration.appearDelay,
-          Motion.Duration.glideSoft, Motion.Duration.doneHold, Motion.Duration.pulse,
-          Motion.Duration.spin, Motion.Duration.echo, Motion.Duration.breathe, Motion.Duration.toast,
+          Motion.Duration.glideSoft, Motion.Duration.leastWork, Motion.Duration.doneHold, Motion.Duration.pulse,
+          Motion.Duration.spin, Motion.Duration.breathe, Motion.Duration.toast,
           Motion.Duration.trace,
         ]
         .map(\.seconds),
@@ -213,7 +214,7 @@ struct DesignSystemTests {
     let colours: [(name: String, colour: Color, rgb: [Float], opacity: Float)] = [
       ("fillPrimaryHover", .fillPrimaryHover, [0xFF, 0xFF, 0xFF], 1),
       ("fillPrimaryPressed", .fillPrimaryPressed, [0xE3, 0xE3, 0xE8], 1),
-      ("fillGlassThick", .fillGlassThick, [38, 38, 42], 0.78),
+      ("fillGlassThick", .fillGlassThick, [38, 38, 42], 0.94),
       ("accentHover", .accentHover, [0x1A, 0x8C, 0xFF], 1),
       ("onAttention", .onAttention, [0x1C, 0x12, 0x03], 1),
       ("fillPinned", .fillPinned, [28, 28, 31], 0.9),

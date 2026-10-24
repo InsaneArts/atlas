@@ -1,17 +1,15 @@
 import SwiftUI
 
-/// The menu bar panel (MacPanel, v3 P1–P11): the helper's status as its heading, its screen, the newest actions and
-/// the actions on the agent. It draws its state and sends what the person does; it decides nothing. A state change
-/// cascades through it in one beat (v3 P7): the word and its dot, then the line, the picture and the buttons, each
-/// animating on its own value 30 milliseconds after the one before, never the whole panel at once. It fills the popover
-/// that holds it, whose corners, glass and shadow are the system's; `panelCard()` draws the board's own where no popover
-/// does.
+/// The menu bar panel: the helper's status as its heading, its screen, the newest actions and the actions on the
+/// agent. It draws its state and sends what the person does; it decides nothing. A state change moves every piece at
+/// once on ``PanelLayout/change``: the word, the line, the picture's look and the buttons ease together, so nothing
+/// ripples down the panel on every flip. It fills the popover that holds it, whose corners, glass and shadow are the
+/// system's; `panelCard()` draws its own where no popover does.
 public struct PanelView: View {
   /// What the panel shows.
   private let state: PanelState
   /// Receives what the person does.
   private let send: @MainActor (PanelEvent) -> Void
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
   /// Creates the panel.
@@ -29,12 +27,12 @@ public struct PanelView: View {
     VStack(alignment: .leading, spacing: PanelLayout.gap) {
       PanelHeader(status: state.status, notice: state.notice, isMoreOpen: state.isMoreOpen, send: send)
       PanelPicture(state: state.picture, send: send)
-        .animation(PanelLayout.cascade(.picture, reduceMotion: reduceMotion), value: state.picture.look)
+        .animation(PanelLayout.change, value: state.picture.look)
       if !state.recent.isEmpty {
         PanelRecent(entries: state.recent, send: send)
       }
       PanelControlRow(controls: state.controls, send: send)
-        .animation(PanelLayout.cascade(.buttons, reduceMotion: reduceMotion), value: state.controls)
+        .animation(PanelLayout.change, value: state.controls.main)
     }
     .padding(PanelLayout.inset)
     .frame(width: PanelLayout.width)
@@ -44,8 +42,8 @@ public struct PanelView: View {
     )
     .foregroundStyle(Color.textPrimary)
     .environment(\.colorScheme, .dark)
-    // Only a change is spoken: a poll that reads the same status or notice again says nothing.
-    .onChange(of: state.status.label) { _, label in announce(label) }
+    // Only a change is spoken: a poll that reads the same announcement or notice again says nothing.
+    .onChange(of: state.announcement) { _, text in if let text { announce(text) } }
     .onChange(of: state.notice) { _, notice in if let notice { announce(notice) } }
   }
 

@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// The one row every list draws (v3 D6, U-6): something leading, a medium title over a secondary detail, and
-/// something trailing, at the height its window uses. In a ``GroupedList`` it draws the separator above it, inset to
-/// where its title starts. A row with a radio is a choice: the whole row picks it, the radio is its only mark (v3 D7),
-/// and the row's fill answers the pointer.
+/// The one row every list draws: something leading, a medium title over a secondary detail, and something
+/// trailing, at the height its window uses. In a ``GroupedList`` it draws the separator above it, inset to
+/// where its title starts. A row with a radio is a choice: the whole row picks it, the radio is its only
+/// mark, and the row's fill answers the pointer.
 struct ListRow: View {
   /// What leads the row.
   enum Lead: Equatable, Sendable {
@@ -27,9 +27,9 @@ struct ListRow: View {
   enum DetailStyle: Equatable, Sendable {
     /// Secondary text.
     case plain
-    /// The attention text colour: a failing check's fix (v3 `.srow .tx span.bad`, G5).
+    /// The attention text colour: a failing check's fix.
     case problem
-    /// A folder's path, monospaced (v3 G8).
+    /// A folder's path: in callout type, on one line, cut in the middle when it is long, so its folder's name shows.
     case path
 
     /// The detail's colour.
@@ -63,33 +63,44 @@ struct ListRow: View {
   enum NoteTone: Equatable, Sendable {
     /// Tertiary: a remark, such as Off.
     case quiet
-    /// The attention text colour: a failed check's note (v3 `.row.check.failed .trail`).
+    /// The attention text colour: a failed check's note.
     case problem
+    /// The success text colour: a word saying it worked, such as Passed.
+    case success
 
     /// The word's colour.
     var color: Color {
       switch self {
       case .quiet: .textTertiary
       case .problem: .textAttention
+      case .success: .textSuccess
       }
     }
   }
 
-  /// How tall the row is, by where it sits (v3 D6).
+  /// How the title fits the row's width.
+  enum TitleFit: Equatable, Sendable {
+    /// Up to two lines, a longer title cut in its middle, so both its ends show.
+    case twoLines
+    /// One line, a longer title cut at its end and shown whole in its tooltip, such as an account's long name.
+    case oneLine
+  }
+
+  /// How tall the row is, by where it sits.
   enum Size: Sendable, CaseIterable {
     /// 48: a setup list.
     case regular
     /// 44: a Settings group.
     case compact
-    /// 44: a setup checklist, at a setup list's inset (v3 `.row.check`).
+    /// 44: a setup checklist, at a setup list's inset.
     case checklist
     /// 38: Activity.
     case dense
     /// 34: a window under its app.
     case tight
 
-    /// The space above and below the row's content: v3's 10 on a setup row, 7 in a Settings group (v3 `.srow`); the
-    /// tighter rows and a checklist keep 4, so their least height sets their rhythm.
+    /// The space above and below the row's content: 10 on a setup row, 7 in a Settings group; the tighter
+    /// rows and a checklist keep 4, so their least height sets their rhythm.
     var verticalInset: CGFloat {
       switch self {
       case .regular: Spacing.sPlus
@@ -98,12 +109,12 @@ struct ListRow: View {
       }
     }
 
-    /// The row's inset on each side: 14, or 12 in a Settings group (v3 `.srow`).
+    /// The row's inset on each side: 14, or 12 in a Settings group.
     var inset: CGFloat {
       self == .compact ? Spacing.m : Spacing.mPlus
     }
 
-    /// The detail's style: callout, or caption in a Settings group, its 11-point detail (v3 G3).
+    /// The detail's style: callout, or caption in a Settings group, its 11-point detail.
     var detailStyle: TextStyle {
       self == .compact ? .caption : .callout
     }
@@ -125,6 +136,10 @@ struct ListRow: View {
   private let detail: String?
   /// How the detail is set.
   private let detailStyle: DetailStyle
+  /// A short word on a tint beside the title, or nil for none.
+  private let tag: String?
+  /// How the title fits the row's width.
+  private let titleFit: TitleFit
   /// What leads the row.
   private let lead: Lead
   /// What ends the row.
@@ -141,6 +156,8 @@ struct ListRow: View {
   ///   - title: The title.
   ///   - detail: The detail under it, or nil for none.
   ///   - detailStyle: How the detail is set; secondary text by default.
+  ///   - tag: A short word on a tint beside the title, such as Recommended; none by default.
+  ///   - titleFit: How the title fits the row's width; up to two lines by default.
   ///   - lead: What leads the row; nothing by default.
   ///   - trailing: What ends the row; nothing by default.
   ///   - size: How tall the row is; a setup list's by default.
@@ -149,6 +166,8 @@ struct ListRow: View {
     _ title: String,
     detail: String? = nil,
     detailStyle: DetailStyle = .plain,
+    tag: String? = nil,
+    titleFit: TitleFit = .twoLines,
     lead: Lead = .none,
     trailing: Trailing = .none,
     size: Size = .regular,
@@ -157,6 +176,8 @@ struct ListRow: View {
     self.title = title
     self.detail = detail
     self.detailStyle = detailStyle
+    self.tag = tag
+    self.titleFit = titleFit
     self.lead = lead
     self.trailing = trailing
     self.size = size
@@ -184,6 +205,8 @@ struct ListRow: View {
       title,
       detail: detail,
       detailStyle: detailStyle,
+      tag: tag,
+      titleFit: titleFit,
       lead: lead,
       size: size,
       fill: rowFill,
@@ -218,13 +241,14 @@ struct ListRow: View {
   /// 12: between the lead, the text and the trailing control.
   nonisolated static let gap = Spacing.m
 
-  /// Where the separator above a row starts: where its title starts, past its inset, its lead and the gap after it.
+  /// Where the separator above a row starts: where its title starts, past its inset, its lead and the gap
+  /// after it.
   ///
   /// - Parameters:
   ///   - lead: What leads the row.
   ///   - size: How tall the row is, which sets its inset; a setup list's by default.
   /// - Returns: The separator's inset from the row's leading edge: 14 with nothing leading, 42 after a check's mark,
-  ///   56 after a tile, a picture or a letter (v3's `--sep`); 2 less in a Settings group.
+  /// 56 after a tile, a picture or a letter; 2 less in a Settings group.
   nonisolated static func separatorInset(_ lead: Lead, size: Size = .regular) -> CGFloat {
     let width = leadWidth(lead)
     return width == 0 ? size.inset : size.inset + width + gap
@@ -242,8 +266,8 @@ struct ListRow: View {
     }
   }
 
-  /// The title's weight: medium, so a list reads as content (v3 D1), but regular in a checklist, where the mark says
-  /// how the line stands, and in a Settings group, whose rows are labels for their controls (v3 G3).
+  /// The title's weight: medium, so a list reads as content, but regular in a checklist, where the mark says
+  /// how the line stands, and in a Settings group, whose rows are labels for their controls.
   ///
   /// - Parameters:
   ///   - lead: What leads the row.
@@ -258,13 +282,13 @@ struct ListRow: View {
   }
 }
 
-/// A row's own measures, from v3's `.row`.
+/// A row's own measures for content and separators.
 private enum Layout {
-  /// 7: above and below a Settings row's content (v3 `.srow`).
+  /// 7: above and below a Settings row's content.
   static let compactVerticalInset: CGFloat = 7
-  /// 48: a setup list's row (v3 D6).
+  /// 48: a setup list's row.
   static let regularHeight: CGFloat = 48
-  /// 38: an Activity row (v3 D6, V8).
+  /// 38: an Activity row.
   static let denseHeight: CGFloat = 38
 }
 

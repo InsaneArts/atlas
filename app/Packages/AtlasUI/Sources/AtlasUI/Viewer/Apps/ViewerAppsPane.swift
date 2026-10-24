@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// The Apps tab (v3 V9): the apps open in the helper, front to back, each a group with its real icon and its windows
-/// with their sizes, with a search over their names; or why none shows. Show on Screen shows on the window row under
-/// the pointer only.
+/// The Apps tab: the apps open in the helper, front to back, each a group with its real icon and its windows with
+/// their sizes, with a search over their names once any is open; or why none shows, on the pane's own ground. Show on
+/// Screen shows on the window row under the pointer only.
 struct ViewerAppsPane: View {
   /// What the pane shows.
   let state: ViewerAppsState
@@ -10,12 +10,17 @@ struct ViewerAppsPane: View {
   let send: @MainActor (ViewerEvent) -> Void
   /// The window row under the pointer; nil for none.
   @State private var hoveredWindow: Int?
+  @Environment(\.paneSettled) private var paneSettled
 
   /// The header with the search, over the apps or why there are none.
   var body: some View {
     VStack(spacing: .zero) {
-      PaneHeader(title: "Apps in the helper", meta: state.meta) {
-        SearchField(text: state.query, prompt: "Search apps") { send(.searchApps($0)) }
+      PaneHeader(title: "Apps", meta: state.meta) {
+        if state.isSearchable {
+          SearchField(text: state.query, prompt: "Search apps", focusRequests: state.findRequests) {
+            send(.searchApps($0))
+          }
+        }
       }
       content
     }
@@ -23,13 +28,13 @@ struct ViewerAppsPane: View {
     .clipShape(RoundedRectangle(cornerRadius: Radius.large))
     .cardSurface()
     .accessibilityElement(children: .contain)
-    .accessibilityLabel("Apps in the helper")
+    .accessibilityLabel("Apps")
   }
 
   /// The apps' groups, or why there are none.
   @ViewBuilder private var content: some View {
     if let empty = state.empty {
-      EmptyMessage(state: empty, size: .stage, symbol: .windows)
+      EmptyMessage(state: empty, size: .stage, ground: .pane, symbol: .windows)
     } else {
       ScrollView {
         LazyVStack(spacing: Spacing.sPlus) {
@@ -39,9 +44,10 @@ struct ViewerAppsPane: View {
         }
         .padding(.top, ViewerLayout.appsTop)
         .padding(.bottom, Spacing.sPlus)
-        .padding(.horizontal, ViewerLayout.paneInset)
+        .padding(.horizontal, ViewerLayout.swapInset)
       }
-      .scrollIndicators(.automatic)
+      .scrollIndicators(paneSettled ? .automatic : .hidden)
+      .clearsMiniScreen()
     }
   }
 

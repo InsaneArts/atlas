@@ -2,8 +2,10 @@ import AppKit
 import AtlasUI
 import SwiftUI
 
-/// The Settings window: dark, 680 wide and as tall as its pane (v3 G2), its symbol tabs on the window's ground with no
-/// toolbar behind them. One at a time; it has a Dock icon while open, like any app window (``DockIcon``).
+/// The Settings window: dark, 680 wide and as tall as its pane, its symbol tabs on the window's ground with no toolbar
+/// behind them. One at a time; it has a Dock icon while open, like any app window (``DockIcon``). It opens where it was
+/// left, its top-left corner kept under ``autosaveName``, centred only the first time; it cannot be minimised, as a
+/// settings window is closed instead, and it comes to the Space the person is on, full-screen apps included.
 ///
 /// SwiftUI only reports how tall each pane draws; the window fits it here, in AppKit, keeping its top edge: easing
 /// over 0.35 seconds on (0.25, 0.1, 0.25, 1) while on screen, or at once while hidden or under Reduce Motion. A pane
@@ -12,13 +14,16 @@ final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   /// Moves a window to a frame, easing or at once.
   typealias Mover = @MainActor (_ window: NSWindow, _ frame: NSRect, _ animated: Bool) -> Void
 
+  /// The name its place is kept under in the app's defaults. Shipped, so it never changes.
+  static let autosaveName = "AtlasSettings"
+
   /// The window's controller.
   let controller: SettingsController
   /// Runs once the window has closed and its controller has stopped.
   let closed: @MainActor (SettingsWindow) -> Void
   /// Moves the window to each new frame; ``move(_:to:animated:)`` outside tests.
   private let mover: Mover
-  /// Open until closed, minimised included.
+  /// Open until closed.
   private(set) var isPresented = false
 
   /// Creates the window, hidden until ``present()``.
@@ -37,7 +42,7 @@ final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     self.mover = mover
     super.init(
       contentRect: NSRect(x: 0, y: 0, width: SettingsLayout.width, height: SettingsLayout.firstHeight),
-      styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
+      styleMask: [.titled, .closable, .fullSizeContentView],
       backing: .buffered,
       defer: false
     )
@@ -51,6 +56,7 @@ final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     toolbarStyle = .unifiedCompact
     isReleasedWhenClosed = false
     isMovableByWindowBackground = true
+    collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
     delegate = self
     WindowShell.host(in: self) {
       SettingsView(state: controller.state, edit: controller.update, send: controller.send)
@@ -58,18 +64,20 @@ final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     controller.reshape = { [weak self] title, height in
       self?.reshape(title: title, contentHeight: height)
     }
+    setFrameAutosaveName(Self.autosaveName)
   }
 
-  /// Brings the window forward, centred the first time at its pane's height. The app shows its Dock icon first.
+  /// Brings the window forward at its pane's height: where it was left, its top edge kept, or centred the first time.
+  /// The app shows its Dock icon first.
   func present() {
     if !isPresented {
+      let restored = setFrameUsingName(Self.autosaveName)
       // Draws the pane once, so its height is known before the window shows.
       contentView?.layoutSubtreeIfNeeded()
       controller.reshapeWindow()
-      center()
+      if !restored { center() }
     }
     isPresented = true
-    if isMiniaturized { deminiaturize(nil) }
     makeKeyAndOrderFront(nil)
     NSApp.activate()
   }

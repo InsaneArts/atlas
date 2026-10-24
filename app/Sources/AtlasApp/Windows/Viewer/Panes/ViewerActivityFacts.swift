@@ -14,4 +14,6 @@ struct ViewerActivityFacts {
   var query = ""
   /// The filter chosen.
   var filter = ViewerActivityFilter.all
+  /// Counts Find's asks for the search field's focus.
+  var findRequests = 0
 }

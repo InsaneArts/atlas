@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// The setup window's content: the first reading, the permission panel beside System Settings, or one screen at a
-/// time, over the footer. The footer sits outside the screens, so it never moves while they slide (v3 S1). It draws
-/// its state and sends what the person does; it decides nothing. The account form is the one value it edits in
+/// time, over the footer. The footer sits outside the screens, so it never moves while they fade into each other. It
+/// draws its state and sends what the person does; it decides nothing. The account form is the one value it edits in
 /// place.
 public struct OnboardingView<DragIcon: View>: View {
   /// What the window shows.
@@ -72,8 +72,8 @@ public struct OnboardingView<DragIcon: View>: View {
       .post()
   }
 
-  /// The permission panel, the first reading, or a screen, each screen sliding in the way the person goes as the last
-  /// one slides out (``PageStage``). The panel and the screens fade into each other, as the window changes size.
+  /// The permission panel, the first reading, or a screen, each screen fading in over the last (``PageStage``). The
+  /// panel and the screens fade into each other, as the window changes size.
   @ViewBuilder private var content: some View {
     switch state.content {
     case .permissionPanel(let panel):
@@ -83,7 +83,7 @@ public struct OnboardingView<DragIcon: View>: View {
     case .loading(let problem):
       LoadingScreen(problem: problem)
     case .screen(let screen):
-      PageStage(id: screen.id, direction: state.direction) {
+      PageStage(id: screen.id) {
         OnboardingScreenContent(screen: screen, note: state.note, form: form, send: send)
       }
       .transition(.opacity.animation(Motion.fade))

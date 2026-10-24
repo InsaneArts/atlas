@@ -21,12 +21,20 @@ final class ViewerController {
   @ObservationIgnored private(set) var shown = false
   /// What it reaches outside itself, which its parts are made from.
   @ObservationIgnored let dependencies: ViewerDependencies
+  /// The moment a Recover that worked holds before its alert closes, which Done ends at once.
+  @ObservationIgnored let doneHold = DoneHold()
   /// The lease, its heartbeat and release, and the input that belongs to it.
   @ObservationIgnored private(set) lazy var control = ViewerControl(viewer: self, dependencies: dependencies)
   /// The status and the picture, read one at a time while the window shows, and the picture's rate.
   @ObservationIgnored private(set) lazy var readingLoop = ViewerReadingLoop(viewer: self, dependencies: dependencies)
   /// The Activity, Apps and Screenshots tabs, and the thumbnails they share.
   @ObservationIgnored private(set) lazy var panesModel = ViewerPanesModel(viewer: self, dependencies: dependencies)
+  /// Waits for a state that asks something of the person to hold before VoiceOver says it.
+  @ObservationIgnored private var announcing: Task<Void, Never>?
+
+  /// 1 s: how long a state that asks something of the person holds before VoiceOver says it, so a state that flickers
+  /// says nothing and two in a row say only the last.
+  static let announceAfter: Duration = .seconds(1)
 
   /// Creates a viewer that has read nothing yet, with the person's saved rate and Details.
   ///
@@ -36,6 +44,10 @@ final class ViewerController {
     // Made now, so the saved choices are read as the window is made: the rate, then Details.
     _ = readingLoop
     details.shown = dependencies.preferences.loadDetails()
+    session.corner =
+      dependencies.preferences
+      .loadCorner()
+      .flatMap(MiniCorner.init(rawValue:)) ?? .bottomTrailing
   }
 
   /// Everything the controller holds, as one value.
@@ -112,9 +124,53 @@ final class ViewerController {
     case .askRestart: ask(.restart)
     case .alertConfirm: Task { await confirmAlert() }
     case .alertCancel: cancelAlert()
-    case .searchActivity, .filterActivity, .searchApps, .showWindow, .clearOutline, .searchShots, .selectShot,
-      .openShot, .toggleShot, .previousShot, .nextShot, .closeShot, .copyShot, .showShotInFinder, .thumbnailNeeded:
+    case .moveCorner(let corner): moveCorner(corner)
+    case .searchActivity, .filterActivity, .searchApps, .showWindow, .clearOutline, .shotColumns, .selectShot,
+      .openShot, .toggleShot, .previousShot, .nextShot, .shotAbove, .shotBelow, .clearShotSelection, .closeShot,
+      .copyShot, .showShotInFinder, .thumbnailNeeded:
       panesModel.sendPane(event)
+    }
+  }
+
+  /// The small screen settled in a corner: the window keeps it there, and the next window starts there.
+  ///
+  /// - Parameter corner: The corner.
+  func moveCorner(_ corner: MiniCorner) {
+    session.corner = corner
+    dependencies.preferences.saveCorner(corner.rawValue)
+  }
+
+  /// What VoiceOver should say about the helper's state now: its word and line while it asks something of the person
+  /// (it needs them, agents are stopped, they have control, it is logged out or not ready) and this window has the
+  /// keyboard; nil otherwise, as for every Working and Idle.
+  var askingStatus: String? {
+    guard shown, control.focused else { return nil }
+    let snapshot = snapshot
+    switch snapshot.mode.kind {
+    case .needsYou, .stopped, .control, .loggedOut, .notReady:
+      let status = ViewerPresenter.status(snapshot)
+      return status.line.isEmpty ? status.label : "\(status.label), \(status.line)"
+    case .idle, .working, .inUseElsewhere, .connecting:
+      return nil
+    }
+  }
+
+  /// Says `text` once it has held for ``announceAfter`` on the window's clock; a newer one, or none, calls it off.
+  ///
+  /// - Parameter text: What VoiceOver should say now, from ``askingStatus``.
+  func announceSoon(_ text: String?) {
+    announcing?.cancel()
+    announcing = nil
+    guard let text else {
+      if session.announcement != nil { session.announcement = nil }
+      return
+    }
+    let clock = dependencies.clock
+    // Unstructured, as the state settles while the window goes on.
+    announcing = Task { [weak self] in
+      try? await clock.sleep(for: Self.announceAfter)
+      guard let self, !Task.isCancelled else { return }
+      session.announcement = text
     }
   }
 
@@ -125,7 +181,7 @@ final class ViewerController {
     session.notice = text
   }
 
-  /// Take Control was refused: the reason shows in a toast and the button shakes once (v3 V12). The toast leaves by
+  /// Take Control was refused: the reason shows in a toast and the button shakes once. The toast leaves by
   /// itself after ``Motion/Duration/toast`` on the window's clock; only the newest refusal's wait removes it.
   ///
   /// - Parameter reason: Why, such as "The agent is mid-action. Try again in a moment."

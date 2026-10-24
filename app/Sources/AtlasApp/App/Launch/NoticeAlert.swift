@@ -2,7 +2,7 @@ import AppKit
 import AtlasCommands
 
 /// `--notice TITLE MESSAGE [--switch-back ACCOUNT]`: tells the person something in this session (the helper's, when
-/// its daemon asks), waits for an answer, then exits. It stays a standard system alert (v3 A7), with Atlas's real icon:
+/// its daemon asks), waits for an answer, then exits. It stays a standard system alert, with Atlas's real icon:
 /// a custom window would add risk for a moment the person sees once. With an account, Switch Back is the default and
 /// locks this session so they can switch back to that account, and Stay Here takes Escape; without one, OK alone.
 enum NoticeAlert {

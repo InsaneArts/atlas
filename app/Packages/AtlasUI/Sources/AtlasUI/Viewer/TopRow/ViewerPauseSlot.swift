@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The picture's pause in its slot (v3 V11): pause turns into play by a symbol replace once the picture is paused, at
+/// The picture's pause in its slot: pause turns into play by a symbol replace once the picture is paused, at
 /// once under Reduce Motion. It pauses the picture only; work in the helper goes on.
 struct ViewerPauseSlot: View {
   /// The pause; nil while there is no picture to pause.

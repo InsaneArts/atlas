@@ -2,13 +2,15 @@ import AtlasOnboarding
 import AtlasUI
 
 extension OnboardingPresenter {
-  /// The account choice: a new account first, then each standard account, the picked one selected, with what
-  /// approving in macOS will do for it (no approval comes for the account Atlas was set up in before).
+  /// The account choice: a new account first, then each standard account, the picked one selected, a problem setting
+  /// one up in its own row, with what approving in macOS will do for an existing account picked (no approval comes for
+  /// the account Atlas was set up in before).
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The choice's rows.
   static func choose(_ snapshot: OnboardingSnapshot) -> OnboardingChooseScreenState {
-    let picked = snapshot.facts.candidates.first { snapshot.shownPick == .existing($0.name) }
+    let picksExisting = snapshot.facts.candidates.contains { snapshot.shownPick == .existing($0.name) }
+    let problemAccount = problemAccount(snapshot)
     return OnboardingChooseScreenState(
       isNewAccountPicked: snapshot.shownPick == .newAccount,
       accounts: snapshot.facts.candidates.map { candidate in
@@ -17,11 +19,12 @@ extension OnboardingPresenter {
           title: candidate.title,
           detail: OnboardingWords.candidateDetail(candidate.name),
           mark: .letter(candidate.title.initial),
-          isSelected: snapshot.shownPick == .existing(candidate.name)
+          isSelected: snapshot.shownPick == .existing(candidate.name),
+          problem: candidate.name == problemAccount ? snapshot.problem : nil
         )
       },
       offersNewAccount: !snapshot.facts.onlyChoice,
-      approval: snapshot.facts.onlyChoice ? nil : picked.map { OnboardingWords.approveToReady($0.title) }
+      approval: !snapshot.facts.onlyChoice && picksExisting ? OnboardingWords.approveToReady : nil
     )
   }
 
@@ -57,7 +60,7 @@ extension OnboardingPresenter {
     let quiet = snapshot.working == nil && snapshot.problem == nil
     return OnboardingSwitchScreenState(
       title: OnboardingWords.logIn(to: helper.title),
-      logInDetail: OnboardingWords.chooseOnLockScreen(helper.title),
+      logInTitle: OnboardingWords.logInStep(to: helper.title),
       progress: OnboardingSwitchScreenState.Progress(
         logIn: progress.logIn.stepState,
         openAtlas: progress.openAtlas.stepState,
@@ -68,17 +71,16 @@ extension OnboardingPresenter {
     )
   }
 
-  /// What the switch screen waits for: the log-in, Atlas opening there, the two permissions, then the switch back.
+  /// What the switch screen waits for once the person has logged in to the helper: Atlas opening there, the two
+  /// permissions, then the switch back. Before that, nothing: the steps and Lock and Switch already say what to do.
   ///
   /// - Parameters:
   ///   - helper: The helper, as the person's account sees it.
   ///   - progress: The three steps' progress.
-  /// - Returns: The pill's words.
-  private static func waiting(_ helper: OnboardingFacts.Helper, progress: SwitchProgress) -> String {
-    if !helper.signedIn { return OnboardingWords.lockThenLogIn(to: helper.title) }
-    if !helper.answering {
-      return helper.onConsole ? OnboardingWords.waitingForAtlas(in: helper.title) : OnboardingWords.lockThenAllow
-    }
+  /// - Returns: The line's words, or nil for none.
+  private static func waiting(_ helper: OnboardingFacts.Helper, progress: SwitchProgress) -> String? {
+    if !helper.signedIn { return nil }
+    if !helper.answering { return OnboardingWords.waitingForAtlas(in: helper.title) }
     if progress.allow != .done { return OnboardingWords.waitingForPermissions }
     return OnboardingWords.waitingForSwitchBack
   }
@@ -90,9 +92,9 @@ extension OnboardingPresenter {
   static func finishing(_ snapshot: OnboardingSnapshot) -> OnboardingFinishingScreenState {
     let live: (state: CheckState, note: String, failure: String?) =
       switch snapshot.finish {
-      case .passed: (.done, OnboardingWords.passed, nil)
-      case .failed(let message): (.failed, OnboardingWords.failed, message)
-      case .idle, .running: (.busy, OnboardingWords.checkingNote, nil)
+      case .passed: (.done, StatusWord.passed.text, nil)
+      case .failed(let message): (.failed, StatusWord.failed.text, message)
+      case .idle, .running: (.busy, StatusWord.checking.text, nil)
       }
     let headline: (title: String, tail: String) =
       switch snapshot.finish {
@@ -104,14 +106,16 @@ extension OnboardingPresenter {
       title: headline.title,
       tail: headline.tail,
       loggedIn: OnboardingWords.loggedIn(snapshot.facts.helper.title),
+      permissionsNote: StatusWord.allowed.text,
       live: live.state,
       liveNote: live.note,
       failure: live.failure
     )
   }
 
-  /// The agents: each reads connected, found or not installed; its switch is on once connected or chosen, and only a
-  /// found, unconnected one can be switched.
+  /// The agents, each under its icon as Settings shows it: Connected, Gets the Atlas skill while switched on, Found
+  /// while switched off, or Not on this Mac; its switch is on once connected or chosen, and only a found, unconnected
+  /// one can be switched.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The agents screen.
@@ -120,11 +124,11 @@ extension OnboardingPresenter {
       agents: snapshot.agents.map { agent in
         let detail =
           if !agent.checked {
-            snapshot.agentsFailed ? OnboardingWords.agentNotChecked : OnboardingWords.agentChecking
+            snapshot.agentsFailed ? OnboardingWords.agentNotChecked : StatusWord.checking.text
           } else if agent.connected {
             OnboardingWords.agentConnected
           } else if agent.found {
-            OnboardingWords.agentFound
+            agent.on ? OnboardingWords.agentGetsSkill : OnboardingWords.agentFound
           } else {
             OnboardingWords.agentMissing
           }
@@ -132,6 +136,7 @@ extension OnboardingPresenter {
           id: agent.id.rawValue,
           title: OnboardingWords.agentTitle(agent.id),
           detail: detail,
+          icon: AgentRowIcons.icon(agent.id.rawValue, snapshot.agentIcons),
           isOn: agent.on || agent.connected,
           isEnabled: agent.found && !agent.connected
         )

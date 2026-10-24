@@ -10,10 +10,9 @@ public struct OnboardingPermissionPanelState: Equatable, Sendable {
   public var accessibility: OnboardingPermissionItem
   /// Screen Recording, for pictures.
   public var screenRecording: OnboardingPermissionItem
-  /// What the panel waits for, or that the permission is on.
-  public var pill: String
-  /// Whether the permission guided now is on, which ticks the pill.
-  public var isOn: Bool
+  /// Where the permission guided now stands, the panel's status line: waiting for the person, being checked, or
+  /// allowed.
+  public var status: OnboardingPermissionStanding
 
   /// Creates the panel's state.
   ///
@@ -23,23 +22,26 @@ public struct OnboardingPermissionPanelState: Equatable, Sendable {
   ///   - alreadyListed: For Atlas listed already but off, or for anyone who can't drag: turning its switch on.
   ///   - accessibility: Accessibility, for input.
   ///   - screenRecording: Screen Recording, for pictures.
-  ///   - pill: What the panel waits for, or that the permission is on.
-  ///   - isOn: Whether the permission guided now is on, which ticks the pill.
+  ///   - status: Where the permission guided now stands.
   public init(
     label: String,
     instruction: String,
     alreadyListed: String,
     accessibility: OnboardingPermissionItem,
     screenRecording: OnboardingPermissionItem,
-    pill: String,
-    isOn: Bool
+    status: OnboardingPermissionStanding
   ) {
     self.label = label
     self.instruction = instruction
     self.alreadyListed = alreadyListed
     self.accessibility = accessibility
     self.screenRecording = screenRecording
-    self.pill = pill
-    self.isOn = isOn
+    self.status = status
+  }
+
+  /// Whether the permission guided now is on, so the panel shows its tick and waits for nothing.
+  public var isOn: Bool {
+    if case .allowed = status { return true }
+    return false
   }
 }

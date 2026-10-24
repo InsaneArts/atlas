@@ -1,7 +1,7 @@
 import AtlasUI
 import CoreGraphics
 
-/// The window's shape (v3 G2): each pane says how tall it draws, and the window fits the one shown, its title naming
+/// The window's shape: each pane says how tall it draws, and the window fits the one shown, its title naming
 /// it. Only a height leaves SwiftUI; the window resizes in AppKit.
 extension SettingsController {
   /// A pane drew at a height: kept for whenever it shows, and the window fits it now if it shows.

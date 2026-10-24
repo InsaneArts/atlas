@@ -5,10 +5,10 @@
       var state = selecting(.helper)
       state.alert = AlertCardState(
         title: "Recover the helper?",
-        message: "Atlas checks the helper and starts it again. No action runs twice.",
+        message: "Atlas checks the helper and starts it again.",
         buttons: [
           AlertCardButton(id: .confirm, title: "Recover", role: .action),
-          AlertCardButton(id: .cancel, title: "Not Now", role: .cancel),
+          AlertCardButton(id: .cancel, title: "Cancel", role: .cancel),
         ]
       )
       return state
@@ -32,9 +32,8 @@
     @MainActor static let settingsForget: SettingsState = {
       var state = selecting(.agents)
       state.alert = AlertCardState(
-        title: "Forget opie?",
-        message:
-          "Atlas takes its section out of the project's AGENTS.md and CLAUDE.md. Agents there stop testing in the helper.",
+        title: "Forget “opie”?",
+        message: "Atlas removes its instructions from this project. Agents there stop using the helper.",
         buttons: [
           AlertCardButton(id: .cancel, title: "Cancel", role: .safeCancel),
           AlertCardButton(id: .confirm, title: "Forget", role: .destructive),
@@ -51,7 +50,7 @@
         message: "Atlas checks the release's signature and installs it, then restarts itself to finish.",
         buttons: [
           AlertCardButton(id: .confirm, title: "Install", role: .action),
-          AlertCardButton(id: .cancel, title: "Not Now", role: .cancel),
+          AlertCardButton(id: .cancel, title: "Cancel", role: .cancel),
         ]
       )
       return state
@@ -87,7 +86,7 @@
       return state
     }()
 
-    /// Recover running from its alert: a spinner in Recover while Not Now waits.
+    /// Recover running from its alert: a spinner in Recover while Cancel waits.
     @MainActor static let settingsRecovering: SettingsState = {
       var state = settingsRecover
       state.alert?.phase = .running(label: "Recovering…")
