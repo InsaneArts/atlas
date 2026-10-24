@@ -15,12 +15,15 @@ struct ShotTileView: View {
   let send: @MainActor (ViewerEvent) -> Void
   @Environment(\.shotDrag) private var drag
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.paneShows) private var paneShows
   @State private var isHovered = false
 
   /// The tile, read as one button that opens it.
   var body: some View {
     draggable
       .onAppear { send(.thumbnailNeeded(tile.id)) }
+      // A kept pane's tiles do not appear anew as it shows again; a thumbnail let go meanwhile is asked for again.
+      .onChange(of: paneShows) { _, shows in if shows { send(.thumbnailNeeded(tile.id)) } }
       .accessibilityElement(children: .combine)
       .accessibilityLabel(tile.label)
       .accessibilityAddTraits(tile.isSelected ? [.isButton, .isSelected] : .isButton)

@@ -205,4 +205,55 @@ struct ViewerReadingLoopTests {
     #expect(viewer.state.screen.empty?.lastPicture == shown, "the last picture stays as the ring arrives")
     viewer.close()
   }
+
+  @Test("a helper that goes silent after a picture keeps that picture behind Not ready and its Recover")
+  func aSilentHelperKeepsTheLastPictureBehindNotReady() async throws {
+    let service = ScriptedService()
+    service.reply = ["ready": true, "canObserve": true, "overview": ["mode": "observing", "state": "idle"]]
+    let viewer = try await ViewerController.watching(service)
+    let shown = try #require(viewer.reading.picture)
+    // A restarting helper: the service answers, saying the helper is silent.
+    service.reply = [
+      "ready": false, "canObserve": false,
+      "overview": ["mode": "unavailable", "state": "notReady", "reason": "Atlas isn't answering in the helper."],
+    ]
+    await viewer.readingLoop.read(viewer.readingLoop.generation)
+    let waiting = try #require(viewer.state.screen.empty)
+    #expect(viewer.state.screen.picture == nil)
+    #expect(waiting.message.headline == ViewerWords.notReadyHeadline, "the helper says it is not ready")
+    #expect(waiting.event == .askRecover)
+    #expect(waiting.lastPicture == shown, "the stage went blank")
+    viewer.close()
+  }
+
+  @Test("stopping reading puts the ring away, so reading again waits its whole 0.4 seconds before it rings")
+  func stoppingReadingStartsTheWaitAgain() async throws {
+    let service = ScriptedService()
+    service.reply = ["ready": true, "canObserve": true, "overview": ["mode": "observing", "state": "idle"]]
+    let clock = ManualClock()
+    let viewer = try await ViewerController.watching(service, clock: clock)
+    viewer.readingLoop.ticking?.cancel()
+    service.fail = ["status"]
+    await viewer.readingLoop.read(viewer.readingLoop.generation)
+    let delay = Duration.seconds(Motion.Duration.appearDelay.seconds)
+    try await clock.untilSleeping(for: delay, "the wait for a picture never started")
+    clock.advance(by: delay)
+    try await settle("the ring never showed") { viewer.reading.waitedLong }
+    // Hidden or paused, then shown again with still no picture: the ring waits its moment again.
+    viewer.readingLoop.watch(false)
+    #expect(!viewer.reading.waitedLong, "the ring stayed out while reading stopped")
+    viewer.readingLoop.watch(true)
+    try await clock.untilSleeping(for: delay, "the wait never started again")
+    #expect(!viewer.reading.waitedLong, "the ring showed at once")
+    // Stopped before its moment ends, the wait starts over rather than ringing early.
+    clock.advance(by: delay / 2)
+    viewer.readingLoop.watch(false)
+    viewer.readingLoop.watch(true)
+    try await clock.untilSleeping(for: delay, "the wait never started over")
+    clock.advance(by: delay / 2)
+    #expect(!viewer.reading.waitedLong, "the ring kept the stopped wait's time")
+    clock.advance(by: delay / 2)
+    try await settle("the ring never showed after its whole moment") { viewer.reading.waitedLong }
+    viewer.close()
+  }
 }

@@ -1,12 +1,13 @@
 import SwiftUI
 
 /// The helper's status at the top row's leading edge (v3 V1): its mark, its word in its tone (blue while this window
-/// holds control), and its line in grey, cut short first and gone once too little of it would show. A new word or line
-/// replaces the old with a blur, a fade under Reduce Motion. VoiceOver reads it as one.
+/// holds control), and in the row's widest layout its line in grey, cut short first and gone once too little of it
+/// would show; every narrower layout has no line at all, so the line goes before the tabs' words do (V15). A new word
+/// or line replaces the old with a blur, a fade under Reduce Motion. VoiceOver reads it as one.
 struct ViewerTopStatus: View {
   /// The status.
   let status: StatusSummary
-  /// Whether the status asks the row for room for its line; otherwise the line takes only the room left.
+  /// Whether the line shows, asking the row for room for it: in the widest layout alone.
   let reservesLine: Bool
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -20,23 +21,9 @@ struct ViewerTopStatus: View {
         .fixedSize()
         .id(status.label)
         .transition(changing)
-      ViewThatFits(in: .horizontal) {
-        Text(status.line)
-          .font(Typography.font(.callout))
-          .foregroundStyle(Color.textSecondary)
-          .truncationMode(.tail)
-          .frame(
-            minWidth: ViewerLayout.statusLineLeast,
-            idealWidth: ViewerLayout.statusLineLeast,
-            maxWidth: .infinity,
-            alignment: .leading
-          )
-        Color.clear
-          .frame(width: .zero, height: .zero)
+      if reservesLine {
+        line
       }
-      .frame(minWidth: .zero, idealWidth: lineRoom, maxWidth: .infinity, alignment: .leading)
-      .id(status.line)
-      .transition(changing)
     }
     .lineLimit(1)
     .animation(Motion.animation(Motion.state, reduceMotion: reduceMotion, reduced: Motion.reduced), value: status)
@@ -44,9 +31,25 @@ struct ViewerTopStatus: View {
     .accessibilityAddTraits(.updatesFrequently)
   }
 
-  /// The room the line asks the row for.
-  private var lineRoom: CGFloat {
-    reservesLine ? ViewerLayout.statusLineRoom : .zero
+  /// The line, cut short first and gone once too little of it would show.
+  private var line: some View {
+    ViewThatFits(in: .horizontal) {
+      Text(status.line)
+        .font(Typography.font(.callout))
+        .foregroundStyle(Color.textSecondary)
+        .truncationMode(.tail)
+        .frame(
+          minWidth: ViewerLayout.statusLineLeast,
+          idealWidth: ViewerLayout.statusLineLeast,
+          maxWidth: .infinity,
+          alignment: .leading
+        )
+      Color.clear
+        .frame(width: .zero, height: .zero)
+    }
+    .frame(minWidth: .zero, idealWidth: ViewerLayout.statusLineRoom, maxWidth: .infinity, alignment: .leading)
+    .id(status.line)
+    .transition(changing)
   }
 
   /// How a word gives way to the next: a blur, or a fade under Reduce Motion.

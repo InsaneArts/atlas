@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// How a pane comes and goes as the tab changes (v3 X3): the new one fades in from 16 points on the side its tab
+/// How the Screen comes and goes as the tab changes, and how Activity, Apps and Screenshots come in the first time
+/// they show; once shown, those three are kept and move by ``KeptPaneShift`` instead (v3 X3): the new one fades in from 16 points on the side its tab
 /// lies, after the old one has shown alone for 50 milliseconds, so the stage is never blank (R15); the old one fades
 /// out 12 points toward the other side. The side comes from ``EnvironmentValues/paneDirection``. Under Reduce Motion
 /// both only crossfade, over 0.15 seconds.
@@ -55,8 +56,16 @@ struct PaneShift: ViewModifier {
         active: PaneShift(isArriving: false, isAway: true, isScreen: isScreen),
         identity: PaneShift(isArriving: false, isAway: false, isScreen: isScreen)
       )
-      .animation(Motion.animation(Motion.crossfadeOut, reduceMotion: reduceMotion, reduced: Motion.crossfadeReduced))
+      .animation(departure(reduceMotion: reduceMotion))
     )
+  }
+
+  /// An old pane's animation as it leaves: the quick fade, or the short crossfade under Reduce Motion.
+  ///
+  /// - Parameter reduceMotion: Whether the Reduce Motion setting is on.
+  /// - Returns: The animation.
+  static func departure(reduceMotion: Bool) -> Animation {
+    Motion.animation(Motion.crossfadeOut, reduceMotion: reduceMotion, reduced: Motion.crossfadeReduced)
   }
 
   /// A new pane's animation: the tab spring after the overlap, or the short crossfade under Reduce Motion.

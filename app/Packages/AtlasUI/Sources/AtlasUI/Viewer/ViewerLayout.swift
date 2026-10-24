@@ -48,6 +48,9 @@ enum ViewerLayout {
   static let miniInset: CGFloat = 26
   /// 248 by 155: the mini screen, at the screen's 16 by 10 (mac.py `mini`).
   static let miniSize = CGSize(width: 248, height: 155)
+  /// 4: how far the pointer moves on the mini screen before a press becomes a drag; less is a click, back to the
+  /// screen.
+  static let miniDragStart: CGFloat = 4
   /// 0.9: how small the mini screen starts as it fades in without growing from the stage, as from Screenshots (v3
   /// `vSwitchTab`'s arrival).
   static let miniArrival: CGFloat = 0.9
@@ -124,14 +127,38 @@ enum ViewerLayout {
     return rimArrival
   }
 
-  /// The room the stage leaves at its trailing edge: Details' column while Details shows, else none. It follows
-  /// whether Details shows, never how far it has slid, so the picture takes its new width at once and never squeezes
-  /// while Details moves (v3 V3).
+  /// The room the stage leaves at its trailing edge: Details' column while Details shows, else none. It moves on
+  /// ``stageSlide(tab:reduceMotion:)``, Details' own spring, so the stage's edge keeps to the column's as it slides.
   ///
   /// - Parameter showsDetails: Whether Details shows.
   /// - Returns: The trailing room.
   static func stageTrailing(showsDetails: Bool) -> CGFloat {
     showsDetails ? detailsColumn : .zero
+  }
+
+  /// How the stage gives Details its room or takes it back: on the Screen, on ``Motion/slide``, the spring Details
+  /// slides on, so the picture shrinks and recentres in step with the column, turning back with it when Details is
+  /// toggled again mid-way; the live picture only rescales on its layer meanwhile. Activity, Apps and Screenshots take
+  /// their new width at once while Details slides over the edge: laying a list or a grid out again at every frame of
+  /// the slide costs about 10 milliseconds a frame, and a grid's columns would jump between rows. At once under Reduce
+  /// Motion too, where Details only fades.
+  ///
+  /// - Parameters:
+  ///   - tab: The tab shown.
+  ///   - reduceMotion: Whether the Reduce Motion setting is on.
+  /// - Returns: The animation, or nil.
+  static func stageSlide(tab: ViewerTab, reduceMotion: Bool) -> Animation? {
+    guard tab == .screen else { return nil }
+    return Motion.animation(Motion.slide, reduceMotion: reduceMotion)
+  }
+
+  /// How Details slides in and out: on ``Motion/slide``, the stage's spring, so the two keep to each other; a fade
+  /// under Reduce Motion, where it stays in place.
+  ///
+  /// - Parameter reduceMotion: Whether the Reduce Motion setting is on.
+  /// - Returns: The animation.
+  static func detailsSlide(reduceMotion: Bool) -> Animation {
+    Motion.animation(Motion.slide, reduceMotion: reduceMotion, reduced: Motion.reduced)
   }
 
   /// How large the mini screen draws as it comes in: from ``miniArrival`` while it fades in on its own; its own size
@@ -145,6 +172,15 @@ enum ViewerLayout {
   static func miniScale(isComing: Bool, growsFromStage: Bool, reduceMotion: Bool) -> CGFloat {
     guard isComing, !growsFromStage, !reduceMotion else { return 1 }
     return miniArrival
+  }
+
+  /// How the mini screen settles in its corner once let go of: on ``Motion/release``, a spring with a little bounce,
+  /// from wherever the drag left it; at once under Reduce Motion.
+  ///
+  /// - Parameter reduceMotion: Whether the Reduce Motion setting is on.
+  /// - Returns: The animation, or nil.
+  static func miniSnap(reduceMotion: Bool) -> Animation? {
+    Motion.animation(Motion.release, reduceMotion: reduceMotion)
   }
 
   /// How far Details sits from its place: there while it shows, else its whole column further out, past the
@@ -184,6 +220,45 @@ enum ViewerLayout {
     guard !reduceMotion else { return .zero }
     let side = CGFloat(direction)
     return isArriving ? paneEnter * side : -paneLeave * side
+  }
+
+  /// Where a kept pane sits while another tab shows (``KeptPaneShift``): the pane just left, ``paneLeave`` toward the
+  /// side away from the tab shown, where it fades out; any other, ``paneEnter`` on the side its tab lies from the tab
+  /// shown, where a switch to it comes in from. Both lie on the same side of a given tab, so a switch reversed mid-way
+  /// turns the pane back the way it went. None for the pane shown, and none under Reduce Motion.
+  ///
+  /// - Parameters:
+  ///   - tab: The kept pane's tab.
+  ///   - shown: The tab shown.
+  ///   - left: The tab the last switch left, if any.
+  ///   - reduceMotion: Whether the Reduce Motion setting is on.
+  /// - Returns: Its horizontal offset.
+  static func keptPaneOffset(_ tab: ViewerTab, shown: ViewerTab, left: ViewerTab?, reduceMotion: Bool) -> CGFloat {
+    guard tab != shown else { return .zero }
+    guard tab != left else {
+      let away = ViewerTab.direction(from: tab, to: shown)
+      return paneOffset(isArriving: false, direction: away, reduceMotion: reduceMotion)
+    }
+    let toward = ViewerTab.direction(from: shown, to: tab)
+    return paneOffset(isArriving: true, direction: toward, reduceMotion: reduceMotion)
+  }
+
+  /// How the window's blur behind a screenshot shown large comes and goes: on ``shotFade`` with the shade, or at once
+  /// under Reduce Motion, which never animates a blur.
+  ///
+  /// - Parameter reduceMotion: Whether the Reduce Motion setting is on.
+  /// - Returns: The animation, or nil.
+  static func shotBlurring(reduceMotion: Bool) -> Animation? {
+    Motion.animation(shotFade, reduceMotion: reduceMotion)
+  }
+
+  /// How the shade and the large view's buttons fade in and out: on ``shotFade``, or the plain fade under Reduce
+  /// Motion.
+  ///
+  /// - Parameter reduceMotion: Whether the Reduce Motion setting is on.
+  /// - Returns: The animation.
+  static func shotFading(reduceMotion: Bool) -> Animation {
+    Motion.animation(shotFade, reduceMotion: reduceMotion, reduced: Motion.reduced)
   }
 
   /// How much the window blurs behind a screenshot shown large: ``shotScrimBlur`` while one shows, else none.

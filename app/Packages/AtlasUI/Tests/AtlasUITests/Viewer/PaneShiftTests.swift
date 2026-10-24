@@ -26,4 +26,26 @@ struct PaneShiftTests {
     // The old pane shows alone for 50 milliseconds before the new one starts in, so the stage is never blank.
     #expect(ViewerLayout.paneOverlap == 0.05)
   }
+
+  @Test("a kept pane leaves away from the new tab, waits on the side its tab lies, and turns back the way it went")
+  func keptPanesWaitOnTheirOwnSide() {
+    // Activity to Apps: Activity leaves 12 to the left, Screenshots waits 16 to the right, Apps sits in place.
+    #expect(ViewerLayout.keptPaneOffset(.activity, shown: .apps, left: .activity, reduceMotion: false) == -12)
+    #expect(ViewerLayout.keptPaneOffset(.screenshots, shown: .apps, left: .activity, reduceMotion: false) == 16)
+    #expect(ViewerLayout.keptPaneOffset(.apps, shown: .apps, left: .activity, reduceMotion: false) == 0)
+    // Back to Activity mid-way: it comes in from the left, the side it left by, so it turns back rather than jumping
+    // across; Apps leaves to the right.
+    #expect(ViewerLayout.keptPaneOffset(.activity, shown: .apps, left: nil, reduceMotion: false) == -16)
+    #expect(ViewerLayout.keptPaneOffset(.apps, shown: .activity, left: .apps, reduceMotion: false) == 12)
+    // From the Screen every kept pane waits to the right, as every one of them lies there.
+    for tab in ViewerTab.keptTabs {
+      #expect(ViewerLayout.keptPaneOffset(tab, shown: .screen, left: nil, reduceMotion: false) == 16, "\(tab)")
+      #expect(ViewerLayout.keptPaneOffset(tab, shown: .screen, left: tab, reduceMotion: false) == 12, "\(tab)")
+    }
+    // Under Reduce Motion they only crossfade.
+    #expect(ViewerLayout.keptPaneOffset(.activity, shown: .apps, left: .activity, reduceMotion: true) == 0)
+    #expect(ViewerLayout.keptPaneOffset(.screenshots, shown: .apps, left: nil, reduceMotion: true) == 0)
+    // Every tab but the Screen is kept.
+    #expect(ViewerTab.keptTabs == [.activity, .apps, .screenshots])
+  }
 }

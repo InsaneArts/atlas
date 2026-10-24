@@ -27,18 +27,16 @@ extension ViewerPresenter {
     )
   }
 
-  /// What the Activity tab holds unseen (v3 V2): the actions newer than the newest one seen, orange once one of them
-  /// failed; nothing while Activity shows or before the first reading.
+  /// What the Activity tab holds unseen (v3 V2): the actions newer than every one seen, orange once one of them
+  /// failed, even after it left the status's few; nothing while Activity shows or before the first reading.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: What is unseen.
   static func unseen(_ snapshot: ViewerSnapshot) -> ViewerUnseen {
     guard snapshot.session.tab != .activity, let seen = snapshot.session.activitySeen else { return .none }
-    let reading = snapshot.reading.statusReading
-    let unseen = reading.activity(limit: .max)
-      .prefix { $0.id != seen.newest }
-    guard !unseen.isEmpty else { return .none }
-    return unseen.contains { !$0.ok } ? .failed : .new
+    let unseen = seen.unseen(in: snapshot.reading.statusReading.activity(limit: .max))
+    if seen.failed || unseen.contains(where: { !$0.ok }) { return .failed }
+    return unseen.isEmpty ? .none : .new
   }
 
   /// The buttons on the right, only those that apply (v3 D11). Keys only while this window holds control; while the

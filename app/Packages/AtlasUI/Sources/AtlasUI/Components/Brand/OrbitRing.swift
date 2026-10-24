@@ -16,7 +16,7 @@ struct OrbitRing: View {
         Ellipse()
           .stroke(Color.strokeHighlight, lineWidth: Stroke.emphasis)
       } else {
-        TracingArc(phase: phase)
+        TracingArc(phase: phase, arc: Layout.arc)
           .stroke(
             Color.textPrimary
               .opacity(Opacity.muted),
@@ -42,32 +42,6 @@ struct OrbitRing: View {
     withTransaction(still) { phase = Layout.start }
     guard !isStill else { return }
     withAnimation(Motion.trace) { phase = Layout.start + 1 }
-  }
-}
-
-/// A quarter of an oval, starting `phase` of a turn along it, which SwiftUI moves round as `phase` changes.
-private struct TracingArc: Shape {
-  /// Where the quarter starts, a fraction of one turn; past 1 it wraps.
-  var phase: Double
-
-  var animatableData: Double {
-    get { phase }
-    set { phase = newValue }
-  }
-
-  /// The quarter, in two pieces when it runs past the oval's starting point.
-  ///
-  /// - Parameter rect: The oval's frame.
-  /// - Returns: The path.
-  func path(in rect: CGRect) -> Path {
-    let oval = Ellipse()
-      .path(in: rect)
-    let start = phase - phase.rounded(.down)
-    let end = start + Layout.arc
-    guard end > 1 else { return oval.trimmedPath(from: start, to: end) }
-    var path = oval.trimmedPath(from: start, to: 1)
-    path.addPath(oval.trimmedPath(from: 0, to: end - 1))
-    return path
   }
 }
 

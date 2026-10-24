@@ -48,4 +48,13 @@ struct CaptionStackTests {
     #expect(Layout.height(count: 3, fanned: false) == CGFloat(28 + 14))
     #expect(Layout.height(count: 0, fanned: true) == 0)
   }
+
+  @Test("under Reduce Motion a new action moves no chip, and the chips only fade")
+  func underReduceMotionTheChipsOnlyFade() {
+    // Places move on the state spring, or at once under Reduce Motion; faintness fades either way.
+    #expect(CaptionStack.moving(reduceMotion: false) == Motion.state)
+    #expect(CaptionStack.moving(reduceMotion: true) == nil)
+    #expect(CaptionStack.fading(reduceMotion: false) == Motion.state)
+    #expect(CaptionStack.fading(reduceMotion: true) == Motion.reduced)
+  }
 }

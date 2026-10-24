@@ -35,7 +35,8 @@ extension ViewerPresenter {
   }
 
   /// Why there is no picture (v3 V7): logged out, paused before the first, still connecting, or not ready; the first
-  /// and the last with the white button that helps.
+  /// and the last with the white button that helps. Not ready keeps the last picture behind its words as connecting
+  /// does: a helper restarting answers as not ready while it is silent, and the stage should not go blank for it.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The message and what its button sends.
@@ -64,7 +65,8 @@ extension ViewerPresenter {
         message: ViewerWords.notReadyMessage,
         action: EmptyMessageAction(title: ViewerWords.recoverButton, isPrimary: true)
       ),
-      event: .askRecover
+      event: .askRecover,
+      lastPicture: snapshot.reading.lastPicture
     )
   }
 

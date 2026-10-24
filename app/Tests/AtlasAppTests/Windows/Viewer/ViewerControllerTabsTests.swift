@@ -1,4 +1,5 @@
 import AsyncSupportTesting
+import AtlasService
 import AtlasServiceTesting
 import AtlasUI
 import Foundation
@@ -62,6 +63,57 @@ struct ViewerControllerTabsTests {
     viewer.send(.selectTab(.screen))
     #expect(viewer.state.top.activityUnseen == .none, "seen stays seen")
     viewer.close()
+  }
+
+  @Test("an unseen failure keeps the dot orange after newer actions push it out of the status")
+  func anUnseenFailureOutlastsTheStatusRows() async throws {
+    let service = ScriptedService()
+    service.reply = Self.reply([Self.row("a1", ok: true)])
+    let viewer = try await ViewerController.watching(service)
+    service.reply = Self.reply([Self.row("a2", ok: false), Self.row("a1", ok: true)])
+    try await Self.read(viewer, until: "a2")
+    #expect(viewer.state.top.activityUnseen == .failed)
+    // Twelve newer actions that worked: the status lists twelve, so the failure has left it unseen.
+    service.reply = Self.reply((1...12).reversed().map { Self.row("b\($0)", ok: true) })
+    try await Self.read(viewer, until: "b12")
+    #expect(viewer.state.top.activityUnseen == .failed, "the failure was never seen")
+    viewer.send(.selectTab(.activity))
+    viewer.send(.selectTab(.screen))
+    #expect(viewer.state.top.activityUnseen == .none, "Activity showed it")
+    viewer.close()
+  }
+
+  @Test("what Activity shows while the picture is paused is seen, so the dot stays off once it resumes")
+  func activityReadWhilePausedIsSeen() async throws {
+    let service = ScriptedService()
+    service.reply = Self.reply([Self.row("a1", ok: true)])
+    let viewer = try await ViewerController.watching(service)
+    viewer.send(.togglePause)
+    // The helper acts while the picture, and with it the status, is paused; Activity reads its own log meanwhile.
+    let newer = [Self.row("a3", ok: false), Self.row("a2", ok: true), Self.row("a1", ok: true)]
+    service.reply = Self.reply(newer)
+    service.activityLog = ActivityLog(entries: [
+      ActivityLog.Entry(id: "a3", outcome: .failed),
+      ActivityLog.Entry(id: "a2"),
+      ActivityLog.Entry(id: "a1"),
+    ])
+    viewer.send(.selectTab(.activity))
+    try await settle("Activity never read its log") { viewer.panes.activity.log?.entries.first?.id == "a3" }
+    viewer.send(.selectTab(.screen))
+    viewer.send(.togglePause)
+    try await Self.read(viewer, until: "a3")
+    #expect(viewer.state.top.activityUnseen == .none, "Activity showed a2 and a3 before the status caught up")
+    viewer.close()
+  }
+
+  /// One recent action in a status.
+  ///
+  /// - Parameters:
+  ///   - id: Its id.
+  ///   - ok: Whether it worked.
+  /// - Returns: The row.
+  static func row(_ id: String, ok: Bool) -> [String: Any] {
+    ["id": id, "operation": "input", "ok": ok, "ageSeconds": 1]
   }
 
   /// A status with `activity`, newest first.

@@ -48,33 +48,36 @@ struct ViewerLayoutTests {
 }
 
 extension ViewerLayoutTests {
-  @Test("the stage keeps its new width while Details slides")
-  func theStageKeepsItsNewWidthWhileDetailsSlides() {
-    // The stage's room follows whether Details shows, and nothing else: there is no slide in it.
+  @Test("on the Screen the stage makes Details' room on Details' spring, and at once elsewhere or under Reduce Motion")
+  func theStageAndDetailsMoveTogether() {
+    // The stage's room follows whether Details shows: Details' column and the window's inset beside it.
     #expect(ViewerLayout.stageTrailing(showsDetails: true) == 292)
     #expect(ViewerLayout.stageTrailing(showsDetails: false) == 0)
     #expect(ViewerLayout.detailsWidth == 280)
-    // Details slides by an offset of its own: hidden, a whole column out past the window's edge, so at every point of
-    // the slide its leading edge stays at or beyond the stage's new trailing edge, and the stage never waits for it.
-    let hidden = ViewerLayout.detailsOffset(isShown: false, reduceMotion: false)
-    #expect(hidden == ViewerLayout.detailsColumn)
-    #expect(ViewerLayout.detailsOffset(isShown: true, reduceMotion: false) == 0)
-    let window: CGFloat = 1440
-    let stageEdge = window - ViewerLayout.stageTrailing(showsDetails: true)
-    for step in 0...10 {
-      let offset = hidden * CGFloat(step) / 10
-      #expect(window - ViewerLayout.detailsColumn + offset >= stageEdge)
+    // Details slides by a whole column: as far as the stage's edge moves, so on one spring the two edges keep
+    // together at every point of the slide, and turn back together when it is toggled again mid-way (R17).
+    let stageTravel = ViewerLayout.stageTrailing(showsDetails: true) - ViewerLayout.stageTrailing(showsDetails: false)
+    let columnTravel =
+      ViewerLayout.detailsOffset(isShown: false, reduceMotion: false)
+      - ViewerLayout.detailsOffset(isShown: true, reduceMotion: false)
+    #expect(stageTravel == columnTravel)
+    #expect(ViewerLayout.stageSlide(tab: .screen, reduceMotion: false) == Motion.slide)
+    #expect(ViewerLayout.detailsSlide(reduceMotion: false) == Motion.slide)
+    #expect(Motion.slide == .spring(Motion.Springs.slide))
+    // A list or a grid takes its new width at once rather than laying out again at every frame of the slide.
+    for tab in ViewerTab.keptTabs {
+      #expect(ViewerLayout.stageSlide(tab: tab, reduceMotion: false) == nil, "\(tab)")
     }
-    // Under Reduce Motion it fades in place instead.
+    // Under Reduce Motion Details fades in place and the stage changes at once.
+    #expect(ViewerLayout.stageSlide(tab: .screen, reduceMotion: true) == nil)
+    #expect(ViewerLayout.detailsSlide(reduceMotion: true) == Motion.reduced)
     #expect(ViewerLayout.detailsOffset(isShown: false, reduceMotion: true) == 0)
     #expect(ViewerLayout.detailsOpacity(isShown: false, reduceMotion: true) == 0)
     #expect(ViewerLayout.detailsOpacity(isShown: true, reduceMotion: true) == 1)
     #expect(ViewerLayout.detailsOpacity(isShown: false, reduceMotion: false) == 1)
-    // The slide is a spring, which turns back from where it is when Details is toggled again mid-way (R17).
-    #expect(Motion.slide == .spring(Motion.Springs.slide))
   }
 
-  @Test("the spotlight's label moves inside the outline at the right edge")
+  @Test("the spotlight's label moves inside the outline at the right edge, and never past the picture's bottom")
   func theSpotlightsLabelMovesInsideTheOutlineAtTheRightEdge() {
     let picture = CGSize(width: 1000, height: 600)
     let label = CGSize(width: 300, height: 28)
@@ -96,8 +99,28 @@ extension ViewerLayoutTests {
       OutlineLabelPlacement.frame(label: label, outline: top, in: picture)
         == CGRect(x: 8, y: 18, width: 300, height: 28)
     )
+    // At the bottom right, inside would run below the picture, so it stops 8 above the picture's bottom.
+    let low = CGRect(x: 850, y: 580, width: 150, height: 20)
+    #expect(
+      OutlineLabelPlacement.frame(label: label, outline: low, in: picture)
+        == CGRect(x: 1000 - 8 - 300, y: 600 - 8 - 28, width: 300, height: 28)
+    )
+    // A window partly off the screen at the bottom right keeps its label whole on the picture.
+    let off = CGRect(x: 900, y: 590, width: 400, height: 300)
+    let placed = OutlineLabelPlacement.frame(label: label, outline: off, in: picture)
+    #expect(placed.maxY <= 600 - 8 && placed.maxX <= 1000 - 8 && placed.minX >= 8 && placed.minY >= 8, "\(placed)")
     // A label wider than the picture is cut to it.
     let wide = OutlineLabelPlacement.frame(label: CGSize(width: 2000, height: 28), outline: edge, in: picture)
     #expect(wide == CGRect(x: 8, y: 208, width: 984, height: 28))
+  }
+
+  @Test("the window's blur behind a large screenshot never animates under Reduce Motion, and its shade only fades")
+  func theLargeScreenshotsBlurIsStillUnderReduceMotion() {
+    #expect(ViewerLayout.shotBlurring(reduceMotion: false) == ViewerLayout.shotFade)
+    #expect(ViewerLayout.shotBlurring(reduceMotion: true) == nil)
+    #expect(ViewerLayout.shotFading(reduceMotion: false) == ViewerLayout.shotFade)
+    #expect(ViewerLayout.shotFading(reduceMotion: true) == Motion.reduced)
+    #expect(ViewerLayout.shotBlur(isShown: true) == 6)
+    #expect(ViewerLayout.shotBlur(isShown: false) == 0)
   }
 }

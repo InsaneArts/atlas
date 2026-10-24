@@ -150,6 +150,8 @@ final class ViewerPanesModel {
       panes.activity.readAt = readAt
       panes.activity.failure = nil
       if let list { keep(list) }
+      // What the tab now shows is seen, also while the picture, and with it the status, is paused.
+      viewer?.noteActivitySeen()
     } catch {
       guard number == work.generation, !error.isCancelled else { return }
       panes.activity.failure = error.message

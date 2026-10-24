@@ -249,7 +249,6 @@ final class ViewerReadingLoop {
       viewer.control.releaseControl(ViewerWords.helperChanged)
     }
     stopAwaiting()
-    reading.waitedLong = false
     reading.frame = frame
     reading.picture = decoded.picture
     reading.lastPicture = decoded.picture
@@ -274,7 +273,7 @@ final class ViewerReadingLoop {
 
   /// Rings the waiting stage's mark once the window has waited ``Motion/Duration/appearDelay`` for a picture, on the
   /// window's clock, so a quick answer never flashes it (v3 R12). It starts as reading starts with no picture and as
-  /// the picture is lost; a picture's arrival, or reading stopping, ends the wait.
+  /// the picture is lost; a picture's arrival, or reading stopping, ends the wait and puts the ring away.
   private func awaitPicture() {
     guard reading.picture == nil, waiting == nil, !reading.waitedLong else { return }
     // Unstructured, as the wait runs while readings go on; cancelled the moment a picture arrives.
@@ -286,10 +285,12 @@ final class ViewerReadingLoop {
     }
   }
 
-  /// Ends the wait for a picture, if one runs.
+  /// Ends the wait for a picture, if one runs, and puts the ring away: the next wait, as reading starts again or a
+  /// picture is lost again, waits its whole moment before it rings.
   private func stopAwaiting() {
     waiting?.cancel()
     waiting = nil
+    reading.waitedLong = false
   }
 
   /// Resuming the picture reads afresh: the last picture is not one to aim at, nor is the helper known to take input,

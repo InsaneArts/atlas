@@ -1,6 +1,8 @@
+import AppKit
 import AtlasUI
 import CoreGraphics
 import QuartzCore
+import SwiftUI
 import Testing
 
 @testable import AtlasApp
@@ -21,6 +23,34 @@ struct LayerPictureTests {
     #expect(layer.contentsGravity == .resizeAspect)
     #expect(layer.filters?.count == 1, "a paused look keeps half its colour")
     #expect(asked.keys.isEmpty, "no action was asked for: \\(asked.keys)")
+  }
+
+  @Test("the window's live slot shows each new frame through its layer, without building its view again")
+  @MainActor
+  func theLiveSlotShowsEachNewFrame() throws {
+    let first = try Self.picture("one")
+    let live = ViewerLivePicture(picture: first, saturation: 1, corner: 12)
+    let hosting = NSHostingView(rootView: LayerPictureView(live: live))
+    hosting.frame = NSRect(x: 0, y: 0, width: 160, height: 100)
+    hosting.layoutSubtreeIfNeeded()
+    let slot = try #require(Self.pictureViews(in: hosting).first, "the slot hosts no layer")
+    #expect((slot.layer?.contents as AnyObject?) === first.image)
+    let second = try Self.picture("two")
+    hosting.rootView = LayerPictureView(live: ViewerLivePicture(picture: second, saturation: 1, corner: 12))
+    hosting.layoutSubtreeIfNeeded()
+    #expect(Self.pictureViews(in: hosting).count == 1)
+    #expect(Self.pictureViews(in: hosting).first === slot, "the slot's view was built again")
+    #expect((slot.layer?.contents as AnyObject?) === second.image, "the new frame never reached the layer")
+  }
+
+  /// The views under `view` whose layer shows a picture.
+  ///
+  /// - Parameter view: A view.
+  /// - Returns: Those views, in tree order.
+  @MainActor
+  static func pictureViews(in view: NSView) -> [NSView] {
+    let own = view.layer?.contents == nil ? [] : [view]
+    return own + view.subviews.flatMap { pictureViews(in: $0) }
   }
 
   /// A one-pixel picture named `id`.

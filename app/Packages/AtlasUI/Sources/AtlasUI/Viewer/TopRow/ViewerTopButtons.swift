@@ -22,7 +22,7 @@ struct ViewerTopButtons: View {
       wordOrSymbol(String("Clear"), symbol: .clear, event: .clearOutline, isEnabled: true)
         .help(String("Stop showing the window"))
         .actionSlot(actions.showsClear)
-      PauseSlot(pause: actions.pause, send: send)
+      ViewerPauseSlot(pause: actions.pause, send: send)
       keys
         .actionSlot(actions.keys != .hidden)
       wordOrSymbol(String("Stop"), symbol: .stop, event: .stopAgent, isEnabled: true)
@@ -31,7 +31,7 @@ struct ViewerTopButtons: View {
       wordOrSymbol(String("Resume"), symbol: .resume, event: .resumeAgent, isEnabled: resumeEnabled)
         .help(actions.agentHelp)
         .actionSlot(isResume)
-      MainButton(control: actions.control, refusals: actions.refusals, send: send)
+      ViewerMainButton(control: actions.control, refusals: actions.refusals, send: send)
       more
       details
     }
@@ -153,70 +153,6 @@ struct ViewerTopButtons: View {
     guard case .resume(let isEnabled) = actions.agent else { return false }
     return isEnabled
   }
-}
-
-/// The picture's pause in its slot (v3 V11): pause turns into play by a symbol replace once the picture is paused, at
-/// once under Reduce Motion. It pauses the picture only; work in the helper goes on.
-private struct PauseSlot: View {
-  /// The pause; nil while there is no picture to pause.
-  let pause: ViewerToggle?
-  /// Receives the press.
-  let send: @MainActor (ViewerEvent) -> Void
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-  var body: some View {
-    Button {
-      send(.togglePause)
-    } label: {
-      Image(systemName: (pause?.isOn == true ? SymbolName.play : SymbolName.pause).rawValue)
-        .contentTransition(.symbolEffect(.replace))
-        .animation(Motion.animation(Motion.state, reduceMotion: reduceMotion), value: pause?.isOn)
-    }
-    .buttonStyle(.capsule(.glass, size: .small, outline: .circle))
-    .help(pause?.help ?? "")
-    .accessibilityLabel(pause?.label ?? "")
-    .actionSlot(pause != nil)
-  }
-}
-
-/// The white capsule in its slot (v3 X5, V12): Take Control, Give Back or Recover…, its title morphing in place in a
-/// capsule at least 116 wide, so the row does not move. A refused Take Control shakes it once.
-private struct MainButton: View {
-  /// The button; nil while the stage offers what to do instead.
-  let control: ViewerControlButton?
-  /// Take Control's refusals counted.
-  let refusals: Int
-  /// Receives the press.
-  let send: @MainActor (ViewerEvent) -> Void
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-  var body: some View {
-    Button {
-      if let control { send(control.event) }
-    } label: {
-      Text(control?.title ?? "")
-        .contentTransition(.interpolate)
-        .frame(minWidth: Layout.labelMinWidth)
-        .animation(
-          Motion.animation(Motion.arrive, reduceMotion: reduceMotion, reduced: Motion.reduced),
-          value: control?.title
-        )
-    }
-    .buttonStyle(.capsule(size: .small))
-    .disabled(control?.isEnabled != true)
-    .shakes(refusals)
-    .help(control?.help ?? "")
-    .accessibilityLabel(control?.title ?? "")
-    .actionSlot(control != nil)
-  }
-}
-
-/// The white capsule's own measure.
-private enum Layout {
-  /// 18: a capsule's inset each side of its title (``CapsuleButtonStyle``'s for a capsule that hugs its title).
-  static let capsuleInset: CGFloat = 18
-  /// 80: its title's least width, the capsule's 116 less its inset each side (v3 `min-width: 116px`).
-  static let labelMinWidth = ViewerLayout.mainButtonMinWidth - capsuleInset * 2
 }
 
 #if DEBUG

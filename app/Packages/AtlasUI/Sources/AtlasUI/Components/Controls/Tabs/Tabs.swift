@@ -59,15 +59,13 @@ struct Tabs<Tab: Hashable & Sendable, Accessory: View>: View {
 
   /// The tabs in their capsule track.
   private var track: some View {
-    HStack(spacing: Layout.trackGap) {
+    HStack(spacing: TabsLayout.trackGap) {
       ForEach(state.tabs) { tab in
         Button {
           send(tab.id)
         } label: {
-          HStack(spacing: Spacing.xsPlus) {
-            trackLabel(tab)
-            accessory(tab.id)
-          }
+          trackLabel(tab)
+            .modifier(hanging(tab.id, gap: face == .symbol ? Spacing.xs : Spacing.xsPlus))
         }
         .buttonStyle(TrackTabStyle(isSelected: tab.id == state.selected, face: face, thumb: thumb))
         .help(face == .symbol ? tab.title : "")
@@ -75,13 +73,13 @@ struct Tabs<Tab: Hashable & Sendable, Accessory: View>: View {
         .accessibilityAddTraits(tab.id == state.selected ? .isSelected : [])
       }
     }
-    .padding(Layout.trackInset)
+    .padding(TabsLayout.trackInset)
     .background(
       Capsule()
         .fill(Color.fillControl)
     )
     .overlay(
-      RoundedRectangle(cornerRadius: Layout.trackHeight / 2, style: .circular)
+      RoundedRectangle(cornerRadius: TabsLayout.trackHeight / 2, style: .circular)
         .strokeBorder(Color.separator, lineWidth: Stroke.hairline)
     )
     .fixedSize()
@@ -113,10 +111,8 @@ struct Tabs<Tab: Hashable & Sendable, Accessory: View>: View {
         Button {
           send(tab.id)
         } label: {
-          HStack(spacing: Spacing.xs) {
-            Text(tab.title)
-            accessory(tab.id)
-          }
+          Text(tab.title)
+            .modifier(hanging(tab.id, gap: Spacing.xs))
         }
         .buttonStyle(SegmentTabStyle(isSelected: tab.id == state.selected, thumb: thumb))
         .accessibilityLabel(tab.title)
@@ -144,18 +140,16 @@ struct Tabs<Tab: Hashable & Sendable, Accessory: View>: View {
         Button {
           send(tab.id)
         } label: {
-          VStack(spacing: Layout.tileGap) {
+          VStack(spacing: TabsLayout.tileGap) {
             if let symbol = tab.symbol {
               Image(systemName: symbol.rawValue)
                 .font(Typography.symbol(.tab))
                 .foregroundStyle(tab.id == state.selected ? Color.accent : Color.textSecondary)
                 .frame(height: SymbolScale.tab.pointSize)
             }
-            HStack(spacing: Spacing.xs) {
-              Text(tab.title)
-                .font(Typography.font(.caption, weight: .medium))
-              accessory(tab.id)
-            }
+            Text(tab.title)
+              .font(Typography.font(.caption, weight: .medium))
+              .modifier(hanging(tab.id, gap: Spacing.xs))
           }
         }
         .buttonStyle(TileTabStyle(isSelected: tab.id == state.selected))
@@ -165,6 +159,18 @@ struct Tabs<Tab: Hashable & Sendable, Accessory: View>: View {
     }
     .accessibilityElement(children: .contain)
     .accessibilityLabel(state.label)
+  }
+
+  /// What hangs `tab`'s accessory `gap` after the trailing edge of its label, outside the label's frame: the label stays
+  /// centred in its tab, the thumb sits on the tab whole, and the gaps between the words stay even, whether or not the
+  /// tab carries anything (an Activity dot that is not showing included).
+  ///
+  /// - Parameters:
+  ///   - tab: The tab.
+  ///   - gap: From the label's trailing edge to the accessory.
+  /// - Returns: The modifier.
+  private func hanging(_ tab: Tab, gap: CGFloat) -> TabsAccessory<Accessory> {
+    TabsAccessory(accessory: accessory(tab), gap: gap)
   }
 }
 
@@ -184,73 +190,6 @@ extension Tabs where Accessory == EmptyView {
   ) {
     self.init(state: state, style: style, face: face, send: send) { _ in EmptyView() }
   }
-}
-
-/// A tab in the track: its label bright on the thumb while selected, quiet otherwise and brightening while held, which
-/// also dips it a little (v3 X9: tabs 0.96).
-private struct TrackTabStyle: ButtonStyle {
-  /// Whether it is the selected tab.
-  let isSelected: Bool
-  /// What the tab shows: a symbol sits closer to its edges than a word.
-  let face: TabsFace
-  /// The namespace the thumb glides in.
-  let thumb: Namespace.ID
-  @Environment(\.isEnabled) private var enabled
-
-  func makeBody(configuration: Configuration) -> some View {
-    configuration.label
-      .font(Typography.font(.body, weight: .medium))
-      .foregroundStyle(isSelected || configuration.isPressed ? Color.textPrimary : Color.textSecondary)
-      .lineLimit(1)
-      .padding(.horizontal, face == .symbol ? Spacing.sPlus : Spacing.mPlus)
-      .frame(height: Layout.trackHeight)
-      .background {
-        if isSelected {
-          TabsThumb()
-            .matchedGeometryEffect(id: TabsStyle.thumbID, in: thumb)
-        }
-      }
-      .contentShape(Capsule())
-      .modifier(PressScale(isPressed: configuration.isPressed, scale: Layout.pressedScale))
-      .opacity(enabled ? 1 : Opacity.disabled)
-      .animation(CapsuleButtonStyle.pressAnimation(isPressed: configuration.isPressed), value: configuration.isPressed)
-  }
-}
-
-/// The selected track tab's thumb (v3 `.vtabs .thumb`): the held fill, a fine highlight along its top and a small
-/// shadow under it.
-private struct TabsThumb: View {
-  var body: some View {
-    Capsule()
-      .fill(Color.fillControlOn)
-      .overlay(alignment: .top) {
-        RoundedRectangle(cornerRadius: Layout.trackHeight / 2, style: .circular)
-          .strokeBorder(Color.strokeHighlight, lineWidth: Stroke.hairline)
-          .mask(alignment: .top) {
-            Rectangle()
-              .frame(height: Stroke.hairline)
-          }
-      }
-      .shadow(color: Color.dropShadowFaint, radius: Layout.thumbShadow, y: Layout.thumbDrop)
-  }
-}
-
-/// The tabs' own measures, from v3's track (`.vtabs`) and tiles (G1). At file scope because `Tabs` is generic.
-private enum Layout {
-  /// 28: a track tab's height, and the thumb's.
-  static let trackHeight = ControlHeight.s
-  /// 3: the track's inset around its tabs, so the track stands 34 high.
-  static let trackInset: CGFloat = 3
-  /// 2: between two track tabs.
-  static let trackGap = Spacing.half
-  /// 0.96: how far a held tab dips (v3 X9).
-  static let pressedScale: CGFloat = 0.96
-  /// 1.5: the thumb's shadow, half v3's 3-point blur.
-  static let thumbShadow: CGFloat = 1.5
-  /// 1: how far the thumb's shadow falls.
-  static let thumbDrop: CGFloat = 1
-  /// 3: between a tile's symbol and its word.
-  static let tileGap: CGFloat = 3
 }
 
 #if DEBUG

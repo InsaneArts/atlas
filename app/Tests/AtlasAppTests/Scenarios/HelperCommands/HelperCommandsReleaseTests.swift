@@ -50,6 +50,45 @@ struct HelperCommandsReleaseTests {
     reopened.close()
   }
 
+  @Test("a window freed before its input and release are answered keeps Take Control waiting until both are")
+  func aFreedWindowsWorkStillHoldsTheBarrier() async throws {
+    let service = ScriptedService()
+    service.reply = HelperCommandsScenario.idle
+    let actions = HelperActions(
+      commands: ScriptedCommands([:]),
+      service: service,
+      barrier: ControlBarrier(service: service, clock: ManualClock())
+    )
+    var viewer: ViewerController? = try await ViewerController.watching(service, actions: actions)
+    weak let gone = viewer
+    await viewer?.control.takeControl()
+    service.hold = ["input"]
+    viewer?.control.send(text: "a")
+    try await settle("the input was never sent") { service.held["input"] != nil }
+    service.hold = ["release"]
+    viewer?.close()
+    try await settle("the release was never sent") { service.held["release"] != nil }
+    // The window and its controller are gone; what they sent is not.
+    viewer = nil
+    #expect(gone == nil, "the closed window's controller outlived it")
+    #expect(actions.barrier.isBusy)
+    let reopened = try await ViewerController.watching(service, actions: actions)
+    #expect(reopened.state.top.actions.control?.isEnabled != true, "Take Control did not wait for the gone window")
+    await reopened.control.takeControl()
+    #expect(service.log.filter { $0.hasPrefix("acquire") }.count == 1, "control was asked for again too soon")
+    // The input answered, the release still is not: still waiting.
+    service.resume("input")
+    try await settle("the input was never answered") { service.held["input"] == nil }
+    #expect(actions.barrier.isBusy, "the unanswered release stopped counting")
+    #expect(reopened.state.top.actions.control?.isEnabled != true)
+    // Once the release is answered too, the reopened window may take control.
+    service.resume("release")
+    try await settle("Take Control never came back") { reopened.state.top.actions.control?.isEnabled == true }
+    await reopened.control.takeControl()
+    #expect(service.log.filter { $0.hasPrefix("acquire") }.count == 2)
+    reopened.close()
+  }
+
   @Test("leaving and coming back to the window while a refused release is sent again keeps nothing of that attempt")
   func aCancelledAttemptKeepsNoGrant() async throws {
     let service = ScriptedService()

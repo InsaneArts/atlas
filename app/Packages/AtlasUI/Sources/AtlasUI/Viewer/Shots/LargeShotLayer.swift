@@ -37,7 +37,7 @@ struct LargeShotLayer: View {
           .transition(.opacity)
       }
     }
-    .animation(ViewerLayout.shotFade, value: shot == nil)
+    .animation(ViewerLayout.shotFading(reduceMotion: reduceMotion), value: shot == nil)
   }
 
   /// The picture at its own shape in the centre, zooming from and back to its tile.
@@ -48,14 +48,16 @@ struct LargeShotLayer: View {
     ZStack {
       if let shot {
         let size = ViewerLayout.largeShotSize(aspect: shot.aspect, in: window)
+        // The picture and its backing carry the zoom inside the fixed frame, so the frame the zoom hands them really
+        // resizes them from the tile's to the centre's, rather than moving a picture already full size.
         PictureTile(picture: shot.picture, radius: Radius.large)
-          .frame(width: size.width, height: size.height)
-          .shotZoom(id: shot.id, in: zoom)
           .background(
             RoundedRectangle(cornerRadius: Radius.large)
               .filledOutline(Color.letterbox, border: Color.strokeStrong)
               .elevation(.modal)
           )
+          .shotZoom(id: shot.id, in: zoom)
+          .frame(width: size.width, height: size.height)
           .accessibilityElement()
           .accessibilityLabel(shot.caption)
           .accessibilityAddTraits(.isImage)
@@ -92,7 +94,7 @@ struct LargeShotLayer: View {
           .transition(.opacity)
       }
     }
-    .animation(ViewerLayout.shotFade, value: shot == nil)
+    .animation(ViewerLayout.shotFading(reduceMotion: reduceMotion), value: shot == nil)
   }
 
   /// A round glass button stepping to the screenshot before or after.

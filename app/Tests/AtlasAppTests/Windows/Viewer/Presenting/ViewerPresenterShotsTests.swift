@@ -27,6 +27,10 @@ struct ViewerPresenterShotsTests {
     // tile carries it.
     let tiles = shots.days.flatMap(\.shots)
     #expect(large.id == "b.png")
-    #expect(tiles.map(\.id).filter { $0 == large.id }.count == 1)
+    let carrying =
+      tiles
+      .map(\.id)
+      .filter { $0 == large.id }
+    #expect(carrying.count == 1)
   }
 }

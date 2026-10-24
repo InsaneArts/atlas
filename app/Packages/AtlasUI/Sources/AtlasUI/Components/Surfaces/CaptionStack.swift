@@ -17,9 +17,17 @@ struct CaptionStack: View {
     ZStack(alignment: .bottomLeading) {
       ForEach(shown) { item in
         chip(item.entry)
-          .scaleEffect(Layout.scale(depth: item.depth, fanned: isFanned), anchor: .bottomLeading)
-          .offset(y: Layout.offset(depth: item.depth, fanned: isFanned))
-          .opacity(Layout.opacity(depth: item.depth, fanned: isFanned))
+          // Where a chip stands moves on the state spring, at once under Reduce Motion; how faint it is fades either
+          // way. Each is scoped to its own effect, so nothing moves while a new action arrives under Reduce Motion.
+          .animation(Self.moving(reduceMotion: reduceMotion)) { chip in
+            chip
+              .scaleEffect(Layout.scale(depth: item.depth, fanned: isFanned), anchor: .bottomLeading)
+              .offset(y: Layout.offset(depth: item.depth, fanned: isFanned))
+          }
+          .animation(Self.fading(reduceMotion: reduceMotion)) { chip in
+            chip
+              .opacity(Layout.opacity(depth: item.depth, fanned: isFanned))
+          }
           .zIndex(-Double(item.depth))
           .transition(arrival)
       }
@@ -28,11 +36,8 @@ struct CaptionStack: View {
     .frame(height: Layout.height(count: shown.count, fanned: isFanned), alignment: .bottomLeading)
     .contentShape(Rectangle())
     .onHover { isFanned = $0 }
-    .animation(Motion.animation(Motion.state, reduceMotion: reduceMotion), value: isFanned)
-    .animation(
-      Motion.animation(Motion.state, reduceMotion: reduceMotion, reduced: Motion.reduced),
-      value: shown.map(\.id)
-    )
+    .animation(Self.moving(reduceMotion: reduceMotion), value: isFanned)
+    .animation(Self.moving(reduceMotion: reduceMotion), value: shown.map(\.id))
     .accessibilityElement(children: .contain)
     .accessibilityLabel(Text(verbatim: "Latest actions"))
   }
@@ -52,17 +57,35 @@ struct CaptionStack: View {
   }
 
   /// How a chip comes and goes: in at the front with a blur, the oldest fading as it folds away; a fade under Reduce
-  /// Motion.
+  /// Motion, on its own short animation, since nothing else moves then.
   private var arrival: AnyTransition {
-    Motion.transition(
-      .asymmetric(
-        insertion: AnyTransition(.blurReplace(.downUp))
-          .animation(Motion.arrive),
-        removal: AnyTransition.opacity
-          .animation(Motion.leave)
-      ),
-      reduceMotion: reduceMotion
+    guard !reduceMotion else {
+      return AnyTransition.opacity
+        .animation(Self.fading(reduceMotion: reduceMotion))
+    }
+    return .asymmetric(
+      insertion: AnyTransition(.blurReplace(.downUp))
+        .animation(Motion.arrive),
+      removal: AnyTransition.opacity
+        .animation(Motion.leave)
     )
+  }
+
+  /// How the chips move to new places, as an action arrives or the pile fans out: on the state spring, or at once under
+  /// Reduce Motion.
+  ///
+  /// - Parameter reduceMotion: Whether the Reduce Motion setting is on.
+  /// - Returns: The animation, or nil.
+  nonisolated static func moving(reduceMotion: Bool) -> Animation? {
+    Motion.animation(Motion.state, reduceMotion: reduceMotion)
+  }
+
+  /// How the chips fade to their new faintness: on the state spring, or a plain fade under Reduce Motion.
+  ///
+  /// - Parameter reduceMotion: Whether the Reduce Motion setting is on.
+  /// - Returns: The animation.
+  nonisolated static func fading(reduceMotion: Bool) -> Animation {
+    Motion.animation(Motion.state, reduceMotion: reduceMotion, reduced: Motion.reduced)
   }
 
   /// The newest actions the pile shows, each with its depth: at most ``Layout/limit``, the newest at depth 0, in

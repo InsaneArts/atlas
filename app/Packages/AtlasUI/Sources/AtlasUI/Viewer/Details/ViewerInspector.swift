@@ -2,9 +2,10 @@ import SwiftUI
 
 /// Details' column at the window's trailing edge (v3 V3): it slides in from past the edge and back out on
 /// ``Motion/slide``, a spring that turns back from wherever it is when Details is toggled again mid-way (R17); under
-/// Reduce Motion it fades in place. It slides alone: the stage beside it takes its new width at once
-/// (``ViewerLayout/stageTrailing(showsDetails:)``). Leaving, it keeps what it last showed, so it slides away whole
-/// rather than emptying first; hidden, it takes no clicks or keyboard focus, and VoiceOver passes it by.
+/// Reduce Motion it fades in place. On the Screen the stage beside it gives up or takes back its room on the same
+/// spring (``ViewerLayout/stageSlide(tab:reduceMotion:)``), so the picture's edge keeps to the column's. Leaving, it
+/// keeps what it last showed, so it slides away whole rather than emptying first; hidden, it takes no clicks or
+/// keyboard focus, and VoiceOver passes it by.
 struct ViewerInspector: View {
   /// What Details shows; nil hides it.
   let details: ViewerDetailsState?
@@ -28,7 +29,7 @@ struct ViewerInspector: View {
     .padding([.trailing, .bottom], Spacing.m)
     .offset(x: ViewerLayout.detailsOffset(isShown: isShown, reduceMotion: reduceMotion))
     .opacity(ViewerLayout.detailsOpacity(isShown: isShown, reduceMotion: reduceMotion))
-    .animation(Motion.animation(Motion.slide, reduceMotion: reduceMotion, reduced: Motion.reduced), value: isShown)
+    .animation(ViewerLayout.detailsSlide(reduceMotion: reduceMotion), value: isShown)
     // Hidden past the edge, it takes no clicks, no keyboard focus and no VoiceOver.
     .allowsHitTesting(isShown)
     .disabled(!isShown)
