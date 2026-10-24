@@ -10,8 +10,7 @@
         next: OnboardingFooterAction(title: .continue, event: .continueChoice, isEnabled: true, isDefault: true),
         track: onboardingTrack(1, of: 6)
       ),
-      note: .none,
-      isBusy: false
+      note: .none
     )
 
     /// The account form, its passwords not typed yet.
@@ -22,8 +21,7 @@
         next: OnboardingFooterAction(title: .createAccount, event: .createAccount, isEnabled: false, isDefault: true),
         track: onboardingTrack(1, of: 6)
       ),
-      note: .none,
-      isBusy: false
+      note: .none
     )
 
     /// The account form with a short name macOS refuses: the row is marked, the note says why and what to try, and
@@ -63,7 +61,6 @@
         "Approve in the macOS dialog. It says Atlas can change your Mac. "
           + "That covers only the three steps below."
       )
-      state.isBusy = true
       return state
     }()
 

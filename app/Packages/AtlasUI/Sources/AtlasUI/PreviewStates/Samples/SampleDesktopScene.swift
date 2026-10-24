@@ -8,6 +8,7 @@
     /// A display's size, in points, at the boards' 16 by 10.
     private let display = CGSize(width: 1440, height: 900)
 
+    /// A blue ground with a menu bar strip and one window on it, in light mode.
     var body: some View {
       ZStack(alignment: .topLeading) {
         LinearGradient(

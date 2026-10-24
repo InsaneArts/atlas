@@ -20,6 +20,7 @@
       PopupOption(id: Rate.paused, title: "Paused", isEnabled: false),
     ]
 
+    /// The popup at each of two choices, on the ground.
     var body: some View {
       HStack(spacing: Spacing.m) {
         PopupButton(label: String("Picture"), options: Self.options, selection: .constant(.live))

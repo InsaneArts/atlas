@@ -10,7 +10,9 @@ public struct WheelAccumulator: Sendable {
   /// 100: the most whole lines one send carries each way; the rest stays for the next.
   static let mostLines = 100.0
 
+  /// The horizontal scroll not yet sent, in lines.
   var x = 0.0
+  /// The vertical scroll not yet sent, in lines.
   var y = 0.0
 
   /// Whether at least one whole line waits, as one that ``take()`` capped leaves.

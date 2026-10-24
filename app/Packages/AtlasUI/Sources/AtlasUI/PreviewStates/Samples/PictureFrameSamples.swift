@@ -3,6 +3,7 @@
 
   /// The picture frame's samples: each look, then the empty stage, at the panel's small corners.
   struct PictureFrameSamples: View {
+    /// The sample desktop in each look, two by two.
     var body: some View {
       Grid(horizontalSpacing: Spacing.m, verticalSpacing: Spacing.m) {
         GridRow {

@@ -19,7 +19,9 @@ extension ViewerStatus {
 
     /// The input service, as the session reports it.
     struct Input: Decodable {
+      /// Whether the input service is ready to send events.
       var ready: Bool?
+      /// Whether the input service answered.
       var ok: Bool?
     }
 

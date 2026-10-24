@@ -5,6 +5,7 @@ struct GroupLabel: View {
   /// The group's name.
   let text: String
 
+  /// The label in small semibold, read as a header.
   var body: some View {
     Text(text)
       .font(Typography.font(.caption, weight: .semibold))

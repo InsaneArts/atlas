@@ -1,4 +1,4 @@
-// Reports a declaration other code can reach that has no `///` doc comment,
+// Fails on a declaration other code can reach that has no `///` doc comment,
 // in app/Sources and every local package's Sources:
 // node scripts/check-swift-docs.mjs [FOLDER...].
 //

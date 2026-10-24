@@ -8,6 +8,7 @@ struct AppTile: View {
   /// The icon's side: an app's 34 by default, 16 beside a label.
   var side = IconSize.xl
 
+  /// The icon, or the quiet tile, at its side.
   var body: some View {
     icon
       .frame(width: side, height: side)

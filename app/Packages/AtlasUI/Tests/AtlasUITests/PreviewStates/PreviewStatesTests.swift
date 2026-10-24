@@ -163,7 +163,12 @@
           "permissions", "helperDone", "blocked",
         ]
       )
-      #expect(PreviewStates.onboarding.contains { $0.value.isBusy }, "a command running")
+      let notes = PreviewStates.onboarding
+        .map(\.value.note)
+      let running = notes.contains { note in
+        if case .working = note { true } else { false }
+      }
+      #expect(running, "a command running")
     }
   }
 #endif

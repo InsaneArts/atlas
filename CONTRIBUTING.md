@@ -97,7 +97,8 @@ These hold everywhere; a change that needs to break one needs an issue first.
   (AtlasService, AtlasCommands, AtlasControl, AtlasStatus, AtlasOnboarding)
   hold rules and the service client, AtlasUI holds views and never imports
   them, AtlasApp holds the AppKit windows. Use the design tokens, one type per
-  file, and name tests as sentences.
+  file, a `///` line on every declaration other code can reach, and name tests
+  as sentences.
 - **Plain words** in every message a person or agent reads: short, specific,
   no jargon.
 

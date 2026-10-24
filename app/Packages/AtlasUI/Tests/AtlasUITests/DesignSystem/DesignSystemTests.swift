@@ -110,7 +110,7 @@ struct DesignSystemTests {
         "opacity",
         [
           Opacity.tint, Opacity.tintStrong, Opacity.edgeTintQuiet, Opacity.disabled, Opacity.dimmed, Opacity.muted,
-          Opacity.edgeTint, Opacity.demonstration,
+          Opacity.edgeTint,
         ],
         true
       ),
@@ -124,9 +124,8 @@ struct DesignSystemTests {
           Motion.Duration.leave, Motion.Duration.fade, Motion.Duration.hoverOut, Motion.Duration.reduced,
           Motion.Duration.crossfade, Motion.Duration.dim, Motion.Duration.piece,
           Motion.Duration.draw, Motion.Duration.state, Motion.Duration.resize, Motion.Duration.shake,
-          Motion.Duration.entry,
           Motion.Duration.appearDelay,
-          Motion.Duration.glide, Motion.Duration.glideSoft, Motion.Duration.doneHold, Motion.Duration.pulse,
+          Motion.Duration.glideSoft, Motion.Duration.doneHold, Motion.Duration.pulse,
           Motion.Duration.spin, Motion.Duration.echo, Motion.Duration.breathe, Motion.Duration.toast,
           Motion.Duration.trace,
         ]

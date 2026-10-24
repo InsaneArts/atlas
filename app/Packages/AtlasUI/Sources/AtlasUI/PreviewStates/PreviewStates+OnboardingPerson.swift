@@ -6,8 +6,7 @@
     @MainActor public static let onboardingLoading = OnboardingState(
       content: .loading(problem: nil),
       footer: OnboardingFooterState(),
-      note: .none,
-      isBusy: false
+      note: .none
     )
 
     /// A fresh Mac: what Atlas is.
@@ -17,8 +16,7 @@
         next: OnboardingFooterAction(title: .getStarted, event: .begin, isEnabled: true, isDefault: true),
         track: onboardingTrack(0, of: 6)
       ),
-      note: .none,
-      isBusy: false
+      note: .none
     )
 
     /// The helper chosen, not logged in yet: until it answers, another account can be chosen.
@@ -29,8 +27,7 @@
         next: OnboardingFooterAction(title: .lockAndSwitch, event: .lockAndSwitch, isEnabled: true, isDefault: true),
         track: onboardingTrack(2, of: 6)
       ),
-      note: .none,
-      isBusy: false
+      note: .none
     )
 
     /// The helper logged in, off screen, with Atlas not open there yet.
@@ -62,8 +59,7 @@
         ),
         track: onboardingTrack(3, of: 6)
       ),
-      note: .none,
-      isBusy: false
+      note: .none
     )
 
     /// The check passed: Continue opens.
@@ -99,8 +95,7 @@
         next: OnboardingFooterAction(title: .continue, event: .connectAgents, isEnabled: false, isDefault: true),
         track: onboardingTrack(4, of: 6)
       ),
-      note: .none,
-      isBusy: false
+      note: .none
     )
 
     /// Setup done.
@@ -111,8 +106,7 @@
         next: OnboardingFooterAction(title: .done, event: .complete, isEnabled: true, isDefault: true),
         track: onboardingTrack(5, of: 6)
       ),
-      note: .none,
-      isBusy: false
+      note: .none
     )
 
     /// The first reading failed: why, and Try Again.
@@ -121,8 +115,7 @@
       footer: OnboardingFooterState(
         next: OnboardingFooterAction(title: .tryAgain, event: .checkAgain, isEnabled: true, isDefault: true)
       ),
-      note: .problem(onboardingLoadingProblem),
-      isBusy: false
+      note: .problem(onboardingLoadingProblem)
     )
 
     /// A helper with a long name, never answered, and a switch that failed: Choose Another Account in Back's place.

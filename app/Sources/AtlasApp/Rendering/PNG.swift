@@ -64,6 +64,7 @@ enum PNG {
     guard let appearance = Appearance.dark, let data = data(of: host, appearance: appearance) else {
       return false
     }
+    // The render reports a failed write as false; why it failed is not its concern.
     return (try? data.write(to: file)) != nil
   }
 }

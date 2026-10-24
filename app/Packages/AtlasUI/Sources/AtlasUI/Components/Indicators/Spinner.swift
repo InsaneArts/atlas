@@ -9,6 +9,7 @@ struct Spinner: View {
   @State private var turning = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+  /// A faint ring with the arc turning on it.
   var body: some View {
     ZStack {
       Circle()

@@ -107,9 +107,6 @@ extension Color {
     .opacity(0.06)
   /// An account's avatar disc: an opaque grey, 0.23 of the way from black to white.
   static let fillAvatar = Color(white: 0.23)
-  /// An inactive page dot: white at 0.18.
-  static let fillIndicator = Color.white
-    .opacity(0.18)
   /// A step still to come on a progress track (v3 D8 `.track i`): white at 0.14.
   static let fillTrack = Color.white
     .opacity(0.14)
@@ -128,14 +125,8 @@ extension Color {
   static let fillPlaceholder = Color(red: 0x0D / 255, green: 0x0D / 255, blue: 0x10 / 255)
   /// A modal surface's ground drawn opaque, under Reduce Transparency, such as an alert's: rgb(44, 44, 48).
   static let fillModalSolid = Color(red: 44 / 255, green: 44 / 255, blue: 48 / 255)
-  /// A modal surface's ground over its material, such as an alert's: rgb(44, 44, 48) at 0.95.
-  static let fillModal = Color.fillModalSolid
-    .opacity(0.95)
   /// A floating bar of buttons drawn opaque, under Reduce Transparency: rgb(40, 40, 44).
   static let fillFloatingSolid = Color(red: 40 / 255, green: 40 / 255, blue: 44 / 255)
-  /// A floating bar of buttons over its material, such as a large screenshot's: rgb(40, 40, 44) at 0.92.
-  static let fillFloating = Color.fillFloatingSolid
-    .opacity(0.92)
   /// The tint over a regular glass's material before macOS 26, such as a chip's or the tab track's (v3
   /// `--glass-chip`, D12): the ground at 0.66.
   static let fillGlass = Color.ground

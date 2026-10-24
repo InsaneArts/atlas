@@ -22,6 +22,7 @@ struct Headline: View {
   /// How large the title is.
   var size = Size.hero
 
+  /// The title's lines, centred and read as one header.
   var body: some View {
     lines
       .multilineTextAlignment(.center)

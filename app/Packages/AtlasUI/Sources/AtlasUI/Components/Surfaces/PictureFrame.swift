@@ -19,6 +19,7 @@ struct PictureFrame: View {
   /// How large its corners are.
   var size = Size.regular
 
+  /// The picture letterboxed on black in its look, or the empty stage, inside its edge.
   var body: some View {
     ZStack {
       if let picture {

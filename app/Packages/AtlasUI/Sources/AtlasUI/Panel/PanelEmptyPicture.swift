@@ -15,6 +15,7 @@ struct PanelEmptyPicture: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.animatesArrivals) private var animatesArrivals
 
+  /// Atlas's mark over the line saying why there is no screen.
   var body: some View {
     VStack(spacing: Spacing.m) {
       OrbitMark(size: PanelLayout.emptyMark)

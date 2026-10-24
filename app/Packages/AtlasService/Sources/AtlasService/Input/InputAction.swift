@@ -26,6 +26,7 @@ public enum InputAction: Encodable, Equatable, Sendable {
 
   /// Every field an action may carry; each case writes only its own.
   enum CodingKeys: String, CodingKey {
+    /// Each field by the name the service reads.
     case type, phase, x, y, button, count, modifiers, dx, dy, text, key, ms
   }
 

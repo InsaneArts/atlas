@@ -15,6 +15,7 @@ public struct ActivityLog: Decodable, Equatable, Sendable {
 
   /// The root fields of `activity.json`.
   enum CodingKeys: String, CodingKey {
+    /// The rows, under the service's `activity`.
     case entries = "activity"
   }
 

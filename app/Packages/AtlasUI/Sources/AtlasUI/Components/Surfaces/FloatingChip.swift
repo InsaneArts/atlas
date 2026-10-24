@@ -21,6 +21,7 @@ struct FloatingChip<Content: View>: View {
   @ViewBuilder let content: Content
   @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
+  /// The content in a row on the frosted capsule.
   var body: some View {
     HStack(spacing: Spacing.s) {
       content

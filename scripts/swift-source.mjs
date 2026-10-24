@@ -202,9 +202,10 @@ function globPattern(glob) {
 // waive a checker (or one rule of it) for the paths a glob names, and
 // `reportOnly`, each { checker, rule?, until, reason }, turn a checker or one
 // of its rules into a report that never fails. Every entry names the phase
-// that removes it and its reason; one without either throws.
+// that removes it and its reason; one without either throws. With no file,
+// nothing is waived and every rule is a gate.
 export function allowList(file = path.join(repository, 'scripts/check-swift.allow.json')) {
-  const list = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const list = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
   for (const entry of [...(list.waivers ?? []), ...(list.reportOnly ?? [])]) {
     for (const field of ['until', 'reason']) {
       if (typeof entry[field] !== 'string' || !entry[field].trim()) {

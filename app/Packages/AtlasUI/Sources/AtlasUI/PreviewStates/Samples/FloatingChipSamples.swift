@@ -3,6 +3,7 @@
 
   /// The floating chip's samples at each size: a notice, the chip at the top, and the mini screen's Live.
   struct FloatingChipSamples: View {
+    /// A notice, the chip at the top and the mini screen's Live, on the ground.
     var body: some View {
       VStack(spacing: Spacing.s) {
         FloatingChip {

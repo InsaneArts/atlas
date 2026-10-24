@@ -6,8 +6,7 @@
     @MainActor public static let onboardingPermissionPanel = OnboardingState(
       content: .permissionPanel(onboardingPermissionPanelState),
       footer: onboardingPanelFooter,
-      note: .none,
-      isBusy: false
+      note: .none
     )
 
     /// In the helper: the panel the moment Accessibility turns on, before Screen Recording's page opens by itself.
@@ -24,8 +23,7 @@
         )
       ),
       footer: onboardingPanelFooter,
-      note: .none,
-      isBusy: false
+      note: .none
     )
 
     /// The panel's footer: Back alone, at its bottom left.

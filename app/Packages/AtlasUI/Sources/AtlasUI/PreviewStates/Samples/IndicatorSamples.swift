@@ -7,16 +7,10 @@
     enum Kind: Sendable {
       /// Spinners at the sizes in use.
       case spinner
-      /// Check marks at the sizes in use.
-      case checkMark
       /// Discs at each size and tone in use.
       case disc
       /// Every mark, a breathing dot and the small dots a caption and a badge use.
       case statusDot
-      /// The first, a middle and the last step.
-      case pageDots
-      /// Waiting and done.
-      case progressPill
       /// The first, a middle and the last step of the track.
       case progressTrack
       /// Success and problem, settled.
@@ -47,12 +41,6 @@
             Spinner(size: IconSize.xsPlus)
             Spinner(size: IconSize.sPlus)
           }
-        case .checkMark:
-          HStack(spacing: Spacing.m) {
-            CheckMark()
-            CheckMark(size: IconSize.m)
-            CheckMark(size: IconSize.xxl)
-          }
         case .disc:
           HStack(spacing: Spacing.m) {
             Disc(content: .symbol("exclamationmark"), tone: .attention, size: .mark)
@@ -62,7 +50,6 @@
             Disc(content: .letter(String("Y")), tone: .accentSoft)
             Disc(content: .letter(String("A")), tone: .neutral)
             Disc(content: .letter(String("T")), tone: .avatar, size: .avatar)
-            Disc(content: .letter(String("I")), tone: .avatar, size: .large)
           }
         case .statusDot:
           HStack(spacing: Spacing.m) {
@@ -75,13 +62,6 @@
             StatusDot(mark: .pulsing, tone: .active, size: .small)
             StatusDot(mark: .small, tone: .ready)
           }
-        case .pageDots:
-          PageDots(index: 0, count: 6)
-          PageDots(index: 2, count: 6)
-          PageDots(index: 2, count: 3)
-        case .progressPill:
-          ProgressPill(text: String("Waiting for Accessibility…"))
-          ProgressPill(text: String("Accessibility is on"), done: true)
         case .progressTrack:
           ProgressTrack(index: 0, count: 6, label: String("Step 1 of 6"))
           ProgressTrack(index: 2, count: 6, label: String("Step 3 of 6"))

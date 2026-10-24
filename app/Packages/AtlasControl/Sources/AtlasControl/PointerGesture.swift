@@ -15,22 +15,33 @@ public struct PointerGesture: Sendable {
 
   /// The button held now.
   struct Active {
+    /// The button held.
     let button: MouseButton
+    /// The click count its press carried.
     let count: Int
+    /// Where it went down, on the helper's display.
     let from: DesktopPoint
+    /// Where it is now, on the helper's display.
     var last: DesktopPoint
+    /// Whether it has moved far enough to be a drag, so its release starts no repeat.
     var moved = false
   }
 
   /// The last click, which a repeat counts from.
   struct Previous {
+    /// The button clicked.
     let button: MouseButton
+    /// The click count it carried.
     let count: Int
+    /// When it came up, in seconds.
     let at: Double
+    /// Where it came up, on the helper's display.
     let point: DesktopPoint
   }
 
+  /// The button held now; nil while none is.
   var active: Active?
+  /// The last click, which a repeat counts from; nil after a drag or a cancel.
   var previous: Previous?
 
   /// Creates a gesture with no button held.

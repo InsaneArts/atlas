@@ -20,7 +20,9 @@ public struct ScreenshotList: Decodable, Equatable, Sendable {
 
   /// The body's fields this app reads.
   enum CodingKeys: String, CodingKey {
+    /// The list, under the service's `screenshots`.
     case shots = "screenshots"
+    /// The folder the screenshots are kept in.
     case folder
   }
 

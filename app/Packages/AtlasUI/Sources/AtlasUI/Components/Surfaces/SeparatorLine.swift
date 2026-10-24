@@ -6,6 +6,7 @@ struct SeparatorLine: View {
   var axis = Axis.horizontal
   @Environment(\.displayScale) private var scale
 
+  /// The line along its axis.
   var body: some View {
     switch axis {
     case .horizontal:

@@ -47,6 +47,7 @@ public struct HelperApp: Decodable, Equatable, Sendable, Identifiable {
 
   /// The fields of one `apps` row.
   enum CodingKeys: String, CodingKey {
+    /// Each field by the name the service writes.
     case pid, name, bundle, front, icon, windows
   }
 

@@ -12,16 +12,12 @@
       case controlRim
       /// The picture in each look.
       case pictureTreatment
-      /// Rows with separators between them.
-      case separatedRows
       /// The window's ground under a sample.
       case windowSurface
       /// The panel's card.
       case panelCard
       /// A window outlined near the picture's right edge, its label moved inside the outline.
       case outlineLabel
-      /// A selected and an unselected icon tab.
-      case iconTab
       /// A control at its own size and pressed.
       case pressScale
     }
@@ -60,13 +56,6 @@
                 .pictureTreatment(look)
             }
           }
-        case .separatedRows:
-          CardGroup {
-            SeparatedRows(items: Self.facts) { fact in
-              DetailRow(name: fact.name, value: fact.value)
-            }
-          }
-          .frame(width: SampleWidth.narrow)
         case .windowSurface:
           Text(verbatim: "On the window's ground")
             .padding(Spacing.xl)
@@ -87,19 +76,6 @@
           }
           .frame(width: SampleWidth.narrow, height: 140)
           .background(Color.fillPlaceholder)
-        case .iconTab:
-          HStack(spacing: Spacing.xs) {
-            Button {
-            } label: {
-              IconTabLabel(title: String("General"), icon: .symbol(SymbolName.gear.rawValue))
-            }
-            .buttonStyle(IconTabStyle(isSelected: true))
-            Button {
-            } label: {
-              IconTabLabel(title: String("Helper"), icon: .symbol(SymbolName.display.rawValue))
-            }
-            .buttonStyle(IconTabStyle(isSelected: false))
-          }
         case .pressScale:
           HStack(spacing: Spacing.xl) {
             Capsule()
@@ -115,12 +91,6 @@
       }
       .sampleSurface()
     }
-
-    /// Two facts, for the separated rows.
-    private static let facts = [
-      Fact(name: String("Helper"), value: String("Atlas")),
-      Fact(name: String("Display"), value: String("1512 × 982")),
-    ]
 
     /// The sample desktop, small.
     @ViewBuilder private var picture: some View {

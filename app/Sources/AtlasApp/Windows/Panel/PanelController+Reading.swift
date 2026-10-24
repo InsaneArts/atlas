@@ -46,6 +46,7 @@ extension PanelController {
     return Task { [weak self, clock] in
       while !Task.isCancelled {
         if let controller = self { await step(controller) } else { return }
+        // A cancelled pause ends at once, and the loop's condition ends the loop.
         try? await clock.sleep(for: pause)
       }
     }
@@ -97,6 +98,7 @@ extension PanelController {
   func readFrame() async {
     frameReading += 1
     let number = frameReading
+    // A failed capture is nil, and shows no picture rather than an old one.
     let shown = try? await service.frame()
     guard number == frameReading, !Task.isCancelled else { return }
     var decoded: DesktopPicture?

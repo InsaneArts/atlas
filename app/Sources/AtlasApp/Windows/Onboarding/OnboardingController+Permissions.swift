@@ -22,6 +22,7 @@ extension OnboardingController {
   ///
   /// - Parameter permission: The permission just turned on.
   func moveOn(from permission: Permission) async {
+    // A tick cut short by Back only ends sooner; the guard below drops the move on.
     try? await dependencies.clock.sleep(for: Self.tickShown)
     // Back during the tick: a panel opened again since is not this one's to move on.
     guard !Task.isCancelled, !closed, snapshot.guiding == permission else { return }

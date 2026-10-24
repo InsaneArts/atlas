@@ -54,6 +54,7 @@ extension ViewerStatus {
     /// - Throws: `DecodingError` only when the row is not an object.
     public init(from decoder: any Decoder) throws {
       let container = try decoder.container(keyedBy: CodingKeys.self)
+      // Each field is read leniently: a missing or mistyped one takes its default, so one odd field never drops the row.
       id = (try? container.decodeIfPresent(String.self, forKey: .id))
         .flatMap { $0?.isEmpty == false ? $0 : nil }
       operation = (try? container.decodeIfPresent(String.self, forKey: .operation)) ?? "action"

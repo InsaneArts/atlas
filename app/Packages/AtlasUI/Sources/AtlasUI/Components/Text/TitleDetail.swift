@@ -23,6 +23,7 @@ struct TitleDetail: View {
   /// Whether the detail wraps onto as many lines as it needs.
   var wraps = false
 
+  /// The title over its detail, leading.
   var body: some View {
     VStack(alignment: .leading, spacing: Spacing.half) {
       Text(title)

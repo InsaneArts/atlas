@@ -47,7 +47,10 @@ struct OnboardingControllerSwitchTests {
       #expect(controller.snapshot.working == nil)
       #expect(controller.snapshot.problem == nil, "a wait Back stopped is no failure")
       #expect(controller.snapshot.step == .switchToHelper)
-      #expect(!controller.state.isBusy, "the switch is back as it was, Lock and Switch ready again")
+      #expect(
+        controller.state.footer.next?.isEnabled == true,
+        "the switch is back as it was, Lock and Switch ready again"
+      )
     }
   }
 }

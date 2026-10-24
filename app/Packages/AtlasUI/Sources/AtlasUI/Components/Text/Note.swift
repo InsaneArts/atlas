@@ -9,6 +9,7 @@ struct Note: View {
   /// How its lines line up: centred by default, as under a screen's content.
   var alignment = TextAlignment.center
 
+  /// The small print in its tone.
   var body: some View {
     Text(text)
       .font(Typography.font(.caption))

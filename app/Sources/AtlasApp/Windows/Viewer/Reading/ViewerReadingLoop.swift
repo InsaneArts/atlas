@@ -166,6 +166,7 @@ final class ViewerReadingLoop {
   func readStatus() async {
     statusReading += 1
     let readingNumber = statusReading
+    // A status that cannot be read leaves the window as it is; the reading loop reads it again.
     guard let reply = try? await service.status(), readingNumber == statusReading else { return }
     show(reply)
   }
@@ -182,6 +183,7 @@ final class ViewerReadingLoop {
       while !Task.isCancelled {
         guard self != nil else { return }
         self?.readClock()
+        // A cancelled tick ends at once, and the loop's condition ends the loop.
         try? await clock.sleep(for: Self.tickEvery)
       }
     }

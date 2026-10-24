@@ -9,16 +9,14 @@
         next: OnboardingFooterAction(title: .allow, event: .allow, isEnabled: true, isDefault: true),
         track: onboardingTrack(0, of: 3)
       ),
-      note: .none,
-      isBusy: false
+      note: .none
     )
 
     /// In the helper: Accessibility on, Screen Recording still off.
     @MainActor public static let onboardingPermissions = OnboardingState(
       content: .screen(.permissions(onboardingPermissionsScreen)),
       footer: OnboardingFooterState(track: onboardingTrack(1, of: 3)),
-      note: .none,
-      isBusy: false
+      note: .none
     )
 
     /// In the helper: neither permission on yet, Accessibility first.
@@ -32,8 +30,7 @@
         )
       ),
       footer: OnboardingFooterState(track: onboardingTrack(1, of: 3)),
-      note: .none,
-      isBusy: false
+      note: .none
     )
 
     /// In the helper: both permissions being checked while Atlas's job restarts.
@@ -47,8 +44,7 @@
         )
       ),
       footer: OnboardingFooterState(track: onboardingTrack(1, of: 3)),
-      note: .none,
-      isBusy: false
+      note: .none
     )
 
     /// In the helper: both permissions on.
@@ -58,8 +54,7 @@
         next: OnboardingFooterAction(title: .switchBack, event: .switchBack, isEnabled: true, isDefault: true),
         track: onboardingTrack(2, of: 3)
       ),
-      note: .none,
-      isBusy: false
+      note: .none
     )
 
     /// Atlas.app is not where it must be.
@@ -68,8 +63,7 @@
       footer: OnboardingFooterState(
         next: OnboardingFooterAction(title: .checkAgain, event: .checkAgain, isEnabled: true, isDefault: true)
       ),
-      note: .none,
-      isBusy: false
+      note: .none
     )
 
     /// In the helper: a person with a long name asks a helper with a long name, and allowing failed.

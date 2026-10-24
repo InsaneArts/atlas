@@ -3,6 +3,7 @@
 
   /// The group label's samples: a group's name above a card's, and a longer one.
   struct GroupLabelSamples: View {
+    /// Two group labels, on the ground.
     var body: some View {
       VStack(alignment: .leading, spacing: Spacing.s) {
         GroupLabel(text: String("Ready to act"))

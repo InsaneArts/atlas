@@ -127,6 +127,7 @@ iconutil.arguments = [
 ]
 try iconutil.run()
 iconutil.waitUntilExit()
+// Only a scratch folder: one left behind is harmless, and the icon is already written.
 try? FileManager.default.removeItem(at: iconset)
 // The size macOS keeps for account pictures.
 try png(pixels: 512, draw: drawPicture).write(to: here.appendingPathComponent("HelperPicture.png"))

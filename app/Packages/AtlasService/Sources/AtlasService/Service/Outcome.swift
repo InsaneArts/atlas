@@ -46,6 +46,7 @@ public struct Outcome: Sendable {
   ///   - stderr: What it printed on standard error.
   /// - Returns: The outcome; a command that printed no JSON failed with its standard error as the message.
   public static func parse(status: Int32, stdout: Data, stderr: Data) -> Outcome {
+    /// What the command printed: whether it worked, and its error and code when it did not.
     struct Reply: Decodable {
       let ok: Bool?
       let error: String?
@@ -53,6 +54,7 @@ public struct Outcome: Sendable {
     }
     let decoder = JSONDecoder()
     for data in [stdout, stderr] where !data.isEmpty {
+      // Output that is not the reply is skipped: the other stream, or the fallback below, tells what happened.
       if let reply = try? decoder.decode(Reply.self, from: data) {
         let worked = status == 0 && reply.ok != false
         return Outcome(

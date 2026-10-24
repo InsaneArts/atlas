@@ -13,6 +13,7 @@
     /// - Returns: Whether every component was drawn.
     static func draw(to directory: String) -> Bool {
       let folder = URL(fileURLWithPath: directory)
+      // A folder that cannot be made fails the writes below, which report it.
       try? FileManager.default
         .createDirectory(at: folder, withIntermediateDirectories: true)
       return ComponentSample.allCases

@@ -5,6 +5,7 @@ struct Lede: View {
   /// The sentences.
   let text: String
 
+  /// The paragraph, centred in grey under a title.
   var body: some View {
     Text(text)
       .font(Typography.font(.body))

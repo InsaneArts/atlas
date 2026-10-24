@@ -281,3 +281,33 @@ test('the Swift check summary adds up the tests of every test product Swift Test
     'ok   app: swift test (403 tests)',
   );
 });
+
+test('with no allow list nothing is waived and every rule is a gate', () => {
+  const list = allowList(path.join(os.tmpdir(), 'atlas-check-swift-none', 'allow.json'));
+  assert.equal(list.waived('tokens', 'inline size', 'app/Sources/AtlasApp/Any.swift'), false);
+  assert.equal(list.reportsOnly('docs', undefined), false);
+});
+
+test("the tests checker passes the ceiling's one wall-clock wait and fails the same wait anywhere else", (t) => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-check-swift-'));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  const testing = path.join(base, 'app/Packages/AsyncSupport/Sources/AsyncSupportTesting');
+  fs.mkdirSync(testing, { recursive: true });
+  const wait = [
+    'func wait() async throws {',
+    '  try await Task.sleep(for: .seconds(1))',
+    '}',
+    '',
+  ].join('\n');
+  fs.writeFileSync(path.join(testing, 'Ceiling.swift'), wait);
+  fs.writeFileSync(path.join(testing, 'Pause.swift'), wait);
+  const { status, lines } = check(
+    'tests',
+    'app/Packages/AsyncSupport/Sources/AsyncSupportTesting',
+    { base },
+  );
+  assert.equal(status, 1);
+  assert.deepEqual(lines, [
+    'app/Packages/AsyncSupport/Sources/AsyncSupportTesting/Pause.swift:2: wall-clock sleep in a test: wait on a sentinel or a manual clock',
+  ]);
+});

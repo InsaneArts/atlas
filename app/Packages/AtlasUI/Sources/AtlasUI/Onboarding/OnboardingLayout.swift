@@ -21,8 +21,6 @@ public enum OnboardingLayout {
   static let sideFooterHeight: CGFloat = 56
   /// 20: the footer's side inset (v3 `.foot2`).
   static let barInset: CGFloat = 20
-  /// 20: the helper's work note's least height, so the screen does not jump as it comes and goes.
-  static let workNoteHeight: CGFloat = 20
   /// 88: the app icon's visible tile on the welcome screen (v3 B1, C-T1).
   static let welcomeTile: CGFloat = 88
   /// 80: the app icon's visible tile on the done screen (v3 S8, C-T1).

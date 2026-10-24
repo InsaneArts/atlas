@@ -8,6 +8,7 @@ struct OrbitMark: View {
   let size: CGFloat
   @Environment(\.displayScale) private var displayScale
 
+  /// The orbit drawn once as a mask and filled in the text's colour, so its strokes never darken where they cross.
   var body: some View {
     Canvas { context, canvas in
       let orbit = Orbit(

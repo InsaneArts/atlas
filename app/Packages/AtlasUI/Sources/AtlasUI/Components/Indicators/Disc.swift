@@ -41,8 +41,6 @@ struct Disc: View {
     /// 48: the asking account's avatar in the helper's allow pairing, beside Atlas's tile of the same size (v3
     /// `.pairing`).
     case pairing
-    /// 56: a large avatar, as the boards draw it.
-    case large
   }
 
   /// What the disc holds.
@@ -52,6 +50,7 @@ struct Disc: View {
   /// How large it is.
   var size = Size.regular
 
+  /// The disc in its tone, its symbol, letter or number in the middle.
   var body: some View {
     ZStack {
       Circle()
@@ -86,7 +85,6 @@ struct Disc: View {
     case (.regular, _): Typography.font(.caption, weight: .bold)
     case (.avatar, _): Typography.font(.body, weight: .semibold)
     case (.pairing, _): Typography.font(.title3, weight: .semibold)
-    case (.large, _): Typography.font(.title3, weight: .semibold)
     }
   }
 
@@ -96,7 +94,6 @@ struct Disc: View {
     case .regular: IconSize.m
     case .avatar: IconSize.xl
     case .pairing: Layout.pairingSide
-    case .large: Layout.largeSide
     }
   }
 
@@ -130,9 +127,6 @@ struct Disc: View {
 private enum Layout {
   /// 0.2: the soft accent under the person's own initial, stronger than a tint so it reads at disc size.
   static let accentSoft = 0.2
-  /// 56: a large disc's side, the boards' large avatar (the shared `IconSize.avatarLarge` until Phase 6a, which only
-  /// this size used).
-  static let largeSide: CGFloat = 56
   /// 48: a pairing disc's side (v3 `.pairing .av2`).
   static let pairingSide: CGFloat = 48
 }

@@ -10,6 +10,7 @@ struct PopupButton<Value: Hashable & Sendable>: View {
   /// The current choice.
   @Binding var selection: Value
 
+  /// The choice's word and a chevron, opening the choices as a menu.
   var body: some View {
     Menu {
       Picker(label, selection: $selection) {

@@ -14,6 +14,7 @@ enum ShotDrag {
 
   /// Empties the folder, as a new drag starts and as the app quits.
   static func emptyFolder() {
+    // Nothing to empty is no failure, and a folder that stays only holds copies of screenshots.
     try? FileManager.default
       .removeItem(at: folder)
   }

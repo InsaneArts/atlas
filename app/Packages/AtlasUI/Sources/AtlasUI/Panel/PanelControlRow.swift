@@ -9,6 +9,7 @@ struct PanelControlRow: View {
   /// Receives what the person does.
   let send: @MainActor (PanelEvent) -> Void
 
+  /// Stop in its slot, then the main action filling the row.
   var body: some View {
     HStack(spacing: Spacing.s) {
       Button("Stop") { send(.stopAgent) }

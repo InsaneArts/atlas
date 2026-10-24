@@ -17,6 +17,7 @@ struct PanelHeader: View {
   @State private var moreFrame = CGRect.zero
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+  /// The status's word and line on the leading edge, ⋯ on the trailing one.
   var body: some View {
     HStack(alignment: .top, spacing: Spacing.sPlus) {
       VStack(alignment: .leading, spacing: Spacing.half) {

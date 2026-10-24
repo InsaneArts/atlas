@@ -78,6 +78,7 @@ final class ViewerPanesModel {
         guard self?.work.generation == number else { return }
         await self?.read(tab, number)
         guard self?.work.generation == number, !Task.isCancelled else { return }
+        // A cancelled pause ends at once, and the loop's condition ends the loop.
         try? await clock.sleep(for: Self.pause(for: tab))
       }
     }
@@ -276,6 +277,7 @@ final class ViewerPanesModel {
     guard let name = panes.shots.large else { return }
     let number = work.large.copyGeneration
     work.large.copy = Task { [weak self, service] in
+      // A screenshot that cannot be read copies nothing; the person can copy again.
       let png = try? await service.screenshot(name: name, full: true)
       guard let self, let png, number == work.large.copyGeneration else { return }
       shotOutlet.copy(png)
@@ -317,6 +319,7 @@ final class ViewerPanesModel {
     work.large.generation += 1
     let number = work.large.generation
     work.large.load = Task { [weak self, service] in
+      // A screenshot that cannot be read shows none, and is tried again with the next reading.
       let png = try? await service.screenshot(name: name, full: true)
       var image: CGImage?
       if let png { image = await ImageDecoding.image(png) }
@@ -353,6 +356,7 @@ final class ViewerPanesModel {
       let number = work.thumbnails.generation
       work.thumbnails.loading[name] = Task { [weak self, service] in
         var image: CGImage?
+        // A thumbnail that cannot be read lands as none, its tile left as it was.
         if let jpeg = try? await service.screenshot(name: name, full: false) {
           image = await ImageDecoding.image(jpeg)
         }

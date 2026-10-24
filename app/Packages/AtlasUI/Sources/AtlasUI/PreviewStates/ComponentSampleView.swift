@@ -16,11 +16,9 @@
     /// The chosen component's samples.
     public var body: some View {
       switch sample {
-      case .capsuleTabs: CapsuleTabsSamples()
       case .capsuleButtons: CapsuleButtonSamples(.every)
       case .captionStack: CaptionStackSamples()
       case .statusDots: IndicatorSamples(.statusDot)
-      case .statusLabel: StatusLabelSamples()
       case .floatingChip: FloatingChipSamples()
       case .alertCard: AlertCardSamples()
       case .emptyMessage: EmptyMessageSamples()
@@ -29,8 +27,6 @@
       case .paneHeader: PaneHeaderSamples()
       case .searchField: SearchFieldSamples()
       case .groupLabel: GroupLabelSamples()
-      case .iconTabs: IconTabsSamples()
-      case .formRow: FormRowSamples()
       case .popupButton: PopupButtonSamples()
       case .appIconTiles: BrandSamples(.appIcon)
       case .accountPictureSizes: BrandSamples(.accountPicture)

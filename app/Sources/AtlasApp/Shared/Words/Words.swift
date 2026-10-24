@@ -27,8 +27,6 @@ enum Words {
   static let inUseElsewhereLine = "Another window has control"
   /// The person holds control: the main window's line beside the word.
   static let controlLine = "The agent waits"
-  /// How to give control back, on the chip over the screen: chip text, not a sentence, so it has no full stop.
-  static let controlHint = "Control-Shift-Escape gives it back"
   /// The line beside the word while the picture is paused.
   static let pausedLine = "Picture paused"
   /// The person stopped agents: the line beside the word.

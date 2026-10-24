@@ -43,6 +43,7 @@
     /// - Returns: Whether every state was drawn.
     static func draw(to directory: String) -> Bool {
       let folder = URL(fileURLWithPath: directory)
+      // A folder that cannot be made fails the writes below, which report it.
       try? FileManager.default
         .createDirectory(at: folder, withIntermediateDirectories: true)
       let reduceTransparency = ProcessInfo.processInfo.environment["ATLAS_RENDER_REDUCE_TRANSPARENCY"] == "1"

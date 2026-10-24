@@ -26,6 +26,7 @@ public struct ViewerStatus: Decodable, Equatable, Sendable {
 
   /// The root fields of `status.json`.
   enum CodingKeys: String, CodingKey {
+    /// Each field by the name the service writes.
     case ready, canObserve, checks, nextSteps, error, controlActive, session, capabilities, overview
   }
 

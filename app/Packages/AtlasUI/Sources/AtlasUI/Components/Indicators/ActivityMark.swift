@@ -7,6 +7,7 @@ struct ActivityMark: View {
   /// Which mark it draws.
   let kind: ActivityMarkKind
 
+  /// The mark for the line's kind, hidden from VoiceOver.
   var body: some View {
     mark
       .accessibilityHidden(true)

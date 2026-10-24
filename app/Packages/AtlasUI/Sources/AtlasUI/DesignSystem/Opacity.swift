@@ -14,6 +14,4 @@ enum Opacity {
   static let muted = 0.5
   /// 0.55: a tinted fill's edge.
   static let edgeTint = 0.55
-  /// 0.7: a demonstration drawn over the screen, see-through so it reads as showing how, not as the real thing.
-  static let demonstration = 0.7
 }

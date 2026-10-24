@@ -31,6 +31,7 @@ public struct Screenshot: Decodable, Equatable, Sendable, Identifiable {
 
   /// The fields of one `screenshots` row.
   enum CodingKeys: String, CodingKey {
+    /// Each field by the name the service writes.
     case name, takenAt, width, height
   }
 

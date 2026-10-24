@@ -8,14 +8,6 @@ public struct AppIcon: View {
   let size: CGFloat
   @Environment(\.appIcon) private var icon
 
-  /// Creates the icon at a canvas size.
-  ///
-  /// - Parameter size: The canvas's side, in points, margin included. Each caller moves to ``init(tile:)`` with its
-  ///   surface's redesign.
-  init(size: CGFloat) {
-    self.size = size
-  }
-
   /// Creates the icon by the tile it shows (v3 B1): the canvas is drawn larger by the margin around the tile.
   ///
   /// - Parameter tile: The visible tile's side, in points, such as a window layout's welcome or About tile.
@@ -60,7 +52,7 @@ private enum Layout {
 
 #if DEBUG
   #Preview("Placeholder") {
-    AppIcon(size: IconSize.xxl)
+    AppIcon(tile: IconSize.xxl)
       .sampleSurface()
   }
 

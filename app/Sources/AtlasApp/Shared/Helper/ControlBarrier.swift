@@ -86,7 +86,9 @@ final class ControlBarrier {
   /// - Returns: Whether one answered.
   private func answered(tries: Int) async -> Bool {
     for attempt in 0..<tries {
+      // A pause cut short only tries again sooner; the hold, which is never cancelled, always waits it out.
       if attempt > 0 { try? await clock.sleep(for: Self.statusEvery) }
+      // Any reply counts as an answer; a failed reading only means this try did not get one.
       if (try? await service.status()) != nil { return true }
     }
     return false

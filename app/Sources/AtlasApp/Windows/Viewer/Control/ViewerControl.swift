@@ -205,6 +205,7 @@ final class ViewerControl {
     do {
       return try await service.acquire(frame: frame)
     } catch let refusal as ServiceError where refusal.isBusy {
+      // A wait cut short only retries sooner; the guard below drops a retry the person moved on from.
       try? await clock.sleep(for: Self.busyRetryAfter)
       guard generation == controlGeneration, let newest = viewer?.reading.frame, !pictureStale else { throw refusal }
       return try await service.acquire(frame: newest.id)
@@ -263,6 +264,7 @@ final class ViewerControl {
       var tick = 0
       while !Task.isCancelled {
         guard let interval = self?.heartbeatInterval else { return }
+        // A cancelled heartbeat ends at once; the guard below ends the loop.
         try? await clock.sleep(for: interval)
         guard !Task.isCancelled, let self, lease == granted else { return }
         guard !pictureStale else {
@@ -444,6 +446,7 @@ final class ViewerControl {
   private func sendWheelSoon() {
     guard wheelSending == nil else { return }
     wheelSending = Task { [weak self, clock] in
+      // A cancelled gathering ends at once; the guard below sends nothing.
       try? await clock.sleep(for: Self.scrollGathering)
       guard let self, !Task.isCancelled else { return }
       wheelSending = nil
@@ -548,6 +551,7 @@ extension ViewerControl: InputSink {
       return
     }
     inputReading = Task { [weak self, clock] in
+      // A cancelled wait ends at once; the guard below reads nothing.
       try? await clock.sleep(for: wait)
       guard let self, !Task.isCancelled else { return }
       inputReading = nil

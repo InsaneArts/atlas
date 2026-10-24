@@ -59,6 +59,7 @@ extension ActivityLog {
 
     /// The fields of one `activity` row.
     enum CodingKeys: String, CodingKey {
+      /// Each field by the name the service writes.
       case id, says, ok, started, actor, ageSeconds, startedAt, reason, operation, count
     }
 

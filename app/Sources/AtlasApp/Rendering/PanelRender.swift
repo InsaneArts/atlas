@@ -64,6 +64,7 @@ enum PanelRender {
     to path: String,
     appearance: NSAppearance?
   ) async -> Bool {
+    // A status or picture the service cannot give draws as the empty status and no picture.
     async let reading = try? service.status()
     async let picture = try? service.frame()
     let status = await reading ?? ViewerStatus()
@@ -171,6 +172,7 @@ enum PanelRender {
     guard let appearance, let data = PNG.data(of: canvas, appearance: appearance) else {
       return false
     }
+    // The render reports a failed write as false; why it failed is not its concern.
     return (try? data.write(to: URL(fileURLWithPath: path))) != nil
   }
 }

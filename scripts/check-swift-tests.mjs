@@ -14,7 +14,9 @@
 // - `empty`: an `@Test` whose body is empty, or an `#expect` or `#require` of
 //   the literal `true`, which cannot fail.
 // - `sleep`: a wall-clock wait, `Task.sleep` or `Thread.sleep`; a test waits
-//   on a sentinel or a manual clock instead.
+//   on a sentinel or a manual clock instead. The one exception is CEILING,
+//   `Ceiling.timer`: the bound every wait has, not a pause, cancelled as soon
+//   as the event it bounds comes.
 //
 // The `force` and `empty` rules port ../jolt-v2/Scripts/check_tests.py. A
 // text heuristic over Swift, with comments and string contents blanked
@@ -51,6 +53,8 @@ const LOOKBACK = 200;
 const MARKER = '// swift-format-ignore: NeverForceUnwrap';
 const OPENERS = { ')': '(', ']': '[', '>': '<' };
 const WALL_CLOCK = /\b(?:Task|Thread)\s*\.\s*sleep\b/g;
+// The one file whose wall-clock wait is the tests' ceiling, not a pause.
+const CEILING = 'app/Packages/AsyncSupport/Sources/AsyncSupportTesting/Ceiling.swift';
 
 // The index of the parenthesis closing the one at `opening`, or null.
 function closing(code, opening) {
@@ -213,7 +217,7 @@ function marked(alone, line) {
 }
 
 // Every problem in one test file, as { line, rule, message }.
-export function violations(text) {
+export function violations(text, file = '') {
   const comments = [];
   const code = codeOnly(text, comments);
   const line = lineOf(code);
@@ -247,7 +251,7 @@ export function violations(text) {
     }
   }
   found.push(...bangs.values());
-  for (const sleep of code.matchAll(WALL_CLOCK)) {
+  for (const sleep of file === CEILING ? [] : code.matchAll(WALL_CLOCK)) {
     found.push({ line: line(sleep.index), rule: 'sleep', message: SLEEP });
   }
   return found.sort((a, b) => a.line - b.line);

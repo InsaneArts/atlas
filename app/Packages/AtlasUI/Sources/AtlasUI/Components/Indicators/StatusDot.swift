@@ -22,6 +22,7 @@ struct StatusDot: View {
   @State private var dim = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+  /// The mark at its side, glowing or breathing as its tone asks.
   var body: some View {
     shape
       .frame(width: side, height: side)

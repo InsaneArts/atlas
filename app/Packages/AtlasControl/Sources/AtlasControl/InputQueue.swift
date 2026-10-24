@@ -10,16 +10,22 @@ public final class InputQueue {
 
   /// One batch waiting, with the lease and generation it was queued under.
   struct Item {
+    /// What the batch does.
     let actions: [InputAction]
+    /// The picture it was aimed at.
     let frame: String
+    /// The lease it was queued under.
     let lease: String
+    /// The generation it was queued in; a newer one drops it unsent.
     let generation: Int
   }
 
   /// Where the input goes, and who hears how it went.
   public weak var sink: (any InputSink)?
+  /// The lease that owns input now; nil while none does.
   private(set) var owner: String?
   private var generation = 0
+  /// The batches waiting, oldest first.
   private(set) var pending: [Item] = []
   private var sending = false
 

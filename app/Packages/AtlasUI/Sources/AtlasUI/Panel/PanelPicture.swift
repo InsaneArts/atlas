@@ -14,6 +14,7 @@ struct PanelPicture: View {
   @State private var isHovered = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+  /// The helper's screen, or the empty stage, at the panel's picture size.
   var body: some View {
     ZStack {
       if state.showsScreen {

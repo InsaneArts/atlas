@@ -28,7 +28,9 @@ extension ViewerStatus.Capabilities {
 
     /// One stage of the check, and whether it passed.
     struct Stage: Decodable {
+      /// The stage's name.
       var stage: String?
+      /// Whether it passed; missing counts as not.
       var passed: Bool?
     }
 

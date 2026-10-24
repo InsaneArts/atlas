@@ -24,6 +24,7 @@ extension AppContainer {
     let service = service
     let recovery = NotificationRecovery(
       actions: actions,
+      // A status that cannot be read is nil, and the recovery then only opens Atlas.
       status: { try? await service.status() },
       holdingControl: { [weak coordinator] in coordinator?.viewerHoldsControl ?? false },
       readStatus: { [weak self] in await self?.panel?.readStatus() },

@@ -11,6 +11,7 @@ struct PanelRecentRow: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.animatesArrivals) private var animatesArrivals
 
+  /// Its mark if it carries state, what was done, and how long ago.
   var body: some View {
     HStack(spacing: .zero) {
       if entry.isFailed {

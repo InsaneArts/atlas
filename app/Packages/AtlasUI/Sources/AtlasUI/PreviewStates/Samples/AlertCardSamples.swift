@@ -51,6 +51,7 @@
       return state
     }
 
+    /// The cards side by side and stacked, then one in each phase.
     var body: some View {
       VStack(alignment: .leading, spacing: Spacing.xxl) {
         HStack(alignment: .top, spacing: Spacing.xxl) {

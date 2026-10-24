@@ -22,7 +22,6 @@ enum OnboardingPresenter {
       content: content,
       footer: footer,
       note: note(snapshot),
-      isBusy: snapshot.working != nil,
       direction: snapshot.direction.page
     )
   }

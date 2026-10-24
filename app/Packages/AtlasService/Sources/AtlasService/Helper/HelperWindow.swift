@@ -34,6 +34,7 @@ public struct HelperWindow: Decodable, Equatable, Sendable, Identifiable {
 
   /// The fields of one `windows` row.
   enum CodingKeys: String, CodingKey {
+    /// Each field by the name the service writes.
     case id, title, x, y, width, height
   }
 

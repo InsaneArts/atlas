@@ -76,6 +76,7 @@ extension ViewerStatus {
 
     /// The fields of the `overview` object.
     enum CodingKeys: String, CodingKey {
+      /// Each field by the name the service writes.
       case mode, state, label, reason, recoverable, account, accountName, display, pending, inFlight, activity
     }
 
