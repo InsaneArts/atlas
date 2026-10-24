@@ -196,6 +196,30 @@ struct PanelControllerTests {
     controller.watch(open: false)
   }
 
+  @Test(
+    "pausing the picture only stops its pictures: the service and the command line hear nothing, so the agent goes on"
+  )
+  func pausingTouchesOnlyThePicture() async throws {
+    let service = ScriptedService()
+    service.picture = png()
+    let commands = ScriptedCommands([:])
+    let clock = ManualClock()
+    let controller = Self.panel(service, commands: commands, clock: clock)
+    controller.watch(open: true)
+    try await clock.untilSleeping(2, for: PanelController.openEvery, "the open panel never paused after reading")
+    try await settle("opening never listed the helper") { !commands.ran.isEmpty }
+    let ran = commands.ran
+    controller.send(.togglePause)
+    #expect(controller.state.picture.pause.isPaused)
+    clock.advance(by: PanelController.openEvery)
+    try await settle("the status was never read again") { service.statusCalls >= 2 }
+    controller.send(.togglePause)
+    #expect(!controller.state.picture.pause.isPaused)
+    #expect(service.log.isEmpty, "no stop, resume, release or recovery was asked of the service")
+    #expect(Set(commands.ran) == Set(ran), "no command ran but the helper's listing, which each opening reads again")
+    controller.watch(open: false)
+  }
+
   @Test("switching locks the screen for the helper the service reports and says what to do next")
   func switchingLocksTheScreen() async {
     let service = ScriptedService()

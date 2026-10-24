@@ -42,16 +42,25 @@ enum WindowShell {
     window.contentViewController = controller
   }
 
-  /// Makes a SwiftUI view a popover's content, dark like Atlas's windows, the popover following the view's size.
+  /// Makes a SwiftUI view a popover's content, dark like Atlas's windows. The view sits at the top of a container
+  /// (``PopoverContent``) that hands each new size the view asks for to `follow`, which sets the popover's size, so
+  /// the owner decides whether a change eases or lands at once.
   ///
   /// - Parameters:
   ///   - popover: The popover to fill.
+  ///   - label: What VoiceOver calls the popover, such as "Atlas".
+  ///   - follow: Receives each size the view asks for, the first one included.
   ///   - content: Builds the popover's view from its controller; called inside ``ShellRoot``'s body.
-  static func host<Content: View>(in popover: NSPopover, @ViewBuilder content: @escaping @MainActor () -> Content) {
+  static func host<Content: View>(
+    in popover: NSPopover,
+    label: String,
+    follow: @escaping @MainActor (NSSize) -> Void,
+    @ViewBuilder content: @escaping @MainActor () -> Content
+  ) {
     let controller = NSHostingController(rootView: ShellRoot(content: content))
-    // The popover follows the view as its rows come and go.
-    controller.sizingOptions = [.preferredContentSize]
-    popover.contentViewController = controller
+    // The view tells the container the size it wants, and holds that height at the container's top.
+    controller.sizingOptions = [.preferredContentSize, .intrinsicContentSize]
+    popover.contentViewController = PopoverContent(content: controller, label: label, follow: follow)
     popover.appearance = Appearance.dark
   }
 

@@ -15,7 +15,7 @@
       case .resumeAgent, .giveBack:
         return panelIdle
       case .togglePause:
-        return state.controls.pause.isPaused ? panelIdle : panelPaused
+        return state.picture.pause.isPaused ? panelIdle : panelPaused
       case .openAtlas, .openScreen, .openActivity, .askRecover, .askSwitch, .showMore:
         return state
       }

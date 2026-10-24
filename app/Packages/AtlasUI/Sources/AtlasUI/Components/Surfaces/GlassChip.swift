@@ -10,6 +10,9 @@ struct GlassChip<Content: View>: View {
     case none
     /// A status dot in a tone, such as the active blue of the newest action.
     case dot(StatusTone)
+    /// A status dot that breathes while something works, such as the newest action's on the panel's picture;
+    /// steady under Reduce Motion.
+    case pulsing(StatusTone)
     /// A spinner, which waits before it shows.
     case spinner
     /// A symbol, such as pause.
@@ -63,13 +66,15 @@ struct GlassChip<Content: View>: View {
     .accessibilityElement(children: .combine)
   }
 
-  /// The dot, the spinner, the symbol, or nothing.
+  /// The dot, the breathing dot, the spinner, the symbol, or nothing.
   @ViewBuilder private var leadMark: some View {
     switch lead {
     case .none:
       EmptyView()
     case .dot(let tone):
       StatusDot(mark: .dot, tone: tone, size: .small)
+    case .pulsing(let tone):
+      StatusDot(mark: .pulsing, tone: tone, size: .small)
     case .spinner:
       Spinner()
         .appearsAfterDelay()

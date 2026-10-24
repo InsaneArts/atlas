@@ -2,23 +2,17 @@ import AtlasStatus
 import AtlasUI
 
 extension PanelPresenter {
-  /// The row of buttons: Stop while an agent works, the state's one main action, the pause button and ⋯.
+  /// The row of buttons, the actions on the agent (v3 P2): Stop while an agent works, then the state's one main
+  /// action. The pause button sits on the picture, and ⋯ in the header.
   ///
   /// - Parameters:
   ///   - snapshot: What the controller holds.
   ///   - mode: The helper's mode.
   /// - Returns: The buttons.
   static func controls(_ snapshot: PanelSnapshot, mode: Mode) -> PanelControls {
-    let paused = snapshot.session.paused
-    return PanelControls(
+    PanelControls(
       showsStop: agentButton(snapshot, mode: mode) == .stop,
-      main: main(snapshot, mode: mode),
-      pause: PanelPause(
-        isPaused: paused,
-        label: paused ? PanelWords.resumePicture : PanelWords.pausePicture,
-        help: paused ? PanelWords.resumePictureHelp : PanelWords.pausePictureHelp
-      ),
-      isMoreOpen: snapshot.session.moreOpen
+      main: main(snapshot, mode: mode)
     )
   }
 

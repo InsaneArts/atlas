@@ -1,13 +1,18 @@
 import SwiftUI
 
-/// The menu bar panel (MacPanel): the helper's status, its screen, the newest actions and one row of buttons. It
-/// draws its state and sends what the person does; it decides nothing. It fills the popover that holds it, whose
-/// corners and shadow are the system's; `panelCard()` draws the board's own where no popover does.
+/// The menu bar panel (MacPanel, v3 P1–P11): the helper's status as its heading, its screen, the newest actions and
+/// the actions on the agent. It draws its state and sends what the person does; it decides nothing. A state change
+/// cascades through it in one beat (v3 P7): the word and its dot, then the line, the picture and the buttons, each
+/// animating on its own value 30 milliseconds after the one before, never the whole panel at once. It fills the popover
+/// that holds it, whose corners, glass and shadow are the system's; `panelCard()` draws the board's own where no popover
+/// does.
 public struct PanelView: View {
   /// What the panel shows.
   private let state: PanelState
   /// Receives what the person does.
   private let send: @MainActor (PanelEvent) -> Void
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
   /// Creates the panel.
   ///
@@ -19,20 +24,24 @@ public struct PanelView: View {
     self.send = send
   }
 
-  /// The header, the line, the picture, Recent when there is any, then the buttons.
+  /// The header, the picture, Recent when there is any, then the buttons.
   public var body: some View {
     VStack(alignment: .leading, spacing: PanelLayout.gap) {
-      PanelHeader(status: state.status)
-      line
+      PanelHeader(status: state.status, notice: state.notice, isMoreOpen: state.isMoreOpen, send: send)
       PanelPicture(state: state.picture, send: send)
+        .animation(PanelLayout.cascade(.picture, reduceMotion: reduceMotion), value: state.picture.look)
       if !state.recent.isEmpty {
         PanelRecent(entries: state.recent, send: send)
       }
       PanelControlRow(controls: state.controls, send: send)
+        .animation(PanelLayout.cascade(.buttons, reduceMotion: reduceMotion), value: state.controls)
     }
     .padding(PanelLayout.inset)
     .frame(width: PanelLayout.width)
-    .background(PanelLayout.ground)
+    .background(
+      PanelLayout.ground
+        .opacity(PanelLayout.groundOpacity(reduceTransparency: reduceTransparency))
+    )
     .foregroundStyle(Color.textPrimary)
     .environment(\.colorScheme, .dark)
     // Only a change is spoken: a poll that reads the same status or notice again says nothing.
@@ -46,29 +55,6 @@ public struct PanelView: View {
   private func announce(_ text: String) {
     AccessibilityNotification.Announcement(text)
       .post()
-  }
-
-  /// The status's line, or what the last action said when it did not work, in one line; nothing when both are
-  /// empty.
-  @ViewBuilder private var line: some View {
-    if let notice = state.notice {
-      lineText(notice)
-        .foregroundStyle(Color.textAttention)
-    } else if !state.status.line.isEmpty {
-      lineText(state.status.line)
-        .foregroundStyle(Color.textSecondary)
-    }
-  }
-
-  /// One line of the line row's words, cut short with an ellipsis.
-  ///
-  /// - Parameter text: The words.
-  /// - Returns: The line.
-  private func lineText(_ text: String) -> some View {
-    Text(text)
-      .font(Typography.font(.callout))
-      .lineLimit(1)
-      .truncationMode(.tail)
   }
 }
 
@@ -117,6 +103,12 @@ public struct PanelView: View {
 
   #Preview("Connecting") {
     PanelView(state: PreviewStates.panelConnecting) { _ in }
+      .panelCard()
+      .padding(Spacing.xxxl)
+  }
+
+  #Preview("Picture paused") {
+    PanelView(state: PreviewStates.panelPaused) { _ in }
       .panelCard()
       .padding(Spacing.xxxl)
   }

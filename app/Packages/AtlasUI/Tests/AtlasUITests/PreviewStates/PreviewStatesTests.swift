@@ -16,7 +16,7 @@
       }
     }
 
-    @Test("the panel previews show every state, picture, main action and notice")
+    @Test("the panel previews show every state, picture look, main action and notice")
     func panelPreviewsCoverEveryPiece() {
       let states = PreviewStates.panel
         .map(\.value)
@@ -27,16 +27,17 @@
         ]
       )
       let looks = Set(
-        states.compactMap { state -> String? in
-          switch state.picture {
-          case .screen(let picture, let look, let caption):
-            guard picture != nil else { return "empty stage" }
-            return caption != nil ? "caption" : "\(look)"
-          case .empty: return "empty"
+        states.map { state -> String in
+          switch state.picture.look {
+          case .empty: "empty"
+          default: "\(state.picture.look)"
           }
         }
       )
-      #expect(looks == ["live", "caption", "inControl", "dimmed", "paused", "empty", "empty stage"])
+      #expect(looks == ["live", "control", "needsYou", "paused", "empty", "connecting"])
+      #expect(states.contains { $0.picture.caption != nil }, "the newest action over the screen")
+      #expect(states.contains { $0.recent.contains(where: \.isLive) }, "a live row in Recent")
+      #expect(states.contains { $0.picture.pause.isPaused }, "the pause button showing play")
       #expect(Set(states.map(\.controls.main.title)).count == 5, "Open Atlas, Give Back, Recover, Resume, Switch")
       #expect(states.contains { !$0.controls.main.isEnabled })
       #expect(states.contains { $0.notice != nil })

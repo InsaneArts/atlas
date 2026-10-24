@@ -13,10 +13,11 @@ enum PanelPresenter {
     let mode = mode(snapshot)
     let reading = StatusReading(snapshot.status)
     return PanelState(
-      status: mode.panelSummary(reading),
+      status: mode.panelSummary(reading, paused: snapshot.session.paused),
       notice: snapshot.session.notice,
+      isMoreOpen: snapshot.session.moreOpen,
       picture: picture(snapshot, mode: mode, reading: reading),
-      recent: hidesRecent(mode) ? [] : reading.recentEntries,
+      recent: hidesRecent(mode) ? [] : recent(reading, mode: mode),
       controls: controls(snapshot, mode: mode)
     )
   }
@@ -32,9 +33,10 @@ enum PanelPresenter {
     return Mode.seen(by: snapshot.status.overview, holdingControl: snapshot.holdingControl)
   }
 
-  /// What fills the picture's frame: the empty stage saying why while the helper is logged out or not ready; else the
-  /// screen, inside the rim while in control, dimmed while it needs the person, faded while paused, with the newest
-  /// action over it while an agent works and the picture is live.
+  /// The picture (v3 P2, P4, P6, P11): the empty stage saying why while the helper is logged out or not ready, the
+  /// mark breathing while connecting; else the screen, inside the rim while in control, greyed under the badge while
+  /// it needs the person, greyed alone while paused, with the newest action over it while an agent works and the
+  /// picture is live. The pause button on it pauses the picture only.
   ///
   /// - Parameters:
   ///   - snapshot: What the controller holds.
@@ -42,24 +44,53 @@ enum PanelPresenter {
   ///   - reading: The status, read.
   /// - Returns: The picture's state.
   static func picture(_ snapshot: PanelSnapshot, mode: Mode, reading: StatusReading) -> PanelPictureState {
-    switch mode.kind {
-    case .loggedOut: return .empty(PanelWords.loggedOutPicture)
-    // Recover is offered only where it fixes something (``helperMenu``), and the stage says so only then.
-    case .notReady:
-      return .empty(
-        snapshot.status.overview.recoveryHelps ? PanelWords.notReadyPicture : PanelWords.notReadyWaitPicture
-      )
-    case .idle, .working, .control, .needsYou, .stopped, .connecting, .inUseElsewhere: break
-    }
     let paused = snapshot.session.paused
-    let look: PictureLook =
+    let look: PanelPictureState.Look =
       switch mode.kind {
-      case .control: .inControl
-      case .needsYou: .dimmed
-      default: paused ? .paused : .live
+      case .loggedOut: .empty(message: PanelWords.loggedOutPicture)
+      // Recover is offered only where it fixes something (``helperMenu``), and the stage says so only then.
+      case .notReady:
+        .empty(
+          message: snapshot.status.overview.recoveryHelps ? PanelWords.notReadyPicture : PanelWords.notReadyWaitPicture
+        )
+      case .connecting: .connecting
+      case .control: .control
+      case .needsYou: .needsYou
+      case .idle, .working, .stopped, .inUseElsewhere: paused ? .paused : .live
       }
-    let caption = mode.kind == .working && !paused ? reading.captionEntries.last : nil
-    return .screen(picture: snapshot.picture, look: look, caption: caption)
+    let newest = mode.kind == .working && !paused ? reading.captionEntries.last : nil
+    var state = PanelPictureState(
+      look: look,
+      caption: newest.map { PanelCaption(text: $0.line, time: $0.when) },
+      pause: PanelPause(
+        isPaused: paused,
+        label: paused ? PanelWords.resumePicture : PanelWords.pausePicture,
+        help: paused ? PanelWords.resumePictureHelp : PanelWords.pausePictureHelp
+      )
+    )
+    state.picture = state.showsScreen ? snapshot.picture : nil
+    return state
+  }
+
+  /// Recent's rows, newest first (v3 P5): the newest is live only while an agent works, so only it carries the blue
+  /// dot, and only then.
+  ///
+  /// - Parameters:
+  ///   - reading: The status, read.
+  ///   - mode: The helper's mode.
+  /// - Returns: The rows.
+  static func recent(_ reading: StatusReading, mode: Mode) -> [PanelRecentEntry] {
+    reading.recentEntries
+      .enumerated()
+      .map { index, entry in
+        PanelRecentEntry(
+          id: entry.id,
+          line: entry.line,
+          when: entry.when,
+          isFailed: entry.mark == .failed,
+          isLive: mode.kind == .working && index == 0
+        )
+      }
   }
 
   /// Whether Recent hides: while the helper is logged out or not ready, as its picture does.

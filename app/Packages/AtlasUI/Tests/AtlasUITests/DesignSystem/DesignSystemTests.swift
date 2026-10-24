@@ -120,7 +120,8 @@ struct DesignSystemTests {
           Motion.Duration.drawDelay, Motion.Duration.press, Motion.Duration.hoverIn, Motion.Duration.dismiss,
           Motion.Duration.leave, Motion.Duration.fade, Motion.Duration.hoverOut, Motion.Duration.reduced,
           Motion.Duration.crossfade, Motion.Duration.dim,
-          Motion.Duration.draw, Motion.Duration.shake, Motion.Duration.entry, Motion.Duration.appearDelay,
+          Motion.Duration.draw, Motion.Duration.state, Motion.Duration.shake, Motion.Duration.entry,
+          Motion.Duration.appearDelay,
           Motion.Duration.glide, Motion.Duration.glideSoft, Motion.Duration.doneHold, Motion.Duration.pulse,
           Motion.Duration.spin, Motion.Duration.breathe, Motion.Duration.toast,
         ]
@@ -209,6 +210,7 @@ struct DesignSystemTests {
       ("fillPrimaryPressed", .fillPrimaryPressed, [0xE3, 0xE3, 0xE8], 1),
       ("fillGlassThick", .fillGlassThick, [38, 38, 42], 0.78),
       ("accentHover", .accentHover, [0x1A, 0x8C, 0xFF], 1),
+      ("onAttention", .onAttention, [0x1C, 0x12, 0x03], 1),
     ]
     let environment = EnvironmentValues()
     for (name, colour, rgb, opacity) in colours {

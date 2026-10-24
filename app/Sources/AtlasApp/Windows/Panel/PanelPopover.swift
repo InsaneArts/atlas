@@ -16,7 +16,7 @@ final class PanelPopover: NSObject, NSPopoverDelegate {
   /// The menu bar item it opens from.
   private let item: StatusItem
   /// The panel.
-  private let popover = NSPopover()
+  let popover = NSPopover()
   /// Watches for clicks outside Atlas while the panel shows, so a click anywhere else closes it as a menu would;
   /// nil while it is closed. A transient popover only closes on clicks this app receives, and a menu bar app is
   /// often not the active one.
@@ -33,11 +33,16 @@ final class PanelPopover: NSObject, NSPopoverDelegate {
     self.item = item
     self.openSettings = openSettings
     super.init()
-    // The popover follows the panel as Recent and the line come and go; Atlas's panel is always dark, like its other
-    // windows.
-    WindowShell.host(in: popover) { [weak self] in
-      PanelView(state: controller.state) { self?.handle($0) }
-    }
+    // The popover follows the panel as Recent and the line come and go (`PanelPopover+Resize`); Atlas's panel is
+    // always dark, like its other windows.
+    WindowShell.host(
+      in: popover,
+      label: PanelWords.name,
+      follow: { [weak self] in self?.resize(to: $0) },
+      content: { [weak self] in
+        PanelView(state: controller.state) { self?.handle($0) }
+      }
+    )
     popover.behavior = .transient
     popover.delegate = self
     item.button?.target = self

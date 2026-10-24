@@ -9,6 +9,8 @@ struct StatusDot: View {
     case small
     /// 7: beside a status's word.
     case regular
+    /// 8: beside a status's word set as a heading, such as the panel's (v3 P1).
+    case large
   }
 
   /// Which mark it draws.
@@ -57,6 +59,7 @@ struct StatusDot: View {
     case (.square, _): Layout.square
     case (.small, _), (_, .small): IconSize.xxs
     case (_, .regular): Layout.regular
+    case (_, .large): Layout.large
     }
   }
 
@@ -74,6 +77,8 @@ struct StatusDot: View {
 private enum Layout {
   /// 7: a status dot.
   static let regular: CGFloat = 7
+  /// 8: a status dot beside a heading (v3 `.dot`).
+  static let large: CGFloat = 8
   /// 8: the stopped square.
   static let square: CGFloat = 8
   /// 2: the square's corners, softened as the system's stop buttons are.
@@ -109,6 +114,8 @@ private enum Layout {
           .tag(StatusDot.Size.small)
         Text(verbatim: "Regular")
           .tag(StatusDot.Size.regular)
+        Text(verbatim: "Large")
+          .tag(StatusDot.Size.large)
       }
       Picker(String("Tone"), selection: $tone) {
         Text(verbatim: "Ready")

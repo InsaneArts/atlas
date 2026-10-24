@@ -44,6 +44,8 @@ extension Color {
   /// attention at 0.16.
   static let attentionFill = Color.attention
     .opacity(0.16)
+  /// Glyphs on ``attention``, such as the "!" on the panel picture's badge (v3 `.warn`): #1C1203.
+  static let onAttention = Color(red: 0x1C / 255, green: 0x12 / 255, blue: 0x03 / 255)
   /// A word that needs the person, such as Needs you: #FFB340.
   static let textAttention = Color(red: 0xFF / 255, green: 0xB3 / 255, blue: 0x40 / 255)
   /// A link, and the word You have control: #4EA6FF.

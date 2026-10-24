@@ -25,14 +25,16 @@ extension Mode {
     return summary(line: line)
   }
 
-  /// The mode as the panel shows it, beside its word.
+  /// The mode as the panel shows it, its line under its word.
   ///
-  /// - Parameter reading: What the panel last read.
+  /// - Parameters:
+  ///   - reading: What the panel last read.
+  ///   - paused: Whether the panel's picture is paused, which Idle says in place of what was done last (v3 P11).
   /// - Returns: The word, its colour, its mark and the panel's line.
-  func panelSummary(_ reading: StatusReading) -> StatusSummary {
+  func panelSummary(_ reading: StatusReading, paused: Bool) -> StatusSummary {
     let line =
       switch kind {
-      case .idle: reading.idleLine
+      case .idle: paused ? PanelWords.pausedLine : reading.idleLine
       case .working: reading.workingLine(withAge: true)
       case .control: PanelWords.controlLine
       case .needsYou: reading.needsYouLine

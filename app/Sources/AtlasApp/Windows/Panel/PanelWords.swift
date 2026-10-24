@@ -5,8 +5,12 @@
 /// depend on state, interpolated, chosen by a condition or derived from facts. Words the panel shares with another
 /// window are the app's shared ``Words`` or the helper commands' ``HelperWords``.
 enum PanelWords {
+  /// What VoiceOver calls the panel: Atlas, though its heading is now the status (v3 P1, C-11).
+  static let name = "Atlas"
   /// The person holds control in Atlas's window: the line beside the word.
   static let controlLine = "In Atlas · the agent waits"
+  /// The panel's picture is paused while nothing acts: the line under Idle (v3 P11).
+  static let pausedLine = "Picture paused · work in the helper goes on"
   /// The helper is logged out: the line beside the word.
   static let loggedOutLine = "Agents can't use the helper until you log in"
   /// The helper isn't answering, when the service gives no reason: the line beside the word.
@@ -32,8 +36,7 @@ enum PanelWords {
   static let resumeHelp = "Let agents act in the helper again"
   /// Recover…'s tooltip.
   static let recoverHelp = "Check the helper and start its mouse and keyboard again"
-  /// Switch to the Helper…'s tooltip.
-  /// The pause button, for VoiceOver, while pictures arrive.
+  /// The pause button on the picture, for VoiceOver, while pictures arrive.
   static let pausePicture = "Pause picture"
   /// The pause button, for VoiceOver, while the picture is paused.
   static let resumePicture = "Resume picture"

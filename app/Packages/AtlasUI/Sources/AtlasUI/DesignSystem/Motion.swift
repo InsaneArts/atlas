@@ -38,6 +38,9 @@ public enum Motion {
     public static let dim = Duration(seconds: 0.25)
     /// 0.3: a check drawing itself along its stroke (v3 S3, X11: `trim` 0 → 1).
     static let draw = Duration(seconds: 0.3)
+    /// 0.3: a piece moving to a new state, ``Motion/state``'s length; AppKit reads it for the menu bar panel's height
+    /// easing to fit (v3 P10, X6).
+    public static let state = Duration(seconds: 0.3)
     /// 0.36: an alert shaking once when its command is refused (v3 A4).
     static let shake = Duration(seconds: 0.36)
     /// 0.4: content arriving.
@@ -156,6 +159,13 @@ public enum Motion {
   /// A dot breathing in and out for as long as it shows.
   static var pulse: Animation {
     .easeInOut(duration: Duration.pulse.seconds)
+      .repeatForever(autoreverses: true)
+  }
+
+  /// A mark breathing in and out for as long as it shows, one breath in and out over ``Duration/breathe``, each way
+  /// half of it (v3 `breathe`, as the menu bar badge breathes). A loop, so only where ``loops(reduceMotion:)`` allows.
+  static var breathe: Animation {
+    .easeInOut(duration: Duration.breathe.seconds / 2)
       .repeatForever(autoreverses: true)
   }
 
