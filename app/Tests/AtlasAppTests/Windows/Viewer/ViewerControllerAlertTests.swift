@@ -88,7 +88,7 @@ struct ViewerControllerAlertTests {
     viewer.send(.alertConfirm)
     try await settle("the refusal never showed") { viewer.session.recoveryRefusal != nil }
     service.reply = ["ready": true, "canObserve": true, "overview": ["mode": "observing", "state": "idle"]]
-    await viewer.readStatus()
+    await viewer.readingLoop.readStatus()
     #expect(viewer.session.recoveryRefusal == nil)
     viewer.close()
   }

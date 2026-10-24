@@ -89,7 +89,7 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     if isMiniaturized { deminiaturize(nil) }
     makeKeyAndOrderFront(nil)
     NSApp.activate()
-    if isKeyWindow { controller.gainedFocus() } else { controller.lostFocus() }
+    if isKeyWindow { controller.control.gainedFocus() } else { controller.control.lostFocus() }
     followScreen()
   }
 
@@ -195,14 +195,14 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   ///
   /// - Parameter notification: The window's notification.
   func windowDidBecomeKey(_ notification: Notification) {
-    controller.gainedFocus()
+    controller.control.gainedFocus()
   }
 
   /// The window lost the keyboard: control goes back.
   ///
   /// - Parameter notification: The window's notification.
   func windowDidResignKey(_ notification: Notification) {
-    controller.lostFocus()
+    controller.control.lostFocus()
   }
 
   /// The window is closing: control goes back and reading stops; the app settles its Dock icon once `closed` runs.

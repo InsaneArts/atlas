@@ -42,7 +42,9 @@ final class WindowCoordinator {
       \.viewer,
       controller: {
         let controller = parts?.viewerController(switchToHelper: viewerSwitch())
-        if let controller, let panel = parts?.panel { controller.begin(with: panel.answer, picture: panel.picture) }
+        if let controller, let panel = parts?.panel {
+          controller.readingLoop.begin(with: panel.answer, picture: panel.picture)
+        }
         return controller
       },
       window: windows.viewer
@@ -107,12 +109,12 @@ final class WindowCoordinator {
   /// Whether the main window holds control or is asking for it now.
   var viewerHoldsControl: Bool {
     guard let controller = viewer?.controller else { return false }
-    return controller.holdingControl || controller.session.acquiring
+    return controller.holdingControl || controller.control.acquiring
   }
 
   /// Ends the main window's control, if it holds it: before one of the helper's commands runs.
   func releaseViewerControl() {
-    viewer?.controller.releaseControl()
+    viewer?.controller.control.releaseControl()
   }
 
   /// Asks before one of the helper's commands runs, for the panel: in the main window while it is open, else in the

@@ -1,7 +1,8 @@
 import AtlasUI
 
-/// What the main window is doing: the tab shown, watching or paused, recovering, holding control, the alert and
-/// menu open, and what the input method is composing. Each is observed, so the window follows every change at once.
+/// What the main window is doing: the tab shown, watching or paused, recovering, the alert and menu open. Each is
+/// observed, so the window follows every change at once. Control, and what the input method is composing, are
+/// ``ViewerControl``'s.
 struct ViewerSession {
   /// The tab shown.
   var tab = ViewerTab.screen
@@ -25,19 +26,10 @@ struct ViewerSession {
   var alertRunning = false
   /// The top row's menu open now.
   var openMenu: ViewerMenu?
-  /// Text the input method is composing, not yet sent.
-  var composing = ""
   /// The screen takes the keyboard (while in control).
   var keyboardConnected = false
   /// The window is in full screen (its title bar buttons are hidden).
   var fullScreen = false
-  /// The lease this window holds while in control.
-  var lease: String?
-  /// Whether this window's acquisition is under way, its one retry included.
-  var acquiring = false
   /// Whether Check Again is reading the helper now.
   var checkingAgain = false
-
-  /// Whether this window holds control.
-  var holdingControl: Bool { lease != nil }
 }

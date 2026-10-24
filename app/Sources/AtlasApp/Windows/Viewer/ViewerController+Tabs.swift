@@ -9,10 +9,10 @@ extension ViewerController {
   /// - Parameter tab: The tab.
   func selectTab(_ tab: ViewerTab) {
     guard tab != session.tab else { return }
-    if holdingControl || session.acquiring { releaseControl() }
-    if session.tab == .screenshots { closeShot() }
+    if holdingControl || control.acquiring { control.releaseControl() }
+    if session.tab == .screenshots { panesModel.closeShot() }
     session.tab = tab
-    followPane()
+    panesModel.followPane()
   }
 
   /// Check Again in Details: reads the status and Details' own facts now, then the next picture at once; once at a
@@ -21,8 +21,8 @@ extension ViewerController {
     guard !session.checkingAgain else { return }
     session.checkingAgain = true
     defer { session.checkingAgain = false }
-    await readStatus()
-    refresh()
+    await readingLoop.readStatus()
+    readingLoop.refresh()
     await readDetails()
   }
 }

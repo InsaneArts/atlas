@@ -34,7 +34,7 @@ extension ViewerController {
     commands: ScriptedCommands = ScriptedCommands([:]),
     rate: Double = 0,
     clock: ManualClock = ManualClock(),
-    heartbeat: Duration = ViewerController.heartbeatEvery,
+    heartbeat: Duration = ViewerControl.heartbeatEvery,
     doubleClick: TimeInterval = 0.5,
     pictures: PictureOutlet = PictureOutlet(copy: { _ in }, save: { _ in nil }),
     switchToHelper: (@MainActor () async -> String)? = nil,
@@ -51,7 +51,7 @@ extension ViewerController {
         service: service,
         barrier: ControlBarrier(service: service, clock: clock)
       ) {
-        viewer.controller?.releaseControl()
+        viewer.controller?.control.releaseControl()
       }
     let controller = ViewerController(
       dependencies: ViewerDependencies(
@@ -93,7 +93,7 @@ extension ViewerController {
     commands: ScriptedCommands = ScriptedCommands([:]),
     rate: Double = 0,
     clock: ManualClock = ManualClock(),
-    heartbeat: Duration = ViewerController.heartbeatEvery,
+    heartbeat: Duration = ViewerControl.heartbeatEvery,
     doubleClick: TimeInterval = 0.5,
     pictures: PictureOutlet = PictureOutlet(copy: { _ in }, save: { _ in nil }),
     actions: HelperActions? = nil,

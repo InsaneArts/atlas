@@ -12,10 +12,10 @@ struct ViewerControllerTabsTests {
   func leavingTheScreenTabGivesControlBack() async throws {
     let service = ScriptedService()
     let viewer = try await ViewerController.watching(service)
-    await viewer.takeControl()
-    try #require(viewer.session.lease == "lease", "control was taken")
+    await viewer.control.takeControl()
+    try #require(viewer.control.lease == "lease", "control was taken")
     viewer.send(.selectTab(.activity))
-    #expect(viewer.session.lease == nil)
+    #expect(viewer.control.lease == nil)
     #expect(viewer.state.top.tabs.selected == .activity)
     try await settle("the lease was never released") { service.log.contains("release lease") }
     viewer.close()
@@ -25,13 +25,13 @@ struct ViewerControllerTabsTests {
   func takeControlWaitsForTheRelease() async throws {
     let service = ScriptedService()
     let viewer = try await ViewerController.watching(service)
-    await viewer.takeControl()
+    await viewer.control.takeControl()
     service.hold = ["release"]
     viewer.send(.selectTab(.apps))
     try await settle("the release was never sent") { service.held["release"] != nil }
     viewer.send(.selectTab(.screen))
     #expect(!viewer.state.top.actions.control.isEnabled)
-    await viewer.takeControl()
+    await viewer.control.takeControl()
     #expect(service.log.filter { $0.hasPrefix("acquire") }.count == 1, "nothing is asked before the answer")
     service.resume("release")
     try await settle("Take Control never came back") { viewer.state.top.actions.control.isEnabled }

@@ -6,12 +6,12 @@ extension ViewerController {
   /// Reads the agents connected to Atlas and the helper's login time. A reading that fails keeps what was known.
   func readDetails() async {
     readLoginTime()
-    if let read = await connectedAgents() { agents = read }
+    if let read = await dependencies.connectedAgents() { details.agents = read }
   }
 
   /// Reads when the helper's account logged in, once its account is known.
   func readLoginTime() {
     guard let account = reading.status.overview.account else { return }
-    loggedInAt = loginTime(account)
+    details.loggedInAt = dependencies.loginTime(account)
   }
 }

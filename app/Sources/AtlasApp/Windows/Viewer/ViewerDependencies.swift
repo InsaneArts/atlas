@@ -17,7 +17,7 @@ struct ViewerDependencies {
   /// The clock every wait runs on: the pause between readings and the tabs', the heartbeat, Details' tick, gathering
   /// scrolls, the reading input asks for, and Take Control's retry. A cancelled wait ends at once.
   var clock: any Clock<Duration>
-  /// One heartbeat tick; the app passes ``ViewerController/heartbeatEvery``.
+  /// One heartbeat tick; the app passes ``ViewerControl/heartbeatEvery``.
   var heartbeatInterval: Duration
   /// The Mac's double-click speed, in seconds, read at each click so a change in System Settings counts at once.
   var doubleClickInterval: @MainActor () -> TimeInterval

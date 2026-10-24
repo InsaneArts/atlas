@@ -41,43 +41,44 @@
 
     // One case a render, so drawing them, about a second each with their frosted chips and alerts, never holds
     // the main actor long enough to starve another suite's wait.
-    @Test("every main window render draws at the boards' window size", arguments: ViewerRender.files)
+    @Test("every main window render draws at the boards' window size", arguments: await ViewerRender.names)
     func everyViewerRenderDraws(file: String) throws {
       let size = PreviewStates.viewerSize
-      let state = try #require(ViewerRender.renders.first { $0.file == file }?.state)
+      let render = try #require(ViewerRender.renders.first { $0.name == file })
+      #expect(render.size == size)
       let directory = try Self.directory()
       defer {
         try? FileManager.default
           .removeItem(at: directory)
       }
-      #expect(ViewerRender.draw(file, state, to: directory))
+      #expect(ViewerRender.draw(file, render.value, to: directory, size: try #require(render.size)))
       let drawn = directory.appendingPathComponent("\(file).png")
       let image = try #require(NSBitmapImageRep(data: Data(contentsOf: drawn)), "\(file) was not drawn")
       #expect(image.pixelsWide == Int(size.width) * PNG.scale)
       #expect(image.pixelsHigh == Int(size.height) * PNG.scale)
     }
 
-    @Test("every narrow main window render draws at its width", arguments: ViewerRender.narrowFiles)
+    @Test("every narrow main window render draws at its width", arguments: await ViewerRender.narrowNames)
     func everyNarrowRenderDraws(file: String) throws {
-      let render = try #require(ViewerRender.narrowRenders.first { $0.file == file })
+      let render = try #require(ViewerRender.narrowRenders.first { $0.name == file })
       let directory = try Self.directory()
       defer {
         try? FileManager.default
           .removeItem(at: directory)
       }
-      let size = NSSize(width: render.width, height: PreviewStates.viewerSize.height)
-      #expect(ViewerRender.draw(file, render.state, to: directory, size: size))
+      let size = try #require(render.size)
+      #expect(size.height == PreviewStates.viewerSize.height)
+      #expect(ViewerRender.draw(file, render.value, to: directory, size: size))
       let drawn = directory.appendingPathComponent("\(file).png")
       let image = try #require(NSBitmapImageRep(data: Data(contentsOf: drawn)), "\(file) was not drawn")
-      #expect(image.pixelsWide == Int(render.width) * PNG.scale)
+      #expect(image.pixelsWide == Int(size.width) * PNG.scale)
     }
 
     @Test("the main window renders have names of their own")
     func theViewerRendersHaveTheirOwnNames() {
-      let files = ViewerRender.files + ViewerRender.narrowFiles
-      #expect(Set(files).count == files.count)
-      #expect(ViewerRender.renders.count == ViewerRender.files.count, "every name has its state")
-      #expect(ViewerRender.narrowRenders.count == ViewerRender.narrowFiles.count, "every narrow name has its state")
+      let names = (ViewerRender.renders + ViewerRender.narrowRenders + ViewerRender.frameRenders)
+        .map(\.name)
+      #expect(Set(names).count == names.count)
     }
 
     @Test("every settings render draws at its window's size", arguments: SettingsRender.files)
@@ -191,7 +192,7 @@
       let missing = PreviewStates.viewer
         .filter { sample in
           !ViewerRender.renders
-            .contains { $0.state == sample.value }
+            .contains { $0.value == sample.value }
         }
         .map(\.name)
       #expect(missing.isEmpty, "samples with no render: \(missing)")

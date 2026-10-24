@@ -18,12 +18,23 @@ extension ViewerController {
   /// - Parameter alert: The alert.
   func ask(_ alert: ViewerAlert) {
     guard !session.alertRunning, !session.recovering else { return say(HelperWords.waitForAction) }
-    releaseControl()
+    control.releaseControl()
     if alert == .recover {
       session.recoveryLater = nil
       session.recoveryRefusal = nil
     }
     session.alert = alert
+  }
+
+  /// A status was shown: once nothing needs recovery, the recovery set aside is forgotten, and so is a refusal its
+  /// alert no longer shows.
+  func forgetRecoveryOnceNoneNeeded() {
+    // Not Now covers one incident: once nothing needs recovery, a later one alerts again.
+    if snapshot.offeredRecovery == nil {
+      session.recoveryLater = nil
+      // A refusal belongs to the alert it answered: once nothing needs recovery it is gone with it.
+      if session.alert != .recover { session.recoveryRefusal = nil }
+    }
   }
 
   /// The alert's way out: Cancel, or Not Now, which sets the recovery alert aside until its reason changes.
@@ -62,7 +73,7 @@ extension ViewerController {
       session.recoveryDone = true
       say(nil)
       // A hold cut short only shortens the moment Recovered shows; the alert closes either way.
-      try? await clock.sleep(for: .seconds(Motion.Duration.doneHold.seconds))
+      try? await dependencies.clock.sleep(for: .seconds(Motion.Duration.doneHold.seconds))
       session.recoveryDone = false
       session.alert = nil
       // A notice said during the hold, such as to wait for another alert, stays.
@@ -75,8 +86,8 @@ extension ViewerController {
     }
     session.recovering = false
     // Read the outcome directly: a paused picture makes no requests.
-    await readStatus()
-    refresh()
+    await readingLoop.readStatus()
+    readingLoop.refresh()
   }
 
   /// Runs an asked alert's command once, holding its buttons meanwhile, then reads the outcome.
@@ -87,14 +98,14 @@ extension ViewerController {
     session.alertRunning = true
     await command()
     session.alertRunning = false
-    await readStatus()
-    refresh()
+    await readingLoop.readStatus()
+    readingLoop.refresh()
   }
 
   /// Switches this Mac's screen to the helper, saying what to do next or why it could not.
   private func switchHelper() async {
     session.alert = nil
-    guard let switchToHelper else { return }
+    guard let switchToHelper = dependencies.switchToHelper else { return }
     say(Words.locking)
     say(await switchToHelper())
   }

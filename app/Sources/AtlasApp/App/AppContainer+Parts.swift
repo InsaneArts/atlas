@@ -21,7 +21,7 @@ extension AppContainer: WindowParts {
         preferences: viewerPreferences,
         uptime: { ProcessInfo.processInfo.systemUptime },
         clock: clock,
-        heartbeatInterval: ViewerController.heartbeatEvery,
+        heartbeatInterval: ViewerControl.heartbeatEvery,
         doubleClickInterval: { NSEvent.doubleClickInterval },
         pictures: .live,
         switchToHelper: switchToHelper,
