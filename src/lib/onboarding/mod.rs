@@ -496,15 +496,30 @@ fn keep_other_helper(uid: u32, previous: &Config) -> Result<()> {
 /// What choosing any helper needs that does not depend on the account:
 /// this Atlas.app signed by its developer, settings that name no other
 /// helper in use, and `atlas` in a terminal.
-fn ready_to_choose(config_path: &Path, uid: u32) -> Result<()> {
+fn ready_to_choose(config_path: &Path, uid: u32, selected: Option<u32>) -> Result<()> {
     let executable = signed_executable()?;
 
     if let Some(previous) = settings(config_path)? {
-        keep_other_helper(uid, &previous)?;
+        check_choice(uid, selected, &previous, keep_other_helper)?;
     }
 
     init::link_command(&executable)?;
     Ok(())
+}
+
+/// Choosing the configured account again repairs its setup. Creating an
+/// account, or selecting another one, must first protect the existing helper.
+fn check_choice(
+    controller: u32,
+    selected: Option<u32>,
+    previous: &Config,
+    keep: impl FnOnce(u32, &Config) -> Result<()>,
+) -> Result<()> {
+    if selected == Some(previous.helper_uid) {
+        Ok(())
+    } else {
+        keep(controller, previous)
+    }
 }
 
 /// `name`, an existing standard account other than `controller`'s, that
@@ -565,7 +580,7 @@ fn choosable(name: &str, controller: u32) -> Result<setup::Account> {
 pub fn choose(config_path: &Path, name: &str) -> Result<Value> {
     let (uid, _, _) = me()?;
     let helper = choosable(name, uid)?;
-    ready_to_choose(config_path, uid)?;
+    ready_to_choose(config_path, uid, Some(helper.uid))?;
 
     let expected = setup::identity::current(&helper)
         .ok_or_else(|| problem("macOS could not identify the chosen helper account"))?;
@@ -1117,7 +1132,7 @@ pub fn create(config_path: &Path, name: &str, full_name: &str) -> Result<Value> 
     // Choosing it checks these too, but only once macOS has made the
     // account: a refusal then would leave an account nothing uses.
     let (uid, _, _) = me()?;
-    ready_to_choose(config_path, uid)?;
+    ready_to_choose(config_path, uid, None)?;
 
     let password = Secret(read_secret(std::io::stdin())?);
     let next_uid = init::free_uid()?;
@@ -1410,9 +1425,8 @@ pub fn accept(controller_uid: u32, controller_name: &str) -> Result<Value> {
 /// This Atlas.app's executable, refused unless Atlas's developer signed it.
 fn signed_executable() -> Result<PathBuf> {
     let executable = init::app_executable()?;
-    // Only from Applications, where macOS guards apps against changes: a copy
-    // elsewhere could be swapped after this check, before it runs as the
-    // helper.
+    // Installation location for the shared app. The approved executor
+    // independently protects and verifies its own copy before using it.
     if !executable.starts_with("/Applications") {
         return Err(problem(
             "Atlas.app must be in Applications to set up the helper. Move it there, then open it again.",
@@ -1551,6 +1565,21 @@ pub fn login(config_path: &Path, on: bool) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn choosing_the_configured_helper_again_bypasses_the_replacement_refusal() {
+        let config = Config {
+            helper_uid: 502,
+            socket_path: "/unused/daemon.sock".into(),
+            identity_probe: "/unused/atlas".into(),
+            input_socket: "/unused/input.sock".into(),
+            output_dir: "/unused/runs".into(),
+        };
+        let keep = |_: u32, _: &Config| Err(problem("The configured helper is in use"));
+        assert!(check_choice(501, Some(502), &config, keep).is_ok());
+        assert!(check_choice(501, Some(503), &config, keep).is_err());
+        assert!(check_choice(501, None, &config, keep).is_err());
+    }
+
     #[test]
     fn setup_without_orphans_excludes_teardown_and_keeps_its_executor_after_caller_death() {
         if !crate::transaction_test::isolated(

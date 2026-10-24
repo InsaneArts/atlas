@@ -136,11 +136,21 @@ pub fn real_name(name: &str) -> Option<String> {
 /// immediately before entering its launchd session. The worker repeats the
 /// check as the account itself before every mutation.
 const DISPATCH: &str = r##"uid=$1 name=$2 guid=$3 mode=$4 executable=$5 request=$6 identity=$7 last=$8
-refuse() { print -r -- '{"ok":false,"error":"The helper is not the account Atlas chose; nothing was changed"}'; exit 1 }
+refuse() { print -r -- '{"ok":false,"error":"Atlas could not verify the helper account or protect its executable; nothing was changed"}'; exit 1 }
 [[ $uid == <501-60000> && $name =~ '^[A-Za-z0-9_][A-Za-z0-9._-]*$' && $name != <-> ]] || refuse
 [[ $guid =~ '^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$' ]] || refuse
-[[ $(/usr/bin/dscl . -read /Users/$name GeneratedUID </dev/null) == "GeneratedUID: $guid" ]] || refuse
-[[ $(/usr/bin/id -u -- $name </dev/null) == $uid && $(/usr/bin/id -nu -- $uid </dev/null) == $name ]] || refuse
+chosen() {
+  [[ $(/usr/bin/dscl . -read /Users/$name GeneratedUID </dev/null) == "GeneratedUID: $guid" ]] || refuse
+  [[ $(/usr/bin/id -u -- $name </dev/null) == $uid && $(/usr/bin/id -nu -- $uid </dev/null) == $name ]] || refuse
+}
+chosen
+stage_executable
+# Only a login opener needs its copy after this worker exits.
+if [[ $9 == temporary ]]; then
+  snapshot=${executable%/Atlas.app/Contents/MacOS/atlas}
+  trap '/bin/rm -rf -- $snapshot' EXIT
+fi
+chosen
 if [[ $mode == login ]]; then
   /bin/launchctl asuser $uid /usr/bin/sudo -n -u $name $executable setup-helper $request --account $identity $last
 else
@@ -222,7 +232,13 @@ fn run_as_helper(
     if cached_rights {
         command.arg("-n");
     }
-    let script = [crate::onboarding::as_root::EXECUTOR, DISPATCH].concat();
+    let script = [
+        crate::onboarding::as_root::EXECUTOR,
+        crate::onboarding::as_root::BECOME_ROOT,
+        &crate::onboarding::as_root::staging(),
+        DISPATCH,
+    ]
+    .concat();
     command
         .args([
             "/usr/bin/env",
@@ -244,6 +260,13 @@ fn run_as_helper(
         .arg(serde_json::to_string(request)?)
         .arg(serde_json::to_string(expected)?)
         .arg(if logged_out { "--logged-out" } else { "--" })
+        .arg(
+            if matches!(request, helper::Request::FirstLogin { opener: true, .. }) {
+                "keep"
+            } else {
+                "temporary"
+            },
+        )
         .stderr(std::process::Stdio::piped());
     let output = crate::onboarding::as_root::tracked_output(&mut command).map_err(|refusal| {
         Error::new(
@@ -315,7 +338,7 @@ pub const APP_IDENTIFIER: &str = "com.insanearts.atlas.bar";
 
 /// The code requirement for code signed as `identifier`: a Developer ID
 /// Application signature by Atlas's team. install.sh checks the same.
-fn requirement_for(identifier: &str) -> String {
+pub(crate) fn requirement_for(identifier: &str) -> String {
     format!(
         "anchor apple generic and identifier \"{identifier}\" \
          and certificate 1[field.1.2.840.113635.100.6.2.6] \
@@ -858,16 +881,27 @@ mod tests {
             },
         ];
         for request in requests {
-            for replaced in [false, true] {
+            for replacement in ["never", "before", "during"] {
                 let dir = tempfile::tempdir().unwrap();
-                let guid = if replaced {
-                    "11111111-2222-3333-4444-555555555555"
-                } else {
-                    &identity.generated_uid
-                };
-                let mut script = DISPATCH.to_owned();
+                let replaced = replacement != "never";
+                if replacement == "before" {
+                    fs::write(dir.path().join("replaced"), "").unwrap();
+                } else if replacement == "during" {
+                    fs::write(dir.path().join("replace-during-copy"), "").unwrap();
+                }
+                let mut script = [
+                    "stage_executable() { executable=/protected-atlas; if [[ -e replace-during-copy ]]; then touch replaced; fi; }\n",
+                    DISPATCH,
+                ]
+                .concat();
                 for (tool, body) in [
-                    ("/usr/bin/dscl", format!("print 'GeneratedUID: {guid}'")),
+                    (
+                        "/usr/bin/dscl",
+                        format!(
+                            "if [[ -e replaced ]]; then print 'GeneratedUID: 11111111-2222-3333-4444-555555555555'; else print 'GeneratedUID: {}'; fi",
+                            identity.generated_uid
+                        ),
+                    ),
                     (
                         "/usr/bin/id",
                         "[[ $1 == -u ]] && print 7001 || print helper".into(),
@@ -909,10 +943,13 @@ mod tests {
                 if replaced {
                     assert!(dispatched.is_err(), "no launchctl asuser or worker ran");
                 } else {
+                    let dispatched = dispatched.unwrap();
                     assert!(
-                        dispatched.unwrap().contains(&encoded),
+                        dispatched.contains(&encoded),
                         "the worker receives the same expected identity"
                     );
+                    assert!(dispatched.contains("/protected-atlas"));
+                    assert!(!dispatched.contains("/unused-atlas"));
                 }
             }
         }

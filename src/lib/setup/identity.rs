@@ -250,6 +250,17 @@ mod tests {
     }
 
     #[test]
+    fn explicitly_choosing_a_legacy_helper_records_its_identity() {
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(on_file_in(home.path(), 502), OnFile::Nothing);
+        remember_in(home.path(), &opie(), true).unwrap();
+        assert_eq!(
+            standing(&on_file_in(home.path(), 502), Some(&opie())),
+            Standing::Same(opie())
+        );
+    }
+
+    #[test]
     fn an_account_that_took_the_helpers_user_id_is_not_the_helper() {
         let recorded = OnFile::Recorded(opie());
         assert_eq!(standing(&recorded, Some(&opie())), Standing::Same(opie()));

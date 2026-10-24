@@ -176,7 +176,10 @@ fn macos() -> Result<(String, String)> {
 /// write to (another account could plant a login item in it otherwise).
 fn private_enough(path: &Path, uid: u32) -> Result<bool> {
     let metadata = fs::symlink_metadata(path)?;
-    Ok(metadata.is_dir() && metadata.uid() == uid && metadata.mode() & 0o022 == 0)
+    Ok(metadata.is_dir()
+        && metadata.uid() == uid
+        && metadata.mode() & 0o022 == 0
+        && !crate::acl::allows_write(path)?)
 }
 
 /// The folder `relative` in the home, a real directory the account owns
@@ -184,6 +187,11 @@ fn private_enough(path: &Path, uid: u32) -> Result<bool> {
 /// parents when absent.
 fn owned_folder(layout: &Layout, relative: &str) -> Result<PathBuf> {
     let mut path = layout.home.clone();
+    if !private_enough(&path, layout.uid)? {
+        return Err(problem(
+            "The home is not a folder only this account can change",
+        ));
+    }
     for part in Path::new(relative) {
         path.push(part);
         layout.check()?;
@@ -676,6 +684,57 @@ mod tests {
         )
         .unwrap();
         assert!(ready(&layout, true, Some(program), MACOS).is_err());
+        assert!(!layout.agent_plist(OPENER).exists());
+    }
+
+    #[test]
+    fn writable_acls_on_the_home_and_each_login_folder_are_refused() {
+        let user = std::env::var("USER").unwrap();
+        let program = Path::new("/Applications/Atlas.app/Contents/MacOS/atlas");
+        for relative in ["", "Library", "Library/LaunchAgents"] {
+            let (_dir, layout) = layout();
+            let folder = layout.home.join(relative);
+            fs::create_dir_all(&folder).unwrap();
+            assert!(
+                Command::new("/bin/chmod")
+                    .args([
+                        "+a",
+                        &format!("user:{user} allow add_file,add_subdirectory")
+                    ])
+                    .arg(&folder)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            assert!(ready(&layout, true, Some(program), MACOS).is_err());
+            assert!(!layout.agent_plist(OPENER).exists());
+            assert!(owned_folder(&layout, "Library/LaunchAgents").is_err());
+        }
+    }
+
+    #[test]
+    fn a_new_login_folder_with_an_inherited_writable_acl_is_refused() {
+        let (_dir, layout) = layout();
+        let user = std::env::var("USER").unwrap();
+        assert!(
+            Command::new("/bin/chmod")
+                .args([
+                    "+a",
+                    &format!(
+                        "user:{user} allow add_file,add_subdirectory,directory_inherit,only_inherit"
+                    ),
+                ])
+                .arg(&layout.home)
+                .status()
+                .unwrap()
+                .success()
+        );
+        // The home itself is rejected conservatively, even for inherit-only
+        // entries. A child created under it must also be rejected on its own.
+        let child = layout.home.join("Library");
+        fs::create_dir(&child).unwrap();
+        assert!(!private_enough(&child, layout.uid).unwrap());
+        assert!(owned_folder(&layout, "Library/LaunchAgents").is_err());
         assert!(!layout.agent_plist(OPENER).exists());
     }
 

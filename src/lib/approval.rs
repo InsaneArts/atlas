@@ -31,7 +31,7 @@ use std::{
 pub enum Refusal {
     /// The person cancelled macOS's dialog.
     Cancelled,
-    /// This macOS no longer has, or no longer honours, the call that starts it.
+    /// This macOS has no call that starts it; authorization was never requested.
     Unavailable,
     /// It failed for another reason, said in one line.
     Failed(String),
@@ -183,10 +183,13 @@ pub fn run(program: &Path, arguments: &[&str], prompt: &str) -> Result<UnixStrea
             &mut pipe,
         )
     };
-    // macOS gave the approval but would not run the step: on a macOS that
-    // keeps the call but no longer honours it, the same as not having it.
-    if status != 0 || pipe.is_null() {
-        return Err(Refusal::Unavailable);
+    if let Err(error) = execution_started(status, !pipe.is_null()) {
+        if !pipe.is_null() {
+            // SAFETY: a stream returned by this call, closed once before
+            // returning the execution failure.
+            unsafe { libc::fclose(pipe) };
+        }
+        return Err(error);
     }
 
     // SAFETY: `pipe` is the open stream macOS gave; its descriptor is copied
@@ -209,9 +212,32 @@ pub fn run(program: &Path, arguments: &[&str], prompt: &str) -> Result<UnixStrea
     }))
 }
 
+/// Once approval was requested, failure must stop the attempt instead of
+/// offering another authorization mechanism.
+fn execution_started(status: i32, has_pipe: bool) -> Result<(), Refusal> {
+    if status != 0 || !has_pipe {
+        Err(Refusal::Failed(format!(
+            "macOS could not run the approved step ({status}); no further approval was requested"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn execution_failure_after_approval_never_allows_another_approval() {
+        for (status, has_pipe) in [(-60031, false), (-60031, true), (0, false)] {
+            assert!(matches!(
+                execution_started(status, has_pipe),
+                Err(Refusal::Failed(_))
+            ));
+        }
+        assert_eq!(execution_started(0, true), Ok(()));
+    }
 
     #[test]
     fn this_macos_still_has_the_call_that_starts_the_approved_step() {

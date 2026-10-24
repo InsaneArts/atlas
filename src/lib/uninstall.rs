@@ -182,8 +182,8 @@ struct Facts {
     settings: bool,
     /// The helper's account exists, and is not known to be another's.
     account: bool,
-    /// The account with the helper's user ID is not the helper Atlas
-    /// recorded: it is left alone.
+    /// The account with the helper's user ID is not verified as the helper
+    /// Atlas recorded: it is left alone.
     other: bool,
     /// A desktop login of the helper's user ID runs.
     logged_in: bool,
@@ -237,7 +237,7 @@ fn plan(facts: &Facts) -> Vec<Step> {
     steps.push(Step::Rest);
 
     if facts.settings && facts.account {
-        steps.push(if facts.remove_helper {
+        steps.push(if facts.remove_helper && !facts.other {
             Step::RemoveHelper
         } else {
             Step::Hint
@@ -308,7 +308,7 @@ async fn execute(steps: &[Step], facts: &Facts, world: &mut impl Teardown) -> Re
                 }
             }
             Step::Hint => {
-                if world.logged_out() {
+                if facts.other || world.logged_out() {
                     world.hint();
                 }
             }
@@ -327,7 +327,7 @@ enum Known {
     /// It is, as recorded.
     Verified(Identity),
     /// Nothing is recorded. A daemon answering at this user ID cannot
-    /// establish which account owns it now; the person must choose it.
+    /// establish which account owns it now; it stays untouched.
     Unrecorded(Identity),
     /// It is another account, or it or its record cannot be read.
     Other,
@@ -352,7 +352,7 @@ pub async fn run(
 ) -> Result<Value> {
     let found = survey(config_path)?;
     let uid = found.client.as_ref().map(|client| client.config.helper_uid);
-    let other = found.known == Some(Known::Other);
+    let other = matches!(found.known, Some(Known::Other | Known::Unrecorded(_)));
     let facts = Facts {
         settings: uid.is_some(),
         account: found.helper.is_some(),
@@ -390,7 +390,11 @@ pub async fn run(
         live.warnings
             .push(format!("Helper job left in place: {error}"));
     }
-    if other {
+    if let Some(Known::Unrecorded(identity)) = &found.known {
+        let message = unrecorded_message(&identity.name);
+        skipped("Helper account", &message);
+        live.warnings.push(message);
+    } else if other {
         skipped("Helper", "left alone: another account has its user ID now");
         live.warnings.push(
             "The account with the helper's user ID is not the helper Atlas set up, so it was \
@@ -421,7 +425,7 @@ pub async fn run(
         },
     });
 
-    if found.unloaded.is_some() {
+    if found.unloaded.is_some() || matches!(found.known, Some(Known::Unrecorded(_))) {
         report["kept"]["helperJob"] = json!(true);
     }
 
@@ -458,10 +462,15 @@ impl Live<'_> {
 
 impl Teardown for Live<'_> {
     async fn settle(&mut self) -> Result<()> {
-        retiring(self.known.as_ref())?;
         let Some(client) = &self.found.client else {
             return Ok(());
         };
+        if matches!(self.known, Some(Known::Other | Known::Unrecorded(_))) {
+            // Local exclusion only: preserve pending outcomes without
+            // contacting or changing an account whose identity is unknown.
+            self.exclusion = Some(client.controller.acquire(true)?);
+            return Ok(());
+        }
         self.exclusion = Some(settle(client, &mut self.warnings).await?);
 
         Ok(())
@@ -554,11 +563,13 @@ impl Teardown for Live<'_> {
     }
 
     fn hint(&mut self) {
-        self.hint = self
-            .found
-            .helper
-            .as_ref()
-            .map(|name| format!("sudo sysadminctl -deleteUser {name}"));
+        self.hint = self.found.helper.as_ref().map(|name| {
+            if matches!(self.known, Some(Known::Unrecorded(_))) {
+                unrecorded_message(name)
+            } else {
+                format!("sudo sysadminctl -deleteUser {name}")
+            }
+        });
     }
 
     fn caches(&mut self) {
@@ -690,7 +701,7 @@ fn confirm(found: &Found, config_path: &Path, keep_config: bool, facts: &Facts) 
 
     // The helper's job is stopped only through settings that load.
     let mut parts = vec![
-        if client.is_some() {
+        if client.is_some() && !facts.other {
             "the helper's background job, the menu bar and the agent plugins".to_owned()
         } else {
             "the menu bar and the agent plugins".to_owned()
@@ -717,12 +728,14 @@ fn confirm(found: &Found, config_path: &Path, keep_config: bool, facts: &Facts) 
     }
 
     if let Some(name) = helper {
-        let first = if facts.logged_in {
+        let first = if facts.logged_in && !facts.other {
             "The helper is logged out first; its apps quit. "
         } else {
             ""
         };
-        say(&if facts.remove_helper {
+        say(&if matches!(found.known, Some(Known::Unrecorded(_))) {
+            unrecorded_message(name)
+        } else if facts.remove_helper && !facts.other {
             format!("{first}Then the helper account {name} and its files are deleted.")
         } else if facts.logged_in {
             format!("{first}The account and its files stay.")
@@ -941,22 +954,20 @@ async fn log_out_helper(
 /// its user ID (`known`, `None` when it was gone): only the helper as
 /// recorded. Another account's is never touched, only Atlas's own records
 /// of the helper go; one never recorded is not taken for the helper, and
-/// nothing is removed until it is.
+/// its account and job stay while Atlas itself can be removed.
 fn retiring(known: Option<&Known>) -> Result<Option<&Identity>> {
     match known {
         Some(Known::Verified(identity)) => Ok(Some(identity)),
-        Some(Known::Other) | None => Ok(None),
-        Some(Known::Unrecorded(_)) => Err(unverified()),
+        Some(Known::Other | Known::Unrecorded(_)) | None => Ok(None),
     }
 }
 
-/// Uninstall's refusal when it cannot tell the account with the helper's
-/// user ID is still the helper.
-fn unverified() -> Error {
-    problem(
-        "Atlas can't tell that the account with the helper's user ID is still its helper, so it \
-         stopped before removing anything. Explicitly choose the helper account in Atlas, \
-         then run atlas uninstall again.",
+/// Explain why an unrecorded account is left alone and how to remove it.
+fn unrecorded_message(name: &str) -> String {
+    format!(
+        "The account {name} and its background job are left alone because Atlas has no recorded \
+         identity for it. To remove the account and its files, log it out yourself, then delete \
+         {name} in System Settings > Users & Groups."
     )
 }
 
@@ -1695,12 +1706,24 @@ mod tests {
     #[tokio::test]
     async fn an_unrecorded_helper_never_uses_its_daemons_word_to_adopt_an_account() {
         let dir = tempfile::tempdir().unwrap();
+        let mut client = Client::new(Config {
+            helper_uid: 7001,
+            socket_path: dir.path().join("no-daemon.sock"),
+            input_socket: dir.path().join("no-input.sock"),
+            identity_probe: dir.path().join("atlas"),
+            output_dir: dir.path().join("runs"),
+        })
+        .unwrap();
+        client.controller = Controller::at(7001, &dir.path().join("control"));
+        let pending = client.controller.quarantine().unwrap();
+        let generation = pending.generation().to_owned();
+        drop(pending);
         // A surviving daemon only proves its numeric user ID, even when the
         // current directory entry has the same name as the deleted helper.
         let found = Found {
             app: dir.path().join("Atlas.app"),
             executable: dir.path().join("atlas"),
-            client: None,
+            client: Some(client),
             unloaded: None,
             helper: Some("helper".into()),
             known: Some(Known::Unrecorded(Identity {
@@ -1722,10 +1745,17 @@ mod tests {
             exclusion: None,
             known: found.known.clone(),
         };
-        let error = live.settle().await.unwrap_err();
-        assert!(error.error.contains("Explicitly choose"), "{}", error.error);
+        live.settle().await.unwrap();
+        assert!(live.exclusion.is_some());
+        let controller = &live.found.client.as_ref().unwrap().controller;
+        assert_eq!(controller.pending().unwrap(), [generation]);
+        assert_eq!(controller.acquire(true).unwrap_err().code, "busy");
         assert!(live.identity().is_none());
         assert!(live.removed.is_empty());
+        live.hint();
+        let hint = live.hint.unwrap();
+        assert!(hint.contains("no recorded identity"));
+        assert!(hint.contains("System Settings > Users & Groups"));
     }
 
     #[test]
@@ -2094,8 +2124,8 @@ mod tests {
         assert_eq!(retiring(Some(&Known::Other)).unwrap(), None, "left alone");
         assert_eq!(retiring(None).unwrap(), None, "gone");
         assert_eq!(
-            retiring(Some(&Known::Unrecorded(opie))).unwrap_err().code,
-            "uninstall",
+            retiring(Some(&Known::Unrecorded(opie))).unwrap(),
+            None,
             "never taken for the helper unrecorded"
         );
     }
@@ -2204,6 +2234,36 @@ mod tests {
         fn release(&mut self) {
             self.held = None;
         }
+    }
+
+    #[tokio::test]
+    async fn an_unrecorded_account_is_kept_while_atlas_and_its_caches_are_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let facts = Facts {
+            other: true,
+            on_screen: true,
+            remove_helper: true,
+            ..facts()
+        };
+        let steps = plan(&facts);
+        assert_eq!(
+            steps,
+            [
+                Step::Settle,
+                Step::Retire,
+                Step::Rest,
+                Step::Hint,
+                Step::Caches
+            ]
+        );
+        let mut script = Script::new(dir.path(), &[false]);
+        let claim = script.controller.quarantine().unwrap();
+        let generation = claim.generation().to_owned();
+        drop(claim);
+        execute(&steps, &facts, &mut script).await.unwrap();
+        assert_eq!(script.steps, ["settle", "retire", "rest", "hint", "caches"]);
+        assert_eq!(script.controller.pending().unwrap(), [generation]);
+        assert!(script.controller.acquire(true).is_ok());
     }
 
     #[tokio::test]

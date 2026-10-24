@@ -2,9 +2,9 @@
 //! for its first login under the person's one approval, and closing the
 //! desktop logins macOS leaves behind when an account is deleted while
 //! logged in. Only Apple's own tools run as root, from a script fixed here
-//! that takes everything it acts on as arguments, so no file the person can
-//! change runs as root or is read by it; Atlas itself runs only as the
-//! helper, readying that account (`setup-helper`).
+//! that takes everything it acts on as arguments. Atlas itself runs only
+//! as the helper, from a root-owned copy verified after copying, readying
+//! that account (`setup-helper`).
 //!
 //! Root re-checks every user ID it is asked to close, just before each step
 //! that ends a login: a person's user ID that no directory has an account
@@ -39,7 +39,7 @@ IFS= read -r acknowledgement || exit 1
 /// nowhere (it is the asking Atlas's own), and nothing of the asking process
 /// carries over that could shape what root makes: its file mode mask or its
 /// limits.
-pub(super) const BECOME_ROOT: &str = r##"asker=${SUDO_UID:-$UID}
+pub(crate) const BECOME_ROOT: &str = r##"asker=${SUDO_UID:-$UID}
 if ! ( UID=0 ) 2>/dev/null; then print -r -- "@atlas error macOS did not let Atlas act as an administrator"; exit 1; fi
 UID=0
 GID=0
@@ -50,6 +50,45 @@ export HOME=/var/root LOGNAME=root USER=root
 unset OLDPWD
 cd /
 "##;
+
+/// Keep the worker and the login opener in the same protected, signed
+/// bundle. The directory is private until copying, ownership, permissions
+/// and signature verification finish. It stays for the subsequent login;
+/// the asking account and the helper can neither replace nor edit it.
+const STAGING: &str = r##"stage_executable() {
+  [[ $executable == /*/Contents/MacOS/atlas ]] || refuse "Atlas has no app bundle"
+  local source=${executable%/Contents/MacOS/atlas} staged bad
+  staged=$(/usr/bin/mktemp -d /private/var/tmp/atlas-approved.XXXXXXXX) || refuse "macOS could not protect a copy of Atlas"
+  # Remove any inherited ACL before copying anything into this directory.
+  /bin/chmod -N $staged && /bin/chmod 700 $staged || refuse "macOS could not protect the copy's folder"
+  /usr/bin/ditto --noacl --noextattr --norsrc $source $staged/Atlas.app || { /bin/rm -rf -- $staged; refuse "Atlas could not be copied"; }
+  # Links or special files could escape the protected bundle. Inspect them
+  # before any recursive ownership or permission change.
+  bad=$(/usr/bin/find $staged ! -type d ! -type f -print) || { /bin/rm -rf -- $staged; refuse "Atlas's copy could not be inspected"; }
+  [[ -z $bad ]] || { /bin/rm -rf -- $staged; refuse "Atlas's copy contains links or special files"; }
+  /usr/sbin/chown -R 0:0 $staged && /bin/chmod -RN $staged && /bin/chmod -R u+rwX,go+rX,go-w,u-s,g-s $staged/Atlas.app || { /bin/rm -rf -- $staged; refuse "Atlas's copy could not be protected"; }
+  /usr/bin/codesign --verify --strict --deep -R '=ATLAS_WORKER_REQUIREMENT' $staged/Atlas.app &&
+    /usr/bin/codesign --verify --strict -R '=ATLAS_APP_REQUIREMENT' $staged/Atlas.app/Contents/MacOS/AtlasApp || { /bin/rm -rf -- $staged; refuse "Atlas's protected copy is not signed by Atlas's developer"; }
+  /bin/chmod 755 $staged || refuse "Atlas's verified copy could not be opened"
+  executable=$staged/Atlas.app/Contents/MacOS/atlas
+}
+"##;
+
+pub(crate) fn staging() -> String {
+    STAGING
+        .replace(
+            "ATLAS_WORKER_REQUIREMENT",
+            &crate::setup::requirement_for(crate::setup::IDENTIFIER),
+        )
+        .replace(
+            "ATLAS_APP_REQUIREMENT",
+            &crate::setup::requirement_for(crate::setup::APP_IDENTIFIER),
+        )
+}
+
+fn steps() -> String {
+    [staging().as_str(), STEPS].concat()
+}
 
 /// The steps, as root. Arguments, one of:
 /// - `close TARGET…`: close logins, each named as one of
@@ -294,6 +333,9 @@ name=$2 executable=$3 expected=$4
 [[ $name =~ '^[A-Za-z0-9_][A-Za-z0-9._-]*$' && $name != <-> ]] || refuse "$name is not an account name Atlas uses"
 [[ $expected == <501-60000> ]] || refuse "$name is not a person's account"
 if [[ $mode == create || $mode == create-terminal ]]; then orphans=("${@[7,-1]}"); else guid=$5 orphans=("${@[6,-1]}"); fi
+# Verify a protected copy before closing logins, creating an account or
+# executing the worker. Terminal creation runs only Apple's account tool.
+if [[ $mode != create-terminal ]]; then stage_executable; fi
 # Deleted accounts' logins close before anything is made: a new account's
 # home is never made while one of them runs.
 for u in $orphans; do orphan $u; done
@@ -442,7 +484,7 @@ pub(crate) fn create_in_terminal(
         EXECUTOR,
         "exec </dev/tty || exit 1\n",
         BECOME_ROOT.replace("exec 2>/dev/null\n", "").as_str(),
-        STEPS,
+        &steps(),
     ]
     .concat();
     let asker = format!("SUDO_UID={}", nix::unistd::getuid().as_raw());
@@ -675,11 +717,11 @@ fn run_to_end(
     arguments: &[&str],
     secret: Option<&[u8]>,
 ) -> (Result<String, Refusal>, bool) {
-    let script = [EXECUTOR, BECOME_ROOT, STEPS].concat();
+    let script = [EXECUTOR, BECOME_ROOT, &steps()].concat();
 
     match via {
         Via::Approval(prompt) => {
-            let approved_script = [EXECUTOR, BECOME_ROOT, STEPS].concat();
+            let approved_script = [EXECUTOR, BECOME_ROOT, &steps()].concat();
             let mut argv = vec![
                 "-i",
                 "PATH=/usr/bin:/bin:/usr/sbin:/sbin",
@@ -1358,7 +1400,7 @@ if [[ $1 == -u && -e created ]]; then print 7003; else exit 1; fi"#,
     /// The steps with Apple's tools standing in as scripts in `dir` that
     /// `tools` names; the stand-ins share `dir` for notes.
     fn with_stand_ins(dir: &Path, tools: &[(&str, &str)]) -> String {
-        let mut script = STEPS.to_owned();
+        let mut script = ["stage_executable() { :; }\n", STEPS].concat();
         for (tool, body) in tools {
             let path = dir.join(Path::new(tool).file_name().unwrap());
             fs::write(
@@ -1378,8 +1420,12 @@ if [[ $1 == -u && -e created ]]; then print 7003; else exit 1; fi"#,
     /// makes.
     fn run_steps(dir: &Path, tools: &[(&str, &str)], arguments: &[&str]) -> String {
         let script = with_stand_ins(dir, tools);
+        run_script(&script, arguments)
+    }
+
+    fn run_script(script: &str, arguments: &[&str]) -> String {
         let run = Command::new("/usr/bin/env")
-            .args(["-i", "/bin/zsh", "-p", "-f", "-c", &script, "zsh"])
+            .args(["-i", "/bin/zsh", "-p", "-f", "-c", script, "zsh"])
             .args(arguments)
             .output()
             .unwrap();
@@ -2371,7 +2417,7 @@ esac"#;
 
     #[test]
     fn the_steps_are_valid_zsh_and_stop_without_an_administrator() {
-        let script = [BECOME_ROOT, STEPS].concat();
+        let script = [BECOME_ROOT, &steps()].concat();
         let check = Command::new("/bin/zsh")
             .args(["-n", "-f", "-c", &script])
             .output()
@@ -2393,6 +2439,129 @@ esac"#;
                 "macOS did not let Atlas act as an administrator".into()
             ))
         );
+    }
+
+    #[test]
+    fn the_worker_runs_the_verified_copy_even_when_the_source_is_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("Source.app/Contents/MacOS");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("atlas"), "verified").unwrap();
+        fs::write(source.join("AtlasApp"), "verified app").unwrap();
+        let tools = [
+            ("/usr/bin/id", OPIE),
+            ("/usr/sbin/chown", "print -rl -- \"$@\" > ownership"),
+            (
+                "/usr/bin/codesign",
+                r#"target=${@[-1]}
+[[ $(/usr/bin/stat -f %Lp ${target%/Atlas.app*}) == 700 ]] || exit 1
+if [[ $target == *.app ]]; then
+  [[ $(<$target/Contents/MacOS/atlas) == verified ]] || exit 1
+  print replaced > Source.app/Contents/MacOS/atlas
+fi
+print -r -- "$*" >> verification"#,
+            ),
+            (
+                "/usr/bin/sudo",
+                r#"print -r -- "$4" > worker-path
+cat "$4" > worker-bytes
+print -r -- '{"ok": true}'"#,
+            ),
+        ];
+        let mut tools = tools.to_vec();
+        tools.extend(
+            STANDARD
+                .into_iter()
+                .filter(|(tool, _)| !matches!(*tool, "/usr/bin/sudo")),
+        );
+        let script = staged_stand_ins(dir.path(), &tools);
+        let text = run_script(
+            &script,
+            &[
+                "choose",
+                "opie",
+                source.join("atlas").to_str().unwrap(),
+                "502",
+                GUID,
+            ],
+        );
+        assert_eq!(outcome(&text), Ok(()), "{text}");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("worker-bytes")).unwrap(),
+            "verified"
+        );
+        assert_eq!(
+            fs::read_to_string(source.join("atlas")).unwrap(),
+            "replaced\n"
+        );
+        let worker = fs::read_to_string(dir.path().join("worker-path")).unwrap();
+        assert!(worker.starts_with(dir.path().to_str().unwrap()));
+        assert!(worker.contains("/atlas-approved."));
+        let ownership = fs::read_to_string(dir.path().join("ownership")).unwrap();
+        assert!(ownership.starts_with("-R\n0:0\n"));
+        let verified = fs::read_to_string(dir.path().join("verification")).unwrap();
+        assert!(verified.contains(&crate::setup::requirement_for(crate::setup::IDENTIFIER)));
+        assert!(verified.contains(&crate::setup::requirement_for(crate::setup::APP_IDENTIFIER)));
+    }
+
+    #[test]
+    fn an_invalid_or_linked_copy_never_reaches_the_worker() {
+        for linked in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let source = dir.path().join("Source.app/Contents/MacOS");
+            fs::create_dir_all(&source).unwrap();
+            fs::write(source.join("atlas"), "replacement").unwrap();
+            if linked {
+                std::os::unix::fs::symlink("/bin/ls", source.join("AtlasApp")).unwrap();
+            } else {
+                fs::write(source.join("AtlasApp"), "replacement app").unwrap();
+            }
+            let mut tools = vec![
+                ("/usr/bin/id", OPIE),
+                ("/usr/sbin/chown", "exit 0"),
+                ("/usr/bin/codesign", "exit 1"),
+            ];
+            tools.extend(STANDARD);
+            let script = staged_stand_ins(dir.path(), &tools);
+            let text = run_script(
+                &script,
+                &[
+                    "choose",
+                    "opie",
+                    source.join("atlas").to_str().unwrap(),
+                    "502",
+                    GUID,
+                ],
+            );
+            assert!(outcome(&text).is_err(), "{text}");
+            assert!(!dir.path().join("sudo.log").exists());
+            assert!(!asked(dir.path(), "createhomedir"));
+            assert!(!fs::read_dir(dir.path()).unwrap().any(|entry| {
+                entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("atlas-approved.")
+            }));
+        }
+    }
+
+    fn staged_stand_ins(dir: &Path, tools: &[(&str, &str)]) -> String {
+        let staging = steps().strip_suffix(STEPS).unwrap().to_owned();
+        let mut script =
+            with_stand_ins(dir, tools).replacen("stage_executable() { :; }\n", &staging, 1);
+        // Staging also uses tool stand-ins, and all copies stay in the fixture.
+        for (tool, _) in tools {
+            script = script.replace(
+                tool,
+                &dir.join(Path::new(tool).file_name().unwrap())
+                    .to_string_lossy(),
+            );
+        }
+        script.replace(
+            "/private/var/tmp/atlas-approved.XXXXXXXX",
+            &format!("{}/atlas-approved.XXXXXXXX", dir.display()),
+        )
     }
 
     #[test]
@@ -2517,7 +2686,7 @@ esac"#;
     #[test]
     fn a_creation_that_fails_silently_reports_sysadminctls_real_status() {
         let dir = tempfile::tempdir().unwrap();
-        let mut script = STEPS.to_owned();
+        let mut script = ["stage_executable() { :; }\n", STEPS].concat();
         let tools = [
             ("/usr/bin/id", "exit 1"),
             ("/usr/bin/dscl", "exit 0"),
@@ -2568,7 +2737,7 @@ read -rs "password?User password:"; print -rn -- $password > password; touch mad
             ),
         ];
         tools.extend(STANDARD);
-        let mut script = STEPS.to_owned();
+        let mut script = ["stage_executable() { :; }\n", STEPS].concat();
         for (tool, body) in &tools {
             let path = dir.path().join(Path::new(tool).file_name().unwrap());
             fs::write(

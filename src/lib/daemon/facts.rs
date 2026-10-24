@@ -161,17 +161,35 @@ const RECORDING_RESTART_GAP: Duration = Duration::from_secs(60);
 /// on first. It runs apart from the arrival's requests, which a moment off
 /// screen ends, and ends once this process may record.
 pub async fn restart_for_recording(restart: impl Fn()) {
+    watch_recording(
+        || tokio::time::sleep(RECORDING_WATCH),
+        capture::permitted,
+        || async { guided().await && screen_recording_now().await },
+        restarted_lately,
+        restart,
+    )
+    .await;
+}
+
+async fn watch_recording<Pause, Probe>(
+    mut pause: impl FnMut() -> Pause,
+    mut permitted: impl FnMut() -> bool,
+    mut granted: impl FnMut() -> Probe,
+    mut cooling_down: impl FnMut() -> bool,
+    restart: impl Fn(),
+) where
+    Pause: std::future::Future<Output = ()>,
+    Probe: std::future::Future<Output = bool>,
+{
     loop {
-        tokio::time::sleep(RECORDING_WATCH).await;
-        if capture::permitted() {
+        pause().await;
+        if permitted() {
             return;
         }
 
         // The window first: a new process is started only while it guides.
-        if guided().await && screen_recording_now().await {
-            if !restarted_lately() {
-                restart();
-            }
+        if granted().await && !cooling_down() {
+            restart();
             return;
         }
     }
@@ -612,6 +630,26 @@ pub fn hello(manager: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_recording_grant_is_picked_up_after_the_restart_cooldown_expires() {
+        let elapsed = std::cell::Cell::new(Duration::ZERO);
+        let restarted = std::cell::Cell::new(false);
+        watch_recording(
+            || {
+                elapsed.set(elapsed.get() + RECORDING_WATCH);
+                assert!(elapsed.get() <= RECORDING_RESTART_GAP);
+                std::future::ready(())
+            },
+            || false,
+            || std::future::ready(true),
+            || within(Some(elapsed.get()), RECORDING_RESTART_GAP),
+            || restarted.set(true),
+        )
+        .await;
+        assert!(restarted.get());
+        assert_eq!(elapsed.get(), RECORDING_RESTART_GAP);
+    }
 
     /// The prompt option is passed by name; it is the exported constant.
     #[test]
