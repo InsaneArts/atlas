@@ -13,11 +13,6 @@ public enum OnboardingLayout {
   static let column: CGFloat = 440
   /// 2: the most lines a line naming an account takes; a longer name is cut in its middle, so both its ends show.
   static let nameLines = 2
-  /// 3: the most account rows the choice shows whole; with more, they scroll.
-  static let accountRowsInView = 3
-  /// 170: the height scrolling account rows take: two rows and most of a third, so the cut row shows there are more,
-  /// with room left for the work note and the footer.
-  static let accountListHeight: CGFloat = 170
   /// 28: above a screen's content, clear of the title bar (v3 `.stage2`).
   static let contentTop: CGFloat = 28
   /// 64: the footer's height under a screen (v3 D2).
@@ -26,16 +21,16 @@ public enum OnboardingLayout {
   static let sideFooterHeight: CGFloat = 56
   /// 20: the footer's side inset (v3 `.foot2`).
   static let barInset: CGFloat = 20
-  /// 20: the work note's least height, so the screen does not jump as it comes and goes.
+  /// 20: the helper's work note's least height, so the screen does not jump as it comes and goes.
   static let workNoteHeight: CGFloat = 20
   /// 44: above the permission panel's content, clear of the title bar.
   static let panelTop: CGFloat = 44
   /// 18: below the permission panel's content.
   static let panelBottom: CGFloat = 18
-  /// 104: the app icon on the welcome screen.
-  static let welcomeIcon: CGFloat = 104
-  /// 92: the app icon on the done screen.
-  static let doneIcon: CGFloat = 92
+  /// 88: the app icon's visible tile on the welcome screen (v3 B1, C-T1).
+  static let welcomeTile: CGFloat = 88
+  /// 80: the app icon's visible tile on the done screen (v3 S8, C-T1).
+  static let doneTile: CGFloat = 80
   /// 72: the app icon on the helper's allow screen.
   static let allowIcon: CGFloat = 72
   /// 72: Atlas's icon in the permission panel, dragged into System Settings.
@@ -46,10 +41,6 @@ public enum OnboardingLayout {
   static let ghostHandFont = Font.system(size: ghostHand)
   /// 14: how far past the ghost's icon, right and down, the hand holds it.
   static let ghostHandOffset: CGFloat = 14
-  /// 40: the warning symbol on the blocked screen.
-  static let blockedSymbol: CGFloat = 40
-  /// The warning symbol's font, at ``blockedSymbol``: a symbol of its own size, not text on the type scale.
-  static let blockedSymbolFont = Font.system(size: blockedSymbol)
 
   /// The one vertical rhythm every setup screen keeps, so a screen's pieces sit at the same heights from screen to
   /// screen (v3 D2). Each value is the space a piece takes above it, or, for the hero and the label, below it.

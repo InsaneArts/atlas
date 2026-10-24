@@ -37,9 +37,17 @@
       VStack(spacing: Spacing.s) {
         switch kind {
         case .step:
-          StepRow(index: 1, title: String("Find Atlas in the list"), detail: String("Privacy & Security"), state: .done)
-          StepRow(index: 2, title: String("Turn its switch on"), detail: String("Confirm it"), state: .current)
-          StepRow(index: 3, title: String("Come back here"), detail: String("Atlas notices"), state: .waiting)
+          StepList(
+            steps: [
+              StepList.Step(
+                title: String("Find Atlas in the list"),
+                detail: String("Privacy & Security"),
+                state: .done
+              ),
+              StepList.Step(title: String("Turn its switch on"), detail: String("Confirm it"), state: .current),
+              StepList.Step(title: String("Come back here"), detail: String("Atlas notices"), state: .waiting),
+            ]
+          )
         case .control:
           ControlRow(size: .menu) {
             Text(verbatim: "Open at Login")
@@ -75,10 +83,13 @@
             selected: false
           ) {}
         case .field:
-          CardGroup {
-            FieldRow(label: String("Full name"), text: .constant(String("Atlas")))
-            SeparatorLine()
-            FieldRow(label: String("Password"), text: .constant(String("secret")), secure: true)
+          GroupedList(SampleListItem.fields) { field in
+            FieldRow(
+              label: field.title,
+              text: .constant(field.detail ?? String()),
+              secure: field.id > 0,
+              placeholder: String("Required")
+            )
           }
         case .check:
           CardGroup {

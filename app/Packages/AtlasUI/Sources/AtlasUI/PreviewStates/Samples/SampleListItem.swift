@@ -11,5 +11,11 @@
     var lead = ListRow.Lead.none
     /// What ends the row.
     var trailing = ListRow.Trailing.none
+
+    /// A filled field and an empty secure one, by label and value.
+    static let fields = [
+      SampleListItem(id: 0, title: String("Full name"), detail: String("Atlas")),
+      SampleListItem(id: 1, title: String("Password")),
+    ]
   }
 #endif

@@ -52,7 +52,7 @@
             tail: "You'll approve it once in macOS.",
             note: .working(
               "Approve in the macOS dialog. It says Atlas can change your Mac. "
-                + "That covers only the three steps above."
+                + "That covers only the three steps below."
             ),
             isFormEnabled: false
           )
@@ -61,7 +61,7 @@
       state.footer.back?.isEnabled = false
       state.note = .working(
         "Approve in the macOS dialog. It says Atlas can change your Mac. "
-          + "That covers only the three steps above."
+          + "That covers only the three steps below."
       )
       state.isBusy = true
       return state

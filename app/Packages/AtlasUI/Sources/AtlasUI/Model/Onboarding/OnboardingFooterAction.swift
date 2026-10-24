@@ -43,6 +43,9 @@ public struct OnboardingFooterAction: Equatable, Sendable {
   public var isEnabled: Bool
   /// Whether Return presses it. Only the main action, on the right, ever takes Return.
   public var isDefault: Bool
+  /// Whether it follows a success, so it lights up a moment after the success shows, as Continue does once the check
+  /// passes (v3 S5).
+  public var followsSuccess: Bool
 
   /// Creates a footer button.
   ///
@@ -51,10 +54,12 @@ public struct OnboardingFooterAction: Equatable, Sendable {
   ///   - event: What pressing it sends.
   ///   - isEnabled: Whether it can be pressed now.
   ///   - isDefault: Whether Return presses it; only the main action, on the right, ever takes Return.
-  public init(title: Title, event: OnboardingEvent, isEnabled: Bool, isDefault: Bool) {
+  ///   - followsSuccess: Whether it lights up a moment after a success shows; false by default.
+  public init(title: Title, event: OnboardingEvent, isEnabled: Bool, isDefault: Bool, followsSuccess: Bool = false) {
     self.title = title
     self.event = event
     self.isEnabled = isEnabled
     self.isDefault = isDefault
+    self.followsSuccess = followsSuccess
   }
 }

@@ -12,7 +12,7 @@ enum OnboardingWords {
   static let notUnderstood = "Atlas gave an answer this window does not understand"
   /// While the account is made.
   static let creating =
-    "Approve in the macOS dialog. It says Atlas can change your Mac. That covers only the three steps above."
+    "Approve in the macOS dialog. It says Atlas can change your Mac. That covers only the three steps below."
   /// While the chosen agents are connected.
   static let connecting = "Connecting your agents…"
   /// While Open at Login is set.

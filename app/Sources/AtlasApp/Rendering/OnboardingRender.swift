@@ -46,7 +46,8 @@
       return renders.map { render in
         PNG.write(
           OnboardingView(state: render.state, form: .constant(form(render.state))) { _ in }
-            .environment(\.appIcon, AppIconImage.image),
+            .environment(\.appIcon, AppIconImage.image)
+            .environment(\.accountPicture, AccountPictureImage.image),
           size: size(render.state),
           to: folder.appendingPathComponent("\(render.file).png")
         )

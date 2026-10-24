@@ -1,6 +1,8 @@
 import SwiftUI
 
-/// What ends a ``ListRow``: a quiet word, a mark and a word, a switch, a button, a radio or a spinner.
+/// What ends a ``ListRow``: a quiet word, a mark and a word, a switch, a button, a radio or a spinner. A word that
+/// changes in place, as a check's note does once it passes, replaces the old one with a blur (v3 S5); under Reduce
+/// Motion it fades.
 struct ListRowTrailing: View {
   /// What ends the row.
   let trailing: ListRow.Trailing
@@ -8,6 +10,7 @@ struct ListRowTrailing: View {
   var label = ""
   /// What its switch or button does.
   let action: (@MainActor () -> Void)?
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   /// The trailing control, or nothing.
   var body: some View {
@@ -19,6 +22,8 @@ struct ListRowTrailing: View {
         .textStyle(.callout)
         .foregroundStyle(tone.color)
         .lineLimit(1)
+        .id(text)
+        .transition(Motion.transition(AnyTransition(.blurReplace(.downUp)), reduceMotion: reduceMotion))
     case .check(let state, let word):
       HStack(spacing: Spacing.xs) {
         OutcomeMark(kind: StatusLine.Kind(state))

@@ -32,10 +32,16 @@ public enum Motion {
     static let hoverIn = Duration(seconds: 0.12)
     /// 0.12: a pane leaving as another takes its place (v3 G2, X2).
     static let crossfadeOut = Duration(seconds: 0.12)
+    /// 0.12: a step finishing: its number shrinking away, and how long the next step waits before it lights up (v3
+    /// S3, X8).
+    static let step = Duration(seconds: 0.12)
     /// 0.15: a pane's crossfade under Reduce Motion, both ways (v3 X2).
     static let crossfadeReduced = Duration(seconds: 0.15)
     /// 0.15: an alert leaving, fading and shrinking a little (v3 A6).
     static let dismiss = Duration(seconds: 0.15)
+    /// 0.15: how long what follows a success waits: the ring after its tile, and Continue after the last check (v3
+    /// X11, S5).
+    static let followUp = Duration(seconds: 0.15)
     /// 0.18: a chip, a row, a slot or a toast leaving (v3 `Motion.leave`).
     static let leave = Duration(seconds: 0.18)
     /// 0.2: a notice, an edge, content leaving.
@@ -76,6 +82,8 @@ public enum Motion {
     static let pulse = Duration(seconds: 0.8)
     /// 0.9: one turn of the spinner.
     static let spin = Duration(seconds: 0.9)
+    /// 0.9: one ring in a success tile's shape expanding and fading (v3 S8, X11).
+    static let echo = Duration(seconds: 0.9)
     /// 1.6: one breath of the live badge (v3 `Duration.breathe`).
     public static let breathe = Duration(seconds: 1.6)
     /// 2.4: how long a toast stays (v3 `Duration.toast`).
@@ -96,6 +104,8 @@ public enum Motion {
     static let page = Spring(duration: 0.42, bounce: 0)
     /// A check, a badge or a symbol popping in: 0.35 seconds, bounce 0.3.
     static let pop = Spring(duration: 0.35, bounce: 0.3)
+    /// A success tile settling into place: 0.5 seconds, bounce 0.2 (v3 `icon`, S8).
+    static let settle = Spring(duration: 0.5, bounce: 0.2)
     /// A tab's thumb and its pane: 0.32 seconds, bounce 0.12.
     static let tab = Spring(duration: 0.32, bounce: 0.12)
     /// A side column sliding in: 0.35 seconds, no bounce (``Motion/slide``).
@@ -154,6 +164,32 @@ public enum Motion {
 
   /// A check, a badge or a symbol popping in: ``Springs/pop``.
   static var pop: Animation { .spring(Springs.pop) }
+
+  /// A success tile settling from 92% into place: ``Springs/settle`` (v3 S8, X11).
+  static var settle: Animation { .spring(Springs.settle) }
+
+  /// One ring in a success tile's shape expanding and fading, once: over ``Duration/echo`` on a curve that leaves
+  /// fast and lands softly, after ``Duration/followUp``, so the tile has begun to settle first (v3 S8, X11). It scales,
+  /// so under Reduce Motion the ring is not drawn at all.
+  static var echo: Animation {
+    .timingCurve(echoCurve.x1, echoCurve.y1, echoCurve.x2, echoCurve.y2, duration: Duration.echo.seconds)
+      .delay(Duration.followUp.seconds)
+  }
+
+  /// A step's number shrinking away as the step finishes: ease out over ``Duration/step`` (v3 S3, X8). It scales, so
+  /// under Reduce Motion a view passes it through ``animation(_:reduceMotion:reduced:)``.
+  static var stepOut: Animation { .easeOut(duration: Duration.step.seconds) }
+
+  /// A step lighting up as the one before it finishes: ``state``, after ``Duration/step`` (v3 S3, X8).
+  static var stepLight: Animation {
+    state.delay(Duration.step.seconds)
+  }
+
+  /// What follows a success lighting up, such as Continue after the last check passes: ``state``, after
+  /// ``Duration/followUp`` (v3 S5).
+  static var followUp: Animation {
+    state.delay(Duration.followUp.seconds)
+  }
 
   /// A tab's thumb and its pane: ``Springs/tab``.
   static var tab: Animation { .spring(Springs.tab) }
@@ -289,6 +325,9 @@ public enum Motion {
     !reduceMotion
   }
 
+  /// The echo's curve, as a cubic Bézier's two control points: it leaves fast and lands softly (v3
+  /// `cubic-bezier(.2, .7, .3, 1)`).
+  private static let echoCurve = (x1: 0.2, y1: 0.7, x2: 0.3, y2: 1.0)
   /// The indicator's spring response, in seconds.
   private static let indicatorResponse = 0.45
   /// The indicator's spring damping: 0.8 leaves a small settle.

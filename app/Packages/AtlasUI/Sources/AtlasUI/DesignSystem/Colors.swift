@@ -12,6 +12,10 @@ extension Color {
   static let textSecondary = Color(red: 0xA1 / 255, green: 0xA1 / 255, blue: 0xA6 / 255)
   /// Small print, hints and times: #8E8E93.
   static let textTertiary = Color(red: 0x8E / 255, green: 0x8E / 255, blue: 0x93 / 255)
+  /// What an empty field shows until something is typed, such as Required (v3 `.row.field input::placeholder`):
+  /// white at 0.28.
+  static let textPlaceholder = Color.white
+    .opacity(0.28)
   /// What is happening now, and the switches: system blue, #0A84FF.
   static let accent = Color(red: 0x0A / 255, green: 0x84 / 255, blue: 0xFF / 255)
   /// The accent under the pointer, a step brighter, such as an alert's default button (v3 `.acap.accent:hover`):
@@ -33,6 +37,10 @@ extension Color {
   /// ``attentionFill``: the accent at 0.16.
   static let accentFill = Color.accent
     .opacity(0.16)
+  /// The fine edge of a focus ring, inside its ``accentRing`` halo, such as a focused field's (v3 `.row.field::after`):
+  /// the accent at 0.7.
+  static let strokeFocus = Color.accent
+    .opacity(0.7)
   /// Done and ready: system green, #30D158.
   static let success = Color(red: 0x30 / 255, green: 0xD1 / 255, blue: 0x58 / 255)
   /// Text that says something is done, such as "Allowed": #32D74B.
@@ -59,6 +67,10 @@ extension Color {
     .opacity(0.7)
   /// A destructive button's word, such as Log Out: #FF6961.
   static let textDestructive = Color(red: 0xFF / 255, green: 0x69 / 255, blue: 0x61 / 255)
+  /// A quiet card's ground, a step under ``fillCard``, such as the note on why setup asks for administrator access
+  /// (v3 `.approval`): white at 0.03.
+  static let fillQuiet = Color.white
+    .opacity(0.03)
   /// A card's ground: white at 0.045.
   static let fillCard = Color.white
     .opacity(0.045)
@@ -135,6 +147,15 @@ extension Color {
   /// A divider and a card's edge: white at 0.08.
   static let separator = Color.white
     .opacity(0.08)
+  /// The rail joining a list's steps (v3 `.row.step .rail`): white at 0.10.
+  static let strokeRail = Color.white
+    .opacity(0.1)
+  /// The rail below a finished step (v3 `.row.step.done .rail`): system green at 0.45.
+  static let strokeRailDone = Color.success
+    .opacity(0.45)
+  /// The ring that expands from a success tile and fades (v3 `.hero .ring`): white at 0.55.
+  static let strokeEcho = Color.white
+    .opacity(0.55)
   /// A glass edge: white at 0.16.
   static let strokeStrong = Color.white
     .opacity(0.16)
