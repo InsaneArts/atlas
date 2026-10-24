@@ -19,7 +19,7 @@
         .map { sample in
           let view = ComponentSampleView(sample)
             .environment(\.appIcon, AppIconImage.image)
-          let size = NSHostingView(rootView: view).fittingSize
+          let size = WindowShell.hostingView(view).fittingSize
           return PNG.write(view, size: size, to: folder.appendingPathComponent("\(sample.rawValue).png"))
         }
         .allSatisfy { $0 }

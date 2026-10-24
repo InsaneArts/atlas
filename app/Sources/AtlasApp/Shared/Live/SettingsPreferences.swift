@@ -24,9 +24,6 @@ struct SettingsPreferences {
   /// Saves the Dock badge.
   var saveBadge: @MainActor (Bool) -> Void
 
-  /// The app's own, in its standard defaults.
-  static var standard: SettingsPreferences { stored(in: .standard) }
-
   /// Preferences kept in `defaults` under the shipped keys.
   ///
   /// - Parameter defaults: Where to keep them.

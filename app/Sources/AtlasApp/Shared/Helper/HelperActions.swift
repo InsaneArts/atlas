@@ -7,7 +7,7 @@ import Observation
 /// Out with or without force. One of each runs at a time, whichever window asked, and each is answered only once its
 /// command has ended; Recover and Restart are one operation, since either may restart the helper. Every one first waits for the app's control work to be answered (``ControlBarrier``) and stops,
 /// saying why, while a release is still refused; before switching, logging out or restarting it also ends this
-/// app's own control. While any of them runs, Take Control waits (``running``). `AppController` builds the one
+/// app's own control. While any of them runs, Take Control waits (``running``). ``AppContainer`` builds the one
 /// instance every window shares.
 @Observable
 final class HelperActions {

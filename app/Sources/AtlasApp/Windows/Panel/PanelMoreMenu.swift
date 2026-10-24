@@ -29,7 +29,7 @@ enum PanelMoreMenu {
   /// - Returns: The menu.
   static func menu(_ value: PanelMoreMenuState, target: HelperMenuActions, actions: Actions) -> NSMenu {
     let menu = NSMenu()
-    menu.appearance = NSAppearance(named: .darkAqua)
+    menu.appearance = Appearance.dark
     menu.minimumWidth = width
     // Each item is enabled from the presenter's value, never by a second rule in a validator.
     menu.autoenablesItems = false

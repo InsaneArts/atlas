@@ -36,7 +36,7 @@ extension SettingsPresenter {
         SettingsWords.installTitle(version),
         SettingsWords.installMessage,
         busy ? SettingsWords.installing : SettingsWords.install,
-        cancel: ViewerWords.notNow,
+        cancel: HelperWords.notNow,
         busy: busy
       )
     }

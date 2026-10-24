@@ -2,8 +2,9 @@ import AppKit
 import AtlasUI
 import SwiftUI
 
-/// Atlas's menu bar item and its panel. The glyph follows the helper's mode; the panel reads the picture only while
-/// it is open, and opens its ⋯ menu here, under its button (`PanelPopover+Menu`).
+/// The menu bar panel's popover, opened from Atlas's menu bar item (``StatusItem``), whose glyph it keeps on the
+/// helper's mode. The panel reads the picture only while it is open, and opens its ⋯ menu here, under its button
+/// (`PanelPopover+Menu`). A popover, not a window, so the one shell name that does not end in `Window`.
 final class PanelPopover: NSObject, NSPopoverDelegate {
   /// 6: between ⋯ and the menu it opens, as in the main window.
   static let menuGap: CGFloat = 6
@@ -12,9 +13,8 @@ final class PanelPopover: NSObject, NSPopoverDelegate {
   let controller: PanelController
   /// Opens the Settings window, from the ⋯ menu.
   let openSettings: @MainActor () -> Void
-  /// The menu bar item.
-  private let item = NSStatusBar.system
-    .statusItem(withLength: NSStatusItem.variableLength)
+  /// The menu bar item it opens from.
+  private let item: StatusItem
   /// The panel.
   private let popover = NSPopover()
   /// Watches for clicks outside Atlas while the panel shows, so a click anywhere else closes it as a menu would;
@@ -22,26 +22,23 @@ final class PanelPopover: NSObject, NSPopoverDelegate {
   /// often not the active one.
   private var outsideClicks: Any?
 
-  /// Puts the item in the menu bar and starts reading at the closed rate.
+  /// Opens from the item in the menu bar and starts reading at the closed rate.
   ///
   /// - Parameters:
   ///   - controller: The panel's controller.
+  ///   - item: The menu bar item the panel opens from.
   ///   - openSettings: Opens the Settings window, from the ⋯ menu.
-  init(controller: PanelController, openSettings: @escaping @MainActor () -> Void) {
+  init(controller: PanelController, item: StatusItem, openSettings: @escaping @MainActor () -> Void) {
     self.controller = controller
+    self.item = item
     self.openSettings = openSettings
     super.init()
-    let content = NSHostingController(
-      rootView: ShellRoot { [weak self] in
-        PanelView(state: controller.state) { self?.handle($0) }
-      }
-    )
-    // The popover follows the panel as Recent and the line come and go.
-    content.sizingOptions = [.preferredContentSize]
-    popover.contentViewController = content
+    // The popover follows the panel as Recent and the line come and go; Atlas's panel is always dark, like its other
+    // windows.
+    WindowShell.host(in: popover) { [weak self] in
+      PanelView(state: controller.state) { self?.handle($0) }
+    }
     popover.behavior = .transient
-    // Atlas's panel is always dark, like its other windows.
-    popover.appearance = NSAppearance(named: .darkAqua)
     popover.delegate = self
     item.button?.target = self
     item.button?.action = #selector(toggle)

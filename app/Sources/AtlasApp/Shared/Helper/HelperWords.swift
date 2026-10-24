@@ -4,6 +4,10 @@ import AtlasService
 /// refusals read. Words a single window says around them stay in that window's words.
 /// `nonisolated`: constants, which a test's arguments read off the main actor too.
 nonisolated enum HelperWords {
+  /// The recovery alert's way out, which sets it aside.
+  static let notNow = "Not Now"
+  /// Once the helper logged out.
+  static let helperLoggedOut = "The helper is logged out."
   /// The menu item that asks to recover the helper.
   static let recoverItem = "Recover…"
   /// The menu item that asks to restart the helper.

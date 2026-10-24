@@ -16,7 +16,7 @@ extension SettingsPresenter {
     let running = facts.running
     let alertRunning = snapshot.session.alertRunning
     return SettingsHelperState(
-      account: overview.title ?? ViewerWords.helper,
+      account: overview.title ?? Words.helper,
       status: mode.summary(line: ""),
       line: SettingsWords.helperLine(display: Words.size(overview.display)),
       ready: ready(reading.readinessItems),

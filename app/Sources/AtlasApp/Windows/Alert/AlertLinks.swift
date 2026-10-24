@@ -1,6 +1,6 @@
 import AtlasService
 
-/// What the alert window asks of the rest of the app, as closures `AppController` gives it at `init`.
+/// What the alert window asks of the rest of the app, as closures ``WindowCoordinator`` gives it at `init`.
 struct AlertLinks {
   /// The service's latest overview, as the menu bar panel last read it.
   var overview: @MainActor () -> ViewerStatus.Overview = { ViewerStatus.Overview() }

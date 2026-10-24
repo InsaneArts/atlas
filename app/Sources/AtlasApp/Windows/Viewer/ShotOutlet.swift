@@ -11,10 +11,12 @@ struct ShotOutlet {
   var reveal: @MainActor (URL) -> Void
 
   /// The app's own: the general pasteboard, and the Finder selecting the file.
-  static var live: ShotOutlet {
+  ///
+  /// - Parameter workspace: The workspace that shows a file in the Finder; the app's container hands in the shared one.
+  /// - Returns: The outlet.
+  static func live(_ workspace: NSWorkspace) -> ShotOutlet {
     ShotOutlet(copy: copyToPasteboard) { file in
-      NSWorkspace.shared
-        .activateFileViewerSelecting([file])
+      workspace.activateFileViewerSelecting([file])
     }
   }
 

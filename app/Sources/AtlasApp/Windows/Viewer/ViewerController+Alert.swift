@@ -88,7 +88,7 @@ extension ViewerController {
       return
     }
     session.alert = nil
-    say(outcome.map { $0.ok ? ViewerWords.helperLoggedOut : $0.message } ?? HelperWords.waitForAction)
+    say(outcome.map { $0.ok ? HelperWords.helperLoggedOut : $0.message } ?? HelperWords.waitForAction)
   }
 
   /// Restarts the helper.

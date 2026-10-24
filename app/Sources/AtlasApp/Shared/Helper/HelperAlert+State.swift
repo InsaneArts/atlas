@@ -20,7 +20,7 @@ extension HelperAlert {
         ViewerWords.recoverTitle,
         failure ?? Self.recoverMessage(overview),
         busy ? ViewerWords.recovering : ViewerWords.recover,
-        cancel: ViewerWords.notNow,
+        cancel: HelperWords.notNow,
         busy: busy
       )
     case .switchToHelper:

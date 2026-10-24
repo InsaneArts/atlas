@@ -5,8 +5,6 @@
 /// depend on state, interpolated, chosen by a condition or derived from facts, and a list row's fixed name travels
 /// with its value. Words the window shares with another are the app's shared ``Words`` or its ``HelperWords``.
 enum ViewerWords {
-  /// The helper's name when the status gives none.
-  static let helper = "Helper"
   /// The window's title, which only the Window menu shows.
   static let windowTitle = "Atlas"
 }

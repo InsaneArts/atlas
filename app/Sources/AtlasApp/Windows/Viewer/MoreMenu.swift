@@ -15,7 +15,7 @@ enum MoreMenu {
   /// - Returns: The menu.
   static func menu(_ value: ViewerMoreMenu, target: AnyObject) -> NSMenu {
     let menu = NSMenu()
-    menu.appearance = NSAppearance(named: .darkAqua)
+    menu.appearance = Appearance.dark
     menu.minimumWidth = width
     menu.addItem(.sectionHeader(title: ViewerWords.pictureHeader))
     for choice in ViewerPictureChoice.allCases {

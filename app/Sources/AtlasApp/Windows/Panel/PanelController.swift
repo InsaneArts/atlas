@@ -6,7 +6,7 @@ import Observation
 
 /// The menu bar panel's one observed object: it holds the latest status, the helper's screen and what the panel is
 /// doing, reads them on a schedule (`PanelController+Reading`), and runs what the panel's events ask
-/// (`PanelController+Actions`). Recover…, Switch… and Log Out… ask first in an alert that `AppController` places;
+/// (`PanelController+Actions`). Recover…, Switch… and Log Out… ask first in an alert that ``WindowCoordinator`` places;
 /// ``PanelPresenter`` decides what the panel shows.
 ///
 /// Each part of the snapshot is its own stored property, so the menu bar glyph, which reads only the status, is not

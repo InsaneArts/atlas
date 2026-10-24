@@ -112,7 +112,7 @@
       let snapshot = PanelRenderOverrides(environment: ["ATLAS_RENDER_MODE": mode, "ATLAS_RENDER_PREVIEW": "1"])
         .applied(to: PanelSnapshot(picture: SampleDesktop.picture))
       let drawn = directory.appendingPathComponent("\(mode).png")
-      #expect(PanelRender.draw(snapshot, to: drawn.path, appearance: .darkAqua))
+      #expect(PanelRender.draw(snapshot, to: drawn.path, appearance: Appearance.dark))
       let image = try #require(NSBitmapImageRep(data: Data(contentsOf: drawn)), "\(mode) was not drawn")
       // The panel's own width, as its view lays out alone, with the render's margin on both sides.
       let panel = NSHostingView(rootView: PanelView(state: PanelPresenter.state(snapshot)) { _ in })
@@ -140,7 +140,7 @@
           .removeItem(at: directory)
       }
       let drawn = directory.appendingPathComponent("\(file).png")
-      #expect(PanelRender.draw(alert: try Self.alert(file), to: drawn.path, appearance: .darkAqua))
+      #expect(PanelRender.draw(alert: try Self.alert(file), to: drawn.path, appearance: Appearance.dark))
       let image = try #require(NSBitmapImageRep(data: Data(contentsOf: drawn)), "\(file) was not drawn")
       #expect(image.pixelsWide > 0 && image.pixelsHigh > 0)
     }

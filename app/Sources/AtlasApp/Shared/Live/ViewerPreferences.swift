@@ -18,9 +18,6 @@ struct ViewerPreferences {
   /// Saves whether Details shows.
   var saveDetails: @MainActor (Bool) -> Void
 
-  /// The app's own, in its standard defaults.
-  static var standard: ViewerPreferences { stored(in: .standard) }
-
   /// Preferences kept in `defaults` under the shipped keys.
   ///
   /// - Parameter defaults: Where to keep them.

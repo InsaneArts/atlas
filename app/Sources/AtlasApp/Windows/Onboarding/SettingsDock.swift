@@ -13,8 +13,8 @@ final class SettingsDock {
   /// second, so System Settings has drawn its list before the ghost points into it.
   static let ghostPatience = 8
 
-  /// The setup window.
-  private let window: NSWindow
+  /// The setup window, which owns this dock and so outlives it.
+  private unowned let window: NSWindow
   /// Moves the window.
   private let glide: WindowGlide
   /// The clock the looks wait on.

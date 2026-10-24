@@ -23,4 +23,12 @@ struct AppConfiguration {
     }
     renderOverrides = PanelRenderOverrides(environment: environment)
   }
+
+  /// Reads the configuration from this process's environment.
+  ///
+  /// - Parameter executable: This app's own executable, beside which `atlas` sits in Atlas.app.
+  /// - Returns: The configuration.
+  static func reading(executable: URL) -> AppConfiguration {
+    AppConfiguration(environment: ProcessInfo.processInfo.environment, executable: executable)
+  }
 }

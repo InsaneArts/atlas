@@ -1,6 +1,6 @@
 import AppKit
 
-/// The ⋯ menu's helper commands: each asks first, in an alert `AppController` places. The menu enables them from the
+/// The ⋯ menu's helper commands: each asks first, in an alert ``WindowCoordinator`` places. The menu enables them from the
 /// presenter's value, so they need no validator.
 extension PanelPopover: HelperMenuActions {
   /// Recover…: ask before recovering the helper.

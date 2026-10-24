@@ -42,7 +42,7 @@ extension SettingsController {
     }
     session.alert = nil
     say(
-      outcome.map { $0.ok ? ViewerWords.helperLoggedOut : $0.message } ?? HelperWords.waitForAction,
+      outcome.map { $0.ok ? HelperWords.helperLoggedOut : $0.message } ?? HelperWords.waitForAction,
       in: .helper,
       problem: outcome?.ok != true
     )

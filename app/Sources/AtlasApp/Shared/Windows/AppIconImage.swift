@@ -17,6 +17,7 @@ enum AppIconImage {
       .deletingLastPathComponent()
       .deletingLastPathComponent()
       .deletingLastPathComponent()
+      .deletingLastPathComponent()
       .appendingPathComponent("Resources/AppIcon.icns")
     return NSImage(contentsOf: source) ?? NSImage()
   }()

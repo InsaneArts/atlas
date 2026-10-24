@@ -20,30 +20,4 @@ struct OnboardingDependencies {
   /// The clock every wait runs on: the pause between readings of the facts, a permission's tick before the panel
   /// moves on, and the permission panel following System Settings. A cancelled wait ends at once.
   var clock: any Clock<Duration>
-
-  /// The app's own: `commands`, NSWorkspace, the bundled login item and the app's clock.
-  ///
-  /// - Parameters:
-  ///   - commands: The `atlas` command line.
-  ///   - loginItem: The app's login item.
-  ///   - installs: Connecting agents, shared with Settings.
-  ///   - clock: The app's clock.
-  /// - Returns: The live dependencies.
-  static func live(
-    commands: any CommandRunning,
-    loginItem: OpenAtLogin,
-    installs: AgentInstalls,
-    clock: any Clock<Duration>
-  ) -> OnboardingDependencies {
-    OnboardingDependencies(
-      commands: commands,
-      openURL: { url in
-        _ = NSWorkspace.shared
-          .open(url)
-      },
-      loginItem: loginItem,
-      installs: installs,
-      clock: clock
-    )
-  }
 }

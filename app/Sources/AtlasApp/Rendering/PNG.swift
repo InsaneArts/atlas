@@ -45,9 +45,9 @@ enum PNG {
   ///   - file: Where the PNG goes.
   /// - Returns: Whether the PNG was written.
   static func write(_ view: some View, size: NSSize, to file: URL) -> Bool {
-    let host = NSHostingView(rootView: view)
+    let host = WindowShell.hostingView(view)
     host.frame = NSRect(origin: .zero, size: size)
-    guard let appearance = NSAppearance(named: .darkAqua), let data = data(of: host, appearance: appearance) else {
+    guard let appearance = Appearance.dark, let data = data(of: host, appearance: appearance) else {
       return false
     }
     return (try? data.write(to: file)) != nil

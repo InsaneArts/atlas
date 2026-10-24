@@ -13,7 +13,7 @@ enum KeysMenu {
   /// - Returns: The menu.
   static func menu(for controller: ViewerController) -> NSMenu {
     let menu = NSMenu()
-    menu.appearance = NSAppearance(named: .darkAqua)
+    menu.appearance = Appearance.dark
     menu.minimumWidth = width
     menu.addItem(.sectionHeader(title: ViewerWords.macKeys))
     add(HelperKey.mac, to: menu, for: controller)

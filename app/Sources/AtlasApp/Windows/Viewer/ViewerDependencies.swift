@@ -33,39 +33,4 @@ struct ViewerDependencies {
   var wallClock: @MainActor () -> Date = { Date() }
   /// Where a copied screenshot goes, and how its file is shown; by default nowhere.
   var shotOutlet = ShotOutlet(copy: { _ in }, reveal: { _ in })
-
-  /// The app's own, over `service`, `actions` and `commands`.
-  ///
-  /// - Parameters:
-  ///   - service: The viewer service.
-  ///   - actions: The helper's own commands.
-  ///   - commands: The `atlas` command line, which says which agents are connected.
-  ///   - clock: The app's clock.
-  ///   - switchToHelper: Locks the screen for the helper, returning what to tell the person.
-  /// - Returns: The live dependencies.
-  static func live(
-    service: any ViewerService,
-    actions: HelperActions,
-    commands: any CommandRunning,
-    clock: any Clock<Duration>,
-    switchToHelper: @escaping @MainActor () async -> String
-  ) -> ViewerDependencies {
-    ViewerDependencies(
-      service: service,
-      actions: actions,
-      preferences: .standard,
-      uptime: { ProcessInfo.processInfo.systemUptime },
-      clock: clock,
-      heartbeatInterval: ViewerController.heartbeatEvery,
-      doubleClickInterval: { NSEvent.doubleClickInterval },
-      pictures: .live,
-      switchToHelper: switchToHelper,
-      connectedAgents: {
-        let outcome = await commands.run(.agentsStatus)
-        return outcome.ok ? outcome.decode(AgentsStatus.self)?.connected : nil
-      },
-      loginTime: LoginRecords.loginTime(of:),
-      shotOutlet: .live
-    )
-  }
 }

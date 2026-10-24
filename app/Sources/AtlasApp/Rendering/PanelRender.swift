@@ -45,13 +45,13 @@ enum PanelRender {
   ///   - service: The viewer service to read.
   ///   - overrides: What the design check changes, from `ATLAS_RENDER_*`.
   ///   - path: Where to write the PNG.
-  ///   - name: The appearance of the menu bar strip around the panel.
+  ///   - appearance: The appearance of the menu bar strip around the panel.
   /// - Returns: Whether the PNG was written.
   static func draw(
     service: any ViewerService,
     overrides: PanelRenderOverrides,
     to path: String,
-    appearance name: NSAppearance.Name
+    appearance: NSAppearance?
   ) async -> Bool {
     async let reading = try? service.status()
     async let picture = try? service.frame()
@@ -63,9 +63,9 @@ enum PanelRender {
     #endif
     let snapshot = overrides.applied(to: live)
     if let alert = overrides.alertSnapshot(over: snapshot.status.overview) {
-      return draw(alert: alert, to: path, appearance: name)
+      return draw(alert: alert, to: path, appearance: appearance)
     }
-    return draw(snapshot, to: path, appearance: name)
+    return draw(snapshot, to: path, appearance: appearance)
   }
 
   /// Draws the panel for `snapshot` on its card, under a strip of menu bar holding its glyph.
@@ -73,11 +73,11 @@ enum PanelRender {
   /// - Parameters:
   ///   - snapshot: What the panel's controller would hold.
   ///   - path: Where to write the PNG.
-  ///   - name: The appearance of the menu bar strip around the panel.
+  ///   - appearance: The appearance of the menu bar strip around the panel.
   /// - Returns: Whether the PNG was written.
-  static func draw(_ snapshot: PanelSnapshot, to path: String, appearance name: NSAppearance.Name) -> Bool {
-    let content = NSHostingView(
-      rootView: ShellRoot {
+  static func draw(_ snapshot: PanelSnapshot, to path: String, appearance: NSAppearance?) -> Bool {
+    let content = WindowShell.hostingView(
+      ShellRoot {
         PanelView(state: PanelPresenter.state(snapshot)) { _ in }
           .panelCard()
           .padding(margin)
@@ -101,7 +101,7 @@ enum PanelRender {
     canvas.addSubview(glyph)
     content.frame = NSRect(origin: .zero, size: size)
     canvas.addSubview(content)
-    return write(canvas, to: path, appearance: name)
+    return write(canvas, to: path, appearance: appearance)
   }
 
   /// Draws the alert window's alert, as it stands over whatever is behind it: running, saying why its command did
@@ -110,17 +110,17 @@ enum PanelRender {
   /// - Parameters:
   ///   - alert: The alert, as the alert window's controller would hold it.
   ///   - path: Where to write the PNG.
-  ///   - name: The appearance of the ground behind it.
+  ///   - appearance: The appearance of the ground behind it.
   /// - Returns: Whether the PNG was written.
-  static func draw(alert: AlertSnapshot, to path: String, appearance name: NSAppearance.Name) -> Bool {
+  static func draw(alert: AlertSnapshot, to path: String, appearance: NSAppearance?) -> Bool {
     let state = AlertPresenter.state(alert)
-    let content = NSHostingView(rootView: ShellRoot { AlertView(state: state) { _ in } })
+    let content = WindowShell.hostingView(ShellRoot { AlertView(state: state) { _ in } })
     let size = content.fittingSize
     let canvas = NSView(frame: NSRect(origin: .zero, size: size))
     canvas.addSubview(fill(canvas.bounds, .windowBackgroundColor))
     content.frame = canvas.bounds
     canvas.addSubview(content)
-    return write(canvas, to: path, appearance: name)
+    return write(canvas, to: path, appearance: appearance)
   }
 
   /// A plain box in one colour.
@@ -142,10 +142,10 @@ enum PanelRender {
   /// - Parameters:
   ///   - canvas: The view to draw.
   ///   - path: Where to write it.
-  ///   - name: The appearance to draw it in.
+  ///   - appearance: The appearance to draw it in.
   /// - Returns: Whether the PNG was written.
-  private static func write(_ canvas: NSView, to path: String, appearance name: NSAppearance.Name) -> Bool {
-    guard let appearance = NSAppearance(named: name), let data = PNG.data(of: canvas, appearance: appearance) else {
+  private static func write(_ canvas: NSView, to path: String, appearance: NSAppearance?) -> Bool {
+    guard let appearance, let data = PNG.data(of: canvas, appearance: appearance) else {
       return false
     }
     return (try? data.write(to: URL(fileURLWithPath: path))) != nil

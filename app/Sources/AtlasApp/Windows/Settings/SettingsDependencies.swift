@@ -22,32 +22,4 @@ struct SettingsDependencies {
   var links: SettingsLinks
   /// The clock any wait of the window runs on, so a test moves its time by hand; none waits yet.
   var clock: any Clock<Duration>
-
-  /// The app's own: `commands`, `actions`, the standard defaults, Atlas.app's version and the app's clock.
-  ///
-  /// - Parameters:
-  ///   - commands: The `atlas` command line.
-  ///   - actions: The helper's own commands.
-  ///   - installs: Connecting agents, shared with the setup window.
-  ///   - links: What Settings shares with the other windows.
-  ///   - clock: The app's clock.
-  /// - Returns: The live dependencies.
-  static func live(
-    commands: any CommandRunning,
-    actions: HelperActions,
-    installs: AgentInstalls,
-    links: SettingsLinks,
-    clock: any Clock<Duration>
-  ) -> SettingsDependencies {
-    SettingsDependencies(
-      commands: commands,
-      actions: actions,
-      installs: installs,
-      preferences: .standard,
-      agentIcons: AgentIcons.onThisMac,
-      version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
-      links: links,
-      clock: clock
-    )
-  }
 }

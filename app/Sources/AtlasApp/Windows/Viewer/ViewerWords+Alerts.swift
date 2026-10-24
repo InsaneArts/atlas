@@ -3,8 +3,6 @@
 extension ViewerWords {
   /// The way out of an alert.
   static let cancel = "Cancel"
-  /// The recovery alert's way out, which sets it aside.
-  static let notNow = "Not Now"
   /// The recovery alert's title.
   static let recoverTitle = "Recover the helper?"
   /// The recovery alert's sentence while an action's outcome is unknown.

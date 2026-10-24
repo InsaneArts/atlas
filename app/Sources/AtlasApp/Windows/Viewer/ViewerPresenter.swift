@@ -63,7 +63,7 @@ enum ViewerPresenter {
   /// - Parameter status: The service's status.
   /// - Returns: The name.
   static func account(_ status: ViewerStatus) -> String {
-    status.overview.accountName ?? status.session.userName ?? status.overview.account ?? ViewerWords.helper
+    status.overview.accountName ?? status.session.userName ?? status.overview.account ?? Words.helper
   }
 
   /// How old the newest picture is at the snapshot's time: "just now", "4 s ago", or a dash before the first.

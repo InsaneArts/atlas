@@ -5,8 +5,9 @@ import SwiftUI
 /// The main window: dark, resizable, its one quiet row in the title bar. It reads only while on screen, gives
 /// control back whenever it closes, hides or loses focus, opens the top row's menus, hands a dragged screenshot to
 /// the system, reads the Screenshots tab's keys (``ShotKeys``), and answers the main menu's View, File and Helper
-/// items (`ViewerWindow+Menus`) as the window's delegate, which the responder chain reaches.
-final class ViewerWindow: NSObject, NSWindowDelegate {
+/// items (`ViewerWindow+Menus`) as the window itself, which the responder chain reaches. Built on the one shell
+/// (``WindowShell``), and opened and closed by the coordinator (``WindowPresenting``).
+final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   /// The name its frame is saved under. Shipped, so it never changes.
   static let autosaveName = "AtlasViewer"
   /// 1200 by 800: the window's size the first time, until the person moves or resizes it.
@@ -21,19 +22,17 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
 
   /// The window's controller.
   let controller: ViewerController
-  /// The window.
-  let window: NSWindow
   /// Runs once the window has closed.
   let closed: @MainActor (ViewerWindow) -> Void
   /// Open until closed, minimised included.
-  private(set) var isOpen = false
+  private(set) var isPresented = false
   /// The empty toolbar that lines the window buttons up with the top row; taken off in full screen, where it would
   /// become the auto-hiding full-screen toolbar and cover the row.
-  private let toolbar = NSToolbar(identifier: "viewer")
+  private let rowToolbar = NSToolbar(identifier: "viewer")
   /// Reads the Screenshots tab's keys while the window is open.
   private var shotKeys: Any?
 
-  /// Creates the window, hidden until ``show()``.
+  /// Creates the window, hidden until ``present()``.
   ///
   /// - Parameters:
   ///   - controller: The window's controller.
@@ -41,67 +40,56 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
   init(controller: ViewerController, closed: @escaping @MainActor (ViewerWindow) -> Void) {
     self.controller = controller
     self.closed = closed
-    window = NSWindow(
+    super.init(
       contentRect: NSRect(origin: .zero, size: Self.firstSize),
       styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
       backing: .buffered,
       defer: false
     )
-    super.init()
     // The title is for the Window menu alone.
-    window.title = ViewerWords.windowTitle
-    window.titleVisibility = .hidden
-    window.titlebarAppearsTransparent = true
-    window.titlebarSeparatorStyle = .none
+    title = ViewerWords.windowTitle
+    titleVisibility = .hidden
+    titlebarAppearsTransparent = true
+    titlebarSeparatorStyle = .none
     // An empty toolbar gives the title bar the top row's height, so the window buttons line up with it.
-    window.toolbar = toolbar
-    window.toolbarStyle = .unified
-    window.isReleasedWhenClosed = false
-    window.appearance = NSAppearance(named: .darkAqua)
-    window.backgroundColor = .ground
-    window.contentMinSize = Self.leastSize
-    window.collectionBehavior.insert(.fullScreenPrimary)
-    window.delegate = self
-    let host = NSHostingView(
-      rootView: ShellRoot { [weak self] in
-        ViewerView(
-          state: controller.state,
-          send: { self?.handle($0) },
-          newest: { controller.newestPicture },
-          input: { DesktopInput(controller: controller) }
-        )
-        .environment(
-          \.shotDrag,
-          ShotDragSource { name in
-            ShotDrag.provider(
-              name: name,
-              suggestedName: ViewerPresenter.shotFileName(name, controller.snapshot),
-              service: controller.service
-            )
-          }
-        )
-      }
-    )
-    // The window keeps the size it is given; the content fills it.
-    host.sizingOptions = []
-    window.contentView = host
-    window.setFrameAutosaveName(Self.autosaveName)
+    toolbar = rowToolbar
+    toolbarStyle = .unified
+    isReleasedWhenClosed = false
+    contentMinSize = Self.leastSize
+    collectionBehavior.insert(.fullScreenPrimary)
+    delegate = self
+    WindowShell.host(in: self) { [weak self] in
+      ViewerView(
+        state: controller.state,
+        send: { self?.handle($0) },
+        newest: { controller.newestPicture },
+        input: { DesktopInput(controller: controller) }
+      )
+      .environment(
+        \.shotDrag,
+        ShotDragSource { name in
+          ShotDrag.provider(
+            name: name,
+            suggestedName: ViewerPresenter.shotFileName(name, controller.snapshot),
+            service: controller.service
+          )
+        }
+      )
+    }
+    setFrameAutosaveName(Self.autosaveName)
   }
-
-  /// Whether the window takes the keyboard now.
-  var isKey: Bool { window.isKeyWindow }
 
   /// Brings the window forward, where it was left, and reads while it is on screen. The app shows its Dock icon
   /// first (``DockIcon``). Ordered front is not on screen: while the screen is locked or asleep the window is
   /// occluded, and reading starts with the occlusion change once it shows.
-  func show() {
-    if !isOpen && !window.setFrameUsingName(Self.autosaveName) { window.center() }
-    isOpen = true
+  func present() {
+    if !isPresented && !setFrameUsingName(Self.autosaveName) { center() }
+    isPresented = true
     watchShotKeys()
-    if window.isMiniaturized { window.deminiaturize(nil) }
-    window.makeKeyAndOrderFront(nil)
+    if isMiniaturized { deminiaturize(nil) }
+    makeKeyAndOrderFront(nil)
     NSApp.activate()
-    if window.isKeyWindow { controller.gainedFocus() } else { controller.lostFocus() }
+    if isKeyWindow { controller.gainedFocus() } else { controller.lostFocus() }
     followScreen()
   }
 
@@ -126,7 +114,7 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
   ///   - frame: The button's frame in the window's content, top left first.
   ///   - kind: Which menu.
   private func open(_ menu: NSMenu, below frame: CGRect, as kind: ViewerMenu) {
-    guard let content = window.contentView else { return }
+    guard let content = contentView else { return }
     controller.setOpenMenu(kind)
     // The hosting view is flipped, as SwiftUI's frames are: down is a larger y.
     let point = NSPoint(x: frame.minX, y: frame.maxY + Self.menuGap)
@@ -152,8 +140,8 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
   /// - Parameter event: The key.
   /// - Returns: The key, to pass on, or nil once handled.
   private func shotKey(_ event: NSEvent) -> NSEvent? {
-    guard event.window === window, controller.session.tab == .screenshots, controller.state.alert == nil,
-      !(window.firstResponder is NSText)
+    guard event.window === self, controller.session.tab == .screenshots, controller.state.alert == nil,
+      !(firstResponder is NSText)
     else { return event }
     let held = event.modifierFlags.intersection([.command, .control, .option])
     let largeShown = controller.panes.shots.large != nil
@@ -166,7 +154,7 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
   /// Reads only while the window is on screen: off screen (minimised, covered, on another Space, or behind a locked
   /// or sleeping screen) it stops reading and gives control back; on screen again, it reads again.
   func followScreen() {
-    controller.setVisible(window.occlusionState.contains(.visible) && window.isVisible)
+    controller.setVisible(occlusionState.contains(.visible) && isVisible)
   }
 
   /// Full screen hides the window buttons the top row keeps clear of. The empty toolbar comes off first: kept, it
@@ -175,7 +163,7 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
   ///
   /// - Parameter notification: The window's notification.
   func windowWillEnterFullScreen(_ notification: Notification) {
-    window.toolbar = nil
+    toolbar = nil
     controller.setFullScreen(true)
   }
 
@@ -183,7 +171,7 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
   ///
   /// - Parameter notification: The window's notification.
   func windowDidExitFullScreen(_ notification: Notification) {
-    window.toolbar = toolbar
+    toolbar = rowToolbar
     controller.setFullScreen(false)
   }
 
@@ -191,12 +179,12 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
   ///
   /// - Parameter window: The window.
   func windowDidFailToEnterFullScreen(_ window: NSWindow) {
-    window.toolbar = toolbar
+    toolbar = rowToolbar
     controller.setFullScreen(false)
   }
 
   /// Closes the window.
-  func close() { window.close() }
+  func dismiss() { close() }
 
   /// The window went on or off screen: reading follows (``followScreen()``).
   ///
@@ -221,7 +209,7 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
   ///
   /// - Parameter notification: The window's notification.
   func windowWillClose(_ notification: Notification) {
-    isOpen = false
+    isPresented = false
     if let shotKeys { NSEvent.removeMonitor(shotKeys) }
     shotKeys = nil
     controller.close()

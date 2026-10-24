@@ -9,6 +9,8 @@ import Foundation
 /// One punctuation rule holds for every word Atlas.app makes: a line a window shows on its own as a sentence (a hint, a
 /// notice, a reason to wait) ends with its full stop, and a label, a title, a mode or a fact's value has none.
 enum Words {
+  /// The helper's name when the status gives none.
+  static let helper = "Helper"
   /// A fact whose value is not known yet: the same dash in the panel and the viewer.
   static let unknown = "—"
   /// The helper's display, as the panel's and the viewer's facts name it.

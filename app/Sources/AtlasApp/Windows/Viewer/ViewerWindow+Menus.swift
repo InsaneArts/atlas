@@ -5,7 +5,7 @@ import AtlasUI
 /// validated against the same state field its button draws (``ViewerPresenter``), never a rule of its own. While
 /// this window holds control, the screen's key monitor sees every key first, so these shortcuts reach the helper
 /// instead, all but Control-Shift-Escape.
-extension ViewerWindow: ViewerMenuActions, HelperMenuActions, NSMenuItemValidation {
+extension ViewerWindow: ViewerMenuActions, HelperMenuActions {
   /// Shows the tab the item's tag names.
   ///
   /// - Parameter sender: The menu item.
@@ -87,11 +87,12 @@ extension ViewerWindow: ViewerMenuActions, HelperMenuActions, NSMenuItemValidati
   /// - Parameter sender: The menu item.
   func askLogOut(_ sender: Any?) { controller.send(.askLogOut) }
 
-  /// Whether an item can be chosen now, with its title and tick set from the same state the window draws.
+  /// Whether an item can be chosen now, with its title and tick set from the same state the window draws. The
+  /// window's own items (Close, Minimize, Enter Full Screen) are the window's to validate, as for any window.
   ///
   /// - Parameter item: The item.
   /// - Returns: Whether it can be chosen.
-  func validateMenuItem(_ item: NSMenuItem) -> Bool {
+  override func validateMenuItem(_ item: NSMenuItem) -> Bool {
     let state = controller.state
     let menu = controller.moreMenu
     let alertUp = state.alert != nil
@@ -121,7 +122,7 @@ extension ViewerWindow: ViewerMenuActions, HelperMenuActions, NSMenuItemValidati
     case #selector(HelperMenuActions.askRestart(_:)): return menu.helper.canRestart && !alertUp
     case #selector(HelperMenuActions.askSwitch(_:)): return menu.helper.canSwitch && !alertUp
     case #selector(HelperMenuActions.askLogOut(_:)): return menu.helper.canLogOut && !alertUp
-    default: return true
+    default: return super.validateMenuItem(item)
     }
   }
 

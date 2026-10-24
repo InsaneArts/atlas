@@ -34,22 +34,15 @@ final class DragGhost {
       backing: .buffered,
       defer: true
     )
-    panel.isOpaque = false
-    panel.backgroundColor = .clear
-    panel.hasShadow = false
     panel.ignoresMouseEvents = true
     panel.isReleasedWhenClosed = false
     panel.hidesOnDeactivate = false
     panel.level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
     panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle, .transient]
     panel.setAccessibilityElement(false)
-    let host = NSHostingView(
-      rootView: ShellRoot { [weak self] in
-        if let state = self?.state { DragGhostView(state: state) }
-      }
-    )
-    host.sizingOptions = []
-    panel.contentView = host
+    WindowShell.hostOverlay(in: panel) { [weak self] in
+      if let state = self?.state { DragGhostView(state: state) }
+    }
   }
 
   /// Shows the ghost from the panel's icon into System Settings' window, or hides it.

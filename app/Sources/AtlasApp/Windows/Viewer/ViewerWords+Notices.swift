@@ -9,8 +9,6 @@ extension ViewerWords {
   static let agentResumed = "Agent resumed."
   /// Take Control still refused after its one retry: an agent's action holds the helper.
   static let agentMidAction = "The agent is mid-action. Try again in a moment."
-  /// Once the helper logged out.
-  static let helperLoggedOut = "The helper is logged out."
   /// Once the helper restarted.
   static let helperRestarted = "The helper was restarted. Take control again when ready."
   /// The helper's session or display changed, which ended control.

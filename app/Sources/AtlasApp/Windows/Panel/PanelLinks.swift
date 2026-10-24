@@ -1,7 +1,7 @@
 import AtlasService
 import AtlasUI
 
-/// What the panel asks of the rest of the app, as closures `AppController` gives it at `init`: the panel never
+/// What the panel asks of the rest of the app, as closures ``WindowCoordinator`` gives it at `init`: the panel never
 /// touches another window itself.
 struct PanelLinks {
   /// Opens the main window, on `tab` or, for nil, on the tab it shows.

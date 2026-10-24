@@ -1,6 +1,6 @@
 import AtlasService
 
-/// What Settings shares with the app's other parts, which only `AppController` knows: the helper's status as the menu
+/// What Settings shares with the app's other parts, which only ``WindowCoordinator`` knows: the helper's status as the menu
 /// bar last read it, Open at Login as the panel keeps it, the picture as the main window keeps it, switching to the
 /// helper, and the setup window. Reached through closures, so Settings never holds another window, and a value the
 /// panel or the main window also shows stays one value.

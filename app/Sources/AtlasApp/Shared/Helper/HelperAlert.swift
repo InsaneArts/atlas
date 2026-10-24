@@ -1,5 +1,5 @@
 /// An alert one window asks another to show before one of the helper's commands runs: the menu bar panel asks, and
-/// `AppController` shows it in the main window when it is open, else in the alert window.
+/// ``WindowCoordinator`` shows it in the main window when it is open, else in the alert window.
 enum HelperAlert: Equatable, Sendable {
   /// Recover the helper?
   case recover

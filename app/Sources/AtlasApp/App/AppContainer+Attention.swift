@@ -2,14 +2,14 @@ import AppKit
 
 /// What Atlas shows outside its windows when it needs the person: the notification and the Dock badge
 /// (``AttentionSignals``), fed by the panel's readings, the Dock icon and the choices in Settings.
-extension AppController {
+extension AppContainer {
   /// Makes the signals at launch. Nothing asks for consent here: Settings asks when the person turns Notify me on.
   /// Clicking a notification opens the main window on Screen.
   func startSignals() {
     signals = AttentionSignals(
-      notifier: .live { [weak self] in self?.openViewer(tab: .screen) },
+      notifier: .live { [weak coordinator] in coordinator?.openViewer(tab: .screen) },
       badge: .live,
-      preferences: .standard
+      preferences: settingsPreferences
     )
   }
 
@@ -26,7 +26,7 @@ extension AppController {
   ///
   /// - Returns: The preferences.
   func watchedPreferences() -> SettingsPreferences {
-    var preferences = SettingsPreferences.standard
+    var preferences = settingsPreferences
     let saveNotify = preferences.saveNotify
     let saveBadge = preferences.saveBadge
     preferences.saveNotify = { [weak self] on in
