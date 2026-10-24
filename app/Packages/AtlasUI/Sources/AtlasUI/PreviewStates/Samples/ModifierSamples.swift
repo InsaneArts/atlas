@@ -18,7 +18,7 @@
       case windowSurface
       /// The panel's card.
       case panelCard
-      /// An outline's label near the picture's right edge, kept inside it.
+      /// A window outlined near the picture's right edge, its label moved inside the outline.
       case outlineLabel
       /// A selected and an unselected icon tab.
       case iconTab
@@ -77,12 +77,15 @@
             .frame(width: SampleWidth.narrow)
             .panelCard()
         case .outlineLabel:
-          OutlineLabelPlacement(anchor: CGPoint(x: 220, y: 40)) {
-            FloatingChip {
-              Text(verbatim: "Opie Settings, a window near the edge")
+          ZStack {
+            OutlineHighlight(frame: CGRect(x: 150, y: 20, width: 90, height: 100), dim: 0.36)
+            OutlineLabelPlacement(outline: CGRect(x: 150, y: 20, width: 90, height: 100)) {
+              GlassChip {
+                Text(verbatim: "Opie Settings, a window near the edge")
+              }
             }
           }
-          .frame(width: SampleWidth.narrow, height: 100)
+          .frame(width: SampleWidth.narrow, height: 140)
           .background(Color.fillPlaceholder)
         case .iconTab:
           HStack(spacing: Spacing.xs) {

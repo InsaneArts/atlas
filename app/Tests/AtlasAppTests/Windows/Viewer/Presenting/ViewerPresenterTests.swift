@@ -248,7 +248,7 @@ struct ViewerPresenterTests {
     #expect(all.first?.value == "All checks pass")
     let some = ViewerPresenter.readyRows([ready, keys, dialogs])
     #expect(some.map(\.name) == ["Mouse and keyboard", "Save and Open dialogs", "1 other passes"])
-    #expect(some.map(\.mark) == [.notReady, .unknown, nil])
+    #expect(some.map(\.mark) == [.notReady, .unknown, .ready], "the count of those that pass has a green check")
     #expect(some.map(\.note) == ["Accessibility is off", "Not checked yet", nil])
     #expect(ViewerPresenter.readyRows([keys]).map(\.name) == ["Mouse and keyboard"], "no count when none pass")
     #expect(ViewerPresenter.readyRows([]).isEmpty, "nothing before any check is known")

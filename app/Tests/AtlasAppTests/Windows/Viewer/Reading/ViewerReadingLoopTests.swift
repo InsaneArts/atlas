@@ -173,4 +173,36 @@ struct ViewerReadingLoopTests {
       service.log.contains("release lease") && !viewer.barrier.isBusy
     }
   }
+
+  @Test("connecting keeps the last picture and shows the ring only after 0.4 seconds")
+  func connectingKeepsTheLastPictureAndRingsOnlyAfterADelay() async throws {
+    let service = ScriptedService()
+    service.reply = ["ready": true, "canObserve": true, "overview": ["mode": "observing", "state": "idle"]]
+    let clock = ManualClock()
+    let viewer = try await ViewerController.watching(service, clock: clock)
+    let shown = try #require(viewer.reading.picture)
+    // Details' tick stops, so the clock's sleepers are the reading's pause and the wait for a picture.
+    viewer.readingLoop.ticking?.cancel()
+    #expect(viewer.state.screen.empty == nil)
+    service.fail = ["status"]
+    await viewer.readingLoop.read(viewer.readingLoop.generation)
+    // The picture is lost: the stage keeps it behind Reconnecting…, and no ring yet.
+    let waiting = try #require(viewer.state.screen.empty)
+    #expect(viewer.state.screen.picture == nil)
+    #expect(viewer.snapshot.mode.kind == .connecting)
+    #expect(waiting.lastPicture == shown)
+    #expect(waiting.message.headline == ViewerWords.reconnectingHeadline)
+    #expect(!waiting.showsRing)
+    // 0.4 seconds, as the window's clock reads it.
+    let delay = Duration.seconds(Motion.Duration.appearDelay.seconds)
+    #expect(abs(Motion.Duration.appearDelay.seconds - 0.4) < 1e-9)
+    try await clock.untilSleeping(for: delay, "the wait for a picture never started")
+    clock.advance(by: delay - .milliseconds(1))
+    #expect(clock.waiting.contains(.milliseconds(1)), "the wait has a moment left")
+    #expect(viewer.state.screen.empty?.showsRing == false)
+    clock.advance(by: .milliseconds(1))
+    try await settle("the ring never showed") { viewer.state.screen.empty?.showsRing == true }
+    #expect(viewer.state.screen.empty?.lastPicture == shown, "the last picture stays as the ring arrives")
+    viewer.close()
+  }
 }

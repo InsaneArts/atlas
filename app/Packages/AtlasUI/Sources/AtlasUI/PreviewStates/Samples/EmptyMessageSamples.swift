@@ -2,8 +2,10 @@
   import SwiftUI
 
   /// The empty message's samples: connecting with no button, logged out with a glass one, and not ready with the
-  /// next step, the last in a small window.
+  /// next step, the last in a small window; then the main window's stage pattern, its mark ringed while connecting
+  /// (v3 V7).
   struct EmptyMessageSamples: View {
+    /// The messages, one above the other.
     var body: some View {
       VStack(spacing: Spacing.m) {
         EmptyMessage(
@@ -27,8 +29,16 @@
           ),
           size: .small
         )
+        EmptyMessage(
+          state: EmptyMessageState(
+            headline: "Connecting to the helper…",
+            message: "This takes a moment after the Mac starts."
+          ),
+          size: .stage,
+          tracesMark: true
+        )
       }
-      .frame(width: SampleWidth.column, height: SampleWidth.column * 3 / 2)
+      .frame(width: SampleWidth.column, height: SampleWidth.column * 2)
       .sampleSurface()
     }
   }

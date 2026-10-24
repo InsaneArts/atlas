@@ -62,7 +62,7 @@ enum CheckWords {
       return "Mouse and keyboard stopped in the helper. Recover starts them again."
     case "Accessibility allowed": return "Turn on Atlas in the helper's Accessibility settings."
     case "Input service ready" where step.contains("Accessibility"): return "Needs Accessibility first."
-    case "Input service ready": return "Mouse and keyboard aren't ready."
+    case "Input service ready": return "Mouse and keyboard aren't ready. Recover starts them again."
     default: return step.isEmpty || step.contains("atlas ") ? "Not ready." : Words.sentence(step)
     }
   }

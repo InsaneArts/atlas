@@ -20,7 +20,9 @@ extension Mode {
       case .needsYou: reading.needsYouLine
       case .stopped: Words.stoppedLine
       case .inUseElsewhere: Words.inUseElsewhereLine
-      case .notReady, .loggedOut, .connecting: ""
+      case .notReady: PanelWords.notReadyLine(reading.status.overview.reason)
+      case .loggedOut: PanelWords.loggedOutLine
+      case .connecting: ""
       }
     return summary(line: line)
   }

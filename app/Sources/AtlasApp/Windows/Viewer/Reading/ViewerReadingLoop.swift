@@ -55,6 +55,8 @@ final class ViewerReadingLoop {
   @ObservationIgnored private(set) var readAgain = false
   /// Refreshes ``now`` while readings run.
   @ObservationIgnored private(set) var ticking: Task<Void, Never>?
+  /// Waits ``Motion/Duration/appearDelay`` for a picture before the waiting stage rings its mark.
+  @ObservationIgnored private var waiting: Task<Void, Never>?
 
   /// Creates a loop that has read nothing yet, at the person's saved rate.
   ///
@@ -91,6 +93,7 @@ final class ViewerReadingLoop {
       }
     }
     tick(on)
+    if on { awaitPicture() } else { stopAwaiting() }
   }
 
   /// Read again now, or right after the reading under way.
@@ -201,6 +204,7 @@ final class ViewerReadingLoop {
     reading.status = status ?? ViewerStatus()
     reading.hasStatus = status != nil
     reading.picture = picture
+    reading.lastPicture = picture
   }
 
   /// Shows a status. Input not ready ends control now, and so does a status asked after the grant that says no
@@ -242,8 +246,11 @@ final class ViewerReadingLoop {
     {
       viewer.control.releaseControl(ViewerWords.helperChanged)
     }
+    stopAwaiting()
+    reading.waitedLong = false
     reading.frame = frame
     reading.picture = decoded.picture
+    reading.lastPicture = decoded.picture
     reading.pictureSize = decoded.size
     reading.frameAt = uptime()
     reading.unavailable = nil
@@ -260,6 +267,27 @@ final class ViewerReadingLoop {
     reading.pictureSize = nil
     viewer?.control.releaseControl()
     reading.unavailable = error.localizedDescription
+    awaitPicture()
+  }
+
+  /// Rings the waiting stage's mark once the window has waited ``Motion/Duration/appearDelay`` for a picture, on the
+  /// window's clock, so a quick answer never flashes it (v3 R12). It starts as reading starts with no picture and as
+  /// the picture is lost; a picture's arrival, or reading stopping, ends the wait.
+  private func awaitPicture() {
+    guard reading.picture == nil, waiting == nil, !reading.waitedLong else { return }
+    // Unstructured, as the wait runs while readings go on; cancelled the moment a picture arrives.
+    waiting = Task { [weak self, clock] in
+      try? await clock.sleep(for: .seconds(Motion.Duration.appearDelay.seconds))
+      guard let self, !Task.isCancelled else { return }
+      waiting = nil
+      if reading.picture == nil { reading.waitedLong = true }
+    }
+  }
+
+  /// Ends the wait for a picture, if one runs.
+  private func stopAwaiting() {
+    waiting?.cancel()
+    waiting = nil
   }
 
   /// Resuming the picture reads afresh: the last picture is not one to aim at, nor is the helper known to take input,

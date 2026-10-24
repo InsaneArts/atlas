@@ -31,6 +31,7 @@
     ///   - activity: Its recent activity, newest first.
     ///   - checks: Its checks; every one passing by default.
     ///   - dialogs: How its Save and Open dialogs check stands; passed by default.
+    ///   - reason: The helper's reason, as the overview gives it; nil for none.
     /// - Returns: The decoded status.
     /// - Throws: A decoding error, which a fixed reply never gives.
     func reported(
@@ -40,24 +41,26 @@
       checks: [[String: Any]] = [
         ["name": "Helper running", "ok": true], ["name": "Input service ready", "ok": true],
       ],
-      dialogs: [String: Any] = ["state": "passed", "ageSeconds": 600]
+      dialogs: [String: Any] = ["state": "passed", "ageSeconds": 600],
+      reason: String? = "The helper's reason"
     ) throws -> ViewerStatus {
+      var overview: [String: Any] = [
+        "mode": mode,
+        "state": state,
+        "account": "atlas",
+        "accountName": "Atlas",
+        "display": ["width": 1440, "height": 900],
+        "pending": mode == "recovering" ? 1 : 0,
+        "activity": activity,
+      ]
+      overview["reason"] = reason
       let reply: [String: Any] = [
         "ready": true,
         "canObserve": true,
         "checks": checks,
         "session": ["user": ["name": "Atlas"], "inputService": ["ok": true, "ready": true]],
         "capabilities": ["nativeDialogs": dialogs],
-        "overview": [
-          "mode": mode,
-          "state": state,
-          "reason": "The helper's reason",
-          "account": "atlas",
-          "accountName": "Atlas",
-          "display": ["width": 1440, "height": 900],
-          "pending": mode == "recovering" ? 1 : 0,
-          "activity": activity,
-        ],
+        "overview": overview,
       ]
       return try status(reply)
     }

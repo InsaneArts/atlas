@@ -48,6 +48,7 @@
       case .symbolTileSizes: IndicatorSamples(.symbolTile)
       case .symbolNames: SymbolSamples()
       case .tabs: TabsSamples()
+      case .facts: FactSamples()
       }
     }
   }

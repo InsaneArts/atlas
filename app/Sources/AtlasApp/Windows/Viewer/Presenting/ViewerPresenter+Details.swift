@@ -26,7 +26,7 @@ extension ViewerPresenter {
 
   /// Ready to act's rows: one, "Ready to act" with "All checks pass", while every check passes; else only the checks
   /// that do not, each with its mark and what it means (one not checked yet with its quiet ring), and a quiet count
-  /// of those that do. None before any check is known.
+  /// of those that do, with a green check. None before any check is known.
   ///
   /// - Parameter items: Each readiness check.
   /// - Returns: The rows.
@@ -41,7 +41,7 @@ extension ViewerPresenter {
     }
     let passing = items.count - open.count
     if passing > 0 {
-      rows.append(ViewerReadyRow(id: "others", name: ViewerWords.othersPass(passing), isQuiet: true))
+      rows.append(ViewerReadyRow(id: "others", name: ViewerWords.othersPass(passing), mark: .ready, isQuiet: true))
     }
     return rows
   }

@@ -65,5 +65,7 @@
     case symbolNames = "symbol-names"
     /// The tabs in a track by word and by symbol, and as symbols over words (U-10, V1, V15, G1).
     case tabs
+    /// An inspector's facts and checks (V3).
+    case facts
   }
 #endif

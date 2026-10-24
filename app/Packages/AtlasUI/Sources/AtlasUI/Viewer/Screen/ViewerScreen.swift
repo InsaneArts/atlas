@@ -3,7 +3,7 @@ import SwiftUI
 /// The Screen tab (v3 V4): the helper's screen as the only object on the stage, fitted at the picture's own shape
 /// inside the frame every tab shares and centred there, with 12-point corners, a fine light inner edge and a short
 /// shadow on the window's ground; or at actual size in a view that scrolls; with what is happening laid over the
-/// picture and control's rim round it (v3 V5). With no picture, why, on the whole frame.
+/// picture and control's rim round it (v3 V5). With no picture, why, on the waiting stage (v3 V7).
 ///
 /// The picture itself comes from `livePicture`, the app's layer that swaps each frame whole (v3 V17), or an image in
 /// previews and renders; the black that darkens a look is laid over it here. The shell's input surface covers exactly
@@ -25,9 +25,7 @@ struct ViewerScreen<Input: View, LivePicture: View>: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text(verbatim: "The helper's screen"))
     } else if let empty = state.empty {
-      EmptyMessage(state: empty.message) {
-        if let event = empty.event { send(event) }
-      }
+      WaitingStage(empty: empty, send: send)
     }
   }
 
@@ -40,9 +38,7 @@ struct ViewerScreen<Input: View, LivePicture: View>: View {
     if let actual = state.actualSize {
       ActualSizeScreen(size: actual) {
         treated(picture)
-        if let outline = state.outline {
-          ScreenOutline(outline: outline, picture: size)
-        }
+        spotlight(size)
         input
       }
       .overlay { ScreenOverlay(state: state) }
@@ -51,9 +47,7 @@ struct ViewerScreen<Input: View, LivePicture: View>: View {
       ZStack {
         Color.letterbox
         treated(picture)
-        if let outline = state.outline {
-          ScreenOutline(outline: outline, picture: size)
-        }
+        spotlight(size)
         input
         ScreenOverlay(state: state)
       }
@@ -71,6 +65,21 @@ struct ViewerScreen<Input: View, LivePicture: View>: View {
       .overlay { ViewerControlRim(isInControl: state.look == .inControl) }
       .aspectRatio(size, contentMode: .fit)
     }
+  }
+
+  /// A window shown from the Apps tab, as a spotlight over the picture, fading in and out (v3 V14); showing another
+  /// window glides it there.
+  ///
+  /// - Parameter picture: The picture's size in pixels.
+  /// - Returns: The spotlight, or nothing.
+  private func spotlight(_ picture: CGSize) -> some View {
+    ZStack {
+      if let outline = state.outline {
+        ScreenOutline(outline: outline, picture: picture)
+          .transition(.opacity)
+      }
+    }
+    .animation(Motion.fade, value: state.outline == nil)
   }
 
   /// The picture through the live slot, with the colour its look keeps and the black that darkens it.

@@ -4,8 +4,13 @@ import SwiftUI
 enum ViewerLayout {
   /// 52: the top row's height, the title bar's with its empty toolbar.
   static let topRowHeight: CGFloat = 52
-  /// 300: the Details pane's width.
-  static let detailsWidth: CGFloat = 300
+  /// 280: Details' width, an inspector beside the stage (v3 V3, `.vdetails .in`).
+  static let detailsWidth: CGFloat = 280
+  /// 292: the room Details takes from the stage while it shows: its own width and the window's inset to its right
+  /// (v3 `.vwin.details .vdetails`).
+  static let detailsColumn = detailsWidth + Spacing.m
+  /// 14: Details' inset round its content, and between its header and groups (v3 `.vdetails .in`).
+  static let detailsInset = Spacing.mPlus
   /// 20: from the window's leading edge to the window buttons, and to the status in full screen, which hides them.
   static let lightsInset: CGFloat = 20
   /// 52: the three window buttons, 12 across and 8 apart.
@@ -65,8 +70,16 @@ enum ViewerLayout {
   static let shotColumns = 4
   /// 18: between the Screenshots pane's rows of tiles, the board's, a little more than between its columns.
   static let shotRowGap: CGFloat = 18
-  /// 40: how far a window outline's label sits above the outline's top.
-  static let outlineLabelLift: CGFloat = 40
+  /// 0.36: how dark the picture goes outside a window shown from the Apps tab (v3 V14, `.outline`).
+  static let spotlightDim = 0.36
+  /// 14: how much the last picture blurs behind Connecting's words (v3 V7, X4, `.vempty .lastframe`).
+  static let lastFrameBlur: CGFloat = 14
+  /// 0.6: how much colour the last picture keeps behind them.
+  static let lastFrameSaturation = 0.6
+  /// 0.55: the black laid over it, so it keeps 0.45 of its brightness, as CSS `brightness(.45)` multiplies.
+  static let lastFrameShade = 0.55
+  /// 1.04: how much larger the blurred picture draws than the stage, so its blurred edges fall outside it.
+  static let lastFrameScale: CGFloat = 1.04
   /// 1040 by 650: the largest a screenshot is drawn in the large view (mac.py `board_shot_large`).
   static let largeShotLargest = CGSize(width: 1040, height: 650)
 
@@ -80,6 +93,40 @@ enum ViewerLayout {
   static func rimScale(isInControl: Bool, reduceMotion: Bool) -> CGFloat {
     guard !isInControl, !reduceMotion else { return 1 }
     return rimArrival
+  }
+
+  /// The room the stage leaves at its trailing edge: Details' column while Details shows, else none. It follows
+  /// whether Details shows, never how far it has slid, so the picture takes its new width at once and never squeezes
+  /// while Details moves (v3 V3).
+  ///
+  /// - Parameter showsDetails: Whether Details shows.
+  /// - Returns: The trailing room.
+  static func stageTrailing(showsDetails: Bool) -> CGFloat {
+    showsDetails ? detailsColumn : .zero
+  }
+
+  /// How far Details sits from its place: there while it shows, else its whole column further out, past the
+  /// window's edge. Under Reduce Motion it stays in place and fades instead.
+  ///
+  /// - Parameters:
+  ///   - isShown: Whether Details shows.
+  ///   - reduceMotion: Whether the Reduce Motion setting is on.
+  /// - Returns: Its horizontal offset.
+  static func detailsOffset(isShown: Bool, reduceMotion: Bool) -> CGFloat {
+    guard !isShown, !reduceMotion else { return .zero }
+    return detailsColumn
+  }
+
+  /// How opaque Details draws: whole, except hidden under Reduce Motion, where it fades out in place instead of
+  /// sliding away.
+  ///
+  /// - Parameters:
+  ///   - isShown: Whether Details shows.
+  ///   - reduceMotion: Whether the Reduce Motion setting is on.
+  /// - Returns: Its opacity.
+  static func detailsOpacity(isShown: Bool, reduceMotion: Bool) -> Double {
+    guard !isShown, reduceMotion else { return 1 }
+    return 0
   }
 
   /// The status's leading inset: clear of the window buttons, or the buttons' own inset in full screen.

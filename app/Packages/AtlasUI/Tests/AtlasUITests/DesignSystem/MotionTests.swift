@@ -47,9 +47,9 @@ struct MotionTests {
     #expect(Motion.LayerSpring.pop == Motion.LayerSpring(duration: 0.35, bounce: 0.3))
   }
 
-  @Test("the slide and indicator are still today's springs, exactly")
+  @Test("the slide is v3's slide spring, and the indicator is still today's spring, exactly")
   func slideAndIndicatorKeepTheirSprings() {
-    #expect(Motion.slide == Animation.spring(response: 0.35, dampingFraction: 1))
+    #expect(Motion.slide == Animation.spring(Motion.Springs.slide))
     #expect(Motion.indicator == Animation.spring(response: 0.45, dampingFraction: 0.8))
   }
 

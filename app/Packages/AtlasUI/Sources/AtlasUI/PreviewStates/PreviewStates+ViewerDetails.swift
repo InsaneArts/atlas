@@ -29,7 +29,7 @@
           id: "Mouse and keyboard",
           name: "Mouse and keyboard",
           mark: .notReady,
-          note: "Mouse and keyboard aren't ready."
+          note: "Mouse and keyboard aren't ready. Recover starts them again."
         ),
         ViewerReadyRow(
           id: "Save and Open dialogs",
@@ -37,7 +37,7 @@
           mark: .unknown,
           note: "Not checked yet"
         ),
-        ViewerReadyRow(id: "others", name: "1 other passes", isQuiet: true),
+        ViewerReadyRow(id: "others", name: "1 other passes", mark: .ready, isQuiet: true),
       ]
       return state
     }()

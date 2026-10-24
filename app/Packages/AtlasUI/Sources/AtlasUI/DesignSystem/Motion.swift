@@ -47,7 +47,7 @@ public enum Motion {
     static let entry = Duration(seconds: 0.4)
     /// 0.4: how long a spinner or a placeholder waits before it shows, so a quick answer never flashes one (v3
     /// `Duration.appearDelay`, R12).
-    static let appearDelay = Duration(seconds: 0.4)
+    public static let appearDelay = Duration(seconds: 0.4)
     /// 0.45: a window gliding to a new place on the screen and back.
     public static let glide = Duration(seconds: 0.45)
     /// 0.5: a window gliding on ``Motion/glideSoftCurve``, which starts at once and lands softly (v3 `Duration.glide`,
@@ -63,6 +63,8 @@ public enum Motion {
     public static let breathe = Duration(seconds: 1.6)
     /// 2.4: how long a toast stays (v3 `Duration.toast`).
     public static let toast = Duration(seconds: 2.4)
+    /// 2.4: one turn of the ring tracing round Atlas's mark while the viewer connects (v3 V7: one 2.4 s turn, linear).
+    static let trace = Duration(seconds: 2.4)
   }
 
   /// The springs behind the animations, kept as values so their duration and bounce can be read back.
@@ -79,7 +81,7 @@ public enum Motion {
     static let pop = Spring(duration: 0.35, bounce: 0.3)
     /// A tab's thumb and its pane: 0.32 seconds, bounce 0.12.
     static let tab = Spring(duration: 0.32, bounce: 0.12)
-    /// A side column sliding in: 0.35 seconds, no bounce, the curve of today's ``Motion/slide``.
+    /// A side column sliding in: 0.35 seconds, no bounce (``Motion/slide``).
     static let slide = Spring(duration: 0.35, bounce: 0)
     /// A window or a pane changing height: 0.35 seconds, no bounce.
     static let resize = Spring(duration: 0.35, bounce: 0)
@@ -169,15 +171,23 @@ public enum Motion {
       .repeatForever(autoreverses: true)
   }
 
+  /// A ring tracing round a mark for as long as it shows, one linear turn over ``Duration/trace`` (v3 V7). A loop, so
+  /// only where ``loops(reduceMotion:)`` allows.
+  static var trace: Animation {
+    .linear(duration: Duration.trace.seconds)
+      .repeatForever(autoreverses: false)
+  }
+
   /// The spinner turning for as long as it shows.
   static var spin: Animation {
     .linear(duration: Duration.spin.seconds)
       .repeatForever(autoreverses: false)
   }
 
-  /// A side column sliding in: a spring with no bounce. v3's ``Springs/slide`` draws the same curve and takes over
-  /// when its surface is redesigned.
-  static var slide: Animation { .spring(response: slideResponse, dampingFraction: 1) }
+  /// A side column sliding in, such as the viewer's Details: ``Springs/slide``, a spring with no bounce that turns
+  /// back from where it is when asked to reverse mid-way (v3 V3, R17). The same curve as the response-0.35, damping-1
+  /// spring it replaced.
+  static var slide: Animation { .spring(Springs.slide) }
 
   /// A position indicator moving, such as the page dots: a spring with a little bounce. v3's ``Springs/indicator``
   /// draws the same curve and takes over when its surface is redesigned.
@@ -227,8 +237,6 @@ public enum Motion {
     !reduceMotion
   }
 
-  /// The slide's spring response, in seconds.
-  private static let slideResponse = 0.35
   /// The indicator's spring response, in seconds.
   private static let indicatorResponse = 0.45
   /// The indicator's spring damping: 0.8 leaves a small settle.

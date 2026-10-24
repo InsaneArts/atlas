@@ -41,64 +41,24 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
     self.livePicture = livePicture
   }
 
-  /// The top row in the title bar, the screen or a tab's pane under it, Details beside them, the mini screen in the
-  /// corner, a screenshot shown large over all of it, and the alert over that.
+  /// The top row in the title bar, the stage under it with Details beside it, a screenshot shown large over all of
+  /// it, and the alert over that.
   public var body: some View {
     GeometryReader { proxy in
       VStack(spacing: .zero) {
         // The top row fills the title bar, whatever its height.
         ViewerTopRow(state: state.top, send: send)
           .frame(height: max(proxy.safeAreaInsets.top, ViewerLayout.topRowHeight))
-        HStack(spacing: .zero) {
-          // Every tab stands in the same frame, the content area less the window's inset: the panes fill it, the picture
-          // fits in it.
-          pane
-            .padding(Spacing.m)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // The small screen keeps to the panes' corner, clear of Details.
-            .overlay(alignment: .bottomTrailing) {
-              if let mini = state.mini {
-                MiniScreen(state: mini) { send(.selectTab(.screen)) }
-                  .padding(ViewerLayout.miniInset)
-              }
-            }
-            .overlay(alignment: .top) { toast }
-          // Details is a pane of the same card beside the main one, below the top row: its top level with the main
-          // pane's, the window's inset to its right and below it, the main pane's own inset as the gap between them.
-          // The slide moves Details alone: the pane takes its new width at once, so nothing on the screen, a caption,
-          // the outline or the picture's frame, rides along.
-          ZStack {
-            if let details = state.details {
-              ViewerDetails(state: details, newest: newest, send: send)
-                .frame(width: ViewerLayout.detailsWidth)
-                .padding([.top, .bottom, .trailing], Spacing.m)
-                .transition(
-                  Motion.transition(
-                    AnyTransition.move(edge: .trailing)
-                      .combined(with: .opacity),
-                    reduceMotion: reduceMotion
-                  )
-                )
-            }
+        // The stage gives Details its room at once, never on an animation, so the picture takes its new width in one
+        // step while Details slides in or out over the edge (v3 V3).
+        stage
+          .padding(.trailing, ViewerLayout.stageTrailing(showsDetails: showsDetails))
+          .transaction(value: showsDetails) { $0.animation = nil }
+          .overlay(alignment: .trailing) {
+            ViewerInspector(details: state.details, newest: newest, send: send)
           }
-          .animation(
-            Motion.animation(Motion.slide, reduceMotion: reduceMotion, reduced: Motion.fade),
-            value: state.details == nil
-          )
-        }
       }
-      .overlay {
-        ZStack {
-          if let large = largeShot {
-            LargeShotLayer(shot: large, send: send)
-              .transition(.opacity)
-          }
-        }
-        .animation(
-          Motion.animation(Motion.fade, reduceMotion: reduceMotion, reduced: Motion.reduced),
-          value: largeShot == nil
-        )
-      }
+      .overlay { largeShotLayer }
       .overlay {
         AlertLayer(state: state.alert) { send($0 == .confirm ? .alertConfirm : .alertCancel) }
       }
@@ -110,6 +70,42 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
     .onChange(of: state.alert?.shownTitle) { _, title in if let title { announce(title) } }
     .onChange(of: state.alert?.refusal) { _, refusal in if let refusal { announce(refusal) } }
     .onChange(of: state.toast) { _, toast in if let toast { announce(toast) } }
+  }
+
+  /// The stage: the Screen tab or the selected tab's pane, in the frame every tab shares, the window's inset at its
+  /// sides and below and none above, so the picture starts right under the bar (v3 `.vpane`); the small screen in its
+  /// corner and the toast at its top.
+  private var stage: some View {
+    pane
+      .padding([.horizontal, .bottom], Spacing.m)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      // The small screen keeps to the stage's corner, clear of Details.
+      .overlay(alignment: .bottomTrailing) {
+        if let mini = state.mini {
+          MiniScreen(state: mini) { send(.selectTab(.screen)) }
+            .padding(ViewerLayout.miniInset)
+        }
+      }
+      .overlay(alignment: .top) { toast }
+  }
+
+  /// Whether Details shows.
+  private var showsDetails: Bool {
+    state.details != nil
+  }
+
+  /// A screenshot shown large over the whole window, fading in and out.
+  private var largeShotLayer: some View {
+    ZStack {
+      if let large = largeShot {
+        LargeShotLayer(shot: large, send: send)
+          .transition(.opacity)
+      }
+    }
+    .animation(
+      Motion.animation(Motion.fade, reduceMotion: reduceMotion, reduced: Motion.reduced),
+      value: largeShot == nil
+    )
   }
 
   /// The Screen tab, or the selected tab's pane: Activity, Apps and Screenshots fill the frame inside the window's

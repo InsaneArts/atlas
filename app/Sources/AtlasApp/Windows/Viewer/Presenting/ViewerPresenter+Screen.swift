@@ -34,8 +34,8 @@ extension ViewerPresenter {
     return snapshot.mode.kind == .needsYou ? .dimmed : .live
   }
 
-  /// Why there is no picture: logged out, still connecting, paused before the first, or not ready; the first and the
-  /// last with the button that helps (MacEmpty).
+  /// Why there is no picture (v3 V7): logged out, paused before the first, still connecting, or not ready; the first
+  /// and the last with the white button that helps.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The message and what its button sends.
@@ -45,7 +45,7 @@ extension ViewerPresenter {
         message: EmptyMessageState(
           headline: ViewerWords.loggedOutHeadline,
           message: ViewerWords.loggedOutMessage,
-          action: EmptyMessageAction(title: HelperWords.switchItem, isPrimary: false)
+          action: EmptyMessageAction(title: HelperWords.switchItem, isPrimary: true)
         ),
         event: .askSwitch
       )
@@ -56,9 +56,7 @@ extension ViewerPresenter {
       )
     }
     if snapshot.mode.kind == .connecting {
-      return ViewerEmpty(
-        message: EmptyMessageState(headline: ViewerWords.connectingHeadline, message: ViewerWords.connectingMessage)
-      )
+      return connecting(snapshot.reading)
     }
     return ViewerEmpty(
       message: EmptyMessageState(
@@ -67,6 +65,23 @@ extension ViewerPresenter {
         action: EmptyMessageAction(title: ViewerWords.recoverButton, isPrimary: true)
       ),
       event: .askRecover
+    )
+  }
+
+  /// Connecting: the first time, why it takes a moment; again, after a picture was lost, the last picture kept behind
+  /// the words with Reconnecting… (v3 X4, R12). The ring round the mark shows once the window has waited a moment.
+  ///
+  /// - Parameter reading: What the last reading showed.
+  /// - Returns: The message, the last picture and the ring.
+  static func connecting(_ reading: ViewerReading) -> ViewerEmpty {
+    let again = reading.lastPicture != nil
+    return ViewerEmpty(
+      message: EmptyMessageState(
+        headline: again ? ViewerWords.reconnectingHeadline : ViewerWords.connectingHeadline,
+        message: again ? "" : ViewerWords.connectingMessage
+      ),
+      lastPicture: reading.lastPicture,
+      showsRing: reading.waitedLong
     )
   }
 

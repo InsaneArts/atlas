@@ -49,9 +49,16 @@
           $0.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
           $0.locale = Locale(identifier: "de_DE")
         },
-        "Not ready": shown(try reported("unavailable", state: "notReady"), picture: false, unavailable: gone),
+        "Not ready": shown(
+          try reported("unavailable", state: "notReady", reason: nil),
+          picture: false,
+          unavailable: gone
+        ),
         "Logged out": shown(loggedOut, picture: false, unavailable: gone),
-        "Connecting": ViewerPresenter.state(ViewerSnapshot()),
+        "Connecting": shown(idle, picture: false, unavailable: gone) {
+          $0.reading.lastPicture = SampleDesktop.picture
+          $0.reading.waitedLong = true
+        },
         "Switch": shown(loggedOut, picture: false, unavailable: gone) { $0.session.alert = .switchToHelper },
         "Log out": shown(idle) { $0.session.alert = .logOut },
         "Log out anyway": shown(idle) { $0.session.alert = .logOutAnyway },

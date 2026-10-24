@@ -1,9 +1,9 @@
 #if DEBUG
   extension PreviewStates {
-    /// The helper doesn't answer, so there is no picture: Recover is the way back (MacEmpty).
+    /// The helper doesn't answer, so there is no picture: Recover is the way back (v3 V7).
     @MainActor public static let viewerNotReady = ViewerState(
       top: viewerTop(
-        StatusSummary(label: "Not ready", tone: .quiet, mark: .small),
+        StatusSummary(label: "Not ready", tone: .quiet, mark: .small, line: "Atlas isn't answering in the helper"),
         viewerActions(control: nil, showsPause: false)
       ),
       screen: ViewerScreenState(
@@ -18,10 +18,15 @@
       )
     )
 
-    /// The helper is logged out: switching to it to log in is the way back (MacEmpty).
+    /// The helper is logged out: switching to it to log in is the way back (v3 V7).
     @MainActor public static let viewerLoggedOut = ViewerState(
       top: viewerTop(
-        StatusSummary(label: "Logged out", tone: .quiet, mark: .dot),
+        StatusSummary(
+          label: "Logged out",
+          tone: .quiet,
+          mark: .dot,
+          line: "Agents can't use the helper until you log in"
+        ),
         viewerActions(control: nil, showsPause: false)
       ),
       screen: ViewerScreenState(
@@ -29,14 +34,15 @@
           message: EmptyMessageState(
             headline: "The helper is logged out",
             message: "Agents can't use it until you log in to it again.",
-            action: EmptyMessageAction(title: "Switch to the Helper…", isPrimary: false)
+            action: EmptyMessageAction(title: "Switch to the Helper…", isPrimary: true)
           ),
           event: .askSwitch
         )
       )
     )
 
-    /// The window has just opened: no reading has arrived yet (MacEmpty).
+    /// The picture was lost and the window connects again: the last picture stays behind the words, blurred and
+    /// dimmed, and the ring traces round the mark once a moment has passed (v3 V7, X4).
     @MainActor public static let viewerConnecting = ViewerState(
       top: viewerTop(
         StatusSummary(label: "Connecting", tone: .quiet, mark: .dot),
@@ -44,10 +50,9 @@
       ),
       screen: ViewerScreenState(
         empty: ViewerEmpty(
-          message: EmptyMessageState(
-            headline: "Connecting to the helper…",
-            message: "This takes a moment after the Mac starts."
-          )
+          message: EmptyMessageState(headline: "Reconnecting…", message: ""),
+          lastPicture: SampleDesktop.picture,
+          showsRing: true
         )
       )
     )

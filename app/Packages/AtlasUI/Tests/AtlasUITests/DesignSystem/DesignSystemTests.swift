@@ -123,7 +123,7 @@ struct DesignSystemTests {
           Motion.Duration.draw, Motion.Duration.state, Motion.Duration.shake, Motion.Duration.entry,
           Motion.Duration.appearDelay,
           Motion.Duration.glide, Motion.Duration.glideSoft, Motion.Duration.doneHold, Motion.Duration.pulse,
-          Motion.Duration.spin, Motion.Duration.breathe, Motion.Duration.toast,
+          Motion.Duration.spin, Motion.Duration.breathe, Motion.Duration.toast, Motion.Duration.trace,
         ]
         .map(\.seconds),
         // Steps of different roles may share a length, such as fade, hoverOut and reduced.

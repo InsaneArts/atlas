@@ -6,8 +6,9 @@ struct NewestPictureRow: View {
   /// Reads how old the newest picture is, such as "just now".
   let newest: @MainActor () -> String
 
+  /// The age, read as the row draws.
   var body: some View {
-    DetailRow(name: "Newest", value: newest())
+    FactRow("Newest", value: newest())
   }
 }
 
