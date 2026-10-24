@@ -151,6 +151,21 @@ export function lineOf(text) {
   };
 }
 
+// Each local package's `folder` (such as `Sources` or `Tests`), as paths
+// relative to `base` (the repository unless given), in name order:
+// `app/Packages/<name>/<folder>` for every package under app/Packages that
+// has one.
+export function packageFolders(folder, base = repository) {
+  const packages = path.join(base, 'app/Packages');
+  if (!fs.existsSync(packages)) return [];
+  return fs
+    .readdirSync(packages, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => `app/Packages/${entry.name}/${folder}`)
+    .filter((relative) => fs.existsSync(path.join(base, relative)))
+    .sort();
+}
+
 // Every .swift file under `folder`, sorted, skipping SwiftPM's build folders.
 export function swiftFiles(folder) {
   const found = [];

@@ -10,6 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { packages, steps, summaryLine } from '../scripts/check-swift.mjs';
 import { allowList } from '../scripts/swift-source.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -165,4 +166,87 @@ test('an allow list entry without its phase or its reason is refused', (t) => {
   assert.throws(() => allowList(list), /has no reason/);
   fs.writeFileSync(list, JSON.stringify({ reportOnly: [{ checker: 'docs', reason: 'why' }] }));
   assert.throws(() => allowList(list), /has no until/);
+});
+
+test('the Swift check covers app and then every local package', () => {
+  const folders = packages();
+  assert.equal(folders[0], 'app');
+  assert.ok(folders.includes('app/Packages/AtlasUI'), folders.join('\n'));
+});
+
+// A repository holding app/ and two local packages: Kit, with a test target,
+// and KitTesting, a Testing-only package with Sources alone.
+function swiftRepository(t) {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-check-swift-'));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  const write = (relative, text) => {
+    fs.mkdirSync(path.dirname(path.join(base, relative)), { recursive: true });
+    fs.writeFileSync(path.join(base, relative), text);
+  };
+  for (const folder of ['app', 'app/Packages/Kit']) {
+    write(`${folder}/Package.swift`, '.target(name: "A"), .testTarget(name: "ATests")\n');
+    write(`${folder}/Sources/A/A.swift`, '');
+    write(`${folder}/Tests/ATests/ATests.swift`, '');
+  }
+  write('app/Packages/KitTesting/Package.swift', '.target(name: "KitTesting")\n');
+  write('app/Packages/KitTesting/Sources/KitTesting/Fake.swift', '');
+  return base;
+}
+
+test('the Swift check skips the tests of a package with no test target and lints only the folders it has', (t) => {
+  const base = swiftRepository(t);
+  assert.deepEqual(packages(base), ['app', 'app/Packages/Kit', 'app/Packages/KitTesting']);
+  const planned = steps(['app/Packages/KitTesting'], base);
+  assert.deepEqual(
+    planned.map((step) => step.skipped ?? step.args.join(' ')),
+    ['no test target', 'format lint -rs Sources'],
+  );
+  assert.equal(
+    summaryLine(planned[0]),
+    'skip app/Packages/KitTesting: swift test (no test target)',
+  );
+});
+
+test('the Swift check exits 1 when one step fails, after running every other step', (t) => {
+  const base = swiftRepository(t);
+  const log = path.join(base, 'swift.log');
+  const swift = path.join(base, 'swift');
+  fs.writeFileSync(
+    swift,
+    [
+      '#!/bin/sh',
+      // Logs the folder and the arguments; fails only app's tests.
+      `echo "\${PWD##*/} $*" >> "${log}"`,
+      '[ "${PWD##*/}" = app ] && [ "$1" = test ] && exit 1',
+      'exit 0',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  );
+  const result = spawnSync(process.execPath, [path.join(root, 'scripts/check-swift.mjs')], {
+    encoding: 'utf8',
+    env: { ...process.env, CHECK_SWIFT_BASE: base, CHECK_SWIFT_SWIFT: swift },
+  });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout, /^FAIL app: swift test$/m);
+  assert.match(result.stdout, /^ok   app\/Packages\/Kit: swift test$/m);
+  assert.match(result.stdout, /^skip app\/Packages\/KitTesting: swift test \(no test target\)$/m);
+  assert.deepEqual(fs.readFileSync(log, 'utf8').trim().split('\n'), [
+    'app test',
+    'app format lint -rs Sources Tests',
+    'Kit test',
+    'Kit format lint -rs Sources Tests',
+    'KitTesting format lint -rs Sources',
+  ]);
+});
+
+test('the Swift check summary adds up the tests of every test product Swift Testing ran', () => {
+  const output = [
+    '✔ Test run with 142 tests in 43 suites passed after 0.2 seconds.',
+    '✔ Test run with 261 tests in 51 suites passed after 11.4 seconds.',
+  ].join('\n');
+  assert.equal(
+    summaryLine({ folder: 'app', name: 'swift test', ok: true, output }),
+    'ok   app: swift test (403 tests)',
+  );
 });

@@ -142,7 +142,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const folders = process.argv.slice(2).filter((argument) => !argument.startsWith('--'));
   run(
     'tokens',
-    folders.length ? folders : ['app/Sources/AtlasUI', 'app/Sources/AtlasApp'],
+    folders.length ? folders : ['app/Packages/AtlasUI/Sources', 'app/Sources/AtlasApp'],
     violations,
   );
 }

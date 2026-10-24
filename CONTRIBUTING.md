@@ -21,7 +21,7 @@ in an issue.
 You need a Mac with:
 
 - macOS 14 or later
-- Xcode 16 or later (Swift 6)
+- Xcode 26 or later (Swift 6.2)
 - Rust (`rustup`; `rust-toolchain.toml` picks the version)
 - Node 24
 
@@ -46,7 +46,7 @@ To try your build against a helper, set Atlas up once with the released app
 | `src/lib/native`      | capture, accessibility, input and the held-input journal      |
 | `src/lib/environment` | copies into the helper and their rollback                     |
 | `src/lib/setup`       | the helper's launchd jobs and their repair                    |
-| `app/`                | Atlas.app in Swift 6: AtlasKit, AtlasUI and AtlasApp          |
+| `app/`                | Atlas.app in Swift 6: AtlasKit, AtlasApp, `Packages/AtlasUI`  |
 | `agents/`             | the Claude Code and Codex plugin                              |
 | `scripts/`            | live checks against a real helper                             |
 | `tests/`              | integration tests and the native test fixture                 |
@@ -62,7 +62,7 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 npm run format:check
 npm test
-cd app && swift test && swift format lint -rs Sources Tests
+node scripts/check-swift.mjs   # swift test and swift format lint, app/ and app/Packages/*
 ```
 
 Passing tests are not enough for anything that changes input, windows,

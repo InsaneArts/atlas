@@ -1,17 +1,18 @@
-// Reports a declaration other code can reach that has no `///` doc comment:
+// Reports a declaration other code can reach that has no `///` doc comment,
+// in app/Sources and every local package's Sources:
 // node scripts/check-swift-docs.mjs [FOLDER...].
 //
-// Atlas's declarations are `package` or internal, so swift-format's
-// `AllPublicDeclarationsHaveDocumentation` sees none of them (standard
-// DOC1). This checker reads every type, function, initializer, subscript,
-// property, type alias and enum case declared at file level or in a type's
-// body, and reports one that is neither `private` nor `fileprivate`, nor a
-// member of a private type, and has no `///` line above it and its
-// attributes. Declarations inside a function, closure or accessor are local
-// and never read; an `extension` is not a declaration. A heuristic over
-// source text, with comments and strings blanked first.
+// swift-format's `AllPublicDeclarationsHaveDocumentation` sees only `public`
+// declarations, which only the local packages have; the rest are `package` or
+// internal (standard DOC1). This checker reads every type, function,
+// initializer, subscript, property, type alias and enum case declared at file
+// level or in a type's body, and reports one that is neither `private` nor
+// `fileprivate`, nor a member of a private type, and has no `///` line above
+// it and its attributes. Declarations inside a function, closure or accessor
+// are local and never read; an `extension` is not a declaration. A heuristic
+// over source text, with comments and strings blanked first.
 import { fileURLToPath } from 'node:url';
-import { codeOnly, run } from './swift-source.mjs';
+import { codeOnly, packageFolders, run } from './swift-source.mjs';
 
 const MODIFIER = String.raw`(?:@\w+(?:\([^)]*\))?\s+|(?:public|package|internal|open|private|fileprivate)(?:\(set\))?\s+|(?:static|class|final|override|mutating|nonmutating|nonisolated(?:\(unsafe\))?|lazy|weak|unowned|indirect|convenience|required|dynamic|isolated|consuming|borrowing)\s+)*`;
 const DECLARATION = new RegExp(
@@ -65,5 +66,5 @@ export function violations(text) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const folders = process.argv.slice(2).filter((argument) => !argument.startsWith('--'));
-  run('docs', folders.length ? folders : ['app/Sources'], violations);
+  run('docs', folders.length ? folders : ['app/Sources', ...packageFolders('Sources')], violations);
 }

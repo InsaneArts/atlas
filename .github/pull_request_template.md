@@ -8,5 +8,5 @@
 
 - [ ] `cargo fmt --all --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test`
 - [ ] `npm run format:check` and `npm test`
-- [ ] `swift test` and `swift format lint -rs Sources Tests` in `app/` (if Swift changed)
+- [ ] `node scripts/check-swift.mjs` (if Swift changed)
 - [ ] Tried on a real helper (if input, windows, screenshots or setup changed)

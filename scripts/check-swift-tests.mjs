@@ -1,5 +1,6 @@
 // Fails on a test that crashes instead of failing, or that exists only to
-// exist, anywhere in app/Tests: node scripts/check-swift-tests.mjs [FOLDER...].
+// exist, in app/Tests and every local package's Tests:
+// node scripts/check-swift-tests.mjs [FOLDER...].
 //
 // Rules, each named for the allow list:
 // - `force`: a force unwrap, a force cast, a force try or an implicitly
@@ -19,7 +20,7 @@
 // first: it catches the spellings its fixtures show, and a deliberate evasion
 // is a review finding, not a checker bug.
 import { fileURLToPath } from 'node:url';
-import { codeOnly, lineOf, run } from './swift-source.mjs';
+import { codeOnly, lineOf, packageFolders, run } from './swift-source.mjs';
 
 const CRASHES = 'which takes every test in its process down when';
 const EXCEPTION =
@@ -251,5 +252,5 @@ export function violations(text) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const folders = process.argv.slice(2).filter((argument) => !argument.startsWith('--'));
-  run('tests', folders.length ? folders : ['app/Tests'], violations);
+  run('tests', folders.length ? folders : ['app/Tests', ...packageFolders('Tests')], violations);
 }

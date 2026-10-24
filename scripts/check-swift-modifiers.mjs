@@ -32,7 +32,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { codeOnly, lineOf, repository, run, swiftFiles } from './swift-source.mjs';
+import { codeOnly, lineOf, packageFolders, repository, run, swiftFiles } from './swift-source.mjs';
 
 // A call: `.name(` or `.name {`, the name lowercase-initial.
 const CALL = /\.([a-z_]\w*)(?=\(|[ \t]*\{)/g;
@@ -270,7 +270,9 @@ export function fixed(text) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const folders = process.argv.slice(2).filter((argument) => !argument.startsWith('--'));
-  const roots = folders.length ? folders : ['app/Sources', 'app/Tests'];
+  const roots = folders.length
+    ? folders
+    : ['app/Sources', 'app/Tests', ...packageFolders('Sources'), ...packageFolders('Tests')];
   if (process.argv.includes('--fix')) {
     for (const folder of roots) {
       for (const file of swiftFiles(path.resolve(repository, folder))) {

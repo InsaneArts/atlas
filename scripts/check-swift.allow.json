@@ -1,7 +1,7 @@
 {
   "waivers": [
     {
-      "path": "app/Sources/AtlasUI/Components/Controls/IconTabLabel.swift",
+      "path": "app/Packages/AtlasUI/Sources/AtlasUI/Components/Controls/IconTabLabel.swift",
       "checkers": ["tokens"],
       "rule": "inline color",
       "until": "Phase 14",

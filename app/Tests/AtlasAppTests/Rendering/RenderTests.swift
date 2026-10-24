@@ -1,10 +1,11 @@
 #if DEBUG
   import AppKit
   import AtlasKit
+  import AtlasUI
+  import SwiftUI
   import Testing
 
   @testable import AtlasApp
-  @testable import AtlasUI
 
   // One render at a time: run together, the renders' seconds of main-actor drawing queue ahead of every other suite's
   // work and outlast its waits; one by one, that work runs between them.
@@ -115,7 +116,11 @@
       let drawn = directory.appendingPathComponent("\(mode).png")
       #expect(PanelRender.draw(snapshot, to: drawn.path, appearance: .darkAqua))
       let image = try #require(NSBitmapImageRep(data: Data(contentsOf: drawn)), "\(mode) was not drawn")
-      #expect(image.pixelsWide == Int(PanelLayout.width + 2 * PanelRender.margin) * PNG.scale)
+      // The panel's own width, as its view lays out alone, with the render's margin on both sides.
+      let panel = NSHostingView(rootView: PanelView(state: PanelPresenter.state(snapshot)) { _ in })
+        .fittingSize
+        .width
+      #expect(image.pixelsWide == Int(panel + 2 * PanelRender.margin) * PNG.scale)
     }
 
     /// The alert a render's settings draw, as the alert window's controller would hold it.
