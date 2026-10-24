@@ -30,7 +30,7 @@ struct HelperCommandsGrantTests {
     try await settle("the switch never reached its wait") { viewer.barrier.waiters == 1 }
     #expect(commands.ran.isEmpty, "nothing runs while the acquisition is unanswered")
     viewer.send(.selectTab(.screen))
-    #expect(!viewer.state.top.actions.control.isEnabled)
+    #expect(viewer.state.top.actions.control?.isEnabled != true)
     service.resume("acquire")
     try await settle("the switch never ran") { commands.ran.count == 1 && !viewer.actions.isBusy }
     #expect(await switching.value?.ok == true)
@@ -62,11 +62,14 @@ struct HelperCommandsGrantTests {
     await taking.value
     #expect(viewer.control.lease == nil, "a grant that arrives once a command started is not kept")
     #expect(seen.serviceLogs.first?.contains("released lease") == true)
-    #expect(!viewer.state.top.actions.control.isEnabled, "the command still runs after its release was answered")
+    #expect(
+      viewer.state.top.actions.control?.isEnabled != true,
+      "the command still runs after its release was answered"
+    )
     await viewer.control.takeControl()
     #expect(service.log.filter { $0.hasPrefix("acquire") }.count == 1, "nothing is asked while it runs")
     gate.open()
-    try await settle("Take Control never came back") { viewer.state.top.actions.control.isEnabled }
+    try await settle("Take Control never came back") { viewer.state.top.actions.control?.isEnabled == true }
     #expect(await switching.value?.ok == true)
     viewer.close()
   }
@@ -98,7 +101,7 @@ struct HelperCommandsGrantTests {
     try await clock.untilSleeping(for: lifetime, "the hold never waited out a lease's lifetime")
     try await settle("the switch never reached its wait") { actions.barrier.waiters == 1 }
     #expect(commands.ran.isEmpty, "nothing runs while a lease it may have granted is alive")
-    #expect(!viewer.state.top.actions.control.isEnabled)
+    #expect(viewer.state.top.actions.control?.isEnabled != true)
     #expect(!service.revoked, "no viewer's control is revoked for it")
     clock.advance(by: lifetime - .milliseconds(1))
     #expect(clock.waiting == [.milliseconds(1)], "the hold lasts the whole lifetime")
@@ -159,9 +162,9 @@ struct HelperCommandsGrantTests {
     try await settle("the key was never sent") { service.held["input"] != nil }
     viewer.control.releaseControl()
     try await settle("the release was never answered") { service.log.contains("released lease") }
-    #expect(!viewer.state.top.actions.control.isEnabled, "the batch in flight holds the helper")
+    #expect(viewer.state.top.actions.control?.isEnabled != true, "the batch in flight holds the helper")
     service.resume("input")
-    try await settle("Take Control never came back") { viewer.state.top.actions.control.isEnabled }
+    try await settle("Take Control never came back") { viewer.state.top.actions.control?.isEnabled == true }
     viewer.close()
   }
 }

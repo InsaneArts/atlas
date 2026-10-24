@@ -4,7 +4,7 @@
     @MainActor public static let viewerNotReady = ViewerState(
       top: viewerTop(
         StatusSummary(label: "Not ready", tone: .quiet, mark: .small),
-        viewerActions(control: viewerTakeControl(isEnabled: false))
+        viewerActions(control: nil, showsPause: false)
       ),
       screen: ViewerScreenState(
         empty: ViewerEmpty(
@@ -22,7 +22,7 @@
     @MainActor public static let viewerLoggedOut = ViewerState(
       top: viewerTop(
         StatusSummary(label: "Logged out", tone: .quiet, mark: .dot),
-        viewerActions(control: viewerTakeControl(isEnabled: false))
+        viewerActions(control: nil, showsPause: false)
       ),
       screen: ViewerScreenState(
         empty: ViewerEmpty(
@@ -40,7 +40,7 @@
     @MainActor public static let viewerConnecting = ViewerState(
       top: viewerTop(
         StatusSummary(label: "Connecting", tone: .quiet, mark: .dot),
-        viewerActions(control: viewerTakeControl(isEnabled: false))
+        viewerActions(control: nil, showsPause: false)
       ),
       screen: ViewerScreenState(
         empty: ViewerEmpty(

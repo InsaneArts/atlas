@@ -23,7 +23,8 @@ enum ViewerPresenter {
       // its own.
       mini: tab == .activity || tab == .apps
         ? snapshot.reading.picture.map { MiniScreenState(picture: $0, isPaused: snapshot.session.paused) } : nil,
-      pane: pane(snapshot)
+      pane: pane(snapshot),
+      toast: snapshot.session.toast
     )
   }
 

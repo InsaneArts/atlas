@@ -47,6 +47,7 @@
       case .actionSlotActions: ActionSlotSamples(isInControl: true)
       case .symbolTileSizes: IndicatorSamples(.symbolTile)
       case .symbolNames: SymbolSamples()
+      case .tabs: TabsSamples()
       }
     }
   }

@@ -53,32 +53,35 @@ struct ViewerPresenterTests {
   )
   func takeControlWaitsForEverything() throws {
     let ready = watching(try status(["ready": true, "overview": ["mode": "observing"]]))
-    #expect(ViewerPresenter.state(ready).top.actions.control.isEnabled)
+    #expect(ViewerPresenter.state(ready).top.actions.control?.isEnabled == true)
     let agent = watching(try status(["overview": ["mode": "agent", "state": "working"]]))
-    #expect(ViewerPresenter.state(agent).top.actions.control.isEnabled, "the person may take over from an agent")
+    #expect(
+      ViewerPresenter.state(agent).top.actions.control?.isEnabled == true,
+      "the person may take over from an agent"
+    )
     var notReady = ready
     notReady.reading.ready = false
-    #expect(!ViewerPresenter.state(notReady).top.actions.control.isEnabled)
+    #expect(ViewerPresenter.state(notReady).top.actions.control?.isEnabled != true)
     var noFrame = ready
     noFrame.reading.frame = nil
-    #expect(!ViewerPresenter.state(noFrame).top.actions.control.isEnabled)
+    #expect(ViewerPresenter.state(noFrame).top.actions.control?.isEnabled != true)
     let elsewhere = watching(try status(["overview": ["mode": "controlling", "state": "control"]]))
-    #expect(!ViewerPresenter.state(elsewhere).top.actions.control.isEnabled)
+    #expect(ViewerPresenter.state(elsewhere).top.actions.control?.isEnabled != true)
     var paused = ready
     paused.session.paused = true
-    #expect(!ViewerPresenter.state(paused).top.actions.control.isEnabled)
+    #expect(ViewerPresenter.state(paused).top.actions.control?.isEnabled != true)
     var acquiring = ready
     acquiring.acquiring = true
-    #expect(!ViewerPresenter.state(acquiring).top.actions.control.isEnabled)
+    #expect(ViewerPresenter.state(acquiring).top.actions.control?.isEnabled != true)
     var controlBusy = ready
     controlBusy.controlBusy = true
     #expect(
-      !ViewerPresenter.state(controlBusy).top.actions.control.isEnabled,
+      ViewerPresenter.state(controlBusy).top.actions.control?.isEnabled != true,
       "an acquisition or release is unanswered"
     )
     var commandRunning = ready
     commandRunning.running = [.switchToHelper]
-    #expect(!ViewerPresenter.state(commandRunning).top.actions.control.isEnabled, "a helper command runs")
+    #expect(ViewerPresenter.state(commandRunning).top.actions.control?.isEnabled != true, "a helper command runs")
   }
 
   @Test("the top row offers Stop while an agent acts and Resume once stopped, never while in control")
@@ -107,23 +110,65 @@ struct ViewerPresenterTests {
       ])
     )
     let actions = ViewerPresenter.state(snapshot).top.actions
-    #expect(actions.control.event == .askRecover)
+    #expect(actions.control?.event == .askRecover)
     #expect(actions.keys == .hidden)
     #expect(actions.agent == nil)
   }
 
-  @Test("the control button reads Give Back in control and Connecting… while asked, and Keys is pressed in control")
+  @Test("the control button reads Give Back in control and Connecting… while asked")
   func theControlButtonFollowsTheLease() throws {
     var snapshot = watching(try status(["overview": ["mode": "observing"]]))
-    #expect(ViewerPresenter.state(snapshot).top.actions.control.title == "Take Control")
-    #expect(ViewerPresenter.state(snapshot).top.actions.keys == .disabled)
+    #expect(ViewerPresenter.state(snapshot).top.actions.control?.title == "Take Control")
     snapshot.acquiring = true
-    #expect(ViewerPresenter.state(snapshot).top.actions.control.title == "Connecting…")
+    #expect(ViewerPresenter.state(snapshot).top.actions.control?.title == "Connecting…")
     snapshot.acquiring = false
     snapshot.lease = "lease"
-    #expect(ViewerPresenter.state(snapshot).top.actions.control.event == .giveBack)
-    #expect(ViewerPresenter.state(snapshot).top.actions.control.isEnabled)
-    #expect(ViewerPresenter.state(snapshot).top.actions.keys == .pressed)
+    #expect(ViewerPresenter.state(snapshot).top.actions.control?.event == .giveBack)
+    #expect(ViewerPresenter.state(snapshot).top.actions.control?.isEnabled == true)
+  }
+
+  @Test("Keys appears only while you have control")
+  func keysAppearsOnlyInControl() throws {
+    let modes: [[String: Any]] = [
+      ["mode": "observing", "state": "idle"], ["mode": "agent", "state": "working"],
+      ["mode": "recovering", "state": "needsYou"], ["mode": "stopped", "state": "stopped"],
+      ["mode": "controlling", "state": "control"], ["mode": "loggedOut", "state": "notReady"],
+      ["mode": "unavailable", "state": "notReady"],
+    ]
+    for mode in modes {
+      var snapshot = watching(try status(["overview": mode]))
+      #expect(ViewerPresenter.state(snapshot).top.actions.keys == .hidden, "\(mode) without control")
+      snapshot.acquiring = true
+      snapshot.session.paused = true
+      #expect(ViewerPresenter.state(snapshot).top.actions.keys == .hidden, "\(mode) while asking, paused")
+    }
+    #expect(ViewerPresenter.state(ViewerSnapshot()).top.actions.keys == .hidden, "connecting")
+    var holding = watching(try status(["overview": ["mode": "controlling", "state": "control"]]))
+    holding.lease = "lease"
+    #expect(ViewerPresenter.state(holding).top.actions.keys == .shown(isOpen: false))
+    holding.session.openMenu = .keys
+    #expect(ViewerPresenter.state(holding).top.actions.keys == .shown(isOpen: true), "pressed while its menu is open")
+    holding.session.openMenu = .more
+    #expect(ViewerPresenter.state(holding).top.actions.keys == .shown(isOpen: false))
+  }
+
+  @Test("a logged-out helper leaves Take Control off the bar")
+  func aLoggedOutHelperLeavesTakeControlOff() throws {
+    var loggedOut = watching(try status(["overview": ["mode": "loggedOut", "state": "notReady"]]))
+    loggedOut.reading.picture = nil
+    loggedOut.reading.unavailable = "Gone"
+    let state = ViewerPresenter.state(loggedOut)
+    #expect(state.top.status.label == "Logged out")
+    #expect(state.top.actions.control == nil, "nothing to take, so nothing drawn")
+    #expect(state.top.actions.pause == nil, "no picture to pause")
+    #expect(state.screen.empty?.event == .askSwitch, "the stage offers the way back")
+    var notReady = loggedOut
+    notReady.reading.status = try status(["overview": ["mode": "unavailable", "state": "notReady"]])
+    notReady.reading.ready = false
+    #expect(ViewerPresenter.state(notReady).top.actions.control == nil)
+    #expect(ViewerPresenter.state(ViewerSnapshot()).top.actions.control == nil, "connecting")
+    let idle = watching(try status(["overview": ["mode": "observing", "state": "idle"]]))
+    #expect(ViewerPresenter.state(idle).top.actions.control?.event == .takeControl, "a ready helper offers it")
   }
 
   @Test("captions step aside for control and pause")
@@ -188,8 +233,8 @@ struct ViewerPresenterTests {
     var snapshot = watching(try status(["overview": ["mode": "recovering", "state": "needsYou"]]))
     snapshot.running = [.recovery]
     let state = ViewerPresenter.state(snapshot)
-    #expect(state.top.actions.control.event == .askRecover)
-    #expect(!state.top.actions.control.isEnabled)
+    #expect(state.top.actions.control?.event == .askRecover)
+    #expect(state.top.actions.control?.isEnabled != true)
     #expect(state.alert?.isBusy == true)
   }
 

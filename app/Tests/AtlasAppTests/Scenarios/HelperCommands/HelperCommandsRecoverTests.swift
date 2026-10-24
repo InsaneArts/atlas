@@ -73,7 +73,7 @@ struct HelperCommandsRecoverTests {
     let recovering = Task { await viewer.actions.recover() }
     try await settle("Recover never read the status") { service.held["status"] != nil }
     #expect(viewer.control.lease == nil, "control was given back first")
-    #expect(!viewer.state.top.actions.control.isEnabled, "Take Control waits while it reads")
+    #expect(viewer.state.top.actions.control?.isEnabled != true, "Take Control waits while it reads")
     service.resume("status")
     try await settle("Recover never ran") { commands.ran.count == 1 && !viewer.actions.isBusy }
     #expect(await recovering.value?.outcome.ok == true)

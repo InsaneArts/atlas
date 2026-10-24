@@ -5,14 +5,15 @@
       top: viewerTop(
         StatusSummary(label: "You have control", tone: .link, mark: .dot, line: "The agent waits"),
         viewerActions(
-          keys: .pressed,
+          keys: .shown(isOpen: false),
           control: ViewerControlButton(
             title: "Give Back",
             isEnabled: true,
             help: "Give control back (⌃⇧⎋)",
             event: .giveBack
           )
-        )
+        ),
+        isInControl: true
       ),
       screen: ViewerScreenState(picture: SampleDesktop.picture, look: .inControl, chip: .inControl)
     )
@@ -27,7 +28,8 @@
     /// Take Control was still refused after its one retry, as an agent's action ran.
     @MainActor public static let viewerMidAction: ViewerState = {
       var state = viewerWorking
-      state.screen.notice = "The agent is mid-action. Try again in a moment."
+      state.top.actions.refusals = 1
+      state.toast = "The agent is mid-action. Try again in a moment."
       return state
     }()
   }

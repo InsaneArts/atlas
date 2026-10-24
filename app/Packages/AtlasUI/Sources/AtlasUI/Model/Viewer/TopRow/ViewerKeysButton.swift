@@ -1,10 +1,10 @@
-/// The top row's Keys button: pressed while this window holds control, faded while it does not, and gone while the
-/// helper needs the person.
+/// The top row's Keys button (v3 D11): shown only while this window holds control, since only then has it keys to send,
+/// and pressed while its menu is open.
 public enum ViewerKeysButton: Equatable, Sendable {
-  /// Not shown.
+  /// Not shown: this window holds no control.
   case hidden
-  /// Shown, faded, and not pressable: there is no control to send keys with.
-  case disabled
-  /// Shown pressed, as control is on, and pressable: it offers the keys this Mac would keep.
-  case pressed
+  /// Shown, with whether its menu is open.
+  ///
+  /// - Parameter isOpen: Whether its menu is open, which draws it pressed.
+  case shown(isOpen: Bool)
 }

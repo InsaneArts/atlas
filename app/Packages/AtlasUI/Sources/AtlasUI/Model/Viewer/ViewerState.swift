@@ -12,6 +12,8 @@ public struct ViewerState: Equatable, Sendable {
   public var mini: MiniScreenState?
   /// What shows under the top row: the screen, or the selected tab's pane.
   public var pane: ViewerPane
+  /// Why Take Control was just refused, in a toast that leaves by itself (v3 V12); nil shows none.
+  public var toast: String?
 
   /// Creates the main window's state.
   ///
@@ -22,13 +24,15 @@ public struct ViewerState: Equatable, Sendable {
   ///   - alert: The alert over the whole window; nil shows none.
   ///   - mini: The small screen over the Activity or Apps tab; nil shows none.
   ///   - pane: What shows under the top row; the screen by default.
+  ///   - toast: Why Take Control was just refused; none by default.
   public init(
     top: ViewerTopRowState,
     screen: ViewerScreenState,
     details: ViewerDetailsState? = nil,
     alert: AlertCardState<AlertChoice>? = nil,
     mini: MiniScreenState? = nil,
-    pane: ViewerPane = .screen
+    pane: ViewerPane = .screen,
+    toast: String? = nil
   ) {
     self.top = top
     self.screen = screen
@@ -36,5 +40,6 @@ public struct ViewerState: Equatable, Sendable {
     self.alert = alert
     self.mini = mini
     self.pane = pane
+    self.toast = toast
   }
 }

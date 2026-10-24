@@ -63,5 +63,7 @@
     case symbolTileSizes = "symbol-tile-sizes"
     /// Every symbol Atlas draws (D13).
     case symbolNames = "symbol-names"
+    /// The tabs in a track by word and by symbol, and as symbols over words (U-10, V1, V15, G1).
+    case tabs
   }
 #endif

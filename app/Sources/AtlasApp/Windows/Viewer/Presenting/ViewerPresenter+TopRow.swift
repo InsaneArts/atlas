@@ -1,7 +1,9 @@
+import AtlasStatus
 import AtlasUI
 
 extension ViewerPresenter {
-  /// The top row: the status, the tabs and the buttons.
+  /// The top row: the status, the tabs with Activity's unseen dot, the buttons, and the accent wash while this window
+  /// holds control.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The top row.
@@ -14,24 +16,42 @@ extension ViewerPresenter {
         showing: snapshot.panes.apps.shown?.app
       ),
       tabs: CapsuleTabsState(
-        tabs: ViewerTab.allCases.map { CapsuleTab(id: $0, title: ViewerWords.tab($0)) },
+        tabs: ViewerTab.allCases.map { CapsuleTab(id: $0, title: ViewerWords.tab($0), symbol: $0.symbol) },
         selected: session.tab,
         label: ViewerWords.tabsLabel
       ),
+      activityUnseen: unseen(snapshot),
       actions: actions(snapshot),
+      isInControl: snapshot.holdingControl,
       isFullScreen: session.fullScreen
     )
   }
 
-  /// The buttons on the right. While the helper needs the person, Recover… takes the white capsule's place and Keys
-  /// and Stop go (mac.py:213); Clear stands first while a window is outlined (MacShowOnScreen).
+  /// What the Activity tab holds unseen (v3 V2): the actions newer than the newest one seen, orange once one of them
+  /// failed; nothing while Activity shows or before the first reading.
+  ///
+  /// - Parameter snapshot: What the controller holds.
+  /// - Returns: What is unseen.
+  static func unseen(_ snapshot: ViewerSnapshot) -> ViewerUnseen {
+    guard snapshot.session.tab != .activity, let seen = snapshot.session.activitySeen else { return .none }
+    let reading = snapshot.reading.statusReading
+    let unseen = reading.activity(limit: .max)
+      .prefix { $0.id != seen.newest }
+    guard !unseen.isEmpty else { return .none }
+    return unseen.contains { !$0.ok } ? .failed : .new
+  }
+
+  /// The buttons on the right, only those that apply (v3 D11). Keys only while this window holds control; while the
+  /// helper needs the person, Recover… takes the white capsule's place and Stop goes (mac.py:213); while it is logged
+  /// out, not ready or still connecting, the white capsule goes and the stage offers what to do; the pause shows while
+  /// there is a picture to pause, or one is paused; Clear stands first while a window is outlined (MacShowOnScreen).
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The buttons.
   static func actions(_ snapshot: ViewerSnapshot) -> ViewerTopActions {
     let session = snapshot.session
     let needsYou = needsYou(snapshot)
-    let keys: ViewerKeysButton = needsYou ? .hidden : snapshot.holdingControl ? .pressed : .disabled
+    let keys: ViewerKeysButton = snapshot.holdingControl ? .shown(isOpen: session.openMenu == .keys) : .hidden
     let agent = needsYou ? nil : agent(snapshot)
     let agentHelp =
       switch agent {
@@ -39,16 +59,19 @@ extension ViewerPresenter {
       case .resume: ViewerWords.resumeAgentHelp
       case nil: ""
       }
+    let paused = session.paused
     return ViewerTopActions(
-      pause: ViewerToggle(
-        isOn: session.paused,
-        label: session.paused ? ViewerWords.resumePicture : ViewerWords.pausePicture,
-        help: session.paused ? ViewerWords.resumePictureHelp : ViewerWords.pausePictureHelp
-      ),
+      pause: paused || snapshot.reading.picture != nil
+        ? ViewerToggle(
+          isOn: paused,
+          label: paused ? ViewerWords.resumePicture : ViewerWords.pausePicture,
+          help: paused ? ViewerWords.resumePictureHelp : ViewerWords.pausePictureHelp
+        ) : nil,
       keys: keys,
       agent: agent,
       agentHelp: agentHelp,
-      control: control(snapshot),
+      control: offersControl(snapshot) ? control(snapshot) : nil,
+      refusals: session.refusals,
       more: ViewerToggle(isOn: session.openMenu == .more, label: ViewerWords.more, help: ViewerWords.moreHelp),
       details: ViewerToggle(
         isOn: snapshot.detailsShown,
@@ -57,6 +80,21 @@ extension ViewerPresenter {
       ),
       showsClear: snapshot.panes.apps.shown != nil
     )
+  }
+
+  /// Whether the white capsule applies (v3 D11): not while the helper is logged out or still connecting, nor while it
+  /// is not ready and control cannot be taken, where there is nothing to take and the stage says what to do instead.
+  /// A helper whose state is unknown but which takes control still offers it.
+  ///
+  /// - Parameter snapshot: What the controller holds.
+  /// - Returns: Whether it shows.
+  static func offersControl(_ snapshot: ViewerSnapshot) -> Bool {
+    if snapshot.holdingControl { return true }
+    return switch snapshot.mode.kind {
+    case .loggedOut, .connecting: false
+    case .notReady: snapshot.canTakeControl || snapshot.acquiring
+    case .idle, .working, .control, .inUseElsewhere, .needsYou, .stopped: true
+    }
   }
 
   /// Whether the helper needs the person and this window holds no control: Recover… is the next step.
@@ -105,7 +143,6 @@ extension ViewerPresenter {
     }
     return ViewerControlButton(
       title: snapshot.acquiring ? ViewerWords.connectingControl : ViewerWords.takeControl,
-      shortTitle: snapshot.acquiring ? ViewerWords.connectingControl : ViewerWords.takeControlShort,
       isEnabled: snapshot.canTakeControl,
       help: ViewerWords.takeControlHelp,
       event: .takeControl

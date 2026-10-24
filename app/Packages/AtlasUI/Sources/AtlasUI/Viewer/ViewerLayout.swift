@@ -14,16 +14,31 @@ enum ViewerLayout {
   static let lightsToStatus: CGFloat = 18
   /// 16: between the top row's three columns.
   static let columnGap: CGFloat = 16
-  /// 1040: below this width Keys drops its word and keeps its glyph, as the widget's does.
-  static let keysWordRoom: CGFloat = 1040
-  /// 980: below this width the tabs draw their words in: under about 965 the status, the four tabs and the widest
-  /// set of buttons (Resume or Stop beside Take Control) no longer fit at full size, measured from the renders.
-  static let tabsRoom: CGFloat = 980
-  /// 940: below this width the status keeps its word alone: its line would show only a few letters by then.
-  static let statusLineRoom: CGFloat = 940
-  /// 920: below this width the white capsule says its short word, Take for Take Control: with its long word the
-  /// widest set of buttons needs about 900, measured from the renders.
-  static let longWordsRoom: CGFloat = 920
+  /// 80: the room the status line asks for in the widest layout before the row gives it up for a narrower one; shown,
+  /// the line takes whatever its column leaves and is cut short first (v3 V1).
+  static let statusLineRoom: CGFloat = 80
+  /// 60: the least room the status line shows in; with less, a few letters and an ellipsis would say nothing, so it goes.
+  static let statusLineLeast: CGFloat = 60
+  /// 116: the white capsule's least width, so Take Control and Give Back morph in place without the row moving (v3
+  /// X5, `min-width: 116px`).
+  static let mainButtonMinWidth: CGFloat = 116
+  /// 3: between the control chip's keycaps (v3 `.kcs`).
+  static let keycapGap: CGFloat = 3
+  /// 1.5 by 13: the typing chip's caret (v3 `.typing .caret`).
+  static let caret = CGSize(width: 1.5, height: 13)
+  /// 14: the control rim's corner, the picture's 12 and the 2-point gap round it (v3 V5, `.vpic .rim`).
+  static let rimRadius: CGFloat = 14
+  /// 2: between the picture's edge and the rim, the ground showing through.
+  static let rimGap: CGFloat = 2
+  /// 2: the rim's accent line.
+  static let rimWidth: CGFloat = 2
+  /// 4: the soft accent ring outside the rim.
+  static let ringWidth: CGFloat = 4
+  /// 1.01: the rim settles in from a little larger.
+  static let rimArrival: CGFloat = 1.01
+  /// The top row's layouts, widest first, which a narrowing window steps through (v3 V15): the status line goes
+  /// first, then the tabs' words, then the actions' words.
+  static let barLayouts: [ViewerTopRowFit] = [.full, .statusWord, .tabSymbols, .actionSymbols]
   /// 26: the mini screen's inset from the window's right and bottom edges (mac.py `mini`).
   static let miniInset: CGFloat = 26
   /// 16 by 10: a screenshot's tile, and the screen's shape where a sample needs one.
@@ -55,16 +70,16 @@ enum ViewerLayout {
   /// 1040 by 650: the largest a screenshot is drawn in the large view (mac.py `board_shot_large`).
   static let largeShotLargest = CGSize(width: 1040, height: 650)
 
-  /// How far the top row draws in for a window `width` wide.
+  /// How large the control rim is as control comes or goes: settled while in control, a little larger otherwise, so
+  /// it settles in; never larger under Reduce Motion, where only its opacity changes.
   ///
-  /// - Parameter width: The window's width.
-  /// - Returns: The step.
-  static func topRowFit(width: CGFloat) -> ViewerTopRowFit {
-    if width >= keysWordRoom { return .regular }
-    if width >= tabsRoom { return .keysGlyph }
-    if width >= statusLineRoom { return .tightTabs }
-    if width >= longWordsRoom { return .statusWord }
-    return .shortWords
+  /// - Parameters:
+  ///   - isInControl: Whether this window holds control.
+  ///   - reduceMotion: Whether the Reduce Motion setting is on.
+  /// - Returns: The rim's scale.
+  static func rimScale(isInControl: Bool, reduceMotion: Bool) -> CGFloat {
+    guard !isInControl, !reduceMotion else { return 1 }
+    return rimArrival
   }
 
   /// The status's leading inset: clear of the window buttons, or the buttons' own inset in full screen.

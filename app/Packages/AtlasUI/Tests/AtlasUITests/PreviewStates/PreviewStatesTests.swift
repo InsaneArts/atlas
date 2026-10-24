@@ -77,7 +77,8 @@
       )
       #expect(chips == ["typing", "inControl", "paused"])
       #expect(states.contains { $0.details != nil })
-      #expect(states.contains { $0.top.actions.pause.isOn })
+      #expect(states.contains { $0.top.actions.pause?.isOn == true })
+      #expect(states.contains { $0.toast != nil })
       let panes = Set(
         states.map { state in
           switch state.pane {

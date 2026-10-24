@@ -32,4 +32,11 @@ struct ViewerSession {
   var fullScreen = false
   /// Whether Check Again is reading the helper now.
   var checkingAgain = false
+  /// Why Take Control was just refused, in a toast until it leaves by itself (v3 V12).
+  var toast: String?
+  /// Take Control's refusals counted, so each one shakes its button once and only the newest toast's wait removes it.
+  var refusals = 0
+  /// The newest action the person has seen: the Activity tab's while it shows, the first reading's otherwise; nil
+  /// before the first reading, when nothing is unseen yet.
+  var activitySeen: ViewerSeenActivity?
 }

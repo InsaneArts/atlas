@@ -5,12 +5,20 @@ import Testing
 
 @Suite("ViewerLayout")
 struct ViewerLayoutTests {
-  @Test("the top row draws in one step at a time as the window narrows, never skipping or undoing one")
-  func theTopRowDrawsInStepByStep() {
-    let widths = stride(from: CGFloat(1440), through: 700, by: -10)
-    let steps = widths.map(ViewerLayout.topRowFit(width:))
-    #expect(steps == steps.sorted(), "a narrower window never draws in less")
-    #expect(Set(steps) == [.regular, .keysGlyph, .tightTabs, .statusWord, .shortWords], "every step is reached")
+  @Test("a narrow window drops the status line before the tab words, and the tab words before the action words")
+  func aNarrowWindowCollapsesInOrder() throws {
+    let layouts = ViewerLayout.barLayouts
+    #expect(layouts.first == .full, "the widest layout shows everything")
+    let noLine = try #require(layouts.firstIndex { !$0.reservesLine })
+    let tabSymbols = try #require(layouts.firstIndex { $0.tabFace == .symbol })
+    let actionSymbols = try #require(layouts.firstIndex { !$0.actionWords })
+    #expect(noLine < tabSymbols)
+    #expect(tabSymbols < actionSymbols)
+    for (wider, narrower) in zip(layouts, layouts.dropFirst()) {
+      #expect(wider.reservesLine || !narrower.reservesLine, "a line once given up stays given up")
+      #expect(wider.tabFace == .word || narrower.tabFace == .symbol, "tab words once dropped stay dropped")
+      #expect(wider.actionWords || !narrower.actionWords, "action words once dropped stay dropped")
+    }
   }
 
   @Test("a window outline is letterboxed as the picture is, so it lies where a click on that window lands")

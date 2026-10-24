@@ -55,6 +55,8 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     toolbar = rowToolbar
     toolbarStyle = .unified
     isReleasedWhenClosed = false
+    // The system's zoom in and shrink out, as a document opens and closes (v3 X1); AppKit honours Reduce Motion.
+    animationBehavior = .documentWindow
     contentMinSize = Self.leastSize
     collectionBehavior.insert(.fullScreenPrimary)
     delegate = self
@@ -63,7 +65,8 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
         state: controller.state,
         send: { self?.handle($0) },
         newest: { controller.newestPicture },
-        input: { DesktopInput(controller: controller) }
+        input: { DesktopInput(controller: controller) },
+        livePicture: { LayerPictureView(live: $0) }
       )
       .environment(
         \.shotDrag,
@@ -80,10 +83,15 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   }
 
   /// Brings the window forward, where it was left, and reads while it is on screen. The app shows its Dock icon
-  /// first (``DockIcon``). Ordered front is not on screen: while the screen is locked or asleep the window is
-  /// occluded, and reading starts with the occlusion change once it shows.
+  /// first (``DockIcon``). Opening, its content lays out and draws before it shows, so the zoom carries the last
+  /// picture the panel read rather than Connecting (v3 X1). Ordered front is not on screen: while the screen is locked
+  /// or asleep the window is occluded, and reading starts with the occlusion change once it shows.
   func present() {
     if !isPresented && !setFrameUsingName(Self.autosaveName) { center() }
+    if !isVisible {
+      contentView?.layoutSubtreeIfNeeded()
+      displayIfNeeded()
+    }
     isPresented = true
     watchShotKeys()
     if isMiniaturized { deminiaturize(nil) }
@@ -115,11 +123,15 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   ///   - kind: Which menu.
   private func open(_ menu: NSMenu, below frame: CGRect, as kind: ViewerMenu) {
     guard let content = contentView else { return }
-    controller.setOpenMenu(kind)
+    // Nothing animates in the frame the menu's tracking loop starts, nor as it ends (v3 R16): an animation under way
+    // then would stop halfway until the menu closes.
+    var still = Transaction(animation: nil)
+    still.disablesAnimations = true
+    withTransaction(still) { controller.setOpenMenu(kind) }
     // The hosting view is flipped, as SwiftUI's frames are: down is a larger y.
     let point = NSPoint(x: frame.minX, y: frame.maxY + Self.menuGap)
     menu.popUp(positioning: nil, at: point, in: content)
-    controller.setOpenMenu(nil)
+    withTransaction(still) { controller.setOpenMenu(nil) }
   }
 
   /// Reads the Screenshots tab's keys before the window does: Space, ← and → and Esc, unless a field takes the keys or

@@ -13,7 +13,7 @@
       case .toggleDetails:
         return state.details == nil ? viewerDetails : viewerIdle
       case .togglePause:
-        return state.top.actions.pause.isOn ? viewerWorking : viewerPaused
+        return state.top.actions.pause?.isOn == true ? viewerWorking : viewerPaused
       case .takeControl:
         return viewerControl
       case .giveBack, .alertConfirm, .alertCancel, .checkAgain:

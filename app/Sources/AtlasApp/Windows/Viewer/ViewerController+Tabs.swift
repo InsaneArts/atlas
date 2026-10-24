@@ -12,7 +12,16 @@ extension ViewerController {
     if holdingControl || control.acquiring { control.releaseControl() }
     if session.tab == .screenshots { panesModel.closeShot() }
     session.tab = tab
+    noteActivitySeen()
     panesModel.followPane()
+  }
+
+  /// The newest action is seen once the Activity tab shows it, and at the first reading, so what the helper did before
+  /// the window opened is never new (v3 V2).
+  func noteActivitySeen() {
+    guard reading.hasStatus, session.activitySeen == nil || session.tab == .activity else { return }
+    let seen = ViewerSeenActivity(newest: reading.statusReading.activity(limit: 1).first?.id)
+    if session.activitySeen != seen { session.activitySeen = seen }
   }
 
   /// Check Again in Details: reads the status and Details' own facts now, then the next picture at once; once at a

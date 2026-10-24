@@ -4,6 +4,7 @@ import AtlasStatus
 import AtlasUI
 import Foundation
 import Testing
+import os
 
 @testable import AtlasApp
 
@@ -223,7 +224,7 @@ struct ViewerControlTests {
     viewer.close()
   }
 
-  @Test("Take Control pressed while an agent acts retries once and then says the agent is mid-action")
+  @Test("Take Control pressed while an agent acts retries once and then says the agent is mid-action in a toast")
   func takeControlRetriesOnceWhileAnAgentActs() async throws {
     let service = ScriptedService()
     service.reply = ["ready": true, "canObserve": true, "overview": ["mode": "agent", "state": "working"]]
@@ -231,15 +232,81 @@ struct ViewerControlTests {
     let viewer = try await ViewerController.watching(service, clock: clock)
     // Readings stop, so the retry is the clock's one sleeper.
     viewer.readingLoop.watch(false)
-    #expect(viewer.state.top.actions.control.isEnabled, "Take Control stays offered while an agent works")
+    #expect(viewer.state.top.actions.control?.isEnabled == true, "Take Control stays offered while an agent works")
     service.busyAcquires = 2
     try await Self.takeControl(viewer, retryingOn: clock)
     #expect(service.log.filter { $0.hasPrefix("acquire") }.count == 2, "asked once, then once more")
     #expect(viewer.control.lease == nil)
-    #expect(viewer.session.notice == ViewerWords.agentMidAction)
+    #expect(viewer.state.toast == ViewerWords.agentMidAction)
     service.busyAcquires = 1
     try await Self.takeControl(viewer, retryingOn: clock)
     #expect(viewer.control.lease == "lease", "the action ended within the wait, so the retry took control")
+    #expect(viewer.state.toast == nil, "control taken, the refusal is old news")
+    viewer.close()
+  }
+
+  @Test("a refused Take Control shows the reason and removes it after 2.4 seconds on the clock")
+  func aRefusalShowsItsReasonForItsTime() async throws {
+    let service = ScriptedService()
+    service.reply = ["ready": true, "canObserve": true, "overview": ["mode": "agent", "state": "working"]]
+    let clock = ManualClock()
+    let viewer = try await ViewerController.watching(service, clock: clock)
+    // Readings stop, so the retry and the toast are the clock's only sleepers.
+    viewer.readingLoop.watch(false)
+    service.busyAcquires = 2
+    try await Self.takeControl(viewer, retryingOn: clock)
+    #expect(viewer.state.toast == ViewerWords.agentMidAction)
+    #expect(viewer.state.top.actions.refusals == 1, "the white capsule shakes once")
+    #expect(viewer.session.notice == nil, "the reason is the toast's, not a notice that stays")
+    let toast = Duration.seconds(Motion.Duration.toast.seconds)
+    try await clock.untilSleeping(for: toast, "the toast never waited to leave")
+    clock.advance(by: toast - .milliseconds(1))
+    await Task.yield()
+    #expect(viewer.state.toast == ViewerWords.agentMidAction, "it stays its whole 2.4 seconds")
+    clock.advance(by: .milliseconds(1))
+    try await settle("the toast never left") { viewer.state.toast == nil }
+    #expect(viewer.state.top.actions.refusals == 1, "leaving shakes nothing")
+    viewer.close()
+  }
+
+  @Test("input changes hands before any control animation starts")
+  func inputChangesHandsBeforeAnyControlAnimation() async throws {
+    let service = ScriptedService()
+    let viewer = try await ViewerController.watching(service)
+    service.hold = ["acquire"]
+    let taking = Task { await viewer.control.takeControl() }
+    try await settle("Take Control was never asked") { service.held["acquire"] != nil }
+    #expect(!viewer.state.top.isInControl, "nothing turns to control before the reply")
+    // The first job that can run once the lease changes sees what the turn that changed it left: input and every
+    // piece the window animates must already have changed hands there, never in a later step.
+    let firstLook = OSAllocatedUnfairLock<[Bool]?>(initialState: nil)
+    withObservationTracking {
+      _ = viewer.control.lease
+    } onChange: {
+      MainActor.assumeIsolated {
+        // Unstructured, so it runs as the next job on the main actor, after the turn that set the lease.
+        Task {
+          let state = viewer.state
+          let seen = [
+            viewer.control.canInput,
+            state.top.isInControl,
+            state.top.status.tone == .link,
+            state.screen.look == .inControl,
+            state.top.actions.keys == .shown(isOpen: false),
+            state.top.actions.control?.event == .giveBack,
+          ]
+          firstLook.withLock { $0 = seen }
+          // Typed in that same first job, it goes to the helper: the input queue already belongs to the lease.
+          viewer.control.send(text: "a")
+        }
+      }
+    }
+    service.resume("acquire")
+    await taking.value
+    try await settle("the grant was never seen") { firstLook.withLock { $0 } != nil }
+    let seen = try #require(firstLook.withLock { $0 })
+    #expect(seen == [true, true, true, true, true, true], "input, the wash, the word, the rim, Keys and Give Back")
+    try await settle("the text typed at once never reached the helper") { !service.actions.isEmpty }
     viewer.close()
   }
 

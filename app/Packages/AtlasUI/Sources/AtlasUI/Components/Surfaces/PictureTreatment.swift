@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// How a picture of the helper's screen is drawn for its look: greyed and darkened while dimmed, faded while paused,
-/// as it is otherwise. The fitted frame and the screen at actual size share it, so neither drops a treatment.
+/// How a picture of the helper's screen is drawn for its look: greyed and darkened while dimmed, a little less while
+/// paused (v3 V11), as it is otherwise. The fitted frame, the screen at actual size and the live picture's layer share
+/// its two numbers, so none drops a treatment.
 struct PictureTreatment: ViewModifier {
   /// How the picture is drawn.
   let look: PictureLook
@@ -12,18 +13,48 @@ struct PictureTreatment: ViewModifier {
   /// - Returns: The picture, treated.
   func body(content: Content) -> some View {
     content
-      .saturation(look == .dimmed ? Layout.dimSaturation : 1)
-      .overlay(Color.letterbox.opacity(look == .dimmed ? Layout.dimShade : 0))
-      .opacity(look == .paused ? Opacity.dimmed : 1)
+      .saturation(Self.saturation(for: look))
+      .overlay(
+        Color.letterbox
+          .opacity(Self.shade(for: look))
+      )
+  }
+
+  /// How much colour a picture keeps in `look`.
+  ///
+  /// - Parameter look: How the picture is drawn.
+  /// - Returns: The saturation, 1 for all of it.
+  nonisolated static func saturation(for look: PictureLook) -> Double {
+    switch look {
+    case .dimmed: Layout.dimSaturation
+    case .paused: Layout.pausedSaturation
+    case .live, .inControl: 1
+    }
+  }
+
+  /// How much black lies over a picture in `look`, which darkens it.
+  ///
+  /// - Parameter look: How the picture is drawn.
+  /// - Returns: The black's opacity, 0 for none.
+  nonisolated static func shade(for look: PictureLook) -> Double {
+    switch look {
+    case .dimmed: Layout.dimShade
+    case .paused: Layout.pausedShade
+    case .live, .inControl: 0
+    }
   }
 }
 
-/// The treatment's own measures, from the boards (v3.py `stage`).
+/// The treatment's own measures, from the boards (v3.py `stage`) and v3 V11.
 private enum Layout {
   /// 0.55: how much colour a dimmed picture keeps.
   static let dimSaturation = 0.55
   /// 0.4: the black over a dimmed picture, which leaves it at the board's 0.6 brightness.
   static let dimShade = 0.4
+  /// 0.5: how much colour a paused picture keeps (v3 V11, `pausedSaturation`).
+  static let pausedSaturation = 0.5
+  /// 0.3: the black over a paused picture, which leaves it at v3's 0.7 brightness (`pausedBrightness`).
+  static let pausedShade = 0.3
 }
 
 #if DEBUG

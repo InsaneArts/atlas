@@ -5,6 +5,12 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case pause = "pause.fill"
   /// Resume the picture.
   case play = "play.fill"
+  /// Stop the agent, where a narrow window keeps the symbol alone.
+  case stop = "stop.fill"
+  /// Resume the agent, where a narrow window keeps the symbol alone; not play, which the picture's pause becomes.
+  case resume = "forward.fill"
+  /// Clear the window shown on the screen, where a narrow window keeps the symbol alone.
+  case clear = "xmark"
   /// Keys, while in control.
   case keyboard
   /// More.

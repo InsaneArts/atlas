@@ -5,8 +5,6 @@ import AtlasControl
 extension ViewerWords {
   /// The control button while watching.
   static let takeControl = "Take Control"
-  /// The control button while watching, in the narrowest window.
-  static let takeControlShort = "Take"
   /// The control button in control.
   static let giveBack = "Give Back"
   /// The control button while control is asked for.

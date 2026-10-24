@@ -41,18 +41,7 @@ struct AlertCard<ID: Hashable & Sendable>: View {
     .glass(.thick, in: shape)
     .overlay(edge)
     .background { CutoutShadow(shape: shape, level: .modal) }
-    .keyframeAnimator(initialValue: CGFloat.zero, trigger: refusals) { card, offset in
-      card.offset(x: offset)
-    } keyframes: { _ in
-      // v3's `@keyframes shake`: left 5, right 5, left 3, right 3, home, in five even steps.
-      KeyframeTrack {
-        LinearKeyframe(-Layout.shakeFar, duration: Layout.shakeStep)
-        LinearKeyframe(Layout.shakeFar, duration: Layout.shakeStep)
-        LinearKeyframe(-Layout.shakeNear, duration: Layout.shakeStep)
-        LinearKeyframe(Layout.shakeNear, duration: Layout.shakeStep)
-        LinearKeyframe(.zero, duration: Layout.shakeStep)
-      }
-    }
+    .shakes(refusals)
     .onChange(of: state.refusal) { _, refusal in
       if Self.shakes(on: refusal, reduceMotion: reduceMotion) { refusals += 1 }
     }
@@ -276,12 +265,6 @@ private enum Layout {
   static let markGap: CGFloat = 7
   /// 0.5: a mark pops in from half its size (v3 `runAlert`).
   static let markArrival: CGFloat = 0.5
-  /// 5: the shake's first, furthest swing.
-  static let shakeFar: CGFloat = 5
-  /// 3: the shake's second, nearer swing.
-  static let shakeNear: CGFloat = 3
-  /// One fifth of the shake.
-  static let shakeStep = Motion.Duration.shake.seconds / 5
   /// The top highlight (v3 `inset 0 .5px 0 rgb(255 255 255 / .16)`): the glass edge again, faded out by a fifth of
   /// the way down, where the corners end.
   static var highlight: LinearGradient {

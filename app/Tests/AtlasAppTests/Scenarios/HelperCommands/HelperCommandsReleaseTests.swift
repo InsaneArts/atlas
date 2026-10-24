@@ -41,7 +41,7 @@ struct HelperCommandsReleaseTests {
     let switching = Task { await panel.switchToHelper() }
     try await settle("the panel's switch never reached its wait") { actions.barrier.waiters == 1 }
     let reopened = try await ViewerController.watching(service, commands: commands, actions: actions)
-    #expect(!reopened.state.top.actions.control.isEnabled, "a reopened window waits for the release too")
+    #expect(reopened.state.top.actions.control?.isEnabled != true, "a reopened window waits for the release too")
     #expect(commands.ran.isEmpty)
     service.resume("release")
     try await settle("the panel's switch never ran") { commands.ran.count == 1 && actions.running.isEmpty }

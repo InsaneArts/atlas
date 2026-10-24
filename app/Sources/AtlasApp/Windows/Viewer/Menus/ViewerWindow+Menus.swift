@@ -33,8 +33,9 @@ extension ViewerWindow: ViewerMenuActions, HelperMenuActions {
   ///
   /// - Parameter sender: The menu item.
   func toggleControl(_ sender: Any?) {
-    let control = controller.state.top.actions.control
-    guard control.isEnabled, control.event == .takeControl || control.event == .giveBack else { return }
+    guard let control = controller.state.top.actions.control, control.isEnabled,
+      control.event == .takeControl || control.event == .giveBack
+    else { return }
     controller.send(control.event)
   }
 
@@ -104,7 +105,7 @@ extension ViewerWindow: ViewerMenuActions, HelperMenuActions {
       item.title = state.top.actions.details.isOn ? ViewerWords.hideDetailsItem : ViewerWords.showDetailsItem
       return true
     case #selector(ViewerMenuActions.togglePicturePause(_:)):
-      item.title = state.top.actions.pause.isOn ? ViewerWords.resumePictureItem : ViewerWords.pausePictureItem
+      item.title = state.top.actions.pause?.isOn == true ? ViewerWords.resumePictureItem : ViewerWords.pausePictureItem
       return true
     case #selector(ViewerMenuActions.choosePicture(_:)):
       item.state = item.tag == menu.picture.rawValue ? .on : .off
@@ -126,13 +127,18 @@ extension ViewerWindow: ViewerMenuActions, HelperMenuActions {
     }
   }
 
-  /// Take Control or Give Back, as the white capsule reads; while it reads Recover…, Take Control waits.
+  /// Take Control or Give Back, as the white capsule reads; while it reads Recover…, or is not drawn, Take Control
+  /// waits.
   ///
   /// - Parameters:
   ///   - item: The item.
-  ///   - control: The white capsule.
+  ///   - control: The white capsule; nil while it is not drawn.
   /// - Returns: Whether it can be chosen.
-  private func validateControl(_ item: NSMenuItem, _ control: ViewerControlButton) -> Bool {
+  private func validateControl(_ item: NSMenuItem, _ control: ViewerControlButton?) -> Bool {
+    guard let control else {
+      item.title = ViewerWords.takeControl
+      return false
+    }
     let toggles = control.event == .takeControl || control.event == .giveBack
     item.title = control.event == .giveBack ? ViewerWords.giveBack : ViewerWords.takeControl
     return toggles && control.isEnabled

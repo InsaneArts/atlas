@@ -61,7 +61,8 @@
           $0.composing = "こんにちは"
         },
         "Mid-action": shown(try reported("agent", state: "working", activity: Self.working)) {
-          $0.session.notice = ViewerWords.agentMidAction
+          $0.session.toast = ViewerWords.agentMidAction
+          $0.session.refusals = 1
         },
         "Actual size, paused": shown(idle) {
           $0.session.paused = true

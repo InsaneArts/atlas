@@ -109,7 +109,8 @@ final class ViewerControl {
   /// work under way (``ControlBarrier``), so the helper's commands wait for it; a grant that arrives after the attempt
   /// was cancelled, or once one of the helper's commands started, is given back before that work ends, and a reply
   /// that was lost holds the barrier until a lease it may have granted can no longer be alive. A busy service is
-  /// asked once more after ``busyRetryAfter``; still busy, the notice says the agent is mid-action.
+  /// asked once more after ``busyRetryAfter``; still busy, a toast says the agent is mid-action and the button shakes
+  /// (``ViewerController/refuse(_:)``).
   func takeControl() async {
     guard let viewer, viewer.snapshot.canTakeControl else { return }
     acquiring = true
@@ -144,7 +145,7 @@ final class ViewerControl {
       guard generation == controlGeneration else { return }
       acquiring = false
       let busy = (error as? ServiceError)?.isBusy == true
-      viewer.say(busy ? ViewerWords.agentMidAction : error.localizedDescription)
+      if busy { viewer.refuse(ViewerWords.agentMidAction) } else { viewer.say(error.localizedDescription) }
     }
   }
 
@@ -187,6 +188,7 @@ final class ViewerControl {
     acquiring = false
     input.activate(granted)
     viewer?.say(nil)
+    viewer?.dismissToast()
     startHeartbeat(granted)
     viewer?.readingLoop.refresh()
   }

@@ -125,6 +125,28 @@ final class ViewerController {
     session.notice = text
   }
 
+  /// Take Control was refused: the reason shows in a toast and the button shakes once (v3 V12). The toast leaves by
+  /// itself after ``Motion/Duration/toast`` on the window's clock; only the newest refusal's wait removes it.
+  ///
+  /// - Parameter reason: Why, such as "The agent is mid-action. Try again in a moment."
+  func refuse(_ reason: String) {
+    session.refusals += 1
+    session.toast = reason
+    let refusal = session.refusals
+    let clock = dependencies.clock
+    // Unstructured, as the toast leaves by itself while the window goes on.
+    Task { [weak self] in
+      try? await clock.sleep(for: .seconds(Motion.Duration.toast.seconds))
+      guard let self, session.refusals == refusal else { return }
+      session.toast = nil
+    }
+  }
+
+  /// The toast goes at once: control was taken after all.
+  func dismissToast() {
+    if session.toast != nil { session.toast = nil }
+  }
+
   /// Stop or Resume, saying how it went, then reads the status so the window shows it at once.
   ///
   /// - Parameter stopped: Whether agents stop.

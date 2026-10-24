@@ -1,31 +1,54 @@
 import SwiftUI
 
 /// What lies over the screen and takes no clicks: the chip and the notice at the top, the latest actions in the
-/// bottom corner. A notice fades in and out, or comes and goes at once under Reduce Motion.
+/// bottom corner. One chip replaces another in the same place with a blur, as the typing chip takes control's (v3
+/// V13); a notice fades in and out. Under Reduce Motion both fade.
 struct ScreenOverlay: View {
   /// What the screen shows.
   let state: ViewerScreenState
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+  /// The chip and the notice at the top, the captions in the corner.
   var body: some View {
     VStack(spacing: Spacing.s) {
-      if let chip = state.chip {
-        ScreenChip(chip: chip)
+      ZStack {
+        if let chip = state.chip {
+          ScreenChip(chip: chip)
+            .id(Self.slot(chip))
+            .transition(Motion.transition(AnyTransition(.blurReplace(.downUp)), reduceMotion: reduceMotion))
+        }
       }
+      .animation(
+        Motion.animation(Motion.arrive, reduceMotion: reduceMotion, reduced: Motion.reduced),
+        value: state.chip.map(Self.slot)
+      )
       if let notice = state.notice {
         FloatingChip(lines: ViewerLayout.noticeLines) {
           Text(notice)
         }
         .frame(maxWidth: ViewerLayout.noticeWidth)
-        .transition(reduceMotion ? .identity : .opacity)
+        .transition(.opacity)
       }
       Spacer(minLength: .zero)
       CaptionStack(entries: state.captions)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
-    .padding(Spacing.mPlus)
-    .animation(Motion.animation(Motion.fade, reduceMotion: reduceMotion), value: state.notice)
+    .padding(.top, Spacing.m)
+    .padding([.horizontal, .bottom], Spacing.mPlus)
+    .animation(Motion.animation(Motion.fade, reduceMotion: reduceMotion, reduced: Motion.reduced), value: state.notice)
     .allowsHitTesting(false)
+  }
+
+  /// Which chip stands in the slot, whatever it says: a new one replaces it, new words in the same one do not.
+  ///
+  /// - Parameter chip: The chip.
+  /// - Returns: Its kind.
+  nonisolated static func slot(_ chip: ViewerScreenChip) -> Int {
+    switch chip {
+    case .typing: 0
+    case .inControl: 1
+    case .paused: 2
+    }
   }
 }
 
@@ -34,5 +57,17 @@ struct ScreenOverlay: View {
     ScreenOverlay(state: PreviewStates.viewerWorking.screen)
       .frame(width: SampleWidth.column * 2, height: SampleWidth.column)
       .sampleSurface()
+  }
+
+  #Preview("Interactive") {
+    @Previewable @State var chip = ViewerScreenChip.inControl
+    InteractivePreview {
+      Button(String("Type")) { chip = .typing("こんにちは") }
+      Button(String("Control")) { chip = .inControl }
+      Button(String("Paused")) { chip = .paused }
+    } content: {
+      ScreenOverlay(state: ViewerScreenState(chip: chip))
+        .frame(width: SampleWidth.column * 2, height: SampleWidth.column)
+    }
   }
 #endif

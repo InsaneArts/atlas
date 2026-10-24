@@ -226,6 +226,7 @@ final class ViewerReadingLoop {
       control.releaseControl(ViewerWords.releasedElsewhere)
     }
     viewer.forgetRecoveryOnceNoneNeeded()
+    viewer.noteActivitySeen()
   }
 
   /// Shows a new picture, read with a status that says whether the helper takes input. A picture from a changed

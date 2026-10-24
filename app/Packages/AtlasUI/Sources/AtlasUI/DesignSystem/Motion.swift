@@ -62,7 +62,7 @@ public enum Motion {
     /// 1.6: one breath of the live badge (v3 `Duration.breathe`).
     public static let breathe = Duration(seconds: 1.6)
     /// 2.4: how long a toast stays (v3 `Duration.toast`).
-    static let toast = Duration(seconds: 2.4)
+    public static let toast = Duration(seconds: 2.4)
   }
 
   /// The springs behind the animations, kept as values so their duration and bounce can be read back.
