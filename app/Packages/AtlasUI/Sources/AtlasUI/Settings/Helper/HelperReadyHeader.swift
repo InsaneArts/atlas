@@ -7,6 +7,9 @@ struct HelperReadyHeader: View {
   /// Runs Check Again.
   let checkAgain: @MainActor () -> Void
 
+  /// The accessibility traits applied only to the section's title.
+  let headingTraits: AccessibilityTraits = .isHeader
+
   /// The section's name and the link.
   var body: some View {
     HStack(alignment: .top) {
@@ -14,6 +17,7 @@ struct HelperReadyHeader: View {
         Text("Ready to act")
           .textStyle(.heading)
           .foregroundStyle(Color.textPrimary)
+          .accessibilityAddTraits(headingTraits)
         Text("Check the helper and the permissions it needs.")
           .textStyle(.callout)
           .foregroundStyle(Color.textSecondary)

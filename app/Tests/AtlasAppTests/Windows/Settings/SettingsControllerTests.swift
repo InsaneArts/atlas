@@ -12,7 +12,7 @@ import Testing
 
 @Suite("SettingsController")
 struct SettingsControllerTests {
-  @Test("a failed project refresh keeps the last loaded list and its count on the detail page")
+  @Test("a failed project refresh keeps cached rows and reports the refresh failure until a successful retry")
   func failedProjectRefreshKeepsTheList() async {
     let commands = ScriptedCommands(["agents status": Self.statusWithOpie])
     let controller = SettingsController.scripted(commands: commands)
@@ -24,7 +24,43 @@ struct SettingsControllerTests {
     #expect(controller.agents.failed)
     #expect(controller.state.location == .projects)
     #expect(controller.state.agents.projects == projects)
+    #expect(controller.state.agents.projectsReading == .failed)
+    #expect(controller.state.agents.projectsSummary == "1 project taught · Couldn't refresh projects")
+    #expect(controller.state.agents.projectsNote?.kind == .problem)
+    commands.answer("agents status", Self.statusWithOpie)
+    await controller.loadAgents()
     #expect(controller.state.agents.projectsSummary == "1 project taught")
+    #expect(controller.state.agents.projectsNote == nil)
+  }
+
+  @Test("a first project reading that fails never reports an empty list")
+  func aFailedFirstReadingIsNotEmpty() async {
+    let commands = ScriptedCommands(["agents status": #"{"ok":false,"error":"Cannot read agents"}"#])
+    let controller = SettingsController.scripted(commands: commands)
+    #expect(controller.state.agents.projectsSummary == "Reading projects…")
+    await controller.loadAgents()
+    #expect(controller.state.agents.projects.isEmpty)
+    #expect(controller.state.agents.projectsReading == .failed)
+    #expect(controller.state.agents.projectsSummary == "Couldn't read projects")
+    #expect(controller.state.agents.projectsNote?.kind == .problem)
+  }
+
+  @Test("a delayed project reading reports progress and becomes empty only after a successful empty answer")
+  func aDelayedReadingIsNotEmpty() async throws {
+    let commands = ScriptedCommands(["agents status": #"{"ok":true,"agents":[],"projects":[]}"#])
+    let gate = ReleaseSignal()
+    commands.whileRunning { _ in await gate.wait() }
+    let controller = SettingsController.scripted(commands: commands)
+    controller.send(.navigate(.projects))
+    try await settle("the project reading never started") { !commands.ran.isEmpty }
+    #expect(controller.state.agents.projectsReading == .reading)
+    #expect(controller.state.agents.projectsSummary == "Reading projects…")
+    #expect(controller.state.agents.projectsNote?.kind == .working)
+    gate.open()
+    await controller.agentsReading?.value
+    #expect(controller.state.agents.projectsReading == .loaded)
+    #expect(controller.state.agents.projectsSummary == "No projects taught")
+    #expect(controller.state.agents.projectsNote == nil)
   }
 
   @Test("relocated field edits read fresh shared values and call only their original writers")

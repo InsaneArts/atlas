@@ -46,8 +46,7 @@ struct PictureChoiceCard: View {
           .fill(selected ? Color.accentFill : hovered ? Color.fillControlHover : Color.fillControl)
       )
       .overlay {
-        RoundedRectangle(cornerRadius: Radius.small)
-          .strokeBorder(selected || focused ? Color.strokeFocus : Color.clear, lineWidth: Stroke.regular)
+        PictureChoiceBorder(selected: selected, focused: focused)
       }
       .contentShape(RoundedRectangle(cornerRadius: Radius.small))
     }
