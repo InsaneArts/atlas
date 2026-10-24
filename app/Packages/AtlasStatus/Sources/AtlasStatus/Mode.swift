@@ -7,7 +7,7 @@ import AtlasService
 /// word from the service is a change even on the same row.
 public struct Mode: Equatable, Sendable {
   /// The status table's rows.
-  public enum Kind: Equatable, Sendable {
+  public enum Kind: Equatable, Sendable, CaseIterable {
     /// Nothing is happening in the helper.
     case idle
     /// An agent is acting in the helper.

@@ -46,6 +46,8 @@ enum AtlasApp {
       case .renderSettings:
         needsDebugBuild("--render-settings")
     #endif
+    case .renderMenuBar(let folder):
+      drawMenuBar(to: folder)
     case .app(let render, let dark):
       app(configuration: configuration, loginItem: loginItem, clock: clock, render: render, dark: dark)
     }
@@ -112,6 +114,16 @@ enum AtlasApp {
       exit(2)
     }
   #endif
+
+  /// `--render-menubar DIR`: draw the menu bar item in every state, light and dark, then exit. It needs no preview
+  /// state or service, so release builds draw it too.
+  ///
+  /// - Parameter folder: Where the PNGs go.
+  /// - Returns: Never; the process exits.
+  static func drawMenuBar(to folder: String) -> Never {
+    DockIcon.settle(windowOpen: false)
+    exit(MenuBarRender.draw(to: folder) ? 0 : 4)
+  }
 
   /// `--render PATH`: draw the panel from the service's status, then exit.
   ///

@@ -1,9 +1,17 @@
-// render-app.mjs keeps its own table of ATLAS_RENDER_* settings; it must
-// name exactly what PanelRender.swift draws.
+// render-app.mjs keeps its own table of ATLAS_RENDER_* settings and menu bar
+// states; it must name exactly what PanelRender.swift and MenuBarRender.swift
+// draw.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { ALERT_RENDERS, NOTICE_RENDERS, PANEL_MODES } from '../scripts/render-app.mjs';
+import {
+  ALERT_RENDERS,
+  GROUPS,
+  MENUBAR_BARS,
+  MENUBAR_STATES,
+  NOTICE_RENDERS,
+  PANEL_MODES,
+} from '../scripts/render-app.mjs';
 
 const swift = readFileSync(
   new URL('../app/Sources/AtlasApp/Rendering/PanelRender.swift', import.meta.url),
@@ -66,4 +74,36 @@ test('the alert renders draw each phase: running, as Recover and as a destructiv
   ]) {
     assert.ok(files.includes(file), `${file} has no render`);
   }
+});
+
+const menuBar = readFileSync(
+  new URL('../app/Sources/AtlasApp/Rendering/MenuBarRender.swift', import.meta.url),
+  'utf8',
+);
+
+// The text of MenuBarRender's `static let NAME ... = [ ... ]`, up to its
+// closing bracket at the start of a line.
+function menuBarLiteral(name) {
+  const match = new RegExp(`static let ${name}\\b[^=]*=\\s*\\[([\\s\\S]*?)\\n\\s*\\]`).exec(
+    menuBar,
+  );
+  assert.ok(match, `MenuBarRender.${name} not found`);
+  return match[1];
+}
+
+test('the render table names exactly the states in MenuBarRender.states', () => {
+  const states = [...menuBarLiteral('states').matchAll(/\(\s*"([^"]+)",\s*\.\w+\s*\)/g)].map(
+    (match) => match[1],
+  );
+  assert.ok(states.length > 0, 'no states read from MenuBarRender.states');
+  assert.deepEqual(MENUBAR_STATES, states);
+});
+
+test('the render table names exactly the bars in MenuBarRender.bars', () => {
+  const bars = [...menuBarLiteral('bars').matchAll(/\(\s*"([^"]+)",/g)].map((match) => match[1]);
+  assert.deepEqual(MENUBAR_BARS, bars);
+});
+
+test('the menu bar is a render group of its own', () => {
+  assert.ok(GROUPS.includes('menubar'));
 });

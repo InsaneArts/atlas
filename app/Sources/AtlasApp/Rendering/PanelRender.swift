@@ -102,17 +102,18 @@ enum PanelRender {
     canvas.addSubview(fill(canvas.bounds, .windowBackgroundColor))
     let strip = NSRect(x: 0, y: size.height, width: size.width, height: barHeight)
     canvas.addSubview(fill(strip, .underPageBackgroundColor))
-    // The glyph at its own size, centred in the strip as the menu bar does.
-    let image = StatusGlyph.image(for: PanelPresenter.mode(snapshot))
-    let glyph = NSImageView(image: image)
-    glyph.imageScaling = .scaleNone
-    glyph.frame = NSRect(
-      x: (size.width - margin - glyphInset).rounded(),
-      y: (size.height + (barHeight - image.size.height) / 2).rounded(.down),
-      width: image.size.width,
-      height: image.size.height
+    // The menu bar item at its own size, centred in the strip as the menu bar does.
+    let item = MenuBarRender.item(
+      PanelPresenter.mode(snapshot).kind,
+      appearance: appearance ?? NSAppearance.currentDrawing()
     )
-    canvas.addSubview(glyph)
+    item.setFrameOrigin(
+      NSPoint(
+        x: (size.width - margin - glyphInset).rounded(),
+        y: (size.height + (barHeight - item.frame.height) / 2).rounded(.down)
+      )
+    )
+    canvas.addSubview(item)
     content.frame = NSRect(origin: .zero, size: size)
     canvas.addSubview(content)
     return write(canvas, to: path, appearance: appearance)
@@ -143,7 +144,7 @@ enum PanelRender {
   ///   - frame: Where it sits.
   ///   - colour: Its colour.
   /// - Returns: The box.
-  private static func fill(_ frame: NSRect, _ colour: NSColor) -> NSBox {
+  static func fill(_ frame: NSRect, _ colour: NSColor) -> NSBox {
     let box = NSBox(frame: frame)
     box.boxType = .custom
     box.borderWidth = 0

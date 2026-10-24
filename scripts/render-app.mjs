@@ -9,7 +9,9 @@
 // - settings: --render-settings;
 // - panel: --render --dark, once a mode in PANEL_MODES plus paused;
 // - alerts: --render --dark, once an entry in ALERT_RENDERS, then once a
-//   helper notice in NOTICE_RENDERS (the system alerts --notice shows).
+//   helper notice in NOTICE_RENDERS (the system alerts --notice shows);
+// - menubar: --render-menubar, the menu bar item in every state of
+//   MENUBAR_STATES on each bar of MENUBAR_BARS, as <state>-<bar>.png.
 //
 // The panel and the alerts read a viewer service from the capability URL on
 // stdin. Here that is a stub on a free port answering every route with 404,
@@ -23,7 +25,15 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-export const GROUPS = ['viewer', 'onboarding', 'settings', 'panel', 'alerts', 'components'];
+export const GROUPS = [
+  'viewer',
+  'onboarding',
+  'settings',
+  'panel',
+  'alerts',
+  'components',
+  'menubar',
+];
 
 // The one table of ATLAS_RENDER_* settings. It must match PanelRender.modes
 // PanelRender.alerts and PanelRender.notices in
@@ -83,6 +93,28 @@ export const NOTICE_RENDERS = [
   { file: 'notice-set-up', environment: { ATLAS_RENDER_NOTICE: 'setUp' } },
   { file: 'notice-running-again', environment: { ATLAS_RENDER_NOTICE: 'runningAgain' } },
 ];
+
+// The menu bar item's states and bars. They must match MenuBarRender.states
+// and MenuBarRender.bars in app/Sources/AtlasApp/Rendering/MenuBarRender.swift;
+// tests/test_render_table.mjs checks that they do.
+export const MENUBAR_STATES = [
+  'idle',
+  'working',
+  'control',
+  'needsYou',
+  'stopped',
+  'notReady',
+  'loggedOut',
+  'connecting',
+  'inUseElsewhere',
+];
+
+export const MENUBAR_BARS = ['light', 'dark'];
+
+// The files --render-menubar writes, one a state on each bar.
+export const MENUBAR_FILES = MENUBAR_STATES.flatMap((state) =>
+  MENUBAR_BARS.map((bar) => `${state}-${bar}.png`),
+);
 
 export const PANEL_RENDERS = [
   ...PANEL_MODES.map((mode) => ({
@@ -277,6 +309,20 @@ async function renderPanel(app, folder, renders, stub) {
   }
 }
 
+// Draws the menu bar item, then checks that it wrote exactly the table's files.
+async function renderMenuBar(app, folder) {
+  fresh(folder);
+  await run(app, ['--render-menubar', folder], { timeout: PANEL_TIMEOUT_MS });
+  const written = fs.readdirSync(folder).filter((name) => name.endsWith('.png'));
+  const missing = MENUBAR_FILES.filter((file) => !written.includes(file));
+  const extra = written.filter((file) => !MENUBAR_FILES.includes(file));
+  if (missing.length || extra.length) {
+    throw new Error(
+      `--render-menubar wrote ${written.length} files; missing [${missing}], unexpected [${extra}]`,
+    );
+  }
+}
+
 async function main() {
   const { out, only } = parse(process.argv.slice(2));
   if (inside(out, path.join(root, 'docs/evidence/redesign-v3/before'))) {
@@ -311,6 +357,7 @@ async function main() {
       await stub.close();
     }
   }
+  if (only.includes('menubar')) await renderMenuBar(app, path.join(out, 'menubar'));
   for (const group of only) console.log(`${group}: ${count(path.join(out, group))} files`);
 }
 

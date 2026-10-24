@@ -45,8 +45,7 @@ final class PanelPopover: NSObject, NSPopoverDelegate {
     StateTracking.follow(
       { [weak controller] in controller?.mode },
       apply: { [weak self] mode in
-        self?.item.button?.image = StatusGlyph.image(for: mode)
-        self?.item.button?.toolTip = PanelWords.statusItem(mode.word)
+        self?.item.show(mode.kind, description: PanelWords.statusItem(mode.word))
       }
     )
     controller.watch(open: false)

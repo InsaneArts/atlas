@@ -31,6 +31,8 @@ struct LaunchArgumentsTests {
     #expect(LaunchArguments.mode(["app", "--render", "p", "--render-viewer", "v"]) == .renderViewer("v"))
     #expect(LaunchArguments.mode(["app", "--render-settings", "s", "--render-viewer", "v"]) == .renderViewer("v"))
     #expect(LaunchArguments.mode(["app", "--render", "p", "--render-settings", "s"]) == .renderSettings("s"))
+    #expect(LaunchArguments.mode(["app", "--render-settings", "s", "--render-menubar", "m"]) == .renderSettings("s"))
+    #expect(LaunchArguments.mode(["app", "--render", "p", "--render-menubar", "m"]) == .renderMenuBar("m"))
     #expect(LaunchArguments.mode(["app", "--render", "p", "--dark"]) == .app(render: "p", dark: true))
     #expect(LaunchArguments.mode(["app"]) == .app(render: nil, dark: false))
   }

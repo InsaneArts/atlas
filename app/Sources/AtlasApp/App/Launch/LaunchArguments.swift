@@ -25,6 +25,9 @@ enum LaunchArguments {
     if let folder = value(after: "--render-settings", in: arguments) {
       return .renderSettings(folder)
     }
+    if let folder = value(after: "--render-menubar", in: arguments) {
+      return .renderMenuBar(folder)
+    }
     return .app(render: value(after: "--render", in: arguments), dark: arguments.contains("--dark"))
   }
 

@@ -53,7 +53,7 @@ public enum Motion {
     /// 0.9: one turn of the spinner.
     static let spin = Duration(seconds: 0.9)
     /// 1.6: one breath of the live badge (v3 `Duration.breathe`).
-    static let breathe = Duration(seconds: 1.6)
+    public static let breathe = Duration(seconds: 1.6)
     /// 2.4: how long a toast stays (v3 `Duration.toast`).
     static let toast = Duration(seconds: 2.4)
   }
@@ -209,7 +209,7 @@ public enum Motion {
   ///
   /// - Parameter reduceMotion: Whether the Reduce Motion setting is on.
   /// - Returns: False under Reduce Motion.
-  static func loops(reduceMotion: Bool) -> Bool {
+  public static func loops(reduceMotion: Bool) -> Bool {
     !reduceMotion
   }
 
