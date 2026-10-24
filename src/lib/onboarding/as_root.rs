@@ -57,6 +57,7 @@ cd /
 const STAGING: &str = r##"staged=
 trap '[[ -z $staged ]] || /bin/rm -rf -- "$staged"' EXIT
 trap 'exit 1' HUP INT TERM
+trap '' PIPE
 stage_executable() {
   [[ $executable == /*/Contents/MacOS/atlas ]] || refuse "Atlas has no app bundle"
   local source=${executable%/Contents/MacOS/atlas} bad
@@ -2560,6 +2561,64 @@ print -r -- '{"ok": true}'"#,
             assert!(outcome(&text).is_err(), "{failure}: {text}");
             assert_no_staged_copies(dir.path());
         }
+    }
+
+    #[test]
+    fn a_closed_reply_pipe_after_staging_still_removes_the_copy() {
+        use std::{
+            io::{BufRead, BufReader, Write},
+            process::Stdio,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("Source.app/Contents/MacOS");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("atlas"), "verified").unwrap();
+        fs::write(source.join("AtlasApp"), "verified app").unwrap();
+        let script = staged_stand_ins(
+            dir.path(),
+            &[
+                ("/usr/bin/id", "exit 1"),
+                ("/usr/sbin/chown", "exit 0"),
+                ("/usr/bin/codesign", "exit 0"),
+                (
+                    "/bin/chmod",
+                    r#"if [[ $1 == 755 ]]; then
+  print -r -- "$2"
+  IFS= read -r acknowledgement || exit 1
+fi
+/bin/chmod "$@""#,
+                ),
+            ],
+        );
+        let mut child = Command::new("/usr/bin/env")
+            .args(["-i", "/bin/zsh", "-p", "-f", "-c", &script, "zsh"])
+            .args([
+                "choose",
+                "opie",
+                source.join("atlas").to_str().unwrap(),
+                "502",
+                GUID,
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut reply = BufReader::new(child.stdout.take().unwrap());
+        let mut staged = String::new();
+        reply.read_line(&mut staged).unwrap();
+        assert!(Path::new(staged.trim()).join("Atlas.app").exists());
+        drop(reply);
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"continue\n")
+            .unwrap();
+        let status = child.wait().unwrap();
+        assert_no_staged_copies(dir.path());
+        assert_eq!(status.code(), Some(1));
     }
 
     fn assert_no_staged_copies(dir: &Path) {
