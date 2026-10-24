@@ -29,16 +29,34 @@ struct StepDisc: View {
         .animation(Motion.animation(Motion.draw, reduceMotion: reduceMotion), value: isDone)
     }
     .frame(width: Self.side, height: Self.side)
-    .keyframeAnimator(initialValue: 1, trigger: state) { disc, scale in
+    .keyframeAnimator(initialValue: CGFloat(1), trigger: state) { disc, scale in
       disc.scaleEffect(scale)
     } keyframes: { _ in
-      KeyframeTrack {
-        LinearKeyframe(1, duration: hold)
-        LinearKeyframe(popFrom, duration: .zero)
-        SpringKeyframe(1, spring: Motion.Springs.pop)
-      }
+      Self.pop(hold: hold, from: popFrom)
     }
     .accessibilityHidden(true)
+  }
+
+  /// The disc's pop as its state changes: it holds whole for `hold`, then jumps to `from` and springs back whole on
+  /// ``Motion/Springs/pop``.
+  ///
+  /// - Parameters:
+  ///   - hold: How long it stays whole first, in seconds; zero for none.
+  ///   - from: The scale it jumps to before springing back.
+  /// - Returns: The keyframes.
+  @KeyframesBuilder<CGFloat>
+  nonisolated static func pop(hold: TimeInterval, from: CGFloat) -> some Keyframes<CGFloat> {
+    // The jump is a move, never a zero-length linear keyframe: that divides by zero, and the NaN scale it gives makes
+    // AppKit abort the app in NSView.setFrameTransform.
+    KeyframeTrack {
+      if hold > 0 {
+        LinearKeyframe(1, duration: hold)
+      } else {
+        MoveKeyframe(1)
+      }
+      MoveKeyframe(from)
+      SpringKeyframe(1, spring: Motion.Springs.pop)
+    }
   }
 
   /// 22: the disc's side (v3 `.sdisc`).
