@@ -54,7 +54,7 @@ final class PanelController {
   /// The readings under way.
   @ObservationIgnored var polling: [Task<Void, Never>] = []
   /// Whether the panel is open, so the picture is read.
-  @ObservationIgnored var isOpen = false
+  var isOpen = false
   /// Numbers each status reading, so only the newest one started is shown.
   @ObservationIgnored var statusReading = 0
   /// Numbers each picture reading, under the same rule.

@@ -34,6 +34,8 @@ final class SettingsDock {
   private let lost: @MainActor () -> Void
   /// Whether a mouse button is down now: the person dragging a window, or dragging Atlas in.
   private let mouseDown: @MainActor () -> Bool
+  /// Whether Reduce Motion is on, read on each following move.
+  private let reduceMotion: @MainActor () -> Bool
   /// How the panel keeps to its place, look by look.
   private var follow = DockFollow()
   /// Following System Settings' window, while the panel guides.
@@ -60,6 +62,7 @@ final class SettingsDock {
   ///   - waitingFor: The permission the panel waits for, by its label.
   ///   - lost: Runs once System Settings, docked beside, is closed or quit.
   ///   - mouseDown: Whether a mouse button is down now; the Mac's own by default.
+  ///   - reduceMotion: Whether Reduce Motion is on; the person's setting unless a test says.
   init(
     window: NSWindow,
     glide: WindowGlide,
@@ -68,7 +71,8 @@ final class SettingsDock {
     settingsFrame: @escaping @MainActor () -> CGRect? = SystemSettingsWindow.frame,
     waitingFor: @escaping @MainActor () -> String?,
     lost: @escaping @MainActor () -> Void,
-    mouseDown: @escaping @MainActor () -> Bool = { NSEvent.pressedMouseButtons != 0 }
+    mouseDown: @escaping @MainActor () -> Bool = { NSEvent.pressedMouseButtons != 0 },
+    reduceMotion: @escaping @MainActor () -> Bool = { Appearance.reduceMotion }
   ) {
     self.window = window
     self.glide = glide
@@ -78,6 +82,7 @@ final class SettingsDock {
     self.waitingFor = waitingFor
     self.lost = lost
     self.mouseDown = mouseDown
+    self.reduceMotion = reduceMotion
   }
 
   /// Moves the panel beside System Settings, or, while it shows no window yet, shrinks it where the card was; then
@@ -159,6 +164,11 @@ final class SettingsDock {
   ///   - origin: Where it belongs.
   ///   - elapsed: The time since the last move.
   private func move(toward origin: CGPoint, after elapsed: Duration) {
+    if reduceMotion() {
+      follow = DockFollow()
+      window.setFrameOrigin(origin)
+      return
+    }
     let distance = hypot(origin.x - window.frame.minX, origin.y - window.frame.minY)
     guard distance >= OnboardingPlacement.followSlack || follow.isCatchingUp else { return }
     let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18

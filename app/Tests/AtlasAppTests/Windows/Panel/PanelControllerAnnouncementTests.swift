@@ -6,6 +6,33 @@ import Testing
 
 @Suite("PanelController announcements")
 struct PanelControllerAnnouncementTests {
+  @Test("tracking installed while closed announces a status change after the panel opens")
+  func openingStartsAnnouncementTracking() async throws {
+    let service = ScriptedService()
+    let clock = ManualClock()
+    let panel = PanelController.scripted(service, clock: clock)
+    service.reply = ["overview": ["mode": "agent", "state": "working"]]
+    await panel.readStatus()
+    StateTracking.follow(
+      { [weak panel] () -> String?? in
+        guard let panel else { return nil }
+        return .some(panel.askingStatus)
+      },
+      apply: { [weak panel] (text: String?) in panel?.announceSoon(text) }
+    )
+    #expect(clock.waiting.isEmpty)
+    panel.isOpen = true
+    panel.restartAnnouncements()
+    service.reply = ["overview": ["mode": "stopped", "state": "stopped"]]
+    await panel.readStatus()
+    let text = try #require(panel.askingStatus)
+    try await clock.untilSleeping(for: PanelController.announceAfter, "the announcement never waited")
+    #expect(clock.waiting.count == 1)
+    clock.advance(by: PanelController.announceAfter)
+    try await settle("the status change was never announced") { panel.state.announcement == text }
+    #expect(clock.waiting.isEmpty)
+  }
+
   @Test("the open panel announces asking states after a second, and stays quiet for Working and Idle")
   func onlyAskingStatesAreAnnounced() async throws {
     let service = ScriptedService()

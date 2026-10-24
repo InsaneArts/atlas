@@ -32,8 +32,9 @@ struct SettingsDockTests {
 
     /// Docks the panel.
     ///
+    /// - Parameter reduceMotion: Whether following should move at once.
     /// - Throws: A failed requirement with no screen.
-    init() throws {
+    init(reduceMotion: @escaping @MainActor () -> Bool = { false }) throws {
       let screen = try #require(NSScreen.main, "a screen to dock on")
       visible = screen.visibleFrame
       window = NSWindow(
@@ -56,7 +57,8 @@ struct SettingsDockTests {
         settingsFrame: { [settings] in settings.frame },
         waitingFor: { nil },
         lost: {},
-        mouseDown: { [pointer] in pointer.isDown }
+        mouseDown: { [pointer] in pointer.isDown },
+        reduceMotion: reduceMotion
       )
       dock.start(size: size, visible: visible)
       glides.endAll()
@@ -109,14 +111,23 @@ struct SettingsDockTests {
     }
   }
 
-  @Test("after a jump, the panel catches up on a spring with no bounce rather than snapping")
-  func aJumpIsCaughtUpOnASpring() async throws {
-    let docked = try Docked()
+  @Test(
+    "after a jump, the panel moves at once under Reduce Motion and otherwise catches up on a spring",
+    arguments: [false, true]
+  )
+  func aJumpRespectsReduceMotion(reduced: Bool) async throws {
+    let docked = try Docked(reduceMotion: { reduced })
     defer { docked.close() }
     let start = docked.window.frame.origin
     docked.settings.frame = docked.settings.frame.offsetBy(dx: 0, dy: -200)
     try await docked.clock.untilSleeping(for: SettingsDock.followEvery, "the dock waits for its next look")
     docked.clock.advance(by: SettingsDock.followEvery)
+    if reduced {
+      try await docked.clock.untilSleeping(for: SettingsDock.followEvery, "the dock never resumed its usual looks")
+      #expect(docked.window.frame.origin == docked.place)
+      #expect(docked.glides.travels.count == 1, "following moves without a glide")
+      return
+    }
     try await docked.clock.untilSleeping(for: SettingsDock.followFrame, "the dock never caught up frame by frame")
     let after = docked.window.frame.origin
     #expect(after.y < start.y && after.y > docked.place.y, "part of the way, not snapped: \(after)")
