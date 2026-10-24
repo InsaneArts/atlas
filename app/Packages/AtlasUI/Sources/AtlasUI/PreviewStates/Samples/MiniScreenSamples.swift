@@ -1,19 +1,38 @@
 #if DEBUG
   import SwiftUI
 
-  /// The mini screen's sample, over the sample desktop.
+  /// The mini screen's sample, over the sample desktop, at the size the main window gives it.
   struct MiniScreenSamples: View {
+    /// The small screen live, then paused.
     var body: some View {
       Group {
         if let picture = SampleDesktop.picture {
           HStack(spacing: Spacing.xxl) {
-            MiniScreen(state: MiniScreenState(picture: picture)) {}
-            MiniScreen(state: MiniScreenState(picture: picture, isPaused: true)) {}
+            sample(MiniScreenState(picture: picture))
+            sample(MiniScreenState(picture: picture, isPaused: true))
           }
         }
       }
       .padding(Spacing.xxl)
       .sampleSurface()
+    }
+
+    /// One mini screen, its picture drawn as the previews draw the live slot.
+    ///
+    /// - Parameter state: The picture, and whether it is paused.
+    /// - Returns: The mini screen at the main window's size.
+    private func sample(_ state: MiniScreenState) -> some View {
+      MiniScreen(state: state) {
+      } picture: {
+        StillPicture(
+          ViewerLivePicture(
+            picture: state.picture,
+            saturation: PictureTreatment.saturation(for: state.look),
+            corner: Radius.medium
+          )
+        )
+      }
+      .frame(width: ViewerLayout.miniSize.width, height: ViewerLayout.miniSize.height)
     }
   }
 #endif

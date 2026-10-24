@@ -21,7 +21,7 @@ enum ViewerPresenter {
       alert: alert(snapshot),
       // The screen keeps the corner over Activity and Apps, faded while paused; the Screenshots grid has pictures of
       // its own.
-      mini: tab == .activity || tab == .apps
+      mini: tab.keepsScreenInCorner
         ? snapshot.reading.picture.map { MiniScreenState(picture: $0, isPaused: snapshot.session.paused) } : nil,
       pane: pane(snapshot),
       toast: snapshot.session.toast

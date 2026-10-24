@@ -7,7 +7,8 @@ import SwiftUI
 ///
 /// The picture itself comes from `livePicture`, the app's layer that swaps each frame whole (v3 V17), or an image in
 /// previews and renders; the black that darkens a look is laid over it here. The shell's input surface covers exactly
-/// the picture, so a click lands where the picture shows it.
+/// the picture, so a click lands where the picture shows it. Fitted, the picture is the one that shrinks into the
+/// corner as the Screen is left and grows back out of it (``ScreenZoom``, v3 V16).
 struct ViewerScreen<Input: View, LivePicture: View>: View {
   /// What the screen shows.
   let state: ViewerScreenState
@@ -17,6 +18,8 @@ struct ViewerScreen<Input: View, LivePicture: View>: View {
   let input: Input
   /// Draws the newest picture.
   let livePicture: (ViewerLivePicture) -> LivePicture
+  /// The namespace the picture moves in between the stage and the corner, the window's.
+  let zoom: Namespace.ID
 
   /// The picture under what lies over it, or why there is none.
   var body: some View {
@@ -63,6 +66,7 @@ struct ViewerScreen<Input: View, LivePicture: View>: View {
           .elevation(.resting)
       }
       .overlay { ViewerControlRim(isInControl: state.look == .inControl) }
+      .screenZoom(in: zoom)
       .aspectRatio(size, contentMode: .fit)
     }
   }
@@ -108,11 +112,13 @@ struct ViewerScreen<Input: View, LivePicture: View>: View {
 
 #if DEBUG
   #Preview("You have control") {
+    @Previewable @Namespace var zoom
     ViewerScreen(
       state: PreviewStates.viewerControl.screen,
       send: { _ in },
       input: EmptyView(),
-      livePicture: StillPicture.init
+      livePicture: StillPicture.init,
+      zoom: zoom
     )
     .frame(width: SampleWidth.column * 2)
     .padding(Spacing.l)
@@ -120,11 +126,13 @@ struct ViewerScreen<Input: View, LivePicture: View>: View {
   }
 
   #Preview("Logged out") {
+    @Previewable @Namespace var zoom
     ViewerScreen(
       state: PreviewStates.viewerLoggedOut.screen,
       send: { _ in },
       input: EmptyView(),
-      livePicture: StillPicture.init
+      livePicture: StillPicture.init,
+      zoom: zoom
     )
     .frame(width: SampleWidth.column * 2)
     .sampleSurface()
@@ -132,6 +140,7 @@ struct ViewerScreen<Input: View, LivePicture: View>: View {
 
   #Preview("Interactive") {
     @Previewable @State var state = PreviewStates.viewerWorking
+    @Previewable @Namespace var zoom
     InteractivePreview {
       Menu(String("State")) {
         ForEach(PreviewStates.viewer) { preview in
@@ -140,7 +149,7 @@ struct ViewerScreen<Input: View, LivePicture: View>: View {
       }
       .fixedSize()
     } content: {
-      ViewerScreen(state: state.screen, send: { _ in }, input: EmptyView(), livePicture: StillPicture.init)
+      ViewerScreen(state: state.screen, send: { _ in }, input: EmptyView(), livePicture: StillPicture.init, zoom: zoom)
         .frame(width: SampleWidth.column * 2, height: SampleWidth.column)
         .padding(Spacing.l)
     }

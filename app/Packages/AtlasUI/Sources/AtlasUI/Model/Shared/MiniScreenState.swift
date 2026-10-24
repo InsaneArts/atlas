@@ -5,6 +5,11 @@ public struct MiniScreenState: Equatable, Sendable {
   /// Whether the picture is paused, which draws it faded with "Paused" in place of "Live".
   public var isPaused: Bool
 
+  /// How the picture is drawn: paused, or live.
+  public var look: PictureLook {
+    isPaused ? .paused : .live
+  }
+
   /// Creates the small screen's state.
   ///
   /// - Parameters:

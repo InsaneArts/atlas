@@ -46,6 +46,11 @@ enum ViewerLayout {
   static let barLayouts: [ViewerTopRowFit] = [.full, .statusWord, .tabSymbols, .actionSymbols]
   /// 26: the mini screen's inset from the window's right and bottom edges (mac.py `mini`).
   static let miniInset: CGFloat = 26
+  /// 248 by 155: the mini screen, at the screen's 16 by 10 (mac.py `mini`).
+  static let miniSize = CGSize(width: 248, height: 155)
+  /// 0.9: how small the mini screen starts as it fades in without growing from the stage, as from Screenshots (v3
+  /// `vSwitchTab`'s arrival).
+  static let miniArrival: CGFloat = 0.9
   /// 16 by 10: a screenshot's tile, and the screen's shape where a sample needs one.
   static let placeholderAspect = CGSize(width: 16, height: 10)
   /// 3: the most lines a notice over the screen takes, so a longer one is read whole yet never covers the picture.
@@ -127,6 +132,19 @@ enum ViewerLayout {
   /// - Returns: The trailing room.
   static func stageTrailing(showsDetails: Bool) -> CGFloat {
     showsDetails ? detailsColumn : .zero
+  }
+
+  /// How large the mini screen draws as it comes in: from ``miniArrival`` while it fades in on its own; its own size
+  /// as it grows from the stage, which moves it instead, once in, and under Reduce Motion, where it only fades.
+  ///
+  /// - Parameters:
+  ///   - isComing: Whether it is about to come in, at its transition's start.
+  ///   - growsFromStage: Whether it arrives as the stage's picture moving into the corner.
+  ///   - reduceMotion: Whether the Reduce Motion setting is on.
+  /// - Returns: Its scale.
+  static func miniScale(isComing: Bool, growsFromStage: Bool, reduceMotion: Bool) -> CGFloat {
+    guard isComing, !growsFromStage, !reduceMotion else { return 1 }
+    return miniArrival
   }
 
   /// How far Details sits from its place: there while it shows, else its whole column further out, past the

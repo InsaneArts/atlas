@@ -20,8 +20,12 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
   @State private var settledTab: ViewerTab
   /// Which way the last switch went, from ``ViewerTab/direction(from:to:)``.
   @State private var settledDirection = 0
+  /// Whether the last switch moved the picture between the stage and the corner, from ``ScreenZoom``.
+  @State private var settledZoom = false
   /// The namespace a screenshot zooms in between its tile and the large view.
   @Namespace private var zoom
+  /// The namespace the helper's screen moves in between the stage and the corner (v3 V16).
+  @Namespace private var screenZoom
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   /// Creates the window's content.
@@ -88,24 +92,46 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
 
   /// The stage: the Screen tab or the selected tab's pane, in the frame every tab shares, the window's inset at its
   /// sides and below and none above, so the picture starts right under the bar (v3 `.vpane`); the small screen in its
-  /// corner and the toast at its top.
+  /// corner and the toast at its top. A switch between the Screen and a tab with the small screen moves the picture
+  /// between the two on ``Motion/zoom`` (v3 V16); every other switch keeps the panes' own timing.
   private var stage: some View {
     ZStack {
       pane
         .id(state.pane.tab)
-        .transition(PaneShift.transition(reduceMotion: reduceMotion))
+        .transition(PaneShift.transition(isScreen: state.pane.tab == .screen, reduceMotion: reduceMotion))
     }
     .environment(\.paneDirection, paneDirection)
     .padding([.horizontal, .bottom], Spacing.m)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     // The small screen keeps to the stage's corner, clear of Details.
-    .overlay(alignment: .bottomTrailing) {
+    .overlay(alignment: .bottomTrailing) { corner }
+    .overlay(alignment: .top) { toast }
+    .environment(\.screenZooms, screenZooms)
+    .animation(ScreenZoom.animation(zooms: screenZooms), value: state.pane.tab)
+  }
+
+  /// The helper's screen, small and live in the stage's corner over Activity and Apps: the same live slot as the
+  /// stage's picture, which it grows out of as the Screen is left and turns back into as it is chosen again.
+  private var corner: some View {
+    ZStack {
       if let mini = state.mini {
-        MiniScreen(state: mini) { send(.selectTab(.screen)) }
-          .padding(ViewerLayout.miniInset)
+        MiniScreen(state: mini) {
+          send(.selectTab(.screen))
+        } picture: {
+          livePicture(
+            ViewerLivePicture(
+              picture: mini.picture,
+              saturation: PictureTreatment.saturation(for: mini.look),
+              corner: Radius.medium
+            )
+          )
+        }
+        .screenZoom(in: screenZoom)
+        .frame(width: ViewerLayout.miniSize.width, height: ViewerLayout.miniSize.height)
+        .padding(ViewerLayout.miniInset)
+        .transition(CornerShift.transition(growsFromStage: zoomingNow, reduceMotion: reduceMotion))
       }
     }
-    .overlay(alignment: .top) { toast }
   }
 
   /// Whether Details shows.
@@ -120,12 +146,26 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
     return tab == settledTab ? settledDirection : ViewerTab.direction(from: settledTab, to: tab)
   }
 
+  /// Whether the picture moves between the stage and the corner for the tab shown now: from the tab last settled on
+  /// as the switch begins, and that answer once settled, as ``paneDirection`` is.
+  private var screenZooms: Bool {
+    let tab = state.pane.tab
+    guard tab != settledTab else { return settledZoom }
+    return ScreenZoom.zooms(from: settledTab, to: tab, screen: state.screen, reduceMotion: reduceMotion)
+  }
+
+  /// Whether the picture is moving between the stage and the corner in this very switch, before it settles: what the
+  /// small screen arriving reads, so a small screen that comes with the first picture, with no switch, fades in.
+  private var zoomingNow: Bool {
+    state.pane.tab != settledTab && screenZooms
+  }
+
   /// The Screen tab, or the selected tab's pane: Activity, Apps and Screenshots fill the frame inside the window's
   /// inset, and the Screen's picture fits within that same frame at its own shape.
   @ViewBuilder private var pane: some View {
     switch state.pane {
     case .screen:
-      ViewerScreen(state: state.screen, send: send, input: input, livePicture: livePicture)
+      ViewerScreen(state: state.screen, send: send, input: input, livePicture: livePicture, zoom: screenZoom)
     case .activity(let activity):
       ViewerActivityPane(state: activity, send: send)
     case .apps(let apps):
@@ -162,13 +202,14 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
     return shots.large
   }
 
-  /// Settles the stage on a new tab once its switch has begun, keeping the way it went.
+  /// Settles the stage on a new tab once its switch has begun, keeping the way it went and whether the picture moved.
   ///
   /// - Parameters:
   ///   - old: The tab left.
   ///   - new: The tab shown.
   private func settle(from old: ViewerTab, to new: ViewerTab) {
     settledDirection = ViewerTab.direction(from: old, to: new)
+    settledZoom = ScreenZoom.zooms(from: old, to: new, screen: state.screen, reduceMotion: reduceMotion)
     settledTab = new
   }
 
