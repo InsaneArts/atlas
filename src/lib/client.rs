@@ -475,29 +475,47 @@ impl Client {
 
         // The person's side keeps the Stop first, so it holds even when the
         // helper's input service is down or older: agents' commands read it.
-        self.controller.note_stop(on)?;
+        if on {
+            self.controller.note_stop(true)?;
+        }
 
         let unreachable = |why: &str| {
-            json!({
+            if !on {
+                if !matches!(
+                    self.config
+                        .input_socket
+                        .with_extension("stopped")
+                        .try_exists(),
+                    Ok(false)
+                ) {
+                    return Err(Error::new(
+                        "stopped",
+                        format!("{why} Recover input before agents can resume."),
+                    ));
+                }
+                self.controller.note_stop(false)?;
+            }
+            Ok(json!({
                 "ok": true,
                 "held": on,
                 "kept": true,
                 "warnings": [format!("{why} Agents are {} here all the same.", if on { "stopped" } else { "free to go on" })],
-            })
+            }))
         };
         let Ok(hello) = self.input_transport().call(&json!({"op": "hello"})).await else {
-            return Ok(unreachable("The helper's input service isn't running."));
+            return unreachable("The helper's input service isn't running.");
         };
         let capable = hello["capabilities"]
             .as_array()
             .is_some_and(|capabilities| capabilities.iter().any(|c| c == "hold"));
         if !capable {
-            return Ok(unreachable(
-                "The helper's input service is from an older build.",
-            ));
+            return unreachable("The helper's input service is from an older build.");
         }
 
         let mut reply = self.native_request(json!({"op": "hold", "on": on})).await?;
+        if !on {
+            self.controller.note_stop(false)?;
+        }
         if reply["kept"] == false {
             reply["warnings"] = json!([
                 "The helper could not save this, so it lasts only until its input restarts"
@@ -507,13 +525,12 @@ impl Client {
         Ok(reply)
     }
 
-    /// Once the person stops agents: the stop's saved marker appears, or
-    /// the input service says so.
+    /// Once the person stops agents: either side's saved marker appears.
     async fn stopped_while_running(&self) {
         let marker = self.config.input_socket.with_extension("stopped");
         loop {
             tokio::time::sleep(Duration::from_millis(300)).await;
-            if marker.exists() {
+            if marker.exists() || self.controller.stop_noted() {
                 return;
             }
         }
@@ -1351,7 +1368,10 @@ impl Client {
         // starts, once the person has stopped agents; reads and Atlas's own
         // steps (no `doing`) go on.
         let cuttable = request["op"] == "run" && self.actor == Actor::Agent && self.doing.is_some();
-        if cuttable && self.config.input_socket.with_extension("stopped").exists() {
+        if cuttable
+            && (self.config.input_socket.with_extension("stopped").exists()
+                || self.controller.stop_noted())
+        {
             return Err(Error::new("stopped", crate::error::STOPPED));
         }
 
@@ -2228,7 +2248,27 @@ mod tests {
                 .contains("isn't running")
         );
         assert_eq!(agent.require_going().await.unwrap_err().code, "stopped");
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), agent.stopped_while_running())
+                .await
+                .is_ok()
+        );
+        let acting = agent.clone().doing(Doing::new("run"));
+        let refused = acting
+            .mutate(json!({"op": "run", "argv": ["true"]}), None, None)
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code, "stopped");
+        assert!(!refused.uncertain, "nothing started");
 
+        let marker = person.config.input_socket.with_extension("stopped");
+        fs::write(&marker, b"").unwrap();
+        let refused = person.hold(false).await.unwrap_err();
+        assert_eq!(refused.code, "stopped");
+        assert!(person.controller.stop_noted());
+        assert!(marker.exists());
+
+        fs::remove_file(marker).unwrap();
         person.hold(false).await.unwrap();
         assert!(agent.require_going().await.is_ok(), "resumed");
     }
@@ -2246,6 +2286,118 @@ mod tests {
         std::fs::write(&marker, b"").unwrap();
         let heard = tokio::time::timeout(Duration::from_secs(2), client.stopped_while_running());
         assert!(heard.await.is_ok(), "the stop is heard within a moment");
+    }
+
+    #[tokio::test]
+    async fn a_local_stop_cancels_a_running_command_and_refuses_its_next_dispatch() {
+        let (dir, mut client, input, _session) = native_client();
+        drop(input);
+        client.transport.path = dir.path().join("helper.sock");
+        let helper = UnixListener::bind(&client.transport.path).unwrap();
+        let mut person = client.clone();
+        person.actor = Actor::Viewer;
+        let acting = client.doing(Doing::new("run"));
+        let run = json!({"op": "run", "argv": ["true"], "timeoutMs": 1000});
+        let ownership = acting.controller.acquire(false).unwrap();
+        let mut caller = Box::pin(acting.mutate(run.clone(), None, None));
+        let mut peer = dispatched(&mut caller, &helper, "run").await;
+        let pending = acting.controller.pending().unwrap();
+        assert_eq!(pending.len(), 1);
+
+        let stopped = person.hold(true).await.unwrap();
+        assert_eq!(stopped["ok"], true);
+        assert_eq!(stopped["held"], true);
+        assert!(
+            !acting
+                .config
+                .input_socket
+                .with_extension("stopped")
+                .exists()
+        );
+        let error = tokio::time::timeout(Duration::from_secs(2), caller)
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.code, "stopped");
+        assert!(error.uncertain);
+        assert_eq!(acting.controller.pending().unwrap(), pending);
+        assert_eq!(acting.controller.acquire(true).unwrap_err().code, "busy");
+        let mut line = String::new();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), peer.read_line(&mut line))
+                .await
+                .unwrap()
+                .unwrap(),
+            0,
+            "the helper sees the cancelled connection"
+        );
+
+        let error = acting.mutate(run, None, None).await.unwrap_err();
+        assert_eq!(error.code, "stopped");
+        assert!(!error.uncertain, "the next command never starts");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), helper.accept())
+                .await
+                .is_err()
+        );
+        drop(ownership);
+        recovery_settles_the_abandoned_claim(&acting);
+    }
+
+    #[tokio::test]
+    async fn resume_keeps_the_local_stop_until_the_helpers_stop_can_be_cleared() {
+        let (_dir, client, listener, _session) = native_client();
+        let mut person = client;
+        person.actor = Actor::Viewer;
+        let marker = person.config.input_socket.with_extension("stopped");
+        let mut stopping = Box::pin(person.hold(true));
+        let mut hello = dispatched(&mut stopping, &listener, "hello").await;
+        answer(&mut hello, json!({"ok": true, "capabilities": ["hold"]})).await;
+        let mut hold = dispatched(&mut stopping, &listener, "hold").await;
+        fs::write(&marker, b"").unwrap();
+        answer(&mut hold, json!({"ok": true, "held": true, "kept": true})).await;
+        assert_eq!(stopping.await.unwrap()["held"], true);
+        drop(listener);
+
+        let error = person.hold(false).await.unwrap_err();
+        assert_eq!(error.code, "stopped");
+        assert!(
+            error
+                .error
+                .contains("Recover input before agents can resume")
+        );
+        assert!(person.controller.stop_noted());
+        assert!(marker.exists());
+        let mut agent = person.clone();
+        agent.actor = Actor::Agent;
+        assert_eq!(agent.require_going().await.unwrap_err().code, "stopped");
+
+        fs::remove_file(marker).unwrap();
+        assert_eq!(person.hold(false).await.unwrap()["held"], false);
+        assert!(!person.controller.stop_noted());
+    }
+
+    #[tokio::test]
+    async fn resume_clears_the_local_stop_only_after_native_acknowledgment() {
+        for acknowledged in [false, true] {
+            let (_dir, client, listener, _session) = native_client();
+            let mut person = client;
+            person.actor = Actor::Viewer;
+            person.controller.note_stop(true).unwrap();
+            let mut resuming = Box::pin(person.hold(false));
+            let mut hello = dispatched(&mut resuming, &listener, "hello").await;
+            assert!(person.controller.stop_noted());
+            answer(&mut hello, json!({"ok": true, "capabilities": ["hold"]})).await;
+            let mut hold = dispatched(&mut resuming, &listener, "hold").await;
+            assert!(person.controller.stop_noted());
+            answer(
+                &mut hold,
+                json!({"ok": acknowledged, "code": "native", "error": "refused", "held": false}),
+            )
+            .await;
+            assert_eq!(resuming.await.is_ok(), acknowledged);
+            assert_eq!(person.controller.stop_noted(), !acknowledged);
+        }
     }
 
     #[tokio::test]

@@ -1537,13 +1537,18 @@ pub(crate) fn post_local(url: &str, route: &str, body: &Value) -> Result<Value> 
             .as_str()
             .and_then(crate::error::code)
             .unwrap_or("menubar");
-        return Err(Error::new(
+        let error = Error::new(
             code,
             reply["error"]
                 .as_str()
                 .unwrap_or("The menu bar's viewer refused")
                 .to_owned(),
-        ));
+        );
+        return Err(if reply["uncertain"] == true {
+            error.uncertain()
+        } else {
+            error
+        });
     }
 
     Ok(reply)
@@ -2133,6 +2138,45 @@ mod tests {
         assert_eq!(answering_off(&url).await, Some(Some(std::process::id())));
 
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn post_local_preserves_the_code_and_uncertainty_of_an_input_refusal() {
+        for uncertain in [true, false] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/", listener.local_addr().unwrap());
+            let app = axum::Router::new().route(
+                "/input",
+                axum::routing::post(move || async move {
+                    json_response(
+                        409,
+                        json!({
+                            "ok": false,
+                            "code": "session-changed",
+                            "error": "The session changed during input",
+                            "uncertain": uncertain,
+                        }),
+                    )
+                }),
+            );
+            let server = tokio::spawn(async move {
+                axum::serve(listener, app).await.unwrap();
+            });
+            let error = tokio::task::spawn_blocking(move || {
+                post_local(&url, "input", &json!({"actions": []}))
+            })
+            .await
+            .unwrap()
+            .unwrap_err();
+            server.abort();
+
+            assert_eq!(error.code, "session-changed");
+            assert_eq!(error.error, "The session changed during input");
+            assert_eq!(error.uncertain, uncertain);
+            let reported = serde_json::to_value(error).unwrap();
+            assert_eq!(reported["code"], "session-changed");
+            assert_eq!(reported["uncertain"], uncertain);
+        }
     }
 
     #[tokio::test]
