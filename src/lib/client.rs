@@ -356,6 +356,10 @@ impl Client {
 
         let reply = self.transport.call(&request).await?;
         if reply["ok"] != true {
+            if reply["code"].is_string() {
+                return Err(crate::transport::refusal(&reply));
+            }
+
             return Err(Error::new(
                 "capture",
                 reply["error"].as_str().unwrap_or("Capture failed"),

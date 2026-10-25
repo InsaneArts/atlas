@@ -352,6 +352,8 @@ fn reason(row: &Value) -> Option<&'static str> {
         "windows" => "The window wasn't there",
         "input" => "The mouse and keyboard weren't ready",
         "capture" => "The screen couldn't be read",
+        "permission" => "The helper can't record the screen",
+        "session-changed" => "The helper's screen changed meanwhile",
         "lease-lost" => "Control ended before it finished",
         "cancelled" => "It was cancelled",
         "uncertain" => "It may not have finished",
@@ -394,6 +396,20 @@ mod tests {
     use std::fs;
 
     const NOW: u128 = 100_000_000_000;
+
+    #[test]
+    fn every_screenshot_refusal_has_a_plain_reason_in_the_activity_list() {
+        for (code, words) in [
+            ("capture", "The screen couldn't be read"),
+            ("identity", "Atlas couldn't reach the helper"),
+            ("on-console", "Atlas couldn't reach the helper"),
+            ("permission", "The helper can't record the screen"),
+            ("session-changed", "The helper's screen changed meanwhile"),
+        ] {
+            let row = json!({"operation": "screenshot", "ok": false, "code": code});
+            assert_eq!(shown(&row, NOW)["reason"], words, "{code}");
+        }
+    }
 
     #[test]
     fn the_activity_log_is_read_only_as_a_plain_file_never_a_link_or_a_pipe() {
