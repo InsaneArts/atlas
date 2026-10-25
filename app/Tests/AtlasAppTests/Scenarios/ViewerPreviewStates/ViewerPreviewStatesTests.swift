@@ -86,8 +86,7 @@
       snapshot.reading.unavailable = unavailable
       if picture, let sample = SampleDesktop.picture {
         snapshot.reading.picture = sample
-        snapshot.reading.frame = Frame(
-          png: Data(),
+        snapshot.reading.frame = (
           id: sample.id,
           revision: sample.id,
           display: ViewerStatus.Size(width: 1440, height: 900)

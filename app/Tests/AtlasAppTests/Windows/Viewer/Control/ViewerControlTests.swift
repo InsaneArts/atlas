@@ -1,4 +1,5 @@
 import AsyncSupportTesting
+import AtlasService
 import AtlasServiceTesting
 import AtlasStatus
 import AtlasUI
@@ -376,7 +377,8 @@ struct ViewerControlTests {
       viewer.close()
       service.resume("frame")
     }
-    let frame = try #require(viewer.reading.frame)
+    let shown = try #require(viewer.reading.frame)
+    let frame = Frame(png: service.picture, id: shown.id, revision: shown.revision, display: shown.display)
     let decoded = try #require(await DesktopPicture.decode(frame))
     viewer.togglePause()
     service.hold.insert("frame")
