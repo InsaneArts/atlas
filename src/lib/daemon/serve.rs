@@ -393,32 +393,26 @@ async fn screenshot(daemon: &Daemon, max_dimension: Option<u32>) -> Value {
     };
     let taken = tokio::task::spawn_blocking(move || {
         let request = Request::Screenshot { max_dimension };
-        if let Some(refusal) = allowed(&request, on_console()) {
-            return Err(refusal);
-        }
-        let current = InputEpoch::from_proof(&session().map_err(refused)?, std::process::id())
-            .map_err(refused)?;
-        if current != epoch {
-            return Err(failure(
-                "session-changed",
-                "Session changed during capture; observe again",
-            ));
-        }
+        let validate = || {
+            if let Some(refusal) = allowed(&request, on_console()) {
+                return Err(refusal);
+            }
+            let current = InputEpoch::from_proof(&session().map_err(refused)?, std::process::id())
+                .map_err(refused)?;
+            if current != epoch {
+                return Err(failure(
+                    "session-changed",
+                    "Session changed during capture; observe again",
+                ));
+            }
+            Ok(())
+        };
+        validate()?;
 
         let shot = capture(epoch.display_id as u32, max_dimension).map_err(refused)?;
         let off_display = off_display_windows();
 
-        if let Some(refusal) = allowed(&request, on_console()) {
-            return Err(refusal);
-        }
-        let current = InputEpoch::from_proof(&session().map_err(refused)?, std::process::id())
-            .map_err(refused)?;
-        if current != epoch {
-            return Err(failure(
-                "session-changed",
-                "Session changed during capture; observe again",
-            ));
-        }
+        validate()?;
 
         Ok((shot, off_display))
     })
