@@ -280,6 +280,11 @@ const _: () = assert!(TYPE_MS * TEXT_MAX as u32 <= BATCH_MS);
 const KEY_MS: u32 = 10;
 
 pub fn validate(value: &Value, display: &Display) -> Result<()> {
+    parse(value, display).map(|_| ())
+}
+
+/// Parse the whole batch and validate every action before returning it for execution.
+pub(crate) fn parse(value: &Value, display: &Display) -> Result<Vec<Action>> {
     let actions = Vec::<Action>::deserialize(value)?;
     if actions.is_empty() || actions.len() > 32 {
         return Err(Error::new("input", "Send between 1 and 32 actions"));
@@ -308,7 +313,7 @@ pub fn validate(value: &Value, display: &Display) -> Result<()> {
 
     let mut cost: u32 = 0;
 
-    for (index, action) in actions.into_iter().enumerate() {
+    for (index, action) in actions.iter().enumerate() {
         // What is wrong with the action, if anything, and its share of the
         // batch budget.
         let (problem, duration) = match action {
@@ -318,15 +323,18 @@ pub fn validate(value: &Value, display: &Display) -> Result<()> {
                 count,
                 modifiers,
                 ..
-            } => (press(x, y, count, &modifiers), POINTER_MS),
-            Action::Move { x, y } => ((!point(x, y)).then_some(OFF_DISPLAY), 0),
+            } => (press(*x, *y, *count, modifiers), POINTER_MS),
+            Action::Move { x, y } => ((!point(*x, *y)).then_some(OFF_DISPLAY), 0),
             Action::Click {
                 x,
                 y,
                 count,
                 modifiers,
                 ..
-            } => (press(x, y, count, &modifiers), u32::from(count) * CLICK_MS),
+            } => (
+                press(*x, *y, *count, modifiers),
+                u32::from(*count) * CLICK_MS,
+            ),
             Action::Drag {
                 from_x,
                 from_y,
@@ -334,16 +342,14 @@ pub fn validate(value: &Value, display: &Display) -> Result<()> {
                 to_y,
                 ..
             } => (
-                (!(point(from_x, from_y) && point(to_x, to_y))).then_some(OFF_DISPLAY),
+                (!(point(*from_x, *from_y) && point(*to_x, *to_y))).then_some(OFF_DISPLAY),
                 DRAG_MS,
             ),
             Action::Scroll { x, y, dx, dy } => (
-                (!point(x, y))
+                (!point(*x, *y))
                     .then_some(OFF_DISPLAY)
-                    .or(
-                        (!((-100..=100).contains(&dx) && (-100..=100).contains(&dy)))
-                            .then_some("a scroll is at most 100 lines each way"),
-                    ),
+                    .or((!((-100..=100).contains(dx) && (-100..=100).contains(dy)))
+                        .then_some("a scroll is at most 100 lines each way")),
                 SCROLL_MS,
             ),
             Action::Type { text } => {
@@ -357,10 +363,10 @@ pub fn validate(value: &Value, display: &Display) -> Result<()> {
                 )
             }
             Action::Key { key } => (
-                (!valid_key(&key)).then_some("the key is not a known name (see atlas key --help)"),
+                (!valid_key(key)).then_some("the key is not a known name (see atlas key --help)"),
                 KEY_MS,
             ),
-            Action::Wait { ms } => ((ms > 250).then_some("a wait is at most 250 ms"), ms),
+            Action::Wait { ms } => ((*ms > 250).then_some("a wait is at most 250 ms"), *ms),
         };
 
         if let Some(problem) = problem {
@@ -383,7 +389,7 @@ pub fn validate(value: &Value, display: &Display) -> Result<()> {
         }
     }
 
-    Ok(())
+    Ok(actions)
 }
 
 #[cfg(test)]
