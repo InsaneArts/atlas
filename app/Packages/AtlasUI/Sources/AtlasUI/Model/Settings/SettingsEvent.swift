@@ -1,5 +1,7 @@
 /// What the person does in Settings, other than the General pane values carried by its binding.
 public enum SettingsEvent: Equatable, Sendable {
+  /// Returns focus to the current page heading without moving its scroll position.
+  case focusPage
   /// Shows a pane.
   case selectTab(SettingsTab)
   /// Opens a root or detail page without running a command.

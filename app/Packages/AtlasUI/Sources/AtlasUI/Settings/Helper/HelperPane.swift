@@ -66,6 +66,7 @@ struct HelperPane: View {
         trailing: .button("Recover…"),
         size: .compact
       ) { send(.askRecover) }
+      .environment(\.settingsAlertControl, true)
       .disabled(!state.buttons.canRecover)
       .settingsTarget(.recover)
     case .logOut:
@@ -75,6 +76,7 @@ struct HelperPane: View {
         trailing: .button("Log Out…"),
         size: .compact
       ) { send(.askLogOut) }
+      .environment(\.settingsAlertControl, true)
       .disabled(!state.buttons.canLogOut)
       .settingsTarget(.logOut)
     }

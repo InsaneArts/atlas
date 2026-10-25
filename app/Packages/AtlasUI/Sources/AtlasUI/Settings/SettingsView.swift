@@ -11,6 +11,8 @@ public struct SettingsView: View {
 
   /// Receives explicit results and alerts for VoiceOver, independently of routine helper status.
   private let announce: @MainActor (String) -> Void
+  /// Retains the invoking button's SwiftUI focus independently of the last reveal.
+  @State private var alertFocus = SettingsAlertFocus()
   /// The single outgoing surface; another navigation replaces it immediately.
   @State private var outgoing: SettingsSurface?
 
@@ -64,9 +66,13 @@ public struct SettingsView: View {
       AlertLayer(state: state.alert) { send($0 == .confirm ? .alertConfirm : .alertCancel) }
     }
     .windowSurface()
+    .environment(\.settingsAlertFocus, alertFocus)
     // The sidebar reserves traffic-light space in the full-size content view.
     .ignoresSafeArea(.container, edges: .top)
     .onChange(of: surface) { previous, _ in outgoing = previous }
+    .onChange(of: state.alert == nil) { _, dismissed in
+      if dismissed { alertFocus.restore { send(.focusPage) } }
+    }
     // Each only when its words change, so a poll that reads the same says nothing.
     .onChange(of: state.alert?.shownTitle) { _, title in if let title { announce(title) } }
     .onChange(of: state.alert?.refusal) { _, refusal in if let refusal { announce(refusal) } }

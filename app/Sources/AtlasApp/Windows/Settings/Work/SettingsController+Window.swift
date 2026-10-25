@@ -20,7 +20,7 @@ extension SettingsController {
     } else {
       target = .page(destination)
     }
-    session.reveal = SettingsReveal(target: target, request: (session.reveal?.request ?? 0) + 1)
+    session.reveal = SettingsReveal(target: target, request: (session.reveal?.request ?? 0) + 1, scrolls: false)
     enteredDestination()
   }
 

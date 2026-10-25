@@ -9,6 +9,12 @@
     @MainActor public static func settings(_ state: SettingsState, applying event: SettingsEvent) -> SettingsState {
       var next = state
       switch event {
+      case .focusPage:
+        next.reveal = SettingsReveal(
+          target: .page(next.location),
+          request: (next.reveal?.request ?? 0) + 1,
+          scrolls: false
+        )
       case .selectTab(let tab):
         next.tabs.selected = tab
       case .navigate(let destination):

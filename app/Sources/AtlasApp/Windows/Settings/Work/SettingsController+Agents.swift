@@ -111,9 +111,9 @@ extension SettingsController {
   /// - Parameter path: The project's folder.
   func forget(_ path: String) async {
     let outcome = await dependencies.commands.run(.forgetProject(path: path))
-    session.alert = nil
     let name = SettingsPresenter.projectName(path)
     say(outcome.ok ? nil : SettingsWords.notForgotten(name, outcome.message), in: .agents, kind: .problem)
     await loadAgents()
+    session.alert = nil
   }
 }

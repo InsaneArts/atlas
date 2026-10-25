@@ -9,6 +9,8 @@ struct ListRowTrailing: View {
   var label = ""
   /// What its switch or button does.
   let action: (@MainActor () -> Void)?
+  /// Whether this particular list action opens a Settings alert.
+  @Environment(\.settingsAlertControl) private var restoresAlertFocus
 
   /// The trailing control, or nothing.
   var body: some View {
@@ -34,8 +36,13 @@ struct ListRowTrailing: View {
         .toggleStyle(.accentSwitch)
         .labelsHidden()
     case .button(let title):
-      Button(title) { action?() }
-        .buttonStyle(.capsule(.glass, size: .mini))
+      if restoresAlertFocus {
+        SettingsAlertButton(title) { action?() }
+          .buttonStyle(.capsule(.glass, size: .mini))
+      } else {
+        Button(title) { action?() }
+          .buttonStyle(.capsule(.glass, size: .mini))
+      }
     case .radio(let isOn):
       RadioMark(isOn: isOn)
     case .progress:
