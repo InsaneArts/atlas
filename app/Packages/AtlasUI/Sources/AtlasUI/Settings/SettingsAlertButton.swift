@@ -10,6 +10,8 @@ struct SettingsAlertButton<Label: View>: View {
   @ViewBuilder let label: () -> Label
   /// The window's focus restoration.
   @Environment(\.settingsAlertFocus) private var alertFocus
+  /// Whether the button currently accepts input and focus.
+  @Environment(\.isEnabled) private var isEnabled
   /// Distinguishes repeated Recover buttons and project rows.
   @State private var identity = UUID()
   /// The actual button's focus, rather than its inert row wrapper.
@@ -27,6 +29,7 @@ struct SettingsAlertButton<Label: View>: View {
       label()
     }
     .focused($focused)
+    .onChange(of: isEnabled) { _, enabled in alertFocus?.setEnabled(enabled, for: identity) }
     .onDisappear { alertFocus?.forget(identity) }
   }
 }
