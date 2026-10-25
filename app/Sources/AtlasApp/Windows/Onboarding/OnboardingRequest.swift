@@ -3,7 +3,7 @@ import AtlasOnboarding
 
 /// One thing the setup window does in its queue, which ``OnboardingController/run()`` performs in order, one at a time
 /// (`OnboardingController+Queue`): the person's actions, the check and the agents reading a step starts by itself, and
-/// the permission panel's own requests. A reading, ``refresh``, never waits in the queue: the reading loop takes it at once.
+/// the permission panel's own requests. Fact readings run separately in the reading loop.
 ///
 /// A request already waiting or under way is not queued again (``repeats(_:)``).
 nonisolated enum OnboardingRequest: Hashable, Sendable {
@@ -33,8 +33,6 @@ nonisolated enum OnboardingRequest: Hashable, Sendable {
   case allow(uid: Int, name: String)
   /// Switch Back, in the helper.
   case switchBack
-  /// Read the facts again soon: Check Again, or Continue once the check passed.
-  case refresh
   /// The end-to-end check, which the finishing step starts by itself.
   case check
   /// Which agents are installed and connected, which the agents step asks by itself.
@@ -66,7 +64,7 @@ nonisolated enum OnboardingRequest: Hashable, Sendable {
   var endsOnBack: Bool {
     switch self {
     case .lockAndSwitch, .switchBack: true
-    case .useHelper, .createAccount, .chooseAnother, .closeLeftovers, .connectAgents, .complete, .allow, .refresh,
+    case .useHelper, .createAccount, .chooseAnother, .closeLeftovers, .connectAgents, .complete, .allow,
       .check, .readAgents, .openSettings, .moveOn:
       false
     }
@@ -77,7 +75,7 @@ nonisolated enum OnboardingRequest: Hashable, Sendable {
     switch self {
     case .openSettings, .moveOn: true
     case .useHelper, .createAccount, .lockAndSwitch, .chooseAnother, .closeLeftovers, .connectAgents, .complete,
-      .allow, .switchBack, .refresh, .check, .readAgents:
+      .allow, .switchBack, .check, .readAgents:
       false
     }
   }

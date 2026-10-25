@@ -1,6 +1,7 @@
 import AsyncSupportTesting
 import AtlasCommands
 import AtlasCommandsTesting
+import AtlasUI
 import Testing
 
 @testable import AtlasApp
@@ -13,6 +14,8 @@ struct OnboardingControllerReadingTests {
     let controller = OnboardingController.scripted(commands)
     await controller.close()
     controller.refresh()
+    controller.send(.checkAgain)
+    controller.send(.continueFinishing)
     // Unstructured, so the ceiling bounds it: a closed window's run() returns at once, having started nothing.
     try await Task { await controller.run() }
       .value("a closed window's run() never returned")
@@ -168,8 +171,11 @@ struct OnboardingControllerReadingTests {
     }
   }
 
-  @Test("a reading that arrives during an action still updates the screen")
-  func aReadingLandsDuringAnAction() async throws {
+  @Test(
+    "polling, Check Again and Continue Finishing update the screen while a queued action is still running",
+    arguments: [nil, .checkAgain, .continueFinishing] as [OnboardingEvent?]
+  )
+  func aReadingLandsDuringAnAction(refresh: OnboardingEvent?) async throws {
     let clock = ManualClock()
     let gate = ReleaseSignal()
     let commands = ScriptedCommands(["onboarding status": OnboardingReplies.switchingMac, "switch": #"{"ok": true}"#])
@@ -187,8 +193,12 @@ struct OnboardingControllerReadingTests {
         OnboardingReplies.switchingMac
           .replacingOccurrences(of: #""signedIn": false"#, with: #""signedIn": true"#)
       )
-      // The reading loop's own interval, with Lock and Switch still under way.
-      clock.advance(by: OnboardingController.readEvery)
+      // Refresh events take the reading lane while Lock and Switch still holds the action queue.
+      if let refresh {
+        controller.send(refresh)
+      } else {
+        clock.advance(by: OnboardingController.readEvery)
+      }
       try await settle("the reading never landed while Lock and Switch ran") {
         controller.snapshot.facts.helper.signedIn
       }

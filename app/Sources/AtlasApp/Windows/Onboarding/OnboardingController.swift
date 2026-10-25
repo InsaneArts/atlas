@@ -121,7 +121,7 @@ final class OnboardingController {
     case .chooseAnother: enqueue(.chooseAnother)
     case .closeLeftovers: enqueue(.closeLeftovers)
     case .continueAfterClose: snapshot.choices.closedLeftovers = false
-    case .checkAgain, .continueFinishing: enqueue(.refresh)
+    case .checkAgain, .continueFinishing: refresh()
     case .retryFinish: retryFinish()
     case .setAgent(let id, let on): setAgent(id, on: on)
     case .connectAgents: enqueue(.connectAgents(chosen: agentsSwitchedOn))

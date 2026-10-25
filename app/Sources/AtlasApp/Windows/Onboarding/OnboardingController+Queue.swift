@@ -31,13 +31,11 @@ extension OnboardingController {
     }
   }
 
-  /// Queues a request, unless the same one is already waiting or under way, or the window has closed. A reading is
-  /// never queued: the reading loop takes it at once, so it waits behind no command.
+  /// Queues a request, unless the same one is already waiting or under way, or the window has closed.
   ///
   /// - Parameter request: The request.
   func enqueue(_ request: OnboardingRequest) {
     guard !closed else { return }
-    guard request != .refresh else { return refresh() }
     guard !isQueued(request) else { return }
     lastTicket += 1
     pending[lastTicket] = request
@@ -75,7 +73,6 @@ extension OnboardingController {
     case .complete: await complete()
     case .allow(let uid, let name): await allow(uid: uid, name: name)
     case .switchBack: await switchBack()
-    case .refresh: refresh()
     case .check: await check()
     case .readAgents: await readAgents()
     case .openSettings(let permission): openSettings(permission)
