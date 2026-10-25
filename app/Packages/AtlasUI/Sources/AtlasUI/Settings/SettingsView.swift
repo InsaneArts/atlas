@@ -85,8 +85,7 @@ public struct SettingsView: View {
     }
     .onChange(of: state.helper.notice) { _, notice in if let notice { announce(notice.text) } }
     .onChange(of: state.agents.notice) { _, notice in if let notice { announce(notice.text) } }
-    // Speak every explicit announcement, even when its words repeat.
-    .onChange(of: state.announcement) { _, announcement in if let announcement { announce(announcement.text) } }
+    .onChange(of: state.announcement) { _, text in if let text { announce(text) } }
     .onChange(of: state.about.status) { _, status in if let status { announce(status.text) } }
     .onChange(of: state.search.query) { _, _ in
       if state.search.isActive {

@@ -39,8 +39,7 @@ extension SettingsController {
     let result = search.results[next]
     guard result.id != search.selection else { return }
     session.search.selection = result.id
-    let title = if case .project(let path) = result.id { "\(result.title), \(path)" } else { result.title }
-    session.announce("\(title), \(result.breadcrumb)")
+    session.announcement = "\(result.title), \(result.breadcrumb)"
   }
 
   /// Opens only a still-current result, clearing the query and requesting inert target focus.

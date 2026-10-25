@@ -27,17 +27,7 @@ struct SettingsSession: Equatable {
   /// What the last command said, in the pane that ran it.
   var notice: SettingsNotice?
   /// The last explicit command failure or keyboard-selected search result for VoiceOver.
-  var announcement: SettingsAnnouncement?
-  /// Counts explicit announcements even when the previous one has been cleared.
-  private var announcementRequests = 0
+  var announcement: String?
   /// Why each agent's last Connect or Disconnect failed, by id; cleared when status confirms the requested state.
   var connectFailures: [String: SettingsAgentFailure] = [:]
-
-  /// Requests speech for an explicit result, even when its words repeat.
-  ///
-  /// - Parameter text: The words VoiceOver speaks.
-  mutating func announce(_ text: String) {
-    announcementRequests += 1
-    announcement = SettingsAnnouncement(request: announcementRequests, text: text)
-  }
 }
