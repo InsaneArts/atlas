@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// A pane's search field: a magnifying glass, then the query, and a clear button while there is one, on a quiet
@@ -18,7 +19,6 @@ struct SearchField: View {
   var onMove: (@MainActor (Int) -> Void)?
   /// Opens a selected location only after the text field commits Return.
   var onOpen: (@MainActor () -> Void)?
-  @Environment(\.searchIsComposing) private var isComposing
   @FocusState private var focused: Bool
 
   /// The glass, the query and its clear button on their quiet rounded field.
@@ -37,7 +37,7 @@ struct SearchField: View {
       .onKeyPress(.escape) { escape() }
       .onKeyPress(.upArrow, phases: [.down, .repeat]) { move(-1, modifiers: $0.modifiers) }
       .onKeyPress(.downArrow, phases: [.down, .repeat]) { move(1, modifiers: $0.modifiers) }
-      .onSubmit { if !isComposing() { onOpen?() } }
+      .onSubmit { onOpen?() }
       if !text.isEmpty {
         Button {
           onChange("")
@@ -94,13 +94,19 @@ struct SearchField: View {
   ///
   /// - Returns: Handled, so the key goes no further.
   private func escape() -> KeyPress.Result {
-    guard !isComposing() else { return .ignored }
+    guard !composing else { return .ignored }
     if text.isEmpty {
       focused = false
     } else {
       onChange("")
     }
     return .handled
+  }
+
+  /// Leaves input-method candidate navigation with the native field editor.
+  private var composing: Bool {
+    let editor = NSApp.keyWindow?.firstResponder as? NSTextView
+    return editor?.hasMarkedText() == true
   }
 
   /// Routes result arrows only when the owner supports them and the query is nonempty.
@@ -111,7 +117,7 @@ struct SearchField: View {
   /// - Returns: Whether result navigation consumed this key.
   private func move(_ step: Int, modifiers: EventModifiers) -> KeyPress.Result {
     guard modifiers.intersection([.command, .option, .shift, .control]).isEmpty,
-      !isComposing(), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let onMove
+      !composing, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let onMove
     else {
       return .ignored
     }
