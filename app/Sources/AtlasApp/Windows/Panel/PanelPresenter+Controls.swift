@@ -66,8 +66,7 @@ extension PanelPresenter {
     PanelMoreMenuState(showsOpenAtlas: main(snapshot, mode: mode(snapshot)).event != .openAtlas)
   }
 
-  /// Stop or Resume, by the rule the main window's top row follows too; Resume waits while the panel's own request
-  /// runs.
+  /// Stop or Resume, by the rule the main window's top row follows too; Resume waits while any window's request runs.
   ///
   /// - Parameters:
   ///   - snapshot: What the controller holds.
@@ -77,7 +76,7 @@ extension PanelPresenter {
     mode.agentButton(
       snapshot.status.overview,
       holdingControl: snapshot.holdingControl,
-      isBusy: snapshot.session.requests > 0 || snapshot.agentRequests > 0
+      isBusy: snapshot.agentRequests > 0
     )
   }
 }

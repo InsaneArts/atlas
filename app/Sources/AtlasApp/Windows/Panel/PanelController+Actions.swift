@@ -10,26 +10,22 @@ extension PanelController {
     await setStopped(true)
   }
 
-  /// Resume: lets agents act again, unless any of the panel's own requests, or a Stop or Resume from any window, is
-  /// still unanswered.
+  /// Resume: lets agents act again, unless a Stop or Resume from any window is still unanswered.
   func resumeAgent() async {
-    guard session.requests == 0, actions.agentRequests == 0 else { return }
+    guard actions.agentRequests == 0 else { return }
     await setStopped(false)
   }
 
-  /// Asks the service to stop or resume agents, counted among the panel's requests until it answers, then reads the
-  /// status; a refusal says why.
+  /// Asks the service to stop or resume agents through the shared actions, then reads the status; a refusal says why.
   ///
   /// - Parameter stopped: Whether agents stop.
   private func setStopped(_ stopped: Bool) async {
-    session.requests += 1
     session.notice = nil
     do {
       try await actions.setStopped(stopped)
     } catch {
       session.notice = Words.sentence(error.localizedDescription)
     }
-    session.requests -= 1
     await readStatus()
   }
 

@@ -103,7 +103,7 @@ struct PanelControllerTests {
     await controller.stopAgent()
     await controller.resumeAgent()
     #expect(service.log == ["stop", "resume"])
-    #expect(controller.session.requests == 0)
+    #expect(controller.actions.agentRequests == 0)
   }
 
   @Test("a stop the service refuses says why in place of the line, until the panel opens again")
@@ -113,6 +113,7 @@ struct PanelControllerTests {
     let controller = PanelController.scripted(service)
     await controller.stopAgent()
     #expect(controller.state.notice == "hold failed.")
+    #expect(controller.actions.agentRequests == 0)
     controller.watch(open: true)
     #expect(controller.state.notice == nil)
     controller.watch(open: false)
@@ -127,12 +128,17 @@ struct PanelControllerTests {
     try await settle("the first stop never reached the service") { service.held["hold"] != nil }
     await controller.resumeAgent()
     #expect(service.log == ["stop"], "a resume waits")
+    #expect(controller.session.notice == nil, "a blocked Resume stays silent")
     await controller.stopAgent()
     #expect(service.log == ["stop", "stop"], "a second stop does not, and is answered")
     await controller.resumeAgent()
     #expect(service.log == ["stop", "stop"], "the first stop is still unanswered, so a resume still waits")
+    first.cancel()
+    await controller.resumeAgent()
+    #expect(service.log == ["stop", "stop"], "cancelling the caller does not answer its Stop")
     service.resume("hold")
     await first.value
+    #expect(controller.actions.agentRequests == 0)
     await controller.resumeAgent()
     #expect(service.log == ["stop", "stop", "resume"])
   }

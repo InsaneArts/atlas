@@ -20,11 +20,17 @@ struct PanelControllerKeysTests {
     try await settle("the stop never read the status") { service.statusCalls == 2 }
     service.reply = ["overview": ["mode": "stopped", "state": "stopped"]]
     await panel.readStatus()
-    try await settle("the stop request never ended") { panel.session.requests == 0 }
+    try await settle("the stop request never ended") { panel.actions.agentRequests == 0 }
     #expect(panel.state.controls.agentHelp == "Resume Agent (⌘.)")
-    panel.session.requests = 1
+    service.hold = ["hold"]
+    let stopping = Task { try await panel.actions.setStopped(true) }
+    try await settle("the shared Stop never reached the service") { service.held["hold"] != nil }
     #expect(!panel.press(.stopOrResume), "a disabled Resume is not pressed")
-    panel.session.requests = 0
+    await panel.resumeAgent()
+    #expect(panel.session.notice == nil, "a shared request blocks Resume silently")
+    #expect(!service.log.contains("resume"))
+    service.resume("hold")
+    try await stopping.value
     #expect(panel.press(.stopOrResume))
     try await settle("the shortcut never resumed the agent") { service.log.contains("resume") }
   }
