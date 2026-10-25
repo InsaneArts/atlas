@@ -657,7 +657,7 @@ mod tests {
         let installed = Path::new("/Applications/Atlas.app/Contents/MacOS/atlas");
         // Stand in only for disk reachability and codesign. Resolve paths,
         // write the real plist and apply Allow's actual identity checks.
-        let program = crate::init::app_executable_using(|path| {
+        let program = crate::setup::installed_app::app_executable_using(|path| {
             assert_eq!(path, installed);
             true
         })

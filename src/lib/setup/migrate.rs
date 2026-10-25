@@ -910,7 +910,7 @@ fn signed_daemon(program: &Path) -> Result<String> {
 
 /// The stable installed executable the helper daemon runs.
 fn daemon_program() -> Result<PathBuf> {
-    crate::init::app_executable()
+    super::installed_app::app_executable()
 }
 
 /// What every plan starts from: the configuration (its canonical path,

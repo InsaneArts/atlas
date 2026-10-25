@@ -7,6 +7,7 @@ pub(crate) mod configuration;
 pub mod first_login;
 pub mod helper;
 pub mod identity;
+pub(crate) mod installed_app;
 pub mod migrate;
 
 use crate::{

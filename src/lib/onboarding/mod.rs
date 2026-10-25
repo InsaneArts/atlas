@@ -174,7 +174,7 @@ fn helper_job_here(uid: u32) -> bool {
 /// The app this runs from, whether it is signed by Atlas's developer, and
 /// whether `atlas` in a terminal reaches it.
 fn app() -> Value {
-    match init::app_executable() {
+    match setup::installed_app::app_executable() {
         Ok(executable) => {
             let link = config::home()
                 .map(|home| home.join(".local/bin/atlas"))
@@ -505,7 +505,7 @@ fn ready_to_choose(config_path: &Path, uid: u32, selected: Option<u32>) -> Resul
         check_choice(uid, selected, &previous, keep_other_helper)?;
     }
 
-    init::link_command(&executable)?;
+    setup::installed_app::link_command(&executable)?;
     Ok(())
 }
 
@@ -647,7 +647,7 @@ fn use_helper(
         None => fresh,
     };
 
-    let linked = init::link_command(&executable)?;
+    let linked = setup::installed_app::link_command(&executable)?;
 
     // A setup record left by an earlier account with this user ID.
     setup::migrate::archive_foreign(helper.uid, &helper.home)?;
@@ -1428,7 +1428,7 @@ pub fn accept(controller_uid: u32, controller_name: &str) -> Result<Value> {
 
 /// The installed Atlas.app's executable, refused unless its developer signed it.
 pub(crate) fn signed_executable() -> Result<PathBuf> {
-    signed_executable_using(init::app_executable()?, setup::developer_id)
+    signed_executable_using(setup::installed_app::app_executable()?, setup::developer_id)
 }
 
 pub(crate) fn signed_executable_using(
@@ -1456,7 +1456,7 @@ pub(crate) fn signed_executable_using(
 fn expected_agent(layout: &Layout, controller_uid: u32) -> Result<Agent> {
     Ok(Agent {
         label: LABEL.to_owned(),
-        program: init::app_executable()?,
+        program: setup::installed_app::app_executable()?,
         uid: layout.uid,
         controller_uid,
         socket: layout.socket(),
