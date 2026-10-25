@@ -92,7 +92,7 @@ fn doing(command: &Command) -> Option<Doing> {
 
 /// Whether a command changes the helper, so an agent's is refused while
 /// the person has stopped agents. Looking, reading and recovery are not.
-fn changes_helper(command: &Command) -> bool {
+fn changes_helper(command: &Command, attributed: bool) -> bool {
     match command {
         Command::Screenshot { .. } => false,
         // Each changes what runs in the helper, or how; a stop that moved
@@ -112,7 +112,7 @@ fn changes_helper(command: &Command) -> bool {
             Some(EnvironmentCommand::Profile { apply, .. }) => *apply,
             Some(_) => false,
         },
-        _ => doing(command).is_some(),
+        _ => attributed,
     }
 }
 
@@ -169,7 +169,7 @@ pub(super) async fn execute(config: PathBuf, command: Command) -> Result<Value> 
     // controller's configuration. A command that talks to the helper loads
     // it before anything else.
     let doing = doing(&command);
-    let changes = changes_helper(&command);
+    let changes = changes_helper(&command, doing.is_some());
     let client = || {
         Client::new(Config::load(&config)?).map(|mut client| {
             client.actor = actor;
@@ -874,7 +874,10 @@ mod tests {
 
     #[test]
     fn a_stop_refuses_what_changes_the_helper_and_lets_looking_and_recovery_through() {
-        let changes = |args: &[&str]| changes_helper(&parse(args).unwrap().command.unwrap());
+        let changes = |args: &[&str]| {
+            let command = parse(args).unwrap().command.unwrap();
+            changes_helper(&command, doing(&command).is_some())
+        };
 
         for acting in [
             &["click", "1", "2"][..],
@@ -891,6 +894,9 @@ mod tests {
             &["install"],
             &["update"],
             &["setup", "--apply"],
+            &["setup", "--rollback"],
+            &["environment", "rollback", "plan", "--apply"],
+            &["environment", "profile", "profile.toml", "--apply"],
         ] {
             assert!(changes(acting), "{acting:?}");
         }
@@ -903,6 +909,9 @@ mod tests {
             &["start-input"],
             &["stop"],
             &["environment"],
+            &["environment", "rollback", "plan"],
+            &["environment", "profile", "profile.toml"],
+            &["update", "--check"],
             &["setup"],
         ] {
             assert!(!changes(looking), "{looking:?}");
