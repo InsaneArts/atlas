@@ -117,6 +117,81 @@ async fn a_read_only_server_offers_only_what_looks() {
 }
 
 #[tokio::test]
+async fn result_flags_match_offered_tools_on_successful_and_failed_calls() {
+    use axum::{Json, Router, routing::get};
+
+    for (views, read_only) in [(false, false), (false, true), (true, false), (true, true)] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut server = server(dir.path());
+        server.read_only = read_only;
+        let capabilities = if views {
+            json!({"extensions": {UI_EXTENSION: {"mimeTypes": [APP_MIME]}}})
+        } else {
+            json!({})
+        };
+        ask(&server, "initialize", json!({"capabilities": capabilities})).await;
+        let listed = names(&ask(&server, "tools/list", json!({})).await);
+        let resume = listed.contains(&"resume_agent".to_owned());
+        let control = listed.contains(&"take_control".to_owned());
+        assert_eq!(resume, views && !read_only);
+        assert_eq!(control, views && !read_only);
+        for (name, offered) in [("resume_agent", resume), ("take_control", control)] {
+            if !offered {
+                let refused = ask(&server, "tools/call", json!({"name": name})).await;
+                assert_eq!(refused["error"]["code"], -32602);
+                assert!(
+                    refused.get("result").is_none(),
+                    "an RPC refusal has no tool flags"
+                );
+            }
+        }
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        server.port = listener.local_addr().unwrap().port();
+        let url = format!("http://127.0.0.1:{}/viewer/", server.port);
+        let record = json!({"url": url, "pid": std::process::id()});
+        std::fs::write(
+            server
+                .client
+                .output_dir()
+                .unwrap()
+                .join(crate::viewer::MENUBAR_RECORD),
+            record.to_string(),
+        )
+        .unwrap();
+        let app = Router::new()
+            .route("/viewer/", get(|| async {
+                Json(json!({"service": "atlas-viewer", "pid": std::process::id()}))
+            }))
+            .route("/viewer/status.json", get(|| async {
+                Json(json!({"overview": {"state": "idle", "label": "Idle", "headline": "Waiting"}}))
+            }));
+        let serving = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        for failed in [false, true] {
+            if failed {
+                let blocked = dir.path().join("not-a-directory");
+                std::fs::write(&blocked, b"not a directory").unwrap();
+                server.client.config.output_dir = blocked;
+            }
+            let called = ask(&server, "tools/call", json!({"name": "atlas_status"})).await;
+            let result = &called["result"];
+            assert_eq!(result["isError"] == true, failed);
+            if failed {
+                assert!(result["structuredContent"]["error"]["code"].is_string());
+            } else {
+                assert_eq!(result["structuredContent"]["status"]["state"], "idle");
+            }
+            assert_eq!(result["structuredContent"]["canResume"], resume);
+            assert_eq!(result["structuredContent"]["canControl"], control);
+            assert_eq!(result["structuredContent"]["control"], false);
+        }
+        serving.abort();
+        let _ = serving.await;
+    }
+}
+
+#[tokio::test]
 async fn the_model_sees_the_status_and_the_view_and_only_the_view_calls_the_rest() {
     let dir = tempfile::tempdir().unwrap();
     let server = server(dir.path());

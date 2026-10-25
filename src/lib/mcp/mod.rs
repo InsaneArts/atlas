@@ -335,8 +335,9 @@ impl Server {
         });
         // The view offers Resume and control only where this client may
         // call them, and knows whether the control shown is its own.
-        result["structuredContent"]["canResume"] = json!(self.offers("resume_agent"));
-        result["structuredContent"]["canControl"] = json!(self.offers("take_control"));
+        let can_control = self.views.load(Ordering::Relaxed) && !self.read_only;
+        result["structuredContent"]["canResume"] = json!(can_control);
+        result["structuredContent"]["canControl"] = json!(can_control);
         result["structuredContent"]["control"] = json!(self.controlling().await);
         result
     }
