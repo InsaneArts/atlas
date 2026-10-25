@@ -5,18 +5,28 @@
     <img src="assets/logo-light.svg" alt="Atlas logo" height="64">
   </picture>
 </p>
-
-# Atlas
-
-Atlas lets agents use a separate macOS desktop while you keep using yours. It runs apps in a second account, called the helper, on the same Mac. Agents can open a build, inspect its windows, take screenshots, click and type there without taking over your desktop.
-
-<p>
+<h3 align="center">hypervised desktop for autonomous agents</h3>
+<p align="center">Atlas gives your agent a hidden second desktop on your Mac.<br>It clicks, types and tests apps there while you keep working on yours.</p>
+<p align="center">
   <a href="https://github.com/InsaneArts/atlas/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/InsaneArts/atlas/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+  <a href="https://github.com/InsaneArts/atlas/releases"><img alt="Release" src="https://img.shields.io/github/v/release/InsaneArts/atlas"></a>
   <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-lightgrey">
   <a href="Cargo.toml"><img alt="Rust" src="https://img.shields.io/badge/rust-edition%202024-orange"></a>
 </p>
 
-[![Codex checks an app in the helper while the person works in Xcode; Atlas's menu bar panel shows the helper screen](assets/demo.webp)](https://atlas.insanearts.io)
+[![Codex checks a new setting in your app on Atlas's hidden desktop while you keep typing in Xcode; Atlas's menu bar panel shows it live](assets/demo.webp)](https://atlas.insanearts.io)
+
+---
+
+An agent can change a Mac app, but it cannot watch the change run without
+taking over your screen. Atlas gives it a screen of its own: a second macOS
+login, signed in and kept in the background. There the agent opens its build,
+takes screenshots, clicks and types, and comes back with proof. Your windows,
+keyboard and mouse are never touched.
+
+You set it up once, then watch from the menu bar and take over when you want.
+
+Read more in the [documentation](docs/README.md).
 
 ## Install
 
@@ -100,18 +110,6 @@ Pausing the picture leaves helper work running. **Take Control** gives you the h
 
 Atlas checks the helper account, graphical session and display before input. An unknown action outcome blocks further changes until recovery; it is never blindly replayed. The helper is an ordinary login, not a virtual machine or security sandbox. It shares the Mac's network and speakers, and some native dialogs and browser views need Screen Sharing. Read the [practical limits](docs/using-atlas.md#settings-and-practical-limits) before planning a task.
 
-## Documentation
-
-Start at the [documentation index](docs/README.md), or go directly to:
-
-- [Getting started](docs/getting-started.md): installation and helper setup.
-- [Using Atlas](docs/using-atlas.md): app testing, viewing and control.
-- [Agent connections](docs/agents.md): connect and verify each supported host.
-- [Maintenance](docs/maintenance.md): updates, uninstall choices and reinstalling.
-- [Troubleshooting](docs/troubleshooting.md): diagnose a problem and choose the next step.
-
-## Contributing and license
+## Contributing
 
 [Contributing](CONTRIBUTING.md) covers builds, checks and pull requests. The [architecture guide](docs/architecture.md) maps the code and its responsibilities. Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md). Report security issues privately through the [security policy](SECURITY.md).
-
-Atlas is licensed under [MIT](LICENSE).
