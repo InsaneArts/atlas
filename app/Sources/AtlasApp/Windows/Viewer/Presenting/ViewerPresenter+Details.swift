@@ -84,7 +84,7 @@ extension ViewerPresenter {
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The choice.
-  static func pictureChoice(_ snapshot: ViewerSnapshot) -> ViewerPictureChoice {
+  static func pictureChoice(_ snapshot: ViewerSnapshot) -> SettingsPicture {
     if snapshot.session.paused { return .paused }
     return snapshot.rate == .everyFiveSeconds ? .everyFiveSeconds : .live
   }

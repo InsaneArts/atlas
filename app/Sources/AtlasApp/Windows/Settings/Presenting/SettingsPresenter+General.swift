@@ -11,7 +11,7 @@ extension SettingsPresenter {
     return SettingsGeneralState(
       opensAtLogin: facts.opensAtLogin.isEnabled,
       canOpenAtLogin: facts.opensAtLogin.isAvailable,
-      picture: picture(facts.picture),
+      picture: facts.picture,
       pictureOptions: [
         PopupOption(id: .live, title: SettingsWords.live),
         PopupOption(id: .everyFiveSeconds, title: SettingsWords.everyFiveSeconds),
@@ -19,29 +19,5 @@ extension SettingsPresenter {
       ],
       notify: snapshot.notify
     )
-  }
-
-  /// The main window's picture choice as Settings offers it.
-  ///
-  /// - Parameter choice: The choice.
-  /// - Returns: Settings' choice.
-  static func picture(_ choice: ViewerPictureChoice) -> SettingsPicture {
-    switch choice {
-    case .live: .live
-    case .everyFiveSeconds: .everyFiveSeconds
-    case .paused: .paused
-    }
-  }
-
-  /// Settings' picture choice as the main window makes it.
-  ///
-  /// - Parameter picture: Settings' choice.
-  /// - Returns: The main window's choice.
-  static func choice(_ picture: SettingsPicture) -> ViewerPictureChoice {
-    switch picture {
-    case .live: .live
-    case .everyFiveSeconds: .everyFiveSeconds
-    case .paused: .paused
-    }
   }
 }
