@@ -7,6 +7,82 @@ import Testing
 
 @Suite("SettingsPresenter")
 struct SettingsPresenterTests {
+  @Test("a command failure takes precedence over reported status, including Show File", arguments: [false, true])
+  func commandFailureTakesPrecedence(hasCommandFailure: Bool) throws {
+    var snapshot = SettingsSnapshot()
+    snapshot.agents.choices[0].checked = true
+    snapshot.agents.choices[0].found = true
+    snapshot.agents.choices[0].problem = "settings file is not valid JSON"
+    if hasCommandFailure {
+      snapshot.session.connectFailures["claude"] = SettingsAgentFailure(message: "permission denied")
+    }
+
+    let row = try #require(SettingsPresenter.agents(snapshot).agents.first)
+    #expect(row.connection == .connect(isEnabled: true))
+    #expect(
+      row.problem
+        == (hasCommandFailure
+          ? "Couldn't connect: permission denied" : "Couldn't connect: settings file has a mistake")
+    )
+    #expect(row.showsFile == !hasCommandFailure)
+  }
+
+  @Test("Connecting hides an old failure while Disconnecting keeps its words", arguments: [false, true])
+  func changingAnAgentControlsItsFailure(isRemoving: Bool) throws {
+    var snapshot = SettingsSnapshot()
+    snapshot.agents.choices[0].checked = true
+    snapshot.agents.choices[0].found = true
+    snapshot.agents.choices[0].hasConnection = true
+    snapshot.agents.choices[0].problem = "reported failure"
+    let failure = "Couldn't disconnect: settings file is not valid JSON"
+    snapshot.session.connectFailures["claude"] = SettingsAgentFailure(message: failure, isDisconnect: true)
+    snapshot.facts.installing = ["claude"]
+    snapshot.facts.isRemoving = isRemoving
+
+    let row = try #require(SettingsPresenter.agents(snapshot).agents.first)
+    #expect(row.connection == (isRemoving ? .note("Disconnecting…") : .connecting))
+    #expect(row.problem == (isRemoving ? failure : nil))
+    #expect(row.showsFile == isRemoving)
+    #expect(!row.canDisconnect)
+  }
+
+  @Test("another agent being changed disables Connect and Disconnect everywhere", arguments: [false, true])
+  func anotherAgentChangeDisablesConnectionActions(isRemoving: Bool) throws {
+    var snapshot = SettingsSnapshot()
+    for index in snapshot.agents.choices.indices {
+      snapshot.agents.choices[index].checked = true
+      snapshot.agents.choices[index].found = true
+    }
+    snapshot.agents.choices[0].hasConnection = true
+    snapshot.agents.choices[2].hasConnection = true
+    snapshot.agents.choices[2].connected = true
+    snapshot.facts.installing = ["pi"]
+    snapshot.facts.isRemoving = isRemoving
+
+    let rows = SettingsPresenter.agents(snapshot).agents
+    let claude = try #require(rows.first { $0.id == "claude" })
+    let codex = try #require(rows.first { $0.id == "codex" })
+    let opencode = try #require(rows.first { $0.id == "opencode" })
+    #expect(claude.connection == .connect(isEnabled: false), "a partial connection cannot finish yet")
+    #expect(codex.connection == .connect(isEnabled: false), "an unconnected agent cannot start yet")
+    #expect(opencode.connection == .connected)
+    #expect(!rows.contains { $0.canDisconnect }, "connected and partial rows must both wait")
+  }
+
+  @Test("Show File is offered only for a bad settings file whose location Atlas knows")
+  func showFileRequiresAKnownSettingsFile() {
+    var snapshot = SettingsSnapshot()
+    for index in snapshot.agents.choices.indices {
+      snapshot.agents.choices[index].checked = true
+      snapshot.agents.choices[index].found = true
+      snapshot.agents.choices[index].problem = "settings file is not valid JSON"
+    }
+
+    let rows = SettingsPresenter.agents(snapshot).agents
+    #expect(rows.map(\.id) == ["claude", "codex", "opencode", "pi"])
+    #expect(rows.map(\.showsFile) == [true, false, false, false])
+  }
+
   @Test("About shows one control for updates, whatever the update state, and what runs under it, not in it")
   func aboutShowsOneControlForUpdates() {
     let misplaced =

@@ -14,7 +14,7 @@ extension SettingsPresenter {
     let failures = snapshot.session.connectFailures
     let plugins = agents.choices.map { choice in
       let parts = choice.checked ? choice.parts : [AgentID.claude.rawValue, AgentsStatus.claudeAppID]
-      return SettingsAgentRow(
+      let row = SettingsAgentRow(
         id: choice.id.rawValue,
         title: Words.agentTitle(choice.id),
         detail: detail(
@@ -33,12 +33,10 @@ extension SettingsPresenter {
         ),
         canDisconnect: choice.hasConnection && installing.isEmpty
       )
+      return failing(row, failures[choice.id.rawValue]?.message ?? choice.problem)
     }
     return SettingsAgentsState(
-      agents: plugins.map { row in
-        let reported = agents.choices.first { $0.id.rawValue == row.id }?.problem
-        return failing(row, failures[row.id]?.message ?? reported)
-      },
+      agents: plugins,
       projects: snapshot.agents.projects.map(project),
       notice: notice(snapshot, in: .agents, busy: !installing.isEmpty)
     )
