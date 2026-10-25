@@ -106,8 +106,9 @@ atlas close --app Habits                       # quits it and removes Atlas's co
 ```
 
 Every command prints JSON when its output is not a terminal and exits non-zero
-on failure, with `{"ok": false, "code", "error", "uncertain"}` on standard
-error. `atlas agent-guide` prints the full guide agents read.
+on failure. A failed action's result is on stdout; command or connection errors
+are on stderr. On a non-zero exit, read both.
+`atlas agent-guide` prints the full guide agents read.
 
 | | Commands |
 | --- | --- |
