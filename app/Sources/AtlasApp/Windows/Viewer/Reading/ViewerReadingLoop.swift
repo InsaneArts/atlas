@@ -148,7 +148,10 @@ final class ViewerReadingLoop {
       let reply = try await service.status()
       guard current() else { return }
       show(reply)
-      guard !paused else { return }
+      guard !paused else {
+        reading.unavailable = nil
+        return
+      }
       if let reason = reply.unobservable?.word { throw ServiceError(reason) }
       let next: Frame
       if let early = await early {
