@@ -273,13 +273,15 @@ pub fn overview(
     } else if pending.unresolved > 0 {
         // A stop that cut an action short leaves its outcome unknown: say
         // both, as recovery comes first and the stop stays after it.
-        let reason = if session["inputService"]["held"] == true {
+        let reason = if report["ready"] != true && !recoverable {
+            first_step.as_str()
+        } else if session["inputService"]["held"] == true {
             "You stopped the agent mid-action, so its outcome is unknown. Recover, then resume."
         } else {
             "An action's outcome is unknown; recover before taking control"
         };
         ("recovering", reason.to_owned())
-    } else if session["inputService"]["held"] == true && !lease_active {
+    } else if session["inputService"]["held"] == true && !lease_active && report["ready"] == true {
         // The person's stop holds whatever else is true, until they take
         // control themselves: agents wait.
         (
@@ -330,6 +332,8 @@ pub fn overview(
         "headline": headline,
         "reason": reason,
         "recoverable": mode == "blocked" && recoverable,
+        "recoveryHelps": (mode == "recovering" && (report["ready"] == true || recoverable))
+            || (mode == "blocked" && recoverable),
         "account": if reachable { &session["user"]["name"] } else { &report["account"] },
         "display": serde::Deserialize::deserialize(&session["display"])
             .ok()
@@ -570,6 +574,101 @@ mod tests {
             "the person may take over"
         );
         assert_eq!(mode(&held, false, 1, &[]), "recovering");
+    }
+
+    #[test]
+    fn input_failure_after_a_stop_offers_recovery_and_keeps_agents_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, dir.path());
+        controller.note_stop(true).unwrap();
+        let mut held = report(true, true);
+        held["session"]["inputService"]["held"] = json!(true);
+        assert_eq!(mode(&held, false, 0, &[]), "stopped");
+
+        held["ready"] = json!(false);
+        held["nextSteps"] = json!([crate::session::START_INPUT]);
+        let summary = overview(&held, false, pending(&controller).0, &[], NOW);
+        assert_eq!(summary["mode"], "blocked");
+        assert_eq!(summary["state"], "needsYou");
+        assert_eq!(summary["recoveryHelps"], true);
+        assert!(controller.stop_noted());
+        assert_eq!(held["session"]["inputService"]["held"], true);
+
+        held["ready"] = json!(true);
+        let recovered = overview(&held, false, pending(&controller).0, &[], NOW);
+        assert_eq!(recovered["mode"], "stopped");
+        assert_eq!(recovered["recoveryHelps"], false);
+        assert!(controller.stop_noted());
+        assert_eq!(held["session"]["inputService"]["held"], true);
+
+        controller.note_stop(false).unwrap();
+        held["session"]["inputService"]["held"] = json!(false);
+        assert_eq!(mode(&held, false, 0, &[]), "observing");
+    }
+
+    #[test]
+    fn a_permission_failure_after_a_stop_shows_what_must_be_allowed_before_resuming() {
+        let dir = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, dir.path());
+        controller.note_stop(true).unwrap();
+        let mut held = report(true, true);
+        held["session"]["inputService"]["held"] = json!(true);
+        assert_eq!(mode(&held, false, 0, &[]), "stopped");
+
+        held["ready"] = json!(false);
+        held["nextSteps"] = json!(["Turn on Accessibility for Atlas in the helper first."]);
+        let summary = overview(&held, false, pending(&controller).0, &[], NOW);
+        assert_eq!(summary["mode"], "blocked");
+        assert_eq!(summary["state"], "notReady");
+        assert_eq!(summary["reason"], held["nextSteps"][0]);
+        assert_eq!(summary["recoveryHelps"], false);
+        assert!(controller.stop_noted());
+        assert_eq!(held["session"]["inputService"]["held"], true);
+
+        held["ready"] = json!(true);
+        assert_eq!(mode(&held, false, 0, &[]), "stopped");
+    }
+
+    #[test]
+    fn an_unknown_outcome_keeps_its_claim_while_recovery_waits_for_a_prerequisite() {
+        let dir = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, dir.path());
+        drop(controller.quarantine().unwrap());
+        let claims = controller.pending().unwrap();
+        let mut report = report(true, true);
+        let summary = overview(&report, false, pending(&controller).0, &[], NOW);
+        assert_eq!(summary["mode"], "recovering");
+        assert_eq!(summary["recoveryHelps"], true);
+
+        for step in [
+            "Turn on Accessibility for Atlas in the helper first.",
+            "Allow Screen Recording for Atlas in the helper first.",
+            "Switch back to your own account without logging the helper out.",
+        ] {
+            report["ready"] = json!(false);
+            report["nextSteps"] = json!([step]);
+            let summary = overview(&report, false, pending(&controller).0, &[], NOW);
+            assert_eq!(summary["mode"], "recovering");
+            assert_eq!(summary["state"], "needsYou");
+            assert_eq!(summary["pending"], 1);
+            assert_eq!(summary["reason"], step);
+            assert_eq!(summary["recoveryHelps"], false);
+            assert_eq!(controller.pending().unwrap(), claims);
+        }
+
+        report["nextSteps"] = json!([crate::session::START_INPUT]);
+        let summary = overview(&report, false, pending(&controller).0, &[], NOW);
+        assert_eq!(summary["mode"], "recovering");
+        assert_eq!(summary["recoveryHelps"], true);
+        assert_eq!(controller.pending().unwrap(), claims);
+
+        report["ready"] = json!(true);
+        assert_eq!(mode(&report, false, 1, &[]), "recovering");
+        controller.clear().unwrap();
+        assert_eq!(
+            overview(&report, false, pending(&controller).0, &[], NOW)["mode"],
+            "observing"
+        );
     }
 
     #[test]

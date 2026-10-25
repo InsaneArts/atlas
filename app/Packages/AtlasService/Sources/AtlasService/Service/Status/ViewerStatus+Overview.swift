@@ -12,6 +12,8 @@ extension ViewerStatus {
     public var reason: String?
     /// Whether Recover fixes what keeps the helper not ready: its input stopped or lost its display.
     public var recoverable = false
+    /// Whether the service says recovery can help, including its permission and session prerequisites.
+    private var recoveryEligibility: Bool?
     /// The helper's short account name.
     public var account: String?
     /// The account's full name ("Atlas"), when it has one.
@@ -51,7 +53,7 @@ extension ViewerStatus {
     /// Whether Recover helps now: an action's outcome is unknown, or what keeps the helper not ready is something
     /// Recover fixes. The panel's recovery card and the viewer's alert both follow it.
     public var recoveryHelps: Bool {
-      mode == .recovering || (mode == .blocked && recoverable)
+      recoveryEligibility ?? (mode == .recovering || (mode == .blocked && recoverable))
     }
 
     /// Whether Recover restarts the helper, as the viewer service's own recovery decides: only while an action's
@@ -77,7 +79,8 @@ extension ViewerStatus {
     /// The fields of the `overview` object.
     enum CodingKeys: String, CodingKey {
       /// Each field by the name the service writes.
-      case mode, state, label, reason, recoverable, account, accountName, display, pending, inFlight, activity
+      case mode, state, label, reason, recoverable, recoveryHelps, account, accountName, display, pending, inFlight,
+        activity
     }
 
     /// Decodes an overview, keeping the default of anything missing or of the wrong type.
@@ -91,6 +94,7 @@ extension ViewerStatus {
       label = (try? container.decodeIfPresent(String.self, forKey: .label)) ?? ""
       reason = try? container.decodeIfPresent(String.self, forKey: .reason)
       recoverable = (try? container.decodeIfPresent(Bool.self, forKey: .recoverable)) ?? false
+      recoveryEligibility = try? container.decodeIfPresent(Bool.self, forKey: .recoveryHelps)
       account = try? container.decodeIfPresent(String.self, forKey: .account)
       accountName = try? container.decodeIfPresent(String.self, forKey: .accountName)
       display = try? container.decodeIfPresent(Size.self, forKey: .display)

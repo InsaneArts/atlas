@@ -68,6 +68,18 @@ struct StatusReadingTests {
     #expect((reading.recovery(holdingControl: false, recovering: false) != nil) == offered)
   }
 
+  @Test("an unknown outcome offers no recovery alert when a prerequisite prevents recovery")
+  func recoveryWaitsForPrerequisites() throws {
+    let reading = StatusReading(
+      try status([
+        "overview": ["mode": "recovering", "state": "needsYou", "pending": 1, "recoveryHelps": false]
+      ])
+    )
+    #expect(reading.controlBlocked == .recovery)
+    #expect(!reading.recoveryOffered(holdingControl: false))
+    #expect(reading.recovery(holdingControl: false, recovering: false) == nil)
+  }
+
   @Test("an unknown check stays unknown, a failed one keeps its step for the app, and native dialogs are their own row")
   func statusRows() throws {
     let accessibility = ViewerStatus.Check(

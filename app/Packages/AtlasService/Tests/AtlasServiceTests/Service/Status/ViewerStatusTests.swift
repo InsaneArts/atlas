@@ -39,6 +39,16 @@ struct ViewerStatusTests {
     #expect(reading.overview.recoveryRestarts == (pending > 0 || inFlight > 0))
   }
 
+  @Test("an unknown outcome respects whether the service says recovery can help", arguments: [false, true])
+  func recoveryEligibility(helps: Bool) throws {
+    let reading = try status([
+      "overview": ["mode": "recovering", "state": "needsYou", "pending": 1, "recoveryHelps": helps]
+    ])
+    #expect(reading.overview.mode == .recovering)
+    #expect(reading.overview.pending == 1)
+    #expect(reading.overview.recoveryHelps == helps)
+  }
+
   @Test("a not ready status drops unsupported display sizes")
   func invalidDisplaySizes() throws {
     for side in [1e100, -1, 0, 32769] {
