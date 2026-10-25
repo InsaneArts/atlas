@@ -47,12 +47,13 @@ nonisolated final class RetriedReleaseProtocol: URLProtocol {
   /// Refuses the first request; later ones stay unanswered until cancelled.
   override func startLoading() {
     let secret = request.url?.pathComponents.dropFirst().first ?? ""
-    let script = Self.scripts.withLock { scripts in
-      guard var script = scripts[secret] else { return scripts[secret] }
-      script.received += 1
-      scripts[secret] = script
-      return script
-    }
+    let script = Self.scripts
+      .withLock { scripts in
+        guard var script = scripts[secret] else { return scripts[secret] }
+        script.received += 1
+        scripts[secret] = script
+        return script
+      }
     guard let script else {
       client?.urlProtocol(self, didFailWithError: URLError(.badURL))
       return
