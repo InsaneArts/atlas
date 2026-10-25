@@ -1,6 +1,5 @@
 // The check-swift-*.mjs checkers: each passes a clean fixture and fails a
-// dirty one, at the lines and for the reasons the fixture holds, and the
-// allow list waives or only reports what it names. Fixtures live in
+// dirty one, at the lines and for the reasons the fixture holds. Fixtures live in
 // tests/check-swift/<checker>/{clean,dirty}; the real tree is npm test's own
 // run of the checkers, not this file's.
 import assert from 'node:assert/strict';
@@ -11,26 +10,20 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { packages, steps, summaryLine } from '../scripts/check-swift.mjs';
-import { allowList } from '../scripts/swift-source.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixtures = path.join(root, 'tests/check-swift');
 
-// Runs one checker on `folder` under `base`, with the allow list `allow`.
-function check(
-  checker,
-  folder,
-  { base = path.join(fixtures, checker), allow = 'empty.json' } = {},
-) {
+// Runs one checker on `folder` under `base`.
+function check(checker, folder, { base = path.join(fixtures, checker), list = false } = {}) {
   const result = spawnSync(
     process.execPath,
-    [path.join(root, `scripts/check-swift-${checker}.mjs`), folder],
+    [path.join(root, `scripts/check-swift-${checker}.mjs`), folder, ...(list ? ['--list'] : [])],
     {
       encoding: 'utf8',
       env: {
         ...process.env,
         CHECK_SWIFT_BASE: base,
-        CHECK_SWIFT_ALLOW: path.join(fixtures, 'allow', allow),
       },
     },
   );
@@ -163,51 +156,22 @@ test('the tests checker passes try #require, a logical not and bangs in comments
   assert.equal(status, 0, lines.join('\n'));
 });
 
-test('a waiver drops the hits in the paths it names', () => {
-  const { status, lines } = check('tokens', 'dirty', { allow: 'waived.json' });
-  assert.equal(status, 0, lines.join('\n'));
+test('--list keeps real violations on stderr and exits with failure', () => {
+  const ordinary = check('docs', 'dirty');
+  const listed = check('docs', 'dirty', { list: true });
+  assert.equal(listed.status, 1);
+  assert.deepEqual(listed.lines, ordinary.lines);
+  assert.ok(listed.lines.length > 0);
+  assert.equal(listed.stdout, '');
 });
 
-test('a report-only rule is counted and never fails', (t) => {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-check-swift-'));
-  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
-  fs.mkdirSync(path.join(base, 'Tests'));
-  fs.writeFileSync(
-    path.join(base, 'Tests/WaitTests.swift'),
-    [
-      'import Testing',
-      '',
-      '@Test("a wait that a manual clock should replace")',
-      'func waits() async throws {',
-      '  try await Task.sleep(for: .milliseconds(1))',
-      '}',
-      '',
-    ].join('\n'),
-  );
-  const { status, lines, stdout } = check('tests', 'Tests', { base, allow: 'waived.json' });
-  assert.equal(status, 0, lines.join('\n'));
-  assert.match(stdout, /check-swift-tests: 1 reported/);
-});
-
-test('an allow list entry without its expiry condition or its reason is refused', (t) => {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-check-swift-'));
-  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
-  const list = path.join(base, 'allow.json');
-  fs.writeFileSync(
-    list,
-    JSON.stringify({
-      waivers: [
-        {
-          path: '**',
-          checkers: ['tokens'],
-          until: 'the undocumented declarations gain documentation',
-        },
-      ],
-    }),
-  );
-  assert.throws(() => allowList(list), /has no reason/);
-  fs.writeFileSync(list, JSON.stringify({ reportOnly: [{ checker: 'docs', reason: 'why' }] }));
-  assert.throws(() => allowList(list), /has no until/);
+test('a missing source folder reports its location and exits 2', () => {
+  const { status, lines, stdout } = check('tokens', 'missing');
+  assert.equal(status, 2);
+  assert.deepEqual(lines, [
+    `check-swift-tokens: ${path.join(fixtures, 'tokens', 'missing')} does not exist`,
+  ]);
+  assert.equal(stdout, '');
 });
 
 test('the Swift check covers app and then every local package', () => {
@@ -291,12 +255,6 @@ test('the Swift check summary adds up the tests of every test product Swift Test
     summaryLine({ folder: 'app', name: 'swift test', ok: true, output }),
     'ok   app: swift test (403 tests)',
   );
-});
-
-test('with no allow list nothing is waived and every rule is a gate', () => {
-  const list = allowList(path.join(os.tmpdir(), 'atlas-check-swift-none', 'allow.json'));
-  assert.equal(list.waived('tokens', 'inline size', 'app/Sources/AtlasApp/Any.swift'), false);
-  assert.equal(list.reportsOnly('docs', undefined), false);
 });
 
 test('the tests checker passes the wait inside Ceiling.timer and fails any other wall-clock wait, in that file or elsewhere', (t) => {
