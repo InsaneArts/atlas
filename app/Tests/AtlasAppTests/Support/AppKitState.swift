@@ -31,6 +31,7 @@ nonisolated struct AppKitState: SuiteTrait, TestTrait, TestScoping {
   )
     async throws
   {
-    try await AppKitTestGate.shared.withOwnership(function)
+    try await AppKitTestGate.shared
+      .withOwnership(function)
   }
 }
