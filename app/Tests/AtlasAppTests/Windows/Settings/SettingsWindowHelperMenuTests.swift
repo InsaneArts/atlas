@@ -11,7 +11,6 @@ struct SettingsWindowHelperMenuTests {
   func settingsAnswersTheHelperMenu() throws {
     let controller = SettingsController.scripted(commands: ScriptedCommands([:]))
     let window = SettingsWindow(controller: controller, closed: { _ in })
-    controller.send(.navigate(.diagnostics))
     let helper = MainMenu.helper()
     let switchItem = try #require(helper.items.first { $0.action == #selector(HelperMenuActions.askSwitch(_:)) })
     let restart = try #require(helper.items.first { $0.action == #selector(HelperMenuActions.askRestart(_:)) })
@@ -20,7 +19,7 @@ struct SettingsWindowHelperMenuTests {
     #expect(switchItem.title == "Switch to “\(controller.state.helper.account.name)”…")
     #expect(!window.validateMenuItem(restart), "Settings offers no restart")
     window.askSwitch(nil)
-    #expect(controller.state.location == .root(.helper), "it asks on the Helper page")
+    #expect(controller.state.tabs.selected == .helper, "it asks on the Helper pane")
     #expect(controller.state.alert != nil)
   }
 }

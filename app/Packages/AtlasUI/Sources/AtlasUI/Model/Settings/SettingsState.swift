@@ -1,9 +1,7 @@
-/// The Settings shell, shared page values and its window-wide alert.
+/// The Settings shell, its four existing content panes and its window-wide alert.
 public struct SettingsState: Equatable, Sendable {
   /// Labels and selection for the existing content panes.
   public var tabs: CapsuleTabsState<SettingsTab>
-  /// The current route; nil retains the selection of an existing pane sample.
-  public var destination: SettingsDestination?
   /// Whether history has an earlier destination.
   public var canGoBack: Bool
   /// Whether history has a later destination.
@@ -52,9 +50,6 @@ public struct SettingsState: Equatable, Sendable {
 
   /// The selected pane's name, which the title bar shows.
   public var title: String {
-    location.title
+    tabs.tabs.first { $0.id == tabs.selected }?.title ?? ""
   }
-
-  /// The resolved route, including older samples that select a pane.
-  public var location: SettingsDestination { destination ?? .root(SettingsRoot(pane: tabs.selected)) }
 }

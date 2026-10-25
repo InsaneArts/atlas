@@ -24,25 +24,18 @@ struct HelperPane: View {
       }
       VStack(alignment: .leading, spacing: SettingsLayout.titleGap) {
         HelperReadyHeader { send(.checkAgain) }
-        GroupedSection([HelperAction.recover], notes: readyNotes) { _ in
-          SettingsDisclosureRow(title: "Readiness & Diagnostics", summary: state.readinessSummary) {
-            send(.navigate(.diagnostics))
-          }
-        }
-        GroupedSection(state.ready.filter { $0.item.state == .notReady }) { row in
+        GroupedSection(state.ready, notes: readyNotes) { row in
           HelperReadyRow(row: row, buttons: state.buttons) { send(.askRecover) }
         }
       }
       // Check Again always lasts long enough to show, so its marks need no wait before their spinners.
       .environment(\.marksSwapAtOnce, true)
-      GroupedSection(
-        HelperAction.allCases,
-        title: "When something goes wrong",
-        description: "Recover input or end the helper's login.",
-        notes: notes
-      ) { action in
+      GroupedSection(HelperAction.allCases, title: "When something goes wrong", notes: notes) { action in
         actionRow(action)
       }
+    }
+    .onChange(of: state.buttons.isChecking) { _, isChecking in
+      if !isChecking { announceChecked() }
     }
   }
 
@@ -83,6 +76,12 @@ struct HelperPane: View {
       .compactMap { $0 }
   }
 
+  /// Tells VoiceOver once that Check Again ended, and how things stand.
+  private func announceChecked() {
+    let ready = state.ready.allSatisfy { $0.item.state == .ready }
+    AccessibilityNotification.Announcement(ready ? "Checked. All ready." : "Checked. Not everything is ready.")
+      .post()
+  }
 }
 
 #if DEBUG

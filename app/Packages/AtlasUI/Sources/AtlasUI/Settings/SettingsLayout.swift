@@ -16,10 +16,6 @@ public enum SettingsLayout {
   public static let width = defaultWidth
   /// The stable default height used by standalone Settings previews.
   public static let firstHeight = defaultHeight
-  /// 104: the cadence cards' minimum height.
-  static let pictureChoiceHeight: CGFloat = 104
-  /// 160: the readable minimum width of a cadence card before falling back to the popup.
-  static let pictureChoiceWidth: CGFloat = 160
   /// 224: the fixed sidebar width.
   static let sidebarWidth: CGFloat = 224
   /// 12: the sidebar's side and bottom insets.
@@ -62,7 +58,7 @@ public enum SettingsLayout {
   /// 3: the focus halo outside a sidebar selection.
   static let focusHalo: CGFloat = 3
   /// 20: between a form's sections, the gap and the next section name's own space above it.
-  static let sectionGap = Spacing.xxl
+  static let sectionGap = Spacing.xl
   /// 32 above, 68 at the sides, 62 below: About's insets.
   static let aboutInsets = EdgeInsets(top: 32, leading: 68, bottom: 62, trailing: 68)
   /// 84: the app's icon in About.
@@ -80,9 +76,7 @@ public enum SettingsLayout {
   /// 40: the helper's picture at the top of the Helper pane.
   static let accountPicture: CGFloat = 40
   /// 600: the default account row's usable width after its horizontal padding.
-  static let accountStackThreshold = contentMaximumWidth
-  /// The account layout receives its width after the row's horizontal padding.
-  static let accountContentStackThreshold = accountStackThreshold - Spacing.m * 2
+  static let accountStackThreshold = contentMaximumWidth - Spacing.m * 2
   /// 10: between a section's name and its group, as ``GroupedSection`` sets them, for a section that draws its own
   /// name.
   static let titleGap = Spacing.sPlus

@@ -40,7 +40,7 @@ struct SettingsLayoutTests {
     for _ in 0..<20 { await Task.yield() }
     host.layoutSubtreeIfNeeded()
     let scrolls = Self.scrollViews(in: host)
-    try #require(scrolls.count == SettingsDestination.pages.count)
+    try #require(scrolls.count == SettingsTab.allCases.count)
     for (index, scroll) in scrolls.enumerated() {
       let document = try #require(scroll.documentView)
       let overflow = document.bounds.height - scroll.contentView.bounds.height
@@ -51,14 +51,14 @@ struct SettingsLayoutTests {
       #expect(scroll.contentView.bounds.minY > 0, "the pane must actually scroll before switching away")
     }
     let positions = scrolls.map { $0.contentView.bounds.origin }
-    for destination in SettingsDestination.pages {
-      state.destination = destination
+    for tab in SettingsTab.allCases {
+      state.tabs.selected = tab
       host.rootView = SettingsPane(state: state, edit: { _ in }, send: { _ in })
       for _ in 0..<20 { await Task.yield() }
       host.layoutSubtreeIfNeeded()
       #expect(Self.scrollViews(in: host) == scrolls, "switching panes retains their scrolling views")
       for (scroll, position) in zip(scrolls, positions) {
-        #expect(scroll.contentView.bounds.origin == position, "\(destination) reset another pane's position")
+        #expect(scroll.contentView.bounds.origin == position, "\(tab) reset another pane's position")
       }
     }
   }
@@ -108,9 +108,8 @@ struct SettingsLayoutTests {
   @MainActor
   func sidebarRowsKeepTheirRhythm() throws {
     let state = PreviewStates.settingsHelper
-    for root in SettingsRoot.allCases {
-      let helper = root == .helper
-      let item = CapsuleTab(id: root, title: SettingsDestination.root(root).title, symbol: .gear)
+    for item in state.tabs.tabs {
+      let helper = item.id == .helper
       let size = try Self.size(
         SettingsSidebarRow(item: item, subtitle: helper ? state.helper.account.status.label : nil, selected: false) {}
           .frame(width: SettingsLayout.sidebarWidth)

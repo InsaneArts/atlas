@@ -65,14 +65,6 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case sparkles
   /// Connected coding agents as a Settings category.
   case agents = "puzzlepiece.extension.fill"
-  /// Screen and viewer preferences.
-  case screens = "rectangle.on.rectangle"
-  /// Notification preferences.
-  case notifications = "bell.badge.fill"
-  /// A live screen cadence.
-  case live = "arrow.triangle.2.circlepath"
-  /// A periodic screen cadence.
-  case clock
   /// About.
   case info = "info.circle"
   /// The narrow Activity tab.

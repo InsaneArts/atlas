@@ -36,28 +36,6 @@
       "26-claude-code-only",
       "27-claude-app-only",
       "28-claude-partly-connected",
-      "29-screen-live",
-      "30-screen-five-seconds",
-      "31-screen-paused",
-      "32-paused-unavailable",
-      "33-notifications-on",
-      "34-notifications-off",
-      "35-startup-unavailable",
-      "36-diagnostics",
-      "37-diagnostics-mixed",
-      "38-diagnostics-empty",
-      "39-diagnostics-checking",
-      "40-projects",
-      "41-projects-empty",
-      "42-projects-long-duplicates",
-      "43-projects-many",
-      "44-projects-forget-failed",
-      "45-long-helper",
-      "46-failed-connection",
-      "47-claude-partial",
-      "48-update-misplaced",
-      "49-update-installed",
-      "50-cleanup-failed",
     ]
 
     /// Every Settings state drawn for visual checks, by file name.
@@ -65,16 +43,10 @@
       Array(zip(files, PreviewStates.settings.map(\.value)))
     }
 
-    /// The accessible popup presentation for each existing cadence choice.
-    static var popupRenders: [(file: String, state: SettingsState)] {
-      renders.filter { ["29-screen-live", "30-screen-five-seconds", "31-screen-paused"].contains($0.file) }
-        .map { ("popup-\($0.file)", $0.state) }
-    }
-
     /// Additional stable viewports; the original 28 state scenarios remain in their original order above.
     static var viewportRenders: [(file: String, state: SettingsState, size: NSSize)] {
       let minimum = NSSize(width: SettingsLayout.minimumWidth, height: SettingsLayout.minimumHeight)
-      return Array(zip(files, renders))
+      return Array(zip(files.prefix(4), renders.prefix(4)))
         .map { file, render in
           ("minimum-\(file)", render.state, minimum)
         } + [
@@ -104,10 +76,7 @@
       let viewports = viewportRenders.map {
         draw($0.file, $0.state, to: folder, reduceTransparency: reduceTransparency, size: $0.size)
       }
-      let popups = popupRenders.map {
-        draw($0.file, $0.state, to: folder, reduceTransparency: reduceTransparency, voiceOver: true)
-      }
-      return (standard + viewports + popups)
+      return (standard + viewports)
         .allSatisfy { $0 }
     }
 
@@ -119,19 +88,16 @@
     ///   - folder: Where the PNG goes.
     ///   - reduceTransparency: Whether to draw it as under Reduce Transparency; not by default.
     ///   - size: The explicit viewport, or the stable default when nil.
-    ///   - voiceOver: Whether to draw the accessible popup presentation; false by default.
     /// - Returns: Whether it was drawn.
     static func draw(
       _ file: String,
       _ state: SettingsState,
       to folder: URL,
       reduceTransparency: Bool = false,
-      size: NSSize? = nil,
-      voiceOver: Bool = false
+      size: NSSize? = nil
     ) -> Bool {
       PNG.write(
         view(state) { _ in }
-          .environment(\.settingsPicturePopup, voiceOver)
           .environment(\._accessibilityReduceTransparency, reduceTransparency),
         size: size ?? Self.size(of: state),
         to: folder.appendingPathComponent("\(file).png")

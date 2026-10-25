@@ -50,10 +50,6 @@ struct SettingsClaudeTests {
     let commands = ScriptedCommands(["agents status": Self.partial, "agents install": #"{"ok":true}"#])
     let controller = SettingsController.scripted(commands: commands)
     await controller.loadAgents()
-    controller.send(.navigate(.projects))
-    await controller.agentsReading?.value
-    controller.send(.navigate(.root(.agents)))
-    await controller.agentsReading?.value
     let rows = controller.state.agents.agents
     #expect(rows.map(\.id) == ["claude", "codex"])
     let claude = try #require(rows.first)

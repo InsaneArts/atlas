@@ -38,7 +38,7 @@ final class SettingsController {
     self.dependencies = dependencies
     let preferences = dependencies.preferences
     let root = SettingsRoot(savedValue: preferences.loadTab())
-    session.navigation = SettingsNavigation(initial: .root(root))
+    session.navigation = SettingsNavigation(initial: .root(SettingsRoot(pane: root.pane ?? .general)))
     notify = preferences.loadNotify()
     icons = AgentRowIcons.onThisMac(home: FileManager.default.homeDirectoryForCurrentUser) { path in
       dependencies.icon(forFile: path)
@@ -83,20 +83,6 @@ final class SettingsController {
     // Unstructured, as `send` is the view's synchronous callback: each async event runs in a task of its own.
     switch event {
     case .selectTab(let tab): selectTab(tab)
-    case .navigate(let destination): navigate(destination)
-    case .setOpenAtLogin(let on):
-      var general = SettingsPresenter.general(snapshot)
-      general.opensAtLogin = on
-      update(general)
-    case .choosePicture(let picture):
-      var general = SettingsPresenter.general(snapshot)
-      general.picture = picture
-      update(general)
-    case .setNotify(let on):
-      var general = SettingsPresenter.general(snapshot)
-      general.notify = on
-      update(general)
-    case .copyDiagnostics: dependencies.links.copyDiagnostics()
     case .back: moveInHistory(forward: false)
     case .forward: moveInHistory(forward: true)
     case .checkAgain: Task { await checkAgain() }
@@ -143,15 +129,8 @@ final class SettingsController {
   ///
   /// - Parameter tab: The pane.
   func selectTab(_ tab: SettingsTab) {
-    navigate(.root(SettingsRoot(pane: tab)))
-  }
-
-  /// Visits a page while retaining the shared work, notices and alert.
-  ///
-  /// - Parameter destination: The requested root or detail.
-  func navigate(_ destination: SettingsDestination) {
-    guard destination != session.navigation.destination else { return }
-    session.navigation.visit(destination)
+    guard .root(SettingsRoot(pane: tab)) != session.navigation.destination else { return }
+    session.navigation.visit(.root(SettingsRoot(pane: tab)))
     enteredDestination()
   }
 

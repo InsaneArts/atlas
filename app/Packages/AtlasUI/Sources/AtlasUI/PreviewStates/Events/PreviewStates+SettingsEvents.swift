@@ -11,14 +11,6 @@
       switch event {
       case .selectTab(let tab):
         next.tabs.selected = tab
-      case .navigate(let destination):
-        next.destination = destination
-      case .setOpenAtLogin(let on):
-        next.general.opensAtLogin = on
-      case .choosePicture(let picture):
-        next.general.picture = picture
-      case .setNotify(let on):
-        next.general.notify = on
       case .askRecover:
         next.alert = settingsRecover.alert
       case .askLogOut:
@@ -49,7 +41,7 @@
         next.alert = settingsSwitch.alert
       case .closeLeftovers, .closeHelper:
         next.helper.closeLogin = nil
-      case .copyDiagnostics, .checkAgain, .gettingStarted, .back, .forward, .showAppInFinder, .showAgentFile:
+      case .checkAgain, .gettingStarted, .back, .forward, .showAppInFinder, .showAgentFile:
         break
       }
       return next

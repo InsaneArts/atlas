@@ -1,6 +1,8 @@
 import SwiftUI
 
-/// Coding agents with their existing actions and failures, followed by a live link to taught projects.
+/// The Agents pane: each agent with its icon and whether it is connected, then, when `atlas agents project` taught
+/// any, each project with Forget…, which asks first. Why a Connect failed sits in its agent's row; what else the last
+/// command said sits under the agents.
 struct AgentsPane: View {
   /// What the pane shows.
   let state: SettingsAgentsState
@@ -10,12 +12,7 @@ struct AgentsPane: View {
   /// What it draws, from its state.
   var body: some View {
     VStack(alignment: .leading, spacing: SettingsLayout.sectionGap) {
-      GroupedSection(
-        state.agents,
-        title: "Coding agents",
-        description: "Let supported agents use the helper.",
-        notes: notes
-      ) { agent in
+      GroupedSection(state.agents, notes: notes) { agent in
         AgentConnectionRow(agent: agent) {
           send(.connect(agent.id))
         } disconnect: {
@@ -24,12 +21,16 @@ struct AgentsPane: View {
           send(.showAgentFile(agent.id))
         }
       }
-      GroupedSection(
-        [GeneralRow.picture],
-        title: "Project instructions",
-        description: "Projects taught to agents without the Atlas plugin."
-      ) { _ in
-        SettingsDisclosureRow(title: "Projects", summary: state.projectsSummary) { send(.navigate(.projects)) }
+      if !state.projects.isEmpty {
+        GroupedSection(
+          state.projects,
+          title: "Projects",
+          notes: [
+            .text("Agents without the Atlas plugin read these projects' AGENTS.md. Forget takes Atlas's section out.")
+          ]
+        ) { project in
+          ProjectRow(project: project) { send(.askForget(project.id)) }
+        }
       }
     }
   }

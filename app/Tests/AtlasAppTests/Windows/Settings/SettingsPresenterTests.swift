@@ -1,80 +1,12 @@
 import AtlasCommands
 import AtlasService
 import AtlasUI
-import Foundation
 import Testing
 
 @testable import AtlasApp
 
 @Suite("SettingsPresenter")
 struct SettingsPresenterTests {
-  @Test("Paused is available only with an open viewer or an already paused picture", arguments: [false, true])
-  func pausedAvailability(canPause: Bool) throws {
-    for picture in [ViewerPictureChoice.live, .everyFiveSeconds, .paused] {
-      var snapshot = SettingsSnapshot()
-      snapshot.facts.canPause = canPause
-      snapshot.facts.picture = picture
-      let general = SettingsPresenter.general(snapshot)
-      #expect(general.pictureOptions.map(\.id) == [.live, .everyFiveSeconds, .paused])
-      #expect(general.pictureOptions.map(\.title) == ["Live", "Every 5 Seconds", "Paused"])
-      #expect(general.pictureOptions[2].isEnabled == (canPause || picture == .paused))
-      #expect(general.picture == SettingsPresenter.picture(picture))
-    }
-  }
-
-  @Test("startup preserves the reported unavailable state and Notifications stays off by default")
-  func unavailableStartupAndNotificationDefault() {
-    var snapshot = SettingsSnapshot()
-    snapshot.facts.opensAtLogin = OpenAtLogin.State(isAvailable: false, isEnabled: false)
-    let general = SettingsPresenter.general(snapshot)
-    #expect(!general.canOpenAtLogin && !general.opensAtLogin)
-    #expect(!general.notify)
-  }
-
-  @Test("readiness summaries distinguish empty, unknown, mixed, ready and explicitly checking rows")
-  func readinessSummaries() {
-    var helper = SettingsPresenter.helper(SettingsSnapshot())
-    helper.ready = []
-    #expect(helper.readinessSummary == "Not checked yet")
-    helper.ready = SettingsPresenter.ready([ReadinessItem(name: "Future check", text: "Waiting", state: .unknown)])
-    #expect(helper.readinessSummary == "1 not checked")
-    helper.ready += SettingsPresenter.ready([
-      ReadinessItem(name: "Permission", text: "Use macOS settings", state: .notReady),
-      ReadinessItem(name: "Native dialogs", text: "Ready", state: .ready),
-    ])
-    #expect(helper.readinessSummary == "1 needing attention · 1 not checked")
-    #expect(helper.ready.map(\.item.name) == ["Future check", "Permission", "Native dialogs"])
-    #expect(helper.ready.first?.item.text == "Waiting")
-    helper.ready = SettingsPresenter.ready([ReadinessItem(name: "Future check", text: "", state: .ready)])
-    #expect(helper.readinessSummary == "All reported checks passed")
-    helper.buttons.canCheck = false
-    #expect(helper.readinessSummary == "Checking…")
-  }
-
-  @Test("project summaries count loaded paths and retain missing sections and duplicate folder names")
-  func projectSummariesAndIdentity() throws {
-    var agents = SettingsPresenter.agents(SettingsSnapshot())
-    agents.projects = []
-    #expect(agents.projectsSummary == "No projects taught")
-    let report = try JSONDecoder()
-      .decode(
-        AgentsStatus.self,
-        from: Data(
-          #"{"ok":true,"agents":[],"projects":[{"path":"/work/same","taught":true},{"path":"/archive/same","taught":false}]}"#
-            .utf8
-        )
-      )
-    let projects = try #require(report.projects)
-    let first = SettingsPresenter.project(projects[0])
-    let second = SettingsPresenter.project(projects[1])
-    agents.projects = [first]
-    #expect(agents.projectsSummary == "1 project taught")
-    agents.projects.append(second)
-    #expect(agents.projectsSummary == "2 projects taught")
-    #expect(first.name == second.name && first.id != second.id)
-    #expect(second.detail == "No longer has the Atlas section" && !second.detailIsPath)
-  }
-
   @Test("About shows one control for updates, whatever the update state, and what runs under it, not in it")
   func aboutShowsOneControlForUpdates() {
     let misplaced =
