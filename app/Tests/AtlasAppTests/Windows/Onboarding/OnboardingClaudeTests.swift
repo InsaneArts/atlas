@@ -44,6 +44,41 @@ struct OnboardingClaudeTests {
     }
   }
 
+  @Test("setup keeps a Claude restart request across a retry and Continue finishes without reinstalling")
+  func restartNoticeSurvivesRetry() async throws {
+    let commands = ScriptedCommands([
+      "onboarding status": OnboardingReplies.finishedMac,
+      "agents status":
+        #"{"ok":true,"agents":[{"agent":"claude","installed":true,"connected":false},{"agent":"claude-app","installed":true,"connected":false}]}"#,
+      "agents install":
+        #"{"ok":false,"agents":[{"agent":"claude","ok":false,"error":"plugin failed"},{"agent":"claude-app","ok":true,"restart":true}]}"#,
+    ])
+    let controller = OnboardingController.scripted(commands)
+    try await controller.whileOpen { _ in
+      try await controller.untilLoaded()
+      try await settle("the agents were never read") { controller.snapshot.agentsLoaded }
+      await controller.connectAgents(controller.agentsSwitchedOn)
+      #expect(controller.snapshot.step == .agents)
+      #expect(OnboardingPresenter.agents(controller.snapshot).agents.first?.detail.contains("Claude Code") == true)
+      #expect(OnboardingPresenter.agents(controller.snapshot).agents.first?.detail.contains("plugin failed") == true)
+      commands.answer(
+        "agents install",
+        #"{"ok":true,"agents":[{"agent":"claude","ok":true},{"agent":"claude-app","ok":true,"restart":false}]}"#
+      )
+      await controller.connectAgents(controller.agentsSwitchedOn)
+      #expect(controller.snapshot.agents.first?.connected == true)
+      #expect(controller.snapshot.step == .agents)
+      #expect(
+        OnboardingPresenter.agents(controller.snapshot).agents.first?.detail
+          == "Quit and reopen the Claude app for this to take effect."
+      )
+      #expect(commands.ran.count { $0.starts(with: ["agents", "install"]) } == 2)
+      await controller.connectAgents(controller.agentsSwitchedOn)
+      #expect(controller.snapshot.step == .done)
+      #expect(commands.ran.count { $0.starts(with: ["agents", "install"]) } == 2)
+    }
+  }
+
   @Test("setup connects both installed Claude parts from its one row and shows a part failure there")
   func connectsBothParts() async throws {
     let commands = ScriptedCommands([

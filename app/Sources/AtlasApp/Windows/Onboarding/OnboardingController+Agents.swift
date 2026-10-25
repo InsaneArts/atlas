@@ -70,7 +70,7 @@ extension OnboardingController {
         )
       else { return }
       let change = outcome.decode(AgentsChange.self)
-      snapshot.agentsNeedRestart = change?.requiresRestart == true
+      snapshot.agentsNeedRestart = snapshot.agentsNeedRestart || change?.requiresRestart == true
       // A reply that names no agent connected them all when it worked.
       let connected = outcome.ok ? chosen : change?.connected ?? []
       for index in snapshot.agents.indices where connected.contains(snapshot.agents[index].id) {
