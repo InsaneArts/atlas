@@ -161,7 +161,7 @@ final class ViewerReadingLoop {
     } catch is StatusRefused {
       return
     } catch {
-      if current() { lost(error) }
+      if current() && !paused { lost(error) }
     }
   }
 
