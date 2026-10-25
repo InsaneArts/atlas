@@ -512,7 +512,11 @@ impl Client {
             return unreachable("The helper's input service is from an older build.");
         }
 
-        let mut reply = self.native_request(json!({"op": "hold", "on": on})).await?;
+        let mut reply = match self.native_request(json!({"op": "hold", "on": on})).await {
+            Ok(reply) => reply,
+            Err(_) if on => return unreachable("The helper's input service could not be told."),
+            Err(error) => return Err(error),
+        };
         if !on {
             self.controller.note_stop(false)?;
         }
@@ -2339,6 +2343,64 @@ mod tests {
             tokio::time::timeout(Duration::from_millis(50), helper.accept())
                 .await
                 .is_err()
+        );
+        drop(ownership);
+        recovery_settles_the_abandoned_claim(&acting);
+    }
+
+    #[tokio::test]
+    async fn a_local_stop_succeeds_and_cancels_a_running_command_when_native_hold_fails() {
+        let (dir, mut client, input, _session) = native_client();
+        client.transport.path = dir.path().join("helper.sock");
+        let helper = UnixListener::bind(&client.transport.path).unwrap();
+        let mut person = client.clone();
+        person.actor = Actor::Viewer;
+        let acting = client.doing(Doing::new("run"));
+        let ownership = acting.controller.acquire(false).unwrap();
+        let mut caller = Box::pin(acting.mutate(
+            json!({"op": "run", "argv": ["true"], "timeoutMs": 1000}),
+            None,
+            None,
+        ));
+        let mut peer = dispatched(&mut caller, &helper, "run").await;
+        let pending = acting.controller.pending().unwrap();
+        assert_eq!(pending.len(), 1);
+
+        let mut stopping = Box::pin(person.hold(true));
+        let mut hello = dispatched(&mut stopping, &input, "hello").await;
+        answer(&mut hello, json!({"ok": true, "capabilities": ["hold"]})).await;
+        let mut hold = dispatched(&mut stopping, &input, "hold").await;
+        answer(
+            &mut hold,
+            json!({"ok": false, "error": "Cleanup failed", "uncertain": true}),
+        )
+        .await;
+        assert_eq!(
+            stopping.await.unwrap(),
+            json!({
+                "ok": true,
+                "held": true,
+                "kept": true,
+                "warnings": ["The helper's input service could not be told. Agents are stopped here all the same."],
+            })
+        );
+        assert!(person.controller.stop_noted());
+        let error = tokio::time::timeout(Duration::from_secs(2), caller)
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.code, "stopped");
+        assert!(error.uncertain);
+        assert_eq!(acting.controller.pending().unwrap(), pending);
+        assert_eq!(acting.controller.acquire(true).unwrap_err().code, "busy");
+        let mut line = String::new();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), peer.read_line(&mut line))
+                .await
+                .unwrap()
+                .unwrap(),
+            0,
+            "the helper sees the cancelled connection"
         );
         drop(ownership);
         recovery_settles_the_abandoned_claim(&acting);
