@@ -701,20 +701,24 @@ fn shipped_manifest_and_profile_examples_parse_as_toml() {
 #[test]
 fn a_briefly_held_store_lock_is_waited_for_but_a_held_one_is_refused() {
     let sandbox = Sandbox::new();
-    let first = state::Store::open(&sandbox.home, true).unwrap();
-    let release = std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(10));
-        drop(first);
-    });
-
-    state::Store::open(&sandbox.home, true).expect("a lock released within the patience is taken");
-    release.join().unwrap();
+    let mut first = Some(state::Store::open(&sandbox.home, true).unwrap());
+    state::Store::open_with_retry(&sandbox.home, true, |_| {
+        drop(first.take().expect("the first retry releases the lock"));
+        true
+    })
+    .expect("a lock released on retry is taken");
+    assert!(first.is_none(), "the held lock required a retry");
 
     let held = state::Store::open(&sandbox.home, true).unwrap();
-    let started = std::time::Instant::now();
-    let refused = state::Store::open(&sandbox.home, true).err().unwrap();
+    let mut retries = 0;
+    let refused = state::Store::open_with_retry(&sandbox.home, true, |_| {
+        retries += 1;
+        retries < 2
+    })
+    .err()
+    .unwrap();
     assert_eq!(refused.error, "Another environment operation is running");
-    assert!(started.elapsed() >= std::time::Duration::from_millis(200));
+    assert_eq!(retries, 2);
     drop(held);
 }
 

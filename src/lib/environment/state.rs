@@ -9,7 +9,11 @@ use fs2::FileExt;
 const LOCK_PATIENCE: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// Take the store lock without blocking on a real holder.
-fn take(lock: &fs::File, write: bool) -> Result<()> {
+fn take(
+    lock: &fs::File,
+    write: bool,
+    mut retry: impl FnMut(std::time::Instant) -> bool,
+) -> Result<()> {
     let deadline = std::time::Instant::now() + LOCK_PATIENCE;
 
     loop {
@@ -23,7 +27,7 @@ fn take(lock: &fs::File, write: bool) -> Result<()> {
             return Ok(());
         }
 
-        if std::time::Instant::now() >= deadline {
+        if !retry(deadline) {
             return Err(problem("Another environment operation is running"));
         }
 
@@ -38,6 +42,14 @@ pub(super) struct Store {
 
 impl Store {
     pub fn open(home: &Path, write: bool) -> Result<Self> {
+        Self::open_with_retry(home, write, |deadline| std::time::Instant::now() < deadline)
+    }
+
+    pub(super) fn open_with_retry(
+        home: &Path,
+        write: bool,
+        retry: impl FnMut(std::time::Instant) -> bool,
+    ) -> Result<Self> {
         let path = home.join(STATE);
 
         let directory = if write {
@@ -54,7 +66,7 @@ impl Store {
         let lock = open_regular(&path.join("lock"), write)?;
         if let Some(lock) = &lock {
             validate_private(lock, false)?;
-            take(lock, write)?;
+            take(lock, write, retry)?;
         }
 
         Ok(Self { path, lock })

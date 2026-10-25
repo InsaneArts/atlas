@@ -2833,7 +2833,9 @@ mod tests {
                 assert!(started.elapsed() < FIRST_REQUEST + Duration::from_secs(2));
             }
 
-            std::thread::sleep(FIRST_REQUEST + Duration::from_millis(500) - started.elapsed());
+            std::thread::sleep(
+                (FIRST_REQUEST + Duration::from_millis(500)).saturating_sub(started.elapsed()),
+            );
             let request = format!("GET {prefix} HTTP/1.1\r\nHost: {authority}\r\n\r\n");
             named.write_all(request.as_bytes()).unwrap();
             reply(&mut named)
