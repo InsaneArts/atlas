@@ -91,7 +91,8 @@ fn prune_captures(output: &Path) {
         let capture = entry
             .file_name()
             .to_str()
-            .is_some_and(|name| name.ends_with("-capture.png"));
+            .and_then(crate::helper_info::capture_time)
+            .is_some();
         if old && capture && entry.file_type().is_ok_and(|kind| kind.is_file()) {
             let _ = fs::remove_file(entry.path());
         }
@@ -1756,6 +1757,43 @@ mod tests {
         io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
         net::{UnixListener, UnixStream},
     };
+
+    #[test]
+    fn pruning_removes_only_old_capture_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = std::time::SystemTime::now() - Duration::from_secs(8 * 24 * 60 * 60);
+        let kept = [
+            "notes-capture.png",
+            "-capture.png",
+            "340282366920938463463374607431768211456-capture.png",
+            ".1-capture.png.partial",
+        ];
+        for name in kept.into_iter().chain(["1-capture.png"]) {
+            let file = fs::File::create(dir.path().join(name)).unwrap();
+            file.set_times(fs::FileTimes::new().set_modified(old))
+                .unwrap();
+        }
+        fs::write(dir.path().join("2-capture.png"), b"recent").unwrap();
+        std::os::unix::fs::symlink("notes-capture.png", dir.path().join("3-capture.png")).unwrap();
+        fs::create_dir(dir.path().join("4-capture.png")).unwrap();
+        fs::File::open(dir.path().join("4-capture.png"))
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(old))
+            .unwrap();
+
+        prune_captures(dir.path());
+
+        assert!(!dir.path().join("1-capture.png").exists());
+        for name in kept
+            .into_iter()
+            .chain(["2-capture.png", "3-capture.png", "4-capture.png"])
+        {
+            assert!(
+                fs::symlink_metadata(dir.path().join(name)).is_ok(),
+                "{name}"
+            );
+        }
+    }
 
     /// A native socket and controller confined to a short temporary path.
     fn native_client() -> (tempfile::TempDir, Client, UnixListener, Session) {
