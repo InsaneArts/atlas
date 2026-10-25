@@ -607,7 +607,7 @@ impl Viewer {
                 all: false,
             };
             let windows = crate::agent::list(&client, &filter).await?;
-            Ok::<_, Error>(listed_apps(&apps["apps"], &windows["windows"]))
+            listed_apps(&apps["apps"], &windows["windows"])
         };
         let mut apps = tokio::time::timeout(READ_DEADLINE, read)
             .await
@@ -1869,8 +1869,8 @@ fn answered(reply: Value) -> Result<Value> {
 
 /// The helper's regular apps as the app lists them, front to back, each
 /// with its windows front to back. A window's id is its window number.
-fn listed_apps(apps: &Value, windows: &Value) -> Vec<Value> {
-    helper_info::open_apps(apps, windows)
+fn listed_apps(apps: &Value, windows: &Value) -> Result<Vec<Value>> {
+    Ok(helper_info::open_apps(apps, windows)?
         .into_iter()
         .map(|app| {
             json!({
@@ -1881,7 +1881,7 @@ fn listed_apps(apps: &Value, windows: &Value) -> Vec<Value> {
                 "windows": app["windows"],
             })
         })
-        .collect()
+        .collect())
 }
 
 /// A reply of `value` as JSON, with status `code`.
@@ -3021,7 +3021,7 @@ mod tests {
             window(7, 3, "Starter"),
         ]);
 
-        let listed = listed_apps(&apps, &windows);
+        let listed = listed_apps(&apps, &windows).unwrap();
         let order = listed
             .iter()
             .map(|app| app["name"].as_str().unwrap())

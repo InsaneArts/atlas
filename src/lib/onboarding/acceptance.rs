@@ -11,7 +11,7 @@ use std::{
     cell::RefCell,
     fs,
     io::{Read, Write},
-    os::unix::{fs::OpenOptionsExt, process::CommandExt},
+    os::unix::process::CommandExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     time::Duration,
@@ -184,8 +184,12 @@ pub async fn accept_worker(ticket: &str) -> Result<Value> {
 
 /// A stale consent record is visible but never authorizes a different request.
 pub(super) fn accepted(pairing: &Pairing) -> bool {
-    use std::os::unix::fs::MetadataExt;
     let path = socket(pairing.helper_uid).with_file_name("accepted.json");
+    accepted_at(&path, pairing)
+}
+
+fn accepted_at(path: &Path, pairing: &Pairing) -> bool {
+    use std::os::unix::fs::MetadataExt;
     let read = || -> Option<Pairing> {
         let directory = fs::symlink_metadata(path.parent()?).ok()?;
         if !directory.is_dir()
@@ -195,11 +199,7 @@ pub(super) fn accepted(pairing: &Pairing) -> bool {
         {
             return None;
         }
-        let mut file = fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&path)
-            .ok()?;
+        let mut file = crate::helper_info::open_plain(path)?;
         let metadata = file.metadata().ok()?;
         if !metadata.is_file()
             || metadata.uid() != pairing.helper_uid
@@ -208,7 +208,13 @@ pub(super) fn accepted(pairing: &Pairing) -> bool {
             return None;
         }
         let mut bytes = Vec::new();
-        (&mut file).take(64 * 1024).read_to_end(&mut bytes).ok()?;
+        (&mut file)
+            .take(64 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .ok()?;
+        if bytes.len() > 64 * 1024 {
+            return None;
+        }
         serde_json::from_slice(&bytes).ok()
     };
     read().as_ref() == Some(pairing)
@@ -510,6 +516,27 @@ mod tests {
                 generated_uid: "6DB4B7AF-BE3C-486C-BD46-1B4558946919".into(),
             },
         }
+    }
+
+    #[test]
+    fn acceptance_reads_only_a_bounded_plain_file_without_waiting_for_a_writer() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("accepted.json");
+        let mut pairing = pairing();
+        pairing.helper_uid = nix::unistd::getuid().as_raw();
+        let bytes = serde_json::to_vec(&pairing).unwrap();
+        fs::write(&path, &bytes).unwrap();
+        assert!(accepted_at(&path, &pairing));
+
+        let link = dir.path().join("link.json");
+        std::os::unix::fs::symlink(&path, &link).unwrap();
+        assert!(!accepted_at(&link, &pairing));
+        fs::write(&path, [bytes, vec![b' '; 64 * 1024]].concat()).unwrap();
+        assert!(!accepted_at(&path, &pairing));
+
+        fs::remove_file(&path).unwrap();
+        nix::unistd::mkfifo(&path, nix::sys::stat::Mode::S_IRUSR).unwrap();
+        assert!(!accepted_at(&path, &pairing));
     }
     fn agent(dir: &Path) -> setup::helper::Agent {
         setup::helper::Agent {

@@ -148,8 +148,11 @@ enum Words {
   /// - Parameter size: A display's size, in points.
   /// - Returns: Width × height in whole points, or `nil` for no size or an empty one.
   static func size(_ size: ViewerStatus.Size?) -> String? {
-    guard let size, size.width > 0, size.height > 0 else { return nil }
-    return "\(Int(size.width.rounded())) × \(Int(size.height.rounded()))"
+    guard let size, size.isValid,
+      let width = Int(exactly: size.width.rounded()),
+      let height = Int(exactly: size.height.rounded())
+    else { return nil }
+    return "\(width) × \(height)"
   }
 
   /// How fresh the picture is, from the age of the last one.

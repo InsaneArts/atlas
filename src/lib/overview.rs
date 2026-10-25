@@ -331,7 +331,10 @@ pub fn overview(
         "reason": reason,
         "recoverable": mode == "blocked" && recoverable,
         "account": if reachable { &session["user"]["name"] } else { &report["account"] },
-        "display": session["display"],
+        "display": serde::Deserialize::deserialize(&session["display"])
+            .ok()
+            .filter(crate::session::Display::valid)
+            .map(|_: crate::session::Display| &session["display"]),
         "pending": pending.unresolved,
         "inFlight": pending.in_flight,
         "nativeDialogs": report["capabilities"]["nativeDialogs"]["state"],
@@ -453,6 +456,29 @@ mod tests {
 
     fn mode(report: &Value, lease: bool, pending: usize, activity: &[Value]) -> Value {
         overview(report, lease, unresolved(pending), activity, NOW)["mode"].clone()
+    }
+
+    #[test]
+    fn a_not_ready_helper_shows_only_valid_display_geometry() {
+        let mut report = report(true, false);
+        for display in [
+            json!({"width": 1e100, "height": 1, "scale": 1}),
+            json!({"width": 1, "height": 32769, "scale": 1}),
+            json!({"width": 0, "height": 1, "scale": 1}),
+            json!({"width": 1, "height": 1, "scale": 9}),
+            json!({"width": f64::INFINITY, "height": 1, "scale": 1}),
+        ] {
+            report["session"]["display"] = display;
+            let shown = overview(&report, false, unresolved(0), &[], NOW);
+            assert_eq!(shown["state"], "notReady");
+            assert!(shown["display"].is_null());
+        }
+        let display = json!({"width": 32768, "height": 1, "scale": 8});
+        report["session"]["display"] = display.clone();
+        assert_eq!(
+            overview(&report, false, unresolved(0), &[], NOW)["display"],
+            display
+        );
     }
 
     #[test]

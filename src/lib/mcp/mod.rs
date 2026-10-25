@@ -707,7 +707,7 @@ impl Server {
             all: false,
         };
         let windows = crate::agent::list(&self.client, &filter).await?;
-        let mut listed = open_apps(&apps["apps"], &windows["windows"]);
+        let mut listed = open_apps(&apps["apps"], &windows["windows"])?;
 
         for (at, app) in listed.iter_mut().enumerate() {
             only_title_and_size(app);

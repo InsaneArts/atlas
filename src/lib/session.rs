@@ -54,6 +54,14 @@ const MAX_SIDE: f64 = 32768.0;
 /// The largest backing scale a display may report.
 const MAX_SCALE: f64 = 8.0;
 
+impl Display {
+    pub(crate) fn valid(&self) -> bool {
+        within(self.width, MAX_SIDE)
+            && within(self.height, MAX_SIDE)
+            && within(self.scale, MAX_SCALE)
+    }
+}
+
 /// Whether `value` is a finite measure above zero and at most `max`.
 fn within(value: f64, max: f64) -> bool {
     value.is_finite() && value > 0.0 && value <= max
@@ -205,9 +213,7 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
     if value["user"]["uid"].as_u64() != Some(uid.into())
         || value["session"]["onConsole"] != false
         || value["session"]["managerName"] != "Aqua"
-        || !within(display.width, MAX_SIDE)
-        || !within(display.height, MAX_SIDE)
-        || !within(display.scale, MAX_SCALE)
+        || !display.valid()
     {
         return Err(invalid());
     }

@@ -32,7 +32,7 @@ use serde_json::{Value, json};
 use std::{
     fs,
     io::{Read, Write},
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     time::{Duration, Instant},
@@ -88,18 +88,20 @@ fn read_request(path: &Path) -> Option<Pairing> {
     let folder = fs::symlink_metadata(path.parent()?).ok()?;
 
     // Opened without following a link, and checked as opened.
-    let mut file = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
-        .ok()?;
+    let mut file = crate::helper_info::open_plain(path)?;
     let metadata = file.metadata().ok()?;
     if !metadata.is_file() || metadata.mode() & 0o022 != 0 {
         return None;
     }
 
     let mut body = Vec::new();
-    (&mut file).take(64 * 1024).read_to_end(&mut body).ok()?;
+    (&mut file)
+        .take(64 * 1024 + 1)
+        .read_to_end(&mut body)
+        .ok()?;
+    if body.len() > 64 * 1024 {
+        return None;
+    }
     let value: Value = serde_json::from_slice(&body).ok()?;
     let request = Pairing {
         ticket: match value.get("ticket") {
@@ -348,7 +350,7 @@ async fn helper_side(uid: u32, pairing: Option<&Pairing>) -> Value {
     // Installed for the account asking now: a job left by an earlier Atlas
     // (another app, another account) needs Allow again.
     let installed = layout.as_ref().is_ok_and(|layout| {
-        let current = fs::read_to_string(layout.agent_plist(LABEL)).ok();
+        let current = read_text(&layout.agent_plist(LABEL), 64 * 1024);
         match (current, pairing) {
             (None, _) => false,
             (Some(_), None) => true,
@@ -1479,8 +1481,7 @@ pub fn window(open: bool) -> Result<Value> {
 /// Whether this account's onboarding window is open: the process it names
 /// still lives and is Atlas's window (a reused process ID is not).
 pub fn window_open(home: &Path) -> bool {
-    let Some(pid) = fs::read_to_string(home.join(setup::helper::ROOT).join(WINDOW_MARKER))
-        .ok()
+    let Some(pid) = read_text(&home.join(setup::helper::ROOT).join(WINDOW_MARKER), 64)
         .and_then(|text| text.trim().parse::<i32>().ok())
         .filter(|pid| *pid > 1)
     else {
@@ -1498,6 +1499,16 @@ pub fn window_open(home: &Path) -> bool {
             Path::new(String::from_utf8_lossy(&output.stdout).trim()).file_name()
                 == Some(std::ffi::OsStr::new(crate::menubar::APP_EXECUTABLE))
         })
+}
+
+/// Read only a bounded plain text file, without waiting for a pipe's writer.
+fn read_text(path: &Path, limit: u64) -> Option<String> {
+    let mut text = String::new();
+    crate::helper_info::open_plain(path)?
+        .take(limit + 1)
+        .read_to_string(&mut text)
+        .ok()?;
+    (text.len() as u64 <= limit).then_some(text)
 }
 
 /// Back in the person's account: start input, record and check the setup
@@ -1856,6 +1867,20 @@ mod tests {
         assert_eq!(read_request(&link), None);
     }
 
+    #[test]
+    fn shared_requests_and_helper_text_never_wait_for_a_pipe_writer() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("onboarding.json");
+        nix::unistd::mkfifo(&path, nix::sys::stat::Mode::S_IRUSR).unwrap();
+        assert_eq!(read_request(&path), None);
+        assert_eq!(read_text(&path, 64 * 1024), None);
+        fs::remove_file(&path).unwrap();
+        fs::write(&path, "a".repeat(65)).unwrap();
+        assert_eq!(read_text(&path, 64), None);
+        fs::write(&path, "a".repeat(64)).unwrap();
+        assert_eq!(read_text(&path, 64), Some("a".repeat(64)));
+    }
+
     /// A helper answers only while something listens at its socket; a
     /// socket file left behind, or none, is silent.
     #[test]
@@ -1943,6 +1968,9 @@ mod tests {
         assert!(!window_open(dir.path()));
 
         fs::remove_file(root.join(WINDOW_MARKER)).unwrap();
+        assert!(!window_open(dir.path()));
+
+        nix::unistd::mkfifo(&root.join(WINDOW_MARKER), nix::sys::stat::Mode::S_IRUSR).unwrap();
         assert!(!window_open(dir.path()));
     }
 

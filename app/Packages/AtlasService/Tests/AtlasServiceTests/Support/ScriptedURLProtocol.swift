@@ -6,8 +6,8 @@ import os
 final class ScriptedURLProtocol: URLProtocol {
   /// What a request gets.
   enum Answer: Sendable {
-    /// A reply with this status and body.
-    case reply(status: Int, body: Data)
+    /// A reply with this status, body and optional headers.
+    case reply(status: Int, body: Data, headers: [String: String] = [:])
     /// A failure, such as a timeout or a cancellation.
     case failure(URLError.Code)
   }
@@ -48,10 +48,10 @@ final class ScriptedURLProtocol: URLProtocol {
       .withLock { $0[secret] }
     let answer = scripted ?? .failure(.cannotConnectToHost)
     switch answer {
-    case .reply(let status, let body):
+    case .reply(let status, let body, let headers):
       guard
         let url = request.url,
-        let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)
+        let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: headers)
       else { return client?.urlProtocol(self, didFailWithError: URLError(.badURL)) ?? () }
       client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
       client?.urlProtocol(self, didLoad: body)

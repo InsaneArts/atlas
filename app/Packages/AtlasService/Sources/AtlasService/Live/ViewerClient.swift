@@ -118,8 +118,9 @@ public struct ViewerClient: ViewerService {
     let header = { (name: String) in http.value(forHTTPHeaderField: name) }
     guard let id = header("X-Frame-Id"), !id.isEmpty,
       let revision = header("X-Session-Revision"), !revision.isEmpty,
-      let width = header("X-Display-Width").flatMap(Double.init), width > 0,
-      let height = header("X-Display-Height").flatMap(Double.init), height > 0
+      let width = header("X-Display-Width").flatMap(Double.init),
+      let height = header("X-Display-Height").flatMap(Double.init),
+      ViewerStatus.Size(width: width, height: height).isValid
     else { throw ServiceError.unknownScreenSize }
     return Frame(png: data, id: id, revision: revision, display: .init(width: width, height: height))
   }

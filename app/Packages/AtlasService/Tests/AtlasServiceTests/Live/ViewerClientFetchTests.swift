@@ -17,6 +17,25 @@ struct ViewerClientFetchTests {
     )
   }
 
+  @Test("frame headers accept only finite supported display sizes")
+  func frameDisplaySizes() async throws {
+    for side in ["1e100", "inf", "nan", "-1", "0", "32769", "32768"] {
+      for dimension in ["X-Display-Width", "X-Display-Height"] {
+        var headers = [
+          "X-Frame-Id": "frame", "X-Session-Revision": "revision",
+          "X-Display-Width": "1", "X-Display-Height": "1",
+        ]
+        headers[dimension] = side
+        let reading = try client(.reply(status: 200, body: Data(), headers: headers))
+        if side == "32768" {
+          #expect(try await reading.frame().display.isValid)
+        } else {
+          await #expect(throws: ServiceError.unknownScreenSize) { try await reading.frame() }
+        }
+      }
+    }
+  }
+
   @Test("a reply at its size limit is read, and one a byte over is refused")
   func theSizeLimitHolds() async throws {
     let limit = 64

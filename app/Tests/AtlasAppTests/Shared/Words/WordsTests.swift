@@ -56,6 +56,15 @@ struct WordsTests {
     #expect(Words.size(.init(width: 0, height: 10)) == nil)
   }
 
+  @Test("unsupported display sizes have no words and never trap")
+  func invalidSizes() {
+    for side in [Double.nan, .infinity, -.infinity, 1e100, Double(Int.max), -1, 0, 32769] {
+      #expect(Words.size(.init(width: side, height: 1)) == nil)
+      #expect(Words.size(.init(width: 1, height: side)) == nil)
+    }
+    #expect(Words.size(.init(width: 32768, height: 1.5)) == "32768 × 2")
+  }
+
   @Test("a picture's age reads as live, updated or stale")
   func freshness() {
     #expect(Words.freshness(1) == "Live")

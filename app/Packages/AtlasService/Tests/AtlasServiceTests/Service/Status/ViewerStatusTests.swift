@@ -6,6 +6,27 @@ import Testing
 
 @Suite("ViewerStatus")
 struct ViewerStatusTests {
+  @Test("a not ready status drops unsupported display sizes")
+  func invalidDisplaySizes() throws {
+    for side in [1e100, -1, 0, 32769] {
+      for display in [["width": side, "height": 1], ["width": 1, "height": side]] {
+        let reading = try status(["ready": false, "overview": ["display": display]])
+        #expect(!reading.ready)
+        #expect(reading.overview.display == nil)
+      }
+    }
+    let decoder = JSONDecoder()
+    decoder.nonConformingFloatDecodingStrategy = .convertFromString(
+      positiveInfinity: "Infinity",
+      negativeInfinity: "-Infinity",
+      nan: "NaN"
+    )
+    for side in ["Infinity", "-Infinity", "NaN"] {
+      let data = Data("{\"width\":\"\(side)\",\"height\":1}".utf8)
+      #expect(throws: DecodingError.self) { try decoder.decode(ViewerStatus.Size.self, from: data) }
+    }
+  }
+
   @Test("the deleted accounts' open logins and a silent helper's login are read, and none by default")
   func leftoverLogins() throws {
     let reading = try status(["leftoverLogins": [502, 504], "helperStale": true])
