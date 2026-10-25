@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// About's one update button, whatever the check's state: glass Check for Updates, then blue Install Update… once a
-/// newer version is found. It holds no spinner: while its check or install runs it waits, plain, and the line under
-/// it says what runs. It lays out at its widest word, so it never changes width.
+/// About's native update button: Check for Updates…, then prominent Install Update… once a newer version is found.
+/// While its check or install runs it waits, disabled, and the line under it says what runs. It lays out at its
+/// widest title, so it never changes width.
 struct AboutUpdateButton: View {
   /// Where the check stands.
   let update: SettingsUpdateButton
@@ -11,21 +11,33 @@ struct AboutUpdateButton: View {
 
   /// What it draws, from its state.
   var body: some View {
+    Group {
+      switch update {
+      case .check, .checking:
+        button
+          .buttonStyle(.bordered)
+      case .install, .installing:
+        button
+          .buttonStyle(.borderedProminent)
+      }
+    }
+    .disabled(update.isWorking)
+  }
+
+  /// The action and its title, sized once for either native style.
+  private var button: some View {
     Button {
       if let event = update.event { send(event) }
     } label: {
       ZStack {
-        // Untracked, the widest any look sets them, so the glass and the blue button share one width.
+        // Reserve the widest title so checking and installing share one width.
         ForEach(SettingsUpdateButton.titles, id: \.self) { title in
           Text(title)
-            .tracking(LetterSpacing.natural)
             .hidden()
         }
         Text(update.title)
           .swapsText(on: update.title)
       }
     }
-    .buttonStyle(.capsule(update.look, size: .mini))
-    .disabled(update.isWorking)
   }
 }

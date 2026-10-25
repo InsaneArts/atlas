@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The About pane: Atlas's icon, name, version and what it is, then the update button with Getting Started… as a
-/// link beside it, and what it says about updates in one spot under them, which keeps its height whatever it says.
+/// The About pane: Atlas's icon, name, version and what it is, then native update and Getting Started… buttons,
+/// and what it says about updates in one spot under them, which keeps its height whatever it says.
 struct AboutPane: View {
   /// What the pane shows.
   let state: SettingsAboutState
@@ -31,8 +31,9 @@ struct AboutPane: View {
       HStack(spacing: Spacing.m) {
         AboutUpdateButton(update: state.update, send: send)
         Button("Getting Started…") { send(.gettingStarted) }
-          .buttonStyle(.textLink(.regular))
+          .buttonStyle(.bordered)
       }
+      .controlSize(.regular)
       .padding(.top, Spacing.xl)
       AboutUpdateStatus(status: state.status, send: send)
         .padding(.top, Spacing.m)
@@ -46,6 +47,14 @@ struct AboutPane: View {
   #Preview("About") {
     FormColumn(insets: SettingsLayout.aboutInsets) {
       AboutPane(state: PreviewStates.settingsAbout.about) { _ in }
+    }
+    .frame(width: SettingsLayout.width)
+    .sampleSurface()
+  }
+
+  #Preview("About — Update available") {
+    FormColumn(insets: SettingsLayout.aboutInsets) {
+      AboutPane(state: PreviewStates.settingsAboutNewer.about) { _ in }
     }
     .frame(width: SettingsLayout.width)
     .sampleSurface()

@@ -53,13 +53,25 @@ struct SettingsLayoutTests {
     #expect(Set(heights).count == 1, "\(heights)")
   }
 
-  @Test("About's update button keeps one width as it checks, finds a newer version and installs")
+  @Test("About's update button keeps one width and the native button height as it checks, finds a version and installs")
   @MainActor
   func theUpdateButtonKeepsItsWidth() throws {
-    let widths = try [SettingsUpdateButton.check, .checking, .install, .installing].map { update in
-      try Self.size(AboutUpdateButton(update: update) { _ in }.fixedSize()).width
+    let sizes = try [SettingsUpdateButton.check, .checking, .install, .installing].map { update in
+      try Self.size(
+        AboutUpdateButton(update: update) { _ in }
+          .controlSize(.regular)
+          .fixedSize()
+      )
     }
+    let widths = sizes.map(\.width)
     #expect(Set(widths).count == 1, "\(widths)")
+    let gettingStarted = try Self.size(
+      Button("Getting Started…") {}
+        .buttonStyle(.bordered)
+        .controlSize(.regular)
+        .fixedSize()
+    )
+    #expect(sizes.allSatisfy { $0.height == gettingStarted.height }, "\(sizes), Getting Started: \(gettingStarted)")
   }
 
   @Test("About's note makes its web address a live link")
