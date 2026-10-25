@@ -589,7 +589,9 @@ pub fn choose(config_path: &Path, name: &str) -> Result<Value> {
     // Atlas already answering there needs nothing readied.
     let mut readied = true;
     let orphans = orphans_now()?;
-    if !orphans.is_empty() || !init::proposed(&helper).is_ok_and(|config| answers(&config)) {
+    if !orphans.is_empty()
+        || !setup::configuration::proposed(&helper).is_ok_and(|config| answers(&config))
+    {
         // Root readies this account only while it is still the one checked.
         match closing_first(helper.uid, &orphans, || as_root::ready(&expected, &orphans))? {
             Ok(()) => {}
@@ -622,7 +624,7 @@ fn use_helper(
     let (uid, me_name, _) = me()?;
     let executable = signed_executable()?;
     let previous = settings(config_path)?;
-    let fresh = init::proposed(helper)?;
+    let fresh = setup::configuration::proposed(helper)?;
 
     // As `atlas init` does: the settings for this same helper stay (only
     // their sockets follow its home); another helper in use is kept.
@@ -680,8 +682,8 @@ fn use_helper(
 
     match previous {
         Some(previous) if previous == config => {}
-        Some(previous) => init::replace_config(config_path, &previous, &config)?,
-        None => init::write_config(config_path, &config)?,
+        Some(previous) => setup::configuration::replace_config(config_path, &previous, &config)?,
+        None => setup::configuration::write_config(config_path, &config)?,
     }
 
     Ok(json!({

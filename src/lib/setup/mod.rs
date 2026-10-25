@@ -3,6 +3,7 @@
 //! nothing; a fact we cannot observe is `null`, never `false`. [`migrate`]
 //! moves capture to the managed private layout through [`helper`] actions run
 //! inside the helper login.
+pub(crate) mod configuration;
 pub mod first_login;
 pub mod helper;
 pub mod identity;
@@ -684,7 +685,7 @@ pub async fn preview(config_path: &Path, helper: Option<&str>) -> Result<Value> 
     // written, by preview.
     let effective = match &config {
         Some(config) if !conflict => config.clone(),
-        _ => crate::init::proposed(&account)?,
+        _ => configuration::proposed(&account)?,
     };
 
     let current = std::env::current_exe()
