@@ -736,9 +736,19 @@ async fn observe(client: &Client, uid: u32, report: &mut Value) {
     let status = client.status().await;
     let reachable = status["ok"] == true;
     let session = require_hidden(&status, uid).ok();
+    let absence = if crate::session::silent(&status) {
+        tokio::task::spawn_blocking(move || crate::session::absence(uid))
+            .await
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
 
     report["session"] = json!({
         "reachable": reachable,
+        "code": status["code"],
+        "absence": absence.as_ref().map(crate::session::Absence::as_str),
         "graphical": status["session"]["managerName"],
         "onConsole": status["session"]["onConsole"],
         "hidden": reachable.then_some(session.is_some()),
@@ -790,12 +800,22 @@ fn next_steps(report: &Value) -> Vec<String> {
         _ => {}
     }
 
-    if report["session"]["reachable"] != true {
+    if report["session"]["code"] == "blocked" {
         steps.push(
-            "The helper is not running. Log in to the helper account once, then switch back \
-             without logging it out."
+            report["session"]["error"]
+                .as_str()
+                .unwrap_or("This shell may not connect to the helper; run atlas outside a sandbox.")
                 .to_owned(),
         );
+    } else if report["session"]["reachable"] != true {
+        let step = match report["session"]["absence"].as_str() {
+            Some("loggedOut") => crate::session::LOGGED_OUT,
+            Some("missing") => {
+                "The helper account no longer exists. Run atlas init to set up a new one."
+            }
+            _ => "Start the helper: run atlas init (safe to run again).",
+        };
+        steps.push(step.to_owned());
     } else if report["session"]["hidden"] != true {
         steps.push("Switch back to your own account without logging the helper out.".to_owned());
     }
@@ -1175,6 +1195,86 @@ mod tests {
         assert_eq!(preview_account(None, None).unwrap_err().code, "usage");
         let unknown = preview_account(Some("no-such-atlas-account"), None).unwrap_err();
         assert_eq!(unknown.code, "setup");
+    }
+
+    #[test]
+    fn login_is_advised_only_for_a_confirmed_logout() {
+        for absence in [Some("loggedOut"), Some("missing"), None] {
+            let steps = next_steps(&json!({
+                "session": {"reachable": false, "absence": absence},
+            }));
+            if absence == Some("loggedOut") {
+                assert!(steps[0].contains("Log in"));
+            } else {
+                assert!(!steps[0].contains("Log in"), "{absence:?}");
+                assert!(steps[0].contains("atlas init"), "{absence:?}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn observing_a_blocked_transport_preserves_its_code_and_advice() {
+        use tokio::{
+            io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+            net::UnixListener,
+        };
+
+        let dir = tempfile::Builder::new()
+            .prefix("atlas-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let uid = 60001;
+        let mut client = Client::new(Config {
+            helper_uid: uid,
+            socket_path: dir.path().join("helper.sock"),
+            identity_probe: dir.path().join("atlas"),
+            input_socket: dir.path().join("input.sock"),
+            output_dir: dir.path().join("runs"),
+        })
+        .unwrap();
+        client.controller = crate::control::Controller::at(uid, &dir.path().join("state"));
+        client.transport.peer_uid = nix::unistd::getuid().as_raw();
+        let listener = UnixListener::bind(&client.transport.path).unwrap();
+        let status = json!({
+            "ok": false,
+            "code": "blocked",
+            "error": "This shell may not connect to the helper; run atlas outside a sandbox.",
+        });
+        let serving = async {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut stream = BufReader::new(stream);
+            let mut request = String::new();
+            stream.read_line(&mut request).await.unwrap();
+            stream
+                .get_mut()
+                .write_all(format!("{status}\n").as_bytes())
+                .await
+                .unwrap();
+        };
+        let mut report = json!({});
+        tokio::join!(observe(&client, uid, &mut report), serving);
+
+        let steps = next_steps(&report);
+        let doctor = crate::session::diagnose(status, uid);
+        assert_eq!(steps, vec![doctor["nextSteps"][0].as_str().unwrap()]);
+        assert!(!steps.join(" ").contains("Log in"));
+        assert_eq!(report["session"]["code"], "blocked");
+    }
+
+    #[test]
+    fn a_blocked_transport_advises_running_outside_the_sandbox() {
+        for error in [
+            json!("This shell may not connect to the helper; run atlas outside a sandbox."),
+            Value::Null,
+        ] {
+            let steps = next_steps(&json!({
+                "session": {"reachable": false, "code": "blocked", "error": error},
+            }));
+            assert_eq!(
+                steps,
+                ["This shell may not connect to the helper; run atlas outside a sandbox."]
+            );
+        }
     }
 
     #[test]
