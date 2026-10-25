@@ -70,7 +70,14 @@ final class ViewerPanesModel {
     work.reading = nil
     let shown = viewer?.shown == true
     let tab = viewer?.session.tab ?? .screen
-    if !shown || (tab != .activity && tab != .screenshots) { resetThumbnails() }
+    if !shown || (tab != .activity && tab != .screenshots) {
+      resetThumbnails()
+    } else {
+      work.thumbnails.wanted = work.thumbnails.wanted.filter { name in
+        panes.shots.shots?.contains(where: { $0.name == name }) == true && panes.thumbnails[name] == nil
+      }
+      readThumbnails()
+    }
     followLarge()
     guard shown, tab != .screen else { return }
     let number = work.generation
@@ -229,6 +236,9 @@ final class ViewerPanesModel {
   ///
   /// - Parameter list: The reading.
   private func keep(_ list: ScreenshotList) {
+    let names = Set(list.shots.map(\.name))
+    if let large = panes.shots.large, !names.contains(large) { closeShot() }
+    if let selected = panes.shots.selected, !names.contains(selected) { panes.shots.selected = nil }
     panes.shots.shots = list.shots
     panes.shots.folder = list.folder
   }
@@ -473,11 +483,11 @@ final class ViewerPanesModel {
     readThumbnails()
   }
 
-  /// Lets the queue go: what waits is forgotten, what is being read is cancelled, and any reply still to come is
-  /// dropped. What is kept stays.
+  /// Pauses the queue: what is being read is cancelled and waits with the rest for the pane to show again. Any reply
+  /// still to come is dropped. What is kept stays.
   func resetThumbnails() {
     work.thumbnails.generation += 1
-    work.thumbnails.wanted.removeAll()
+    work.thumbnails.wanted.insert(contentsOf: work.thumbnails.loading.keys, at: 0)
     for load in work.thumbnails.loading.values { load.cancel() }
     work.thumbnails.loading.removeAll()
   }

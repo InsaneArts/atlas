@@ -146,6 +146,126 @@ struct ViewerPanesModelTests {
     viewer.close()
   }
 
+  @Test("pending thumbnails resume when the same pane shows again", arguments: [ViewerTab.screenshots, .activity])
+  func hiddenThumbnailsResume(_ tab: ViewerTab) async throws {
+    let service = ScriptedService()
+    let viewer = try await Self.onShots(service)
+    defer {
+      viewer.close()
+      service.resumeAllShots()
+    }
+    let queued = "queued.png"
+    let removed = "removed.png"
+    service.shots += [Screenshot(name: queued), Screenshot(name: removed)]
+    await viewer.panesModel.readShots(viewer.panesModel.work.generation)
+    if tab == .activity {
+      service.activityLog = ActivityLog(entries: [
+        ActivityLog.Entry(id: "1", says: "took a screenshot", ageSeconds: 4, operation: "screenshot")
+      ])
+      viewer.send(.selectTab(.activity))
+      try await settle("Activity was never read") { viewer.panes.activity.readAt != nil }
+    }
+    service.shot = png(width: 1, height: 1)
+    for name in [Self.newer, Self.older, queued, removed] { viewer.send(.thumbnailNeeded(name)) }
+    try await settle("two thumbnails were never asked for") { service.heldShots.count == 2 }
+    let stale = Array(viewer.panesModel.work.thumbnails.loading.values)
+    viewer.setVisible(false)
+    viewer.setVisible(false)
+    for task in stale { #expect(task.isCancelled) }
+    #expect(viewer.panesModel.work.thumbnails.loading.isEmpty)
+    service.shots.removeAll { $0.name == removed }
+    await viewer.panesModel.readShots(viewer.panesModel.work.generation)
+    service.shot = png(width: 2, height: 2)
+    viewer.setVisible(true)
+    try await settle("the cancelled thumbnails were not requested again") { service.heldShots.count == 4 }
+    let fresh = Array(viewer.panesModel.work.thumbnails.loading.values)
+    for name in [Self.newer, Self.older] { try await Self.answer(service, name, full: false) }
+    for task in stale { try await Self.ended(task, "a stale thumbnail never replied") }
+    #expect(viewer.panes.thumbnails[Self.newer] == nil)
+    #expect(viewer.panes.thumbnails[Self.older] == nil)
+    #expect(viewer.panesModel.work.thumbnails.loading.count == 2)
+    #expect(service.heldShots.count == 4, "late replies do not start the queued thumbnail")
+    for name in [Self.newer, Self.older] { try await Self.answer(service, name, full: false) }
+    for task in fresh { try await Self.ended(task, "a resumed thumbnail never arrived") }
+    try await settle("the queued thumbnail was never requested") { service.heldShots.count == 5 }
+    let last = viewer.panesModel.work.thumbnails.loading[queued]
+    try await Self.answer(service, queued, full: false)
+    try await Self.ended(last, "the queued thumbnail never arrived")
+    for name in [Self.newer, Self.older, queued] {
+      #expect(viewer.panes.thumbnails[name]?.image.width == 2)
+    }
+    #expect(viewer.panesModel.work.thumbnails.wanted.isEmpty)
+    #expect(!service.heldShots.contains { $0.name == removed })
+    viewer.setVisible(false)
+    viewer.setVisible(true)
+    #expect(viewer.panesModel.work.thumbnails.loading.isEmpty, "cached thumbnails need no new requests")
+  }
+
+  @Test(
+    "a screenshot removed from the list closes its large view and leaves exports and arrows on the grid",
+    arguments: [false, true]
+  )
+  func removedLargeShotCloses(_ loaded: Bool) async throws {
+    let service = ScriptedService()
+    let newest = "1792665120000000000-capture.png"
+    service.shotData = [newest: png(width: 1, height: 1), Self.older: png(width: 2, height: 2)]
+    var copied: [Data] = []
+    var saved: [Data] = []
+    let viewer = try await Self.onShots(
+      service,
+      shotOutlet: ShotOutlet(
+        copy: { copied.append($0) },
+        reveal: { _ in },
+        save: { data, _ in
+          saved.append(data)
+          return true
+        }
+      )
+    )
+    defer {
+      viewer.close()
+      service.resumeAllShots()
+    }
+    viewer.send(.openShot(Self.older))
+    let load = try #require(viewer.panesModel.work.large.load)
+    if loaded {
+      try await Self.answer(service, Self.older, full: true)
+      try await Self.ended(load, "the large screenshot never arrived")
+      try #require(viewer.panes.shots.full != nil)
+    }
+    service.shots = [Screenshot(name: newest, takenAt: Date(timeIntervalSince1970: 1_792_665_120)), Self.shots[0]]
+    await viewer.panesModel.readShots(viewer.panesModel.work.generation)
+    #expect(viewer.panes.shots.large == nil)
+    #expect(viewer.panes.shots.selected == nil)
+    #expect(viewer.panes.shots.full == nil)
+    #expect(viewer.panesModel.work.large.load == nil)
+    if !loaded {
+      #expect(load.isCancelled)
+      try await Self.answer(service, Self.older, full: true)
+      try await Self.ended(load, "the removed screenshot never replied")
+      #expect(viewer.panes.shots.full == nil)
+    }
+    #expect(ViewerPresenter.selectedShot(viewer.snapshot) == newest)
+    #expect(viewer.panesModel.actedShot == newest)
+    viewer.send(.copyShot)
+    let copy = viewer.panesModel.work.large.copy
+    try await Self.answer(service, newest, full: true)
+    try await Self.ended(copy, "Copy never finished")
+    viewer.panesModel.saveShot()
+    let save = viewer.panesModel.work.large.copy
+    try await Self.answer(service, newest, full: true)
+    try await Self.ended(save, "Save never finished")
+    #expect(copied == [service.shotData[newest]])
+    #expect(saved == [service.shotData[newest]])
+    viewer.send(.nextShot)
+    #expect(ViewerPresenter.selectedShot(viewer.snapshot) == Self.newer)
+    #expect(viewer.panesModel.actedShot == Self.newer)
+    service.shots.removeAll { $0.name == Self.newer }
+    await viewer.panesModel.readShots(viewer.panesModel.work.generation)
+    #expect(viewer.panes.shots.selected == nil)
+    #expect(viewer.panesModel.actedShot == newest)
+  }
+
   @Test("an older Copy never lands over a newer one, read or kept")
   func olderCopyNeverLands() async throws {
     let service = ScriptedService()
