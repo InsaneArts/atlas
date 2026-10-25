@@ -368,6 +368,36 @@ struct ViewerControlTests {
     viewer.close()
   }
 
+  @Test("pausing after a fresh picture arrives cancels the queued Take Control and keeps the picture paused")
+  func pausingAfterAFreshPictureCancelsTheQueuedTakeControl() async throws {
+    let service = ScriptedService()
+    let viewer = try await ViewerController.watching(service)
+    defer {
+      viewer.close()
+      service.resume("frame")
+    }
+    let frame = try #require(viewer.reading.frame)
+    let decoded = try #require(await DesktopPicture.decode(frame))
+    viewer.togglePause()
+    service.hold.insert("frame")
+    await viewer.control.takeControl()
+    try #require(viewer.control.pictureWait != nil)
+
+    viewer.readingLoop.show(frame, decoded: decoded, ready: true)
+    #expect(viewer.control.pictureWait == nil)
+    viewer.togglePause()
+    let paused = viewer.control.controlGeneration
+    // Let the continuation queued by the picture run after Pause, on the same actor.
+    await Task { @MainActor in }.value
+
+    #expect(viewer.session.paused)
+    #expect(viewer.control.controlGeneration == paused)
+    #expect(viewer.control.pictureWait == nil)
+    #expect(!viewer.control.acquiring)
+    #expect(viewer.control.lease == nil)
+    #expect(!service.log.contains { $0.hasPrefix("acquire ") })
+  }
+
   @Test("a paused viewer offers Take Control again after becoming ready and waits for a fresh picture before acquiring")
   func aPausedViewerOffersControlAgainAfterBecomingReady() async throws {
     let service = ScriptedService()

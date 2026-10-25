@@ -37,10 +37,7 @@ extension ViewerWindow: ViewerMenuActions, HelperMenuActions {
   ///
   /// - Parameter sender: The menu item.
   func toggleControl(_ sender: Any?) {
-    guard let control = controller.state.top.actions.control, control.isEnabled,
-      control.event == .takeControl || control.event == .giveBack
-    else { return }
-    controller.send(control.event)
+    controller.toggleControl(present: present)
   }
 
   /// Stop Agent or Resume Agent, as the top row offers it now.

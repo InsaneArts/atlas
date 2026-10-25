@@ -37,6 +37,40 @@ struct ViewerControllerTests {
     viewer.close()
   }
 
+  @Test("menu Take Control presents a hidden paused viewer before resuming and acquires with a fresh picture")
+  func menuTakeControlPresentsAHiddenPausedViewerBeforeResuming() async throws {
+    let service = ScriptedService()
+    let viewer = try await ViewerController.watching(service)
+    defer { viewer.close() }
+    let frame = try #require(viewer.reading.frame)
+    viewer.togglePause()
+    viewer.setVisible(false)
+    viewer.control.lostFocus()
+    try #require(viewer.state.top.actions.control?.isEnabled == true)
+    var presentations = 0
+
+    viewer.toggleControl {
+      presentations += 1
+      #expect(viewer.session.paused)
+      #expect(viewer.control.pictureWait == nil)
+      viewer.control.gainedFocus()
+      viewer.setVisible(true)
+    }
+
+    #expect(presentations == 1)
+    try await settle("menu Take Control never acquired after showing the viewer") { viewer.control.lease == "lease" }
+    #expect(viewer.shown)
+    #expect(viewer.control.focused)
+    #expect(!viewer.session.paused)
+    let fresh = try #require(viewer.reading.frame)
+    #expect(fresh.id != frame.id)
+    #expect(service.log.filter { $0.hasPrefix("acquire ") } == ["acquire \(fresh.id)"])
+
+    viewer.toggleControl { presentations += 1 }
+    #expect(viewer.control.lease == nil, "Give Back still releases control")
+    #expect(presentations == 1, "Give Back does not present the window")
+  }
+
   @Test("Stop Agent and Resume Agent ask the service and say how it went")
   func stoppingAndResumingTheAgent() async throws {
     let service = ScriptedService()

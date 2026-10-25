@@ -262,7 +262,10 @@ final class ViewerControl {
     endPictureWait()
     acquiring = false
     // Unstructured, as a picture lands synchronously; Take Control checks everything again before it asks.
-    Task { await takeControl() }
+    Task {
+      guard controlGeneration == waited else { return }
+      await takeControl()
+    }
   }
 
   /// Ends the wait for a fresh picture, if one waits.

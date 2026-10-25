@@ -138,6 +138,17 @@ final class ViewerController {
     }
   }
 
+  /// Take Control or Give Back from a menu, presenting the window before Take Control so a paused picture can resume.
+  ///
+  /// - Parameter present: Brings the window forward and updates its visibility and focus.
+  func toggleControl(present: () -> Void) {
+    guard let control = state.top.actions.control, control.isEnabled,
+      control.event == .takeControl || control.event == .giveBack
+    else { return }
+    if control.event == .takeControl { present() }
+    send(control.event)
+  }
+
   /// The small screen settled in a corner: the window keeps it there, and the next window starts there.
   ///
   /// - Parameter corner: The corner.
