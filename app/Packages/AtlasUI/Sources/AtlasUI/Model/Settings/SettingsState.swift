@@ -1,11 +1,7 @@
-/// The Settings shell, its four existing content panes and its window-wide alert.
+/// The Settings window: its tab row, its four panes and the alert over it. The selected pane lives only in the tabs.
 public struct SettingsState: Equatable, Sendable {
-  /// Labels and selection for the existing content panes.
+  /// The tab row, each tab its symbol over its word, with the pane shown selected.
   public var tabs: CapsuleTabsState<SettingsTab>
-  /// Whether history has an earlier destination.
-  public var canGoBack: Bool
-  /// Whether history has a later destination.
-  public var canGoForward: Bool
   /// The General pane.
   public var general: SettingsGeneralState
   /// The Helper pane.
@@ -26,20 +22,14 @@ public struct SettingsState: Equatable, Sendable {
   ///   - agents: The Agents pane.
   ///   - about: The About pane.
   ///   - alert: The alert over the whole window, if one is asked.
-  ///   - canGoBack: Whether history has an earlier destination.
-  ///   - canGoForward: Whether history has a later destination.
   public init(
     tabs: CapsuleTabsState<SettingsTab>,
     general: SettingsGeneralState,
     helper: SettingsHelperState,
     agents: SettingsAgentsState,
     about: SettingsAboutState,
-    alert: AlertCardState<AlertChoice>? = nil,
-    canGoBack: Bool = false,
-    canGoForward: Bool = false
+    alert: AlertCardState<AlertChoice>? = nil
   ) {
-    self.canGoBack = canGoBack
-    self.canGoForward = canGoForward
     self.tabs = tabs
     self.general = general
     self.helper = helper

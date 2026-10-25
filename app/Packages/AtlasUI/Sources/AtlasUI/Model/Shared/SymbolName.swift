@@ -63,8 +63,6 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case display
   /// The agents, and an update available.
   case sparkles
-  /// Connected coding agents as a Settings category.
-  case agents = "puzzlepiece.extension.fill"
   /// About.
   case info = "info.circle"
   /// The narrow Activity tab.

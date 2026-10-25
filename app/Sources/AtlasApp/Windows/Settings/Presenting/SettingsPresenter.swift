@@ -14,9 +14,7 @@ enum SettingsPresenter {
       helper: helper(snapshot),
       agents: agents(snapshot),
       about: about(snapshot),
-      alert: alert(snapshot),
-      canGoBack: snapshot.session.navigation.canGoBack,
-      canGoForward: snapshot.session.navigation.canGoForward
+      alert: alert(snapshot)
     )
   }
 

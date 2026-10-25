@@ -21,26 +21,6 @@ struct SettingsLayoutTests {
     return CGSize(width: image.width, height: image.height)
   }
 
-  @Test("the existing pane states share stable default and minimum Settings viewports")
-  @MainActor
-  func theShellKeepsItsViewportAcrossPanes() throws {
-    for state in [
-      PreviewStates.settingsGeneral, PreviewStates.settingsHelper, PreviewStates.settingsAgents,
-      PreviewStates.settingsAbout,
-    ] {
-      for viewport in [
-        CGSize(width: SettingsLayout.defaultWidth, height: SettingsLayout.defaultHeight),
-        CGSize(width: SettingsLayout.minimumWidth, height: SettingsLayout.minimumHeight),
-      ] {
-        let size = try Self.size(
-          SettingsView(state: state, edit: { _ in }, send: { _ in })
-            .frame(width: viewport.width, height: viewport.height)
-        )
-        #expect(size == viewport)
-      }
-    }
-  }
-
   @Test("Check Again's results land top first, each 50 milliseconds after the row above")
   func checkAgainStaggersEachResult() {
     #expect(SettingsLayout.checkStagger(index: 0) == 0, "the first result lands at once")

@@ -2,10 +2,8 @@ import AtlasUI
 
 /// What the Settings window is doing: the pane shown, the alert asked, what runs, and what the last command said.
 struct SettingsSession: Equatable {
-  /// Visits during this window session.
-  var navigation = SettingsNavigation(initial: .root(.general))
-  /// The existing content pane owned by the current destination.
-  var tab: SettingsTab { navigation.destination?.root.pane ?? .general }
+  /// The pane shown.
+  var tab = SettingsTab.general
   /// The alert asked, if any.
   var alert: SettingsAlert?
   /// Whether the alert's command runs now, so its buttons wait.

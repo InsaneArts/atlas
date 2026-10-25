@@ -12,51 +12,6 @@ import Testing
 
 @Suite("SettingsController")
 struct SettingsControllerTests {
-  @Test("history navigation preserves active work and alerts without running helper or update commands")
-  func navigationPreservesWorkAndAlerts() {
-    let commands = ScriptedCommands([:])
-    let controller = SettingsController.scripted(commands: commands)
-    controller.send(.askRecover)
-    controller.session.checking = true
-    controller.session.update = .checking
-    controller.session.alertRunning = true
-    controller.session.alertRefusal = "Still waiting"
-    let before = controller.session
-    controller.send(.selectTab(.helper))
-    controller.send(.selectTab(.about))
-    controller.send(.back)
-    controller.send(.forward)
-    var expected = before
-    expected.navigation = controller.session.navigation
-    #expect(controller.session == expected)
-    #expect(commands.ran.isEmpty)
-    #expect(controller.state.canGoBack && !controller.state.canGoForward)
-  }
-
-  @Test("closing and reopening keeps only the last root while preserving an update already running")
-  func reopeningStartsAtTheRememberedRoot() {
-    let commands = ScriptedCommands([:])
-    var dependencies = SettingsController.scripted(commands: commands).dependencies
-    var saved: String? = "helper"
-    dependencies.preferences.loadTab = { saved }
-    dependencies.preferences.saveTab = { saved = $0 }
-    let controller = SettingsController(dependencies: dependencies)
-    #expect(controller.session.tab == .helper)
-    controller.send(.selectTab(.about))
-    controller.send(.back)
-    #expect(saved == "helper")
-    controller.send(.forward)
-    #expect(saved == "about")
-    controller.session.update = .checking
-    controller.close()
-    #expect(controller.session.navigation.entries == [.root(.about)])
-    #expect(controller.session.update == .checking)
-    let reopened = SettingsController(dependencies: dependencies)
-    #expect(reopened.session.tab == .about)
-    #expect(!reopened.state.canGoBack && !reopened.state.canGoForward)
-    #expect(commands.ran.isEmpty)
-  }
-
   /// A project `atlas agents status` lists as taught.
   static let opie = "/Users/me/dev/opie"
   /// `atlas agents status` listing ``opie``.
