@@ -1395,7 +1395,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             check: false,
         } => {
             as_yourself("update")?;
-            update(&config, allow_unnotarized, force, version)
+            update(&config, allow_unnotarized, force, version).await
         }
         Command::UpdateFinish => {
             as_yourself("update")?;
@@ -1867,7 +1867,7 @@ fn refuse_root(command: &str, root: bool) -> Result<()> {
 
 /// Update the app, then hand over to the new executable, so the steps that
 /// move the helper onto it are always the new version's own.
-fn update(
+async fn update(
     config: &std::path::Path,
     allow_unnotarized: bool,
     force: bool,
@@ -1887,7 +1887,21 @@ fn update(
     };
 
     let spinner = Spinner::new("Checking for an update…");
-    let mut report = atlas::update::install(&source, allow_unnotarized, force, &exclusive)?;
+    let mut report = atlas::update::install(
+        &source,
+        allow_unnotarized,
+        force,
+        &exclusive,
+        async |program| {
+            if let Some(loaded) = set_up(config)?
+                && atlas::setup::migrate::in_effect(loaded.helper_uid)
+            {
+                atlas::setup::migrate::preflight_apply(config, program).await?;
+            }
+            Ok(())
+        },
+    )
+    .await?;
 
     drop(exclusion);
 

@@ -200,7 +200,7 @@ impl Layout {
         if let Some(guard) = &self.guard {
             let account = checked_account(
                 guard,
-                || observe(self.uid),
+                || observe(self.uid, guard),
                 || crate::session::confirm_gone(&[self.uid]),
                 || crate::session::logged_out(self.uid) == Some(true),
             )?;
@@ -256,12 +256,18 @@ pub struct Guard {
     pub logged_out: bool,
 }
 
-/// Read the account, its persistent identity, and its home as one observation.
+/// Read the account, its home, and (when expected) its persistent identity.
 /// A changed directory mapping is refused, rather than joining two accounts' facts.
-fn observe(uid: u32) -> Result<(super::Account, super::identity::Identity)> {
+fn observe(uid: u32, guard: &Guard) -> Result<(super::Account, Option<super::identity::Identity>)> {
     let account = account_with_uid(uid)?.ok_or_else(|| problem("Helper account not found"))?;
-    let identity = super::identity::current(&account)
-        .ok_or_else(|| problem("macOS could not read the helper's account identity"))?;
+    let identity = if guard.account.is_some() {
+        Some(
+            super::identity::current(&account)
+                .ok_or_else(|| problem("macOS could not read the helper's account identity"))?,
+        )
+    } else {
+        None
+    };
     if account_with_uid(uid)?.as_ref() != Some(&account) {
         return Err(problem("The helper account changed while it was checked"));
     }
@@ -272,15 +278,16 @@ fn observe(uid: u32) -> Result<(super::Account, super::identity::Identity)> {
 /// processes once more. No identity or home captured before the wait is trusted.
 fn checked_account(
     guard: &Guard,
-    mut read: impl FnMut() -> Result<(super::Account, super::identity::Identity)>,
+    mut read: impl FnMut() -> Result<(super::Account, Option<super::identity::Identity>)>,
     wait: impl FnOnce() -> bool,
     out_now: impl FnOnce() -> bool,
 ) -> Result<super::Account> {
-    let expected = guard.account.as_ref().ok_or_else(|| {
-        problem("Setup needs the identity of the explicitly chosen helper account")
-    })?;
-    let check = |account: &super::Account, identity: &super::identity::Identity| {
-        if identity != expected || account.uid != expected.uid || account.name != expected.name {
+    let check = |account: &super::Account, identity: &Option<super::identity::Identity>| {
+        if guard.account.as_ref().is_some_and(|expected| {
+            identity.as_ref() != Some(expected)
+                || account.uid != expected.uid
+                || account.name != expected.name
+        }) {
             Err(problem(
                 "This account is no longer the helper Atlas chose, so nothing more was changed",
             ))
@@ -305,8 +312,8 @@ fn checked_account(
     Ok(account)
 }
 
-/// Run a setup request only as its expected account, with identity and home
-/// revalidated after waits and before each mutation.
+/// Run setup only as the requested account, revalidating its home and any
+/// supplied identity after waits and before each mutation.
 pub fn run_guarded(request: &str, guard: &Guard) -> Result<Value> {
     let request: Request = serde_json::from_str(request)?;
     let uid = nix::unistd::getuid().as_raw();
@@ -323,7 +330,7 @@ pub fn run_guarded(request: &str, guard: &Guard) -> Result<Value> {
 
     let account = checked_account(
         guard,
-        || observe(uid),
+        || observe(uid, guard),
         || crate::session::confirm_gone(&[uid]),
         || crate::session::logged_out(uid) == Some(true),
     )?;
@@ -800,6 +807,48 @@ fn restore(layout: &Layout, label: &str, sha256: &str) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn legacy_setup_needs_no_record_and_still_honors_logout_checks() {
+        let dir = tempfile::tempdir().unwrap();
+        let account = super::super::Account {
+            uid: 7001,
+            name: "helper".into(),
+            home: dir.path().into(),
+        };
+        let checked = checked_account(
+            &Guard::default(),
+            || Ok((account.clone(), None)),
+            || panic!("ordinary setup does not wait for logout"),
+            || panic!("ordinary setup does not require logout"),
+        )
+        .unwrap();
+        fs::write(checked.home.join("setup-step"), b"complete").unwrap();
+        assert_eq!(
+            fs::read(dir.path().join("setup-step")).unwrap(),
+            b"complete"
+        );
+        let guard = Guard {
+            logged_out: true,
+            ..Guard::default()
+        };
+        assert!(
+            checked_account(
+                &guard,
+                || Ok((account.clone(), None)),
+                || false,
+                || panic!("an unsuccessful logout wait refuses immediately"),
+            )
+            .is_err()
+        );
+        assert!(
+            checked_account(&guard, || Ok((account.clone(), None)), || true, || false,).is_err()
+        );
+        assert_eq!(
+            checked_account(&guard, || Ok((account.clone(), None)), || true, || true,).unwrap(),
+            account
+        );
+    }
+
+    #[test]
     fn setup_refuses_an_account_replaced_while_authorization_or_login_was_pending() {
         let identity = super::super::identity::Identity {
             uid: 7001,
@@ -822,7 +871,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let result = checked_account(
             &guard,
-            || Ok((account.clone(), replacement.clone())),
+            || Ok((account.clone(), Some(replacement.clone()))),
             || unreachable!(),
             || unreachable!(),
         );
@@ -831,7 +880,6 @@ mod tests {
         }
         assert!(result.is_err());
         assert!(!dir.path().join("mutation").exists());
-        assert!(checked_account(&Guard::default(), || unreachable!(), || true, || true).is_err());
     }
 
     #[test]
@@ -862,7 +910,7 @@ mod tests {
                     now.generated_uid = "11111111-2222-3333-4444-555555555555".into();
                     account.home = dir.path().join("replacement");
                 }
-                Ok((account, now))
+                Ok((account, Some(now)))
             },
             || {
                 waited.set(true);
@@ -884,7 +932,7 @@ mod tests {
                 if waited.get() {
                     account.home = dir.path().join("fresh-home");
                 }
-                Ok((account, identity.clone()))
+                Ok((account, Some(identity.clone())))
             },
             || true,
             || true,
@@ -894,7 +942,7 @@ mod tests {
         assert!(
             checked_account(
                 &guard,
-                || Ok((account.clone(), identity.clone())),
+                || Ok((account.clone(), Some(identity.clone()))),
                 || true,
                 || false
             )

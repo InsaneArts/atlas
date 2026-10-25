@@ -208,8 +208,9 @@ thread_local! {
 }
 
 /// Bind durable claims to every executor dispatched in this scope. Before
-/// acknowledging an executor, its PID is synced into each claim file. If the
-/// caller dies, recovery still refuses while that executor can act.
+/// acknowledging an executor, its PID, boot and start time are synced into
+/// each claim file. If the caller dies, recovery still refuses while that
+/// process instance can act.
 pub(crate) struct ExecutorClaims(Vec<File>);
 
 impl ExecutorClaims {
@@ -230,21 +231,109 @@ impl Drop for ExecutorClaims {
 
 /// Persist the executor before allowing it past its initial handshake.
 pub(crate) fn record_executor(pid: nix::unistd::Pid) -> Result<()> {
+    record_executor_with(pid, executor_boot, executor_start)
+}
+
+fn record_executor_with(
+    pid: nix::unistd::Pid,
+    boot: impl FnOnce() -> Result<[u64; 2]>,
+    start: impl FnOnce(i32) -> Result<[u64; 2]>,
+) -> Result<()> {
     EXECUTOR_CLAIMS.with(|claims| {
-        for mut file in claims.borrow().iter() {
+        let claims = claims.borrow();
+        if claims.is_empty() {
+            return Ok(());
+        }
+        let executor = Executor {
+            pid: pid.as_raw(),
+            boot: boot()?,
+            start: start(pid.as_raw())?,
+        };
+        let record = serde_json::to_vec(&executor)?;
+        for mut file in claims.iter() {
             file.set_len(0)?;
             file.seek(SeekFrom::Start(0))?;
-            writeln!(file, "{}", pid.as_raw())?;
+            file.write_all(&record)?;
             file.sync_all()?;
         }
         Ok(())
     })
 }
 
-/// A recycled PID can conservatively delay recovery; it never authorizes
-/// clearing active work. Only a definite missing process counts as ended,
-/// including when the caller cannot signal a root executor.
-fn executor_running(mut file: &File) -> bool {
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Executor {
+    pid: i32,
+    boot: [u64; 2],
+    start: [u64; 2],
+}
+
+/// The exact kern.boottime, including its fractional seconds.
+#[allow(unsafe_code, reason = "FFI: kern.boottime has no safe binding")]
+fn executor_boot() -> Result<[u64; 2]> {
+    let mut boot = libc::timeval {
+        tv_sec: 0,
+        tv_usec: 0,
+    };
+    let mut size = std::mem::size_of_val(&boot);
+    let mut name = [libc::CTL_KERN, libc::KERN_BOOTTIME];
+    // SAFETY: valid MIB and correctly sized, writable timeval buffer; no input buffer.
+    let status = unsafe {
+        libc::sysctl(
+            name.as_mut_ptr(),
+            2,
+            (&mut boot as *mut libc::timeval).cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if status != 0 || size != std::mem::size_of_val(&boot) {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok([
+        boot.tv_sec
+            .try_into()
+            .map_err(|_| Error::new("state", "Invalid boot time"))?,
+        boot.tv_usec
+            .try_into()
+            .map_err(|_| Error::new("state", "Invalid boot time"))?,
+    ])
+}
+
+#[allow(unsafe_code, reason = "FFI: proc_pidinfo has no safe binding")]
+fn executor_start(pid: i32) -> Result<[u64; 2]> {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::uninit();
+    let size = std::mem::size_of_val(&info) as i32;
+    // SAFETY: proc_pidinfo receives a writable buffer of the declared size.
+    let read = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            size,
+        )
+    };
+    if read != size {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    // SAFETY: proc_pidinfo returned the full size of an initialized proc_bsdinfo.
+    let info = unsafe { info.assume_init() };
+    Ok([info.pbi_start_tvsec, info.pbi_start_tvusec])
+}
+
+/// A different boot or process instance cannot be the dispatched executor.
+/// Unreadable identities and legacy PID-only records remain conservative.
+fn executor_running(file: &File) -> bool {
+    executor_running_with(file, executor_boot, executor_start)
+}
+
+fn executor_running_with(
+    mut file: &File,
+    boot: impl FnOnce() -> Result<[u64; 2]>,
+    start: impl FnOnce(i32) -> Result<[u64; 2]>,
+) -> bool {
     let mut text = String::new();
     if file
         .seek(SeekFrom::Start(0))
@@ -256,8 +345,19 @@ fn executor_running(mut file: &File) -> bool {
     if text.is_empty() {
         return false;
     }
-    let Some(pid) = text.trim().parse::<i32>().ok().filter(|pid| *pid > 0) else {
-        return true;
+    let pid = match serde_json::from_str::<Executor>(&text) {
+        Ok(executor) if executor.pid > 0 => {
+            if boot().is_ok_and(|boot| boot != executor.boot)
+                || start(executor.pid).is_ok_and(|start| start != executor.start)
+            {
+                return false;
+            }
+            executor.pid
+        }
+        _ => match text.trim().parse::<i32>().ok().filter(|pid| *pid > 0) {
+            Some(pid) => pid,
+            None => return true,
+        },
     };
     nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None) != Err(nix::errno::Errno::ESRCH)
 }
@@ -784,6 +884,86 @@ impl Drop for ActionPermit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn executor_claims_persist_the_pid_boot_and_process_start_before_dispatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, dir.path());
+        let pending = controller.quarantine().unwrap();
+        let _claims = ExecutorClaims::new(std::slice::from_ref(&pending)).unwrap();
+        let pid = nix::unistd::getpid();
+        record_executor_with(
+            pid,
+            || Ok([100, 200]),
+            |observed| {
+                assert_eq!(observed, pid.as_raw());
+                Ok([300, 400])
+            },
+        )
+        .unwrap();
+        let executor: Executor = serde_json::from_slice(&fs::read(&pending.live).unwrap()).unwrap();
+        assert_eq!(executor.pid, pid.as_raw());
+        assert_eq!(executor.boot, [100, 200]);
+        assert_eq!(executor.start, [300, 400]);
+    }
+
+    #[test]
+    fn a_reused_executor_pid_is_not_alive_on_a_different_boot_or_start_time() {
+        let mut file = tempfile::tempfile().unwrap();
+        let executor = Executor {
+            pid: nix::unistd::getpid().as_raw(),
+            boot: [100, 200],
+            start: [300, 400],
+        };
+        file.write_all(&serde_json::to_vec(&executor).unwrap())
+            .unwrap();
+        assert!(executor_running_with(
+            &file,
+            || Ok(executor.boot),
+            |pid| {
+                assert_eq!(pid, executor.pid);
+                Ok(executor.start)
+            }
+        ));
+        for changed in ["boot", "start"] {
+            let mut boot = executor.boot;
+            let mut start = executor.start;
+            match changed {
+                "boot" => boot[1] += 1,
+                _ => start[1] += 1,
+            }
+            assert!(
+                !executor_running_with(
+                    &file,
+                    || Ok(boot),
+                    |pid| {
+                        assert_eq!(pid, executor.pid);
+                        Ok(start)
+                    }
+                ),
+                "different {changed}"
+            );
+        }
+        assert!(
+            executor_running_with(
+                &file,
+                || Err(Error::new("state", "unreadable boot")),
+                |_| Err(Error::new("state", "unreadable process")),
+            ),
+            "unreadable observations do not release a live executor"
+        );
+    }
+
+    #[test]
+    fn unreadable_and_legacy_executor_records_do_not_release_a_live_process() {
+        let mut file = tempfile::tempfile().unwrap();
+        for record in [nix::unistd::getpid().to_string(), "{".into(), "-1".into()] {
+            file.set_len(0).unwrap();
+            file.seek(SeekFrom::Start(0)).unwrap();
+            file.write_all(record.as_bytes()).unwrap();
+            assert!(executor_running(&file));
+        }
+    }
 
     /// Checking that the lock can be kept creates its directory, leaves no
     /// file behind and never touches the lock; a place that cannot be

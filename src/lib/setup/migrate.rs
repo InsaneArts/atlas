@@ -192,15 +192,43 @@ pub fn managed(config: &Config, layout: &Layout) -> Config {
 }
 
 fn helper_argv(client: &Client, request: &Request) -> Result<Vec<String>> {
-    let expected = super::identity::verified(client.config.helper_uid)
-        .ok_or_else(|| problem("Choose the helper account in Atlas before setting it up"))?;
-    Ok(vec![
+    helper_argv_with(client, request, setup_identity(client.config.helper_uid)?)
+}
+
+/// Legacy setup runs as the helper, without adopting an unrecorded identity.
+/// An existing record must still match; unreadable records are never absence.
+fn setup_identity(uid: u32) -> Result<Option<super::identity::Identity>> {
+    setup_identity_with(super::identity::on_file(uid), || {
+        super::identity::verified(uid)
+    })
+}
+
+fn setup_identity_with(
+    on_file: super::identity::OnFile,
+    verified: impl FnOnce() -> Option<super::identity::Identity>,
+) -> Result<Option<super::identity::Identity>> {
+    match on_file {
+        super::identity::OnFile::Nothing => Ok(None),
+        _ => verified()
+            .map(Some)
+            .ok_or_else(|| problem("Choose the helper account in Atlas before setting it up")),
+    }
+}
+
+fn helper_argv_with(
+    client: &Client,
+    request: &Request,
+    expected: Option<super::identity::Identity>,
+) -> Result<Vec<String>> {
+    let mut argv = vec![
         client.config.identity_probe.to_string_lossy().into_owned(),
         "setup-helper".to_owned(),
         serde_json::to_string(request)?,
-        "--account".into(),
-        serde_json::to_string(&expected)?,
-    ])
+    ];
+    if let Some(expected) = expected {
+        argv.extend(["--account".into(), serde_json::to_string(&expected)?]);
+    }
+    Ok(argv)
 }
 
 /// Whether a completed helper run is a refusal the worker says changed
@@ -552,12 +580,12 @@ impl Migration {
         self.note("input moved")
     }
 
-    /// Make the configuration file hold `want`, refusing unknown contents.
-    fn switch_config(&mut self, from: &str, want: &str) -> Result<()> {
-        let path = self.log.plan.config_path.clone();
-        let current = fs::read_to_string(&path)?;
+    /// Whether setup must switch the configuration, refusing unknown contents.
+    fn check_config(&self, from: &str, want: &str) -> Result<bool> {
+        let path = &self.log.plan.config_path;
+        let current = fs::read_to_string(path)?;
         if current == want {
-            return Ok(());
+            return Ok(false);
         }
 
         if current != from {
@@ -568,7 +596,7 @@ impl Migration {
         }
 
         // Replacing a link would leave the file it points to unchanged.
-        if fs::symlink_metadata(&path)?.file_type().is_symlink() {
+        if fs::symlink_metadata(path)?.file_type().is_symlink() {
             return Err(problem(format!(
                 "{} is a link, so setup cannot switch it. Replace the link with the file it \
                  points to, then run setup again.",
@@ -576,7 +604,14 @@ impl Migration {
             )));
         }
 
-        save_private(&path, want.as_bytes())?;
+        Ok(true)
+    }
+
+    fn switch_config(&mut self, from: &str, want: &str) -> Result<()> {
+        if !self.check_config(from, want)? {
+            return Ok(());
+        }
+        save_private(&self.log.plan.config_path, want.as_bytes())?;
         self.note("configuration switched")
     }
 
@@ -1121,6 +1156,62 @@ pub async fn apply(config_path: &Path, _ownership: &Ownership) -> Result<Value> 
     carry_out(path, log, recheck).await
 }
 
+/// Check setup's prerequisites before update replaces the app. Read-only:
+/// no log is created, archived or changed, and no setup mutation is dispatched.
+/// The caller holds controller exclusion through this check and the swap.
+pub async fn preflight_apply(config_path: &Path, updated_program: &Path) -> Result<()> {
+    let (path, log) = recorded_log(config_path)?;
+    let start = apply_start(log, &path)?;
+    let (log, resuming) = match start {
+        Start::Resume(log) => (log, true),
+        Start::Plan(_) => (
+            Log {
+                version: 1,
+                plan: plan(config_path).await?,
+                state: State::Applying,
+                pending: Vec::new(),
+                history: Vec::new(),
+            },
+            false,
+        ),
+    };
+    let migration = Migration::new(path, log)?;
+    migration.require_owned_pending()?;
+    migration.check_config(
+        &migration.log.plan.old_config,
+        &migration.log.plan.new_config,
+    )?;
+    let updated = signed_daemon(updated_program)?;
+    if resuming
+        && migration.log.state != State::Applied
+        && !migration.log.plan.fresh
+        && updated != migration.log.plan.cdhash
+    {
+        return Err(problem(
+            "Atlas.app changed since setup was planned; run setup --rollback, then setup --apply again",
+        ));
+    }
+    let through = migration
+        .reachable_endpoint([Endpoint::Old, Endpoint::New])
+        .await?;
+    let job = if migration.log.plan.fresh {
+        managed_job(migration.client(through)).await?
+    } else {
+        migration.jobs(through).await?[&migration.log.plan.label].clone()
+    };
+    let expected = text_sha256(&plist(&migration.agent(), &migration.layout().logs()));
+    if !(job["plistKind"] == "absent"
+        || job["plistKind"] == "regular" && job["plistSha256"] == expected)
+        || job["loaded"] == true
+            && job["path"] != json!(migration.layout().agent_plist(&migration.log.plan.label))
+    {
+        return Err(problem(
+            "The helper's background job differs from its setup; run atlas init to replace it",
+        ));
+    }
+    Ok(())
+}
+
 /// Undo an applied or interrupted migration recorded in the log.
 /// Callers prove controller ownership (acquired for recovery) by passing it.
 pub async fn rollback(config_path: &Path, _ownership: &Ownership) -> Result<Value> {
@@ -1148,6 +1239,48 @@ pub async fn rollback(config_path: &Path, _ownership: &Ownership) -> Result<Valu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_update_setup_dispatches_without_recording_an_identity() {
+        let expected = setup_identity_with(super::super::identity::OnFile::Nothing, || {
+            panic!("a legacy migration must not adopt or require an identity")
+        })
+        .unwrap();
+        let client = Client::new(config()).unwrap();
+        let request = Request::Prepare {
+            uid: 502,
+            controller: "c".into(),
+        };
+        let argv = helper_argv_with(&client, &request, expected).unwrap();
+        assert_eq!(
+            argv,
+            [
+                client.config.identity_probe.to_string_lossy().into_owned(),
+                "setup-helper".into(),
+                serde_json::to_string(&request).unwrap(),
+            ]
+        );
+        assert!(setup_identity_with(super::super::identity::OnFile::Unreadable, || None).is_err());
+        let recorded = super::super::identity::Identity {
+            uid: 502,
+            name: "helper".into(),
+            generated_uid: "chosen".into(),
+        };
+        assert!(
+            setup_identity_with(
+                super::super::identity::OnFile::Recorded(recorded.clone()),
+                || None
+            )
+            .is_err(),
+            "a mismatched or unreadable account still refuses"
+        );
+        let argv = helper_argv_with(&client, &request, Some(recorded.clone())).unwrap();
+        assert_eq!(argv[3], "--account");
+        assert_eq!(
+            serde_json::from_str::<super::super::identity::Identity>(&argv[4]).unwrap(),
+            recorded
+        );
+    }
 
     fn config() -> Config {
         Config {
