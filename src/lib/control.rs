@@ -196,28 +196,33 @@ impl Drop for Pending {
         // replacement can only appear once this one is gone, so a path that
         // still names the locked file stays ours until it is removed here.
         // The lock goes with the descriptor.
-        if self.names_own_file() && !executor_running(&self.lock) {
-            let _ = fs::remove_file(&self.live);
+        if self.names_own_file() && !claim_executor_running(&self.lock, &self.live) {
+            remove_claim(&self.live);
         }
     }
 }
 
 thread_local! {
     /// Claims for the synchronous privileged dispatch on this thread.
-    static EXECUTOR_CLAIMS: RefCell<Vec<File>> = const { RefCell::new(Vec::new()) };
+    static EXECUTOR_CLAIMS: RefCell<Vec<(PathBuf, File)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Bind durable claims to every executor dispatched in this scope. Before
 /// acknowledging an executor, its PID, boot and start time are synced into
-/// each claim file. If the caller dies, recovery still refuses while that
-/// process instance can act.
-pub(crate) struct ExecutorClaims(Vec<File>);
+/// a record alongside each claim. If the caller dies, recovery refuses while
+/// that process instance can act.
+pub(crate) struct ExecutorClaims(Vec<(PathBuf, File)>);
 
 impl ExecutorClaims {
     pub(crate) fn new(claims: &[Pending]) -> Result<Self> {
         let files = claims
             .iter()
-            .map(|claim| claim.lock.try_clone())
+            .map(|claim| {
+                claim
+                    .lock
+                    .try_clone()
+                    .map(|file| (claim.live.clone(), file))
+            })
             .collect::<std::io::Result<Vec<_>>>()?;
         Ok(Self(EXECUTOR_CLAIMS.with(|bound| bound.replace(files))))
     }
@@ -250,14 +255,54 @@ fn record_executor_with(
             start: start(pid.as_raw())?,
         };
         let record = serde_json::to_vec(&executor)?;
-        for mut file in claims.iter() {
-            file.set_len(0)?;
-            file.seek(SeekFrom::Start(0))?;
-            file.write_all(&record)?;
-            file.sync_all()?;
+        for (live, _) in claims.iter() {
+            publish_executor_with(live, &record, |file, record| file.write_all(record))?;
         }
         Ok(())
     })
+}
+
+/// Publish identity separately from the stable claim inode: a failed write
+/// cannot destroy the previous executor's identity or release its flock.
+fn publish_executor_with(
+    live: &Path,
+    record: &[u8],
+    write: impl FnOnce(&mut File, &[u8]) -> std::io::Result<()>,
+) -> Result<()> {
+    let path = live.with_extension("executor.live");
+    let temporary = live.with_extension(format!("executor-{}", token()));
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&temporary)?;
+    let result = (|| {
+        write(&mut file, record)?;
+        file.sync_all()?;
+        fs::rename(&temporary, &path)?;
+        File::open(path.parent().expect("claim directory"))?.sync_all()?;
+        Ok(())
+    })();
+    let _ = fs::remove_file(temporary);
+    result
+}
+
+fn claim_executor_running(file: &File, live: &Path) -> bool {
+    match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(live.with_extension("executor.live"))
+    {
+        Ok(record) => executor_running(&record),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => executor_running(file),
+        Err(_) => true,
+    }
+}
+
+fn remove_claim(live: &Path) {
+    let _ = fs::remove_file(live.with_extension("executor.live"));
+    let _ = fs::remove_file(live);
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -575,8 +620,10 @@ impl Controller {
         OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NOFOLLOW)
-            .open(live)
-            .is_ok_and(|file| FileExt::try_lock_shared(&file).is_err() || executor_running(&file))
+            .open(&live)
+            .is_ok_and(|file| {
+                FileExt::try_lock_shared(&file).is_err() || claim_executor_running(&file, &live)
+            })
     }
 
     /// Record a pending mutation this process is carrying out.
@@ -631,7 +678,7 @@ impl Controller {
         if let Some(live) = self.live(generation)
             && !self.in_progress(generation)
         {
-            let _ = fs::remove_file(live);
+            remove_claim(&live);
         }
 
         let mut pending = pending(&self.marker)?;
@@ -665,7 +712,7 @@ impl Controller {
                 && self.live(generation).is_some()
                 && !self.in_progress(generation)
             {
-                let _ = fs::remove_file(entry.path());
+                remove_claim(&entry.path());
             }
         }
 
@@ -933,7 +980,11 @@ mod tests {
             },
         )
         .unwrap();
-        let executor: Executor = serde_json::from_slice(&fs::read(&pending.live).unwrap()).unwrap();
+        assert!(pending.names_own_file());
+        let executor: Executor = serde_json::from_slice(
+            &fs::read(pending.live.with_extension("executor.live")).unwrap(),
+        )
+        .unwrap();
         assert_eq!(executor.pid, pid.as_raw());
         assert_eq!(executor.boot, "boot-session");
         assert_eq!(executor.start, [300, 400]);
@@ -1016,7 +1067,7 @@ mod tests {
         .unwrap();
         boottime.set(200);
         assert!(executor_running_with(
-            &pending.lock,
+            &File::open(pending.live.with_extension("executor.live")).unwrap(),
             || executor_boot_with(read),
             |_| Ok([300, 400]),
         ));
@@ -1051,6 +1102,85 @@ mod tests {
             || Err(Error::new("state", "unreadable boot")),
             |_| Err(Error::new("state", "process no longer exists")),
         ));
+    }
+
+    #[test]
+    fn a_partial_executor_record_does_not_block_recovery_after_its_executor_and_boot_are_gone() {
+        if !crate::transaction_test::isolated(
+            "control::tests::a_partial_executor_record_does_not_block_recovery_after_its_executor_and_boot_are_gone",
+        ) {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, dir.path());
+        let pending = controller.quarantine().unwrap();
+        let generation = pending.to_string();
+        let live = pending.live.clone();
+        let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+        let pid = child.id() as i32;
+        assert!(child.wait().unwrap().success());
+        let record = serde_json::to_vec(&Executor {
+            pid,
+            boot: "previous-boot-session".into(),
+            start: [300, 400],
+        })
+        .unwrap();
+        publish_executor_with(&live, &record, |file, record| file.write_all(record)).unwrap();
+        assert!(
+            publish_executor_with(&live, &record, |file, record| {
+                file.write_all(&record[..record.len() / 2])?;
+                file.sync_all()?;
+                Err(std::io::Error::other("interrupted write"))
+            })
+            .is_err()
+        );
+        FileExt::unlock(&pending.lock).unwrap();
+
+        assert_eq!(controller.pending().unwrap(), vec![generation]);
+        assert!(live.exists());
+        let _ownership = controller.acquire(true).unwrap();
+        controller.clear().unwrap();
+        assert!(controller.pending().unwrap().is_empty());
+        assert!(!live.exists());
+        assert!(!live.with_extension("executor.live").exists());
+    }
+
+    #[test]
+    fn a_partial_executor_record_keeps_a_possibly_live_executor_pending() {
+        if !crate::transaction_test::isolated(
+            "control::tests::a_partial_executor_record_keeps_a_possibly_live_executor_pending",
+        ) {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, dir.path());
+        let pending = controller.quarantine().unwrap();
+        let generation = pending.to_string();
+        let live = pending.live.clone();
+        let record = nix::unistd::getpid().to_string().into_bytes();
+        fs::write(&live, &record).unwrap();
+        let next = serde_json::to_vec(&Executor {
+            pid: nix::unistd::getpid().as_raw(),
+            boot: "boot-session".into(),
+            start: [300, 400],
+        })
+        .unwrap();
+        assert!(
+            publish_executor_with(&live, &next, |file, record| {
+                file.write_all(&record[..record.len() / 2])?;
+                file.sync_all()?;
+                Err(std::io::Error::other("interrupted write"))
+            })
+            .is_err()
+        );
+        assert!(pending.names_own_file());
+        drop(pending);
+
+        assert_eq!(controller.acquire(true).unwrap_err().code, "busy");
+        controller.clear().unwrap();
+        assert_eq!(controller.pending().unwrap(), vec![generation]);
+        assert!(live.exists());
+        assert_eq!(fs::read(live).unwrap(), record);
     }
 
     /// Checking that the lock can be kept creates its directory, leaves no
