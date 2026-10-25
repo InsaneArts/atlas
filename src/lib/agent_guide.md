@@ -62,7 +62,8 @@ the Atlas menu bar item, or open the viewer window with `atlas monitor`. In
 an app that shows Atlas's own view (the Claude app, the Codex app), call the
 Atlas `show_screen` tool once as visible work starts: the person sees the
 helper's screen and what you do there, and can stop you. In Claude Code,
-tell the person they can type `/atlas-screen` to see the same. Pi uses the Atlas menu bar or `atlas monitor`; its `show_screen` reply is text.
+tell the person they can type `/atlas-screen` to see the same. Pi and opencode use the Atlas menu bar or `atlas monitor`; their `show_screen`
+replies are text.
 
 ## Look
 

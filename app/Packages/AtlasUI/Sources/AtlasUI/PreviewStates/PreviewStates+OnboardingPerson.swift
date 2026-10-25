@@ -158,6 +158,14 @@
                 isEnabled: false
               ),
               OnboardingAgentItem(
+                id: "opencode",
+                title: "opencode",
+                detail: "Not checked yet",
+                icon: .mark(.opencode),
+                isOn: false,
+                isEnabled: false
+              ),
+              OnboardingAgentItem(
                 id: "pi",
                 title: "Pi",
                 detail: "Not checked yet",
@@ -239,6 +247,14 @@
           title: "Codex",
           detail: "Live Mac view in the Codex app",
           icon: onboardingCodexIcon,
+          isOn: true,
+          isEnabled: true
+        ),
+        OnboardingAgentItem(
+          id: "opencode",
+          title: "opencode",
+          detail: "Test Mac apps on a hidden desktop",
+          icon: .mark(.opencode),
           isOn: true,
           isEnabled: true
         ),

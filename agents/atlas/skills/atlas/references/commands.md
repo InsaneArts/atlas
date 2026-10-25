@@ -173,6 +173,9 @@ Options:
       --codex
           Only Codex
 
+      --opencode
+          Only opencode
+
       --pi
           Only Pi
 
@@ -205,6 +208,9 @@ Options:
 
       --codex
           Only Codex
+
+      --opencode
+          Only opencode
 
       --pi
           Only Pi

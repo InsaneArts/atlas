@@ -20,6 +20,13 @@
           canDisconnect: true
         ),
         SettingsAgentRow(
+          id: "opencode",
+          title: "opencode",
+          detail: "Test Mac apps on a hidden desktop",
+          icon: .mark(.opencode),
+          connection: .connect(isEnabled: true)
+        ),
+        SettingsAgentRow(
           id: "pi",
           title: "Pi",
           detail: "Test Mac apps on a hidden desktop",

@@ -69,3 +69,17 @@ Atlas reads `PI_CODING_AGENT_DIR/settings.json` (default `~/.pi/agent/settings.j
 and lets Pi write it under its own lock. Repair malformed settings before
 reconnecting. An unrelated package named `atlas` is kept; remove that package
 in Pi yourself if you want Atlas to use the name.
+
+## opencode connection
+
+Connect with `atlas agents install --opencode`, then restart opencode. Restart
+again after disconnecting or updating Atlas. Atlas registers a plugin symlink
+in `$XDG_CONFIG_HOME/opencode/plugins` (default `~/.config/opencode/plugins`)
+and preserves existing JSON/JSONC configuration and MCP settings. An existing
+regular `atlas.js` file or unrelated link is kept; move it yourself before
+connecting Atlas. If Atlas.app moves, reconnect to update the link.
+
+The first opencode start can wait about a minute while opencode installs its
+own dependencies if offline. Start opencode once with network access first.
+Use the Atlas menu bar or `atlas monitor` to watch the helper; opencode does
+not render Atlas’s embedded screen view.

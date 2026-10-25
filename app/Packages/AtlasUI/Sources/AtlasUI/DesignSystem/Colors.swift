@@ -4,6 +4,12 @@ import SwiftUI
 /// One dark ground, quiet fills, white for the one thing to do next, and system blue for what is happening now.
 /// The window backgrounds read ``ground`` through `NSColor.ground`.
 extension Color {
+  /// opencode's graphite card, at its top edge.
+  static let brandOpencodeTop = Color(red: 0x2E / 255, green: 0x2A / 255, blue: 0x2A / 255)
+  /// opencode's graphite card, at its bottom edge.
+  static let brandOpencodeBottom = Color(red: 0x13 / 255, green: 0x10 / 255, blue: 0x10 / 255)
+  /// The grey square inside opencode's original frame.
+  static let brandOpencodeInner = Color(red: 0x5A / 255, green: 0x58 / 255, blue: 0x58 / 255)
   /// The white silhouette on a dark brand card.
   static let brandWhite = Color.white
   /// Pi's graphite card, at its top edge.

@@ -1,7 +1,7 @@
 //! `atlas agents`: connect coding agents to Atlas. The
 //! plugin ships inside Atlas.app, matching this CLI. Claude Code and Codex
-//! use a local marketplace; Pi references the package in place.
-//! Each gets the Atlas skill, MCP and a session brief.
+//! use a local marketplace; Pi references the package, and opencode loads
+//! a symlinked plugin. Each gets the Atlas skill, MCP and a session brief.
 use crate::{
     client::Client,
     config::Config,
@@ -17,6 +17,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod opencode;
 mod pi;
 
 /// The marketplace and plugin name in the marketplace-based agents.
@@ -41,17 +42,19 @@ fn problem(message: impl Into<String>) -> Error {
 pub enum Agent {
     Claude,
     Codex,
+    Opencode,
     Pi,
 }
 
 impl Agent {
-    pub const ALL: [Agent; 3] = [Agent::Claude, Agent::Codex, Agent::Pi];
+    pub const ALL: [Agent; 4] = [Agent::Claude, Agent::Codex, Agent::Opencode, Agent::Pi];
 
     pub fn name(self) -> &'static str {
         match self {
             Agent::Claude => "claude",
             Agent::Codex => "codex",
             Agent::Pi => "pi",
+            Agent::Opencode => "opencode",
         }
     }
 
@@ -61,6 +64,7 @@ impl Agent {
             Agent::Claude => "Claude Code",
             Agent::Codex => "Codex",
             Agent::Pi => "Pi",
+            Agent::Opencode => "opencode",
         }
     }
 
@@ -82,7 +86,7 @@ impl Agent {
                 argv(&["plugin", "marketplace", "add", &path]),
                 argv(&["plugin", "add", PLUGIN]),
             ],
-            Agent::Pi => vec![],
+            Agent::Pi | Agent::Opencode => vec![],
         }
     }
 
@@ -144,7 +148,7 @@ impl Agent {
     /// Whether this agent's copy of the plugin named atlas (agents copy a
     /// plugin when installing it) is Atlas's.
     fn keeps_atlas(self) -> bool {
-        if matches!(self, Agent::Pi) {
+        if matches!(self, Agent::Pi | Agent::Opencode) {
             return false;
         }
         let Some(home) = self.home() else {
@@ -165,6 +169,7 @@ impl Agent {
             Agent::Claude => ("CLAUDE_CONFIG_DIR", ".claude"),
             Agent::Codex => ("CODEX_HOME", ".codex"),
             Agent::Pi => return pi::home(),
+            Agent::Opencode => return opencode::home(),
         };
 
         std::env::var_os(variable)
@@ -184,7 +189,7 @@ impl Agent {
                 argv(&["plugin", "remove", PLUGIN]),
                 argv(&["plugin", "marketplace", "remove", NAME]),
             ],
-            Agent::Pi => vec![],
+            Agent::Pi | Agent::Opencode => vec![],
         }
     }
 
@@ -196,7 +201,7 @@ impl Agent {
                 argv(&["plugin", "update", PLUGIN]),
             ],
             Agent::Codex => vec![argv(&["plugin", "add", PLUGIN])],
-            Agent::Pi => vec![],
+            Agent::Pi | Agent::Opencode => vec![],
         }
     }
 
@@ -231,6 +236,9 @@ impl Agent {
     /// marketplace (unknown when its list cannot be read); an error when it
     /// does not answer.
     fn installed(self) -> std::result::Result<Option<bool>, String> {
+        if self == Agent::Opencode {
+            return opencode::installed().map(Some).map_err(|e| e.error);
+        }
         if self == Agent::Pi {
             return self
                 .source()
@@ -241,7 +249,7 @@ impl Agent {
         let list: &[&str] = match self {
             Agent::Claude => &["plugin", "list", "--json"],
             Agent::Codex => &["plugin", "list", "--marketplace", NAME, "--json"],
-            Agent::Pi => return Ok(None),
+            Agent::Pi | Agent::Opencode => return Ok(None),
         };
 
         let output = match exec(self, list, ASK) {
@@ -259,7 +267,7 @@ impl Agent {
         let plugins = match self {
             Agent::Claude => list.as_array(),
             Agent::Codex => list["installed"].as_array(),
-            Agent::Pi => return None,
+            Agent::Pi | Agent::Opencode => return None,
         }?;
 
         Some(plugins.iter().any(|plugin| {
@@ -273,13 +281,16 @@ impl Agent {
     /// fails while any of its local marketplace folders is missing, so its
     /// settings, where adding a marketplace records it, are read first.
     fn source(self) -> std::result::Result<Option<Source>, String> {
+        if self == Agent::Opencode {
+            return opencode::source().map(Some).map_err(|e| e.error);
+        }
         if self == Agent::Pi {
             return pi::source().map(Some).map_err(|e| e.error);
         }
         let recorded = match self {
             Agent::Claude => None,
             Agent::Codex => self.home().and_then(|home| codex_recorded(&home)),
-            Agent::Pi => None,
+            Agent::Pi | Agent::Opencode => None,
         };
 
         if let Some(found @ (Source::Folder(_) | Source::Elsewhere(_))) = &recorded {
@@ -300,7 +311,7 @@ impl Agent {
         let marketplaces = match self {
             Agent::Claude => list.as_array(),
             Agent::Codex => list["marketplaces"].as_array(),
-            Agent::Pi => return None,
+            Agent::Pi | Agent::Opencode => return None,
         }?;
 
         let Some(found) = marketplaces.iter().find(|entry| entry["name"] == NAME) else {
@@ -320,7 +331,7 @@ impl Agent {
                 found["marketplaceSource"]["sourceType"].as_str(),
                 found["marketplaceSource"]["source"].as_str(),
             ),
-            Agent::Pi => return None,
+            Agent::Pi | Agent::Opencode => return None,
         };
 
         Some(match (kind, place) {
@@ -659,6 +670,7 @@ fn install_places() -> Vec<PathBuf> {
         for relative in [
             ".local/bin",
             ".claude/local",
+            ".opencode/bin",
             ".npm-global/bin",
             ".volta/bin",
             ".bun/bin",
@@ -968,6 +980,10 @@ pub fn change_these(chosen: &[Agent], all: bool, app: bool, remove: bool) -> Res
             Err(error) => json!({"agent": agent.name(), "ok": false, "error": error.error}),
         };
 
+        if agent == Agent::Opencode && matches!(outcome, Ok(Removal::Changed)) {
+            result["restart"] = json!(true);
+        }
+
         if let Ok(Removal::Kept(place)) = outcome {
             result["kept"] = json!(place);
         }
@@ -993,6 +1009,9 @@ fn connect_agent(
 ) -> Result<Removal> {
     if agent == Agent::Pi {
         return pi::change(Some(marketplace));
+    }
+    if agent == Agent::Opencode {
+        return opencode::change(Some(marketplace));
     }
     let steps = agent.connecting(marketplace, source.as_ref().ok().and_then(Option::as_ref))?;
 
@@ -1023,6 +1042,9 @@ fn disconnect_agent(
 ) -> Result<Removal> {
     if agent == Agent::Pi {
         return pi::change(None);
+    }
+    if agent == Agent::Opencode {
+        return opencode::change(None);
     }
     match source.map_err(problem)? {
         Some(Source::Folder(folder)) if agent.ours(&folder) => {}

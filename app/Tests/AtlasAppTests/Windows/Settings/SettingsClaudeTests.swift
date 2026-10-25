@@ -51,7 +51,7 @@ struct SettingsClaudeTests {
     let controller = SettingsController.scripted(commands: commands)
     await controller.loadAgents()
     let rows = controller.state.agents.agents
-    #expect(rows.map(\.id) == ["claude", "codex", "pi"])
+    #expect(rows.map(\.id) == ["claude", "codex", "opencode", "pi"])
     let claude = try #require(rows.first)
     #expect(claude.title == "Claude")
     #expect(claude.detail == "Claude Code tools and a live Mac view in the app")

@@ -11,7 +11,7 @@ extension Words {
   static func agentRestart(_ agent: AgentID) -> String {
     switch agent {
     case .claude: claudeRestart
-
+    case .opencode: "Restart opencode for this change to take effect."
     case .pi: "Start a new Pi session or use /reload for this change to take effect."
     case .codex: "Start a new Codex session for this change to take effect."
     }
@@ -42,7 +42,7 @@ extension Words {
       if app { return "Live Mac view in the Claude app" }
       return "Test Mac apps from Claude Code"
     case .codex: return "Live Mac view in the Codex app"
-    case .pi: return "Test Mac apps on a hidden desktop"
+    case .opencode, .pi: return "Test Mac apps on a hidden desktop"
     }
   }
 }

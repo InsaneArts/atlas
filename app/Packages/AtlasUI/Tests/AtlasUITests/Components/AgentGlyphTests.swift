@@ -27,4 +27,14 @@ struct AgentGlyphTests {
     }
   }
 
+  @Test("opencode's adjacent close and move commands keep the white frame and its inner hole")
+  func opencodeFrame() throws {
+    let paths = AgentMarkKind.opencode.paths
+    let data = try #require(paths.last)
+    let path = AgentGlyph.parse(data)
+    #expect(!path.isEmpty)
+    #expect(path.boundingRect == CGRect(x: 128, y: 96, width: 256, height: 320))
+    #expect(path.contains(CGPoint(x: 150, y: 200), eoFill: true))
+    #expect(!path.contains(CGPoint(x: 256, y: 200), eoFill: true))
+  }
 }

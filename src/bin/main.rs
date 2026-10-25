@@ -623,6 +623,9 @@ enum AgentsCommand {
         /// Only Codex.
         #[arg(long)]
         codex: bool,
+        /// Only opencode.
+        #[arg(long)]
+        opencode: bool,
         /// Only Pi.
         #[arg(long)]
         pi: bool,
@@ -640,6 +643,9 @@ enum AgentsCommand {
         /// Only Codex.
         #[arg(long)]
         codex: bool,
+        /// Only opencode.
+        #[arg(long)]
+        opencode: bool,
         /// Only Pi.
         #[arg(long)]
         pi: bool,
@@ -651,25 +657,33 @@ enum AgentsCommand {
 
 /// Connect or disconnect the named agents and Claude app; none
 /// named means every installed one, the Claude app included.
-fn changed(claude: bool, codex: bool, pi: bool, app: bool, remove: bool) -> Result<Value> {
+fn changed(
+    claude: bool,
+    codex: bool,
+    opencode: bool,
+    pi: bool,
+    app: bool,
+    remove: bool,
+) -> Result<Value> {
     // Connecting an app that isn't here would only leave its settings behind.
     if app && !remove && !atlas::claude_app::installed() {
         return Err(Error::new("agents", "The Claude app isn't installed"));
     }
     if app {
-        atlas::agents::change_these(&chosen(claude, codex, pi), false, true, remove)
+        atlas::agents::change_these(&chosen(claude, codex, opencode, pi), false, true, remove)
     } else {
-        atlas::agents::change(&chosen(claude, codex, pi), remove)
+        atlas::agents::change(&chosen(claude, codex, opencode, pi), remove)
     }
 }
 
 /// The coding agents selected by flags (none means every installed one).
-fn chosen(claude: bool, codex: bool, pi: bool) -> Vec<atlas::agents::Agent> {
+fn chosen(claude: bool, codex: bool, opencode: bool, pi: bool) -> Vec<atlas::agents::Agent> {
     use atlas::agents::Agent;
 
     [
         (claude, Agent::Claude),
         (codex, Agent::Codex),
+        (opencode, Agent::Opencode),
         (pi, Agent::Pi),
     ]
     .into_iter()
@@ -1464,20 +1478,22 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
                 AgentsCommand::Install {
                     claude,
                     codex,
+                    opencode,
                     pi,
                     app,
                 } => {
                     let _spinner = Spinner::new("Connecting…");
-                    changed(claude, codex, pi, app, false)
+                    changed(claude, codex, opencode, pi, app, false)
                 }
                 AgentsCommand::Remove {
                     claude,
                     codex,
+                    opencode,
                     pi,
                     app,
                 } => {
                     let _spinner = Spinner::new("Disconnecting…");
-                    changed(claude, codex, pi, app, true)
+                    changed(claude, codex, opencode, pi, app, true)
                 }
             }
         }
@@ -2196,10 +2212,16 @@ mod tests {
     }
 
     #[test]
-    fn pi_can_be_selected_independently() {
-        assert_eq!(chosen(false, false, true), [atlas::agents::Agent::Pi]);
+    fn pi_and_opencode_can_be_selected_independently_or_together() {
+        use atlas::agents::Agent;
+        assert_eq!(chosen(false, false, false, true), [Agent::Pi]);
+        assert_eq!(chosen(false, false, true, false), [Agent::Opencode]);
+        assert_eq!(
+            chosen(false, false, true, true),
+            [Agent::Opencode, Agent::Pi]
+        );
         for verb in ["install", "remove"] {
-            assert!(parse(&["agents", verb, "--pi"]).is_ok());
+            assert!(parse(&["agents", verb, "--pi", "--opencode"]).is_ok());
         }
     }
 

@@ -65,7 +65,7 @@ enum Words {
     case .claude: "Claude"
     case .codex: "Codex"
     case .pi: "Pi"
-
+    case .opencode: "opencode"
     }
   }
 
