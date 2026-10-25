@@ -12,23 +12,22 @@ struct GeneralPane: View {
     VStack(alignment: .leading, spacing: SettingsLayout.sectionGap) {
       GroupedSection(
         [GeneralRow.openAtLogin],
-        title: SettingsSearchCatalog.startup.section,
-        description: SettingsSearchCatalog.startup.sectionDetail,
+        title: "Startup",
+        description: "Keep Atlas available from the menu bar.",
         notes: state.canOpenAtLogin ? [] : [.text("Open at login is unavailable in a development build.")]
       ) { _ in
         ListRow(
-          SettingsSearchCatalog.startup.title,
-          detail: SettingsSearchCatalog.startup.detail,
+          "Open Atlas at login",
+          detail: "Atlas sits in the menu bar from the start",
           trailing: .toggle(isOn: state.opensAtLogin),
           size: .compact
         ) { send(.setOpenAtLogin(!state.opensAtLogin)) }
         .disabled(!state.canOpenAtLogin)
-        .settingsTarget(.startup)
       }
       GroupedSection(
         [GeneralRow.picture, .notify],
-        title: SettingsSearchCatalog.everydayTitle,
-        description: SettingsSearchCatalog.everydayDetail,
+        title: "Everyday preferences",
+        description: "Screen updates and when Atlas asks for you",
         notes: [.text("Closing Atlas's windows keeps it in the menu bar.")]
       ) { row in
         if row == .picture {

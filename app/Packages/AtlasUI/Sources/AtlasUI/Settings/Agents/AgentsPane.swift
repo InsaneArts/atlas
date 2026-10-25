@@ -12,8 +12,8 @@ struct AgentsPane: View {
     VStack(alignment: .leading, spacing: SettingsLayout.sectionGap) {
       GroupedSection(
         state.agents,
-        title: SettingsSearchCatalog.agentsTitle,
-        description: SettingsSearchCatalog.agentsDetail,
+        title: "Coding agents",
+        description: "Let supported agents use the helper.",
         notes: notes
       ) { agent in
         AgentConnectionRow(agent: agent) {
@@ -23,12 +23,11 @@ struct AgentsPane: View {
         } showFile: {
           send(.showAgentFile(agent.id))
         }
-        .settingsTarget(.agent(agent.id))
       }
       GroupedSection(
         [GeneralRow.picture],
-        title: SettingsSearchCatalog.projectsTitle,
-        description: SettingsSearchCatalog.projectsDetail
+        title: "Project instructions",
+        description: "Projects taught to agents without the Atlas plugin."
       ) { _ in
         SettingsDisclosureRow(title: "Projects", summary: state.projectsSummary) { send(.navigate(.projects)) }
       }

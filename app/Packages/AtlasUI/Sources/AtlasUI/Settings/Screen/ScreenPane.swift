@@ -14,7 +14,7 @@ struct ScreenPane: View {
   /// One selection and one edit path, whichever presentation fits.
   var body: some View {
     VStack(alignment: .leading, spacing: SettingsLayout.titleGap) {
-      SettingsSectionHeading(title: SettingsSearchCatalog.cadence.title)
+      SettingsSectionHeading(title: "Screen updates")
       GroupedSection(
         [GeneralRow.picture],
         notes: state.pictureOptions.first(where: { $0.id == .paused })?.isEnabled == false
@@ -36,16 +36,15 @@ struct ScreenPane: View {
           }
         }
       }
-      .accessibilityLabel(SettingsSearchCatalog.cadence.title)
-      .settingsTarget(.cadence)
+      .accessibilityLabel("Screen updates")
     }
   }
 
   /// The standard menu shares its options, selection and writer with the cards.
   private var popup: some View {
-    ListRowBody(SettingsSearchCatalog.cadence.title, detail: SettingsSearchCatalog.cadence.detail, size: .compact) {
+    ListRowBody("Screen updates", detail: "How often Atlas's windows show the helper's screen", size: .compact) {
       PopupButton(
-        label: SettingsSearchCatalog.cadence.title,
+        label: "Screen updates",
         options: state.pictureOptions,
         selection: Binding(get: { state.picture }, set: { send(.choosePicture($0)) })
       )

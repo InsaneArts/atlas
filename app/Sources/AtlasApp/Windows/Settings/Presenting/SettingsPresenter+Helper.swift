@@ -28,17 +28,7 @@ extension SettingsPresenter {
         status: mode.summary(line: "")
       ),
       closeLogin: closeLogin(snapshot, canRun: !alertRunning && !waits),
-      ready: ready(
-        reading.readinessItems,
-        recoverLines: recoverLines,
-        checking: snapshot.session.checking,
-        identities: reading.statusRows.map { row in
-          switch row.subject {
-          case .check(let key): "check:\(key)"
-          case .nativeDialogs: "native-dialogs"
-          }
-        }
-      ),
+      ready: ready(reading.readinessItems, recoverLines: recoverLines, checking: snapshot.session.checking),
       buttons: SettingsHelperButtons(
         canSwitch: !running.contains(.switchToHelper) && !alertRunning && !waits,
         canCheck: !snapshot.session.checking,
@@ -98,13 +88,11 @@ extension SettingsPresenter {
   ///   - items: Each check, as the status reads it.
   ///   - recoverLines: The short line of each failed check Recover fixes, by its name; none by default.
   ///   - checking: Whether Check Again's reading runs now.
-  ///   - identities: Stable service identities in the same order; omitted for presentation samples.
   /// - Returns: The rows.
   static func ready(
     _ items: [ReadinessItem],
     recoverLines: [String: String] = [:],
-    checking: Bool = false,
-    identities: [String] = []
+    checking: Bool = false
   ) -> [SettingsReadyRow] {
     items.enumerated()
       .map { index, item in
@@ -114,8 +102,7 @@ extension SettingsPresenter {
           item: ReadinessItem(name: item.name, text: text, state: item.state),
           offersRecover: recoverLine != nil,
           isChecking: checking,
-          index: index,
-          searchID: identities.indices.contains(index) ? identities[index] : nil
+          index: index
         )
       }
   }

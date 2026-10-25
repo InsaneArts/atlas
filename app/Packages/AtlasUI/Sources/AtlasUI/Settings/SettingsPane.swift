@@ -13,23 +13,16 @@ struct SettingsPane: View {
   var body: some View {
     ZStack(alignment: .top) {
       ForEach(SettingsDestination.pages, id: \.self) { destination in
-        ScrollViewReader { scroll in
-          FormColumn(insets: SettingsLayout.swapInsets) {
-            VStack(alignment: .leading, spacing: SettingsLayout.sectionGap) {
-              Text(destination.description)
-                .textStyle(.callout)
-                .foregroundStyle(Color.textSecondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .settingsTarget(.page(destination))
-              page(destination)
-            }
-            .frame(maxWidth: SettingsLayout.contentMaximumWidth)
-            .frame(maxWidth: .infinity)
+        FormColumn(insets: SettingsLayout.swapInsets) {
+          VStack(alignment: .leading, spacing: SettingsLayout.sectionGap) {
+            Text(destination.description)
+              .textStyle(.callout)
+              .foregroundStyle(Color.textSecondary)
+              .frame(maxWidth: .infinity, alignment: .leading)
+            page(destination)
           }
-          .environment(\.settingsReveal, state.location == destination && !state.search.isActive ? state.reveal : nil)
-          .onChange(of: state.reveal) { _, reveal in
-            if let reveal, reveal.target.destination == destination { scroll.scrollTo(reveal.target) }
-          }
+          .frame(maxWidth: SettingsLayout.contentMaximumWidth)
+          .frame(maxWidth: .infinity)
         }
         .opacity(state.location == destination ? 1 : 0)
         .disabled(state.location != destination)

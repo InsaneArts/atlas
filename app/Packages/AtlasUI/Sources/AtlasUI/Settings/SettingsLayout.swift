@@ -34,8 +34,6 @@ public enum SettingsLayout {
   static let sidebarRowHeight: CGFloat = 32
   /// 52: the Helper row's stable two-line slot.
   static let helperSidebarRowHeight: CGFloat = 52
-  /// 52: search rows can grow to fit their breadcrumb and explanation.
-  static let searchResultHeight: CGFloat = 52
   /// 64: the stationary navigation header height.
   static let headerHeight: CGFloat = 64
   /// 14: the header controls' distance from the full-size content top.

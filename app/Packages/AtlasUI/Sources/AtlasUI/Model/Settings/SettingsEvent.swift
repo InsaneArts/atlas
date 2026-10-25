@@ -4,18 +4,6 @@ public enum SettingsEvent: Equatable, Sendable {
   case selectTab(SettingsTab)
   /// Opens a root or detail page without running a command.
   case navigate(SettingsDestination)
-  /// Edits only the transient local query.
-  case search(String)
-  /// Focuses the search field through Find's existing responder action.
-  case find
-  /// Moves the selected local result one step, without opening it.
-  case moveSearchSelection(Int)
-  /// Selects a current result when keyboard focus reaches its row.
-  case selectSearchResult(SettingsSearchTarget)
-  /// Opens a current match's location without activating its control.
-  case openSearchResult(SettingsSearchTarget)
-  /// Opens the selected match, consuming Return in the field.
-  case openSelectedSearchResult
   /// Changes only the startup preference through its existing writer.
   case setOpenAtLogin(Bool)
   /// Changes only the screen cadence through its existing writer.

@@ -36,7 +36,6 @@ extension SettingsWindow: HelperMenuActions {
     let alertUp = state.alert != nil
     let name = state.helper.account.name
     switch item.action {
-    case #selector(FindMenuActions.findInTab(_:)): return !alertUp
     case #selector(HelperMenuActions.askRecover(_:)): return buttons.canRecover && !alertUp
     case #selector(HelperMenuActions.askRestart(_:)): return false
     case #selector(HelperMenuActions.askSwitch(_:)):

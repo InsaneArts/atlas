@@ -4,26 +4,16 @@ import SwiftUI
 struct SettingsSidebar: View {
   /// Labels, current selection and live helper state.
   let state: SettingsState
-  /// Receives navigation and local search events.
-  let send: @MainActor (SettingsEvent) -> Void
+  /// Receives a destination selection.
+  let select: @MainActor (SettingsRoot) -> Void
 
   /// The reserved search field and independently scrollable destination clusters.
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: SettingsLayout.sidebarClusterGap) {
         VStack(spacing: Spacing.m) {
-          SearchField(
-            text: state.search.query,
-            prompt: "Search Settings",
-            focusRequests: state.search.focusRequests,
-            onChange: { query in
-              var transaction = Transaction()
-              transaction.animation = nil
-              withTransaction(transaction) { send(.search(query)) }
-            },
-            onMove: { send(.moveSearchSelection($0)) },
-            onOpen: { send(.openSelectedSearchResult) }
-          )
+          SearchField(text: "", prompt: "Search Settings", onChange: { _ in })
+            .disabled(true)
           VStack(spacing: SettingsLayout.sidebarRowGap) {
             row(.helper)
           }
@@ -56,6 +46,6 @@ struct SettingsSidebar: View {
       item: item,
       subtitle: pane == .helper ? state.helper.account.status.label : nil,
       selected: state.location.root == pane
-    ) { send(.navigate(.root(pane))) }
+    ) { select(pane) }
   }
 }

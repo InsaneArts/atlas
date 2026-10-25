@@ -8,10 +8,6 @@ public struct SettingsState: Equatable, Sendable {
   public var canGoBack: Bool
   /// Whether history has a later destination.
   public var canGoForward: Bool
-  /// The local query, matches and explicit field-focus requests.
-  public var search = SettingsSearchState()
-  /// An explicit target reveal, independent of routine status updates.
-  public var reveal: SettingsReveal?
   /// The General pane.
   public var general: SettingsGeneralState
   /// The Helper pane.
@@ -56,7 +52,7 @@ public struct SettingsState: Equatable, Sendable {
 
   /// The selected pane's name, which the title bar shows.
   public var title: String {
-    search.isActive ? "Search Results" : location.title
+    location.title
   }
 
   /// The resolved route, including older samples that select a pane.

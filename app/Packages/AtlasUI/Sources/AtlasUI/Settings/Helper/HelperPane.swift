@@ -15,13 +15,11 @@ struct HelperPane: View {
     VStack(alignment: .leading, spacing: SettingsLayout.sectionGap) {
       GroupedSection([state.account]) { account in
         HelperAccountRow(account: account, buttons: state.buttons, send: send)
-          .settingsTarget(.account)
       }
       if let row = state.closeLogin {
         GroupedSection([row], notes: row.status.map { [.status(.working, $0)] } ?? []) { row in
           ListRow(row.title, detail: row.detail, trailing: .button(row.button), size: .compact) { send(row.event) }
             .disabled(!row.canRun)
-            .settingsTarget(.cleanup)
         }
       }
       VStack(alignment: .leading, spacing: SettingsLayout.titleGap) {
@@ -39,8 +37,8 @@ struct HelperPane: View {
       .environment(\.marksSwapAtOnce, true)
       GroupedSection(
         HelperAction.allCases,
-        title: SettingsSearchCatalog.recover.section,
-        description: SettingsSearchCatalog.recover.sectionDetail,
+        title: "When something goes wrong",
+        description: "Recover input or end the helper's login.",
         notes: notes
       ) { action in
         actionRow(action)
@@ -56,22 +54,20 @@ struct HelperPane: View {
     switch action {
     case .recover:
       ListRow(
-        SettingsSearchCatalog.recover.title,
-        detail: SettingsSearchCatalog.recover.detail,
+        "Recover the helper",
+        detail: "Restarts its mouse and keyboard",
         trailing: .button("Recover…"),
         size: .compact
       ) { send(.askRecover) }
       .disabled(!state.buttons.canRecover)
-      .settingsTarget(.recover)
     case .logOut:
       ListRow(
-        SettingsSearchCatalog.logOut.title,
-        detail: SettingsSearchCatalog.logOut.detail,
+        "Log out the helper",
+        detail: "Quits its apps until you log in again",
         trailing: .button("Log Out…"),
         size: .compact
       ) { send(.askLogOut) }
       .disabled(!state.buttons.canLogOut)
-      .settingsTarget(.logOut)
     }
   }
 

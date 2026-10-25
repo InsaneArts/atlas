@@ -38,7 +38,7 @@ public struct SettingsView: View {
   public var body: some View {
     ZStack {
       HStack(spacing: .zero) {
-        SettingsSidebar(state: state, send: send)
+        SettingsSidebar(state: state) { send(.navigate(.root($0))) }
         VStack(spacing: .zero) {
           SettingsHeader(
             title: state.title,
@@ -46,18 +46,7 @@ public struct SettingsView: View {
             canGoForward: state.canGoForward,
             send: send
           )
-          ZStack(alignment: .top) {
-            SettingsPane(state: state, edit: edit, send: send)
-              .opacity(state.search.isActive ? 0 : 1)
-              .disabled(state.search.isActive)
-              .allowsHitTesting(!state.search.isActive)
-              .accessibilityHidden(state.search.isActive)
-            if state.search.isActive {
-              SettingsSearchResults(state: state.search, send: send)
-                .transition(.opacity)
-            }
-          }
-          .animation(state.search.isActive ? Motion.swapIn : Motion.swapOut, value: state.search.isActive)
+          SettingsPane(state: state, edit: edit, send: send)
         }
       }
       // Under an alert, nothing is reached by Tab or VoiceOver until it is answered.
@@ -81,28 +70,11 @@ public struct SettingsView: View {
     .onChange(of: state.helper.notice) { _, notice in if let notice { announce(notice.text) } }
     .onChange(of: state.agents.notice) { _, notice in if let notice { announce(notice.text) } }
     .onChange(of: state.about.status) { _, status in if let status { announce(status.text) } }
-    .onChange(of: state.search.query) { _, _ in
-      if state.search.isActive {
-        announce(state.search.results.isEmpty ? "No settings found" : "Search results available")
-      }
-    }
   }
 
 }
 
 #if DEBUG
-  #Preview("Search states") {
-    ScrollView {
-      VStack(spacing: Spacing.xxl) {
-        ForEach(PreviewStates.settingsSearch) { preview in
-          SettingsView(state: preview.value, edit: { _ in }, send: { _ in })
-            .frame(width: SettingsLayout.width, height: SettingsLayout.firstHeight)
-            .previewDisplayName(preview.name)
-        }
-      }
-    }
-  }
-
   #Preview("General") {
     SettingsView(state: PreviewStates.settingsGeneral, edit: { _ in }, send: { _ in })
       .frame(width: SettingsLayout.width, height: SettingsLayout.firstHeight)
