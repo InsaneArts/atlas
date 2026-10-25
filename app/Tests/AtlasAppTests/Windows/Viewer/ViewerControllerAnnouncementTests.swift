@@ -25,13 +25,14 @@ struct ViewerControllerAnnouncementTests {
     window.windowDidBecomeKey(Notification(name: NSWindow.didBecomeKeyNotification, object: window))
     service.reply = ["ready": true, "canObserve": true, "overview": ["mode": "stopped", "state": "stopped"]]
     await viewer.readingLoop.readStatus()
-    try await clock.untilSleeping(for: ViewerController.announceAfter, "the window never subscribed")
+    // The paused viewer also waits for status and age ticks; the third sleeper is the announcement.
+    try await clock.untilSleeping(3, "the window never subscribed")
     clock.advance(by: ViewerController.announceAfter)
     try await settle("the window never announced") { viewer.session.announcement?.hasPrefix("Stopped") == true }
     window.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification, object: window))
     try await settle("the background window kept its announcement") { viewer.session.announcement == nil }
     window.windowDidBecomeKey(Notification(name: NSWindow.didBecomeKeyNotification, object: window))
-    try await clock.untilSleeping(for: ViewerController.announceAfter, "regaining the keyboard never subscribed")
+    try await clock.untilSleeping(3, "regaining the keyboard never subscribed")
     clock.advance(by: ViewerController.announceAfter)
     try await settle("the focused window never announced again") { viewer.session.announcement != nil }
     viewer.setVisible(false)
@@ -62,7 +63,7 @@ struct ViewerControllerAnnouncementTests {
     await viewer.readingLoop.readStatus()
     #expect(viewer.askingStatus == nil, "Working asks nothing of the person")
     viewer.announceSoon("Stopped, Resume when you're ready")
-    try await clock.untilSleeping(for: ViewerController.announceAfter, "the announcement never waited")
+    try await clock.untilSleeping(3, "the announcement never waited")
     clock.advance(by: ViewerController.announceAfter - .milliseconds(1))
     await Task.yield()
     #expect(viewer.state.announcement == nil, "it waits its second")

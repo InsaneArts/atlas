@@ -1,6 +1,6 @@
 #if DEBUG
   extension PreviewStates {
-    /// The helper doesn't answer, so there is no picture: Recover is the way back.
+    /// The helper doesn't answer, so there is no picture: Settings shows what it needs while Atlas checks again.
     @MainActor public static let viewerNotReady = ViewerState(
       top: viewerTop(
         StatusSummary(label: "Not ready", tone: .quiet, mark: .small, line: "Atlas isn't answering in the helper"),
@@ -10,10 +10,10 @@
         empty: ViewerEmpty(
           message: EmptyMessageState(
             headline: "Atlas isn't answering in the helper",
-            message: "Recover checks the helper and starts it again.",
-            action: EmptyMessageAction(title: "Recover…", isPrimary: true)
+            message: "Atlas checks again by itself. Settings shows what the helper needs.",
+            action: EmptyMessageAction(title: "Open Settings", isPrimary: true)
           ),
-          event: .askRecover
+          event: .openSettings
         )
       )
     )

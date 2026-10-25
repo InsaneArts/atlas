@@ -68,13 +68,18 @@ extension ViewerPresenter {
     if snapshot.mode.kind == .connecting {
       return connecting(snapshot.reading)
     }
+    let recoveryHelps = snapshot.reading.status.overview.recoveryHelps
     return ViewerEmpty(
       message: EmptyMessageState(
-        headline: ViewerWords.notReadyHeadline,
-        message: ViewerWords.notReadyMessage,
-        action: EmptyMessageAction(title: ViewerWords.recoverButton, isPrimary: true)
+        headline: recoveryHelps
+          ? ViewerWords.notReadyHeadline : ViewerWords.notReadyLine(snapshot.reading.status.overview.reason),
+        message: recoveryHelps ? ViewerWords.notReadyMessage : ViewerWords.notReadyWaitMessage,
+        action: EmptyMessageAction(
+          title: recoveryHelps ? ViewerWords.recoverButton : ViewerWords.openSettings,
+          isPrimary: true
+        )
       ),
-      event: .askRecover,
+      event: recoveryHelps ? .askRecover : .openSettings,
       lastPicture: snapshot.reading.lastPicture
     )
   }

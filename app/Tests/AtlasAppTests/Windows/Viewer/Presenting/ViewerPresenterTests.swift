@@ -202,9 +202,46 @@ struct ViewerPresenterTests {
     snapshot.session.paused = false
     snapshot.reading.unavailable = "Gone"
     snapshot.reading.status = try status(["overview": ["mode": "unavailable", "state": "notReady"]])
-    #expect(ViewerPresenter.state(snapshot).screen.empty?.event == .askRecover)
+    #expect(ViewerPresenter.state(snapshot).screen.empty?.event == .openSettings)
     snapshot.reading.status = try status(["overview": ["mode": "loggedOut"]])
     #expect(ViewerPresenter.state(snapshot).screen.empty?.event == .askSwitch)
+  }
+
+  @Test("a permission failure offers Settings and its guidance instead of recovery")
+  func aPermissionFailureOffersSettings() throws {
+    var snapshot = ViewerSnapshot()
+    snapshot.reading.status = try status([
+      "ready": false, "canObserve": false, "nextSteps": ["Allow Screen Recording."],
+      "overview": [
+        "mode": "blocked", "state": "notReady", "recoverable": false,
+        "reason": "Screen Recording is off for Atlas in the helper.",
+      ],
+    ])
+    snapshot.reading.hasStatus = true
+    let empty = try #require(ViewerPresenter.state(snapshot).screen.empty)
+    #expect(empty.message.headline == ViewerWords.notReadyLine(snapshot.reading.status.overview.reason))
+    #expect(empty.message.message == ViewerWords.notReadyWaitMessage)
+    #expect(empty.message.action?.title == ViewerWords.openSettings)
+    #expect(empty.event == .openSettings)
+    #expect(!snapshot.helperMenu.canRecover)
+  }
+
+  @Test("an input failure that recovery can fix offers Recover")
+  func aRecoverableInputFailureOffersRecover() throws {
+    var snapshot = ViewerSnapshot()
+    snapshot.reading.status = try status([
+      "ready": false, "canObserve": true,
+      "overview": [
+        "mode": "blocked", "state": "notReady", "recoverable": true,
+        "reason": "Mouse and keyboard aren't ready.",
+      ],
+    ])
+    snapshot.reading.hasStatus = true
+    let empty = try #require(ViewerPresenter.state(snapshot).screen.empty)
+    #expect(empty.message.headline == ViewerWords.notReadyHeadline)
+    #expect(empty.message.message == ViewerWords.notReadyMessage)
+    #expect(empty.message.action?.title == ViewerWords.recoverButton)
+    #expect(empty.event == .askRecover)
   }
 
   @Test("typing shows before the control chip, and the paused chip only over a picture")

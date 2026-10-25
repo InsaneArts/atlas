@@ -33,4 +33,6 @@ struct ViewerDependencies {
   var wallClock: @MainActor () -> Date = { Date() }
   /// Where a copied screenshot goes, and how its file is shown; by default nowhere.
   var shotOutlet = ShotOutlet(copy: { _ in }, reveal: { _ in })
+  /// Opens Settings on Helper, which says what the helper needs.
+  var openSettings: @MainActor () -> Void = {}
 }

@@ -30,7 +30,8 @@ extension AppContainer: WindowParts {
           return outcome.ok ? outcome.decode(AgentsStatus.self)?.connected : nil
         },
         loginTime: LoginRecords.loginTime(of:),
-        shotOutlet: .live(NSWorkspace.shared)
+        shotOutlet: .live(NSWorkspace.shared),
+        openSettings: coordinator.panelLinks().openSettings
       )
     )
   }

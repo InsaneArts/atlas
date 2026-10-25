@@ -3,7 +3,7 @@ import AtlasUI
 import Foundation
 import Observation
 
-/// Reading: the status, then a picture, one reading at a time while the window is on screen and not paused, and the
+/// Reading: the status, then a picture unless paused, one reading at a time while the window is on screen, and the
 /// picture on screen, copied or saved as it is, never captured anew. ``ViewerController`` owns one; its state is
 /// written here alone.
 @Observable
@@ -41,7 +41,7 @@ final class ViewerReadingLoop {
   /// The time Details last read, in seconds of uptime: refreshed each ``tickEvery`` while pictures arrive.
   /// Unobserved: the window redraws with each reading, and Details' age row follows ``ticks``.
   @ObservationIgnored private(set) var now: TimeInterval = 0
-  /// Whether readings run: the window is on screen and not paused.
+  /// Whether readings run: the window is on screen.
   @ObservationIgnored private(set) var watching = false
   /// Numbers each start and stop of reading, so a stopped loop ends.
   @ObservationIgnored private(set) var generation = 0
@@ -73,7 +73,7 @@ final class ViewerReadingLoop {
     rate = ViewerPictureRate(rawValue: preferences.loadRate()) ?? .live
   }
 
-  /// Read while the window is on screen and not paused; stop otherwise.
+  /// Read while the window is on screen; stop otherwise.
   ///
   /// - Parameter on: Whether to read.
   func watch(_ on: Bool) {
@@ -93,7 +93,7 @@ final class ViewerReadingLoop {
       }
     }
     tick(on)
-    if on { awaitPicture() } else { stopAwaiting() }
+    if on && viewer?.session.paused != true { awaitPicture() } else { stopAwaiting() }
   }
 
   /// Read again now, or right after the reading under way.
@@ -128,7 +128,7 @@ final class ViewerReadingLoop {
     }
   }
 
-  /// The status, then a picture. A reading overtaken by a newer one, or by
+  /// The status, then a picture unless paused. A reading overtaken by a newer one, or by
   /// a pause or close, has no effect at all, failures included, and so has a
   /// status the service refused to give (it was busy, say): what shows stays.
   ///
@@ -137,13 +137,16 @@ final class ViewerReadingLoop {
     statusReading += 1
     let readingNumber = statusReading
     let current = { [unowned self] in watching && number == generation && readingNumber == statusReading }
+    let paused = viewer?.session.paused == true
+    let needsEarlyFrame = !paused && reading.frame == nil
     // With no picture yet, the first one is asked for alongside the
     // status, so the window shows the helper at once.
-    async let early = reading.frame == nil ? (try? await service.frame()) : nil
+    async let early = needsEarlyFrame ? (try? await service.frame()) : nil
     do {
       let reply = try await service.status()
       guard current() else { return }
       show(reply)
+      guard !paused else { return }
       if let reason = reply.unobservable?.word { throw ServiceError(reason) }
       let next: Frame
       if let early = await early {

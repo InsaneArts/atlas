@@ -26,6 +26,8 @@ public enum ViewerEvent: Equatable, Sendable {
   case toggleDetails
   /// Check Again in Details: read the helper's status now.
   case checkAgain
+  /// Open Settings on Helper to see what the helper needs.
+  case openSettings
   /// Recover…: ask before recovering the helper.
   case askRecover
   /// Switch to the Helper…: ask before switching this Mac's screen to the helper.

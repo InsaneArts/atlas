@@ -30,7 +30,8 @@
         return viewerLogOut
       case .askRestart:
         return viewerRestart
-      case .showKeys, .showMore, .copyShot, .showShotInFinder, .thumbnailNeeded, .shotColumns, .moveCorner:
+      case .showKeys, .showMore, .copyShot, .showShotInFinder, .thumbnailNeeded, .shotColumns, .moveCorner,
+        .openSettings:
         return state
       case .showWindow:
         return viewerShowOnScreen

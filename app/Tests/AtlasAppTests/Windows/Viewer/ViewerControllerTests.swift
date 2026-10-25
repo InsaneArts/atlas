@@ -13,6 +13,20 @@ import os
 
 @Suite("ViewerController")
 struct ViewerControllerTests {
+  @Test("Open Settings from the viewer uses the panel's route to Helper")
+  func openingSettingsUsesThePanelsHelperRoute() throws {
+    let parts = StandInParts()
+    let coordinator = parts.coordinator()
+    coordinator.openSettings()
+    coordinator.settings?.controller.selectTab(.about)
+    var dependencies = ViewerController.scripted(ScriptedService()).dependencies
+    dependencies.openSettings = coordinator.panelLinks().openSettings
+    let viewer = ViewerController(dependencies: dependencies)
+    viewer.send(.openSettings)
+    #expect(coordinator.settings?.controller.session.tab == .helper)
+    #expect(parts.settingsMade == 1)
+  }
+
   @Test("a reading shows the status and the picture, and control can be taken")
   func aReadingShowsTheStatusAndThePicture() async throws {
     let viewer = try await ViewerController.watching(ScriptedService())

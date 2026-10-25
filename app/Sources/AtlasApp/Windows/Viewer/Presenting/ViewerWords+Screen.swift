@@ -15,8 +15,21 @@ extension ViewerWords {
   static let notReadyHeadline = "Atlas isn't answering in the helper"
   /// Not ready's sentence.
   static let notReadyMessage = "Recover checks the helper and starts it again."
+  /// Not ready's sentence when recovery cannot help.
+  static let notReadyWaitMessage = "Atlas checks again by itself. Settings shows what the helper needs."
+  /// The action when recovery cannot help.
+  static let openSettings = "Open Settings"
   /// A picture paused before the first one arrived: the headline.
   static let pausedHeadline = "Picture paused"
   /// A picture paused before the first one arrived: the sentence.
   static let pausedMessage = "Work in the helper goes on."
+
+  /// Why the helper is not ready, falling back to the unanswered helper when no reason is given.
+  ///
+  /// - Parameter reason: The service's reason, if any.
+  /// - Returns: The reason, or the default headline.
+  static func notReadyLine(_ reason: String?) -> String {
+    guard let reason, !reason.isEmpty else { return notReadyHeadline }
+    return reason
+  }
 }

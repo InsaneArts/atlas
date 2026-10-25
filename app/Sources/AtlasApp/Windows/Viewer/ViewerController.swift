@@ -123,6 +123,7 @@ final class ViewerController {
     case .showKeys, .showMore: break
     case .toggleDetails: toggleDetails()
     case .checkAgain: Task { await checkAgain() }
+    case .openSettings: dependencies.openSettings()
     case .askRecover: ask(.recover)
     case .askSwitch: ask(.switchToHelper)
     case .askLogOut: ask(.logOut)
@@ -229,7 +230,7 @@ final class ViewerController {
     session.paused.toggle()
     control.releaseControl()
     if !session.paused { readingLoop.forgetFrame() }
-    readingLoop.watch(!session.paused && shown)
+    readingLoop.watch(shown)
   }
 
   /// Shows Details, reading what it lists that the helper's status does not carry, or hides it.
@@ -239,7 +240,7 @@ final class ViewerController {
     if details.shown { Task { await readDetails() } }
   }
 
-  /// Resume reading after the window was hidden, unless paused; Details left open reads its facts the first time.
+  /// Resume reading after the window was hidden; Details left open reads its facts the first time.
   ///
   /// - Parameter shown: Whether the window is on screen.
   func setVisible(_ shown: Bool) {
@@ -247,7 +248,7 @@ final class ViewerController {
     if shown, !self.shown, details.shown, details.agents == nil { Task { await readDetails() } }
     self.shown = shown
     if !shown { control.releaseControl() }
-    readingLoop.watch(shown && !session.paused)
+    readingLoop.watch(shown)
     panesModel.followPane()
   }
 

@@ -13,6 +13,49 @@ import os
 
 @Suite("ViewerReadingLoop")
 struct ViewerReadingLoopTests {
+  @Test("a paused picture keeps status and controls current without fetching frames", arguments: [false, true])
+  func aPausedPictureKeepsStatusAndControlsCurrent(hasPicture: Bool) async throws {
+    let service = ScriptedService()
+    service.picture = png()
+    service.reply = ["ready": true, "canObserve": true, "overview": ["mode": "observing", "state": "idle"]]
+    let clock = ManualClock()
+    let viewer = ViewerController.scripted(service, clock: clock)
+    defer { viewer.close() }
+    if hasPicture {
+      viewer.setVisible(true)
+      try await settle("the first picture never arrived") { viewer.reading.frame != nil }
+    }
+    let asked = service.statusCalls
+    let frames = service.frameCalls
+    viewer.togglePause()
+    if !hasPicture { viewer.setVisible(true) }
+    try await settle("the paused viewer never read status") { service.statusCalls > asked }
+    let interval = Duration.seconds(ViewerPictureRate.live.seconds)
+    try await clock.untilSleeping(for: interval, "the paused reading never waited")
+    #expect(viewer.state.top.status.label == "Idle")
+    #expect(viewer.state.top.actions.agent == nil)
+    #expect(service.frameCalls == frames)
+
+    service.reply = ["ready": true, "canObserve": true, "overview": ["mode": "agent", "state": "working"]]
+    clock.advance(by: interval)
+    try await settle("the paused viewer never showed Working") { viewer.state.top.status.label == "Working" }
+    #expect(viewer.state.top.actions.agent == .stop)
+    #expect(service.frameCalls == frames)
+    try await clock.untilSleeping(for: interval, "the working reading never waited")
+
+    service.reply = [
+      "ready": false, "canObserve": true,
+      "overview": ["mode": "recovering", "state": "needsYou", "reason": "Unknown outcome"],
+    ]
+    clock.advance(by: interval)
+    try await settle("the paused viewer never showed Needs you") { viewer.snapshot.mode.kind == .needsYou }
+    #expect(viewer.state.top.actions.agent == nil)
+    #expect(viewer.state.top.actions.control?.event == .askRecover)
+    #expect(viewer.state.top.actions.control?.isEnabled == true)
+    #expect(service.frameCalls == frames)
+    #expect(viewer.session.paused)
+  }
+
   @Test("the panel's picture shows at once, but control waits for a reading of its own")
   func thePanelsPictureShowsAtOnceButControlWaitsForAReading() async throws {
     let service = ScriptedService()
@@ -206,7 +249,7 @@ struct ViewerReadingLoopTests {
     viewer.close()
   }
 
-  @Test("a helper that goes silent after a picture keeps that picture behind Not ready and its Recover")
+  @Test("a helper that goes silent after a picture keeps that picture behind Not ready and Open Settings")
   func aSilentHelperKeepsTheLastPictureBehindNotReady() async throws {
     let service = ScriptedService()
     service.reply = ["ready": true, "canObserve": true, "overview": ["mode": "observing", "state": "idle"]]
@@ -220,8 +263,8 @@ struct ViewerReadingLoopTests {
     await viewer.readingLoop.read(viewer.readingLoop.generation)
     let waiting = try #require(viewer.state.screen.empty)
     #expect(viewer.state.screen.picture == nil)
-    #expect(waiting.message.headline == ViewerWords.notReadyHeadline, "the helper says it is not ready")
-    #expect(waiting.event == .askRecover)
+    #expect(waiting.message.headline == ViewerWords.notReadyLine(viewer.reading.status.overview.reason))
+    #expect(waiting.event == .openSettings)
     #expect(waiting.lastPicture == shown, "the stage went blank")
     viewer.close()
   }
