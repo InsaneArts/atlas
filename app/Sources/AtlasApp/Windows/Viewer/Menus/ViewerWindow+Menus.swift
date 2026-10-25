@@ -24,7 +24,7 @@ extension ViewerWindow: ViewerMenuActions, HelperMenuActions {
   ///
   /// - Parameter sender: The menu item.
   func togglePicturePause(_ sender: Any?) {
-    guard controller.state.top.actions.pause != nil else { return }
+    guard ViewerPresenter.pause(controller.snapshot) != nil else { return }
     controller.send(.togglePause)
   }
 
@@ -44,7 +44,7 @@ extension ViewerWindow: ViewerMenuActions, HelperMenuActions {
   ///
   /// - Parameter sender: The menu item.
   func toggleAgent(_ sender: Any?) {
-    switch controller.state.top.actions.agent {
+    switch ViewerPresenter.actions(controller.snapshot).agent {
     case .stop: controller.send(.stopAgent)
     case .resume(let isEnabled) where isEnabled: controller.send(.resumeAgent)
     default: return
@@ -112,38 +112,41 @@ extension ViewerWindow: ViewerMenuActions, HelperMenuActions {
   /// - Parameter item: The item.
   /// - Returns: Whether it can be chosen.
   override func validateMenuItem(_ item: NSMenuItem) -> Bool {
-    let state = controller.state
-    let menu = controller.moreMenu
-    let alertUp = state.alert != nil
+    let snapshot = controller.snapshot
     switch item.action {
     case #selector(ViewerMenuActions.selectTab(_:)):
-      item.state = item.tag == state.top.tabs.selected.menuTag ? .on : .off
-      return state.top.tabs.tabs.contains { $0.id.menuTag == item.tag }
+      let tabs = ViewerPresenter.top(snapshot).tabs
+      item.state = item.tag == tabs.selected.menuTag ? .on : .off
+      return tabs.tabs.contains { $0.id.menuTag == item.tag }
     case #selector(ViewerMenuActions.toggleDetails(_:)):
-      item.title = state.top.actions.details.isOn ? ViewerWords.hideDetailsItem : ViewerWords.showDetailsItem
+      item.title =
+        ViewerPresenter.actions(snapshot).details.isOn ? ViewerWords.hideDetailsItem : ViewerWords.showDetailsItem
       return true
     case #selector(ViewerMenuActions.togglePicturePause(_:)):
-      item.title = controller.session.paused ? Words.resumePictureItem : Words.pausePictureItem
-      return state.top.actions.pause != nil
+      item.title = snapshot.session.paused ? Words.resumePictureItem : Words.pausePictureItem
+      return ViewerPresenter.pause(snapshot) != nil
     case #selector(ViewerMenuActions.chooseRate(_:)):
-      item.state = item.tag == menu.rate.menuTag ? .on : .off
+      item.state = item.tag == snapshot.rate.menuTag ? .on : .off
       return true
     case #selector(ViewerMenuActions.toggleActualSize(_:)):
+      let menu = ViewerPresenter.moreMenu(snapshot)
       item.state = menu.actualSize ? .on : .off
       return menu.hasPicture
     case #selector(ViewerMenuActions.toggleControl(_:)):
-      return validateControl(item, state.top.actions.control) && !alertUp
+      return validateControl(item, ViewerPresenter.actions(snapshot).control) && ViewerPresenter.alert(snapshot) == nil
     case #selector(ViewerMenuActions.toggleAgent(_:)):
-      return validateAgent(item, state.top.actions.agent) && !alertUp
+      return validateAgent(item, ViewerPresenter.actions(snapshot).agent) && ViewerPresenter.alert(snapshot) == nil
     case #selector(NSText.copy(_:)):
+      let menu = ViewerPresenter.moreMenu(snapshot)
       return menu.actsOnShot || menu.hasPicture
     case #selector(ViewerMenuActions.savePicture(_:)):
+      let menu = ViewerPresenter.moreMenu(snapshot)
       item.title = menu.actsOnShot ? ViewerWords.saveScreenshot : ViewerWords.savePicture
       return menu.actsOnShot || menu.hasPicture
     case #selector(ViewerMenuActions.findInTab(_:)):
-      return searchable(state.pane)
+      return searchable(ViewerPresenter.pane(snapshot))
     default:
-      return validateHelper(item, alertUp: alertUp) ?? super.validateMenuItem(item)
+      return validateHelper(item, snapshot: snapshot) ?? super.validateMenuItem(item)
     }
   }
 
@@ -151,11 +154,12 @@ extension ViewerWindow: ViewerMenuActions, HelperMenuActions {
   ///
   /// - Parameters:
   ///   - item: The item.
-  ///   - alertUp: Whether an alert is over the window.
+  ///   - snapshot: What the window held when validation began.
   /// - Returns: Whether it can be chosen, or nil for an item that is not one of them.
-  private func validateHelper(_ item: NSMenuItem, alertUp: Bool) -> Bool? {
-    let helper = controller.snapshot.helperMenu
-    let name = controller.reading.hasStatus ? ViewerPresenter.account(controller.reading.status) : nil
+  private func validateHelper(_ item: NSMenuItem, snapshot: ViewerSnapshot) -> Bool? {
+    let helper = snapshot.helperMenu
+    let name = snapshot.reading.hasStatus ? ViewerPresenter.account(snapshot.reading.status) : nil
+    let alertUp = ViewerPresenter.alert(snapshot) != nil
     switch item.action {
     case #selector(HelperMenuActions.askRecover(_:)): return helper.canRecover && !alertUp
     case #selector(HelperMenuActions.askRestart(_:)): return helper.canRestart && !alertUp

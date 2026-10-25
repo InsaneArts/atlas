@@ -144,7 +144,7 @@ final class ViewerController {
   ///
   /// - Parameter present: Brings the window forward and updates its visibility and focus.
   func toggleControl(present: () -> Void) {
-    guard let control = state.top.actions.control, control.isEnabled,
+    guard let control = ViewerPresenter.actions(snapshot).control, control.isEnabled,
       control.event == .takeControl || control.event == .giveBack
     else { return }
     if control.event == .takeControl { present() }
