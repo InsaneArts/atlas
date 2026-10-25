@@ -61,6 +61,7 @@ extension SettingsController {
       return
     }
     guard let outcome else { return say(HelperWords.waitForAction, in: .agents, kind: .working) }
+    say(outcome.decode(AgentsChange.self)?.requiresRestart == true ? Words.claudeRestart : nil, in: .agents)
     var failedAgents: Set<String> = []
     if !outcome.ok {
       let failures = Self.connectFailures(outcome, asked: id)
@@ -80,6 +81,7 @@ extension SettingsController {
     session.announcement = nil
     session.connectFailures[id] = nil
     guard let outcome = await dependencies.installs.disconnect(id, parts: choice.parts) else { return }
+    say(outcome.decode(AgentsChange.self)?.requiresRestart == true ? Words.claudeRestart : nil, in: .agents)
     if !outcome.ok {
       session.connectFailures[id] = SettingsAgentFailure(
         message: "Couldn't disconnect: " + (Self.connectFailures(outcome, asked: id)[id] ?? outcome.message),

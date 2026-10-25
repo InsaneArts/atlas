@@ -70,6 +70,7 @@ extension OnboardingController {
         )
       else { return }
       let change = outcome.decode(AgentsChange.self)
+      snapshot.agentsNeedRestart = change?.requiresRestart == true
       // A reply that names no agent connected them all when it worked.
       let connected = outcome.ok ? chosen : change?.connected ?? []
       for index in snapshot.agents.indices where connected.contains(snapshot.agents[index].id) {
@@ -89,6 +90,8 @@ extension OnboardingController {
         }
         return
       }
+      // Keep the restart instruction on the agents step until Continue is pressed again.
+      if snapshot.agentsNeedRestart { return }
     }
     // A note left here (a skipped check, or an install that failed before its agent was switched off) belongs to the
     // agents step only.

@@ -139,7 +139,8 @@ extension OnboardingPresenter {
           id: agent.id.rawValue,
           title: OnboardingWords.agentTitle(agent.id),
           detail: agent.problem
-            ?? (agent.id == .claude && agent.found ? claudeDetail : status),
+            ?? (agent.id == .claude && snapshot.agentsNeedRestart ? Words.claudeRestart : nil)
+              ?? (agent.id == .claude && agent.found ? claudeDetail : status),
           icon: AgentRowIcons.icon(agent.id.rawValue, snapshot.agentIcons),
           isOn: agent.on || agent.connected,
           isEnabled: agent.found && !agent.connected

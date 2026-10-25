@@ -1,6 +1,9 @@
 import AtlasCommands
 
 extension Words {
+  /// What to do after changing a connection while the Claude app is running.
+  static let claudeRestart = "Quit and reopen the Claude app for this to take effect."
+
   /// Which Claude connections apply on this Mac.
   ///
   /// - Parameter parts: The installed CLI component ids.

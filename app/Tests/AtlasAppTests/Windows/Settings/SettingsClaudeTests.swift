@@ -7,6 +7,40 @@ import Testing
 
 @Suite("Settings Claude connections")
 struct SettingsClaudeTests {
+  @Test(
+    "Connect and Disconnect show the Claude restart line only when requested",
+    arguments: ["true", "false", "missing"],
+    [false, true]
+  )
+  func restartNotice(restart: String, disconnect: Bool) async throws {
+    let field = restart == "missing" ? "" : ",\"restart\":\(restart)"
+    let commands = ScriptedCommands([
+      "agents status":
+        "{\"ok\":true,\"agents\":[{\"agent\":\"claude-app\",\"installed\":true,\"connected\":\(disconnect)}]}",
+      disconnect ? "agents remove" : "agents install":
+        "{\"ok\":true,\"agents\":[{\"agent\":\"claude-app\",\"ok\":true\(field)}]}",
+    ])
+    let controller = SettingsController.scripted(commands: commands)
+    await controller.loadAgents()
+    #expect(controller.state.agents.notice == nil)
+    commands.answer(
+      "agents status",
+      "{\"ok\":true,\"agents\":[{\"agent\":\"claude-app\",\"installed\":true,\"connected\":\(!disconnect)}]}"
+    )
+    if disconnect {
+      await controller.disconnect("claude")
+    } else {
+      await controller.connect("claude")
+    }
+    let row = try #require(controller.state.agents.agents.first)
+    #expect(row.connection == (disconnect ? .connect(isEnabled: true) : .connected))
+    #expect(
+      controller.state.agents.notice?.text
+        == (restart == "true" ? "Quit and reopen the Claude app for this to take effect." : nil)
+    )
+    #expect(controller.state.agents.notice?.kind == (restart == "true" ? .quiet : nil))
+  }
+
   /// Status with both Claude parts installed and only Claude Code connected.
   private static let partial =
     #"{"ok":true,"agents":[{"agent":"claude","installed":true,"connected":true},{"agent":"claude-app","installed":true,"connected":false},{"agent":"codex","installed":false}]}"#

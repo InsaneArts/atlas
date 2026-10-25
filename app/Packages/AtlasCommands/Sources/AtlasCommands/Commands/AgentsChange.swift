@@ -6,12 +6,19 @@ public struct AgentsChange: Decodable, Sendable {
     public let agent: String
     /// Whether it was connected.
     public let ok: Bool?
+    /// Whether the Claude app must be quit and reopened for this change to take effect.
+    public let restart: Bool?
     /// Why it was not, when it was not.
     public let error: String?
   }
 
   /// The agents, in the command's order.
   public let agents: [Agent]
+
+  /// Whether a successful change needs the Claude app to be quit and reopened.
+  public var requiresRestart: Bool {
+    agents.contains { $0.ok == true && $0.restart == true }
+  }
 
   /// The agents it connected.
   public var connected: [AgentID] {

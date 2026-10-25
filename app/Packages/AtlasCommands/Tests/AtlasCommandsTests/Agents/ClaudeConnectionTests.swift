@@ -5,6 +5,28 @@ import Testing
 
 @Suite("Claude connections")
 struct ClaudeConnectionTests {
+  @Test("agent changes decode an optional restart request", arguments: ["true", "false", "missing"])
+  func decodesRestart(restart: String) throws {
+    let field = restart == "missing" ? "" : ",\"restart\":\(restart)"
+    let change = try JSONDecoder()
+      .decode(
+        AgentsChange.self,
+        from: Data("{\"agents\":[{\"agent\":\"claude-app\",\"ok\":true\(field)}]}".utf8)
+      )
+    #expect(change.agents.first?.restart == (restart == "missing" ? nil : restart == "true"))
+    #expect(change.requiresRestart == (restart == "true"))
+  }
+
+  @Test("an unsuccessful agent change does not request a restart")
+  func failedChangeDoesNotRequestRestart() throws {
+    let change = try JSONDecoder()
+      .decode(
+        AgentsChange.self,
+        from: Data(#"{"agents":[{"agent":"claude-app","ok":false,"restart":true}]}"#.utf8)
+      )
+    #expect(!change.requiresRestart)
+  }
+
   @Test("Claude is connected only when every installed part is connected", arguments: [false, true])
   func allPartsMustConnect(appConnected: Bool) throws {
     let status = try JSONDecoder()
