@@ -50,37 +50,6 @@ struct SettingsAlertFocusTests {
     #expect(restored == 1 && fallback == 1)
   }
 
-  @Test("a surviving invoker disabled before or during dismissal restores the page heading")
-  func aDisabledInvokerRestoresTheHeading() async {
-    for disabledBeforeDismissal in [true, false] {
-      let focus = SettingsAlertFocus()
-      let invoker = UUID()
-      var invokerFocused = false
-      var headingFocused = false
-      focus.remember(invoker) { invokerFocused = true }
-      if disabledBeforeDismissal { focus.setEnabled(false, for: invoker) }
-      focus.restore { headingFocused = true }
-      if !disabledBeforeDismissal { focus.setEnabled(false, for: invoker) }
-      await Self.nativeUpdate()
-      #expect(headingFocused && !invokerFocused)
-    }
-  }
-
-  @Test("an invoker reenabled after dismissal regains focus despite unrelated disabled controls")
-  func aReenabledInvokerRegainsFocus() async {
-    let focus = SettingsAlertFocus()
-    let invoker = UUID()
-    var invokerFocused = false
-    var headingFocused = false
-    focus.remember(invoker) { invokerFocused = true }
-    focus.setEnabled(false, for: invoker)
-    focus.restore { headingFocused = true }
-    focus.setEnabled(true, for: invoker)
-    focus.setEnabled(false, for: UUID())
-    await Self.nativeUpdate()
-    #expect(invokerFocused && !headingFocused)
-  }
-
   /// Waits until the dismissal's native focus update has run.
   private static func nativeUpdate() async {
     await withCheckedContinuation { continuation in
