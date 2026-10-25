@@ -428,7 +428,7 @@ fn candidates() -> Result<Vec<Value>> {
 fn settings(config_path: &Path) -> Result<Option<Config>> {
     match Config::load(config_path) {
         Ok(settings) => Ok(Some(settings)),
-        Err(_) if !config_path.exists() => Ok(None),
+        Err(error) if error.code == "config" => Ok(None),
         Err(error) => Err(error),
     }
 }
@@ -1584,6 +1584,33 @@ pub fn login(config_path: &Path, on: bool) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn settings_are_absent_only_when_the_configuration_is_missing() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        for missing in ["missing.toml", "missing/settings.toml"] {
+            assert!(settings(&dir.path().join(missing)).unwrap().is_none());
+        }
+        let valid = dir.path().join("valid.toml");
+        fs::write(&valid, include_str!("../../../examples/config.toml")).unwrap();
+        assert_eq!(
+            settings(&valid).unwrap().unwrap(),
+            Config::load(&valid).unwrap()
+        );
+
+        let malformed = dir.path().join("malformed.toml");
+        fs::write(&malformed, "helper_uid = [").unwrap();
+        let dangling = dir.path().join("dangling.toml");
+        symlink(dir.path().join("missing.toml"), &dangling).unwrap();
+        let looping = dir.path().join("loop");
+        symlink(&looping, &looping).unwrap();
+        assert_eq!(fs::read_link(&looping).unwrap(), looping);
+        for broken in [malformed, dangling, looping.join("settings.toml")] {
+            assert_eq!(settings(&broken).unwrap_err().code, "config-invalid");
+        }
+    }
+
     #[test]
     fn choosing_the_configured_helper_again_bypasses_the_replacement_refusal() {
         let config = Config {

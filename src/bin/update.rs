@@ -172,6 +172,33 @@ fn has_helper_job(recorded: bool, daemon_answers: bool) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn setup_detection_propagates_broken_configuration_paths() {
+        use std::{fs, os::unix::fs::symlink};
+
+        let dir = tempfile::tempdir().unwrap();
+        for missing in ["missing.toml", "missing/settings.toml"] {
+            assert!(set_up(&dir.path().join(missing)).unwrap().is_none());
+        }
+        let valid = dir.path().join("valid.toml");
+        fs::write(&valid, include_str!("../../examples/config.toml")).unwrap();
+        assert_eq!(
+            set_up(&valid).unwrap().unwrap(),
+            Config::load(&valid).unwrap()
+        );
+
+        let malformed = dir.path().join("malformed.toml");
+        fs::write(&malformed, "helper_uid = [").unwrap();
+        let dangling = dir.path().join("dangling.toml");
+        symlink(dir.path().join("missing.toml"), &dangling).unwrap();
+        let looping = dir.path().join("loop");
+        symlink(&looping, &looping).unwrap();
+        assert_eq!(fs::read_link(&looping).unwrap(), looping);
+        for broken in [malformed, dangling, looping.join("settings.toml")] {
+            assert_eq!(set_up(&broken).unwrap_err().code, "config-invalid");
+        }
+    }
+
     /// Only missing settings mean "not set up"; a broken file is an error.
     #[tokio::test]
     async fn finishing_an_update_needs_settings_that_load() {

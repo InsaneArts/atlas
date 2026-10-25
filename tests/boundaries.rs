@@ -265,6 +265,52 @@ fn shipped_example_configuration_parses_and_round_trips() {
 }
 
 #[test]
+fn configuration_lookup_distinguishes_absence_from_broken_links() {
+    use std::{fs, io::ErrorKind, os::unix::fs::symlink};
+
+    let dir = tempfile::tempdir().unwrap();
+    for missing in ["missing.toml", "missing/settings.toml"] {
+        assert_eq!(
+            Config::load(&dir.path().join(missing)).unwrap_err().code,
+            "config"
+        );
+    }
+    let valid = dir.path().join("valid.toml");
+    let expected = config(&fs::canonicalize(dir.path()).unwrap());
+    fs::write(&valid, expected.to_toml().unwrap()).unwrap();
+    assert_eq!(Config::load(&valid).unwrap(), expected);
+
+    let dangling = dir.path().join("dangling.toml");
+    symlink(dir.path().join("missing.toml"), &dangling).unwrap();
+    assert!(
+        fs::symlink_metadata(&dangling)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let looping = dir.path().join("loop");
+    symlink(&looping, &looping).unwrap();
+    assert_eq!(fs::read_link(&looping).unwrap(), looping);
+    let beneath_loop = looping.join("settings.toml");
+    assert_ne!(
+        fs::symlink_metadata(&beneath_loop).unwrap_err().kind(),
+        ErrorKind::NotFound
+    );
+
+    for broken in [dangling, beneath_loop] {
+        let diagnostic = fs::canonicalize(&broken).unwrap_err().to_string();
+        let error = Config::load(&broken).unwrap_err();
+        assert_eq!(error.code, "config-invalid", "{}", broken.display());
+        assert!(
+            error.error.contains(&broken.display().to_string()),
+            "{}",
+            error.error
+        );
+        assert!(error.error.contains(&diagnostic), "{}", error.error);
+    }
+}
+
+#[test]
 fn a_missing_configuration_points_at_a_legacy_json_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("atlas.local.toml");
