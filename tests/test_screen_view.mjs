@@ -310,6 +310,32 @@ async function screenshotGrid() {
   return { ...page, open, complete, displayed };
 }
 
+for (const [message, expected] of [
+  ['IPC not available for MCP tool call', 'View unavailable here · Use Atlas'],
+  ['Temporary connection failure', "Atlas isn't answering"],
+]) {
+  test(`a rejected first frame explains ${message} and recovers on the next poll`, async () => {
+    const { node, messages, calls, receive, advance, result } = screenView();
+    await receive({
+      method: 'ui/notifications/tool-result',
+      params: { structuredContent: { status: { state: 'idle' }, canControl: false } },
+    });
+    const initialize = messages.find((message) => message.method === 'ui/initialize');
+    await receive({ id: initialize.id, result: {} });
+    await receive({ id: calls('screen_frame')[0].id, error: { code: -32603, message } });
+    assert.equal(node('[data-note]').textContent, expected);
+    assert.equal(node('[data-frame]').getAttribute('src'), undefined);
+    await advance(4000);
+    assert.equal(calls('screen_frame').length, 2);
+    await receive({
+      id: calls('screen_frame')[1].id,
+      result: result('recovered', 'recovered-key', 100, 100),
+    });
+    assert.equal(node('[data-frame]').getAttribute('src'), 'data:image/jpeg;base64,recovered');
+    assert.equal(node('[data-note]').hidden, true);
+  });
+}
+
 for (const order of ['old first', 'new first']) {
   test(`each screenshot opening owns its full image when replies arrive ${order}`, async () => {
     const { node, open, complete, displayed } = await screenshotGrid();

@@ -434,6 +434,10 @@ if (typeof document !== 'undefined') {
       }, 30000);
     });
   const call = (name, args) => request('tools/call', { name, arguments: args || {} });
+  const callError = (error, otherwise = "Atlas isn't answering") =>
+    error.message === 'IPC not available for MCP tool call'
+      ? 'View unavailable here · Use Atlas'
+      : otherwise;
   const said = (result, otherwise) =>
     (result && result.content && result.content[0] && result.content[0].text) || otherwise;
   const code = (result) =>
@@ -659,7 +663,7 @@ if (typeof document !== 'undefined') {
         render();
       }
     } catch (error) {
-      if (!superseded) note("Atlas isn't answering");
+      if (!superseded) note(callError(error));
     }
     polling = false;
     schedule();
@@ -684,7 +688,9 @@ if (typeof document !== 'undefined') {
       }
     } catch (error) {
       if (!superseded)
-        note(tool === 'resume_agent' ? 'Resume from the Atlas menu bar' : "Atlas isn't answering");
+        note(
+          callError(error, tool === 'resume_agent' ? 'Resume from the Atlas menu bar' : undefined),
+        );
     }
     busy = false;
     epoch += 1;
@@ -801,7 +807,7 @@ if (typeof document !== 'undefined') {
         }
       }
     } catch (error) {
-      if (!superseded) note("Atlas isn't answering");
+      if (!superseded) note(callError(error));
     }
     if (!model.ours) {
       stopKeeping();
@@ -842,7 +848,7 @@ if (typeof document !== 'undefined') {
         else if (model.ours) note(said(result, "That didn't reach the helper"));
       }
     } catch (error) {
-      if (!superseded) note("Atlas isn't answering");
+      if (!superseded) note(callError(error));
     }
     sending = false;
     // The screen shows what the input did sooner.
@@ -1362,7 +1368,7 @@ if (typeof document !== 'undefined') {
       const result = await call('open_viewer', {});
       if (result && result.isError) note(said(result, "Atlas couldn't open its viewer"));
     } catch (error) {
-      note("Atlas isn't answering");
+      note(callError(error));
     }
   });
   for (const button of all('[data-ask]'))
