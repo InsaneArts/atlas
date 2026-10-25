@@ -608,6 +608,8 @@ pub fn change_these(chosen: &[Agent], all: bool, app: bool, remove: bool) -> Res
 
         let outcome = if agent == Agent::Pi {
             pi::change(marketplace.as_deref())
+        } else if agent == Agent::Opencode {
+            opencode::change(marketplace.as_deref())
         } else {
             // Where its marketplace named atlas comes from now decides what may
             // change: never one that is someone else's.
@@ -656,9 +658,6 @@ fn connect_agent(
     marketplace: &Path,
     source: &std::result::Result<Option<Source>, String>,
 ) -> Result<Removal> {
-    if agent == Agent::Opencode {
-        return opencode::change(Some(marketplace));
-    }
     let steps = agent.connecting(marketplace, source.as_ref().ok().and_then(Option::as_ref))?;
 
     steps
@@ -686,9 +685,6 @@ fn disconnect_agent(
     agent: Agent,
     source: std::result::Result<Option<Source>, String>,
 ) -> Result<Removal> {
-    if agent == Agent::Opencode {
-        return opencode::change(None);
-    }
     match source.map_err(problem)? {
         Some(Source::Folder(folder)) if agent.ours(&folder) => {}
         Some(Source::Folder(folder)) => return Ok(Removal::Kept(folder.display().to_string())),
