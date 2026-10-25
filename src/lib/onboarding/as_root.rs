@@ -2660,7 +2660,17 @@ fi
                     GUID,
                 ],
             );
-            assert!(outcome(&text).is_err(), "{text}");
+            if linked {
+                assert_eq!(
+                    outcome(&text),
+                    Err(Refusal::Failed(
+                        "Atlas's copy contains links or special files".into()
+                    )),
+                    "{text}"
+                );
+            } else {
+                assert!(outcome(&text).is_err(), "{text}");
+            }
             assert!(!dir.path().join("sudo.log").exists());
             assert!(!asked(dir.path(), "createhomedir"));
             assert_no_staged_copies(dir.path());
