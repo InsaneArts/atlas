@@ -1860,6 +1860,11 @@ mod tests {
     /// socket file left behind, or none, is silent.
     #[test]
     fn a_helper_answers_only_while_its_socket_listens() {
+        if !crate::transaction_test::isolated(
+            "onboarding::tests::a_helper_answers_only_while_its_socket_listens",
+        ) {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("atlas.sock");
         let config = Config {
