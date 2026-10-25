@@ -636,13 +636,22 @@ impl Controller {
     /// entry is not one of ours. For display only; every pending generation
     /// still blocks control until verified recovery.
     pub fn unresolved(&self) -> Result<Vec<String>> {
+        self.pending_snapshot().map(|(unresolved, _)| unresolved)
+    }
+
+    /// Unresolved generations and the total from one locked marker read.
+    pub(crate) fn pending_snapshot(&self) -> Result<(Vec<String>, usize)> {
         // Under the marker lock a finishing mutation cannot clear its entry
         // between reading the marker and probing its claim.
         let _lock = self.lock_marker()?;
-        Ok(pending(&self.marker)?
+        let pending = pending(&self.marker)?;
+        let total = pending.len();
+        let unresolved = pending
             .into_iter()
             .filter(|generation| !self.in_progress(generation))
-            .collect())
+            .collect();
+
+        Ok((unresolved, total))
     }
 
     /// The claim file for a generation; only plain tokens name one.
@@ -986,6 +995,90 @@ impl Drop for ActionPermit {
 mod tests {
     use super::*;
 
+    fn pending_counts(controller: &Controller) -> (usize, usize, usize) {
+        let (pending, total) = crate::overview::pending(controller);
+        (total, pending.unresolved, pending.in_flight)
+    }
+
+    #[test]
+    fn reporting_pending_claims_never_settles_them_or_admits_control() {
+        let directory = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, directory.path());
+        let observer = Controller::at(505, directory.path());
+        let report = |expected| {
+            let before = fs::read(&controller.marker).ok();
+            assert_eq!(pending_counts(&observer), expected);
+            assert_eq!(fs::read(&controller.marker).ok(), before);
+        };
+
+        report((0, 0, 0));
+        let abandoned = controller.quarantine().unwrap();
+        let generation = abandoned.to_string();
+        report((1, 0, 1));
+        assert!(observer.unresolved().unwrap().is_empty());
+        assert_eq!(observer.acquire(false).unwrap_err().code, "uncertain");
+
+        drop(abandoned);
+        report((1, 1, 0));
+        assert_eq!(observer.unresolved().unwrap(), vec![generation.clone()]);
+        assert_eq!(observer.acquire(false).unwrap_err().code, "uncertain");
+
+        let working = controller.quarantine().unwrap();
+        report((2, 1, 1));
+        assert_eq!(observer.unresolved().unwrap(), vec![generation.clone()]);
+        controller.clear_if(&working).unwrap();
+        drop(working);
+        report((1, 1, 0));
+        assert_eq!(observer.pending().unwrap(), vec![generation]);
+        assert_eq!(observer.acquire(false).unwrap_err().code, "uncertain");
+
+        controller.clear().unwrap();
+        report((0, 0, 0));
+        assert!(observer.acquire(false).is_ok());
+    }
+
+    #[test]
+    fn reporting_empty_legacy_and_malformed_markers_preserves_their_contents() {
+        let directory = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, directory.path());
+        for (contents, generations) in [
+            ("[]", vec![]),
+            ("not JSON", vec!["legacy-unknown"]),
+            (
+                r#"["1234.legacy","5678.legacy"]"#,
+                vec!["1234.legacy", "5678.legacy"],
+            ),
+        ] {
+            fs::write(&controller.marker, contents).unwrap();
+            assert_eq!(
+                pending_counts(&controller),
+                (generations.len(), generations.len(), 0)
+            );
+            assert_eq!(controller.pending().unwrap(), generations);
+            assert_eq!(controller.unresolved().unwrap(), generations);
+            assert_eq!(fs::read_to_string(&controller.marker).unwrap(), contents);
+            assert_eq!(controller.acquire(false).unwrap_err().code, "uncertain");
+        }
+    }
+
+    #[test]
+    fn unreadable_markers_and_unopenable_locks_are_reported_as_unresolved() {
+        for marker_fails in [true, false] {
+            let directory = tempfile::tempdir().unwrap();
+            let controller = Controller::at(505, directory.path());
+            let blocked = if marker_fails {
+                &controller.marker
+            } else {
+                &controller.marker_lock
+            };
+            fs::create_dir(blocked).unwrap();
+            assert!(controller.pending().is_err());
+            assert!(controller.unresolved().is_err());
+            assert_eq!(pending_counts(&controller), (1, 1, 0));
+            assert!(blocked.is_dir());
+        }
+    }
+
     #[test]
     fn dropping_ownership_releases_control_while_a_duplicate_descriptor_stays_open() {
         if !crate::transaction_test::isolated(
@@ -1027,6 +1120,7 @@ mod tests {
         drop(pending);
         assert!(live.exists(), "the executor outlives its caller's claim");
         assert!(executor_running(&File::open(record).unwrap()));
+        assert_eq!(pending_counts(&controller), (1, 0, 1));
         assert_eq!(
             controller.acquire(true).unwrap_err().code,
             "busy",
