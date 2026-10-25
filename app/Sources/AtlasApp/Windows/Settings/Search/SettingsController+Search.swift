@@ -21,7 +21,6 @@ extension SettingsController {
   func search(_ query: String) {
     guard session.alert == nil, session.search.query != query else { return }
     session.reveal = nil
-    session.announcement = nil
     session.search.query = query
     session.search.selection = nil
     session.search.selection = state.search.selection
@@ -36,10 +35,7 @@ extension SettingsController {
     guard !search.results.isEmpty else { return }
     let index = search.results.firstIndex { $0.id == search.selection } ?? 0
     let next = min(max(index + step, 0), search.results.count - 1)
-    let result = search.results[next]
-    guard result.id != search.selection else { return }
-    session.search.selection = result.id
-    session.announcement = "\(result.title), \(result.breadcrumb)"
+    session.search.selection = search.results[next].id
   }
 
   /// Opens only a still-current result, clearing the query and requesting inert target focus.

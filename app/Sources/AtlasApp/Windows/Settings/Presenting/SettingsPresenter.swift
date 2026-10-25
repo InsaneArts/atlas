@@ -19,7 +19,6 @@ enum SettingsPresenter {
       canGoForward: snapshot.session.navigation.canGoForward
     )
     state.destination = snapshot.session.navigation.destination
-    state.announcement = snapshot.session.announcement
     return state
   }
 

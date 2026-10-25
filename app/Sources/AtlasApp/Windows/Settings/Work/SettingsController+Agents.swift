@@ -52,7 +52,6 @@ extension SettingsController {
     let installs = dependencies.installs
     guard !installs.isBusy else { return say(HelperWords.waitForAction, in: .agents, kind: .working) }
     say(nil, in: .agents)
-    session.announcement = nil
     session.connectFailures[id] = nil
     let outcome: Outcome?
     if let agent = AgentID(rawValue: id) {
@@ -68,7 +67,6 @@ extension SettingsController {
         .mapValues { SettingsAgentFailure(message: $0) }
       session.connectFailures.merge(failures) { _, newer in newer }
       failedAgents = Set(failures.keys)
-      announceAgentFailures(failedAgents)
     }
     await loadAgents(preservingFailures: failedAgents)
   }
@@ -78,7 +76,6 @@ extension SettingsController {
   /// - Parameter id: The displayed agent id.
   func disconnect(_ id: String) async {
     guard let choice = agents.choices.first(where: { $0.id.rawValue == id }), !choice.parts.isEmpty else { return }
-    session.announcement = nil
     session.connectFailures[id] = nil
     guard let outcome = await dependencies.installs.disconnect(id, parts: choice.parts) else { return }
     say(outcome.decode(AgentsChange.self)?.requiresRestart == true ? Words.claudeRestart : nil, in: .agents)
@@ -87,19 +84,8 @@ extension SettingsController {
         message: "Couldn't disconnect: " + (Self.connectFailures(outcome, asked: id)[id] ?? outcome.message),
         isDisconnect: true
       )
-      announceAgentFailures([id])
     }
     await loadAgents()
-  }
-
-  /// Announces only the agents whose explicit command just failed, using their row's name and explanation.
-  ///
-  /// - Parameter ids: The agents whose command failed.
-  private func announceAgentFailures(_ ids: Set<String>) {
-    session.announcement = SettingsPresenter.agents(snapshot).agents
-      .filter { ids.contains($0.id) }
-      .compactMap { row in row.problem.map { "\(row.title). \(Words.sentence($0))" } }
-      .joined(separator: " ")
   }
 
   /// Why a Connect did not work, by agent: each agent the command says failed, with why; else the agent asked for,
