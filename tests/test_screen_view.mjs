@@ -142,13 +142,147 @@ test("a result's screen comes from _meta, and a missing one dims the last", () =
 });
 
 test('a paused picture keeps its frame while the status moves on', () => {
-  const paused = { picture: 'paused', frame: { id: 'old' } };
+  const paused = {
+    picture: 'paused',
+    frame: { id: 'old' },
+    points: { width: 1440, height: 900 },
+  };
   const next = view.merge(paused, {
-    structuredContent: { status: { state: 'idle' } },
+    structuredContent: { status: { state: 'idle' }, points: { width: 900, height: 1440 } },
     _meta: { 'atlas/frame': { id: 'new' } },
   });
   assert.equal(next.frame.id, 'old');
   assert.equal(next.status.state, 'idle');
+  same(next.points, { width: 1440, height: 900 }, 'the dimensions belong to the paused picture');
+});
+
+test('taking control of a changed paused picture refuses clicks until the fresh picture is shown', async () => {
+  const nodes = new Map();
+  const listeners = new Map();
+  const messages = [];
+  const node = (selector) => {
+    if (nodes.has(selector)) return nodes.get(selector);
+    const events = new Map();
+    const attributes = new Map();
+    const element = {
+      style: {},
+      dataset: {},
+      classList: { contains: () => false, toggle() {}, add() {}, remove() {} },
+      addEventListener: (name, callback) => events.set(name, callback),
+      fire: (name, event = {}) => events.get(name)?.(event),
+      getAttribute: (name) => attributes.get(name),
+      setAttribute: (name, value) => attributes.set(name, value),
+      append(...children) {
+        this.firstChild = children[0];
+      },
+      replaceChildren(...children) {
+        this.firstChild = children[0];
+      },
+      focus() {},
+      getBoundingClientRect: () => ({
+        left: 0,
+        top: 0,
+        right: 100,
+        bottom: 100,
+        width: 100,
+        height: 100,
+      }),
+      set src(value) {
+        attributes.set('src', value);
+        this.complete = false;
+        this.naturalWidth = 0;
+      },
+      load() {
+        this.complete = true;
+        this.naturalWidth = 100;
+        this.currentSrc = attributes.get('src');
+        this.onload?.();
+      },
+    };
+    nodes.set(selector, element);
+    return element;
+  };
+  const parent = { postMessage: (message) => messages.push(message) };
+  vm.runInNewContext(source, {
+    document: {
+      body: node('body'),
+      querySelector: node,
+      querySelectorAll: () => [],
+      createElement: () => node(Symbol()),
+      addEventListener() {},
+    },
+    window: { parent, addEventListener: (name, callback) => listeners.set(name, callback) },
+    setTimeout() {},
+    clearTimeout() {},
+    setInterval() {},
+    clearInterval() {},
+  });
+  const receive = (message) =>
+    listeners.get('message')({ source: parent, data: { jsonrpc: '2.0', ...message } });
+  const result = (id, key, width, height, control = false) => ({
+    structuredContent: {
+      status: { state: control ? 'control' : 'idle' },
+      canControl: true,
+      control,
+      points: { width, height },
+    },
+    _meta: { 'atlas/frame': { id, key, mimeType: 'image/jpeg', data: id } },
+  });
+  const picture = node('[data-frame]');
+  await receive({
+    method: 'ui/notifications/tool-result',
+    params: result('old', 'old-key', 1000, 800),
+  });
+  picture.load();
+  node('[data-pause]').fire('click');
+  await receive({
+    method: 'ui/notifications/tool-result',
+    params: result('moved', 'moved-key', 800, 1000),
+  });
+  assert.equal(picture.getAttribute('src'), 'data:image/jpeg;base64,old');
+
+  const taking = node('[data-take]').fire('click');
+  const acquisition = messages.find((message) => message.params?.name === 'take_control');
+  await receive({ id: acquisition.id, result: result('fresh', 'fresh-key', 800, 1000, true) });
+  await taking;
+  const click = () =>
+    node('[data-screen]').fire('mousedown', {
+      button: 0,
+      clientX: 50,
+      clientY: 50,
+      preventDefault() {},
+    });
+  click();
+  const sent = () => messages.filter((message) => message.params?.name === 'send_input');
+  assert.equal(
+    sent().length,
+    0,
+    'the new source has not loaded, so the old picture cannot be clicked',
+  );
+  assert.equal(node('[data-keys]').disabled, true);
+  picture.load();
+  click();
+  assert.equal(sent().length, 1);
+  assert.equal(sent()[0].params.arguments.frame, 'fresh-key');
+  same(sent()[0].params.arguments.actions[0], {
+    type: 'pointer',
+    phase: 'down',
+    x: 400,
+    y: 500,
+    button: 'left',
+    count: 1,
+    modifiers: [],
+  });
+  listeners.get('mouseup')({ clientX: 50, clientY: 50 });
+  await receive({
+    method: 'ui/notifications/tool-result',
+    params: result('later', 'later-key', 1000, 800, true),
+  });
+  picture.load();
+  await receive({ id: sent()[0].id, result: { structuredContent: { control: true } } });
+  assert.equal(sent().length, 2);
+  assert.equal(sent()[1].params.arguments.frame, 'fresh-key', 'queued input keeps its observation');
+  assert.equal(sent()[1].params.arguments.actions[0].phase, 'up');
 });
 
 test('every result says whether this app may resume and control, and whether control is ours', () => {

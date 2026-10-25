@@ -382,6 +382,83 @@ fn held(lease: &str, kept: Instant) -> Held {
 }
 
 #[tokio::test]
+async fn taking_control_returns_its_picture_and_input_keeps_the_displayed_frames_key() {
+    use axum::{Json, Router, routing::get, routing::post};
+
+    let dir = tempfile::tempdir().unwrap();
+    let server = server(dir.path());
+    let png = crate::native::capture::sample_png(640, 360);
+    let expected = server.frame_of(png.clone()).await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/viewer/", listener.local_addr().unwrap());
+    let received = Arc::new(Mutex::new(Value::Null));
+    let input = received.clone();
+    let app = Router::new()
+        .route(
+            "/viewer/frame.png",
+            get(move || {
+                let png = png.clone();
+                async move {
+                    (
+                        [
+                            ("x-frame-id", "shown"),
+                            ("x-display-width", "1280"),
+                            ("x-display-height", "720"),
+                        ],
+                        png,
+                    )
+                }
+            }),
+        )
+        .route(
+            "/viewer/control/renew",
+            post(|Json(body): Json<Value>| async move {
+                assert_eq!(body["frame"], "shown");
+                Json(json!({"ok": true}))
+            }),
+        )
+        .route(
+            "/viewer/input",
+            post(move |Json(body): Json<Value>| async move {
+                *input.lock().await = body;
+                Json(json!({"ok": true}))
+            }),
+        );
+    let serving = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    *server.held.lock().await = Some(Held {
+        url,
+        ..held("ours", Instant::now())
+    });
+
+    let taken = server.take_control().await.unwrap();
+    let picture = &taken["_meta"][FRAME_META];
+    assert_eq!(picture["id"], expected["id"]);
+    assert_eq!(picture["data"], expected["data"]);
+    assert_eq!(picture["key"], "shown");
+    assert_eq!(
+        taken["structuredContent"]["points"],
+        json!({"width": 1280.0, "height": 720.0})
+    );
+
+    *server.shared.lock().await = Some(Seen {
+        key: "unseen".to_owned(),
+        at: Instant::now(),
+    });
+    let click = json!([{"type": "pointer", "phase": "down", "x": 1, "y": 1}]);
+    server.send_input(&picture["key"], &click).await.unwrap();
+    assert_eq!(received.lock().await["frame"], "shown");
+    assert_eq!(
+        server
+            .send_input(&Value::Null, &click)
+            .await
+            .unwrap_err()
+            .code,
+        "stale-frame"
+    );
+    serving.abort();
+}
+
+#[tokio::test]
 async fn a_late_failure_on_older_control_never_ends_control_taken_since() {
     let dir = tempfile::tempdir().unwrap();
     let server = server(dir.path());

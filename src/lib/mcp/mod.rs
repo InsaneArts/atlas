@@ -307,7 +307,10 @@ impl Server {
             "take_control" => self.take_control().await,
             "keep_control" => self.keep_control().await,
             "give_back" => self.give_back().await,
-            "send_input" => self.send_input(&arguments["actions"]).await,
+            "send_input" => {
+                self.send_input(&arguments["frame"], &arguments["actions"])
+                    .await
+            }
             "activity" => self.activity().await,
             "helper_apps" => self.helper_apps().await,
             "screenshots" => self.screenshots().await,
@@ -412,10 +415,14 @@ impl Server {
         result["structuredContent"]["unchanged"] = json!(unchanged);
         result["structuredContent"]["screen"] = json!(frame.is_some());
         // Where the person's clicks land: display points, as input takes.
-        if let Some((_, (width, height))) = shared {
+        if let Some((_, (width, height))) = &shared {
             result["structuredContent"]["points"] = json!({"width": width, "height": height});
         }
-        if let Some(frame) = frame.filter(|_| !unchanged) {
+        let controlling = self.controlling().await;
+        if let Some(mut frame) = frame.filter(|_| !unchanged || controlling) {
+            if let Some((key, _)) = shared {
+                frame["key"] = json!(key);
+            }
             result["_meta"] = json!({ FRAME_META: frame });
         }
         Ok(result)
@@ -517,6 +524,20 @@ impl Server {
         // The slow steps run outside the lock, so a status or Give Back
         // never waits on them.
         let current = self.held.lock().await.clone();
+        let url = match &current {
+            Some(current) if current.kept.elapsed() < LEASE => current.url.clone(),
+            _ => self.viewer(true).await?,
+        };
+        let address = url.clone();
+        let frame = tokio::task::spawn_blocking(move || {
+            crate::viewer::fetch_frame(&address, FRAME_DEADLINE, FRAME_LIMIT)
+        })
+        .await
+        .map_err(|_| Error::new("menubar", "Atlas's menu bar didn't answer"))??;
+        *self.shared.lock().await = Some(Seen {
+            key: frame.key.clone(),
+            at: Instant::now(),
+        });
         let kept = match &current {
             Some(current) if current.kept.elapsed() < LEASE => {
                 let renewed = self.renew(current).await;
@@ -531,9 +552,7 @@ impl Server {
                 self.forget(&old).await;
                 release(&old).await;
             }
-            let url = self.viewer(true).await?;
-            let key = self.key(&url, true).await?;
-            let reply = post(&url, "control/acquire", json!({"frame": key})).await?;
+            let reply = post(&url, "control/acquire", json!({"frame": frame.key})).await?;
             let lease = reply["lease"]
                 .as_str()
                 .ok_or_else(|| Error::new("menubar", "The menu bar gave no control"))?;
@@ -554,7 +573,16 @@ impl Server {
         }
 
         let status = self.status().await?;
-        Ok(said(&status))
+        let mut result = said(&status);
+        let (width, height) = frame.display;
+        result["structuredContent"]["points"] = json!({"width": width, "height": height});
+        let mut picture = self
+            .frame_of(frame.png)
+            .await
+            .ok_or_else(|| Error::new("capture", "The helper's screen couldn't be prepared"))?;
+        picture["key"] = json!(frame.key);
+        result["_meta"] = json!({ FRAME_META: picture });
+        Ok(result)
     }
 
     /// Keep the person's control a while longer: the view says so every
@@ -599,10 +627,15 @@ impl Server {
     }
 
     /// Send the person's input to the helper while they have control.
-    async fn send_input(&self, actions: &Value) -> Result<Value> {
+    async fn send_input(&self, frame: &Value, actions: &Value) -> Result<Value> {
         let actions = checked(actions)?;
         let held = self.holding().await?;
-        let key = self.key(&held.url, false).await?;
+        let key = frame
+            .as_str()
+            .filter(|key| !key.is_empty())
+            .ok_or_else(|| {
+                Error::new("stale-frame", "Wait for a fresh frame before sending input")
+            })?;
         let body = json!({"lease": held.lease, "frame": key, "actions": actions});
         let sent = post(&held.url, "input", body).await;
         self.settle(&held, &sent, false).await;
@@ -941,9 +974,10 @@ fn tools() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
+                    "frame": {"type": "string"},
                     "actions": {"type": "array", "items": {"type": "object"}, "maxItems": ACTIONS},
                 },
-                "required": ["actions"],
+                "required": ["frame", "actions"],
                 "additionalProperties": false,
             },
             "annotations": {"readOnlyHint": false, "openWorldHint": false},
