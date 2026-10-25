@@ -21,7 +21,7 @@ in an issue.
 You need a Mac with:
 
 - macOS 14 or later
-- Xcode 16 or later (Swift 6)
+- Xcode 26 or later (Swift 6.2)
 - Rust (`rustup`; `rust-toolchain.toml` picks the version)
 - Node 24
 
@@ -46,7 +46,7 @@ To try your build against a helper, set Atlas up once with the released app
 | `src/lib/native`      | capture, accessibility, input and the held-input journal      |
 | `src/lib/environment` | copies into the helper and their rollback                     |
 | `src/lib/setup`       | the helper's launchd jobs and their repair                    |
-| `app/`                | Atlas.app in Swift 6: AtlasKit, AtlasUI and AtlasApp          |
+| `app/`                | Atlas.app in Swift 6: AtlasApp and its `Packages/`            |
 | `agents/`             | the Claude Code and Codex plugin                              |
 | `scripts/`            | live checks against a real helper                             |
 | `tests/`              | integration tests and the native test fixture                 |
@@ -62,7 +62,7 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 npm run format:check
 npm test
-cd app && swift test && swift format lint -rs Sources Tests
+node scripts/check-swift.mjs   # swift test and swift format lint, app/ and app/Packages/*
 ```
 
 Passing tests are not enough for anything that changes input, windows,
@@ -93,10 +93,12 @@ These hold everywhere; a change that needs to break one needs an issue first.
 - **`unsafe` is denied crate-wide.** Prefer safe bindings (`nix`, `objc2`).
   FFI without one lives in a module or function marked `allow(unsafe_code)`
   with its reason, and every `unsafe` block has a `SAFETY:` note.
-- **Swift** follows `app/`'s layout: AtlasKit holds rules and the service
-  client, AtlasUI holds views and never imports AtlasKit, AtlasApp holds the
-  AppKit windows. Use the design tokens, one type per file, and name tests as
-  sentences.
+- **Swift** follows `app/`'s layout: the domain packages under `app/Packages`
+  (AtlasService, AtlasCommands, AtlasControl, AtlasStatus, AtlasOnboarding)
+  hold rules and the service client, AtlasUI holds views and never imports
+  them, AtlasApp holds the AppKit windows. Use the design tokens, one type per
+  file, a `///` line on every declaration other code can reach, and name tests
+  as sentences.
 - **Plain words** in every message a person or agent reads: short, specific,
   no jargon.
 
@@ -108,8 +110,7 @@ repository should read it first.
 - Keep each pull request to one change, with tests where they make sense.
 - Write commit subjects as one scoped line in the present tense, for example
   `fix(viewer): release held keys when control ends`. No body is needed.
-- Keep investigation notes, run logs and local config (`docs/`, `runs/`,
-  `atlas.local.toml`) out of the commit.
+- Keep `docs/`, `runs/` and local config (`atlas.local.toml`) out of the commit.
 - Fill in the pull request template, including how you tested on screen.
 
 ## License

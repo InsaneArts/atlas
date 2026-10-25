@@ -15,6 +15,7 @@ pub enum View {
     Doctor {
         verbose: bool,
     },
+    LoginTiming,
     Status,
     Config,
     Capture,
@@ -77,6 +78,7 @@ impl Rendered {
 pub fn render(view: &View, value: &Value) -> Rendered {
     match view {
         View::Doctor { verbose } => Rendered::out(observe::doctor(value, *verbose)),
+        View::LoginTiming => Rendered::out(observe::login_timing(value)),
         View::Status => observe::status(value),
         View::Config => Rendered::out(observe::config(value)),
         View::Capture => failed(value).unwrap_or_else(|| Rendered::out(observe::capture(value))),

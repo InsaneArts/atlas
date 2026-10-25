@@ -13,13 +13,16 @@ fn policy(policy: NSApplicationActivationPolicy) -> &'static str {
     }
 }
 
-/// The running applications, in the order the system lists them.
-/// Called on worker threads, so each call drains its own autorelease pool.
+/// The running applications, in the order the system lists them, without
+/// those that have no process (macOS may still list one that quit, its
+/// process ID -1). Called on worker threads, so each call drains its own
+/// autorelease pool.
 pub fn running() -> Vec<Value> {
     objc2::rc::autoreleasepool(|_| {
         NSWorkspace::sharedWorkspace()
             .runningApplications()
             .iter()
+            .filter(|app| app.processIdentifier() > 0)
             .map(|app| {
                 json!({
                     "name": app.localizedName().map(|name| name.to_string()),

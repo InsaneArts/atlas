@@ -6,6 +6,8 @@ struct SettingsNotice: Equatable {
   var tab: SettingsTab
   /// The line.
   var text: String
-  /// Whether it says something went wrong or could not run.
-  var isProblem = false
+  /// How the line reads: quiet, waiting on something that runs, or a problem.
+  var kind = SettingsNote.Kind.quiet
+  /// Whether Check Again said it, so it shows under "Ready to act" rather than under the pane's last group.
+  var fromCheck = false
 }

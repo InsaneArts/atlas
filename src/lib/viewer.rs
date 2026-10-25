@@ -607,7 +607,7 @@ impl Viewer {
                 all: false,
             };
             let windows = crate::agent::list(&client, &filter).await?;
-            Ok::<_, Error>(listed_apps(&apps["apps"], &windows["windows"]))
+            listed_apps(&apps["apps"], &windows["windows"])
         };
         let mut apps = tokio::time::timeout(READ_DEADLINE, read)
             .await
@@ -1537,13 +1537,18 @@ pub(crate) fn post_local(url: &str, route: &str, body: &Value) -> Result<Value> 
             .as_str()
             .and_then(crate::error::code)
             .unwrap_or("menubar");
-        return Err(Error::new(
+        let error = Error::new(
             code,
             reply["error"]
                 .as_str()
                 .unwrap_or("The menu bar's viewer refused")
                 .to_owned(),
-        ));
+        );
+        return Err(if reply["uncertain"] == true {
+            error.uncertain()
+        } else {
+            error
+        });
     }
 
     Ok(reply)
@@ -1869,8 +1874,8 @@ fn answered(reply: Value) -> Result<Value> {
 
 /// The helper's regular apps as the app lists them, front to back, each
 /// with its windows front to back. A window's id is its window number.
-fn listed_apps(apps: &Value, windows: &Value) -> Vec<Value> {
-    helper_info::open_apps(apps, windows)
+fn listed_apps(apps: &Value, windows: &Value) -> Result<Vec<Value>> {
+    Ok(helper_info::open_apps(apps, windows)?
         .into_iter()
         .map(|app| {
             json!({
@@ -1881,7 +1886,7 @@ fn listed_apps(apps: &Value, windows: &Value) -> Vec<Value> {
                 "windows": app["windows"],
             })
         })
-        .collect()
+        .collect())
 }
 
 /// A reply of `value` as JSON, with status `code`.
@@ -2133,6 +2138,45 @@ mod tests {
         assert_eq!(answering_off(&url).await, Some(Some(std::process::id())));
 
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn post_local_preserves_the_code_and_uncertainty_of_an_input_refusal() {
+        for uncertain in [true, false] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/", listener.local_addr().unwrap());
+            let app = axum::Router::new().route(
+                "/input",
+                axum::routing::post(move || async move {
+                    json_response(
+                        409,
+                        json!({
+                            "ok": false,
+                            "code": "session-changed",
+                            "error": "The session changed during input",
+                            "uncertain": uncertain,
+                        }),
+                    )
+                }),
+            );
+            let server = tokio::spawn(async move {
+                axum::serve(listener, app).await.unwrap();
+            });
+            let error = tokio::task::spawn_blocking(move || {
+                post_local(&url, "input", &json!({"actions": []}))
+            })
+            .await
+            .unwrap()
+            .unwrap_err();
+            server.abort();
+
+            assert_eq!(error.code, "session-changed");
+            assert_eq!(error.error, "The session changed during input");
+            assert_eq!(error.uncertain, uncertain);
+            let reported = serde_json::to_value(error).unwrap();
+            assert_eq!(reported["code"], "session-changed");
+            assert_eq!(reported["uncertain"], uncertain);
+        }
     }
 
     #[tokio::test]
@@ -2833,7 +2877,9 @@ mod tests {
                 assert!(started.elapsed() < FIRST_REQUEST + Duration::from_secs(2));
             }
 
-            std::thread::sleep(FIRST_REQUEST + Duration::from_millis(500) - started.elapsed());
+            std::thread::sleep(
+                (FIRST_REQUEST + Duration::from_millis(500)).saturating_sub(started.elapsed()),
+            );
             let request = format!("GET {prefix} HTTP/1.1\r\nHost: {authority}\r\n\r\n");
             named.write_all(request.as_bytes()).unwrap();
             reply(&mut named)
@@ -3021,7 +3067,7 @@ mod tests {
             window(7, 3, "Starter"),
         ]);
 
-        let listed = listed_apps(&apps, &windows);
+        let listed = listed_apps(&apps, &windows).unwrap();
         let order = listed
             .iter()
             .map(|app| app["name"].as_str().unwrap())

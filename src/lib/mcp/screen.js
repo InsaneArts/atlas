@@ -148,11 +148,12 @@ function merge(current, result) {
   if (typeof structured.canResume === 'boolean') next.canResume = structured.canResume;
   if (typeof structured.canControl === 'boolean') next.canControl = structured.canControl;
   if (typeof structured.control === 'boolean') next.ours = structured.control;
-  if (structured.points) next.points = structured.points;
+  if (next.ours && !current.ours) next.displayed = null;
   // A paused picture stays, except while the person controls the helper.
-  const paused = current.picture === 'paused' && current.frame && !current.ours;
+  const paused = current.picture === 'paused' && current.frame && !next.ours;
   if (frame && !paused) {
     next.frame = frame;
+    next.points = structured.points || null;
     next.stale = false;
   } else if (structured.unchanged) {
     next.stale = false;
@@ -160,6 +161,13 @@ function merge(current, result) {
     next.stale = true;
   }
   return next;
+}
+
+/** The observation input may name, once its picture is on screen. */
+function inputFrame(model) {
+  return model.ours && !model.stale && model.points && model.displayed === model.frame
+    ? model.frame && model.frame.key
+    : null;
 }
 
 /** A row as the activity reads it: the agent's own words, or the person's,
@@ -471,8 +479,22 @@ if (typeof document !== 'undefined') {
     const image = one('[data-frame]');
     const empty = one('[data-empty]');
     if (model.frame) {
-      const source = `data:${model.frame.mimeType};base64,${model.frame.data}`;
+      const frame = model.frame;
+      const source = `data:${frame.mimeType};base64,${frame.data}`;
+      const loaded = () => {
+        if (
+          model.frame === frame &&
+          image.currentSrc === source &&
+          image.complete &&
+          image.naturalWidth > 0
+        ) {
+          model.displayed = frame;
+          showButtons();
+        }
+      };
+      image.onload = loaded;
       if (image.getAttribute('src') !== source) image.src = source;
+      else loaded();
       image.hidden = false;
       image.classList.toggle('dim', model.stale || model.picture === 'paused');
       empty.hidden = true;
@@ -536,7 +558,7 @@ if (typeof document !== 'undefined') {
     takeButton.disabled = busy || !control.enabled;
 
     const keys = one('[data-keys]');
-    keys.disabled = !model.ours;
+    keys.disabled = !inputFrame(model);
     keys.hidden = !model.canControl;
 
     const paused = model.picture === 'paused';
@@ -759,6 +781,7 @@ if (typeof document !== 'undefined') {
   const giveBack = async () => {
     taking += 1;
     queue.length = 0;
+    releasePointer(true);
     epoch += 1;
     try {
       const result = await call('give_back', {});
@@ -785,18 +808,23 @@ if (typeof document !== 'undefined') {
   const queue = [];
   let sending = false;
   const enqueue = (...actions) => {
-    if (!model.ours) return;
-    queue.push(...actions);
+    const frame = inputFrame(model);
+    if (!frame) return;
+    queue.push(...actions.map((action) => ({ frame, action })));
     pump();
   };
   const pump = async () => {
     if (sending || !queue.length || !model.ours) return;
     sending = true;
-    const waiting = batched(queue.splice(0));
+    const frame = queue[0].frame;
+    const end = queue.findIndex((item) => item.frame !== frame);
+    const waiting = batched(
+      queue.splice(0, end < 0 ? queue.length : end).map((item) => item.action),
+    );
     const actions = waiting.slice(0, portion(waiting));
-    queue.unshift(...waiting.slice(actions.length));
+    queue.unshift(...waiting.slice(actions.length).map((action) => ({ frame, action })));
     try {
-      const result = await call('send_input', { actions });
+      const result = await call('send_input', { frame, actions });
       if (result && result.isError) {
         const wasOurs = model.ours;
         model = merge(model, result);
@@ -819,14 +847,31 @@ if (typeof document !== 'undefined') {
   const imageRect = () => one('[data-frame]').getBoundingClientRect();
   let pressed = null;
   let pressedAt = null;
+  let pressedFrame = null;
   let lastMove = 0;
+
+  const releasePointer = (immediate = false) => {
+    if (!pressed) return;
+    const frame = pressedFrame;
+    const action = { type: 'pointer', phase: 'up', ...pressedAt, ...pressed };
+    pressed = null;
+    if (!model.ours) return;
+    if (immediate) {
+      // Give Back never waits for input already answering.
+      call('send_input', { frame, actions: [action] }).catch(() => {});
+    } else {
+      queue.push({ frame, action });
+      pump();
+    }
+  };
 
   screen.addEventListener('contextmenu', (event) => {
     if (model.ours) event.preventDefault();
   });
   screen.addEventListener('mousedown', (event) => {
     // The main and secondary buttons; others have nothing to press there.
-    if (!model.ours || (event.button !== 0 && event.button !== 2)) return;
+    const frame = inputFrame(model);
+    if (!frame || (event.button !== 0 && event.button !== 2)) return;
     const point = pointAt(imageRect(), event.clientX, event.clientY, model.points);
     if (!point) return;
     event.preventDefault();
@@ -838,13 +883,15 @@ if (typeof document !== 'undefined') {
     const held = modifiers(event).filter((name) => !(button === 'right' && name === 'ctrl'));
     const count = Math.max(1, Math.min(3, event.detail || 1));
     // A press while another is held releases that one first.
-    if (pressed && pressedAt) enqueue({ type: 'pointer', phase: 'up', ...pressedAt, ...pressed });
+    releasePointer();
     pressed = { button, count, modifiers: held };
     pressedAt = point;
+    pressedFrame = frame;
     enqueue({ type: 'pointer', phase: 'down', ...point, ...pressed });
   });
   window.addEventListener('mousemove', (event) => {
-    if (!pressed || !model.ours) return;
+    const frame = inputFrame(model);
+    if (!pressed || !frame) return;
     const now = Date.now();
     if (now - lastMove < 50) return;
     lastMove = now;
@@ -854,25 +901,28 @@ if (typeof document !== 'undefined') {
     const point = pointAt(rect, x, y, model.points);
     if (point) {
       pressedAt = point;
+      pressedFrame = frame;
       enqueue({ type: 'pointer', phase: 'move', ...point, ...pressed });
     }
   });
   window.addEventListener('mouseup', (event) => {
     if (!pressed) return;
-    const rect = imageRect();
-    const x = Math.min(Math.max(event.clientX, rect.left), rect.right);
-    const y = Math.min(Math.max(event.clientY, rect.top), rect.bottom);
-    const point = pointAt(rect, x, y, model.points);
-    if (point) enqueue({ type: 'pointer', phase: 'up', ...point, ...pressed });
-    pressed = null;
+    const frame = inputFrame(model);
+    if (frame) {
+      const rect = imageRect();
+      const x = Math.min(Math.max(event.clientX, rect.left), rect.right);
+      const y = Math.min(Math.max(event.clientY, rect.top), rect.bottom);
+      const point = pointAt(rect, x, y, model.points);
+      if (point) {
+        pressedAt = point;
+        pressedFrame = frame;
+      }
+    }
+    releasePointer();
   });
   // A press whose release never came here (the window lost focus) is
   // released where it was, so no button stays down in the helper.
-  window.addEventListener('blur', () => {
-    if (!pressed || !pressedAt) return;
-    enqueue({ type: 'pointer', phase: 'up', ...pressedAt, ...pressed });
-    pressed = null;
-  });
+  window.addEventListener('blur', () => releasePointer());
 
   // Scrolling gathers for a moment, then goes as whole lines in one action.
   let wheelKept = { x: 0, y: 0 };
@@ -880,7 +930,8 @@ if (typeof document !== 'undefined') {
   screen.addEventListener(
     'wheel',
     (event) => {
-      if (!model.ours) return;
+      const frame = inputFrame(model);
+      if (!frame) return;
       const point = pointAt(imageRect(), event.clientX, event.clientY, model.points);
       if (!point) return;
       event.preventDefault();
@@ -894,7 +945,8 @@ if (typeof document !== 'undefined') {
         const most = (value) => Math.max(-100, Math.min(100, value));
         const { dx, dy, at } = wheel;
         Object.assign(wheel, { dx: 0, dy: 0, timer: null });
-        if (at && (dx || dy)) enqueue({ type: 'scroll', ...at, dx: most(dx), dy: most(dy) });
+        if (at && (dx || dy) && frame === inputFrame(model))
+          enqueue({ type: 'scroll', ...at, dx: most(dx), dy: most(dy) });
       }, 60);
     },
     { passive: false },

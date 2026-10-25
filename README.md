@@ -37,7 +37,9 @@ notarization, puts Atlas.app in /Applications and links `atlas` into
 `~/.local/bin`. Atlas then opens and walks you through the rest in one window:
 choose or create the helper account, switch to it once to allow Atlas there,
 and switch back. `atlas init` does the same in a terminal, and both are safe to
-run again. Atlas never stores a password or changes privacy settings for you.
+run again. Setting up asks for your administrator password once, in macOS's own
+dialog, to create the helper account and get it ready; Atlas doesn't keep it,
+and never stores a password or changes privacy settings for you.
 
 ```sh
 atlas update                 # checks the signature, then swaps the app in place
@@ -46,9 +48,16 @@ atlas uninstall              # keeps the helper account
 
 ### Teach your agents
 
-Setup connects Claude Code and Codex, so every session has the Atlas skill
-(later: `atlas agents install`). To make agents use it whenever they change
-something you can see, add a short section to each project:
+Setup connects Claude and Codex; `atlas agents install` does it later.
+Claude has one row for Claude Code and the Claude app, connecting whichever
+are installed. It reads Connected only when both installed parts are connected.
+The CLI keeps separate `claude` and `claude-app` ids in JSON; use
+`atlas agents install --claude --app` or `atlas agents remove --claude --app`
+to change both together.
+Claude Code and Codex get the Atlas skill and, while Atlas is ready, a reminder
+to check on-screen changes in the helper (Codex asks you to trust the plugin's
+hooks once). The Claude app gets Atlas's MCP connection for status and viewing
+the screen. For any other agent, add a short section to the project instead:
 
 ```sh
 cd your-project
@@ -97,8 +106,9 @@ atlas close --app Habits                       # quits it and removes Atlas's co
 ```
 
 Every command prints JSON when its output is not a terminal and exits non-zero
-on failure, with `{"ok": false, "code", "error", "uncertain"}` on standard
-error. `atlas agent-guide` prints the full guide agents read.
+on failure. A failed action's result is on stdout; command or connection errors
+are on stderr. On a non-zero exit, read both.
+`atlas agent-guide` prints the full guide agents read.
 
 | | Commands |
 | --- | --- |

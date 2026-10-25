@@ -426,7 +426,7 @@ fn copies_of(root: &Path, app: &str) -> Vec<PathBuf> {
 
 /// The copy folders under `root`, when it is Atlas's own private folder.
 fn folders(root: &Path) -> Vec<PathBuf> {
-    if !private_folder(root) {
+    if root_if_owned_in(root).is_none() {
         return Vec::new();
     }
 
@@ -520,10 +520,13 @@ fn prune_in(root: &Path, running: &[&str]) {
     }
 }
 
-/// ROOT itself, for uninstall, when it is Atlas's own folder.
+/// ROOT itself, for uninstall, when it and its parent are Atlas's own folders.
 pub fn root_if_owned() -> Option<PathBuf> {
-    let root = PathBuf::from(ROOT);
-    private_folder(&root).then_some(root)
+    root_if_owned_in(Path::new(ROOT))
+}
+
+fn root_if_owned_in(root: &Path) -> Option<PathBuf> {
+    (root.parent().is_some_and(private_folder) && private_folder(root)).then(|| root.to_path_buf())
 }
 
 #[cfg(test)]
@@ -544,6 +547,52 @@ mod tests {
         std::os::unix::fs::symlink(&folder, &link).unwrap();
         assert!(!private_folder(&link), "a link is never followed");
         assert!(!private_folder(&dir.path().join("missing")));
+    }
+
+    #[test]
+    fn a_symlinked_parent_keeps_personal_files_out_of_cleanup() {
+        let shared = tempfile::tempdir().unwrap();
+        let projects = tempfile::tempdir().unwrap();
+        let open = projects.path().join("Open");
+        fs::DirBuilder::new().mode(0o700).create(&open).unwrap();
+        let copy = copy_folder(&open, "a", "note.txt");
+        age(&copy, 8);
+        let atlas = shared.path().join("Atlas");
+        std::os::unix::fs::symlink(projects.path(), &atlas).unwrap();
+        let root = atlas.join("Open");
+        assert!(private_folder(&root), "Open alone passes the checks");
+
+        assert!(remove_copies_in(&root, "note", &[]).is_empty());
+        prune_in(&root, &[]);
+        let owned = root_if_owned_in(&root);
+        if let Some(root) = &owned {
+            fs::remove_dir_all(root).unwrap();
+        }
+        assert!(owned.is_none(), "uninstall must refuse the root");
+        assert_eq!(fs::read_to_string(copy.join("note.txt")).unwrap(), "hello");
+    }
+
+    #[test]
+    fn a_real_private_parent_allows_cleanup() {
+        let shared = tempfile::tempdir().unwrap();
+        let atlas = shared.path().join("Atlas");
+        fs::DirBuilder::new().mode(0o700).create(&atlas).unwrap();
+        let root = atlas.join("Open");
+        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        let closed = copy_folder(&root, "a", "note.txt");
+        let old = copy_folder(&root, "b", "old.txt");
+        age(&old, 8);
+
+        assert_eq!(root_if_owned_in(&root), Some(root.clone()));
+        assert_eq!(
+            remove_copies_in(&root, "note", &[]),
+            [closed.to_string_lossy().into_owned()]
+        );
+        prune_in(&root, &[]);
+        assert!(!closed.exists());
+        assert!(!old.exists());
+        fs::remove_dir_all(root_if_owned_in(&root).unwrap()).unwrap();
+        assert!(!root.exists());
     }
 
     #[test]

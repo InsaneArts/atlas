@@ -1,152 +1,58 @@
-import AtlasKit
+import AtlasService
 import AtlasUI
-import Foundation
 import Observation
 
-/// The main window's one observed object: what the last reading showed, what this window is doing (the tab, watching
-/// or paused, holding control, the alert asked), and the person's choices. Pictures stay in memory only. Every effect
-/// is a request to the viewer service or one of the helper's commands, which own the helper's safety;
-/// ``ViewerPresenter`` decides what the window shows. Its parts are in `ViewerController+Control`, `+Input`,
-/// `+InputSink`, `+Reading`, `+Tabs`, `+Picture`, `+Alert`, and for the other tabs `+Panes`, `+Activity`, `+Apps`,
-/// `+Shots` and `+Thumbnails`.
-@MainActor
+/// The main window's one observed object: what this window is doing (the tab, watching or paused, the alert asked)
+/// and Details, composed with its three parts, each with state of its own: ``control`` (the lease, its heartbeat and
+/// the input that belongs to it), ``readingLoop`` (the status and the picture) and ``panesModel`` (the Activity, Apps
+/// and Screenshots tabs). Pictures stay in memory only. Every effect is a request to the viewer service or one of the
+/// helper's commands, which own the helper's safety; ``ViewerPresenter`` decides what the window shows from
+/// ``snapshot``. Its own parts are in `ViewerController+Tabs`, `+Picture`, `+Alert` and `+Details`.
 @Observable
 final class ViewerController {
-  /// Between pictures while holding control: 500 ms, so the person sees what their input did at once.
-  static let controlEvery: Duration = .milliseconds(500)
-  /// How often Details' age of the picture is read again while pictures arrive: 1 s, as it reads in whole seconds.
-  static let tickEvery: Duration = .seconds(1)
-  /// One heartbeat tick: 500 ms, so a stale picture ends control within half a second; the lease is renewed every
-  /// ``renewEvery`` ticks.
-  static let heartbeatEvery: Duration = .milliseconds(500)
-  /// The pause between readings in the app: a sleep, which cancelling ends early.
-  static let sleep: @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
-
-  /// What the last reading showed. Written only by the controller's own files; the shells call its methods.
-  var reading = ViewerReading()
   /// What this window is doing. Written only by the controller's own files; the shells call its methods.
   var session = ViewerSession()
-  /// What the Activity, Apps and Screenshots tabs hold. Written only by the controller's own files.
-  var panes = ViewerPanes()
-  /// Counts the clock's readings. Only ``newestPicture`` reads it, so each tick redraws Details' age row alone.
-  private(set) var ticks = 0
-
-  /// How often a picture is read while watching.
-  private(set) var rate = ViewerPictureRate.live {
+  /// Whether the person asked for Details, and what it read. Written only by the controller's own files; whether it
+  /// shows is saved with each change.
+  var details = ViewerDetailsFacts() {
     didSet {
-      preferences.saveRate(rate.seconds)
-      refresh()
+      if details.shown != oldValue.shown { dependencies.preferences.saveDetails(details.shown) }
     }
   }
-  /// Whether the person asked for Details.
-  private(set) var detailsShown = false {
-    didSet { preferences.saveDetails(detailsShown) }
-  }
-  /// The agents connected to Atlas, as last read for Details; nil before they are read, or when they could not be.
-  var agents: [AgentID]?
-  /// When the helper's account logged in, as last read for Details; nil when unknown.
-  var loggedInAt: Date?
-
-  /// The viewer service it reads and asks.
-  @ObservationIgnored let service: any ViewerService
-  /// The helper's own commands, shared with the panel.
-  @ObservationIgnored let actions: HelperActions
-  /// The app's control work not yet answered, shared with the helper's commands and any later window.
-  @ObservationIgnored var barrier: ControlBarrier { actions.barrier }
-  /// Where the rate and Details are kept between windows.
-  @ObservationIgnored let preferences: ViewerPreferences
-  /// The time now, in seconds of uptime, which never steps back.
-  @ObservationIgnored let clock: @MainActor () -> TimeInterval
-  /// One heartbeat tick; the lease is renewed every ``renewEvery`` ticks.
-  @ObservationIgnored let heartbeatInterval: Duration
-  /// The pause between readings, and before Take Control asks again, which ends early when cancelled.
-  @ObservationIgnored let nap: @Sendable (Duration) async -> Void
-  /// The Mac's double-click speed, in seconds.
-  @ObservationIgnored let doubleClickInterval: @MainActor () -> TimeInterval
-  /// Where a copied or saved picture goes.
-  @ObservationIgnored let pictures: PictureOutlet
-  /// Locks the screen so the person can log in to the helper; nil when the app cannot.
-  @ObservationIgnored let switchToHelper: (@MainActor () async -> String)?
-  /// Reads the agents connected to Atlas, for Details.
-  @ObservationIgnored let connectedAgents: @MainActor () async -> [AgentID]?
-  /// Reads when an account logged in, for Details.
-  @ObservationIgnored let loginTime: @MainActor (String) -> Date?
-  /// The date and time now, which the tabs tell times and days by.
-  @ObservationIgnored let wallClock: @MainActor () -> Date
-  /// Where a copied screenshot goes, and how its file is shown.
-  @ObservationIgnored let shotOutlet: ShotOutlet
-  /// The time Details last read, in seconds of uptime: refreshed each ``tickEvery`` while pictures arrive.
-  /// Unobserved: the window redraws with each reading, and Details' age row follows ``ticks``.
-  @ObservationIgnored private(set) var now: TimeInterval = 0
-  /// Whether readings run: the window is on screen and not paused.
-  @ObservationIgnored var watching = false
   /// The window is on screen.
-  @ObservationIgnored var shown = false
-  /// The window takes the keyboard.
-  @ObservationIgnored var focused = true
+  private(set) var shown = false
+  /// What it reaches outside itself, which its parts are made from.
+  @ObservationIgnored let dependencies: ViewerDependencies
+  /// The moment a Recover that worked holds before its alert closes, which Done ends at once.
+  @ObservationIgnored let doneHold = DoneHold()
+  /// The lease, its heartbeat and release, and the input that belongs to it.
+  @ObservationIgnored private(set) lazy var control = ViewerControl(viewer: self, dependencies: dependencies)
+  /// The status and the picture, read one at a time while the window shows, and the picture's rate.
+  @ObservationIgnored private(set) lazy var readingLoop = ViewerReadingLoop(viewer: self, dependencies: dependencies)
+  /// The Activity, Apps and Screenshots tabs, and the thumbnails they share.
+  @ObservationIgnored private(set) lazy var panesModel = ViewerPanesModel(viewer: self, dependencies: dependencies)
+  /// Waits for a state that asks something of the person to hold before VoiceOver says it.
+  @ObservationIgnored private var announcing: Task<Void, Never>?
 
-  // Control's working parts (see ViewerController+Control.swift).
+  /// The asking text already scheduled or spoken; unchanged readings never restart its hold.
+  @ObservationIgnored private var announcedStatus: String?
 
-  /// Numbers each acquisition and release, so a late reply knows it was overtaken.
-  @ObservationIgnored var controlGeneration = 0
-  /// The status reading under way when the lease was granted: only a later one can say the lease has ended.
-  @ObservationIgnored var controlSince = 0
-  /// Renews the lease and ends control over a stale picture.
-  @ObservationIgnored var heartbeat: Task<Void, Never>?
-  /// The mouse button held and the clicks counted.
-  @ObservationIgnored var gesture = PointerGesture()
-  /// Scrolling gathered and not yet sent.
-  @ObservationIgnored var wheel = WheelAccumulator()
-  /// Where the gathered scrolling happens.
-  @ObservationIgnored var wheelAt: DesktopPoint?
-  /// When the last scroll event came, in seconds of uptime; a long gap starts a new gesture.
-  @ObservationIgnored var wheelHeardAt: TimeInterval?
-  /// Sends the gathered scrolling once the gathering ends.
-  @ObservationIgnored var wheelSending: Task<Void, Never>?
-  /// The input waiting to go to the helper, in order.
-  @ObservationIgnored let input = InputQueue()
-
-  // Reading's working parts (see ViewerController+Reading.swift).
-
-  /// Numbers each start and stop of reading, so a stopped loop ends.
-  @ObservationIgnored var generation = 0
-  /// Numbers each status reading, so only the newest one started is shown.
-  @ObservationIgnored var statusReading = 0
-  /// The reading loop.
-  @ObservationIgnored var polling: Task<Void, Never>?
-  /// The pause between readings, cancelled to read again at once.
-  @ObservationIgnored var napping: Task<Void, Never>?
-  /// A reading was asked for while one ran: done as soon as it ends.
-  @ObservationIgnored var readAgain = false
-  /// Refreshes ``now`` while readings run.
-  @ObservationIgnored var ticking: Task<Void, Never>?
-  /// When input last asked for a reading, in seconds of uptime.
-  @ObservationIgnored var inputReadAt: TimeInterval?
-  /// Asks for the reading input asked for too soon after the last, once its pause ends.
-  @ObservationIgnored var inputReading: Task<Void, Never>?
-  /// The other tabs' reading and thumbnails under way (see ViewerController+Panes.swift).
-  @ObservationIgnored var paneWork = ViewerPaneWork()
+  /// 1 s: how long a state that asks something of the person holds before VoiceOver says it, so a state that flickers
+  /// says nothing and two in a row say only the last.
+  static let announceAfter: Duration = .seconds(1)
 
   /// Creates a viewer that has read nothing yet, with the person's saved rate and Details.
   ///
   /// - Parameter dependencies: What it reaches outside itself; a saved rate the window does not offer reads as Live.
   init(dependencies: ViewerDependencies) {
-    service = dependencies.service
-    actions = dependencies.actions
-    preferences = dependencies.preferences
-    clock = dependencies.clock
-    heartbeatInterval = dependencies.heartbeatInterval
-    nap = dependencies.nap
-    doubleClickInterval = dependencies.doubleClickInterval
-    pictures = dependencies.pictures
-    switchToHelper = dependencies.switchToHelper
-    connectedAgents = dependencies.connectedAgents
-    loginTime = dependencies.loginTime
-    wallClock = dependencies.wallClock
-    shotOutlet = dependencies.shotOutlet
-    rate = ViewerPictureRate(rawValue: preferences.loadRate()) ?? .live
-    detailsShown = preferences.loadDetails()
-    input.sink = self
+    self.dependencies = dependencies
+    // Made now, so the saved choices are read as the window is made: the rate, then Details.
+    _ = readingLoop
+    details.shown = dependencies.preferences.loadDetails()
+    session.corner =
+      dependencies.preferences
+      .loadCorner()
+      .flatMap(MiniCorner.init(rawValue:)) ?? .bottomTrailing
   }
 
   /// Everything the controller holds, as one value.
@@ -154,16 +60,19 @@ final class ViewerController {
     ViewerSnapshot(
       reading: reading,
       session: session,
-      detailsShown: detailsShown,
-      rate: rate,
-      now: now,
+      lease: control.lease,
+      acquiring: control.acquiring,
+      composing: control.composing,
+      detailsShown: details.shown,
+      rate: readingLoop.rate,
+      now: readingLoop.now,
       running: actions.running,
       agentRequests: actions.agentRequests,
       controlBusy: actions.barrier.isBusy,
-      agents: agents,
-      loggedInAt: loggedInAt,
-      panes: panes,
-      date: wallClock()
+      agents: details.agents,
+      loggedInAt: details.loggedInAt,
+      panes: panesModel.panes,
+      date: dependencies.wallClock()
     )
   }
 
@@ -177,36 +86,110 @@ final class ViewerController {
   /// the picture's age redraws that row alone.
   var newestPicture: String {
     // Read so the row draws again at each tick.
-    _ = ticks
+    _ = readingLoop.ticks
     return ViewerPresenter.newest(snapshot)
   }
 
+  /// The viewer service it reads and asks.
+  var service: any ViewerService { dependencies.service }
+
+  /// The helper's own commands, shared with the panel.
+  var actions: HelperActions { dependencies.actions }
+
+  /// The app's control work not yet answered, shared with the helper's commands and any later window.
+  var barrier: ControlBarrier { actions.barrier }
+
+  /// What the last reading showed.
+  var reading: ViewerReading { readingLoop.reading }
+
+  /// What the Activity, Apps and Screenshots tabs hold.
+  var panes: ViewerPanes { panesModel.panes }
+
   /// Whether this window holds control.
-  var holdingControl: Bool { session.holdingControl }
+  var holdingControl: Bool { control.lease != nil }
 
   /// Applies one of the window's events. Keys and ⋯ open their menus in the window's shell, which owns AppKit.
   ///
   /// - Parameter event: What the person did.
   func send(_ event: ViewerEvent) {
+    // Unstructured, as `send` is the view's synchronous callback: each async event runs in a task of its own.
     switch event {
     case .selectTab(let tab): selectTab(tab)
     case .togglePause: togglePause()
-    case .takeControl: Task { await takeControlOnScreen() }
-    case .giveBack: releaseControl()
+    case .takeControl: Task { await control.takeControlOnScreen() }
+    case .giveBack: control.releaseControl()
     case .stopAgent: Task { await setStopped(true) }
     case .resumeAgent: Task { await setStopped(false) }
     case .showKeys, .showMore: break
     case .toggleDetails: toggleDetails()
     case .checkAgain: Task { await checkAgain() }
+    case .openSettings: dependencies.openSettings()
     case .askRecover: ask(.recover)
     case .askSwitch: ask(.switchToHelper)
     case .askLogOut: ask(.logOut)
     case .askRestart: ask(.restart)
     case .alertConfirm: Task { await confirmAlert() }
     case .alertCancel: cancelAlert()
-    case .searchActivity, .filterActivity, .searchApps, .showWindow, .clearOutline, .searchShots, .selectShot,
-      .openShot, .toggleShot, .previousShot, .nextShot, .closeShot, .copyShot, .showShotInFinder, .thumbnailNeeded:
-      sendPane(event)
+    case .moveCorner(let corner): moveCorner(corner)
+    case .searchActivity, .filterActivity, .searchApps, .showWindow, .clearOutline, .shotColumns, .selectShot,
+      .openShot, .toggleShot, .previousShot, .nextShot, .shotAbove, .shotBelow, .clearShotSelection, .closeShot,
+      .copyShot, .showShotInFinder, .thumbnailNeeded:
+      panesModel.sendPane(event)
+    }
+  }
+
+  /// Take Control or Give Back from a menu, presenting the window before Take Control so a paused picture can resume.
+  ///
+  /// - Parameter present: Brings the window forward and updates its visibility and focus.
+  func toggleControl(present: () -> Void) {
+    guard let control = state.top.actions.control, control.isEnabled,
+      control.event == .takeControl || control.event == .giveBack
+    else { return }
+    if control.event == .takeControl { present() }
+    send(control.event)
+  }
+
+  /// The small screen settled in a corner: the window keeps it there, and the next window starts there.
+  ///
+  /// - Parameter corner: The corner.
+  func moveCorner(_ corner: MiniCorner) {
+    session.corner = corner
+    dependencies.preferences.saveCorner(corner.rawValue)
+  }
+
+  /// What VoiceOver should say about the helper's state now: its word and line while it asks something of the person
+  /// (it needs them, agents are stopped, they have control, it is logged out or not ready) and this window has the
+  /// keyboard; nil otherwise, as for every Working and Idle.
+  var askingStatus: String? {
+    guard shown, control.focused else { return nil }
+    let snapshot = snapshot
+    switch snapshot.mode.kind {
+    case .needsYou, .stopped, .control, .loggedOut, .notReady:
+      let status = ViewerPresenter.status(snapshot)
+      return status.line.isEmpty ? status.label : "\(status.label), \(status.line)"
+    case .idle, .working, .inUseElsewhere, .connecting:
+      return nil
+    }
+  }
+
+  /// Says `text` once it has held for ``announceAfter`` on the window's clock; a newer one, or none, calls it off.
+  ///
+  /// - Parameter text: What VoiceOver should say now, from ``askingStatus``.
+  func announceSoon(_ text: String?) {
+    guard text != announcedStatus else { return }
+    announcedStatus = text
+    announcing?.cancel()
+    announcing = nil
+    guard let text else {
+      if session.announcement != nil { session.announcement = nil }
+      return
+    }
+    let clock = dependencies.clock
+    // Unstructured, as the state settles while the window goes on.
+    announcing = Task { [weak self] in
+      try? await clock.sleep(for: Self.announceAfter)
+      guard let self, !Task.isCancelled else { return }
+      session.announcement = text
     }
   }
 
@@ -217,40 +200,67 @@ final class ViewerController {
     session.notice = text
   }
 
+  /// Take Control was refused: the reason shows in a toast and the button shakes once. The toast leaves by
+  /// itself after ``Motion/Duration/toast`` on the window's clock; only the newest refusal's wait removes it.
+  ///
+  /// - Parameter reason: Why, such as "The agent is mid-action. Try again in a moment."
+  func refuse(_ reason: String) {
+    session.refusals += 1
+    session.toast = reason
+    let refusal = session.refusals
+    let clock = dependencies.clock
+    // Unstructured, as the toast leaves by itself while the window goes on.
+    Task { [weak self] in
+      try? await clock.sleep(for: .seconds(Motion.Duration.toast.seconds))
+      guard let self, session.refusals == refusal else { return }
+      session.toast = nil
+    }
+  }
+
+  /// The toast goes at once: control was taken after all.
+  func dismissToast() {
+    if session.toast != nil { session.toast = nil }
+  }
+
+  /// Stop or Resume, saying how it went, then reads the status so the window shows it at once.
+  ///
+  /// - Parameter stopped: Whether agents stop.
+  func setStopped(_ stopped: Bool) async {
+    do {
+      try await actions.setStopped(stopped)
+      say(stopped ? ViewerWords.agentStopped : ViewerWords.agentResumed)
+    } catch {
+      say(error.localizedDescription)
+    }
+    await readingLoop.readStatus()
+    readingLoop.refresh()
+  }
+
   /// Pauses the picture, or resumes it. Either way control goes back; resuming reads afresh.
   func togglePause() {
     session.paused.toggle()
-    releaseControl()
-    if !session.paused {
-      reading.ready = false
-      reading.frame = nil
-      reading.frameAt = nil
-    }
-    watch(!session.paused && shown)
-  }
-
-  /// Picks how often a picture is read while watching.
-  ///
-  /// - Parameter rate: The rate.
-  func setRate(_ rate: ViewerPictureRate) {
-    self.rate = rate
+    control.releaseControl()
+    if !session.paused { readingLoop.forgetFrame() }
+    readingLoop.watch(shown)
   }
 
   /// Shows Details, reading what it lists that the helper's status does not carry, or hides it.
   func toggleDetails() {
-    detailsShown.toggle()
-    if detailsShown { Task { await readDetails() } }
+    details.shown.toggle()
+    // Unstructured, as the event is synchronous: Details reads its facts beside it.
+    if details.shown { Task { await readDetails() } }
   }
 
-  /// Resume reading after the window was hidden, unless paused; Details left open reads its facts the first time.
+  /// Resume reading after the window was hidden; Details left open reads its facts the first time.
   ///
   /// - Parameter shown: Whether the window is on screen.
   func setVisible(_ shown: Bool) {
-    if shown, !self.shown, detailsShown, agents == nil { Task { await readDetails() } }
+    // Unstructured, as AppKit's notification is synchronous: Details reads its facts beside it.
+    if shown, !self.shown, details.shown, details.agents == nil { Task { await readDetails() } }
     self.shown = shown
-    if !shown { releaseControl() }
-    watch(shown && !session.paused)
-    followPane()
+    if !shown { control.releaseControl() }
+    readingLoop.watch(shown)
+    panesModel.followPane()
   }
 
   /// The window entered or left full screen, which hides or shows its title bar buttons.
@@ -274,26 +284,12 @@ final class ViewerController {
     session.keyboardConnected = connected
   }
 
-  /// What the input method is composing now, shown on the screen until it is committed or ends. The same text again
-  /// changes nothing, so the window does not redraw for it.
-  ///
-  /// - Parameter text: The composed text; empty once the composition ends.
-  func compose(_ text: String) {
-    guard session.composing != text else { return }
-    session.composing = text
-  }
-
   /// The window is closing: give control back and stop reading.
   func close() {
     shown = false
-    releaseControl()
-    watch(false)
-    followPane()
-  }
-
-  /// Reads the clock into ``now``, and tells Details' age row.
-  func readClock() {
-    now = clock()
-    ticks += 1
+    control.releaseControl()
+    readingLoop.watch(false)
+    panesModel.followPane()
+    panesModel.stopCopy()
   }
 }

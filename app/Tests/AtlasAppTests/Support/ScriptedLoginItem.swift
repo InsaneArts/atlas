@@ -1,9 +1,10 @@
 import Foundation
+import Observation
 
 @testable import AtlasApp
 
 /// A stand-in login item: available or not, on or off, so no test registers the real one.
-@MainActor
+@Observable
 final class ScriptedLoginItem {
   /// Whether the app can open at login.
   var available: Bool

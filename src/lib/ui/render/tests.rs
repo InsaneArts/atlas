@@ -421,9 +421,17 @@ fn removal_and_login_read_as_sentences() {
                                      "remove": "sudo sysadminctl -deleteUser atlas"}}),
     );
     assert!(
-        removed
-            .out
-            .contains("The helper account atlas is still here")
+        removed.out.contains("To delete the helper account too: ")
+            && removed.out.contains("(it's logged out, so this is safe).")
+    );
+
+    let deleted = show(
+        View::Uninstall,
+        json!({"ok": true, "kept": {"helperAccount": null, "remove": null}}),
+    );
+    assert!(
+        !deleted.out.contains("To delete"),
+        "no way to delete what is gone"
     );
 
     let on = show(
@@ -632,4 +640,39 @@ fn an_open_names_its_copy_whether_or_not_it_launched() {
            "error": "Unable to find application named 'Calculator'", "uncertain": false}),
     );
     assert!(!plain.err.contains("copied"), "{}", plain.err);
+}
+
+#[test]
+fn the_last_login_reads_one_step_a_line() {
+    let told = show(
+        View::LoginTiming,
+        json!({"ok": true, "found": true,
+               "steps": {"passwordToUpdater": 0.5, "updater": 0.4, "setupAssistant": false,
+                         "loginCompleteToDesktop": 1.0, "desktopToAtlas": 2.5,
+                         "passwordToDesktop": 4.0},
+               "slowestPlugin": {"plugin": "com.apple.dock.DockUpdater", "phase": "User",
+                                 "seconds": 0.3},
+               "unfinished": []}),
+    );
+    assert!(
+        told.out.contains("Password → desktop          4.0 s"),
+        "{}",
+        told.out
+    );
+    assert!(told.out.contains("Setup Assistant             skipped"));
+    assert!(told.out.contains("slowest: com.apple.dock.DockUpdater"));
+
+    let hung = show(
+        View::LoginTiming,
+        json!({"ok": true, "found": true, "steps": {},
+               "unfinished": ["com.apple.dock.SpacesUpdater"]}),
+    );
+    assert!(hung.out.contains("never finished"), "{}", hung.out);
+    assert!(
+        hung.out
+            .contains("Never finished: com.apple.dock.SpacesUpdater")
+    );
+
+    let none = show(View::LoginTiming, json!({"ok": true, "found": false}));
+    assert!(none.out.contains("No login in the last 2 hours"));
 }

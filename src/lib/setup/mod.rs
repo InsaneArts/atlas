@@ -3,7 +3,9 @@
 //! nothing; a fact we cannot observe is `null`, never `false`. [`migrate`]
 //! moves capture to the managed private layout through [`helper`] actions run
 //! inside the helper login.
+pub mod first_login;
 pub mod helper;
+pub mod identity;
 pub mod migrate;
 
 use crate::{
@@ -130,6 +132,28 @@ pub fn real_name(name: &str) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
+/// The privileged dispatcher checks the chosen account after authorization,
+/// immediately before entering its launchd session. The worker repeats the
+/// check as the account itself before every mutation.
+const DISPATCH: &str = r##"uid=$1 name=$2 guid=$3 mode=$4 executable=$5 request=$6 identity=$7 last=$8
+refuse() { print -r -- '{"ok":false,"error":"Atlas could not verify the helper account or protect its executable; nothing was changed"}'; exit 1 }
+[[ $uid == <501-60000> && $name =~ '^[A-Za-z0-9_][A-Za-z0-9._-]*$' && $name != <-> ]] || refuse
+[[ $guid =~ '^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$' ]] || refuse
+chosen() {
+  [[ $(/usr/bin/dscl . -read /Users/$name GeneratedUID </dev/null) == "GeneratedUID: $guid" ]] || refuse
+  [[ $(/usr/bin/id -u -- $name </dev/null) == $uid && $(/usr/bin/id -nu -- $uid </dev/null) == $name ]] || refuse
+}
+chosen
+stage_executable
+chosen
+if [[ $mode == login ]]; then
+  /bin/launchctl asuser $uid /usr/bin/sudo -n -u $name $executable setup-helper $request --account $identity $last
+else
+  /usr/bin/sudo -n -u $name $executable setup-helper $request --account $identity $last
+fi
+exit $?
+"##;
+
 /// Run one `setup-helper` request as `helper`, inside its own login, through
 /// sudo: with the administrator rights already held (`cached_rights`, as
 /// init holds them), or letting sudo ask. The reply is whether the command
@@ -139,31 +163,118 @@ pub(crate) fn request_as_helper(
     helper: &Account,
     request: &helper::Request,
     cached_rights: bool,
+    expected: &identity::Identity,
 ) -> Result<(bool, Value)> {
-    let mut command = Command::new("/usr/bin/sudo");
+    run_as_helper(
+        executable,
+        helper,
+        request,
+        cached_rights,
+        true,
+        expected,
+        false,
+    )
+}
 
+/// Run one `setup-helper` request as `helper` while it is logged out (no
+/// desktop): plainly through sudo, with the administrator rights already
+/// held, so nothing (no per-user launchd session) starts in the account.
+/// The reply as [`request_as_helper`] gives it.
+pub(crate) fn request_before_login(
+    executable: &Path,
+    helper: &Account,
+    request: &helper::Request,
+    expected: &identity::Identity,
+) -> Result<(bool, Value)> {
+    run_as_helper(executable, helper, request, true, false, expected, true)
+}
+
+/// Run one `setup-helper` request as the logged-out `helper`, recorded as
+/// `expected`: plainly through sudo, which may ask for the person's
+/// password, so nothing starts a login of the account again. Once sudo lets
+/// it run, the request itself refuses unless its account is still that one
+/// and still logged out, so nothing changes in another account or in a
+/// login that started meanwhile. The reply as [`request_as_helper`] gives
+/// it.
+pub(crate) fn request_logged_out_as(
+    executable: &Path,
+    helper: &Account,
+    request: &helper::Request,
+    expected: &identity::Identity,
+) -> Result<(bool, Value)> {
+    run_as_helper(executable, helper, request, false, false, expected, true)
+}
+
+/// Run one `setup-helper` request as `helper` through sudo, inside its login
+/// (`in_login`, through `launchctl asuser`) or plainly, with what the
+/// request checks of its account first (`guard`).
+fn run_as_helper(
+    executable: &Path,
+    helper: &Account,
+    request: &helper::Request,
+    cached_rights: bool,
+    in_login: bool,
+    expected: &identity::Identity,
+    logged_out: bool,
+) -> Result<(bool, Value)> {
+    if expected.uid != helper.uid || expected.name != helper.name {
+        return Err(Error::new(
+            "setup",
+            "The helper is not the account Atlas chose",
+        ));
+    }
+    let mut command = Command::new("/usr/bin/sudo");
     if cached_rights {
         command.arg("-n");
     }
-
-    let output = command
+    let script = [
+        crate::onboarding::as_root::EXECUTOR,
+        crate::onboarding::as_root::BECOME_ROOT,
+        &crate::onboarding::as_root::staging(),
+        DISPATCH,
+    ]
+    .concat();
+    command
         .args([
-            "/bin/launchctl",
-            "asuser",
-            &helper.uid.to_string(),
-            "/usr/bin/sudo",
-            "-u",
-            &helper.name,
+            "/usr/bin/env",
+            "-i",
+            "PATH=/usr/bin:/bin:/usr/sbin:/sbin",
+            "/bin/zsh",
+            "-f",
+            "-c",
+            &script,
+            "zsh",
         ])
+        .args([
+            &helper.uid.to_string(),
+            &helper.name,
+            &expected.generated_uid,
+        ])
+        .arg(if in_login { "login" } else { "plain" })
         .arg(executable)
-        .arg("setup-helper")
         .arg(serde_json::to_string(request)?)
-        .output()?;
+        .arg(serde_json::to_string(expected)?)
+        .arg(if logged_out { "--logged-out" } else { "--" })
+        .stderr(std::process::Stdio::piped());
+    let output = crate::onboarding::as_root::tracked_output(&mut command).map_err(|refusal| {
+        Error::new(
+            "setup",
+            format!("The setup executor did not finish: {refusal:?}"),
+        )
+        .uncertain()
+    })?;
+
+    Ok(worker_reply(&output))
+}
+
+/// Whether a `setup-helper` run succeeded, and the JSON it printed: on
+/// standard output, or (a refusal) on standard error; null when none.
+fn worker_reply(output: &std::process::Output) -> (bool, Value) {
     let reply = serde_json::from_slice(&output.stdout)
         .or_else(|_| serde_json::from_slice(&output.stderr))
         .unwrap_or(Value::Null);
 
-    Ok((output.status.success(), reply))
+    (output.status.success(), reply)
 }
 
 #[derive(Debug, Default, PartialEq, Eq, Serialize)]
@@ -215,7 +326,7 @@ pub const APP_IDENTIFIER: &str = "com.insanearts.atlas.bar";
 
 /// The code requirement for code signed as `identifier`: a Developer ID
 /// Application signature by Atlas's team. install.sh checks the same.
-fn requirement_for(identifier: &str) -> String {
+pub(crate) fn requirement_for(identifier: &str) -> String {
     format!(
         "anchor apple generic and identifier \"{identifier}\" \
          and certificate 1[field.1.2.840.113635.100.6.2.6] \
@@ -625,9 +736,19 @@ async fn observe(client: &Client, uid: u32, report: &mut Value) {
     let status = client.status().await;
     let reachable = status["ok"] == true;
     let session = require_hidden(&status, uid).ok();
+    let absence = if crate::session::silent(&status) {
+        tokio::task::spawn_blocking(move || crate::session::absence(uid))
+            .await
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
 
     report["session"] = json!({
         "reachable": reachable,
+        "code": status["code"],
+        "absence": absence.as_ref().map(crate::session::Absence::as_str),
         "graphical": status["session"]["managerName"],
         "onConsole": status["session"]["onConsole"],
         "hidden": reachable.then_some(session.is_some()),
@@ -679,12 +800,22 @@ fn next_steps(report: &Value) -> Vec<String> {
         _ => {}
     }
 
-    if report["session"]["reachable"] != true {
+    if report["session"]["code"] == "blocked" {
         steps.push(
-            "The helper is not running. Log in to the helper account once, then switch back \
-             without logging it out."
+            report["session"]["error"]
+                .as_str()
+                .unwrap_or("This shell may not connect to the helper; run atlas outside a sandbox.")
                 .to_owned(),
         );
+    } else if report["session"]["reachable"] != true {
+        let step = match report["session"]["absence"].as_str() {
+            Some("loggedOut") => crate::session::LOGGED_OUT,
+            Some("missing") => {
+                "The helper account no longer exists. Run atlas init to set up a new one."
+            }
+            _ => "Start the helper: run atlas init (safe to run again).",
+        };
+        steps.push(step.to_owned());
     } else if report["session"]["hidden"] != true {
         steps.push("Switch back to your own account without logging the helper out.".to_owned());
     }
@@ -730,6 +861,181 @@ fn next_steps(report: &Value) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_dispatcher_removes_first_login_copies_on_success_and_failure() {
+        use std::os::unix::fs::PermissionsExt;
+
+        for failure in ["none", "identity", "worker"] {
+            let dir = tempfile::tempdir().unwrap();
+            let source = dir.path().join("Source.app/Contents/MacOS");
+            fs::create_dir_all(&source).unwrap();
+            fs::write(source.join("atlas"), "worker").unwrap();
+            fs::write(source.join("AtlasApp"), "app").unwrap();
+            let guid = "6DB4B7AF-BE3C-486C-BD46-1B4558946919";
+            let mut script = [crate::onboarding::as_root::staging().as_str(), DISPATCH]
+                .concat()
+                .replace(
+                    "/private/var/tmp/atlas-approved.XXXXXXXX",
+                    &format!("{}/atlas-approved.XXXXXXXX", dir.path().display()),
+                );
+            for (tool, body) in [
+                (
+                    "/usr/bin/dscl",
+                    format!(
+                        "[[ $failure == identity && -e verified ]] && exit 1; print 'GeneratedUID: {guid}'"
+                    ),
+                ),
+                ("/usr/bin/id", "[[ $1 == -u ]] && print 7001 || print helper".into()),
+                ("/usr/sbin/chown", "exit 0".into()),
+                ("/usr/bin/codesign", "touch verified".into()),
+                (
+                    "/usr/bin/sudo",
+                    "[[ -f $4 ]] || exit 2; print -r -- \"$4\" > worker-path; [[ $failure == worker ]] && exit 1; print '{\"ok\":true}'".into(),
+                ),
+            ] {
+                let path = dir.path().join(Path::new(tool).file_name().unwrap());
+                fs::write(&path, format!("#!/bin/zsh -f\n{body}\n")).unwrap();
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+                script = script.replace(tool, path.to_str().unwrap());
+            }
+            let output = Command::new("/bin/zsh")
+                .args(["-f", "-c", &script, "zsh", "7001", "helper", guid, "plain"])
+                .arg(source.join("atlas"))
+                .args([
+                    r#"{"action":"first-login","uid":7001,"opener":true}"#,
+                    "{}",
+                    "--logged-out",
+                ])
+                .env("failure", failure)
+                .current_dir(dir.path())
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.success(),
+                failure == "none",
+                "{failure}: {output:?}"
+            );
+            assert!(dir.path().join("verified").is_file());
+            assert!(
+                !fs::read_dir(dir.path()).unwrap().any(|entry| {
+                    entry
+                        .unwrap()
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("atlas-approved.")
+                }),
+                "{failure}"
+            );
+            if failure != "identity" {
+                let worker = fs::read_to_string(dir.path().join("worker-path")).unwrap();
+                assert!(worker.contains("/atlas-approved."));
+                assert!(!Path::new(worker.trim()).exists());
+            }
+        }
+    }
+
+    #[test]
+    fn the_privileged_dispatcher_checks_identity_before_entering_a_session() {
+        use std::os::unix::fs::PermissionsExt;
+        let identity = identity::Identity {
+            uid: 7001,
+            name: "helper".into(),
+            generated_uid: "6DB4B7AF-BE3C-486C-BD46-1B4558946919".into(),
+        };
+        let requests = [
+            helper::Request::FirstLogin {
+                uid: 7001,
+                opener: false,
+            },
+            helper::Request::Prepare {
+                uid: 7001,
+                controller: "person".into(),
+            },
+            helper::Request::Install {
+                agent: helper::Agent {
+                    label: helper::LABEL.into(),
+                    uid: 7001,
+                    controller_uid: 501,
+                    program: "/Applications/Atlas.app/Contents/MacOS/atlas".into(),
+                    socket: "/Users/helper/.atlas/helper/7001.sock".into(),
+                },
+            },
+        ];
+        for request in requests {
+            for replacement in ["never", "before", "during"] {
+                let dir = tempfile::tempdir().unwrap();
+                let replaced = replacement != "never";
+                if replacement == "before" {
+                    fs::write(dir.path().join("replaced"), "").unwrap();
+                } else if replacement == "during" {
+                    fs::write(dir.path().join("replace-during-copy"), "").unwrap();
+                }
+                let mut script = [
+                    "stage_executable() { executable=/protected-atlas; if [[ -e replace-during-copy ]]; then touch replaced; fi; }\n",
+                    DISPATCH,
+                ]
+                .concat();
+                for (tool, body) in [
+                    (
+                        "/usr/bin/dscl",
+                        format!(
+                            "if [[ -e replaced ]]; then print 'GeneratedUID: 11111111-2222-3333-4444-555555555555'; else print 'GeneratedUID: {}'; fi",
+                            identity.generated_uid
+                        ),
+                    ),
+                    (
+                        "/usr/bin/id",
+                        "[[ $1 == -u ]] && print 7001 || print helper".into(),
+                    ),
+                    ("/bin/launchctl", "print -rl -- \"$@\" > dispatch".into()),
+                    ("/usr/bin/sudo", "print -rl -- \"$@\" > dispatch".into()),
+                ] {
+                    let path = dir.path().join(Path::new(tool).file_name().unwrap());
+                    fs::write(&path, format!("#!/bin/zsh -f\n{body}\n")).unwrap();
+                    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+                    script = script.replace(tool, path.to_str().unwrap());
+                }
+                let encoded = serde_json::to_string(&identity).unwrap();
+                let output = Command::new("/bin/zsh")
+                    .args([
+                        "-f",
+                        "-c",
+                        &script,
+                        "zsh",
+                        "7001",
+                        "helper",
+                        &identity.generated_uid,
+                        "login",
+                        "/unused-atlas",
+                        &serde_json::to_string(&request).unwrap(),
+                        &encoded,
+                        "--",
+                    ])
+                    .current_dir(dir.path())
+                    .output()
+                    .unwrap();
+                assert_eq!(
+                    output.status.success(),
+                    !replaced,
+                    "{}",
+                    String::from_utf8_lossy(&output.stdout)
+                );
+                let dispatched = fs::read_to_string(dir.path().join("dispatch"));
+                if replaced {
+                    assert!(dispatched.is_err(), "no launchctl asuser or worker ran");
+                } else {
+                    let dispatched = dispatched.unwrap();
+                    assert!(
+                        dispatched.contains(&encoded),
+                        "the worker receives the same expected identity"
+                    );
+                    assert!(dispatched.contains("/protected-atlas"));
+                    assert!(!dispatched.contains("/unused-atlas"));
+                }
+            }
+        }
+    }
+
     use super::*;
 
     /// The installer verifies downloads against exactly setup's requirement.
@@ -889,6 +1195,86 @@ mod tests {
         assert_eq!(preview_account(None, None).unwrap_err().code, "usage");
         let unknown = preview_account(Some("no-such-atlas-account"), None).unwrap_err();
         assert_eq!(unknown.code, "setup");
+    }
+
+    #[test]
+    fn login_is_advised_only_for_a_confirmed_logout() {
+        for absence in [Some("loggedOut"), Some("missing"), None] {
+            let steps = next_steps(&json!({
+                "session": {"reachable": false, "absence": absence},
+            }));
+            if absence == Some("loggedOut") {
+                assert!(steps[0].contains("Log in"));
+            } else {
+                assert!(!steps[0].contains("Log in"), "{absence:?}");
+                assert!(steps[0].contains("atlas init"), "{absence:?}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn observing_a_blocked_transport_preserves_its_code_and_advice() {
+        use tokio::{
+            io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+            net::UnixListener,
+        };
+
+        let dir = tempfile::Builder::new()
+            .prefix("atlas-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let uid = 60001;
+        let mut client = Client::new(Config {
+            helper_uid: uid,
+            socket_path: dir.path().join("helper.sock"),
+            identity_probe: dir.path().join("atlas"),
+            input_socket: dir.path().join("input.sock"),
+            output_dir: dir.path().join("runs"),
+        })
+        .unwrap();
+        client.controller = crate::control::Controller::at(uid, &dir.path().join("state"));
+        client.transport.peer_uid = nix::unistd::getuid().as_raw();
+        let listener = UnixListener::bind(&client.transport.path).unwrap();
+        let status = json!({
+            "ok": false,
+            "code": "blocked",
+            "error": "This shell may not connect to the helper; run atlas outside a sandbox.",
+        });
+        let serving = async {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut stream = BufReader::new(stream);
+            let mut request = String::new();
+            stream.read_line(&mut request).await.unwrap();
+            stream
+                .get_mut()
+                .write_all(format!("{status}\n").as_bytes())
+                .await
+                .unwrap();
+        };
+        let mut report = json!({});
+        tokio::join!(observe(&client, uid, &mut report), serving);
+
+        let steps = next_steps(&report);
+        let doctor = crate::session::diagnose(status, uid);
+        assert_eq!(steps, vec![doctor["nextSteps"][0].as_str().unwrap()]);
+        assert!(!steps.join(" ").contains("Log in"));
+        assert_eq!(report["session"]["code"], "blocked");
+    }
+
+    #[test]
+    fn a_blocked_transport_advises_running_outside_the_sandbox() {
+        for error in [
+            json!("This shell may not connect to the helper; run atlas outside a sandbox."),
+            Value::Null,
+        ] {
+            let steps = next_steps(&json!({
+                "session": {"reachable": false, "code": "blocked", "error": error},
+            }));
+            assert_eq!(
+                steps,
+                ["This shell may not connect to the helper; run atlas outside a sandbox."]
+            );
+        }
     }
 
     #[test]

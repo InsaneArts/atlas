@@ -2,71 +2,131 @@ import AppKit
 import AtlasUI
 import SwiftUI
 
-/// The Settings window: dark, a fixed 680 by 540, its icon tabs on the window's ground with no toolbar behind them.
-/// One at a time; it has a Dock icon while open, like any app window (``DockIcon``).
-@MainActor
-final class SettingsWindow: NSObject, NSWindowDelegate {
+/// The Settings window: dark, 680 wide and as tall as its pane, its symbol tabs on the window's ground with no toolbar
+/// behind them. One at a time; it has a Dock icon while open, like any app window (``DockIcon``). It opens where it was
+/// left, its top-left corner kept under ``autosaveName``, centred only the first time; it cannot be minimised, as a
+/// settings window is closed instead, and it comes to the Space the person is on, full-screen apps included.
+///
+/// SwiftUI only reports how tall each pane draws; the window fits it here, in AppKit, keeping its top edge: easing
+/// over 0.35 seconds on (0.25, 0.1, 0.25, 1) while on screen, or at once while hidden or under Reduce Motion. A pane
+/// changed mid-resize eases on from wherever the window is.
+final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
+  /// Moves a window to a frame, easing or at once.
+  typealias Mover = @MainActor (_ window: NSWindow, _ frame: NSRect, _ animated: Bool) -> Void
+
+  /// The name its place is kept under in the app's defaults. Shipped, so it never changes.
+  static let autosaveName = "AtlasSettings"
+
   /// The window's controller.
   let controller: SettingsController
-  /// The window.
-  let window: NSWindow
   /// Runs once the window has closed and its controller has stopped.
   let closed: @MainActor (SettingsWindow) -> Void
-  /// Open until closed, minimised included.
-  private(set) var isOpen = false
+  /// Moves the window to each new frame; ``move(_:to:animated:)`` outside tests.
+  private let mover: Mover
+  /// Open until closed.
+  private(set) var isPresented = false
 
-  /// Creates the window, hidden until ``show()``.
+  /// Creates the window, hidden until ``present()``.
   ///
   /// - Parameters:
   ///   - controller: The window's controller.
+  ///   - mover: Moves the window to each new frame; easing through AppKit's animator by default.
   ///   - closed: Runs once the window has closed and its controller has stopped.
-  init(controller: SettingsController, closed: @escaping @MainActor (SettingsWindow) -> Void) {
+  init(
+    controller: SettingsController,
+    mover: @escaping Mover = SettingsWindow.move,
+    closed: @escaping @MainActor (SettingsWindow) -> Void
+  ) {
     self.controller = controller
     self.closed = closed
-    window = NSWindow(
-      contentRect: NSRect(origin: .zero, size: SettingsLayout.window),
-      styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
+    self.mover = mover
+    super.init(
+      contentRect: NSRect(x: 0, y: 0, width: SettingsLayout.width, height: SettingsLayout.firstHeight),
+      styleMask: [.titled, .closable, .fullSizeContentView],
       backing: .buffered,
       defer: false
     )
-    super.init()
-    // The title is for the Window menu alone.
-    window.title = SettingsWords.windowTitle
-    window.titleVisibility = .hidden
-    window.titlebarAppearsTransparent = true
-    window.titlebarSeparatorStyle = .none
-    // An empty compact toolbar lowers the window buttons to the board's 14 from the top, beside the tabs.
-    window.toolbar = NSToolbar(identifier: "settings")
-    window.toolbarStyle = .unifiedCompact
-    window.isReleasedWhenClosed = false
-    window.isMovableByWindowBackground = true
-    window.appearance = NSAppearance(named: .darkAqua)
-    window.backgroundColor = .ground
-    window.delegate = self
-    let host = NSHostingView(
-      rootView: ShellRoot {
-        SettingsView(state: controller.state, edit: controller.update, send: controller.send)
-      }
-    )
-    // The window keeps its one size; the content fills it.
-    host.sizingOptions = []
-    window.contentView = host
+    // The title names the pane for the Window menu and VoiceOver; the view draws it in the title bar.
+    title = SettingsWords.tab(controller.session.tab)
+    titleVisibility = .hidden
+    titlebarAppearsTransparent = true
+    titlebarSeparatorStyle = .none
+    // An empty compact toolbar lowers the window buttons to 14 from the top, beside the pane's name.
+    toolbar = NSToolbar(identifier: "settings")
+    toolbarStyle = .unifiedCompact
+    isReleasedWhenClosed = false
+    isMovableByWindowBackground = true
+    collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
+    delegate = self
+    WindowShell.host(in: self) {
+      SettingsView(state: controller.state, edit: controller.update, send: controller.send)
+    }
+    controller.reshape = { [weak self] title, height in
+      self?.reshape(title: title, contentHeight: height)
+    }
+    setFrameAutosaveName(Self.autosaveName)
   }
 
-  /// Whether the window takes the keyboard now.
-  var isKey: Bool { window.isKeyWindow }
-
-  /// Brings the window forward, centred the first time. The app shows its Dock icon first.
-  func show() {
-    if !isOpen { window.center() }
-    isOpen = true
-    if window.isMiniaturized { window.deminiaturize(nil) }
-    window.makeKeyAndOrderFront(nil)
+  /// Brings the window forward at its pane's height: where it was left, its top edge kept, or centred the first time.
+  /// The app shows its Dock icon first.
+  func present() {
+    if !isPresented {
+      let restored = setFrameUsingName(Self.autosaveName)
+      // Draws the pane once, so its height is known before the window shows.
+      contentView?.layoutSubtreeIfNeeded()
+      controller.reshapeWindow()
+      if !restored { center() }
+    }
+    isPresented = true
+    makeKeyAndOrderFront(nil)
     NSApp.activate()
   }
 
   /// Closes the window.
-  func close() { window.close() }
+  func dismiss() { close() }
+
+  /// Names the pane shown and fits its height, when known.
+  ///
+  /// - Parameters:
+  ///   - title: The pane's name.
+  ///   - contentHeight: The title and tabs over the pane, or nil until the pane has drawn.
+  func reshape(title: String, contentHeight: CGFloat?) {
+    self.title = title
+    guard let contentHeight else { return }
+    fit(contentHeight: contentHeight)
+  }
+
+  /// Fits a content height from the window's frame now, mid-resize included, keeping its top edge.
+  ///
+  /// - Parameter contentHeight: The title and tabs over the pane.
+  func fit(contentHeight: CGFloat) {
+    let target = SettingsWindowFrame.frame(current: frame, contentHeight: contentHeight, within: screen?.visibleFrame)
+    guard target != frame else { return }
+    let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    mover(self, target, SettingsWindowFrame.animates(isVisible: isVisible, reduceMotion: reduceMotion))
+  }
+
+  /// Moves a window to a frame: through AppKit's animator over ``AtlasUI/Motion/Duration/resize`` on
+  /// ``AtlasUI/Motion/resizeCurve``, which starts from wherever the window is, so a new frame mid-resize retargets;
+  /// or at once.
+  ///
+  /// - Parameters:
+  ///   - window: The window.
+  ///   - frame: Its new frame.
+  ///   - animated: Whether it eases there.
+  static func move(_ window: NSWindow, to frame: NSRect, animated: Bool) {
+    guard animated else {
+      window.setFrame(frame, display: true)
+      return
+    }
+    let curve = Motion.resizeCurve
+    NSAnimationContext.runAnimationGroup { context in
+      context.duration = Motion.Duration.resize.seconds
+      context.timingFunction = CAMediaTimingFunction(controlPoints: curve.x1, curve.y1, curve.x2, curve.y2)
+      window.animator()
+        .setFrame(frame, display: true)
+    }
+  }
 
   /// The window came forward: what it shows from the other windows is read again.
   ///
@@ -79,7 +139,8 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
   ///
   /// - Parameter notification: The window's notification.
   func windowWillClose(_ notification: Notification) {
-    isOpen = false
+    isPresented = false
+    controller.reshape = nil
     controller.close()
     closed(self)
   }

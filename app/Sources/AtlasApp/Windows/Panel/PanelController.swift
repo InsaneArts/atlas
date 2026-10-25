@@ -1,15 +1,16 @@
-import AtlasKit
+import AtlasCommands
+import AtlasService
+import AtlasStatus
 import AtlasUI
 import Observation
 
 /// The menu bar panel's one observed object: it holds the latest status, the helper's screen and what the panel is
 /// doing, reads them on a schedule (`PanelController+Reading`), and runs what the panel's events ask
-/// (`PanelController+Actions`). Recover…, Switch… and Log Out… ask first in an alert that `AppController` places;
+/// (`PanelController+Actions`). Recover… and Switch… ask first in an alert that ``WindowCoordinator`` places;
 /// ``PanelPresenter`` decides what the panel shows.
 ///
 /// Each part of the snapshot is its own stored property, so the menu bar glyph, which reads only the status, is not
 /// redrawn when a picture arrives. They are written only by the controller's own files; the shell calls its methods.
-@MainActor
 @Observable
 final class PanelController {
   /// Between status readings with the panel open, and between pictures while it is open: 2 s, as the viewer's
@@ -18,6 +19,9 @@ final class PanelController {
   /// Between status readings with the panel closed: 5 s, often enough for the menu bar glyph to follow the helper's
   /// mode, rarely enough to cost nothing.
   static let closedEvery: Duration = .seconds(5)
+  /// How long a state that asks something of the person holds before VoiceOver hears it: 1 s, as in the main window,
+  /// so a state that passes at once is never said.
+  static let announceAfter: Duration = .seconds(1)
 
   /// The latest status the service reported: every field at its safe default, as a service that cannot be reached
   /// reads, before the first reading ends and after one that fails, which the panel shows alike.
@@ -45,12 +49,12 @@ final class PanelController {
   @ObservationIgnored let loginItem: OpenAtLogin
   /// What the panel asks of the rest of the app.
   @ObservationIgnored let links: PanelLinks
-  /// The pause between readings: a sleep, which cancelling ends early; a test stands in its own.
-  @ObservationIgnored let nap: @Sendable (Duration) async -> Void
+  /// The clock the pauses between readings run on; a cancelled pause ends at once.
+  @ObservationIgnored let clock: any Clock<Duration>
   /// The readings under way.
   @ObservationIgnored var polling: [Task<Void, Never>] = []
   /// Whether the panel is open, so the picture is read.
-  @ObservationIgnored var isOpen = false
+  var isOpen = false
   /// Numbers each status reading, so only the newest one started is shown.
   @ObservationIgnored var statusReading = 0
   /// Numbers each picture reading, under the same rule.
@@ -59,31 +63,23 @@ final class PanelController {
   @ObservationIgnored var wantedAtLogin: Bool?
   /// Whether a change to Open at Login runs now: one at a time, so the system ends where the person last asked.
   @ObservationIgnored var changingAtLogin = false
+  /// What VoiceOver was last handed (``askingStatus``), so a reading that says the same again, or the panel opening
+  /// on it, says nothing more.
+  @ObservationIgnored var askedBefore: String?
+  /// The wait before the newest asking state is said; nil while none waits.
+  @ObservationIgnored var announcing: Task<Void, Never>?
 
   /// Creates a panel that has read nothing yet.
   ///
-  /// - Parameters:
-  ///   - service: The viewer service.
-  ///   - commands: The `atlas` command line.
-  ///   - actions: The helper's own commands, shared with every window.
-  ///   - loginItem: The app's login item.
-  ///   - links: What the panel asks of the rest of the app.
-  ///   - nap: The pause between readings; the app's sleeps.
-  init(
-    service: any ViewerService,
-    commands: any CommandRunning,
-    actions: HelperActions,
-    loginItem: OpenAtLogin,
-    links: PanelLinks = PanelLinks(),
-    nap: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
-  ) {
-    self.service = service
-    self.commands = commands
-    self.actions = actions
-    self.loginItem = loginItem
-    self.links = links
-    self.nap = nap
-    opensAtLogin = loginItem.state
+  /// - Parameter dependencies: What it reaches outside itself.
+  init(dependencies: PanelDependencies) {
+    service = dependencies.service
+    commands = dependencies.commands
+    actions = dependencies.actions
+    loginItem = dependencies.loginItem
+    links = dependencies.links
+    clock = dependencies.clock
+    opensAtLogin = dependencies.loginItem.state
   }
 
   /// Everything the controller holds, as one value, with whether the main window holds control and which of the
@@ -91,7 +87,8 @@ final class PanelController {
   var snapshot: PanelSnapshot {
     PanelSnapshot(
       status: status,
-      connecting: answered == nil,
+      connecting: connecting,
+      reconnecting: answered == false,
       picture: picture,
       session: session,
       holdingControl: links.holdingControl(),
@@ -100,6 +97,10 @@ final class PanelController {
       opensAtLogin: opensAtLogin
     )
   }
+
+  /// Whether the panel waits for the service: before its first answer, and again after a reading that failed, until it
+  /// answers once more, as the main window reconnects.
+  var connecting: Bool { answered != true }
 
   /// The service's last answer, which the viewer opens on; nil before the first reading ends and after one that
   /// failed.
@@ -119,7 +120,7 @@ final class PanelController {
   /// redrawn when a picture arrives or a command starts.
   var mode: Mode {
     PanelPresenter.mode(
-      PanelSnapshot(status: status, connecting: answered == nil, holdingControl: links.holdingControl())
+      PanelSnapshot(status: status, connecting: connecting, holdingControl: links.holdingControl())
     )
   }
 
@@ -127,6 +128,7 @@ final class PanelController {
   ///
   /// - Parameter event: What the person did.
   func send(_ event: PanelEvent) {
+    // Unstructured, as `send` is the view's synchronous callback: each async event runs in a task of its own.
     switch event {
     case .openAtlas: links.openViewer(nil)
     case .openScreen: links.openViewer(.screen)
@@ -136,14 +138,10 @@ final class PanelController {
     case .giveBack: giveBack()
     case .askRecover: links.showAlert(.recover)
     case .askSwitch: links.showAlert(.switchToHelper)
+    case .openSettings: links.openSettings()
     case .togglePause: togglePause()
     case .showMore: break
     }
-  }
-
-  /// Asks before logging the helper out, from the ⋯ menu.
-  func askLogOut() {
-    links.showAlert(.logOut)
   }
 
   /// Marks the ⋯ menu open or closed, so its button draws pressed while it is open.

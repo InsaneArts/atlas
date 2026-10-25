@@ -118,7 +118,15 @@ enum Command {
         rollback: bool,
     },
     #[command(hide = true)]
-    SetupHelper { request: String },
+    SetupHelper {
+        request: String,
+        /// Refuse unless this account matches this JSON account identity.
+        #[arg(long)]
+        account: String,
+        /// Refuse unless this account is logged out.
+        #[arg(long)]
+        logged_out: bool,
+    },
     /// Show where Atlas keeps its settings, sockets and screenshots.
     Config,
     /// Show the helper: who it is, where it is and what it may do.
@@ -128,6 +136,9 @@ enum Command {
         /// Include the helper's full status (in --json too).
         #[arg(long)]
         verbose: bool,
+        /// Show how long the last login of the past two hours took, step by step.
+        #[arg(long, conflicts_with = "verbose")]
+        login_timing: bool,
     },
     /// Check that native Save and Open dialogs work in the helper.
     ///
@@ -486,7 +497,7 @@ enum Command {
     Init,
     /// Remove Atlas from this Mac (asks first).
     ///
-    /// The helper account and its files stay; the app goes to the Trash.
+    /// The helper is logged out first. Its account and files stay unless you pass --remove-helper; the app goes to the Trash.
     Uninstall {
         /// Keep configuration, setup records and logs.
         #[arg(long)]
@@ -494,6 +505,9 @@ enum Command {
         /// Do not ask.
         #[arg(long)]
         yes: bool,
+        /// Also delete the helper account and its files, once it is logged out.
+        #[arg(long)]
+        remove_helper: bool,
     },
     /// Connect Claude Code and Codex, or show which are connected.
     ///
@@ -535,6 +549,12 @@ enum OnboardingCommand {
         #[arg(long = "controller-name")]
         controller_name: String,
     },
+    /// Serve the unprivileged setup connection after Allow.
+    #[command(hide = true)]
+    AcceptWorker {
+        #[arg(long)]
+        ticket: String,
+    },
     /// Mark the window open or closed in this account.
     Window {
         #[arg(value_enum)]
@@ -542,6 +562,12 @@ enum OnboardingCommand {
     },
     /// Take back this account's request of a helper that never answered.
     Forget,
+    /// Close the logins deleted accounts left open (macOS asks to approve).
+    Close {
+        /// Log out the helper instead, where Atlas isn't answering.
+        #[arg(long)]
+        helper: bool,
+    },
     /// Back in the person's account: start input and check everything.
     Finish,
     /// Open the menu bar at login (on or off), decided once.
@@ -566,6 +592,10 @@ enum OnOff {
 #[derive(Subcommand)]
 enum AgentsCommand {
     /// Which agents are on this Mac and whether Atlas is connected.
+    ///
+    /// JSON keeps Claude Code (`claude`) and the Claude app (`claude-app`)
+    /// as separate connection parts. Atlas.app groups them into one Claude
+    /// row, connected only when every installed part is connected.
     Status {
         /// One plain line for an agent's session start.
         #[arg(long)]
@@ -583,6 +613,9 @@ enum AgentsCommand {
         dir: Option<PathBuf>,
     },
     /// Connect the plugin to Claude Code and/or Codex (all installed by default).
+    ///
+    /// Use --claude --app together to connect both Claude parts. Select only
+    /// the parts installed on this Mac. JSON reports each part's result by id.
     Install {
         /// Only Claude Code.
         #[arg(long)]
@@ -595,6 +628,8 @@ enum AgentsCommand {
         app: bool,
     },
     /// Disconnect the plugin from Claude Code and/or Codex.
+    ///
+    /// Use --claude --app together to disconnect both Claude parts.
     Remove {
         /// Only Claude Code.
         #[arg(long)]
@@ -695,9 +730,18 @@ fn main() -> ExitCode {
     let config = atlas::config::effective(cli.config.take());
 
     // `atlas` alone shows what it can do; opened as an app (Finder,
-    // Launchpad, `open`), it shows the window instead.
+    // Launchpad, `open`), it shows the window instead. launchd names the
+    // job that started it: the helper's one-time opener opens the window
+    // once the desktop is up.
     let Some(command) = cli.command.take() else {
         if opened_as_app() {
+            if atlas::setup::first_login::started_as_opener() {
+                // Its output goes nowhere; the next login tries again.
+                return match atlas::setup::first_login::open_at_login() {
+                    Ok(_) => ExitCode::SUCCESS,
+                    Err(_) => ExitCode::FAILURE,
+                };
+            }
             return open_app(&config);
         }
         let _ = help::command().print_help();
@@ -930,7 +974,11 @@ fn doing(command: &Command) -> Option<Doing> {
         Command::Key { keys } => Doing::keys(keys),
         Command::Open { app, targets, .. } => Doing::open(app.as_deref(), targets),
         Command::Close { app, .. } => Doing::new("close").app(app.as_deref()),
-        Command::Run { .. } => Doing::new("run"),
+        Command::Run { .. }
+        | Command::Environment {
+            command: Some(EnvironmentCommand::Run { .. }),
+            ..
+        } => Doing::new("run"),
         _ => return None,
     })
 }
@@ -966,7 +1014,10 @@ fn view(command: &Command) -> View {
     let at = |x: f64, y: f64| format!("{}, {}", text::number(x), text::number(y));
 
     match command {
-        Command::Doctor { verbose } => View::Doctor { verbose: *verbose },
+        Command::Doctor {
+            login_timing: true, ..
+        } => View::LoginTiming,
+        Command::Doctor { verbose, .. } => View::Doctor { verbose: *verbose },
         Command::Status => View::Status,
         Command::Config => View::Config,
         Command::Screenshot { .. } => View::Capture,
@@ -1201,15 +1252,37 @@ async fn doctor(client: &Client, verbose: bool) -> Value {
     // Both states make the helper unusable; init refuses them too.
     let mut first_steps = Vec::new();
 
-    if let Some(account) = &account {
-        if atlas::session::leftover_session(uid, &account.name, &account.home) {
-            first_steps.push(format!(
-                "macOS still runs a session of a deleted account with {}'s user ID and mixes it \
-                 up with the helper. Restart the Mac.",
-                account.name
-            ));
-        }
+    // A deleted account's login left running can stall the next login, or
+    // be mistaken for the helper's.
+    let sessions = tokio::task::spawn_blocking(move || atlas::session::sessions(Some(uid)))
+        .await
+        .ok()
+        .flatten();
+    let leftover = sessions.as_ref().map(|sessions| {
+        sessions
+            .leftover_uids(atlas::session::Kind::Orphan)
+            .into_iter()
+            .chain(sessions.leftover_uids(atlas::session::Kind::HelperLeftover))
+            .next()
+    });
+    let left = leftover.flatten().map(|uid| {
+        format!(
+            "A deleted account (user ID {uid}) is still logged in. Close it in Atlas › Settings › \
+             Helper, or run atlas init."
+        )
+    });
+    if let Some(checks) = report["checks"].as_array_mut() {
+        checks.push(json!({
+            "name": "No logins left by deleted accounts",
+            "ok": leftover.map(|uid| uid.is_none()),
+            "nextStep": left,
+        }));
+    }
+    if let Some(step) = left {
+        first_steps.push(step);
+    }
 
+    if let Some(account) = &account {
         match atlas::setup::administrator(&account.name) {
             Some(false) => {}
             Some(true) => first_steps.push(format!(
@@ -1301,7 +1374,17 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             controller_uid,
             socket,
         } => input_service(uid, controller_uid, socket).await,
-        Command::SetupHelper { request } => atlas::setup::helper::run(&request),
+        Command::SetupHelper {
+            request,
+            account,
+            logged_out,
+        } => atlas::setup::helper::run_guarded(
+            &request,
+            &atlas::setup::helper::Guard {
+                account: Some(serde_json::from_str(&account)?),
+                logged_out,
+            },
+        ),
         Command::Update {
             check: true,
             version,
@@ -1314,7 +1397,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             check: false,
         } => {
             as_yourself("update")?;
-            update(&config, allow_unnotarized, force, version)
+            update(&config, allow_unnotarized, force, version).await
         }
         Command::UpdateFinish => {
             as_yourself("update")?;
@@ -1337,10 +1420,15 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
                     controller_uid,
                     controller_name,
                 } => onboarding::accept(controller_uid, &controller_name),
+                OnboardingCommand::AcceptWorker { ticket } => {
+                    onboarding::accept_worker(&ticket).await
+                }
                 OnboardingCommand::Window { state } => {
                     onboarding::window(state == WindowState::Open)
                 }
                 OnboardingCommand::Forget => onboarding::forget(&config),
+                OnboardingCommand::Close { helper: false } => onboarding::close_leftovers(&config),
+                OnboardingCommand::Close { helper: true } => onboarding::close_helper(&config),
                 OnboardingCommand::Finish => onboarding::finish(&config).await,
                 OnboardingCommand::Login { state } => {
                     onboarding::login(&config, state == OnOff::On)
@@ -1373,9 +1461,13 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
                 }
             }
         }
-        Command::Uninstall { keep_config, yes } => {
+        Command::Uninstall {
+            keep_config,
+            yes,
+            remove_helper,
+        } => {
             as_yourself("uninstall")?;
-            atlas::uninstall::run(&config, keep_config, yes).await
+            atlas::uninstall::run(&config, keep_config, yes, remove_helper).await
         }
         Command::Menubar {
             login: Some(login), ..
@@ -1408,7 +1500,10 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
             Ok(json!({ "ok": true, "config": client.config, "path": config }))
         }
         Command::Status => Ok(client()?.status().await),
-        Command::Doctor { verbose } => Ok(doctor(&client()?, verbose).await),
+        Command::Doctor {
+            login_timing: true, ..
+        } => atlas::login_log::timing(),
+        Command::Doctor { verbose, .. } => Ok(doctor(&client()?, verbose).await),
         Command::VerifyNative { fixture } => atlas::capability::verify(&client()?, &fixture).await,
         Command::Environment {
             manifest,
@@ -1774,7 +1869,7 @@ fn refuse_root(command: &str, root: bool) -> Result<()> {
 
 /// Update the app, then hand over to the new executable, so the steps that
 /// move the helper onto it are always the new version's own.
-fn update(
+async fn update(
     config: &std::path::Path,
     allow_unnotarized: bool,
     force: bool,
@@ -1794,7 +1889,21 @@ fn update(
     };
 
     let spinner = Spinner::new("Checking for an update…");
-    let mut report = atlas::update::install(&source, allow_unnotarized, force, &exclusive)?;
+    let mut report = atlas::update::install(
+        &source,
+        allow_unnotarized,
+        force,
+        &exclusive,
+        async |program| {
+            if let Some(loaded) = set_up(config)?
+                && atlas::setup::migrate::in_effect(loaded.helper_uid)
+            {
+                atlas::setup::migrate::preflight_apply(config, program).await?;
+            }
+            Ok(())
+        },
+    )
+    .await?;
 
     drop(exclusion);
 
@@ -2067,6 +2176,18 @@ mod tests {
     }
 
     #[test]
+    fn setup_workers_require_an_explicit_account_identity() {
+        let request = r#"{"action":"prepare","uid":502,"controller":"controller"}"#;
+        assert_eq!(
+            parse(&["setup-helper", request]).err().unwrap().kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+        let identity =
+            r#"{"uid":502,"name":"helper","generatedUid":"6DB4B7AF-BE3C-486C-BD46-1B4558946919"}"#;
+        assert!(parse(&["setup-helper", request, "--account", identity]).is_ok());
+    }
+
+    #[test]
     fn each_command_that_acts_in_the_helper_says_what_it_does() {
         let said = |args: &[&str]| {
             let command = parse(args).unwrap().command.unwrap();
@@ -2099,6 +2220,7 @@ mod tests {
         says(&["open", "https://example.com"], "opened a link");
         says(&["close", "--app", "TextEdit"], "closed TextEdit");
         says(&["run", "--", "ls", "/private"], "ran a command");
+        says(&["environment", "run", "--", "ls"], "ran a command");
         assert_eq!(
             said(&["windows"]),
             None,
@@ -2108,6 +2230,100 @@ mod tests {
             said(&["restart"]),
             None,
             "recovery is worded by its operation"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stop_cancels_an_environment_run_after_dispatch() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        use tokio::{
+            io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+            net::UnixListener,
+        };
+
+        let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+        let mut client = Client::new(Config {
+            helper_uid: 60001,
+            socket_path: dir.path().join("helper.sock"),
+            identity_probe: dir.path().join("probe"),
+            input_socket: dir.path().join("input.sock"),
+            output_dir: dir.path().join("out"),
+        })
+        .unwrap();
+        client.controller = atlas::control::Controller::at(60001, &dir.path().join("state"));
+        client.transport.peer_uid = nix::unistd::getuid().as_raw();
+        let command = parse(&["environment", "run", "--", "tool"])
+            .unwrap()
+            .command
+            .unwrap();
+        client.doing = doing(&command);
+        let Command::Environment {
+            command: Some(EnvironmentCommand::Run { argv, timeout }),
+            ..
+        } = command
+        else {
+            panic!("environment run did not parse");
+        };
+        let listener = UnixListener::bind(&client.transport.path).unwrap();
+        let ownership = client.controller.acquire(false).unwrap();
+        let helper = async {
+            let proof = json!({"ok": true, "uid": 60001, "hasGraphicAccess": true,
+                "parentPID": 123, "onConsole": false, "securitySessionID": 42,
+                "displayID": 7, "width": 100, "height": 100});
+            for (operation, reply) in [
+                (
+                    "hello",
+                    json!({"ok": true, "user": {"uid": 60001}, "daemon": {"pid": 123},
+                        "session": {"managerName": "Aqua", "onConsole": false},
+                        "display": {"width": 100, "height": 100, "scale": 1}}),
+                ),
+                (
+                    "run",
+                    json!({"ok": true, "exitCode": 0, "timedOut": false,
+                        "events": [{"event": "output", "data": STANDARD.encode(proof.to_string())}]}),
+                ),
+            ] {
+                let (peer, _) = listener.accept().await.unwrap();
+                let mut peer = BufReader::new(peer);
+                let mut line = String::new();
+                peer.read_line(&mut line).await.unwrap();
+                assert_eq!(
+                    serde_json::from_str::<Value>(&line).unwrap()["op"],
+                    operation
+                );
+                peer.get_mut()
+                    .write_all(format!("{reply}\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+
+            let (peer, _) = listener.accept().await.unwrap();
+            let mut peer = BufReader::new(peer);
+            let mut line = String::new();
+            peer.read_line(&mut line).await.unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["op"], "run");
+            assert_eq!(request["argv"], json!(["tool"]));
+            assert_eq!(client.controller.pending().unwrap().len(), 1);
+            client.controller.note_stop(true).unwrap();
+            line.clear();
+            assert_eq!(peer.read_line(&mut line).await.unwrap(), 0);
+        };
+        let running = client.run_owned_within(&ownership, argv, Duration::from_secs(timeout));
+        let (outcome, ()) = tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::join!(running, helper)
+        })
+        .await
+        .unwrap();
+        let error = outcome.unwrap_err();
+        assert_eq!(error.code, "stopped");
+        assert!(error.uncertain);
+        assert_eq!(client.controller.pending().unwrap().len(), 1);
+        assert_eq!(client.controller.acquire(true).unwrap_err().code, "busy");
+        drop(ownership);
+        assert_eq!(
+            client.controller.acquire(false).unwrap_err().code,
+            "uncertain"
         );
     }
 

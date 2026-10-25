@@ -1,4 +1,5 @@
-import AtlasKit
+import AtlasCommands
+import AtlasService
 import AtlasUI
 
 /// The readings: the status at the open or closed rate, the picture while the panel is open and not paused, Open at
@@ -7,12 +8,14 @@ extension PanelController {
   /// Reads the status now and then at the open or closed rate, and the picture at the open rate while open and not
   /// paused, until called again. The two run apart, so a slow capture never holds the status back. Opening also reads
   /// Open at Login and the helper's account again, since Getting Started or the system may have changed them
-  /// meanwhile, and drops what the last action said.
+  /// meanwhile, and drops what the last action said. Opening or closing starts VoiceOver's announcements afresh.
   ///
   /// - Parameter open: Whether the panel is open.
   func watch(open: Bool) {
     stop()
+    let turning = open != isOpen
     isOpen = open
+    if turning { restartAnnouncements() }
     if open {
       session.notice = nil
       readOpenAtLogin()
@@ -42,13 +45,20 @@ extension PanelController {
   )
     -> Task<Void, Never>
   {
-    let nap = nap
-    return Task { [weak self] in
+    return Task { [weak self, clock] in
       while !Task.isCancelled {
         if let controller = self { await step(controller) } else { return }
-        await nap(pause)
+        // A cancelled pause ends at once, and the loop's condition ends the loop.
+        try? await clock.sleep(for: pause)
       }
     }
+  }
+
+  /// The panel's work at launch, which the app starts once: learning the helper to switch to. It ends once
+  /// ``findHelper()`` has; the readings run on ``watch(open:)``'s tasks, which the shell starts and the panel's opening
+  /// changes.
+  func run() async {
+    await findHelper()
   }
 
   /// Reads where Open at Login stands now: the ⋯ menu ticks it, and its item turns it from there. While a change
@@ -90,6 +100,7 @@ extension PanelController {
   func readFrame() async {
     frameReading += 1
     let number = frameReading
+    // A failed capture is nil, and shows no picture rather than an old one.
     let shown = try? await service.frame()
     guard number == frameReading, !Task.isCancelled else { return }
     var decoded: DesktopPicture?

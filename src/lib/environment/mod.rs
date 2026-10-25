@@ -631,6 +631,7 @@ async fn dispatch_within(
         request,
     };
 
+    let ownership = client.controller.acquire(false)?;
     let name = format!("request-{}", crate::control::token());
     let invocation = stage.join(&name);
     create_stage(&invocation, helper)?;
@@ -643,11 +644,23 @@ async fn dispatch_within(
         }
     };
 
-    let result = match client.run_within(argv, timeout).await {
-        Ok(reply) if raw_output => refused(reply, &name),
-        Ok(reply) => decode_reply(&reply, mutating, &name),
-        Err(error) => Err(error),
-    };
+    let result = async {
+        // A process exit does not acknowledge the environment mutation.
+        let generation = client.controller.quarantine()?;
+        let result = match client.run_owned_within(&ownership, argv, timeout).await {
+            Ok(reply) if reply["ok"] == false => Err(crate::transport::refusal(&reply)),
+            Ok(reply) if raw_output => refused(reply, &name),
+            Ok(reply) => decode_reply(&reply, mutating, &name),
+            Err(error) => Err(error),
+        };
+
+        if !delivery_uncertain(&result) {
+            client.controller.clear_if(&generation)?;
+        }
+
+        result
+    }
+    .await;
 
     if !delivery_uncertain(&result) {
         // A complete child reply means its immutable request is no longer in use.

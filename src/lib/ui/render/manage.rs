@@ -277,13 +277,12 @@ pub fn update(value: &Value) -> Rendered {
 pub fn uninstall(value: &Value) -> String {
     let mut lines = vec![format!("{} Atlas is removed", style::ok())];
 
-    if let (Some(name), Some(command)) = (
+    if let (Some(_), Some(command)) = (
         value["kept"]["helperAccount"].as_str(),
         value["kept"]["remove"].as_str(),
     ) {
         lines.push(format!(
-            "  The helper account {} is still here. To delete it too: {}",
-            text::printable(name),
+            "  To delete the helper account too: {} (it's logged out, so this is safe).",
             style::cmd(command)
         ));
     }

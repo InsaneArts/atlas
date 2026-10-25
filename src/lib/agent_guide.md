@@ -7,9 +7,8 @@ The person's only job was setting Atlas up; everything after that is yours.
 
 Commands print JSON whenever their output is not a terminal (as in your shell;
 add `--json` if you ever see plain text; only `--help` is always text) and
-exit non-zero on failure. Failures
-are `{"ok": false, "code", "error", "uncertain"}`, printed on standard
-error.
+exit non-zero on failure. A failed action's result is on stdout;
+command or connection errors are on stderr. On a non-zero exit, read both.
 
 ## When to use it
 
@@ -210,7 +209,7 @@ you found it:
    (`retainedDirectories`).
 3. Delete files you made with `atlas run -- /bin/rm FILE...`, one command
    on its own rather than an `rm` inside `sh -c` or beside other commands,
-   so a reviewer of your commands can see what goes.
+   so the person reading your commands can see what goes.
 
 Screenshots are deleted by Atlas after a week; you need not remove them.
 

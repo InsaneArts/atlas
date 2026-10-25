@@ -1,7 +1,7 @@
 # Working on Atlas
 
-- Use the Rust library/CLI layout and fmt, clippy and test checks used by the
-  neighboring markdown2pdf project. No Python runtime and no TUI.
+- Use a Rust library/CLI layout and the fmt, clippy and test checks listed
+  below. No Python runtime and no TUI.
 - unsafe code is denied crate-wide. Prefer safe crates (nix, objc2 bindings);
   FFI that has none lives in a module or function marked
   allow(unsafe_code) with its reason, and every unsafe block has a SAFETY note.
@@ -16,15 +16,18 @@
   input executable is a separate process.
 - Cancel ownership independently of event execution. Retain controller exclusion
   through cleanup; keep every unacknowledged mutation pending until recovery.
-- Preserve investigation evidence. docs/, runs/, local configuration and archived
-  experiments stay untracked. Keep the remote focused on maintained source.
+- Preserve investigation evidence. docs/, runs/, local configuration and
+  archived experiments stay untracked. Keep the remote focused on maintained source.
 - Run cargo fmt --all --check, cargo clippy --all-targets -- -D warnings,
-  cargo test, npm run format:check and npm test after relevant changes; in
-  app/, swift test and swift format lint -rs Sources Tests (Swift 6 mode).
-- Write app/ Swift as ../jolt-v2's chapters 13 and 14 say. AtlasKit holds rules
-  and the service client; AtlasUI holds the design system, components, each
-  window's state and events, views and previews, and never imports AtlasKit;
-  AtlasApp holds the AppKit shells, one controller and presenter per window.
+  cargo test, npm run format:check and npm test after relevant changes, and
+  node scripts/check-swift.mjs (swift test and swift format lint -rs Sources
+  Tests in app/ and every app/Packages/ package; Swift 6 mode).
+- Keep app/ Swift separated by responsibility. The domain packages
+  under app/Packages (AtlasService, AtlasCommands, AtlasControl, AtlasStatus,
+  AtlasOnboarding) hold rules and the service client; AtlasUI, its own package
+  under app/Packages/, holds the design system, components, each window's state
+  and events, views and previews, and never imports them; AtlasApp holds the
+  AppKit shells, one controller and presenter per window.
   A view draws its state and sends events. Use tokens, never literal sizes;
   one type per file; one chained call per line; sentence-named tests.
 - Unit checks are not desktop evidence. Exercise changed input behavior against

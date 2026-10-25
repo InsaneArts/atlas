@@ -1246,7 +1246,9 @@ fn without_section(text: &str) -> Option<String> {
 
 /// An instruction file's text, or None when there is none.
 fn read_instructions(path: &Path) -> Result<Option<String>> {
-    match std::fs::read_to_string(path) {
+    let target = file_target(path)
+        .map_err(|error| problem(format!("Could not read {}: {error}", path.display())))?;
+    match std::fs::read_to_string(target) {
         Ok(text) => Ok(Some(text)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(problem(format!(
@@ -1295,7 +1297,7 @@ fn with_section(text: &str) -> Option<String> {
 fn replace_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::{io::Write, os::unix::fs::OpenOptionsExt, os::unix::fs::PermissionsExt};
 
-    let target = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let target = file_target(path)?;
     let mode = std::fs::metadata(&target).map_or(0o644, |m| m.permissions().mode() & 0o777);
     let temporary = target.with_file_name(format!(
         ".{}.atlas-{}",
@@ -1325,6 +1327,20 @@ fn replace_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     }
 
     result
+}
+
+/// Resolve an existing file, refusing links whose targets cannot be resolved.
+fn file_target(path: &Path) -> std::io::Result<PathBuf> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => path.canonicalize().map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!("Could not resolve {}: {error}", path.display()),
+            )
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(path.to_path_buf()),
+        Err(error) => Err(error),
+    }
 }
 
 /// After an update, bring each connected agent's copy of the plugin up to
@@ -1503,6 +1519,34 @@ mod tests {
     }
 
     #[test]
+    fn an_unresolved_instruction_link_leaves_every_file_unchanged() {
+        for (name, other) in [("AGENTS.md", "CLAUDE.md"), ("CLAUDE.md", "AGENTS.md")] {
+            for target in ["missing.md", name] {
+                let dir = tempfile::tempdir().unwrap();
+                let path = dir.path().join(name);
+                let other = dir.path().join(other);
+                let before = with_section("# Rules\n").unwrap();
+                std::fs::write(&other, &before).unwrap();
+                std::os::unix::fs::symlink(target, &path).unwrap();
+                let record = dir.path().join("projects.json");
+
+                let error = project(dir.path()).unwrap_err();
+                assert!(error.error.contains(&path.display().to_string()));
+                assert!(error.error.contains("Could not resolve"));
+                assert_eq!(std::fs::read_link(&path).unwrap(), Path::new(target));
+                assert_eq!(std::fs::read_to_string(&other).unwrap(), before);
+
+                let error = forget_in(dir.path(), &record).unwrap_err();
+                assert!(error.error.contains(&path.display().to_string()));
+                assert_eq!(std::fs::read_link(&path).unwrap(), Path::new(target));
+                assert_eq!(std::fs::read_to_string(&other).unwrap(), before);
+                assert!(!record.exists());
+                assert!(!dir.path().join("missing.md").exists());
+            }
+        }
+    }
+
+    #[test]
     fn forgetting_takes_back_only_what_teaching_added() {
         for text in ["A", "A\n", "A\n\n", "# Opie\n\nBuild with make.\n"] {
             let taught = with_section(text).unwrap();
@@ -1570,6 +1614,22 @@ mod tests {
         });
 
         assert_eq!(taught_in(&record).len(), folders.len());
+    }
+
+    #[test]
+    fn an_unresolved_project_list_link_is_refused_and_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let record = dir.path().join("projects.json");
+        let target = Path::new("missing.json");
+        std::os::unix::fs::symlink(target, &record).unwrap();
+
+        for keep in [true, false] {
+            let error = remember(&record, dir.path(), keep).unwrap_err();
+            assert!(error.error.contains(&record.display().to_string()));
+            assert!(error.error.contains("Could not resolve"));
+            assert_eq!(std::fs::read_link(&record).unwrap(), target);
+            assert!(!dir.path().join(target).exists());
+        }
     }
 
     #[test]
@@ -1801,6 +1861,22 @@ mod tests {
             let value: Value = serde_json::from_str(&text).unwrap();
             assert_eq!(value["homepage"], HOMEPAGE, "{manifest}");
         }
+    }
+
+    /// Codex refuses hooks/hooks.json for its Claude Code `modules`, so its
+    /// manifest names hooks.json, which holds the same hooks without them.
+    #[test]
+    fn codex_reads_the_same_hooks_without_claude_code_modules() {
+        let plugin = Path::new(env!("CARGO_MANIFEST_DIR")).join("agents/atlas");
+        let read = |name: &str| -> Value {
+            serde_json::from_str(&std::fs::read_to_string(plugin.join(name)).unwrap()).unwrap()
+        };
+
+        let mut claude = read("hooks/hooks.json");
+        assert!(claude["modules"].is_array());
+        claude.as_object_mut().unwrap().remove("modules");
+        assert_eq!(read("hooks.json"), claude);
+        assert_eq!(read(".codex-plugin/plugin.json")["hooks"], "./hooks.json");
     }
 
     /// Codex will not add over a marketplace of the same name, so another

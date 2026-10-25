@@ -1,12 +1,12 @@
 #if DEBUG
-  import AtlasKit
+  import AtlasService
+  import AtlasServiceTesting
   import AtlasUI
   import Testing
 
   @testable import AtlasApp
 
   /// The panel's samples are written out by hand; these keep each one what the panel would show for the same facts.
-  @MainActor
   @Suite("PreviewStates+Panel")
   struct PanelPreviewStatesTests {
     /// What the controller holds on a set-up Mac whose helper is in `mode`: an agent's three actions in Opie, a few
@@ -70,6 +70,8 @@
         "Log out anyway": AlertSnapshot(alert: .logOutAnyway),
         "Recover refused": AlertSnapshot(alert: .recover, failure: HelperWords.recoverBusy, overview: recovering),
         "Recovering": AlertSnapshot(alert: .recover, running: true, overview: recovering),
+        "Recovered": AlertSnapshot(alert: .recover, running: true, done: true, overview: recovering),
+        "Logging out": AlertSnapshot(alert: .logOut, running: true),
       ]
       #expect(Set(presented.keys) == Set(PreviewStates.alert.map(\.name)), "every sample has its facts, and no more")
       for preview in PreviewStates.alert {

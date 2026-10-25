@@ -79,6 +79,9 @@ fn changed(settings: &mut Map<String, Value>, atlas: Option<&Path>) -> Result<bo
     if let Some(found) = servers.get(NAME)
         && !ours(found)
     {
+        if atlas.is_none() {
+            return Ok(false);
+        }
         return Err(Error::new(
             "agents",
             "The Claude app already has an MCP server named atlas that is not Atlas's; remove it \
@@ -108,13 +111,22 @@ fn connected_in(home: &Path) -> bool {
 /// The file before Atlas first changed it is kept beside it, privately, and
 /// never replaced. The new file replaces the old one whole, with its
 /// permissions; a settings file that is a link is changed where it points.
-/// Removing leaves alone what is not Atlas's to change: a file that is not
-/// JSON, or another program's entry named atlas.
+/// Removing leaves another program's entry named atlas alone; invalid
+/// settings are reported without changing the file.
 fn change_in(home: &Path, atlas: Option<&Path>) -> Result<bool> {
     use std::os::unix::fs::PermissionsExt;
 
     let named = settings_in(home);
-    let path = fs::canonicalize(&named).unwrap_or(named);
+    let path = match fs::symlink_metadata(&named) {
+        Ok(_) => fs::canonicalize(&named).map_err(|error| {
+            Error::new(
+                "agents",
+                format!("Could not resolve {}: {error}", named.display()),
+            )
+        })?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => named.clone(),
+        Err(error) => return Err(Error::writing(&named, error)),
+    };
     let before = match fs::read_to_string(&path) {
         Ok(text) => Some(text),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
@@ -127,8 +139,12 @@ fn change_in(home: &Path, atlas: Option<&Path>) -> Result<bool> {
     let settings = match changing {
         Ok(Some(settings)) => settings,
         Ok(None) => return Ok(false),
-        Err(_) if atlas.is_none() => return Ok(false),
-        Err(error) => return Err(error),
+        Err(error) => {
+            return Err(Error::new(
+                error.code,
+                format!("{}: {}", named.display(), error.error),
+            ));
+        }
     };
 
     let folder = path.parent().unwrap_or(home);
@@ -293,6 +309,70 @@ mod tests {
     }
 
     #[test]
+    fn an_unresolved_settings_link_is_refused_and_kept() {
+        for target in ["missing.json", "claude_desktop_config.json"] {
+            let dir = tempfile::tempdir().unwrap();
+            let home = dir.path();
+            let path = settings_in(home);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(target, &path).unwrap();
+
+            for atlas in [Some(Path::new("/x/atlas")), None] {
+                let error = change_in(home, atlas).unwrap_err();
+                assert!(error.error.contains(&path.display().to_string()));
+                assert!(error.error.contains("Could not resolve"));
+                assert_eq!(fs::read_link(&path).unwrap(), Path::new(target));
+                assert!(!path.with_extension("json.before-atlas").exists());
+                assert!(!path.with_extension("json.atlas-partial").exists());
+            }
+            assert!(!path.parent().unwrap().join("missing.json").exists());
+        }
+    }
+
+    #[test]
+    fn removing_reports_invalid_settings_and_keeps_the_file_as_it_was() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let path = settings_in(home);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+
+        for before in [
+            r#"{"mcpServers": {"atlas": {"command": "/x/atlas", "args": ["mcp"]}}"#,
+            "[]",
+            r#"{"mcpServers": null}"#,
+            r#"{"mcpServers": []}"#,
+            r#"{"mcpServers": "invalid"}"#,
+        ] {
+            fs::write(&path, before).unwrap();
+            let error = change_in(home, None).unwrap_err();
+            assert_eq!(error.code, "agents");
+            assert!(error.error.contains(&path.display().to_string()));
+            assert_eq!(fs::read_to_string(&path).unwrap(), before);
+            assert!(!path.with_extension("json.before-atlas").exists());
+        }
+    }
+
+    #[test]
+    fn removing_an_absent_entry_keeps_other_settings_and_creates_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let path = settings_in(home);
+        assert!(!change_in(home, None).unwrap());
+        assert!(!path.exists());
+
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        for before in [
+            r#"{"theme": "dark"}"#,
+            r#"{"mcpServers": {"other": {"command": "x"}}, "theme": "dark"}"#,
+        ] {
+            fs::write(&path, before).unwrap();
+            assert!(!change_in(home, None).unwrap());
+            assert_eq!(fs::read_to_string(&path).unwrap(), before);
+            assert!(!path.with_extension("json.before-atlas").exists());
+        }
+    }
+
+    #[test]
     fn another_programs_atlas_entry_and_a_broken_file_are_left_alone() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path();
@@ -309,7 +389,7 @@ mod tests {
 
         fs::write(&path, "{ not json").unwrap();
         assert_eq!(change_in(home, Some(atlas)).unwrap_err().code, "agents");
-        assert!(!change_in(home, None).unwrap());
+        assert_eq!(change_in(home, None).unwrap_err().code, "agents");
         assert_eq!(fs::read_to_string(&path).unwrap(), "{ not json");
     }
 }

@@ -32,8 +32,9 @@ fn request_accessibility() {
 /// once per app, so the requests come one by one: Accessibility first,
 /// waiting until it is on (macOS reports that at once), then Screen
 /// Recording, with its System Settings page opened so its switch is there
-/// even when macOS shows no prompt. Nothing is granted here; the person
-/// decides, in the normal way.
+/// even when macOS shows no prompt. While Atlas's setup window is open, it
+/// guides the person instead and this only watches. Nothing is granted
+/// here; the person decides, in the normal way.
 ///
 /// With nothing to ask right after the person logged in (after a restart
 /// or a log-out), they are told they can switch back to `controller`.
@@ -67,10 +68,168 @@ async fn just_logged_in() -> bool {
         .is_some_and(|login| login.age < FRESH_LOGIN)
 }
 
+/// What the daemon does on one pass about a permission still off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Nudge {
+    /// Nothing now: keep watching.
+    Wait,
+    /// Ask macOS for it: its prompt, which also lists Atlas in System
+    /// Settings.
+    Request,
+    /// Open its System Settings page.
+    OpenSettings,
+}
+
+/// Passes in a row with no setup window that the daemon waits for: it asks
+/// on the third, so a window opening at login (by itself, or by the
+/// opener) is in time to guide instead.
+const QUIET_PASSES: u32 = 3;
+
+/// How asking for one permission stands: passes in a row with no setup
+/// window, whether macOS was asked, whether its page was opened, and how
+/// many passes went by since the request.
+#[derive(Debug, Default)]
+struct Asking {
+    quiet: u32,
+    requested: bool,
+    opened: bool,
+    since_request: u32,
+}
+
+impl Asking {
+    /// What to do on this pass, and count it. While Atlas's setup window
+    /// guides the person (`guided`), only it does: macOS's prompt would
+    /// cover it, and asking lists Atlas switched off, where dragging Atlas
+    /// in may no longer turn it on. Otherwise, after [`QUIET_PASSES`]
+    /// without it, ask once, then open the page once `settings_after`
+    /// passes went by since asking.
+    fn pass(&mut self, guided: bool, settings_after: u32) -> Nudge {
+        self.quiet = if guided { 0 } else { self.quiet + 1 };
+
+        let nudge = if self.quiet < QUIET_PASSES {
+            Nudge::Wait
+        } else if !self.requested {
+            self.requested = true;
+            Nudge::Request
+        } else if !self.opened && self.since_request >= settings_after {
+            self.opened = true;
+            Nudge::OpenSettings
+        } else {
+            Nudge::Wait
+        };
+
+        if self.requested {
+            self.since_request += 1;
+        }
+
+        nudge
+    }
+}
+
+/// Whether Atlas's setup window guides the person through the permissions
+/// in this account now: it is open, or the opener waits to open it (asked
+/// off the runtime: it runs `ps`).
+async fn guided() -> bool {
+    tokio::task::spawn_blocking(|| {
+        let uid = nix::unistd::getuid().as_raw();
+        crate::config::home().is_ok_and(|home| {
+            crate::onboarding::window_open(&home)
+                || crate::setup::first_login::opener_waiting(&crate::setup::helper::Layout {
+                    uid,
+                    home,
+                    guard: None,
+                })
+        })
+    })
+    .await
+    .unwrap_or(false)
+}
+
+/// How often the daemon looks for a Screen Recording grant it cannot use
+/// yet, while Atlas's setup window guides the person: every 2 s.
+const RECORDING_WATCH: Duration = Duration::from_secs(2);
+
+/// The least time between two restarts for Screen Recording: 60 s, so a
+/// grant that this process and a new one see differently never restarts it
+/// over and over.
+const RECORDING_RESTART_GAP: Duration = Duration::from_secs(60);
+
+/// While Atlas's setup window guides the person, restart this process as
+/// soon as a new one may use Screen Recording and this one may not. Only a
+/// new process gets the grant, and the window reads it from this one, so the
+/// window sees the switch on at once, whichever permission the person turned
+/// on first. It runs apart from the arrival's requests, which a moment off
+/// screen ends, and ends once this process may record.
+pub async fn restart_for_recording(restart: impl Fn()) {
+    watch_recording(
+        || tokio::time::sleep(RECORDING_WATCH),
+        capture::permitted,
+        || async { guided().await && screen_recording_now().await },
+        restarted_lately,
+        restart,
+    )
+    .await;
+}
+
+async fn watch_recording<Pause, Probe>(
+    mut pause: impl FnMut() -> Pause,
+    mut permitted: impl FnMut() -> bool,
+    mut granted: impl FnMut() -> Probe,
+    mut cooling_down: impl FnMut() -> bool,
+    restart: impl Fn(),
+) where
+    Pause: std::future::Future<Output = ()>,
+    Probe: std::future::Future<Output = bool>,
+{
+    loop {
+        pause().await;
+        if permitted() {
+            return;
+        }
+
+        // The window first: a new process is started only while it guides.
+        if granted().await && !cooling_down() {
+            restart();
+            return;
+        }
+    }
+}
+
+/// Whether this watcher restarted Atlas less than [`RECORDING_RESTART_GAP`]
+/// ago; when not, now is noted as its latest restart. The note outlives the
+/// restart, as the asked mark does.
+fn restarted_lately() -> bool {
+    let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
+        return false;
+    };
+
+    let path = home
+        .join(crate::setup::helper::ROOT)
+        .join("recording-restart");
+    let age = std::fs::metadata(&path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok());
+    let lately = within(age, RECORDING_RESTART_GAP);
+    if !lately {
+        let _ = std::fs::write(&path, b"restarted\n");
+    }
+
+    lately
+}
+
+/// Whether something `age` old (none when it never happened) is younger
+/// than `gap`.
+fn within(age: Option<Duration>, gap: Duration) -> bool {
+    age.is_some_and(|age| age < gap)
+}
+
 /// One arrival's requests, given up as soon as the helper leaves the screen.
 /// When the person has turned on what was asked for, Atlas says so here, so
 /// they know to switch back, and restarts this process if it cannot yet use
-/// Screen Recording (macOS applies that grant to new processes only).
+/// Screen Recording (macOS applies that grant to new processes only). While
+/// the setup window is open, it guides the person and this only watches
+/// ([`Asking::pass`]); closing it midway brings the requests back.
 async fn ask(shown: &impl Fn() -> bool, restart: &impl Fn(), controller: u32) {
     // Let the desktop settle after the switch, and let macOS finish a new
     // account's setup screens: a prompt raised behind them is never seen.
@@ -90,7 +249,7 @@ async fn ask(shown: &impl Fn() -> bool, restart: &impl Fn(), controller: u32) {
     // now: say so (and pick up the grant).
     if accessibility() && recording().await {
         if asked(false) {
-            done_notice();
+            done_notice(controller);
         } else if just_logged_in().await {
             back_notice(controller);
         }
@@ -105,20 +264,20 @@ async fn ask(shown: &impl Fn() -> bool, restart: &impl Fn(), controller: u32) {
     asked(true);
 
     if !accessibility() {
-        request_accessibility();
         // As long as the person stays, however long they take. Should the
         // prompt not appear, its System Settings page opens instead.
-        let mut second = 0u32;
+        let mut asking = Asking::default();
 
         while !accessibility() {
+            match asking.pass(guided().await, 15) {
+                Nudge::Request => request_accessibility(),
+                Nudge::OpenSettings => open_settings("Privacy_Accessibility"),
+                Nudge::Wait => {}
+            }
+
             tokio::time::sleep(Duration::from_secs(1)).await;
             if !shown() {
                 return;
-            }
-
-            second += 1;
-            if second == 15 {
-                open_settings("Privacy_Accessibility");
             }
         }
 
@@ -126,30 +285,32 @@ async fn ask(shown: &impl Fn() -> bool, restart: &impl Fn(), controller: u32) {
     }
 
     if !recording().await {
-        if !shown() {
-            return;
-        }
+        let mut asking = Asking::default();
 
-        capture::request();
-        tokio::time::sleep(Duration::from_secs(1)).await;
-
-        if !shown() {
-            return;
-        }
-
-        open_settings("Privacy_ScreenCapture");
-
-        while !screen_recording_now().await {
-            tokio::time::sleep(Duration::from_secs(2)).await;
+        // Just read as off: passes ask (once quiet) before reading it again.
+        loop {
             if !shown() {
                 return;
+            }
+
+            let nudge = asking.pass(guided().await, 1);
+            match nudge {
+                Nudge::Request => _ = capture::request(),
+                Nudge::OpenSettings => open_settings("Privacy_ScreenCapture"),
+                Nudge::Wait => {}
+            }
+
+            let pause = if nudge == Nudge::Request { 1 } else { 2 };
+            tokio::time::sleep(Duration::from_secs(pause)).await;
+            if screen_recording_now().await {
+                break;
             }
         }
     }
 
     if shown() {
         asked(false);
-        done_notice();
+        done_notice(controller);
         if !capture::permitted() {
             restart();
         }
@@ -209,14 +370,32 @@ fn asked(remember: bool) -> bool {
     was
 }
 
-/// Tell the person, in the helper, that it is set up and they can go back.
-fn done_notice() {
+/// Tell the person, in the helper, that it is set up, with a button that
+/// switches back to `controller` when that account is known.
+fn done_notice(controller: u32) {
+    let account = crate::setup::account_with_uid(controller).ok().flatten();
+    let title = account.as_ref().map(|account| {
+        crate::setup::real_name(&account.name).unwrap_or_else(|| account.name.clone())
+    });
     notice(
-        "Atlas is set up here",
-        "Screen Recording and Accessibility are on. Switch back to your own account; Atlas \
-         carries on there by itself.",
-        None,
+        "Atlas is set up",
+        &done_message(title.as_deref()),
+        account.as_ref().map(|account| account.name.as_str()),
     );
+}
+
+/// What the set-up notice says: who to switch back to, by name when known.
+fn done_message(title: Option<&str>) -> String {
+    let back = title.unwrap_or("your own account");
+    format!(
+        "Screen Recording and Accessibility are on. {}",
+        switch_back(back)
+    )
+}
+
+/// The sentence that sends the person back to `title`'s account.
+fn switch_back(title: &str) -> String {
+    format!("Switch back to {title} — Atlas keeps running there.")
 }
 
 /// Tell the person, just logged in to the helper, that Atlas runs here
@@ -229,7 +408,7 @@ fn back_notice(controller: u32) {
     let title = crate::setup::real_name(&account.name).unwrap_or_else(|| account.name.clone());
     notice(
         "Atlas is running here again",
-        &format!("Switch back to {title}; Atlas carries on there by itself."),
+        &switch_back(&title),
         Some(&account.name),
     );
 }
@@ -452,6 +631,26 @@ pub fn hello(manager: &str) -> Value {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn a_recording_grant_is_picked_up_after_the_restart_cooldown_expires() {
+        let elapsed = std::cell::Cell::new(Duration::ZERO);
+        let restarted = std::cell::Cell::new(false);
+        watch_recording(
+            || {
+                elapsed.set(elapsed.get() + RECORDING_WATCH);
+                assert!(elapsed.get() <= RECORDING_RESTART_GAP);
+                std::future::ready(())
+            },
+            || false,
+            || std::future::ready(true),
+            || within(Some(elapsed.get()), RECORDING_RESTART_GAP),
+            || restarted.set(true),
+        )
+        .await;
+        assert!(restarted.get());
+        assert_eq!(elapsed.get(), RECORDING_RESTART_GAP);
+    }
+
     /// The prompt option is passed by name; it is the exported constant.
     #[test]
     #[allow(unsafe_code)]
@@ -459,6 +658,103 @@ mod tests {
         // SAFETY: reading an immutable framework constant in a test.
         let key = unsafe { objc2_application_services::kAXTrustedCheckOptionPrompt };
         assert_eq!(key.to_string(), "AXTrustedCheckOptionPrompt");
+    }
+
+    /// `asking`'s nudges over `count` passes, the window guiding as given.
+    fn passes(asking: &mut Asking, guided: bool, settings_after: u32, count: usize) -> Vec<Nudge> {
+        (0..count)
+            .map(|_| asking.pass(guided, settings_after))
+            .collect()
+    }
+
+    #[test]
+    fn a_restart_for_screen_recording_waits_a_minute_after_the_last_one() {
+        let gap = RECORDING_RESTART_GAP;
+        assert!(!within(None, gap), "never restarted");
+        assert!(within(Some(Duration::from_secs(5)), gap), "just restarted");
+        assert!(!within(Some(gap + Duration::from_secs(1)), gap));
+    }
+
+    #[test]
+    fn while_the_setup_window_guides_the_daemon_only_watches() {
+        let mut asking = Asking::default();
+        assert!(
+            passes(&mut asking, true, 15, 30)
+                .iter()
+                .all(|nudge| *nudge == Nudge::Wait)
+        );
+        assert_eq!(
+            asking.since_request, 0,
+            "passes count only once macOS was asked"
+        );
+    }
+
+    #[test]
+    fn without_the_window_the_daemon_waits_asks_once_then_opens_the_page_once() {
+        let mut asking = Asking::default();
+        let quiet = QUIET_PASSES as usize;
+        let mut expected = vec![Nudge::Wait; quiet - 1];
+        expected.push(Nudge::Request);
+        expected.extend(vec![Nudge::Wait; 14]);
+        expected.push(Nudge::OpenSettings);
+        expected.push(Nudge::Wait);
+        assert_eq!(passes(&mut asking, false, 15, expected.len()), expected);
+
+        let mut recording = Asking::default();
+        let nudges = passes(&mut recording, false, 1, quiet + 2);
+        assert_eq!(
+            nudges[quiet - 1..],
+            [Nudge::Request, Nudge::OpenSettings, Nudge::Wait]
+        );
+    }
+
+    #[test]
+    fn a_window_opening_late_at_login_still_guides_before_any_prompt() {
+        let mut asking = Asking::default();
+        let early = passes(&mut asking, false, 15, QUIET_PASSES as usize - 1);
+        assert!(early.iter().all(|nudge| *nudge == Nudge::Wait));
+        assert_eq!(
+            asking.pass(true, 15),
+            Nudge::Wait,
+            "the window came in time"
+        );
+        let again = passes(&mut asking, false, 15, QUIET_PASSES as usize);
+        assert_eq!(
+            again.last(),
+            Some(&Nudge::Request),
+            "closing it brings the request back"
+        );
+    }
+
+    #[test]
+    fn closing_the_window_midway_brings_the_page_back_once_its_time_went_by() {
+        let mut asking = Asking::default();
+        passes(&mut asking, false, 15, QUIET_PASSES as usize);
+        assert!(asking.requested);
+        assert!(
+            passes(&mut asking, true, 15, 20)
+                .iter()
+                .all(|nudge| *nudge == Nudge::Wait)
+        );
+        let after = passes(&mut asking, false, 15, QUIET_PASSES as usize);
+        assert_eq!(after.last(), Some(&Nudge::OpenSettings));
+    }
+
+    #[test]
+    fn the_set_up_notice_names_the_account_to_switch_back_to() {
+        assert_eq!(
+            done_message(Some("Alex")),
+            "Screen Recording and Accessibility are on. Switch back to Alex — Atlas keeps running there."
+        );
+        assert_eq!(
+            done_message(None),
+            "Screen Recording and Accessibility are on. Switch back to your own account — Atlas keeps \
+             running there."
+        );
+        assert!(
+            !switch_back("Alex").contains(';'),
+            "one plain sentence, no semicolon"
+        );
     }
 
     #[test]

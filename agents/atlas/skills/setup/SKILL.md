@@ -65,10 +65,12 @@ If permissions are missing, tell the person to switch to the helper account and
 turn Atlas on in System Settings › Privacy & Security (Screen Recording and
 Accessibility), then switch back.
 
-## 5. Teach this project
+## 5. Done
 
-Offer to run `atlas agents project` in the project folder. It adds a short
-section to AGENTS.md (and to a separate CLAUDE.md) so every future session here
-knows to check on-screen changes in the helper. It edits those files, so ask
-first. From then on the person never has to run anything else: you open
-builds, copy what apps need and clean up yourself.
+Setup connects Claude Code and Codex (`atlas agents install` connects them
+later), and while Atlas is ready the plugin reminds every session to check
+on-screen changes in the helper. Codex asks the person to trust the plugin's
+hooks once; say so if they use Codex. From then on the person never has to run anything else: you open
+builds, copy what apps need and clean up yourself. If the person also uses
+another agent in this project, offer `atlas agents project` there; it edits
+AGENTS.md (and a separate CLAUDE.md), so ask first.

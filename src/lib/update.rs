@@ -591,8 +591,15 @@ pub(crate) fn atlas_copies(installed: &Path) -> Vec<PathBuf> {
 /// Put `new` in place of `installed` with one atomic exchange, keeping
 /// the previous app beside it (and recording where) until the helper's
 /// handover succeeds.
-fn swap(new: &Path, installed: &Path, name: &str) -> Result<()> {
-    swap_recording(new, installed, name, &record_path()?)
+async fn swap(
+    new: &Path,
+    installed: &Path,
+    name: &str,
+    record: &Path,
+    preflight: impl AsyncFnOnce(&Path) -> Result<()>,
+) -> Result<()> {
+    preflight(&new.join(EXECUTABLE)).await?;
+    swap_recording(new, installed, name, record)
 }
 
 fn swap_recording(new: &Path, installed: &Path, name: &str, record: &Path) -> Result<()> {
@@ -645,25 +652,31 @@ fn swap_recording(new: &Path, installed: &Path, name: &str, record: &Path) -> Re
 /// The exchange a recorded update may have been stopped before: when the
 /// installed app is not the recorded new one but the staging copy beside it
 /// is, exchange them now, so finishing never discards the new app.
-fn resume(record: &Value, installed: &Path) -> Result<()> {
-    let Some(expected) = record["executable"].as_str() else {
-        return Ok(());
-    };
+async fn resume(
+    record: &Value,
+    installed: &Path,
+    preflight: impl AsyncFnOnce(&Path) -> Result<()>,
+) -> Result<()> {
+    let previous = resume_source(record, installed);
+    let next = previous.as_deref().unwrap_or(installed);
+    preflight(&next.join(EXECUTABLE)).await?;
+    if let Some(previous) = previous {
+        exchange(&previous, installed)?;
+    }
+    Ok(())
+}
+
+/// The staged new app when the recorded exchange has not happened yet.
+fn resume_source(record: &Value, installed: &Path) -> Option<PathBuf> {
+    let expected = record["executable"].as_str()?;
 
     let previous = record["previous"].as_str().map(Path::new);
-    let Some(previous) = previous.filter(|previous| staged_beside(previous, Some(installed)))
-    else {
-        return Ok(());
-    };
+    let previous = previous.filter(|previous| staged_beside(previous, Some(installed)))?;
 
     let sha256 = |app: &Path| crate::digest::file_sha256(&app.join(EXECUTABLE));
-    if sha256(installed).as_deref() != Some(expected)
-        && sha256(previous).as_deref() == Some(expected)
-    {
-        exchange(previous, installed)?;
-    }
-
-    Ok(())
+    (sha256(installed).as_deref() != Some(expected)
+        && sha256(previous).as_deref() == Some(expected))
+    .then(|| previous.to_owned())
 }
 
 /// Whether other accounts (the helper) can reach and run `executable`:
@@ -683,17 +696,18 @@ pub fn reachable_by_others(executable: &Path) -> bool {
 /// Replace the installed app with the release from `source` when it is newer
 /// (or `force`). Reports whether it changed and the versions involved. The
 /// caller holds the update lock throughout.
-pub fn install(
+pub async fn install(
     source: &Source,
     allow_unnotarized: bool,
     force: bool,
     _exclusive: &Exclusive,
+    preflight: impl AsyncFnOnce(&Path) -> Result<()>,
 ) -> Result<Value> {
     let installed = installed_app()?;
 
     // A swap whose handover did not finish is resumed before anything else.
     if let Some(record) = unfinished()? {
-        resume(&record, &installed)?;
+        resume(&record, &installed, preflight).await?;
         return Ok(json!({"ok": true, "updated": true, "resumed": true, "record": record}));
     }
 
@@ -704,7 +718,7 @@ pub fn install(
     }
 
     let work = scratch()?;
-    let outcome = (|| {
+    let outcome = async {
         let name = download(source, &work)?;
         let available = archive_version(&name).unwrap_or_default();
         let current = version(crate::VERSION);
@@ -718,7 +732,7 @@ pub fn install(
         }
 
         let app = verify(&work, &name, allow_unnotarized)?;
-        swap(&app, &installed, &name)?;
+        swap(&app, &installed, &name, &record_path()?, preflight).await?;
 
         Ok(json!({
             "ok": true,
@@ -727,7 +741,8 @@ pub fn install(
             "to": name,
             "app": installed,
         }))
-    })();
+    }
+    .await;
 
     let _ = fs::remove_dir_all(&work);
     outcome
@@ -736,6 +751,41 @@ pub fn install(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn setup_refusal_prevents_the_bundle_exchange_and_update_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let installed = dir.path().join("Applications/Atlas.app");
+        let new = dir.path().join("unpacked/Atlas.app");
+        let record = dir.path().join("Support/update.json");
+        for (app, version) in [(&installed, "old"), (&new, "new")] {
+            fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
+            fs::write(app.join(EXECUTABLE), version).unwrap();
+        }
+        let result = swap(
+            &new,
+            &installed,
+            "Atlas-9.9.9-macos.zip",
+            &record,
+            async |program| {
+                assert_eq!(program, new.join(EXECUTABLE));
+                assert_eq!(
+                    fs::read_to_string(installed.join(EXECUTABLE)).unwrap(),
+                    "old"
+                );
+                Err(problem("setup refuses"))
+            },
+        )
+        .await;
+        assert_eq!(result.unwrap_err().error, "setup refuses");
+        assert_eq!(
+            fs::read_to_string(installed.join(EXECUTABLE)).unwrap(),
+            "old"
+        );
+        assert_eq!(fs::read_to_string(new.join(EXECUTABLE)).unwrap(), "new");
+        assert!(!record.exists());
+        assert!(staged_copies(&installed).is_empty());
+    }
 
     #[test]
     fn a_check_reads_the_newest_release_and_installs_nothing() {
@@ -897,8 +947,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_swap_is_recorded_first_and_finishing_removes_only_the_staged_copy() {
+    #[tokio::test]
+    async fn a_swap_is_recorded_first_and_finishing_removes_only_the_staged_copy() {
         let dir = tempfile::tempdir().unwrap();
         let root = fs::canonicalize(dir.path()).unwrap();
         let installed = root.join("Applications/Atlas.app");
@@ -959,7 +1009,7 @@ mod tests {
         );
 
         // The exchange happened: resuming changes nothing.
-        resume(&plan, &installed).unwrap();
+        resume(&plan, &installed, async |_| Ok(())).await.unwrap();
         assert_eq!(
             fs::read_to_string(installed.join("version")).unwrap(),
             "new"
@@ -972,7 +1022,18 @@ mod tests {
             "old"
         );
 
-        resume(&plan, &installed).unwrap();
+        let refused = resume(&plan, &installed, async |program| {
+            assert_eq!(program, previous.join(EXECUTABLE));
+            Err(problem("setup refuses"))
+        })
+        .await;
+        assert_eq!(refused.unwrap_err().error, "setup refuses");
+        assert_eq!(
+            fs::read_to_string(installed.join("version")).unwrap(),
+            "old"
+        );
+        assert_eq!(fs::read_to_string(previous.join("version")).unwrap(), "new");
+        resume(&plan, &installed, async |_| Ok(())).await.unwrap();
         assert_eq!(
             fs::read_to_string(installed.join("version")).unwrap(),
             "new"

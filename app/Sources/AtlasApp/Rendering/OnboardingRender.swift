@@ -4,7 +4,6 @@
   import SwiftUI
 
   /// The setup window's design renders. Debug builds only, since the samples are.
-  @MainActor
   enum OnboardingRender {
     /// Every setup window sample drawn for checking against the design, by file name, in the order the person
     /// meets them.
@@ -28,17 +27,27 @@
       ("05-finishing-failed", PreviewStates.onboardingFinishingFailed),
       ("06-agents", PreviewStates.onboardingAgents),
       ("06-agents-not-checked", PreviewStates.onboardingAgentsNotChecked),
+      ("06-claude-code-only", PreviewStates.onboardingClaudeCode),
+      ("06-claude-app-only", PreviewStates.onboardingClaudeApp),
+      ("06-claude-connection-failed", PreviewStates.onboardingClaudeFailure),
       ("07-done", PreviewStates.onboardingDone),
       ("08-helper-allow", PreviewStates.onboardingAllow),
       ("08-helper-allow-long", PreviewStates.onboardingAllowLong),
       ("09-helper-permissions", PreviewStates.onboardingPermissions),
-      ("10-helper-guide", PreviewStates.onboardingGuide),
+      ("09-helper-permissions-start", PreviewStates.onboardingPermissionsStart),
+      ("09-helper-permissions-checking", PreviewStates.onboardingPermissionsChecking),
+      ("10-helper-permission-panel", PreviewStates.onboardingPermissionPanel),
+      ("10-helper-permission-panel-allowed", PreviewStates.onboardingPermissionPanelAllowed),
       ("11-helper-done", PreviewStates.onboardingHelperDone),
       ("12-blocked", PreviewStates.onboardingBlocked),
+      ("14-close", PreviewStates.onboardingClose),
+      ("14-close-closing", PreviewStates.onboardingCloseClosing),
+      ("14-close-cancelled", PreviewStates.onboardingCloseCancelled),
+      ("14-close-closed", PreviewStates.onboardingCloseClosed),
     ]
 
     /// Draws every setup window sample to a PNG named after it in `directory`, at Retina scale and at its window's
-    /// size: the guide panel's for the guide, the card's for the rest.
+    /// size: the side panel's for the permission panel, the card's for the rest.
     ///
     /// - Parameter directory: Where to write the PNGs.
     /// - Returns: Whether every PNG was written.
@@ -47,7 +56,8 @@
       return renders.map { render in
         PNG.write(
           OnboardingView(state: render.state, form: .constant(form(render.state))) { _ in }
-            .environment(\.appIcon, AppIconImage.image),
+            .environment(\.appIcon, AppIconImage.image)
+            .environment(\.accountPicture, AccountPictureImage.image),
           size: size(render.state),
           to: folder.appendingPathComponent("\(render.file).png")
         )
@@ -67,10 +77,10 @@
     /// The window size a sample draws at.
     ///
     /// - Parameter state: The sample.
-    /// - Returns: The side panel's size for the guide, else the card's.
+    /// - Returns: The side panel's size for the permission panel, else the card's.
     static func size(_ state: OnboardingState) -> CGSize {
       switch state.content {
-      case .guide: OnboardingPlacement.size(guiding: true)
+      case .permissionPanel: OnboardingPlacement.size(guiding: true)
       case .loading, .screen: OnboardingPlacement.size(guiding: false)
       }
     }

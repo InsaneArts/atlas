@@ -8,7 +8,7 @@ use crate::{
     },
     error::{Error, Result},
     native::{apps, capture, endpoint, windows},
-    session::validate_target_uid,
+    session::{InputEpoch, validate_target_uid},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
@@ -39,7 +39,7 @@ const CONSOLE_CHECK: Duration = Duration::from_secs(1);
 
 /// Takes a screenshot: the real display in the daemon, a synthetic image in
 /// tests, so ordinary tests never capture the desktop they run on.
-type Capture = fn(Option<u32>) -> Result<capture::Shot>;
+type Capture = fn(u32, Option<u32>) -> Result<capture::Shot>;
 
 struct Daemon {
     /// launchd's session type, read once at start.
@@ -47,17 +47,24 @@ struct Daemon {
     capture: Capture,
     /// Whether the helper's session is on the console right now.
     on_console: fn() -> bool,
+    session: fn() -> Result<Value>,
     restarting: Notify,
     /// Set when the daemon stops, so running commands are ended first.
     stopping: watch::Sender<bool>,
 }
 
 impl Daemon {
-    fn new(manager: String, capture: Capture, on_console: fn() -> bool) -> Self {
+    fn new(
+        manager: String,
+        capture: Capture,
+        on_console: fn() -> bool,
+        session: fn() -> Result<Value>,
+    ) -> Self {
         Self {
             manager,
             capture,
             on_console,
+            session,
             restarting: Notify::new(),
             stopping: watch::Sender::new(false),
         }
@@ -128,12 +135,14 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
 
     let manager = facts::manager_name();
     require_graphical_session(uid, &manager)?;
+    crate::login_log::mark(&format!("daemon.start uid={uid}"));
     facts::type_exactly();
 
     let daemon = Arc::new(Daemon::new(
         manager,
         capture::main_display,
         facts::on_console,
+        crate::native::session_info,
     ));
 
     let (listener, _endpoint) = endpoint::bind(
@@ -154,6 +163,10 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
             restarter.restarting.notify_one();
         },
     ));
+    let watcher = daemon.clone();
+    let recording = tokio::spawn(facts::restart_for_recording(move || {
+        watcher.restarting.notify_one();
+    }));
 
     let slots = Arc::new(Semaphore::new(CONNECTIONS));
     let mut tasks = JoinSet::new();
@@ -222,6 +235,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     }
 
     consent.abort();
+    recording.abort();
     outcome
 }
 
@@ -370,8 +384,37 @@ fn off_display_windows() -> Vec<Value> {
 
 async fn screenshot(daemon: &Daemon, max_dimension: Option<u32>) -> Value {
     let capture = daemon.capture;
+    let on_console = daemon.on_console;
+    let session = daemon.session;
+    let epoch = match session().and_then(|proof| InputEpoch::from_proof(&proof, std::process::id()))
+    {
+        Ok(epoch) => epoch,
+        Err(error) => return refused(error),
+    };
     let taken = tokio::task::spawn_blocking(move || {
-        capture(max_dimension).map(|shot| (shot, off_display_windows()))
+        let request = Request::Screenshot { max_dimension };
+        let validate = || {
+            if let Some(refusal) = allowed(&request, on_console()) {
+                return Err(refusal);
+            }
+            let current = InputEpoch::from_proof(&session().map_err(refused)?, std::process::id())
+                .map_err(refused)?;
+            if current != epoch {
+                return Err(failure(
+                    "session-changed",
+                    "Session changed during capture; observe again",
+                ));
+            }
+            Ok(())
+        };
+        validate()?;
+
+        let shot = capture(epoch.display_id as u32, max_dimension).map_err(refused)?;
+        let off_display = off_display_windows();
+
+        validate()?;
+
+        Ok((shot, off_display))
     })
     .await;
     match taken {
@@ -383,7 +426,7 @@ async fn screenshot(daemon: &Daemon, max_dimension: Option<u32>) -> Value {
             "scale": shot.scale,
             "offDisplayWindows": off_display,
         }),
-        Ok(Err(error)) => refused(error),
+        Ok(Err(refusal)) => refusal,
         Err(_) => failure("capture", "The capture failed"),
     }
 }
@@ -416,7 +459,15 @@ async fn handle(stream: UnixStream, daemon: Arc<Daemon>, controller: bool) -> Re
     });
     let reply = match request {
         Err(reply) => reply,
-        Ok(Request::Hello) => facts::hello(&daemon.manager),
+        Ok(Request::Hello) => {
+            // The first hello of this login: Atlas answers in the helper.
+            static GREETED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !GREETED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                crate::login_log::mark("daemon.firstHello");
+            }
+            facts::hello(&daemon.manager)
+        }
         Ok(Request::Apps) => match tokio::task::spawn_blocking(apps::running).await {
             Ok(apps) => json!({"ok": true, "apps": apps}),
             Err(_) => failure("apps", "Running applications could not be listed"),
@@ -485,7 +536,8 @@ mod tests {
         assert_eq!(mode.to_string(), "kCFRunLoopDefaultMode");
     }
 
-    fn synthetic(_: Option<u32>) -> Result<capture::Shot> {
+    fn synthetic(display: u32, _: Option<u32>) -> Result<capture::Shot> {
+        assert_eq!(display, 7);
         Ok(capture::Shot {
             png: b"\x89PNG synthetic".to_vec(),
             width: 64,
@@ -494,11 +546,25 @@ mod tests {
         })
     }
 
+    fn session() -> Result<Value> {
+        Ok(json!({
+            "ok": true,
+            "uid": 502,
+            "securitySessionID": 42,
+            "hasGraphicAccess": true,
+            "onConsole": false,
+            "displayID": 7,
+            "width": 64.0,
+            "height": 36.0,
+        }))
+    }
+
     fn daemon(on_console: bool) -> Arc<Daemon> {
         Arc::new(Daemon::new(
             "Aqua".into(),
             synthetic,
             if on_console { || true } else { || false },
+            session,
         ))
     }
 
@@ -599,6 +665,133 @@ mod tests {
 
         let hello = exchange(daemon(true), r#"{"op":"hello"}"#).await;
         assert_eq!(hello[0]["ok"], true, "facts stay available");
+    }
+
+    #[test]
+    fn nothing_is_captured_if_the_helper_comes_on_screen_while_the_worker_waits() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        static SHOWN: AtomicBool = AtomicBool::new(false);
+        static CHECKED: Notify = Notify::const_new();
+        static CAPTURES: AtomicUsize = AtomicUsize::new(0);
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        let (release, waiting) = std::sync::mpsc::channel();
+        let blocker = runtime.spawn_blocking(move || {
+            waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+        });
+        let daemon = Arc::new(Daemon::new(
+            "Aqua".into(),
+            |display, limit| {
+                CAPTURES.fetch_add(1, Ordering::SeqCst);
+                synthetic(display, limit)
+            },
+            || {
+                let shown = SHOWN.load(Ordering::SeqCst);
+                CHECKED.notify_one();
+                shown
+            },
+            session,
+        ));
+
+        runtime.block_on(async {
+            let request = tokio::spawn(exchange(daemon, r#"{"op":"screenshot"}"#));
+            tokio::time::timeout(Duration::from_secs(5), CHECKED.notified())
+                .await
+                .unwrap();
+            SHOWN.store(true, Ordering::SeqCst);
+            release.send(()).unwrap();
+            blocker.await.unwrap();
+
+            let reply = request.await.unwrap();
+            assert_eq!(CAPTURES.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                reply,
+                vec![
+                    allowed(
+                        &Request::Screenshot {
+                            max_dimension: None
+                        },
+                        true
+                    )
+                    .unwrap()
+                ]
+            );
+        });
+    }
+
+    #[tokio::test]
+    async fn a_capture_is_refused_when_the_display_epoch_changes() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static READS: AtomicUsize = AtomicUsize::new(0);
+        static CHANGE_AT: AtomicUsize = AtomicUsize::new(1);
+        static CAPTURES: AtomicUsize = AtomicUsize::new(0);
+
+        for change_at in [1, 2] {
+            READS.store(0, Ordering::SeqCst);
+            CHANGE_AT.store(change_at, Ordering::SeqCst);
+            CAPTURES.store(0, Ordering::SeqCst);
+            let daemon = Arc::new(Daemon::new(
+                "Aqua".into(),
+                |display, limit| {
+                    CAPTURES.fetch_add(1, Ordering::SeqCst);
+                    synthetic(display, limit)
+                },
+                || false,
+                || {
+                    let mut proof = session()?;
+                    if READS.fetch_add(1, Ordering::SeqCst) >= CHANGE_AT.load(Ordering::SeqCst) {
+                        proof["displayID"] = json!(8);
+                    }
+                    Ok(proof)
+                },
+            ));
+
+            let reply = exchange(daemon, r#"{"op":"screenshot"}"#).await;
+            assert_eq!(CAPTURES.load(Ordering::SeqCst), change_at - 1);
+            assert_eq!(
+                reply,
+                vec![failure(
+                    "session-changed",
+                    "Session changed during capture; observe again"
+                )]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn pixels_are_discarded_if_the_helper_comes_on_screen_during_capture() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        static SHOWN: AtomicBool = AtomicBool::new(false);
+        let daemon = Arc::new(Daemon::new(
+            "Aqua".into(),
+            |display, limit| {
+                SHOWN.store(true, Ordering::SeqCst);
+                synthetic(display, limit)
+            },
+            || SHOWN.load(Ordering::SeqCst),
+            session,
+        ));
+
+        let reply = exchange(daemon, r#"{"op":"screenshot"}"#).await;
+        assert_eq!(
+            reply,
+            vec![
+                allowed(
+                    &Request::Screenshot {
+                        max_dimension: None
+                    },
+                    true
+                )
+                .unwrap()
+            ]
+        );
     }
 
     /// The reply shapes clients and the live checks read.
@@ -728,9 +921,12 @@ mod tests {
     async fn a_command_stops_when_the_helper_comes_on_screen() {
         static SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-        let daemon = Arc::new(Daemon::new("Aqua".into(), synthetic, || {
-            SHOWN.load(std::sync::atomic::Ordering::SeqCst)
-        }));
+        let daemon = Arc::new(Daemon::new(
+            "Aqua".into(),
+            synthetic,
+            || SHOWN.load(std::sync::atomic::Ordering::SeqCst),
+            session,
+        ));
         let (mut client, server) = UnixStream::pair().unwrap();
         let served = tokio::spawn(handle(server, daemon, true));
 

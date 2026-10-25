@@ -46,7 +46,14 @@ pub const GROUPS: &[(&str, &[&str])] = &[
 /// A few ways to use each command that takes arguments, shown under its
 /// `--help` and in its usage errors.
 const EXAMPLES: &[(&str, &[&str])] = &[
-    ("doctor", &["atlas doctor", "atlas doctor --verbose"]),
+    (
+        "doctor",
+        &[
+            "atlas doctor",
+            "atlas doctor --verbose",
+            "atlas doctor --login-timing",
+        ],
+    ),
     ("windows", &["atlas windows --app TextEdit"]),
     (
         "elements",
@@ -100,6 +107,10 @@ const EXAMPLES: &[(&str, &[&str])] = &[
     ),
     ("monitor", &["atlas monitor", "atlas monitor --port 8800"]),
     ("logout", &["atlas logout", "atlas logout --force"]),
+    (
+        "uninstall",
+        &["atlas uninstall", "atlas uninstall --remove-helper"],
+    ),
     (
         "agents",
         &[

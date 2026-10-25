@@ -144,26 +144,39 @@ pub fn timestamp() -> u128 {
 
 impl Client {
     pub fn install(&self) -> Result<Value> {
+        self.install_probe(false)
+    }
+
+    /// Repair the probe under recovery exclusion without settling previous work.
+    pub(crate) fn bootstrap_probe(&self) -> Result<Value> {
+        self.install_probe(true)
+    }
+
+    fn install_probe(&self, recovery: bool) -> Result<Value> {
         let source = fs::canonicalize(std::env::current_exe()?)?;
         let target = &self.config.identity_probe;
 
-        // Only Atlas's own shared folder is repaired; a custom location keeps
-        // the permissions its owner chose.
-        if let Some(parent) = target.parent()
-            && Path::new(crate::handoff::ROOT).parent() == Some(parent)
-        {
-            shared_folder(parent)?;
-        }
-
-        // A link already pointing at this executable (or this executable
-        // itself) changes nothing, so it needs no exclusion and works while
-        // an earlier action still awaits recovery. A copy is always replaced.
-        if fs::canonicalize(target).ok().as_ref() == Some(&source) {
+        let shared = target
+            .parent()
+            .filter(|parent| Path::new(crate::handoff::ROOT).parent() == Some(*parent));
+        let folder_ready = shared.is_none_or(|parent| {
+            fs::symlink_metadata(parent).is_ok_and(|metadata| {
+                metadata.is_dir()
+                    && (metadata.uid() == nix::unistd::getuid().as_raw()
+                        && metadata.mode() & 0o777 == 0o755
+                        || metadata.uid() == 0 && metadata.mode() & 0o022 == 0)
+            })
+        });
+        // An unchanged link and folder need no mutation or exclusion.
+        // A copy is always replaced, using a fresh inode.
+        if folder_ready && fs::canonicalize(target).ok().as_ref() == Some(&source) {
             return Ok(json!({ "ok": true, "path": target, "alreadyInstalled": true }));
         }
 
-        let _ownership = self.controller.acquire(false)?;
-
+        let _ownership = self.controller.acquire(recovery)?;
+        if let Some(parent) = shared {
+            shared_folder(parent)?;
+        }
         if fs::canonicalize(target).ok().as_ref() == Some(&source) {
             return Ok(json!({ "ok": true, "path": target, "alreadyInstalled": true }));
         }
@@ -343,6 +356,10 @@ impl Client {
 
         let reply = self.transport.call(&request).await?;
         if reply["ok"] != true {
+            if reply["code"].is_string() {
+                return Err(crate::transport::refusal(&reply));
+            }
+
             return Err(Error::new(
                 "capture",
                 reply["error"].as_str().unwrap_or("Capture failed"),
@@ -435,12 +452,12 @@ impl Client {
 
     pub async fn acquire_input(&self, owner: &str, epoch: &Epoch) -> Result<Value> {
         // The person's viewer may take over while agents are stopped.
-        self.native_request(json!({
+        self.pending_until_known(self.native_request(json!({
             "op": "acquire",
             "owner": owner,
             "epoch": epoch.input_epoch(),
             "person": self.actor == Actor::Viewer,
-        }))
+        })))
         .await
     }
 
@@ -458,29 +475,64 @@ impl Client {
 
         // The person's side keeps the Stop first, so it holds even when the
         // helper's input service is down or older: agents' commands read it.
-        self.controller.note_stop(on)?;
+        if on {
+            self.controller.note_stop(true)?;
+        }
 
         let unreachable = |why: &str| {
-            json!({
+            if !on {
+                if !matches!(
+                    self.config
+                        .input_socket
+                        .with_extension("stopped")
+                        .try_exists(),
+                    Ok(false)
+                ) {
+                    return Err(Error::new(
+                        "stopped",
+                        format!("{why} Recover input before agents can resume."),
+                    ));
+                }
+                self.controller.note_stop(false)?;
+            }
+            Ok(json!({
                 "ok": true,
                 "held": on,
                 "kept": true,
                 "warnings": [format!("{why} Agents are {} here all the same.", if on { "stopped" } else { "free to go on" })],
-            })
+            }))
         };
         let Ok(hello) = self.input_transport().call(&json!({"op": "hello"})).await else {
-            return Ok(unreachable("The helper's input service isn't running."));
+            return unreachable("The helper's input service isn't running.");
         };
         let capable = hello["capabilities"]
             .as_array()
             .is_some_and(|capabilities| capabilities.iter().any(|c| c == "hold"));
         if !capable {
-            return Ok(unreachable(
-                "The helper's input service is from an older build.",
-            ));
+            return unreachable("The helper's input service is from an older build.");
         }
 
-        let mut reply = self.native_request(json!({"op": "hold", "on": on})).await?;
+        let mut reply = match self.native_request(json!({"op": "hold", "on": on})).await {
+            Ok(reply) => reply,
+            Err(error) if on => {
+                let mut reply = if error.uncertain {
+                    unreachable("The helper's input service may or may not have been told.")
+                } else {
+                    unreachable(&format!(
+                        "The helper's input service reported a problem while stopping: {}.",
+                        error.error.trim_end_matches('.')
+                    ))
+                }?;
+                if error.uncertain {
+                    reply["uncertain"] = json!(true);
+                }
+                return Ok(reply);
+            }
+            Err(error) => return Err(error),
+        };
+        if !on {
+            self.controller.note_stop(false)?;
+        }
         if reply["kept"] == false {
             reply["warnings"] = json!([
                 "The helper could not save this, so it lasts only until its input restarts"
@@ -490,13 +542,12 @@ impl Client {
         Ok(reply)
     }
 
-    /// Once the person stops agents: the stop's saved marker appears, or
-    /// the input service says so.
+    /// Once the person stops agents: either side's saved marker appears.
     async fn stopped_while_running(&self) {
         let marker = self.config.input_socket.with_extension("stopped");
         loop {
             tokio::time::sleep(Duration::from_millis(300)).await;
-            if marker.exists() {
+            if marker.exists() || self.controller.stop_noted() {
                 return;
             }
         }
@@ -587,11 +638,12 @@ impl Client {
     async fn repin(&self, session: Session) -> Result<Session> {
         let unavailable = || {
             Error::new(
-                "permission",
+                "startup",
                 "The native input service is unavailable; run atlas start-input",
             )
         };
         let status = self.status().await;
+        require_accessibility(&status)?;
         if !crate::session::pinned_to_session(&status, &session) {
             return Err(unavailable());
         }
@@ -601,8 +653,10 @@ impl Client {
         let same_size = pinned["width"].as_f64() == Some(epoch.display.width)
             && pinned["height"].as_f64() == Some(epoch.display.height);
 
-        self.native_request(json!({"op": "reset", "epoch": epoch.input_epoch()}))
-            .await?;
+        self.pending_until_known(
+            self.native_request(json!({"op": "reset", "epoch": epoch.input_epoch()})),
+        )
+        .await?;
         let current = self.identity().await?;
         if !current.input {
             return Err(unavailable());
@@ -652,6 +706,19 @@ impl Client {
 
         actions::validate(actions, &session.epoch.display)?;
 
+        self.input_in_session(actions, expected, lease, &session)
+            .await
+    }
+
+    /// Carry out validated input in the verified session, retaining the
+    /// standalone action's claim until native cleanup is acknowledged.
+    async fn input_in_session(
+        &self,
+        actions: &Value,
+        expected: Option<(&Epoch, Instant)>,
+        lease: Option<(&SharedLease, &str)>,
+        session: &Session,
+    ) -> Result<Value> {
         let standalone = crate::control::token();
         let owner = lease.map(|(_, token)| token).unwrap_or(&standalone);
         if lease.is_none()
@@ -659,16 +726,20 @@ impl Client {
         {
             if error.uncertain {
                 // The service may now hold input for `owner`: release it, or
-                // leave the outcome pending for recovery.
-                let pending = self.controller.quarantine()?;
-                if self.native_control("release", owner).await.is_ok() {
-                    self.controller.clear_if(&pending)?;
-                }
+                // leave the outcome pending for recovery. The unacknowledged
+                // acquire stays pending even if this cleanup succeeds.
+                let _ = self
+                    .pending_until_known(self.native_control("release", owner))
+                    .await;
             }
 
             return Err(error);
         }
 
+        let generation = lease
+            .is_none()
+            .then(|| self.controller.quarantine())
+            .transpose()?;
         let result = self
             .mutate(
                 json!({
@@ -686,11 +757,18 @@ impl Client {
 
         if lease.is_none() {
             let cleanup = self.native_control("release", owner).await;
+            let unknown = result
+                .as_ref()
+                .map_or_else(|error| error.uncertain, |reply| reply["uncertain"] == true)
+                || cleanup.as_ref().is_err_and(|error| error.uncertain);
+            if cleanup.is_ok()
+                && !unknown
+                && let Some(generation) = &generation
+            {
+                self.controller.clear_if(generation)?;
+            }
             if cleanup.is_err() {
-                // Nothing will settle this release, whatever the input did;
-                // it stays for recovery.
-                drop(self.controller.quarantine()?);
-                return Err(match result {
+                let error = match result {
                     Ok(_) => Error::new(
                         "uncertain",
                         "Input finished but native release was not confirmed",
@@ -699,8 +777,8 @@ impl Client {
                         "uncertain",
                         format!("{} Native release was not confirmed either.", error.error),
                     ),
-                }
-                .uncertain());
+                };
+                return Err(error.uncertain());
             }
         }
 
@@ -1100,12 +1178,18 @@ impl Client {
         let claim = self.controller.quarantine()?;
         let outcome = self.restart_claimed(&before).await;
 
+        self.settle_restart(&claim, outcome)
+    }
+
+    /// Settle this restart after verified recovery or a definite refusal.
+    /// Other live mutations retain their own claims.
+    fn settle_restart(&self, claim: &str, outcome: Result<Value>) -> Result<Value> {
         let refused = match &outcome {
             Ok(reply) => reply["ok"] != true && reply["uncertain"] != true,
             Err(error) => !error.uncertain,
         };
-        if refused {
-            self.controller.clear_if(&claim)?;
+        if refused || outcome.as_ref().is_ok_and(|reply| reply["ok"] == true) {
+            self.controller.clear_if(claim).map_err(Error::uncertain)?;
         }
 
         outcome
@@ -1206,7 +1290,13 @@ impl Client {
     /// `force` ends the session without asking the apps, and may run with
     /// outcomes still unknown: it is the person's way out of one.
     pub async fn logout(&self, force: bool) -> Result<Value> {
-        let _ownership = self.controller.acquire(force)?;
+        let ownership = self.controller.acquire(force)?;
+        self.logout_held(&ownership, force).await
+    }
+
+    /// [`Client::logout`] under control already held (`_ownership`), for a
+    /// caller that keeps it across more than the log-out, such as uninstall.
+    pub async fn logout_held(&self, _ownership: &Ownership, force: bool) -> Result<Value> {
         self.identity().await?;
         let claim = self.controller.quarantine()?;
 
@@ -1260,31 +1350,28 @@ impl Client {
         .uncertain())
     }
 
-    /// Whether the helper's desktop goes away within `seconds`: no Dock, seen
-    /// twice in a row (a Dock that restarts is not a log-out), and its
+    /// Whether the helper's login goes away within `seconds`: no
+    /// loginwindow and no Dock of it, seen twice in a row half a second
+    /// apart (a Dock alone can restart in a login that lives on), and its
     /// daemon no longer answering. A look that fails counts as present.
     async fn desktop_gone(&self, seconds: u64) -> bool {
         let uid = self.config.helper_uid;
-        let gone = async {
-            let mut absent = 0;
-            while absent < 2 {
-                tokio::time::sleep(Duration::from_millis(500)).await;
-                let desktop = tokio::task::spawn_blocking(move || crate::session::logged_in(uid));
-                absent = if desktop.await.ok().flatten() == Some(false) {
-                    absent + 1
-                } else {
-                    0
-                };
-            }
-
-            while self.transport.call(&json!({"op": "hello"})).await.is_ok() {
-                tokio::time::sleep(Duration::from_millis(500)).await;
-            }
+        let looked = move || async move {
+            tokio::task::spawn_blocking(move || crate::session::logged_out(uid))
+                .await
+                .ok()
+                .flatten()
+                == Some(true)
         };
+        let answers = || async { self.transport.call(&json!({"op": "hello"})).await.is_ok() };
 
-        tokio::time::timeout(Duration::from_secs(seconds), gone)
-            .await
-            .is_ok()
+        gone_within(
+            looked,
+            answers,
+            Duration::from_secs(seconds),
+            Duration::from_millis(500),
+        )
+        .await
     }
 
     async fn mutate(
@@ -1299,7 +1386,10 @@ impl Client {
         // starts, once the person has stopped agents; reads and Atlas's own
         // steps (no `doing`) go on.
         let cuttable = request["op"] == "run" && self.actor == Actor::Agent && self.doing.is_some();
-        if cuttable && self.config.input_socket.with_extension("stopped").exists() {
+        if cuttable
+            && (self.config.input_socket.with_extension("stopped").exists()
+                || self.controller.stop_noted())
+        {
             return Err(Error::new("stopped", crate::error::STOPPED));
         }
 
@@ -1340,11 +1430,13 @@ impl Client {
             ));
         }
 
-        // A restart or log-out runs under the claim its caller holds through
-        // verification; every other mutation claims its own generation.
-        let generation = (request["op"] != "restart" && request["op"] != "logout")
-            .then(|| self.controller.quarantine())
-            .transpose()?;
+        // Restart, log-out and standalone input run under the claim their
+        // caller holds through verification or cleanup.
+        let generation = (request["op"] != "restart"
+            && request["op"] != "logout"
+            && !(request["op"] == "input" && lease.is_none()))
+        .then(|| self.controller.quarantine())
+        .transpose()?;
 
         let pending = match connection.dispatch(&request).await {
             Ok(pending) => pending,
@@ -1531,9 +1623,7 @@ fn failure_code(reply: &Value) -> Option<String> {
     if reply["timedOut"] == true {
         return Some("timeout".into());
     }
-    reply["exitCode"]
-        .as_i64()
-        .is_some_and(|code| code != 0)
+    (!reply["signal"].is_null() || reply["exitCode"].as_i64().is_some_and(|code| code != 0))
         .then(|| "exit".into())
 }
 
@@ -1543,6 +1633,7 @@ fn worked(reply: &Value) -> bool {
     reply["ok"] == true
         && reply["exitCode"].as_i64().is_none_or(|code| code == 0)
         && reply["timedOut"] != true
+        && reply["signal"].is_null()
 }
 
 pub fn validate_completion(request: &Value, reply: &Value) -> Result<()> {
@@ -1605,7 +1696,9 @@ fn process_exists(pid: u32) -> bool {
 /// Refuse input work while the helper's Atlas lacks Accessibility; an
 /// unknown answer is not a refusal.
 fn require_accessibility(status: &Value) -> Result<()> {
-    if status["permissions"]["accessibility"] == false {
+    if status["permissions"]["accessibility"] == false
+        || status["inputService"]["accessibility"] == false
+    {
         return Err(Error::new(
             "permission",
             "The helper does not allow Atlas Accessibility yet, which input needs. In the \
@@ -1617,9 +1710,412 @@ fn require_accessibility(status: &Value) -> Result<()> {
     Ok(())
 }
 
+/// Whether a login is seen gone within `limit`: `looked` (no loginwindow
+/// and no Dock) true twice in a row, `pause` apart, and then `answers` (its
+/// daemon says hello) false. The processes are looked at all the while: a
+/// login seen again, even while its daemon still answers, starts the count
+/// over. Only silence after two looks that found it gone, and a third look
+/// after that silence (the daemon's answer can take a while, and the login
+/// can come back meanwhile), ends the wait.
+async fn gone_within<L, A>(
+    mut looked: impl FnMut() -> L,
+    mut answers: impl FnMut() -> A,
+    limit: Duration,
+    pause: Duration,
+) -> bool
+where
+    L: std::future::Future<Output = bool>,
+    A: std::future::Future<Output = bool>,
+{
+    let gone = async {
+        let mut absent = 0;
+        loop {
+            tokio::time::sleep(pause).await;
+            if !looked().await {
+                absent = 0;
+                continue;
+            }
+
+            absent += 1;
+            if absent >= 2 && !answers().await {
+                if looked().await {
+                    return;
+                }
+                absent = 0;
+            }
+        }
+    };
+
+    tokio::time::timeout(limit, gone).await.is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::{
+        io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+        net::{UnixListener, UnixStream},
+    };
+
+    /// A native socket and controller confined to a short temporary path.
+    fn native_client() -> (tempfile::TempDir, Client, UnixListener, Session) {
+        let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+        let mut client = client_in(dir.path());
+        client.controller = Controller::at(60001, &dir.path().join("state"));
+        client.config.helper_uid = nix::unistd::getuid().as_raw();
+        client.transport = client.input_transport();
+        let listener = UnixListener::bind(&client.config.input_socket).unwrap();
+        let session = Session {
+            epoch: Epoch {
+                uid: client.config.helper_uid,
+                capture_pid: 123,
+                display: Display {
+                    width: 100.0,
+                    height: 100.0,
+                    scale: 1.0,
+                },
+                security_session_id: 42,
+                display_id: 7,
+                input_pid: 456,
+            },
+            capture: true,
+            input: true,
+        };
+        (dir, client, listener, session)
+    }
+
+    /// Drive the caller until the stand-in has received a complete request,
+    /// leaving its reply under the test's control.
+    async fn dispatched<T: std::fmt::Debug>(
+        caller: &mut (impl Future<Output = Result<T>> + Unpin),
+        listener: &UnixListener,
+        operation: &str,
+    ) -> BufReader<UnixStream> {
+        tokio::select! {
+            outcome = caller => panic!("caller ended before {operation}: {outcome:?}"),
+            peer = tokio::time::timeout(Duration::from_secs(2), async {
+                let (peer, _) = listener.accept().await.unwrap();
+                let mut peer = BufReader::new(peer);
+                let mut request = String::new();
+                peer.read_line(&mut request).await.unwrap();
+                assert_eq!(serde_json::from_str::<Value>(&request).unwrap()["op"], operation);
+                peer
+            }) => peer.unwrap(),
+        }
+    }
+
+    async fn answer(peer: &mut BufReader<UnixStream>, reply: Value) {
+        peer.get_mut()
+            .write_all(format!("{reply}\n").as_bytes())
+            .await
+            .unwrap();
+    }
+
+    /// Exercise the transaction after session verification, with no native
+    /// events: the stand-in acknowledges a press and move without a release.
+    async fn standalone_input(client: &Client, session: &Session) -> Result<Value> {
+        let _ownership = client.controller.acquire(false)?;
+        let actions = json!([
+            {"type": "pointer", "phase": "down", "x": 1, "y": 1},
+            {"type": "pointer", "phase": "move", "x": 2, "y": 2},
+        ]);
+        actions::validate(&actions, &session.epoch.display)?;
+        client.input_in_session(&actions, None, None, session).await
+    }
+
+    fn recovery_settles_the_abandoned_claim(client: &Client) {
+        assert_eq!(client.controller.pending().unwrap().len(), 1);
+        assert_eq!(client.controller.unresolved().unwrap().len(), 1);
+        assert_eq!(
+            client.controller.acquire(false).unwrap_err().code,
+            "uncertain"
+        );
+        let ownership = client.controller.acquire(true).unwrap();
+        client.controller.clear().unwrap();
+        drop(ownership);
+        assert!(client.controller.pending().unwrap().is_empty());
+        assert!(client.controller.acquire(false).is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_release_interrupted_after_dispatch_stays_pending_until_recovery() {
+        let (_dir, client, listener, session) = native_client();
+        let mut caller = Box::pin(standalone_input(&client, &session));
+        let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+        answer(&mut acquire, json!({"ok": true})).await;
+        let mut input = dispatched(&mut caller, &listener, "input").await;
+        let generation = client.controller.pending().unwrap();
+        assert_eq!(generation.len(), 1);
+        answer(&mut input, json!({"ok": true, "performed": 2})).await;
+        let _release = dispatched(&mut caller, &listener, "release").await;
+        assert_eq!(client.controller.pending().unwrap(), generation);
+        assert_eq!(client.controller.acquire(true).unwrap_err().code, "busy");
+        drop(caller);
+        recovery_settles_the_abandoned_claim(&client);
+    }
+
+    #[tokio::test]
+    async fn a_successful_release_settles_the_standalone_input_claim() {
+        let (_dir, client, listener, session) = native_client();
+        let mut caller = Box::pin(standalone_input(&client, &session));
+        let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+        answer(&mut acquire, json!({"ok": true})).await;
+        let mut input = dispatched(&mut caller, &listener, "input").await;
+        let generation = client.controller.pending().unwrap();
+        assert_eq!(generation.len(), 1);
+        answer(&mut input, json!({"ok": true, "performed": 2})).await;
+        let mut release = dispatched(&mut caller, &listener, "release").await;
+        assert_eq!(client.controller.pending().unwrap(), generation);
+        assert_eq!(client.controller.acquire(true).unwrap_err().code, "busy");
+        answer(&mut release, json!({"ok": true})).await;
+        assert_eq!(caller.await.unwrap()["ok"], true);
+        assert!(client.controller.pending().unwrap().is_empty());
+        assert!(client.controller.acquire(false).is_ok());
+    }
+
+    #[tokio::test]
+    async fn standalone_input_with_an_uncertain_outcome_stays_pending_until_recovery() {
+        for (input_reply, release_reply) in [
+            (json!({"ok": true, "performed": 2}), None),
+            (
+                json!({"ok": false, "uncertain": true, "error": "unknown"}),
+                Some(json!({"ok": true})),
+            ),
+            (
+                json!({"ok": true, "performed": 2}),
+                Some(json!({"ok": false, "uncertain": true, "error": "unknown"})),
+            ),
+        ] {
+            let (_dir, client, listener, session) = native_client();
+            let mut caller = Box::pin(standalone_input(&client, &session));
+            let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+            answer(&mut acquire, json!({"ok": true})).await;
+            let mut input = dispatched(&mut caller, &listener, "input").await;
+            answer(&mut input, input_reply).await;
+            let mut release = dispatched(&mut caller, &listener, "release").await;
+            assert_eq!(client.controller.pending().unwrap().len(), 1);
+            if let Some(reply) = release_reply {
+                answer(&mut release, reply).await;
+            }
+            drop(release);
+            let outcome = caller.await;
+            assert!(
+                outcome
+                    .as_ref()
+                    .map_or_else(|error| error.uncertain, |reply| reply["uncertain"] == true)
+            );
+            recovery_settles_the_abandoned_claim(&client);
+        }
+    }
+
+    #[tokio::test]
+    async fn an_input_whose_native_release_is_definitely_refused_stays_pending_until_recovery() {
+        let (_dir, client, listener, session) = native_client();
+        let mut caller = Box::pin(standalone_input(&client, &session));
+        let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+        answer(&mut acquire, json!({"ok": true})).await;
+        let mut input = dispatched(&mut caller, &listener, "input").await;
+        answer(&mut input, json!({"ok": true, "performed": 2})).await;
+        let mut release = dispatched(&mut caller, &listener, "release").await;
+        let generation = client.controller.pending().unwrap();
+        assert_eq!(generation.len(), 1);
+        answer(
+            &mut release,
+            json!({"ok": false, "code": "lease-lost", "error": "refused"}),
+        )
+        .await;
+        let error = caller.await.unwrap_err();
+        assert_eq!(error.code, "uncertain");
+        assert!(error.uncertain);
+        assert_eq!(client.controller.pending().unwrap(), generation);
+        recovery_settles_the_abandoned_claim(&client);
+    }
+
+    #[tokio::test]
+    async fn releasing_after_a_lost_acquisition_reply_keeps_the_acquisition_pending() {
+        let (_dir, client, listener, session) = native_client();
+        let mut caller = Box::pin(standalone_input(&client, &session));
+        let acquire = dispatched(&mut caller, &listener, "acquire").await;
+        drop(acquire);
+        let mut release = dispatched(&mut caller, &listener, "release").await;
+        assert_eq!(client.controller.pending().unwrap().len(), 2);
+        assert_eq!(client.controller.unresolved().unwrap().len(), 1);
+        assert_eq!(client.controller.acquire(true).unwrap_err().code, "busy");
+        answer(&mut release, json!({"ok": true})).await;
+        assert!(caller.await.unwrap_err().uncertain);
+        recovery_settles_the_abandoned_claim(&client);
+    }
+
+    #[tokio::test]
+    async fn an_acquisition_interrupted_after_dispatch_stays_pending_until_recovery() {
+        let (_dir, client, listener, session) = native_client();
+        let mut caller = Box::pin(client.acquire_input("owner", &session.epoch));
+        let _acquire = dispatched(&mut caller, &listener, "acquire").await;
+        assert_eq!(client.controller.pending().unwrap().len(), 1);
+        drop(caller);
+        recovery_settles_the_abandoned_claim(&client);
+    }
+
+    #[tokio::test]
+    async fn an_acquisition_settles_only_an_acknowledged_outcome() {
+        for reply in [
+            json!({"ok": true}),
+            json!({"ok": false, "code": "busy", "error": "refused"}),
+            json!({"ok": false, "uncertain": true, "error": "unknown"}),
+        ] {
+            let (_dir, client, listener, session) = native_client();
+            let mut caller = Box::pin(client.acquire_input("owner", &session.epoch));
+            let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+            assert_eq!(client.controller.pending().unwrap().len(), 1);
+            answer(&mut acquire, reply.clone()).await;
+            assert_eq!(caller.await.is_ok(), reply["ok"] == true);
+            if reply["uncertain"] == true {
+                recovery_settles_the_abandoned_claim(&client);
+            } else {
+                assert!(client.controller.pending().unwrap().is_empty());
+                assert!(client.controller.acquire(false).is_ok());
+            }
+        }
+    }
+
+    /// A status reply sufficient for repinning preflight. It deliberately
+    /// lacks the independent proof required by later session verification.
+    fn repinnable_status(session: &Session) -> Value {
+        json!({"ok": true, "inputService": {
+            "ok": true, "protocolVersion": 1, "accessibility": true,
+            "enforcedEpoch": session.epoch.input_epoch(),
+        }})
+    }
+
+    #[tokio::test]
+    async fn missing_input_with_permissions_granted_reports_a_startup_failure() {
+        let (_dir, client, listener, session) = native_client();
+        let status = json!({
+            "ok": true,
+            "permissions": {"screenCapture": true, "accessibility": true},
+            "inputService": {"ok": false, "accessibility": true},
+        });
+        let mut caller = Box::pin(client.repin(session));
+        let mut hello = dispatched(&mut caller, &listener, "hello").await;
+        answer(&mut hello, status).await;
+        let error = caller.await.unwrap_err();
+        assert_eq!(error.code, "startup");
+        assert!(!error.uncertain);
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn repinning_with_accessibility_revoked_reports_a_permission_failure() {
+        for source in ["permissions", "inputService"] {
+            let (_dir, client, listener, session) = native_client();
+            let mut status = repinnable_status(&session);
+            status[source]["accessibility"] = json!(false);
+            let mut caller = Box::pin(client.repin(session));
+            let mut hello = dispatched(&mut caller, &listener, "hello").await;
+            answer(&mut hello, status).await;
+            assert_eq!(caller.await.unwrap_err().code, "permission", "{source}");
+            assert!(client.controller.pending().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_display_reset_interrupted_after_dispatch_stays_pending_until_recovery() {
+        let (_dir, client, listener, session) = native_client();
+        let status = repinnable_status(&session);
+        let mut caller = Box::pin(client.repin(session));
+        let mut hello = dispatched(&mut caller, &listener, "hello").await;
+        answer(&mut hello, status).await;
+        let _reset = dispatched(&mut caller, &listener, "reset").await;
+        assert_eq!(client.controller.pending().unwrap().len(), 1);
+        drop(caller);
+        recovery_settles_the_abandoned_claim(&client);
+    }
+
+    #[tokio::test]
+    async fn an_acknowledged_display_reset_is_settled_before_session_verification() {
+        let (_dir, client, listener, session) = native_client();
+        let status = repinnable_status(&session);
+        let mut caller = Box::pin(client.repin(session));
+        let mut hello = dispatched(&mut caller, &listener, "hello").await;
+        answer(&mut hello, status.clone()).await;
+        let mut reset = dispatched(&mut caller, &listener, "reset").await;
+        assert_eq!(client.controller.pending().unwrap().len(), 1);
+        answer(&mut reset, json!({"ok": true, "released": true})).await;
+        let mut verifying = dispatched(&mut caller, &listener, "hello").await;
+        assert!(client.controller.pending().unwrap().is_empty());
+        answer(&mut verifying, status).await;
+        assert_eq!(caller.await.unwrap_err().code, "identity");
+        assert!(client.controller.pending().unwrap().is_empty());
+        assert!(client.controller.acquire(false).is_ok());
+    }
+
+    #[test]
+    fn an_interrupted_setup_can_repair_its_probe_without_settling_pending_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut client = client_in(dir.path());
+        client.controller = Controller::at(60001, &dir.path().join("state"));
+        let previous = client.controller.quarantine().unwrap();
+        let generation = previous.generation().to_owned();
+        drop(previous);
+        assert!(!client.config.identity_probe.exists());
+        assert!(client.install().is_err());
+        let competing = client.controller.acquire(true).unwrap();
+        assert!(client.bootstrap_probe().is_err());
+        assert!(!client.config.identity_probe.exists());
+        drop(competing);
+        client.bootstrap_probe().unwrap();
+        assert!(client.config.identity_probe.is_file());
+        assert_eq!(
+            file_sha256(&client.config.identity_probe).unwrap(),
+            file_sha256(&std::env::current_exe().unwrap()).unwrap()
+        );
+        assert_eq!(
+            client.controller.pending().unwrap(),
+            std::slice::from_ref(&generation)
+        );
+        assert!(client.controller.acquire(false).is_err());
+        fs::write(&client.config.identity_probe, b"interrupted copy").unwrap();
+        client.bootstrap_probe().unwrap();
+        assert_eq!(
+            file_sha256(&client.config.identity_probe).unwrap(),
+            file_sha256(&std::env::current_exe().unwrap()).unwrap()
+        );
+        assert_eq!(client.controller.pending().unwrap(), [generation]);
+        let owned = client.controller.acquire(true).unwrap();
+        client.controller.clear().unwrap();
+        drop(owned);
+        assert!(client.controller.acquire(false).is_ok());
+    }
+
+    #[test]
+    fn a_successful_recovery_allows_the_next_normal_acquisition() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut client = client_in(dir.path());
+        client.controller = Controller::at(60001, &dir.path().join("state"));
+        let ownership = client.controller.acquire(true).unwrap();
+        drop(client.controller.quarantine().unwrap());
+        let claim = client.controller.quarantine().unwrap();
+        // The verified recovery clears abandoned work while retaining its
+        // own live claim, which the restart success path must then settle.
+        client.controller.clear().unwrap();
+        client
+            .settle_restart(&claim, Ok(json!({"ok": true, "restarted": true})))
+            .unwrap();
+        drop(claim);
+        drop(ownership);
+        assert!(client.controller.pending().unwrap().is_empty());
+        assert!(client.controller.acquire(false).is_ok());
+
+        let other = client.controller.quarantine().unwrap();
+        let claim = client.controller.quarantine().unwrap();
+        client.controller.clear().unwrap();
+        client
+            .settle_restart(&claim, Ok(json!({"ok": true, "restarted": true})))
+            .unwrap();
+        drop(claim);
+        assert_eq!(client.controller.pending().unwrap(), [other.generation()]);
+        assert!(client.controller.acquire(false).is_err());
+    }
 
     /// A client for a configuration kept in `dir`.
     fn client_in(dir: &Path) -> Client {
@@ -1627,6 +2123,110 @@ mod tests {
                     identity_probe = \"probe\"\ninput_socket = \"i.sock\"\n";
         let config = Config::parse(text.as_bytes(), &dir.join("u.toml")).unwrap();
         Client::new(config).unwrap()
+    }
+
+    /// A login is gone only once it is seen gone twice in a row and its
+    /// daemon stopped answering; a look in between that sees it again
+    /// starts the count over.
+    #[tokio::test]
+    async fn a_login_is_gone_only_when_seen_gone_twice_and_silent() {
+        use std::{cell::RefCell, collections::VecDeque};
+
+        let pause = Duration::from_millis(1);
+        let limit = Duration::from_secs(5);
+        let run = |looks: &[bool], hellos: &[bool]| {
+            let looks = RefCell::new(looks.iter().copied().collect::<VecDeque<_>>());
+            let hellos = RefCell::new(hellos.iter().copied().collect::<VecDeque<_>>());
+            let seen = RefCell::new(0);
+            async move {
+                let gone = gone_within(
+                    || {
+                        *seen.borrow_mut() += 1;
+                        let look = looks.borrow_mut().pop_front().unwrap_or(false);
+                        async move { look }
+                    },
+                    || {
+                        let hello = hellos.borrow_mut().pop_front().unwrap_or(false);
+                        async move { hello }
+                    },
+                    limit,
+                    pause,
+                )
+                .await;
+                (gone, seen.into_inner())
+            }
+        };
+
+        assert_eq!(run(&[true, true, true], &[]).await, (true, 3));
+        assert_eq!(
+            run(&[true, false, true, true, true], &[]).await,
+            (true, 5),
+            "a login seen again starts the count over"
+        );
+        assert_eq!(
+            run(&[true, true, true, true, true], &[true, true]).await,
+            (true, 5),
+            "waits for the daemon to go quiet, looking all the while"
+        );
+        assert_eq!(
+            run(&[true, true, false, true, true, true], &[true, false]).await,
+            (true, 6),
+            "a login back after the second look starts the count over"
+        );
+        assert_eq!(
+            run(&[true, true, false, true, true, true], &[false, false]).await,
+            (true, 6),
+            "a login back while the daemon was asked starts the count over"
+        );
+
+        // Back after the second look, then its daemon goes quiet: still
+        // logged in, never gone.
+        let back = Duration::from_millis(50);
+        let looks = std::cell::Cell::new(0);
+        let hellos = std::cell::Cell::new(0);
+        let returned = gone_within(
+            || {
+                looks.set(looks.get() + 1);
+                let look = looks.get() <= 2;
+                async move { look }
+            },
+            || {
+                hellos.set(hellos.get() + 1);
+                let hello = hellos.get() == 1;
+                async move { hello }
+            },
+            back,
+            pause,
+        )
+        .await;
+        assert!(!returned, "a login that came back is not gone");
+
+        // It logs in again while the daemon is still being asked, and the
+        // daemon then says nothing: still logged in.
+        let again = std::cell::Cell::new(false);
+        let returned = gone_within(
+            || {
+                let look = !again.get();
+                async move { look }
+            },
+            || {
+                again.set(true);
+                async move {
+                    tokio::time::sleep(pause).await;
+                    false
+                }
+            },
+            back,
+            pause,
+        )
+        .await;
+        assert!(!returned, "back while its daemon was asked");
+
+        let short = Duration::from_millis(50);
+        let stays = gone_within(|| async { false }, || async { false }, short, pause).await;
+        assert!(!stays, "a login that stays is not gone");
+        let answering = gone_within(|| async { true }, || async { true }, short, pause).await;
+        assert!(!answering, "a daemon that keeps answering is not gone");
     }
 
     #[tokio::test]
@@ -1698,7 +2298,27 @@ mod tests {
                 .contains("isn't running")
         );
         assert_eq!(agent.require_going().await.unwrap_err().code, "stopped");
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), agent.stopped_while_running())
+                .await
+                .is_ok()
+        );
+        let acting = agent.clone().doing(Doing::new("run"));
+        let refused = acting
+            .mutate(json!({"op": "run", "argv": ["true"]}), None, None)
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code, "stopped");
+        assert!(!refused.uncertain, "nothing started");
 
+        let marker = person.config.input_socket.with_extension("stopped");
+        fs::write(&marker, b"").unwrap();
+        let refused = person.hold(false).await.unwrap_err();
+        assert_eq!(refused.code, "stopped");
+        assert!(person.controller.stop_noted());
+        assert!(marker.exists());
+
+        fs::remove_file(marker).unwrap();
         person.hold(false).await.unwrap();
         assert!(agent.require_going().await.is_ok(), "resumed");
     }
@@ -1716,6 +2336,230 @@ mod tests {
         std::fs::write(&marker, b"").unwrap();
         let heard = tokio::time::timeout(Duration::from_secs(2), client.stopped_while_running());
         assert!(heard.await.is_ok(), "the stop is heard within a moment");
+    }
+
+    #[tokio::test]
+    async fn a_local_stop_cancels_a_running_command_and_refuses_its_next_dispatch() {
+        let (dir, mut client, input, _session) = native_client();
+        drop(input);
+        client.transport.path = dir.path().join("helper.sock");
+        let helper = UnixListener::bind(&client.transport.path).unwrap();
+        let mut person = client.clone();
+        person.actor = Actor::Viewer;
+        let acting = client.doing(Doing::new("run"));
+        let run = json!({"op": "run", "argv": ["true"], "timeoutMs": 1000});
+        let ownership = acting.controller.acquire(false).unwrap();
+        let mut caller = Box::pin(acting.mutate(run.clone(), None, None));
+        let mut peer = dispatched(&mut caller, &helper, "run").await;
+        let pending = acting.controller.pending().unwrap();
+        assert_eq!(pending.len(), 1);
+
+        let stopped = person.hold(true).await.unwrap();
+        assert_eq!(stopped["ok"], true);
+        assert_eq!(stopped["held"], true);
+        assert!(
+            !acting
+                .config
+                .input_socket
+                .with_extension("stopped")
+                .exists()
+        );
+        let error = tokio::time::timeout(Duration::from_secs(2), caller)
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.code, "stopped");
+        assert!(error.uncertain);
+        assert_eq!(acting.controller.pending().unwrap(), pending);
+        assert_eq!(acting.controller.acquire(true).unwrap_err().code, "busy");
+        let mut line = String::new();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), peer.read_line(&mut line))
+                .await
+                .unwrap()
+                .unwrap(),
+            0,
+            "the helper sees the cancelled connection"
+        );
+
+        let error = acting.mutate(run, None, None).await.unwrap_err();
+        assert_eq!(error.code, "stopped");
+        assert!(!error.uncertain, "the next command never starts");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), helper.accept())
+                .await
+                .is_err()
+        );
+        drop(ownership);
+        recovery_settles_the_abandoned_claim(&acting);
+    }
+
+    #[tokio::test]
+    async fn a_local_stop_succeeds_and_cancels_a_running_command_when_native_hold_fails() {
+        let (dir, mut client, input, _session) = native_client();
+        client.transport.path = dir.path().join("helper.sock");
+        let helper = UnixListener::bind(&client.transport.path).unwrap();
+        let mut person = client.clone();
+        person.actor = Actor::Viewer;
+        let acting = client.doing(Doing::new("run"));
+        let ownership = acting.controller.acquire(false).unwrap();
+        let mut caller = Box::pin(acting.mutate(
+            json!({"op": "run", "argv": ["true"], "timeoutMs": 1000}),
+            None,
+            None,
+        ));
+        let mut peer = dispatched(&mut caller, &helper, "run").await;
+        let pending = acting.controller.pending().unwrap();
+        assert_eq!(pending.len(), 1);
+
+        let mut stopping = Box::pin(person.hold(true));
+        let mut hello = dispatched(&mut stopping, &input, "hello").await;
+        answer(&mut hello, json!({"ok": true, "capabilities": ["hold"]})).await;
+        let mut hold = dispatched(&mut stopping, &input, "hold").await;
+        answer(
+            &mut hold,
+            json!({"ok": false, "error": "Cleanup failed", "uncertain": true}),
+        )
+        .await;
+        assert_eq!(
+            stopping.await.unwrap(),
+            json!({
+                "ok": true,
+                "held": true,
+                "kept": true,
+                "uncertain": true,
+                "warnings": ["The helper's input service may or may not have been told. Agents are stopped here all the same."],
+            })
+        );
+        assert!(person.controller.stop_noted());
+        let error = tokio::time::timeout(Duration::from_secs(2), caller)
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.code, "stopped");
+        assert!(error.uncertain);
+        assert_eq!(acting.controller.pending().unwrap(), pending);
+        assert_eq!(acting.controller.acquire(true).unwrap_err().code, "busy");
+        let mut line = String::new();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), peer.read_line(&mut line))
+                .await
+                .unwrap()
+                .unwrap(),
+            0,
+            "the helper sees the cancelled connection"
+        );
+        drop(ownership);
+        recovery_settles_the_abandoned_claim(&acting);
+    }
+
+    #[tokio::test]
+    async fn a_stop_returns_ok_with_the_native_problem_when_native_hold_fails() {
+        let (_dir, mut person, input, _session) = native_client();
+        person.actor = Actor::Viewer;
+        let mut stopping = Box::pin(person.hold(true));
+        let mut hello = dispatched(&mut stopping, &input, "hello").await;
+        answer(&mut hello, json!({"ok": true, "capabilities": ["hold"]})).await;
+        let mut hold = dispatched(&mut stopping, &input, "hold").await;
+        answer(
+            &mut hold,
+            json!({"ok": false, "error": "Cleanup failed", "uncertain": false}),
+        )
+        .await;
+
+        assert_eq!(
+            stopping.await.unwrap(),
+            json!({
+                "ok": true,
+                "held": true,
+                "kept": true,
+                "warnings": ["The helper's input service reported a problem while stopping: Cleanup failed. Agents are stopped here all the same."],
+            })
+        );
+        assert!(person.controller.stop_noted());
+    }
+
+    #[tokio::test]
+    async fn a_stop_returns_ok_with_uncertainty_and_a_warning_when_native_hold_is_uncertain() {
+        let (_dir, mut person, input, _session) = native_client();
+        person.actor = Actor::Viewer;
+        let mut stopping = Box::pin(person.hold(true));
+        let mut hello = dispatched(&mut stopping, &input, "hello").await;
+        answer(&mut hello, json!({"ok": true, "capabilities": ["hold"]})).await;
+        let mut hold = dispatched(&mut stopping, &input, "hold").await;
+        answer(
+            &mut hold,
+            json!({"ok": false, "error": "Cleanup failed", "uncertain": true}),
+        )
+        .await;
+
+        assert_eq!(
+            stopping.await.unwrap(),
+            json!({
+                "ok": true,
+                "held": true,
+                "kept": true,
+                "uncertain": true,
+                "warnings": ["The helper's input service may or may not have been told. Agents are stopped here all the same."],
+            })
+        );
+        assert!(person.controller.stop_noted());
+    }
+
+    #[tokio::test]
+    async fn resume_keeps_the_local_stop_until_the_helpers_stop_can_be_cleared() {
+        let (_dir, client, listener, _session) = native_client();
+        let mut person = client;
+        person.actor = Actor::Viewer;
+        let marker = person.config.input_socket.with_extension("stopped");
+        let mut stopping = Box::pin(person.hold(true));
+        let mut hello = dispatched(&mut stopping, &listener, "hello").await;
+        answer(&mut hello, json!({"ok": true, "capabilities": ["hold"]})).await;
+        let mut hold = dispatched(&mut stopping, &listener, "hold").await;
+        fs::write(&marker, b"").unwrap();
+        answer(&mut hold, json!({"ok": true, "held": true, "kept": true})).await;
+        assert_eq!(stopping.await.unwrap()["held"], true);
+        drop(listener);
+
+        let error = person.hold(false).await.unwrap_err();
+        assert_eq!(error.code, "stopped");
+        assert!(
+            error
+                .error
+                .contains("Recover input before agents can resume")
+        );
+        assert!(person.controller.stop_noted());
+        assert!(marker.exists());
+        let mut agent = person.clone();
+        agent.actor = Actor::Agent;
+        assert_eq!(agent.require_going().await.unwrap_err().code, "stopped");
+
+        fs::remove_file(marker).unwrap();
+        assert_eq!(person.hold(false).await.unwrap()["held"], false);
+        assert!(!person.controller.stop_noted());
+    }
+
+    #[tokio::test]
+    async fn resume_clears_the_local_stop_only_after_native_acknowledgment() {
+        for acknowledged in [false, true] {
+            let (_dir, client, listener, _session) = native_client();
+            let mut person = client;
+            person.actor = Actor::Viewer;
+            person.controller.note_stop(true).unwrap();
+            let mut resuming = Box::pin(person.hold(false));
+            let mut hello = dispatched(&mut resuming, &listener, "hello").await;
+            assert!(person.controller.stop_noted());
+            answer(&mut hello, json!({"ok": true, "capabilities": ["hold"]})).await;
+            let mut hold = dispatched(&mut resuming, &listener, "hold").await;
+            assert!(person.controller.stop_noted());
+            answer(
+                &mut hold,
+                json!({"ok": acknowledged, "code": "native", "error": "refused", "held": false}),
+            )
+            .await;
+            assert_eq!(resuming.await.is_ok(), acknowledged);
+            assert_eq!(person.controller.stop_noted(), !acknowledged);
+        }
     }
 
     #[tokio::test]
@@ -1780,6 +2624,22 @@ mod tests {
             &json!({"ok": true, "exitCode": 0, "timedOut": true})
         ));
         assert!(!worked(&json!({"ok": false})));
+    }
+
+    #[test]
+    fn a_command_terminated_by_a_signal_is_recorded_as_an_exit_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = client_in(dir.path()).doing(Doing::new("run"));
+        let request = json!({"op": "run", "argv": ["tool"]});
+        let reply = json!({"ok": true, "exitCode": null, "timedOut": false, "signal": "SIGTERM"});
+        validate_completion(&request, &reply).unwrap();
+        client.record_start(&request).unwrap();
+        client.record(&request, &reply, Duration::ZERO).unwrap();
+
+        let rows = crate::overview::activity(client.output_dir().unwrap(), 5);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["ok"], false);
+        assert_eq!(rows[0]["code"], "exit");
     }
 
     #[tokio::test]

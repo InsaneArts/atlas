@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasService
 import AtlasUI
 
 /// What `--render` changes in the live status for design checks, read from its environment, so every state of the
@@ -10,8 +10,10 @@ import AtlasUI
 /// - `ATLAS_RENDER_MESSAGE` shows what an action said, in place of the line, or in the alert window why its command
 ///   did not run.
 /// - `ATLAS_RENDER_PAUSED=1` pauses the picture.
-/// - `ATLAS_RENDER_ALERT` (`recover`, `switch`, `logOut` or `logOutAnyway`) draws the alert window instead, and
-///   `ATLAS_RENDER_BUSY=1` draws it while its command runs.
+/// - `ATLAS_RENDER_ALERT` (`recover`, `switch`, `logOut` or `logOutAnyway`) draws the alert window instead,
+///   `ATLAS_RENDER_BUSY=1` draws it while its command runs, and `ATLAS_RENDER_ALERT_PHASE=done` once it worked.
+/// - `ATLAS_RENDER_NOTICE` (`setUp` or `runningAgain`) draws one of the helper's notices instead.
+/// - `ATLAS_RENDER_REDUCE_TRANSPARENCY=1` draws the panel as Reduce Transparency does, its glass opaque.
 /// - `ATLAS_RENDER_PREVIEW=1` shows a set-up Mac: the helper's names and display, three recent actions, Open at Login
 ///   and, in a debug build, the sample screen when the live one gives none.
 struct PanelRenderOverrides: Equatable, Sendable {
@@ -29,8 +31,14 @@ struct PanelRenderOverrides: Equatable, Sendable {
   var alert: HelperAlert?
   /// Whether the alert's command runs.
   var busy: Bool
+  /// Whether the alert's command worked, so it holds on its done title.
+  var done: Bool
+  /// The helper notice to draw instead of the panel; nil draws none.
+  var notice: NoticeRender?
   /// Whether a set-up Mac's facts fill in what the live service lacks.
   var showsEverything: Bool
+  /// Whether the panel is drawn as under Reduce Transparency.
+  var reducesTransparency: Bool
 
   /// Reads the overrides from an environment.
   ///
@@ -55,7 +63,10 @@ struct PanelRenderOverrides: Equatable, Sendable {
       default: nil
       }
     busy = environment["ATLAS_RENDER_BUSY"] == "1"
+    done = environment["ATLAS_RENDER_ALERT_PHASE"] == "done"
+    notice = environment["ATLAS_RENDER_NOTICE"].flatMap(NoticeRender.init(rawValue:))
     showsEverything = environment["ATLAS_RENDER_PREVIEW"] == "1"
+    reducesTransparency = environment["ATLAS_RENDER_REDUCE_TRANSPARENCY"] == "1"
   }
 
   /// The alert window's alert to draw, as its controller would hold it, over the panel's overview; nil draws the
@@ -64,7 +75,15 @@ struct PanelRenderOverrides: Equatable, Sendable {
   /// - Parameter overview: The overview the panel shows, which says why Recover helps.
   /// - Returns: The alert's snapshot, running or saying why its command did not run as asked.
   func alertSnapshot(over overview: ViewerStatus.Overview) -> AlertSnapshot? {
-    alert.map { AlertSnapshot(alert: $0, running: busy, failure: message.map(Words.sentence), overview: overview) }
+    alert.map { alert in
+      AlertSnapshot(
+        alert: alert,
+        running: busy,
+        failure: message.map(Words.sentence),
+        done: done,
+        overview: overview
+      )
+    }
   }
 
   /// A snapshot with these overrides applied.

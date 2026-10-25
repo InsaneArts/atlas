@@ -1,5 +1,9 @@
-import AtlasKit
+import AsyncSupportTesting
+import AtlasCommandsTesting
+import AtlasService
+import AtlasServiceTesting
 import AtlasUI
+import CoreGraphics
 
 @testable import AtlasApp
 
@@ -11,30 +15,41 @@ extension SettingsController {
   ///   - commands: The scripted command line.
   ///   - statusReads: Counts each time it asks for the shared status to be read again.
   ///   - installs: The agent installs it shares with another window; its own over `commands` when nil.
+  ///   - clock: The clock its waits run on, such as a done Recover's hold.
+  ///   - actions: The helper's commands it shares with another window; its own over `commands` when nil.
+  ///   - fileIcon: The icon a file shows, by its path; none by default.
+  ///   - status: The shared status it reads; an empty one by default.
   /// - Returns: The controller.
   static func scripted(
     commands: ScriptedCommands,
     statusReads: CallCount = CallCount(),
-    installs: AgentInstalls? = nil
+    installs: AgentInstalls? = nil,
+    clock: ManualClock = ManualClock(),
+    actions: HelperActions? = nil,
+    fileIcon: @escaping @MainActor (String) -> CGImage? = { _ in nil },
+    status: ViewerStatus = ViewerStatus()
   ) -> SettingsController {
     let service = ScriptedService()
     return SettingsController(
       dependencies: SettingsDependencies(
         commands: commands,
-        actions: HelperActions(commands: commands, service: service, barrier: ControlBarrier(service: service)),
+        actions: actions
+          ?? HelperActions(
+            commands: commands,
+            service: service,
+            barrier: ControlBarrier(service: service, clock: ManualClock())
+          ),
         installs: installs ?? AgentInstalls(commands: commands),
         preferences: SettingsPreferences(
           loadTab: { nil },
           saveTab: { _ in },
           loadNotify: { false },
-          saveNotify: { _ in },
-          loadBadge: { false },
-          saveBadge: { _ in }
+          saveNotify: { _ in }
         ),
-        agentIcons: { [:] },
+        fileIcon: fileIcon,
         version: "0.1.0",
         links: SettingsLinks(
-          status: { (ViewerStatus(), false) },
+          status: { (status, false) },
           readStatus: { statusReads.count += 1 },
           opensAtLogin: { OpenAtLogin.State(isAvailable: true, isEnabled: false) },
           setOpenAtLogin: { _ in },
@@ -43,7 +58,8 @@ extension SettingsController {
           choosePicture: { _ in },
           switchToHelper: { "" },
           gettingStarted: {}
-        )
+        ),
+        clock: clock
       )
     )
   }

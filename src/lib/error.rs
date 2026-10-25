@@ -85,6 +85,7 @@ pub const CODES: &[&str] = &[
     "menubar",
     "native",
     "no-environment",
+    "not-ready",
     "on-console",
     "onboarding",
     "permission",

@@ -1,4 +1,6 @@
-import AtlasKit
+import AtlasCommands
+import AtlasOnboarding
+import AtlasService
 import AtlasUI
 import Foundation
 import Observation
@@ -7,9 +9,13 @@ import Observation
 /// while the window is open), the person's choices, and what is running now. Every action is an `atlas` command; the
 /// window holds no policy of its own, and ``OnboardingPresenter`` decides what it shows.
 ///
-/// What the window shows is written in this file alone, so the window's shell and view change it only through
-/// ``send(_:)`` and ``update(_:)``.
-@MainActor
+/// ``run()`` holds the window's two lanes: the reading loop (`+Reading`) and the queue (`+Queue`), which performs the
+/// window's requests one at a time. ``send(_:)`` applies a choice at once and queues an action as an
+/// ``OnboardingRequest``. The rest is in its parts: the account (`+Account`), the check and Done (`+Finishing`), the
+/// agents (`+Agents`) and the helper's own screens (`+Permissions`).
+///
+/// What the window shows is written by the controller's own files alone, so the window's shell and view change it only
+/// through ``send(_:)`` and ``update(_:)``.
 @Observable
 final class OnboardingController {
   /// How often the facts are read while the window is open: 1.5 s, soon enough that a switch turned on in System
@@ -18,38 +24,77 @@ final class OnboardingController {
   /// After `atlas agents status` failed, how many readings of the facts pass before it is asked again: 10, about 15
   /// s, so a command that keeps failing is not run every moment while the person reads the screen.
   static let agentsRetryReadings = 10
+  /// How many readings in a row a job may answer nothing before it counts as stopped: 20, about 30 s, longer than
+  /// launchd waits to bring a job back.
+  static let restartReadings = 20
+  /// How long a permission just turned on shows its tick before the next one is allowed: 1.2 s.
+  static let tickShown: Duration = .milliseconds(1200)
+  /// How long the passed check shows before its Continue lights up and takes presses: ``Motion/Duration/followUp``.
+  static let continueFollows: Duration = .seconds(Motion.Duration.followUp.seconds)
+  /// How long a command runs before its working line shows: ``Motion/Duration/noteDelay``, the line's own wait, so a
+  /// command that ends sooner never shows one.
+  static let workingShows: Duration = .seconds(Motion.Duration.noteDelay.seconds)
+  /// The least time a working line stays once it shows: ``Motion/Duration/leastWork``, so a line never flashes.
+  static let workingStays: Duration = .seconds(Motion.Duration.leastWork.seconds)
 
   /// Everything the window shows, as one value.
-  private(set) var snapshot = OnboardingSnapshot()
+  var snapshot = OnboardingSnapshot()
   /// The window's work is done: setup finished, or the helper locked for the switch back. The window closes itself.
-  private(set) var closeRequested = false
+  var closeRequested = false
 
   /// What the controller reaches outside itself.
   @ObservationIgnored let dependencies: OnboardingDependencies
-  /// The reading loop, while the window is open.
-  @ObservationIgnored private var polling: Task<Void, Never>?
-  /// Whether a reading runs now.
-  @ObservationIgnored private var reading = false
-  /// A reading asked for while one ran: done as soon as it ends.
-  @ObservationIgnored private var readAgain = false
+  /// The tickets of the queued requests, in order, for the queue in ``run()``.
+  @ObservationIgnored let requests: AsyncStream<Int>
+  /// Where the window queues a request's ticket.
+  @ObservationIgnored let queue: AsyncStream<Int>.Continuation
+  /// The requests queued and not yet started, by their tickets, so one already waiting is not queued twice, and Back
+  /// can drop one. Each queuing takes a ticket of its own, so a request dropped and queued again runs in its new place,
+  /// never its old one.
+  @ObservationIgnored var pending: [Int: OnboardingRequest] = [:]
+  /// The ticket the last queued request took.
+  @ObservationIgnored var lastTicket = 0
+  /// The request the queue performs now, with its work, which Back can stop; nil between requests. Read by tests,
+  /// which wait for its end.
+  @ObservationIgnored var performing: (request: OnboardingRequest, work: Task<Void, Never>)?
+  /// Whether ``run()`` has started, so a second call returns at once.
+  @ObservationIgnored var started = false
+  /// Whether the reading loop is setting the helper's mark now.
+  @ObservationIgnored var marking = false
+  /// The window's close, waiting for the mark under way to settle, so the clearing lands last.
+  @ObservationIgnored var markSettled: CheckedContinuation<Void, Never>?
+  /// The reading loop's pause between readings, which a refresh or the window's close cuts short.
+  @ObservationIgnored var resting: Task<Void, Never>?
+  /// A reading asked for since the last one began: done as soon as it ends.
+  @ObservationIgnored var readAgain = false
   /// Whether the helper's "set up here" notice was last told the window is open.
-  @ObservationIgnored private var markedOpen = false
-  /// Setting that mark, while it runs.
-  @ObservationIgnored private var marking: Task<Void, Never>?
-  /// The end-to-end check, while it runs: one at a time.
-  @ObservationIgnored private var finishing: Task<Void, Never>?
-  /// Reading which agents are installed and connected, while it runs.
-  @ObservationIgnored private var loadingAgents: Task<Void, Never>?
+  @ObservationIgnored var markedOpen = false
   /// Readings of the facts since `atlas agents status` last failed.
-  @ObservationIgnored private var readingsSinceAgentsFailed = 0
-  /// The window closed: nothing new starts, and late replies are dropped.
-  @ObservationIgnored private var closed = false
+  @ObservationIgnored var readingsSinceAgentsFailed = 0
+  /// Readings in a row whose permissions were unknown.
+  @ObservationIgnored var readingsUnknown = 0
+  /// In the helper: the account whose picture was read last, by its short name, so it is read once.
+  @ObservationIgnored var askerPictured: String?
+  /// The window closed: nothing new starts, nothing queued runs, and late replies are dropped.
+  @ObservationIgnored var closed = false
+  /// The time since Lock and Switch, while the helper's login is timed; nil otherwise.
+  @ObservationIgnored var sinceSwitch: (@Sendable () -> Duration)?
+  /// Told each time the queue takes a request, once it is the request under way and before its work starts, which
+  /// waits for the turn of the main actor the telling runs in to end: Back or the window's close can come in that gap,
+  /// and a test acts there.
+  @ObservationIgnored var taking: (@MainActor (OnboardingRequest) -> Void)?
+  /// The steps of the helper's login noted so far: "answering" and "hidden".
+  @ObservationIgnored var timed: Set<String> = []
 
   /// Creates a controller that has read nothing yet.
   ///
   /// - Parameter dependencies: The `atlas` command line and the system pieces it reaches.
   init(dependencies: OnboardingDependencies) {
     self.dependencies = dependencies
+    let (requests, queue) = AsyncStream.makeStream(of: Int.self)
+    self.requests = requests
+    self.queue = queue
+    snapshot.agentIcons = dependencies.agentIcons()
   }
 
   /// The `atlas` command line every action runs.
@@ -62,7 +107,7 @@ final class OnboardingController {
     return OnboardingPresenter.state(shown)
   }
 
-  /// Applies one of the window's events.
+  /// Applies one of the window's events: a choice at once, an action as a request in the queue.
   ///
   /// - Parameter event: What the person did.
   func send(_ event: OnboardingEvent) {
@@ -70,24 +115,28 @@ final class OnboardingController {
     case .begin: snapshot.choices.started = true
     case .back: back()
     case .pick(let account): snapshot.picked = account
-    case .continueChoice: Task { await useHelper() }
-    case .createAccount: Task { await createAccount() }
-    case .lockAndSwitch: Task { await act(.switchTo(snapshot.facts.helper.name), Words.locking) }
-    case .chooseAnother: Task { await chooseAnother() }
-    case .checkAgain: refresh()
+    case .continueChoice: enqueue(.useHelper)
+    case .createAccount: enqueue(.createAccount)
+    case .lockAndSwitch: enqueue(.lockAndSwitch)
+    case .chooseAnother: enqueue(.chooseAnother)
+    case .closeLeftovers: enqueue(.closeLeftovers)
+    case .continueAfterClose: snapshot.choices.closedLeftovers = false
+    case .checkAgain, .continueFinishing: enqueue(.refresh)
     case .retryFinish: retryFinish()
-    case .continueFinishing: refresh()
     case .setAgent(let id, let on): setAgent(id, on: on)
-    case .chooseProject: chooseProject()
-    case .removeProject(let id): snapshot.projects.removeAll { $0.path == id }
-    case .connectAgents: Task { await connectAgents() }
-    case .setOpenAtLogin(let on): snapshot.opensAtLogin = on
-    case .complete: Task { await complete() }
-    case .allow: Task { await allow() }
+    case .connectAgents: enqueue(.connectAgents(chosen: agentsSwitchedOn))
+    case .setOpenAtLogin(let on):
+      guard snapshot.working == nil else { return }
+      snapshot.opensAtLogin = on
+    case .complete: enqueue(.complete)
+    case .allow: enqueue(.allow)
+    // Nothing is allowed: the window closes, and the helper asks again the next time Atlas opens there.
+    case .notNow: closeRequested = true
+    case .showInFinder: dependencies.reveal(dependencies.app)
     case .openSettings(let id):
-      if let permission = Permission.allCases.first(where: { $0.id == id }) { openSettings(permission) }
-    case .closeGuide: snapshot.guiding = nil
-    case .switchBack: Task { await switchBack() }
+      if let permission = Permission.allCases.first(where: { $0.id == id }) { enqueue(.openSettings(permission)) }
+    case .closePanel: closePanel()
+    case .switchBack: enqueue(.switchBack)
     }
   }
 
@@ -98,94 +147,54 @@ final class OnboardingController {
     snapshot.form = form
   }
 
-  // MARK: Reading
-
-  /// Reads the facts now and then every ``readEvery`` until ``stop()``.
-  func watch() {
-    guard polling == nil else { return }
-    polling = Task { [weak self] in
-      // Ends once cancelled, or once the controller is gone.
-      while !Task.isCancelled, let controller = self {
-        await controller.read()
-        try? await Task.sleep(for: Self.readEvery)
-      }
+  /// Reads the facts now and then every ``readEvery``, and performs the window's requests one at a time, until
+  /// ``close()``.
+  ///
+  /// The window runs this once, from when it is first shown; a second call returns at once, and so does one after the
+  /// close. Its two lanes are the two children of one task group, so neither outlives it: the reading loop
+  /// (`readFacts()`) and the queue (`performRequests()`). Both run on the main actor and interleave only at their
+  /// awaits, so a reading lands while an action runs, and no action waits for a reading.
+  ///
+  /// It returns once the window has closed and the request under way, if any, has settled. Cancelling it stops both
+  /// lanes at once, the request under way included.
+  func run() async {
+    guard !started, !closed else { return }
+    started = true
+    // Structured children, not tasks of their own: each runs its whole loop on the main actor.
+    await withDiscardingTaskGroup { group in
+      group.addTask { await self.readFacts() }
+      group.addTask { await self.performRequests() }
     }
   }
 
-  /// Stops reading.
-  func stop() {
-    polling?.cancel()
-    polling = nil
-  }
-
-  /// Reads the facts again soon: now, or right after the reading under way.
-  func refresh() {
+  /// The window is closing: the queue stops, so nothing queued runs, and the reading loop stops, dropping a reading
+  /// under way; once a mark under way has settled, the helper's mark is cleared, so the clearing lands last. A request
+  /// under way runs to its end, since stopping `atlas` partway could leave a restart or setup half done, and its
+  /// outcome is dropped.
+  func close() async {
     guard !closed else { return }
-    if reading {
-      readAgain = true
-    } else {
-      Task { await read() }
+    closed = true
+    queue.finish()
+    pending.removeAll()
+    resting?.cancel()
+    if marking { await withCheckedContinuation { markSettled = $0 } }
+    if snapshot.facts.role == .helper {
+      _ = await commands.run(.markWindow(open: false))
     }
   }
 
-  /// One reading at a time, so an old one never lands after a newer one.
-  private func read() async {
-    guard !reading else {
-      readAgain = true
-      return
-    }
-    reading = true
-    let outcome = await commands.run(.onboardingStatus)
-    reading = false
-    guard !closed else { return }
-    if outcome.ok, let facts = OnboardingFacts(json: outcome.reply) {
-      snapshot.facts = facts
-      if !snapshot.loaded {
-        snapshot.opensAtLogin = facts.opensAtLogin(enabledNow: dependencies.loginItem.isEnabled())
-        // A failed first reading's message goes with it.
-        snapshot.problem = nil
-      }
-      snapshot.loaded = true
-      // A pick the choice no longer shows, or none yet, gives way to the default.
-      if snapshot.shownPick == nil { snapshot.picked = facts.defaultPick.map(OnboardingAccountPick.init(name:)) }
-      advance()
-    } else if !snapshot.loaded {
-      snapshot.problem = outcome.ok ? OnboardingWords.notUnderstood : Words.sentence(outcome.message)
-    }
-    if readAgain {
-      readAgain = false
-      await read()
-    }
-  }
-
-  /// Starts what a step needs as soon as it is shown, and lets the guide step aside once it is done.
-  private func advance() {
-    guard !closed else { return }
-    let step = snapshot.step
-    switch step {
-    case .finishing where snapshot.finish == .idle: runFinish()
-    case .agents where snapshot.agents.isEmpty: loadAgents()
-    case .agents where snapshot.agentsFailed: retryAgents()
-    case .allow, .permissions, .helperDone: markWindow(open: true)
-    default: break
-    }
-    // A check's outcome holds for this visit to the step alone: coming back runs it again.
-    if step != .finishing, snapshot.finish != .running { snapshot.finish = .idle }
-    if let permission = snapshot.guiding, !permission.guideStays(on: step, asker: snapshot.facts.asker) {
-      snapshot.guiding = nil
-    }
-  }
-
-  /// Runs one command, with its words shown while it runs; one at a time, and none once the window has closed.
+  /// Runs one command, with its words shown while it runs; one at a time, and none once the window has closed. A
+  /// command that ran past ``workingShows`` has shown its line, which stays ``workingStays`` before the next screen or
+  /// line takes its place; a problem shows at once.
   ///
   /// A command already running when the window closes settles, but its outcome is dropped, so a workflow awaiting it
-  /// stops there and starts no further command.
+  /// stops there and starts no further command. So is one whose wait Back stopped (``OnboardingRequest/endsOnBack``).
   ///
   /// - Parameters:
   ///   - action: The command.
   ///   - words: What to show while it runs.
   ///   - input: What to write to its standard input, if anything: a secret travels this way.
-  /// - Returns: The command's outcome, or nil when another one runs or the window has closed.
+  /// - Returns: The command's outcome, or nil when another one runs, Back stopped it or the window has closed.
   @discardableResult
   func act(_ action: Action, _ words: String, input: Data? = nil) async -> Outcome? {
     await act(words) { await self.commands.run(action, input: input) }
@@ -197,15 +206,18 @@ final class OnboardingController {
   /// - Parameters:
   ///   - words: What runs, in words, while it does.
   ///   - command: The command, answering nil when it could not start.
-  /// - Returns: Its outcome, or nil when it did not run or the window closed.
+  /// - Returns: Its outcome, or nil when it did not run, Back stopped it or the window closed.
   func act(_ words: String, _ command: () async -> Outcome?) async -> Outcome? {
     guard !closed, snapshot.working == nil else { return nil }
     snapshot.working = words
     snapshot.problem = nil
-    let ran = await command()
+    snapshot.problemAbout = nil
+    let ran = Self.stopwatch(dependencies.clock)
+    let outcome = await command()
+    if outcome?.ok == true { await keepWorkingLine(shownFor: ran()) }
     snapshot.working = nil
-    guard !closed else { return nil }
-    guard let outcome = ran else {
+    guard !closed, !Task.isCancelled else { return nil }
+    guard let outcome else {
       snapshot.problem = HelperWords.waitForAction
       return nil
     }
@@ -214,217 +226,25 @@ final class OnboardingController {
     return outcome
   }
 
-  /// The window is closing: stop reading, start nothing new, and clear the helper's mark once a mark under way has
-  /// settled, so the clearing lands last. A check or an agents reading under way runs to its end, since stopping
-  /// `atlas` partway could leave a restart or setup half done; its reply is dropped.
-  func close() async {
-    closed = true
-    stop()
-    await marking?.value
-    if snapshot.facts.role == .helper {
-      _ = await commands.run(.markWindow(open: false))
-    }
+  /// Keeps a working line that has shown until it has stayed ``workingStays``; one whose command ended before it
+  /// showed goes at once. Cancelled, as by Back or the window's close, it ends at once.
+  ///
+  /// - Parameter elapsed: How long the command ran.
+  private func keepWorkingLine(shownFor elapsed: Duration) async {
+    let left = Self.workingShows + Self.workingStays - elapsed
+    guard elapsed > Self.workingShows, left > .zero else { return }
+    try? await dependencies.clock.sleep(for: left)
   }
 
-  // MARK: The person's side
-
-  /// Back to the screen before: the welcome from the choice, the choice from the form, the agents from Done.
+  /// Back to the screen before: the welcome from the choice, the choice from the form, the agents from Done. It is
+  /// applied at once, never queued, and stops the lock's wait, waiting or under way.
   private func back() {
+    stop(where: \.endsOnBack)
     switch snapshot.step {
     case .chooseHelper: snapshot.choices.started = false
     case .createAccount: snapshot.choices.creating = false
     case .done: snapshot.choices.agentsDone = false
     default: break
-    }
-  }
-
-  /// Continue on the choice: the form for a new account, else set the picked account up as the helper.
-  func useHelper() async {
-    switch snapshot.shownPick {
-    case .newAccount: snapshot.choices.creating = true
-    case .existing(let name):
-      let title = snapshot.facts.candidates.first { $0.name == name }?.title ?? name
-      await act(.chooseHelper(name), OnboardingWords.settingUp(title))
-    case nil: break
-    }
-  }
-
-  /// Creates the account. The password reaches macOS on standard input, never in the arguments, and leaves the form
-  /// as it is handed over.
-  func createAccount() async {
-    guard snapshot.form.canCreate, snapshot.working == nil else { return }
-    let action = Action.createAccount(account: snapshot.form.accountName, fullName: snapshot.form.fullName)
-    var secret = Data(snapshot.form.password.utf8)
-    // One line: the command reads the password up to its newline.
-    secret.append(0x0A)
-    // Cleared from the window as soon as it is handed to macOS.
-    snapshot.form.password = ""
-    snapshot.form.verify = ""
-    await act(
-      action,
-      OnboardingWords.creating,
-      input: secret
-    )
-    secret.resetBytes(in: 0..<secret.count)
-  }
-
-  /// Runs the end-to-end check, then reads the facts again; never a second one while one runs, and a check the
-  /// closing window stopped shows nothing.
-  private func runFinish() {
-    guard finishing == nil, !closed else { return }
-    snapshot.finish = .running
-    finishing = Task {
-      let outcome = await commands.run(.finishSetup)
-      guard !closed else { return }
-      finishing = nil
-      snapshot.finish = outcome.ok ? .passed : .failed(outcome.message)
-      refresh()
-    }
-  }
-
-  /// Try Again after a failed check.
-  private func retryFinish() {
-    guard finishing == nil else { return }
-    snapshot.finish = .idle
-    runFinish()
-  }
-
-  /// Lists the agents Atlas can connect, then asks `atlas agents status` which are installed and connected. A reading
-  /// that fails keeps the agents listed, unchecked with their switches off, says so and lets Continue skip the step;
-  /// it is asked again every ``agentsRetryReadings`` readings. One that ends after the window closed is dropped.
-  func loadAgents() {
-    guard loadingAgents == nil, !closed else { return }
-    if snapshot.agents.isEmpty { snapshot.agents = AgentChoice.all }
-    readingsSinceAgentsFailed = 0
-    loadingAgents = Task {
-      let outcome = await commands.run(.agentsStatus)
-      guard !closed else { return }
-      loadingAgents = nil
-      guard outcome.ok, let status = outcome.decode(AgentsStatus.self) else {
-        snapshot.agentsFailed = true
-        if snapshot.working == nil { snapshot.problem = OnboardingWords.agentsCheckFailed }
-        return
-      }
-      if snapshot.agentsFailed, snapshot.problem == OnboardingWords.agentsCheckFailed { snapshot.problem = nil }
-      snapshot.agentsFailed = false
-      snapshot.agents = AgentChoice.merged(snapshot.agents, with: status.agents)
-      snapshot.agentsLoaded = true
-    }
-  }
-
-  /// Counts a reading since `atlas agents status` failed, and asks it again once enough have passed.
-  private func retryAgents() {
-    guard loadingAgents == nil else { return }
-    readingsSinceAgentsFailed += 1
-    if readingsSinceAgentsFailed >= Self.agentsRetryReadings { loadAgents() }
-  }
-
-  /// Turns an agent's switch on or off.
-  ///
-  /// - Parameters:
-  ///   - id: The agent's id, as the screen names it.
-  ///   - on: Whether it is on.
-  private func setAgent(_ id: String, on: Bool) {
-    guard let index = snapshot.agents.firstIndex(where: { $0.id.rawValue == id }) else { return }
-    snapshot.agents[index].on = on
-  }
-
-  /// Asks for project folders to teach, adding each new one. A folder is known by its path with links resolved, so
-  /// one folder chosen twice, by another spelling or through a link, is added once.
-  private func chooseProject() {
-    for url in dependencies.chooseFolders() {
-      let folder = url.standardizedFileURL.resolvingSymlinksInPath()
-      if !snapshot.projects.contains(where: { $0.path == folder.path }) { snapshot.projects.append(folder) }
-    }
-  }
-
-  /// Gives up the helper picked but never set up and goes back to the choice: the list, never the account form,
-  /// even when the account was just created there.
-  func chooseAnother() async {
-    guard let outcome = await act(.forgetHelper, OnboardingWords.backToChoice), outcome.ok else { return }
-    snapshot.choices.creating = false
-  }
-
-  /// Connects the chosen agents, then teaches each chosen project; a project that cannot be taught is named, and the
-  /// rest still follow. Agents that cannot be connected are each named with why, and the window stays.
-  func connectAgents() async {
-    let chosen = AgentChoice.toConnect(snapshot.agents)
-    if !chosen.isEmpty {
-      let installs = dependencies.installs
-      guard let outcome = await act(OnboardingWords.connecting, { await installs.install(chosen) }) else { return }
-      let change = outcome.decode(AgentsChange.self)
-      // A reply that names no agent connected them all when it worked.
-      let connected = outcome.ok ? chosen : change?.connected ?? []
-      for index in snapshot.agents.indices where connected.contains(snapshot.agents[index].id) {
-        snapshot.agents[index].connected = true
-      }
-      guard outcome.ok else {
-        let failures = (change?.failures ?? []).map { OnboardingWords.notConnected($0.agent, $0.error) }
-        if !failures.isEmpty { snapshot.problem = failures.joined(separator: " ") }
-        return
-      }
-    }
-    var failed: [String] = []
-    for project in snapshot.projects where !snapshot.taught.contains(project) {
-      guard
-        let outcome = await act(.teachProject(path: project.path), OnboardingWords.teaching(project.lastPathComponent))
-      else { return }
-      if outcome.ok {
-        snapshot.taught.append(project)
-      } else {
-        failed.append(OnboardingWords.notTaught(project.lastPathComponent, outcome.message))
-      }
-    }
-    // A skipped check's note belongs to the agents step only.
-    if snapshot.problem == OnboardingWords.agentsCheckFailed { snapshot.problem = nil }
-    snapshot.choices.agentsDone = true
-    if !failed.isEmpty { snapshot.problem = failed.joined(separator: " ") }
-  }
-
-  /// Done: set Open at Login, open Atlas, then close the window; on any failure the window stays, saying why.
-  func complete() async {
-    guard let login = await act(.setOpensAtLogin(snapshot.opensAtLogin), OnboardingWords.finishing),
-      login.ok,
-      let started = await act(.openMenuBar, OnboardingWords.opening),
-      started.ok
-    else { return }
-    closeRequested = true
-  }
-
-  // MARK: The helper's side
-
-  /// Allows exactly the account shown: a request changed since is refused.
-  func allow() async {
-    let asker = snapshot.facts.asker
-    await act(.allow(uid: asker.uid, name: asker.name), OnboardingWords.settingUpHere)
-  }
-
-  /// Opens the permission's Privacy & Security page, with the guide panel beside it.
-  ///
-  /// - Parameter permission: The permission to allow.
-  private func openSettings(_ permission: Permission) {
-    if let url = permission.settingsURL { dependencies.openURL(url) }
-    snapshot.guiding = permission
-  }
-
-  /// Locks this account for the switch back, to the account that asked, or with none named when no one asked; the
-  /// window's work here is then done.
-  func switchBack() async {
-    let name = snapshot.facts.asker.name
-    let action: Action = name.isEmpty ? .lockScreen : .switchTo(name)
-    if let outcome = await act(action, Words.locking), outcome.ok { closeRequested = true }
-  }
-
-  /// While open in the helper, Atlas's own "set up here" notice stays quiet; one mark at a time, tried again on the
-  /// next reading.
-  ///
-  /// - Parameter open: Whether the window is open.
-  private func markWindow(open: Bool) {
-    guard snapshot.facts.role == .helper, !closed, marking == nil, open != markedOpen else { return }
-    marking = Task {
-      let marked = await commands.run(.markWindow(open: open)).ok
-      marking = nil
-      if marked { markedOpen = open }
     }
   }
 }

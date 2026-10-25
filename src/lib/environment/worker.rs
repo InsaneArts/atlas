@@ -694,6 +694,8 @@ pub(super) fn rollback(
 
     if transaction.phase == Phase::RolledBack {
         if apply {
+            guard()?;
+            store.finish(id)?;
             store.discard_copies(&transaction);
         }
         return Ok(report(&transaction, Ok(()), true));

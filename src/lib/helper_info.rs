@@ -7,7 +7,7 @@ use crate::error::{Error, Result};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
 };
 use tokio::sync::Mutex;
@@ -109,19 +109,47 @@ pub fn thumbnail(png: &[u8]) -> Result<Value> {
 /// The regular apps in `apps`, each with its windows from `windows` (front
 /// to back): apps with a window first, in the order of their front one.
 /// A window carries its number, title and bounds in desktop points.
-pub fn open_apps(apps: &Value, windows: &Value) -> Vec<Value> {
+pub fn open_apps(apps: &Value, windows: &Value) -> Result<Vec<Value>> {
+    // Reserve the added field names and null defaults per entry before
+    // copying anything. Each source entry can contribute to the output once.
+    let count = apps.as_array().map_or(0, Vec::len) + windows.as_array().map_or(0, Vec::len);
+    let too_large = || Error::new("apps", "The app list is too large to read");
+    let overhead = count
+        .checked_mul(128)
+        .filter(|bytes| *bytes <= FRAME_LIMIT)
+        .ok_or_else(too_large)?;
+    let mut budget = ListBudget(FRAME_LIMIT - overhead);
+    serde_json::to_writer(&mut budget, apps).map_err(|_| too_large())?;
+    serde_json::to_writer(&mut budget, windows).map_err(|_| too_large())?;
+
+    let mut pids = HashSet::new();
+    for app in apps.as_array().into_iter().flatten() {
+        if !pids.insert(
+            app["pid"]
+                .as_u64()
+                .filter(|pid| *pid > 0)
+                .ok_or_else(|| Error::new("apps", "The app list has an invalid process ID"))?,
+        ) {
+            return Err(Error::new("apps", "The app list repeats a process ID"));
+        }
+    }
     let windows = windows.as_array().map(Vec::as_slice).unwrap_or_default();
+    let mut grouped = HashMap::<u64, Vec<_>>::new();
+    for (at, window) in windows.iter().enumerate() {
+        if let Some(pid) = window["pid"].as_u64() {
+            grouped.entry(pid).or_default().push((at, window));
+        }
+    }
     let mut listed = apps
         .as_array()
         .into_iter()
         .flatten()
         .filter(|app| app["policy"] == "regular")
         .map(|app| {
-            let own = windows
-                .iter()
-                .enumerate()
-                .filter(|(_, window)| window["pid"] == app["pid"])
-                .collect::<Vec<_>>();
+            let own = app["pid"]
+                .as_u64()
+                .and_then(|pid| grouped.remove(&pid))
+                .unwrap_or_default();
             let front = own.first().map_or(usize::MAX, |(at, _)| *at);
             // The app the executable is in: the innermost, for a helper app
             // inside another.
@@ -156,7 +184,24 @@ pub fn open_apps(apps: &Value, windows: &Value) -> Vec<Value> {
         .collect::<Vec<_>>();
 
     listed.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
-    listed.into_iter().map(|(_, _, app)| app).collect()
+    Ok(listed.into_iter().map(|(_, _, app)| app).collect())
+}
+
+/// Count serialized source bytes without allocating another copy of them.
+struct ListBudget(usize);
+
+impl std::io::Write for ListBudget {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0 = self
+            .0
+            .checked_sub(bytes.len())
+            .ok_or_else(|| std::io::Error::other("The app list is too large to read"))?;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// When a screenshot named `name` was taken, in nanoseconds since 1970:
@@ -323,7 +368,7 @@ mod tests {
             {"number": 13, "pid": 3, "title": "Ring", "bounds": {"x": 700.0, "y": 80.0, "width": 520.0, "height": 860.0}},
         ]);
 
-        let listed = open_apps(&apps, &windows);
+        let listed = open_apps(&apps, &windows).unwrap();
         let order = listed
             .iter()
             .map(|app| app["name"].clone())
@@ -340,6 +385,28 @@ mod tests {
             json!([]),
             "Finder, without a window, last"
         );
+    }
+
+    #[test]
+    fn repeated_app_process_ids_are_refused_before_joining_windows() {
+        let app = json!({"name": "Notes", "pid": 4, "policy": "regular"});
+        let apps = json!([app, app]);
+        let windows = json!([{"pid": 4, "number": 1, "title": "Notes"}]);
+        assert_eq!(open_apps(&apps, &windows).unwrap_err().code, "apps");
+    }
+
+    #[test]
+    fn app_lists_bound_total_entries_and_text_before_copying_them() {
+        let apps = json!([{"name": "Notes", "pid": 4, "policy": "regular"}]);
+        let windows = json!([
+            {"pid": 4, "title": "x".repeat(FRAME_LIMIT / 2)},
+            {"pid": 4, "title": "x".repeat(FRAME_LIMIT / 2)},
+        ]);
+        assert_eq!(open_apps(&apps, &windows).unwrap_err().code, "apps");
+        let windows = Value::Array(vec![Value::Null; FRAME_LIMIT / 128 + 1]);
+        assert_eq!(open_apps(&apps, &windows).unwrap_err().code, "apps");
+        let apps = json!([{"pid": 4, "name": "x".repeat(FRAME_LIMIT), "policy": "regular"}]);
+        assert_eq!(open_apps(&apps, &json!([])).unwrap_err().code, "apps");
     }
 
     #[test]
@@ -464,7 +531,7 @@ mod tests {
         let nested = json!([{"name": "Helper", "pid": 1, "policy": "regular",
             "executable": "/Applications/Big.app/Contents/Frameworks/Helper.app/Contents/MacOS/Helper"}]);
         assert_eq!(
-            open_apps(&nested, &json!([]))[0]["bundle"],
+            open_apps(&nested, &json!([])).unwrap()[0]["bundle"],
             "/Applications/Big.app/Contents/Frameworks/Helper.app"
         );
     }

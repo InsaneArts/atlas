@@ -4,62 +4,92 @@
   import SwiftUI
 
   /// The viewer window's design renders. Debug builds only, since the samples are.
-  @MainActor
   enum ViewerRender {
-    /// Each render's file name, numbered in the order the renders were added, one for each sample the previews list
-    /// (``PreviewStates/viewer``), which `RenderTests` checks. Kept apart from the states, which are the main actor's,
-    /// so a test can list them as its arguments.
-    nonisolated static let files = [
-      "01-working",
-      "02-idle",
-      "03-control",
-      "04-needs-you",
-      "05-stopped",
-      "06-in-use-elsewhere",
-      "07-paused",
-      "08-details",
-      "09-not-ready",
-      "10-logged-out",
-      "11-connecting",
-      "12-switch",
-      "13-log-out",
-      "14-log-out-anyway",
-      "15-restart",
-      "16-typing",
-      "17-mid-action",
-      "18-actual-size-paused",
-      "19-actual-size-needs-you",
-      "20-activity",
-      "21-activity-nothing-yet",
-      "22-apps",
-      "23-show-on-screen",
-      "24-screenshots",
-      "25-screenshot-large",
-      "26-screenshots-none-yet",
-      "27-activity-paused",
-      "28-apps-paused",
-      "29-show-on-screen-right-edge",
-      "30-details-checks",
-    ]
+    /// Every main window state drawn for visual checks, at the standard window size, one for each sample the
+    /// previews list (``PreviewStates/viewer``), which `RenderTests` checks. Each render's name is its
+    /// file's, numbered in the order the renders were added.
+    static var renders: [PreviewState<ViewerState>] {
+      [
+        sample("01-working", PreviewStates.viewerWorking),
+        sample("02-idle", PreviewStates.viewerIdle),
+        sample("03-control", PreviewStates.viewerControl),
+        sample("04-needs-you", PreviewStates.viewerNeedsYou),
+        sample("05-stopped", PreviewStates.viewerStopped),
+        sample("06-in-use-elsewhere", PreviewStates.viewerInUseElsewhere),
+        sample("07-paused", PreviewStates.viewerPaused),
+        sample("08-details", PreviewStates.viewerDetails),
+        sample("09-not-ready", PreviewStates.viewerNotReady),
+        sample("10-logged-out", PreviewStates.viewerLoggedOut),
+        sample("11-connecting", PreviewStates.viewerConnecting),
+        sample("12-switch", PreviewStates.viewerSwitch),
+        sample("13-log-out", PreviewStates.viewerLogOut),
+        sample("14-log-out-anyway", PreviewStates.viewerLogOutAnyway),
+        sample("15-restart", PreviewStates.viewerRestart),
+        sample("16-typing", PreviewStates.viewerTyping),
+        sample("17-mid-action", PreviewStates.viewerMidAction),
+        sample("18-actual-size-paused", PreviewStates.viewerActualSizePaused),
+        sample("19-actual-size-needs-you", PreviewStates.viewerActualSizeNeedsYou),
+        sample("20-activity", PreviewStates.viewerActivity),
+        sample("21-activity-nothing-yet", PreviewStates.viewerActivityEmpty),
+        sample("22-apps", PreviewStates.viewerApps),
+        sample("23-show-on-screen", PreviewStates.viewerShowOnScreen),
+        sample("24-screenshots", PreviewStates.viewerShots),
+        sample("25-screenshot-large", PreviewStates.viewerShotLarge),
+        sample("26-screenshots-none-yet", PreviewStates.viewerShotsEmpty),
+        sample("27-activity-paused", PreviewStates.viewerActivityPaused),
+        sample("28-apps-paused", PreviewStates.viewerAppsPaused),
+        sample("29-show-on-screen-right-edge", PreviewStates.viewerShowOnScreenRightEdge),
+        sample("30-details-checks", PreviewStates.viewerDetailsChecks),
+      ]
+    }
+
+    /// The render names, in order, for a test to list as its arguments.
+    static var names: [String] { renders.map(\.name) }
+
+    /// A render at the standard window size.
+    ///
+    /// - Parameters:
+    ///   - name: Its file's name.
+    ///   - state: The state it draws.
+    /// - Returns: The render.
+    private static func sample(_ name: String, _ state: ViewerState) -> PreviewState<ViewerState> {
+      PreviewState(name: name, value: state, size: PreviewStates.viewerSize)
+    }
 
     /// The narrow windows the top row is drawn in for checking how it draws in: the least width, then 900 and 1040,
     /// each side of a step (`ViewerLayout.topRowFit`).
     nonisolated static let narrowWidths: [CGFloat] = [860, 900, 1040]
 
-    /// The narrow renders' file names: Working, Stopped and You have control at each of ``narrowWidths``, then
-    /// Activity, Apps and Screenshots with Details open at the least width, where their headers have the least room.
-    nonisolated static let narrowFiles: [String] =
-      narrowWidths.flatMap { width in
-        ["working", "stopped", "control"].map { "narrow-\(Int(width))-\($0)" }
-      } + ["activity", "apps", "screenshots"].map { "narrow-\(Int(narrowWidths[0]))-\($0)-details" }
+    /// The narrow renders, each named by its file and drawn at its window's width and the standard height:
+    /// Working, Stopped and You have control at each of ``narrowWidths``, then Activity, Apps and Screenshots
+    /// with Details open at the least width, where their headers have the least room.
+    static var narrowRenders: [PreviewState<ViewerState>] {
+      let states = [
+        ("working", PreviewStates.viewerWorking), ("stopped", PreviewStates.viewerStopped),
+        ("control", PreviewStates.viewerControl),
+      ]
+      let tabs = [
+        ("activity", PreviewStates.viewerActivity), ("apps", PreviewStates.viewerApps),
+        ("screenshots", PreviewStates.viewerShots),
+      ]
+      let least = narrowWidths[0]
+      return narrowWidths.flatMap { width in
+        states.map { narrow("narrow-\(Int(width))-\($0.0)", $0.1, width: width) }
+      } + tabs.map { narrow("narrow-\(Int(least))-\($0.0)-details", withDetails($0.1), width: least) }
+    }
 
-    /// The narrow renders, by file name, with their window's width.
-    static var narrowRenders: [(file: String, state: ViewerState, width: CGFloat)] {
-      let states = [PreviewStates.viewerWorking, PreviewStates.viewerStopped, PreviewStates.viewerControl]
-      let tabs = [PreviewStates.viewerActivity, PreviewStates.viewerApps, PreviewStates.viewerShots]
-        .map { (withDetails($0), narrowWidths[0]) }
-      return zip(narrowFiles, narrowWidths.flatMap { width in states.map { ($0, width) } } + tabs)
-        .map { (file: $0, state: $1.0, width: $1.1) }
+    /// The narrow render names, in order, for a test to list as its arguments.
+    static var narrowNames: [String] { narrowRenders.map(\.name) }
+
+    /// A render in a narrow window, at the standard height.
+    ///
+    /// - Parameters:
+    ///   - name: Its file's name.
+    ///   - state: The state it draws.
+    ///   - width: The window's width.
+    /// - Returns: The render.
+    private static func narrow(_ name: String, _ state: ViewerState, width: CGFloat) -> PreviewState<ViewerState> {
+      PreviewState(name: name, value: state, size: CGSize(width: width, height: PreviewStates.viewerSize.height))
     }
 
     /// `state` with the Details column open beside its pane, as the Details sample shows it.
@@ -81,9 +111,9 @@
       ]
     }
 
-    /// The sizes the frame renders draw the four tabs at: the boards' window with Details, the narrower steps with
-    /// and without it, and two full screens, so every tab can be seen to stand in the same frame. The design check
-    /// draws them; the tests draw each state once, at the boards' size or a narrow one.
+    /// The sizes the frame renders draw the four tabs at: the standard window with Details, the narrower
+    /// steps with and without it, and two full screens, so every tab can be seen to stand in the same frame.
+    /// The design check draws them; the tests draw each state once, at the standard size or a narrow one.
     private static let frameSizes: [(name: String, size: NSSize, details: Bool, fullScreen: Bool)] = [
       ("1440-details", NSSize(width: 1440, height: 900), true, false),
       ("1040", NSSize(width: 1040, height: 900), false, false),
@@ -95,70 +125,27 @@
       ("2560x1440-fullscreen", NSSize(width: 2560, height: 1440), false, true),
     ]
 
-    /// The frame renders, by file name, with their window's size.
-    static var frameRenders: [(file: String, state: ViewerState, size: NSSize)] {
+    /// The frame renders, each named by its file and drawn at its window's size.
+    static var frameRenders: [PreviewState<ViewerState>] {
       frameSizes.flatMap { size in
         tabs.map { tab in
           var state = size.details ? withDetails(tab.state) : tab.state
           state.top.isFullScreen = size.fullScreen
-          return (file: "frame-\(size.name)-\(tab.name)", state: state, size: size.size)
+          return PreviewState(name: "frame-\(size.name)-\(tab.name)", value: state, size: size.size)
         }
       }
     }
 
-    /// Every main window state drawn for checking against the boards, by file name, at the boards' window size.
-    static var renders: [(file: String, state: ViewerState)] {
-      Array(zip(files, states))
-    }
-
-    /// The states, in the order of ``files``.
-    private static let states = [
-      PreviewStates.viewerWorking,
-      PreviewStates.viewerIdle,
-      PreviewStates.viewerControl,
-      PreviewStates.viewerNeedsYou,
-      PreviewStates.viewerStopped,
-      PreviewStates.viewerInUseElsewhere,
-      PreviewStates.viewerPaused,
-      PreviewStates.viewerDetails,
-      PreviewStates.viewerNotReady,
-      PreviewStates.viewerLoggedOut,
-      PreviewStates.viewerConnecting,
-      PreviewStates.viewerSwitch,
-      PreviewStates.viewerLogOut,
-      PreviewStates.viewerLogOutAnyway,
-      PreviewStates.viewerRestart,
-      PreviewStates.viewerTyping,
-      PreviewStates.viewerMidAction,
-      PreviewStates.viewerActualSizePaused,
-      PreviewStates.viewerActualSizeNeedsYou,
-      PreviewStates.viewerActivity,
-      PreviewStates.viewerActivityEmpty,
-      PreviewStates.viewerApps,
-      PreviewStates.viewerShowOnScreen,
-      PreviewStates.viewerShots,
-      PreviewStates.viewerShotLarge,
-      PreviewStates.viewerShotsEmpty,
-      PreviewStates.viewerActivityPaused,
-      PreviewStates.viewerAppsPaused,
-      PreviewStates.viewerShowOnScreenRightEdge,
-      PreviewStates.viewerDetailsChecks,
-    ]
-
-    /// Draws every main window state to PNGs in `directory`, at Retina scale (``PNG/scale``).
+    /// Draws every main window state to PNGs in `directory`, at Retina scale (``PNG/scale``): the standard
+    /// renders, the narrow ones, then the frames, each at its size.
     ///
-    /// - Parameters:
-    ///   - directory: Where the PNGs go.
-    ///   - size: The window's size.
+    /// - Parameter directory: Where the PNGs go.
     /// - Returns: Whether every state was drawn.
-    static func draw(to directory: String, size: NSSize = PreviewStates.viewerSize) -> Bool {
+    static func draw(to directory: String) -> Bool {
       let folder = URL(fileURLWithPath: directory)
-      let wide = renders.map { draw($0.file, $0.state, to: folder, size: size) }
-      let narrow = narrowRenders.map {
-        draw($0.file, $0.state, to: folder, size: NSSize(width: $0.width, height: size.height))
-      }
-      let frames = frameRenders.map { draw($0.file, $0.state, to: folder, size: $0.size) }
-      return (wide + narrow + frames).allSatisfy { $0 }
+      return (renders + narrowRenders + frameRenders)
+        .map { draw($0.name, $0.value, to: folder, size: $0.size ?? PreviewStates.viewerSize) }
+        .allSatisfy { $0 }
     }
 
     /// Draws one main window state to `file`.png in `folder`, at Retina scale.

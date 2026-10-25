@@ -1,4 +1,3 @@
-import AtlasKit
 import AtlasUI
 
 /// The tabs and Details: leaving the Screen tab gives control back, as losing focus does, and Take Control then waits
@@ -10,20 +9,46 @@ extension ViewerController {
   /// - Parameter tab: The tab.
   func selectTab(_ tab: ViewerTab) {
     guard tab != session.tab else { return }
-    if holdingControl || session.acquiring { releaseControl() }
-    if session.tab == .screenshots { closeShot() }
+    if holdingControl || control.acquiring { control.releaseControl() }
+    if session.tab == .screenshots { panesModel.closeShot() }
     session.tab = tab
-    followPane()
+    noteActivitySeen()
+    panesModel.followPane()
+  }
+
+  /// What the person has seen of the helper's activity. While the Activity tab shows, everything it shows is
+  /// seen: its own log once read, which reads on while the picture is paused, else the status's actions. At
+  /// the first reading the status's actions are seen, so what the helper did before the window opened is
+  /// never new. Otherwise an unseen action that failed is remembered until Activity shows, even once newer
+  /// ones push it out of the status.
+  func noteActivitySeen() {
+    guard reading.hasStatus else { return }
+    let status = reading.statusReading.activity(limit: .max)
+    var seen: ViewerSeenActivity
+    if let shown = session.activitySeen, session.tab != .activity {
+      seen = shown
+      let unseen = shown.unseen(in: status)
+      seen.failed = shown.failed || unseen.contains { !$0.ok }
+    } else {
+      let log = session.tab == .activity ? panesModel.panes.activity.log?.entries.map(\.id) : nil
+      seen = ViewerSeenActivity(ids: Set(log ?? status.map(\.id)))
+    }
+    if session.activitySeen != seen { session.activitySeen = seen }
   }
 
   /// Check Again in Details: reads the status and Details' own facts now, then the next picture at once; once at a
-  /// time, its button showing a spinner meanwhile.
+  /// time, its button taking no press meanwhile. It holds for at least ``AtlasUI/Motion/Duration/leastWork`` on the
+  /// window's clock, so a check that answers at once still reads as checked rather than a flicker.
   func checkAgain() async {
     guard !session.checkingAgain else { return }
     session.checkingAgain = true
     defer { session.checkingAgain = false }
-    await readStatus()
-    refresh()
+    let clock = dependencies.clock
+    // Unstructured, so the least time runs beside the readings, not after them.
+    let least = Task { try? await clock.sleep(for: .seconds(Motion.Duration.leastWork.seconds)) }
+    await readingLoop.readStatus()
+    readingLoop.refresh()
     await readDetails()
+    await least.value
   }
 }

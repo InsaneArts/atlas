@@ -1,5 +1,4 @@
 /// A gate a test opens by hand: a scripted command waits at it, so the test acts while the command is under way.
-@MainActor
 final class ReleaseSignal {
   /// Whether the gate is open.
   private var isOpen = false

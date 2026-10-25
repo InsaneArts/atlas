@@ -1582,6 +1582,16 @@ mod tests {
         }
     }
 
+    #[test]
+    fn agents_are_told_to_read_both_output_streams_on_failure() {
+        for text in [GUIDE, include_str!("../../README.md")] {
+            let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(text.contains("A failed action's result is on stdout"));
+            assert!(text.contains("command or connection errors are on stderr"));
+            assert!(text.contains("On a non-zero exit, read both."));
+        }
+    }
+
     /// Agents read the skill's description from YAML front matter: it stays
     /// one double-quoted line with nothing that would end or break it.
     #[test]

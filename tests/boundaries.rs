@@ -457,6 +457,54 @@ fn capture_rejects_non_png_and_extreme_dimensions() {
     assert_eq!(png_dimensions(&header).unwrap_err().code, "capture");
 }
 
+#[tokio::test]
+async fn a_session_changed_screenshot_refusal_reaches_the_caller_with_that_code() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let dir = tempfile::Builder::new()
+        .prefix("ust-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let mut client = Client::new(config(dir.path())).unwrap();
+    client.transport.peer_uid = current_uid();
+    let listener = UnixListener::bind(&client.config.socket_path).unwrap();
+    let mut hello = status();
+    hello["user"]["uid"] = json!(client.config.helper_uid);
+    hello["sessionProof"]["uid"] = json!(client.config.helper_uid);
+    let proof = STANDARD.encode(serde_json::to_vec(&hello["sessionProof"]).unwrap());
+    let message = "Session changed during capture; observe again";
+    let server = tokio::spawn(async move {
+        for (op, reply) in [
+            ("hello", hello),
+            (
+                "run",
+                json!({"ok": true, "exitCode": 0, "timedOut": false,
+                    "events": [{"event": "output", "data": proof}]}),
+            ),
+            (
+                "screenshot",
+                json!({"ok": false, "code": "session-changed", "error": message}),
+            ),
+        ] {
+            let (peer, _) = listener.accept().await.unwrap();
+            let mut peer = BufReader::new(peer);
+            let mut request = String::new();
+            peer.read_line(&mut request).await.unwrap();
+            assert_eq!(serde_json::from_str::<Value>(&request).unwrap()["op"], op);
+            let mut bytes = serde_json::to_vec(&reply).unwrap();
+            bytes.push(b'\n');
+            peer.get_mut().write_all(&bytes).await.unwrap();
+        }
+    });
+
+    let error = client.capture(None).await.unwrap_err();
+    assert_eq!(error.code, "session-changed");
+    assert_eq!(error.error, message);
+    assert!(!error.uncertain);
+    server.await.unwrap();
+}
+
 fn current_uid() -> u32 {
     nix::unistd::getuid().as_raw()
 }
@@ -831,7 +879,7 @@ fn only_generations_nothing_will_settle_are_unresolved() {
 
     let held = controller.quarantine().unwrap();
     controller.clear().unwrap();
-    assert!(controller.pending().unwrap().is_empty());
+    assert_eq!(controller.pending().unwrap(), vec![held.to_string()]);
     assert!(
         !orphan.exists(),
         "recovery sweeps unlisted abandoned claims"

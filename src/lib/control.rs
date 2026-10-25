@@ -10,8 +10,9 @@ use fs2::FileExt;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use std::{
+    cell::RefCell,
     fs::{self, File, OpenOptions},
-    io::Write,
+    io::{Read, Seek, SeekFrom, Write},
     os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::Arc,
@@ -195,10 +196,238 @@ impl Drop for Pending {
         // replacement can only appear once this one is gone, so a path that
         // still names the locked file stays ours until it is removed here.
         // The lock goes with the descriptor.
-        if self.names_own_file() {
-            let _ = fs::remove_file(&self.live);
+        if self.names_own_file() && !claim_executor_running(&self.lock, &self.live) {
+            remove_claim(&self.live);
         }
     }
+}
+
+thread_local! {
+    /// Claims for the synchronous privileged dispatch on this thread.
+    static EXECUTOR_CLAIMS: RefCell<Vec<(PathBuf, File)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Bind durable claims to every executor dispatched in this scope. Before
+/// acknowledging an executor, its PID, boot and start time are synced into
+/// a record alongside each claim. If the caller dies, recovery refuses while
+/// that process instance can act.
+pub(crate) struct ExecutorClaims(Vec<(PathBuf, File)>);
+
+impl ExecutorClaims {
+    pub(crate) fn new(claims: &[Pending]) -> Result<Self> {
+        let files = claims
+            .iter()
+            .map(|claim| {
+                claim
+                    .lock
+                    .try_clone()
+                    .map(|file| (claim.live.clone(), file))
+            })
+            .collect::<std::io::Result<Vec<_>>>()?;
+        Ok(Self(EXECUTOR_CLAIMS.with(|bound| bound.replace(files))))
+    }
+}
+
+impl Drop for ExecutorClaims {
+    fn drop(&mut self) {
+        EXECUTOR_CLAIMS.with(|bound| bound.replace(std::mem::take(&mut self.0)));
+    }
+}
+
+/// Persist the executor before allowing it past its initial handshake.
+pub(crate) fn record_executor(pid: nix::unistd::Pid) -> Result<()> {
+    record_executor_with(pid, executor_boot, executor_start)
+}
+
+fn record_executor_with(
+    pid: nix::unistd::Pid,
+    boot: impl FnOnce() -> Result<String>,
+    start: impl FnOnce(i32) -> Result<[u64; 2]>,
+) -> Result<()> {
+    EXECUTOR_CLAIMS.with(|claims| {
+        let claims = claims.borrow();
+        if claims.is_empty() {
+            return Ok(());
+        }
+        let executor = Executor {
+            pid: pid.as_raw(),
+            boot: boot()?,
+            start: start(pid.as_raw())?,
+        };
+        let record = serde_json::to_vec(&executor)?;
+        for (live, file) in claims.iter() {
+            publish_executor_with(live, &record, |file, record| file.write_all(record))?;
+            let mut file = file;
+            file.set_len(0)?;
+            file.seek(SeekFrom::Start(0))?;
+            file.write_all(&record)?;
+            file.sync_all()?;
+        }
+        Ok(())
+    })
+}
+
+/// Publish identity separately from the stable claim inode: a failed write
+/// cannot destroy the previous executor's identity or release its flock.
+fn publish_executor_with(
+    live: &Path,
+    record: &[u8],
+    write: impl FnOnce(&mut File, &[u8]) -> std::io::Result<()>,
+) -> Result<()> {
+    let path = live.with_extension("executor.live");
+    let temporary = live.with_extension(format!("executor-{}", token()));
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&temporary)?;
+    let result = (|| {
+        write(&mut file, record)?;
+        file.sync_all()?;
+        fs::rename(&temporary, &path)?;
+        File::open(path.parent().expect("claim directory"))?.sync_all()?;
+        Ok(())
+    })();
+    let _ = fs::remove_file(temporary);
+    result
+}
+
+fn claim_executor_running(file: &File, live: &Path) -> bool {
+    match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(live.with_extension("executor.live"))
+    {
+        Ok(record) => executor_running(&record),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => executor_running(file),
+        Err(_) => true,
+    }
+}
+
+fn remove_claim(live: &Path) {
+    match fs::remove_file(live) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => return,
+        _ => {}
+    }
+    #[cfg(test)]
+    tests::INTERRUPT_CLAIM_REMOVAL.with(|interrupt| {
+        assert!(!interrupt.replace(false), "interrupted cleanup");
+    });
+    let _ = fs::remove_file(live.with_extension("executor.live"));
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Executor {
+    pid: i32,
+    boot: String,
+    start: [u64; 2],
+}
+
+/// The immutable identity of this boot, unaffected by wall-clock changes.
+fn executor_boot() -> Result<String> {
+    executor_boot_with(executor_sysctl)
+}
+
+fn executor_boot_with(read: impl FnOnce(&std::ffi::CStr) -> Result<String>) -> Result<String> {
+    read(c"kern.bootsessionuuid")
+}
+
+#[allow(unsafe_code, reason = "FFI: kern.bootsessionuuid has no safe binding")]
+fn executor_sysctl(name: &std::ffi::CStr) -> Result<String> {
+    let mut boot = [0_u8; 37];
+    let mut size = std::mem::size_of_val(&boot);
+    // SAFETY: NUL-terminated name and writable buffer of the declared size; no input buffer.
+    let status = unsafe {
+        libc::sysctlbyname(
+            name.as_ptr(),
+            boot.as_mut_ptr().cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if status != 0 || size != std::mem::size_of_val(&boot) {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    std::ffi::CStr::from_bytes_with_nul(&boot)
+        .ok()
+        .and_then(|boot| boot.to_str().ok())
+        .map(str::to_owned)
+        .ok_or_else(|| Error::new("state", "Invalid boot session UUID"))
+}
+
+#[allow(unsafe_code, reason = "FFI: proc_pidinfo has no safe binding")]
+fn executor_start(pid: i32) -> Result<[u64; 2]> {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::uninit();
+    let size = std::mem::size_of_val(&info) as i32;
+    // SAFETY: proc_pidinfo receives a writable buffer of the declared size.
+    let read = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            size,
+        )
+    };
+    if read != size {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    // SAFETY: proc_pidinfo returned the full size of an initialized proc_bsdinfo.
+    let info = unsafe { info.assume_init() };
+    Ok([info.pbi_start_tvsec, info.pbi_start_tvusec])
+}
+
+/// A different boot or process instance cannot be the dispatched executor.
+/// Unreadable identities and legacy PID-only records remain conservative.
+fn executor_running(file: &File) -> bool {
+    executor_running_with(file, executor_boot, executor_start)
+}
+
+fn executor_running_with(
+    mut file: &File,
+    boot: impl FnOnce() -> Result<String>,
+    start: impl FnOnce(i32) -> Result<[u64; 2]>,
+) -> bool {
+    let mut text = String::new();
+    if file
+        .seek(SeekFrom::Start(0))
+        .and_then(|_| file.read_to_string(&mut text))
+        .is_err()
+    {
+        return true;
+    }
+    if text.is_empty() {
+        return false;
+    }
+    let executor = serde_json::from_str::<Executor>(&text)
+        .ok()
+        .filter(|executor| executor.pid > 0);
+    let pid = match &executor {
+        Some(executor) => executor.pid,
+        None => match text.trim().parse::<i32>().ok().filter(|pid| *pid > 0) {
+            Some(pid) => pid,
+            None => return true,
+        },
+    };
+    // An exited process has no start time to read. Only ESRCH proves absence;
+    // permission errors and unavailable identities still retain the claim.
+    if nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None)
+        == Err(nix::errno::Errno::ESRCH)
+    {
+        return false;
+    }
+    if let Some(executor) = executor {
+        let (Ok(boot), Ok(start)) = (boot(), start(pid)) else {
+            return true;
+        };
+        if boot != executor.boot || start != executor.start {
+            return false;
+        }
+    }
+    true
 }
 
 /// Exclusive control of one helper, held until dropped.
@@ -215,6 +444,7 @@ impl Drop for Ownership {
         if let Some(note) = &self.person {
             let _ = fs::remove_file(note);
         }
+        let _ = FileExt::unlock(&self._lock);
     }
 }
 
@@ -259,12 +489,24 @@ impl Controller {
     /// Whether this process may keep its locks and claims here at all. An
     /// agent's sandbox may forbid writing, and the error then says so.
     pub fn writable(&self) -> Result<()> {
+        if fs::symlink_metadata(&self.directory).is_ok() {
+            real_directory(&self.directory)?;
+        }
         probe_write(&self.directory)
     }
 
-    pub fn acquire(&self, recovery: bool) -> Result<Ownership> {
+    /// The state folder, made if missing, and refused when it is a link:
+    /// locks and records kept through a link would be another folder's once
+    /// the link is changed or removed, and a second controller could take a
+    /// lock of its own.
+    fn make_directory(&self) -> Result<()> {
         fs::create_dir_all(&self.directory)
             .map_err(|error| Error::writing(&self.directory, error))?;
+        real_directory(&self.directory)
+    }
+
+    pub fn acquire(&self, recovery: bool) -> Result<Ownership> {
+        self.make_directory()?;
 
         let lock = open_lock(&self.lock)?;
         if FileExt::try_lock_exclusive(&lock).is_err() {
@@ -281,6 +523,17 @@ impl Controller {
         // Nobody held it, so a note left by a viewer that ended is stale.
         let _ = fs::remove_file(&self.person);
 
+        if recovery
+            && self
+                .pending()?
+                .iter()
+                .any(|generation| self.in_progress(generation))
+        {
+            return Err(Error::new(
+                "busy",
+                "An Atlas executor is still carrying out an action. Wait for it to end before recovering.",
+            ));
+        }
         if !recovery {
             self.require_known()?;
         }
@@ -298,9 +551,11 @@ impl Controller {
 
     /// Note that the person stopped agents (`on`), or let them go on.
     pub fn note_stop(&self, on: bool) -> Result<()> {
+        if fs::symlink_metadata(&self.directory).is_ok() {
+            real_directory(&self.directory)?;
+        }
         if on {
-            fs::create_dir_all(&self.directory)
-                .map_err(|error| Error::writing(&self.directory, error))?;
+            self.make_directory()?;
             fs::write(&self.stopped, b"").map_err(|error| Error::writing(&self.directory, error))
         } else {
             match fs::remove_file(&self.stopped) {
@@ -333,8 +588,7 @@ impl Controller {
     }
 
     fn lock_marker(&self) -> Result<File> {
-        fs::create_dir_all(&self.directory)
-            .map_err(|error| Error::writing(&self.directory, error))?;
+        self.make_directory()?;
         let file = open_lock(&self.marker_lock)?;
         FileExt::lock_exclusive(&file)?;
 
@@ -378,8 +632,10 @@ impl Controller {
         OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NOFOLLOW)
-            .open(live)
-            .is_ok_and(|file| FileExt::try_lock_shared(&file).is_err())
+            .open(&live)
+            .is_ok_and(|file| {
+                FileExt::try_lock_shared(&file).is_err() || claim_executor_running(&file, &live)
+            })
     }
 
     /// Record a pending mutation this process is carrying out.
@@ -396,8 +652,7 @@ impl Controller {
             .live(generation)
             .ok_or_else(|| Error::new("state", "Pending generations are hexadecimal tokens"))?;
 
-        fs::create_dir_all(&self.directory)
-            .map_err(|error| Error::writing(&self.directory, error))?;
+        self.make_directory()?;
         let file = open_lock(&live)?;
         FileExt::try_lock_exclusive(&file)
             .map_err(|_| Error::new("busy", "That generation is already being carried out"))?;
@@ -435,7 +690,7 @@ impl Controller {
         if let Some(live) = self.live(generation)
             && !self.in_progress(generation)
         {
-            let _ = fs::remove_file(live);
+            remove_claim(&live);
         }
 
         let mut pending = pending(&self.marker)?;
@@ -448,10 +703,16 @@ impl Controller {
         }
     }
 
-    /// Verified recovery settles every pending mutation and removes every
-    /// claim file no live mutation holds, listed or not.
+    /// Verified recovery settles every pending mutation no live claim holds
+    /// and removes every claim file no live mutation holds, listed or not. A
+    /// mutation still being carried out (an approved root run among them)
+    /// stays pending: only its own end settles it.
     pub fn clear(&self) -> Result<()> {
         let _lock = self.lock_marker()?;
+        let running: Vec<String> = pending(&self.marker)?
+            .into_iter()
+            .filter(|generation| self.in_progress(generation))
+            .collect();
         let prefix = format!("{}.", self.name);
 
         for entry in fs::read_dir(&self.directory)?.flatten() {
@@ -463,12 +724,37 @@ impl Controller {
                 && self.live(generation).is_some()
                 && !self.in_progress(generation)
             {
-                let _ = fs::remove_file(entry.path());
+                remove_claim(&entry.path());
             }
         }
 
-        remove_marker(&self.marker)
+        if running.is_empty() {
+            remove_marker(&self.marker)
+        } else {
+            write_private(&self.marker, &serde_json::to_vec(&running)?)
+        }
     }
+}
+
+/// Refuse `directory` unless it is a real folder of this account, not a
+/// link to one.
+fn real_directory(directory: &Path) -> Result<()> {
+    let metadata =
+        fs::symlink_metadata(directory).map_err(|error| Error::writing(directory, error))?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_dir()
+        || metadata.uid() != nix::unistd::getuid().as_raw()
+    {
+        return Err(Error::new(
+            "state",
+            format!(
+                "{} is a link or not a folder of this account. Remove it, then try again.",
+                directory.display()
+            ),
+        ));
+    }
+
+    Ok(())
 }
 
 /// Pending generations in a marker; an unreadable one stays pending as unknown.
@@ -670,6 +956,306 @@ impl Drop for ActionPermit {
 mod tests {
     use super::*;
 
+    #[test]
+    fn dropping_ownership_releases_control_while_a_duplicate_descriptor_stays_open() {
+        if !crate::transaction_test::isolated(
+            "control::tests::dropping_ownership_releases_control_while_a_duplicate_descriptor_stays_open",
+        ) {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, directory.path());
+        let ownership = controller.acquire_for_person().unwrap();
+        let duplicate = ownership._lock.try_clone().unwrap();
+        assert_eq!(controller.acquire(false).unwrap_err().code, "busy");
+
+        drop(ownership);
+
+        assert!(!controller.person.exists());
+        let _next = controller.acquire(false).unwrap();
+        assert!(duplicate.metadata().is_ok());
+    }
+
+    #[test]
+    fn executor_claims_persist_the_pid_boot_and_process_start_before_dispatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, dir.path());
+        let pending = controller.quarantine().unwrap();
+        let _claims = ExecutorClaims::new(std::slice::from_ref(&pending)).unwrap();
+        let pid = nix::unistd::getpid();
+        record_executor_with(
+            pid,
+            || Ok("boot-session".into()),
+            |observed| {
+                assert_eq!(observed, pid.as_raw());
+                Ok([300, 400])
+            },
+        )
+        .unwrap();
+        assert!(pending.names_own_file());
+        let executor: Executor = serde_json::from_slice(
+            &fs::read(pending.live.with_extension("executor.live")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(executor.pid, pid.as_raw());
+        assert_eq!(executor.boot, "boot-session");
+        assert_eq!(executor.start, [300, 400]);
+    }
+
+    #[test]
+    fn a_reader_of_the_claim_file_sees_a_running_executor() {
+        let dir = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, dir.path());
+        let pending = controller.quarantine().unwrap();
+        let _claims = ExecutorClaims::new(std::slice::from_ref(&pending)).unwrap();
+        record_executor_with(
+            nix::unistd::getpid(),
+            || Ok("boot-session".into()),
+            |_| Ok([300, 400]),
+        )
+        .unwrap();
+        assert!(executor_running_with(
+            &File::open(&pending.live).unwrap(),
+            || Ok("boot-session".into()),
+            |_| Ok([300, 400]),
+        ));
+    }
+
+    #[test]
+    fn a_reused_executor_pid_is_not_alive_on_a_different_boot_or_start_time() {
+        let mut file = tempfile::tempfile().unwrap();
+        let executor = Executor {
+            pid: nix::unistd::getpid().as_raw(),
+            boot: "boot-session".into(),
+            start: [300, 400],
+        };
+        file.write_all(&serde_json::to_vec(&executor).unwrap())
+            .unwrap();
+        assert!(executor_running_with(
+            &file,
+            || Ok(executor.boot.clone()),
+            |pid| {
+                assert_eq!(pid, executor.pid);
+                Ok(executor.start)
+            }
+        ));
+        for changed in ["boot", "start"] {
+            let mut boot = executor.boot.clone();
+            let mut start = executor.start;
+            match changed {
+                "boot" => boot.push('2'),
+                _ => start[1] += 1,
+            }
+            assert!(
+                !executor_running_with(
+                    &file,
+                    || Ok(boot),
+                    |pid| {
+                        assert_eq!(pid, executor.pid);
+                        Ok(start)
+                    }
+                ),
+                "different {changed}"
+            );
+        }
+        assert!(
+            executor_running_with(
+                &file,
+                || Err(Error::new("state", "unreadable boot")),
+                |_| Err(Error::new("state", "unreadable process")),
+            ),
+            "unreadable observations do not release a live executor"
+        );
+        assert!(executor_running_with(
+            &file,
+            || Err(Error::new("state", "unreadable boot")),
+            |_| Ok([0, 0]),
+        ));
+        assert!(executor_running_with(
+            &file,
+            || Ok("different boot".into()),
+            |_| Err(Error::new("state", "unreadable process")),
+        ));
+    }
+
+    #[test]
+    fn a_clock_change_does_not_release_a_surviving_executor() {
+        let dir = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, dir.path());
+        let pending = controller.quarantine().unwrap();
+        let _claims = ExecutorClaims::new(std::slice::from_ref(&pending)).unwrap();
+        let boottime = std::cell::Cell::new(100);
+        let read = |name: &std::ffi::CStr| match name.to_bytes() {
+            b"kern.bootsessionuuid" => Ok("same-boot-session".into()),
+            b"kern.boottime" => Ok(boottime.get().to_string()),
+            _ => panic!("unexpected sysctl"),
+        };
+        record_executor_with(
+            nix::unistd::getpid(),
+            || executor_boot_with(read),
+            |_| Ok([300, 400]),
+        )
+        .unwrap();
+        boottime.set(200);
+        assert!(executor_running_with(
+            &File::open(pending.live.with_extension("executor.live")).unwrap(),
+            || executor_boot_with(read),
+            |_| Ok([300, 400]),
+        ));
+    }
+
+    #[test]
+    fn unreadable_and_legacy_executor_records_do_not_release_a_live_process() {
+        let mut file = tempfile::tempfile().unwrap();
+        for record in [nix::unistd::getpid().to_string(), "{".into(), "-1".into()] {
+            file.set_len(0).unwrap();
+            file.seek(SeekFrom::Start(0)).unwrap();
+            file.write_all(record.as_bytes()).unwrap();
+            assert!(executor_running(&file));
+        }
+    }
+
+    #[test]
+    fn an_exited_executor_releases_its_claim_when_its_identity_is_unavailable() {
+        let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+        let pid = child.id() as i32;
+        assert!(child.wait().unwrap().success());
+        let mut file = tempfile::tempfile().unwrap();
+        let executor = Executor {
+            pid,
+            boot: "boot-session".into(),
+            start: [300, 400],
+        };
+        file.write_all(&serde_json::to_vec(&executor).unwrap())
+            .unwrap();
+        assert!(!executor_running_with(
+            &file,
+            || Err(Error::new("state", "unreadable boot")),
+            |_| Err(Error::new("state", "process no longer exists")),
+        ));
+    }
+
+    #[test]
+    fn a_partial_executor_record_does_not_block_recovery_after_its_executor_and_boot_are_gone() {
+        if !crate::transaction_test::isolated(
+            "control::tests::a_partial_executor_record_does_not_block_recovery_after_its_executor_and_boot_are_gone",
+        ) {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, dir.path());
+        let pending = controller.quarantine().unwrap();
+        let generation = pending.to_string();
+        let live = pending.live.clone();
+        let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+        let pid = child.id() as i32;
+        assert!(child.wait().unwrap().success());
+        let record = serde_json::to_vec(&Executor {
+            pid,
+            boot: "previous-boot-session".into(),
+            start: [300, 400],
+        })
+        .unwrap();
+        publish_executor_with(&live, &record, |file, record| file.write_all(record)).unwrap();
+        assert!(
+            publish_executor_with(&live, &record, |file, record| {
+                file.write_all(&record[..record.len() / 2])?;
+                file.sync_all()?;
+                Err(std::io::Error::other("interrupted write"))
+            })
+            .is_err()
+        );
+        FileExt::unlock(&pending.lock).unwrap();
+
+        assert_eq!(controller.pending().unwrap(), vec![generation]);
+        assert!(live.exists());
+        let _ownership = controller.acquire(true).unwrap();
+        controller.clear().unwrap();
+        assert!(controller.pending().unwrap().is_empty());
+        assert!(!live.exists());
+        assert!(!live.with_extension("executor.live").exists());
+    }
+
+    thread_local! {
+        pub(super) static INTERRUPT_CLAIM_REMOVAL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    #[test]
+    fn interrupted_claim_cleanup_leaves_recovery_unblocked_despite_a_malformed_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, dir.path());
+        let pending = controller.quarantine().unwrap();
+        let generation = pending.to_string();
+        let live = pending.live.clone();
+        let sidecar = live.with_extension("executor.live");
+        let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+        let pid = child.id() as i32;
+        assert!(child.wait().unwrap().success());
+        let record = serde_json::to_vec(&Executor {
+            pid,
+            boot: "previous-boot-session".into(),
+            start: [300, 400],
+        })
+        .unwrap();
+        fs::write(&live, b"{").unwrap();
+        fs::write(&sidecar, &record).unwrap();
+
+        INTERRUPT_CLAIM_REMOVAL.with(|interrupt| interrupt.set(true));
+        assert!(std::panic::catch_unwind(|| drop(pending)).is_err());
+
+        assert!(!live.exists());
+        assert_eq!(fs::read(&sidecar).unwrap(), record);
+        assert_eq!(
+            controller.pending().unwrap(),
+            std::slice::from_ref(&generation)
+        );
+        assert_eq!(controller.unresolved().unwrap(), [generation]);
+        let ownership = controller.acquire(true).unwrap();
+        controller.clear().unwrap();
+        assert!(controller.pending().unwrap().is_empty());
+        assert!(sidecar.exists());
+        drop(ownership);
+        assert!(controller.acquire(false).is_ok());
+    }
+
+    #[test]
+    fn a_partial_executor_record_keeps_a_possibly_live_executor_pending() {
+        if !crate::transaction_test::isolated(
+            "control::tests::a_partial_executor_record_keeps_a_possibly_live_executor_pending",
+        ) {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, dir.path());
+        let pending = controller.quarantine().unwrap();
+        let generation = pending.to_string();
+        let live = pending.live.clone();
+        let record = nix::unistd::getpid().to_string().into_bytes();
+        fs::write(&live, &record).unwrap();
+        let next = serde_json::to_vec(&Executor {
+            pid: nix::unistd::getpid().as_raw(),
+            boot: "boot-session".into(),
+            start: [300, 400],
+        })
+        .unwrap();
+        assert!(
+            publish_executor_with(&live, &next, |file, record| {
+                file.write_all(&record[..record.len() / 2])?;
+                file.sync_all()?;
+                Err(std::io::Error::other("interrupted write"))
+            })
+            .is_err()
+        );
+        assert!(pending.names_own_file());
+        drop(pending);
+
+        assert_eq!(controller.acquire(true).unwrap_err().code, "busy");
+        controller.clear().unwrap();
+        assert_eq!(controller.pending().unwrap(), vec![generation]);
+        assert!(live.exists());
+        assert_eq!(fs::read(live).unwrap(), record);
+    }
+
     /// Checking that the lock can be kept creates its directory, leaves no
     /// file behind and never touches the lock; a place that cannot be
     /// written says so.
@@ -684,6 +1270,53 @@ mod tests {
 
         let unwritable = Controller::at(505, Path::new("/dev/null/Atlas"));
         assert_eq!(unwritable.writable().unwrap_err().code, "io");
+    }
+
+    #[test]
+    fn a_state_folder_that_is_a_link_is_refused_before_any_lock_or_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("elsewhere");
+        fs::create_dir(&target).unwrap();
+        let link = dir.path().join("Atlas");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let controller = Controller::at(505, &link);
+
+        assert_eq!(controller.acquire(true).unwrap_err().code, "state");
+        assert_eq!(controller.quarantine().unwrap_err().code, "state");
+        assert_eq!(controller.pending().unwrap_err().code, "state");
+        assert_eq!(controller.writable().unwrap_err().code, "state");
+        assert_eq!(controller.note_stop(false).unwrap_err().code, "state");
+        assert_eq!(controller.note_stop(true).unwrap_err().code, "state");
+        assert_eq!(
+            fs::read_dir(&target).unwrap().count(),
+            0,
+            "nothing kept through the link"
+        );
+    }
+
+    #[test]
+    fn recovery_never_settles_a_mutation_still_being_carried_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, &dir.path().join("Atlas"));
+        let lost = controller.quarantine().unwrap();
+        drop(lost);
+        let running = controller.quarantine().unwrap();
+
+        assert_eq!(controller.acquire(true).unwrap_err().code, "busy");
+
+        // Recovery from another process, while the run goes on.
+        Controller::at(505, &dir.path().join("Atlas"))
+            .clear()
+            .unwrap();
+        assert_eq!(
+            controller.pending().unwrap(),
+            [running.generation().to_owned()]
+        );
+        assert!(controller.require_known().is_err());
+
+        controller.clear_if(&running).unwrap();
+        drop(running);
+        assert!(controller.pending().unwrap().is_empty());
     }
 
     /// While the person holds control through a viewer, an agent finding

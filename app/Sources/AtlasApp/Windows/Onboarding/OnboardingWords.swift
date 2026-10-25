@@ -1,20 +1,25 @@
-import AtlasKit
+import AtlasCommands
+import Foundation
 
 /// The setup window's words that depend on its state: what each command says while it runs, and every word a screen
 /// shows that names an account, an agent, a permission or a state.
 ///
 /// The rule every window follows: fixed copy stays in AtlasUI's views; a presenter supplies only the words that
 /// depend on state, interpolated, chosen by a condition or derived from facts, and a list row's fixed name travels
-/// with its value. Words the window shares with the panel are AtlasKit's ``Words``.
+/// with its value. Words the window shares with the panel are the app's shared ``Words``; the words that say where a
+/// permission or a check stands are ``StatusWord``'s.
 enum OnboardingWords {
-  // MARK: Commands
 
   /// The first reading gave a reply that is not a status.
   static let notUnderstood = "Atlas gave an answer this window does not understand"
+  /// The first reading could not run Atlas's command line at all: a plain cause and what to do.
+  static let filesIncomplete = "Atlas’s files look incomplete. Reinstall Atlas, then open it again."
   /// While the account is made.
-  static let creating = "Creating the account…"
+  static let creating = "Approve in the macOS dialog. It says Atlas can change your Mac; that means only what’s below."
   /// While the chosen agents are connected.
   static let connecting = "Connecting your agents…"
+  /// While Atlas reads which agents are on this Mac, which Continue waits for.
+  static let checkingAgents = "Checking your agents…"
   /// While Open at Login is set.
   static let finishing = "Finishing…"
   /// While Atlas opens in the menu bar.
@@ -25,29 +30,54 @@ enum OnboardingWords {
   /// While the helper asked is let go, to choose another.
   static let backToChoice = "Going back to the choice…"
 
-  /// While an existing account is set up as the helper.
+  /// An existing account picked, which macOS will ask to approve getting ready. It names no account, as the row
+  /// picked above it does.
+  static let approveToReady =
+    "You’ll approve once in macOS. "
+    + "Atlas then opens there by itself and skips macOS’s welcome questions; nothing in the account is removed."
+
+  /// Where the screen sits on the footer's track, as VoiceOver says it.
+  ///
+  /// - Parameters:
+  ///   - index: The screen, from 0.
+  ///   - count: How many screens its side of setup has.
+  /// - Returns: "Step 2 of 6"
+  static func step(_ index: Int, of count: Int) -> String {
+    "Step \(index + 1) of \(count)"
+  }
+
+  /// While an existing account is set up as the helper, which macOS asks to approve.
   ///
   /// - Parameter account: The account as people know it.
-  /// - Returns: "Setting up Test Account…"
+  /// - Returns: "Approve in the macOS dialog to get Annie ready."
   static func settingUp(_ account: String) -> String {
+    "Approve in the macOS dialog to get \(named(account)) ready."
+  }
+
+  /// While the account Atlas was set up in before is chosen again, with no approval.
+  ///
+  /// - Parameter account: The account as people know it.
+  /// - Returns: "Setting up Annie…"
+  static func choosing(_ account: String) -> String {
     "Setting up \(named(account))…"
   }
 
-  // MARK: Naming an account
-
   /// An account named in a sentence: the default helper's name, Atlas, is also the app's, so it is named as the Atlas
-  /// account; any other name reads as itself.
+  /// account; a person's full name is called by its given name, so a long name never floods the sentence; any other
+  /// name reads as itself.
   ///
   /// - Parameter account: The account as people know it.
-  /// - Returns: "the Atlas account", or the name itself.
+  /// - Returns: "the Atlas account", "Maria Fernanda" for "Maria Fernanda Montgomery-Castellanos de la Vega", or the
+  ///   name itself.
   static func named(_ account: String) -> String {
-    account.caseInsensitiveCompare("Atlas") == .orderedSame ? "the \(account) account" : account
+    if account.caseInsensitiveCompare("Atlas") == .orderedSame { return "the \(account) account" }
+    return givenName(account)
   }
 
   /// An account named at the start of a sentence.
   ///
   /// - Parameter account: The account as people know it.
-  /// - Returns: "The Atlas account", or the name itself.
+  /// - Returns: "The Atlas account", or the name as ``named(_:)`` gives it.
   static func namedFirst(_ account: String) -> String {
     let words = named(account)
     let first = words.prefix(1)
@@ -55,22 +85,19 @@ enum OnboardingWords {
     return first + words.dropFirst()
   }
 
-  /// While a project is taught.
+  /// A full name's given name, where macOS's name reading finds one that starts the name and a family name after it,
+  /// as in "Christopher Alexander Montgomery-Smith"; else the whole name, as for "Test Account" or "Ismayil", whose
+  /// reading would pick a word that is no given name.
   ///
-  /// - Parameter project: The folder's name.
-  /// - Returns: "Teaching Opie…"
-  static func teaching(_ project: String) -> String {
-    "Teaching \(project)…"
-  }
-
-  /// A project that could not be taught.
-  ///
-  /// - Parameters:
-  ///   - project: The folder's name.
-  ///   - message: Why, in one line.
-  /// - Returns: "Opie: why."
-  static func notTaught(_ project: String, _ message: String) -> String {
-    "\(project): \(message)."
+  /// - Parameter name: The full name.
+  /// - Returns: The given name, or the whole name.
+  static func givenName(_ name: String) -> String {
+    let parts = PersonNameComponentsFormatter()
+      .personNameComponents(from: name)
+    guard let given = parts?.givenName, !given.isEmpty, parts?.familyName != nil, name.hasPrefix(given) else {
+      return name
+    }
+    return given
   }
 
   /// An agent that could not be connected.
@@ -80,226 +107,10 @@ enum OnboardingWords {
   ///   - message: Why, in one line; empty when the command gave no reason.
   /// - Returns: "Codex: not installed."
   static func notConnected(_ agent: AgentID, _ message: String) -> String {
-    let reason = message.isEmpty ? "it didn't connect" : message
+    let reason = message.isEmpty ? "it didn’t connect" : message
+    if agent == .claude, message.hasPrefix("Claude Code:") || message.hasPrefix("The Claude app:") {
+      return Words.sentence(reason)
+    }
     return "\(agentTitle(agent)): \(Words.sentence(reason))"
-  }
-
-  // MARK: The account choice and form
-
-  /// The form's tail while the account is made.
-  static let confirmInDialog = "Confirm in the macOS dialog."
-  /// The form's tail before.
-  static let passwordNext = "macOS asks for your password next."
-
-  /// A standard account's row detail.
-  ///
-  /// - Parameter account: Its short name.
-  /// - Returns: "testaccount · standard account on this Mac"
-  static func candidateDetail(_ account: String) -> String {
-    "\(account) · standard account on this Mac"
-  }
-
-  // MARK: The switch
-
-  /// The switch screen's second step, before the helper has logged in.
-  static let answerWelcome = "Answer the welcome questions, then open Atlas there"
-  /// Atlas answers in the helper, which still lacks a permission.
-  static let waitingForPermissions = "Waiting for the two permissions…"
-  /// The helper is ready, on screen.
-  static let waitingForSwitchBack = "Waiting for you to switch back…"
-  /// Atlas runs in the helper, but the helper is not on screen.
-  static let lockThenOpenAtlas = "Next: Lock and Switch, then open Atlas there."
-
-  /// The switch screen's headline.
-  ///
-  /// - Parameter helper: The helper as people know it.
-  /// - Returns: "Now log in to the Atlas account."
-  static func logIn(to helper: String) -> String {
-    "Now log in to \(named(helper))."
-  }
-
-  /// Where to choose the helper.
-  ///
-  /// - Parameter helper: The helper as people know it.
-  /// - Returns: "Choose the Atlas account on the lock screen"
-  static func chooseOnLockScreen(_ helper: String) -> String {
-    "Choose \(named(helper)) on the lock screen"
-  }
-
-  /// The switch screen's second step, once the helper has logged in.
-  ///
-  /// - Parameter helper: The helper as people know it.
-  /// - Returns: "Open Atlas in the Atlas account"
-  static func openAtlas(in helper: String) -> String {
-    "Open Atlas in \(named(helper))"
-  }
-
-  /// The helper has not logged in yet.
-  ///
-  /// - Parameter helper: The helper as people know it.
-  /// - Returns: "Next: Lock and Switch, then log in to the Atlas account."
-  static func lockThenLogIn(to helper: String) -> String {
-    "Next: Lock and Switch, then log in to \(named(helper))."
-  }
-
-  /// The helper is on screen, and Atlas not open there yet.
-  ///
-  /// - Parameter helper: The helper as people know it.
-  /// - Returns: "Waiting for Atlas to open in the Atlas account…"
-  static func waitingForAtlas(in helper: String) -> String {
-    "Waiting for Atlas to open in \(named(helper))…"
-  }
-
-  // MARK: Finishing
-
-  /// The headline while the check runs or failed.
-  static let checking = "Checking everything"
-  /// Its tail.
-  static let endToEnd = "end to end."
-  /// The headline once the check passed.
-  static let everythingWorks = "Everything works."
-  /// Its tail.
-  static let agentsHaveAMac = "Your agents have a Mac now."
-  /// The headline once the check failed.
-  static let almostThere = "Almost there."
-  /// Its tail.
-  static let oneCheckFailed = "One check didn't pass."
-  /// The live check's note while it runs.
-  static let checkingNote = "checking…"
-  /// Its note once passed.
-  static let passed = "passed"
-  /// Its note once failed.
-  static let failed = "failed"
-
-  /// The first check, naming the helper.
-  ///
-  /// - Parameter helper: The helper as people know it.
-  /// - Returns: "The Atlas account is logged in"
-  static func loggedIn(_ helper: String) -> String {
-    "\(namedFirst(helper)) is logged in"
-  }
-
-  // MARK: Agents and done
-
-  /// An agent's name.
-  ///
-  /// - Parameter agent: The agent.
-  /// - Returns: "Claude Code" or "Codex".
-  static func agentTitle(_ agent: AgentID) -> String {
-    Words.agentTitle(agent)
-  }
-
-  /// An agent that already knows Atlas.
-  static let agentConnected = "Connected. Every session has the Atlas skill."
-  /// An agent installed and not yet connected.
-  static let agentFound = "Found. Adds the Atlas skill to every session."
-  /// An agent not on this Mac.
-  static let agentMissing = "Not installed on this Mac."
-  /// An agent while `atlas agents status` runs.
-  static let agentChecking = "Checking…"
-  /// An agent `atlas agents status` could not check.
-  static let agentNotChecked = "Not checked yet."
-  /// `atlas agents status` failed: the step can be skipped, and Atlas asks again.
-  static let agentsCheckFailed =
-    "Atlas couldn't check your agents. Continue to skip this, or wait while it tries again."
-
-  /// A chosen project's remove button, for VoiceOver.
-  ///
-  /// - Parameter project: The folder's name.
-  /// - Returns: "Remove Opie"
-  static func remove(_ project: String) -> String {
-    "Remove \(project)"
-  }
-
-  /// The done screen's lede.
-  ///
-  /// - Parameter helper: The helper as people know it.
-  /// - Returns: What Atlas does from now on, and what to do after a restart.
-  static func doneLede(_ helper: String) -> String {
-    "That was the whole setup. Atlas lives in your menu bar: ask your agent to check something on screen, and watch it work from there. After a restart, just log in to \(named(helper)) again; Atlas does the rest."
-  }
-
-  // MARK: The helper's side
-
-  /// A permission that is on.
-  static let permissionOn = "Allowed"
-  /// A permission that is off.
-  static let permissionOff = "Off"
-  /// The helper's done tail when no account asked.
-  static let switchBackToOwn = "Switch back to your own account."
-
-  /// The allow screen's label over its title.
-  ///
-  /// - Parameter account: This account as people know it.
-  /// - Returns: "Atlas in the Atlas account"
-  static func atlasIn(_ account: String) -> String {
-    "Atlas in \(named(account))"
-  }
-
-  /// The allow screen's headline.
-  ///
-  /// - Parameter asker: The asking account as people know it.
-  /// - Returns: "Let Ismayil use this account"
-  static func letUse(_ asker: String) -> String {
-    "Let \(named(asker)) use this account"
-  }
-
-  /// What allowing means.
-  ///
-  /// - Parameter asker: The asking account as people know it.
-  /// - Returns: The allow screen's lede.
-  static func allowLede(_ asker: String) -> String {
-    "\(asker)'s agents will open apps here, click and type, while \(asker) keeps working in their own account. You allow this once; Atlas then starts here by itself."
-  }
-
-  /// The button that opens a permission's switch.
-  ///
-  /// - Parameter permission: The permission's name.
-  /// - Returns: "Allow Accessibility"
-  static func allow(_ permission: String) -> String {
-    "Allow \(permission)"
-  }
-
-  /// The guide's label over its title.
-  ///
-  /// - Parameters:
-  ///   - number: Which permission, from 1.
-  ///   - count: How many.
-  ///   - permission: Its name.
-  /// - Returns: "1 of 2 · Accessibility"
-  static func guideLabel(_ number: Int, of count: Int, _ permission: String) -> String {
-    "\(number) of \(count) · \(permission)"
-  }
-
-  /// Where the switch is.
-  ///
-  /// - Parameter permission: The permission's name.
-  /// - Returns: "Privacy & Security › Accessibility"
-  static func settingsPath(_ permission: String) -> String {
-    "Privacy & Security › \(permission)"
-  }
-
-  /// The guide's pill once the switch is on.
-  ///
-  /// - Parameter permission: The permission's name.
-  /// - Returns: "Accessibility is on"
-  static func isOn(_ permission: String) -> String {
-    "\(permission) is on"
-  }
-
-  /// The guide's pill while it waits.
-  ///
-  /// - Parameter permission: The permission's name.
-  /// - Returns: "Waiting for Accessibility…"
-  static func waiting(for permission: String) -> String {
-    "Waiting for \(permission)…"
-  }
-
-  /// The helper's done tail.
-  ///
-  /// - Parameter asker: The account to switch back to, as people know it.
-  /// - Returns: "Switch back to Ismayil."
-  static func switchBack(to asker: String) -> String {
-    "Switch back to \(named(asker))."
   }
 }

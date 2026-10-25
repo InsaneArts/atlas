@@ -1,5 +1,7 @@
 #if DEBUG
-  import AtlasKit
+  import AtlasCommands
+  import AtlasOnboarding
+  import AtlasOnboardingTesting
   import AtlasUI
   import Foundation
   import Testing
@@ -8,7 +10,6 @@
 
   /// The setup window's samples are written out by hand; these keep each one what the window would show for the same
   /// facts.
-  @MainActor
   @Suite("PreviewStates+Onboarding")
   struct OnboardingPreviewStatesTests {
     /// The person's account, with one standard account that could be the helper, and the helper `atlas` as given.
@@ -19,6 +20,7 @@
     ///   - installed: Whether Atlas.app is where it must be.
     ///   - candidates: The standard accounts that could be the helper, by short and full name.
     ///   - onlyChoice: Whether the helper chosen before was prepared, so it is the one choice.
+    ///   - leftovers: The user IDs of deleted accounts whose logins are still open.
     /// - Returns: The facts.
     /// - Throws: When the reply is not a status.
     func person(
@@ -26,12 +28,14 @@
       finished: Bool = false,
       installed: Bool = true,
       candidates: [(String, String)] = [("testaccount", "Test Account")],
-      onlyChoice: Bool = false
+      onlyChoice: Bool = false,
+      leftovers: [Int] = []
     ) throws -> OnboardingFacts {
       var reply: [String: Any] = [
         "ok": true, "role": "controller", "me": ["name": "me"], "app": ["installed": installed, "signed": true],
         "configured": helper != nil, "finished": finished, "onlyChoice": onlyChoice,
         "candidates": candidates.map { ["name": $0.0, "realName": $0.1] },
+        "leftoverLogins": leftovers.map { ["uid": $0, "kind": "orphan"] },
       ]
       if let helper { reply["helper"] = helper }
       return try facts(reply)
@@ -97,6 +101,8 @@
     func loaded(_ facts: OnboardingFacts, started: Bool = false) -> OnboardingSnapshot {
       var snapshot = OnboardingSnapshot(facts: facts, loaded: true)
       snapshot.choices.started = started
+      // The samples name the permissions as macOS 26 does.
+      snapshot.macOS = OperatingSystemVersion(majorVersion: 26, minorVersion: 0, patchVersion: 0)
       return snapshot
     }
 
@@ -127,8 +133,9 @@
         try person(candidates: [("testaccount", "Test Account"), ("kid", "Guest Kid")]),
         started: true
       )
-      chooseProblem.picked = .newAccount
+      chooseProblem.picked = .existing("kid")
       chooseProblem.problem = "macOS could not say whether kid is an administrator."
+      chooseProblem.problemAbout = "kid"
       var only = loaded(
         try person(
           helper(signedIn: false, answering: false, allowed: false, paired: false),
@@ -147,7 +154,7 @@
           )
         )
       )
-      switchLong.problem = "The screen could not be locked: loginwindow did not answer within ten seconds."
+      switchLong.problem = OnboardingWords.lockFailed("Maria Fernanda Montgomery-Castellanos de la Vega")
       var loadingFailed = OnboardingSnapshot()
       loadingFailed.problem = PreviewStates.onboardingLoadingProblem
       var create = choose
@@ -160,6 +167,7 @@
       finishing.finish = .running
       var passed = finishing
       passed.finish = .passed
+      passed.passSettled = true
       var failed = finishing
       failed.finish = .failed("The test screenshot never arrived.")
       var agents = loaded(try person(helper(), finished: true))
@@ -169,14 +177,20 @@
           agent.checked = true
           agent.found = true
           agent.on = true
+          agent.parts = id == .claude ? [id.rawValue, AgentsStatus.claudeAppID] : [id.rawValue]
           return agent
         }
-      agents.projects = [URL(fileURLWithPath: "/Users/me/dev/Opie")]
+      agents.agentsLoaded = true
+      var claudeCode = agents
+      claudeCode.agents[0].parts = [AgentID.claude.rawValue]
+      var claudeApp = agents
+      claudeApp.agents[0].parts = [AgentsStatus.claudeAppID]
+      var claudeFailure = agents
+      claudeFailure.agents[0].hasConnection = true
+      claudeFailure.agents[0].problem = "The Claude app: could not write settings"
       var notChecked = loaded(try person(helper(), finished: true))
       notChecked.agents = AgentChoice.all
       notChecked.agentsFailed = true
-      notChecked.projects = ["Opie", "Jolt", "understudy", "markdown2pdf", "InsaneArts Website"]
-        .map { URL(fileURLWithPath: "/Users/me/dev/\($0)") }
       notChecked.problem = OnboardingWords.agentsCheckFailed
       var done = loaded(try person(helper(), finished: true))
       done.choices.agentsDone = true
@@ -188,8 +202,19 @@
         )
       )
       allowLong.problem = "Atlas could not finish setting up here: the login item could not be added."
-      var guide = loaded(try helperSide())
-      guide.guiding = .accessibility
+      var panel = loaded(try helperSide(accessibility: true))
+      panel.guiding = .screenRecording
+      var panelAllowed = loaded(try helperSide(accessibility: true))
+      panelAllowed.guiding = .accessibility
+      let close = loaded(try person(helper(), leftovers: [502]))
+      var closing = close
+      closing.working = OnboardingWords.closing
+      var cancelled = close
+      cancelled.problem = "It’s still open. Close it before you switch."
+      var closed = loaded(try person())
+      closed.choices.closedLeftovers = true
+      var checkingFacts = try helperSide()
+      checkingFacts.asker.permissionsKnown = false
       let presented: [String: OnboardingSnapshot] = [
         "Loading": OnboardingSnapshot(),
         "Loading, failed": loadingFailed,
@@ -210,13 +235,23 @@
         "Finishing, failed": failed,
         "Agents": agents,
         "Agents, not checked": notChecked,
+        "Claude Code only": claudeCode,
+        "Claude app only": claudeApp,
+        "Claude connection failed": claudeFailure,
         "Done": done,
         "Helper allow": loaded(try helperSide(running: false)),
         "Helper allow, a long name": allowLong,
+        "Helper permissions, none yet": loaded(try helperSide()),
         "Helper permissions": loaded(try helperSide(accessibility: true)),
-        "Helper guide": guide,
+        "Helper permissions, checking": loaded(checkingFacts),
+        "Helper permission panel, allowed": panelAllowed,
+        "Helper permission panel": panel,
         "Helper done": loaded(try helperSide(accessibility: true, screen: true)),
         "Blocked": loaded(try person(installed: false)),
+        "Close": close,
+        "Close, closing": closing,
+        "Close, cancelled": cancelled,
+        "Close, closed": closed,
       ]
       #expect(
         Set(presented.keys) == Set(PreviewStates.onboarding.map(\.name)),

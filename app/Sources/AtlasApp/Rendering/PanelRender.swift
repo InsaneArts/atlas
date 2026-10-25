@@ -1,11 +1,10 @@
 import AppKit
-import AtlasKit
+import AtlasService
 import AtlasUI
 import SwiftUI
 
 /// The panel's render, `--render PATH`, in release builds too: it draws from the live service, not from samples,
 /// changed only by ``PanelRenderOverrides``, so every state, and the alert window, can be drawn offline.
-@MainActor
 enum PanelRender {
   /// The menu bar strip's height above the panel: 28, a menu bar's on a laptop without a notch.
   static let barHeight: CGFloat = 28
@@ -20,7 +19,7 @@ enum PanelRender {
     "elsewhere",
   ]
   /// Each alert window render's file name with the `ATLAS_RENDER_*` settings that draw it: every alert, one whose
-  /// command did not run, and one whose command runs.
+  /// command did not run, one whose command runs, and Recover once it worked.
   nonisolated static let alerts: [(file: String, environment: [String: String])] = [
     ("alert-recover", ["ATLAS_RENDER_ALERT": "recover", "ATLAS_RENDER_MODE": "recovering"]),
     ("alert-switch", ["ATLAS_RENDER_ALERT": "switch"]),
@@ -37,23 +36,35 @@ enum PanelRender {
       "alert-recovering",
       ["ATLAS_RENDER_ALERT": "recover", "ATLAS_RENDER_MODE": "recovering", "ATLAS_RENDER_BUSY": "1"]
     ),
+    ("alert-logging-out", ["ATLAS_RENDER_ALERT": "logOut", "ATLAS_RENDER_BUSY": "1"]),
+    (
+      "alert-recovered",
+      ["ATLAS_RENDER_ALERT": "recover", "ATLAS_RENDER_MODE": "recovering", "ATLAS_RENDER_ALERT_PHASE": "done"]
+    ),
+  ]
+  /// Each helper notice render's file name with the `ATLAS_RENDER_NOTICE` setting that draws it (``NoticeRender``).
+  nonisolated static let notices: [(file: String, environment: [String: String])] = [
+    ("notice-set-up", ["ATLAS_RENDER_NOTICE": "setUp"]),
+    ("notice-running-again", ["ATLAS_RENDER_NOTICE": "runningAgain"]),
   ]
 
   /// Draws the panel and its menu bar glyph, as a person would see them, to a PNG at `path`, from what the viewer
-  /// service reports now, changed only by `overrides`; or, when they name one, the alert window's alert.
+  /// service reports now, changed only by `overrides`; or, when they name one, the alert window's alert or a helper
+  /// notice.
   ///
   /// - Parameters:
   ///   - service: The viewer service to read.
   ///   - overrides: What the design check changes, from `ATLAS_RENDER_*`.
   ///   - path: Where to write the PNG.
-  ///   - name: The appearance of the menu bar strip around the panel.
+  ///   - appearance: The appearance of the menu bar strip around the panel.
   /// - Returns: Whether the PNG was written.
   static func draw(
     service: any ViewerService,
     overrides: PanelRenderOverrides,
     to path: String,
-    appearance name: NSAppearance.Name
+    appearance: NSAppearance?
   ) async -> Bool {
+    // A status or picture the service cannot give draws as the empty status and no picture.
     async let reading = try? service.status()
     async let picture = try? service.frame()
     let status = await reading ?? ViewerStatus()
@@ -62,11 +73,14 @@ enum PanelRender {
     #if DEBUG
       if overrides.showsEverything, live.picture == nil { live.picture = SampleDesktop.picture }
     #endif
+    if let notice = overrides.notice {
+      return notice.draw(to: path, appearance: appearance)
+    }
     let snapshot = overrides.applied(to: live)
     if let alert = overrides.alertSnapshot(over: snapshot.status.overview) {
-      return draw(alert: alert, to: path, appearance: name)
+      return draw(alert: alert, to: path, appearance: appearance)
     }
-    return draw(snapshot, to: path, appearance: name)
+    return draw(snapshot, to: path, appearance: appearance, reduceTransparency: overrides.reducesTransparency)
   }
 
   /// Draws the panel for `snapshot` on its card, under a strip of menu bar holding its glyph.
@@ -74,14 +88,22 @@ enum PanelRender {
   /// - Parameters:
   ///   - snapshot: What the panel's controller would hold.
   ///   - path: Where to write the PNG.
-  ///   - name: The appearance of the menu bar strip around the panel.
+  ///   - appearance: The appearance of the menu bar strip around the panel.
+  ///   - reduceTransparency: Whether to draw it as under Reduce Transparency, its glass opaque.
   /// - Returns: Whether the PNG was written.
-  static func draw(_ snapshot: PanelSnapshot, to path: String, appearance name: NSAppearance.Name) -> Bool {
-    let content = NSHostingView(
-      rootView: ShellRoot {
+  static func draw(
+    _ snapshot: PanelSnapshot,
+    to path: String,
+    appearance: NSAppearance?,
+    reduceTransparency: Bool = false
+  ) -> Bool {
+    let content = PNG.host(
+      ShellRoot {
         PanelView(state: PanelPresenter.state(snapshot)) { _ in }
           .panelCard()
           .padding(margin)
+          // The setting's own value is read-only; its underscored twin is the one SwiftUI lets a render set.
+          .environment(\._accessibilityReduceTransparency, reduceTransparency)
       }
     )
     let size = content.fittingSize
@@ -89,20 +111,21 @@ enum PanelRender {
     canvas.addSubview(fill(canvas.bounds, .windowBackgroundColor))
     let strip = NSRect(x: 0, y: size.height, width: size.width, height: barHeight)
     canvas.addSubview(fill(strip, .underPageBackgroundColor))
-    // The glyph at its own size, centred in the strip as the menu bar does.
-    let image = StatusGlyph.image(for: PanelPresenter.mode(snapshot))
-    let glyph = NSImageView(image: image)
-    glyph.imageScaling = .scaleNone
-    glyph.frame = NSRect(
-      x: (size.width - margin - glyphInset).rounded(),
-      y: (size.height + (barHeight - image.size.height) / 2).rounded(.down),
-      width: image.size.width,
-      height: image.size.height
+    // The menu bar item at its own size, centred in the strip as the menu bar does.
+    let item = MenuBarRender.item(
+      PanelPresenter.mode(snapshot).kind,
+      appearance: appearance ?? NSAppearance.currentDrawing()
     )
-    canvas.addSubview(glyph)
+    item.setFrameOrigin(
+      NSPoint(
+        x: (size.width - margin - glyphInset).rounded(),
+        y: (size.height + (barHeight - item.frame.height) / 2).rounded(.down)
+      )
+    )
+    canvas.addSubview(item)
     content.frame = NSRect(origin: .zero, size: size)
     canvas.addSubview(content)
-    return write(canvas, to: path, appearance: name)
+    return write(canvas, to: path, appearance: appearance)
   }
 
   /// Draws the alert window's alert, as it stands over whatever is behind it: running, saying why its command did
@@ -111,17 +134,17 @@ enum PanelRender {
   /// - Parameters:
   ///   - alert: The alert, as the alert window's controller would hold it.
   ///   - path: Where to write the PNG.
-  ///   - name: The appearance of the ground behind it.
+  ///   - appearance: The appearance of the ground behind it.
   /// - Returns: Whether the PNG was written.
-  static func draw(alert: AlertSnapshot, to path: String, appearance name: NSAppearance.Name) -> Bool {
+  static func draw(alert: AlertSnapshot, to path: String, appearance: NSAppearance?) -> Bool {
     let state = AlertPresenter.state(alert)
-    let content = NSHostingView(rootView: ShellRoot { AlertView(state: state) { _ in } })
+    let content = PNG.host(ShellRoot { AlertView(state: state) { _ in } })
     let size = content.fittingSize
     let canvas = NSView(frame: NSRect(origin: .zero, size: size))
     canvas.addSubview(fill(canvas.bounds, .windowBackgroundColor))
     content.frame = canvas.bounds
     canvas.addSubview(content)
-    return write(canvas, to: path, appearance: name)
+    return write(canvas, to: path, appearance: appearance)
   }
 
   /// A plain box in one colour.
@@ -130,7 +153,7 @@ enum PanelRender {
   ///   - frame: Where it sits.
   ///   - colour: Its colour.
   /// - Returns: The box.
-  private static func fill(_ frame: NSRect, _ colour: NSColor) -> NSBox {
+  static func fill(_ frame: NSRect, _ colour: NSColor) -> NSBox {
     let box = NSBox(frame: frame)
     box.boxType = .custom
     box.borderWidth = 0
@@ -143,12 +166,13 @@ enum PanelRender {
   /// - Parameters:
   ///   - canvas: The view to draw.
   ///   - path: Where to write it.
-  ///   - name: The appearance to draw it in.
+  ///   - appearance: The appearance to draw it in.
   /// - Returns: Whether the PNG was written.
-  private static func write(_ canvas: NSView, to path: String, appearance name: NSAppearance.Name) -> Bool {
-    guard let appearance = NSAppearance(named: name), let data = PNG.data(of: canvas, appearance: appearance) else {
+  private static func write(_ canvas: NSView, to path: String, appearance: NSAppearance?) -> Bool {
+    guard let appearance, let data = PNG.data(of: canvas, appearance: appearance) else {
       return false
     }
+    // The render reports a failed write as false; why it failed is not its concern.
     return (try? data.write(to: URL(fileURLWithPath: path))) != nil
   }
 }

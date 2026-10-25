@@ -4,6 +4,7 @@
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::time::Duration;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct Display {
@@ -52,6 +53,14 @@ const FIRST_USER_UID: u32 = 501;
 const MAX_SIDE: f64 = 32768.0;
 /// The largest backing scale a display may report.
 const MAX_SCALE: f64 = 8.0;
+
+impl Display {
+    pub(crate) fn valid(&self) -> bool {
+        within(self.width, MAX_SIDE)
+            && within(self.height, MAX_SIDE)
+            && within(self.scale, MAX_SCALE)
+    }
+}
 
 /// Whether `value` is a finite measure above zero and at most `max`.
 fn within(value: f64, max: f64) -> bool {
@@ -204,9 +213,7 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
     if value["user"]["uid"].as_u64() != Some(uid.into())
         || value["session"]["onConsole"] != false
         || value["session"]["managerName"] != "Aqua"
-        || !within(display.width, MAX_SIDE)
-        || !within(display.height, MAX_SIDE)
-        || !within(display.scale, MAX_SCALE)
+        || !display.valid()
     {
         return Err(invalid());
     }
@@ -571,42 +578,98 @@ fn processes() -> Option<Vec<Process>> {
         .output()
         .ok()?;
 
-    output
-        .status
-        .success()
-        .then(|| parse_processes(&String::from_utf8_lossy(&output.stdout)))
+    if !output.status.success() {
+        return None;
+    }
+    parse_processes(std::str::from_utf8(&output.stdout).ok()?)
 }
 
 /// `ps -o uid=,pid=,etime=,comm=` lines; the command is the rest of a line.
-fn parse_processes(listing: &str) -> Vec<Process> {
-    listing
-        .lines()
-        .filter_map(|line| {
-            let mut words = line.split_whitespace();
-            let uid = words.next()?.parse().ok()?;
-            let pid = words.next()?.parse().ok()?;
-            let running = running_for(words.next()?)?;
-            let command = words.collect::<Vec<_>>().join(" ");
-
-            Some(Process {
-                uid,
-                pid,
-                running,
-                command,
-            })
-        })
-        .collect()
+fn parse_processes(listing: &str) -> Option<Vec<Process>> {
+    let mut processes = Vec::new();
+    for line in listing.lines() {
+        let mut words = line.split_whitespace();
+        let uid = words.next()?.parse::<i64>().ok()?;
+        // Negative system IDs cannot belong to a helper session.
+        if uid < 0 {
+            continue;
+        }
+        let uid = u32::try_from(uid).ok()?;
+        let pid = words.next()?.parse().ok()?;
+        let running = running_for(words.next()?)?;
+        let command = words.collect::<Vec<_>>().join(" ");
+        if command.is_empty() {
+            return None;
+        }
+        processes.push(Process {
+            uid,
+            pid,
+            running,
+            command,
+        });
+    }
+    Some(processes)
 }
 
 /// Whether `uid` is logged in to a desktop (its Dock runs); `None` when the
 /// process list could not be read, which is never "logged out".
 pub fn logged_in(uid: u32) -> Option<bool> {
     let listed = processes()?;
-    Some(
-        listed
-            .iter()
-            .any(|process| process.uid == uid && process.command.ends_with("/Dock")),
-    )
+    Some(runs_as(&listed, uid, "/Dock"))
+}
+
+/// Whether `uid` is fully logged out: neither its loginwindow nor its Dock
+/// runs. A Dock alone is not enough, since launchd restarts it in a login
+/// that lives on. `None` when the process list could not be read.
+pub fn logged_out(uid: u32) -> Option<bool> {
+    Some(logged_out_in(&processes()?, uid))
+}
+
+fn logged_out_in(listed: &[Process], uid: u32) -> bool {
+    !runs_as(listed, uid, "/loginwindow") && !runs_as(listed, uid, "/Dock")
+}
+
+/// Whether `uid`'s desktop login runs: its loginwindow and its Dock both.
+/// `None` when the process list could not be read.
+pub fn desktop_runs(uid: u32) -> Option<bool> {
+    let listed = processes()?;
+    Some(runs_as(&listed, uid, "/loginwindow") && runs_as(&listed, uid, "/Dock"))
+}
+
+/// Whether a process of `uid` whose command ends with `name` runs.
+fn runs_as(listed: &[Process], uid: u32, name: &str) -> bool {
+    listed
+        .iter()
+        .any(|process| process.uid == uid && process.command.ends_with(name))
+}
+
+/// Whether macOS is still updating an account for its login: its
+/// UserAccountUpdater runs, as root and as the account.
+fn updating(listed: &[Process]) -> bool {
+    listed
+        .iter()
+        .any(|process| process.command.ends_with("/UserAccountUpdater"))
+}
+
+/// Whether `uid`'s desktop is up: macOS done updating the account, Setup
+/// Assistant gone, and the Dock and the Finder running (loginwindow starts
+/// the Dock only once Setup Assistant is done). `None` when processes could
+/// not be listed.
+pub fn desktop_up(uid: u32) -> Option<bool> {
+    Some(desktop_up_in(&processes()?, uid))
+}
+
+fn desktop_up_in(listed: &[Process], uid: u32) -> bool {
+    !updating(listed)
+        && !runs_as(listed, uid, "/Setup Assistant")
+        && runs_as(listed, uid, "/Dock")
+        && runs_as(listed, uid, "/Finder")
+}
+
+/// Whether Setup Assistant runs for `uid` now; `None` when processes could
+/// not be listed.
+pub fn setup_assistant(uid: u32) -> Option<bool> {
+    Some(runs_as(&processes()?, uid, "/Setup Assistant"))
 }
 
 /// A desktop login: its loginwindow, which starts when the person logs in
@@ -628,40 +691,333 @@ pub fn login(uid: u32) -> Option<Login> {
         })
 }
 
-/// Whether a desktop session running as `uid` is older than the account's
-/// home folder: a deleted account's session, still logged in, that macOS
-/// now attributes to the account that reused its user ID.
-pub fn leftover_session(uid: u32, name: &str, home: &std::path::Path) -> bool {
-    // How long ago the account was made: its record's creation time, or
-    // failing that its home folder's.
-    let Some(age) = account_age(name).or_else(|| {
-        std::fs::metadata(home)
-            .and_then(|metadata| metadata.created())
-            .ok()
-            .and_then(|created| created.elapsed().ok())
-    }) else {
-        return false;
-    };
+/// One desktop login as the process list shows it: its loginwindow, the
+/// user ID that runs it, and how long it has run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Window {
+    pub uid: u32,
+    pub pid: u32,
+    pub age: Duration,
+}
 
-    // A session cannot start before its account exists; a few seconds of
-    // slack cover clock rounding.
-    let slack = std::time::Duration::from_secs(10);
-    login(uid).is_some_and(|login| login.age > age + slack)
+/// What directory services say of one user ID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Record {
+    /// Found by `getpwuid`, which asks every directory macOS uses.
+    pub passwd: bool,
+    /// Found by a search of every directory (`dscl /Search`), network and
+    /// mobile accounts included.
+    pub directory: bool,
+    /// How long ago the account was made, when that is known.
+    pub age: Option<Duration>,
+}
+
+impl Record {
+    /// Whether any directory has an account with this user ID.
+    pub fn exists(&self) -> bool {
+        self.passwd || self.directory
+    }
+}
+
+/// Whose a desktop login is, and so whether Atlas may ever close it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Kind {
+    /// The account asking; never acted on.
+    Mine,
+    /// The helper's own login.
+    Helper,
+    /// A deleted account's login still running under a user ID the helper
+    /// was given afterwards: older than the helper's account itself.
+    HelperLeftover,
+    /// The login of an account that no directory has any more.
+    Orphan,
+    /// Another person's login, or one on screen; never acted on.
+    OtherPerson,
+    /// The login window itself, run by a system user.
+    Picker,
+}
+
+/// How much older than its account a login must be to have outlived an
+/// earlier account: a login cannot start before its account exists, and a
+/// few seconds cover clock rounding.
+pub(crate) const REUSED_SLACK: Duration = Duration::from_secs(10);
+
+/// Each login in `windows` with whose it is, given what directory services
+/// say of each user ID (`accounts`), this account (`me`), the helper (or
+/// the account about to be made it), and who owns the screen (`console`).
+pub fn classify(
+    windows: &[Window],
+    accounts: impl Fn(u32) -> Record,
+    me: u32,
+    helper: Option<u32>,
+    console: Option<u32>,
+) -> Vec<(Window, Kind)> {
+    windows
+        .iter()
+        .map(|window| {
+            let kind = if window.uid < FIRST_USER_UID {
+                Kind::Picker
+            } else if window.uid == me {
+                Kind::Mine
+            } else {
+                let record = accounts(window.uid);
+                let helper = Some(window.uid) == helper;
+                let reused = record
+                    .age
+                    .is_some_and(|age| window.age >= age + REUSED_SLACK);
+
+                if !record.exists() && Some(window.uid) != console {
+                    Kind::Orphan
+                } else if helper && reused && Some(window.uid) != console {
+                    Kind::HelperLeftover
+                } else if helper {
+                    Kind::Helper
+                } else {
+                    Kind::OtherPerson
+                }
+            };
+
+            (*window, kind)
+        })
+        .collect()
+}
+
+/// Why a new login could hang now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Blocker {
+    /// A deleted account is still logged in.
+    Orphan { uid: u32 },
+    /// A deleted account is still logged in under the helper's user ID.
+    HelperLeftover { uid: u32 },
+    /// Another account started logging in long ago and never got its
+    /// desktop.
+    StuckLogin { uid: u32 },
+    /// macOS is updating an account for its login.
+    AccountUpdating,
+}
+
+impl Blocker {
+    /// What it is, in the words that follow "Atlas can't switch yet:".
+    pub fn words(&self) -> &'static str {
+        match self {
+            Self::Orphan { .. } | Self::HelperLeftover { .. } => {
+                "a deleted account is still logged in."
+            }
+            Self::StuckLogin { .. } => "another account is still logging in.",
+            Self::AccountUpdating => "macOS is still setting up an account.",
+        }
+    }
+
+    /// The user ID whose login it is, if it is one login's.
+    pub fn uid(&self) -> Option<u32> {
+        match self {
+            Self::Orphan { uid } | Self::HelperLeftover { uid } | Self::StuckLogin { uid } => {
+                Some(*uid)
+            }
+            Self::AccountUpdating => None,
+        }
+    }
+
+    /// Whether Atlas can close it: a deleted account's login.
+    pub fn closable(&self) -> bool {
+        matches!(self, Self::Orphan { .. } | Self::HelperLeftover { .. })
+    }
+}
+
+/// How long a login may go without a desktop before it counts as stuck.
+const STUCK_AFTER: Duration = Duration::from_secs(120);
+
+/// What would make a new login hang, from the classified logins and the
+/// process list: a deleted account's login, a login of another account
+/// with no Dock and no Setup Assistant for too long, or macOS updating an
+/// account.
+fn blockers(classified: &[(Window, Kind)], listed: &[Process]) -> Vec<Blocker> {
+    let mut found: Vec<Blocker> = classified
+        .iter()
+        .filter_map(|(window, kind)| match kind {
+            Kind::Orphan => Some(Blocker::Orphan { uid: window.uid }),
+            Kind::HelperLeftover => Some(Blocker::HelperLeftover { uid: window.uid }),
+            Kind::Helper | Kind::OtherPerson
+                if window.age > STUCK_AFTER
+                    && !runs_as(listed, window.uid, "/Dock")
+                    && !runs_as(listed, window.uid, "/Setup Assistant") =>
+            {
+                Some(Blocker::StuckLogin { uid: window.uid })
+            }
+            _ => None,
+        })
+        .collect();
+
+    if updating(listed) {
+        found.push(Blocker::AccountUpdating);
+    }
+
+    found
+}
+
+/// The loginwindow processes in a process list.
+fn windows_in(listed: &[Process]) -> Vec<Window> {
+    listed
+        .iter()
+        .filter(|process| process.command.ends_with("/loginwindow"))
+        .map(|process| Window {
+            uid: process.uid,
+            pid: process.pid,
+            age: process.running,
+        })
+        .collect()
+}
+
+/// The user ID that owns the screen now (0 at the login window), or
+/// `None` when it cannot be read.
+pub fn console_owner() -> Option<u32> {
+    use std::os::unix::fs::MetadataExt;
+
+    std::fs::metadata("/dev/console")
+        .ok()
+        .map(|metadata| metadata.uid())
+}
+
+/// What directory services say of `uid`, with how long ago its account was
+/// made when `aged` (only the helper's age is ever compared). A lookup that
+/// fails counts as an account found: an unknown is never taken for a
+/// deleted account.
+pub fn record(uid: u32, aged: bool) -> Record {
+    let account = crate::setup::account_with_uid(uid);
+    let passwd = !matches!(account, Ok(None));
+    let directory = std::process::Command::new("/usr/bin/dscl")
+        .args(["/Search", "-search", "/Users", "UniqueID", &uid.to_string()])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_or(true, |output| {
+            !output.status.success() || !String::from_utf8_lossy(&output.stdout).trim().is_empty()
+        });
+    let age = account.ok().flatten().filter(|_| aged).and_then(|account| {
+        account_age(&account.name).or_else(|| {
+            std::fs::metadata(&account.home)
+                .and_then(|metadata| metadata.created())
+                .ok()
+                .and_then(|created| created.elapsed().ok())
+        })
+    });
+
+    Record {
+        passwd,
+        directory,
+        age,
+    }
+}
+
+/// Every desktop login on this Mac with whose it is, and what would make a
+/// new login hang now. `helper` is the helper (or the account about to be
+/// made it). `None` when the process list could not be read.
+pub fn sessions(helper: Option<u32>) -> Option<Sessions> {
+    let listed = processes()?;
+    let me = nix::unistd::getuid().as_raw();
+    let accounts = |uid| record(uid, Some(uid) == helper);
+    let logins = classify(&windows_in(&listed), accounts, me, helper, console_owner());
+    let blockers = blockers(&logins, &listed);
+
+    Some(Sessions { logins, blockers })
+}
+
+/// Every desktop login on this Mac, classified, and what would make a new
+/// login hang now.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Sessions {
+    pub logins: Vec<(Window, Kind)>,
+    pub blockers: Vec<Blocker>,
+}
+
+impl Sessions {
+    /// The logins Atlas may close: deleted accounts' logins, as
+    /// `{"uid", "kind"}`.
+    pub fn leftovers(&self) -> Vec<Value> {
+        self.logins
+            .iter()
+            .filter(|(_, kind)| matches!(kind, Kind::Orphan | Kind::HelperLeftover))
+            .map(|(window, kind)| json!({"uid": window.uid, "kind": kind}))
+            .collect()
+    }
+
+    /// The user IDs of the deleted accounts still logged in, by kind.
+    pub fn leftover_uids(&self, wanted: Kind) -> Vec<u32> {
+        self.logins
+            .iter()
+            .filter(|(_, kind)| *kind == wanted)
+            .map(|(window, _)| window.uid)
+            .collect()
+    }
+}
+
+/// What would make a new login hang now; `None` when the process list could
+/// not be read.
+pub fn blockers_now(helper: Option<u32>) -> Option<Vec<Blocker>> {
+    sessions(helper).map(|sessions| sessions.blockers)
+}
+
+/// How long a login with its desktop up may go without Atlas answering
+/// before its login counts as left behind rather than still starting.
+const STALE_AFTER: Duration = Duration::from_secs(180);
+
+/// Whether `uid`'s login is up and settled: its loginwindow has run for
+/// over three minutes and its Dock runs. Called for a helper whose Atlas is
+/// silent, it tells a login left behind from one still starting. `None`
+/// when processes could not be listed.
+pub fn stale(uid: u32) -> Option<bool> {
+    let listed = processes()?;
+    Some(stale_in(&listed, uid))
+}
+
+fn stale_in(listed: &[Process], uid: u32) -> bool {
+    windows_in(listed)
+        .iter()
+        .any(|window| window.uid == uid && window.age > STALE_AFTER)
+        && runs_as(listed, uid, "/Dock")
+}
+
+/// Whether the logins of `uids` are gone: no loginwindow and no Dock of
+/// any of them, seen twice half a second apart, so a login on its way out
+/// is not taken for one that ended (a Dock alone can restart in a login
+/// that lives on). A process list that cannot be read is not gone.
+pub fn confirm_gone(uids: &[u32]) -> bool {
+    gone_twice(uids, processes, || {
+        std::thread::sleep(Duration::from_millis(500));
+    })
+}
+
+fn gone_twice(
+    uids: &[u32],
+    mut listed: impl FnMut() -> Option<Vec<Process>>,
+    mut pause: impl FnMut(),
+) -> bool {
+    (0..2).all(|_| {
+        pause();
+        listed().is_some_and(|listed| uids.iter().all(|uid| logged_out_in(&listed, *uid)))
+    })
 }
 
 /// How long ago account `name` was created, from its directory record.
 fn account_age(name: &str) -> Option<std::time::Duration> {
+    account_created(name)?.elapsed().ok()
+}
+
+/// The directory record's creation time; home-folder timestamps are not provenance.
+pub(crate) fn account_created(name: &str) -> Option<std::time::SystemTime> {
     let output = std::process::Command::new("/usr/bin/dscl")
         .args([".", "-read", &format!("/Users/{name}"), "accountPolicyData"])
         .output()
         .ok()?;
+    if !output.status.success() {
+        return None;
+    }
     let text = String::from_utf8_lossy(&output.stdout);
     let after = text.split("<key>creationTime</key>").nth(1)?;
     let value = after.split("<real>").nth(1)?.split("</real>").next()?;
-    let created =
-        std::time::UNIX_EPOCH + std::time::Duration::from_secs_f64(value.trim().parse().ok()?);
-
-    created.elapsed().ok()
+    std::time::UNIX_EPOCH
+        .checked_add(std::time::Duration::try_from_secs_f64(value.trim().parse().ok()?).ok()?)
 }
 
 /// `ps` elapsed time (`[[days-]hours:]minutes:seconds`) as a duration.
@@ -687,10 +1043,16 @@ fn running_for(elapsed: &str) -> Option<std::time::Duration> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Absence, LOGGED_OUT, diagnose, input_build_current, parse_processes, require_hidden,
-        running_for, silent, validate_target_uid,
+        Absence, Blocker, Kind, LOGGED_OUT, Process, Record, Window, blockers, classify,
+        desktop_up_in, diagnose, gone_twice, input_build_current, logged_out_in, parse_processes,
+        require_hidden, running_for, silent, stale_in, validate_target_uid,
     };
     use serde_json::json;
+    use std::time::Duration;
+
+    fn listed_processes(listing: &str) -> Vec<Process> {
+        parse_processes(listing).expect("valid process list")
+    }
 
     #[test]
     fn only_a_helper_that_did_not_answer_is_explained() {
@@ -707,11 +1069,34 @@ mod tests {
     }
 
     #[test]
+    fn the_desktop_is_up_once_setup_assistant_is_gone_and_the_dock_and_finder_run() {
+        let core = "/System/Library/CoreServices";
+        let listing = |extra: &str| {
+            listed_processes(&format!(
+                "502 10 00:10 {core}/Dock.app/Contents/MacOS/Dock\n\
+                 502 11 00:10 {core}/Finder.app/Contents/MacOS/Finder\n\
+                 502 12 00:10 {core}/KeyboardSetupAssistant.app/Contents/MacOS/KeyboardSetupAssistant\n\
+                 {extra}"
+            ))
+        };
+        let assistant = |uid: u32| {
+            format!("{uid} 13 00:10 {core}/Setup Assistant.app/Contents/MacOS/Setup Assistant\n")
+        };
+        assert!(desktop_up_in(&listing(""), 502));
+        assert!(!desktop_up_in(&listing(&assistant(502)), 502));
+        assert!(
+            desktop_up_in(&listing(&assistant(503)), 502),
+            "another account's Setup Assistant"
+        );
+        assert!(!desktop_up_in(&listing(""), 503), "no Dock of its own");
+    }
+
+    #[test]
     fn processes_are_read_from_ps_lines() {
         let listing = "  505  1158 04-00:04:57 /System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow\n\
                        501   700       05:32 /Applications/Some App.app/Contents/MacOS/Some App\n\
-                       not a process line\n";
-        let listed = parse_processes(listing);
+                       -2    40       00:10 /usr/sbin/system-service\n";
+        let listed = listed_processes(listing);
         assert_eq!(listed.len(), 2);
         assert_eq!((listed[0].uid, listed[0].pid), (505, 1158));
         assert_eq!(
@@ -722,6 +1107,31 @@ mod tests {
             listed[1].command, "/Applications/Some App.app/Contents/MacOS/Some App",
             "a command keeps its spaces"
         );
+    }
+
+    #[test]
+    fn process_lists_ignore_negative_ids_but_refuse_unreadable_rows() {
+        let listing = "-2 40 00:10 /usr/sbin/system-service\n\
+                       1 41 00:10 /usr/sbin/daemon\n\
+                       99 42 00:10 /usr/sbin/unknown\n\
+                       502 43 00:10 /System/Library/CoreServices/Dock.app/Contents/MacOS/Dock\n";
+        let listed = parse_processes(listing).unwrap();
+        assert_eq!(
+            listed.iter().map(|process| process.uid).collect::<Vec<_>>(),
+            [1, 99, 502]
+        );
+        for line in [
+            "garbage",
+            "NaN 44 00:10 /Dock",
+            "4294967296 44 00:10 /Dock",
+            "502 bad 00:10 /Dock",
+            "502 44 bad /Dock",
+            "502 44 00:10",
+        ] {
+            let malformed = format!("{listing}{line}\n");
+            assert!(parse_processes(&malformed).is_none(), "{line}");
+            assert!(!gone_twice(&[502], || parse_processes(&malformed), || {}));
+        }
     }
 
     #[test]
@@ -844,6 +1254,290 @@ mod tests {
             input_build_current(&legacy),
             "services that predate the field"
         );
+    }
+
+    fn window(uid: u32, seconds: u64) -> Window {
+        Window {
+            uid,
+            pid: uid + 1000,
+            age: Duration::from_secs(seconds),
+        }
+    }
+
+    fn account(seconds: Option<u64>) -> Record {
+        Record {
+            passwd: true,
+            directory: true,
+            age: seconds.map(Duration::from_secs),
+        }
+    }
+
+    fn kinds(classified: &[(Window, Kind)]) -> Vec<(u32, Kind)> {
+        classified
+            .iter()
+            .map(|(window, kind)| (window.uid, *kind))
+            .collect()
+    }
+
+    #[test]
+    fn a_login_whose_account_no_directory_has_is_an_orphan() {
+        let windows = [window(0, 900), window(501, 900), window(502, 900)];
+        let classified = classify(
+            &windows,
+            |uid| {
+                if uid == 502 {
+                    Record::default()
+                } else {
+                    account(Some(5000))
+                }
+            },
+            501,
+            Some(503),
+            Some(501),
+        );
+        assert_eq!(
+            kinds(&classified),
+            [(0, Kind::Picker), (501, Kind::Mine), (502, Kind::Orphan)]
+        );
+    }
+
+    #[test]
+    fn a_reused_user_id_is_a_leftover_only_while_its_login_is_older_than_the_account() {
+        let older = classify(
+            &[window(503, 900)],
+            |_| account(Some(60)),
+            501,
+            Some(503),
+            Some(501),
+        );
+        assert_eq!(kinds(&older), [(503, Kind::HelperLeftover)]);
+
+        let newer = classify(
+            &[window(503, 30)],
+            |_| account(Some(60)),
+            501,
+            Some(503),
+            Some(501),
+        );
+        assert_eq!(kinds(&newer), [(503, Kind::Helper)]);
+
+        let rounding = classify(
+            &[window(503, 65)],
+            |_| account(Some(60)),
+            501,
+            Some(503),
+            None,
+        );
+        assert_eq!(kinds(&rounding), [(503, Kind::Helper)], "within the slack");
+
+        let unknown = classify(&[window(503, 900)], |_| account(None), 501, Some(503), None);
+        assert_eq!(
+            kinds(&unknown),
+            [(503, Kind::Helper)],
+            "no age, no leftover"
+        );
+    }
+
+    #[test]
+    fn the_login_window_itself_is_the_picker() {
+        let classified = classify(
+            &[window(0, 10), window(88, 10)],
+            |_| Record::default(),
+            501,
+            None,
+            None,
+        );
+        assert_eq!(kinds(&classified), [(0, Kind::Picker), (88, Kind::Picker)]);
+    }
+
+    #[test]
+    fn this_account_is_never_acted_on_even_without_a_record() {
+        let classified = classify(
+            &[window(501, 10)],
+            |_| Record::default(),
+            501,
+            Some(501),
+            None,
+        );
+        assert_eq!(kinds(&classified), [(501, Kind::Mine)]);
+    }
+
+    #[test]
+    fn the_account_on_screen_is_never_an_orphan() {
+        let classified = classify(
+            &[window(504, 900)],
+            |_| Record::default(),
+            501,
+            Some(503),
+            Some(504),
+        );
+        assert_eq!(kinds(&classified), [(504, Kind::OtherPerson)]);
+
+        let helper = classify(
+            &[window(503, 900)],
+            |_| account(Some(60)),
+            501,
+            Some(503),
+            Some(503),
+        );
+        assert_eq!(
+            kinds(&helper),
+            [(503, Kind::Helper)],
+            "the helper on screen"
+        );
+    }
+
+    #[test]
+    fn a_network_account_is_never_an_orphan() {
+        let network = Record {
+            passwd: false,
+            directory: true,
+            age: None,
+        };
+        let classified = classify(&[window(1201, 900)], |_| network, 501, Some(503), Some(501));
+        assert_eq!(kinds(&classified), [(1201, Kind::OtherPerson)]);
+
+        let cached = Record {
+            passwd: true,
+            directory: false,
+            age: None,
+        };
+        let classified = classify(&[window(1202, 900)], |_| cached, 501, None, Some(501));
+        assert_eq!(kinds(&classified), [(1202, Kind::OtherPerson)]);
+    }
+
+    #[test]
+    fn a_login_without_a_dock_for_long_is_stuck_but_setup_assistant_is_not() {
+        let core = "/System/Library/CoreServices";
+        let classified = [(window(503, 130), Kind::Helper)];
+
+        let bare = listed_processes(&format!(
+            "503 10 02:10 {core}/loginwindow.app/Contents/MacOS/loginwindow\n"
+        ));
+        assert_eq!(
+            blockers(&classified, &bare),
+            [Blocker::StuckLogin { uid: 503 }]
+        );
+
+        let assistant = listed_processes(&format!(
+            "503 11 02:00 {core}/Setup Assistant.app/Contents/MacOS/Setup Assistant\n"
+        ));
+        assert!(blockers(&classified, &assistant).is_empty());
+
+        let docked = listed_processes(&format!(
+            "503 12 02:00 {core}/Dock.app/Contents/MacOS/Dock\n"
+        ));
+        assert!(blockers(&classified, &docked).is_empty());
+
+        let young = [(window(503, 90), Kind::Helper)];
+        assert!(blockers(&young, &bare).is_empty(), "still within its time");
+
+        let mine = [(window(501, 900), Kind::Mine)];
+        assert!(blockers(&mine, &bare).is_empty(), "never this account");
+    }
+
+    #[test]
+    fn a_running_account_updater_and_deleted_accounts_block_a_login() {
+        let updater =
+            listed_processes("0 40 00:05 /System/Library/CoreServices/UserAccountUpdater\n");
+        assert_eq!(blockers(&[], &updater), [Blocker::AccountUpdating]);
+
+        let classified = [
+            (window(502, 900), Kind::Orphan),
+            (window(503, 900), Kind::HelperLeftover),
+        ];
+        let found = blockers(&classified, &[]);
+        assert_eq!(
+            found,
+            [
+                Blocker::Orphan { uid: 502 },
+                Blocker::HelperLeftover { uid: 503 }
+            ]
+        );
+        assert!(found.iter().all(Blocker::closable));
+        assert!(!Blocker::AccountUpdating.closable());
+        assert_eq!(
+            Blocker::StuckLogin { uid: 1 }.words(),
+            "another account is still logging in."
+        );
+    }
+
+    #[test]
+    fn a_login_is_over_only_once_its_loginwindow_and_dock_are_both_gone() {
+        let core = "/System/Library/CoreServices";
+        let both = listed_processes(&format!(
+            "502 10 00:10 {core}/loginwindow.app/Contents/MacOS/loginwindow\n\
+             502 11 00:10 {core}/Dock.app/Contents/MacOS/Dock\n"
+        ));
+        assert!(!logged_out_in(&both, 502));
+        assert!(!logged_out_in(&both[..1], 502), "a loginwindow alone");
+        assert!(!logged_out_in(&both[1..], 502), "a Dock alone");
+        assert!(logged_out_in(&[], 502));
+        assert!(logged_out_in(&both, 503), "another account's");
+    }
+
+    #[test]
+    fn closed_logins_are_gone_only_once_seen_without_loginwindow_and_dock_twice() {
+        use std::{cell::RefCell, collections::VecDeque};
+
+        let core = "/System/Library/CoreServices";
+        let dock = listed_processes(&format!(
+            "7001 11 00:10 {core}/Dock.app/Contents/MacOS/Dock\n"
+        ));
+        let window = listed_processes(&format!(
+            "7003 10 00:10 {core}/loginwindow.app/Contents/MacOS/loginwindow\n"
+        ));
+        let gone = |looks: Vec<Option<Vec<Process>>>| {
+            let looks = RefCell::new(looks.into_iter().collect::<VecDeque<_>>());
+            gone_twice(
+                &[7001, 7003],
+                || looks.borrow_mut().pop_front().flatten(),
+                || {},
+            )
+        };
+
+        assert!(gone(vec![Some(vec![]), Some(vec![])]));
+        assert!(!gone(vec![Some(dock.clone()), Some(vec![])]), "a Dock left");
+        assert!(
+            !gone(vec![Some(vec![]), Some(window)]),
+            "back by the second look"
+        );
+        assert!(!gone(vec![None, Some(vec![])]), "a list that failed");
+    }
+
+    #[test]
+    fn a_login_is_left_behind_only_once_its_desktop_has_been_up_for_minutes() {
+        let core = "/System/Library/CoreServices";
+        let listing = |age: &str, dock: bool| {
+            let mut text =
+                format!("503 10 {age} {core}/loginwindow.app/Contents/MacOS/loginwindow\n");
+            if dock {
+                text.push_str(&format!(
+                    "503 11 {age} {core}/Dock.app/Contents/MacOS/Dock\n"
+                ));
+            }
+            listed_processes(&text)
+        };
+        assert!(stale_in(&listing("04:00", true), 503));
+        assert!(!stale_in(&listing("02:00", true), 503), "still starting");
+        assert!(!stale_in(&listing("04:00", false), 503), "no desktop yet");
+        assert!(!stale_in(&listing("04:00", true), 504), "another account's");
+    }
+
+    #[test]
+    fn the_desktop_waits_for_the_account_updater_to_end() {
+        let core = "/System/Library/CoreServices";
+        let listed = listed_processes(&format!(
+            "502 10 00:10 {core}/Dock.app/Contents/MacOS/Dock\n\
+             502 11 00:10 {core}/Finder.app/Contents/MacOS/Finder\n"
+        ));
+        assert!(desktop_up_in(&listed, 502));
+
+        let mut updating = listed.clone();
+        updating.extend(listed_processes(&format!(
+            "0 12 00:01 {core}/UserAccountUpdater\n"
+        )));
+        assert!(!desktop_up_in(&updating, 502));
     }
 
     #[test]

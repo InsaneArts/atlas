@@ -49,10 +49,36 @@ pub async fn report(client: &Client, until: Instant) -> Value {
         None
     };
 
+    let silent = crate::session::silent(&reply);
     let mut status = crate::capability::doctor(reply, uid);
     if let Some(absence) = &absence {
         absence.explain(&mut status);
     }
+
+    // Logins Atlas can close: deleted accounts' logins, and the helper's own
+    // when its desktop is up but Atlas there stays silent. Unknown is none.
+    let looking = tokio::task::spawn_blocking(move || {
+        let leftovers = crate::session::sessions(Some(uid))
+            .map(|sessions| {
+                sessions
+                    .leftover_uids(crate::session::Kind::Orphan)
+                    .into_iter()
+                    .chain(sessions.leftover_uids(crate::session::Kind::HelperLeftover))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        (
+            leftovers,
+            silent && crate::session::stale(uid) == Some(true),
+        )
+    });
+    let (leftovers, stale) = tokio::time::timeout_at(until, looking)
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_default();
+    status["leftoverLogins"] = json!(leftovers);
+    status["helperStale"] = json!(stale);
 
     // A Stop kept on the person's side counts as one the helper holds.
     if client.controller.stop_noted() && status["session"]["inputService"].is_object() {
@@ -247,13 +273,15 @@ pub fn overview(
     } else if pending.unresolved > 0 {
         // A stop that cut an action short leaves its outcome unknown: say
         // both, as recovery comes first and the stop stays after it.
-        let reason = if session["inputService"]["held"] == true {
+        let reason = if report["ready"] != true && !recoverable {
+            first_step.as_str()
+        } else if session["inputService"]["held"] == true {
             "You stopped the agent mid-action, so its outcome is unknown. Recover, then resume."
         } else {
             "An action's outcome is unknown; recover before taking control"
         };
         ("recovering", reason.to_owned())
-    } else if session["inputService"]["held"] == true && !lease_active {
+    } else if session["inputService"]["held"] == true && !lease_active && report["ready"] == true {
         // The person's stop holds whatever else is true, until they take
         // control themselves: agents wait.
         (
@@ -304,8 +332,13 @@ pub fn overview(
         "headline": headline,
         "reason": reason,
         "recoverable": mode == "blocked" && recoverable,
+        "recoveryHelps": (mode == "recovering" && (report["ready"] == true || recoverable))
+            || (mode == "blocked" && recoverable),
         "account": if reachable { &session["user"]["name"] } else { &report["account"] },
-        "display": session["display"],
+        "display": serde::Deserialize::deserialize(&session["display"])
+            .ok()
+            .filter(crate::session::Display::valid)
+            .map(|_: crate::session::Display| &session["display"]),
         "pending": pending.unresolved,
         "inFlight": pending.in_flight,
         "nativeDialogs": report["capabilities"]["nativeDialogs"]["state"],
@@ -326,6 +359,12 @@ fn reason(row: &Value) -> Option<&'static str> {
         "windows" => "The window wasn't there",
         "input" => "The mouse and keyboard weren't ready",
         "capture" => "The screen couldn't be read",
+        "permission" => match row["operation"].as_str() {
+            Some("screenshot") => "The helper can't record the screen",
+            Some("input") => "The helper can't use the mouse and keyboard",
+            _ => "The helper doesn't have permission",
+        },
+        "session-changed" => "The helper's screen changed meanwhile",
         "lease-lost" => "Control ended before it finished",
         "cancelled" => "It was cancelled",
         "uncertain" => "It may not have finished",
@@ -370,6 +409,27 @@ mod tests {
     const NOW: u128 = 100_000_000_000;
 
     #[test]
+    fn every_screenshot_refusal_has_a_plain_reason_in_the_activity_list() {
+        for (code, words) in [
+            ("capture", "The screen couldn't be read"),
+            ("identity", "Atlas couldn't reach the helper"),
+            ("on-console", "Atlas couldn't reach the helper"),
+            ("permission", "The helper can't record the screen"),
+            ("session-changed", "The helper's screen changed meanwhile"),
+        ] {
+            let row = json!({"operation": "screenshot", "ok": false, "code": code});
+            assert_eq!(shown(&row, NOW)["reason"], words, "{code}");
+        }
+        for (operation, words) in [
+            ("input", "The helper can't use the mouse and keyboard"),
+            ("run", "The helper doesn't have permission"),
+        ] {
+            let row = json!({"operation": operation, "ok": false, "code": "permission"});
+            assert_eq!(shown(&row, NOW)["reason"], words, "{operation}");
+        }
+    }
+
+    #[test]
     fn the_activity_log_is_read_only_as_a_plain_file_never_a_link_or_a_pipe() {
         let dir = tempfile::tempdir().unwrap();
         let elsewhere = dir.path().join("elsewhere.jsonl");
@@ -411,6 +471,29 @@ mod tests {
 
     fn mode(report: &Value, lease: bool, pending: usize, activity: &[Value]) -> Value {
         overview(report, lease, unresolved(pending), activity, NOW)["mode"].clone()
+    }
+
+    #[test]
+    fn a_not_ready_helper_shows_only_valid_display_geometry() {
+        let mut report = report(true, false);
+        for display in [
+            json!({"width": 1e100, "height": 1, "scale": 1}),
+            json!({"width": 1, "height": 32769, "scale": 1}),
+            json!({"width": 0, "height": 1, "scale": 1}),
+            json!({"width": 1, "height": 1, "scale": 9}),
+            json!({"width": f64::INFINITY, "height": 1, "scale": 1}),
+        ] {
+            report["session"]["display"] = display;
+            let shown = overview(&report, false, unresolved(0), &[], NOW);
+            assert_eq!(shown["state"], "notReady");
+            assert!(shown["display"].is_null());
+        }
+        let display = json!({"width": 32768, "height": 1, "scale": 8});
+        report["session"]["display"] = display.clone();
+        assert_eq!(
+            overview(&report, false, unresolved(0), &[], NOW)["display"],
+            display
+        );
     }
 
     #[test]
@@ -491,6 +574,101 @@ mod tests {
             "the person may take over"
         );
         assert_eq!(mode(&held, false, 1, &[]), "recovering");
+    }
+
+    #[test]
+    fn input_failure_after_a_stop_offers_recovery_and_keeps_agents_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, dir.path());
+        controller.note_stop(true).unwrap();
+        let mut held = report(true, true);
+        held["session"]["inputService"]["held"] = json!(true);
+        assert_eq!(mode(&held, false, 0, &[]), "stopped");
+
+        held["ready"] = json!(false);
+        held["nextSteps"] = json!([crate::session::START_INPUT]);
+        let summary = overview(&held, false, pending(&controller).0, &[], NOW);
+        assert_eq!(summary["mode"], "blocked");
+        assert_eq!(summary["state"], "needsYou");
+        assert_eq!(summary["recoveryHelps"], true);
+        assert!(controller.stop_noted());
+        assert_eq!(held["session"]["inputService"]["held"], true);
+
+        held["ready"] = json!(true);
+        let recovered = overview(&held, false, pending(&controller).0, &[], NOW);
+        assert_eq!(recovered["mode"], "stopped");
+        assert_eq!(recovered["recoveryHelps"], false);
+        assert!(controller.stop_noted());
+        assert_eq!(held["session"]["inputService"]["held"], true);
+
+        controller.note_stop(false).unwrap();
+        held["session"]["inputService"]["held"] = json!(false);
+        assert_eq!(mode(&held, false, 0, &[]), "observing");
+    }
+
+    #[test]
+    fn a_permission_failure_after_a_stop_shows_what_must_be_allowed_before_resuming() {
+        let dir = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, dir.path());
+        controller.note_stop(true).unwrap();
+        let mut held = report(true, true);
+        held["session"]["inputService"]["held"] = json!(true);
+        assert_eq!(mode(&held, false, 0, &[]), "stopped");
+
+        held["ready"] = json!(false);
+        held["nextSteps"] = json!(["Turn on Accessibility for Atlas in the helper first."]);
+        let summary = overview(&held, false, pending(&controller).0, &[], NOW);
+        assert_eq!(summary["mode"], "blocked");
+        assert_eq!(summary["state"], "notReady");
+        assert_eq!(summary["reason"], held["nextSteps"][0]);
+        assert_eq!(summary["recoveryHelps"], false);
+        assert!(controller.stop_noted());
+        assert_eq!(held["session"]["inputService"]["held"], true);
+
+        held["ready"] = json!(true);
+        assert_eq!(mode(&held, false, 0, &[]), "stopped");
+    }
+
+    #[test]
+    fn an_unknown_outcome_keeps_its_claim_while_recovery_waits_for_a_prerequisite() {
+        let dir = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, dir.path());
+        drop(controller.quarantine().unwrap());
+        let claims = controller.pending().unwrap();
+        let mut report = report(true, true);
+        let summary = overview(&report, false, pending(&controller).0, &[], NOW);
+        assert_eq!(summary["mode"], "recovering");
+        assert_eq!(summary["recoveryHelps"], true);
+
+        for step in [
+            "Turn on Accessibility for Atlas in the helper first.",
+            "Allow Screen Recording for Atlas in the helper first.",
+            "Switch back to your own account without logging the helper out.",
+        ] {
+            report["ready"] = json!(false);
+            report["nextSteps"] = json!([step]);
+            let summary = overview(&report, false, pending(&controller).0, &[], NOW);
+            assert_eq!(summary["mode"], "recovering");
+            assert_eq!(summary["state"], "needsYou");
+            assert_eq!(summary["pending"], 1);
+            assert_eq!(summary["reason"], step);
+            assert_eq!(summary["recoveryHelps"], false);
+            assert_eq!(controller.pending().unwrap(), claims);
+        }
+
+        report["nextSteps"] = json!([crate::session::START_INPUT]);
+        let summary = overview(&report, false, pending(&controller).0, &[], NOW);
+        assert_eq!(summary["mode"], "recovering");
+        assert_eq!(summary["recoveryHelps"], true);
+        assert_eq!(controller.pending().unwrap(), claims);
+
+        report["ready"] = json!(true);
+        assert_eq!(mode(&report, false, 1, &[]), "recovering");
+        controller.clear().unwrap();
+        assert_eq!(
+            overview(&report, false, pending(&controller).0, &[], NOW)["mode"],
+            "observing"
+        );
     }
 
     #[test]

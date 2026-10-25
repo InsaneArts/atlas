@@ -1,16 +1,16 @@
 import AppKit
-import AtlasKit
+import AtlasCommands
+import AtlasService
 
 /// Atlas.app's executable, the app target: AppKit windows, one controller and presenter per window, rendering and
-/// launch. It reads its environment once (``AppConfiguration``) and draws with AtlasUI, which never sees AtlasKit.
+/// launch. It reads its environment once (``AppConfiguration``) and draws with AtlasUI, which sees no domain package.
 ///
 /// `atlas menubar` starts it with the viewer's capability URL on stdin, never in argv, and it quits when stdin
 /// closes, so it never outlives the `atlas` that started it. A few flags run one task and exit instead
 /// (``LaunchArguments``).
 @main
-@MainActor
 enum AtlasApp {
-  /// Starts the launch its arguments ask for.
+  /// Starts the launch its arguments ask for: one function each.
   static func main() {
     // A command that exits before reading what it was given must not end
     // the app: writes to its closed pipe fail with an error instead.
@@ -18,24 +18,20 @@ enum AtlasApp {
     let arguments = CommandLine.arguments
     let executable = URL(fileURLWithPath: arguments[0])
       .resolvingSymlinksInPath()
-    let configuration = AppConfiguration(
-      environment: ProcessInfo.processInfo.environment,
-      executable: executable
-    )
+    let configuration = AppConfiguration.reading(executable: executable)
     let loginItem = OpenAtLogin.live(LoginItem())
-    var render: String?
-    var dark = false
-    let mode = LaunchArguments.mode(arguments)
-    switch mode {
+    // The one live clock: every window's waits run on it, and tests hand in a manual one.
+    let clock = ContinuousClock()
+    switch LaunchArguments.mode(arguments) {
     case .notice(let title, let message, let switchBack):
       NoticeAlert.show(title: title, message: message, switchBack: switchBack, commands: configuration.commands)
     case .login(let change):
       LoginCommand.run(change, loginItem: loginItem)
     case .onboarding:
-      onboarding(commands: configuration.commands, loginItem: loginItem)
+      OnboardingAlone.run(commands: configuration.commands, loginItem: loginItem, clock: clock)
     #if DEBUG
       case .renderOnboarding(let folder):
-        drawPreviews { OnboardingRender.draw(to: folder) }
+        drawPreviews { OnboardingRender.draw(to: folder) && DockedRender.draw(to: folder) }
       case .renderViewer(let folder):
         drawPreviews {
           ViewerRender.draw(to: folder) && ComponentRender.draw(to: folder + "/components")
@@ -50,10 +46,29 @@ enum AtlasApp {
       case .renderSettings:
         needsDebugBuild("--render-settings")
     #endif
-    case .app(let folder, let inDark):
-      render = folder
-      dark = inDark
+    case .renderMenuBar(let folder):
+      drawMenuBar(to: folder)
+    case .app(let render, let dark):
+      app(configuration: configuration, loginItem: loginItem, clock: clock, render: render, dark: dark)
     }
+  }
+
+  /// The app itself, once `atlas menubar` has given it the viewer's capability URL on stdin: the menu bar item and the
+  /// windows it opens, built by the container. With `--render PATH`, the panel is drawn instead.
+  ///
+  /// - Parameters:
+  ///   - configuration: What the app took from its environment.
+  ///   - loginItem: The app's login item.
+  ///   - clock: The one live clock.
+  ///   - render: Where `--render` draws the panel, or nil for the live app.
+  ///   - dark: Whether that drawing's menu bar strip is dark.
+  static func app(
+    configuration: AppConfiguration,
+    loginItem: OpenAtLogin,
+    clock: any Clock<Duration>,
+    render: String?,
+    dark: Bool
+  ) {
     guard let line = readLine(), let service = ViewerClient(line) else {
       FileHandle.standardError
         .write(Data("Expected the viewer URL on stdin\n".utf8))
@@ -64,10 +79,17 @@ enum AtlasApp {
     if let render {
       drawPanel(service: service, overrides: configuration.renderOverrides, to: render, dark: dark)
     }
-    let controller = AppController(commands: configuration.commands, service: service, loginItem: loginItem)
-    app.delegate = controller
-    listen(received: { line in controller.received(line) }, closed: { controller.parentClosed() })
-    withExtendedLifetime(controller) { app.run() }
+    let delegate = AppDelegate(
+      container: AppContainer(
+        commands: configuration.commands,
+        service: service,
+        loginItem: loginItem,
+        clock: clock
+      )
+    )
+    app.delegate = delegate
+    listen(received: { line in delegate.received(line) }, closed: { delegate.parentClosed() })
+    withExtendedLifetime(delegate) { app.run() }
   }
 
   #if DEBUG
@@ -93,6 +115,16 @@ enum AtlasApp {
     }
   #endif
 
+  /// `--render-menubar DIR`: draw the menu bar item in every state, light and dark, then exit. It needs no preview
+  /// state or service, so release builds draw it too.
+  ///
+  /// - Parameter folder: Where the PNGs go.
+  /// - Returns: Never; the process exits.
+  static func drawMenuBar(to folder: String) -> Never {
+    DockIcon.settle(windowOpen: false)
+    exit(MenuBarRender.draw(to: folder) ? 0 : 4)
+  }
+
   /// `--render PATH`: draw the panel from the service's status, then exit.
   ///
   /// - Parameters:
@@ -104,37 +136,17 @@ enum AtlasApp {
   static func drawPanel(service: ViewerClient, overrides: PanelRenderOverrides, to path: String, dark: Bool) -> Never {
     let app = NSApplication.shared
     listen(received: { _ in }, closed: { NSApp.terminate(nil) })
+    // Unstructured, as the drawing needs the app running below; it exits the process once drawn.
     Task {
       let drawn = await PanelRender.draw(
         service: service,
         overrides: overrides,
         to: path,
-        appearance: dark ? .darkAqua : .aqua
+        appearance: dark ? Appearance.dark : Appearance.light
       )
       exit(drawn ? 0 : 4)
     }
     app.run()
-    exit(0)
-  }
-
-  /// `--onboarding`: the setup window on its own (Atlas.app opened before it is set up). It quits when the window
-  /// closes.
-  ///
-  /// - Parameters:
-  ///   - commands: The `atlas` the window runs.
-  ///   - loginItem: The app's login item.
-  /// - Returns: Never; the process exits.
-  static func onboarding(commands: Commands, loginItem: OpenAtLogin) -> Never {
-    let app = NSApplication.shared
-    app.mainMenu = MainMenu.make()
-    let controller = OnboardingController(
-      dependencies: .live(commands: commands, loginItem: loginItem, installs: AgentInstalls(commands: commands))
-    )
-    let window = OnboardingWindow(controller: controller) { _ in NSApp.terminate(nil) }
-    DockIcon.settle(windowOpen: true)
-    app.finishLaunching()
-    window.show()
-    withExtendedLifetime(window) { app.run() }
     exit(0)
   }
 
@@ -148,6 +160,7 @@ enum AtlasApp {
     closed: @escaping @MainActor @Sendable () -> Void
   ) {
     Thread.detachNewThread {
+      // Unstructured, as this thread is outside any actor: each line, then the close, hops to the main actor.
       while let line = readLine() {
         Task { @MainActor in received(line) }
       }

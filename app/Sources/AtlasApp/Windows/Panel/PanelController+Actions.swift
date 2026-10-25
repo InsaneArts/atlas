@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasService
 import AtlasUI
 import Foundation
 
@@ -37,6 +37,7 @@ extension PanelController {
   /// barrier, then reads the status.
   func giveBack() {
     links.giveBack()
+    // Unstructured, as Give Back is synchronous: the status is read beside it.
     Task { await readStatus() }
   }
 

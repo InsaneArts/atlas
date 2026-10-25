@@ -24,6 +24,88 @@ fn display(value: &Value) -> Option<String> {
     ))
 }
 
+/// The last login, one step a line, then any plugin of macOS's account
+/// update that never finished.
+pub fn login_timing(value: &Value) -> String {
+    if value["found"] != true {
+        return format!("{} No login in the last 2 hours", style::unknown());
+    }
+
+    let steps = &value["steps"];
+    let seconds = |key: &str| {
+        steps[key].as_f64().map_or_else(
+            || style::dim("unknown"),
+            |seconds| format!("{seconds:.1} s"),
+        )
+    };
+    let slowest = value["slowestPlugin"]["plugin"]
+        .as_str()
+        .zip(value["slowestPlugin"]["seconds"].as_f64())
+        .map(|(plugin, seconds)| {
+            style::dim(format!(
+                " (slowest: {}, {seconds:.1} s)",
+                text::printable(plugin)
+            ))
+        })
+        .unwrap_or_default();
+    let assistant = match steps["setupAssistant"].as_bool() {
+        Some(true) => "shown".to_owned(),
+        Some(false) => "skipped".to_owned(),
+        None => style::dim("unknown"),
+    };
+
+    let mut lines = vec![
+        style::bold("The last login, step by step"),
+        format!(
+            "  Password → account update   {}",
+            seconds("passwordToUpdater")
+        ),
+        if value["unfinished"]
+            .as_array()
+            .is_some_and(|plugins| !plugins.is_empty())
+        {
+            format!(
+                "  Account update              {}",
+                style::dim("never finished")
+            )
+        } else {
+            format!(
+                "  Account update              {}{slowest}",
+                seconds("updater")
+            )
+        },
+        format!("  Setup Assistant             {assistant}"),
+        format!(
+            "  Login complete → desktop    {}",
+            seconds("loginCompleteToDesktop")
+        ),
+        format!(
+            "  Desktop → Atlas open        {}",
+            seconds("desktopToAtlas")
+        ),
+        format!(
+            "  Password → desktop          {}",
+            seconds("passwordToDesktop")
+        ),
+    ];
+
+    let unfinished: Vec<&str> = value["unfinished"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    if !unfinished.is_empty() {
+        lines.push(format!(
+            "{} Never finished: {}",
+            style::warn(),
+            text::printable(&unfinished.join(", "))
+        ));
+    }
+
+    lines.join("\n")
+}
+
 /// Ready in one line; otherwise each check and the numbered fixes. Verbose
 /// adds the facts behind them.
 pub fn doctor(value: &Value, verbose: bool) -> String {
@@ -294,7 +376,7 @@ pub fn apps(value: &Value) -> String {
                 };
 
                 vec![
-                    text::printable(app["name"].as_str().unwrap_or("?")).into_owned(),
+                    text::clip(&text::printable(app["name"].as_str().unwrap_or("?")), 24),
                     app["pid"].to_string(),
                     state.to_owned(),
                 ]
@@ -451,4 +533,46 @@ pub fn readiness(value: &Value) -> String {
     }
 
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn an_oversized_app_name_cannot_amplify_padding_across_many_rows() {
+        console::set_colors_enabled(false);
+
+        let mut entries = vec![json!({
+            "name": "a".repeat(1024 * 1024), "pid": 1, "policy": "regular"
+        })];
+        assert!(apps(&json!({"apps": &entries})).len() < 128);
+        entries
+            .extend((0..10_000).map(|_| json!({"name": "Short", "pid": 2, "policy": "regular"})));
+
+        let shown = apps(&json!({"apps": entries}));
+        assert!(shown.len() < 400_000);
+        assert_eq!(shown.lines().count(), 10_002);
+        assert!(shown.contains("aaaaaaaaaaaaaaaaaaaaaaa…  1"));
+        assert!(shown.ends_with("Short                     2"));
+    }
+
+    #[test]
+    fn app_names_are_made_printable_and_clipped_by_display_width() {
+        console::set_colors_enabled(false);
+
+        let shown = apps(&json!({"apps": [{
+            "name": format!("\n{}", "界".repeat(20)),
+            "pid": 1, "policy": "regular", "active": true
+        }]}));
+
+        assert_eq!(
+            shown,
+            format!(
+                "APP                      PID  STATE\n\\n{}…  1    frontmost",
+                "界".repeat(10)
+            )
+        );
+    }
 }

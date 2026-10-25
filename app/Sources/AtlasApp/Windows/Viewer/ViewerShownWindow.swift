@@ -1,4 +1,4 @@
-import AtlasKit
+import AtlasService
 
 /// A window shown on the screen from the Apps tab, as it was when Show on screen was pressed: view-only, it does not
 /// follow the window should it move.

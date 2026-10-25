@@ -1,6 +1,6 @@
-import AtlasKit
+import AtlasService
 
-/// What the alert window asks of the rest of the app, as closures `AppController` gives it at `init`.
+/// What the alert window asks of the rest of the app, as closures ``WindowCoordinator`` gives it at `init`.
 struct AlertLinks {
   /// The service's latest overview, as the menu bar panel last read it.
   var overview: @MainActor () -> ViewerStatus.Overview = { ViewerStatus.Overview() }
@@ -10,4 +10,6 @@ struct AlertLinks {
   var switchToHelper: @MainActor () async -> Outcome? = { nil }
   /// Closes the alert window, if it still shows the given controller's alert: an older one never closes a newer.
   var close: @MainActor (AlertController) -> Void = { _ in }
+  /// The clock the alert's waits run on, so a test moves its time by hand: a done Recover's hold before it closes.
+  var clock: any Clock<Duration>
 }

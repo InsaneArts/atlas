@@ -1,15 +1,15 @@
-import AtlasKit
+import AtlasService
 import AtlasUI
 import Foundation
 import Observation
 
 /// The alert window's one observed object: which alert shows, whether its command runs, and why it did not run.
 /// Its command runs through the helper's shared commands (``HelperActions``), once however many times its button is
-/// pressed, after the app's control work is answered; once it worked the window closes, and when it did not, the
-/// alert stays and says why. A log-out an app held up asks again, offering Log Out Anyway. Its buttons wait from the
-/// press until the status is read again and the outcome shows, and a command closes only the alert it started from
-/// (``generation``). ``AlertPresenter`` decides what the alert says.
-@MainActor
+/// pressed, after the app's control work is answered; once it worked the window closes, a Recover first saying the
+/// helper is ready for ``AtlasUI/Motion/Duration/doneHold`` on the injected clock or until Done, and when it did not,
+/// the alert stays and says why. A log-out an app held up asks again, offering Log Out Anyway. Its buttons wait from
+/// the press until the status is read again and the outcome shows, and a command closes only the alert it started
+/// from (``generation``). ``AlertPresenter`` decides what the alert says.
 @Observable
 final class AlertController {
   /// Which alert shows.
@@ -18,6 +18,10 @@ final class AlertController {
   private(set) var running = false
   /// Why its command did not run; nil until one did not.
   private(set) var failure: String?
+  /// Whether a Recover worked and the alert holds, saying so, before it closes.
+  private(set) var done = false
+  /// An alert asked while a Recover holds on its done words: it shows once the hold ends, in place of closing.
+  @ObservationIgnored private(set) var next: HelperAlert?
   /// Numbers the alert shown: a new alert or a way out moves it on, so a command's ending closes only the alert it
   /// started from.
   @ObservationIgnored private(set) var generation = 0
@@ -27,6 +31,8 @@ final class AlertController {
   @ObservationIgnored private var confirming: Task<Void, Never>?
   /// What the alert window asks of the rest of the app.
   @ObservationIgnored let links: AlertLinks
+  /// The moment a Recover that worked holds before the window closes, which Done ends at once.
+  @ObservationIgnored private let doneHold = DoneHold()
 
   /// Creates the alert window's controller.
   ///
@@ -41,17 +47,24 @@ final class AlertController {
   }
 
   /// The alert as it should read now.
-  var state: OrbitAlertState<AlertChoice> {
-    AlertPresenter.state(AlertSnapshot(alert: alert, running: running, failure: failure, overview: links.overview()))
+  var state: AlertCardState<AlertChoice> {
+    AlertPresenter.state(
+      AlertSnapshot(alert: alert, running: running, failure: failure, done: done, overview: links.overview())
+    )
   }
 
   /// Shows another alert in place of this one. While this one's command runs, the new one is not dropped unseen: the
-  /// alert says to try again once its command ends.
+  /// alert says to try again once its command ends, or, once a Recover holds on its done words, shows it after the
+  /// hold.
   ///
   /// - Parameter next: The alert to show.
   func show(_ next: HelperAlert) {
     guard !running else {
-      failure = next == alert ? failure : HelperWords.waitForAction
+      if done {
+        self.next = next
+      } else {
+        failure = next == alert ? failure : HelperWords.waitForAction
+      }
       return
     }
     generation += 1
@@ -64,14 +77,26 @@ final class AlertController {
   /// - Parameter choice: The button.
   func send(_ choice: AlertChoice) {
     switch choice {
-    case .confirm: confirming = Task { await confirm() }
+    case .confirm:
+      // One press runs it; another before the first has even begun is the same press.
+      guard !running, confirming == nil else { return }
+      // Unstructured, as `send` is the view's synchronous callback; it clears itself once the command ends.
+      confirming = Task {
+        await confirm()
+        confirming = nil
+      }
     case .cancel: cancel()
     }
   }
 
   /// The way out: closes the window. While its command runs it waits, unless the command is still waiting for this
-  /// app's control to be given back: it has not run, so it is called off and the window closes.
+  /// app's control to be given back: it has not run, so it is called off and the window closes. Once a Recover worked
+  /// it is Done, which ends the hold, so the window closes, or shows an alert asked meanwhile, now.
   func cancel() {
+    if doneHold.isHolding {
+      doneHold.end()
+      return
+    }
     if running {
       guard let command = alert.command, actions.isWaiting(command) else { return }
       confirming?.cancel()
@@ -123,9 +148,16 @@ final class AlertController {
     await finish(outcome, started: started)
   }
 
+  /// Shows a Recover that worked as done, with its Done button, for ``AtlasUI/Motion/Duration/doneHold`` on the
+  /// injected clock, or until Done is pressed.
+  private func holdDone() async {
+    done = true
+    await doneHold.hold(on: links.clock)
+  }
+
   /// Ends a command: the status is read again with the buttons still waiting, then the window closes once it
-  /// worked, or the alert says why not, and only then can its buttons be pressed again. Nothing closes or changes
-  /// when the alert shown is no longer the one the command started from.
+  /// worked, a Recover after holding on its done words, or the alert says why not, and only then can its buttons be
+  /// pressed again. Nothing closes or changes when the alert shown is no longer the one the command started from.
   ///
   /// - Parameters:
   ///   - outcome: The command's outcome, or nil when it already ran from another window.
@@ -140,7 +172,15 @@ final class AlertController {
       return
     }
     if outcome.ok {
+      if alert == .recover { await holdDone() }
+      guard started == generation else { return }
       generation += 1
+      if let asked = next {
+        next = nil
+        done = false
+        alert = asked
+        return
+      }
       links.close(self)
     } else {
       failure = Words.sentence(refusal(outcome))

@@ -10,8 +10,6 @@ struct SettingsSnapshot {
   var icons: [String: IconImage] = [:]
   /// Whether Notify me is on.
   var notify = false
-  /// Whether the Dock badge is on.
-  var badge = false
   /// What the rest of the app says now.
   var facts = SettingsFacts()
 }
