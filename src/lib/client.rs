@@ -1543,12 +1543,15 @@ impl Client {
             .truncate(false)
             .write(true)
             .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
             .open(directory.join("metadata.lock"))?;
+        if !lock.metadata()?.is_file() {
+            return Err(Error::new("state", "The activity lock is not a plain file"));
+        }
         FileExt::lock_exclusive(&lock)?;
 
         let path = directory.join("metadata.jsonl");
-        if fs::metadata(&path).is_ok_and(|m| m.len() > 1024 * 1024) {
+        if fs::symlink_metadata(&path).is_ok_and(|m| m.is_file() && m.len() > 1024 * 1024) {
             fs::rename(&path, directory.join("metadata.previous.jsonl"))?;
         }
 
@@ -1556,8 +1559,11 @@ impl Client {
             .create(true)
             .append(true)
             .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
             .open(path)?;
+        if !file.metadata()?.is_file() {
+            return Err(Error::new("state", "The activity log is not a plain file"));
+        }
 
         // No input text, argv, coordinates, window titles, output or image
         // payloads in metadata: only what `Doing` names.
@@ -2785,5 +2791,118 @@ mod tests {
 
         let log = fs::read_to_string(directory.join("metadata.jsonl")).unwrap();
         assert!(!log.contains("secret"), "no typed text is recorded");
+    }
+
+    #[test]
+    fn recording_refuses_non_files_without_waiting_for_a_reader() {
+        const WORKER: &str = "ATLAS_TEST_METADATA_DIRECTORY";
+        if let Some(directory) = std::env::var_os(WORKER) {
+            let client = client_in(Path::new(&directory));
+            assert!(client.record_start(&json!({"op": "run"})).is_err());
+            return;
+        }
+
+        let mut refused = Vec::new();
+        for name in ["metadata.lock", "metadata.jsonl"] {
+            for kind in [
+                "fifo",
+                "fifo with reader",
+                "directory",
+                "link",
+                "large link",
+            ] {
+                let dir = tempfile::tempdir().unwrap();
+                let client = client_in(dir.path());
+                let output = client.output_dir().unwrap();
+                let path = output.join(name);
+                let target = output.join("personal-file");
+                let contents = if kind == "large link" {
+                    vec![b'x'; 1024 * 1024 + 1]
+                } else {
+                    b"kept".to_vec()
+                };
+                fs::write(&target, &contents).unwrap();
+                match kind {
+                    "fifo" | "fifo with reader" => nix::unistd::mkfifo(
+                        &path,
+                        nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+                    )
+                    .unwrap(),
+                    "directory" => fs::create_dir(&path).unwrap(),
+                    "link" | "large link" => std::os::unix::fs::symlink(&target, &path).unwrap(),
+                    _ => unreachable!(),
+                }
+                let _reader = (kind == "fifo with reader").then(|| {
+                    OpenOptions::new()
+                        .read(true)
+                        .custom_flags(libc::O_NONBLOCK)
+                        .open(&path)
+                        .unwrap()
+                });
+
+                // The synchronous open cannot be interrupted by a Tokio timeout.
+                // Confine it to a child we always reap, even on the old blocking path.
+                let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "client::tests::recording_refuses_non_files_without_waiting_for_a_reader",
+                    ])
+                    .env(WORKER, dir.path())
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .unwrap();
+                let deadline = Instant::now() + Duration::from_secs(2);
+                let success = loop {
+                    if let Some(status) = child.try_wait().unwrap() {
+                        break status.success();
+                    }
+                    if Instant::now() >= deadline {
+                        let _ = child.kill();
+                        child.wait().unwrap();
+                        break false;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                };
+                assert_eq!(fs::read(&target).unwrap(), contents);
+                refused.push((name, kind, success));
+            }
+        }
+        assert!(
+            refused.iter().all(|(_, _, success)| *success),
+            "{refused:?}"
+        );
+    }
+
+    #[test]
+    fn recording_appends_privately_and_rotates_a_full_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = client_in(dir.path()).doing(Doing::new("run"));
+        let request = json!({"op": "run"});
+        client.record_start(&request).unwrap();
+        client
+            .record(&request, &json!({"ok": true}), Duration::ZERO)
+            .unwrap();
+        let output = client.output_dir().unwrap();
+        let path = output.join("metadata.jsonl");
+        assert_eq!(fs::read_to_string(&path).unwrap().lines().count(), 2);
+        for name in ["metadata.lock", "metadata.jsonl"] {
+            assert_eq!(
+                fs::metadata(output.join(name)).unwrap().mode() & 0o777,
+                0o600
+            );
+        }
+
+        let full = vec![b'x'; 1024 * 1024 + 1];
+        fs::write(&path, &full).unwrap();
+        client.record_start(&request).unwrap();
+        assert_eq!(
+            fs::read(output.join("metadata.previous.jsonl")).unwrap(),
+            full
+        );
+        let row: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(row["operation"], "run");
+        assert_eq!(row["started"], true);
     }
 }
