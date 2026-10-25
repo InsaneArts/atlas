@@ -156,7 +156,7 @@ test('a paused picture keeps its frame while the status moves on', () => {
   same(next.points, { width: 1440, height: 900 }, 'the dimensions belong to the paused picture');
 });
 
-test('taking control of a changed paused picture refuses clicks until the fresh picture is shown', async () => {
+function screenView() {
   const nodes = new Map();
   const listeners = new Map();
   const messages = [];
@@ -228,6 +228,11 @@ test('taking control of a changed paused picture refuses clicks until the fresh 
     },
     _meta: { 'atlas/frame': { id, key, mimeType: 'image/jpeg', data: id } },
   });
+  return { node, listeners, messages, receive, result };
+}
+
+test('taking control of a changed paused picture refuses clicks until the fresh picture is shown', async () => {
+  const { node, listeners, messages, receive, result } = screenView();
   const picture = node('[data-frame]');
   await receive({
     method: 'ui/notifications/tool-result',
@@ -284,6 +289,64 @@ test('taking control of a changed paused picture refuses clicks until the fresh 
   assert.equal(sent()[1].params.arguments.frame, 'fresh-key', 'queued input keeps its observation');
   assert.equal(sent()[1].params.arguments.actions[0].phase, 'up');
 });
+
+for (const [name, release] of [
+  [
+    'a mouse-up while the next picture loads releases the held pointer',
+    (page) => page.listeners.get('mouseup')({ clientX: 90, clientY: 90 }),
+  ],
+  [
+    'a blur while the next picture loads releases the held pointer',
+    (page) => page.listeners.get('blur')(),
+  ],
+  [
+    'giving control back while the next picture loads releases the held pointer',
+    (page) => page.node('[data-take]').fire('click'),
+  ],
+]) {
+  test(name, async () => {
+    const page = screenView();
+    const { node, listeners, messages, receive, result } = page;
+    const sent = () => messages.filter((message) => message.params?.name === 'send_input');
+    const press = () =>
+      node('[data-screen]').fire('mousedown', {
+        button: 0,
+        clientX: 50,
+        clientY: 50,
+        preventDefault() {},
+      });
+    await receive({
+      method: 'ui/notifications/tool-result',
+      params: result('first', 'first-key', 800, 1000, true),
+    });
+    node('[data-frame]').load();
+    press();
+    assert.equal(sent().length, 1);
+    await receive({
+      method: 'ui/notifications/tool-result',
+      params: result('next', 'next-key', 1000, 800, true),
+    });
+    listeners.get('mousemove')({ clientX: 90, clientY: 90 });
+    release(page);
+    await receive({ id: sent()[0].id, result: { structuredContent: { control: true } } });
+    assert.equal(sent().length, 2);
+    assert.equal(sent()[1].params.arguments.frame, 'first-key');
+    same(sent()[1].params.arguments.actions, [
+      {
+        type: 'pointer',
+        phase: 'up',
+        x: 400,
+        y: 500,
+        button: 'left',
+        count: 1,
+        modifiers: [],
+      },
+    ]);
+    press();
+    await receive({ id: sent()[1].id, result: { structuredContent: { control: true } } });
+    assert.equal(sent().length, 2, 'a new press still waits for the next picture');
+  });
+}
 
 test('every result says whether this app may resume and control, and whether control is ours', () => {
   const next = view.merge(

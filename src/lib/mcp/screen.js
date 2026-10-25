@@ -781,6 +781,7 @@ if (typeof document !== 'undefined') {
   const giveBack = async () => {
     taking += 1;
     queue.length = 0;
+    releasePointer(true);
     epoch += 1;
     try {
       const result = await call('give_back', {});
@@ -846,14 +847,31 @@ if (typeof document !== 'undefined') {
   const imageRect = () => one('[data-frame]').getBoundingClientRect();
   let pressed = null;
   let pressedAt = null;
+  let pressedFrame = null;
   let lastMove = 0;
+
+  const releasePointer = (immediate = false) => {
+    if (!pressed) return;
+    const frame = pressedFrame;
+    const action = { type: 'pointer', phase: 'up', ...pressedAt, ...pressed };
+    pressed = null;
+    if (!model.ours) return;
+    if (immediate) {
+      // Give Back never waits for input already answering.
+      call('send_input', { frame, actions: [action] }).catch(() => {});
+    } else {
+      queue.push({ frame, action });
+      pump();
+    }
+  };
 
   screen.addEventListener('contextmenu', (event) => {
     if (model.ours) event.preventDefault();
   });
   screen.addEventListener('mousedown', (event) => {
     // The main and secondary buttons; others have nothing to press there.
-    if (!inputFrame(model) || (event.button !== 0 && event.button !== 2)) return;
+    const frame = inputFrame(model);
+    if (!frame || (event.button !== 0 && event.button !== 2)) return;
     const point = pointAt(imageRect(), event.clientX, event.clientY, model.points);
     if (!point) return;
     event.preventDefault();
@@ -865,13 +883,15 @@ if (typeof document !== 'undefined') {
     const held = modifiers(event).filter((name) => !(button === 'right' && name === 'ctrl'));
     const count = Math.max(1, Math.min(3, event.detail || 1));
     // A press while another is held releases that one first.
-    if (pressed && pressedAt) enqueue({ type: 'pointer', phase: 'up', ...pressedAt, ...pressed });
+    releasePointer();
     pressed = { button, count, modifiers: held };
     pressedAt = point;
+    pressedFrame = frame;
     enqueue({ type: 'pointer', phase: 'down', ...point, ...pressed });
   });
   window.addEventListener('mousemove', (event) => {
-    if (!pressed || !inputFrame(model)) return;
+    const frame = inputFrame(model);
+    if (!pressed || !frame) return;
     const now = Date.now();
     if (now - lastMove < 50) return;
     lastMove = now;
@@ -881,25 +901,28 @@ if (typeof document !== 'undefined') {
     const point = pointAt(rect, x, y, model.points);
     if (point) {
       pressedAt = point;
+      pressedFrame = frame;
       enqueue({ type: 'pointer', phase: 'move', ...point, ...pressed });
     }
   });
   window.addEventListener('mouseup', (event) => {
     if (!pressed) return;
-    const rect = imageRect();
-    const x = Math.min(Math.max(event.clientX, rect.left), rect.right);
-    const y = Math.min(Math.max(event.clientY, rect.top), rect.bottom);
-    const point = pointAt(rect, x, y, model.points);
-    if (point) enqueue({ type: 'pointer', phase: 'up', ...point, ...pressed });
-    pressed = null;
+    const frame = inputFrame(model);
+    if (frame) {
+      const rect = imageRect();
+      const x = Math.min(Math.max(event.clientX, rect.left), rect.right);
+      const y = Math.min(Math.max(event.clientY, rect.top), rect.bottom);
+      const point = pointAt(rect, x, y, model.points);
+      if (point) {
+        pressedAt = point;
+        pressedFrame = frame;
+      }
+    }
+    releasePointer();
   });
   // A press whose release never came here (the window lost focus) is
   // released where it was, so no button stays down in the helper.
-  window.addEventListener('blur', () => {
-    if (!pressed || !pressedAt) return;
-    enqueue({ type: 'pointer', phase: 'up', ...pressedAt, ...pressed });
-    pressed = null;
-  });
+  window.addEventListener('blur', () => releasePointer());
 
   // Scrolling gathers for a moment, then goes as whole lines in one action.
   let wheelKept = { x: 0, y: 0 };
