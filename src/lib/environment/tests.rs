@@ -275,6 +275,116 @@ fn malformed_or_interrupted_mutation_replies_remain_uncertain() {
     }
 }
 
+#[tokio::test]
+async fn a_worker_killed_after_replacing_a_file_stays_pending_until_recovery() {
+    const TEST: &str =
+        "environment::tests::a_worker_killed_after_replacing_a_file_stays_pending_until_recovery";
+    if let Some(path) = std::env::var_os("ATLAS_ENVIRONMENT_TEST_PACKET") {
+        let packet: Packet = decode(&fs::read(path).unwrap()).unwrap();
+        let Request::Apply { plan } = packet.request else {
+            panic!("expected an apply request");
+        };
+        let _ = worker::apply_plan(&plan.home, &plan, &|| {
+            if fs::read(plan.home.join("file")).unwrap() == b"replacement" {
+                nix::sys::signal::kill(nix::unistd::getpid(), nix::sys::signal::Signal::SIGKILL)
+                    .unwrap();
+            }
+            Ok(())
+        });
+        panic!("the worker must be killed after replacement");
+    }
+    if !crate::transaction_test::isolated(TEST) {
+        return;
+    }
+
+    use std::os::unix::process::ExitStatusExt;
+    use tokio::{
+        io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+        net::UnixListener,
+        process::Command,
+    };
+
+    let sandbox = Sandbox::new();
+    let first = sandbox.plan(vec![sandbox.payload("file", b"original")]);
+    assert_eq!(sandbox.apply(&first)["ok"], true);
+    let plan = sandbox.plan(vec![sandbox.payload("file", b"replacement")]);
+    let mut client = crate::transaction_test::client(&sandbox.root);
+    client.transport.peer_uid = nix::unistd::getuid().as_raw();
+    let listener = UnixListener::bind(&client.transport.path).unwrap();
+    let stage = stage_in(&sandbox.root, &plan.id);
+    let helper = helper_name(nix::unistd::getuid().as_raw()).unwrap();
+    let daemon = async {
+        loop {
+            let (peer, _) = listener.accept().await.unwrap();
+            let mut peer = BufReader::new(peer);
+            let mut line = String::new();
+            peer.read_line(&mut line).await.unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            let worker = request["argv"][1] == "environment-worker";
+            let reply = if request["op"] == "hello" {
+                json!({"ok": true, "user": {"uid": 7001}, "daemon": {"pid": 123},
+                    "session": {"managerName": "Aqua", "onConsole": false},
+                    "display": {"width": 100, "height": 100, "scale": 1}})
+            } else if worker {
+                assert_eq!(client.controller.acquire(true).unwrap_err().code, "busy");
+                assert!(!client.controller.pending().unwrap().is_empty());
+                let output = Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", TEST, "--nocapture"])
+                    .env(
+                        "ATLAS_ENVIRONMENT_TEST_PACKET",
+                        request["argv"][2].as_str().unwrap(),
+                    )
+                    .output()
+                    .await
+                    .unwrap();
+                assert_eq!(output.status.signal(), Some(libc::SIGKILL));
+                assert_eq!(fs::read(sandbox.home.join("file")).unwrap(), b"replacement");
+                json!({"ok": true, "exitCode": null, "signal": "SIGKILL",
+                    "timedOut": false, "events": []})
+            } else {
+                assert_eq!(request["op"], "run");
+                let proof = json!({"ok": true, "uid": 7001, "hasGraphicAccess": true,
+                    "parentPID": 123, "onConsole": false, "securitySessionID": 42,
+                    "displayID": 7, "width": 100, "height": 100});
+                json!({"ok": true, "exitCode": 0, "timedOut": false,
+                    "events": [{"event": "output", "data": STANDARD.encode(proof.to_string())}]})
+            };
+            peer.get_mut()
+                .write_all(format!("{reply}\n").as_bytes())
+                .await
+                .unwrap();
+            if worker {
+                break;
+            }
+        }
+    };
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(15), async {
+        tokio::join!(
+            dispatch(
+                &client,
+                &helper,
+                &stage,
+                Request::Apply { plan: plan.clone() }
+            ),
+            daemon
+        )
+    })
+    .await
+    .unwrap();
+    assert!(result.unwrap_err().uncertain);
+    assert!(requests(&stage));
+    assert_eq!(client.controller.pending().unwrap().len(), 1);
+    assert_eq!(
+        client.controller.acquire(false).unwrap_err().code,
+        "uncertain"
+    );
+    let ownership = client.controller.acquire(true).unwrap();
+    assert_eq!(sandbox.apply(&plan)["applied"], true);
+    client.controller.clear().unwrap();
+    drop(ownership);
+    assert!(client.controller.acquire(false).is_ok());
+}
+
 #[test]
 fn rollback_retains_a_created_directory_it_cannot_inspect() {
     let applied = || {
@@ -1196,6 +1306,50 @@ fn a_finished_rollback_keeps_only_its_record() {
     assert_eq!(fs::read(sandbox.home.join("secret")).unwrap(), b"old token");
     assert_eq!(names(), ["transaction.json"]);
     assert_eq!(sandbox.rollback(&plan, true)["rolledBack"], true);
+}
+
+#[test]
+fn retrying_a_finished_rollback_clears_its_active_marker_before_another_profile_applies() {
+    let sandbox = Sandbox::new();
+    let plan = sandbox.plan(vec![sandbox.payload("file", b"first")]);
+    assert_eq!(sandbox.apply(&plan)["applied"], true);
+    assert_eq!(sandbox.rollback(&plan, true)["rolledBack"], true);
+
+    let store = state::Store::open(&sandbox.home, true).unwrap();
+    assert_eq!(
+        store.transaction(&plan.id).unwrap().unwrap().phase,
+        Phase::RolledBack
+    );
+    store.activate(&plan.id).unwrap();
+    atomic_write(&store.blob(&plan.id, 0, false), b"first", 0o600).unwrap();
+    drop(store);
+
+    assert_eq!(sandbox.rollback(&plan, false)["rolledBack"], true);
+    let active = sandbox.home.join(STATE).join("active.json");
+    assert!(active.exists());
+    let calls = Cell::new(0);
+    let refused = worker::rollback(&sandbox.home, &plan.id, true, &|| {
+        calls.set(calls.get() + 1);
+        if calls.get() == 2 {
+            return Err(problem("session changed"));
+        }
+        Ok(())
+    });
+    assert!(refused.is_err());
+    assert!(active.exists());
+    assert!(
+        sandbox
+            .home
+            .join(STATE)
+            .join(format!("transaction-{}/after-0", plan.id))
+            .exists()
+    );
+
+    assert_eq!(sandbox.rollback(&plan, true)["rolledBack"], true);
+    assert!(!active.exists());
+    let next = sandbox.plan(vec![sandbox.payload("file", b"second")]);
+    assert_eq!(sandbox.apply(&next)["applied"], true);
+    assert_eq!(fs::read(sandbox.home.join("file")).unwrap(), b"second");
 }
 
 #[test]
