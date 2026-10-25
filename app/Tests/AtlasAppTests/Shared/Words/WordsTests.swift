@@ -25,6 +25,14 @@ struct WordsTests {
     #expect(Words.shortAgo(seconds) == words)
   }
 
+  @Test("unsupported ages read as unknown and never trap")
+  func invalidAges() {
+    for seconds in [Double.nan, .infinity, -.infinity, 1e100, .greatestFiniteMagnitude, Double(Int.max) * 3600] {
+      #expect(Words.ago(seconds) == Words.unknown)
+      #expect(Words.shortAgo(seconds) == Words.unknown)
+    }
+  }
+
   @Test("an operation reads as what it did, or what could not be done, never its payload or its name")
   func operations() {
     #expect(Words.describe(.init(operation: "run", ok: true)) == "ran a command")

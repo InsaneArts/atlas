@@ -57,7 +57,7 @@ extension ViewerStatus {
     /// Whether Recover restarts the helper, as the viewer service's own recovery decides: only while an action's
     /// outcome is unknown or under way; otherwise it starts the helper's input.
     public var recoveryRestarts: Bool {
-      pending + inFlight > 0
+      pending > 0 || inFlight > 0
     }
 
     /// Whether the command line's Recover may run now. Starting input or restarting takes the controller lock, which
@@ -94,8 +94,8 @@ extension ViewerStatus {
       account = try? container.decodeIfPresent(String.self, forKey: .account)
       accountName = try? container.decodeIfPresent(String.self, forKey: .accountName)
       display = try? container.decodeIfPresent(Size.self, forKey: .display)
-      pending = (try? container.decodeIfPresent(Int.self, forKey: .pending)) ?? 0
-      inFlight = (try? container.decodeIfPresent(Int.self, forKey: .inFlight)) ?? 0
+      pending = max(0, (try? container.decodeIfPresent(Int.self, forKey: .pending)) ?? 0)
+      inFlight = max(0, (try? container.decodeIfPresent(Int.self, forKey: .inFlight)) ?? 0)
       activity = (try? container.decodeIfPresent([Activity].self, forKey: .activity)) ?? []
     }
   }

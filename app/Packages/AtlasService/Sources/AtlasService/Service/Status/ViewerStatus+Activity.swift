@@ -61,7 +61,8 @@ extension ViewerStatus {
       ok = (try? container.decodeIfPresent(Bool.self, forKey: .ok)) == true
       actionCount = try? container.decodeIfPresent(Int.self, forKey: .actionCount)
       actor = (try? container.decodeIfPresent(String.self, forKey: .actor)) ?? "agent"
-      ageSeconds = try? container.decodeIfPresent(Double.self, forKey: .ageSeconds)
+      ageSeconds = (try? container.decodeIfPresent(Double.self, forKey: .ageSeconds))
+        .flatMap { $0.isFinite ? $0 : nil }
       let said = (try? container.decodeIfPresent(String.self, forKey: .says)) ?? nil
       says = said?.isEmpty == false ? said : nil
     }

@@ -6,6 +6,39 @@ import Testing
 
 @Suite("ViewerStatus")
 struct ViewerStatusTests {
+  @Test("nonfinite status ages are read as unknown without dropping their rows")
+  func nonfiniteAges() throws {
+    let decoder = JSONDecoder()
+    decoder.nonConformingFloatDecodingStrategy = .convertFromString(
+      positiveInfinity: "Infinity",
+      negativeInfinity: "-Infinity",
+      nan: "NaN"
+    )
+    for age in ["Infinity", "-Infinity", "NaN"] {
+      let data = Data(
+        """
+        {"overview":{"activity":[{"operation":"run","ok":true,"ageSeconds":"\(age)"}]},
+        "capabilities":{"nativeDialogs":{"state":"passed","ageSeconds":"\(age)"}}}
+        """.utf8
+      )
+      let reading = try decoder.decode(ViewerStatus.self, from: data)
+      #expect(reading.overview.activity == [.init(operation: "run", ok: true)])
+      #expect(reading.capabilities.nativeDialogs.state == .passed)
+      #expect(reading.capabilities.nativeDialogs.ageSeconds == nil)
+    }
+  }
+
+  @Test(
+    "recovery checks each counter without overflow and reads negative counts as zero",
+    arguments: [(Int.max, 1), (1, Int.max), (Int.max, Int.max), (Int.min, Int.min), (Int.min, 1), (1, Int.min), (0, 0)]
+  )
+  func recoveryCounts(pending: Int, inFlight: Int) throws {
+    let reading = try status(["overview": ["pending": pending, "inFlight": inFlight]])
+    #expect(reading.overview.pending == max(0, pending))
+    #expect(reading.overview.inFlight == max(0, inFlight))
+    #expect(reading.overview.recoveryRestarts == (pending > 0 || inFlight > 0))
+  }
+
   @Test("a not ready status drops unsupported display sizes")
   func invalidDisplaySizes() throws {
     for side in [1e100, -1, 0, 32769] {

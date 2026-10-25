@@ -47,7 +47,8 @@ extension ViewerStatus.Capabilities {
         default: .unchecked
         }
       reason = (try? container.decodeIfPresent(String.self, forKey: .reason)) ?? ""
-      ageSeconds = try? container.decodeIfPresent(Double.self, forKey: .ageSeconds)
+      ageSeconds = (try? container.decodeIfPresent(Double.self, forKey: .ageSeconds))
+        .flatMap { $0.isFinite ? $0 : nil }
       let stages = (try? container.decodeIfPresent([Stage].self, forKey: .checks)) ?? []
       failedAt = stages.first { $0.passed != true }?.stage
     }

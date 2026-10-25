@@ -72,10 +72,12 @@ enum Words {
   /// - Parameter seconds: How long ago.
   /// - Returns: "just now", or seconds, minutes or hours ago.
   static func ago(_ seconds: Double) -> String {
+    guard seconds.isFinite else { return unknown }
     if seconds < 5 { return "just now" }
     if seconds < 90 { return "\(Int(seconds.rounded())) s ago" }
     if seconds < 5400 { return "\(Int((seconds / 60).rounded())) min ago" }
-    return "\(Int((seconds / 3600).rounded())) h ago"
+    guard let hours = Int(exactly: (seconds / 3600).rounded()) else { return unknown }
+    return "\(hours) h ago"
   }
 
   /// Seconds ago as the shortest time a row's right edge holds, as the panel's Recent rows show it.
@@ -83,10 +85,12 @@ enum Words {
   /// - Parameter seconds: How long ago.
   /// - Returns: "now" under a second, then "9 s", "2 min" or "3 h".
   static func shortAgo(_ seconds: Double) -> String {
+    guard seconds.isFinite else { return unknown }
     if seconds < 1 { return "now" }
     if seconds < 60 { return "\(Int(seconds.rounded(.down))) s" }
     if seconds < 3600 { return "\(Int((seconds / 60).rounded(.down))) min" }
-    return "\(Int((seconds / 3600).rounded(.down))) h"
+    guard let hours = Int(exactly: (seconds / 3600).rounded(.down)) else { return unknown }
+    return "\(hours) h"
   }
 
   /// What an agent did last, and when, beside Idle.
