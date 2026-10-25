@@ -173,6 +173,34 @@ struct ViewerPanesModelTests {
     viewer.close()
   }
 
+  @Test("a delayed screenshot reply after close does not run the save outlet")
+  func delayedSaveDoesNotRunAfterClose() async throws {
+    let service = ScriptedService()
+    service.shot = png()
+    var saved = false
+    let viewer = try await Self.onShots(
+      service,
+      shotOutlet: ShotOutlet(
+        copy: { _ in },
+        reveal: { _ in },
+        save: { _, _ in
+          saved = true
+          return true
+        }
+      )
+    )
+    viewer.send(.selectShot(Self.newer))
+    viewer.panesModel.saveShot()
+    let save = try #require(viewer.panesModel.work.large.copy)
+    try await settle("the screenshot was never asked for") { service.heldShots.count == 1 }
+    viewer.close()
+    try await Self.answer(service, Self.newer, full: true)
+    try await Self.ended(save, "the screenshot's reply never came back")
+    #expect(!saved)
+    #expect(save.isCancelled)
+    #expect(viewer.panesModel.work.large.copy == nil)
+  }
+
   @Test("a large screenshot read while the window hides never lands, and is read again once it shows")
   func largeReadStopsWhileHidden() async throws {
     let service = ScriptedService()

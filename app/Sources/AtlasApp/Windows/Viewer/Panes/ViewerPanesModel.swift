@@ -353,6 +353,13 @@ final class ViewerPanesModel {
     }
   }
 
+  /// Stops a pending Copy or Save when the window closes, dropping its reply should it still come.
+  func stopCopy() {
+    work.large.copyGeneration += 1
+    work.large.copy?.cancel()
+    work.large.copy = nil
+  }
+
   /// Runs `use` with the screenshot Copy and Save act on, as taken: at once when the large one has arrived, else once
   /// it is read. A newer Copy or Save overtakes it.
   ///

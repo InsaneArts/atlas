@@ -278,5 +278,6 @@ final class ViewerController {
     control.releaseControl()
     readingLoop.watch(false)
     panesModel.followPane()
+    panesModel.stopCopy()
   }
 }
