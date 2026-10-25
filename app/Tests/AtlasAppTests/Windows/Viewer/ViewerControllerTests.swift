@@ -204,6 +204,84 @@ struct ViewerControllerTests {
     viewer.close()
   }
 
+  @Test(
+    "only the newest Details read can replace known agents, including when it fails",
+    arguments: [true, false],
+    [true, false]
+  )
+  func detailsKeepsOnlyItsNewestRead(newestSucceeds: Bool, olderAnswersFirst: Bool) async throws {
+    let olderReply = ReleaseSignal()
+    let newerReply = ReleaseSignal()
+    let reads = CallCount()
+    let viewer = ViewerController.scripted(
+      ScriptedService(),
+      connectedAgents: {
+        reads.count += 1
+        if reads.count == 1 {
+          await olderReply.wait()
+          return [.codex]
+        }
+        await newerReply.wait()
+        return newestSucceeds ? [.pi] : nil
+      }
+    )
+    defer {
+      olderReply.open()
+      newerReply.open()
+      viewer.close()
+    }
+    viewer.details.agents = [.claude]
+    let older = Task { await viewer.readDetails() }
+    try await settle("the older Details read never started") { reads.count == 1 }
+    let newer = Task { await viewer.readDetails() }
+    try await settle("the newer Details read never started") { reads.count == 2 }
+    if olderAnswersFirst {
+      olderReply.open()
+      await older.value
+      #expect(viewer.details.agents == [.claude], "a superseded reply cannot replace known facts")
+      newerReply.open()
+      await newer.value
+    } else {
+      newerReply.open()
+      await newer.value
+      olderReply.open()
+      await older.value
+    }
+    #expect(viewer.details.agents == (newestSucceeds ? [.pi] : [.claude]))
+  }
+
+  @Test("hiding and reopening Details keeps the new opening's agents when the old reply arrives")
+  func reopeningDetailsKeepsItsNewAgents() async throws {
+    let olderReply = ReleaseSignal()
+    let reads = CallCount()
+    let olderAnswered = CallCount()
+    let viewer = ViewerController.scripted(
+      ScriptedService(),
+      connectedAgents: {
+        reads.count += 1
+        if reads.count == 1 {
+          await olderReply.wait()
+          olderAnswered.count += 1
+          return [.codex]
+        }
+        return [.pi]
+      }
+    )
+    defer {
+      olderReply.open()
+      viewer.close()
+    }
+    viewer.send(.toggleDetails)
+    try await settle("Details never read the agents") { reads.count == 1 }
+    viewer.send(.toggleDetails)
+    viewer.send(.toggleDetails)
+    try await settle("reopened Details never read the agents") { viewer.details.agents == [.pi] }
+    olderReply.open()
+    try await settle("the older Details reply never arrived") { olderAnswered.count == 1 }
+    #expect(viewer.details.agents == [.pi])
+    #expect(viewer.details.shown)
+  }
+
   @Test("a closed viewer's late agents reply preserves the next viewer's hidden Details choice")
   func aLateAgentsReplyPreservesTheNextViewersDetailsChoice() async throws {
     let preferences = ViewerPreferences.memory()
