@@ -30,7 +30,7 @@ struct HelperAccountRow: View {
       HStack(spacing: Spacing.m) {
         StatusPill(label: account.status.label, tone: account.status.tone)
         Spacer(minLength: Spacing.m)
-        SettingsAlertButton("Switch to the Helper…") { send(.askSwitch) }
+        Button("Switch to the Helper…") { send(.askSwitch) }
           .buttonStyle(.capsule(.glass, size: .mini))
           .disabled(!buttons.canSwitch)
           .help(buttons.switchHelp)

@@ -74,14 +74,6 @@ final class SettingsSearchKeyboard {
     NSWindow.removeFrame(usingName: name)
   }
 
-  /// Delivers queued native view updates without injecting a key into the page.
-  func settle() async {
-    window.contentView?.layoutSubtreeIfNeeded()
-    await nativeUpdate()
-    for _ in 0..<20 { await Task.yield() }
-    window.contentView?.layoutSubtreeIfNeeded()
-  }
-
   /// Waits for AppKit's actual responder change, rather than a scheduler-dependent number of task yields.
   ///
   /// - Parameters:

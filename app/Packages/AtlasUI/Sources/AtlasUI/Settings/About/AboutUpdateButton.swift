@@ -11,7 +11,7 @@ struct AboutUpdateButton: View {
 
   /// What it draws, from its state.
   var body: some View {
-    SettingsAlertButton(opensAlert: update.event == .askInstall) {
+    Button {
       if let event = update.event { send(event) }
     } label: {
       ZStack {

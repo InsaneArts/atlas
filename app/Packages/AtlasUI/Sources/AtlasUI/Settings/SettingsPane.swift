@@ -30,10 +30,10 @@ struct SettingsPane: View {
           }
           .environment(
             \.settingsReveal,
-            state.location == destination && !state.search.isActive ? state.reveal : nil
+            state.location == destination && !state.search.isActive && state.alert == nil ? state.reveal : nil
           )
           .onChange(of: state.reveal) { _, reveal in
-            if let reveal, reveal.scrolls, reveal.target.destination == destination { scroll.scrollTo(reveal.target) }
+            if let reveal, reveal.target.destination == destination { scroll.scrollTo(reveal.target) }
           }
         }
         .modifier(

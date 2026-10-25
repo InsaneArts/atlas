@@ -89,12 +89,6 @@ final class SettingsController {
   func send(_ event: SettingsEvent) {
     // Unstructured, as `send` is the view's synchronous callback: each async event runs in a task of its own.
     switch event {
-    case .focusPage:
-      session.reveal = SettingsReveal(
-        target: .page(state.location),
-        request: (session.reveal?.request ?? 0) + 1,
-        scrolls: false
-      )
     case .selectTab(let tab): selectTab(tab)
     case .navigate(let destination): navigate(destination)
     case .search(let query): search(query)

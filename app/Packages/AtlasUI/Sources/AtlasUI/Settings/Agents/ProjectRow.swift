@@ -17,7 +17,7 @@ struct ProjectRow: View {
       lead: .tile(.symbol(SymbolName.folder.rawValue)),
       size: .compact
     ) {
-      SettingsAlertButton("Forget…", action: forget)
+      Button("Forget…", action: forget)
         .buttonStyle(.capsule(.glass, size: .mini))
         .accessibilityLabel(project.forgetLabel)
     }
