@@ -19,7 +19,7 @@ __pycache__/
 /node_modules/
 
 # Local research stays available without publishing it.
-/docs/
+/internal/
 
 /target/
 

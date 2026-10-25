@@ -16,8 +16,9 @@
   input executable is a separate process.
 - Cancel ownership independently of event execution. Retain controller exclusion
   through cleanup; keep every unacknowledged mutation pending until recovery.
-- Preserve investigation evidence. docs/, runs/, local configuration and
-  archived experiments stay untracked. Keep the remote focused on maintained source.
+- Public documentation lives in docs/. Preserve investigation evidence in
+  internal/, runs/, local configuration and archived experiments, which stay
+  untracked. Keep the remote focused on maintained source.
 - Run cargo fmt --all --check, cargo clippy --all-targets -- -D warnings,
   cargo test, npm run format:check and npm test after relevant changes, and
   node scripts/check-swift.mjs (swift test and swift format lint -rs Sources

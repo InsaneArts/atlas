@@ -11,6 +11,7 @@ const roots = [
   'scripts',
   'tests',
   'agents',
+  'docs',
   'README.md',
   'CONTRIBUTING.md',
   'AGENTS.md',
@@ -44,7 +45,7 @@ const rules = [
   [
     'private document reference',
     // Bare folder names are allowed; runtime records and screenshots are not documents.
-    /\bdocs[\\/](?![\s`"'<>),;:\]}]|[.!?](?=[\s`"'<>),;:\]}]|$)|$)|\bruns[\\/][^\s`"'<>]*\.(?:md|txt|pdf|docx?)\b/gi,
+    /\binternal[\\/](?![\s`"'<>),;:\]}]|[.!?](?=[\s`"'<>),;:\]}]|$)|$)|\bruns[\\/][^\s`"'<>]*\.(?:md|txt|pdf|docx?)\b/gi,
   ],
   [
     'process citation',

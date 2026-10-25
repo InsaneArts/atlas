@@ -110,7 +110,8 @@ repository should read it first.
 - Keep each pull request to one change, with tests where they make sense.
 - Write commit subjects as one scoped line in the present tense, for example
   `fix(viewer): release held keys when control ends`. No body is needed.
-- Keep `docs/`, `runs/` and local config (`atlas.local.toml`) out of the commit.
+- Keep public documentation in `docs/`. Keep `internal/`, `runs/` and local
+  config (`atlas.local.toml`) out of the commit.
 - Fill in the pull request template, including how you tested on screen.
 
 ## License

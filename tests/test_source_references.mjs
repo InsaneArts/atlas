@@ -29,7 +29,7 @@ const examples = [
   ['15', 'd'].join(''),
   ...[2, 3].map((number) => `item ${number}`),
   ...namedPlans,
-  ['docs', 'implementation.md'].join('/'),
+  ['internal', 'implementation.md'].join('/'),
   ['review', 'finding'].join(' '),
   ['Codex', 'suggested'].join(' '),
 ];
@@ -53,13 +53,13 @@ test('the source checker keeps line numbers when a citation spans comment lines'
 
 test('the source checker accepts plain names of untracked folders', () => {
   for (const source of [
-    'Preserve investigation evidence. docs/, runs/, local configuration and archived experiments stay untracked.',
-    'Keep `docs/` and `runs/` untracked.',
-    'The untracked folders are docs/ and runs/.',
-    'The folders (docs/, runs/) stay untracked.',
-    'Keep docs/',
+    'Preserve investigation evidence. internal/, runs/, local configuration and archived experiments stay untracked.',
+    'Keep `internal/` and `runs/` untracked.',
+    'The untracked folders are internal/ and runs/.',
+    'The folders (internal/, runs/) stay untracked.',
+    'Keep internal/',
     'Keep runs/',
-    "const note = 'Keep docs/ and runs/.';",
+    "const note = 'Keep internal/ and runs/.';",
     'The viewer record defaults to runs/menubar.json.',
     'The screenshot is /Users/me/runs/capture.png.',
     'The screenshot path is /Users/me/runs/\\(name).',
@@ -68,8 +68,17 @@ test('the source checker accepts plain names of untracked folders', () => {
   }
 });
 
+test('the source checker accepts public documentation links', () => {
+  for (const separator of ['/', '\\']) {
+    const reference = ['docs', 'architecture.md'].join(separator);
+    for (const source of [reference, `Read \`${reference}\`.`, `[architecture](${reference})`]) {
+      assert.deepEqual(violations(source), [], source);
+    }
+  }
+});
+
 test('the source checker still rejects documents inside untracked folders and named internal plans', () => {
-  for (const folder of ['docs', 'runs']) {
+  for (const folder of ['internal', 'runs']) {
     for (const separator of ['/', '\\']) {
       for (const file of ['implementation.md', 'nested/audit.md', '.hidden.md', '../plan.md']) {
         const reference = `${folder}${separator}${file}`;
@@ -85,7 +94,7 @@ test('the source checker still rejects documents inside untracked folders and na
   }
   for (const reference of namedPlans) {
     assert.ok(
-      violations(`Keep docs/ and runs/ untracked; see ${reference}.`).length > 0,
+      violations(`Keep internal/ and runs/ untracked; see ${reference}.`).length > 0,
       reference,
     );
   }
@@ -180,6 +189,7 @@ test('the source checker covers each source tree and top-level contributor docum
     'tests/example.js',
     'agents/example.md',
     'agents/example.ts',
+    'docs/getting-started.md',
     'README.md',
     'CONTRIBUTING.md',
     'AGENTS.md',
@@ -195,6 +205,23 @@ test('the source checker covers each source tree and top-level contributor docum
       file,
     );
   }
+});
+
+test('the source checker checks public guides without reading the private archive', (t) => {
+  const base = fixture(t);
+  const archive = path.join(base, 'internal');
+  const docs = path.join(base, 'docs');
+  fs.mkdirSync(archive);
+  fs.mkdirSync(docs);
+  fs.writeFileSync(path.join(archive, 'notes.md'), `${examples[0]}\n`);
+  fs.symlinkSync(archive, path.join(docs, 'archive'));
+  const guide = path.join(docs, 'README.md');
+  fs.writeFileSync(guide, '[Architecture](architecture.md)\n');
+  assert.deepEqual(check(undefined, base), []);
+
+  const privateReference = ['..', 'internal', 'notes.md'].join('/');
+  fs.writeFileSync(guide, `# Atlas\n\n[Notes](${privateReference})\n`);
+  assert.deepEqual(check(undefined, base), ['docs/README.md:3: private document reference']);
 });
 
 test('the source checker skips generated output and symbolic links and rejects missing explicit paths', (t) => {
