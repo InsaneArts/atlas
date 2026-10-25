@@ -14,7 +14,9 @@ extension SettingsController {
 
   /// Reads `atlas agents status`. Only the newest reading started is kept; one that fails says so on each agent that
   /// was never reported, and keeps the projects last read.
-  func loadAgents() async {
+  ///
+  /// - Parameter preservingFailures: Failures from the command that requested this reading, kept until a later reading.
+  func loadAgents(preservingFailures: Set<String> = []) async {
     agentsGeneration += 1
     let number = agentsGeneration
     agents.projectsReading = .reading
@@ -33,8 +35,8 @@ extension SettingsController {
     )
     for choice in agents.choices where choice.checked && choice.problem == nil {
       let id = choice.id.rawValue
-      guard let failure = session.connectFailures[id] else { continue }
-      if failure.isDisconnect ? !choice.hasConnection : choice.connected {
+      guard !preservingFailures.contains(id), let failure = session.connectFailures[id] else { continue }
+      if failure.isDisconnect ? choice.disconnected : choice.connected {
         session.connectFailures[id] = nil
       }
     }
@@ -43,7 +45,7 @@ extension SettingsController {
 
   /// Connects every installed part of one agent through the installs every window
   /// shares, so one runs at a time app-wide; the agents are read again after. Why it failed shows in the agent's own
-  /// row, until the next Connect or a reading confirms it is connected.
+  /// row, until the next Connect or a later reading confirms it is connected.
   ///
   /// - Parameter id: The agent's id, as its row names it.
   func connect(_ id: String) async {
@@ -58,12 +60,14 @@ extension SettingsController {
       return
     }
     guard let outcome else { return say(HelperWords.waitForAction, in: .agents, kind: .working) }
+    var failedAgents: Set<String> = []
     if !outcome.ok {
       let failures = Self.connectFailures(outcome, asked: id)
         .mapValues { SettingsAgentFailure(message: $0) }
       session.connectFailures.merge(failures) { _, newer in newer }
+      failedAgents = Set(failures.keys)
     }
-    await loadAgents()
+    await loadAgents(preservingFailures: failedAgents)
   }
 
   /// Disconnects all the installed parts in an agent's row, then reads their status again.

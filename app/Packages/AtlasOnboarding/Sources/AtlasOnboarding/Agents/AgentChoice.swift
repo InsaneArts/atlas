@@ -12,6 +12,8 @@ public struct AgentChoice: Equatable, Sendable {
   public var connected = false
   /// Whether any part is connected, including a partial Claude connection.
   public var hasConnection = false
+  /// Whether every reported part is explicitly disconnected or absent.
+  public var disconnected = false
   /// The installed CLI components this choice connects together.
   public var parts: [String] = []
   /// Why a component could not be checked or connected.

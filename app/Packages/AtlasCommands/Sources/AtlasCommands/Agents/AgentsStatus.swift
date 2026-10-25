@@ -12,7 +12,7 @@ public struct AgentsStatus: Decodable, Sendable {
     public let error: String?
     /// The installed or connected parts represented by this row.
     public var parts: [String]? = nil
-    /// Whether at least one part is connected and can be disconnected.
+    /// Whether at least one part is connected; false when every part is disconnected or absent, nil when unknown.
     public var hasConnection: Bool? = nil
   }
 

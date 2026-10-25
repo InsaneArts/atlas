@@ -20,6 +20,7 @@ extension AgentChoice {
       guard let index = merged.firstIndex(where: { $0.id.rawValue == row.agent }) else { continue }
       merged[index].parts = row.parts ?? []
       merged[index].hasConnection = row.hasConnection == true
+      merged[index].disconnected = row.hasConnection == false
       merged[index].problem = row.error
       merged[index].checked = true
       merged[index].found = row.installed == true

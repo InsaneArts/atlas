@@ -26,7 +26,11 @@ extension AgentsStatus {
           error: errors.isEmpty ? nil : errors.joined(separator: "; ")
         )
         agent.parts = applicable.map(\.agent)
-        agent.hasConnection = applicable.contains { $0.connected == true }
+        if candidates.contains(where: { $0.connected == true }) {
+          agent.hasConnection = true
+        } else if candidates.allSatisfy({ $0.connected == false || $0.installed == false }) {
+          agent.hasConnection = false
+        }
         return agent
       }
   }
