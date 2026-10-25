@@ -217,7 +217,7 @@ struct SettingsControllerTests {
     controller.close()
   }
 
-  @Test("history navigation preserves active work and alerts without running helper or update commands")
+  @Test("an alert disables history and page navigation while preserving active work")
   func navigationPreservesWorkAndAlerts() {
     let commands = ScriptedCommands([:])
     let controller = SettingsController.scripted(commands: commands)
@@ -231,11 +231,9 @@ struct SettingsControllerTests {
     controller.send(.selectTab(.about))
     controller.send(.back)
     controller.send(.forward)
-    var expected = before
-    expected.navigation = controller.session.navigation
-    #expect(controller.session == expected)
+    #expect(controller.session == before)
     #expect(commands.ran.isEmpty)
-    #expect(controller.state.canGoBack && !controller.state.canGoForward)
+    #expect(!controller.state.canGoBack && !controller.state.canGoForward)
   }
 
   @Test("closing and reopening keeps only the last root while preserving an update already running")

@@ -8,6 +8,8 @@ struct SettingsPane: View {
   let edit: @MainActor (SettingsGeneralState) -> Void
   /// Receives navigation, field edits and existing actions.
   let send: @MainActor (SettingsEvent) -> Void
+  /// Only the immediately preceding page may still draw during a navigation crossfade.
+  var outgoing: SettingsDestination? = nil
 
   /// Each route keeps its scroll view through navigation and shared status updates.
   var body: some View {
@@ -26,19 +28,24 @@ struct SettingsPane: View {
             .frame(maxWidth: SettingsLayout.contentMaximumWidth)
             .frame(maxWidth: .infinity)
           }
-          .environment(\.settingsReveal, state.location == destination && !state.search.isActive ? state.reveal : nil)
+          .environment(
+            \.settingsReveal,
+            state.location == destination && !state.search.isActive && state.alert == nil ? state.reveal : nil
+          )
           .onChange(of: state.reveal) { _, reveal in
             if let reveal, reveal.target.destination == destination { scroll.scrollTo(reveal.target) }
           }
         }
-        .opacity(state.location == destination ? 1 : 0)
-        .disabled(state.location != destination)
-        .allowsHitTesting(state.location == destination)
-        .accessibilityHidden(state.location != destination)
-        .animation(state.location == destination ? Motion.swapIn : Motion.swapOut, value: state.location)
+        .modifier(
+          SettingsVisibility(
+            active: state.location == destination && !state.search.isActive,
+            retained: (state.location == destination && !state.search.isActive) || outgoing == destination
+          )
+        )
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    .environment(\.marksFade, true)
   }
 
   /// Draws canonical controls once, with disclosure links from their owning roots.

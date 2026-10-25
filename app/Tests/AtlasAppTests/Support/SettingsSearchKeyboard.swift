@@ -1,4 +1,5 @@
 import AppKit
+import AsyncSupportTesting
 import Testing
 
 @testable import AtlasApp
@@ -9,6 +10,10 @@ final class SettingsSearchKeyboard {
   let window: SettingsWindow
   /// The shipped menu, with its responder destination fixed to this hidden test window.
   let menu = MainMenu.make(viewer: true)
+  /// Native focus is process-wide, so keyboard harnesses hold it one at a time across suspension points.
+  private static var focusOwner: ReleaseSignal?
+  /// Releases this harness's ownership when its window closes.
+  private var focusRelease: ReleaseSignal?
 
   /// Hosts Settings with an isolated frame identity.
   ///
@@ -27,8 +32,13 @@ final class SettingsSearchKeyboard {
   /// - Returns: The field editor receiving the keys.
   /// - Throws: When the search field cannot take focus.
   func focus() async throws -> NSTextView {
-    for _ in 0..<20 { await Task.yield() }
+    while let owner = Self.focusOwner { await owner.wait() }
+    let release = ReleaseSignal()
+    Self.focusOwner = release
+    focusRelease = release
+    window.contentView?.layoutSubtreeIfNeeded()
     try await press("f", code: 3, modifiers: .command)
+    try await waitForFocus { window.firstResponder is NSTextView }
     let editor = try #require(window.firstResponder as? NSTextView)
     let field = try #require(Self.fields(in: window.contentView).first)
     #expect(editor.delegate === field, "Find focuses the search field")
@@ -43,6 +53,9 @@ final class SettingsSearchKeyboard {
   ///   - modifiers: Any editing modifiers held with the key.
   /// - Throws: When AppKit cannot construct the event.
   func press(_ characters: String, code: UInt16, modifiers: NSEvent.ModifierFlags = []) async throws {
+    window.contentView?.layoutSubtreeIfNeeded()
+    // Flush the next native focus update before sending a key to a newly restored SwiftUI control.
+    await nativeUpdate()
     let event = try #require(
       NSEvent.keyEvent(
         with: .keyDown,
@@ -67,6 +80,36 @@ final class SettingsSearchKeyboard {
     let name = window.frameAutosaveName
     window.close()
     NSWindow.removeFrame(usingName: name)
+    if let focusRelease {
+      Self.focusOwner = nil
+      focusRelease.open()
+      self.focusRelease = nil
+    }
+  }
+
+  /// Waits for AppKit's actual responder change, rather than a scheduler-dependent number of task yields.
+  ///
+  /// - Parameters:
+  ///   - sourceLocation: Where an undelivered focus request is reported.
+  ///   - changed: The responder condition that must hold.
+  /// - Throws: When AppKit never delivers the requested focus.
+  func waitForFocus(sourceLocation: SourceLocation = #_sourceLocation, _ changed: () -> Bool) async throws {
+    let clock = ContinuousClock()
+    let deadline = clock.now
+      .advanced(by: .seconds(3))
+    while !changed(), clock.now < deadline {
+      window.contentView?.layoutSubtreeIfNeeded()
+      await nativeUpdate()
+    }
+    try #require(changed(), "the native responder never received the requested focus", sourceLocation: sourceLocation)
+  }
+
+  /// Lets AppKit and SwiftUI deliver a queued native focus update on the main dispatch queue.
+  private func nativeUpdate() async {
+    await withCheckedContinuation { continuation in
+      DispatchQueue.main
+        .async { continuation.resume() }
+    }
   }
 
   /// Finds native text fields without depending on SwiftUI's private host classes.

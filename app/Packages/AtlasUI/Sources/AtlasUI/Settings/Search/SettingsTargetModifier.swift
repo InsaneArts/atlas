@@ -19,6 +19,7 @@ private struct SettingsTargetModifier: ViewModifier {
       .focusable()
       .focused($focused)
       .focusEffectDisabled()
+      .onAppear { if reveal?.target == target { focused = true } }
       .onKeyPress(.return) { focused ? .handled : .ignored }
       .overlay {
         RoundedRectangle(cornerRadius: Radius.small)

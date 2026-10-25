@@ -11,6 +11,7 @@ struct PictureChoiceBorder: View {
   var body: some View {
     RoundedRectangle(cornerRadius: Radius.small)
       .strokeBorder(selected ? Color.strokeFocus : Color.clear, lineWidth: Stroke.regular)
+      .animation(Motion.markFill, value: selected)
       .overlay {
         RoundedRectangle(cornerRadius: Radius.small)
           .strokeBorder(Color.strokeFocus, lineWidth: Stroke.regular)

@@ -11,13 +11,14 @@ struct OutcomeMark: View {
   var side = StatusLine.markSide
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.marksSwapAtOnce) private var swapsAtOnce
+  @Environment(\.marksFade) private var marksFade
 
   /// The spinner, the round "!" or the check, one at a time, landing in place of the last.
   var body: some View {
     ZStack {
       mark
         .id(kind)
-        .transition(Motion.transition(Self.landing, reduceMotion: reduceMotion))
+        .transition(marksFade ? .opacity : Motion.transition(Self.landing, reduceMotion: reduceMotion))
     }
     .frame(width: side, height: side)
     .accessibilityHidden(true)

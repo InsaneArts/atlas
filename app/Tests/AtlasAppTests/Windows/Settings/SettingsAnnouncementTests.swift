@@ -8,8 +8,11 @@ import Testing
 
 @Suite("Settings announcements")
 struct SettingsAnnouncementTests {
-  @Test("one check completion is announced across Helper and Diagnostics without navigation or polling repeats")
-  func checkingAnnouncesOnceAcrossRoutes() async throws {
+  @Test(
+    "one check completion or refusal is announced across Helper and Diagnostics without navigation or polling repeats",
+    arguments: [nil, "The helper is in use. Try again once it's free."] as [String?]
+  )
+  func checkingAnnouncesOnceAcrossRoutes(refusal: String?) async throws {
     var state = PreviewStates.settingsHelper
     var announced: [String] = []
     let announce: @MainActor (String) -> Void = { announced.append($0) }
@@ -26,14 +29,17 @@ struct SettingsAnnouncementTests {
     host.rootView = SettingsView(state: state, edit: { _ in }, announce: announce, send: { _ in })
     host.layoutSubtreeIfNeeded()
     state.helper.buttons.canCheck = true
+    state.helper.readyNote = refusal.map { SettingsNote(text: $0, kind: .problem) }
     host.rootView = SettingsView(state: state, edit: { _ in }, announce: announce, send: { _ in })
     host.layoutSubtreeIfNeeded()
-    state.destination = .root(.helper)
-    state.helper.account.status.label = "Working"
-    host.rootView = SettingsView(state: state, edit: { _ in }, announce: announce, send: { _ in })
-    host.layoutSubtreeIfNeeded()
+    for index in 0..<4 {
+      state.destination = index.isMultiple(of: 2) ? .root(.helper) : .diagnostics
+      state.helper.account.status.label = index.isMultiple(of: 2) ? "Working" : "Idle"
+      host.rootView = SettingsView(state: state, edit: { _ in }, announce: announce, send: { _ in })
+      host.layoutSubtreeIfNeeded()
+    }
     for _ in 0..<20 { await Task.yield() }
-    #expect(announced == ["Checked. All ready."])
+    #expect(announced == [refusal ?? "Checked. All ready."])
   }
 
   @Test("routine status stays quiet even on another pane while explicit command results still announce")

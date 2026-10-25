@@ -11,6 +11,8 @@ public struct SettingsView: View {
 
   /// Receives explicit results and alerts for VoiceOver, independently of routine helper status.
   private let announce: @MainActor (String) -> Void
+  /// The single outgoing surface; another navigation replaces it immediately.
+  @State private var outgoing: SettingsSurface?
 
   /// Creates the window's view.
   ///
@@ -42,22 +44,18 @@ public struct SettingsView: View {
         VStack(spacing: .zero) {
           SettingsHeader(
             title: state.title,
-            canGoBack: state.canGoBack,
-            canGoForward: state.canGoForward,
+            canGoBack: state.canGoBack && !state.search.isActive,
+            canGoForward: state.canGoForward && !state.search.isActive,
             send: send
           )
           ZStack(alignment: .top) {
-            SettingsPane(state: state, edit: edit, send: send)
-              .opacity(state.search.isActive ? 0 : 1)
-              .disabled(state.search.isActive)
-              .allowsHitTesting(!state.search.isActive)
-              .accessibilityHidden(state.search.isActive)
-            if state.search.isActive {
-              SettingsSearchResults(state: state.search, send: send)
-                .transition(.opacity)
-            }
+            SettingsPane(state: state, edit: edit, send: send, outgoing: outgoing?.destination)
+            SettingsSearchPresentation(
+              state: state.search,
+              send: send,
+              retained: surface == .search || outgoing == .search
+            )
           }
-          .animation(state.search.isActive ? Motion.swapIn : Motion.swapOut, value: state.search.isActive)
         }
       }
       // Under an alert, nothing is reached by Tab or VoiceOver until it is answered.
@@ -68,6 +66,7 @@ public struct SettingsView: View {
     .windowSurface()
     // The sidebar reserves traffic-light space in the full-size content view.
     .ignoresSafeArea(.container, edges: .top)
+    .onChange(of: surface) { previous, _ in outgoing = previous }
     // Each only when its words change, so a poll that reads the same says nothing.
     .onChange(of: state.alert?.shownTitle) { _, title in if let title { announce(title) } }
     .onChange(of: state.alert?.refusal) { _, refusal in if let refusal { announce(refusal) } }
@@ -75,7 +74,7 @@ public struct SettingsView: View {
     .onChange(of: state.helper.buttons.isChecking) { _, checking in
       if !checking {
         let ready = !state.helper.ready.isEmpty && state.helper.ready.allSatisfy { $0.item.state == .ready }
-        announce(ready ? "Checked. All ready." : "Checked. Not everything is ready.")
+        announce(state.helper.readyNote?.text ?? (ready ? "Checked. All ready." : "Checked. Not everything is ready."))
       }
     }
     .onChange(of: state.helper.notice) { _, notice in if let notice { announce(notice.text) } }
@@ -86,6 +85,11 @@ public struct SettingsView: View {
         announce(state.search.results.isEmpty ? "No settings found" : "Search results available")
       }
     }
+  }
+
+  /// The latest requested destination, without any animation queue.
+  private var surface: SettingsSurface {
+    state.search.isActive ? .search : .page(state.location)
   }
 
 }

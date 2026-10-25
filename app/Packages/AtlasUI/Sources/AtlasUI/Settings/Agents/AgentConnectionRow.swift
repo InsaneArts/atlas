@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// One agent in the Agents pane: its real icon, its name over what Atlas does in it, then where it stands: a green
-/// check and Connected, which pops in; Connect, which keeps its width with a spinner in its words' place as
+/// check and Connected, which fade in; Connect, which keeps its width with a spinner in its words' place as
 /// Connecting…; or, for an agent not on this Mac, "Not installed" under its faded icon and nothing at its end. A
 /// Connect that failed says why in the row, in orange, with Show File where a file needs mending.
 struct AgentConnectionRow: View {
@@ -13,7 +13,6 @@ struct AgentConnectionRow: View {
   let disconnect: @MainActor () -> Void
   /// Shows the file its problem is in.
   let showFile: @MainActor () -> Void
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   /// What it draws, from its state.
   var body: some View {
@@ -38,12 +37,9 @@ struct AgentConnectionRow: View {
         ZStack(alignment: .trailing) {
           connection
             .id(isConnected)
-            .transition(Motion.transition(arrival, reduceMotion: reduceMotion))
+            .transition(.opacity)
         }
-        .animation(
-          Motion.animation(Motion.pop, reduceMotion: reduceMotion, reduced: Motion.reduced),
-          value: isConnected
-        )
+        .animation(Motion.textSwap, value: isConnected)
       }
     }
   }
@@ -91,12 +87,6 @@ struct AgentConnectionRow: View {
     }
   }
 
-  /// How Connected's check and word pop in: from small as they fade in.
-  private var arrival: AnyTransition {
-    AnyTransition.scale(scale: Layout.arrival)
-      .combined(with: .opacity)
-  }
-
   /// What stands at the row's end for a connection: Connect and Connecting… as one button, so its place and identity
   /// hold while the connection runs.
   ///
@@ -112,14 +102,8 @@ struct AgentConnectionRow: View {
     }
   }
 
-  /// Whether the agent is connected, which pops its check in.
+  /// Whether the agent is connected, which fades its check in.
   private var isConnected: Bool {
     agent.connection == .connected
   }
-}
-
-/// The row's own measures.
-private enum Layout {
-  /// 0.5: how small Connected's check and word start as they pop in.
-  static let arrival: CGFloat = 0.5
 }
