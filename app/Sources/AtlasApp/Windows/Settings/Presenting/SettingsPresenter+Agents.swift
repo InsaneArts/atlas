@@ -37,7 +37,7 @@ extension SettingsPresenter {
     return SettingsAgentsState(
       agents: plugins.map { row in
         let reported = agents.choices.first { $0.id.rawValue == row.id }?.problem
-        return failing(row, failures[row.id] ?? reported)
+        return failing(row, failures[row.id]?.message ?? reported)
       },
       projects: snapshot.agents.projects.map(project),
       projectsReading: snapshot.agents.projectsReading,

@@ -26,7 +26,6 @@ struct SettingsSession: Equatable {
   var update = SettingsUpdate.idle
   /// What the last command said, in the pane that ran it.
   var notice: SettingsNotice?
-  /// Why each agent's last Connect failed, by the agent's id, as the command said it; an agent's entry goes once it
-  /// is connected again.
-  var connectFailures: [String: String] = [:]
+  /// Why each agent's last Connect or Disconnect failed, by id; cleared when status confirms the requested state.
+  var connectFailures: [String: SettingsAgentFailure] = [:]
 }

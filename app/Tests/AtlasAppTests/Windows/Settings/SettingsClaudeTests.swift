@@ -72,6 +72,63 @@ struct SettingsClaudeTests {
     #expect(claude.showsFile)
   }
 
+  @Test("a failed Connect clears after connecting elsewhere and refreshing Settings")
+  func connectFailureClearsAfterRefresh() async throws {
+    let commands = ScriptedCommands([
+      "agents status": Self.partial,
+      "agents install":
+        #"{"ok":false,"agents":[{"agent":"claude-app","ok":false,"error":"settings file is not valid JSON"}]}"#,
+    ])
+    let controller = SettingsController.scripted(commands: commands)
+    await controller.loadAgents()
+    await controller.connect("claude")
+    let failed = try #require(controller.state.agents.agents.first)
+    #expect(failed.problem?.contains("Couldn't connect") == true)
+    #expect(failed.showsFile)
+    controller.close()
+    commands.answer(
+      "agents status",
+      #"{"ok":true,"agents":[{"agent":"claude","installed":true,"connected":true},{"agent":"claude-app","installed":true,"connected":true}]}"#
+    )
+    controller.cameForward()
+    await controller.agentsReading?.value
+    let refreshed = try #require(controller.state.agents.agents.first)
+    #expect(refreshed.connection == .connected)
+    #expect(refreshed.problem == nil)
+    #expect(!refreshed.showsFile)
+    #expect(controller.session.connectFailures["claude"] == nil)
+  }
+
+  @Test("a failed Disconnect stays until a refresh confirms every Claude part is disconnected")
+  func disconnectFailureClearsAfterRefresh() async throws {
+    let commands = ScriptedCommands([
+      "agents status":
+        #"{"ok":true,"agents":[{"agent":"claude","installed":true,"connected":true},{"agent":"claude-app","installed":true,"connected":true}]}"#,
+      "agents remove":
+        #"{"ok":false,"agents":[{"agent":"claude-app","ok":false,"error":"settings file is not valid JSON"}]}"#,
+    ])
+    let controller = SettingsController.scripted(commands: commands)
+    await controller.loadAgents()
+    await controller.disconnect("claude")
+    let failed = try #require(controller.state.agents.agents.first)
+    #expect(failed.connection == .connected)
+    #expect(failed.problem?.contains("Couldn't disconnect") == true)
+    #expect(failed.showsFile)
+    commands.answer("agents status", Self.partial)
+    await controller.loadAgents()
+    #expect(controller.state.agents.agents.first?.problem == failed.problem)
+    commands.answer(
+      "agents status",
+      #"{"ok":true,"agents":[{"agent":"claude","installed":true,"connected":false},{"agent":"claude-app","installed":true,"connected":false}]}"#
+    )
+    await controller.loadAgents()
+    let refreshed = try #require(controller.state.agents.agents.first)
+    #expect(refreshed.connection == .connect(isEnabled: true))
+    #expect(refreshed.problem == nil)
+    #expect(!refreshed.showsFile)
+    #expect(controller.session.connectFailures["claude"] == nil)
+  }
+
   @Test("one installed Claude part is named and connected alone", arguments: ["claude", "claude-app"])
   func oneInstalledPart(part: String) async throws {
     let commands = ScriptedCommands([

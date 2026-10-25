@@ -31,12 +31,19 @@ extension SettingsController {
       projectsReading: .loaded,
       failed: false
     )
+    for choice in agents.choices where choice.checked && choice.problem == nil {
+      let id = choice.id.rawValue
+      guard let failure = session.connectFailures[id] else { continue }
+      if failure.isDisconnect ? !choice.hasConnection : choice.connected {
+        session.connectFailures[id] = nil
+      }
+    }
     session.search.selection = state.search.selection
   }
 
   /// Connects every installed part of one agent through the installs every window
   /// shares, so one runs at a time app-wide; the agents are read again after. Why it failed shows in the agent's own
-  /// row, until the next Connect.
+  /// row, until the next Connect or a reading confirms it is connected.
   ///
   /// - Parameter id: The agent's id, as its row names it.
   func connect(_ id: String) async {
@@ -52,7 +59,9 @@ extension SettingsController {
     }
     guard let outcome else { return say(HelperWords.waitForAction, in: .agents, kind: .working) }
     if !outcome.ok {
-      session.connectFailures.merge(Self.connectFailures(outcome, asked: id)) { _, newer in newer }
+      let failures = Self.connectFailures(outcome, asked: id)
+        .mapValues { SettingsAgentFailure(message: $0) }
+      session.connectFailures.merge(failures) { _, newer in newer }
     }
     await loadAgents()
   }
@@ -65,8 +74,10 @@ extension SettingsController {
     session.connectFailures[id] = nil
     guard let outcome = await dependencies.installs.disconnect(id, parts: choice.parts) else { return }
     if !outcome.ok {
-      session.connectFailures[id] =
-        "Couldn't disconnect: " + (Self.connectFailures(outcome, asked: id)[id] ?? outcome.message)
+      session.connectFailures[id] = SettingsAgentFailure(
+        message: "Couldn't disconnect: " + (Self.connectFailures(outcome, asked: id)[id] ?? outcome.message),
+        isDisconnect: true
+      )
     }
     await loadAgents()
   }
