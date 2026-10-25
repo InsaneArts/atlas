@@ -154,6 +154,32 @@ struct SettingsSearchTests {
     }
   }
 
+  @Test("composing text keeps arrows Return and Escape with the window's native editor")
+  func composingKeysStayWithTheField() async throws {
+    let controller = SettingsController.scripted(commands: ScriptedCommands([:]))
+    controller.send(.search("helper"))
+    try #require(controller.state.search.results.count > 2)
+    controller.send(.moveSearchSelection(1))
+    let keyboard = SettingsSearchKeyboard(controller)
+    defer { keyboard.close() }
+    let editor = try await keyboard.focus()
+    let selection = controller.state.search.selection
+    for (characters, code): (String, UInt16) in [("\u{f701}", 125), ("\u{f700}", 126), ("\r", 36), ("\u{1b}", 53)] {
+      editor.setMarkedText(
+        "helper",
+        selectedRange: NSRange(location: 6, length: 0),
+        replacementRange: NSRange(location: 0, length: editor.string.utf16.count)
+      )
+      try #require(editor.hasMarkedText())
+      try await keyboard.press(characters, code: code)
+      #expect(controller.state.search.selection == selection)
+      #expect(controller.state.search.isActive)
+      #expect(controller.state.reveal == nil)
+      #expect(keyboard.window.firstResponder === editor)
+      editor.unmarkText()
+    }
+  }
+
   @Test("Escape clears the query first and releases the search field on its second press")
   func escapeHasTwoStages() async throws {
     let controller = SettingsController.scripted(commands: ScriptedCommands([:]))

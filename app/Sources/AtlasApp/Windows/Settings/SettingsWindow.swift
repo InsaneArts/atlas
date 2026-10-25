@@ -13,6 +13,8 @@ final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   let closed: @MainActor (SettingsWindow) -> Void
   /// Open until closed.
   private(set) var isPresented = false
+  /// Keeps composition active through a key that commits or cancels the native marked text.
+  private var composingSearchKey = false
 
   /// Creates the window, hidden until presentation.
   ///
@@ -45,14 +47,31 @@ final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     isMovableByWindowBackground = true
     collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
     delegate = self
-    WindowShell.host(in: self) {
+    WindowShell.host(in: self) { [weak self] in
       SettingsView(state: controller.state, edit: controller.update, send: controller.send)
+        .environment(\.searchIsComposing) { [weak self] in
+          let editor = self?.firstResponder as? NSTextView
+          return self?.composingSearchKey == true || editor?.hasMarkedText() == true
+        }
     }
     controller.nameWindow = { [weak self] title in self?.title = title }
     let restored = setFrameUsingName(autosaveName)
     if !restored { center(self) }
     validateFrame()
     setFrameAutosaveName(autosaveName)
+  }
+
+  /// Preserves the editor's composition state until SwiftUI finishes handling the native key.
+  ///
+  /// - Parameter event: The window's native event.
+  override func sendEvent(_ event: NSEvent) {
+    let previous = composingSearchKey
+    if event.type == .keyDown {
+      let editor = firstResponder as? NSTextView
+      composingSearchKey = editor?.hasMarkedText() == true
+    }
+    defer { composingSearchKey = previous }
+    super.sendEvent(event)
   }
 
   /// Presents the restored or centered window.

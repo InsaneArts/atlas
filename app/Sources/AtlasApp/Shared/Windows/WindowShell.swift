@@ -15,7 +15,15 @@ enum WindowShell {
   static func host<Content: View>(in window: NSWindow, @ViewBuilder content: @escaping @MainActor () -> Content) {
     window.appearance = Appearance.dark
     window.backgroundColor = .ground
-    let hostingView = NSHostingView(rootView: ShellRoot(content: content))
+    let hostingView = NSHostingView(
+      rootView: ShellRoot { [weak window] in
+        content()
+          .environment(\.searchIsComposing) { [weak window] in
+            let editor = window?.firstResponder as? NSTextView
+            return editor?.hasMarkedText() == true
+          }
+      }
+    )
     // The window keeps the size it is given; the content fills it.
     hostingView.sizingOptions = []
     window.contentView = hostingView
