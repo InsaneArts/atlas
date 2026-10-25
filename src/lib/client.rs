@@ -11,7 +11,7 @@ use crate::{
     doing::Doing,
     error::{Error, Result},
     session::{Display, Epoch, Session, input_current, input_settled, require_hidden},
-    transport::{Transport, run_output},
+    transport::{Transport, accepted, run_output},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use fs2::FileExt;
@@ -880,11 +880,7 @@ impl Client {
         let reply = transport.call(&request).await?;
         validate_completion(&request, &reply)?;
 
-        if reply["ok"] != true {
-            return Err(crate::transport::refusal(&reply));
-        }
-
-        Ok(reply)
+        accepted(reply)
     }
 
     pub async fn apps(&self) -> Result<Value> {
