@@ -1547,7 +1547,7 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
 fn activity_row(row: &Value, now: u128) -> Value {
     let shown = crate::overview::shown(row, now);
     json!({
-        "id": crate::overview::row_id(row),
+        "id": shown["id"],
         // When it started, in milliseconds since 1970, so its time never
         // moves between readings.
         "startedAt": row["at"]
