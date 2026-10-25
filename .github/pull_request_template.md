@@ -10,3 +10,4 @@
 - [ ] `npm run format:check` and `npm test`
 - [ ] `node scripts/check-swift.mjs` (if Swift changed)
 - [ ] Tried on a real helper (if input, windows, screenshots or setup changed)
+- [ ] Updated affected public documentation, or explained why no update is needed

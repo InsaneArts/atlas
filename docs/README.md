@@ -18,4 +18,4 @@ For exact command options, use `atlas --help` or the [bundled command reference]
 
 ## Contributing
 
-[Contributing](../CONTRIBUTING.md) covers building from source, the repository layout, required checks and testing against the real helper. Read the [security policy](../SECURITY.md) before reporting a security issue.
+[Contributing](../CONTRIBUTING.md) covers building from source, the repository layout, required checks and testing against the real helper. [Architecture](architecture.md) explains the processes, code responsibilities, Swift package boundaries and recovery rules. Read the [security policy](../SECURITY.md) before reporting a security issue.

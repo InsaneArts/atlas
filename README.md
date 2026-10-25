@@ -5,73 +5,67 @@
     <img src="assets/logo-light.svg" alt="Atlas logo" height="64">
   </picture>
 </p>
-<h3 align="center">hypervised desktop for autonomous agents</h3>
-<p align="center">Atlas gives your agent a hidden second desktop on your Mac.<br>It clicks, types and tests apps there while you keep working on yours.</p>
-<p align="center">
+
+# Atlas
+
+Atlas lets agents use a separate macOS desktop while you keep using yours. It runs apps in a second account, called the helper, on the same Mac. Agents can open a build, inspect its windows, take screenshots, click and type there without taking over your desktop.
+
+<p>
   <a href="https://github.com/InsaneArts/atlas/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/InsaneArts/atlas/actions/workflows/ci.yml/badge.svg?branch=main"></a>
-  <a href="https://github.com/InsaneArts/atlas/releases"><img alt="Release" src="https://img.shields.io/github/v/release/InsaneArts/atlas"></a>
   <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-lightgrey">
   <a href="Cargo.toml"><img alt="Rust" src="https://img.shields.io/badge/rust-edition%202024-orange"></a>
 </p>
 
-[![Codex checks a new setting in your app on Atlas's hidden desktop while you keep typing in Xcode; Atlas's menu bar panel shows it live](assets/demo.webp)](https://atlas.insanearts.io)
+[![Codex checks an app in the helper while the person works in Xcode; Atlas's menu bar panel shows the helper screen](assets/demo.webp)](https://atlas.insanearts.io)
 
----
+## Install
 
-An agent can change a Mac app, but it cannot watch the change run without
-taking over your screen. Atlas gives it a screen of its own: a second macOS
-login, signed in and kept in the background. There the agent opens its build,
-takes screenshots, clicks and types, and comes back with proof. Your windows,
-keyboard and mouse are never touched.
+Atlas requires macOS 14 or later and an administrator account for setup. You choose or create a standard helper account, log in to it and grant Atlas Screen Recording and Accessibility permission through macOS. Then switch back to your own account, leaving the helper logged in.
 
-You set it up once, then watch from the menu bar and take over when you want.
-
-### Install
+Public downloads will become available when Atlas is open source. After that release, run this from your own administrator account, without `sudo`:
 
 ```sh
 curl -fsSL https://atlas.insanearts.io/install.sh | sh
 ```
 
-The script checks the download's checksum, Developer ID signature and
-notarization, puts Atlas.app in /Applications and links `atlas` into
-`~/.local/bin`. Atlas then opens and walks you through the rest in one window:
-choose or create the helper account, switch to it once to allow Atlas there,
-and switch back. `atlas init` does the same in a terminal, and both are safe to
-run again. Setting up asks for your administrator password once, in macOS's own
-dialog, to create the helper account and get it ready; Atlas doesn't keep it,
-and never stores a password or changes privacy settings for you.
+The installer verifies the checksum, Developer ID signature and notarization, installs `/Applications/Atlas.app` and links `atlas` into `~/.local/bin`. Atlas opens to guide you through setup. If no public release is available yet, the installer says so.
+
+Follow [Getting started](docs/getting-started.md) for the full sequence, PATH setup and the `atlas init` terminal alternative. Building from source is covered in [Contributing](CONTRIBUTING.md); compiling the CLI alone does not produce a signed helper installation.
+
+## Try an app
+
+Build your app normally. Then check the helper from your own terminal:
 
 ```sh
-atlas update                 # checks the signature, then swaps the app in place
-atlas uninstall              # keeps the helper account
+atlas doctor --json
 ```
 
-### Teach your agents
-
-Setup connects Claude, Codex, opencode and Pi; `atlas agents install` does it later.
-Claude has one row for Claude Code and the Claude app, connecting whichever
-are installed. It reads Connected only when both installed parts are connected.
-The CLI keeps separate `claude` and `claude-app` ids in JSON; use
-`atlas agents install --claude --app` or `atlas agents remove --claude --app`
-to change both together.
-Claude Code, Codex, opencode and Pi get the Atlas skill and, while Atlas is ready, a reminder
-to check on-screen changes in the helper (Codex asks you to trust the plugin's
-hooks once). The Claude app gets Atlas's MCP connection for status and viewing
-the screen. Pi connects to the bundled package in place; start a new session or use `/reload`
-after connecting or updating Atlas. Pi exposes the MCP tools directly and uses the Atlas
-menu bar or `atlas monitor` for viewing. Use `atlas agents install --pi` or
-`atlas agents remove --pi` to change only Pi. opencode connects through a plugin
-symlink; use `atlas agents install --opencode` or `atlas agents remove --opencode`,
-then restart opencode for the change to take effect. Its existing JSON/JSONC
-configuration stays intact, and its MCP screen reply is text. For any other agent, add a short section to the project instead:
+Continue when `ready` is true. Replace the path and app name below with your build:
 
 ```sh
-cd your-project
-atlas agents project      # adds it to AGENTS.md, and to CLAUDE.md if separate
+atlas open /path/to/build/Example.app
+atlas wait --app Example
+atlas screenshot
 ```
+
+Atlas copies a build the helper cannot read. The screenshot result gives you a PNG path; open it to check the screen. Use `atlas elements --app Example` to inspect controls before acting, then take another screenshot to verify the effect. When finished:
+
+```sh
+atlas close --app Example
+```
+
+This quits the app and removes Atlas's staged copy. The [daily use guide](docs/using-atlas.md) covers the full workflow and coordinate handling. If the app needs files or tools, [preview and copy only those selections](docs/environment.md), then roll them back when the task is done.
+
+Ordinary command results use JSON when piped; help is text and `atlas agent-guide` prints Markdown. A failed action's result is on stdout; command or connection errors are on stderr. On a non-zero exit, read both. The [CLI guide](docs/cli.md) explains output and exit status.
+
+## Connect your agent
+
+Atlas supports Claude Code, Claude Desktop, Codex, opencode and Pi. Connect installed hosts during setup, in **Settings > Agents**, or with `atlas agents install`. See [Agent connections](docs/agents.md) for host selectors, refresh steps and how to verify the connection.
+
+For project-specific instructions, run `atlas agents project` in the project directory and review the resulting change to its agent instructions. You can also add the same section yourself:
 
 <details>
-<summary>Or paste it yourself</summary>
+<summary>Project instructions to copy</summary>
 
 ```markdown
 ## Test on screen with Atlas
@@ -98,102 +92,26 @@ and test apps without touching my desktop, windows, keyboard or mouse.
 
 </details>
 
-### A test, as an agent runs it
+## Watch and control
 
-```sh
-atlas doctor                                   # ready? if not, what to run
-atlas open build/Debug/Habits.app              # copies the build if the helper can't read it
-atlas wait --app Habits                        # until a window is on screen
-atlas screenshot                               # → {"path": ".../capture.png", "pointsPerPixel": 1}
-atlas elements --app Habits --role AXButton    # buttons by name, with frames
-atlas click --app Habits --name "New Habit"    # exactly one visible element, or a refusal
-atlas type "Stretch" && atlas key return
-atlas close --app Habits                       # quits it and removes Atlas's copy
-```
+The Atlas menu bar panel shows the helper's picture and current activity. Choose **Open Atlas**, or run `atlas monitor`, for the full viewer with Screen, Activity, Apps and Screenshots tabs. Supported agent hosts can also show an embedded Atlas view inside a conversation.
 
-Every command prints JSON when its output is not a terminal and exits non-zero
-on failure. A failed action's result is on stdout; command or connection errors
-are on stderr. On a non-zero exit, read both.
-`atlas agent-guide` prints the full guide agents read.
+Pausing the picture leaves helper work running. **Take Control** gives you the helper's mouse and keyboard while excluding competing agent input. Choose **Give Back** or press **Control-Shift-Esc** when done. **Stop** cancels agent input and prevents further agent actions until you resume them.
 
-| | Commands |
-| --- | --- |
-| **Look** | `screenshot` · `windows` · `elements` · `apps` · `status` |
-| **Act** | `click` · `type` · `key` · `move` · `drag` · `scroll` · `input` (up to 32 actions in two seconds) |
-| **Apps** | `open` · `close` · `wait` · `run` (a command as the helper, 20 s by default, up to 600) |
-| **Prepare** | `readiness` (tools and apps the task needs) · `environment` (copy settings and files in) |
-| **Recover** | `restart` · `start-input` · `doctor` |
-| **Watch** | `menubar` · `monitor` · `switch` |
+Atlas checks the helper account, graphical session and display before input. An unknown action outcome blocks further changes until recovery; it is never blindly replayed. The helper is an ordinary login, not a virtual machine or security sandbox. It shares the Mac's network and speakers, and some native dialogs and browser views need Screen Sharing. Read the [practical limits](docs/using-atlas.md#settings-and-practical-limits) before planning a task.
 
-### How it works
+## Documentation
 
-```text
-  your login                                   helper login (signed in, in the background)
- ┌─────────────────────────────────┐          ┌─────────────────────────────────────────┐
- │                                 │  socket  │  Atlas helper daemon (LaunchAgent)      │
- │  agent ──▶ atlas ───────────────┼─────────▶│  screenshots · windows · elements · run │
- │              │                  │          │  owns Screen Recording + Accessibility  │
- │              │                  │  socket  │                                         │
- │              └──────────────────┼─────────▶│  input service ──▶ session event tap    │
- │                                 │          │                                         │
- │  Atlas.app ◀── HTTP 127.0.0.1 ──┤          │  your build, its windows, its files     │
- │  menu bar · viewer   /<token>/  │          │                                         │
- └─────────────────────────────────┘          └─────────────────────────────────────────┘
-```
+Start at the [documentation index](docs/README.md), or go directly to:
 
-The helper is an ordinary account that stays signed in behind yours. Atlas.app
-runs there as a daemon, holding the helper's Screen Recording and Accessibility
-permissions, and `atlas` reaches it over private Unix sockets that check the
-caller's user ID. Input goes only to the helper's own session, never to your
-keyboard and mouse.
+- [Getting started](docs/getting-started.md): installation and helper setup.
+- [Using Atlas](docs/using-atlas.md): app testing, viewing and control.
+- [Agent connections](docs/agents.md): connect and verify each supported host.
+- [Maintenance](docs/maintenance.md): updates, uninstall choices and reinstalling.
+- [Troubleshooting](docs/troubleshooting.md): diagnose a problem and choose the next step.
 
-### Safety
+## Contributing and license
 
-- **One controller at a time.** A lock per helper; anyone else gets `busy` and
-  waits. When you take control in the viewer you hold a lease that ends if you
-  stop renewing it, and keys still held are released.
-- **Unknown outcomes stop everything.** If Atlas cannot tell whether an action
-  happened, it says `uncertain` and refuses every action after it until
-  `atlas restart` has released held input and started a fresh daemon. Nothing
-  is ever replayed.
-- **Held input is journaled.** A pressed key or button survives a crash only as
-  a record, and the next input service lets it go before anyone acts again.
-- **Normal macOS consent.** Atlas never edits privacy settings or stores
-  passwords; you click Allow once, in the helper.
+[Contributing](CONTRIBUTING.md) covers builds, checks and pull requests. The [architecture guide](docs/architecture.md) maps the code and its responsibilities. Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md). Report security issues privately through the [security policy](SECURITY.md).
 
-### Give the helper what an app needs
-
-The helper starts without your files. When an app needs some, the agent brings
-them in and takes them away again:
-
-- **Builds.** `atlas open` copies a build the helper can't read into
-  `/Users/Shared/Atlas/Open`, read-only for the helper, and `atlas close`
-  deletes the copy.
-- **Settings and files.** `atlas environment MANIFEST` previews a copy of up to
-  32 files; `apply` copies exactly what was previewed; `rollback --apply`
-  removes what was added and puts back what was replaced. Each copy is a
-  resumable transaction, written ahead and fingerprinted (contents, mode,
-  owner, ACL, extended attributes, flags), so Atlas never overwrites a file it
-  did not put there and never throws away a change made in the helper.
-
-Credentials, keychains and sign-ins are never copied, and nothing is ever
-copied back to your account.
-
-### Watch and take over
-
-- **Menu bar:** what the agent is doing, a live thumbnail, Open Viewer and
-  Recover.
-- **Viewer** (Open Viewer, or `atlas monitor`): the helper's screen in its own
-  window, each action as it happens. **Take Control** takes the mouse and
-  keyboard; **Give Back** or Control–Shift–Esc gives them back.
-
-### Contributing
-
-Bug reports, ideas and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md)
-explains how to build Atlas and check a change, and everyone taking part follows
-the [Code of Conduct](CODE_OF_CONDUCT.md). Report security problems privately,
-as [SECURITY.md](SECURITY.md) explains.
-
-### License
-
-[MIT](LICENSE).
+Atlas is licensed under [MIT](LICENSE).
