@@ -26,6 +26,8 @@ struct SettingsSession: Equatable {
   var update = SettingsUpdate.idle
   /// What the last command said, in the pane that ran it.
   var notice: SettingsNotice?
+  /// The last explicit command failure or keyboard-selected search result for VoiceOver.
+  var announcement: String?
   /// Why each agent's last Connect or Disconnect failed, by id; cleared when status confirms the requested state.
   var connectFailures: [String: SettingsAgentFailure] = [:]
 }

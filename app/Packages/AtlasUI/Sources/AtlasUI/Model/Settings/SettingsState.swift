@@ -12,6 +12,8 @@ public struct SettingsState: Equatable, Sendable {
   public var search = SettingsSearchState()
   /// An explicit target reveal, independent of routine status updates.
   public var reveal: SettingsReveal?
+  /// An explicit command failure or keyboard-selected search result, independent of routine refreshes.
+  public var announcement: String?
   /// The General pane.
   public var general: SettingsGeneralState
   /// The Helper pane.

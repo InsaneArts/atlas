@@ -195,6 +195,7 @@ final class SettingsController {
     agentsReading?.cancel()
     agentsReading = nil
     session.search = SettingsSearchState()
+    session.announcement = nil
     session.reveal = nil
     let root = session.navigation.destination?.root ?? .general
     session.navigation = SettingsNavigation(initial: .root(root))

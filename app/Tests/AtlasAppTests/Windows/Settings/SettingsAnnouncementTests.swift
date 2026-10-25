@@ -1,13 +1,107 @@
 import AppKit
 import AsyncSupportTesting
+import AtlasCommandsTesting
 import AtlasUI
 import SwiftUI
 import Testing
 
+@testable import AtlasApp
 @testable import AtlasUI
 
 @Suite("Settings announcements", .serialized, AppKitState())
 struct SettingsAnnouncementTests {
+  @Test(
+    "a failed Connect or Disconnect announces the agent and reason once across status refreshes",
+    arguments: [false, true]
+  )
+  func agentFailuresAnnounceOnce(disconnecting: Bool) async throws {
+    let commands = ScriptedCommands([
+      "agents status":
+        #"{"ok":true,"agents":[{"agent":"claude","installed":true,"connected":true},{"agent":"claude-app","installed":true,"connected":false}]}"#,
+      "agents install":
+        #"{"ok":false,"agents":[{"agent":"claude-app","ok":false,"error":"settings file is not valid JSON"}]}"#,
+      "agents remove":
+        #"{"ok":false,"agents":[{"agent":"claude","ok":false,"error":"could not remove plugin"}]}"#,
+    ])
+    let controller = SettingsController.scripted(commands: commands)
+    await controller.loadAgents()
+    var announced: [String] = []
+    let announce: @MainActor (String) -> Void = { announced.append($0) }
+    let host = NSHostingView(
+      rootView: SettingsView(state: controller.state, edit: { _ in }, announce: announce, send: controller.send)
+    )
+    host.frame = NSRect(x: 0, y: 0, width: SettingsLayout.defaultWidth, height: SettingsLayout.defaultHeight)
+    let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
+    window.contentView = host
+    defer { window.contentView = nil }
+    host.layoutSubtreeIfNeeded()
+    if disconnecting {
+      await controller.disconnect("claude")
+    } else {
+      await controller.connect("claude")
+    }
+    let problem = try #require(controller.state.agents.agents.first?.problem)
+    #expect(problem.contains(disconnecting ? "Couldn't disconnect" : "Couldn't connect"))
+    #expect(problem.contains(disconnecting ? "could not remove plugin" : "settings file has a mistake"))
+    host.rootView = SettingsView(state: controller.state, edit: { _ in }, announce: announce, send: controller.send)
+    host.layoutSubtreeIfNeeded()
+    for _ in 0..<3 {
+      await controller.loadAgents()
+      #expect(controller.state.agents.agents.first?.problem == problem)
+      host.rootView = SettingsView(state: controller.state, edit: { _ in }, announce: announce, send: controller.send)
+      host.layoutSubtreeIfNeeded()
+    }
+    for _ in 0..<20 { await Task.yield() }
+    #expect(announced == ["Claude. \(problem)."])
+  }
+
+  @Test(
+    "keyboard selection announces the result title and breadcrumb once while query edits and refreshes stay distinct"
+  )
+  func keyboardSearchSelectionAnnouncesOnce() async throws {
+    let commands = ScriptedCommands([
+      "agents status":
+        #"{"ok":true,"agents":[],"projects":[{"path":"/sample/workspace/one"},{"path":"/sample/workspace/two"}]}"#
+    ])
+    let controller = SettingsController.scripted(commands: commands)
+    await controller.loadAgents()
+    var announced: [String] = []
+    let announce: @MainActor (String) -> Void = { announced.append($0) }
+    let host = NSHostingView(
+      rootView: SettingsView(state: controller.state, edit: { _ in }, announce: announce, send: controller.send)
+    )
+    host.frame = NSRect(x: 0, y: 0, width: SettingsLayout.defaultWidth, height: SettingsLayout.defaultHeight)
+    let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
+    window.contentView = host
+    defer { window.contentView = nil }
+    host.layoutSubtreeIfNeeded()
+    controller.send(.find)
+    controller.send(.search("workspace"))
+    let results = controller.state.search.results
+    try #require(results.count == 2)
+    host.rootView = SettingsView(state: controller.state, edit: { _ in }, announce: announce, send: controller.send)
+    host.layoutSubtreeIfNeeded()
+    #expect(announced == ["Search results available"])
+    for step in [1, 1, -1, -1, 0] {
+      controller.send(.moveSearchSelection(step))
+      host.rootView = SettingsView(state: controller.state, edit: { _ in }, announce: announce, send: controller.send)
+      host.layoutSubtreeIfNeeded()
+    }
+    commands.answer("agents status", #"{"ok":true,"agents":[],"projects":[{"path":"/sample/workspace/two"}]}"#)
+    await controller.loadAgents()
+    #expect(controller.state.search.selection == results[1].id)
+    host.rootView = SettingsView(state: controller.state, edit: { _ in }, announce: announce, send: controller.send)
+    host.layoutSubtreeIfNeeded()
+    for _ in 0..<20 { await Task.yield() }
+    #expect(
+      announced == [
+        "Search results available",
+        "\(results[1].title), \(results[1].breadcrumb)",
+        "\(results[0].title), \(results[0].breadcrumb)",
+      ]
+    )
+  }
+
   @Test(
     "one check completion or refusal is announced across Helper and Diagnostics without navigation or polling repeats",
     arguments: [nil, "The helper is in use. Try again once it's free."] as [String?]
