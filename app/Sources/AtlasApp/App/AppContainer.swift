@@ -35,9 +35,6 @@ final class AppContainer {
   var menuBar: PanelPopover?
   /// The notification for when Atlas needs the person; made at launch.
   var signals: AttentionSignals?
-  /// The app's lifetime work: the task group the panel's `run()`, the one controller that has one, is a child of.
-  /// Started once at launch; it ends once the panel has learned the helper.
-  var lifetime: Task<Void, Never>?
 
   /// An app that runs `commands` and reads `service`. Nothing runs until ``start()``.
   ///

@@ -54,13 +54,6 @@ extension PanelController {
     }
   }
 
-  /// The panel's work at launch, which the app starts once: learning the helper to switch to. It ends once
-  /// ``findHelper()`` has; the readings run on ``watch(open:)``'s tasks, which the shell starts and the panel's opening
-  /// changes.
-  func run() async {
-    await findHelper()
-  }
-
   /// Reads where Open at Login stands now: the ⋯ menu ticks it, and its item turns it from there. While a change
   /// runs the tick keeps what the person asked for; the change reads it back once it ends.
   func readOpenAtLogin() {
