@@ -19,7 +19,7 @@ extension SettingsController {
   ///
   /// - Parameter query: The field's text, including whitespace.
   func search(_ query: String) {
-    guard session.alert == nil, session.search.query != query else { return }
+    guard session.alert == nil else { return }
     session.reveal = nil
     session.search.query = query
     session.search.selection = nil

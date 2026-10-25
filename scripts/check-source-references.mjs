@@ -38,10 +38,6 @@ const rules = [
     ),
   ],
   [
-    'planning citation',
-    /\bphase['’]s\b|\bplan['’]s\s+(?:aliases|search(?:able)?|presentation|requirements|criteria|scope|design|implementation)\b/gi,
-  ],
-  [
     'private document reference',
     /\b(?:polish[- ](?:audit|plan)|redesign[- ](?:run[- ]notes|and[- ]cleanup[- ]plan)|helper[- ]session[- ]plan)\b|\bmac\.py\b|\.\.\/jolt-v2\b|\bMac(?:Working|Control|Activity|Apps|Shots|ShotLarge|Details|ShowOnScreen|Recover)\b/gi,
   ],

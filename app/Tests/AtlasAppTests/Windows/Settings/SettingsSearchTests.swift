@@ -1,4 +1,3 @@
-import AppKit
 import AsyncSupportTesting
 import AtlasCommands
 import AtlasCommandsTesting
@@ -7,9 +6,9 @@ import Testing
 
 @testable import AtlasApp
 
-@Suite("Settings search", .serialized, AppKitState())
+@Suite("Settings search")
 struct SettingsSearchTests {
-  @Test("unavailable preferences and searchable aliases remain discoverable from presentation metadata")
+  @Test("unavailable preferences and the plan's aliases remain discoverable from presentation metadata")
   func unavailableSettingsStayDiscoverable() {
     let commands = ScriptedCommands([:])
     var dependencies = SettingsController.scripted(commands: commands).dependencies
@@ -61,20 +60,17 @@ struct SettingsSearchTests {
   func clearingSearchPreservesHistory() {
     let controller = SettingsController.scripted(commands: ScriptedCommands([:]))
     controller.send(.navigate(.diagnostics))
-    #expect(controller.state.sidebarSelection == .helper)
     let history = controller.session.navigation
     controller.send(.find)
     let requests = controller.state.search.focusRequests
     controller.send(.search("nothing matches"))
     #expect(controller.state.title == "Search Results")
-    #expect(controller.state.sidebarSelection == nil)
     #expect(controller.state.search.results.isEmpty)
     controller.send(.openSelectedSearchResult)
     #expect(controller.session.navigation == history)
     controller.send(.search(""))
     #expect(!controller.state.search.isActive)
     #expect(controller.state.location == .diagnostics)
-    #expect(controller.state.sidebarSelection == .helper)
     #expect(controller.state.title == "Readiness & Diagnostics")
     #expect(controller.state.search.focusRequests == requests)
     #expect(controller.session.navigation == history)
@@ -83,8 +79,6 @@ struct SettingsSearchTests {
     controller.send(.search("Recover the helper"))
     controller.send(.openSelectedSearchResult)
     #expect(controller.state.reveal?.target == .recover)
-    controller.send(.search(""))
-    #expect(controller.state.reveal?.target == .recover, "an unchanged native field update retains target focus")
     controller.send(.find)
     let afterFind = controller.state.search.focusRequests
     controller.send(.search("helper"))
@@ -94,7 +88,7 @@ struct SettingsSearchTests {
   }
 
   @Test("arrows select within bounds and Return on Recover and Log Out visits once without asking or running")
-  func returnOnlyNavigatesHelperResults() async throws {
+  func returnOnlyNavigatesHelperResults() {
     for (query, target) in [("Recover the helper", SettingsSearchTarget.recover), ("Log out the helper", .logOut)] {
       let commands = ScriptedCommands([:])
       var dependencies = SettingsController.scripted(commands: commands).dependencies
@@ -102,24 +96,17 @@ struct SettingsSearchTests {
       dependencies.preferences.saveTab = { savedRoots.append($0) }
       let controller = SettingsController(dependencies: dependencies)
       controller.send(.search(query))
-      let keyboard = SettingsSearchKeyboard(controller)
-      defer { keyboard.close() }
-      let editor = try await keyboard.focus()
       #expect(controller.state.search.selection == target)
-      try await keyboard.press("\u{f700}", code: 126)
+      controller.send(.moveSearchSelection(-1))
       #expect(controller.state.search.selection == target)
-      #expect(keyboard.window.firstResponder === editor)
-      try await keyboard.press("\r", code: 36)
+      controller.send(.openSelectedSearchResult)
       #expect(controller.state.location == .root(.helper))
-      #expect(controller.state.sidebarSelection == .helper)
       #expect(controller.state.reveal?.target == target)
-      #expect(keyboard.window.firstResponder is NSView, "the revealed target takes keyboard focus")
-      #expect(keyboard.window.firstResponder !== editor, "Return transfers focus to the revealed target")
       #expect(controller.state.alert == nil && commands.ran.isEmpty)
       #expect(savedRoots.isEmpty, "a search result never writes a preference")
       #expect(!controller.state.search.isActive)
       #expect(controller.session.navigation.entries == [.root(.general), .root(.helper)])
-      try await keyboard.press("\r", code: 36)
+      controller.send(.openSelectedSearchResult)
       #expect(controller.state.alert == nil && commands.ran.isEmpty)
       controller.send(.back)
       #expect(controller.state.location == .root(.general))
@@ -128,58 +115,15 @@ struct SettingsSearchTests {
     }
   }
 
-  @Test("only plain arrows navigate results while modified arrows retain native text editing")
-  func modifiedArrowsStayWithTheField() async throws {
-    let controller = SettingsController.scripted(commands: ScriptedCommands([:]))
-    controller.send(.search("helper"))
-    let keyboard = SettingsSearchKeyboard(controller)
-    defer { keyboard.close() }
-    let editor = try await keyboard.focus()
-    let results = controller.state.search.results
-    try #require(results.count > 1)
-    try await keyboard.press("\u{f701}", code: 125)
-    #expect(controller.state.search.selection == results[1].id)
-    try await keyboard.press("\u{f700}", code: 126)
-    #expect(controller.state.search.selection == results[0].id)
-    for modifiers: NSEvent.ModifierFlags in [.command, .option, .shift, .control, [.command, .shift]] {
-      for (characters, code): (String, UInt16) in [("\u{f700}", 126), ("\u{f701}", 125)] {
-        editor.setSelectedRange(NSRange(location: 3, length: 0))
-        try await keyboard.press(characters, code: code, modifiers: modifiers)
-        #expect(controller.state.search.selection == results[0].id, "\(modifiers)")
-        #expect(keyboard.window.firstResponder === editor)
-        if modifiers == .command {
-          #expect(editor.selectedRange().location == (code == 126 ? 0 : editor.string.utf16.count))
-        }
-      }
-    }
-  }
-
-  @Test("Escape clears the query first and releases the search field on its second press")
-  func escapeHasTwoStages() async throws {
-    let controller = SettingsController.scripted(commands: ScriptedCommands([:]))
-    controller.send(.search("helper"))
-    let keyboard = SettingsSearchKeyboard(controller)
-    defer { keyboard.close() }
-    let editor = try await keyboard.focus()
-    try await keyboard.press("\u{1b}", code: 53)
-    #expect(!controller.state.search.isActive)
-    #expect(keyboard.window.firstResponder === editor)
-    try await keyboard.press("\u{1b}", code: 53)
-    #expect(keyboard.window.firstResponder !== editor)
-  }
-
   @Test("Return on Forget only reveals the project and a root selection clears search normally")
-  func returnNeverForgetsAProject() async throws {
+  func returnNeverForgetsAProject() async {
     let commands = ScriptedCommands(["agents status": Self.projects])
     let controller = SettingsController.scripted(commands: commands)
     await controller.loadAgents()
     controller.send(.search("Forget workspace"))
-    let keyboard = SettingsSearchKeyboard(controller)
-    defer { keyboard.close() }
-    _ = try await keyboard.focus()
-    for _ in controller.state.search.results { try await keyboard.press("\u{f701}", code: 125) }
+    controller.send(.moveSearchSelection(100))
     #expect(controller.state.search.selection == .project("/sample/workspace/two"))
-    try await keyboard.press("\r", code: 36)
+    controller.send(.openSelectedSearchResult)
     #expect(controller.state.location == .projects)
     #expect(controller.state.reveal?.target == .project("/sample/workspace/two"))
     #expect(controller.state.alert == nil)

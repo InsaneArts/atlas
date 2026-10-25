@@ -36,13 +36,12 @@ struct SettingsSearchResults: View {
                   send(.openSearchResult(entry.id))
                 }
                 .id(entry.id)
-                .overlay(alignment: .bottom) {
-                  if entry.id != state.results.last?.id {
-                    SeparatorLine()
-                      .padding(.horizontal, Spacing.m)
-                      .accessibilityHidden(true)
-                      .allowsHitTesting(false)
-                  }
+                if entry.id != state.results.last?.id {
+                  Rectangle()
+                    .fill(Color.separator)
+                    .frame(height: Stroke.hairline)
+                    .padding(.horizontal, Spacing.m)
+                    .accessibilityHidden(true)
                 }
               }
             }

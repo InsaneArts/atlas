@@ -59,9 +59,6 @@ public struct SettingsState: Equatable, Sendable {
     search.isActive ? "Search Results" : location.title
   }
 
-  /// Search results span pages, so no sidebar destination is selected while they show.
-  public var sidebarSelection: SettingsRoot? { search.isActive ? nil : location.root }
-
   /// The resolved route, including older samples that select a pane.
   public var location: SettingsDestination { destination ?? .root(SettingsRoot(pane: tabs.selected)) }
 }

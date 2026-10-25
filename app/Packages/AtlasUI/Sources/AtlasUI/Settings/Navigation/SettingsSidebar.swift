@@ -55,7 +55,7 @@ struct SettingsSidebar: View {
     return SettingsSidebarRow(
       item: item,
       subtitle: pane == .helper ? state.helper.account.status.label : nil,
-      selected: state.sidebarSelection == pane
+      selected: state.location.root == pane
     ) { send(.navigate(.root(pane))) }
   }
 }
