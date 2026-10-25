@@ -515,11 +515,14 @@ impl Client {
         let mut reply = match self.native_request(json!({"op": "hold", "on": on})).await {
             Ok(reply) => reply,
             Err(error) if on => {
-                let mut reply = unreachable(if error.uncertain {
-                    "The helper's input service may or may not have been told."
+                let mut reply = if error.uncertain {
+                    unreachable("The helper's input service may or may not have been told.")
                 } else {
-                    "The helper's input service could not be told."
-                })?;
+                    unreachable(&format!(
+                        "The helper's input service reported a problem while stopping: {}.",
+                        error.error.trim_end_matches('.')
+                    ))
+                }?;
                 if error.uncertain {
                     reply["uncertain"] = json!(true);
                 }
@@ -2415,6 +2418,32 @@ mod tests {
         );
         drop(ownership);
         recovery_settles_the_abandoned_claim(&acting);
+    }
+
+    #[tokio::test]
+    async fn a_stop_returns_ok_with_the_native_problem_when_native_hold_fails() {
+        let (_dir, mut person, input, _session) = native_client();
+        person.actor = Actor::Viewer;
+        let mut stopping = Box::pin(person.hold(true));
+        let mut hello = dispatched(&mut stopping, &input, "hello").await;
+        answer(&mut hello, json!({"ok": true, "capabilities": ["hold"]})).await;
+        let mut hold = dispatched(&mut stopping, &input, "hold").await;
+        answer(
+            &mut hold,
+            json!({"ok": false, "error": "Cleanup failed", "uncertain": false}),
+        )
+        .await;
+
+        assert_eq!(
+            stopping.await.unwrap(),
+            json!({
+                "ok": true,
+                "held": true,
+                "kept": true,
+                "warnings": ["The helper's input service reported a problem while stopping: Cleanup failed. Agents are stopped here all the same."],
+            })
+        );
+        assert!(person.controller.stop_noted());
     }
 
     #[tokio::test]
