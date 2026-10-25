@@ -58,7 +58,8 @@ extension SettingsWords {
   }
 
   /// The Forget alert's sentence: what leaves the project, in plain words.
-  static let forgetMessage = "Atlas removes its instructions from this project. Agents there stop using the helper."
+  static let forgetMessage =
+    "Atlas removes its section from this project's instruction files. Connected Atlas plugins keep working."
   /// The Forget alert's button.
   static let forget = "Forget"
   /// The Forget alert's button while it runs.

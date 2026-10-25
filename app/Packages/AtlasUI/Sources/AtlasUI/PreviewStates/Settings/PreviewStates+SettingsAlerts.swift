@@ -33,7 +33,8 @@
       var state = selecting(.agents)
       state.alert = AlertCardState(
         title: "Forget “opie”?",
-        message: "Atlas removes its instructions from this project. Agents there stop using the helper.",
+        message:
+          "Atlas removes its section from this project's instruction files. Connected Atlas plugins keep working.",
         buttons: [
           AlertCardButton(id: .cancel, title: "Cancel", role: .safeCancel),
           AlertCardButton(id: .confirm, title: "Forget", role: .destructive),

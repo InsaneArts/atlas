@@ -821,7 +821,10 @@ fn finish(done_steps: &mut Vec<Value>, settings: &Path) -> Result<()> {
                     );
                     done_steps.push(json!({"step": "menubar", "login": login}));
                 }
-                _ => skipped("Menu bar", "turn on Open at Login from its menu later"),
+                _ => skipped(
+                    "Menu bar",
+                    "turn on Open Atlas at login in Atlas › Settings › General later",
+                ),
             }
         }
     }
