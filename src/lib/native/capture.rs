@@ -12,7 +12,7 @@ use objc2_core_foundation::{
 };
 use objc2_core_graphics::{
     CGBitmapContextCreate, CGBitmapContextCreateImage, CGColorSpace, CGContext, CGDisplayBounds,
-    CGImage, CGImageAlphaInfo, CGImageByteOrderInfo, CGInterpolationQuality, CGMainDisplayID,
+    CGImage, CGImageAlphaInfo, CGImageByteOrderInfo, CGInterpolationQuality,
     CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess,
 };
 use objc2_image_io::{
@@ -203,8 +203,8 @@ pub(crate) fn sample_png(width: usize, height: usize) -> Vec<u8> {
     png(&image).expect("a PNG")
 }
 
-/// The main display, at most `limit` pixels on its longest side.
-pub fn main_display(limit: Option<u32>) -> Result<Shot> {
+/// The checked main display, at most `limit` pixels on its longest side.
+pub fn main_display(display: u32, limit: Option<u32>) -> Result<Shot> {
     if !permitted() {
         return Err(Error::new(
             "permission",
@@ -212,7 +212,6 @@ pub fn main_display(limit: Option<u32>) -> Result<Shot> {
         ));
     }
 
-    let display = CGMainDisplayID();
     let points = CGDisplayBounds(display).size;
     // Deprecated for ScreenCaptureKit, but still a synchronous, consent-gated
     // capture of exactly this display on current macOS (qualified live).
