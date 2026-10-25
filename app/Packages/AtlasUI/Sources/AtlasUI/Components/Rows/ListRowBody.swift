@@ -9,8 +9,6 @@ struct ListRowBody<Trailing: View>: View {
   private let title: String
   /// The detail under it, or nil for none.
   private let detail: String?
-  /// Whether this row's live summary crossfades without changing its identity.
-  private let swapsDetail: Bool
   /// How the detail is set.
   private let detailStyle: ListRow.DetailStyle
   /// A short word on a tint beside the title, or nil for none.
@@ -36,7 +34,6 @@ struct ListRowBody<Trailing: View>: View {
   /// - Parameters:
   ///   - title: The title.
   ///   - detail: The detail under it, or nil for none.
-  ///   - swapsDetail: Whether changes to the detail crossfade; false by default.
   ///   - detailStyle: How the detail is set; secondary text by default.
   ///   - tag: A short word on a tint beside the title; none by default.
   ///   - titleFit: How the title fits the row's width; up to two lines by default.
@@ -49,7 +46,6 @@ struct ListRowBody<Trailing: View>: View {
   init(
     _ title: String,
     detail: String? = nil,
-    swapsDetail: Bool = false,
     detailStyle: ListRow.DetailStyle = .plain,
     tag: String? = nil,
     titleFit: ListRow.TitleFit = .twoLines,
@@ -62,7 +58,6 @@ struct ListRowBody<Trailing: View>: View {
   ) {
     self.title = title
     self.detail = detail
-    self.swapsDetail = swapsDetail
     self.detailStyle = detailStyle
     self.tag = tag
     self.titleFit = titleFit
@@ -105,7 +100,11 @@ struct ListRowBody<Trailing: View>: View {
           }
         }
         if let detail {
-          detailText(detail)
+          Text(detail)
+            .textStyle(detailStyle == .path ? .callout : size.detailStyle)
+            .foregroundStyle(detailStyle.color)
+            .lineLimit(detailStyle == .path ? 1 : nil)
+            .truncationMode(.middle)
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -123,22 +122,5 @@ struct ListRowBody<Trailing: View>: View {
     }
     .contentShape(Rectangle())
     .accessibilityElement(children: accessibilityChildren)
-  }
-
-  /// Crossfades live summaries only where requested, leaving other rows' text behavior intact.
-  ///
-  /// - Parameter detail: The row's secondary words.
-  /// - Returns: The styled secondary text.
-  @ViewBuilder private func detailText(_ detail: String) -> some View {
-    let text = Text(detail)
-      .textStyle(detailStyle == .path ? .callout : size.detailStyle)
-      .foregroundStyle(detailStyle.color)
-      .lineLimit(detailStyle == .path ? 1 : nil)
-      .truncationMode(.middle)
-    if swapsDetail {
-      text.swapsText(on: detail)
-    } else {
-      text
-    }
   }
 }

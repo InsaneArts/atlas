@@ -30,10 +30,7 @@ struct AgentsPane: View {
         title: SettingsSearchCatalog.projectsTitle,
         description: SettingsSearchCatalog.projectsDetail
       ) { _ in
-        SettingsDisclosureRow(title: "Projects", summary: state.projectsSummary, destination: .projects) {
-          send(.navigate(.projects))
-        }
-        .id(SettingsSearchTarget.disclosure(.projects))
+        SettingsDisclosureRow(title: "Projects", summary: state.projectsSummary) { send(.navigate(.projects)) }
       }
     }
   }

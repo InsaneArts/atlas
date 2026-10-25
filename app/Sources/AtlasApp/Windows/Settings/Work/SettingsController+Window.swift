@@ -6,7 +6,9 @@ extension SettingsController {
   ///
   /// - Parameter forward: Whether to move forward rather than back.
   func moveInHistory(forward: Bool) {
-    guard session.alert == nil, !state.search.isActive else { return }
+    session.reveal = nil
+    session.search.query = ""
+    session.search.selection = nil
     let before = session.navigation.destination
     if forward {
       session.navigation.forward()
@@ -14,13 +16,6 @@ extension SettingsController {
       session.navigation.back()
     }
     guard let destination = session.navigation.destination, destination != before else { return }
-    let target: SettingsSearchTarget
-    if let before, before == .diagnostics || before == .projects, destination == .root(before.root) {
-      target = .disclosure(before)
-    } else {
-      target = .page(destination)
-    }
-    session.reveal = SettingsReveal(target: target, request: (session.reveal?.request ?? 0) + 1)
     enteredDestination()
   }
 

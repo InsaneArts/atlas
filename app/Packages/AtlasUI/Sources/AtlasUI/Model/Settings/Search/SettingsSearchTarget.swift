@@ -2,8 +2,6 @@
 public enum SettingsSearchTarget: Hashable, Sendable {
   /// A page heading.
   case page(SettingsDestination)
-  /// The root page's link to one of its details.
-  case disclosure(SettingsDestination)
   /// The startup preference.
   case startup
   /// The screen cadence.
@@ -39,7 +37,6 @@ public enum SettingsSearchTarget: Hashable, Sendable {
   public var destination: SettingsDestination {
     switch self {
     case .page(let destination): destination
-    case .disclosure(let destination): .root(destination.root)
     case .startup: .root(.general)
     case .cadence: .root(.screen)
     case .notifications: .root(.notifications)

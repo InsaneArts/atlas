@@ -65,13 +65,6 @@
       "55-search-long-query",
       "56-search-long-breadcrumbs",
       "57-search-alert",
-      "58-recover-refused",
-      "59-recovered",
-      "60-logging-out",
-      "61-logging-out-anyway",
-      "62-forgetting",
-      "63-installing",
-      "64-keyboard-focus",
     ]
 
     /// Every Settings state drawn for visual checks, by file name.
@@ -83,11 +76,6 @@
     static var popupRenders: [(file: String, state: SettingsState)] {
       renders.filter { ["29-screen-live", "30-screen-five-seconds", "31-screen-paused"].contains($0.file) }
         .map { ("popup-\($0.file)", $0.state) }
-    }
-
-    /// Each alert phase plus overflow and keyboard focus in explicit accessibility environments.
-    static var accessibilityRenders: [(file: String, state: SettingsState)] {
-      renders.filter { $0.state.alert != nil || ["45-long-helper", "64-keyboard-focus"].contains($0.file) }
     }
 
     /// Additional stable viewports; the original 28 state scenarios remain in their original order above.
@@ -126,14 +114,7 @@
       let popups = popupRenders.map {
         draw($0.file, $0.state, to: folder, reduceTransparency: reduceTransparency, voiceOver: true)
       }
-      let accessible = accessibilityRenders.flatMap { render in
-        [
-          draw("reduced-motion-\(render.file)", render.state, to: folder, reduceMotion: true),
-          draw("reduced-transparency-\(render.file)", render.state, to: folder, reduceTransparency: true),
-          draw("increased-contrast-\(render.file)", render.state, to: folder, contrast: .increased),
-        ]
-      }
-      return (standard + viewports + popups + accessible)
+      return (standard + viewports + popups)
         .allSatisfy { $0 }
     }
 
@@ -146,8 +127,6 @@
     ///   - reduceTransparency: Whether to draw it as under Reduce Transparency; not by default.
     ///   - size: The explicit viewport, or the stable default when nil.
     ///   - voiceOver: Whether to draw the accessible popup presentation; false by default.
-    ///   - reduceMotion: Whether the fixture uses Reduce Motion; false by default.
-    ///   - contrast: The fixture's contrast; standard by default.
     /// - Returns: Whether it was drawn.
     static func draw(
       _ file: String,
@@ -155,15 +134,11 @@
       to folder: URL,
       reduceTransparency: Bool = false,
       size: NSSize? = nil,
-      voiceOver: Bool = false,
-      reduceMotion: Bool = false,
-      contrast: ColorSchemeContrast = .standard
+      voiceOver: Bool = false
     ) -> Bool {
       PNG.write(
         view(state) { _ in }
           .environment(\.settingsPicturePopup, voiceOver)
-          .environment(\._accessibilityReduceMotion, reduceMotion)
-          .environment(\._colorSchemeContrast, contrast)
           .environment(\._accessibilityReduceTransparency, reduceTransparency),
         size: size ?? Self.size(of: state),
         to: folder.appendingPathComponent("\(file).png")

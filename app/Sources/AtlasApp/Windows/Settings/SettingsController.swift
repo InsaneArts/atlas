@@ -167,12 +167,11 @@ final class SettingsController {
   ///
   /// - Parameter destination: The requested root or detail.
   func navigate(_ destination: SettingsDestination) {
-    guard session.alert == nil else { return }
+    session.reveal = nil
     session.search.query = ""
     session.search.selection = nil
     guard destination != session.navigation.destination else { return }
     session.navigation.visit(destination)
-    session.reveal = SettingsReveal(target: .page(destination), request: (session.reveal?.request ?? 0) + 1)
     enteredDestination()
   }
 

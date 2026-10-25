@@ -27,14 +27,9 @@ struct HelperPane: View {
       VStack(alignment: .leading, spacing: SettingsLayout.titleGap) {
         HelperReadyHeader { send(.checkAgain) }
         GroupedSection([HelperAction.recover], notes: readyNotes) { _ in
-          SettingsDisclosureRow(
-            title: "Readiness & Diagnostics",
-            summary: state.readinessSummary,
-            destination: .diagnostics
-          ) {
+          SettingsDisclosureRow(title: "Readiness & Diagnostics", summary: state.readinessSummary) {
             send(.navigate(.diagnostics))
           }
-          .id(SettingsSearchTarget.disclosure(.diagnostics))
         }
         GroupedSection(state.ready.filter { $0.item.state == .notReady }) { row in
           HelperReadyRow(row: row, buttons: state.buttons) { send(.askRecover) }

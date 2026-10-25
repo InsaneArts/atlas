@@ -8,7 +8,6 @@ struct ListRowLead: View {
   let lead: ListRow.Lead
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.marksSwapAtOnce) private var swapsAtOnce
-  @Environment(\.marksFade) private var marksFade
 
   /// The lead, or nothing.
   var body: some View {
@@ -38,10 +37,7 @@ struct ListRowLead: View {
     case .check(let state):
       OutcomeMark(kind: StatusLine.Kind(state), side: ListRow.leadWidth(lead))
         .id(state)
-        .transition(
-          marksFade
-            ? .opacity : Motion.transition(Self.landing(state, swapsAtOnce: swapsAtOnce), reduceMotion: reduceMotion)
-        )
+        .transition(Motion.transition(Self.landing(state, swapsAtOnce: swapsAtOnce), reduceMotion: reduceMotion))
     case .pending:
       Circle()
         .strokeBorder(Color.strokeControl, lineWidth: Layout.ring)

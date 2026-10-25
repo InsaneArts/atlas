@@ -28,7 +28,6 @@ struct SettingsSidebarRow: View {
             Text(subtitle)
               .textStyle(.caption)
               .foregroundStyle(Color.textSecondary)
-              .swapsText(on: subtitle)
           }
         }
         .fixedSize(horizontal: false, vertical: true)

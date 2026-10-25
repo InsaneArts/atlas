@@ -2,7 +2,7 @@ import SwiftUI
 
 /// One readiness check: its mark, its name, and, while it is not ready, its fix in orange under it, with Recover… at
 /// its end where Recover is the fix. While Check Again reads, each mark turns to a spinner at once, by a fade with no
-/// scale; as the reading lands each result fades in ``SettingsLayout/checkStagger(index:)`` after the row's start, so
+/// scale; as the reading lands each result pops in ``SettingsLayout/checkStagger(index:)`` after the row's start, so
 /// the rows land one after another, top first. VoiceOver hears Checking while it reads, never the result it is
 /// replacing.
 struct HelperReadyRow: View {
@@ -12,6 +12,7 @@ struct HelperReadyRow: View {
   let buttons: SettingsHelperButtons
   /// Asks to recover the helper.
   let recover: @MainActor () -> Void
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   /// What it draws, from its state.
   var body: some View {
@@ -45,10 +46,11 @@ struct HelperReadyRow: View {
     }
   }
 
-  /// A short fade to a spinner at once, then to a result later for each row down.
+  /// How the mark changes: to a spinner at once, by a quick fade; to a result by a pop, later for each row down, or
+  /// under Reduce Motion by a short fade, still staggered.
   private var markChange: Animation {
     guard !row.isChecking else { return Motion.markFill }
-    return Motion.textSwap
+    return Motion.animation(Motion.pop, reduceMotion: reduceMotion, reduced: Motion.textSwap)
       .delay(SettingsLayout.checkStagger(index: row.index))
   }
 }

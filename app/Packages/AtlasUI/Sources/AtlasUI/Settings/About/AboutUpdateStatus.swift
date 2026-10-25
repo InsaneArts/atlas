@@ -2,7 +2,7 @@ import SwiftUI
 
 /// What About says about updates, in the one spot under its buttons, which always keeps
 /// ``SettingsLayout/aboutStatusHeight``, so the window never grows or shrinks as the check goes: a spinner while a
-/// check runs, a green check, the sparkles beside a newer version, one progress bar over the install, the
+/// check runs, a green check that pops in, the sparkles beside a newer version, one progress bar over the install, the
 /// problem line, with Show in Finder when Atlas must move, or plain words whose web address is a link. A new line
 /// swaps in place of the last by opacity.
 struct AboutUpdateStatus: View {
@@ -35,7 +35,7 @@ struct AboutUpdateStatus: View {
     case .working(let text):
       StatusLine(kind: .working, text: text)
     case .done(let text):
-      StatusLine(kind: .done, text: text)
+      StatusLine(kind: .done, text: text, popsMark: true)
     case .problem(let text):
       StatusLine(kind: .problem, text: text)
     case .misplaced(let text):
