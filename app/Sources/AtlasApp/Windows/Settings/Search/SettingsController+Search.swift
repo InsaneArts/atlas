@@ -39,7 +39,10 @@ extension SettingsController {
     let result = search.results[next]
     guard result.id != search.selection else { return }
     session.search.selection = result.id
-    let title = if case .project(let path) = result.id { "\(result.title), \(path)" } else { result.title }
+    let title =
+      if case .project(let path) = result.id { "\(result.title), \(SettingsPresenter.projectPath(path))" } else {
+        result.title
+      }
     session.announce("\(title), \(result.breadcrumb)")
   }
 

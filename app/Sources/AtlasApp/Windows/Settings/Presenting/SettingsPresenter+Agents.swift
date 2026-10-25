@@ -118,10 +118,18 @@ extension SettingsPresenter {
     return SettingsProjectRow(
       id: project.path,
       name: name,
-      detail: taught ? (project.path as NSString).abbreviatingWithTildeInPath : SettingsWords.sectionGone,
+      detail: taught ? projectPath(project.path) : SettingsWords.sectionGone,
       detailIsPath: taught,
       forgetLabel: SettingsWords.forgetLabel(name)
     )
+  }
+
+  /// A project's path with the home folder as `~`.
+  ///
+  /// - Parameter path: The folder's path.
+  /// - Returns: The abbreviated path.
+  static func projectPath(_ path: String) -> String {
+    (path as NSString).abbreviatingWithTildeInPath
   }
 
   /// A project's name: its folder's.

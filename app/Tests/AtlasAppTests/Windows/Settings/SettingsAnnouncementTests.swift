@@ -104,6 +104,45 @@ struct SettingsAnnouncementTests {
     )
   }
 
+  @Test("a project under the home folder is announced with ~ and keeps its absolute path identity")
+  func homeProjectAnnouncesAbbreviatedPath() async throws {
+    let path = NSHomeDirectory() + "/dev/workspace"
+    let commands = ScriptedCommands([
+      "agents status":
+        #"{"ok":true,"agents":[],"projects":[{"path":"/sample/workspace"},{"path":"\#(path)"}]}"#
+    ])
+    let controller = SettingsController.scripted(commands: commands)
+    await controller.loadAgents()
+    var announced: [String] = []
+    let announce: @MainActor (String) -> Void = { announced.append($0) }
+    let host = NSHostingView(
+      rootView: SettingsView(state: controller.state, edit: { _ in }, announce: announce, send: controller.send)
+    )
+    host.frame = NSRect(x: 0, y: 0, width: SettingsLayout.defaultWidth, height: SettingsLayout.defaultHeight)
+    let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
+    window.contentView = host
+    defer { window.contentView = nil }
+    host.layoutSubtreeIfNeeded()
+    controller.send(.find)
+    controller.send(.search("workspace"))
+    let results = controller.state.search.results
+    try #require(results.count == 2)
+    #expect(results[1].id == .project(path))
+    host.rootView = SettingsView(state: controller.state, edit: { _ in }, announce: announce, send: controller.send)
+    host.layoutSubtreeIfNeeded()
+    controller.send(.moveSearchSelection(1))
+    #expect(controller.state.search.selection == .project(path))
+    host.rootView = SettingsView(state: controller.state, edit: { _ in }, announce: announce, send: controller.send)
+    host.layoutSubtreeIfNeeded()
+    for _ in 0..<20 { await Task.yield() }
+    #expect(
+      announced == [
+        "Search results available",
+        "workspace, ~/dev/workspace, Agents › Projects",
+      ]
+    )
+  }
+
   @Test(
     "keyboard selection announces the result title and breadcrumb once while query edits and refreshes stay distinct"
   )
