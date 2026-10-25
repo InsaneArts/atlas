@@ -60,23 +60,25 @@ struct HelperPane: View {
   @ViewBuilder private func actionRow(_ action: HelperAction) -> some View {
     switch action {
     case .recover:
-      ListRow(
+      ListRowBody(
         SettingsSearchCatalog.recover.title,
         detail: SettingsSearchCatalog.recover.detail,
-        trailing: .button("Recover…"),
         size: .compact
-      ) { send(.askRecover) }
-      .environment(\.settingsAlertControl, true)
+      ) {
+        SettingsAlertButton("Recover…") { send(.askRecover) }
+          .buttonStyle(.capsule(.glass, size: .mini))
+      }
       .disabled(!state.buttons.canRecover)
       .settingsTarget(.recover)
     case .logOut:
-      ListRow(
+      ListRowBody(
         SettingsSearchCatalog.logOut.title,
         detail: SettingsSearchCatalog.logOut.detail,
-        trailing: .button("Log Out…"),
         size: .compact
-      ) { send(.askLogOut) }
-      .environment(\.settingsAlertControl, true)
+      ) {
+        SettingsAlertButton("Log Out…") { send(.askLogOut) }
+          .buttonStyle(.capsule(.glass, size: .mini))
+      }
       .disabled(!state.buttons.canLogOut)
       .settingsTarget(.logOut)
     }
