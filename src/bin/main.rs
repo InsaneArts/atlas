@@ -122,7 +122,7 @@ enum Command {
         request: String,
         /// Refuse unless this account matches this JSON account identity.
         #[arg(long)]
-        account: Option<String>,
+        account: String,
         /// Refuse unless this account is logged out.
         #[arg(long)]
         logged_out: bool,
@@ -1377,9 +1377,7 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
         } => atlas::setup::helper::run_guarded(
             &request,
             &atlas::setup::helper::Guard {
-                account: account
-                    .map(|text| serde_json::from_str(&text))
-                    .transpose()?,
+                account: Some(serde_json::from_str(&account)?),
                 logged_out,
             },
         ),
@@ -2171,6 +2169,18 @@ mod tests {
 
     fn parse(args: &[&str]) -> std::result::Result<Cli, clap::Error> {
         Cli::try_parse_from(std::iter::once("atlas").chain(args.iter().copied()))
+    }
+
+    #[test]
+    fn setup_workers_require_an_explicit_account_identity() {
+        let request = r#"{"action":"prepare","uid":502,"controller":"controller"}"#;
+        assert_eq!(
+            parse(&["setup-helper", request]).err().unwrap().kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+        let identity =
+            r#"{"uid":502,"name":"helper","generatedUid":"6DB4B7AF-BE3C-486C-BD46-1B4558946919"}"#;
+        assert!(parse(&["setup-helper", request, "--account", identity]).is_ok());
     }
 
     #[test]

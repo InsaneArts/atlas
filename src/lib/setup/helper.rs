@@ -208,7 +208,7 @@ impl Layout {
         if let Some(guard) = &self.guard {
             let account = checked_account(
                 guard,
-                || observe(self.uid, guard),
+                || observe(self.uid),
                 || crate::session::confirm_gone(&[self.uid]),
                 || crate::session::logged_out(self.uid) == Some(true),
             )?;
@@ -258,28 +258,22 @@ impl Layout {
 /// What a request checks of its own account before it does anything.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Guard {
-    /// The GeneratedUID the account must have: the helper as recorded.
+    /// The required identity, recorded or established by legacy provenance.
     pub account: Option<super::identity::Identity>,
     /// The account must be logged out: no loginwindow and no Dock.
     pub logged_out: bool,
 }
 
-/// Read the account, its home, and (when expected) its persistent identity.
+/// Read the account, its home, and its persistent identity.
 /// A changed directory mapping is refused, rather than joining two accounts' facts.
-fn observe(uid: u32, guard: &Guard) -> Result<(super::Account, Option<super::identity::Identity>)> {
+fn observe(uid: u32) -> Result<(super::Account, Option<super::identity::Identity>)> {
     let account = account_with_uid(uid)?.ok_or_else(|| problem("Helper account not found"))?;
-    let identity = if guard.account.is_some() {
-        Some(
-            super::identity::current(&account)
-                .ok_or_else(|| problem("macOS could not read the helper's account identity"))?,
-        )
-    } else {
-        None
-    };
+    let identity = super::identity::current(&account)
+        .ok_or_else(|| problem("macOS could not read the helper's account identity"))?;
     if account_with_uid(uid)?.as_ref() != Some(&account) {
         return Err(problem("The helper account changed while it was checked"));
     }
-    Ok((account, identity))
+    Ok((account, Some(identity)))
 }
 
 /// Resolve the expected account again after logout verification, then observe
@@ -290,12 +284,14 @@ fn checked_account(
     wait: impl FnOnce() -> bool,
     out_now: impl FnOnce() -> bool,
 ) -> Result<super::Account> {
+    let expected = guard.account.as_ref().ok_or_else(|| {
+        problem("setup-helper requires an expected account identity; nothing was changed")
+    })?;
     let check = |account: &super::Account, identity: &Option<super::identity::Identity>| {
-        if guard.account.as_ref().is_some_and(|expected| {
-            identity.as_ref() != Some(expected)
-                || account.uid != expected.uid
-                || account.name != expected.name
-        }) {
+        if identity.as_ref() != Some(expected)
+            || account.uid != expected.uid
+            || account.name != expected.name
+        {
             Err(problem(
                 "This account is no longer the helper Atlas chose, so nothing more was changed",
             ))
@@ -320,10 +316,28 @@ fn checked_account(
     Ok(account)
 }
 
-/// Run setup only as the requested account, revalidating its home and any
-/// supplied identity after waits and before each mutation.
+/// Run setup only as the expected account, requiring and revalidating its
+/// identity and home after waits and before each mutation.
 pub fn run_guarded(request: &str, guard: &Guard) -> Result<Value> {
     let request: Request = serde_json::from_str(request)?;
+    run_guarded_with(
+        request,
+        guard,
+        || observe(nix::unistd::getuid().as_raw()),
+        || crate::session::confirm_gone(&[nix::unistd::getuid().as_raw()]),
+        || crate::session::logged_out(nix::unistd::getuid().as_raw()) == Some(true),
+        execute,
+    )
+}
+
+fn run_guarded_with(
+    request: Request,
+    guard: &Guard,
+    read: impl FnMut() -> Result<(super::Account, Option<super::identity::Identity>)>,
+    wait: impl FnOnce() -> bool,
+    out_now: impl FnOnce() -> bool,
+    execute: impl FnOnce(Request, &Layout) -> Result<Value>,
+) -> Result<Value> {
     let uid = nix::unistd::getuid().as_raw();
     // Never as root with the helper's real user ID: files would be root's,
     // written in a home the helper controls.
@@ -336,43 +350,40 @@ pub fn run_guarded(request: &str, guard: &Guard) -> Result<Value> {
         ));
     }
 
-    let account = checked_account(
-        guard,
-        || observe(uid, guard),
-        || crate::session::confirm_gone(&[uid]),
-        || crate::session::logged_out(uid) == Some(true),
-    )?;
+    let account = checked_account(guard, read, wait, out_now)?;
     let layout = Layout {
         uid,
         home: account.home,
         guard: Some(guard.clone()),
     };
 
+    execute(request, &layout)
+}
+
+fn execute(request: Request, layout: &Layout) -> Result<Value> {
     match request {
-        Request::Inspect { labels, .. } => inspect(&layout, &labels),
-        Request::Prepare { controller, .. } => prepare(&layout, &controller),
-        Request::Install { agent } => install(&layout, &agent),
+        Request::Inspect { labels, .. } => inspect(layout, &labels),
+        Request::Prepare { controller, .. } => prepare(layout, &controller),
+        Request::Install { agent } => install(layout, &agent),
         Request::Retire {
             label,
             sha256,
             missing_ok,
             ..
-        } => retire(&layout, &label, &sha256, missing_ok),
+        } => retire(layout, &label, &sha256, missing_ok),
         Request::CheckRetire {
             label,
             sha256,
             missing_ok,
             ..
         } => {
-            retirement_with(&layout, &label, &sha256, missing_ok, || {
-                job(&layout, &label)
-            })?;
+            retirement_with(layout, &label, &sha256, missing_ok, || job(layout, &label))?;
             Ok(json!({"ok": true}))
         }
-        Request::Restore { label, sha256, .. } => restore(&layout, &label, &sha256),
-        Request::FirstLogin { opener, .. } => super::first_login::first_login(&layout, opener),
-        Request::ForgetOpener { .. } => super::first_login::forget_opener(&layout),
-        Request::Kickstart { .. } => {
+        Request::Restore { label, sha256, .. } => restore(layout, &label, &sha256),
+        Request::FirstLogin { opener, .. } => super::first_login::first_login(layout, opener),
+        Request::ForgetOpener { .. } => super::first_login::forget_opener(layout),
+        Request::Kickstart { uid } => {
             layout.check()?;
             let output = Command::new("/bin/launchctl")
                 .args(["kickstart", &format!("gui/{uid}/{LABEL}")])
@@ -843,45 +854,170 @@ fn restore(layout: &Layout, label: &str, sha256: &str) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn legacy_setup_needs_no_record_and_still_honors_logout_checks() {
-        let dir = tempfile::tempdir().unwrap();
-        let account = super::super::Account {
+    fn an_expected_identity_is_checked_again_even_without_a_logout_wait() {
+        let identity = super::super::identity::Identity {
             uid: 7001,
             name: "helper".into(),
-            home: dir.path().into(),
+            generated_uid: "6DB4B7AF-BE3C-486C-BD46-1B4558946919".into(),
         };
-        let checked = checked_account(
-            &Guard::default(),
-            || Ok((account.clone(), None)),
-            || panic!("ordinary setup does not wait for logout"),
-            || panic!("ordinary setup does not require logout"),
-        )
-        .unwrap();
-        fs::write(checked.home.join("setup-step"), b"complete").unwrap();
-        assert_eq!(
-            fs::read(dir.path().join("setup-step")).unwrap(),
-            b"complete"
-        );
+        let account = super::super::Account {
+            uid: identity.uid,
+            name: identity.name.clone(),
+            home: "/Users/helper".into(),
+        };
         let guard = Guard {
-            logged_out: true,
-            ..Guard::default()
+            account: Some(identity.clone()),
+            logged_out: false,
         };
+        for observed in [
+            None,
+            Some(super::super::identity::Identity {
+                generated_uid: "11111111-2222-3333-4444-555555555555".into(),
+                ..identity.clone()
+            }),
+        ] {
+            let mut reads = 0;
+            let error = checked_account(
+                &guard,
+                || {
+                    reads += 1;
+                    Ok((
+                        account.clone(),
+                        if reads == 1 {
+                            Some(identity.clone())
+                        } else {
+                            observed.clone()
+                        },
+                    ))
+                },
+                || panic!("no logout wait was requested"),
+                || panic!("no logout check was requested"),
+            )
+            .unwrap_err();
+            assert_eq!(reads, 2);
+            assert!(!error.uncertain);
+        }
         assert!(
             checked_account(
-                &guard,
-                || Ok((account.clone(), None)),
+                &Guard {
+                    logged_out: true,
+                    ..guard
+                },
+                || Ok((account.clone(), Some(identity.clone()))),
                 || false,
-                || panic!("an unsuccessful logout wait refuses immediately"),
+                || panic!("a failed logout wait refuses immediately"),
             )
             .is_err()
         );
-        assert!(
-            checked_account(&guard, || Ok((account.clone(), None)), || true, || false,).is_err()
-        );
-        assert_eq!(
-            checked_account(&guard, || Ok((account.clone(), None)), || true, || true,).unwrap(),
-            account
-        );
+    }
+
+    #[test]
+    fn a_missing_identity_refuses_before_account_lookup_or_logout_waits() {
+        for logged_out in [false, true] {
+            let error = checked_account(
+                &Guard {
+                    account: None,
+                    logged_out,
+                },
+                || panic!("a missing identity must refuse before account lookup"),
+                || panic!("a missing identity must refuse before waiting"),
+                || panic!("a missing identity must refuse before session inspection"),
+            )
+            .unwrap_err();
+            assert!(
+                error
+                    .error
+                    .contains("requires an expected account identity")
+            );
+            assert!(!error.uncertain);
+        }
+    }
+
+    #[test]
+    fn every_worker_request_without_an_identity_refuses_before_dispatch() {
+        let uid = nix::unistd::getuid().as_raw();
+        let dir = tempfile::tempdir().unwrap();
+        let layout = Layout::new(uid, dir.path().into());
+        for request in [
+            Request::Prepare {
+                uid,
+                controller: "controller".into(),
+            },
+            Request::Install {
+                agent: Agent {
+                    label: LABEL.into(),
+                    program: "/bin/sh".into(),
+                    uid,
+                    controller_uid: uid + 1,
+                    socket: layout.socket(),
+                },
+            },
+            Request::Retire {
+                uid,
+                label: "old".into(),
+                sha256: "a".repeat(64),
+                missing_ok: false,
+            },
+            Request::Restore {
+                uid,
+                label: "old".into(),
+                sha256: "a".repeat(64),
+            },
+            Request::FirstLogin { uid, opener: true },
+            Request::ForgetOpener { uid },
+            Request::Kickstart { uid },
+            Request::Inspect {
+                uid,
+                labels: vec![LABEL.into()],
+            },
+            Request::CheckRetire {
+                uid,
+                label: "old".into(),
+                sha256: "a".repeat(64),
+                missing_ok: false,
+            },
+        ] {
+            for logged_out in [false, true] {
+                let guard = Guard {
+                    account: None,
+                    logged_out,
+                };
+                let error = run_guarded_with(
+                    request.clone(),
+                    &guard,
+                    || {
+                        Ok((
+                            super::super::Account {
+                                uid,
+                                name: "helper".into(),
+                                home: dir.path().into(),
+                            },
+                            None,
+                        ))
+                    },
+                    || true,
+                    || true,
+                    |_, layout| {
+                        fs::write(layout.home.join("mutation"), b"changed").unwrap();
+                        panic!("no filesystem or launchd action may be dispatched")
+                    },
+                )
+                .unwrap_err();
+                assert!(
+                    error
+                        .error
+                        .contains("requires an expected account identity"),
+                    "{request:?}: {error}"
+                );
+                assert!(!error.uncertain);
+                let guarded = Layout {
+                    guard: Some(guard),
+                    ..Layout::new(uid, dir.path().into())
+                };
+                assert!(guarded.check().is_err());
+            }
+        }
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 
     #[test]

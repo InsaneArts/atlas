@@ -1347,7 +1347,7 @@ mod tests {
         let recorded = super::super::identity::Identity {
             uid: 502,
             name: "helper".into(),
-            generated_uid: "chosen".into(),
+            generated_uid: "6DB4B7AF-BE3C-486C-BD46-1B4558946919".into(),
         };
         let sessions = legacy_sessions(1000, 900);
         let expected = setup_identity_with(
@@ -1369,12 +1369,32 @@ mod tests {
                 uid: 502,
                 controller: "c".into(),
             },
+            Request::Install {
+                agent: Agent {
+                    label: LABEL.into(),
+                    program: "/Applications/Atlas.app/Contents/MacOS/Atlas".into(),
+                    uid: 502,
+                    controller_uid: 501,
+                    socket: "/Users/helper/.atlas/helper/502.sock".into(),
+                },
+            },
             Request::Retire {
                 uid: 502,
                 label: "old".into(),
                 sha256: "a".repeat(64),
                 missing_ok: false,
             },
+            Request::Restore {
+                uid: 502,
+                label: "old".into(),
+                sha256: "a".repeat(64),
+            },
+            Request::FirstLogin {
+                uid: 502,
+                opener: true,
+            },
+            Request::ForgetOpener { uid: 502 },
+            Request::Kickstart { uid: 502 },
         ] {
             let argv = helper_argv_with(&client, &request, expected.clone()).unwrap();
             assert_eq!(argv[3], "--account");
