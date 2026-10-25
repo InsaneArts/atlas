@@ -174,6 +174,10 @@ struct ViewerReadingLoopTests {
     let frame = viewer.reading.frame
     let started = ReleaseSignal()
     let finish = ReleaseSignal()
+    defer {
+      started.open()
+      finish.open()
+    }
     let reading = Task {
       await viewer.readingLoop.read(viewer.readingLoop.generation) { frame in
         let decoded = await DesktopPicture.decode(frame)
@@ -182,14 +186,15 @@ struct ViewerReadingLoopTests {
         return decoded
       }
     }
-    await started.wait()
+    let waitingForDecode = Task { await started.wait() }
+    try await waitingForDecode.value("the picture decode never started", within: Ceiling.work)
     if stopped {
       viewer.readingLoop.watch(false)
     } else {
       await viewer.readingLoop.readStatus()
     }
     finish.open()
-    await reading.value
+    try await reading.value("the superseded reading never ended", within: Ceiling.work)
     #expect(viewer.reading.picture == shown)
     #expect(viewer.reading.frame?.id == frame?.id)
     #expect(viewer.reading.unavailable == nil)
