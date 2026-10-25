@@ -387,6 +387,7 @@ impl Drop for Ownership {
         if let Some(note) = &self.person {
             let _ = fs::remove_file(note);
         }
+        let _ = FileExt::unlock(&self._lock);
     }
 }
 
@@ -895,6 +896,26 @@ impl Drop for ActionPermit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dropping_ownership_releases_control_while_a_duplicate_descriptor_stays_open() {
+        if !crate::transaction_test::isolated(
+            "control::tests::dropping_ownership_releases_control_while_a_duplicate_descriptor_stays_open",
+        ) {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, directory.path());
+        let ownership = controller.acquire_for_person().unwrap();
+        let duplicate = ownership._lock.try_clone().unwrap();
+        assert_eq!(controller.acquire(false).unwrap_err().code, "busy");
+
+        drop(ownership);
+
+        assert!(!controller.person.exists());
+        let _next = controller.acquire(false).unwrap();
+        assert!(duplicate.metadata().is_ok());
+    }
 
     #[test]
     fn executor_claims_persist_the_pid_boot_and_process_start_before_dispatch() {
