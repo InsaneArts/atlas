@@ -62,6 +62,32 @@ struct AttentionSignalsTests {
     #expect(log.withdrawn == 1, "withdrawn once")
   }
 
+  @Test("a change from recovering to blocked keeps one Needs You notification until Idle")
+  func needsYouStaysUntilIdleWhenItsReasonChanges() {
+    let log = SignalLog()
+    log.notify = true
+    var signals = log.signals
+    let idle = reading(.observing, .idle)
+    var blocked = reading(.blocked, .needsYou)
+    blocked.overview.recoverable = true
+    signals.read(idle)
+    #expect(log.posted.isEmpty)
+    #expect(log.withdrawn == 1, "the first reading reconciles stale notifications")
+    signals.read(reading(.recovering, .needsYou))
+    #expect(log.posted == [.unfinished])
+    #expect(log.withdrawn == 1)
+    for status in [blocked, blocked, blocked] {
+      signals.read(status)
+      #expect(log.posted == [.unfinished], "the same Needs You episode never posts twice")
+      #expect(log.withdrawn == 1, "Needs You still needs the person")
+    }
+    signals.read(idle)
+    #expect(log.posted == [.unfinished])
+    #expect(log.withdrawn == 2, "Idle withdraws the episode's notification")
+    signals.read(idle)
+    #expect(log.withdrawn == 2, "withdrawn once")
+  }
+
   @Test("the helper logged out is withdrawn from Notification Center once it is logged in again, and only then")
   func loggedOutIsWithdrawn() {
     let log = SignalLog()

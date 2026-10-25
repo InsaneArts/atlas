@@ -52,4 +52,14 @@ struct NotificationClicksTests {
     #expect(NotificationClicks.presentation(viewerShows: false) == [.banner, .sound])
     #expect(NotificationClicks.presentation(viewerShows: true).isEmpty)
   }
+
+  @Test("an ordered but covered viewer still allows a notification banner and sound")
+  func aCoveredViewerStillAllowsNotifications() {
+    let covered = WindowVisibility.shows(isVisible: true, occlusionState: [])
+    #expect(NotificationClicks.presentation(viewerShows: covered) == [.banner, .sound])
+    let shown = WindowVisibility.shows(isVisible: true, occlusionState: .visible)
+    #expect(NotificationClicks.presentation(viewerShows: shown).isEmpty)
+    let hidden = WindowVisibility.shows(isVisible: false, occlusionState: .visible)
+    #expect(NotificationClicks.presentation(viewerShows: hidden) == [.banner, .sound])
+  }
 }

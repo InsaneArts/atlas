@@ -10,8 +10,11 @@ extension AppContainer {
       notifier: .live(
         open: { [weak coordinator] in coordinator?.openViewer(tab: .screen) },
         recover: { [weak self] in await self?.recoverFromNotification() },
-        // On screen, not merely open: a minimised main window says nothing.
-        viewerShows: { [weak coordinator] in (coordinator?.viewer?.window as? NSWindow)?.isVisible == true }
+        // On screen, not merely open: a minimised or covered main window says nothing.
+        viewerShows: { [weak coordinator] in
+          guard let window = coordinator?.viewer?.window as? NSWindow else { return false }
+          return WindowVisibility.shows(isVisible: window.isVisible, occlusionState: window.occlusionState)
+        }
       ),
       preferences: settingsPreferences
     )

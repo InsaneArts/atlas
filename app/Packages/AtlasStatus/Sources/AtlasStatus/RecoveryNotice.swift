@@ -34,7 +34,9 @@ public enum RecoveryNotice: Equatable, Sendable {
     if current.mode == .loggedOut { return previous.mode == .loggedOut ? nil : .loggedOut }
     guard current.state == .needsYou else { return nil }
     if current.mode == .recovering { return previous.mode == .recovering ? nil : .unfinished }
-    guard let earlier, needsPerson(previous: previous, current: current), earlier.state != .needsYou else {
+    guard let earlier, previous.mode != .recovering,
+      needsPerson(previous: previous, current: current), earlier.state != .needsYou
+    else {
       return nil
     }
     return .inputStopped
@@ -51,6 +53,6 @@ public enum RecoveryNotice: Equatable, Sendable {
   public static func needsPerson(previous: ViewerStatus.Overview?, current: ViewerStatus.Overview) -> Bool {
     guard current.state == .needsYou else { return false }
     if current.mode == .recovering { return true }
-    return previous.map { $0.state == .needsYou && $0.mode != .recovering } ?? false
+    return previous.map { $0.state == .needsYou } ?? false
   }
 }

@@ -224,7 +224,7 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   /// Reads only while the window is on screen: off screen (minimised, covered, on another Space, or behind a locked
   /// or sleeping screen) it stops reading and gives control back; on screen again, it reads again.
   func followScreen() {
-    controller.setVisible(occlusionState.contains(.visible) && isVisible)
+    controller.setVisible(WindowVisibility.shows(isVisible: isVisible, occlusionState: occlusionState))
   }
 
   /// Full screen hides the window buttons the top row keeps clear of. The empty toolbar comes off first: kept, it
