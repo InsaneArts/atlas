@@ -26,6 +26,10 @@ final class WindowCoordinator {
   private(set) var settingsController: SettingsController?
   /// Whether Close All Windows is already waiting for control to be given back.
   private var closingWindows = false
+  /// Whether setup should open once its old window's close has settled.
+  private var reopeningOnboarding = false
+  /// Whether termination has been requested, so late setup requests cannot reopen a window.
+  private var terminating = false
 
   /// Reports Copy Diagnostics when its invoking window is not the viewer.
   let diagnosticsNotice: @MainActor (String) -> Void
@@ -85,8 +89,13 @@ final class WindowCoordinator {
   }
 
   /// The setup window; brought forward when already open. Once it closes, the panel reads Open at Login and the
-  /// helper again, as setup may have changed either.
+  /// helper again, as setup may have changed either. Reopening waits for the old close to clear the helper's marker.
   func showOnboarding() {
+    guard !closingWindows, !terminating else { return }
+    if let onboarding, !onboarding.window.isPresented {
+      reopeningOnboarding = true
+      return
+    }
     present(
       \.onboarding,
       controller: { parts?.onboardingController() },
@@ -96,6 +105,10 @@ final class WindowCoordinator {
         self?.parts?.panel?.readOpenAtLogin()
         // Unstructured, as the close callback is synchronous.
         Task { await self?.parts?.panel?.findHelper() }
+        if self?.reopeningOnboarding == true {
+          self?.reopeningOnboarding = false
+          self?.showOnboarding()
+        }
       }
     )
   }
@@ -109,6 +122,7 @@ final class WindowCoordinator {
   func closeAllWindows() {
     guard !closingWindows else { return }
     closingWindows = true
+    reopeningOnboarding = false
     // Unstructured, as the menu's action is synchronous: the windows close once the release is answered.
     Task {
       defer { closingWindows = false }
@@ -130,6 +144,8 @@ final class WindowCoordinator {
   ///
   /// - Parameter sender: The menu item.
   func quit(_ sender: Any?) {
+    terminating = true
+    reopeningOnboarding = false
     // Unstructured, as the menu's action is synchronous: Atlas quits once the release is answered.
     Task {
       await releaseBeforeQuitting()
@@ -142,6 +158,8 @@ final class WindowCoordinator {
   /// - Parameter reply: Answers AppKit once the release wait ends.
   /// - Returns: Now when no control work is under way; later otherwise. Never cancels termination.
   func prepareToTerminate(reply: @escaping @MainActor () -> Void) -> NSApplication.TerminateReply {
+    terminating = true
+    reopeningOnboarding = false
     guard holdsUpQuitting else { return .terminateNow }
     // Unstructured, as AppKit asks synchronously: termination proceeds once the release wait ends.
     Task {
@@ -152,9 +170,9 @@ final class WindowCoordinator {
   }
 
   /// Whether control work is under way that quitting should wait for: the main window holds or asks for control, or a
-  /// release it sent is not answered yet.
+  /// release it sent is not answered yet or was refused and needs retrying.
   var holdsUpQuitting: Bool {
-    viewerHoldsControl || controlBarrier?.isBusy == true
+    viewerHoldsControl || controlBarrier?.isBusy == true || controlBarrier?.unreleased.isEmpty == false
   }
 
   /// Gives the main window's control back and waits, at most ``quitWait``, for every release under way to be

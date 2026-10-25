@@ -23,6 +23,8 @@ final class ViewerController {
   private(set) var shown = false
   /// What it reaches outside itself, which its parts are made from.
   @ObservationIgnored let dependencies: ViewerDependencies
+  /// The newest Details read started; older replies cannot replace its facts (`ViewerController+Details`).
+  @ObservationIgnored var detailsGeneration = 0
   /// The moment a Recover that worked holds before its alert closes, which Done ends at once.
   @ObservationIgnored let doneHold = DoneHold()
   /// The lease, its heartbeat and release, and the input that belongs to it.
@@ -142,7 +144,7 @@ final class ViewerController {
   ///
   /// - Parameter present: Brings the window forward and updates its visibility and focus.
   func toggleControl(present: () -> Void) {
-    guard let control = state.top.actions.control, control.isEnabled,
+    guard let control = ViewerPresenter.actions(snapshot).control, control.isEnabled,
       control.event == .takeControl || control.event == .giveBack
     else { return }
     if control.event == .takeControl { present() }

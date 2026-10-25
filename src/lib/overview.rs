@@ -91,8 +91,9 @@ pub async fn report(client: &Client, until: Instant) -> Value {
 /// The controller's mutations of unknown outcome, and how many are pending
 /// in all. An unreadable marker is unknown, so it counts as unresolved.
 pub fn pending(controller: &Controller) -> (Pending, usize) {
-    let total = controller.pending().map_or(1, |pending| pending.len());
-    let unresolved = controller.unresolved().map_or(1, |pending| pending.len());
+    let (unresolved, total) = controller
+        .pending_snapshot()
+        .map_or((1, 1), |(unresolved, total)| (unresolved.len(), total));
     let pending = Pending {
         unresolved,
         in_flight: total.saturating_sub(unresolved),

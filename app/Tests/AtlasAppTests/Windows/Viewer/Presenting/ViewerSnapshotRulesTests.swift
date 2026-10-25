@@ -42,7 +42,7 @@ struct ViewerSnapshotRulesTests {
     var snapshot = ViewerSnapshot()
     snapshot.reading.status = try status(["ready": true, "overview": ["mode": "observing"]])
     snapshot.reading.ready = true
-    snapshot.reading.frame = Frame(png: Data(), id: "f", revision: "r", display: .init(width: 4, height: 3))
+    snapshot.reading.frame = (id: "f", revision: "r", display: .init(width: 4, height: 3))
     snapshot.reading.frameAt = 0
     snapshot.now = Freshness.stale - 1
     try #require(snapshot.canTakeControl, "a fresh picture is taken over")

@@ -1,6 +1,6 @@
 //! `atlas --help`: the commands in a few groups a person can scan,
 //! built from each command's own one-line description so they never drift.
-use super::Cli;
+use super::cli::Cli;
 use atlas::ui::{self, Format, style};
 use clap::{
     CommandFactory,
@@ -173,30 +173,27 @@ pub fn usage(error: clap::Error) -> ExitCode {
         error.exit();
     }
 
-    // Lossy: an argument need not be UTF-8, and this only shows it.
-    let arguments: Vec<String> = std::env::args_os()
-        .skip(1)
-        .map(|argument| argument.to_string_lossy().into_owned())
-        .collect();
+    let arguments: Vec<_> = std::env::args_os().collect();
 
-    // The command on the line, with its subcommand (`environment rollback`);
-    // commands Atlas runs itself are never suggested.
-    let root = Cli::command();
+    // Retain Clap's partial matches for diagnostics, including option-value
+    // ownership and aliases. Some validation errors have no Usage context.
+    // Commands Atlas runs itself are never suggested.
+    let mut root = Cli::command().ignore_errors(true);
+    let matches = root.try_get_matches_from_mut(&arguments).ok();
     let mut current = &root;
+    let mut matched = matches.as_ref();
     let mut path = Vec::new();
 
-    for argument in arguments
-        .iter()
-        .take_while(|argument| argument.as_str() != "--")
-    {
-        if let Some(command) = current.get_subcommands().find(|command| {
-            !command.is_hide_set()
-                && (command.get_name() == argument
-                    || command.get_all_aliases().any(|alias| alias == argument))
-        }) {
-            path.push(command.get_name().to_owned());
-            current = command;
-        }
+    while let Some((name, nested)) = matched.and_then(clap::ArgMatches::subcommand) {
+        let Some(command) = current
+            .find_subcommand(name)
+            .filter(|command| !command.is_hide_set())
+        else {
+            break;
+        };
+        path.push(command.get_name().to_owned());
+        current = command;
+        matched = Some(nested);
     }
 
     let name = (!path.is_empty()).then(|| path.join(" "));
@@ -225,7 +222,11 @@ pub fn usage(error: clap::Error) -> ExitCode {
     };
 
     let format = ui::detect(
-        arguments.iter().any(|argument| argument == "--json"),
+        arguments
+            .iter()
+            .skip(1)
+            .take_while(|argument| *argument != "--")
+            .any(|argument| argument == "--json"),
         std::env::var("ATLAS_JSON").ok().as_deref(),
         std::io::stdout().is_terminal(),
     );
@@ -393,9 +394,66 @@ fn explain(error: &clap::Error, name: Option<&str>) -> String {
     }
 }
 
+/// Every visible command with its full help, as Markdown: the agent
+/// plugin's commands reference (a test keeps the plugin's copy equal).
+pub(super) fn command_reference() -> String {
+    let mut text = String::from(
+        "# Atlas commands\n\nGenerated from `atlas --help`. Every command prints \
+         JSON when its output is not a terminal (or with `--json`) and exits non-zero on \
+         failure.\n",
+    );
+
+    // With each command's examples, as `--help` shows them.
+    let mut root = command().bin_name("atlas");
+    root.build();
+
+    // In the order of `atlas --help`, each command followed by its own
+    // subcommands (such as environment rollback).
+    for name in GROUPS.iter().flat_map(|(_, names)| names.iter()) {
+        let Some(command) = root.find_subcommand_mut(name) else {
+            continue;
+        };
+
+        reference_section(&mut text, &format!("atlas {name}"), command);
+
+        let nested: Vec<String> = command
+            .get_subcommands()
+            .filter(|sub| !sub.is_hide_set() && sub.get_name() != "help")
+            .map(|sub| sub.get_name().to_owned())
+            .collect();
+        for sub in nested {
+            if let Some(subcommand) = command.find_subcommand_mut(&sub) {
+                reference_section(&mut text, &format!("atlas {name} {sub}"), subcommand);
+            }
+        }
+    }
+
+    text
+}
+
+/// One command's section of the reference: its long help, verbatim.
+fn reference_section(text: &mut String, title: &str, command: &mut clap::Command) {
+    let help = command.render_long_help().to_string();
+    text.push_str(&format!(
+        "\n## {title}\n\n```text\n{}\n```\n",
+        help.trim_end()
+    ));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The agent plugin's command reference is exactly this CLI's help.
+    #[test]
+    fn the_plugin_command_reference_matches_this_cli() {
+        let checked_in = include_str!("../../agents/atlas/skills/atlas/references/commands.md");
+        assert_eq!(
+            checked_in,
+            command_reference(),
+            "regenerate with: atlas agent-guide --commands"
+        );
+    }
 
     #[test]
     fn every_visible_command_is_in_exactly_one_group() {

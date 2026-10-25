@@ -14,7 +14,7 @@ extension SettingsPresenter {
     let failures = snapshot.session.connectFailures
     let plugins = agents.choices.map { choice in
       let parts = choice.checked ? choice.parts : [AgentID.claude.rawValue, AgentsStatus.claudeAppID]
-      return SettingsAgentRow(
+      let row = SettingsAgentRow(
         id: choice.id.rawValue,
         title: Words.agentTitle(choice.id),
         detail: detail(
@@ -33,12 +33,10 @@ extension SettingsPresenter {
         ),
         canDisconnect: choice.hasConnection && installing.isEmpty
       )
+      return failing(row, failures[choice.id.rawValue]?.message ?? choice.problem)
     }
     return SettingsAgentsState(
-      agents: plugins.map { row in
-        let reported = agents.choices.first { $0.id.rawValue == row.id }?.problem
-        return failing(row, failures[row.id]?.message ?? reported)
-      },
+      agents: plugins,
       projects: snapshot.agents.projects.map(project),
       notice: notice(snapshot, in: .agents, busy: !installing.isEmpty)
     )
@@ -95,15 +93,6 @@ extension SettingsPresenter {
     failing.problem = failure.hasPrefix("Couldn't disconnect") ? failure : SettingsWords.notConnected(failure)
     failing.showsFile = SettingsWords.isBadSettingsFile(failure) && AgentFiles.knowsSettings(of: row.id)
     return failing
-  }
-
-  /// An agent's name by its id in `atlas agents` results.
-  ///
-  /// - Parameter id: The id, such as `claude` or `claude-app`.
-  /// - Returns: "Claude", "Codex", "Claude app", or the id itself for one this app does not know.
-  static func agentTitle(_ id: String) -> String {
-    if let agent = AgentID(rawValue: id) { return Words.agentTitle(agent) }
-    return id == AgentsStatus.claudeAppID ? SettingsWords.claudeApp : id
   }
 
   /// One project taught: its folder's name, and where it is with the home folder as `~`, or that its files no longer

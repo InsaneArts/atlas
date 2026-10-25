@@ -293,8 +293,9 @@ final class ViewerPanesModel {
   func stepShot(by offset: Int) {
     guard let viewer else { return }
     panes.shots.scrollRequest += 1
-    let order = ViewerPresenter.shotOrder(viewer.snapshot)
-    guard let from = panes.shots.large ?? ViewerPresenter.selectedShot(viewer.snapshot) else {
+    let snapshot = viewer.snapshot
+    let order = ViewerPresenter.shotOrder(snapshot)
+    guard let from = panes.shots.large ?? ViewerPresenter.selectedShot(snapshot, order: order) else {
       if let first = order.first { select(first) }
       return
     }

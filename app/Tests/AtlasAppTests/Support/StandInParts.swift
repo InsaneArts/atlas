@@ -16,10 +16,12 @@ final class StandInParts: WindowParts {
   var panel: PanelController?
   /// A clock nobody advances.
   let clock: any Clock<Duration> = ManualClock()
-  /// No control work of the app's own: a test's control work is its main window's.
-  var controlBarrier: ControlBarrier? { nil }
+  /// Control work that outlives a window; nil unless a test provides the app's barrier.
+  var controlBarrier: ControlBarrier?
   /// Makes each main window's controller: one over a scripted service by default.
   var makeViewer: @MainActor () -> ViewerController = { .scripted(ScriptedService()) }
+  /// Makes each setup window's controller, over an empty scripted command line by default.
+  var makeOnboarding: @MainActor () -> OnboardingController = { .scripted(ScriptedCommands([:])) }
   /// Whether Copy Diagnostics finds anything to copy.
   var diagnostics = true
   /// App-level diagnostic results, without presenting a native alert.
@@ -83,7 +85,7 @@ final class StandInParts: WindowParts {
   ///
   /// - Returns: The controller.
   func onboardingController() -> OnboardingController {
-    OnboardingController.scripted(ScriptedCommands([:]))
+    makeOnboarding()
   }
 
   /// An alert window's controller over a scripted service and commands.

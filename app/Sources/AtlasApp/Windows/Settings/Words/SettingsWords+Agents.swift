@@ -1,8 +1,6 @@
 /// The Agents tab's words: each agent's rows and states, an agent that did not connect, and forgetting a project, with
 /// its alert and what follows it.
 extension SettingsWords {
-  /// The Claude app's name.
-  static let claudeApp = "Claude app"
   /// An agent before `atlas agents status` has answered: the app's one word for a check under way.
   static let checking = StatusWord.checking.text
   /// An agent `atlas agents status` could not report.

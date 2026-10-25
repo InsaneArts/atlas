@@ -6,7 +6,7 @@ use super::{
     session_info,
 };
 use crate::{
-    actions::{self, Action},
+    actions,
     error::{Error, Result},
     session::{Display, InputEpoch},
 };
@@ -328,7 +328,7 @@ impl Service {
         }
 
         let grant = self.gate.grant(owner)?;
-        actions::validate(
+        let actions = actions::parse(
             &request["actions"],
             &Display {
                 width: epoch.width,
@@ -337,7 +337,6 @@ impl Service {
             },
         )?;
 
-        let actions = Vec::<Action>::deserialize(&request["actions"])?;
         let mut engine = self.engine.lock().await;
 
         drop(grant.authorize()?);

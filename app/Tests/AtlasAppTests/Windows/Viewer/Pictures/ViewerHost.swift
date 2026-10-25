@@ -56,10 +56,11 @@ final class ViewerHost {
   func colours(at points: [CGPoint]) throws -> [PictureColour?] {
     let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
     hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+    let sampled = try #require(bitmap.converting(to: .sRGB, renderingIntent: .default))
     let scale = CGFloat(bitmap.pixelsWide) / hosting.bounds.width
     return try points.map { point in
       let colour = try #require(
-        bitmap.colorAt(x: Int(point.x * scale), y: Int(point.y * scale))?
+        sampled.colorAt(x: Int(point.x * scale), y: Int(point.y * scale))?
           .usingColorSpace(.sRGB)
       )
       return PictureColour.allCases

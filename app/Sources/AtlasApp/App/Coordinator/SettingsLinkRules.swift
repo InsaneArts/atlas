@@ -1,3 +1,5 @@
+import AtlasUI
+
 /// Settings' rules for the main window's picture, which Settings shows and changes from General: the open main
 /// window's own choice, or, while none is open, the rate saved for the next one.
 enum SettingsLinkRules {
@@ -7,7 +9,7 @@ enum SettingsLinkRules {
   ///   - viewer: The open main window's controller, or nil when none is open.
   ///   - savedRate: The rate saved for the next main window, in seconds; 0 when none is saved.
   /// - Returns: The choice.
-  static func picture(viewer: ViewerController?, savedRate: Double) -> ViewerPictureChoice {
+  static func picture(viewer: ViewerController?, savedRate: Double) -> SettingsPicture {
     if let viewer {
       if viewer.session.paused { return .paused }
       return viewer.readingLoop.rate == .everyFiveSeconds ? .everyFiveSeconds : .live
@@ -23,7 +25,7 @@ enum SettingsLinkRules {
   ///   - choice: The choice.
   ///   - viewer: The open main window's controller, or nil when none is open.
   ///   - preferences: Where the next main window's rate is saved.
-  static func choose(_ choice: ViewerPictureChoice, viewer: ViewerController?, preferences: ViewerPreferences) {
+  static func choose(_ choice: SettingsPicture, viewer: ViewerController?, preferences: ViewerPreferences) {
     if let viewer {
       viewer.choosePicture(choice)
     } else if choice != .paused {

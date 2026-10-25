@@ -404,8 +404,11 @@ if (typeof document !== 'undefined') {
     tab: 'screen',
     filter: 'all',
     activity: null,
+    activityError: null,
     apps: null,
+    appsError: null,
     shots: null,
+    shotsError: null,
   };
   let context = {};
   let timer = null;
@@ -420,6 +423,7 @@ if (typeof document !== 'undefined') {
   let spoken = '';
   let asking = null;
   const thumbs = new Map();
+  let opening = 0;
 
   const send = (message) => window.parent.postMessage({ jsonrpc: '2.0', ...message }, '*');
   const notify = (method, params) => send({ method, params });
@@ -433,6 +437,10 @@ if (typeof document !== 'undefined') {
       }, 30000);
     });
   const call = (name, args) => request('tools/call', { name, arguments: args || {} });
+  const callError = (error, otherwise = "Atlas isn't answering") =>
+    error.message === 'IPC not available for MCP tool call'
+      ? 'View unavailable here · Use Atlas'
+      : otherwise;
   const said = (result, otherwise) =>
     (result && result.content && result.content[0] && result.content[0].text) || otherwise;
   const code = (result) =>
@@ -645,8 +653,8 @@ if (typeof document !== 'undefined') {
       const result = await call('screen_frame', {
         since: model.frame ? model.frame.id : undefined,
       });
-      if (asked !== epoch) {
-        // An action came since: its answer is newer than this one.
+      if (superseded || asked !== epoch) {
+        // The card retired or an action came since: this answer is obsolete.
       } else if (result && result.isError) {
         note(said(result, "Atlas couldn't read the helper"));
       } else {
@@ -658,7 +666,7 @@ if (typeof document !== 'undefined') {
         render();
       }
     } catch (error) {
-      note("Atlas isn't answering");
+      if (!superseded) note(callError(error));
     }
     polling = false;
     schedule();
@@ -674,13 +682,18 @@ if (typeof document !== 'undefined') {
     let result = null;
     try {
       result = await call(tool, args);
-      if (result && result.isError) note(said(result, failed));
-      else {
-        note('');
-        model = merge(model, result);
+      if (!superseded) {
+        if (result && result.isError) note(said(result, failed));
+        else {
+          note('');
+          model = merge(model, result);
+        }
       }
     } catch (error) {
-      note(tool === 'resume_agent' ? 'Resume from the Atlas menu bar' : "Atlas isn't answering");
+      if (!superseded)
+        note(
+          callError(error, tool === 'resume_agent' ? 'Resume from the Atlas menu bar' : undefined),
+        );
     }
     busy = false;
     epoch += 1;
@@ -708,7 +721,7 @@ if (typeof document !== 'undefined') {
       keeping = true;
       try {
         const result = await call('keep_control', {});
-        if (result && result.isError && code(result) !== 'busy') {
+        if (!superseded && result && result.isError && code(result) !== 'busy') {
           const wasOurs = model.ours;
           model = merge(model, result);
           if (wasOurs && !model.ours) controlEnded(said(result, 'Control ended'));
@@ -729,6 +742,7 @@ if (typeof document !== 'undefined') {
   // helper): nothing more is asked, kept or sent from it.
   const retire = () => {
     superseded = true;
+    dismiss();
     taking += 1;
     clearTimeout(timer);
     clearInterval(panelTimer);
@@ -750,21 +764,24 @@ if (typeof document !== 'undefined') {
 
   let taking = 0;
   const takeControl = async () => {
+    if (superseded) return;
     // The person sees the helper as it is now while they control it.
     model.picture = 'live';
     // The agent may be mid-step: control comes once it finishes, unless
     // the person gives it back meanwhile.
     const mine = ++taking;
+    let result = null;
     for (let attempt = 0; attempt < 6 && mine === taking; attempt += 1) {
-      const result = await act('take_control', {}, "Atlas couldn't take control");
-      if (!result || !result.isError) break;
+      result = await act('take_control', {}, "Atlas couldn't take control");
+      if (mine !== taking || !result || !result.isError) break;
       if (code(result) !== 'busy') return;
       note('Waiting for the helper to finish a step…');
       await new Promise((resolve) => setTimeout(resolve, 700));
     }
     // Given back while the take was still answering: give this back too.
     if (mine !== taking) {
-      if (model.ours) await giveBack();
+      // A retired card does not merge the answer, but still releases its acquisition.
+      if (model.ours || merge({}, result).ours) await giveBack();
       return;
     }
     if (model.ours) {
@@ -785,13 +802,15 @@ if (typeof document !== 'undefined') {
     epoch += 1;
     try {
       const result = await call('give_back', {});
-      if (result && result.isError) note(said(result, "Atlas couldn't give control back"));
-      else {
-        note('');
-        model = merge(model, result);
+      if (!superseded) {
+        if (result && result.isError) note(said(result, "Atlas couldn't give control back"));
+        else {
+          note('');
+          model = merge(model, result);
+        }
       }
     } catch (error) {
-      note("Atlas isn't answering");
+      if (!superseded) note(callError(error));
     }
     if (!model.ours) {
       stopKeeping();
@@ -825,18 +844,18 @@ if (typeof document !== 'undefined') {
     queue.unshift(...waiting.slice(actions.length).map((action) => ({ frame, action })));
     try {
       const result = await call('send_input', { frame, actions });
-      if (result && result.isError) {
+      if (!superseded && result && result.isError) {
         const wasOurs = model.ours;
         model = merge(model, result);
         if (wasOurs && !model.ours) controlEnded(said(result, 'Control ended'));
         else if (model.ours) note(said(result, "That didn't reach the helper"));
       }
     } catch (error) {
-      note("Atlas isn't answering");
+      if (!superseded) note(callError(error));
     }
     sending = false;
     // The screen shows what the input did sooner.
-    if (!polling) {
+    if (!superseded && !polling) {
       clearTimeout(timer);
       timer = setTimeout(poll, 120);
     }
@@ -963,6 +982,7 @@ if (typeof document !== 'undefined') {
   });
 
   const show = (tab) => {
+    if (superseded) return;
     model.tab = tab;
     clearInterval(panelTimer);
     render();
@@ -974,25 +994,39 @@ if (typeof document !== 'undefined') {
   };
 
   const loadActivity = async () => {
+    if (superseded) return;
     try {
       const result = await call('activity', {});
-      if (result && !result.isError) model.activity = result.structuredContent.activity || [];
+      if (superseded) return;
+      if (result && result.isError)
+        model.activityError = said(result, "Atlas couldn't load activity");
+      else {
+        model.activity = result.structuredContent.activity || [];
+        model.activityError = null;
+      }
     } catch (error) {
-      // The list keeps what it had.
+      if (superseded) return;
+      model.activityError = callError(error, "Atlas couldn't load activity");
     }
-    showActivity();
+    if (!superseded) showActivity();
   };
 
   const showActivity = () => {
     const rows = model.activity || [];
-    one('[data-activity-meta]').textContent = rows.length ? 'Newest first' : '';
+    one('[data-activity-meta]').textContent = model.activity
+      ? model.activityError || (rows.length ? 'Newest first' : '')
+      : '';
     for (const button of all('[data-filter]'))
       button.setAttribute('aria-selected', String(button.dataset.filter === model.filter));
     const groups = activityGroups(rows, model.filter);
     const body = one('[data-activity]');
     if (!groups.length) {
       body.replaceChildren(
-        el('div', 'panel-empty', model.activity ? 'Nothing here yet.' : 'Loading…'),
+        el(
+          'div',
+          'panel-empty',
+          model.activity ? 'Nothing here yet.' : model.activityError || 'Loading…',
+        ),
       );
       return;
     }
@@ -1029,26 +1063,33 @@ if (typeof document !== 'undefined') {
   const warning = () => one('[data-warning]').content.firstElementChild.cloneNode(true);
 
   const loadApps = async () => {
+    if (superseded) return;
     try {
       const result = await call('helper_apps', {});
-      if (result && result.isError)
-        one('[data-apps-meta]').textContent = said(result, "Atlas couldn't list the apps");
-      else model.apps = result.structuredContent.apps || [];
+      if (superseded) return;
+      if (result && result.isError) model.appsError = said(result, "Atlas couldn't list the apps");
+      else {
+        model.apps = result.structuredContent.apps || [];
+        model.appsError = null;
+      }
     } catch (error) {
-      // The list keeps what it had.
+      if (superseded) return;
+      model.appsError = callError(error, "Atlas couldn't list the apps");
     }
-    showApps();
+    if (!superseded) showApps();
   };
 
   const showApps = () => {
     const apps = model.apps;
     const body = one('[data-apps]');
     if (!apps) {
-      body.replaceChildren(el('div', 'panel-empty', 'Loading…'));
+      one('[data-apps-meta]').textContent = '';
+      body.replaceChildren(el('div', 'panel-empty', model.appsError || 'Loading…'));
       return;
     }
     const windows = apps.reduce((count, app) => count + app.windows.length, 0);
     one('[data-apps-meta]').textContent =
+      model.appsError ||
       `${apps.length} ${apps.length === 1 ? 'app' : 'apps'} · ${windows} ${windows === 1 ? 'window' : 'windows'}, front to back`;
     if (!apps.length) {
       body.replaceChildren(el('div', 'panel-empty', 'No apps are open in the helper.'));
@@ -1083,25 +1124,33 @@ if (typeof document !== 'undefined') {
   };
 
   const loadShots = async () => {
+    if (superseded) return;
     try {
       const result = await call('screenshots', {});
-      if (result && !result.isError) model.shots = result.structuredContent.screenshots || [];
+      if (superseded) return;
+      if (result && result.isError)
+        model.shotsError = said(result, "Atlas couldn't list screenshots");
+      else {
+        model.shots = result.structuredContent.screenshots || [];
+        model.shotsError = null;
+      }
     } catch (error) {
-      // The grid keeps what it had.
+      if (superseded) return;
+      model.shotsError = callError(error, "Atlas couldn't list screenshots");
     }
-    showShots();
+    if (!superseded) showShots();
   };
 
   const showShots = () => {
     const shots = model.shots;
     const body = one('[data-shots]');
     if (!shots) {
-      body.replaceChildren(el('div', 'panel-empty', 'Loading…'));
+      one('[data-shots-meta]').textContent = '';
+      body.replaceChildren(el('div', 'panel-empty', model.shotsError || 'Loading…'));
       return;
     }
-    one('[data-shots-meta]').textContent = shots.length
-      ? `${shots.length} · open one to see it full size`
-      : '';
+    one('[data-shots-meta]').textContent =
+      model.shotsError || (shots.length ? `${shots.length} · open one to see it full size` : '');
     if (!shots.length) {
       body.replaceChildren(el('div', 'panel-empty', "The agent hasn't taken any screenshots yet."));
       return;
@@ -1135,9 +1184,11 @@ if (typeof document !== 'undefined') {
   };
 
   const thumbnail = async (name) => {
+    if (superseded) return null;
     if (thumbs.has(name)) return thumbs.get(name);
     try {
       const result = await call('screenshot', { name });
+      if (superseded) return null;
       const image = result && result._meta && result._meta[FRAME_META];
       const source = image ? `data:${image.mimeType};base64,${image.data}` : null;
       if (source) thumbs.set(name, source);
@@ -1148,6 +1199,8 @@ if (typeof document !== 'undefined') {
   };
 
   const openShot = async (name) => {
+    if (superseded) return;
+    const mine = ++opening;
     const box = one('[data-lightbox]');
     const image = one('[data-lightbox-image]');
     image.src = thumbs.get(name) || '';
@@ -1156,7 +1209,8 @@ if (typeof document !== 'undefined') {
     try {
       const result = await call('screenshot', { name, full: true });
       const picture = result && result._meta && result._meta[FRAME_META];
-      if (picture && !box.hidden) image.src = `data:${picture.mimeType};base64,${picture.data}`;
+      if (picture && mine === opening)
+        image.src = `data:${picture.mimeType};base64,${picture.data}`;
     } catch (error) {
       // The thumbnail stays.
     }
@@ -1232,6 +1286,7 @@ if (typeof document !== 'undefined') {
   };
 
   const dismiss = () => {
+    opening += 1;
     one('[data-alert]').hidden = true;
     one('[data-lightbox]').hidden = true;
     asking = null;
@@ -1261,6 +1316,7 @@ if (typeof document !== 'undefined') {
 
     switch (message.method) {
       case 'ui/notifications/tool-result':
+        if (superseded) break;
         model = merge(model, message.params);
         keepControl();
         render();
@@ -1338,7 +1394,7 @@ if (typeof document !== 'undefined') {
       const result = await call('open_viewer', {});
       if (result && result.isError) note(said(result, "Atlas couldn't open its viewer"));
     } catch (error) {
-      note("Atlas isn't answering");
+      note(callError(error));
     }
   });
   for (const button of all('[data-ask]'))

@@ -256,8 +256,8 @@ fn exclusive_in(directory: &Path) -> Result<Exclusive> {
 
 /// A private scratch directory for one update, emptied first: an update
 /// stopped midway leaves nothing behind for the next one to find.
-fn scratch() -> Result<PathBuf> {
-    let path = caches()?.join("update");
+fn scratch(caches: &Path) -> Result<PathBuf> {
+    let path = caches.join("update");
     if path.exists() {
         fs::remove_dir_all(&path)?;
     }
@@ -268,14 +268,6 @@ fn scratch() -> Result<PathBuf> {
         .create(&path)?;
 
     Ok(path)
-}
-
-/// Download the release archive and its sums into `work`; the archive's name.
-fn download(source: &Source, work: &Path) -> Result<String> {
-    let name = newest(source, work)?;
-    curl(&format!("{}/{name}", source.base), &work.join(&name))?;
-
-    Ok(name)
 }
 
 /// Download only the release's sums into `work`; the archive they name.
@@ -704,10 +696,32 @@ pub async fn install(
     preflight: impl AsyncFnOnce(&Path) -> Result<()>,
 ) -> Result<Value> {
     let installed = installed_app()?;
+    install_in(
+        source,
+        allow_unnotarized,
+        force,
+        &installed,
+        &caches()?,
+        &record_path()?,
+        preflight,
+    )
+    .await
+}
 
+/// Install using the given app, cache and handover paths; the caller holds
+/// the update lock, as for [`install`].
+async fn install_in(
+    source: &Source,
+    allow_unnotarized: bool,
+    force: bool,
+    installed: &Path,
+    caches: &Path,
+    record: &Path,
+    preflight: impl AsyncFnOnce(&Path) -> Result<()>,
+) -> Result<Value> {
     // A swap whose handover did not finish is resumed before anything else.
-    if let Some(record) = unfinished()? {
-        resume(&record, &installed, preflight).await?;
+    if let Some(record) = read_record(record)? {
+        resume(&record, installed, preflight).await?;
         return Ok(json!({"ok": true, "updated": true, "resumed": true, "record": record}));
     }
 
@@ -717,9 +731,9 @@ pub async fn install(
         ));
     }
 
-    let work = scratch()?;
+    let work = scratch(caches)?;
     let outcome = async {
-        let name = download(source, &work)?;
+        let name = newest(source, &work)?;
         let available = archive_version(&name).unwrap_or_default();
         let current = version(crate::VERSION);
         if available <= current && !force {
@@ -731,8 +745,9 @@ pub async fn install(
             }));
         }
 
+        curl(&format!("{}/{name}", source.base), &work.join(&name))?;
         let app = verify(&work, &name, allow_unnotarized)?;
-        swap(&app, &installed, &name, &record_path()?, preflight).await?;
+        swap(&app, installed, &name, record, preflight).await?;
 
         Ok(json!({
             "ok": true,
@@ -751,6 +766,214 @@ pub async fn install(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An owned, reachable stand-in bundle and private update paths. No test
+    /// runs the stand-in executable or resolves the account's real paths.
+    fn installation(directory: &Path) -> (PathBuf, PathBuf, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let installed = directory.join("Applications/Atlas.app");
+        let executable = installed.join(EXECUTABLE);
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        fs::write(&executable, b"installed app stays").unwrap();
+        for path in executable
+            .ancestors()
+            .take_while(|path| path.starts_with(directory))
+        {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert!(reachable_by_others(&executable));
+        (
+            installed,
+            directory.join("cache"),
+            directory.join("update.json"),
+        )
+    }
+
+    #[tokio::test]
+    async fn unchanged_updates_need_no_archive_and_clean_their_scratch() {
+        for available in [crate::VERSION, "0.0.0"] {
+            let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+            let (installed, cache, record) = installation(dir.path());
+            let _exclusive = exclusive_in(&cache).unwrap();
+            let source = Source {
+                base: format!("file://{}", dir.path().display()),
+                latest: false,
+            };
+            let name = format!("Atlas-{available}-macos.zip");
+            fs::write(
+                dir.path().join("SHA256SUMS"),
+                format!("{}  {name}\n", "0".repeat(64)),
+            )
+            .unwrap();
+            fs::create_dir_all(cache.join("update")).unwrap();
+            fs::write(cache.join("update/stale"), "previous attempt").unwrap();
+
+            let result = install_in(
+                &source,
+                false,
+                false,
+                &installed,
+                &cache,
+                &record,
+                async |_| panic!("a no-op must not preflight or swap"),
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(
+                result,
+                json!({"ok": true, "updated": false, "version": crate::VERSION, "available": name})
+            );
+            assert_eq!(
+                fs::read(installed.join(EXECUTABLE)).unwrap(),
+                b"installed app stays"
+            );
+            assert!(!cache.join("update").exists());
+            assert!(!record.exists());
+            assert!(
+                !dir.path().join(name).exists(),
+                "the unused archive is absent"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn newer_and_forced_updates_still_download_and_verify_the_archive() {
+        let newer = format!("{}.0.0", version(crate::VERSION)[0] + 1);
+        for (available, force) in [
+            (newer.as_str(), false),
+            (crate::VERSION, true),
+            ("0.0.0", true),
+        ] {
+            let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+            let (installed, cache, record) = installation(dir.path());
+            let _exclusive = exclusive_in(&cache).unwrap();
+            let source = Source {
+                base: format!("file://{}", dir.path().display()),
+                latest: false,
+            };
+            let name = format!("Atlas-{available}-macos.zip");
+            let archive = dir.path().join(&name);
+            let sums = dir.path().join("SHA256SUMS");
+            fs::write(&sums, format!("{}  {name}\n", "0".repeat(64))).unwrap();
+
+            for expected in [
+                "Could not download",
+                "Checksum mismatch",
+                "could not be unpacked",
+            ] {
+                let error = install_in(
+                    &source,
+                    false,
+                    force,
+                    &installed,
+                    &cache,
+                    &record,
+                    async |_| panic!("unverified archives must not preflight or swap"),
+                )
+                .await
+                .unwrap_err();
+                assert!(error.error.contains(expected), "{}", error.error);
+                assert!(!cache.join("update").exists());
+                assert!(!record.exists());
+                assert_eq!(
+                    fs::read(installed.join(EXECUTABLE)).unwrap(),
+                    b"installed app stays"
+                );
+
+                // First supply an archive, then its correct checksum: neither
+                // missing bytes nor corrupt bytes can reach installation.
+                if !archive.exists() {
+                    fs::write(&archive, b"not a zip archive").unwrap();
+                } else {
+                    let sum = crate::digest::file_sha256(&archive).unwrap();
+                    fs::write(&sums, format!("{sum}  {name}\n")).unwrap();
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_release_metadata_never_reaches_installation() {
+        let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+        let (installed, cache, record) = installation(dir.path());
+        let _exclusive = exclusive_in(&cache).unwrap();
+        let source = Source {
+            base: format!("file://{}", dir.path().display()),
+            latest: false,
+        };
+        for metadata in [
+            "",
+            "00  ../Atlas-0.0.0-macos.zip\n",
+            "00  Atlas-bad-macos.zip\n",
+        ] {
+            fs::write(dir.path().join("SHA256SUMS"), metadata).unwrap();
+            let error = install_in(
+                &source,
+                false,
+                false,
+                &installed,
+                &cache,
+                &record,
+                async |_| panic!("invalid metadata must not preflight or swap"),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.error, "SHA256SUMS does not name an Atlas archive");
+            assert!(!cache.join("update").exists());
+            assert!(!record.exists());
+            assert_eq!(
+                fs::read(installed.join(EXECUTABLE)).unwrap(),
+                b"installed app stays"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unfinished_handover_precedes_downloads_and_scratch_cleanup() {
+        let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+        let (installed, cache, record_path) = installation(dir.path());
+        let _exclusive = exclusive_in(&cache).unwrap();
+        let source = Source {
+            base: format!("file://{}/absent", dir.path().display()),
+            latest: false,
+        };
+        let record = json!({"installed": installed, "to": "Atlas-9.9.9-macos.zip"});
+        fs::write(&record_path, record.to_string()).unwrap();
+        fs::create_dir_all(cache.join("update")).unwrap();
+        fs::write(cache.join("update/keep"), "unfinished").unwrap();
+        let mut checked = false;
+        let result = install_in(
+            &source,
+            false,
+            false,
+            &installed,
+            &cache,
+            &record_path,
+            async |program| {
+                assert_eq!(program, installed.join(EXECUTABLE));
+                checked = true;
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+        assert!(checked);
+        assert_eq!(
+            result,
+            json!({"ok": true, "updated": true, "resumed": true, "record": record})
+        );
+        assert_eq!(
+            fs::read_to_string(cache.join("update/keep")).unwrap(),
+            "unfinished"
+        );
+        assert_eq!(read_record(&record_path).unwrap(), Some(record));
+        assert_eq!(
+            fs::read(installed.join(EXECUTABLE)).unwrap(),
+            b"installed app stays"
+        );
+    }
 
     #[tokio::test]
     async fn setup_refusal_prevents_the_bundle_exchange_and_update_record() {

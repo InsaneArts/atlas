@@ -1,4 +1,5 @@
 import AtlasService
+import AtlasUI
 
 /// What Settings shares with the app's other parts, which only ``WindowCoordinator`` knows: the helper's status as the menu
 /// bar last read it, Open at Login as the panel keeps it, the picture as the main window keeps it, switching to the
@@ -15,11 +16,11 @@ struct SettingsLinks {
   /// Turns Open at Login on or off.
   var setOpenAtLogin: @MainActor (Bool) async -> Void
   /// The picture choice in force: the main window's, else the rate saved.
-  var picture: @MainActor () -> ViewerPictureChoice
+  var picture: @MainActor () -> SettingsPicture
   /// Whether Paused can be chosen: only while the main window is open, since only it pauses.
   var canPause: @MainActor () -> Bool
   /// Makes a picture choice: the main window's when it is open, else the rate saved for the next one.
-  var choosePicture: @MainActor (ViewerPictureChoice) -> Void
+  var choosePicture: @MainActor (SettingsPicture) -> Void
   /// Locks the screen so the person can log in to the helper, returning what to tell them.
   var switchToHelper: @MainActor () async -> String
   /// Opens the setup window.

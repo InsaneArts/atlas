@@ -382,7 +382,6 @@ pub async fn run(
         warnings: Vec::new(),
         hint: None,
         exclusion: None,
-        known: found.known.clone(),
     };
 
     if let Some(error) = &found.unloaded {
@@ -447,13 +446,12 @@ struct Live<'a> {
     hint: Option<String>,
     /// Control of the helper, from [`Step::Settle`] to the end.
     exclusion: Option<Ownership>,
-    known: Option<Known>,
 }
 
 impl Live<'_> {
     /// The helper as recorded, while it is still that account.
     fn identity(&self) -> Option<&Identity> {
-        match &self.known {
+        match &self.found.known {
             Some(Known::Verified(identity)) => Some(identity),
             _ => None,
         }
@@ -465,7 +463,7 @@ impl Teardown for Live<'_> {
         let Some(client) = &self.found.client else {
             return Ok(());
         };
-        if matches!(self.known, Some(Known::Other | Known::Unrecorded(_))) {
+        if matches!(self.found.known, Some(Known::Other | Known::Unrecorded(_))) {
             // Local exclusion only: preserve pending outcomes without
             // contacting or changing an account whose identity is unknown.
             self.exclusion = Some(client.controller.acquire(true)?);
@@ -500,7 +498,7 @@ impl Teardown for Live<'_> {
         let Some(client) = &self.found.client else {
             return Ok(());
         };
-        let job = retiring(self.known.as_ref())?;
+        let job = retiring(self.found.known.as_ref())?;
         let _ownership = self
             .exclusion
             .as_ref()
@@ -564,7 +562,7 @@ impl Teardown for Live<'_> {
 
     fn hint(&mut self) {
         self.hint = self.found.helper.as_ref().map(|name| {
-            if matches!(self.known, Some(Known::Unrecorded(_))) {
+            if matches!(self.found.known, Some(Known::Unrecorded(_))) {
                 unrecorded_message(name)
             } else {
                 format!("sudo sysadminctl -deleteUser {name}")
@@ -1743,7 +1741,6 @@ mod tests {
             warnings: vec![],
             hint: None,
             exclusion: None,
-            known: found.known.clone(),
         };
         live.settle().await.unwrap();
         assert!(live.exclusion.is_some());

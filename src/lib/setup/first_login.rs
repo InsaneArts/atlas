@@ -246,8 +246,6 @@ fn write_if_absent(path: &Path, bytes: &[u8]) -> Result<bool> {
 struct Readied {
     /// The files written now; empty when they were all there.
     answered: Vec<PathBuf>,
-    /// Whether the account has a desktop login, so its preferences were left.
-    logged_in: bool,
     /// The opener's plist, when one was asked for.
     opener: Option<PathBuf>,
     /// Whether the opener's plist was written or replaced now.
@@ -346,7 +344,6 @@ fn ready_with(
 
     Ok(Readied {
         answered,
-        logged_in,
         opener,
         opener_written,
     })
@@ -657,7 +654,7 @@ mod tests {
         let installed = Path::new("/Applications/Atlas.app/Contents/MacOS/atlas");
         // Stand in only for disk reachability and codesign. Resolve paths,
         // write the real plist and apply Allow's actual identity checks.
-        let program = crate::init::app_executable_using(|path| {
+        let program = crate::setup::installed_app::app_executable_using(|path| {
             assert_eq!(path, installed);
             true
         })

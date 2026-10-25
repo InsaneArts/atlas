@@ -174,7 +174,7 @@ fn helper_job_here(uid: u32) -> bool {
 /// The app this runs from, whether it is signed by Atlas's developer, and
 /// whether `atlas` in a terminal reaches it.
 fn app() -> Value {
-    match init::app_executable() {
+    match setup::installed_app::app_executable() {
         Ok(executable) => {
             let link = config::home()
                 .map(|home| home.join(".local/bin/atlas"))
@@ -505,7 +505,7 @@ fn ready_to_choose(config_path: &Path, uid: u32, selected: Option<u32>) -> Resul
         check_choice(uid, selected, &previous, keep_other_helper)?;
     }
 
-    init::link_command(&executable)?;
+    setup::installed_app::link_command(&executable)?;
     Ok(())
 }
 
@@ -589,7 +589,9 @@ pub fn choose(config_path: &Path, name: &str) -> Result<Value> {
     // Atlas already answering there needs nothing readied.
     let mut readied = true;
     let orphans = orphans_now()?;
-    if !orphans.is_empty() || !init::proposed(&helper).is_ok_and(|config| answers(&config)) {
+    if !orphans.is_empty()
+        || !setup::configuration::proposed(&helper).is_ok_and(|config| answers(&config))
+    {
         // Root readies this account only while it is still the one checked.
         match closing_first(helper.uid, &orphans, || as_root::ready(&expected, &orphans))? {
             Ok(()) => {}
@@ -622,7 +624,7 @@ fn use_helper(
     let (uid, me_name, _) = me()?;
     let executable = signed_executable()?;
     let previous = settings(config_path)?;
-    let fresh = init::proposed(helper)?;
+    let fresh = setup::configuration::proposed(helper)?;
 
     // As `atlas init` does: the settings for this same helper stay (only
     // their sockets follow its home); another helper in use is kept.
@@ -645,7 +647,7 @@ fn use_helper(
         None => fresh,
     };
 
-    let linked = init::link_command(&executable)?;
+    let linked = setup::installed_app::link_command(&executable)?;
 
     // A setup record left by an earlier account with this user ID.
     setup::migrate::archive_foreign(helper.uid, &helper.home)?;
@@ -680,8 +682,8 @@ fn use_helper(
 
     match previous {
         Some(previous) if previous == config => {}
-        Some(previous) => init::replace_config(config_path, &previous, &config)?,
-        None => init::write_config(config_path, &config)?,
+        Some(previous) => setup::configuration::replace_config(config_path, &previous, &config)?,
+        None => setup::configuration::write_config(config_path, &config)?,
     }
 
     Ok(json!({
@@ -1426,7 +1428,7 @@ pub fn accept(controller_uid: u32, controller_name: &str) -> Result<Value> {
 
 /// The installed Atlas.app's executable, refused unless its developer signed it.
 pub(crate) fn signed_executable() -> Result<PathBuf> {
-    signed_executable_using(init::app_executable()?, setup::developer_id)
+    signed_executable_using(setup::installed_app::app_executable()?, setup::developer_id)
 }
 
 pub(crate) fn signed_executable_using(
@@ -1454,7 +1456,7 @@ pub(crate) fn signed_executable_using(
 fn expected_agent(layout: &Layout, controller_uid: u32) -> Result<Agent> {
     Ok(Agent {
         label: LABEL.to_owned(),
-        program: init::app_executable()?,
+        program: setup::installed_app::app_executable()?,
         uid: layout.uid,
         controller_uid,
         socket: layout.socket(),

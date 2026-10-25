@@ -1,8 +1,8 @@
 // Swift source helpers the check-swift-*.mjs checkers share.
 // Each checker reads Swift as text,
 // deliberately simply; blanking comments and string contents first keeps a
-// pattern from firing inside either. It also holds the allow list and the
-// file walk, so every checker reads them one way.
+// pattern from firing inside either. The file walk is shared so every checker
+// sees the same files.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -181,74 +181,13 @@ export function swiftFiles(folder) {
   return found.sort();
 }
 
-// A glob of `*` (within a folder), `**` (any folders) and literal text, as a
-// regular expression over a repository-relative path.
-function globPattern(glob) {
-  let source = '';
-  for (let index = 0; index < glob.length; index += 1) {
-    if (glob.startsWith('**/', index)) {
-      source += '(?:.*/)?';
-      index += 2;
-    } else if (glob.startsWith('**', index)) {
-      source += '.*';
-      index += 1;
-    } else if (glob[index] === '*') source += '[^/]*';
-    else source += glob[index].replace(/[.+?^${}()|[\]\\]/g, '\\$&');
-  }
-  return new RegExp(`^${source}$`);
-}
-
-// The allow list: `waivers`, each { path, checkers, rule?, until, reason },
-// waive a checker (or one rule of it) for the paths a glob names, and
-// `reportOnly`, each { checker, rule?, until, reason }, turn a checker or one
-// of its rules into a report that never fails. Every entry names the condition
-// that removes it and its reason; one without either throws. With no file,
-// nothing is waived and every rule is a gate.
-export function allowList(file = path.join(repository, 'scripts/check-swift.allow.json')) {
-  const list = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
-  for (const entry of [...(list.waivers ?? []), ...(list.reportOnly ?? [])]) {
-    for (const field of ['until', 'reason']) {
-      if (typeof entry[field] !== 'string' || !entry[field].trim()) {
-        throw new Error(`${file}: ${JSON.stringify(entry)} has no ${field}`);
-      }
-    }
-  }
-  const waivers = (list.waivers ?? []).map((waiver) => ({
-    ...waiver,
-    pattern: globPattern(waiver.path),
-  }));
-  const reportOnly = list.reportOnly ?? [];
-  return {
-    // Whether `checker`'s `rule` is waived for the repository-relative `file`.
-    waived(checker, rule, file) {
-      return waivers.some(
-        (waiver) =>
-          waiver.checkers.includes(checker) &&
-          (!waiver.rule || waiver.rule === rule) &&
-          waiver.pattern.test(file),
-      );
-    },
-    // Whether `checker`'s `rule` only reports.
-    reportsOnly(checker, rule) {
-      return reportOnly.some(
-        (entry) => entry.checker === checker && (!entry.rule || entry.rule === rule),
-      );
-    },
-  };
-}
-
 // Runs one checker over the Swift files under each of `folders`, given as
 // paths relative to the repository unless absolute. `check(text, file)`
-// returns { line, rule, message } problems. A waived problem is dropped; a
-// report-only one is counted, listed under "report:" with --list, and never
-// fails. Exits 1 on any
-// other problem. CHECK_SWIFT_ALLOW names another allow list, for the
-// self-tests, and CHECK_SWIFT_BASE another base for the printed paths.
+// returns { line, rule, message } problems; every problem fails the check.
+// CHECK_SWIFT_BASE names another base for the printed paths.
 export function run(checker, folders, check) {
   const base = process.env.CHECK_SWIFT_BASE ?? repository;
-  const allow = allowList(process.env.CHECK_SWIFT_ALLOW);
   const failures = [];
-  const reports = [];
   for (const folder of folders) {
     const root = path.resolve(base, folder);
     if (!fs.existsSync(root)) {
@@ -259,18 +198,10 @@ export function run(checker, folders, check) {
       const relative = path.relative(base, file).split(path.sep).join('/');
       const text = fs.readFileSync(file, 'utf8');
       for (const problem of check(text, relative)) {
-        if (allow.waived(checker, problem.rule, relative)) continue;
-        const line = `${relative}:${problem.line}: ${problem.message}`;
-        (allow.reportsOnly(checker, problem.rule) ? reports : failures).push(line);
+        failures.push(`${relative}:${problem.line}: ${problem.message}`);
       }
     }
   }
-  if (process.argv.includes('--list')) {
-    for (const line of reports) console.log(`report: ${line}`);
-  }
   for (const line of failures) console.error(line);
-  if (reports.length) {
-    console.log(`check-swift-${checker}: ${reports.length} reported (--list prints them)`);
-  }
   process.exit(failures.length ? 1 : 0);
 }

@@ -170,7 +170,12 @@ pub(super) async fn freeze(
             return Ok(result);
         }
 
-        let plan: Plan = decode(&serde_json::to_vec(&result["plan"])?)?;
+        let plan = result
+            .as_object_mut()
+            .and_then(|result| result.remove("plan"))
+            .unwrap_or(Value::Null);
+        let plan: Plan = serde_json::from_value(plan)
+            .map_err(|_| problem("Invalid environment record or schema"))?;
         if plan.id != id || plan.uid != client.config.helper_uid {
             return Err(problem("Preview returned a different plan identity"));
         }
@@ -180,11 +185,6 @@ pub(super) async fn freeze(
             &serde_json::to_vec_pretty(&plan)?,
             0o600,
         )?;
-
-        result
-            .as_object_mut()
-            .ok_or_else(|| problem("Invalid preview result"))?
-            .remove("plan");
 
         result["retainedPlan"] = json!(stage);
         atomic_write(

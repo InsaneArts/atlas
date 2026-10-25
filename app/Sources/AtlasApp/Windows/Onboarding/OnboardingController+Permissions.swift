@@ -3,10 +3,13 @@ import AtlasOnboarding
 
 /// The helper's own screens: Allow, each permission with the panel beside System Settings, and the switch back.
 extension OnboardingController {
-  /// Allows exactly the account shown: a request changed since is refused.
-  func allow() async {
-    let asker = snapshot.facts.asker
-    await act(.allow(uid: asker.uid, name: asker.name), OnboardingWords.settingUpHere)
+  /// Allows exactly the approved account: a request changed since is refused.
+  ///
+  /// - Parameters:
+  ///   - uid: The account's user ID when Allow was pressed.
+  ///   - name: The account's short name when Allow was pressed.
+  func allow(uid: Int, name: String) async {
+    await act(.allow(uid: uid, name: name), OnboardingWords.settingUpHere)
   }
 
   /// Opens the permission's list in System Settings, with the permission panel beside it.

@@ -112,6 +112,73 @@ fn unsafe_actions_and_whole_batches_are_rejected() {
 }
 
 #[test]
+fn the_whole_batch_is_deserialized_before_semantics_count_or_budget_are_checked() {
+    let malformed = json!({"type":"move","y":1});
+    let mut too_many = vec![json!({"type":"wait","ms":0}); 32];
+    too_many.push(malformed.clone());
+    let mut too_slow = vec![json!({"type":"wait","ms":250}); 9];
+    too_slow.push(malformed.clone());
+
+    for batch in [
+        json!([{"type":"move","x":-1,"y":1}, malformed]),
+        json!(too_many),
+        json!(too_slow),
+    ] {
+        let error = actions::validate(&batch, &display()).unwrap_err();
+        assert_eq!(error.code, "invalid-json");
+        assert_eq!(error.error, "missing field `x`");
+    }
+}
+
+#[test]
+fn an_invalid_tail_names_the_action_and_keeps_field_error_precedence() {
+    for (x, count, problem) in [
+        (-1, 0, "its point is off the display"),
+        (1, 0, "a click is 1 to 5 clicks"),
+        (1, 1, "a modifier is one of cmd, ctrl, alt, shift and fn"),
+    ] {
+        let batch = json!([
+            {"type":"click","x":1,"y":1},
+            {"type":"click","x":x,"y":1,"count":count,"modifiers":["hyper"]},
+        ]);
+        let error = actions::validate(&batch, &display()).unwrap_err();
+        assert_eq!(error.code, "input");
+        assert_eq!(
+            error.error,
+            format!("Action 2 was refused and nothing was sent: {problem}")
+        );
+    }
+}
+
+#[test]
+fn action_count_and_total_budget_keep_their_exact_boundaries() {
+    for count in [0, 33] {
+        let error = actions::validate(
+            &json!(vec![json!({"type":"move","x":1,"y":1}); count]),
+            &display(),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "input");
+        assert_eq!(error.error, "Send between 1 and 32 actions");
+    }
+    actions::validate(
+        &json!(vec![json!({"type":"move","x":1,"y":1}); 32]),
+        &display(),
+    )
+    .unwrap();
+
+    let mut batch = vec![json!({"type":"wait","ms":250}); 8];
+    actions::validate(&json!(batch), &display()).unwrap();
+    batch.push(json!({"type":"key","key":"return"}));
+    let error = actions::validate(&json!(batch), &display()).unwrap_err();
+    assert_eq!(error.code, "input");
+    assert_eq!(
+        error.error,
+        "The batch would take longer than two seconds; send it in parts"
+    );
+}
+
+#[test]
 fn unicode_and_supported_shortcuts_validate() {
     for key in ["cmd+[", "cmd+shift+/", "cmd+a", "ctrl+alt+forwarddelete"] {
         assert!(actions::valid_key(key));

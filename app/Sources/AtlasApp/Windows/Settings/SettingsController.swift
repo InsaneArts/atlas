@@ -119,7 +119,7 @@ final class SettingsController {
       Task { await links.setOpenAtLogin(general.opensAtLogin) }
     }
     if general.picture != shown.picture {
-      links.choosePicture(SettingsPresenter.choice(general.picture))
+      links.choosePicture(general.picture)
       revision += 1
     }
     if general.notify != notify {

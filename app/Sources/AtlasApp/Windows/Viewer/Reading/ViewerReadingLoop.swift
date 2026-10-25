@@ -259,7 +259,7 @@ final class ViewerReadingLoop {
       viewer.control.releaseControl(ViewerWords.helperChanged)
     }
     stopAwaiting()
-    reading.frame = frame
+    reading.frame = (frame.id, frame.revision, frame.display)
     reading.picture = decoded.picture
     reading.lastPicture = decoded.picture
     reading.pictureSize = decoded.size

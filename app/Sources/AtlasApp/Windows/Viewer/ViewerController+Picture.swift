@@ -12,7 +12,7 @@ extension ViewerController {
   /// One of the ⋯ menu's picture choices: Live, every five seconds, or paused.
   ///
   /// - Parameter choice: The choice.
-  func choosePicture(_ choice: ViewerPictureChoice) {
+  func choosePicture(_ choice: SettingsPicture) {
     switch choice {
     case .live, .everyFiveSeconds:
       readingLoop.setRate(choice == .live ? .live : .everyFiveSeconds)

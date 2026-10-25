@@ -159,7 +159,13 @@ test('a paused picture keeps its frame while the status moves on', () => {
 function screenView() {
   const nodes = new Map();
   const listeners = new Map();
+  const documentListeners = new Map();
   const messages = [];
+  const timers = new Map();
+  const broadcasts = [];
+  let nextTimer = 1;
+  let now = 0;
+  let channel;
   const node = (selector) => {
     if (nodes.has(selector)) return nodes.get(selector);
     const events = new Map();
@@ -167,15 +173,18 @@ function screenView() {
     const element = {
       style: {},
       dataset: {},
+      children: [],
       classList: { contains: () => false, toggle() {}, add() {}, remove() {} },
       addEventListener: (name, callback) => events.set(name, callback),
       fire: (name, event = {}) => events.get(name)?.(event),
       getAttribute: (name) => attributes.get(name),
       setAttribute: (name, value) => attributes.set(name, value),
       append(...children) {
-        this.firstChild = children[0];
+        this.children.push(...children);
+        this.firstChild = this.children[0];
       },
       replaceChildren(...children) {
+        this.children = children;
         this.firstChild = children[0];
       },
       focus() {},
@@ -202,20 +211,59 @@ function screenView() {
     nodes.set(selector, element);
     return element;
   };
+  const tabs = ['screen', 'activity', 'apps', 'screenshots'].map((name) => {
+    const tab = node(`[data-tab="${name}"]`);
+    tab.dataset.tab = name;
+    return tab;
+  });
+  const filters = ['all', 'agent', 'you', 'problems'].map((name) => {
+    const filter = node(`[data-filter="${name}"]`);
+    filter.dataset.filter = name;
+    return filter;
+  });
+  const setTimer = (callback, delay, repeat = false) => {
+    const id = nextTimer++;
+    timers.set(id, { callback, delay, repeat, at: now + delay });
+    return id;
+  };
+  const advance = async (milliseconds) => {
+    const until = now + milliseconds;
+    while (true) {
+      const next = [...timers].sort((a, b) => a[1].at - b[1].at)[0];
+      if (!next || next[1].at > until) break;
+      const [id, timer] = next;
+      now = timer.at;
+      if (timer.repeat) timer.at += timer.delay;
+      else timers.delete(id);
+      timer.callback();
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+    now = until;
+  };
   const parent = { postMessage: (message) => messages.push(message) };
   vm.runInNewContext(source, {
     document: {
       body: node('body'),
       querySelector: node,
-      querySelectorAll: () => [],
+      querySelectorAll: (selector) =>
+        ({ '[data-tab]': tabs, '[data-filter]': filters })[selector] || [],
       createElement: () => node(Symbol()),
-      addEventListener() {},
+      addEventListener: (name, callback) => documentListeners.set(name, callback),
     },
     window: { parent, addEventListener: (name, callback) => listeners.set(name, callback) },
-    setTimeout() {},
-    clearTimeout() {},
-    setInterval() {},
-    clearInterval() {},
+    setTimeout: setTimer,
+    clearTimeout: (id) => timers.delete(id),
+    setInterval: (callback, delay) => setTimer(callback, delay, true),
+    clearInterval: (id) => timers.delete(id),
+    BroadcastChannel: class {
+      constructor() {
+        channel = this;
+      }
+      postMessage(message) {
+        broadcasts.push(message);
+      }
+    },
   });
   const receive = (message) =>
     listeners.get('message')({ source: parent, data: { jsonrpc: '2.0', ...message } });
@@ -228,8 +276,417 @@ function screenView() {
     },
     _meta: { 'atlas/frame': { id, key, mimeType: 'image/jpeg', data: id } },
   });
-  return { node, listeners, messages, receive, result };
+  const newerCard = () => channel.onmessage({ data: { newer: 'another-card' } });
+  const calls = (name) => messages.filter((message) => message.params?.name === name);
+  return {
+    node,
+    listeners,
+    documentListeners,
+    messages,
+    receive,
+    result,
+    advance,
+    newerCard,
+    calls,
+    broadcasts,
+  };
 }
+
+async function screenshotGrid() {
+  const page = screenView();
+  const { node, receive, calls } = page;
+  node('[data-tab="screenshots"]').fire('click');
+  await receive({
+    id: calls('screenshots')[0].id,
+    result: {
+      structuredContent: {
+        screenshots: ['a', 'b'].map((name) => ({ name, ageSeconds: 1 })),
+      },
+    },
+  });
+  const picture = (data) => ({ _meta: { 'atlas/frame': { mimeType: 'image/jpeg', data } } });
+  for (const request of calls('screenshot'))
+    await receive({ id: request.id, result: picture(`thumb-${request.params.arguments.name}`) });
+  const open = (index) => {
+    node('[data-shots]').children[index].fire('click');
+    return calls('screenshot').at(-1);
+  };
+  const complete = (request, data) => receive({ id: request.id, result: picture(data) });
+  const displayed = () => node('[data-lightbox-image]').getAttribute('src');
+  return { ...page, open, complete, displayed };
+}
+
+for (const [message, expected] of [
+  ['IPC not available for MCP tool call', 'View unavailable here · Use Atlas'],
+  ['Temporary connection failure', "Atlas isn't answering"],
+]) {
+  test(`a rejected first frame explains ${message} and recovers on the next poll`, async () => {
+    const { node, messages, calls, receive, advance, result } = screenView();
+    await receive({
+      method: 'ui/notifications/tool-result',
+      params: { structuredContent: { status: { state: 'idle' }, canControl: false } },
+    });
+    const initialize = messages.find((message) => message.method === 'ui/initialize');
+    await receive({ id: initialize.id, result: {} });
+    await receive({ id: calls('screen_frame')[0].id, error: { code: -32603, message } });
+    assert.equal(node('[data-note]').textContent, expected);
+    assert.equal(node('[data-frame]').getAttribute('src'), undefined);
+    await advance(4000);
+    assert.equal(calls('screen_frame').length, 2);
+    await receive({
+      id: calls('screen_frame')[1].id,
+      result: result('recovered', 'recovered-key', 100, 100),
+    });
+    assert.equal(node('[data-frame]').getAttribute('src'), 'data:image/jpeg;base64,recovered');
+    assert.equal(node('[data-note]').hidden, true);
+  });
+}
+
+for (const order of ['old first', 'new first']) {
+  test(`each screenshot opening owns its full image when replies arrive ${order}`, async () => {
+    const { node, open, complete, displayed } = await screenshotGrid();
+    const first = open(0);
+    assert.equal(displayed(), 'data:image/jpeg;base64,thumb-a');
+    node('[data-lightbox-close]').fire('click');
+    const second = open(1);
+    assert.equal(displayed(), 'data:image/jpeg;base64,thumb-b');
+    if (order === 'old first') {
+      await complete(first, 'full-a');
+      assert.equal(displayed(), 'data:image/jpeg;base64,thumb-b');
+      await complete(second, 'full-b');
+    } else {
+      await complete(second, 'full-b');
+      await complete(first, 'full-a');
+    }
+    assert.equal(displayed(), 'data:image/jpeg;base64,full-b');
+    assert.equal(node('[data-lightbox]').hidden, false);
+  });
+}
+
+test('reopening the same screenshot gives the new opening ownership of its reply', async () => {
+  const { node, open, complete, displayed } = await screenshotGrid();
+  const first = open(0);
+  node('[data-lightbox-close]').fire('click');
+  const second = open(0);
+  await complete(second, 'new-full-a');
+  await complete(first, 'old-full-a');
+  assert.equal(displayed(), 'data:image/jpeg;base64,new-full-a');
+});
+
+test('a failed newest full read retains its own thumbnail when an older read completes', async () => {
+  const { node, open, complete, displayed, receive } = await screenshotGrid();
+  const first = open(0);
+  node('[data-lightbox-close]').fire('click');
+  const second = open(1);
+  await receive({ id: second.id, error: { message: 'Read failed' } });
+  await complete(first, 'full-a');
+  assert.equal(displayed(), 'data:image/jpeg;base64,thumb-b');
+  assert.equal(node('[data-lightbox]').hidden, false);
+});
+
+for (const dismiss of ['Close', 'Escape', 'retirement']) {
+  test(`${dismiss} invalidates the pending screenshot opening`, async () => {
+    const { node, open, complete, displayed, documentListeners, newerCard, calls } =
+      await screenshotGrid();
+    const first = open(0);
+    if (dismiss === 'Close') node('[data-lightbox-close]').fire('click');
+    else if (dismiss === 'Escape') documentListeners.get('keydown')({ key: 'Escape' });
+    else newerCard();
+    await complete(first, 'full-a');
+    assert.equal(node('[data-lightbox]').hidden, true);
+    assert.equal(displayed(), 'data:image/jpeg;base64,thumb-a');
+    if (dismiss === 'retirement') {
+      const before = calls('screenshot').length;
+      open(1);
+      assert.equal(calls('screenshot').length, before);
+      assert.equal(node('[data-lightbox]').hidden, true);
+    }
+  });
+}
+
+test('retired cards cannot restart observation by changing tabs or advancing timers', async () => {
+  const { node, messages, newerCard, advance } = screenView();
+  node('[data-tab="activity"]').fire('click');
+  newerCard();
+  const before = messages.length;
+  for (const tab of ['screen', 'activity', 'apps', 'screenshots'])
+    node(`[data-tab="${tab}"]`).fire('click');
+  await advance(8000);
+  assert.equal(messages.length, before);
+  assert.equal(node('[data-label]').textContent, 'Showing in a newer card');
+});
+
+for (const [tab, tool, panel, data] of [
+  ['activity', 'activity', 'activity', { activity: [] }],
+  ['apps', 'helper_apps', 'apps', { apps: [] }],
+  ['screenshots', 'screenshots', 'shots', { screenshots: [{ name: 'late', ageSeconds: 1 }] }],
+]) {
+  test(`a retired card ignores its held ${tab} result without starting more reads`, async () => {
+    const { node, calls, receive, newerCard, messages, advance } = screenView();
+    node(`[data-tab="${tab}"]`).fire('click');
+    newerCard();
+    const before = messages.length;
+    await receive({ id: calls(tool)[0].id, result: { structuredContent: data } });
+    await advance(8000);
+    assert.equal(node(`[data-${panel}]`).firstChild, undefined);
+    assert.equal(messages.length, before);
+  });
+}
+
+for (const [tab, tool, panel, rows, fallback] of [
+  [
+    'activity',
+    'activity',
+    'activity',
+    [{ actor: 'agent', says: 'copied text', ageSeconds: 1 }],
+    "Atlas couldn't load activity",
+  ],
+  [
+    'apps',
+    'helper_apps',
+    'apps',
+    [{ name: 'Finder', windows: [] }],
+    "Atlas couldn't list the apps",
+  ],
+  [
+    'screenshots',
+    'screenshots',
+    'shots',
+    [{ name: 'saved', ageSeconds: 1 }],
+    "Atlas couldn't list screenshots",
+  ],
+]) {
+  const delay = tab === 'activity' ? 4000 : 8000;
+  const emptyText = {
+    activity: 'Nothing here yet.',
+    apps: 'No apps are open in the helper.',
+    screenshots: "The agent hasn't taken any screenshots yet.",
+  }[tab];
+  const rowText = {
+    activity: 'Copied text',
+    apps: 'Finder',
+    screenshots: 'data:image/jpeg;base64,saved-thumb',
+  }[tab];
+  const metadata = (empty) =>
+    tab === 'apps'
+      ? `${empty ? '0 apps' : '1 app'} · 0 windows, front to back`
+      : empty
+        ? ''
+        : tab === 'activity'
+          ? 'Newest first'
+          : '1 · open one to see it full size';
+  const failure = {
+    isError: true,
+    content: [{ type: 'text', text: 'Could not load this pane' }],
+  };
+  const loaded = async (page, request, data) => {
+    await page.receive({ id: request.id, result: { structuredContent: { [tab]: data } } });
+    for (const thumb of page.calls('screenshot'))
+      await page.receive({
+        id: thumb.id,
+        result: { _meta: { 'atlas/frame': { mimeType: 'image/jpeg', data: 'saved-thumb' } } },
+      });
+  };
+  const content = (page, empty) => {
+    const body = page.node(`[data-${panel}]`);
+    if (empty) return body.firstChild.textContent;
+    if (tab === 'activity') return body.children[1].children[2].firstChild.textContent;
+    if (tab === 'apps') return body.firstChild.firstChild.children[1].textContent;
+    return body.firstChild.firstChild.firstChild.getAttribute('src');
+  };
+
+  for (const [kind, reply, expected] of [
+    ['rejected', { error: { code: -32601, message: 'Method not found' } }, fallback],
+    ['failed', { result: failure }, 'Could not load this pane'],
+    [
+      'unsupported',
+      { error: { code: -32603, message: 'IPC not available for MCP tool call' } },
+      'View unavailable here · Use Atlas',
+    ],
+    ['malformed', { result: {} }, fallback],
+  ]) {
+    test(`${tab} explains its ${kind} first read and recovers on the next poll`, async () => {
+      const page = screenView();
+      page.node(`[data-tab="${tab}"]`).fire('click');
+      await page.receive({ id: page.calls(tool)[0].id, ...reply });
+      assert.equal(page.node(`[data-${panel}]`).firstChild.textContent, expected);
+      assert.equal(page.node(`[data-${panel}-meta]`).textContent, '');
+      page.node('[data-tab="screen"]').fire('click');
+      page.node(`[data-tab="${tab}"]`).fire('click');
+      assert.equal(page.node(`[data-${panel}]`).firstChild.textContent, expected);
+      await page.receive({ id: page.calls(tool)[1].id, ...reply });
+      await page.advance(delay);
+      assert.equal(page.calls(tool).length, 3);
+      assert.equal(page.node(`[data-${panel}]`).firstChild.textContent, expected);
+      await loaded(page, page.calls(tool)[2], []);
+      assert.equal(page.node(`[data-${panel}]`).firstChild.textContent, emptyText);
+      assert.equal(page.node(`[data-${panel}-meta]`).textContent, metadata(true));
+    });
+  }
+
+  for (const empty of [false, true]) {
+    for (const rejected of [false, true]) {
+      test(`a ${rejected ? 'rejected' : 'failed'} ${tab} refresh retains ${empty ? 'empty' : 'nonempty'} content until recovery`, async () => {
+        const page = screenView();
+        page.node(`[data-tab="${tab}"]`).fire('click');
+        await loaded(page, page.calls(tool)[0], empty ? [] : rows);
+        const before = content(page, empty);
+        assert.equal(before, empty ? emptyText : rowText);
+        await page.advance(delay);
+        assert.equal(page.calls(tool).length, 2);
+        await page.receive({
+          id: page.calls(tool)[1].id,
+          ...(rejected
+            ? { error: { code: -32601, message: 'Method not found' } }
+            : { result: failure }),
+        });
+        assert.equal(content(page, empty), before);
+        assert.equal(
+          page.node(`[data-${panel}-meta]`).textContent,
+          rejected ? fallback : 'Could not load this pane',
+        );
+        if (tab === 'activity') {
+          page.node('[data-filter="you"]').fire('click');
+          assert.equal(
+            page.node('[data-activity-meta]').textContent,
+            rejected ? fallback : 'Could not load this pane',
+          );
+          page.node('[data-filter="all"]').fire('click');
+          assert.equal(content(page, empty), before);
+        }
+        await page.advance(delay);
+        assert.equal(page.calls(tool).length, 3);
+        assert.equal(content(page, empty), before);
+        await loaded(page, page.calls(tool)[2], empty ? rows : []);
+        assert.equal(content(page, !empty), empty ? rowText : emptyText);
+        assert.equal(page.node(`[data-${panel}-meta]`).textContent, metadata(!empty));
+      });
+    }
+  }
+
+  test(`a timed out first ${tab} read replaces loading with an error`, async () => {
+    const page = screenView();
+    page.node(`[data-tab="${tab}"]`).fire('click');
+    await page.advance(30000);
+    assert.equal(page.node(`[data-${panel}]`).firstChild.textContent, fallback);
+    await loaded(page, page.calls(tool).at(-1), rows);
+    assert.equal(content(page, false), rowText);
+    assert.equal(page.node(`[data-${panel}-meta]`).textContent, metadata(false));
+  });
+
+  for (const kind of ['rejected', 'failed', 'timed out']) {
+    test(`a retired card ignores its ${kind} ${tab} read`, async () => {
+      const page = screenView();
+      page.node(`[data-tab="${tab}"]`).fire('click');
+      page.newerCard();
+      const before = page.messages.length;
+      if (kind !== 'timed out')
+        await page.receive({
+          id: page.calls(tool)[0].id,
+          ...(kind === 'rejected'
+            ? { error: { code: -32601, message: 'Method not found' } }
+            : { result: failure }),
+        });
+      await page.advance(30000);
+      assert.equal(page.node(`[data-${panel}]`).firstChild, undefined);
+      assert.equal(page.node(`[data-${panel}-meta]`).textContent, undefined);
+      assert.equal(page.messages.length, before);
+    });
+  }
+}
+
+for (const reply of ['poll', 'notification']) {
+  test(`a late ${reply} cannot revive a retired card's picture or control`, async () => {
+    const { node, receive, result, newerCard, messages, calls, advance, broadcasts } = screenView();
+    await receive({
+      method: 'ui/notifications/tool-result',
+      params: result('old', 'old-key', 100, 100),
+    });
+    const initialize = messages.find((message) => message.method === 'ui/initialize');
+    await receive({ id: initialize.id, result: {} });
+    const poll = calls('screen_frame')[0];
+    newerCard();
+    const before = messages.length;
+    const late = result('late', 'late-key', 100, 100, true);
+    await receive(
+      reply === 'poll'
+        ? { id: poll.id, result: late }
+        : { method: 'ui/notifications/tool-result', params: late },
+    );
+    await advance(8000);
+    assert.equal(node('[data-frame]').getAttribute('src'), 'data:image/jpeg;base64,old');
+    assert.equal(node('[data-screen]').getAttribute('aria-label'), "The helper's screen");
+    assert.equal(node('[data-label]').textContent, 'Showing in a newer card');
+    assert.equal(messages.length, before);
+    assert.equal(broadcasts.length, 1);
+  });
+}
+
+test('teardown during acquisition still releases the control that eventually arrives', async () => {
+  const { node, receive, result, calls, messages, advance } = screenView();
+  await receive({
+    method: 'ui/notifications/tool-result',
+    params: result('old', 'old-key', 100, 100),
+  });
+  const taking = node('[data-take]').fire('click');
+  await receive({ id: 'teardown', method: 'ui/resource-teardown' });
+  assert.ok(messages.some((message) => message.id === 'teardown' && message.result));
+  assert.equal(calls('give_back').length, 0);
+  await receive({
+    id: calls('take_control')[0].id,
+    result: result('acquired', 'acquired-key', 100, 100, true),
+  });
+  assert.equal(calls('give_back').length, 1);
+  assert.equal(node('[data-frame]').getAttribute('src'), 'data:image/jpeg;base64,old');
+  await receive({
+    id: calls('give_back')[0].id,
+    result: { structuredContent: { control: false } },
+  });
+  await taking;
+  const before = messages.length;
+  await advance(8000);
+  assert.equal(messages.length, before);
+  assert.equal(node('[data-screen]').getAttribute('aria-label'), "The helper's screen");
+});
+
+test('giving back during acquisition also releases a later successful acquisition', async () => {
+  const { node, receive, result, calls } = screenView();
+  const taking = node('[data-take]').fire('click');
+  await receive({
+    method: 'ui/notifications/tool-result',
+    params: result('acquired', 'acquired-key', 100, 100, true),
+  });
+  const givingBack = node('[data-take]').fire('click');
+  await receive({
+    id: calls('give_back')[0].id,
+    result: { structuredContent: { control: false } },
+  });
+  await givingBack;
+  await receive({
+    id: calls('take_control')[0].id,
+    result: result('late', 'late-key', 100, 100, true),
+  });
+  assert.equal(calls('give_back').length, 2);
+  await receive({
+    id: calls('give_back')[1].id,
+    result: { structuredContent: { control: false } },
+  });
+  await taking;
+  assert.equal(node('[data-screen]').getAttribute('aria-label'), "The helper's screen");
+});
+
+test('a controlling card ignores a newer card and continues keeping control', async () => {
+  const { node, receive, result, newerCard, calls, advance } = screenView();
+  await receive({
+    method: 'ui/notifications/tool-result',
+    params: result('controlled', 'controlled-key', 100, 100, true),
+  });
+  newerCard();
+  await advance(4000);
+  assert.equal(node('[data-label]').textContent, 'You have control');
+  assert.equal(calls('keep_control').length, 1);
+  assert.equal(calls('give_back').length, 0);
+});
 
 test('taking control of a changed paused picture refuses clicks until the fresh picture is shown', async () => {
   const { node, listeners, messages, receive, result } = screenView();

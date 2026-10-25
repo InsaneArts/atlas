@@ -3,7 +3,7 @@ import AtlasOnboarding
 
 /// One thing the setup window does in its queue, which ``OnboardingController/run()`` performs in order, one at a time
 /// (`OnboardingController+Queue`): the person's actions, the check and the agents reading a step starts by itself, and
-/// the permission panel's own requests. A reading, ``refresh``, never waits in the queue: the reading loop takes it at once.
+/// the permission panel's own requests. Fact readings run separately in the reading loop.
 ///
 /// A request already waiting or under way is not queued again (``repeats(_:)``).
 nonisolated enum OnboardingRequest: Hashable, Sendable {
@@ -25,12 +25,14 @@ nonisolated enum OnboardingRequest: Hashable, Sendable {
   case connectAgents(chosen: [AgentID])
   /// Done: Open at Login set, Atlas opened, the window closed.
   case complete
-  /// Allow, in the helper: the account that asked.
-  case allow
+  /// Allow, in the helper: the account approved when the button was pressed.
+  ///
+  /// - Parameters:
+  ///   - uid: The approved account's user ID.
+  ///   - name: The approved account's short name.
+  case allow(uid: Int, name: String)
   /// Switch Back, in the helper.
   case switchBack
-  /// Read the facts again soon: Check Again, or Continue once the check passed.
-  case refresh
   /// The end-to-end check, which the finishing step starts by itself.
   case check
   /// Which agents are installed and connected, which the agents step asks by itself.
@@ -46,13 +48,13 @@ nonisolated enum OnboardingRequest: Hashable, Sendable {
   case moveOn(from: Permission)
 
   /// Whether it does what `other` does, so it is not queued while `other` waits or runs: the same request, or a second
-  /// Continue on the agents, whatever each had chosen.
+  /// Continue on the agents or Allow, whatever each had chosen.
   ///
   /// - Parameter other: The request waiting or under way.
   /// - Returns: Whether it does.
   func repeats(_ other: OnboardingRequest) -> Bool {
     switch (self, other) {
-    case (.connectAgents, .connectAgents): true
+    case (.connectAgents, .connectAgents), (.allow, .allow): true
     default: self == other
     }
   }
@@ -62,7 +64,7 @@ nonisolated enum OnboardingRequest: Hashable, Sendable {
   var endsOnBack: Bool {
     switch self {
     case .lockAndSwitch, .switchBack: true
-    case .useHelper, .createAccount, .chooseAnother, .closeLeftovers, .connectAgents, .complete, .allow, .refresh,
+    case .useHelper, .createAccount, .chooseAnother, .closeLeftovers, .connectAgents, .complete, .allow,
       .check, .readAgents, .openSettings, .moveOn:
       false
     }
@@ -73,7 +75,7 @@ nonisolated enum OnboardingRequest: Hashable, Sendable {
     switch self {
     case .openSettings, .moveOn: true
     case .useHelper, .createAccount, .lockAndSwitch, .chooseAnother, .closeLeftovers, .connectAgents, .complete,
-      .allow, .switchBack, .refresh, .check, .readAgents:
+      .allow, .switchBack, .check, .readAgents:
       false
     }
   }

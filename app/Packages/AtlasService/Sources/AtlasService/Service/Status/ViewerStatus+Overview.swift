@@ -62,17 +62,6 @@ extension ViewerStatus {
       pending > 0 || inFlight > 0
     }
 
-    /// Whether the command line's Recover may run now. Starting input or restarting takes the controller lock, which
-    /// a viewer in control and an agent's work under way both hold, and checks the helper, which an unavailable or
-    /// logged-out one fails; recovering is the recovery card's.
-    var recoverMayRun: Bool {
-      switch mode {
-      case .observing, .blocked: true
-      case .agent, .stopped: inFlight == 0
-      case .controlling, .recovering, .unavailable, .loggedOut: false
-      }
-    }
-
     /// Creates an overview of a helper not reached yet.
     public init() {}
 

@@ -121,7 +121,7 @@ final class OnboardingController {
     case .chooseAnother: enqueue(.chooseAnother)
     case .closeLeftovers: enqueue(.closeLeftovers)
     case .continueAfterClose: snapshot.choices.closedLeftovers = false
-    case .checkAgain, .continueFinishing: enqueue(.refresh)
+    case .checkAgain, .continueFinishing: refresh()
     case .retryFinish: retryFinish()
     case .setAgent(let id, let on): setAgent(id, on: on)
     case .connectAgents: enqueue(.connectAgents(chosen: agentsSwitchedOn))
@@ -129,7 +129,9 @@ final class OnboardingController {
       guard snapshot.working == nil else { return }
       snapshot.opensAtLogin = on
     case .complete: enqueue(.complete)
-    case .allow: enqueue(.allow)
+    case .allow:
+      let asker = snapshot.facts.asker
+      enqueue(.allow(uid: asker.uid, name: asker.name))
     // Nothing is allowed: the window closes, and the helper asks again the next time Atlas opens there.
     case .notNow: closeRequested = true
     case .showInFinder: dependencies.reveal(dependencies.app)

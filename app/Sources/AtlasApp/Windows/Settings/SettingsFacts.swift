@@ -1,4 +1,5 @@
 import AtlasService
+import AtlasUI
 
 /// What Settings reads from the rest of the app each time it draws: the helper's status, Open at Login, the picture,
 /// the helper's commands running and the app's version.
@@ -10,7 +11,7 @@ struct SettingsFacts {
   /// Where Open at Login stands.
   var opensAtLogin = OpenAtLogin.State(isAvailable: false, isEnabled: false)
   /// The picture choice in force.
-  var picture = ViewerPictureChoice.live
+  var picture = SettingsPicture.live
   /// Whether Paused can be chosen now.
   var canPause = false
   /// The helper's commands running now, from any window.

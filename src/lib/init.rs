@@ -8,7 +8,9 @@ use crate::{
     error::{Error, Result},
     setup::{
         self,
+        configuration::{proposed, replace_config, write_config},
         helper::{Agent, LABEL, Layout, Request},
+        installed_app::{app_executable, link_command},
     },
     ui::{
         self,
@@ -20,7 +22,6 @@ use serde_json::{Value, json};
 use std::{
     fs,
     io::Write,
-    os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
     process::Command,
     time::{Duration, Instant},
@@ -140,69 +141,6 @@ fn sudo(args: &[&str]) -> Result<std::process::Output> {
         .arg("-n")
         .args(args)
         .output()?)
-}
-
-/// The stable installed identity, including when a temporary worker calls us.
-pub(crate) fn app_executable() -> Result<PathBuf> {
-    app_executable_using(crate::update::reachable_by_others)
-}
-
-pub(crate) fn app_executable_using(reachable: impl FnOnce(&Path) -> bool) -> Result<PathBuf> {
-    let executable = PathBuf::from("/Applications/Atlas.app/Contents/MacOS/atlas");
-    if !reachable(&executable) {
-        return Err(problem(
-            "Atlas.app must be in /Applications so the helper account can run it",
-        ));
-    }
-
-    Ok(executable)
-}
-
-/// `~/.local/bin/atlas` → the app, so `atlas` works in a terminal.
-pub(crate) fn link_command(executable: &Path) -> Result<Value> {
-    link_command_in(&config::home()?.join(".local/bin"), executable)
-}
-
-/// [`link_command`] into the folder `bin`.
-fn link_command_in(bin: &Path, executable: &Path) -> Result<Value> {
-    fs::create_dir_all(bin)?;
-
-    let link = bin.join("atlas");
-    if fs::canonicalize(&link).ok().as_deref() == Some(executable) {
-        return Ok(json!({"linked": link, "changed": false}));
-    }
-
-    if !replaceable(&link) {
-        return Err(problem(format!(
-            "{} is another program, so it was left alone. Move it aside, then try again.",
-            crate::ui::text::tilde(&link)
-        )));
-    }
-
-    let temporary = bin.join(format!(".atlas.{}", crate::control::token()));
-    std::os::unix::fs::symlink(executable, &temporary)?;
-    fs::rename(&temporary, &link)?;
-
-    Ok(json!({"linked": link, "changed": true}))
-}
-
-/// Whether `link` may become Atlas's command: nothing there, a link to
-/// nothing, or a link into an Atlas.app.
-fn replaceable(link: &Path) -> bool {
-    let Ok(metadata) = fs::symlink_metadata(link) else {
-        return true;
-    };
-
-    if !metadata.file_type().is_symlink() {
-        return false;
-    }
-
-    match fs::canonicalize(link) {
-        Err(_) => true,
-        Ok(target) => target
-            .ancestors()
-            .any(|folder| folder.file_name().is_some_and(|name| name == "Atlas.app")),
-    }
 }
 
 /// Whether `name` can be a new account's short name.
@@ -424,72 +362,6 @@ fn available_uid(
         }
     }
     Err(problem("No free user ID for the helper account"))
-}
-
-/// The configuration for `helper` in the managed private layout.
-pub(crate) fn proposed(helper: &setup::Account) -> Result<Config> {
-    let layout = Layout {
-        uid: helper.uid,
-        home: helper.home.clone(),
-        guard: None,
-    };
-
-    Ok(Config {
-        helper_uid: helper.uid,
-        socket_path: layout.socket(),
-        identity_probe: "/Users/Shared/Atlas/atlas".into(),
-        input_socket: layout.root().join(setup::helper::INPUT).join("input.sock"),
-        output_dir: config::home()?.join("Library/Application Support/Atlas/runs"),
-    })
-}
-
-/// Write a new configuration atomically, readable only by this account.
-pub(crate) fn write_config(path: &Path, config: &Config) -> Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| problem("The configuration needs a directory"))?;
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(parent)?;
-
-    let toml = config.to_toml()?;
-    config::write_beside(
-        path,
-        0o600,
-        |file| Ok(file.write_all(toml.as_bytes())?),
-        // Never replaces a configuration that appeared meanwhile.
-        |temporary| Ok(fs::hard_link(temporary, path)?),
-    )
-}
-
-/// Replace the configuration that named `previous` (its helper account is
-/// gone or changed), atomically, and only while the file still says so.
-pub(crate) fn replace_config(path: &Path, previous: &Config, config: &Config) -> Result<()> {
-    // Replacing a link would leave the file it points to unchanged.
-    if fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
-        return Err(problem(format!(
-            "{} is a link, and its helper account changed. Update the file it points to (or \
-             remove the link), then run atlas init again.",
-            text::tilde(path)
-        )));
-    }
-
-    let toml = config.to_toml()?;
-    config::write_beside(
-        path,
-        0o600,
-        |file| Ok(file.write_all(toml.as_bytes())?),
-        |temporary| {
-            if Config::load(path).ok().as_ref() != Some(previous) {
-                return Err(problem(format!(
-                    "{} changed while Atlas was updating it; run atlas init again",
-                    text::tilde(path)
-                )));
-            }
-            Ok(fs::rename(temporary, path)?)
-        },
-    )
 }
 
 /// Keep the administrator rights from `sudo -v` fresh while init waits
@@ -1842,36 +1714,6 @@ mod tests {
         assert_eq!(failed.error, "it failed");
     }
 
-    /// A configuration is written once, privately, and never over another.
-    #[test]
-    fn a_configuration_is_never_written_over_another() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("Atlas/atlas.toml");
-        let helper = setup::Account {
-            name: "atlas".into(),
-            uid: 503,
-            home: "/Users/atlas".into(),
-        };
-        let config = proposed(&helper).unwrap();
-        write_config(&path, &config).unwrap();
-
-        assert_eq!(
-            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
-
-        let before = fs::read(&path).unwrap();
-        assert!(
-            write_config(&path, &config).is_err(),
-            "an existing file stays"
-        );
-        assert_eq!(fs::read(&path).unwrap(), before);
-        let leftovers = fs::read_dir(path.parent().unwrap()).unwrap().count();
-        assert_eq!(leftovers, 1, "no temporary file is left behind");
-    }
-
     /// An earlier job is retired only when its definition differs, and
     /// restored when the new one cannot go in.
     #[test]
@@ -1971,45 +1813,6 @@ mod tests {
     }
 
     #[test]
-    fn the_command_replaces_only_a_missing_dead_or_atlas_link() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = fs::canonicalize(dir.path()).unwrap();
-        let bin = root.join("bin");
-        let executable = root.join("Applications/Atlas.app/Contents/MacOS/atlas");
-        let older = root.join("Old/Atlas.app/Contents/MacOS/atlas");
-        for path in [&executable, &older] {
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(path, b"").unwrap();
-        }
-        let link = bin.join("atlas");
-
-        assert_eq!(link_command_in(&bin, &executable).unwrap()["changed"], true);
-        assert_eq!(
-            link_command_in(&bin, &executable).unwrap()["changed"],
-            false
-        );
-
-        for target in [older, root.join("gone")] {
-            fs::remove_file(&link).unwrap();
-            std::os::unix::fs::symlink(&target, &link).unwrap();
-            assert_eq!(link_command_in(&bin, &executable).unwrap()["changed"], true);
-            assert_eq!(fs::canonicalize(&link).unwrap(), executable);
-        }
-
-        let other = root.join("other-atlas");
-        fs::write(&other, b"another program").unwrap();
-        fs::remove_file(&link).unwrap();
-        std::os::unix::fs::symlink(&other, &link).unwrap();
-        assert!(link_command_in(&bin, &executable).is_err());
-        assert_eq!(fs::canonicalize(&link).unwrap(), other);
-
-        fs::remove_file(&link).unwrap();
-        fs::write(&link, b"a script").unwrap();
-        assert!(link_command_in(&bin, &executable).is_err());
-        assert_eq!(fs::read(&link).unwrap(), b"a script");
-    }
-
-    #[test]
     fn new_account_names_are_short_and_plain() {
         assert!(valid_account_name("atlas").is_ok());
         assert!(valid_account_name("qa_helper-2").is_ok());
@@ -2022,34 +1825,5 @@ mod tests {
         );
         assert!(valid_account_name("503a").is_ok());
         assert!(valid_account_name(&"x".repeat(32)).is_err());
-    }
-
-    /// A new configuration points everything at the helper's private layout.
-    #[test]
-    fn a_new_configuration_uses_the_managed_layout() {
-        let helper = setup::Account {
-            name: "atlas".into(),
-            uid: 503,
-            home: "/Users/atlas".into(),
-        };
-        let config = proposed(&helper).unwrap();
-        assert_eq!(config.helper_uid, 503);
-        assert_eq!(
-            config.socket_path,
-            PathBuf::from("/Users/atlas/.atlas/helper/503.sock")
-        );
-        assert_eq!(
-            config.input_socket,
-            PathBuf::from("/Users/atlas/.atlas/input/input.sock")
-        );
-        assert_eq!(
-            config.identity_probe,
-            PathBuf::from("/Users/Shared/Atlas/atlas")
-        );
-        assert!(
-            config
-                .output_dir
-                .ends_with("Library/Application Support/Atlas/runs")
-        );
     }
 }

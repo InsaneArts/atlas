@@ -189,13 +189,15 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   /// - Parameter event: The key.
   /// - Returns: The key, to pass on, or nil once handled.
   private func shotKey(_ event: NSEvent) -> NSEvent? {
-    guard event.window === self, controller.state.alert == nil, !(firstResponder is NSText) else { return event }
+    guard event.window === self, !(firstResponder is NSText) else { return event }
+    let snapshot = controller.snapshot
+    guard ViewerPresenter.alert(snapshot) == nil else { return event }
     let held = event.modifierFlags.intersection([.command, .control, .option])
-    if controller.session.tab == .screen {
-      return outlineKey(event, hasModifiers: !held.isEmpty)
+    if snapshot.session.tab == .screen {
+      return outlineKey(event, hasModifiers: !held.isEmpty, snapshot: snapshot)
     }
-    guard controller.session.tab == .screenshots else { return event }
-    let largeShown = controller.panes.shots.large != nil
+    guard snapshot.session.tab == .screenshots else { return event }
+    let largeShown = snapshot.panes.shots.large != nil
     guard let shot = ShotKeys.event(keyCode: event.keyCode, hasModifiers: !held.isEmpty, largeShown: largeShown)
     else { return event }
     controller.send(shot)
@@ -208,13 +210,14 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   /// - Parameters:
   ///   - event: The key.
   ///   - hasModifiers: Whether ⌘, ⌃ or ⌥ is held with it.
+  ///   - snapshot: What the window held when the key arrived.
   /// - Returns: The key, to pass on, or nil once handled.
-  private func outlineKey(_ event: NSEvent, hasModifiers: Bool) -> NSEvent? {
+  private func outlineKey(_ event: NSEvent, hasModifiers: Bool, snapshot: ViewerSnapshot) -> NSEvent? {
     let key = ShotKeys.screenEvent(
       keyCode: event.keyCode,
       hasModifiers: hasModifiers,
-      holdingControl: controller.holdingControl,
-      outlineShown: controller.state.screen.outline != nil
+      holdingControl: snapshot.holdingControl,
+      outlineShown: ViewerPresenter.outline(snapshot) != nil
     )
     guard let key else { return event }
     controller.send(key)

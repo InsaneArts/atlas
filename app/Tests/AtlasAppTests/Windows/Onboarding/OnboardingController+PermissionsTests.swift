@@ -22,7 +22,9 @@ struct OnboardingControllerPermissionsTests {
     try await controller.whileOpen { _ in
       try await controller.untilLoaded()
       #expect(controller.snapshot.step == .allow)
-      await controller.allow()
+      controller.send(.allow)
+      let work = try await controller.untilTaken {}
+      await work.value
       #expect(commands.ran.contains(Action.allow(uid: 501, name: "me").arguments))
     }
   }

@@ -79,7 +79,7 @@ struct PanelPresenterTests {
     #expect(stopped.agent == .resume(isEnabled: true))
     #expect(stopped.main.event == .openAtlas)
     var resuming = try Self.snapshot("Stopped")
-    resuming.session.requests = 1
+    resuming.agentRequests = 1
     #expect(PanelPresenter.state(resuming).controls.agent == .resume(isEnabled: false), "Resume waits for an answer")
   }
 
@@ -164,7 +164,6 @@ struct PanelPresenterTests {
       #expect(agent == expected, "\(row)")
     }
     var stopping = try Self.snapshot("Working")
-    stopping.session.requests = 1
     stopping.agentRequests = 1
     #expect(PanelPresenter.state(stopping).controls.agent == .stop, "a Stop under way leaves Stop in place")
   }

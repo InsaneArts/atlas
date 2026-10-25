@@ -17,7 +17,7 @@ struct ViewerPresenterBarTests {
     snapshot.reading.status = status
     snapshot.reading.hasStatus = true
     snapshot.reading.ready = true
-    snapshot.reading.frame = Frame(png: Data(), id: "f", revision: "r", display: ViewerStatus.Size(width: 4, height: 3))
+    snapshot.reading.frame = (id: "f", revision: "r", display: ViewerStatus.Size(width: 4, height: 3))
     snapshot.reading.frameAt = 0
     snapshot.reading.picture = SampleDesktop.picture
     return snapshot

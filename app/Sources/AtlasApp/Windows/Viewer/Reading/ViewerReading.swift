@@ -11,7 +11,7 @@ struct ViewerReading {
   /// Whether any status has been read yet.
   var hasStatus = false
   /// The latest picture's frame: its id, revision and display.
-  var frame: Frame?
+  var frame: (id: String, revision: String, display: ViewerStatus.Size)?
   /// The latest picture, ready to draw; the panel's, until the first reading of the window's own.
   var picture: DesktopPicture?
   /// The last picture drawn, kept when the picture is lost, so the stage keeps it behind its words, blurred,

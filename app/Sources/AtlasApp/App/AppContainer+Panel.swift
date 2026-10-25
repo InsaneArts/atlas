@@ -3,8 +3,7 @@ import AtlasCommands
 import AtlasService
 
 /// The menu bar item and its panel, built once at launch: the panel's controller, linked to the other windows by the
-/// coordinator, Atlas's item in the menu bar, and the popover it opens; the controller's work starts in the app's
-/// lifetime task group.
+/// coordinator, Atlas's item in the menu bar, and the popover it opens; helper discovery starts in its own task.
 extension AppContainer {
   /// Builds the panel and puts Atlas's item in the menu bar.
   ///
@@ -27,12 +26,8 @@ extension AppContainer {
       gettingStarted: { [weak coordinator] in coordinator?.showOnboarding() }
     )
     panel = controller
-    // Unstructured, as nothing at launch can wait: the app's lifetime, whose task group runs the panel's work.
-    lifetime = Task {
-      await withDiscardingTaskGroup { group in
-        group.addTask { await controller.run() }
-      }
-    }
+    // Unstructured, as nothing at launch can wait: discover the helper once; polling has its own tasks.
+    Task { await controller.findHelper() }
   }
 
   /// Closes the panel, as opening a window or an alert from it does.
