@@ -9,10 +9,17 @@ public struct LoginItem: Sendable {
   static let plist = "com.insanearts.atlas.menubar.plist"
 
   /// Creates the login item for this app's bundled agent.
-  public init() {}
+  public init() {
+    self.init(service: SMAppService.agent(plistName: Self.plist))
+  }
+
+  /// Creates a login item with the given service.
+  init(service: any LoginItemService) {
+    self.service = service
+  }
 
   /// The system's record of the bundled agent.
-  var service: SMAppService { SMAppService.agent(plistName: Self.plist) }
+  let service: any LoginItemService
 
   /// Whether Atlas opens at login now.
   public var enabled: Bool { service.status == .enabled }
@@ -33,6 +40,23 @@ public struct LoginItem: Sendable {
   /// - Parameter on: Whether Atlas should open at login.
   /// - Throws: The system's error when it refuses to register or unregister the agent.
   public func set(_ on: Bool) throws {
-    if on { try service.register() } else { try service.unregister() }
+    guard !matches(on) else { return }
+    do {
+      if on { try service.register() } else { try service.unregister() }
+    } catch {
+      let failure = error as NSError
+      guard failure.domain == "SMAppServiceErrorDomain",
+        failure.code == kSMErrorAlreadyRegistered || failure.code == kSMErrorJobNotFound,
+        matches(on)
+      else { throw error }
+    }
+  }
+
+  /// Whether the service's current status satisfies the requested preference.
+  private func matches(_ on: Bool) -> Bool {
+    let status = service.status
+    return on ? status == .enabled : status == .notRegistered || status == .notFound
   }
 }
+
+extension SMAppService: LoginItemService {}
