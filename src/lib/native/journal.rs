@@ -29,7 +29,7 @@ pub struct Held {
 }
 
 /// The last successful replacement is cached only to avoid writing an unchanged
-/// record twice. A failed write invalidates the cache so cleanup always retries.
+/// record twice. A failed replacement preserves the last successful record.
 pub struct Journal {
     path: PathBuf,
     saved: Option<Held>,
@@ -45,7 +45,6 @@ impl Journal {
             return Ok(());
         }
 
-        self.saved = None;
         store(&self.path, &held)?;
         self.saved = Some(held);
 
@@ -362,6 +361,57 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn a_failed_pointer_move_write_still_allows_the_release_to_be_posted() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("held.json");
+        let epoch = test_epoch();
+        let held = Held {
+            epoch: epoch.clone(),
+            button: Some(Button::Left),
+            keys: Vec::new(),
+            x: 10.0,
+            y: 10.0,
+            count: 1,
+            mouse_number: 1,
+            flags: 0,
+        };
+        let mut journal = Journal::new(path.clone());
+        let mut posted = Vec::new();
+        {
+            // Posting is recorded only after the conservative journal write succeeds.
+            let mut post = |record, phase| -> Result<()> {
+                journal.write(record)?;
+                posted.push(phase);
+                Ok(())
+            };
+            post(held.clone(), "mouse-down").unwrap();
+
+            let pending = path.with_extension("pending");
+            fs::create_dir(&pending).unwrap();
+            let mut moved = held.clone();
+            moved.x += 1.0;
+            assert!(post(moved, "mouse-dragged").is_err());
+
+            post(held.clone(), "mouse-up").unwrap();
+        }
+        assert_eq!(posted, ["mouse-down", "mouse-up"]);
+        assert!(load(&path, &epoch).unwrap().unwrap() == held);
+
+        let mut clean = held;
+        clean.button = None;
+        assert!(journal.write(clean.clone()).is_err());
+        assert!(journal.write(clean.clone()).is_err());
+        assert_eq!(
+            load(&path, &epoch).unwrap().unwrap().button,
+            Some(Button::Left)
+        );
+
+        fs::remove_dir(path.with_extension("pending")).unwrap();
+        journal.write(clean.clone()).unwrap();
+        assert!(load(&path, &epoch).unwrap().unwrap() == clean);
     }
 
     #[test]
