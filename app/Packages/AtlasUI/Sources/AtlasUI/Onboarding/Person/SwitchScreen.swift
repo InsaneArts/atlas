@@ -43,7 +43,7 @@ struct SwitchScreen: View {
   /// - Parameter state: The switch screen.
   /// - Returns: The three steps.
   static func steps(_ state: OnboardingSwitchScreenState) -> [StepList.Step] {
-    let opening = openStep(opensByItself: state.opensByItself)
+    let opening = openStep(opensByItself: state.opensByItself, showsManualOpening: state.showsManualOpening)
     return [
       StepList.Step(title: state.logInTitle, detail: "Pick it on the lock screen", state: state.progress.logIn),
       StepList.Step(title: opening.title, detail: opening.detail, state: state.progress.openAtlas),
@@ -57,12 +57,19 @@ struct SwitchScreen: View {
 
   /// The second step's words: Atlas opens in the helper by itself once the helper was readied, which also skips
   /// macOS's welcome questions there, so there is nothing to set up; else the person opens it from Applications.
+  /// Until Atlas answers, the manual opening instructions stay alongside the automatic opening.
   ///
-  /// - Parameter opensByItself: Whether Atlas opens in the helper by itself.
+  /// - Parameters:
+  ///   - opensByItself: Whether Atlas opens in the helper by itself.
+  ///   - showsManualOpening: Whether to include how to open Atlas from Applications.
   /// - Returns: The step's title and detail.
-  static func openStep(opensByItself: Bool) -> (title: String, detail: String) {
+  static func openStep(opensByItself: Bool, showsManualOpening: Bool) -> (title: String, detail: String) {
     if opensByItself {
-      return ("Atlas opens there by itself", "Nothing to set up first")
+      let detail =
+        showsManualOpening
+        ? "Nothing to set up first. If needed, open Atlas there, in Applications"
+        : "Nothing to set up first"
+      return ("Atlas opens there by itself", detail)
     }
     return ("Open Atlas there", "In Applications. If macOS asks you to set anything up, choose Set Up Later")
   }

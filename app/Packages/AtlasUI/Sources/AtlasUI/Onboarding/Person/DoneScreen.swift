@@ -20,6 +20,7 @@ struct DoneScreen: View {
         ListRow(setting.title, detail: setting.detail, trailing: setting.trailing) {
           send(.setOpenAtLogin(!state.opensAtLogin))
         }
+        .disabled(!state.isEnabled)
       }
       .controlSize(.small)
       .padding(.top, OnboardingLayout.Rhythm.paragraph)

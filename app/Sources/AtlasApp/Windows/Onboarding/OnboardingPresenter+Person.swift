@@ -67,6 +67,7 @@ extension OnboardingPresenter {
         allow: progress.allow.stepState
       ),
       opensByItself: snapshot.helperReadied,
+      showsManualOpening: !helper.answering,
       waiting: quiet ? waiting(helper, progress: progress) : nil
     )
   }
@@ -154,7 +155,8 @@ extension OnboardingPresenter {
   static func done(_ snapshot: OnboardingSnapshot) -> OnboardingDoneScreenState {
     OnboardingDoneScreenState(
       lede: OnboardingWords.doneLede(snapshot.facts.helper.title),
-      opensAtLogin: snapshot.opensAtLogin
+      opensAtLogin: snapshot.opensAtLogin,
+      isEnabled: snapshot.working == nil
     )
   }
 }

@@ -30,6 +30,8 @@ public struct OnboardingSwitchScreenState: Equatable, Sendable {
   public var progress: Progress
   /// Whether Atlas opens in the helper by itself; false when the helper could not be readied, so the person opens it.
   public var opensByItself: Bool
+  /// Whether to include how to open Atlas from Applications while it has not answered yet.
+  public var showsManualOpening: Bool
   /// What happens next, in the pill; nil while the work note has something to say.
   public var waiting: String?
 
@@ -40,18 +42,21 @@ public struct OnboardingSwitchScreenState: Equatable, Sendable {
   ///   - logInTitle: The first step's title: log in to the helper, named.
   ///   - progress: Where the three steps stand.
   ///   - opensByItself: Whether Atlas opens in the helper by itself.
+  ///   - showsManualOpening: Whether to include how to open Atlas from Applications.
   ///   - waiting: What happens next, in the pill; nil while the work note has something to say.
   public init(
     title: String,
     logInTitle: String,
     progress: Progress,
     opensByItself: Bool = true,
+    showsManualOpening: Bool = false,
     waiting: String? = nil
   ) {
     self.title = title
     self.logInTitle = logInTitle
     self.progress = progress
     self.opensByItself = opensByItself
+    self.showsManualOpening = showsManualOpening
     self.waiting = waiting
   }
 }

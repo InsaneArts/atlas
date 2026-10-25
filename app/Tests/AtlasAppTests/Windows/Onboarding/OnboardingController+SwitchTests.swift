@@ -7,6 +7,68 @@ import Testing
 
 @Suite("OnboardingController switching")
 struct OnboardingControllerSwitchTests {
+  @Test("opening setup, choosing Not Now in the helper, returning and reopening keeps the manual opening instructions")
+  func returningAfterNotNowKeepsTheOpeningInstructions() async throws {
+    let commands = ScriptedCommands([
+      "onboarding status": OnboardingReplies.freshMac,
+      "onboarding create": #"{"ok": true, "readied": true}"#,
+    ])
+    commands.whileRunning { arguments in
+      if arguments.starts(with: ["onboarding", "create"]) {
+        commands.answer("onboarding status", OnboardingReplies.switchingMac)
+      }
+    }
+    let controller = OnboardingController.scripted(commands)
+    try await controller.whileOpen { _ in
+      try await controller.untilLoaded()
+      controller.send(.begin)
+      controller.send(.pick(.newAccount))
+      await controller.useHelper()
+      var form = controller.snapshot.form
+      form.password = "hunter2"
+      form.verify = "hunter2"
+      controller.update(form)
+      await controller.createAccount()
+      try await settle("the helper was never read") { controller.snapshot.step == .switchToHelper }
+      #expect(controller.snapshot.helperReadied)
+      #expect(OnboardingPresenter.switchToHelper(controller.snapshot).opensByItself)
+      #expect(OnboardingPresenter.switchToHelper(controller.snapshot).showsManualOpening)
+
+      let helperCommands = ScriptedCommands([
+        "onboarding status": OnboardingReplies.restarting, "onboarding window": #"{"ok": true}"#,
+      ])
+      let helper = OnboardingController.scripted(helperCommands)
+      try await helper.whileOpen { _ in
+        try await helper.untilLoaded()
+        try await settle("the helper's window never opened") {
+          helperCommands.ran.contains(Action.markWindow(open: true).arguments)
+        }
+        helper.send(.notNow)
+        #expect(helper.closeRequested)
+        await helper.close()
+      }
+
+      let returned = OnboardingReplies.switchingMac
+        .replacingOccurrences(of: #""signedIn": false"#, with: #""signedIn": true, "hidden": true"#)
+      commands.answer("onboarding status", returned)
+      controller.refresh()
+      try await settle("the return was never read") { controller.snapshot.facts.helper.signedIn }
+      #expect(controller.snapshot.helperReadied)
+      #expect(OnboardingPresenter.switchToHelper(controller.snapshot).opensByItself)
+      #expect(OnboardingPresenter.switchToHelper(controller.snapshot).showsManualOpening)
+      await controller.close()
+
+      let reopened = OnboardingController.scripted(commands)
+      try await reopened.whileOpen { _ in
+        try await reopened.untilLoaded()
+        #expect(reopened.snapshot.step == .switchToHelper)
+        #expect(reopened.snapshot.helperReadied)
+        #expect(OnboardingPresenter.switchToHelper(reopened.snapshot).opensByItself)
+        #expect(OnboardingPresenter.switchToHelper(reopened.snapshot).showsManualOpening)
+      }
+    }
+  }
+
   @Test(
     "switching back locks for the account that asked, or with none named when no one did",
     arguments: [("me", Action.switchTo("me")), (nil, .lockScreen)] as [(String?, Action)]

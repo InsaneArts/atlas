@@ -39,6 +39,7 @@
             title: "Now log in to the Atlas account.",
             logInTitle: "Log in to the Atlas account",
             progress: .init(logIn: .done, openAtlas: .current, allow: .waiting),
+            showsManualOpening: true,
             waiting: "Waiting for Atlas to open in the Atlas account…"
           )
         )
@@ -124,6 +125,7 @@
             title: "Now log in to \(name).",
             logInTitle: "Log in to \(name)",
             progress: .init(logIn: .current, openAtlas: .waiting, allow: .waiting),
+            showsManualOpening: true,
             waiting: nil
           )
         )
@@ -187,6 +189,7 @@
       title: "Now log in to the Atlas account.",
       logInTitle: "Log in to the Atlas account",
       progress: .init(logIn: .current, openAtlas: .waiting, allow: .waiting),
+      showsManualOpening: true,
       waiting: nil
     )
 

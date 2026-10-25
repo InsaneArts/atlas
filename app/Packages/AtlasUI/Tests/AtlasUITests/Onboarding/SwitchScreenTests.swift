@@ -14,9 +14,18 @@
       #expect(byHand.title == "Open Atlas there")
       #expect(byHand.detail == "In Applications. If macOS asks you to set anything up, choose Set Up Later")
       state.opensByItself = true
+      state.showsManualOpening = false
       let byItself = SwitchScreen.steps(state)[1]
       #expect(byItself.title == "Atlas opens there by itself")
       #expect(byItself.detail == "Nothing to set up first", "macOS's welcome questions were answered already")
+    }
+
+    @Test("an unanswered helper keeps the manual opening instructions alongside Atlas opening by itself")
+    func anUnansweredHelperKeepsTheManualOpening() {
+      let state = PreviewStates.onboardingSwitchScreen
+      let opening = SwitchScreen.steps(state)[1]
+      #expect(opening.title == "Atlas opens there by itself")
+      #expect(opening.detail == "Nothing to set up first. If needed, open Atlas there, in Applications")
     }
 
     @Test("a slow login or problem replaces ordinary waiting and wraps without cutting its reassurance")

@@ -125,7 +125,9 @@ final class OnboardingController {
     case .retryFinish: retryFinish()
     case .setAgent(let id, let on): setAgent(id, on: on)
     case .connectAgents: enqueue(.connectAgents(chosen: agentsSwitchedOn))
-    case .setOpenAtLogin(let on): snapshot.opensAtLogin = on
+    case .setOpenAtLogin(let on):
+      guard snapshot.working == nil else { return }
+      snapshot.opensAtLogin = on
     case .complete: enqueue(.complete)
     case .allow: enqueue(.allow)
     // Nothing is allowed: the window closes, and the helper asks again the next time Atlas opens there.

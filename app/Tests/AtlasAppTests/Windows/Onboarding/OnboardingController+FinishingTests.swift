@@ -102,4 +102,42 @@ struct OnboardingControllerFinishingTests {
     #expect(!controller.closeRequested)
     #expect(controller.snapshot.problem == "unknown command.")
   }
+
+  @Test("Open at Login keeps its saved choice while Done waits for Atlas to open", arguments: [true, false])
+  func theLoginChoiceWaitsForDone(started: Bool) async throws {
+    let gate = ReleaseSignal()
+    let commands = ScriptedCommands([
+      "onboarding status": OnboardingReplies.finishedMac,
+      "onboarding login": #"{"ok": true}"#,
+      "menubar": started ? #"{"ok": true}"# : #"{"ok": false, "error": "Atlas could not open"}"#,
+    ])
+    commands.whileRunning { arguments in
+      if arguments == Action.openMenuBar.arguments { await gate.wait() }
+    }
+    let controller = OnboardingController.scripted(commands)
+    controller.snapshot.choices.agentsDone = true
+    try await controller.whileOpen { _ in
+      defer { gate.open() }
+      try await controller.untilLoaded()
+      controller.send(.setOpenAtLogin(false))
+      #expect(OnboardingPresenter.done(controller.snapshot).isEnabled)
+      controller.send(.complete)
+      try await settle("Atlas never started opening") { commands.ran.contains(Action.openMenuBar.arguments) }
+      #expect(commands.ran.contains(Action.setOpensAtLogin(false).arguments))
+      #expect(controller.snapshot.working == OnboardingWords.opening)
+      #expect(!OnboardingPresenter.done(controller.snapshot).isEnabled)
+      controller.send(.setOpenAtLogin(true))
+      #expect(!controller.snapshot.opensAtLogin)
+      let completing = try #require(controller.performing?.work)
+      gate.open()
+      try await completing.value("Done never ended")
+      #expect(!controller.snapshot.opensAtLogin)
+      #expect(controller.closeRequested == started)
+      if !started {
+        #expect(OnboardingPresenter.done(controller.snapshot).isEnabled)
+        controller.send(.setOpenAtLogin(true))
+        #expect(controller.snapshot.opensAtLogin)
+      }
+    }
+  }
 }

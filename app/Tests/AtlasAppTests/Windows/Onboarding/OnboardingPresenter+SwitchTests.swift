@@ -23,6 +23,7 @@ struct OnboardingPresenterSwitchTests {
       try Samples.person(Samples.helper(signedIn: signedIn, answering: answering, hidden: hidden, allowed: allowed))
     )
     #expect(Self.switchScreen(OnboardingPresenter.state(snapshot))?.waiting == waiting)
+    #expect(Self.switchScreen(OnboardingPresenter.state(snapshot))?.showsManualOpening == !answering)
     snapshot.working = Words.locking
     #expect(Self.switchScreen(OnboardingPresenter.state(snapshot))?.waiting == nil, "the work note shows instead")
   }
