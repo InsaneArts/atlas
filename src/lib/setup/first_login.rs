@@ -269,6 +269,22 @@ fn ready(
     program: Option<&Path>,
     (version, build): (&str, &str),
 ) -> Result<Readied> {
+    ready_with(
+        layout,
+        logged_in,
+        program,
+        (version, build),
+        write_if_absent,
+    )
+}
+
+fn ready_with(
+    layout: &Layout,
+    logged_in: bool,
+    program: Option<&Path>,
+    (version, build): (&str, &str),
+    mut write: impl FnMut(&Path, &[u8]) -> Result<bool>,
+) -> Result<Readied> {
     if program.is_some() && fs::symlink_metadata(layout.home.join(crate::config::SETTINGS)).is_ok()
     {
         return Err(problem(
@@ -289,16 +305,16 @@ fn ready(
     if never_set_up && !logged_in {
         owned_folder(layout, "Library/Preferences")?;
         let files = [
+            (layout.home.join(PRIVACY), privacy_plist()),
+            (layout.home.join(SKIP), String::new()),
             (
                 layout.home.join(SETUP_ASSISTANT),
                 setup_assistant_plist(version, build),
             ),
-            (layout.home.join(PRIVACY), privacy_plist()),
-            (layout.home.join(SKIP), String::new()),
         ];
         for (path, text) in files {
             layout.check()?;
-            if write_if_absent(&path, text.as_bytes())? {
+            if write(&path, text.as_bytes())? {
                 answered.push(path);
             }
         }
@@ -700,6 +716,45 @@ mod tests {
         let again = ready(&layout, false, Some(program), MACOS).unwrap();
         assert!(again.answered.is_empty());
         assert!(!again.opener_written, "the same opener is left as it is");
+    }
+
+    #[test]
+    fn a_failed_first_login_write_leaves_preparation_retryable() {
+        for relative in [PRIVACY, SKIP, SETUP_ASSISTANT] {
+            let (_dir, layout) = layout();
+            let failed = layout.home.join(relative);
+            let mut injected = false;
+            let result = ready_with(&layout, false, None, MACOS, |path, bytes| {
+                if path == failed {
+                    injected = true;
+                    return Err(std::io::Error::from_raw_os_error(libc::ENOSPC).into());
+                }
+                write_if_absent(path, bytes)
+            });
+            assert!(injected);
+            assert!(result.is_err());
+            assert!(!failed.exists());
+            assert!(!layout.home.join(SETUP_ASSISTANT).exists());
+
+            let readied = ready(&layout, false, None, MACOS).unwrap();
+            assert!(readied.answered.contains(&failed));
+            for (relative, expected) in [
+                (PRIVACY, privacy_plist()),
+                (SKIP, String::new()),
+                (SETUP_ASSISTANT, setup_assistant_plist(MACOS.0, MACOS.1)),
+            ] {
+                assert_eq!(
+                    fs::read_to_string(layout.home.join(relative)).unwrap(),
+                    expected
+                );
+            }
+            assert!(
+                ready(&layout, false, None, MACOS)
+                    .unwrap()
+                    .answered
+                    .is_empty()
+            );
+        }
     }
 
     #[test]
