@@ -456,10 +456,14 @@ fn argv(items: &[&str]) -> Vec<String> {
 
 /// Serialize Atlas's multi-step local registrations without taking the host's own settings lock.
 fn connection_lock() -> Result<fs::File> {
+    connection_lock_in(&std::env::temp_dir())
+}
+
+/// The connection lock in `directory`, also used by the Claude app's writer.
+pub(crate) fn connection_lock_in(directory: &Path) -> Result<fs::File> {
     use fs2::FileExt;
     use std::os::unix::fs::OpenOptionsExt;
-    let path =
-        std::env::temp_dir().join(format!("atlas-agents-{}.lock", nix::unistd::Uid::current()));
+    let path = directory.join(format!("atlas-agents-{}.lock", nix::unistd::Uid::current()));
     let file = fs::OpenOptions::new()
         .write(true)
         .create(true)

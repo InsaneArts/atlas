@@ -112,27 +112,12 @@ fn connected_in(home: &Path) -> bool {
 /// never replaced. The new file replaces the old one whole, with its
 /// permissions; a settings file that is a link is changed where it points.
 /// Removing leaves another program's entry named atlas alone; invalid
-/// settings are reported without changing the file.
-fn change_in(home: &Path, atlas: Option<&Path>) -> Result<bool> {
-    use std::os::unix::fs::PermissionsExt;
-
+/// settings are reported without changing the file. Registrations share
+/// the connection lock in `locks`; tests use a directory of their own.
+fn change_in(home: &Path, atlas: Option<&Path>, locks: &Path) -> Result<bool> {
+    let _lock = crate::agents::connection_lock_in(locks)?;
     let named = settings_in(home);
-    let path = match fs::symlink_metadata(&named) {
-        Ok(_) => fs::canonicalize(&named).map_err(|error| {
-            Error::new(
-                "agents",
-                format!("Could not resolve {}: {error}", named.display()),
-            )
-        })?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => named.clone(),
-        Err(error) => return Err(Error::writing(&named, error)),
-    };
-    let before = match fs::read_to_string(&path) {
-        Ok(text) => Some(text),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => return Err(Error::writing(&path, error)),
-    };
-
+    let (path, before) = read_settings(&named)?;
     let changing = parse(before.as_deref()).and_then(|mut settings| {
         changed(&mut settings, atlas).map(|changed| changed.then_some(settings))
     });
@@ -147,24 +132,71 @@ fn change_in(home: &Path, atlas: Option<&Path>) -> Result<bool> {
         }
     };
 
+    write_settings(home, &path, before.as_deref(), settings)?;
+    Ok(true)
+}
+
+/// The resolved settings file and its original text, or its absent path.
+fn read_settings(named: &Path) -> Result<(PathBuf, Option<String>)> {
+    let path = match fs::symlink_metadata(named) {
+        Ok(_) => fs::canonicalize(named).map_err(|error| {
+            Error::new(
+                "agents",
+                format!("Could not resolve {}: {error}", named.display()),
+            )
+        })?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => named.to_path_buf(),
+        Err(error) => return Err(Error::writing(named, error)),
+    };
+    let before = match fs::read_to_string(&path) {
+        Ok(text) => Some(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(Error::writing(&path, error)),
+    };
+
+    Ok((path, before))
+}
+
+/// Publish changed settings, keeping the first original privately beside them.
+fn write_settings(
+    home: &Path,
+    path: &Path,
+    before: Option<&str>,
+    settings: Map<String, Value>,
+) -> Result<()> {
+    use std::{io::Write, os::unix::fs::PermissionsExt};
+
     let folder = path.parent().unwrap_or(home);
     fs::create_dir_all(folder).map_err(|error| Error::writing(folder, error))?;
     let kept = path.with_extension("json.before-atlas");
-    if let Some(before) = &before
+    if let Some(before) = before
         && !kept.exists()
     {
         crate::control::write_private(&kept, before.as_bytes())?;
     }
 
-    let mode = fs::metadata(&path).map_or(0o600, |metadata| metadata.permissions().mode() & 0o777);
+    let mode = fs::metadata(path).map_or(0o600, |metadata| metadata.permissions().mode() & 0o777);
     let mut text = serde_json::to_string_pretty(&Value::Object(settings))?;
     text.push('\n');
-    let partial = path.with_extension("json.atlas-partial");
-    crate::control::write_private(&partial, text.as_bytes())?;
-    fs::set_permissions(&partial, fs::Permissions::from_mode(mode))
-        .map_err(|error| Error::writing(&partial, error))?;
-    fs::rename(&partial, &path).map_err(|error| Error::writing(&path, error))?;
-    Ok(true)
+    crate::config::write_beside(
+        path,
+        0o600,
+        |file| {
+            file.write_all(text.as_bytes())?;
+            file.set_permissions(fs::Permissions::from_mode(mode))?;
+            Ok(())
+        },
+        |temporary| {
+            let (current, text) = read_settings(&settings_in(home))?;
+            if current != path || text.as_deref() != before {
+                return Err(Error::new(
+                    "agents",
+                    "The Claude app's settings changed while connecting; try again",
+                ));
+            }
+            fs::rename(temporary, path).map_err(|error| Error::writing(path, error))
+        },
+    )
 }
 
 /// The executable the app should run: the one inside the installed
@@ -197,7 +229,7 @@ pub fn change(connect: bool) -> Value {
         .ok_or_else(|| Error::new("agents", "HOME is not set"))
         .and_then(|home| {
             let atlas = if connect { Some(executable()?) } else { None };
-            change_in(&home, atlas.as_deref())
+            change_in(&home, atlas.as_deref(), &std::env::temp_dir())
         });
 
     match outcome {
@@ -218,12 +250,110 @@ mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
+    fn change_in(home: &Path, atlas: Option<&Path>) -> Result<bool> {
+        super::change_in(home, atlas, home)
+    }
+
     fn written(home: &Path) -> Value {
         serde_json::from_str(&fs::read_to_string(settings_in(home)).unwrap()).unwrap()
     }
 
     fn mode(path: &Path) -> u32 {
         fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[test]
+    fn settings_edited_after_reading_are_not_replaced() {
+        for edited in [
+            r#"{"theme":"light"}"#,
+            r#"{"mcpServers":{"atlas":{"command":"someone-else"}}}"#,
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let named = settings_in(dir.path());
+            fs::create_dir_all(named.parent().unwrap()).unwrap();
+            fs::write(&named, "{}").unwrap();
+            let (path, before) = read_settings(&named).unwrap();
+            let mut settings = parse(before.as_deref()).unwrap();
+            changed(&mut settings, Some(Path::new("/x/atlas"))).unwrap();
+
+            fs::write(&named, edited).unwrap();
+            let result = write_settings(dir.path(), &path, before.as_deref(), settings);
+
+            assert!(result.unwrap_err().error.contains("settings changed"));
+            assert_eq!(fs::read_to_string(&named).unwrap(), edited);
+        }
+    }
+
+    #[test]
+    fn a_retargeted_settings_link_keeps_both_files_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let named = settings_in(dir.path());
+        fs::create_dir_all(named.parent().unwrap()).unwrap();
+        let original = dir.path().join("original.json");
+        let replacement = dir.path().join("replacement.json");
+        for path in [&original, &replacement] {
+            fs::write(path, "{}").unwrap();
+        }
+        std::os::unix::fs::symlink(&original, &named).unwrap();
+        let (path, before) = read_settings(&named).unwrap();
+        let mut settings = parse(before.as_deref()).unwrap();
+        changed(&mut settings, Some(Path::new("/x/atlas"))).unwrap();
+
+        fs::remove_file(&named).unwrap();
+        std::os::unix::fs::symlink(&replacement, &named).unwrap();
+        let result = write_settings(dir.path(), &path, before.as_deref(), settings);
+
+        assert!(result.unwrap_err().error.contains("settings changed"));
+        assert_eq!(fs::read_link(&named).unwrap(), replacement);
+        for path in [&original, &replacement] {
+            assert_eq!(fs::read_to_string(path).unwrap(), "{}");
+        }
+    }
+
+    #[test]
+    fn settings_created_after_reading_are_not_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let named = settings_in(dir.path());
+        let (path, before) = read_settings(&named).unwrap();
+        let mut settings = parse(before.as_deref()).unwrap();
+        changed(&mut settings, Some(Path::new("/x/atlas"))).unwrap();
+
+        fs::create_dir_all(named.parent().unwrap()).unwrap();
+        let edited = r#"{"theme":"light"}"#;
+        fs::write(&named, edited).unwrap();
+        let result = write_settings(dir.path(), &path, before.as_deref(), settings);
+
+        assert!(result.unwrap_err().error.contains("settings changed"));
+        assert_eq!(fs::read_to_string(&named).unwrap(), edited);
+    }
+
+    #[test]
+    fn another_atlas_registration_keeps_settings_unchanged_until_it_finishes() {
+        let dir = tempfile::tempdir().unwrap();
+        let named = settings_in(dir.path());
+        fs::create_dir_all(named.parent().unwrap()).unwrap();
+        fs::write(&named, "{}").unwrap();
+        let atlas = Path::new("/x/atlas");
+        let held = crate::agents::connection_lock_in(dir.path()).unwrap();
+
+        let refused = std::thread::scope(|scope| {
+            scope
+                .spawn(|| change_in(dir.path(), Some(atlas)))
+                .join()
+                .unwrap()
+        });
+        assert!(
+            refused
+                .unwrap_err()
+                .error
+                .contains("Another agent connection")
+        );
+        assert_eq!(fs::read_to_string(&named).unwrap(), "{}");
+        assert!(!named.with_extension("json.before-atlas").exists());
+
+        drop(held);
+        assert!(change_in(dir.path(), Some(atlas)).unwrap());
+        assert!(connected_in(dir.path()));
     }
 
     #[test]
