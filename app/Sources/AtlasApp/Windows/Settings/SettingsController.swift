@@ -131,7 +131,9 @@ final class SettingsController {
   func selectTab(_ tab: SettingsTab) {
     guard .root(SettingsRoot(pane: tab)) != session.navigation.destination else { return }
     session.navigation.visit(.root(SettingsRoot(pane: tab)))
-    enteredDestination()
+    dependencies.preferences.saveTab(tab.rawValue)
+    nameWindow?("Settings — \(SettingsWords.tab(tab))")
+    if tab == .agents { readAgents() }
   }
 
   /// The window came forward: what the links read is read again, and the agents and projects afresh.

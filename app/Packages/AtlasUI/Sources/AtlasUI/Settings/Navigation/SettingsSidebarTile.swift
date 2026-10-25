@@ -20,7 +20,7 @@ struct SettingsSidebarTile: View {
     switch pane {
     case .helper: .display
     case .general: .gear
-    case .agents: .terminal
+    case .agents: .agents
     case .about: .info
     }
   }
