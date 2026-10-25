@@ -20,20 +20,12 @@ public enum SettingsLayout {
   static let swapInsets = EdgeInsets(top: Spacing.xsPlus, leading: sideInset, bottom: sideInset, trailing: sideInset)
   /// 20: between a form's sections, the gap and the next section name's own space above it.
   static let sectionGap = Spacing.xl
-  /// 32 above, 68 at the sides, 62 below: About's insets.
-  static let aboutInsets = EdgeInsets(top: 32, leading: 68, bottom: 62, trailing: 68)
-  /// 84: the app's icon in About.
-  static let aboutTile: CGFloat = 84
-  /// 440: the widest About's sentence runs before it wraps, so it reads on one line.
-  static let aboutTextWidth: CGFloat = 440
-  /// 440: the widest About's update status runs before it wraps.
-  static let aboutStatusWidth: CGFloat = 440
-  /// 64: About's update status's height, its 14 above included, kept whatever it says, so the window never grows or
-  /// shrinks as a check goes: room for two lines, such as the progress bar over its words or a problem over Show in
-  /// Finder, the tallest it gets.
-  static let aboutStatusHeight: CGFloat = 64
-  /// 220: About's install progress bar.
-  static let progressWidth: CGFloat = 220
+  /// About uses the same column insets as every other Settings pane.
+  static let aboutInsets = swapInsets
+  /// 68: the app's visible icon tile in About's compact header.
+  static let aboutTile: CGFloat = 68
+  /// 360: the widest About's tagline runs, also constrained by the available column.
+  static let aboutTextWidth: CGFloat = 360
   /// 40: the helper's picture at the top of the Helper pane.
   static let accountPicture: CGFloat = 40
   /// 10: between a section's name and its group, as ``GroupedSection`` sets them, for a section that draws its own

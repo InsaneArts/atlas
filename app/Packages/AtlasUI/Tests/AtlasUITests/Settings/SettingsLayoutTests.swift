@@ -30,45 +30,42 @@ struct SettingsLayoutTests {
     }
   }
 
-  @Test("About keeps one height whatever its update line says, so the window never grows as a check goes")
+  @Test("Every About state fits a narrow Settings window and lets longer update details wrap")
   @MainActor
-  func aboutKeepsOneHeight() throws {
-    let statuses: [SettingsUpdateStatus?] = [
-      nil,
-      .working("Checking for updates…"),
-      .done("Atlas is up to date."),
-      .available("Atlas 0.2.0 is available."),
-      .installing("Installing Atlas 0.2.0…"),
-      .problem("Atlas couldn't check for updates."),
-      .misplaced("Move Atlas to the Applications folder, then try again."),
-      .note("Atlas has no public release yet. Check [atlas.insanearts.io](https://atlas.insanearts.io) for news."),
-    ]
-    let heights = try statuses.map { status in
-      try Self.size(
-        AboutPane(state: SettingsAboutState(version: "Version 0.1.0", update: .check, status: status)) { _ in }
-          .frame(width: SettingsLayout.formWidth)
+  func aboutFitsANarrowColumn() throws {
+    for width in [PreviewStates.settingsNarrowWidth, SettingsLayout.width] {
+      let sizes = try PreviewStates.settingsAboutSamples
+        .map { sample in
+          try Self.size(
+            AboutPane(state: sample.value.about) { _ in }
+              .padding(SettingsLayout.aboutInsets)
+              .frame(width: width)
+          )
+        }
+      #expect(sizes.allSatisfy { $0.width == width }, "the column stays inside \(width) points")
+      #expect(
+        sizes.allSatisfy { $0.height + SettingsLayout.header < SettingsLayout.firstHeight },
+        "every state fits without scrolling: \(sizes)"
       )
-      .height
+      if width == PreviewStates.settingsNarrowWidth {
+        #expect(try #require(sizes.last).height > sizes[0].height, "long details grow instead of clipping")
+      }
     }
-    #expect(Set(heights).count == 1, "\(heights)")
   }
 
-  @Test("About's update button keeps one width and the native button height as it checks, finds a version and installs")
+  @Test("About's update button keeps one width and the row capsule height as it checks, finds a version and installs")
   @MainActor
   func theUpdateButtonKeepsItsWidth() throws {
     let sizes = try [SettingsUpdateButton.check, .checking, .install, .installing].map { update in
       try Self.size(
         AboutUpdateButton(update: update) { _ in }
-          .controlSize(.regular)
           .fixedSize()
       )
     }
     let widths = sizes.map(\.width)
     #expect(Set(widths).count == 1, "\(widths)")
     let gettingStarted = try Self.size(
-      Button("Getting Started…") {}
-        .buttonStyle(.bordered)
-        .controlSize(.regular)
+      ListRowTrailing(trailing: .button("Open…"), action: {})
         .fixedSize()
     )
     #expect(sizes.allSatisfy { $0.height == gettingStarted.height }, "\(sizes), Getting Started: \(gettingStarted)")

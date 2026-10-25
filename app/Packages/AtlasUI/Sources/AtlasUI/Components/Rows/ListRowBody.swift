@@ -4,11 +4,11 @@ import SwiftUI
 /// trailing control, at the row's height, with the separator above it in a ``GroupedList``. ``ListRow`` ends
 /// it with one of its own trailing kinds; a row whose control has a value of its own, such as a popup, or a
 /// button that shows its work, hands that control in here.
-struct ListRowBody<Trailing: View>: View {
+struct ListRowBody<Detail: View, Trailing: View>: View {
   /// The title.
   private let title: String
-  /// The detail under it, or nil for none.
-  private let detail: String?
+  /// The detail under the title, including any inline status or link.
+  private let detail: Detail
   /// How the detail is set.
   private let detailStyle: ListRow.DetailStyle
   /// A short word on a tint beside the title, or nil for none.
@@ -55,9 +55,51 @@ struct ListRowBody<Trailing: View>: View {
     leadOpacity: Double = 1,
     accessibilityChildren: AccessibilityChildBehavior = .contain,
     @ViewBuilder trailing: () -> Trailing
+  ) where Detail == Text? {
+    self.init(
+      title,
+      detailStyle: detailStyle,
+      tag: tag,
+      titleFit: titleFit,
+      lead: lead,
+      size: size,
+      fill: fill,
+      leadOpacity: leadOpacity,
+      accessibilityChildren: accessibilityChildren,
+      detailContent: { detail.map { Text($0) } },
+      trailing: trailing
+    )
+  }
+
+  /// Creates a row with a rich detail, such as update progress or a recovery link.
+  ///
+  /// - Parameters:
+  ///   - title: The title.
+  ///   - detailStyle: How the detail is set.
+  ///   - tag: A short word on a tint beside the title.
+  ///   - titleFit: How the title fits the row's width.
+  ///   - lead: What leads the row.
+  ///   - size: How tall the row is.
+  ///   - fill: The row's fill.
+  ///   - leadOpacity: How opaque the lead draws.
+  ///   - accessibilityChildren: How VoiceOver reads the row.
+  ///   - detailContent: The content under the title, at the row's detail style.
+  ///   - trailing: The control at the row's end.
+  init(
+    _ title: String,
+    detailStyle: ListRow.DetailStyle = .plain,
+    tag: String? = nil,
+    titleFit: ListRow.TitleFit = .twoLines,
+    lead: ListRow.Lead = .none,
+    size: ListRow.Size = .regular,
+    fill: Color = .clear,
+    leadOpacity: Double = 1,
+    accessibilityChildren: AccessibilityChildBehavior = .contain,
+    @ViewBuilder detailContent: () -> Detail,
+    @ViewBuilder trailing: () -> Trailing
   ) {
     self.title = title
-    self.detail = detail
+    self.detail = detailContent()
     self.detailStyle = detailStyle
     self.tag = tag
     self.titleFit = titleFit
@@ -99,13 +141,11 @@ struct ListRowBody<Trailing: View>: View {
             AccentTag(text: tag)
           }
         }
-        if let detail {
-          Text(detail)
-            .textStyle(detailStyle == .path ? .callout : size.detailStyle)
-            .foregroundStyle(detailStyle.color)
-            .lineLimit(detailStyle == .path ? 1 : nil)
-            .truncationMode(.middle)
-        }
+        detail
+          .textStyle(detailStyle == .path ? .callout : size.detailStyle)
+          .foregroundStyle(detailStyle.color)
+          .lineLimit(detailStyle == .path ? 1 : nil)
+          .truncationMode(.middle)
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       trailing

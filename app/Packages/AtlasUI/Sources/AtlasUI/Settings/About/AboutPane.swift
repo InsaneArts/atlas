@@ -1,45 +1,61 @@
 import SwiftUI
 
-/// The About pane: Atlas's icon, name, version and what it is, then native update and Getting Started… buttons,
-/// and what it says about updates in one spot under them, which keeps its height whatever it says.
+/// A compact app header over the same grouped action rows as the other Settings panes.
 struct AboutPane: View {
   /// What the pane shows.
   let state: SettingsAboutState
   /// Receives what the person does.
   let send: @MainActor (SettingsEvent) -> Void
 
-  /// What it draws, from its state.
+  /// The app's identity, then updates and the setup walkthrough in one card.
   var body: some View {
-    VStack(spacing: .zero) {
+    VStack(spacing: Spacing.l) {
+      header
+      GroupedSection(AboutRow.allCases) { row in
+        switch row {
+        case .updates:
+          ListRowBody("Updates", size: .compact) {
+            AboutUpdateStatus(status: state.status, send: send)
+          } trailing: {
+            AboutUpdateButton(update: state.update, send: send)
+          }
+        case .gettingStarted:
+          ListRow(
+            "Getting Started",
+            detail: "Walk through setup again",
+            trailing: .button("Open…"),
+            size: .compact
+          ) { send(.gettingStarted) }
+        }
+      }
+    }
+    .frame(maxWidth: .infinity)
+  }
+
+  /// The icon and pane title, a wrapping tagline and a quiet version caption.
+  private var header: some View {
+    VStack(spacing: Spacing.s) {
       // Laid out by its visible tile; the icon's transparent margin overhangs.
       AppIcon(tile: SettingsLayout.aboutTile)
         .frame(width: SettingsLayout.aboutTile, height: SettingsLayout.aboutTile)
+        .padding(.bottom, Spacing.xs)
       Text(verbatim: "Atlas")
-        .textStyle(.title2, weight: .bold)
+        .textStyle(.heading)
         .accessibilityAddTraits(.isHeader)
-        .padding(.top, Spacing.mPlus)
-      Text(state.version)
-        .font(Typography.digits(.callout))
-        .foregroundStyle(Color.textSecondary)
-        .padding(.top, Spacing.half)
       Text(verbatim: "A hidden second desktop where agents test your apps while you work.")
         .textStyle(.body)
         .foregroundStyle(Color.textSecondary)
+        .lineLimit(2)
         .frame(maxWidth: SettingsLayout.aboutTextWidth)
         .fixedSize(horizontal: false, vertical: true)
-        .padding(.top, Spacing.sPlus)
-      HStack(spacing: Spacing.m) {
-        AboutUpdateButton(update: state.update, send: send)
-        Button("Getting Started…") { send(.gettingStarted) }
-          .buttonStyle(.bordered)
-      }
-      .controlSize(.regular)
-      .padding(.top, Spacing.xl)
-      AboutUpdateStatus(status: state.status, send: send)
-        .padding(.top, Spacing.m)
+      Text(state.version)
+        .textStyle(.caption)
+        .foregroundStyle(Color.textTertiary)
     }
     .multilineTextAlignment(.center)
     .frame(maxWidth: .infinity)
+    .padding(.top, Spacing.l)
+    .padding(.bottom, Spacing.xs)
   }
 }
 
@@ -52,11 +68,19 @@ struct AboutPane: View {
     .sampleSurface()
   }
 
-  #Preview("About — Update available") {
-    FormColumn(insets: SettingsLayout.aboutInsets) {
-      AboutPane(state: PreviewStates.settingsAboutNewer.about) { _ in }
+  #Preview("About — Every update state, narrow") {
+    ScrollView {
+      VStack(spacing: SettingsLayout.sectionGap) {
+        ForEach(PreviewStates.settingsAboutSamples) { sample in
+          VStack(alignment: .leading, spacing: SettingsLayout.titleGap) {
+            GroupLabel(text: sample.name)
+            AboutPane(state: sample.value.about) { _ in }
+          }
+          .padding(SettingsLayout.aboutInsets)
+        }
+      }
     }
-    .frame(width: SettingsLayout.width)
+    .frame(width: PreviewStates.settingsNarrowWidth)
     .sampleSurface()
   }
 #endif

@@ -1,80 +1,75 @@
 import SwiftUI
 
-/// What About says about updates, in the one spot under its buttons, which always keeps
-/// ``SettingsLayout/aboutStatusHeight``, so the window never grows or shrinks as the check goes: a spinner while a
-/// check runs, a green check that pops in, the sparkles beside a newer version, one progress bar over the install, the
-/// problem line, with Show in Finder when Atlas must move, or plain words whose web address is a link. A new line
-/// swaps in place of the last by opacity.
+/// The Updates row's detail: a check result, progress, a recovery action or a live release-news link.
+/// It wraps within the space beside the row's button and grows for longer messages.
 struct AboutUpdateStatus: View {
-  /// What it says; nil for nothing.
+  /// What it says; nil for the invitation to check.
   let status: SettingsUpdateStatus?
   /// Receives Show in Finder.
   let send: @MainActor (SettingsEvent) -> Void
 
-  /// What it draws, from its state.
+  /// The current detail, aligned with the row's title.
   var body: some View {
-    ZStack(alignment: .top) {
-      if let status {
-        line(status)
-          .padding(.top, Spacing.mPlus)
-          .id(status)
-          .transition(.opacity)
-      }
+    if let status {
+      line(status)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .id(status)
+        .transition(.opacity)
+        .animation(Motion.textSwap, value: status)
+    } else {
+      Text("Check for a newer version")
+        .textStyle(.caption)
+        .foregroundStyle(Color.textSecondary)
     }
-    .frame(maxWidth: SettingsLayout.aboutStatusWidth, alignment: .top)
-    .frame(height: SettingsLayout.aboutStatusHeight, alignment: .top)
-    .animation(Motion.textSwap, value: status)
   }
 
-  /// One kind of line.
+  /// One kind of detail.
   ///
   /// - Parameter status: What it says.
-  /// - Returns: The line.
+  /// - Returns: The detail.
   @ViewBuilder private func line(_ status: SettingsUpdateStatus) -> some View {
     switch status {
     case .working(let text):
-      StatusLine(kind: .working, text: text)
+      StatusLine(kind: .working, text: text, size: .small, textColor: .textSecondary)
     case .done(let text):
-      StatusLine(kind: .done, text: text, popsMark: true)
+      StatusLine(kind: .done, text: text, size: .small, popsMark: true, textColor: .textSecondary)
     case .problem(let text):
-      StatusLine(kind: .problem, text: text)
+      StatusLine(kind: .problem, text: text, size: .small, textColor: .textSecondary)
     case .misplaced(let text):
-      VStack(spacing: Spacing.xs) {
-        StatusLine(kind: .problem, text: text)
+      VStack(alignment: .leading, spacing: Spacing.xs) {
+        StatusLine(kind: .problem, text: text, size: .small, textColor: .textSecondary)
         Button("Show in Finder") { send(.showAppInFinder) }
-          .buttonStyle(.textLink(.regular))
+          .buttonStyle(.textLink(.small))
       }
     case .available(let text):
-      HStack(spacing: Spacing.xsPlus) {
+      HStack(alignment: .top, spacing: Spacing.xsPlus) {
         Image(systemName: SymbolName.sparkles.rawValue)
           .font(Typography.symbol(.control))
           .foregroundStyle(Color.textLink)
           .accessibilityHidden(true)
         Text(text)
-          .textStyle(.callout)
+          .textStyle(.caption)
           .foregroundStyle(Color.textSecondary)
       }
     case .installing(let text):
-      VStack(spacing: Spacing.s) {
+      VStack(alignment: .leading, spacing: Spacing.xs) {
+        Text(text)
+          .textStyle(.caption)
+          .foregroundStyle(Color.textSecondary)
         ProgressView()
           .progressViewStyle(.linear)
           .tint(Color.accent)
-          .frame(width: SettingsLayout.progressWidth)
-        Text(text)
-          .textStyle(.callout)
-          .foregroundStyle(Color.textSecondary)
       }
     case .note(let text):
       Text(Self.linked(text))
-        .textStyle(.callout)
+        .textStyle(.caption)
         .foregroundStyle(Color.textSecondary)
         .tint(Color.textLink)
-        .fixedSize(horizontal: false, vertical: true)
     }
   }
 
-  /// Words whose links are written as Markdown, such as "[atlas.insanearts.io](https://atlas.insanearts.io)", with
-  /// each link live; words that are not Markdown stay as they are.
+  /// Words whose links are written as Markdown, with each link live; plain words stay as they are.
   ///
   /// - Parameter text: The words.
   /// - Returns: The words, each link live.

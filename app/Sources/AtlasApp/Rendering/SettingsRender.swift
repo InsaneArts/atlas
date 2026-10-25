@@ -54,7 +54,19 @@
       try? FileManager.default
         .createDirectory(at: folder, withIntermediateDirectories: true)
       let reduceTransparency = ProcessInfo.processInfo.environment["ATLAS_RENDER_REDUCE_TRANSPARENCY"] == "1"
-      return renders.map { draw($0.file, $0.state, to: folder, reduceTransparency: reduceTransparency) }
+      let standard = renders.map { draw($0.file, $0.state, to: folder, reduceTransparency: reduceTransparency) }
+      let narrow = PreviewStates.settingsAboutSamples
+        .enumerated()
+        .map { index, sample in
+          draw(
+            "about-narrow-\(index + 1)",
+            sample.value,
+            to: folder,
+            reduceTransparency: reduceTransparency,
+            width: PreviewStates.settingsNarrowWidth
+          )
+        }
+      return (standard + narrow)
         .allSatisfy { $0 }
     }
 
@@ -66,12 +78,19 @@
     ///   - state: The state.
     ///   - folder: Where the PNG goes.
     ///   - reduceTransparency: Whether to draw it as under Reduce Transparency; not by default.
+    ///   - width: The window's width; the standard Settings width by default.
     /// - Returns: Whether it was drawn.
-    static func draw(_ file: String, _ state: SettingsState, to folder: URL, reduceTransparency: Bool = false) -> Bool {
+    static func draw(
+      _ file: String,
+      _ state: SettingsState,
+      to folder: URL,
+      reduceTransparency: Bool = false,
+      width: CGFloat = SettingsLayout.width
+    ) -> Bool {
       PNG.write(
         view(state) { _ in }
           .environment(\._accessibilityReduceTransparency, reduceTransparency),
-        size: size(of: state),
+        size: size(of: state, width: width),
         to: folder.appendingPathComponent("\(file).png")
       )
     }
@@ -79,19 +98,21 @@
     /// The window's size for a state: Settings' width, and the title and tabs over the pane as it draws, which the
     /// pane reports as the window lays it out.
     ///
-    /// - Parameter state: The state.
+    /// - Parameters:
+    ///   - state: The state.
+    ///   - width: The available window width.
     /// - Returns: The size.
-    static func size(of state: SettingsState) -> NSSize {
+    static func size(of state: SettingsState, width: CGFloat = SettingsLayout.width) -> NSSize {
       var pane: CGFloat?
       let host = PNG.host(
         view(state) { event in
           if case .paneHeight(let tab, let height) = event, tab == state.tabs.selected { pane = height }
         }
       )
-      host.frame = NSRect(x: 0, y: 0, width: SettingsLayout.width, height: SettingsLayout.firstHeight)
+      host.frame = NSRect(x: 0, y: 0, width: width, height: SettingsLayout.firstHeight)
       host.layoutSubtreeIfNeeded()
       let height = pane.map { SettingsLayout.header + $0 } ?? SettingsLayout.firstHeight
-      return NSSize(width: SettingsLayout.width, height: height.rounded(.up))
+      return NSSize(width: width, height: height.rounded(.up))
     }
 
     /// The window's view for a render.

@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// About's native update button: Check for Updates…, then prominent Install Update… once a newer version is found.
-/// While its check or install runs it waits, disabled, and the line under it says what runs. It lays out at its
+/// About's row capsule: Check for Updates…, then accent Install Update… once a newer version is found.
+/// While its check or install runs it waits, disabled, and the row's detail says what runs. It lays out at its
 /// widest title, so it never changes width.
 struct AboutUpdateButton: View {
   /// Where the check stands.
@@ -15,24 +15,26 @@ struct AboutUpdateButton: View {
       switch update {
       case .check, .checking:
         button
-          .buttonStyle(.bordered)
+          .buttonStyle(.capsule(.glass, size: .mini))
       case .install, .installing:
         button
-          .buttonStyle(.borderedProminent)
+          .buttonStyle(.capsule(.accent, size: .mini))
       }
     }
+    .fixedSize()
     .disabled(update.isWorking)
   }
 
-  /// The action and its title, sized once for either native style.
+  /// The action and its title, sized once for either capsule look.
   private var button: some View {
     Button {
       if let event = update.event { send(event) }
     } label: {
       ZStack {
-        // Reserve the widest title so checking and installing share one width.
+        // Reserve the widest title without tracking, so glass and accent keep one width despite their letter spacing.
         ForEach(SettingsUpdateButton.titles, id: \.self) { title in
           Text(title)
+            .tracking(.zero)
             .hidden()
         }
         Text(update.title)

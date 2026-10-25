@@ -44,6 +44,8 @@ struct StatusLine: View {
   var size = Size.regular
   /// Whether the mark pops in as the line appears, such as About's green check.
   var popsMark = false
+  /// The sentence's colour when specified, leaving the mark in its status colour.
+  var textColor: Color?
 
   /// The mark, then the sentence.
   var body: some View {
@@ -52,7 +54,7 @@ struct StatusLine: View {
         .padding(.top, size.markInset)
       Text(text)
         .textStyle(size.textStyle)
-        .foregroundStyle(Self.color(kind))
+        .foregroundStyle(textColor ?? Self.color(kind))
         .multilineTextAlignment(.leading)
         .fixedSize(horizontal: false, vertical: true)
         .swapsText(on: text)

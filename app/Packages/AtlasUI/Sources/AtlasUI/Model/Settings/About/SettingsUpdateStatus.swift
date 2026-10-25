@@ -1,4 +1,4 @@
-/// What About says about updates, in the one spot under its buttons.
+/// What About says about updates in the Updates row's detail.
 public enum SettingsUpdateStatus: Hashable, Sendable {
   /// A check runs: a spinner and the words, such as "Checking for updates…".
   case working(String)
@@ -6,7 +6,7 @@ public enum SettingsUpdateStatus: Hashable, Sendable {
   case done(String)
   /// A newer version is published: "Atlas 0.2.0 is available.".
   case available(String)
-  /// The newer version installs: a progress bar over "Installing Atlas 0.2.0…".
+  /// The newer version installs: "Installing Atlas 0.2.0…" with a progress bar.
   case installing(String)
   /// A check or an install failed, saying why: the problem line.
   case problem(String)

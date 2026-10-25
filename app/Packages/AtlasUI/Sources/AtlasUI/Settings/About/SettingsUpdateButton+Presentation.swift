@@ -1,6 +1,6 @@
 extension SettingsUpdateButton {
   /// The button's word: Check for Updates… until a newer version is found, then Install Update…. It keeps its word
-  /// while its check or install runs; the line under it says so.
+  /// while its check or install runs; the row's detail says so.
   var title: String {
     switch self {
     case .check, .checking: "Check for Updates…"

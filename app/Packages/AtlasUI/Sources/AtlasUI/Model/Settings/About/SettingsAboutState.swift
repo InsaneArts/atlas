@@ -1,10 +1,10 @@
-/// The About pane: the app's version, its one update button and what it says about updates.
+/// The About pane's version and Updates row.
 public struct SettingsAboutState: Equatable, Sendable {
   /// The version, such as "Version 0.1.0".
   public var version: String
   /// The update button, whatever the check's state.
   public var update: SettingsUpdateButton
-  /// What the last check or install says, under the buttons; nil for nothing.
+  /// What the last check or install says in the Updates row's detail; nil for nothing.
   public var status: SettingsUpdateStatus?
 
   /// Creates the pane's state.
