@@ -514,7 +514,17 @@ impl Client {
 
         let mut reply = match self.native_request(json!({"op": "hold", "on": on})).await {
             Ok(reply) => reply,
-            Err(_) if on => return unreachable("The helper's input service could not be told."),
+            Err(error) if on => {
+                let mut reply = unreachable(if error.uncertain {
+                    "The helper's input service may or may not have been told."
+                } else {
+                    "The helper's input service could not be told."
+                })?;
+                if error.uncertain {
+                    reply["uncertain"] = json!(true);
+                }
+                return Ok(reply);
+            }
             Err(error) => return Err(error),
         };
         if !on {
@@ -2381,7 +2391,8 @@ mod tests {
                 "ok": true,
                 "held": true,
                 "kept": true,
-                "warnings": ["The helper's input service could not be told. Agents are stopped here all the same."],
+                "uncertain": true,
+                "warnings": ["The helper's input service may or may not have been told. Agents are stopped here all the same."],
             })
         );
         assert!(person.controller.stop_noted());
@@ -2404,6 +2415,33 @@ mod tests {
         );
         drop(ownership);
         recovery_settles_the_abandoned_claim(&acting);
+    }
+
+    #[tokio::test]
+    async fn a_stop_returns_ok_with_uncertainty_and_a_warning_when_native_hold_is_uncertain() {
+        let (_dir, mut person, input, _session) = native_client();
+        person.actor = Actor::Viewer;
+        let mut stopping = Box::pin(person.hold(true));
+        let mut hello = dispatched(&mut stopping, &input, "hello").await;
+        answer(&mut hello, json!({"ok": true, "capabilities": ["hold"]})).await;
+        let mut hold = dispatched(&mut stopping, &input, "hold").await;
+        answer(
+            &mut hold,
+            json!({"ok": false, "error": "Cleanup failed", "uncertain": true}),
+        )
+        .await;
+
+        assert_eq!(
+            stopping.await.unwrap(),
+            json!({
+                "ok": true,
+                "held": true,
+                "kept": true,
+                "uncertain": true,
+                "warnings": ["The helper's input service may or may not have been told. Agents are stopped here all the same."],
+            })
+        );
+        assert!(person.controller.stop_noted());
     }
 
     #[tokio::test]
