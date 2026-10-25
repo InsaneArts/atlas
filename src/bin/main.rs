@@ -974,7 +974,11 @@ fn doing(command: &Command) -> Option<Doing> {
         Command::Key { keys } => Doing::keys(keys),
         Command::Open { app, targets, .. } => Doing::open(app.as_deref(), targets),
         Command::Close { app, .. } => Doing::new("close").app(app.as_deref()),
-        Command::Run { .. } => Doing::new("run"),
+        Command::Run { .. }
+        | Command::Environment {
+            command: Some(EnvironmentCommand::Run { .. }),
+            ..
+        } => Doing::new("run"),
         _ => return None,
     })
 }
@@ -2216,6 +2220,7 @@ mod tests {
         says(&["open", "https://example.com"], "opened a link");
         says(&["close", "--app", "TextEdit"], "closed TextEdit");
         says(&["run", "--", "ls", "/private"], "ran a command");
+        says(&["environment", "run", "--", "ls"], "ran a command");
         assert_eq!(
             said(&["windows"]),
             None,
@@ -2225,6 +2230,100 @@ mod tests {
             said(&["restart"]),
             None,
             "recovery is worded by its operation"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stop_cancels_an_environment_run_after_dispatch() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        use tokio::{
+            io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+            net::UnixListener,
+        };
+
+        let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+        let mut client = Client::new(Config {
+            helper_uid: 60001,
+            socket_path: dir.path().join("helper.sock"),
+            identity_probe: dir.path().join("probe"),
+            input_socket: dir.path().join("input.sock"),
+            output_dir: dir.path().join("out"),
+        })
+        .unwrap();
+        client.controller = atlas::control::Controller::at(60001, &dir.path().join("state"));
+        client.transport.peer_uid = nix::unistd::getuid().as_raw();
+        let command = parse(&["environment", "run", "--", "tool"])
+            .unwrap()
+            .command
+            .unwrap();
+        client.doing = doing(&command);
+        let Command::Environment {
+            command: Some(EnvironmentCommand::Run { argv, timeout }),
+            ..
+        } = command
+        else {
+            panic!("environment run did not parse");
+        };
+        let listener = UnixListener::bind(&client.transport.path).unwrap();
+        let ownership = client.controller.acquire(false).unwrap();
+        let helper = async {
+            let proof = json!({"ok": true, "uid": 60001, "hasGraphicAccess": true,
+                "parentPID": 123, "onConsole": false, "securitySessionID": 42,
+                "displayID": 7, "width": 100, "height": 100});
+            for (operation, reply) in [
+                (
+                    "hello",
+                    json!({"ok": true, "user": {"uid": 60001}, "daemon": {"pid": 123},
+                        "session": {"managerName": "Aqua", "onConsole": false},
+                        "display": {"width": 100, "height": 100, "scale": 1}}),
+                ),
+                (
+                    "run",
+                    json!({"ok": true, "exitCode": 0, "timedOut": false,
+                        "events": [{"event": "output", "data": STANDARD.encode(proof.to_string())}]}),
+                ),
+            ] {
+                let (peer, _) = listener.accept().await.unwrap();
+                let mut peer = BufReader::new(peer);
+                let mut line = String::new();
+                peer.read_line(&mut line).await.unwrap();
+                assert_eq!(
+                    serde_json::from_str::<Value>(&line).unwrap()["op"],
+                    operation
+                );
+                peer.get_mut()
+                    .write_all(format!("{reply}\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+
+            let (peer, _) = listener.accept().await.unwrap();
+            let mut peer = BufReader::new(peer);
+            let mut line = String::new();
+            peer.read_line(&mut line).await.unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["op"], "run");
+            assert_eq!(request["argv"], json!(["tool"]));
+            assert_eq!(client.controller.pending().unwrap().len(), 1);
+            client.controller.note_stop(true).unwrap();
+            line.clear();
+            assert_eq!(peer.read_line(&mut line).await.unwrap(), 0);
+        };
+        let running = client.run_owned_within(&ownership, argv, Duration::from_secs(timeout));
+        let (outcome, ()) = tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::join!(running, helper)
+        })
+        .await
+        .unwrap();
+        let error = outcome.unwrap_err();
+        assert_eq!(error.code, "stopped");
+        assert!(error.uncertain);
+        assert_eq!(client.controller.pending().unwrap().len(), 1);
+        assert_eq!(client.controller.acquire(true).unwrap_err().code, "busy");
+        drop(ownership);
+        assert_eq!(
+            client.controller.acquire(false).unwrap_err().code,
+            "uncertain"
         );
     }
 

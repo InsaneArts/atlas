@@ -1623,9 +1623,7 @@ fn failure_code(reply: &Value) -> Option<String> {
     if reply["timedOut"] == true {
         return Some("timeout".into());
     }
-    reply["exitCode"]
-        .as_i64()
-        .is_some_and(|code| code != 0)
+    (!reply["signal"].is_null() || reply["exitCode"].as_i64().is_some_and(|code| code != 0))
         .then(|| "exit".into())
 }
 
@@ -1635,6 +1633,7 @@ fn worked(reply: &Value) -> bool {
     reply["ok"] == true
         && reply["exitCode"].as_i64().is_none_or(|code| code == 0)
         && reply["timedOut"] != true
+        && reply["signal"].is_null()
 }
 
 pub fn validate_completion(request: &Value, reply: &Value) -> Result<()> {
@@ -2625,6 +2624,22 @@ mod tests {
             &json!({"ok": true, "exitCode": 0, "timedOut": true})
         ));
         assert!(!worked(&json!({"ok": false})));
+    }
+
+    #[test]
+    fn a_command_terminated_by_a_signal_is_recorded_as_an_exit_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = client_in(dir.path()).doing(Doing::new("run"));
+        let request = json!({"op": "run", "argv": ["tool"]});
+        let reply = json!({"ok": true, "exitCode": null, "timedOut": false, "signal": "SIGTERM"});
+        validate_completion(&request, &reply).unwrap();
+        client.record_start(&request).unwrap();
+        client.record(&request, &reply, Duration::ZERO).unwrap();
+
+        let rows = crate::overview::activity(client.output_dir().unwrap(), 5);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["ok"], false);
+        assert_eq!(rows[0]["code"], "exit");
     }
 
     #[tokio::test]
