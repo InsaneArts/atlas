@@ -170,9 +170,9 @@ final class WindowCoordinator {
   }
 
   /// Whether control work is under way that quitting should wait for: the main window holds or asks for control, or a
-  /// release it sent is not answered yet.
+  /// release it sent is not answered yet or was refused and needs retrying.
   var holdsUpQuitting: Bool {
-    viewerHoldsControl || controlBarrier?.isBusy == true
+    viewerHoldsControl || controlBarrier?.isBusy == true || controlBarrier?.unreleased.isEmpty == false
   }
 
   /// Gives the main window's control back and waits, at most ``quitWait``, for every release under way to be

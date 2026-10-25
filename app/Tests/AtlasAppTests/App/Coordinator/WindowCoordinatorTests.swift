@@ -2,6 +2,7 @@ import AppKit
 import AsyncSupportTesting
 import AtlasCommands
 import AtlasCommandsTesting
+import AtlasService
 import AtlasServiceTesting
 import Testing
 
@@ -245,6 +246,68 @@ struct WindowCoordinatorTests {
     let coordinator = parts.coordinator()
     let reply = coordinator.prepareToTerminate { Issue.record("unexpectedly deferred termination") }
     #expect(reply == .terminateNow)
+  }
+
+  @Test("AppKit termination retries a refused release even after the viewer is gone", arguments: [true, false])
+  func terminationRetriesARefusedRelease(retrySucceeds: Bool) async throws {
+    let service = ScriptedService()
+    let parts = StandInParts()
+    let barrier = ControlBarrier(service: service, clock: parts.clock)
+    parts.controlBarrier = barrier
+    service.releaseRefusal = ServiceError("Still held", code: "busy")
+    #expect(await barrier.releaseNow("lease") != nil)
+    #expect(!barrier.isBusy)
+    #expect(barrier.unreleased == ["lease"])
+    if retrySucceeds { service.releaseRefusal = nil }
+    service.hold = ["release"]
+    defer { service.resume("release") }
+    let coordinator = parts.coordinator()
+    let replies = CallCount()
+    let reply = coordinator.prepareToTerminate { replies.count += 1 }
+    try #require(reply == .terminateLater)
+    try await settle("termination never retried the refused release") { service.held["release"] != nil }
+    #expect(replies.count == 0)
+    #expect(coordinator.viewer == nil)
+    service.resume("release")
+    try await settle("AppKit was never allowed to terminate") { replies.count == 1 }
+    #expect(service.log.count { $0 == "release lease" } == 2)
+    #expect(!barrier.isBusy)
+    #expect(barrier.unreleased == (retrySucceeds ? [] : ["lease"]))
+  }
+
+  @Test("a refused release retried at termination is cancelled at the existing two-second ceiling")
+  func terminationBoundsAStalledRetry() async throws {
+    let secret = UUID().uuidString
+    let requests = CallCount()
+    let cancellations = CallCount()
+    let session = RetriedReleaseProtocol.session(secret: secret, requests: requests, cancellations: cancellations)
+    defer {
+      session.invalidateAndCancel()
+      RetriedReleaseProtocol.forget(secret)
+    }
+    let service = try #require(ViewerClient("http://127.0.0.1:8765/\(secret)/", session: session))
+    let parts = StandInParts()
+    let clock = try #require(parts.clock as? ManualClock)
+    let barrier = ControlBarrier(service: service, clock: clock)
+    parts.controlBarrier = barrier
+    #expect(await barrier.releaseNow("lease") != nil)
+    #expect(barrier.unreleased == ["lease"])
+    #expect(!barrier.isBusy)
+    let replies = CallCount()
+    let coordinator = parts.coordinator()
+    let reply = coordinator.prepareToTerminate { replies.count += 1 }
+    try #require(reply == .terminateLater)
+    try await settle("termination never sent the retry") { requests.count == 2 }
+    try await clock.untilSleeping(for: WindowCoordinator.quitWait, "termination never started its ceiling")
+    clock.advance(by: WindowCoordinator.quitWait - .milliseconds(1))
+    #expect(replies.count == 0)
+    #expect(cancellations.count == 0)
+    clock.advance(by: .milliseconds(1))
+    try await settle("the ceiling never cancelled the request and allowed termination") {
+      replies.count == 1 && cancellations.count == 1
+    }
+    #expect(!barrier.isBusy)
+    #expect(barrier.unreleased == ["lease"], "an unanswered retry is still pending")
   }
 
   @Test("log-out or Dock quit proceeds after the answer or ceiling even while ⌘Q waits", arguments: [true, false])
