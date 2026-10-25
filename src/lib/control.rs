@@ -255,8 +255,13 @@ fn record_executor_with(
             start: start(pid.as_raw())?,
         };
         let record = serde_json::to_vec(&executor)?;
-        for (live, _) in claims.iter() {
+        for (live, file) in claims.iter() {
             publish_executor_with(live, &record, |file, record| file.write_all(record))?;
+            let mut file = file;
+            file.set_len(0)?;
+            file.seek(SeekFrom::Start(0))?;
+            file.write_all(&record)?;
+            file.sync_all()?;
         }
         Ok(())
     })
@@ -988,6 +993,25 @@ mod tests {
         assert_eq!(executor.pid, pid.as_raw());
         assert_eq!(executor.boot, "boot-session");
         assert_eq!(executor.start, [300, 400]);
+    }
+
+    #[test]
+    fn a_reader_of_the_claim_file_sees_a_running_executor() {
+        let dir = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, dir.path());
+        let pending = controller.quarantine().unwrap();
+        let _claims = ExecutorClaims::new(std::slice::from_ref(&pending)).unwrap();
+        record_executor_with(
+            nix::unistd::getpid(),
+            || Ok("boot-session".into()),
+            |_| Ok([300, 400]),
+        )
+        .unwrap();
+        assert!(executor_running_with(
+            &File::open(&pending.live).unwrap(),
+            || Ok("boot-session".into()),
+            |_| Ok([300, 400]),
+        ));
     }
 
     #[test]
