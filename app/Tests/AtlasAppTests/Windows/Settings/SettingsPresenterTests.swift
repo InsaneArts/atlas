@@ -54,7 +54,6 @@ struct SettingsPresenterTests {
   @Test("project summaries count loaded paths and retain missing sections and duplicate folder names")
   func projectSummariesAndIdentity() throws {
     var agents = SettingsPresenter.agents(SettingsSnapshot())
-    agents.projectsReading = .loaded
     agents.projects = []
     #expect(agents.projectsSummary == "No projects taught")
     let report = try JSONDecoder()

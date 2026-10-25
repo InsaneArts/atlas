@@ -14,9 +14,6 @@ struct GroupedSection<Items: RandomAccessCollection, Row: View>: View where Item
   /// Draws one item's row, usually a compact ``ListRow``.
   private let row: (Items.Element) -> Row
 
-  /// The accessibility traits applied to the title in either visual style.
-  let headingTraits: AccessibilityTraits = .isHeader
-
   /// Creates a section.
   ///
   /// - Parameters:
@@ -48,9 +45,8 @@ struct GroupedSection<Items: RandomAccessCollection, Row: View>: View where Item
             Text(title)
               .textStyle(.heading)
               .foregroundStyle(Color.textPrimary)
-              .accessibilityAddTraits(headingTraits)
           } else {
-            GroupLabel(text: title, headingTraits: headingTraits)
+            GroupLabel(text: title)
           }
           if let description {
             Text(description)

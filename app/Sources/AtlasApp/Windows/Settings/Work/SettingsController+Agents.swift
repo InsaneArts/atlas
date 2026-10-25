@@ -17,18 +17,15 @@ extension SettingsController {
   func loadAgents() async {
     agentsGeneration += 1
     let number = agentsGeneration
-    agents.projectsReading = .reading
     let outcome = await dependencies.commands.run(.agentsStatus)
     guard number == agentsGeneration, !Task.isCancelled else { return }
     guard outcome.ok, let status = outcome.decode(AgentsStatus.self) else {
       agents.failed = true
-      agents.projectsReading = .failed
       return
     }
     agents = SettingsAgents(
       choices: AgentChoice.merged(AgentChoice.all, with: status.agents),
       projects: status.projects ?? [],
-      projectsReading: .loaded,
       failed: false
     )
   }

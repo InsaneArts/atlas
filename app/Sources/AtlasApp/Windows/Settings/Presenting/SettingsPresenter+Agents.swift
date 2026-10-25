@@ -40,7 +40,6 @@ extension SettingsPresenter {
         return failing(row, failures[row.id]?.message ?? reported)
       },
       projects: snapshot.agents.projects.map(project),
-      projectsReading: snapshot.agents.projectsReading,
       notice: notice(snapshot, in: .agents, busy: !installing.isEmpty)
     )
   }

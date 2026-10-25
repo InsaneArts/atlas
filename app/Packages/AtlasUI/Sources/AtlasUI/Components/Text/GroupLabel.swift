@@ -4,15 +4,13 @@ import SwiftUI
 struct GroupLabel: View {
   /// The group's name.
   let text: String
-  /// The title's accessibility semantics, independent of its visual style.
-  var headingTraits: AccessibilityTraits = .isHeader
 
   /// The label in small semibold, read as a header.
   var body: some View {
     Text(text)
       .font(Typography.font(.caption, weight: .semibold))
       .foregroundStyle(Color.textTertiary)
-      .accessibilityAddTraits(headingTraits)
+      .accessibilityAddTraits(.isHeader)
   }
 }
 

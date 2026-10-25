@@ -16,11 +16,11 @@ struct SettingsSidebarTile: View {
   }
 
   /// The pane's category symbol.
-  var symbol: SymbolName {
+  private var symbol: SymbolName {
     switch pane {
     case .helper: .display
     case .general: .gear
-    case .agents: .terminal
+    case .agents: .agents
     case .screen: .screens
     case .notifications: .notifications
     case .about: .info

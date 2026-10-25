@@ -13,7 +13,7 @@ struct ProjectsPane: View {
       SettingsSectionHeading(title: "Projects")
       if state.projects.isEmpty {
         GroupedSection([GeneralRow.picture], notes: notes) { _ in
-          ListRow(state.projectsSummary, size: .compact)
+          ListRow("No projects taught", size: .compact)
         }
       } else {
         GroupedSection(state.projects, notes: notes) { project in
@@ -27,7 +27,6 @@ struct ProjectsPane: View {
   private var notes: [GroupedSectionNote] {
     [
       .text("Agents without the Atlas plugin read these projects' AGENTS.md. Forget takes Atlas's section out."),
-      state.projects.isEmpty ? nil : state.projectsNote?.sectionNote,
       state.notice?.sectionNote,
     ].compactMap { $0 }
   }
