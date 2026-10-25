@@ -358,26 +358,56 @@ fn executor_sysctl(name: &std::ffi::CStr) -> Result<String> {
         .ok_or_else(|| Error::new("state", "Invalid boot session UUID"))
 }
 
-#[allow(unsafe_code, reason = "FFI: proc_pidinfo has no safe binding")]
+#[allow(unsafe_code, reason = "FFI: KERN_PROC_PID has no safe binding")]
 fn executor_start(pid: i32) -> Result<[u64; 2]> {
-    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::uninit();
-    let size = std::mem::size_of_val(&info) as i32;
-    // SAFETY: proc_pidinfo receives a writable buffer of the declared size.
-    let read = unsafe {
-        libc::proc_pidinfo(
-            pid,
-            libc::PROC_PIDTBSDINFO,
+    // PROC_PIDTBSDINFO refuses another user's process, including the root
+    // executor. KERN_PROC_PID exposes the same exact start time across users.
+    let mut name = [libc::CTL_KERN, libc::KERN_PROC, libc::KERN_PROC_PID, pid];
+    let mut size = 0;
+    // SAFETY: the four-element MIB is valid; a null output asks only its size.
+    let status = unsafe {
+        libc::sysctl(
+            name.as_mut_ptr(),
+            name.len() as u32,
+            std::ptr::null_mut(),
+            &mut size,
+            std::ptr::null_mut(),
             0,
-            info.as_mut_ptr().cast(),
-            size,
         )
     };
-    if read != size {
+    if status != 0 {
         return Err(std::io::Error::last_os_error().into());
     }
-    // SAFETY: proc_pidinfo returned the full size of an initialized proc_bsdinfo.
-    let info = unsafe { info.assume_init() };
-    Ok([info.pbi_start_tvsec, info.pbi_start_tvusec])
+    let invalid = || Error::new("state", "The executor's start time is unavailable");
+    if size < std::mem::size_of::<libc::timeval>() {
+        return Err(invalid());
+    }
+    let mut info = vec![0_u8; size];
+    // SAFETY: the MIB is valid and info has the declared writable capacity.
+    let status = unsafe {
+        libc::sysctl(
+            name.as_mut_ptr(),
+            name.len() as u32,
+            info.as_mut_ptr().cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if status != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    if size < std::mem::size_of::<libc::timeval>() || size > info.len() {
+        return Err(invalid());
+    }
+    // SAFETY: sys/sysctl.h's kinfo_proc starts with kp_proc; sys/proc.h's
+    // extern_proc starts with p_starttime, a timeval. The returned prefix is
+    // long enough, and read_unaligned does not assume the byte buffer's alignment.
+    let start = unsafe { info.as_ptr().cast::<libc::timeval>().read_unaligned() };
+    if start.tv_sec <= 0 || !(0..1_000_000).contains(&start.tv_usec) {
+        return Err(invalid());
+    }
+    Ok([start.tv_sec as u64, start.tv_usec as u64])
 }
 
 /// A different boot or process instance cannot be the dispatched executor.
@@ -974,6 +1004,70 @@ mod tests {
         assert!(!controller.person.exists());
         let _next = controller.acquire(false).unwrap();
         assert!(duplicate.metadata().is_ok());
+    }
+
+    #[test]
+    fn a_privileged_executor_is_identified_and_keeps_recovery_excluded() {
+        let dir = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, dir.path());
+        let pending = controller.quarantine().unwrap();
+        let claims = ExecutorClaims::new(std::slice::from_ref(&pending)).unwrap();
+        // launchd is a stable, root-owned process. Observe it only: this test
+        // never dispatches privileged work or changes a real helper's state.
+        let pid = nix::unistd::Pid::from_raw(1);
+        record_executor(pid).unwrap();
+        let live = pending.live.clone();
+        let record = live.with_extension("executor.live");
+        let executor: Executor = serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();
+        assert_eq!(executor.pid, 1);
+        assert_eq!(executor.boot, executor_boot().unwrap());
+        assert_eq!(executor.start, executor_start(1).unwrap());
+        assert!(executor.start[0] > 0);
+        drop(claims);
+        drop(pending);
+        assert!(live.exists(), "the executor outlives its caller's claim");
+        assert!(executor_running(&File::open(record).unwrap()));
+        assert_eq!(
+            controller.acquire(true).unwrap_err().code,
+            "busy",
+            "recovery stays excluded"
+        );
+    }
+
+    #[test]
+    #[allow(
+        unsafe_code,
+        reason = "FFI: compare the previously stored proc_pidinfo timestamp"
+    )]
+    fn executor_start_keeps_the_previously_recorded_microsecond_identity() {
+        let pid = nix::unistd::getpid().as_raw();
+        let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::uninit();
+        let size = std::mem::size_of_val(&info) as i32;
+        // SAFETY: proc_pidinfo receives a writable buffer of the declared size.
+        let read = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                info.as_mut_ptr().cast(),
+                size,
+            )
+        };
+        assert_eq!(read, size);
+        // SAFETY: proc_pidinfo initialized the complete proc_bsdinfo above.
+        let info = unsafe { info.assume_init() };
+        assert_eq!(
+            executor_start(pid).unwrap(),
+            [info.pbi_start_tvsec, info.pbi_start_tvusec]
+        );
+    }
+
+    #[test]
+    fn an_exited_executor_has_no_start_identity() {
+        let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+        let pid = child.id() as i32;
+        assert!(child.wait().unwrap().success());
+        assert!(executor_start(pid).is_err());
     }
 
     #[test]
