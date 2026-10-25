@@ -4,4 +4,6 @@ public enum RowIcon: Equatable, Sendable {
   case tile(TileIcon)
   /// An app's original logo, read live or bundled with Atlas.
   case app(IconImage)
+  /// An agent's original mark on its brand card.
+  case mark(AgentMarkKind)
 }

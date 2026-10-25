@@ -51,10 +51,10 @@ struct SettingsClaudeTests {
     let controller = SettingsController.scripted(commands: commands)
     await controller.loadAgents()
     let rows = controller.state.agents.agents
-    #expect(rows.map(\.id) == ["claude", "codex"])
+    #expect(rows.map(\.id) == ["claude", "codex", "opencode", "pi"])
     let claude = try #require(rows.first)
     #expect(claude.title == "Claude")
-    #expect(claude.detail == "Claude Code and the Claude app")
+    #expect(claude.detail == "Claude Code tools and a live Mac view in the app")
     #expect(claude.connection == .connect(isEnabled: true))
     #expect(claude.canDisconnect)
     #expect(claude.icon == .app(AgentLogos.claude))
@@ -237,7 +237,7 @@ struct SettingsClaudeTests {
     await controller.loadAgents()
     let claude = try #require(controller.state.agents.agents.first)
     #expect(claude.title == "Claude")
-    #expect(claude.detail == (part == "claude" ? "Claude Code" : "The Claude app"))
+    #expect(claude.detail == (part == "claude" ? "Test Mac apps from Claude Code" : "Live Mac view in the Claude app"))
     await controller.connect("claude")
     #expect(commands.ran.contains(["agents", "install", part == "claude" ? "--claude" : "--app"]))
   }

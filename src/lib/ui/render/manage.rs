@@ -119,15 +119,15 @@ pub fn agents_change(value: &Value) -> Rendered {
         }
     }
 
-    let restart = value["agents"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .any(|agent| agent["restart"] == true);
-    if restart {
-        out.push(style::dim(
-            "Quit and reopen the Claude app for this to take effect.",
-        ));
+    for agent in value["agents"].as_array().into_iter().flatten() {
+        if agent["ok"] == true && agent["restart"] == true {
+            let words = if agent["agent"] == "opencode" {
+                "Restart opencode for this change to take effect."
+            } else {
+                "Quit and reopen the Claude app for this to take effect."
+            };
+            out.push(style::dim(words));
+        }
     }
 
     if connected {

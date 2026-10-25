@@ -19,7 +19,7 @@ public struct SettingsAgentRow: Equatable, Sendable, Identifiable {
   public var id: String
   /// The agent's name, such as "Claude Code".
   public var title: String
-  /// What Atlas does in it, such as "Uses Atlas in every project", or "Not installed".
+  /// What Atlas does in it, such as "Live Mac view in the Codex app", or "Not installed".
   public var detail: String
   /// Its icon: its app's own where the app is on this Mac, else a tile.
   public var icon: RowIcon

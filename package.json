@@ -3,9 +3,9 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "test": "node --test tests/test_viewer_client.mjs tests/test_screen_view.mjs tests/test_compare_renders.mjs tests/test_render_table.mjs tests/test_check_swift.mjs tests/test_source_references.mjs && node scripts/check-source-references.mjs && node scripts/check-swift-tokens.mjs && node scripts/check-swift-modifiers.mjs && node scripts/check-swift-docs.mjs && node scripts/check-swift-tests.mjs",
-    "format": "prettier --write scripts tests/*.mjs src/lib/mcp/screen.js agents/atlas/hooks/register.js agents/atlas/tests/pane.test.ts",
-    "format:check": "prettier --check scripts tests/*.mjs src/lib/mcp/screen.js agents/atlas/hooks/register.js agents/atlas/tests/pane.test.ts"
+    "test": "node --test tests/test_opencode_plugin.mjs tests/test_pi_extension.mjs tests/test_viewer_client.mjs tests/test_screen_view.mjs tests/test_compare_renders.mjs tests/test_render_table.mjs tests/test_check_swift.mjs tests/test_source_references.mjs && node scripts/check-source-references.mjs && node scripts/check-swift-tokens.mjs && node scripts/check-swift-modifiers.mjs && node scripts/check-swift-docs.mjs && node scripts/check-swift-tests.mjs",
+    "format": "prettier --write scripts tests/*.mjs src/lib/mcp/screen.js agents/atlas/hooks/register.js agents/atlas/tests/pane.test.ts agents/atlas/package.json agents/atlas/pi agents/atlas/opencode",
+    "format:check": "prettier --check scripts tests/*.mjs src/lib/mcp/screen.js agents/atlas/hooks/register.js agents/atlas/tests/pane.test.ts agents/atlas/package.json agents/atlas/pi agents/atlas/opencode"
   },
   "devDependencies": {
     "prettier": "3.6.2"

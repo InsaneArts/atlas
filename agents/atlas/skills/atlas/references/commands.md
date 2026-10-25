@@ -66,8 +66,8 @@ Commands:
   status   Which agents are on this Mac and whether Atlas is connected
   project  Tell a project's agents to test with Atlas: adds a short section to its AGENTS.md, and to a CLAUDE.md it has that does not include AGENTS.md
   forget   Take the Atlas section out of a project's AGENTS.md and CLAUDE.md
-  install  Connect the plugin to Claude Code and/or Codex (all installed by default)
-  remove   Disconnect the plugin from Claude Code and/or Codex
+  install  Connect Atlas to coding agents (all installed by default)
+  remove   Disconnect Atlas from coding agents
   help     Print this message or the help of the given subcommand(s)
 
 Options:
@@ -160,7 +160,7 @@ Global options:
 ## atlas agents install
 
 ```text
-Connect the plugin to Claude Code and/or Codex (all installed by default).
+Connect Atlas to coding agents (all installed by default).
 
 Use --claude --app together to connect both Claude parts. Select only the parts installed on this Mac. JSON reports each part's result by id.
 
@@ -172,6 +172,12 @@ Options:
 
       --codex
           Only Codex
+
+      --opencode
+          Only opencode
+
+      --pi
+          Only Pi
 
       --app
           Only the Claude app
@@ -190,7 +196,7 @@ Global options:
 ## atlas agents remove
 
 ```text
-Disconnect the plugin from Claude Code and/or Codex.
+Disconnect Atlas from coding agents.
 
 Use --claude --app together to disconnect both Claude parts.
 
@@ -202,6 +208,12 @@ Options:
 
       --codex
           Only Codex
+
+      --opencode
+          Only opencode
+
+      --pi
+          Only Pi
 
       --app
           Only the Claude app

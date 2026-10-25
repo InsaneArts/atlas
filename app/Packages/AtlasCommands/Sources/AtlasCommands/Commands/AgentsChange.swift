@@ -6,7 +6,7 @@ public struct AgentsChange: Decodable, Sendable {
     public let agent: String
     /// Whether it was connected.
     public let ok: Bool?
-    /// Whether the Claude app must be quit and reopened for this change to take effect.
+    /// Whether this host must be restarted for this change to take effect.
     public let restart: Bool?
     /// Why it was not, when it was not.
     public let error: String?
@@ -15,9 +15,20 @@ public struct AgentsChange: Decodable, Sendable {
   /// The agents, in the command's order.
   public let agents: [Agent]
 
-  /// Whether a successful change needs the Claude app to be quit and reopened.
+  /// Whether a successful change needs a host restart.
   public var requiresRestart: Bool {
     agents.contains { $0.ok == true && $0.restart == true }
+  }
+
+  /// The successful connections whose hosts must be restarted, grouped as the app displays them.
+  public var restarting: [AgentID] {
+    let ids = Set(
+      agents.filter { $0.ok == true && $0.restart == true }.compactMap { row in
+        AgentID(rawValue: row.agent == AgentsStatus.claudeAppID ? AgentID.claude.rawValue : row.agent)
+      }
+    )
+    return AgentID.allCases
+      .filter(ids.contains)
   }
 
   /// The agents it connected.

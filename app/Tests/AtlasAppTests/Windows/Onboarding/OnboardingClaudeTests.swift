@@ -93,8 +93,8 @@ struct OnboardingClaudeTests {
       try await controller.untilLoaded()
       try await settle("the agents were never read") { controller.snapshot.agentsLoaded }
       let screen = OnboardingPresenter.agents(controller.snapshot)
-      #expect(screen.agents.map(\.title) == ["Claude", "Codex"])
-      #expect(screen.agents.first?.detail.contains("Claude Code and the Claude app") == true)
+      #expect(screen.agents.map(\.title) == ["Claude", "Codex", "opencode", "Pi"])
+      #expect(screen.agents.first?.detail == "Claude Code tools and a live Mac view in the app")
       await controller.connectAgents(controller.agentsSwitchedOn)
       #expect(commands.ran.contains(["agents", "install", "--claude", "--app"]))
       #expect(controller.snapshot.agents.first?.connected == false)

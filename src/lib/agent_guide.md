@@ -30,7 +30,7 @@ Do not use it for unit tests, builds, or files and logs you can read directly.
 Never act on the person's own desktop; Atlas cannot, and you must not try.
 
 If `atlas` is missing, or `doctor` stays not ready after the steps below, say
-so and offer to set it up (the setup skill; the person opens Atlas). Do
+so and ask the person to open Atlas to finish setup. Do
 not test on the person's desktop instead, and do not silently skip the check.
 
 ## Start
@@ -62,7 +62,8 @@ the Atlas menu bar item, or open the viewer window with `atlas monitor`. In
 an app that shows Atlas's own view (the Claude app, the Codex app), call the
 Atlas `show_screen` tool once as visible work starts: the person sees the
 helper's screen and what you do there, and can stop you. In Claude Code,
-tell the person they can type `/atlas-screen` to see the same.
+tell the person they can type `/atlas-screen` to see the same. Pi and opencode use the Atlas menu bar or `atlas monitor`; their `show_screen`
+replies are text.
 
 ## Look
 

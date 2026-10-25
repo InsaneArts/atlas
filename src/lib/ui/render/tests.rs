@@ -9,6 +9,24 @@ fn show(view: View, value: Value) -> Rendered {
     render(&view, &value)
 }
 
+#[test]
+fn an_opencode_change_names_its_own_restart_without_a_claude_instruction() {
+    for connected in [true, false] {
+        let shown = show(
+            View::AgentsChange,
+            json!({"ok":true,"agents":[{
+                "agent":"opencode","ok":true,"connected":connected,"restart":true
+            }]}),
+        );
+        assert!(
+            shown
+                .out
+                .contains("Restart opencode for this change to take effect.")
+        );
+        assert!(!shown.out.contains("Claude app"));
+    }
+}
+
 /// Errors, steps and warnings can carry the helper's text: it never drives
 /// the terminal, while the lines Atlas wrote stay lines.
 #[test]

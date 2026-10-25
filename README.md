@@ -48,16 +48,22 @@ atlas uninstall              # keeps the helper account
 
 ### Teach your agents
 
-Setup connects Claude and Codex; `atlas agents install` does it later.
+Setup connects Claude, Codex, opencode and Pi; `atlas agents install` does it later.
 Claude has one row for Claude Code and the Claude app, connecting whichever
 are installed. It reads Connected only when both installed parts are connected.
 The CLI keeps separate `claude` and `claude-app` ids in JSON; use
 `atlas agents install --claude --app` or `atlas agents remove --claude --app`
 to change both together.
-Claude Code and Codex get the Atlas skill and, while Atlas is ready, a reminder
+Claude Code, Codex, opencode and Pi get the Atlas skill and, while Atlas is ready, a reminder
 to check on-screen changes in the helper (Codex asks you to trust the plugin's
 hooks once). The Claude app gets Atlas's MCP connection for status and viewing
-the screen. For any other agent, add a short section to the project instead:
+the screen. Pi connects to the bundled package in place; start a new session or use `/reload`
+after connecting or updating Atlas. Pi exposes the MCP tools directly and uses the Atlas
+menu bar or `atlas monitor` for viewing. Use `atlas agents install --pi` or
+`atlas agents remove --pi` to change only Pi. opencode connects through a plugin
+symlink; use `atlas agents install --opencode` or `atlas agents remove --opencode`,
+then restart opencode for the change to take effect. Its existing JSON/JSONC
+configuration stays intact, and its MCP screen reply is text. For any other agent, add a short section to the project instead:
 
 ```sh
 cd your-project

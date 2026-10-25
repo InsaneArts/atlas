@@ -13,10 +13,6 @@ extension OnboardingWords {
 
   /// An agent that already knows Atlas.
   static let agentConnected = "Connected"
-  /// An agent installed and switched off: Continue leaves it as it is.
-  static let agentFound = "Found"
-  /// An agent installed and switched on: Continue connects it.
-  static let agentGetsSkill = "Gets the Atlas skill"
   /// An agent not on this Mac.
   static let agentMissing = "Not on this Mac"
   /// An agent `atlas agents status` could not check.

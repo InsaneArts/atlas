@@ -114,33 +114,31 @@ extension OnboardingPresenter {
     )
   }
 
-  /// The agents, each under its icon as Settings shows it: Connected, Gets the Atlas skill while switched on, Found
-  /// while switched off, or Not on this Mac; its switch is on once connected or chosen, and only a found, unconnected
-  /// one can be switched.
+  /// The agents, each with the benefit its connection enables; a connected row says so, an unavailable one says
+  /// why, and only a found, unconnected agent can be switched.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The agents screen.
   static func agents(_ snapshot: OnboardingSnapshot) -> OnboardingAgentsScreenState {
     OnboardingAgentsScreenState(
       agents: snapshot.agents.map { agent in
+        let benefit = Words.agentDetail(agent.id, parts: agent.parts)
         let status =
           if !agent.checked {
             snapshot.agentsFailed ? OnboardingWords.agentNotChecked : StatusWord.checking.text
           } else if agent.connected {
-            OnboardingWords.agentConnected
+            "\(benefit) · \(OnboardingWords.agentConnected)"
           } else if agent.found {
-            agent.on ? OnboardingWords.agentGetsSkill : OnboardingWords.agentFound
+            benefit
           } else {
             OnboardingWords.agentMissing
           }
-        let parts = Words.agentParts(agent.parts)
-        let claudeDetail = agent.connected ? "\(parts) · \(OnboardingWords.agentConnected)" : parts
         return OnboardingAgentItem(
           id: agent.id.rawValue,
           title: OnboardingWords.agentTitle(agent.id),
           detail: agent.problem
-            ?? (agent.id == .claude && snapshot.agentsNeedRestart ? Words.claudeRestart : nil)
-              ?? (agent.id == .claude && agent.found ? claudeDetail : status),
+            ?? (snapshot.agentsNeedingRestart.contains(agent.id) ? Words.agentRestart(agent.id) : nil)
+              ?? status,
           icon: AgentRowIcons.icon(agent.id.rawValue, snapshot.agentIcons),
           isOn: agent.on || agent.connected,
           isEnabled: agent.found && !agent.connected

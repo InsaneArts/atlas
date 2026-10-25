@@ -3,14 +3,14 @@
     /// Only Claude Code is installed and chosen.
     @MainActor public static let onboardingClaudeCode: OnboardingState = {
       var screen = onboardingAgentsScreen
-      screen.agents[0].detail = "Claude Code"
+      screen.agents[0].detail = "Test Mac apps from Claude Code"
       return OnboardingState(content: .screen(.agents(screen)), footer: onboardingAgents.footer, note: .none)
     }()
 
     /// Only the Claude app is installed and chosen.
     @MainActor public static let onboardingClaudeApp: OnboardingState = {
       var screen = onboardingAgentsScreen
-      screen.agents[0].detail = "The Claude app"
+      screen.agents[0].detail = "Live Mac view in the Claude app"
       return OnboardingState(content: .screen(.agents(screen)), footer: onboardingAgents.footer, note: .none)
     }()
 

@@ -157,6 +157,22 @@
                 isOn: false,
                 isEnabled: false
               ),
+              OnboardingAgentItem(
+                id: "opencode",
+                title: "opencode",
+                detail: "Not checked yet",
+                icon: .mark(.opencode),
+                isOn: false,
+                isEnabled: false
+              ),
+              OnboardingAgentItem(
+                id: "pi",
+                title: "Pi",
+                detail: "Not checked yet",
+                icon: .mark(.pi),
+                isOn: false,
+                isEnabled: false
+              ),
             ]
           )
         )
@@ -221,7 +237,7 @@
         OnboardingAgentItem(
           id: "claude",
           title: "Claude",
-          detail: "Claude Code and the Claude app",
+          detail: "Claude Code tools and a live Mac view in the app",
           icon: onboardingClaudeIcon,
           isOn: true,
           isEnabled: true
@@ -229,8 +245,24 @@
         OnboardingAgentItem(
           id: "codex",
           title: "Codex",
-          detail: "Gets the Atlas skill",
+          detail: "Live Mac view in the Codex app",
           icon: onboardingCodexIcon,
+          isOn: true,
+          isEnabled: true
+        ),
+        OnboardingAgentItem(
+          id: "opencode",
+          title: "opencode",
+          detail: "Test Mac apps on a hidden desktop",
+          icon: .mark(.opencode),
+          isOn: true,
+          isEnabled: true
+        ),
+        OnboardingAgentItem(
+          id: "pi",
+          title: "Pi",
+          detail: "Test Mac apps on a hidden desktop",
+          icon: .mark(.pi),
           isOn: true,
           isEnabled: true
         ),

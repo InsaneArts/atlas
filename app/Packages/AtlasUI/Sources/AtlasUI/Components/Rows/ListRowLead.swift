@@ -24,6 +24,9 @@ struct ListRowLead: View {
         .clipShape(RoundedRectangle(cornerRadius: Radius.extraSmall))
     case .picture:
       AccountPicture(side: ListRow.leadWidth(lead))
+    case .mark(let kind):
+      AgentMark(kind: kind)
+        .frame(width: ListRow.leadWidth(lead), height: ListRow.leadWidth(lead))
     case .letter(let letter):
       Text(letter)
         .font(Typography.font(.body, weight: .semibold))

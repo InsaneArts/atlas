@@ -4,6 +4,36 @@ import SwiftUI
 /// One dark ground, quiet fills, white for the one thing to do next, and system blue for what is happening now.
 /// The window backgrounds read ``ground`` through `NSColor.ground`.
 extension Color {
+  /// opencode's graphite card, at its top edge.
+  static let brandOpencodeTop = Color(red: 0x2E / 255, green: 0x2A / 255, blue: 0x2A / 255)
+  /// opencode's graphite card, at its bottom edge.
+  static let brandOpencodeBottom = Color(red: 0x13 / 255, green: 0x10 / 255, blue: 0x10 / 255)
+  /// The grey square inside opencode's original frame.
+  static let brandOpencodeInner = Color(red: 0x5A / 255, green: 0x58 / 255, blue: 0x58 / 255)
+  /// The white silhouette on a dark brand card.
+  static let brandWhite = Color.white
+  /// Pi's graphite card, at its top edge.
+  static let brandPiTop = Color(red: 0x2B / 255, green: 0x2B / 255, blue: 0x2E / 255)
+  /// Pi's graphite card, at its bottom edge.
+  static let brandPiBottom = Color(red: 0x11 / 255, green: 0x11 / 255, blue: 0x13 / 255)
+  /// The coral part of Pi's original mark.
+  static let brandPiCoral = Color(red: 0xF0 / 255, green: 0x90 / 255, blue: 0x82 / 255)
+  /// The blue part of Pi's original mark.
+  static let brandPiBlue = Color(red: 0x4D / 255, green: 0x9A / 255, blue: 0xBF / 255)
+  /// The gold part of Pi's original mark.
+  static let brandPiGold = Color(red: 0xF1 / 255, green: 0xBE / 255, blue: 0x58 / 255)
+  /// The light across a dark brand card's top.
+  static let brandCardHighlight = Color.white
+    .opacity(0.16)
+  /// The inner light rim of a dark brand card.
+  static let brandCardRim = Color.white
+    .opacity(0.16)
+  /// The dark outside edge of a brand card.
+  static let brandCardEdge = Color.black
+    .opacity(0.35)
+  /// The soft shade under a brand card.
+  static let brandCardShadow = Color.black
+    .opacity(0.18)
   /// The ground every window draws on: #161618.
   public static let ground = Color(red: 0x16 / 255, green: 0x16 / 255, blue: 0x18 / 255)
   /// Titles and values: #F5F5F7.
