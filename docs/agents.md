@@ -1,0 +1,77 @@
+# Agent connections
+
+Atlas connects supported agent hosts to the helper on your Mac. A connection gives the host Atlas's tools or packaged instructions; it does not replace [helper setup](getting-started.md). This guide explains how to connect each host, verify it and choose a viewing route.
+
+## Connect a host
+
+Install the host you want to use first. You can connect it in Atlas's **Settings > Agents**, or use the CLI:
+
+```sh
+atlas agents install
+atlas agents status
+```
+
+With no selectors, `install` connects the supported hosts Atlas finds on your Mac. Use a selector to change only one host. The same selectors work with `remove`, for example `atlas agents remove --pi` disconnects Pi.
+
+| Host           | Install selector | What Atlas installs                                                                       | Refresh after connecting                                                     | Viewing route                                                                                                   |
+| -------------- | ---------------- | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Claude Code    | `--claude`       | The bundled Atlas plugin through a local marketplace, with skills, MCP and session hooks. | Start a new Claude Code session.                                             | `/atlas-screen` where the host supports the pane, or the native Atlas viewer.                                   |
+| Claude Desktop | `--app`          | An `atlas` MCP entry in the app's configuration.                                          | Quit and reopen Claude, then start a new conversation.                       | `show_screen` through the desktop connector when the host supports Atlas's embedded view, or the native viewer. |
+| Codex          | `--codex`        | The bundled Atlas plugin through a local marketplace, with skills, MCP and session hooks. | Start a new session or task. Review the plugin's hook trust prompt if shown. | `show_screen` in the Codex app when embedded views are supported, or the native viewer.                         |
+| opencode       | `--opencode`     | A linked plugin with the Atlas skill, MCP connection and session brief.                   | Restart opencode after connecting, disconnecting or updating the plugin.     | The native viewer. `show_screen` returns text.                                                                  |
+| Pi             | `--pi`           | The bundled Pi package with the Atlas skill, MCP connection and session brief.            | Start a fresh Pi session or use `/reload`.                                   | The native viewer. `show_screen` returns text.                                                                  |
+
+For example, to connect only Claude Desktop:
+
+```sh
+atlas agents install --app
+atlas agents status
+```
+
+Claude Desktop reads its configuration when it starts, so a new chat without restarting the app may still use the old connection. Atlas preserves other settings and refuses to overwrite an unrelated MCP entry also named `atlas`.
+
+Atlas's Settings groups Claude Code and Claude Desktop into one **Claude** row. The CLI reports them separately as `claude` and `claude-app`. The combined row is connected when all installed parts are connected. Use `atlas agents status` when you need to see which part needs attention.
+
+## Verify the connection
+
+First run `atlas doctor --json` and check for `ready: true`. Then run `atlas agents status` and check the host you connected. These are separate checks: a connected plugin does not make a logged-out helper ready.
+
+After refreshing the host, ask the agent to check Atlas's status. For a host with embedded viewing, ask it to use Atlas's `show_screen` tool. Confirm that you see a changing helper picture and that the Apps panel loads. A saved screenshot or a newly opened native window does not verify the embedded view.
+
+In Claude Desktop, use the desktop Atlas connector for the embedded view. Claude's different task types can use different tool connections. A tool name appearing in a conversation does not prove that connection supports the view. If the card reports that the view is unavailable, check the selected connection and start a fresh conversation after refreshing it.
+
+For any host, you can watch independently with:
+
+```sh
+atlas monitor
+```
+
+This opens a separate Atlas window. The menu bar panel also shows the helper. Neither route requires the conversation to render an embedded card.
+
+## Add project instructions
+
+The plugin supplies general Atlas instructions. You can also add a short Atlas section to a project's own agent instructions so agents know when to use the helper for that project.
+
+From the project directory, run:
+
+```sh
+atlas agents project .
+```
+
+This writes or updates Atlas's section in `AGENTS.md`. It also updates an existing, separate `CLAUDE.md` when that file does not already include `AGENTS.md`. Read the resulting diff before committing it. Other project instructions remain in place.
+
+To remove those project instructions later:
+
+```sh
+atlas agents forget .
+```
+
+This removes Atlas's sections and forgets the project in Atlas's list. A file containing only that section may be removed. It does not disconnect the host's plugin. Use `atlas agents remove` with the appropriate selector to do that.
+
+## If a connection is missing
+
+Check `atlas agents status`, confirm the correct host is installed, and reconnect only that host with its selector. Then follow the refresh step in the table. Existing tasks may retain the tools they had when they started.
+
+If the CLI reports a conflicting plugin or configuration entry, inspect that conflict before changing it. Atlas keeps unrelated entries instead of replacing them. For Pi, a personal skill named `atlas` takes precedence over the bundled skill. For opencode, a regular `atlas.js` file or an unrelated plugin link can prevent Atlas from installing its link. The [bundled troubleshooting guide](../agents/atlas/skills/atlas/references/troubleshooting.md) covers these cases.
+
+If a tool works but the picture or another pane fails, record which host, task type and connection you used, along with the displayed error. Check the native viewer to distinguish a host viewing problem from an unavailable helper. Do not loosen Atlas's connection or input checks to make a card load.
