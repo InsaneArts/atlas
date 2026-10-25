@@ -166,6 +166,35 @@ struct ViewerReadingLoopTests {
     viewer.close()
   }
 
+  @Test("a picture decoded after its reading was superseded is never shown", arguments: [false, true])
+  func aSupersededDecodeIsNeverShown(stopped: Bool) async throws {
+    let viewer = try await ViewerController.watching(ScriptedService())
+    defer { viewer.close() }
+    let shown = viewer.reading.picture
+    let frame = viewer.reading.frame
+    let started = ReleaseSignal()
+    let finish = ReleaseSignal()
+    let reading = Task {
+      await viewer.readingLoop.read(viewer.readingLoop.generation) { frame in
+        let decoded = await DesktopPicture.decode(frame)
+        started.open()
+        await finish.wait()
+        return decoded
+      }
+    }
+    await started.wait()
+    if stopped {
+      viewer.readingLoop.watch(false)
+    } else {
+      await viewer.readingLoop.readStatus()
+    }
+    finish.open()
+    await reading.value
+    #expect(viewer.reading.picture == shown)
+    #expect(viewer.reading.frame?.id == frame?.id)
+    #expect(viewer.reading.unavailable == nil)
+  }
+
   @Test("a viewer reading waits one read interval on the injected clock before reading again")
   func aReadingWaitsOneIntervalBeforeTheNext() async throws {
     let service = ScriptedService()

@@ -5,7 +5,7 @@ import ImageIO
 
 extension DesktopPicture {
   /// A frame's picture, decoded once, with the size in points that input is mapped through.
-  struct Decoded {
+  struct Decoded: Sendable {
     /// The picture, ready to draw.
     let picture: DesktopPicture
     /// The picture's size in points: its pixels at the PNG's own resolution, 72 dots an inch when it names none.
@@ -14,13 +14,13 @@ extension DesktopPicture {
   }
 
   /// The resolution a PNG that names none is read at, in dots an inch, as AppKit reads one: a point a pixel.
-  static let pointsPerInch = 72.0
+  nonisolated static let pointsPerInch = 72.0
 
   /// The picture a frame carries; nil when its data is not an image.
   ///
   /// - Parameter frame: A picture of the helper's desktop, as the service sent it.
   init?(frame: Frame) {
-    guard let decoded = Self.decode(frame) else { return nil }
+    guard let decoded = Self.decoded(frame) else { return nil }
     self = decoded.picture
   }
 
@@ -28,10 +28,19 @@ extension DesktopPicture {
   ///
   /// - Parameter frame: A picture of the helper's desktop, as the service sent it.
   /// - Returns: The picture and its size, or nil when its data is not an image.
-  static func decode(_ frame: Frame) -> Decoded? {
+  @concurrent nonisolated static func decode(_ frame: Frame) async -> Decoded? {
+    decoded(frame)
+  }
+
+  /// Creates a frame's picture with its pixels decoded before it is drawn.
+  ///
+  /// - Parameter frame: A picture of the helper's desktop, as the service sent it.
+  /// - Returns: The picture and its size, or nil when its data is not an image.
+  private nonisolated static func decoded(_ frame: Frame) -> Decoded? {
+    let options = [kCGImageSourceShouldCacheImmediately: true, kCGImageSourceShouldCache: true] as CFDictionary
     guard
       let source = CGImageSourceCreateWithData(frame.png as CFData, nil),
-      let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+      let image = CGImageSourceCreateImageAtIndex(source, 0, options)
     else { return nil }
     let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
     let resolution = { (key: CFString) -> Double in

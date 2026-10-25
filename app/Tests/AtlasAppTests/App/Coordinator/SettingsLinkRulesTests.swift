@@ -1,5 +1,8 @@
 import AtlasServiceTesting
+import AtlasUI
+import Observation
 import Testing
+import os
 
 @testable import AtlasApp
 
@@ -23,5 +26,36 @@ struct SettingsLinkRulesTests {
     #expect(viewer.snapshot.rate == .everyFiveSeconds)
     #expect(SettingsLinkRules.picture(viewer: viewer, savedRate: 0) == .everyFiveSeconds)
     #expect(preferences.loadRate() == 0)
+  }
+
+  @Test("the picture choice in Settings does not observe incoming pictures")
+  func thePictureChoiceDoesNotObservePictures() throws {
+    let viewer = ViewerController.scripted(ScriptedService())
+    let picture = try #require(SampleDesktop.picture)
+    let redrawn = OSAllocatedUnfairLock(initialState: false)
+    withObservationTracking {
+      #expect(SettingsLinkRules.picture(viewer: viewer, savedRate: 5) == .live)
+    } onChange: {
+      redrawn.withLock { $0 = true }
+    }
+    viewer.readingLoop.begin(with: nil, picture: picture)
+    #expect(viewer.reading.picture == picture)
+    #expect(!redrawn.withLock { $0 })
+  }
+
+  @Test("the picture choice in Settings observes pause and cadence changes")
+  func thePictureChoiceObservesPauseAndCadence() {
+    let viewer = ViewerController.scripted(ScriptedService())
+    for choice in [ViewerPictureChoice.everyFiveSeconds, .paused, .live] {
+      let redrawn = OSAllocatedUnfairLock(initialState: false)
+      withObservationTracking {
+        _ = SettingsLinkRules.picture(viewer: viewer, savedRate: 0)
+      } onChange: {
+        redrawn.withLock { $0 = true }
+      }
+      SettingsLinkRules.choose(choice, viewer: viewer, preferences: .memory())
+      #expect(redrawn.withLock { $0 })
+      #expect(SettingsLinkRules.picture(viewer: viewer, savedRate: 0) == choice)
+    }
   }
 }

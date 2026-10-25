@@ -84,7 +84,7 @@ public struct ViewerClient: ViewerService {
   ///   when the reply is not an object.
   public func status() async throws -> ViewerStatus {
     let (data, response) = try await session.data(for: request("status.json"))
-    return try Self.status(data, response: response)
+    return try await Self.decodedReply { try Self.status(data, response: response) }
   }
 
   /// A `status.json` reply read: only a 200 carries a status; any other answer, such as a busy service's 503, is a

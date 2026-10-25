@@ -23,7 +23,11 @@ extension ViewerPresenter {
     }
     let rules = ShotGrouping(now: snapshot.date, calendar: snapshot.zonedCalendar)
     let days = shotDays(snapshot)
-    let selected = selectedShot(snapshot)
+    let order =
+      days
+      .flatMap(\.shots)
+      .map(\.name)
+    let selected = selectedShot(snapshot, order: order)
     var groups: [ViewerShotDay] = []
     for day in days {
       let title = ViewerWords.shotPeriod(day.period, day: dayName(day.period, snapshot))
@@ -39,7 +43,7 @@ extension ViewerPresenter {
       meta: days.isEmpty ? "" : ViewerWords.shotsMeta(today: rules.countToday(shots)),
       days: groups,
       empty: days.isEmpty ? EmptyMessageState(headline: ViewerWords.noShots, message: ViewerWords.noShotsMessage) : nil,
-      large: largeShot(snapshot),
+      large: largeShot(snapshot, order: order),
       scrollRequest: facts.scrollRequest
     )
   }
@@ -65,12 +69,14 @@ extension ViewerPresenter {
 
   /// The selected screenshot: the one picked while it is listed, else the first, unless Esc cleared the selection.
   ///
-  /// - Parameter snapshot: What the controller holds.
+  /// - Parameters:
+  ///   - snapshot: What the controller holds.
+  ///   - order: The grid's order, when already computed.
   /// - Returns: Its name, or nil when none is listed or selected.
-  static func selectedShot(_ snapshot: ViewerSnapshot) -> String? {
+  static func selectedShot(_ snapshot: ViewerSnapshot, order: [String]? = nil) -> String? {
     let facts = snapshot.panes.shots
     guard !facts.selectionCleared else { return nil }
-    let order = shotOrder(snapshot)
+    let order = order ?? shotOrder(snapshot)
     if let picked = facts.selected, order.contains(picked) { return picked }
     return order.first
   }
@@ -78,13 +84,14 @@ extension ViewerPresenter {
   /// The screenshot shown large: the picture as taken once read, its thumbnail before; its time and size; and
   /// whether Previous, Next and Show in Finder go anywhere. None once its screenshot is no longer listed.
   ///
-  /// - Parameter snapshot: What the controller holds.
+  /// - Parameters:
+  ///   - snapshot: What the controller holds.
+  ///   - order: The grid's order.
   /// - Returns: The large view, or nil.
-  static func largeShot(_ snapshot: ViewerSnapshot) -> ViewerLargeShot? {
+  static func largeShot(_ snapshot: ViewerSnapshot, order: [String]) -> ViewerLargeShot? {
     let facts = snapshot.panes.shots
     guard let name = facts.large, let shot = facts.shots?.first(where: { $0.name == name }) else { return nil }
     let picture = facts.full?.picture ?? snapshot.panes.thumbnails[name]
-    let order = shotOrder(snapshot)
     let size = shot.width.flatMap { width in shot.height.map { CGSize(width: width, height: $0) } }
     return ViewerLargeShot(
       id: name,

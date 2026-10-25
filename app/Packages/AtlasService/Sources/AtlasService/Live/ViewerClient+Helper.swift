@@ -25,7 +25,7 @@ extension ViewerClient {
   public func activity() async throws(ServiceError) -> ActivityLog {
     let route = base.appendingPathComponent("activity.json")
     let (data, response) = try await fetched(request(to: route), limit: Self.listLimit)
-    return try Self.activity(data, response: response)
+    return try await Self.decodedReply { () throws(ServiceError) in try Self.activity(data, response: response) }
   }
 
   /// Reads `apps.json`.
@@ -36,7 +36,7 @@ extension ViewerClient {
   public func apps() async throws(ServiceError) -> [HelperApp] {
     let route = base.appendingPathComponent("apps.json")
     let (data, response) = try await fetched(request(to: route), limit: Self.listLimit)
-    return try Self.apps(data, response: response)
+    return try await Self.decodedReply { () throws(ServiceError) in try Self.apps(data, response: response) }
   }
 
   /// Reads `screenshots.json`.
@@ -46,7 +46,18 @@ extension ViewerClient {
   public func screenshots() async throws(ServiceError) -> ScreenshotList {
     let route = base.appendingPathComponent("screenshots.json")
     let (data, response) = try await fetched(request(to: route), limit: Self.listLimit)
-    return try Self.screenshots(data, response: response)
+    return try await Self.decodedReply { () throws(ServiceError) in try Self.screenshots(data, response: response) }
+  }
+
+  /// Decodes a reply off the caller's actor.
+  ///
+  /// - Parameter decode: The reply's decoding work.
+  /// - Returns: The decoded reply.
+  /// - Throws: The decoding error, unchanged.
+  @concurrent static func decodedReply<Reply: Sendable, Failure: Error>(
+    _ decode: @Sendable () throws(Failure) -> Reply
+  ) async throws(Failure) -> Reply {
+    try decode()
   }
 
   /// Reads `screenshot.png`.

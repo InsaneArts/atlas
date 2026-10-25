@@ -67,6 +67,7 @@ public struct ShotGrouping: Sendable {
   ///   - time: A capture's time of day as the tab shows it, which the search looks in.
   /// - Returns: The groups, newest first, each period once.
   public func days(_ shots: [Screenshot], matching query: String, time: (Date) -> String) -> [ShotDay] {
+    let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
     let newestFirst = shots.enumerated()
       .sorted { lhs, rhs in
         switch (lhs.element.takenAt, rhs.element.takenAt) {
@@ -79,7 +80,7 @@ public struct ShotGrouping: Sendable {
       .map(\.element)
     var days: [ShotDay] = []
     for shot in newestFirst where !shot.name.isEmpty {
-      guard Self.matches(time: shot.takenAt.map(time) ?? "", query: query) else { continue }
+      guard query.isEmpty || Self.matches(time: shot.takenAt.map(time) ?? "", query: query) else { continue }
       let period = period(of: shot.takenAt)
       if let index = days.firstIndex(where: { $0.period == period }) {
         days[index].shots.append(shot)

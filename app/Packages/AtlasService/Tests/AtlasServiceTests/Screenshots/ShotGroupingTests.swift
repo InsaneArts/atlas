@@ -69,6 +69,27 @@ struct ShotGroupingTests {
     #expect(days.flatMap(\.shots).map(\.name) == ["a-capture.png"])
   }
 
+  @Test("an empty search groups every screenshot without formatting its time", arguments: ["", " \n\t"])
+  func anEmptySearchDoesNotFormatTimes(query: String) {
+    let shots = [
+      Screenshot(name: "older.png", takenAt: Self.at(9, 58)),
+      Screenshot(name: "undated.png"),
+      Screenshot(name: "newer.png", takenAt: Self.at(10, 31)),
+    ]
+    var formatted = 0
+    let days = ShotGrouping(now: Self.now, calendar: Self.calendar)
+      .days(shots, matching: query) { _ in
+        formatted += 1
+        return ""
+      }
+    #expect(formatted == 0)
+    let names =
+      days
+      .flatMap(\.shots)
+      .map(\.name)
+    #expect(names == ["newer.png", "older.png", "undated.png"])
+  }
+
   @Test("Next stops at the last screenshot, and Previous at the first")
   func nextStopsAtTheLast() {
     let order = ["newest", "middle", "oldest"]

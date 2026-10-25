@@ -8,7 +8,10 @@ enum SettingsLinkRules {
   ///   - savedRate: The rate saved for the next main window, in seconds; 0 when none is saved.
   /// - Returns: The choice.
   static func picture(viewer: ViewerController?, savedRate: Double) -> ViewerPictureChoice {
-    if let viewer { return ViewerPresenter.pictureChoice(viewer.snapshot) }
+    if let viewer {
+      if viewer.session.paused { return .paused }
+      return viewer.readingLoop.rate == .everyFiveSeconds ? .everyFiveSeconds : .live
+    }
     let rate = ViewerPictureRate(rawValue: savedRate) ?? .live
     return rate == .everyFiveSeconds ? .everyFiveSeconds : .live
   }

@@ -5,6 +5,13 @@ import Testing
 
 @Suite("ViewerClient+Helper")
 struct ViewerClientFetchTests {
+  @Test("reply decoding leaves the caller's main actor")
+  @MainActor
+  func replyDecodingLeavesTheMainActor() async {
+    let onMainThread = await ViewerClient.decodedReply { Thread.isMainThread }
+    #expect(!onMainThread)
+  }
+
   /// A client whose requests the scripted protocol answers.
   ///
   /// - Parameter answer: What every request gets.

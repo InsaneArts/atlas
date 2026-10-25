@@ -132,8 +132,10 @@ final class ViewerReadingLoop {
   /// a pause or close, has no effect at all, failures included, and so has a
   /// status the service refused to give (it was busy, say): what shows stays.
   ///
-  /// - Parameter number: The loop's generation.
-  func read(_ number: Int) async {
+  /// - Parameters:
+  ///   - number: The loop's generation.
+  ///   - decode: Decodes the picture off the main actor.
+  func read(_ number: Int, decode: (Frame) async -> DesktopPicture.Decoded? = DesktopPicture.decode) async {
     statusReading += 1
     let readingNumber = statusReading
     let current = { [unowned self] in watching && number == generation && readingNumber == statusReading }
@@ -156,7 +158,9 @@ final class ViewerReadingLoop {
       }
       guard current() else { return }
       // Decoded once: the view draws its pixels, and input is mapped through its size.
-      guard let decoded = DesktopPicture.decode(next) else { throw ServiceError.unknownScreenSize }
+      let decoded = await decode(next)
+      guard current() else { return }
+      guard let decoded else { throw ServiceError.unknownScreenSize }
       show(next, decoded: decoded, ready: reply.ready)
     } catch is StatusRefused {
       return

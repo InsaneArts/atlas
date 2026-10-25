@@ -49,6 +49,44 @@ struct ViewerPresenterShotsTests {
     #expect(shots.meta == "3 today", "the count alone; how to use a tile is in its tooltip")
   }
 
+  @Test("selection and large screenshot navigation follow the grid's newest first order")
+  func selectionAndNavigationFollowTheGridOrder() throws {
+    var snapshot = ViewerSnapshot()
+    snapshot.panes.shots.shots = [
+      Screenshot(name: "oldest.png", takenAt: snapshot.date.addingTimeInterval(-7200)),
+      Screenshot(name: "newest.png", takenAt: snapshot.date),
+      Screenshot(name: "middle.png", takenAt: snapshot.date.addingTimeInterval(-60)),
+    ]
+    snapshot.panes.shots.selected = "missing.png"
+    for (name, back, forward) in [
+      ("newest.png", false, true), ("middle.png", true, true), ("oldest.png", true, false),
+    ] {
+      snapshot.panes.shots.large = name
+      let shots = ViewerPresenter.shots(snapshot)
+      let tiles = shots.days.flatMap(\.shots)
+      #expect(tiles.map(\.id) == ["newest.png", "middle.png", "oldest.png"])
+      let selected =
+        tiles
+        .filter(\.isSelected)
+        .map(\.id)
+      #expect(selected == ["newest.png"])
+      let large = try #require(shots.large)
+      #expect(large.id == name)
+      #expect(large.canGoBack == back)
+      #expect(large.canGoForward == forward)
+    }
+    snapshot.panes.shots.selected = "middle.png"
+    let selected = ViewerPresenter.shots(snapshot).days
+      .flatMap(\.shots)
+      .filter(\.isSelected)
+      .map(\.id)
+    #expect(selected == ["middle.png"])
+    snapshot.panes.shots.selectionCleared = true
+    let cleared = ViewerPresenter.shots(snapshot).days
+      .flatMap(\.shots)
+    #expect(!cleared.contains { $0.isSelected })
+  }
+
   @Test("with no screenshot yet the header says nothing beside its title")
   func noScreenshotsLeaveTheHeaderQuiet() {
     var snapshot = ViewerSnapshot()
