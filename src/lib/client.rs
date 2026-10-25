@@ -638,11 +638,12 @@ impl Client {
     async fn repin(&self, session: Session) -> Result<Session> {
         let unavailable = || {
             Error::new(
-                "permission",
+                "startup",
                 "The native input service is unavailable; run atlas start-input",
             )
         };
         let status = self.status().await;
+        require_accessibility(&status)?;
         if !crate::session::pinned_to_session(&status, &session) {
             return Err(unavailable());
         }
@@ -1696,7 +1697,9 @@ fn process_exists(pid: u32) -> bool {
 /// Refuse input work while the helper's Atlas lacks Accessibility; an
 /// unknown answer is not a refusal.
 fn require_accessibility(status: &Value) -> Result<()> {
-    if status["permissions"]["accessibility"] == false {
+    if status["permissions"]["accessibility"] == false
+        || status["inputService"]["accessibility"] == false
+    {
         return Err(Error::new(
             "permission",
             "The helper does not allow Atlas Accessibility yet, which input needs. In the \
@@ -1983,6 +1986,37 @@ mod tests {
             "ok": true, "protocolVersion": 1, "accessibility": true,
             "enforcedEpoch": session.epoch.input_epoch(),
         }})
+    }
+
+    #[tokio::test]
+    async fn missing_input_with_permissions_granted_reports_a_startup_failure() {
+        let (_dir, client, listener, session) = native_client();
+        let status = json!({
+            "ok": true,
+            "permissions": {"screenCapture": true, "accessibility": true},
+            "inputService": {"ok": false, "accessibility": true},
+        });
+        let mut caller = Box::pin(client.repin(session));
+        let mut hello = dispatched(&mut caller, &listener, "hello").await;
+        answer(&mut hello, status).await;
+        let error = caller.await.unwrap_err();
+        assert_eq!(error.code, "startup");
+        assert!(!error.uncertain);
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn repinning_with_accessibility_revoked_reports_a_permission_failure() {
+        for source in ["permissions", "inputService"] {
+            let (_dir, client, listener, session) = native_client();
+            let mut status = repinnable_status(&session);
+            status[source]["accessibility"] = json!(false);
+            let mut caller = Box::pin(client.repin(session));
+            let mut hello = dispatched(&mut caller, &listener, "hello").await;
+            answer(&mut hello, status).await;
+            assert_eq!(caller.await.unwrap_err().code, "permission", "{source}");
+            assert!(client.controller.pending().unwrap().is_empty());
+        }
     }
 
     #[tokio::test]

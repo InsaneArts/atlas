@@ -355,7 +355,11 @@ fn reason(row: &Value) -> Option<&'static str> {
         "windows" => "The window wasn't there",
         "input" => "The mouse and keyboard weren't ready",
         "capture" => "The screen couldn't be read",
-        "permission" => "The helper can't record the screen",
+        "permission" => match row["operation"].as_str() {
+            Some("screenshot") => "The helper can't record the screen",
+            Some("input") => "The helper can't use the mouse and keyboard",
+            _ => "The helper doesn't have permission",
+        },
         "session-changed" => "The helper's screen changed meanwhile",
         "lease-lost" => "Control ended before it finished",
         "cancelled" => "It was cancelled",
@@ -411,6 +415,13 @@ mod tests {
         ] {
             let row = json!({"operation": "screenshot", "ok": false, "code": code});
             assert_eq!(shown(&row, NOW)["reason"], words, "{code}");
+        }
+        for (operation, words) in [
+            ("input", "The helper can't use the mouse and keyboard"),
+            ("run", "The helper doesn't have permission"),
+        ] {
+            let row = json!({"operation": operation, "ok": false, "code": "permission"});
+            assert_eq!(shown(&row, NOW)["reason"], words, "{operation}");
         }
     }
 
