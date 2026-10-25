@@ -54,10 +54,10 @@ are installed. It reads Connected only when both installed parts are connected.
 The CLI keeps separate `claude` and `claude-app` ids in JSON; use
 `atlas agents install --claude --app` or `atlas agents remove --claude --app`
 to change both together.
-That is all they need: every session gets the Atlas skill and, while Atlas is
-ready, a reminder to check on-screen changes in the helper (Codex asks you to
-trust the plugin's hooks once). For any other agent, add a short section to the
-project instead:
+Claude Code and Codex get the Atlas skill and, while Atlas is ready, a reminder
+to check on-screen changes in the helper (Codex asks you to trust the plugin's
+hooks once). The Claude app gets Atlas's MCP connection for status and viewing
+the screen. For any other agent, add a short section to the project instead:
 
 ```sh
 cd your-project
