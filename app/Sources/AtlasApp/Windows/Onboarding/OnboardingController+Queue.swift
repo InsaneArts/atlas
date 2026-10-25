@@ -73,7 +73,7 @@ extension OnboardingController {
     case .closeLeftovers: await closeLeftovers()
     case .connectAgents(let chosen): await connectAgents(chosen)
     case .complete: await complete()
-    case .allow: await allow()
+    case .allow(let uid, let name): await allow(uid: uid, name: name)
     case .switchBack: await switchBack()
     case .refresh: refresh()
     case .check: await check()

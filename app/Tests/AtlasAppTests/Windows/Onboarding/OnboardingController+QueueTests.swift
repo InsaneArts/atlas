@@ -8,6 +8,74 @@ import Testing
 
 @Suite("OnboardingController queue")
 struct OnboardingControllerQueueTests {
+  @Test(
+    "Allow keeps the approved account and coalesces repeated clicks before and during execution",
+    arguments: [false, true]
+  )
+  func allowKeepsItsApprovedAccount(changedBeforeTaking: Bool) async throws {
+    let gate = ReleaseSignal()
+    defer { gate.open() }
+    let commands = ScriptedCommands([
+      "onboarding status": OnboardingReplies.helper(accessibility: false),
+      "onboarding window": #"{"ok": true}"#,
+      "onboarding accept": #"{"ok": true}"#,
+    ])
+    commands.whileRunning { arguments in
+      if arguments.starts(with: ["onboarding", "accept"]) { await gate.wait() }
+    }
+    let controller = OnboardingController.scripted(commands)
+    try await controller.whileOpen { _ in
+      try await controller.untilLoaded()
+      controller.snapshot.facts.asker.uid = 501
+      controller.snapshot.facts.asker.name = "approved"
+      controller.send(.allow)
+      controller.send(.allow)
+      if changedBeforeTaking {
+        controller.snapshot.facts.asker.uid = 502
+        controller.snapshot.facts.asker.name = "later"
+      }
+      controller.send(.allow)
+      let work = try await controller.untilTaken {
+        controller.snapshot.facts.asker.uid = 503
+        controller.snapshot.facts.asker.name = "newest"
+        controller.send(.allow)
+      }
+      try await settle("Allow never started") {
+        commands.ran.contains { $0.starts(with: ["onboarding", "accept"]) }
+      }
+      controller.send(.allow)
+      #expect(controller.pending.isEmpty, "another Allow must not wait behind the approved one")
+      gate.open()
+      await work.value
+      #expect(
+        commands.ran.filter { $0.starts(with: ["onboarding", "accept"]) }
+          == [Action.allow(uid: 501, name: "approved").arguments]
+      )
+    }
+  }
+
+  @Test("closing after Allow is taken but before it starts approves no account")
+  func closingBeforeAllowStartsApprovesNothing() async throws {
+    guard #available(macOS 26, *) else { return }
+    let commands = ScriptedCommands([
+      "onboarding status": OnboardingReplies.helper(accessibility: false),
+      "onboarding window": #"{"ok": true}"#,
+      "onboarding accept": #"{"ok": true}"#,
+    ])
+    let controller = OnboardingController.scripted(commands)
+    try await controller.whileOpen { _ in
+      try await controller.untilLoaded()
+      controller.send(.allow)
+      var closing: Task<Void, Never>?
+      let work = try await controller.untilTaken {
+        closing = Task.immediate { await controller.close() }
+      }
+      await work.value
+      await closing?.value
+      #expect(!commands.ran.contains { $0.starts(with: ["onboarding", "accept"]) })
+    }
+  }
+
   @Test("Back between the queue taking Lock and Switch and its start keeps it from locking the screen")
   func backBeforeARequestStartsStopsIt() async throws {
     let commands = ScriptedCommands([
