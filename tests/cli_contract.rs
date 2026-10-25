@@ -33,6 +33,10 @@ impl Fixture {
     }
 
     fn run(&self, config: &Path, args: &[&str], atlas_json: Option<&str>) -> Output {
+        self.run_line(Some(config), args, atlas_json)
+    }
+
+    fn run_line(&self, config: Option<&Path>, args: &[&str], atlas_json: Option<&str>) -> Output {
         let before = self.files();
         let mut command = Command::new(env!("CARGO_BIN_EXE_atlas"));
         command
@@ -45,10 +49,12 @@ impl Fixture {
                 ("TERM", "dumb"),
                 ("NO_COLOR", "1"),
             ])
-            .arg("--config")
-            .arg(config)
-            .args(args)
+            .env("ATLAS_CONFIG", self.config("broken.toml"))
             .stdin(Stdio::null());
+        if let Some(config) = config {
+            command.arg("--config").arg(config);
+        }
+        command.args(args);
         if let Some(value) = atlas_json {
             command.env("ATLAS_JSON", value);
         }
@@ -64,6 +70,93 @@ impl Fixture {
 
     fn missing(&self, args: &[&str]) -> Output {
         self.run(&self.config("missing.toml"), args, None)
+    }
+}
+
+#[test]
+fn usage_names_the_parsed_command_without_reading_command_shaped_settings() {
+    let fixture = Fixture::new();
+    std::fs::write(fixture.config("update"), "helper_uid = [\n").unwrap();
+    for (args, name) in [
+        (vec!["--config", "update", "status", "--unknown"], "status"),
+        (vec!["status", "--config", "update", "--unknown"], "status"),
+        (vec!["--config=update", "status", "--unknown"], "status"),
+        (
+            vec!["environment", "--config", "update", "rollback", "--unknown"],
+            "environment",
+        ),
+        (
+            vec!["--config", "update", "environment", "rollback", "--unknown"],
+            "environment rollback",
+        ),
+        (
+            vec!["--config", "update", "capture", "--unknown"],
+            "screenshot",
+        ),
+        (vec!["--config", "update", "helper-serve", "--unknown"], ""),
+        (vec!["status", "--", "update"], "status"),
+    ] {
+        let output = fixture.run_line(None, &args, None);
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert!(output.stdout.is_empty(), "{args:?}");
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["ok"], false);
+        assert_eq!(error["code"], "usage");
+        let command = if name.is_empty() {
+            "atlas".to_owned()
+        } else {
+            format!("atlas {name}")
+        };
+        let expected = if args.contains(&"--") {
+            format!("{command} does not take update.")
+        } else {
+            format!("{command} has no option --unknown.")
+        };
+        assert_eq!(error["error"], expected, "{args:?}");
+
+        let human = fixture.run_line(None, &args, Some("0"));
+        assert_eq!(human.status.code(), Some(2));
+        assert!(human.stdout.is_empty());
+        let message = std::str::from_utf8(&human.stderr).unwrap();
+        assert!(message.contains(&expected), "{args:?}: {message}");
+        assert!(message.contains(&format!("{command} --help")));
+    }
+}
+
+#[test]
+fn only_atlas_json_selects_json_usage_errors() {
+    let fixture = Fixture::new();
+    for command in [vec!["run"], vec!["environment", "run"]] {
+        for (json_before, json_after) in [(false, false), (true, false), (false, true)] {
+            let mut args = command.clone();
+            if json_before {
+                args.push("--json");
+            }
+            args.extend(["--timeout", "0"]);
+            if json_after {
+                args.push("--json");
+            }
+            args.extend(["--", "/usr/bin/true", "--json"]);
+            let output = fixture.run_line(None, &args, Some("0"));
+            assert_eq!(output.status.code(), Some(2), "{args:?}");
+            assert!(output.stdout.is_empty());
+            if json_before || json_after {
+                let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+                assert_eq!(error["code"], "usage");
+                assert_eq!(error["ok"], false);
+                assert!(
+                    error["error"]
+                        .as_str()
+                        .unwrap()
+                        .contains("Give 1 to 600 seconds.")
+                );
+            } else {
+                let error = std::str::from_utf8(&output.stderr).unwrap();
+                assert!(serde_json::from_str::<Value>(error).is_err());
+                assert!(error.contains("Give 1 to 600 seconds."));
+                assert!(error.contains(&format!("atlas {} --help", command.join(" "))));
+            }
+        }
     }
 }
 
