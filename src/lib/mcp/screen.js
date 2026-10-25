@@ -404,8 +404,11 @@ if (typeof document !== 'undefined') {
     tab: 'screen',
     filter: 'all',
     activity: null,
+    activityError: null,
     apps: null,
+    appsError: null,
     shots: null,
+    shotsError: null,
   };
   let context = {};
   let timer = null;
@@ -995,23 +998,35 @@ if (typeof document !== 'undefined') {
     try {
       const result = await call('activity', {});
       if (superseded) return;
-      if (result && !result.isError) model.activity = result.structuredContent.activity || [];
+      if (result && result.isError)
+        model.activityError = said(result, "Atlas couldn't load activity");
+      else {
+        model.activity = result.structuredContent.activity || [];
+        model.activityError = null;
+      }
     } catch (error) {
-      // The list keeps what it had.
+      if (superseded) return;
+      model.activityError = callError(error, "Atlas couldn't load activity");
     }
     if (!superseded) showActivity();
   };
 
   const showActivity = () => {
     const rows = model.activity || [];
-    one('[data-activity-meta]').textContent = rows.length ? 'Newest first' : '';
+    one('[data-activity-meta]').textContent = model.activity
+      ? model.activityError || (rows.length ? 'Newest first' : '')
+      : '';
     for (const button of all('[data-filter]'))
       button.setAttribute('aria-selected', String(button.dataset.filter === model.filter));
     const groups = activityGroups(rows, model.filter);
     const body = one('[data-activity]');
     if (!groups.length) {
       body.replaceChildren(
-        el('div', 'panel-empty', model.activity ? 'Nothing here yet.' : 'Loading…'),
+        el(
+          'div',
+          'panel-empty',
+          model.activity ? 'Nothing here yet.' : model.activityError || 'Loading…',
+        ),
       );
       return;
     }
@@ -1052,11 +1067,14 @@ if (typeof document !== 'undefined') {
     try {
       const result = await call('helper_apps', {});
       if (superseded) return;
-      if (result && result.isError)
-        one('[data-apps-meta]').textContent = said(result, "Atlas couldn't list the apps");
-      else model.apps = result.structuredContent.apps || [];
+      if (result && result.isError) model.appsError = said(result, "Atlas couldn't list the apps");
+      else {
+        model.apps = result.structuredContent.apps || [];
+        model.appsError = null;
+      }
     } catch (error) {
-      // The list keeps what it had.
+      if (superseded) return;
+      model.appsError = callError(error, "Atlas couldn't list the apps");
     }
     if (!superseded) showApps();
   };
@@ -1065,11 +1083,13 @@ if (typeof document !== 'undefined') {
     const apps = model.apps;
     const body = one('[data-apps]');
     if (!apps) {
-      body.replaceChildren(el('div', 'panel-empty', 'Loading…'));
+      one('[data-apps-meta]').textContent = '';
+      body.replaceChildren(el('div', 'panel-empty', model.appsError || 'Loading…'));
       return;
     }
     const windows = apps.reduce((count, app) => count + app.windows.length, 0);
     one('[data-apps-meta]').textContent =
+      model.appsError ||
       `${apps.length} ${apps.length === 1 ? 'app' : 'apps'} · ${windows} ${windows === 1 ? 'window' : 'windows'}, front to back`;
     if (!apps.length) {
       body.replaceChildren(el('div', 'panel-empty', 'No apps are open in the helper.'));
@@ -1108,9 +1128,15 @@ if (typeof document !== 'undefined') {
     try {
       const result = await call('screenshots', {});
       if (superseded) return;
-      if (result && !result.isError) model.shots = result.structuredContent.screenshots || [];
+      if (result && result.isError)
+        model.shotsError = said(result, "Atlas couldn't list screenshots");
+      else {
+        model.shots = result.structuredContent.screenshots || [];
+        model.shotsError = null;
+      }
     } catch (error) {
-      // The grid keeps what it had.
+      if (superseded) return;
+      model.shotsError = callError(error, "Atlas couldn't list screenshots");
     }
     if (!superseded) showShots();
   };
@@ -1119,12 +1145,12 @@ if (typeof document !== 'undefined') {
     const shots = model.shots;
     const body = one('[data-shots]');
     if (!shots) {
-      body.replaceChildren(el('div', 'panel-empty', 'Loading…'));
+      one('[data-shots-meta]').textContent = '';
+      body.replaceChildren(el('div', 'panel-empty', model.shotsError || 'Loading…'));
       return;
     }
-    one('[data-shots-meta]').textContent = shots.length
-      ? `${shots.length} · open one to see it full size`
-      : '';
+    one('[data-shots-meta]').textContent =
+      model.shotsError || (shots.length ? `${shots.length} · open one to see it full size` : '');
     if (!shots.length) {
       body.replaceChildren(el('div', 'panel-empty', "The agent hasn't taken any screenshots yet."));
       return;

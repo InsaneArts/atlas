@@ -216,6 +216,11 @@ function screenView() {
     tab.dataset.tab = name;
     return tab;
   });
+  const filters = ['all', 'agent', 'you', 'problems'].map((name) => {
+    const filter = node(`[data-filter="${name}"]`);
+    filter.dataset.filter = name;
+    return filter;
+  });
   const setTimer = (callback, delay, repeat = false) => {
     const id = nextTimer++;
     timers.set(id, { callback, delay, repeat, at: now + delay });
@@ -241,7 +246,8 @@ function screenView() {
     document: {
       body: node('body'),
       querySelector: node,
-      querySelectorAll: (selector) => (selector === '[data-tab]' ? tabs : []),
+      querySelectorAll: (selector) =>
+        ({ '[data-tab]': tabs, '[data-filter]': filters })[selector] || [],
       createElement: () => node(Symbol()),
       addEventListener: (name, callback) => documentListeners.set(name, callback),
     },
@@ -425,6 +431,168 @@ for (const [tab, tool, panel, data] of [
     assert.equal(node(`[data-${panel}]`).firstChild, undefined);
     assert.equal(messages.length, before);
   });
+}
+
+for (const [tab, tool, panel, rows, fallback] of [
+  [
+    'activity',
+    'activity',
+    'activity',
+    [{ actor: 'agent', says: 'copied text', ageSeconds: 1 }],
+    "Atlas couldn't load activity",
+  ],
+  [
+    'apps',
+    'helper_apps',
+    'apps',
+    [{ name: 'Finder', windows: [] }],
+    "Atlas couldn't list the apps",
+  ],
+  [
+    'screenshots',
+    'screenshots',
+    'shots',
+    [{ name: 'saved', ageSeconds: 1 }],
+    "Atlas couldn't list screenshots",
+  ],
+]) {
+  const delay = tab === 'activity' ? 4000 : 8000;
+  const emptyText = {
+    activity: 'Nothing here yet.',
+    apps: 'No apps are open in the helper.',
+    screenshots: "The agent hasn't taken any screenshots yet.",
+  }[tab];
+  const rowText = {
+    activity: 'Copied text',
+    apps: 'Finder',
+    screenshots: 'data:image/jpeg;base64,saved-thumb',
+  }[tab];
+  const metadata = (empty) =>
+    tab === 'apps'
+      ? `${empty ? '0 apps' : '1 app'} · 0 windows, front to back`
+      : empty
+        ? ''
+        : tab === 'activity'
+          ? 'Newest first'
+          : '1 · open one to see it full size';
+  const failure = {
+    isError: true,
+    content: [{ type: 'text', text: 'Could not load this pane' }],
+  };
+  const loaded = async (page, request, data) => {
+    await page.receive({ id: request.id, result: { structuredContent: { [tab]: data } } });
+    for (const thumb of page.calls('screenshot'))
+      await page.receive({
+        id: thumb.id,
+        result: { _meta: { 'atlas/frame': { mimeType: 'image/jpeg', data: 'saved-thumb' } } },
+      });
+  };
+  const content = (page, empty) => {
+    const body = page.node(`[data-${panel}]`);
+    if (empty) return body.firstChild.textContent;
+    if (tab === 'activity') return body.children[1].children[2].firstChild.textContent;
+    if (tab === 'apps') return body.firstChild.firstChild.children[1].textContent;
+    return body.firstChild.firstChild.firstChild.getAttribute('src');
+  };
+
+  for (const [kind, reply, expected] of [
+    ['rejected', { error: { code: -32601, message: 'Method not found' } }, fallback],
+    ['failed', { result: failure }, 'Could not load this pane'],
+    [
+      'unsupported',
+      { error: { code: -32603, message: 'IPC not available for MCP tool call' } },
+      'View unavailable here · Use Atlas',
+    ],
+    ['malformed', { result: {} }, fallback],
+  ]) {
+    test(`${tab} explains its ${kind} first read and recovers on the next poll`, async () => {
+      const page = screenView();
+      page.node(`[data-tab="${tab}"]`).fire('click');
+      await page.receive({ id: page.calls(tool)[0].id, ...reply });
+      assert.equal(page.node(`[data-${panel}]`).firstChild.textContent, expected);
+      assert.equal(page.node(`[data-${panel}-meta]`).textContent, '');
+      page.node('[data-tab="screen"]').fire('click');
+      page.node(`[data-tab="${tab}"]`).fire('click');
+      assert.equal(page.node(`[data-${panel}]`).firstChild.textContent, expected);
+      await page.receive({ id: page.calls(tool)[1].id, ...reply });
+      await page.advance(delay);
+      assert.equal(page.calls(tool).length, 3);
+      assert.equal(page.node(`[data-${panel}]`).firstChild.textContent, expected);
+      await loaded(page, page.calls(tool)[2], []);
+      assert.equal(page.node(`[data-${panel}]`).firstChild.textContent, emptyText);
+      assert.equal(page.node(`[data-${panel}-meta]`).textContent, metadata(true));
+    });
+  }
+
+  for (const empty of [false, true]) {
+    for (const rejected of [false, true]) {
+      test(`a ${rejected ? 'rejected' : 'failed'} ${tab} refresh retains ${empty ? 'empty' : 'nonempty'} content until recovery`, async () => {
+        const page = screenView();
+        page.node(`[data-tab="${tab}"]`).fire('click');
+        await loaded(page, page.calls(tool)[0], empty ? [] : rows);
+        const before = content(page, empty);
+        assert.equal(before, empty ? emptyText : rowText);
+        await page.advance(delay);
+        assert.equal(page.calls(tool).length, 2);
+        await page.receive({
+          id: page.calls(tool)[1].id,
+          ...(rejected
+            ? { error: { code: -32601, message: 'Method not found' } }
+            : { result: failure }),
+        });
+        assert.equal(content(page, empty), before);
+        assert.equal(
+          page.node(`[data-${panel}-meta]`).textContent,
+          rejected ? fallback : 'Could not load this pane',
+        );
+        if (tab === 'activity') {
+          page.node('[data-filter="you"]').fire('click');
+          assert.equal(
+            page.node('[data-activity-meta]').textContent,
+            rejected ? fallback : 'Could not load this pane',
+          );
+          page.node('[data-filter="all"]').fire('click');
+          assert.equal(content(page, empty), before);
+        }
+        await page.advance(delay);
+        assert.equal(page.calls(tool).length, 3);
+        assert.equal(content(page, empty), before);
+        await loaded(page, page.calls(tool)[2], empty ? rows : []);
+        assert.equal(content(page, !empty), empty ? rowText : emptyText);
+        assert.equal(page.node(`[data-${panel}-meta]`).textContent, metadata(!empty));
+      });
+    }
+  }
+
+  test(`a timed out first ${tab} read replaces loading with an error`, async () => {
+    const page = screenView();
+    page.node(`[data-tab="${tab}"]`).fire('click');
+    await page.advance(30000);
+    assert.equal(page.node(`[data-${panel}]`).firstChild.textContent, fallback);
+    await loaded(page, page.calls(tool).at(-1), rows);
+    assert.equal(content(page, false), rowText);
+    assert.equal(page.node(`[data-${panel}-meta]`).textContent, metadata(false));
+  });
+
+  for (const kind of ['rejected', 'failed', 'timed out']) {
+    test(`a retired card ignores its ${kind} ${tab} read`, async () => {
+      const page = screenView();
+      page.node(`[data-tab="${tab}"]`).fire('click');
+      page.newerCard();
+      const before = page.messages.length;
+      if (kind !== 'timed out')
+        await page.receive({
+          id: page.calls(tool)[0].id,
+          ...(kind === 'rejected'
+            ? { error: { code: -32601, message: 'Method not found' } }
+            : { result: failure }),
+        });
+      await page.advance(30000);
+      assert.equal(page.node(`[data-${panel}]`).firstChild, undefined);
+      assert.equal(page.node(`[data-${panel}-meta]`).textContent, undefined);
+      assert.equal(page.messages.length, before);
+    });
+  }
 }
 
 for (const reply of ['poll', 'notification']) {
