@@ -226,10 +226,12 @@ async fn next_request<R: AsyncBufRead + Unpin>(
             None => (chunk.len(), false),
         };
         if !too_long {
-            line.extend_from_slice(&chunk[..taken]);
-            if line.len() > MAX_LINE + 1 {
+            // Keep room for CRLF without copying an oversized reader chunk.
+            if taken > MAX_LINE + 2 - line.len() {
                 too_long = true;
                 line = Vec::new();
+            } else {
+                line.extend_from_slice(&chunk[..taken]);
             }
         }
         input.consume(taken);
@@ -241,7 +243,9 @@ async fn next_request<R: AsyncBufRead + Unpin>(
 
 /// A whole line read, as its text or the error that answers it.
 fn finished(line: Vec<u8>, too_long: bool) -> std::result::Result<String, Value> {
-    if too_long {
+    let payload = line.strip_suffix(b"\n").unwrap_or(&line);
+    let payload = payload.strip_suffix(b"\r").unwrap_or(payload);
+    if too_long || payload.len() > MAX_LINE {
         return Err(failure(&Value::Null, -32600, "Request too large"));
     }
     String::from_utf8(line)

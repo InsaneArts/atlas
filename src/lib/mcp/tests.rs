@@ -655,6 +655,91 @@ async fn a_line_too_long_or_not_text_is_refused_and_the_session_goes_on() {
     assert_eq!(next_request(&mut input).await.unwrap(), None);
 }
 
+#[tokio::test]
+async fn request_lines_have_the_same_payload_limit_for_every_ending_and_chunk_size() {
+    let refused = json!({"jsonrpc": "2.0", "id": null,
+        "error": {"code": -32600, "message": "Request too large"}});
+    for length in [MAX_LINE - 1, MAX_LINE, MAX_LINE + 1] {
+        for (ending, extra_payload) in [
+            ("", 0),
+            ("\n", 0),
+            ("\r\n", 0),
+            ("\r", 0),
+            ("\r\r\n", 1),
+            ("\r\r", 1),
+        ] {
+            let mut bytes = vec![b'x'; length];
+            bytes.extend_from_slice(ending.as_bytes());
+            if ending.ends_with('\n') {
+                bytes.extend_from_slice(b"{}\n");
+            }
+            // MAX_LINE + 1 splits a maximum-sized payload's CR and LF.
+            for capacity in [8192, MAX_LINE + 1, bytes.len() + 1] {
+                let mut input = tokio::io::BufReader::with_capacity(capacity, &bytes[..]);
+                let expected = if length + extra_payload > MAX_LINE {
+                    Err(refused.clone())
+                } else {
+                    Ok("x".repeat(length))
+                };
+                assert!(
+                    next_request(&mut input).await.unwrap() == Some(expected),
+                    "payload {length}, ending {ending:?}, capacity {capacity}"
+                );
+                if ending.ends_with('\n') {
+                    assert_eq!(
+                        next_request(&mut input).await.unwrap(),
+                        Some(Ok("{}".to_owned()))
+                    );
+                }
+                assert_eq!(next_request(&mut input).await.unwrap(), None);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn request_lines_check_size_before_utf8_and_drain_a_large_chunk() {
+    for length in [MAX_LINE, MAX_LINE + 1, MAX_LINE * 2] {
+        for ending in ["", "\n", "\r\n", "\r"] {
+            let mut bytes = vec![b'x'; length];
+            bytes[0] = 0xff;
+            bytes.extend_from_slice(ending.as_bytes());
+            if ending.ends_with('\n') {
+                bytes.extend_from_slice(b"{}\n");
+            }
+            let mut input = tokio::io::BufReader::with_capacity(bytes.len() + 1, &bytes[..]);
+            let (code, message) = if length > MAX_LINE {
+                (-32600, "Request too large")
+            } else {
+                (-32700, "Parse error")
+            };
+            assert_eq!(
+                next_request(&mut input).await.unwrap(),
+                Some(Err(json!({"jsonrpc": "2.0", "id": null,
+                    "error": {"code": code, "message": message}}))),
+                "payload {length}, ending {ending:?}"
+            );
+            if ending.ends_with('\n') {
+                assert_eq!(
+                    next_request(&mut input).await.unwrap(),
+                    Some(Ok("{}".to_owned()))
+                );
+            }
+            assert_eq!(next_request(&mut input).await.unwrap(), None);
+        }
+    }
+}
+
+#[tokio::test]
+async fn request_lines_keep_blank_lines_distinct_from_eof() {
+    for bytes in [b"".as_slice(), b"\n", b"\r\n", b"\r"] {
+        let mut input = tokio::io::BufReader::with_capacity(1, bytes);
+        let expected = (!bytes.is_empty()).then(|| Ok(String::new()));
+        assert_eq!(next_request(&mut input).await.unwrap(), expected);
+        assert_eq!(next_request(&mut input).await.unwrap(), None);
+    }
+}
+
 #[test]
 fn the_view_gets_each_windows_title_and_size_but_never_its_place_or_number() {
     let mut app = json!({"name": "Opie", "windows": [
