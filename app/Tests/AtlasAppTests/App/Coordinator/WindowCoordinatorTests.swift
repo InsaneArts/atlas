@@ -1,5 +1,7 @@
 import AppKit
 import AsyncSupportTesting
+import AtlasCommands
+import AtlasCommandsTesting
 import AtlasServiceTesting
 import Testing
 
@@ -65,6 +67,87 @@ struct WindowCoordinatorTests {
     #expect(parts.viewersMade == 2)
     #expect(coordinator.viewer?.window === new)
     #expect(parts.dockIcon.last == true)
+  }
+
+  @Test("setup reopens once after its old close settles and leaves the helper marked open", arguments: [true, false])
+  func setupReopensAfterItsOldClose(isHelper: Bool) async throws {
+    let gate = ReleaseSignal()
+    defer { gate.open() }
+    let open = Action.markWindow(open: true).arguments
+    let closed = Action.markWindow(open: false).arguments
+    let commands = ScriptedCommands([
+      "onboarding status": isHelper ? OnboardingReplies.helper(accessibility: false) : OnboardingReplies.freshMac,
+      "onboarding window": #"{"ok": true}"#,
+    ])
+    commands.whileRunning { arguments in
+      if arguments == closed { await gate.wait() }
+    }
+    let parts = StandInParts()
+    parts.makeOnboarding = { .scripted(commands) }
+    let coordinator = parts.coordinator()
+    coordinator.showOnboarding()
+    let old = try #require(coordinator.onboarding?.controller)
+    let window = try #require(parts.windows.first)
+    try await old.whileOpen { _ in
+      try await old.untilLoaded()
+      if isHelper { try await settle("setup never marked itself open") { commands.ran.contains(open) } }
+      window.closesLater = true
+      window.dismiss()
+      coordinator.showOnboarding()
+      coordinator.showOnboarding()
+      #expect(parts.windows.count == 1, "the old close still owns the helper marker")
+      let closing = Task {
+        await old.close()
+        window.finishClosing()
+      }
+      if isHelper {
+        try await settle("the old close never cleared its marker") { commands.ran.contains(closed) }
+        #expect(parts.windows.count == 1, "replacement waits for marker clearing to settle")
+      }
+      gate.open()
+      await closing.value
+      #expect(parts.windows.count == 2, "repeated opens make one replacement")
+      let replacement = try #require(coordinator.onboarding?.controller)
+      #expect(replacement !== old)
+      try await replacement.whileOpen { _ in
+        try await replacement.untilLoaded()
+        if isHelper {
+          try await settle("replacement never marked itself open") { commands.ran.count { $0 == open } == 2 }
+          #expect(commands.ran.filter { $0.starts(with: ["onboarding", "window"]) } == [open, closed, open])
+        } else {
+          #expect(!commands.ran.contains { $0.starts(with: ["onboarding", "window"]) })
+        }
+      }
+    }
+  }
+
+  @Test(
+    "Close All and quit discard a setup reopening waiting for its old close",
+    arguments: ["close", "quit", "terminate"]
+  )
+  func closingDiscardsSetupReopening(action: String) async throws {
+    let parts = StandInParts()
+    let coordinator = parts.coordinator()
+    coordinator.showOnboarding()
+    let window = try #require(parts.windows.first)
+    window.closesLater = true
+    window.dismiss()
+    coordinator.showOnboarding()
+    switch action {
+    case "close": coordinator.closeAllWindows()
+    case "quit": coordinator.quit(nil)
+    default:
+      #expect(coordinator.prepareToTerminate { Issue.record("no control needs a wait") } == .terminateNow)
+    }
+    coordinator.showOnboarding()
+    window.finishClosing()
+    if action == "close" {
+      try await settle("Close All never finished") { parts.panelClosures == 1 }
+    } else if action == "quit" {
+      try await settle("Quit never finished") { parts.terminations == 1 }
+    }
+    #expect(parts.windows.count == 1)
+    #expect(coordinator.onboarding == nil)
   }
 
   @Test("⌘Q closes every window and the panel while Atlas keeps running", arguments: 0..<4)

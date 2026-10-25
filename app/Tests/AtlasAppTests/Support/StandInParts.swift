@@ -20,6 +20,8 @@ final class StandInParts: WindowParts {
   var controlBarrier: ControlBarrier? { nil }
   /// Makes each main window's controller: one over a scripted service by default.
   var makeViewer: @MainActor () -> ViewerController = { .scripted(ScriptedService()) }
+  /// Makes each setup window's controller, over an empty scripted command line by default.
+  var makeOnboarding: @MainActor () -> OnboardingController = { .scripted(ScriptedCommands([:])) }
   /// Whether Copy Diagnostics finds anything to copy.
   var diagnostics = true
   /// App-level diagnostic results, without presenting a native alert.
@@ -83,7 +85,7 @@ final class StandInParts: WindowParts {
   ///
   /// - Returns: The controller.
   func onboardingController() -> OnboardingController {
-    OnboardingController.scripted(ScriptedCommands([:]))
+    makeOnboarding()
   }
 
   /// An alert window's controller over a scripted service and commands.
