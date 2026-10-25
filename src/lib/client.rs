@@ -452,12 +452,12 @@ impl Client {
 
     pub async fn acquire_input(&self, owner: &str, epoch: &Epoch) -> Result<Value> {
         // The person's viewer may take over while agents are stopped.
-        self.native_request(json!({
+        self.pending_until_known(self.native_request(json!({
             "op": "acquire",
             "owner": owner,
             "epoch": epoch.input_epoch(),
             "person": self.actor == Actor::Viewer,
-        }))
+        })))
         .await
     }
 
@@ -618,8 +618,10 @@ impl Client {
         let same_size = pinned["width"].as_f64() == Some(epoch.display.width)
             && pinned["height"].as_f64() == Some(epoch.display.height);
 
-        self.native_request(json!({"op": "reset", "epoch": epoch.input_epoch()}))
-            .await?;
+        self.pending_until_known(
+            self.native_request(json!({"op": "reset", "epoch": epoch.input_epoch()})),
+        )
+        .await?;
         let current = self.identity().await?;
         if !current.input {
             return Err(unavailable());
@@ -669,6 +671,19 @@ impl Client {
 
         actions::validate(actions, &session.epoch.display)?;
 
+        self.input_in_session(actions, expected, lease, &session)
+            .await
+    }
+
+    /// Carry out validated input in the verified session, retaining the
+    /// standalone action's claim until native cleanup is acknowledged.
+    async fn input_in_session(
+        &self,
+        actions: &Value,
+        expected: Option<(&Epoch, Instant)>,
+        lease: Option<(&SharedLease, &str)>,
+        session: &Session,
+    ) -> Result<Value> {
         let standalone = crate::control::token();
         let owner = lease.map(|(_, token)| token).unwrap_or(&standalone);
         if lease.is_none()
@@ -676,16 +691,20 @@ impl Client {
         {
             if error.uncertain {
                 // The service may now hold input for `owner`: release it, or
-                // leave the outcome pending for recovery.
-                let pending = self.controller.quarantine()?;
-                if self.native_control("release", owner).await.is_ok() {
-                    self.controller.clear_if(&pending)?;
-                }
+                // leave the outcome pending for recovery. The unacknowledged
+                // acquire stays pending even if this cleanup succeeds.
+                let _ = self
+                    .pending_until_known(self.native_control("release", owner))
+                    .await;
             }
 
             return Err(error);
         }
 
+        let generation = lease
+            .is_none()
+            .then(|| self.controller.quarantine())
+            .transpose()?;
         let result = self
             .mutate(
                 json!({
@@ -703,11 +722,18 @@ impl Client {
 
         if lease.is_none() {
             let cleanup = self.native_control("release", owner).await;
+            let unknown = result
+                .as_ref()
+                .map_or_else(|error| error.uncertain, |reply| reply["uncertain"] == true)
+                || cleanup.as_ref().is_err_and(|error| error.uncertain);
+            if cleanup.is_ok()
+                && !unknown
+                && let Some(generation) = &generation
+            {
+                self.controller.clear_if(generation)?;
+            }
             if cleanup.is_err() {
-                // Nothing will settle this release, whatever the input did;
-                // it stays for recovery.
-                drop(self.controller.quarantine()?);
-                return Err(match result {
+                let error = match result {
                     Ok(_) => Error::new(
                         "uncertain",
                         "Input finished but native release was not confirmed",
@@ -716,8 +742,8 @@ impl Client {
                         "uncertain",
                         format!("{} Native release was not confirmed either.", error.error),
                     ),
-                }
-                .uncertain());
+                };
+                return Err(error.uncertain());
             }
         }
 
@@ -1366,11 +1392,13 @@ impl Client {
             ));
         }
 
-        // A restart or log-out runs under the claim its caller holds through
-        // verification; every other mutation claims its own generation.
-        let generation = (request["op"] != "restart" && request["op"] != "logout")
-            .then(|| self.controller.quarantine())
-            .transpose()?;
+        // Restart, log-out and standalone input run under the claim their
+        // caller holds through verification or cleanup.
+        let generation = (request["op"] != "restart"
+            && request["op"] != "logout"
+            && !(request["op"] == "input" && lease.is_none()))
+        .then(|| self.controller.quarantine())
+        .transpose()?;
 
         let pending = match connection.dispatch(&request).await {
             Ok(pending) => pending,
@@ -1685,6 +1713,271 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::{
+        io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+        net::{UnixListener, UnixStream},
+    };
+
+    /// A native socket and controller confined to a short temporary path.
+    fn native_client() -> (tempfile::TempDir, Client, UnixListener, Session) {
+        let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+        let mut client = client_in(dir.path());
+        client.controller = Controller::at(60001, &dir.path().join("state"));
+        client.config.helper_uid = nix::unistd::getuid().as_raw();
+        client.transport = client.input_transport();
+        let listener = UnixListener::bind(&client.config.input_socket).unwrap();
+        let session = Session {
+            epoch: Epoch {
+                uid: client.config.helper_uid,
+                capture_pid: 123,
+                display: Display {
+                    width: 100.0,
+                    height: 100.0,
+                    scale: 1.0,
+                },
+                security_session_id: 42,
+                display_id: 7,
+                input_pid: 456,
+            },
+            capture: true,
+            input: true,
+        };
+        (dir, client, listener, session)
+    }
+
+    /// Drive the caller until the stand-in has received a complete request,
+    /// leaving its reply under the test's control.
+    async fn dispatched<T: std::fmt::Debug>(
+        caller: &mut (impl Future<Output = Result<T>> + Unpin),
+        listener: &UnixListener,
+        operation: &str,
+    ) -> BufReader<UnixStream> {
+        tokio::select! {
+            outcome = caller => panic!("caller ended before {operation}: {outcome:?}"),
+            peer = tokio::time::timeout(Duration::from_secs(2), async {
+                let (peer, _) = listener.accept().await.unwrap();
+                let mut peer = BufReader::new(peer);
+                let mut request = String::new();
+                peer.read_line(&mut request).await.unwrap();
+                assert_eq!(serde_json::from_str::<Value>(&request).unwrap()["op"], operation);
+                peer
+            }) => peer.unwrap(),
+        }
+    }
+
+    async fn answer(peer: &mut BufReader<UnixStream>, reply: Value) {
+        peer.get_mut()
+            .write_all(format!("{reply}\n").as_bytes())
+            .await
+            .unwrap();
+    }
+
+    /// Exercise the transaction after session verification, with no native
+    /// events: the stand-in acknowledges a press and move without a release.
+    async fn standalone_input(client: &Client, session: &Session) -> Result<Value> {
+        let _ownership = client.controller.acquire(false)?;
+        let actions = json!([
+            {"type": "pointer", "phase": "down", "x": 1, "y": 1},
+            {"type": "pointer", "phase": "move", "x": 2, "y": 2},
+        ]);
+        actions::validate(&actions, &session.epoch.display)?;
+        client.input_in_session(&actions, None, None, session).await
+    }
+
+    fn recovery_settles_the_abandoned_claim(client: &Client) {
+        assert_eq!(client.controller.pending().unwrap().len(), 1);
+        assert_eq!(client.controller.unresolved().unwrap().len(), 1);
+        assert_eq!(
+            client.controller.acquire(false).unwrap_err().code,
+            "uncertain"
+        );
+        let ownership = client.controller.acquire(true).unwrap();
+        client.controller.clear().unwrap();
+        drop(ownership);
+        assert!(client.controller.pending().unwrap().is_empty());
+        assert!(client.controller.acquire(false).is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_release_interrupted_after_dispatch_stays_pending_until_recovery() {
+        let (_dir, client, listener, session) = native_client();
+        let mut caller = Box::pin(standalone_input(&client, &session));
+        let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+        answer(&mut acquire, json!({"ok": true})).await;
+        let mut input = dispatched(&mut caller, &listener, "input").await;
+        let generation = client.controller.pending().unwrap();
+        assert_eq!(generation.len(), 1);
+        answer(&mut input, json!({"ok": true, "performed": 2})).await;
+        let _release = dispatched(&mut caller, &listener, "release").await;
+        assert_eq!(client.controller.pending().unwrap(), generation);
+        assert_eq!(client.controller.acquire(true).unwrap_err().code, "busy");
+        drop(caller);
+        recovery_settles_the_abandoned_claim(&client);
+    }
+
+    #[tokio::test]
+    async fn a_successful_release_settles_the_standalone_input_claim() {
+        let (_dir, client, listener, session) = native_client();
+        let mut caller = Box::pin(standalone_input(&client, &session));
+        let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+        answer(&mut acquire, json!({"ok": true})).await;
+        let mut input = dispatched(&mut caller, &listener, "input").await;
+        let generation = client.controller.pending().unwrap();
+        assert_eq!(generation.len(), 1);
+        answer(&mut input, json!({"ok": true, "performed": 2})).await;
+        let mut release = dispatched(&mut caller, &listener, "release").await;
+        assert_eq!(client.controller.pending().unwrap(), generation);
+        assert_eq!(client.controller.acquire(true).unwrap_err().code, "busy");
+        answer(&mut release, json!({"ok": true})).await;
+        assert_eq!(caller.await.unwrap()["ok"], true);
+        assert!(client.controller.pending().unwrap().is_empty());
+        assert!(client.controller.acquire(false).is_ok());
+    }
+
+    #[tokio::test]
+    async fn standalone_input_with_an_uncertain_outcome_stays_pending_until_recovery() {
+        for (input_reply, release_reply) in [
+            (json!({"ok": true, "performed": 2}), None),
+            (
+                json!({"ok": false, "uncertain": true, "error": "unknown"}),
+                Some(json!({"ok": true})),
+            ),
+            (
+                json!({"ok": true, "performed": 2}),
+                Some(json!({"ok": false, "uncertain": true, "error": "unknown"})),
+            ),
+        ] {
+            let (_dir, client, listener, session) = native_client();
+            let mut caller = Box::pin(standalone_input(&client, &session));
+            let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+            answer(&mut acquire, json!({"ok": true})).await;
+            let mut input = dispatched(&mut caller, &listener, "input").await;
+            answer(&mut input, input_reply).await;
+            let mut release = dispatched(&mut caller, &listener, "release").await;
+            assert_eq!(client.controller.pending().unwrap().len(), 1);
+            if let Some(reply) = release_reply {
+                answer(&mut release, reply).await;
+            }
+            drop(release);
+            let outcome = caller.await;
+            assert!(
+                outcome
+                    .as_ref()
+                    .map_or_else(|error| error.uncertain, |reply| reply["uncertain"] == true)
+            );
+            recovery_settles_the_abandoned_claim(&client);
+        }
+    }
+
+    #[tokio::test]
+    async fn an_input_whose_native_release_is_definitely_refused_stays_pending_until_recovery() {
+        let (_dir, client, listener, session) = native_client();
+        let mut caller = Box::pin(standalone_input(&client, &session));
+        let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+        answer(&mut acquire, json!({"ok": true})).await;
+        let mut input = dispatched(&mut caller, &listener, "input").await;
+        answer(&mut input, json!({"ok": true, "performed": 2})).await;
+        let mut release = dispatched(&mut caller, &listener, "release").await;
+        let generation = client.controller.pending().unwrap();
+        assert_eq!(generation.len(), 1);
+        answer(
+            &mut release,
+            json!({"ok": false, "code": "lease-lost", "error": "refused"}),
+        )
+        .await;
+        let error = caller.await.unwrap_err();
+        assert_eq!(error.code, "uncertain");
+        assert!(error.uncertain);
+        assert_eq!(client.controller.pending().unwrap(), generation);
+        recovery_settles_the_abandoned_claim(&client);
+    }
+
+    #[tokio::test]
+    async fn releasing_after_a_lost_acquisition_reply_keeps_the_acquisition_pending() {
+        let (_dir, client, listener, session) = native_client();
+        let mut caller = Box::pin(standalone_input(&client, &session));
+        let acquire = dispatched(&mut caller, &listener, "acquire").await;
+        drop(acquire);
+        let mut release = dispatched(&mut caller, &listener, "release").await;
+        assert_eq!(client.controller.pending().unwrap().len(), 2);
+        assert_eq!(client.controller.unresolved().unwrap().len(), 1);
+        assert_eq!(client.controller.acquire(true).unwrap_err().code, "busy");
+        answer(&mut release, json!({"ok": true})).await;
+        assert!(caller.await.unwrap_err().uncertain);
+        recovery_settles_the_abandoned_claim(&client);
+    }
+
+    #[tokio::test]
+    async fn an_acquisition_interrupted_after_dispatch_stays_pending_until_recovery() {
+        let (_dir, client, listener, session) = native_client();
+        let mut caller = Box::pin(client.acquire_input("owner", &session.epoch));
+        let _acquire = dispatched(&mut caller, &listener, "acquire").await;
+        assert_eq!(client.controller.pending().unwrap().len(), 1);
+        drop(caller);
+        recovery_settles_the_abandoned_claim(&client);
+    }
+
+    #[tokio::test]
+    async fn an_acquisition_settles_only_an_acknowledged_outcome() {
+        for reply in [
+            json!({"ok": true}),
+            json!({"ok": false, "code": "busy", "error": "refused"}),
+            json!({"ok": false, "uncertain": true, "error": "unknown"}),
+        ] {
+            let (_dir, client, listener, session) = native_client();
+            let mut caller = Box::pin(client.acquire_input("owner", &session.epoch));
+            let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+            assert_eq!(client.controller.pending().unwrap().len(), 1);
+            answer(&mut acquire, reply.clone()).await;
+            assert_eq!(caller.await.is_ok(), reply["ok"] == true);
+            if reply["uncertain"] == true {
+                recovery_settles_the_abandoned_claim(&client);
+            } else {
+                assert!(client.controller.pending().unwrap().is_empty());
+                assert!(client.controller.acquire(false).is_ok());
+            }
+        }
+    }
+
+    /// A status reply sufficient for repinning preflight. It deliberately
+    /// lacks the independent proof required by later session verification.
+    fn repinnable_status(session: &Session) -> Value {
+        json!({"ok": true, "inputService": {
+            "ok": true, "protocolVersion": 1, "accessibility": true,
+            "enforcedEpoch": session.epoch.input_epoch(),
+        }})
+    }
+
+    #[tokio::test]
+    async fn a_display_reset_interrupted_after_dispatch_stays_pending_until_recovery() {
+        let (_dir, client, listener, session) = native_client();
+        let status = repinnable_status(&session);
+        let mut caller = Box::pin(client.repin(session));
+        let mut hello = dispatched(&mut caller, &listener, "hello").await;
+        answer(&mut hello, status).await;
+        let _reset = dispatched(&mut caller, &listener, "reset").await;
+        assert_eq!(client.controller.pending().unwrap().len(), 1);
+        drop(caller);
+        recovery_settles_the_abandoned_claim(&client);
+    }
+
+    #[tokio::test]
+    async fn an_acknowledged_display_reset_is_settled_before_session_verification() {
+        let (_dir, client, listener, session) = native_client();
+        let status = repinnable_status(&session);
+        let mut caller = Box::pin(client.repin(session));
+        let mut hello = dispatched(&mut caller, &listener, "hello").await;
+        answer(&mut hello, status.clone()).await;
+        let mut reset = dispatched(&mut caller, &listener, "reset").await;
+        assert_eq!(client.controller.pending().unwrap().len(), 1);
+        answer(&mut reset, json!({"ok": true, "released": true})).await;
+        let mut verifying = dispatched(&mut caller, &listener, "hello").await;
+        assert!(client.controller.pending().unwrap().is_empty());
+        answer(&mut verifying, status).await;
+        assert_eq!(caller.await.unwrap_err().code, "identity");
+        assert!(client.controller.pending().unwrap().is_empty());
+        assert!(client.controller.acquire(false).is_ok());
+    }
 
     #[test]
     fn an_interrupted_setup_can_repair_its_probe_without_settling_pending_work() {
