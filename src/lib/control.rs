@@ -306,8 +306,15 @@ fn claim_executor_running(file: &File, live: &Path) -> bool {
 }
 
 fn remove_claim(live: &Path) {
+    match fs::remove_file(live) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => return,
+        _ => {}
+    }
+    #[cfg(test)]
+    tests::INTERRUPT_CLAIM_REMOVAL.with(|interrupt| {
+        assert!(!interrupt.replace(false), "interrupted cleanup");
+    });
     let _ = fs::remove_file(live.with_extension("executor.live"));
-    let _ = fs::remove_file(live);
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -1167,6 +1174,48 @@ mod tests {
         assert!(controller.pending().unwrap().is_empty());
         assert!(!live.exists());
         assert!(!live.with_extension("executor.live").exists());
+    }
+
+    thread_local! {
+        pub(super) static INTERRUPT_CLAIM_REMOVAL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    #[test]
+    fn interrupted_claim_cleanup_leaves_recovery_unblocked_despite_a_malformed_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, dir.path());
+        let pending = controller.quarantine().unwrap();
+        let generation = pending.to_string();
+        let live = pending.live.clone();
+        let sidecar = live.with_extension("executor.live");
+        let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+        let pid = child.id() as i32;
+        assert!(child.wait().unwrap().success());
+        let record = serde_json::to_vec(&Executor {
+            pid,
+            boot: "previous-boot-session".into(),
+            start: [300, 400],
+        })
+        .unwrap();
+        fs::write(&live, b"{").unwrap();
+        fs::write(&sidecar, &record).unwrap();
+
+        INTERRUPT_CLAIM_REMOVAL.with(|interrupt| interrupt.set(true));
+        assert!(std::panic::catch_unwind(|| drop(pending)).is_err());
+
+        assert!(!live.exists());
+        assert_eq!(fs::read(&sidecar).unwrap(), record);
+        assert_eq!(
+            controller.pending().unwrap(),
+            std::slice::from_ref(&generation)
+        );
+        assert_eq!(controller.unresolved().unwrap(), [generation]);
+        let ownership = controller.acquire(true).unwrap();
+        controller.clear().unwrap();
+        assert!(controller.pending().unwrap().is_empty());
+        assert!(sidecar.exists());
+        drop(ownership);
+        assert!(controller.acquire(false).is_ok());
     }
 
     #[test]
