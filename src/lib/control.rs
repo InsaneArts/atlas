@@ -236,7 +236,7 @@ pub(crate) fn record_executor(pid: nix::unistd::Pid) -> Result<()> {
 
 fn record_executor_with(
     pid: nix::unistd::Pid,
-    boot: impl FnOnce() -> Result<[u64; 2]>,
+    boot: impl FnOnce() -> Result<String>,
     start: impl FnOnce(i32) -> Result<[u64; 2]>,
 ) -> Result<()> {
     EXECUTOR_CLAIMS.with(|claims| {
@@ -264,25 +264,28 @@ fn record_executor_with(
 #[serde(deny_unknown_fields)]
 struct Executor {
     pid: i32,
-    boot: [u64; 2],
+    boot: String,
     start: [u64; 2],
 }
 
-/// The exact kern.boottime, including its fractional seconds.
-#[allow(unsafe_code, reason = "FFI: kern.boottime has no safe binding")]
-fn executor_boot() -> Result<[u64; 2]> {
-    let mut boot = libc::timeval {
-        tv_sec: 0,
-        tv_usec: 0,
-    };
+/// The immutable identity of this boot, unaffected by wall-clock changes.
+fn executor_boot() -> Result<String> {
+    executor_boot_with(executor_sysctl)
+}
+
+fn executor_boot_with(read: impl FnOnce(&std::ffi::CStr) -> Result<String>) -> Result<String> {
+    read(c"kern.bootsessionuuid")
+}
+
+#[allow(unsafe_code, reason = "FFI: kern.bootsessionuuid has no safe binding")]
+fn executor_sysctl(name: &std::ffi::CStr) -> Result<String> {
+    let mut boot = [0_u8; 37];
     let mut size = std::mem::size_of_val(&boot);
-    let mut name = [libc::CTL_KERN, libc::KERN_BOOTTIME];
-    // SAFETY: valid MIB and correctly sized, writable timeval buffer; no input buffer.
+    // SAFETY: NUL-terminated name and writable buffer of the declared size; no input buffer.
     let status = unsafe {
-        libc::sysctl(
-            name.as_mut_ptr(),
-            2,
-            (&mut boot as *mut libc::timeval).cast(),
+        libc::sysctlbyname(
+            name.as_ptr(),
+            boot.as_mut_ptr().cast(),
             &mut size,
             std::ptr::null_mut(),
             0,
@@ -291,14 +294,11 @@ fn executor_boot() -> Result<[u64; 2]> {
     if status != 0 || size != std::mem::size_of_val(&boot) {
         return Err(std::io::Error::last_os_error().into());
     }
-    Ok([
-        boot.tv_sec
-            .try_into()
-            .map_err(|_| Error::new("state", "Invalid boot time"))?,
-        boot.tv_usec
-            .try_into()
-            .map_err(|_| Error::new("state", "Invalid boot time"))?,
-    ])
+    std::ffi::CStr::from_bytes_with_nul(&boot)
+        .ok()
+        .and_then(|boot| boot.to_str().ok())
+        .map(str::to_owned)
+        .ok_or_else(|| Error::new("state", "Invalid boot session UUID"))
 }
 
 #[allow(unsafe_code, reason = "FFI: proc_pidinfo has no safe binding")]
@@ -331,7 +331,7 @@ fn executor_running(file: &File) -> bool {
 
 fn executor_running_with(
     mut file: &File,
-    boot: impl FnOnce() -> Result<[u64; 2]>,
+    boot: impl FnOnce() -> Result<String>,
     start: impl FnOnce(i32) -> Result<[u64; 2]>,
 ) -> bool {
     let mut text = String::new();
@@ -345,21 +345,32 @@ fn executor_running_with(
     if text.is_empty() {
         return false;
     }
-    let pid = match serde_json::from_str::<Executor>(&text) {
-        Ok(executor) if executor.pid > 0 => {
-            if boot().is_ok_and(|boot| boot != executor.boot)
-                || start(executor.pid).is_ok_and(|start| start != executor.start)
-            {
-                return false;
-            }
-            executor.pid
-        }
-        _ => match text.trim().parse::<i32>().ok().filter(|pid| *pid > 0) {
+    let executor = serde_json::from_str::<Executor>(&text)
+        .ok()
+        .filter(|executor| executor.pid > 0);
+    let pid = match &executor {
+        Some(executor) => executor.pid,
+        None => match text.trim().parse::<i32>().ok().filter(|pid| *pid > 0) {
             Some(pid) => pid,
             None => return true,
         },
     };
-    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None) != Err(nix::errno::Errno::ESRCH)
+    // An exited process has no start time to read. Only ESRCH proves absence;
+    // permission errors and unavailable identities still retain the claim.
+    if nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None)
+        == Err(nix::errno::Errno::ESRCH)
+    {
+        return false;
+    }
+    if let Some(executor) = executor {
+        let (Ok(boot), Ok(start)) = (boot(), start(pid)) else {
+            return true;
+        };
+        if boot != executor.boot || start != executor.start {
+            return false;
+        }
+    }
+    true
 }
 
 /// Exclusive control of one helper, held until dropped.
@@ -894,7 +905,7 @@ mod tests {
         let pid = nix::unistd::getpid();
         record_executor_with(
             pid,
-            || Ok([100, 200]),
+            || Ok("boot-session".into()),
             |observed| {
                 assert_eq!(observed, pid.as_raw());
                 Ok([300, 400])
@@ -903,7 +914,7 @@ mod tests {
         .unwrap();
         let executor: Executor = serde_json::from_slice(&fs::read(&pending.live).unwrap()).unwrap();
         assert_eq!(executor.pid, pid.as_raw());
-        assert_eq!(executor.boot, [100, 200]);
+        assert_eq!(executor.boot, "boot-session");
         assert_eq!(executor.start, [300, 400]);
     }
 
@@ -912,24 +923,24 @@ mod tests {
         let mut file = tempfile::tempfile().unwrap();
         let executor = Executor {
             pid: nix::unistd::getpid().as_raw(),
-            boot: [100, 200],
+            boot: "boot-session".into(),
             start: [300, 400],
         };
         file.write_all(&serde_json::to_vec(&executor).unwrap())
             .unwrap();
         assert!(executor_running_with(
             &file,
-            || Ok(executor.boot),
+            || Ok(executor.boot.clone()),
             |pid| {
                 assert_eq!(pid, executor.pid);
                 Ok(executor.start)
             }
         ));
         for changed in ["boot", "start"] {
-            let mut boot = executor.boot;
+            let mut boot = executor.boot.clone();
             let mut start = executor.start;
             match changed {
-                "boot" => boot[1] += 1,
+                "boot" => boot.push('2'),
                 _ => start[1] += 1,
             }
             assert!(
@@ -952,6 +963,42 @@ mod tests {
             ),
             "unreadable observations do not release a live executor"
         );
+        assert!(executor_running_with(
+            &file,
+            || Err(Error::new("state", "unreadable boot")),
+            |_| Ok([0, 0]),
+        ));
+        assert!(executor_running_with(
+            &file,
+            || Ok("different boot".into()),
+            |_| Err(Error::new("state", "unreadable process")),
+        ));
+    }
+
+    #[test]
+    fn a_clock_change_does_not_release_a_surviving_executor() {
+        let dir = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, dir.path());
+        let pending = controller.quarantine().unwrap();
+        let _claims = ExecutorClaims::new(std::slice::from_ref(&pending)).unwrap();
+        let boottime = std::cell::Cell::new(100);
+        let read = |name: &std::ffi::CStr| match name.to_bytes() {
+            b"kern.bootsessionuuid" => Ok("same-boot-session".into()),
+            b"kern.boottime" => Ok(boottime.get().to_string()),
+            _ => panic!("unexpected sysctl"),
+        };
+        record_executor_with(
+            nix::unistd::getpid(),
+            || executor_boot_with(read),
+            |_| Ok([300, 400]),
+        )
+        .unwrap();
+        boottime.set(200);
+        assert!(executor_running_with(
+            &pending.lock,
+            || executor_boot_with(read),
+            |_| Ok([300, 400]),
+        ));
     }
 
     #[test]
@@ -963,6 +1010,26 @@ mod tests {
             file.write_all(record.as_bytes()).unwrap();
             assert!(executor_running(&file));
         }
+    }
+
+    #[test]
+    fn an_exited_executor_releases_its_claim_when_its_identity_is_unavailable() {
+        let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+        let pid = child.id() as i32;
+        assert!(child.wait().unwrap().success());
+        let mut file = tempfile::tempfile().unwrap();
+        let executor = Executor {
+            pid,
+            boot: "boot-session".into(),
+            start: [300, 400],
+        };
+        file.write_all(&serde_json::to_vec(&executor).unwrap())
+            .unwrap();
+        assert!(!executor_running_with(
+            &file,
+            || Err(Error::new("state", "unreadable boot")),
+            |_| Err(Error::new("state", "process no longer exists")),
+        ));
     }
 
     /// Checking that the lock can be kept creates its directory, leaves no

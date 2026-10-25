@@ -57,6 +57,13 @@ pub enum Request {
         sha256: String,
         missing_ok: bool,
     },
+    /// Validate retirement's prerequisites without changing anything.
+    CheckRetire {
+        uid: u32,
+        label: String,
+        sha256: String,
+        missing_ok: bool,
+    },
     /// Put the plist with the expected hash back in place and load it.
     Restore {
         uid: u32,
@@ -79,6 +86,7 @@ impl Request {
             Self::Inspect { uid, .. }
             | Self::Prepare { uid, .. }
             | Self::Retire { uid, .. }
+            | Self::CheckRetire { uid, .. }
             | Self::Restore { uid, .. }
             | Self::FirstLogin { uid, .. }
             | Self::ForgetOpener { uid }
@@ -350,6 +358,17 @@ pub fn run_guarded(request: &str, guard: &Guard) -> Result<Value> {
             missing_ok,
             ..
         } => retire(&layout, &label, &sha256, missing_ok),
+        Request::CheckRetire {
+            label,
+            sha256,
+            missing_ok,
+            ..
+        } => {
+            retirement_with(&layout, &label, &sha256, missing_ok, || {
+                job(&layout, &label)
+            })?;
+            Ok(json!({"ok": true}))
+        }
         Request::Restore { label, sha256, .. } => restore(&layout, &label, &sha256),
         Request::FirstLogin { opener, .. } => super::first_login::first_login(&layout, opener),
         Request::ForgetOpener { .. } => super::first_login::forget_opener(&layout),
@@ -369,7 +388,7 @@ pub fn run_guarded(request: &str, guard: &Guard) -> Result<Value> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum Job {
+pub(super) enum Job {
     Absent,
     Loaded { pid: Option<u32>, path: PathBuf },
 }
@@ -713,22 +732,27 @@ pub(super) fn unload(layout: &Layout, label: &str) -> Result<()> {
     Ok(())
 }
 
-fn retire(layout: &Layout, label: &str, sha256: &str, missing_ok: bool) -> Result<Value> {
+pub(super) fn retirement_with(
+    layout: &Layout,
+    label: &str,
+    sha256: &str,
+    missing_ok: bool,
+    read_job: impl FnOnce() -> Result<Job>,
+) -> Result<(File, Job)> {
     require_name(label)?;
     require_sha256(sha256)?;
 
     let path = layout.agent_plist(label);
     let backup = layout.backup(label, sha256);
     let plist = file(&path)?;
+    let saved = file(&backup)?;
+    let job = read_job()?;
 
-    // Validate the definition before unloading anything.
-    match &plist {
-        File::Regular(current) if current == sha256 => {}
-        File::Absent if file(&backup)? == File::Regular(sha256.to_owned()) => {}
-        // Never installed: nothing to undo, and nothing to preserve.
-        File::Absent if missing_ok && job(layout, label)? == Job::Absent => {
-            return Ok(json!({ "ok": true, "label": label, "backup": null, "absent": true }));
-        }
+    match (&plist, &saved) {
+        (File::Regular(current), File::Absent) if current == sha256 => {}
+        (File::Regular(current), File::Regular(saved)) if current == sha256 && saved == sha256 => {}
+        (File::Absent, File::Regular(saved)) if saved == sha256 => {}
+        (File::Absent, File::Absent) if missing_ok && job == Job::Absent => {}
         _ => {
             return Err(problem(format!(
                 "{} is not the expected definition; nothing was changed",
@@ -736,19 +760,31 @@ fn retire(layout: &Layout, label: &str, sha256: &str, missing_ok: bool) -> Resul
             )));
         }
     }
+    if let Job::Loaded { path: loaded, .. } = &job
+        && *loaded != path
+    {
+        return Err(problem(format!(
+            "{label} is loaded from {}; it was not changed",
+            loaded.display()
+        )));
+    }
+    Ok((plist, job))
+}
 
-    if let Job::Loaded { pid, path: loaded } = job(layout, label)? {
+fn retire(layout: &Layout, label: &str, sha256: &str, missing_ok: bool) -> Result<Value> {
+    let (plist, observed) =
+        retirement_with(layout, label, sha256, missing_ok, || job(layout, label))?;
+    let path = layout.agent_plist(label);
+    let backup = layout.backup(label, sha256);
+    if missing_ok && plist == File::Absent && file(&backup)? == File::Absent {
+        return Ok(json!({ "ok": true, "label": label, "backup": null, "absent": true }));
+    }
+
+    if let Job::Loaded { pid, .. } = observed {
         // Unloading the job that runs this worker would sever its own reply.
         if pid == u32::try_from(nix::unistd::getppid().as_raw()).ok() {
             return Err(problem(format!(
                 "Refusing to unload {label} through its own capture daemon"
-            )));
-        }
-
-        if loaded != path {
-            return Err(problem(format!(
-                "{label} is loaded from {}; it was not changed",
-                loaded.display()
             )));
         }
 
@@ -1190,6 +1226,44 @@ mod tests {
         let label = format!("dev.atlas.test.{}", &crate::control::token()[..12]);
 
         (dir, layout, label)
+    }
+
+    #[test]
+    fn retirement_preflight_and_retire_share_the_same_definition_and_backup_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = Layout::new(60001, dir.path().into());
+        let label = "old.helper";
+        let sha256 = text_sha256("definition");
+        let path = layout.agent_plist(label);
+        let backup = layout.backup(label, &sha256);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::create_dir_all(backup.parent().unwrap()).unwrap();
+        let check =
+            |missing_ok| retirement_with(&layout, label, &sha256, missing_ok, || Ok(Job::Absent));
+        assert!(check(false).is_err());
+        assert!(check(true).is_ok());
+        fs::write(&backup, "definition").unwrap();
+        assert!(check(false).is_ok());
+        fs::write(&path, "definition").unwrap();
+        assert!(check(false).is_ok());
+        fs::write(&backup, "other contents").unwrap();
+        assert!(
+            check(false).is_err(),
+            "a conflicting backup refuses before unloading"
+        );
+        fs::remove_file(&backup).unwrap();
+        assert!(check(false).is_ok());
+        std::os::unix::fs::symlink(&path, &backup).unwrap();
+        assert!(check(false).is_err(), "a backup link is never followed");
+        fs::remove_file(&backup).unwrap();
+        assert!(
+            retirement_with(&layout, label, &sha256, false, || Ok(Job::Loaded {
+                pid: Some(123),
+                path: dir.path().join("foreign.plist")
+            }))
+            .is_err()
+        );
+        assert_eq!(fs::read_to_string(path).unwrap(), "definition");
     }
 
     #[test]

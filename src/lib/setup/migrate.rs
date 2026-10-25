@@ -26,7 +26,8 @@ use serde_json::{Value, json};
 use std::{
     fs,
     path::{Path, PathBuf},
-    time::{Duration, Instant},
+    sync::OnceLock,
+    time::{Duration, Instant, SystemTime},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -192,42 +193,88 @@ pub fn managed(config: &Config, layout: &Layout) -> Config {
 }
 
 fn helper_argv(client: &Client, request: &Request) -> Result<Vec<String>> {
-    helper_argv_with(client, request, setup_identity(client.config.helper_uid)?)
+    helper_argv_with(
+        client,
+        request,
+        setup_identity(client.config.helper_uid, None)?,
+    )
 }
 
-/// Legacy setup runs as the helper, without adopting an unrecorded identity.
-/// An existing record must still match; unreadable records are never absence.
-fn setup_identity(uid: u32) -> Result<Option<super::identity::Identity>> {
-    setup_identity_with(super::identity::on_file(uid), || {
-        super::identity::verified(uid)
-    })
+/// A legacy helper needs provenance before its identity can guard workers.
+/// This does not persist an identity: only the person's selection does that.
+fn setup_identity(uid: u32, config_path: Option<&Path>) -> Result<super::identity::Identity> {
+    setup_identity_with(
+        super::identity::on_file(uid),
+        || super::identity::verified(uid),
+        || {
+            let account = account_with_uid(uid)?.ok_or_else(choose_helper)?;
+            let identity = super::identity::current(&account).ok_or_else(choose_helper)?;
+            let created = crate::session::account_created(&account.name);
+            let recorded = config_path
+                .and_then(|path| fs::metadata(path).ok())
+                .and_then(|metadata| metadata.created().ok());
+            let sessions = crate::session::sessions(Some(uid));
+            legacy_provenance(created, recorded, sessions.as_ref(), uid)?;
+            if account_with_uid(uid)?.as_ref() != Some(&account)
+                || super::identity::current(&account).as_ref() != Some(&identity)
+            {
+                return Err(choose_helper());
+            }
+            Ok(identity)
+        },
+    )
+}
+
+fn choose_helper() -> Error {
+    problem(
+        "Atlas could not verify the helper account. Choose the helper again in Atlas to record its identity before setting it up.",
+    )
+}
+
+fn legacy_provenance(
+    created: Option<SystemTime>,
+    recorded: Option<SystemTime>,
+    sessions: Option<&crate::session::Sessions>,
+    uid: u32,
+) -> Result<()> {
+    let (Some(created), Some(recorded), Some(sessions)) = (created, recorded, sessions) else {
+        return Err(choose_helper());
+    };
+    let age = created.elapsed().map_err(|_| choose_helper())?;
+    if created >= recorded
+        || sessions.logins.iter().any(|(window, kind)| {
+            window.uid == uid
+                && (*kind == crate::session::Kind::HelperLeftover
+                    || window.age >= age + crate::session::REUSED_SLACK)
+        })
+    {
+        return Err(choose_helper());
+    }
+    Ok(())
 }
 
 fn setup_identity_with(
     on_file: super::identity::OnFile,
     verified: impl FnOnce() -> Option<super::identity::Identity>,
-) -> Result<Option<super::identity::Identity>> {
+    legacy: impl FnOnce() -> Result<super::identity::Identity>,
+) -> Result<super::identity::Identity> {
     match on_file {
-        super::identity::OnFile::Nothing => Ok(None),
-        _ => verified()
-            .map(Some)
-            .ok_or_else(|| problem("Choose the helper account in Atlas before setting it up")),
+        super::identity::OnFile::Nothing => legacy(),
+        _ => verified().ok_or_else(choose_helper),
     }
 }
 
 fn helper_argv_with(
     client: &Client,
     request: &Request,
-    expected: Option<super::identity::Identity>,
+    expected: super::identity::Identity,
 ) -> Result<Vec<String>> {
     let mut argv = vec![
         client.config.identity_probe.to_string_lossy().into_owned(),
         "setup-helper".to_owned(),
         serde_json::to_string(request)?,
     ];
-    if let Some(expected) = expected {
-        argv.extend(["--account".into(), serde_json::to_string(&expected)?]);
-    }
+    argv.extend(["--account".into(), serde_json::to_string(&expected)?]);
     Ok(argv)
 }
 
@@ -310,6 +357,7 @@ struct Migration {
     log: Log,
     old: Client,
     new: Client,
+    account: OnceLock<super::identity::Identity>,
 }
 
 impl Migration {
@@ -323,7 +371,24 @@ impl Migration {
             log,
             old: Client::new(old)?,
             new: Client::new(new)?,
+            account: OnceLock::new(),
         })
+    }
+
+    fn argv(&self, through: Endpoint, request: &Request) -> Result<Vec<String>> {
+        if self.account.get().is_none() {
+            let identity = setup_identity(self.log.plan.uid, Some(&self.log.plan.config_path))?;
+            let account = account_with_uid(self.log.plan.uid)?.ok_or_else(choose_helper)?;
+            if account.home != self.log.plan.home {
+                return Err(choose_helper());
+            }
+            let _ = self.account.set(identity);
+        }
+        helper_argv_with(
+            self.client(through),
+            request,
+            self.account.get().unwrap().clone(),
+        )
     }
 
     fn client(&self, endpoint: Endpoint) -> &Client {
@@ -421,7 +486,7 @@ impl Migration {
     /// part way, so the generation stays pending for this migration to
     /// reconcile.
     async fn helper(&mut self, through: Endpoint, request: Request) -> Result<Value> {
-        let argv = helper_argv(self.client(through), &request)?;
+        let argv = self.argv(through, &request)?;
         let generation = self.begin()?;
 
         let outcome = match self
@@ -621,7 +686,11 @@ impl Migration {
             uid: self.log.plan.uid,
             labels: vec![self.log.plan.old_label.clone(), self.log.plan.label.clone()],
         };
-        let argv = helper_argv(self.client(through), &request)?;
+        Ok(self.read_only(through, request).await?["jobs"].clone())
+    }
+
+    async fn read_only(&self, through: Endpoint, request: Request) -> Result<Value> {
+        let argv = self.argv(through, &request)?;
 
         // Inspection is read-only and needs no pending marker.
         let reply = self
@@ -629,7 +698,59 @@ impl Migration {
             .run_pending(argv, Duration::from_secs(20))
             .await?;
 
-        Ok(helper_result(&reply)?["jobs"].clone())
+        helper_result(&reply)
+    }
+
+    /// The same worker inspections update uses before any bundle swap.
+    async fn preflight_with(
+        &self,
+        resuming: bool,
+        updated_program: &Path,
+        signed: impl FnOnce(&Path) -> Result<String>,
+        run: impl AsyncFn(Request) -> Result<Value>,
+    ) -> Result<()> {
+        self.require_owned_pending()?;
+        self.check_config(&self.log.plan.old_config, &self.log.plan.new_config)?;
+        let updated = signed(updated_program)?;
+        if resuming
+            && self.log.state != State::Applied
+            && !self.log.plan.fresh
+            && updated != self.log.plan.cdhash
+        {
+            return Err(problem(
+                "Atlas.app changed since setup was planned; run setup --rollback, then setup --apply again",
+            ));
+        }
+        let plan = &self.log.plan;
+        let mut labels = vec![plan.label.clone()];
+        if !plan.fresh {
+            labels.push(plan.old_label.clone());
+        }
+        let observed = run(Request::Inspect {
+            uid: plan.uid,
+            labels,
+        })
+        .await?;
+        let job = &observed["jobs"][&plan.label];
+        let expected = text_sha256(&plist(&self.agent(), &self.layout().logs()));
+        if !(job["plistKind"] == "absent"
+            || job["plistKind"] == "regular" && job["plistSha256"] == expected)
+            || job["loaded"] == true && job["path"] != json!(self.layout().agent_plist(&plan.label))
+        {
+            return Err(problem(
+                "The helper's background job differs from its setup; run atlas init to replace it",
+            ));
+        }
+        if !plan.fresh {
+            run(Request::CheckRetire {
+                uid: plan.uid,
+                label: plan.old_label.clone(),
+                sha256: plan.old_plist_sha256.clone(),
+                missing_ok: false,
+            })
+            .await?;
+        }
+        Ok(())
     }
 
     /// A first setup: the managed daemon is already running (init started
@@ -1079,7 +1200,14 @@ async fn plan(config_path: &Path) -> Result<Plan> {
 
     // Inspection is read-only, so it needs no pending marker.
     let reply = client
-        .run_pending(helper_argv(&client, &request)?, Duration::from_secs(20))
+        .run_pending(
+            helper_argv_with(
+                &client,
+                &request,
+                setup_identity(config.helper_uid, Some(&config_path))?,
+            )?,
+            Duration::from_secs(20),
+        )
         .await?;
     let jobs = helper_result(&reply)?["jobs"].clone();
 
@@ -1176,40 +1304,14 @@ pub async fn preflight_apply(config_path: &Path, updated_program: &Path) -> Resu
         ),
     };
     let migration = Migration::new(path, log)?;
-    migration.require_owned_pending()?;
-    migration.check_config(
-        &migration.log.plan.old_config,
-        &migration.log.plan.new_config,
-    )?;
-    let updated = signed_daemon(updated_program)?;
-    if resuming
-        && migration.log.state != State::Applied
-        && !migration.log.plan.fresh
-        && updated != migration.log.plan.cdhash
-    {
-        return Err(problem(
-            "Atlas.app changed since setup was planned; run setup --rollback, then setup --apply again",
-        ));
-    }
-    let through = migration
-        .reachable_endpoint([Endpoint::Old, Endpoint::New])
-        .await?;
-    let job = if migration.log.plan.fresh {
-        managed_job(migration.client(through)).await?
-    } else {
-        migration.jobs(through).await?[&migration.log.plan.label].clone()
-    };
-    let expected = text_sha256(&plist(&migration.agent(), &migration.layout().logs()));
-    if !(job["plistKind"] == "absent"
-        || job["plistKind"] == "regular" && job["plistSha256"] == expected)
-        || job["loaded"] == true
-            && job["path"] != json!(migration.layout().agent_plist(&migration.log.plan.label))
-    {
-        return Err(problem(
-            "The helper's background job differs from its setup; run atlas init to replace it",
-        ));
-    }
-    Ok(())
+    migration
+        .preflight_with(resuming, updated_program, signed_daemon, async |request| {
+            let through = migration
+                .reachable_endpoint([Endpoint::Old, Endpoint::New])
+                .await?;
+            migration.read_only(through, request).await
+        })
+        .await
 }
 
 /// Undo an applied or interrupted migration recorded in the log.
@@ -1241,44 +1343,180 @@ mod tests {
     use super::*;
 
     #[test]
-    fn legacy_update_setup_dispatches_without_recording_an_identity() {
-        let expected = setup_identity_with(super::super::identity::OnFile::Nothing, || {
-            panic!("a legacy migration must not adopt or require an identity")
-        })
-        .unwrap();
-        let client = Client::new(config()).unwrap();
-        let request = Request::Prepare {
-            uid: 502,
-            controller: "c".into(),
-        };
-        let argv = helper_argv_with(&client, &request, expected).unwrap();
-        assert_eq!(
-            argv,
-            [
-                client.config.identity_probe.to_string_lossy().into_owned(),
-                "setup-helper".into(),
-                serde_json::to_string(&request).unwrap(),
-            ]
-        );
-        assert!(setup_identity_with(super::super::identity::OnFile::Unreadable, || None).is_err());
+    fn a_genuine_legacy_helper_proceeds_with_an_identity_on_every_worker() {
         let recorded = super::super::identity::Identity {
             uid: 502,
             name: "helper".into(),
             generated_uid: "chosen".into(),
         };
+        let sessions = legacy_sessions(1000, 900);
+        let expected = setup_identity_with(
+            super::super::identity::OnFile::Nothing,
+            || panic!("no persistent identity exists"),
+            || {
+                legacy_provenance(Some(at(100)), Some(at(200)), Some(&sessions), 502)?;
+                Ok(recorded.clone())
+            },
+        )
+        .unwrap();
+        let client = Client::new(config()).unwrap();
+        for request in [
+            Request::Inspect {
+                uid: 502,
+                labels: vec![LABEL.into()],
+            },
+            Request::Prepare {
+                uid: 502,
+                controller: "c".into(),
+            },
+            Request::Retire {
+                uid: 502,
+                label: "old".into(),
+                sha256: "a".repeat(64),
+                missing_ok: false,
+            },
+        ] {
+            let argv = helper_argv_with(&client, &request, expected.clone()).unwrap();
+            assert_eq!(argv[3], "--account");
+            assert_eq!(
+                serde_json::from_str::<super::super::identity::Identity>(&argv[4]).unwrap(),
+                recorded
+            );
+        }
+        assert!(
+            setup_identity_with(
+                super::super::identity::OnFile::Unreadable,
+                || None,
+                || panic!("unreadable is not legacy")
+            )
+            .is_err()
+        );
         assert!(
             setup_identity_with(
                 super::super::identity::OnFile::Recorded(recorded.clone()),
-                || None
+                || None,
+                || panic!("a mismatched identity is not legacy"),
             )
             .is_err(),
             "a mismatched or unreadable account still refuses"
         );
-        let argv = helper_argv_with(&client, &request, Some(recorded.clone())).unwrap();
-        assert_eq!(argv[3], "--account");
-        assert_eq!(
-            serde_json::from_str::<super::super::identity::Identity>(&argv[4]).unwrap(),
-            recorded
+    }
+
+    fn at(seconds: u64) -> SystemTime {
+        std::time::UNIX_EPOCH + Duration::from_secs(seconds)
+    }
+
+    fn legacy_sessions(account_age: u64, login_age: u64) -> crate::session::Sessions {
+        crate::session::Sessions {
+            logins: crate::session::classify(
+                &[crate::session::Window {
+                    uid: 502,
+                    pid: 1234,
+                    age: Duration::from_secs(login_age),
+                }],
+                |_| crate::session::Record {
+                    passwd: true,
+                    directory: true,
+                    age: Some(Duration::from_secs(account_age)),
+                },
+                501,
+                Some(502),
+                Some(501),
+            ),
+            blockers: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_surviving_daemon_cannot_set_up_a_new_account_that_reused_the_helper_uid() {
+        let replacement = Account {
+            uid: 502,
+            name: "replacement".into(),
+            home: "/Users/replacement".into(),
+        };
+        assert_ne!(replacement.home, Path::new("/Users/helper"));
+        let sessions = legacy_sessions(60, 900);
+        let error = setup_identity_with(
+            super::super::identity::OnFile::Nothing,
+            || panic!("no persistent identity exists"),
+            || {
+                legacy_provenance(
+                    Some(at(300)),
+                    Some(at(200)),
+                    Some(&sessions),
+                    replacement.uid,
+                )?;
+                panic!("a replacement must be refused before dispatch")
+            },
+        )
+        .unwrap_err();
+        assert!(error.error.contains("Choose the helper again"));
+        // Even a configuration rewritten after UID reuse cannot bless the surviving login.
+        assert!(legacy_provenance(Some(at(300)), Some(at(400)), Some(&sessions), 502).is_err());
+        for (created, recorded, sessions) in [
+            (None, Some(at(200)), Some(&sessions)),
+            (Some(at(100)), None, Some(&sessions)),
+            (Some(at(100)), Some(at(200)), None),
+        ] {
+            assert!(legacy_provenance(created, recorded, sessions, 502).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn update_preflight_refuses_a_missing_retirement_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut migration = sandbox(dir.path());
+        migration.log.state = State::Applied;
+        migration.log.plan.home = dir.path().join("helper");
+        migration.log.plan.old_plist_sha256 = text_sha256("old definition");
+        let layout = migration.layout();
+        let backup = layout.root().join("backup").join(format!(
+            "{}-{}.plist",
+            migration.log.plan.old_label,
+            &migration.log.plan.old_plist_sha256[..16]
+        ));
+        fs::create_dir_all(backup.parent().unwrap()).unwrap();
+        let inspect = async |request| match request {
+            Request::Inspect { .. } => {
+                Ok(json!({"ok": true, "jobs": {LABEL: {"loaded": false, "plistKind": "absent"}}}))
+            }
+            Request::CheckRetire {
+                label,
+                sha256,
+                missing_ok,
+                ..
+            } => {
+                super::super::helper::retirement_with(
+                    &layout,
+                    &label,
+                    &sha256,
+                    missing_ok,
+                    || Ok(super::super::helper::Job::Absent),
+                )?;
+                Ok(json!({"ok": true}))
+            }
+            _ => panic!("preflight must only inspect"),
+        };
+        fs::write(&backup, "old definition").unwrap();
+        let program = Path::new("/updated/atlas");
+        let signed = |path: &Path| {
+            assert_eq!(path, program);
+            Ok("updated-hash".into())
+        };
+        migration
+            .preflight_with(true, program, signed, inspect)
+            .await
+            .unwrap();
+        fs::remove_file(&backup).unwrap();
+        let error = migration
+            .preflight_with(true, program, signed, inspect)
+            .await
+            .unwrap_err();
+        assert!(error.error.contains("not the expected definition"));
+        assert!(!layout.agent_plist(&migration.log.plan.old_label).exists());
+        assert!(
+            !migration.path.exists(),
+            "preflight writes no migration record"
         );
     }
 

@@ -735,7 +735,7 @@ pub enum Kind {
 /// How much older than its account a login must be to have outlived an
 /// earlier account: a login cannot start before its account exists, and a
 /// few seconds cover clock rounding.
-const REUSED_SLACK: Duration = Duration::from_secs(10);
+pub(crate) const REUSED_SLACK: Duration = Duration::from_secs(10);
 
 /// Each login in `windows` with whose it is, given what directory services
 /// say of each user ID (`accounts`), this account (`me`), the helper (or
@@ -995,17 +995,23 @@ fn gone_twice(
 
 /// How long ago account `name` was created, from its directory record.
 fn account_age(name: &str) -> Option<std::time::Duration> {
+    account_created(name)?.elapsed().ok()
+}
+
+/// The directory record's creation time; home-folder timestamps are not provenance.
+pub(crate) fn account_created(name: &str) -> Option<std::time::SystemTime> {
     let output = std::process::Command::new("/usr/bin/dscl")
         .args([".", "-read", &format!("/Users/{name}"), "accountPolicyData"])
         .output()
         .ok()?;
+    if !output.status.success() {
+        return None;
+    }
     let text = String::from_utf8_lossy(&output.stdout);
     let after = text.split("<key>creationTime</key>").nth(1)?;
     let value = after.split("<real>").nth(1)?.split("</real>").next()?;
-    let created =
-        std::time::UNIX_EPOCH + std::time::Duration::from_secs_f64(value.trim().parse().ok()?);
-
-    created.elapsed().ok()
+    std::time::UNIX_EPOCH
+        .checked_add(std::time::Duration::try_from_secs_f64(value.trim().parse().ok()?).ok()?)
 }
 
 /// `ps` elapsed time (`[[days-]hours:]minutes:seconds`) as a duration.
