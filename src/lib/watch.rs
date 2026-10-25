@@ -141,7 +141,6 @@ struct Watch {
     frames: Option<PathBuf>,
     log: Mark,
     said: Value,
-    state: String,
     read_at: Option<Instant>,
     framed_at: Option<Instant>,
     /// The kept screen's digest, and the last id given: ids only go up, so
@@ -156,7 +155,6 @@ impl Watch {
             frames,
             log: None,
             said: Value::Null,
-            state: String::new(),
             read_at: None,
             framed_at: None,
             kept: None,
@@ -176,11 +174,7 @@ impl Watch {
             // A viewer that runs but did not answer leaves the last status
             // standing, rather than a guess at who holds control.
             if let Some((status, source)) = read(client, output, port).await {
-                self.state = status["overview"]["state"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_owned();
-                if self.state == "notReady" {
+                if status["overview"]["state"] == "notReady" {
                     self.forget_frame();
                 }
 
@@ -230,13 +224,14 @@ impl Watch {
 
     /// Whether to keep the screen now.
     fn frame_due(&self, now: Instant) -> bool {
-        let every = match self.state.as_str() {
+        let state = self.said["overview"]["state"].as_str().unwrap_or_default();
+        let every = match state {
             "working" | "control" => FRAME_EVERY,
             _ => IDLE_FRAME_EVERY,
         };
         self.frames.is_some()
-            && self.state != "notReady"
-            && !self.state.is_empty()
+            && state != "notReady"
+            && !state.is_empty()
             && self
                 .framed_at
                 .is_none_or(|at| now.saturating_duration_since(at) >= every)
@@ -516,18 +511,150 @@ mod tests {
             ("notReady", false),
             ("", false),
         ] {
-            watch.state = state.into();
+            watch.news(&status(state, "", 0), "viewer", None);
             assert_eq!(watch.frame_due(start), due, "{state:?}");
         }
 
         watch.framed_at = Some(start);
-        watch.state = "working".into();
+        watch.news(&status("working", "", 0), "viewer", None);
         assert!(!watch.frame_due(start + Duration::from_millis(500)));
         assert!(watch.frame_due(start + FRAME_EVERY));
-        watch.state = "idle".into();
+        watch.news(&status("idle", "", 0), "viewer", None);
         assert!(!watch.frame_due(start + FRAME_EVERY));
         assert!(watch.frame_due(start + IDLE_FRAME_EVERY));
         assert!(!Watch::new(None).frame_due(start), "only with a folder");
+    }
+
+    #[test]
+    fn missing_or_nonstring_retained_state_never_requests_a_frame() {
+        let dir = tempfile::tempdir().unwrap();
+        for overview in [
+            Value::Null,
+            json!({}),
+            json!({"state": null}),
+            json!({"state": 7}),
+            json!({"state": true}),
+        ] {
+            let mut watch = Watch::new(Some(dir.path().to_path_buf()));
+            assert!(!watch.frame_due(Instant::now()), "nothing known yet");
+            assert!(
+                watch
+                    .news(&json!({"overview": overview}), "viewer", None)
+                    .is_some()
+            );
+            assert_eq!(watch.said["overview"]["state"], overview["state"]);
+            assert!(!watch.frame_due(Instant::now()), "{overview}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_busy_viewer_keeps_known_cadence_until_not_ready_forgets_the_screen() {
+        use axum::{Json, Router, http::StatusCode, routing::get};
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::config::Config::parse(
+            b"helper_uid = 60001\nsocket_path = \"helper.sock\"\noutput_dir = \"out\"\nidentity_probe = \"probe\"\ninput_socket = \"input.sock\"\n",
+            &dir.path().join("atlas.toml"),
+        ).unwrap();
+        let mut client = Client::new(config).unwrap();
+        client.controller = crate::control::Controller::at(60001, &dir.path().join("state"));
+        let output = client.output_dir().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let url = format!("http://127.0.0.1:{port}/viewer/");
+        fs::write(
+            output.join(crate::viewer::MENUBAR_RECORD),
+            json!({"url": url, "pid": std::process::id()}).to_string(),
+        )
+        .unwrap();
+        let observed = Arc::new(Mutex::new((
+            StatusCode::OK,
+            status("working", "working", 0),
+        )));
+        let reading = observed.clone();
+        let png = crate::native::capture::sample_png(8, 8);
+        let app = Router::new()
+            .route(
+                "/viewer/",
+                get(|| async {
+                    Json(json!({"service": "atlas-viewer", "pid": std::process::id()}))
+                }),
+            )
+            .route(
+                "/viewer/status.json",
+                get(move || {
+                    let reading = reading.clone();
+                    async move {
+                        let (code, status) = reading.lock().await.clone();
+                        (code, Json(status))
+                    }
+                }),
+            )
+            .route(
+                "/viewer/frame.png",
+                get(move || {
+                    let png = png.clone();
+                    async move {
+                        (
+                            [
+                                ("x-frame-id", "shown"),
+                                ("x-display-width", "8"),
+                                ("x-display-height", "8"),
+                            ],
+                            png,
+                        )
+                    }
+                }),
+            );
+        let serving = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let frames = dir.path().join("frames");
+        private_folder(&frames).unwrap();
+        let mut watch = Watch::new(Some(frames.clone()));
+        let mut lines = Lines {
+            stdout: std::io::stdout(),
+            written: Instant::now(),
+        };
+
+        assert!(watch.tick(&client, output, port, &mut lines).await);
+        assert_eq!(watch.said["overview"]["state"], "working");
+        assert!(frames.join("frame.png").exists());
+        assert!(frames.join("frame.json").exists());
+        let said = watch.said.clone();
+        let kept = watch.kept;
+        let id = watch.last_id;
+        // Keep frame scheduling out of this read-only status transition; its cadence is checked at explicit instants.
+        let framed = Instant::now() + Duration::from_secs(60);
+        watch.framed_at = Some(framed);
+        watch.read_at = None;
+        *observed.lock().await = (StatusCode::SERVICE_UNAVAILABLE, json!({}));
+        assert!(read(&client, output, port).await.is_none());
+        assert!(watch.tick(&client, output, port, &mut lines).await);
+        assert_eq!(
+            watch.said, said,
+            "an unanswered viewer is not a guessed helper state"
+        );
+        assert_eq!(watch.kept, kept);
+        assert_eq!(watch.framed_at, Some(framed));
+        assert_eq!(watch.last_id, id);
+        assert!(!watch.frame_due(framed + Duration::from_millis(500)));
+        assert!(
+            watch.frame_due(framed + FRAME_EVERY),
+            "the previous active cadence remains"
+        );
+
+        watch.read_at = None;
+        *observed.lock().await = (StatusCode::OK, status("notReady", "not ready", 0));
+        assert!(watch.tick(&client, output, port, &mut lines).await);
+        assert_eq!(watch.said["overview"]["state"], "notReady");
+        assert!(watch.kept.is_none());
+        assert!(!frames.join("frame.png").exists());
+        assert!(!frames.join("frame.json").exists());
+        assert_eq!(watch.last_id, id, "frame identities never go backwards");
+        assert!(!watch.frame_due(framed + IDLE_FRAME_EVERY));
+        serving.abort();
+        let _ = serving.await;
     }
 
     #[test]
