@@ -94,10 +94,11 @@ extension SettingsController {
   ///
   /// - Parameter ids: The agents whose command failed.
   private func announceAgentFailures(_ ids: Set<String>) {
-    session.announcement = SettingsPresenter.agents(snapshot).agents
+    let text = SettingsPresenter.agents(snapshot).agents
       .filter { ids.contains($0.id) }
       .compactMap { row in row.problem.map { "\(row.title). \(Words.sentence($0))" } }
       .joined(separator: " ")
+    session.announce(text)
   }
 
   /// Why a Connect did not work, by agent: each agent the command says failed, with why; else the agent asked for,

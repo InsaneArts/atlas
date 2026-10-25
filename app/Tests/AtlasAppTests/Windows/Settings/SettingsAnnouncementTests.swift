@@ -53,6 +53,55 @@ struct SettingsAnnouncementTests {
     }
     for _ in 0..<20 { await Task.yield() }
     #expect(announced == ["Claude. \(problem)."])
+    if disconnecting {
+      await controller.disconnect("claude")
+    } else {
+      await controller.connect("claude")
+    }
+    host.rootView = SettingsView(state: controller.state, edit: { _ in }, announce: announce, send: controller.send)
+    host.layoutSubtreeIfNeeded()
+    for _ in 0..<20 { await Task.yield() }
+    #expect(announced == ["Claude. \(problem).", "Claude. \(problem)."])
+  }
+
+  @Test("Down then Up announces both projects with the same folder name and distinguishes their paths")
+  func sameNamedProjectsAnnounceBothMoves() async throws {
+    let commands = ScriptedCommands([
+      "agents status":
+        #"{"ok":true,"agents":[],"projects":[{"path":"/sample/one/workspace"},{"path":"/sample/two/workspace"}]}"#
+    ])
+    let controller = SettingsController.scripted(commands: commands)
+    await controller.loadAgents()
+    var announced: [String] = []
+    let announce: @MainActor (String) -> Void = { announced.append($0) }
+    let host = NSHostingView(
+      rootView: SettingsView(state: controller.state, edit: { _ in }, announce: announce, send: controller.send)
+    )
+    host.frame = NSRect(x: 0, y: 0, width: SettingsLayout.defaultWidth, height: SettingsLayout.defaultHeight)
+    let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
+    window.contentView = host
+    defer { window.contentView = nil }
+    host.layoutSubtreeIfNeeded()
+    controller.send(.find)
+    controller.send(.search("workspace"))
+    let results = controller.state.search.results
+    try #require(results.count == 2)
+    #expect(results.allSatisfy { $0.title == "workspace" })
+    host.rootView = SettingsView(state: controller.state, edit: { _ in }, announce: announce, send: controller.send)
+    host.layoutSubtreeIfNeeded()
+    for step in [1, -1] {
+      controller.send(.moveSearchSelection(step))
+      host.rootView = SettingsView(state: controller.state, edit: { _ in }, announce: announce, send: controller.send)
+      host.layoutSubtreeIfNeeded()
+    }
+    for _ in 0..<20 { await Task.yield() }
+    #expect(
+      announced == [
+        "Search results available",
+        "workspace, /sample/two/workspace, Agents › Projects",
+        "workspace, /sample/one/workspace, Agents › Projects",
+      ]
+    )
   }
 
   @Test(
@@ -96,8 +145,8 @@ struct SettingsAnnouncementTests {
     #expect(
       announced == [
         "Search results available",
-        "\(results[1].title), \(results[1].breadcrumb)",
-        "\(results[0].title), \(results[0].breadcrumb)",
+        "\(results[1].title), /sample/workspace/two, \(results[1].breadcrumb)",
+        "\(results[0].title), /sample/workspace/one, \(results[0].breadcrumb)",
       ]
     )
   }
