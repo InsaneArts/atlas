@@ -159,6 +159,7 @@ test('a paused picture keeps its frame while the status moves on', () => {
 function screenView() {
   const nodes = new Map();
   const listeners = new Map();
+  const documentListeners = new Map();
   const messages = [];
   const timers = new Map();
   const broadcasts = [];
@@ -172,15 +173,18 @@ function screenView() {
     const element = {
       style: {},
       dataset: {},
+      children: [],
       classList: { contains: () => false, toggle() {}, add() {}, remove() {} },
       addEventListener: (name, callback) => events.set(name, callback),
       fire: (name, event = {}) => events.get(name)?.(event),
       getAttribute: (name) => attributes.get(name),
       setAttribute: (name, value) => attributes.set(name, value),
       append(...children) {
-        this.firstChild = children[0];
+        this.children.push(...children);
+        this.firstChild = this.children[0];
       },
       replaceChildren(...children) {
+        this.children = children;
         this.firstChild = children[0];
       },
       focus() {},
@@ -239,7 +243,7 @@ function screenView() {
       querySelector: node,
       querySelectorAll: (selector) => (selector === '[data-tab]' ? tabs : []),
       createElement: () => node(Symbol()),
-      addEventListener() {},
+      addEventListener: (name, callback) => documentListeners.set(name, callback),
     },
     window: { parent, addEventListener: (name, callback) => listeners.set(name, callback) },
     setTimeout: setTimer,
@@ -268,7 +272,104 @@ function screenView() {
   });
   const newerCard = () => channel.onmessage({ data: { newer: 'another-card' } });
   const calls = (name) => messages.filter((message) => message.params?.name === name);
-  return { node, listeners, messages, receive, result, advance, newerCard, calls, broadcasts };
+  return {
+    node,
+    listeners,
+    documentListeners,
+    messages,
+    receive,
+    result,
+    advance,
+    newerCard,
+    calls,
+    broadcasts,
+  };
+}
+
+async function screenshotGrid() {
+  const page = screenView();
+  const { node, receive, calls } = page;
+  node('[data-tab="screenshots"]').fire('click');
+  await receive({
+    id: calls('screenshots')[0].id,
+    result: {
+      structuredContent: {
+        screenshots: ['a', 'b'].map((name) => ({ name, ageSeconds: 1 })),
+      },
+    },
+  });
+  const picture = (data) => ({ _meta: { 'atlas/frame': { mimeType: 'image/jpeg', data } } });
+  for (const request of calls('screenshot'))
+    await receive({ id: request.id, result: picture(`thumb-${request.params.arguments.name}`) });
+  const open = (index) => {
+    node('[data-shots]').children[index].fire('click');
+    return calls('screenshot').at(-1);
+  };
+  const complete = (request, data) => receive({ id: request.id, result: picture(data) });
+  const displayed = () => node('[data-lightbox-image]').getAttribute('src');
+  return { ...page, open, complete, displayed };
+}
+
+for (const order of ['old first', 'new first']) {
+  test(`each screenshot opening owns its full image when replies arrive ${order}`, async () => {
+    const { node, open, complete, displayed } = await screenshotGrid();
+    const first = open(0);
+    assert.equal(displayed(), 'data:image/jpeg;base64,thumb-a');
+    node('[data-lightbox-close]').fire('click');
+    const second = open(1);
+    assert.equal(displayed(), 'data:image/jpeg;base64,thumb-b');
+    if (order === 'old first') {
+      await complete(first, 'full-a');
+      assert.equal(displayed(), 'data:image/jpeg;base64,thumb-b');
+      await complete(second, 'full-b');
+    } else {
+      await complete(second, 'full-b');
+      await complete(first, 'full-a');
+    }
+    assert.equal(displayed(), 'data:image/jpeg;base64,full-b');
+    assert.equal(node('[data-lightbox]').hidden, false);
+  });
+}
+
+test('reopening the same screenshot gives the new opening ownership of its reply', async () => {
+  const { node, open, complete, displayed } = await screenshotGrid();
+  const first = open(0);
+  node('[data-lightbox-close]').fire('click');
+  const second = open(0);
+  await complete(second, 'new-full-a');
+  await complete(first, 'old-full-a');
+  assert.equal(displayed(), 'data:image/jpeg;base64,new-full-a');
+});
+
+test('a failed newest full read retains its own thumbnail when an older read completes', async () => {
+  const { node, open, complete, displayed, receive } = await screenshotGrid();
+  const first = open(0);
+  node('[data-lightbox-close]').fire('click');
+  const second = open(1);
+  await receive({ id: second.id, error: { message: 'Read failed' } });
+  await complete(first, 'full-a');
+  assert.equal(displayed(), 'data:image/jpeg;base64,thumb-b');
+  assert.equal(node('[data-lightbox]').hidden, false);
+});
+
+for (const dismiss of ['Close', 'Escape', 'retirement']) {
+  test(`${dismiss} invalidates the pending screenshot opening`, async () => {
+    const { node, open, complete, displayed, documentListeners, newerCard, calls } =
+      await screenshotGrid();
+    const first = open(0);
+    if (dismiss === 'Close') node('[data-lightbox-close]').fire('click');
+    else if (dismiss === 'Escape') documentListeners.get('keydown')({ key: 'Escape' });
+    else newerCard();
+    await complete(first, 'full-a');
+    assert.equal(node('[data-lightbox]').hidden, true);
+    assert.equal(displayed(), 'data:image/jpeg;base64,thumb-a');
+    if (dismiss === 'retirement') {
+      const before = calls('screenshot').length;
+      open(1);
+      assert.equal(calls('screenshot').length, before);
+      assert.equal(node('[data-lightbox]').hidden, true);
+    }
+  });
 }
 
 test('retired cards cannot restart observation by changing tabs or advancing timers', async () => {

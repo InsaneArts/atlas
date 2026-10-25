@@ -420,6 +420,7 @@ if (typeof document !== 'undefined') {
   let spoken = '';
   let asking = null;
   const thumbs = new Map();
+  let opening = 0;
 
   const send = (message) => window.parent.postMessage({ jsonrpc: '2.0', ...message }, '*');
   const notify = (method, params) => send({ method, params });
@@ -732,6 +733,7 @@ if (typeof document !== 'undefined') {
   // helper): nothing more is asked, kept or sent from it.
   const retire = () => {
     superseded = true;
+    dismiss();
     taking += 1;
     clearTimeout(timer);
     clearInterval(panelTimer);
@@ -1166,6 +1168,7 @@ if (typeof document !== 'undefined') {
 
   const openShot = async (name) => {
     if (superseded) return;
+    const mine = ++opening;
     const box = one('[data-lightbox]');
     const image = one('[data-lightbox-image]');
     image.src = thumbs.get(name) || '';
@@ -1174,7 +1177,7 @@ if (typeof document !== 'undefined') {
     try {
       const result = await call('screenshot', { name, full: true });
       const picture = result && result._meta && result._meta[FRAME_META];
-      if (!superseded && picture && !box.hidden)
+      if (picture && mine === opening)
         image.src = `data:${picture.mimeType};base64,${picture.data}`;
     } catch (error) {
       // The thumbnail stays.
@@ -1251,6 +1254,7 @@ if (typeof document !== 'undefined') {
   };
 
   const dismiss = () => {
+    opening += 1;
     one('[data-alert]').hidden = true;
     one('[data-lightbox]').hidden = true;
     asking = null;
