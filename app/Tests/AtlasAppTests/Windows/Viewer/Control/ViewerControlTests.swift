@@ -368,6 +368,63 @@ struct ViewerControlTests {
     viewer.close()
   }
 
+  @Test("a paused viewer offers Take Control again after becoming ready and waits for a fresh picture before acquiring")
+  func aPausedViewerOffersControlAgainAfterBecomingReady() async throws {
+    let service = ScriptedService()
+    let ready: [String: Any] = [
+      "ready": true, "canObserve": true, "overview": ["mode": "observing", "state": "idle"],
+    ]
+    service.reply = ready
+    let clock = ManualClock()
+    let viewer = try await ViewerController.watching(service, clock: clock)
+    defer {
+      viewer.close()
+      service.resume("frame")
+    }
+    let frame = try #require(viewer.reading.frame)
+    let frames = service.frameCalls
+    let asked = service.statusCalls
+    viewer.togglePause()
+    try await settle("the paused viewer never read status") { service.statusCalls > asked }
+    let interval = Duration.seconds(ViewerPictureRate.live.seconds)
+    try await clock.untilSleeping(for: interval, "the paused reading never waited")
+    #expect(viewer.state.top.actions.control?.isEnabled == true)
+
+    service.reply = [
+      "ready": false, "canObserve": true,
+      "overview": ["mode": "unavailable", "state": "notReady"],
+    ]
+    clock.advance(by: interval)
+    try await settle("the paused viewer never showed Not Ready") { viewer.snapshot.mode.kind == .notReady }
+    #expect(!viewer.snapshot.canTakeControlOnceResumed)
+    try await clock.untilSleeping(for: interval, "the not ready reading never waited")
+
+    service.reply = ready
+    clock.advance(by: interval)
+    try await settle("the paused viewer never returned to Idle") { viewer.state.top.status.label == "Idle" }
+    try #require(viewer.state.top.actions.control?.isEnabled == true, "Take Control is offered again")
+    #expect(viewer.state.top.actions.control?.event == .takeControl)
+    #expect(viewer.session.paused)
+    #expect(viewer.reading.frame?.id == frame.id)
+    #expect(service.frameCalls == frames)
+
+    service.hold.insert("frame")
+    viewer.send(.takeControl)
+    try await settle("the resumed viewer never requested a fresh picture") { service.held["frame"] != nil }
+    #expect(!viewer.session.paused)
+    #expect(viewer.control.pictureWait != nil)
+    #expect(viewer.reading.frame == nil)
+    #expect(viewer.control.lease == nil)
+    #expect(!service.log.contains { $0.hasPrefix("acquire ") })
+
+    service.resume("frame")
+    try await settle("control was never taken after the fresh picture") { viewer.control.lease == "lease" }
+    let fresh = try #require(viewer.reading.frame)
+    #expect(fresh.id != frame.id)
+    #expect(service.log.contains("acquire \(fresh.id)"))
+    #expect(!service.log.contains("acquire \(frame.id)"))
+  }
+
   @Test("a Take Control waiting for a fresh picture ends when the tab is left, as any acquisition does")
   func aWaitForAFreshPictureEndsWithTheTab() async throws {
     let service = ScriptedService()
