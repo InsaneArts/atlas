@@ -97,15 +97,6 @@ extension SettingsPresenter {
     return failing
   }
 
-  /// An agent's name by its id in `atlas agents` results.
-  ///
-  /// - Parameter id: The id, such as `claude` or `claude-app`.
-  /// - Returns: "Claude", "Codex", "Claude app", or the id itself for one this app does not know.
-  static func agentTitle(_ id: String) -> String {
-    if let agent = AgentID(rawValue: id) { return Words.agentTitle(agent) }
-    return id == AgentsStatus.claudeAppID ? SettingsWords.claudeApp : id
-  }
-
   /// One project taught: its folder's name, and where it is with the home folder as `~`, or that its files no longer
   /// have the Atlas section.
   ///
