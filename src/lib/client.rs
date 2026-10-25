@@ -35,7 +35,7 @@ pub struct Frame {
 }
 
 /// Identity (device, inode, size, mtime) of the installed executable and its hash.
-type BuildCache = Arc<std::sync::Mutex<Option<((u64, u64, u64, i64, i64), Option<String>)>>>;
+type BuildCache = Arc<std::sync::Mutex<Option<((u64, u64, u64, i64, i64), String)>>>;
 
 /// How long `run` lets a command take unless told otherwise.
 pub const RUN_TIMEOUT: Duration = Duration::from_secs(20);
@@ -914,7 +914,7 @@ impl Client {
         if let Some((cached, build)) = self.installed.lock().ok()?.as_ref()
             && *cached == key
         {
-            return build.clone();
+            return Some(build.clone());
         }
 
         // Hashed without the lock, so other callers are not held up. A
@@ -923,7 +923,7 @@ impl Client {
         let build = crate::digest::probe_executable(path).and_then(|path| file_sha256(&path))?;
 
         if let Ok(mut cache) = self.installed.lock() {
-            *cache = Some((key, Some(build.clone())));
+            *cache = Some((key, build.clone()));
         }
 
         Some(build)

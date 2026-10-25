@@ -832,6 +832,39 @@ fn an_unreadable_installed_build_is_retried_not_cached() {
 }
 
 #[test]
+fn cloned_clients_share_builds_and_notice_a_replaced_executable() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let dir = tempfile::tempdir().unwrap();
+    let client = Client::new(config(dir.path())).unwrap();
+    let clone = client.clone();
+    let probe = dir.path().join("probe");
+    std::fs::write(&probe, b"abc").unwrap();
+    let original = std::fs::metadata(&probe).unwrap();
+    let first = client.installed_build().unwrap();
+
+    std::fs::set_permissions(&probe, std::fs::Permissions::from_mode(0o000)).unwrap();
+    assert_eq!(clone.installed_build(), Some(first.clone()), "shared cache");
+
+    let replacement = dir.path().join("replacement");
+    std::fs::write(&replacement, b"def").unwrap();
+    std::fs::File::open(&replacement)
+        .unwrap()
+        .set_modified(original.modified().unwrap())
+        .unwrap();
+    let second = atlas::digest::file_sha256(&replacement).unwrap();
+    assert_ne!(first, second);
+    std::fs::rename(&replacement, &probe).unwrap();
+    let replaced = std::fs::metadata(&probe).unwrap();
+    assert_ne!(original.ino(), replaced.ino());
+    assert_eq!(original.size(), replaced.size());
+    assert_eq!(original.modified().unwrap(), replaced.modified().unwrap());
+
+    assert_eq!(clone.installed_build(), Some(second.clone()));
+    assert_eq!(client.installed_build(), Some(second));
+}
+
+#[test]
 fn a_settled_service_need_not_be_current_but_a_current_one_must_be_settled() {
     let mut state = ready_status();
     state["inputService"]["controlActive"] = json!(false);
