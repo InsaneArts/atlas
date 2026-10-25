@@ -37,6 +37,7 @@ struct AgentsScreen: View {
     switch icon {
     case .app(let image): .image(image)
     case .tile(let tile): .tile(tile)
+    case .mark(let kind): .mark(kind)
     }
   }
 }

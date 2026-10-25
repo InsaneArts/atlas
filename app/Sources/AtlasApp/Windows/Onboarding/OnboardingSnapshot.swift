@@ -1,3 +1,4 @@
+import AtlasCommands
 import AtlasOnboarding
 import AtlasUI
 import Foundation
@@ -31,8 +32,10 @@ struct OnboardingSnapshot {
   var agents: [AgentChoice] = []
   /// Whether `atlas agents status` has said which agents are installed.
   var agentsLoaded = false
-  /// Whether connecting agents needs the Claude app to be quit and reopened.
-  var agentsNeedRestart = false
+  /// Hosts whose connection changes require a restart before the next session.
+  var agentsNeedingRestart: Set<AgentID> = []
+  /// Whether a host restart instruction must stay on the agents step.
+  var agentsNeedRestart: Bool { !agentsNeedingRestart.isEmpty }
   /// Whether an agents install runs now, from this window or Settings, so Continue waits for it.
   var agentsInstalling = false
   /// Whether `atlas agents status` failed last: the agents stay listed, unchecked, and the step can be skipped.

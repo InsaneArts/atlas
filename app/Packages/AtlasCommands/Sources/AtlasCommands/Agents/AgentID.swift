@@ -4,4 +4,6 @@ public enum AgentID: String, CaseIterable, Sendable {
   case claude
   /// Codex.
   case codex
+  /// Pi.
+  case pi
 }

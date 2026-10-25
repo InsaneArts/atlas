@@ -33,7 +33,7 @@ struct OnboardingPresenterFinishingTests {
   }
 
   @Test(
-    "an agent reads Connected, Gets the Atlas skill, Found or Not on this Mac, and only a found one can be switched"
+    "an agent describes its Mac access and connection status, and only a found one can be switched"
   )
   func agentRows() throws {
     func agent(_ id: AgentID, found: Bool, connected: Bool) -> AgentChoice {
@@ -48,10 +48,15 @@ struct OnboardingPresenterFinishingTests {
     snapshot.agents = [agent(.claude, found: true, connected: true), agent(.codex, found: true, connected: false)]
     let state = OnboardingPresenter.agents(snapshot)
     #expect(state.agents.map(\.title) == ["Claude", "Codex"])
-    #expect(state.agents.map(\.detail) == ["Claude Code · Connected", "Found"])
+    #expect(
+      state.agents.map(\.detail) == ["Test Mac apps from Claude Code · Connected", "Live Mac view in the Codex app"]
+    )
     #expect(state.agents.map(\.isOn) == [true, false], "a connected agent's switch is on")
     snapshot.agents[1].on = true
-    #expect(OnboardingPresenter.agents(snapshot).agents[1].detail == "Gets the Atlas skill", "Continue connects it")
+    #expect(
+      OnboardingPresenter.agents(snapshot).agents[1].detail == "Live Mac view in the Codex app",
+      "the switch changes connection choice while the subtitle keeps its benefit"
+    )
     #expect(state.agents.map(\.isEnabled) == [false, true])
     snapshot.agents = [agent(.claude, found: false, connected: false)]
     let missing = try #require(OnboardingPresenter.agents(snapshot).agents.first)
@@ -62,7 +67,7 @@ struct OnboardingPresenterFinishingTests {
     let unchecked = OnboardingPresenter.state(snapshot)
     #expect(
       Self.agentsScreen(unchecked)?.agents.map(\.detail) == [
-        OnboardingWords.agentNotChecked, OnboardingWords.agentNotChecked,
+        OnboardingWords.agentNotChecked, OnboardingWords.agentNotChecked, OnboardingWords.agentNotChecked,
       ],
       "an agent the failed reading never checked reads unchecked, not missing"
     )
@@ -74,7 +79,9 @@ struct OnboardingPresenterFinishingTests {
     var snapshot = Samples.snapshot(try Samples.person(Samples.helper(), finished: true))
     snapshot.agents = AgentChoice.all
     #expect(
-      OnboardingPresenter.agents(snapshot).agents.map(\.icon) == [.app(AgentLogos.claude), .app(AgentLogos.codex)]
+      OnboardingPresenter.agents(snapshot).agents.map(\.icon) == [
+        .app(AgentLogos.claude), .app(AgentLogos.codex), .mark(.pi),
+      ]
     )
     let pixel = try #require(
       CGContext(
@@ -90,7 +97,10 @@ struct OnboardingPresenterFinishingTests {
     )
     let codex = IconImage(id: "/Applications/Codex.app", image: pixel)
     snapshot.agentIcons = [AgentID.codex.rawValue: codex]
-    #expect(OnboardingPresenter.agents(snapshot).agents.last?.icon == .app(codex), "the agent's own app icon")
+    #expect(
+      OnboardingPresenter.agents(snapshot).agents.first { $0.id == "codex" }?.icon == .app(codex),
+      "the agent's own app icon"
+    )
   }
 
   @Test("while Atlas reads the agents, the line under them says so, and a reading that failed says why instead")

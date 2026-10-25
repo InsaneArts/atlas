@@ -44,6 +44,8 @@ extension AgentsStatus {
     case AgentID.claude.rawValue: "Claude Code"
     case claudeAppID: "The Claude app"
     case AgentID.codex.rawValue: "Codex"
+    case AgentID.pi.rawValue: "Pi"
+
     default: id
     }
   }

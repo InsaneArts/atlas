@@ -18,7 +18,7 @@ extension SettingsPresenter {
         id: choice.id.rawValue,
         title: Words.agentTitle(choice.id),
         detail: detail(
-          choice.id == .claude ? Words.agentParts(parts) : SettingsWords.usesAtlas,
+          Words.agentDetail(choice.id, parts: parts),
           absent: choice.checked && !choice.found && !choice.connected
         ),
         icon: AgentRowIcons.icon(choice.id.rawValue, snapshot.icons),

@@ -64,6 +64,8 @@ enum Words {
     switch agent {
     case .claude: "Claude"
     case .codex: "Codex"
+    case .pi: "Pi"
+
     }
   }
 

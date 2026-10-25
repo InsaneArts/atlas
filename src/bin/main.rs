@@ -612,7 +612,7 @@ enum AgentsCommand {
         /// The project folder (default: this one).
         dir: Option<PathBuf>,
     },
-    /// Connect the plugin to Claude Code and/or Codex (all installed by default).
+    /// Connect Atlas to coding agents (all installed by default).
     ///
     /// Use --claude --app together to connect both Claude parts. Select only
     /// the parts installed on this Mac. JSON reports each part's result by id.
@@ -623,11 +623,14 @@ enum AgentsCommand {
         /// Only Codex.
         #[arg(long)]
         codex: bool,
+        /// Only Pi.
+        #[arg(long)]
+        pi: bool,
         /// Only the Claude app.
         #[arg(long)]
         app: bool,
     },
-    /// Disconnect the plugin from Claude Code and/or Codex.
+    /// Disconnect Atlas from coding agents.
     ///
     /// Use --claude --app together to disconnect both Claude parts.
     Remove {
@@ -637,34 +640,41 @@ enum AgentsCommand {
         /// Only Codex.
         #[arg(long)]
         codex: bool,
+        /// Only Pi.
+        #[arg(long)]
+        pi: bool,
         /// Only the Claude app.
         #[arg(long)]
         app: bool,
     },
 }
 
-/// Connect or disconnect the agents named by --claude/--codex/--app; none
+/// Connect or disconnect the named agents and Claude app; none
 /// named means every installed one, the Claude app included.
-fn changed(claude: bool, codex: bool, app: bool, remove: bool) -> Result<Value> {
+fn changed(claude: bool, codex: bool, pi: bool, app: bool, remove: bool) -> Result<Value> {
     // Connecting an app that isn't here would only leave its settings behind.
     if app && !remove && !atlas::claude_app::installed() {
         return Err(Error::new("agents", "The Claude app isn't installed"));
     }
     if app {
-        atlas::agents::change_these(&chosen(claude, codex), false, true, remove)
+        atlas::agents::change_these(&chosen(claude, codex, pi), false, true, remove)
     } else {
-        atlas::agents::change(&chosen(claude, codex), remove)
+        atlas::agents::change(&chosen(claude, codex, pi), remove)
     }
 }
 
-/// The agents named by --claude/--codex (none means every installed one).
-fn chosen(claude: bool, codex: bool) -> Vec<atlas::agents::Agent> {
+/// The coding agents selected by flags (none means every installed one).
+fn chosen(claude: bool, codex: bool, pi: bool) -> Vec<atlas::agents::Agent> {
     use atlas::agents::Agent;
 
-    [(claude, Agent::Claude), (codex, Agent::Codex)]
-        .into_iter()
-        .filter_map(|(on, agent)| on.then_some(agent))
-        .collect()
+    [
+        (claude, Agent::Claude),
+        (codex, Agent::Codex),
+        (pi, Agent::Pi),
+    ]
+    .into_iter()
+    .filter_map(|(on, agent)| on.then_some(agent))
+    .collect()
 }
 
 #[derive(Subcommand)]
@@ -1451,13 +1461,23 @@ async fn execute(config: PathBuf, command: Command) -> Result<Value> {
                 AgentsCommand::Forget { dir } => {
                     atlas::agents::forget(&dir.unwrap_or_else(|| PathBuf::from(".")))
                 }
-                AgentsCommand::Install { claude, codex, app } => {
+                AgentsCommand::Install {
+                    claude,
+                    codex,
+                    pi,
+                    app,
+                } => {
                     let _spinner = Spinner::new("Connecting…");
-                    changed(claude, codex, app, false)
+                    changed(claude, codex, pi, app, false)
                 }
-                AgentsCommand::Remove { claude, codex, app } => {
+                AgentsCommand::Remove {
+                    claude,
+                    codex,
+                    pi,
+                    app,
+                } => {
                     let _spinner = Spinner::new("Disconnecting…");
-                    changed(claude, codex, app, true)
+                    changed(claude, codex, pi, app, true)
                 }
             }
         }
@@ -2173,6 +2193,14 @@ mod tests {
 
     fn parse(args: &[&str]) -> std::result::Result<Cli, clap::Error> {
         Cli::try_parse_from(std::iter::once("atlas").chain(args.iter().copied()))
+    }
+
+    #[test]
+    fn pi_can_be_selected_independently() {
+        assert_eq!(chosen(false, false, true), [atlas::agents::Agent::Pi]);
+        for verb in ["install", "remove"] {
+            assert!(parse(&["agents", verb, "--pi"]).is_ok());
+        }
     }
 
     #[test]

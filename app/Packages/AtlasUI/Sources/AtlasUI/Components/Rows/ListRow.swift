@@ -13,6 +13,8 @@ struct ListRow: View {
     case tile(TileIcon)
     /// An app's own icon, such as an agent's app.
     case image(IconImage)
+    /// An agent's original mark on its brand card.
+    case mark(AgentMarkKind)
     /// The helper account's picture in a circle.
     case picture
     /// An account's first letter on an avatar disc.
@@ -262,7 +264,7 @@ struct ListRow: View {
     switch lead {
     case .none: 0
     case .check, .pending: IconSize.s
-    case .tile, .image, .picture, .letter: IconSize.l
+    case .tile, .image, .mark, .picture, .letter: IconSize.l
     }
   }
 
@@ -277,7 +279,7 @@ struct ListRow: View {
     if size == .compact || size == .checklist { return .regular }
     switch lead {
     case .check, .pending: return .regular
-    case .none, .tile, .image, .picture, .letter: return .medium
+    case .none, .tile, .image, .mark, .picture, .letter: return .medium
     }
   }
 }

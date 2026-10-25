@@ -4,7 +4,7 @@
 atlas=$(command -v atlas 2>/dev/null)
 [ -n "$atlas" ] || [ ! -x "$HOME/.local/bin/atlas" ] || atlas="$HOME/.local/bin/atlas"
 if [ -z "$atlas" ]; then
-	echo "Atlas is not installed. If the person wants GUI testing in a hidden desktop, offer the atlas setup skill."
+	echo "Atlas is not installed. If the person wants GUI testing in a hidden desktop, ask them to open Atlas to finish setup."
 	exit 0
 fi
 "$atlas" agents status --brief 2>/dev/null || echo "Atlas is installed; run atlas doctor before using it."

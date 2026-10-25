@@ -1,0 +1,30 @@
+import CoreGraphics
+import Testing
+
+@testable import AtlasUI
+
+@Suite("Agent glyphs")
+struct AgentGlyphTests {
+  @Test("all Pi colour layers share one scale and remain centred in the card")
+  func piLayers() {
+    let paths = AgentMarkKind.pi.paths
+    var combined = CGRect.null
+    for data in paths {
+      let glyph = AgentGlyph(data: data, layers: paths)
+      let bounds = glyph.path(in: CGRect(x: 0, y: 0, width: 26, height: 26)).boundingRect
+      #expect(!bounds.isEmpty)
+      combined = combined.union(bounds)
+    }
+    #expect(abs(combined.midX - 13) < 0.001)
+    #expect(abs(combined.midY - 13) < 0.001)
+    #expect(abs(combined.width - 13) < 0.001)
+  }
+
+  @Test("an incomplete or unsupported path draws nothing instead of trapping")
+  func invalidPaths() {
+    for data in ["M", "M 0", "M 0 0Q 2 3 4 5", "M 0 0C 1 2", "M 0 0X 1"] {
+      #expect(AgentGlyph.parse(data).isEmpty)
+    }
+  }
+
+}

@@ -4,7 +4,7 @@ public struct OnboardingAgentItem: Equatable, Sendable, Identifiable {
   public var id: String
   /// The agent's name.
   public var title: String
-  /// Where it stands, in a few words: found, getting the Atlas skill, connected or not on this Mac.
+  /// The connection’s benefit and status, or why it is unavailable.
   public var detail: String
   /// Its icon: its app's own where the app is on this Mac, else its tile, as Settings shows it.
   public var icon: RowIcon
@@ -18,7 +18,7 @@ public struct OnboardingAgentItem: Equatable, Sendable, Identifiable {
   /// - Parameters:
   ///   - id: The agent's id, such as `claude`: what its switch sends.
   ///   - title: The agent's name.
-  ///   - detail: Where it stands, in a few words.
+  ///   - detail: The connection’s benefit and status.
   ///   - icon: Its icon, as Settings shows it.
   ///   - isOn: Whether its switch is on.
   ///   - isEnabled: Whether its switch can be changed: only for an agent found and not yet connected.

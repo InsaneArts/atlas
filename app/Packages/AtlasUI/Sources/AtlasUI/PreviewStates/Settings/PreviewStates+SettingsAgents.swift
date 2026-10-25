@@ -6,7 +6,7 @@
         SettingsAgentRow(
           id: "claude",
           title: "Claude",
-          detail: "Claude Code and the Claude app",
+          detail: "Claude Code tools and a live Mac view in the app",
           icon: .app(AgentLogos.claude),
           connection: .connected,
           canDisconnect: true
@@ -14,10 +14,17 @@
         SettingsAgentRow(
           id: "codex",
           title: "Codex",
-          detail: "Uses Atlas in every project",
+          detail: "Live Mac view in the Codex app",
           icon: .app(AgentLogos.codex),
           connection: .connected,
           canDisconnect: true
+        ),
+        SettingsAgentRow(
+          id: "pi",
+          title: "Pi",
+          detail: "Test Mac apps on a hidden desktop",
+          icon: .mark(.pi),
+          connection: .connect(isEnabled: true)
         ),
       ],
       projects: [

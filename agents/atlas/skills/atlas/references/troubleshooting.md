@@ -57,3 +57,15 @@ its own failure is in `exitCode`.)
 | `usage` | The command line was invalid. | Check `references/commands.md`. |
 | `wait-failed` | A window did not appear or close in time (`timedOut`), a command ran but its exit status could not be read, or an app did not quit in time. | For a window, look (`atlas windows`, a screenshot) and wait again; otherwise treat the outcome as unknown and check its effects (`atlas apps` for apps). |
 | `windows` | The helper's window list is unavailable. | Retry once; then `atlas doctor`. |
+
+## Pi connection
+
+Connect with `atlas agents install --pi`. Start a fresh Pi session or use `/reload`
+after connecting or updating Atlas. Only the Atlas skill is installed; open Atlas
+to finish setup. A personal skill named `atlas` takes precedence over the bundled
+one. Pi uses the Atlas menu bar or `atlas monitor` for viewing the helper.
+
+Atlas reads `PI_CODING_AGENT_DIR/settings.json` (default `~/.pi/agent/settings.json`)
+and lets Pi write it under its own lock. Repair malformed settings before
+reconnecting. An unrelated package named `atlas` is kept; remove that package
+in Pi yourself if you want Atlas to use the name.

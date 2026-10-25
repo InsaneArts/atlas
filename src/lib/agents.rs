@@ -1,7 +1,7 @@
-//! `atlas agents`: connect Claude Code and Codex to Atlas. The
-//! plugin (a skill that teaches the agent, a setup skill, and a session-start
-//! status line) ships inside Atlas.app, so it always matches this CLI;
-//! connecting registers that folder as a local marketplace in each agent.
+//! `atlas agents`: connect coding agents to Atlas. The
+//! plugin ships inside Atlas.app, matching this CLI. Claude Code and Codex
+//! use a local marketplace; Pi references the package in place.
+//! Each gets the Atlas skill, MCP and a session brief.
 use crate::{
     client::Client,
     config::Config,
@@ -17,7 +17,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// The marketplace and plugin name in both agents.
+mod pi;
+
+/// The marketplace and plugin name in the marketplace-based agents.
 const NAME: &str = "atlas";
 /// The plugin as both agents name it: `NAME@NAME`, the plugin in its marketplace.
 const PLUGIN: &str = "atlas@atlas";
@@ -39,15 +41,17 @@ fn problem(message: impl Into<String>) -> Error {
 pub enum Agent {
     Claude,
     Codex,
+    Pi,
 }
 
 impl Agent {
-    pub const ALL: [Agent; 2] = [Agent::Claude, Agent::Codex];
+    pub const ALL: [Agent; 3] = [Agent::Claude, Agent::Codex, Agent::Pi];
 
     pub fn name(self) -> &'static str {
         match self {
             Agent::Claude => "claude",
             Agent::Codex => "codex",
+            Agent::Pi => "pi",
         }
     }
 
@@ -56,6 +60,7 @@ impl Agent {
         match self {
             Agent::Claude => "Claude Code",
             Agent::Codex => "Codex",
+            Agent::Pi => "Pi",
         }
     }
 
@@ -77,6 +82,7 @@ impl Agent {
                 argv(&["plugin", "marketplace", "add", &path]),
                 argv(&["plugin", "add", PLUGIN]),
             ],
+            Agent::Pi => vec![],
         }
     }
 
@@ -138,6 +144,9 @@ impl Agent {
     /// Whether this agent's copy of the plugin named atlas (agents copy a
     /// plugin when installing it) is Atlas's.
     fn keeps_atlas(self) -> bool {
+        if matches!(self, Agent::Pi) {
+            return false;
+        }
         let Some(home) = self.home() else {
             return false;
         };
@@ -155,6 +164,7 @@ impl Agent {
         let (variable, folder) = match self {
             Agent::Claude => ("CLAUDE_CONFIG_DIR", ".claude"),
             Agent::Codex => ("CODEX_HOME", ".codex"),
+            Agent::Pi => return pi::home(),
         };
 
         std::env::var_os(variable)
@@ -174,6 +184,7 @@ impl Agent {
                 argv(&["plugin", "remove", PLUGIN]),
                 argv(&["plugin", "marketplace", "remove", NAME]),
             ],
+            Agent::Pi => vec![],
         }
     }
 
@@ -185,6 +196,7 @@ impl Agent {
                 argv(&["plugin", "update", PLUGIN]),
             ],
             Agent::Codex => vec![argv(&["plugin", "add", PLUGIN])],
+            Agent::Pi => vec![],
         }
     }
 
@@ -219,11 +231,17 @@ impl Agent {
     /// marketplace (unknown when its list cannot be read); an error when it
     /// does not answer.
     fn installed(self) -> std::result::Result<Option<bool>, String> {
+        if self == Agent::Pi {
+            return self
+                .source()
+                .map(|source| source.map(|s| s != Source::Absent));
+        }
         // Codex's whole list asks its remote marketplaces too, which can
         // take longer than ASK; Atlas's own marketplace answers at once.
         let list: &[&str] = match self {
             Agent::Claude => &["plugin", "list", "--json"],
             Agent::Codex => &["plugin", "list", "--marketplace", NAME, "--json"],
+            Agent::Pi => return Ok(None),
         };
 
         let output = match exec(self, list, ASK) {
@@ -241,6 +259,7 @@ impl Agent {
         let plugins = match self {
             Agent::Claude => list.as_array(),
             Agent::Codex => list["installed"].as_array(),
+            Agent::Pi => return None,
         }?;
 
         Some(plugins.iter().any(|plugin| {
@@ -254,9 +273,13 @@ impl Agent {
     /// fails while any of its local marketplace folders is missing, so its
     /// settings, where adding a marketplace records it, are read first.
     fn source(self) -> std::result::Result<Option<Source>, String> {
+        if self == Agent::Pi {
+            return pi::source().map(Some).map_err(|e| e.error);
+        }
         let recorded = match self {
             Agent::Claude => None,
             Agent::Codex => self.home().and_then(|home| codex_recorded(&home)),
+            Agent::Pi => None,
         };
 
         if let Some(found @ (Source::Folder(_) | Source::Elsewhere(_))) = &recorded {
@@ -277,6 +300,7 @@ impl Agent {
         let marketplaces = match self {
             Agent::Claude => list.as_array(),
             Agent::Codex => list["marketplaces"].as_array(),
+            Agent::Pi => return None,
         }?;
 
         let Some(found) = marketplaces.iter().find(|entry| entry["name"] == NAME) else {
@@ -296,6 +320,7 @@ impl Agent {
                 found["marketplaceSource"]["sourceType"].as_str(),
                 found["marketplaceSource"]["source"].as_str(),
             ),
+            Agent::Pi => return None,
         };
 
         Some(match (kind, place) {
@@ -413,6 +438,25 @@ fn argv(items: &[&str]) -> Vec<String> {
     items.iter().map(|item| (*item).to_owned()).collect()
 }
 
+/// Serialize Atlas's multi-step local registrations without taking the host's own settings lock.
+fn connection_lock() -> Result<fs::File> {
+    use fs2::FileExt;
+    use std::os::unix::fs::OpenOptionsExt;
+    let path =
+        std::env::temp_dir().join(format!("atlas-agents-{}.lock", nix::unistd::Uid::current()));
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|error| problem(format!("Could not open the agent connection lock: {error}")))?;
+    file.try_lock_exclusive()
+        .map_err(|error| problem(format!("Another agent connection is running: {error}")))?;
+    Ok(file)
+}
+
 /// Whether an agent's tool is on this Mac.
 enum Presence {
     Installed(String),
@@ -520,6 +564,16 @@ fn start(tools: &'static Mutex<Tools>, command: &mut Command) -> Result<(Child, 
 /// collected as it arrives, so a background process the tool leaves holding
 /// its output open cannot keep Atlas waiting.
 fn exec(agent: Agent, argv: &[impl AsRef<std::ffi::OsStr>], limit: Duration) -> Result<Output> {
+    exec_in(agent, argv, limit, None)
+}
+
+/// Run a tool in a particular config folder, retaining timeout and cancellation handling.
+fn exec_in(
+    agent: Agent,
+    argv: &[impl AsRef<std::ffi::OsStr>],
+    limit: Duration,
+    cwd: Option<&Path>,
+) -> Result<Output> {
     use std::os::unix::process::CommandExt;
 
     let (executable, path) = executable(agent);
@@ -533,6 +587,9 @@ fn exec(agent: Agent, argv: &[impl AsRef<std::ffi::OsStr>], limit: Duration) -> 
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0);
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
     let (child, _running) = start(&RUNNING, &mut command)?;
 
     supervise(agent, child, limit)
@@ -871,9 +928,10 @@ pub fn change_these(chosen: &[Agent], all: bool, app: bool, remove: bool) -> Res
     };
 
     if present.is_empty() && !app {
-        return Err(problem(
-            "Neither Claude Code, Codex nor the Claude app is installed",
-        ));
+        return Err(problem(format!(
+            "None of {} or the Claude app is installed",
+            Agent::ALL.map(Agent::display_name).join(", ")
+        )));
     }
 
     let mut results = Vec::new();
@@ -896,7 +954,7 @@ pub fn change_these(chosen: &[Agent], all: bool, app: bool, remove: bool) -> Res
         let source = agent.source();
 
         let outcome = match &marketplace {
-            Some(path) => connect_agent(agent, path, &source).map(|()| Removal::Changed),
+            Some(path) => connect_agent(agent, path, &source),
             None => disconnect_agent(agent, source),
         };
 
@@ -932,7 +990,10 @@ fn connect_agent(
     agent: Agent,
     marketplace: &Path,
     source: &std::result::Result<Option<Source>, String>,
-) -> Result<()> {
+) -> Result<Removal> {
+    if agent == Agent::Pi {
+        return pi::change(Some(marketplace));
+    }
     let steps = agent.connecting(marketplace, source.as_ref().ok().and_then(Option::as_ref))?;
 
     steps
@@ -940,6 +1001,7 @@ fn connect_agent(
         .map(|argv| run(agent, argv))
         .find(Result::is_err)
         .unwrap_or(Ok(()))
+        .map(|()| Removal::Changed)
 }
 
 /// What removing the plugin from an agent did.
@@ -959,6 +1021,9 @@ fn disconnect_agent(
     agent: Agent,
     source: std::result::Result<Option<Source>, String>,
 ) -> Result<Removal> {
+    if agent == Agent::Pi {
+        return pi::change(None);
+    }
     match source.map_err(problem)? {
         Some(Source::Folder(folder)) if agent.ours(&folder) => {}
         Some(Source::Folder(folder)) => return Ok(Removal::Kept(folder.display().to_string())),
@@ -1367,7 +1432,7 @@ pub async fn brief(config_path: &Path) -> String {
 
     let Ok(config) = Config::load(config_path) else {
         return "Atlas is installed but not set up. If the person wants GUI testing, \
-                offer the atlas setup skill (the person opens Atlas)."
+                ask them to open Atlas to finish setup."
             .to_owned();
     };
 
@@ -1889,7 +1954,7 @@ mod tests {
         let old = Source::Folder("/Volumes/Old/Atlas.app/Contents/Resources/agents".into());
         let remove = argv(&["plugin", "marketplace", "remove", "atlas"]);
 
-        for agent in Agent::ALL {
+        for agent in [Agent::Claude, Agent::Codex] {
             for source in [Some(&Source::Absent), Some(&Source::Folder(path.clone()))] {
                 assert_eq!(
                     agent.connecting(&path, source).unwrap(),
