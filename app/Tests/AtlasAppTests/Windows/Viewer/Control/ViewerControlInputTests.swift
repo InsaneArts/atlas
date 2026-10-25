@@ -85,6 +85,48 @@ struct ViewerControlInputTests {
     viewer.close()
   }
 
+  @Test(
+    "scroll at A then at B within the window sends A's lines at A and B's lines at B",
+    arguments: [(3.0, [-3]), (150.0, [-100, -50])]
+  )
+  func scrollingAtTwoPointsKeepsEachBatchAtItsPoint(linesAtA: Double, sendsAtA: [Int]) async throws {
+    let service = ScriptedService()
+    let clock = ManualClock()
+    let viewer = try await ViewerController.watching(service, clock: clock)
+    await viewer.control.takeControl()
+    viewer.control.scrolled(dx: 0, dy: linesAtA, precise: false, began: false, at: middle, in: size)
+    viewer.control.scrolled(dx: 0, dy: 2, precise: false, began: false, at: CGPoint(x: 300, y: 150), in: size)
+    try await settle("A's scroll was never sealed at its point") { service.actions.count == sendsAtA.count }
+    #expect(service.actions.map(\.last) == sendsAtA.map { scroll($0) })
+    try await gathered(clock)
+    try await settle("B's gathered scroll was never sent") { service.actions.count == sendsAtA.count + 1 }
+    #expect(service.actions.last?.last == .scroll(x: 1134, y: 491, dx: 0, dy: -2))
+    viewer.close()
+  }
+
+  @Test("precise half-line deltas still add up to whole lines while the point moves one pixel each event")
+  func preciseHalfLinesAddUpWhileThePointMoves() async throws {
+    let size = CGSize(width: 512, height: 384)
+    let service = ScriptedService()
+    service.display = ViewerStatus.Size(width: size.width, height: size.height)
+    let clock = ManualClock()
+    let viewer = try await ViewerController.watching(service, clock: clock)
+    await viewer.control.takeControl()
+    for offset in 0..<4 {
+      let location = CGPoint(x: middle.x + Double(offset), y: middle.y)
+      viewer.control.scrolled(dx: 0, dy: 5, precise: true, began: offset == 0, at: location, in: size)
+    }
+    try await gathered(clock)
+    try await settle("the moving trackpad's half-lines never added up") { service.actions.count == 2 }
+    #expect(
+      service.actions.map(\.last) == [
+        .scroll(x: 201, y: 150, dx: 0, dy: -1),
+        .scroll(x: 203, y: 150, dx: 0, dy: -1),
+      ]
+    )
+    viewer.close()
+  }
+
   @Test("lines past one send's most go on their own, without waiting for another scroll event")
   func linesPastOneSendGoOnTheirOwn() async throws {
     let service = ScriptedService()

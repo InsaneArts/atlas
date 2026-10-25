@@ -80,6 +80,8 @@ final class ViewerControl {
   @ObservationIgnored private var wheel = WheelAccumulator()
   /// Where the gathered scrolling happens.
   @ObservationIgnored private var wheelAt: DesktopPoint?
+  /// The picture the gathered scrolling was mapped against.
+  @ObservationIgnored private var wheelFrame: String?
   /// When the last scroll event came, in seconds of uptime; a long gap starts a new gesture.
   @ObservationIgnored private var wheelHeardAt: TimeInterval?
   /// Sends the gathered scrolling once the gathering ends.
@@ -312,6 +314,7 @@ final class ViewerControl {
     wheel.reset()
     gesture.cancel()
     wheelAt = nil
+    wheelFrame = nil
     wheelHeardAt = nil
     wheelSending?.cancel()
     wheelSending = nil
@@ -485,7 +488,7 @@ final class ViewerControl {
 
   /// Scrolling is gathered for a moment and sent as whole lines. A new gesture, one the trackpad says begins or one
   /// after a wheel's pause of ``newScrollAfter``, drops the fraction of a line the last one left. While a scroll
-  /// still waits to be sent, more lines gather here instead of queueing behind it.
+  /// still waits to be sent, more lines at the same point gather here instead of queueing behind it.
   ///
   /// - Parameters:
   ///   - dx: AppKit's horizontal delta.
@@ -495,13 +498,20 @@ final class ViewerControl {
   ///   - location: Where, in the view.
   ///   - size: The view's size.
   func scrolled(dx: Double, dy: Double, precise: Bool, began: Bool, at location: CGPoint, in size: CGSize) {
-    guard canInput, let point = point(location, in: size) else { return }
+    guard canInput, let point = point(location, in: size), let frame = viewer?.reading.frame else { return }
+    if wheelAt != point {
+      while wheel.holdsWholeLines { sendWheel() }
+      guard canInput else { return }
+      wheelAt = point
+      wheelFrame = frame.id
+    } else if wheelSending == nil {
+      wheelFrame = frame.id
+    }
     let now = uptime()
     let paused = wheelHeardAt.map { Duration.seconds(now - $0) > Self.newScrollAfter } ?? true
     if began || (!precise && paused) { wheel.beginGesture() }
     wheelHeardAt = now
     wheel.add(dx: dx, dy: dy, precise: precise)
-    wheelAt = point
     sendWheelSoon()
   }
 
@@ -523,13 +533,16 @@ final class ViewerControl {
   /// another scroll event.
   private func sendWheel() {
     let delta = wheel.take()
-    guard let at = wheelAt, delta.dx != 0 || delta.dy != 0 else { return }
+    guard canInput, let at = wheelAt, let frame = wheelFrame, delta.dx != 0 || delta.dy != 0 else { return }
     // AppKit's positive delta moves content down (towards the top of
     // the page); Atlas's positive lines scroll down the page.
-    enqueue([
-      .move(x: at.x, y: at.y), .wait(milliseconds: Self.scrollSettle),
-      .scroll(x: at.x, y: at.y, dx: -delta.dx, dy: -delta.dy),
-    ])
+    input.enqueue(
+      [
+        .move(x: at.x, y: at.y), .wait(milliseconds: Self.scrollSettle),
+        .scroll(x: at.x, y: at.y, dx: -delta.dx, dy: -delta.dy),
+      ],
+      frame: frame
+    )
     if wheel.holdsWholeLines { sendWheelSoon() }
   }
 
