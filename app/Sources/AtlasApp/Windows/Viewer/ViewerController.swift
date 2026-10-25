@@ -15,7 +15,9 @@ final class ViewerController {
   /// Whether the person asked for Details, and what it read. Written only by the controller's own files; whether it
   /// shows is saved with each change.
   var details = ViewerDetailsFacts() {
-    didSet { dependencies.preferences.saveDetails(details.shown) }
+    didSet {
+      if details.shown != oldValue.shown { dependencies.preferences.saveDetails(details.shown) }
+    }
   }
   /// The window is on screen.
   private(set) var shown = false

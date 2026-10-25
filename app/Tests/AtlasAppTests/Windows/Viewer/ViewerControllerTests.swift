@@ -156,6 +156,50 @@ struct ViewerControllerTests {
     viewer.close()
   }
 
+  @Test("a closed viewer's late agents reply preserves the next viewer's hidden Details choice")
+  func aLateAgentsReplyPreservesTheNextViewersDetailsChoice() async throws {
+    let preferences = ViewerPreferences.memory()
+    let reply = ReleaseSignal()
+    let reads = CallCount()
+    let first = ViewerController.scripted(
+      ScriptedService(),
+      connectedAgents: {
+        reads.count += 1
+        await reply.wait()
+        return [.codex]
+      },
+      preferences: preferences
+    )
+    defer {
+      reply.open()
+      first.close()
+    }
+    first.setVisible(true)
+    first.send(.toggleDetails)
+    try await settle("the first agents read never started") { reads.count == 1 }
+    first.close()
+
+    let next = ViewerController.scripted(
+      ScriptedService(),
+      connectedAgents: { [.codex] },
+      preferences: preferences
+    )
+    defer { next.close() }
+    #expect(next.details.shown)
+    next.setVisible(true)
+    try await settle("the next viewer never read the agents") { next.details.agents == [.codex] }
+    next.send(.toggleDetails)
+    #expect(!preferences.loadDetails())
+
+    reply.open()
+    try await settle("the closed viewer's agents reply never arrived") { first.details.agents == [.codex] }
+    #expect(!preferences.loadDetails())
+    next.close()
+    let reopened = ViewerController.scripted(ScriptedService(), preferences: preferences)
+    defer { reopened.close() }
+    #expect(!reopened.details.shown)
+  }
+
   @Test("the small screen's corner is kept for the next window")
   func theCornerIsRemembered() async throws {
     let preferences = ViewerPreferences.memory()
