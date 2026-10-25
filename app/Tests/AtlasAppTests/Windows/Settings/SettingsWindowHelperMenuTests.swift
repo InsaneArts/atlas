@@ -5,7 +5,7 @@ import Testing
 
 @testable import AtlasApp
 
-@Suite("SettingsWindow Helper menu")
+@Suite("SettingsWindow Helper menu", .serialized, AppKitState())
 struct SettingsWindowHelperMenuTests {
   @Test("with Settings in front, the Helper menu's Recover…, Switch and Log Out follow its Helper pane's buttons")
   func settingsAnswersTheHelperMenu() throws {

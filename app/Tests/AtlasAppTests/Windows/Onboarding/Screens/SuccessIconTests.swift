@@ -6,7 +6,7 @@ import Testing
 
 /// Here, not in AtlasUI's tests, because an arrival is a view appearing in a window, which AtlasUI never imports.
 @MainActor
-@Suite("SuccessIcon")
+@Suite("SuccessIcon", .serialized, AppKitState())
 struct SuccessIconTests {
   @Test("the done screen's icon settles once per arrival, not on every redraw")
   func iconSettlesOncePerArrival() {

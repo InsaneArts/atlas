@@ -5,7 +5,7 @@ import Testing
 
 @testable import AtlasApp
 
-@Suite("ViewerStage")
+@Suite("ViewerStage", .serialized, AppKitState())
 @MainActor
 struct ViewerStageTests {
   @Test("a tab shown again is the pane already built, still scrolled where it was left")

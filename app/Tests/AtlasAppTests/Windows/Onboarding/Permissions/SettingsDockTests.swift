@@ -6,7 +6,7 @@ import Testing
 @testable import AtlasApp
 
 @MainActor
-@Suite("SettingsDock")
+@Suite("SettingsDock", .serialized, AppKitState())
 struct SettingsDockTests {
   /// A see-through window that takes no clicks, ordered in so the dock counts it as shown, docked beside a sample
   /// System Settings window, its first glide ended.

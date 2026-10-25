@@ -7,7 +7,7 @@ import Testing
 
 @testable import AtlasApp
 
-@Suite("Settings search", .serialized)
+@Suite("Settings search", .serialized, AppKitState())
 struct SettingsSearchTests {
   @Test("unavailable preferences and searchable aliases remain discoverable from presentation metadata")
   func unavailableSettingsStayDiscoverable() {

@@ -5,7 +5,7 @@ import Testing
 
 @testable import AtlasApp
 
-@Suite("Settings interactions", .serialized)
+@Suite("Settings interactions", .serialized, AppKitState())
 struct SettingsInteractionTests {
   @Test("controller Back and Forward retain both overflowing pages while fresh visits and search reveals scroll")
   func historyPreservesPageScrollPositions() async throws {

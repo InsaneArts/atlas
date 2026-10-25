@@ -7,7 +7,7 @@
   /// The setup window's view in a window of its own, as the app shows it, so Return and Escape reach its buttons
   /// through AppKit's key equivalents.
   @MainActor
-  @Suite("OnboardingFooter keys")
+  @Suite("OnboardingFooter keys", .serialized, AppKitState())
   struct OnboardingFooterKeysTests {
     @Test("every screen hands exactly one main action to the footer, and Return presses it")
     func returnPressesTheMainAction() throws {

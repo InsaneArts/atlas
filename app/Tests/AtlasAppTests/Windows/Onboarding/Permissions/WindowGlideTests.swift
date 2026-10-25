@@ -5,7 +5,7 @@ import Testing
 @testable import AtlasApp
 
 @MainActor
-@Suite("WindowGlide")
+@Suite("WindowGlide", .serialized, AppKitState())
 struct WindowGlideTests {
   @Test("a move between the card and the panel fades the content out, glides, and brings it back from 80%")
   func aResizingMoveFadesItsContent() {

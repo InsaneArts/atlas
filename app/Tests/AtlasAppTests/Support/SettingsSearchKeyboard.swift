@@ -10,10 +10,6 @@ final class SettingsSearchKeyboard {
   let window: SettingsWindow
   /// The shipped menu, with its responder destination fixed to this hidden test window.
   let menu = MainMenu.make(viewer: true)
-  /// Native focus is process-wide, so keyboard harnesses hold it one at a time across suspension points.
-  private static var focusOwner: ReleaseSignal?
-  /// Releases this harness's ownership when its window closes.
-  private var focusRelease: ReleaseSignal?
 
   /// Hosts Settings with an isolated frame identity.
   ///
@@ -32,10 +28,6 @@ final class SettingsSearchKeyboard {
   /// - Returns: The field editor receiving the keys.
   /// - Throws: When the search field cannot take focus.
   func focus() async throws -> NSTextView {
-    while let owner = Self.focusOwner { await owner.wait() }
-    let release = ReleaseSignal()
-    Self.focusOwner = release
-    focusRelease = release
     window.contentView?.layoutSubtreeIfNeeded()
     try await press("f", code: 3, modifiers: .command)
     try await waitForFocus { window.firstResponder is NSTextView }
@@ -80,11 +72,6 @@ final class SettingsSearchKeyboard {
     let name = window.frameAutosaveName
     window.close()
     NSWindow.removeFrame(usingName: name)
-    if let focusRelease {
-      Self.focusOwner = nil
-      focusRelease.open()
-      self.focusRelease = nil
-    }
   }
 
   /// Delivers queued native view updates without injecting a key into the page.

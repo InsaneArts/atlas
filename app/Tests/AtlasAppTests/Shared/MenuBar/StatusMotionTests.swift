@@ -4,7 +4,7 @@ import Testing
 
 @testable import AtlasApp
 
-@Suite("StatusMotion")
+@Suite("StatusMotion", .serialized, AppKitState())
 struct StatusMotionTests {
   /// How close a spring's duration or bounce must come to Motion.pop's.
   private static let tolerance = 1e-9

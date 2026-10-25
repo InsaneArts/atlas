@@ -3,7 +3,7 @@ import Testing
 
 @testable import AtlasApp
 
-@Suite("MainMenu")
+@Suite("MainMenu", .serialized, AppKitState())
 struct MainMenuTests {
   /// Answers the app's own items in a test.
   final class Answerer: NSObject {

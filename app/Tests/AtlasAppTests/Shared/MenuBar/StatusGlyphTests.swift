@@ -4,7 +4,7 @@ import Testing
 
 @testable import AtlasApp
 
-@Suite("StatusGlyph")
+@Suite("StatusGlyph", .serialized, AppKitState())
 struct StatusGlyphTests {
   /// The look of every state.
   private static let looks = Mode.Kind.allCases

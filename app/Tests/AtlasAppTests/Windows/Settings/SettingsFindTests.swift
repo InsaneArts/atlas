@@ -4,7 +4,7 @@ import Testing
 
 @testable import AtlasApp
 
-@Suite("Settings Find")
+@Suite("Settings Find", .serialized, AppKitState())
 struct SettingsFindTests {
   @Test("the one menu Find action focuses Settings search and waits underneath an alert")
   func settingsAnswersTheExistingFindAction() async throws {

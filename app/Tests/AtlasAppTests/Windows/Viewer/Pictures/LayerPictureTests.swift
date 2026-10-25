@@ -7,7 +7,7 @@ import Testing
 
 @testable import AtlasApp
 
-@Suite("LayerPicture")
+@Suite("LayerPicture", .serialized, AppKitState())
 struct LayerPictureTests {
   @Test("a live frame replaces the layer's contents with actions disabled")
   func aLiveFrameReplacesTheContentsWithActionsDisabled() throws {

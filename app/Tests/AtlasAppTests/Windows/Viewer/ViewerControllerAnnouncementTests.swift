@@ -7,7 +7,7 @@ import Testing
 
 @testable import AtlasApp
 
-@Suite("ViewerController announcements")
+@Suite("ViewerController announcements", .serialized, AppKitState())
 struct ViewerControllerAnnouncementTests {
   @Test("a normally constructed viewer subscribes while hidden, then announces after presentation and focus changes")
   func aWindowSubscribesBeforeItShows() async throws {

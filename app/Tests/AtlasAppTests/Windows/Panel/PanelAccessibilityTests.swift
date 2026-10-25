@@ -7,7 +7,7 @@ import Testing
 @testable import AtlasApp
 
 @MainActor
-@Suite("Panel accessibility")
+@Suite("Panel accessibility", .serialized, AppKitState())
 struct PanelAccessibilityTests {
   @Test("the panel is announced as Atlas")
   func thePanelIsAnnouncedAsAtlas() throws {

@@ -5,7 +5,7 @@ import Testing
 
 @testable import AtlasApp
 
-@Suite("ScreenZoom")
+@Suite("ScreenZoom", .serialized, AppKitState())
 @MainActor
 struct ScreenZoomTests {
   @Test("the small screen and the stage share one geometry id")

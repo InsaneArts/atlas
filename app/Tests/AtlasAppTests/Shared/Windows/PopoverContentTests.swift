@@ -5,7 +5,7 @@ import Testing
 @testable import AtlasApp
 
 @MainActor
-@Suite("PopoverContent")
+@Suite("PopoverContent", .serialized, AppKitState())
 struct PopoverContentTests {
   @Test(
     "a popover's content hands its owner each height its SwiftUI view asks for as it grows and shrinks, holding the view at its top"

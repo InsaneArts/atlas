@@ -4,7 +4,7 @@ import Testing
 
 @testable import AtlasApp
 
-@Suite("MenuBarRender")
+@Suite("MenuBarRender", .serialized, AppKitState())
 struct MenuBarRenderTests {
   @Test("the menu bar renders draw every state once, under names of their own")
   func everyStateHasOneRender() {

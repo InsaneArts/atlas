@@ -6,7 +6,7 @@ import Testing
 
 @testable import AtlasUI
 
-@Suite("Settings announcements")
+@Suite("Settings announcements", .serialized, AppKitState())
 struct SettingsAnnouncementTests {
   @Test(
     "one check completion or refusal is announced across Helper and Diagnostics without navigation or polling repeats",

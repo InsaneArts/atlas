@@ -7,7 +7,7 @@ import Testing
 
 @testable import AtlasApp
 
-@Suite("DesktopCanvasView")
+@Suite("DesktopCanvasView", .serialized, AppKitState())
 struct DesktopCanvasViewTests {
   /// No range: the desktop ignores where the input method's text would go.
   let none = NSRange(location: NSNotFound, length: 0)

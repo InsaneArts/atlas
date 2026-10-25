@@ -8,7 +8,7 @@
 
   // One render at a time: run together, the renders' seconds of main-actor drawing queue ahead of every other suite's
   // work and outlast its waits; one by one, that work runs between them.
-  @Suite("Render", .serialized)
+  @Suite("Render", .serialized, AppKitState())
   struct RenderTests {
     /// A new empty folder for one test's renders, which the test removes.
     ///

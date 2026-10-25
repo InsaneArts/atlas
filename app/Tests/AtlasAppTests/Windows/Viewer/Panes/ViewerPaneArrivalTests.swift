@@ -4,7 +4,7 @@ import Testing
 
 @testable import AtlasUI
 
-@Suite("Viewer pane arrival")
+@Suite("Viewer pane arrival", .serialized, AppKitState())
 struct ViewerPaneArrivalTests {
   @Test("a newly mounted pane hides its scroll indicators before its arrival completes")
   func theFirstArrivalStartsUnsettled() throws {

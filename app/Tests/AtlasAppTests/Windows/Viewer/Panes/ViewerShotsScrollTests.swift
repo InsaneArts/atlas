@@ -4,7 +4,7 @@ import AtlasUI
 import SwiftUI
 import Testing
 
-@Suite("Viewer screenshot scrolling")
+@Suite("Viewer screenshot scrolling", .serialized, AppKitState())
 struct ViewerShotsScrollTests {
   @Test("a keyboard move reveals a distant selected screenshot while an ordinary refresh keeps the scroll position")
   func keyboardSelectionScrollsIntoView() async throws {

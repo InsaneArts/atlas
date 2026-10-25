@@ -6,7 +6,7 @@ import Testing
 
 @testable import AtlasApp
 
-@Suite("WindowShell")
+@Suite("WindowShell", .serialized, AppKitState())
 struct WindowShellTests {
   @Test("Settings keeps the shell appearance and native close control while allowing resizing")
   func settingsCanResizeWithoutAMinimizeControl() throws {

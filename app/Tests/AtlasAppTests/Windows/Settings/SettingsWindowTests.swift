@@ -6,7 +6,7 @@ import Testing
 
 @testable import AtlasApp
 
-@Suite("SettingsWindow")
+@Suite("SettingsWindow", .serialized, AppKitState())
 struct SettingsWindowTests {
   @Test("a first opening with no saved frame centers before enabling autosave")
   func aFirstOpeningCenters() {
