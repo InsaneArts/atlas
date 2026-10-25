@@ -221,9 +221,11 @@ impl Agent {
     /// marketplace (unknown when its lists cannot be read); an error when it
     /// does not answer.
     fn connected(self) -> std::result::Result<Option<bool>, String> {
-        match self.installed()? {
-            Some(true) => {}
-            other => return Ok(other),
+        if self != Agent::Pi {
+            match self.installed()? {
+                Some(true) => {}
+                other => return Ok(other),
+            }
         }
 
         Ok(self.source()?.map(|source| match source {
@@ -961,13 +963,17 @@ pub fn change_these(chosen: &[Agent], all: bool, app: bool, remove: bool) -> Res
             }
         }
 
-        // Where its marketplace named atlas comes from now decides what may
-        // change: never one that is someone else's.
-        let source = agent.source();
+        let outcome = if agent == Agent::Pi {
+            pi::change(marketplace.as_deref())
+        } else {
+            // Where its marketplace named atlas comes from now decides what may
+            // change: never one that is someone else's.
+            let source = agent.source();
 
-        let outcome = match &marketplace {
-            Some(path) => connect_agent(agent, path, &source),
-            None => disconnect_agent(agent, source),
+            match &marketplace {
+                Some(path) => connect_agent(agent, path, &source),
+                None => disconnect_agent(agent, source),
+            }
         };
 
         let mut result = match &outcome {
@@ -1007,9 +1013,6 @@ fn connect_agent(
     marketplace: &Path,
     source: &std::result::Result<Option<Source>, String>,
 ) -> Result<Removal> {
-    if agent == Agent::Pi {
-        return pi::change(Some(marketplace));
-    }
     if agent == Agent::Opencode {
         return opencode::change(Some(marketplace));
     }
@@ -1040,9 +1043,6 @@ fn disconnect_agent(
     agent: Agent,
     source: std::result::Result<Option<Source>, String>,
 ) -> Result<Removal> {
-    if agent == Agent::Pi {
-        return pi::change(None);
-    }
     if agent == Agent::Opencode {
         return opencode::change(None);
     }
