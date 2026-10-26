@@ -38,7 +38,7 @@
           title: "Cursor",
           detail: "Test Mac apps from Cursor",
           icon: .app(AgentLogos.cursor),
-          connection: .note("Configured"),
+          connection: .configured,
           canDisconnect: true
         ),
       ],

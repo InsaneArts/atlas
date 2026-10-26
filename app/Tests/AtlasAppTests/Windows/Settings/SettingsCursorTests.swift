@@ -17,7 +17,7 @@ struct SettingsCursorTests {
     await controller.loadAgents()
     let row = try #require(controller.state.agents.agents.first { $0.id == "cursor" })
     #expect(row.title == "Cursor")
-    #expect(row.connection == .note("Configured"))
+    #expect(row.connection == .configured)
     #expect(row.canDisconnect)
     await controller.disconnect("cursor")
     #expect(commands.ran.contains(["agents", "remove", "--cursor"]))

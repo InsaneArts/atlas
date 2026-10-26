@@ -3,6 +3,8 @@ extension AgentConnectionRow {
   enum Trailing: Equatable, Sendable {
     /// A green check and Connected.
     case connected
+    /// A green check and Configured for a verified registration.
+    case configured
     /// The one Connect button: Connect, or Connecting… with a spinner while the connection runs.
     case button(isWorking: Bool, isEnabled: Bool)
     /// Nothing: the agent isn't on this Mac.
