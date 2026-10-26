@@ -278,3 +278,60 @@ fn update_finish_keeps_machine_json_even_when_human_output_is_requested() {
         Some("0"),
     ));
 }
+
+#[test]
+fn pipelined_cursor_initialization_guards_an_imported_plain_mcp_connection() {
+    use std::io::Write;
+
+    let fixture = Fixture::new();
+    let config = fixture.config("mcp.toml");
+    std::fs::write(
+        &config,
+        "helper_uid = 60001\nsocket_path = \"absent.sock\"\nidentity_probe = \"absent\"\ninput_socket = \"input.sock\"\noutput_dir = \"out\"\n",
+    )
+    .unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_atlas"))
+        .args(["--config", config.to_str().unwrap(), "mcp"])
+        .env("HOME", fixture.directory.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    let messages = [
+        json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"cursor-vscode","version":"1.0.0"},"capabilities":{"extensions":{"io.modelcontextprotocol/ui":{}}}}}),
+        json!({"id":2,"method":"tools/list","params":{}}),
+        json!({"id":3,"method":"initialize","params":{"clientInfo":{"name":"another host"},"capabilities":{"extensions":{"io.modelcontextprotocol/ui":{}}}}}),
+        json!({"id":4,"method":"tools/list","params":{}}),
+    ];
+    // One write, without waiting for initialize's response, exercises the
+    // actual concurrent stdio transport used by imported plugin servers.
+    let lines = messages
+        .iter()
+        .map(|message| format!("{message}\n"))
+        .collect::<String>();
+    input.write_all(lines.as_bytes()).unwrap();
+    drop(input);
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let replies = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    for id in [2, 4] {
+        let reply = replies.iter().find(|reply| reply["id"] == id).unwrap();
+        let tools = reply["result"]["tools"].as_array().unwrap();
+        assert!(tools.iter().any(|tool| tool["name"] == "view_close"));
+        assert!(
+            tools
+                .iter()
+                .all(|tool| { tool["inputSchema"]["properties"]["_atlasView"].is_object() })
+        );
+    }
+}

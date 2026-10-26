@@ -173,6 +173,14 @@
                 isOn: false,
                 isEnabled: false
               ),
+              OnboardingAgentItem(
+                id: "cursor",
+                title: "Cursor",
+                detail: "Not checked yet",
+                icon: .app(AgentLogos.cursor),
+                isOn: false,
+                isEnabled: false
+              ),
             ]
           )
         )
@@ -263,6 +271,14 @@
           title: "Pi",
           detail: "Test Mac apps on a hidden desktop",
           icon: .mark(.pi),
+          isOn: true,
+          isEnabled: true
+        ),
+        OnboardingAgentItem(
+          id: "cursor",
+          title: "Cursor",
+          detail: "Test Mac apps from Cursor",
+          icon: .app(AgentLogos.cursor),
           isOn: true,
           isEnabled: true
         ),

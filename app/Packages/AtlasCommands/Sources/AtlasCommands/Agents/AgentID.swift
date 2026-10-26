@@ -8,4 +8,6 @@ public enum AgentID: String, CaseIterable, Sendable {
   case opencode
   /// Pi.
   case pi
+  /// Cursor IDE and Cursor Agent.
+  case cursor
 }

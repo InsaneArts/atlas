@@ -59,6 +59,7 @@
   --alert-width: 280px;
   --icon: 34px;
   --tile: 220px;
+  --inline-height: 720px;
 }
 * { box-sizing: border-box; }
 /* The view fills the app's frame edge to edge; the app rounds and clips
@@ -134,6 +135,11 @@ body.full .card .round { width: var(--control); height: var(--control); }
 .right { justify-content: flex-end; }
 body:not(.full) .full-only { display: none !important; }
 body.full .inline-only { display: none !important; }
+body.inline-expanded .card { height: var(--inline-height); max-height: var(--inline-height); overflow: auto; }
+body.inline-expanded .card .footer { height: auto; min-height: var(--footer); display: flex; flex-wrap: wrap; padding: var(--space-m); gap: var(--space-s); }
+body.inline-expanded .footer .center { order: -1; width: 100%; overflow-x: auto; }
+body.inline-expanded .footer .right { flex-wrap: wrap; }
+body.inline-expanded .content { min-height: 180px; overflow: auto; }
 .thumb { flex: none; position: relative; width: var(--thumb-width); height: var(--thumb-height); padding: 0; border: 0; border-radius: var(--radius-row); overflow: hidden; background: #000000; box-shadow: inset 0 0 0 0.5px var(--line-2); }
 .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 
@@ -311,6 +317,7 @@ body.full .inline-only { display: none !important; }
       </div>
     </div>
     <div class="right">
+      <button type="button" class="pill" data-controls aria-expanded="false">Controls</button>
       <button type="button" class="round" data-pause aria-label="Pause picture" title="Pause picture"><svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" data-pause-glyph><rect x="2.2" y="0.5" width="2.6" height="11" rx="1" fill="currentColor"/><rect x="7.2" y="0.5" width="2.6" height="11" rx="1" fill="currentColor"/></svg><svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" data-play-glyph hidden><path d="M2.5 1L10.5 6L2.5 11Z" fill="currentColor"/></svg></button>
       <button type="button" class="pill full-only" data-keys aria-haspopup="menu" aria-expanded="false" title="Send a key your Mac or this app would keep, such as ⌘⇥" aria-label="Keys"><svg viewBox="0 0 18 14" width="15" height="12" aria-hidden="true"><rect x="1" y="1" width="16" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M4 4.6H5M7 4.6H8M10 4.6H11M13 4.6H14M4 7.2H5M7 7.2H8M10 7.2H11M13 7.2H14M5.5 10H12.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg><span class="word">Keys</span></button>
       <button type="button" class="pill" data-action hidden></button>

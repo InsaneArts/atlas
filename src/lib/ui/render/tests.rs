@@ -27,6 +27,24 @@ fn an_opencode_change_names_its_own_restart_without_a_claude_instruction() {
     }
 }
 
+#[test]
+fn a_cursor_change_names_its_reload_without_a_claude_instruction() {
+    for connected in [true, false] {
+        let shown = show(
+            View::AgentsChange,
+            json!({"ok":true,"agents":[{
+                "agent":"cursor","ok":true,"connected":connected,"restart":true
+            }]}),
+        );
+        assert!(
+            shown
+                .out
+                .contains("Reload the Cursor window or start a new Cursor Agent session")
+        );
+        assert!(!shown.out.contains("Claude app"));
+    }
+}
+
 /// Errors, steps and warnings can carry the helper's text: it never drives
 /// the terminal, while the lines Atlas wrote stay lines.
 #[test]

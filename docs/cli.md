@@ -24,6 +24,8 @@ atlas environment rollback --help
 
 `atlas agents status` reports connections, and `atlas agents status --brief` gives a short session summary. `install` and `remove` accept host selectors. `project DIR` adds project instructions; `forget DIR` removes Atlas's sections. See the [connection guide](agents.md) for the selectors and refresh steps.
 
+`--cursor` selects the local Cursor connection. Its status checks registration files; verify actual loading in a fresh Cursor session. An owned Cursor registration can be removed even if the host has already been uninstalled.
+
 ### Look at the helper
 
 | Command      | Use it to                                                                                                                   |

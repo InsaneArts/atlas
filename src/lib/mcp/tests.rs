@@ -1,7 +1,7 @@
 use super::*;
 use crate::config::Config;
 
-fn server(dir: &std::path::Path) -> Server {
+pub(super) fn server(dir: &std::path::Path) -> Server {
     let text = "helper_uid = 60001\nsocket_path = \"c.sock\"\noutput_dir = \"out\"\n\
                 identity_probe = \"probe\"\ninput_socket = \"i.sock\"\n";
     let config = Config::parse(text.as_bytes(), &dir.join("u.toml")).unwrap();
@@ -13,6 +13,7 @@ fn server(dir: &std::path::Path) -> Server {
         config: dir.join("u.toml"),
         port: 1,
         read_only: false,
+        app_views: OnceLock::new(),
         views: AtomicBool::new(false),
         last: Mutex::new(None),
         framed: Mutex::new(None),
@@ -24,7 +25,33 @@ fn server(dir: &std::path::Path) -> Server {
 
 async fn ask(server: &Server, method: &str, params: Value) -> Value {
     let request = json!({"jsonrpc": "2.0", "id": 7, "method": method, "params": params});
-    server.answer(&request).await.unwrap()
+    let mut reply = server.answer(&request).await.unwrap();
+    reply.delivered();
+    reply.value
+}
+
+#[tokio::test]
+async fn maintenance_ticks_never_lose_a_partially_read_request() {
+    let (mut writer, reader) = tokio::io::duplex(256);
+    let sending = tokio::spawn(async move {
+        writer.write_all(b"{\"id\":").await.unwrap();
+        tokio::time::sleep(Duration::from_millis(35)).await;
+        writer.write_all(b"1,\"method\":\"ping\"}\n").await.unwrap();
+    });
+    let mut reader = BufReader::new(reader);
+    let mut ticks = tokio::time::interval(Duration::from_millis(5));
+    let mut swept = 0;
+    let line = next_with_maintenance(&mut reader, &mut ticks, || swept += 1)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(swept >= 2);
+    assert_eq!(
+        serde_json::from_str::<Value>(&line).unwrap(),
+        json!({"id":1,"method":"ping"})
+    );
+    sending.await.unwrap();
 }
 
 fn names(listed: &Value) -> Vec<String> {
@@ -34,6 +61,70 @@ fn names(listed: &Value) -> Vec<String> {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap().to_owned())
         .collect()
+}
+
+#[tokio::test]
+async fn cursor_imported_connections_require_private_authority_without_a_launcher_flag() {
+    for name in ["cursor-vscode", "Cursor", "cursor-agent", "cursor-cli"] {
+        let dir = tempfile::tempdir().unwrap();
+        let server = server(dir.path());
+        let initialize = json!({"id":1,"method":"initialize","params":{
+            "clientInfo":{"name":name,"version":"1.0.0"},
+            "capabilities":{"extensions":{UI_EXTENSION:{}}}
+        }});
+        // Transport applies this before spawning initialize's answer, so
+        // even a pipelined call must use the restricted route.
+        server.prepare(&initialize);
+        let listed = ask(&server, "tools/list", json!({})).await;
+        for tool in listed["result"]["tools"].as_array().unwrap() {
+            assert!(tool["inputSchema"]["properties"][guarded::ARGUMENT].is_object());
+            let tool = tool["name"].as_str().unwrap();
+            if !LOOKING.contains(&tool) {
+                let refused = ask(&server, "tools/call", json!({"name":tool,"arguments":{}})).await;
+                assert_eq!(refused["error"]["code"], -32602, "{name}: {tool}");
+            }
+        }
+        assert!(server.app_views.get().unwrap().is_empty());
+        // Reinitialization may restrict available tools further, but can
+        // never drop the private-view requirement.
+        ask(
+            &server,
+            "initialize",
+            json!({"clientInfo":{"name":"another host"}}),
+        )
+        .await;
+        assert!(server.app_views.get().is_some());
+        assert_eq!(
+            names(&ask(&server, "tools/list", json!({})).await),
+            ["atlas_status", "show_screen", "screen_frame"]
+        );
+    }
+}
+
+#[tokio::test]
+async fn other_hosts_keep_their_existing_negotiation_and_explicit_guards_stay_enabled() {
+    for name in ["claude", "codex", "Claude Desktop", "unknown"] {
+        let dir = tempfile::tempdir().unwrap();
+        let server = server(dir.path());
+        let params =
+            json!({"clientInfo":{"name":name},"capabilities":{"extensions":{UI_EXTENSION:{}}}});
+        ask(&server, "initialize", params.clone()).await;
+        assert!(server.app_views.get().is_none());
+        let listed = ask(&server, "tools/list", json!({})).await;
+        assert!(names(&listed).contains(&"take_control".to_owned()));
+        assert!(
+            listed["result"]["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|tool| tool["inputSchema"]["properties"][guarded::ARGUMENT].is_null())
+        );
+        server
+            .app_views
+            .get_or_init(|| Arc::new(guarded::Registry::default()));
+        ask(&server, "initialize", params).await;
+        assert!(server.app_views.get().is_some());
+    }
 }
 
 #[tokio::test]
@@ -278,7 +369,7 @@ async fn notifications_get_no_answer_and_unknown_methods_and_tools_an_error() {
     let server = server(dir.path());
 
     let note = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
-    assert_eq!(server.answer(&note).await, None);
+    assert!(server.answer(&note).await.is_none());
     let unknown = ask(&server, "sampling/createMessage", json!({})).await;
     assert_eq!(unknown["error"]["code"], -32601);
     assert_eq!(ask(&server, "ping", json!({})).await["result"], json!({}));

@@ -14,6 +14,7 @@ extension Words {
     case .opencode: "Restart opencode for this change to take effect."
     case .pi: "Start a new Pi session or use /reload for this change to take effect."
     case .codex: "Start a new Codex session for this change to take effect."
+    case .cursor: "Reload the Cursor window or start a new Cursor Agent session for this change to take effect."
     }
   }
 
@@ -43,6 +44,7 @@ extension Words {
       return "Test Mac apps from Claude Code"
     case .codex: return "Live Mac view in the Codex app"
     case .opencode, .pi: return "Test Mac apps on a hidden desktop"
+    case .cursor: return "Test Mac apps from Cursor"
     }
   }
 }

@@ -144,6 +144,16 @@ impl Drop for Running {
 /// is asked for its PATH. The tool gets every place searched, as a tool
 /// installed with npm needs node beside it.
 fn executable(agent: Agent) -> (PathBuf, std::ffi::OsString) {
+    if agent == Agent::Cursor {
+        let path = std::env::join_paths(install_places().into_iter().chain(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )))
+        .unwrap_or_default();
+        return (
+            cursor_executable().unwrap_or_else(|| PathBuf::from("cursor-agent")),
+            path,
+        );
+    }
     let name = agent.name();
     let original = std::env::var_os("PATH").unwrap_or_default();
     let mut places: Vec<PathBuf> = std::env::split_paths(&original).collect();
@@ -161,6 +171,34 @@ fn executable(agent: Agent) -> (PathBuf, std::ffi::OsString) {
 
     let path = std::env::join_paths(&places).unwrap_or(original);
     (found.unwrap_or_else(|| PathBuf::from(name)), path)
+}
+
+/// Cursor's agent is separate from its editor launcher. The generic name
+/// `agent` is accepted only when its resolved path belongs to cursor-agent.
+pub(super) fn cursor_executable() -> Option<PathBuf> {
+    let mut places: Vec<_> =
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
+    places.extend(install_places());
+    places.extend(shell_path().iter().cloned());
+    find("cursor-agent", &places).or_else(|| {
+        places
+            .iter()
+            .filter_map(|place| find("agent", std::slice::from_ref(place)))
+            .find(|path| cursor_agent_path(path))
+    })
+}
+
+fn cursor_agent_path(path: &Path) -> bool {
+    std::fs::canonicalize(path).ok().is_some_and(|resolved| {
+        resolved
+            .file_name()
+            .is_some_and(|name| name == "cursor-agent")
+            && resolved.parent().is_some_and(|parent| {
+                parent
+                    .components()
+                    .any(|component| component.as_os_str() == "cursor-agent")
+            })
+    })
 }
 
 /// `name` as a runnable file in the first of `places` that has it.
@@ -381,6 +419,27 @@ pub(super) fn run(agent: Agent, argv: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_generic_agent_is_cursor_only_in_its_resolved_install_tree() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let unrelated = directory.path().join("cursor-agent");
+        fs::write(&unrelated, "unrelated").unwrap();
+        let launcher = directory.path().join("agent");
+        symlink(&unrelated, &launcher).unwrap();
+        assert!(!cursor_agent_path(&launcher));
+        fs::remove_file(&launcher).unwrap();
+        fs::remove_file(&unrelated).unwrap();
+        let installed = directory
+            .path()
+            .join("cursor-agent/versions/test/cursor-agent");
+        fs::create_dir_all(installed.parent().unwrap()).unwrap();
+        fs::write(&installed, "Cursor Agent").unwrap();
+        symlink(&installed, &launcher).unwrap();
+        assert!(cursor_agent_path(&launcher));
+    }
 
     #[test]
     fn a_tool_is_found_where_it_can_run() {

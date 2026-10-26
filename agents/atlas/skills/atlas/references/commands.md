@@ -179,6 +179,9 @@ Options:
       --pi
           Only Pi
 
+      --cursor
+          Only Cursor
+
       --app
           Only the Claude app
 
@@ -214,6 +217,9 @@ Options:
 
       --pi
           Only Pi
+
+      --cursor
+          Only Cursor
 
       --app
           Only the Claude app

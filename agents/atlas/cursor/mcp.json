@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "atlas": {
+      "type": "stdio",
+      "command": "/bin/sh",
+      "args": ["${CURSOR_PLUGIN_ROOT}/cursor/launch", "mcp"]
+    }
+  }
+}

@@ -52,10 +52,10 @@ struct AgentConnectionRow: View {
   /// label morphs, never two that swap.
   @ViewBuilder private var connection: some View {
     switch Self.trailing(agent.connection) {
-    case .connected:
+    case .connected, .configured:
       HStack(spacing: Spacing.xsPlus) {
         OutcomeMark(kind: .done)
-        Text(verbatim: "Connected")
+        Text(verbatim: agent.connection == .configured ? "Configured" : "Connected")
           .textStyle(.callout)
           .foregroundStyle(Color.textSecondary)
       }
@@ -106,6 +106,7 @@ struct AgentConnectionRow: View {
   nonisolated static func trailing(_ connection: SettingsAgentRow.Connection) -> Trailing {
     switch connection {
     case .connected: .connected
+    case .configured: .configured
     case .connect(let isEnabled): .button(isWorking: false, isEnabled: isEnabled)
     case .connecting: .button(isWorking: true, isEnabled: false)
     case .missing: .none
@@ -115,7 +116,7 @@ struct AgentConnectionRow: View {
 
   /// Whether the agent is connected, which pops its check in.
   private var isConnected: Bool {
-    agent.connection == .connected
+    agent.connection == .connected || agent.connection == .configured
   }
 }
 

@@ -153,6 +153,9 @@ pub(super) enum Command {
         /// Offer only the status and the screen: no Stop, Resume or Recover.
         #[arg(long)]
         read_only: bool,
+        /// Require a private view capability for person-operated MCP actions.
+        #[arg(long, hide = true)]
+        guard_app_controls: bool,
     },
     /// The helper's status as it changes, one JSON line each, for agent apps.
     #[command(hide = true)]
@@ -588,6 +591,12 @@ pub(super) enum AgentsCommand {
         /// The project folder (default: this one).
         dir: Option<PathBuf>,
     },
+    /// Cursor's internal command-hook adapter.
+    #[command(hide = true)]
+    CursorHook {
+        #[arg(value_enum)]
+        event: CursorHookEvent,
+    },
     /// Connect Atlas to coding agents (all installed by default).
     ///
     /// Use --claude --app together to connect both Claude parts. Select only
@@ -605,6 +614,9 @@ pub(super) enum AgentsCommand {
         /// Only Pi.
         #[arg(long)]
         pi: bool,
+        /// Only Cursor.
+        #[arg(long)]
+        cursor: bool,
         /// Only the Claude app.
         #[arg(long)]
         app: bool,
@@ -625,10 +637,19 @@ pub(super) enum AgentsCommand {
         /// Only Pi.
         #[arg(long)]
         pi: bool,
+        /// Only Cursor.
+        #[arg(long)]
+        cursor: bool,
         /// Only the Claude app.
         #[arg(long)]
         app: bool,
     },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub(super) enum CursorHookEvent {
+    SessionStart,
+    BeforeShell,
 }
 
 #[derive(Subcommand)]

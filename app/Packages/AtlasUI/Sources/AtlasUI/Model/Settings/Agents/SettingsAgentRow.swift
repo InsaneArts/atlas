@@ -5,6 +5,8 @@ public struct SettingsAgentRow: Equatable, Sendable, Identifiable {
   public enum Connection: Equatable, Sendable {
     /// It uses Atlas: a green check and "Connected".
     case connected
+    /// Its registration is verified: a green check and "Configured".
+    case configured
     /// It is on this Mac and can be connected: Connect, waiting while another agent connects.
     case connect(isEnabled: Bool)
     /// It is being connected now.

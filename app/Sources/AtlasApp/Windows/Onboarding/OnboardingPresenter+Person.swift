@@ -127,7 +127,7 @@ extension OnboardingPresenter {
           if !agent.checked {
             snapshot.agentsFailed ? OnboardingWords.agentNotChecked : StatusWord.checking.text
           } else if agent.connected {
-            "\(benefit) · \(OnboardingWords.agentConnected)"
+            "\(benefit) · \(agent.id == .cursor ? "Configured" : OnboardingWords.agentConnected)"
           } else if agent.found {
             benefit
           } else {

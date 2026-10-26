@@ -49,6 +49,13 @@ test('each state offers its one action, and Give Back while the person has contr
   assert.equal(view.action('working', { ours: true }).tool, 'give_back');
 });
 
+test('read-only views offer no Stop, Resume, Recover or native-viewer action in any state', () => {
+  for (const state of ['working', 'idle', 'control', 'stopped', 'needsYou', 'notReady']) {
+    assert.equal(view.action(state, { canControl: false, canResume: false }), null, state);
+  }
+  assert.equal(view.action('working', { canControl: false, ours: true }), null);
+});
+
 test('Take Control is offered only where the app may call it and nobody else has control', () => {
   same(view.take({ canControl: false }), { shown: false });
   same(view.take({ canControl: true, ours: true }), {
@@ -163,6 +170,7 @@ function screenView() {
   const messages = [];
   const timers = new Map();
   const broadcasts = [];
+  const observers = [];
   let nextTimer = 1;
   let now = 0;
   let channel;
@@ -171,10 +179,29 @@ function screenView() {
     const events = new Map();
     const attributes = new Map();
     const element = {
-      style: {},
+      style: {
+        setProperty(name, value) {
+          this[name] = value;
+        },
+      },
       dataset: {},
       children: [],
-      classList: { contains: () => false, toggle() {}, add() {}, remove() {} },
+      classList: {
+        values: new Set(),
+        contains(name) {
+          return this.values.has(name);
+        },
+        toggle(name, on) {
+          if (on) this.values.add(name);
+          else this.values.delete(name);
+        },
+        add(name) {
+          this.values.add(name);
+        },
+        remove(name) {
+          this.values.delete(name);
+        },
+      },
       addEventListener: (name, callback) => events.set(name, callback),
       fire: (name, event = {}) => events.get(name)?.(event),
       getAttribute: (name) => attributes.get(name),
@@ -188,6 +215,7 @@ function screenView() {
         this.firstChild = children[0];
       },
       focus() {},
+      querySelector: () => null,
       getBoundingClientRect: () => ({
         left: 0,
         top: 0,
@@ -245,17 +273,28 @@ function screenView() {
   vm.runInNewContext(source, {
     document: {
       body: node('body'),
+      documentElement: node('html'),
       querySelector: node,
       querySelectorAll: (selector) =>
         ({ '[data-tab]': tabs, '[data-filter]': filters })[selector] || [],
       createElement: () => node(Symbol()),
       addEventListener: (name, callback) => documentListeners.set(name, callback),
     },
-    window: { parent, addEventListener: (name, callback) => listeners.set(name, callback) },
+    window: {
+      parent,
+      matchMedia: () => ({ matches: false }),
+      addEventListener: (name, callback) => listeners.set(name, callback),
+    },
     setTimeout: setTimer,
     clearTimeout: (id) => timers.delete(id),
     setInterval: (callback, delay) => setTimer(callback, delay, true),
     clearInterval: (id) => timers.delete(id),
+    ResizeObserver: class {
+      constructor(callback) {
+        observers.push(callback);
+      }
+      observe() {}
+    },
     BroadcastChannel: class {
       constructor() {
         channel = this;
@@ -289,7 +328,227 @@ function screenView() {
     newerCard,
     calls,
     broadcasts,
+    resize: () => observers.forEach((callback) => callback()),
   };
+}
+
+const turns = async () => {
+  for (let i = 0; i < 12; i += 1) await Promise.resolve();
+};
+
+async function guardedView() {
+  const page = screenView();
+  await page.receive({
+    method: 'ui/notifications/tool-result',
+    params: { content: [{ type: 'text', text: 'Public status only' }] },
+  });
+  const initialize = page.messages.find((message) => message.method === 'ui/initialize');
+  await page.receive({
+    id: initialize.id,
+    result: {
+      hostContext: { availableDisplayModes: ['inline'], containerDimensions: { maxHeight: 800 } },
+    },
+  });
+  await turns();
+  const frame = page.calls('screen_frame')[0];
+  assert.equal(frame.params.arguments._atlasView, undefined);
+  await page.receive({
+    id: frame.id,
+    result: {
+      structuredContent: {
+        status: { state: 'idle' },
+        canControl: false,
+        canResume: false,
+        guardAppControls: true,
+      },
+    },
+  });
+  await turns();
+  const bootstrap = page.calls('show_screen')[0];
+  same(bootstrap.params.arguments, { _atlasOpen: true });
+  const credential = 'a'.repeat(48);
+  await page.receive({
+    id: bootstrap.id,
+    result: {
+      structuredContent: { canControl: false, canResume: false },
+      _meta: { 'com.insanearts.atlas/view': credential },
+    },
+  });
+  await turns();
+  await page.advance(4000);
+  const authenticated = page.calls('screen_frame').at(-1);
+  assert.equal(authenticated.params.arguments._atlasView, credential);
+  await page.receive({
+    id: authenticated.id,
+    result: page.result('guarded', 'frame-key', 100, 100),
+  });
+  await turns();
+  return { ...page, credential };
+}
+
+test('a raw frame bootstraps private controls after Cursor omits initial metadata and structured content', async () => {
+  const page = await guardedView();
+  assert.equal(page.node('[data-action]').hidden, false);
+  const stopping = page.node('[data-action]').fire('click');
+  const request = page.calls('stop_agent')[0];
+  assert.equal(request.params.arguments._atlasView, page.credential);
+  await page.receive({
+    id: request.id,
+    result: {
+      structuredContent: { status: { state: 'stopped' }, canControl: true, canResume: true },
+    },
+  });
+  await stopping;
+  assert.equal(page.calls('show_screen').length, 1);
+  for (const message of page.messages.filter((message) =>
+    ['ui/message', 'ui/update-model-context'].includes(message.method),
+  )) {
+    assert.ok(!JSON.stringify(message).includes(page.credential));
+  }
+  for (const selector of ['[data-label]', '[data-hint]', '[data-note]', '[data-action]']) {
+    assert.ok(!String(page.node(selector).textContent).includes(page.credential));
+  }
+});
+
+test('expired private authority disables controls with guidance and never reboots or falls back', async () => {
+  const page = await guardedView();
+  const stopping = page.node('[data-action]').fire('click');
+  await page.receive({
+    id: page.calls('stop_agent')[0].id,
+    error: { code: -32602, message: 'This view authority expired' },
+  });
+  await stopping;
+  assert.equal(page.node('[data-action]').hidden, true);
+  assert.match(page.node('[data-note]').textContent, /Reload the view/);
+  await page.advance(4000);
+  assert.equal(page.calls('show_screen').length, 1);
+  assert.equal(page.calls('screen_frame').at(-1).params.arguments._atlasView, page.credential);
+});
+
+test('background polling hides expired person controls immediately without reauthorizing the card', async () => {
+  const page = await guardedView();
+  assert.equal(page.node('[data-action]').hidden, false);
+  assert.equal(page.node('[data-take]').hidden, false);
+  await page.advance(4000);
+  await page.receive({
+    id: page.calls('screen_frame').at(-1).id,
+    error: { code: -32602, message: 'This view authority expired' },
+  });
+  await turns();
+  assert.equal(page.node('[data-action]').hidden, true);
+  assert.equal(page.node('[data-take]').hidden, true);
+  assert.match(page.node('[data-note]').textContent, /Reload the view/);
+  await page.advance(4000);
+  assert.equal(page.calls('show_screen').length, 1);
+  assert.equal(page.calls('screen_frame').at(-1).params.arguments._atlasView, page.credential);
+});
+
+test('a teardown while bootstrap answers closes the eventual context without enabling it', async () => {
+  const page = screenView();
+  const initialize = page.messages.find((message) => message.method === 'ui/initialize');
+  await page.receive({ id: initialize.id, result: {} });
+  await turns();
+  await page.receive({
+    id: page.calls('screen_frame')[0].id,
+    result: { structuredContent: { guardAppControls: true, canControl: false } },
+  });
+  await turns();
+  const bootstrap = page.calls('show_screen')[0];
+  await page.receive({ id: 'teardown', method: 'ui/resource-teardown' });
+  await page.receive({
+    id: bootstrap.id,
+    result: { _meta: { 'com.insanearts.atlas/view': 'b'.repeat(48) } },
+  });
+  await turns();
+  assert.equal(page.calls('view_close').length, 1);
+  assert.equal(page.calls('view_close')[0].params.arguments._atlasView, 'b'.repeat(48));
+  assert.equal(page.calls('take_control').length, 0);
+});
+
+test('inline Controls and Collapse expose bounded layout, deduplicate resize, and never change control', async () => {
+  const page = screenView();
+  const initialize = page.messages.find((message) => message.method === 'ui/initialize');
+  page.node('html').getBoundingClientRect = () => ({ width: 640, height: 1200 });
+  await page.receive({
+    id: initialize.id,
+    result: {
+      hostContext: { availableDisplayModes: ['inline'], containerDimensions: { maxHeight: 480 } },
+    },
+  });
+  await turns();
+  const changes = () =>
+    page.messages.filter((message) => message.method === 'ui/notifications/size-changed');
+  const before = changes().length;
+  page.node('[data-controls]').fire('click');
+  assert.equal(page.node('body').classList.contains('inline-expanded'), true);
+  assert.equal(page.node('body').style['--inline-height'], '480px');
+  assert.equal(page.node('[data-controls]').textContent, 'Collapse');
+  assert.equal(changes().at(-1).params.height, 480);
+  page.resize();
+  page.resize();
+  assert.equal(changes().length, before);
+  page.node('[data-controls]').fire('click');
+  assert.equal(page.node('body').classList.contains('full'), false);
+  assert.equal(page.node('[data-controls]').textContent, 'Controls');
+  for (const tool of ['take_control', 'keep_control', 'give_back', 'send_input'])
+    assert.equal(page.calls(tool).length, 0);
+});
+
+test('hosts offering fullscreen retain their host mode request and omit local Controls', async () => {
+  const page = screenView();
+  const initialize = page.messages.find((message) => message.method === 'ui/initialize');
+  await page.receive({
+    id: initialize.id,
+    result: { hostContext: { availableDisplayModes: ['inline', 'fullscreen'] } },
+  });
+  await turns();
+  assert.equal(page.node('[data-controls]').hidden, true);
+  const expanding = page.node('[data-expand]').fire('click');
+  const request = page.messages.find((message) => message.method === 'ui/request-display-mode');
+  await page.receive({ id: request.id, result: { mode: 'fullscreen' } });
+  await expanding;
+  assert.equal(page.node('body').classList.contains('full'), true);
+  assert.equal(page.node('body').classList.contains('inline-expanded'), false);
+});
+
+for (const [state, tool] of [
+  ['working', 'stop_agent'],
+  ['idle', 'stop_agent'],
+  ['control', 'stop_agent'],
+  ['stopped', 'resume_agent'],
+  ['needsYou', 'recover'],
+  ['notReady', 'open_viewer'],
+]) {
+  test(`negotiated read-only flags hide ${state} actions while full-control views keep them`, async () => {
+    const { node, receive, calls } = screenView();
+    const status = (canControl) =>
+      receive({
+        method: 'ui/notifications/tool-result',
+        params: { structuredContent: { status: { state }, canControl, canResume: canControl } },
+      });
+    await status(true);
+    assert.equal(node('[data-action]').hidden, false);
+    assert.equal(node('[data-action]').dataset.tool, tool);
+    const more = node('[data-menu="more"]');
+    const openMore = () => {
+      more.hidden = true;
+      node('[data-more]').fire('click', { currentTarget: node('[data-more]') });
+    };
+    openMore();
+    assert.equal(node('[data-recover]').hidden, false);
+    assert.equal(node('[data-open-atlas]').hidden, false);
+    await status(false);
+    assert.equal(node('[data-action]').hidden, true);
+    assert.equal(node('[data-action]').dataset.tool, '');
+    assert.equal(node('[data-recover]').hidden, true);
+    assert.equal(node('[data-open-atlas]').hidden, true);
+    await node('[data-action]').fire('click');
+    await node('[data-recover]').fire('click');
+    await node('[data-open-atlas]').fire('click');
+    for (const name of ['stop_agent', 'resume_agent', 'recover', 'open_viewer']) {
+      assert.equal(calls(name).length, 0, name);
+    }
+  });
 }
 
 async function screenshotGrid() {

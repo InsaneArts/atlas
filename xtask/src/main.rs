@@ -520,6 +520,8 @@ fn build(options: &Options, stage: &Path, upload: &Path) -> Result<PathBuf> {
         "ClaudeLogo@2x.png",
         "CodexLogo.png",
         "CodexLogo@2x.png",
+        "CursorLogo.png",
+        "CursorLogo@2x.png",
     ] {
         fs::copy(
             package.join("Resources").join(file),

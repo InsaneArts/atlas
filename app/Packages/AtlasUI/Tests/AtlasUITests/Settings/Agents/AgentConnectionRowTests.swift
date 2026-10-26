@@ -10,6 +10,7 @@ struct AgentConnectionRowTests {
     #expect(AgentConnectionRow.trailing(.connect(isEnabled: false)) == .button(isWorking: false, isEnabled: false))
     #expect(AgentConnectionRow.trailing(.connecting) == .button(isWorking: true, isEnabled: false))
     #expect(AgentConnectionRow.trailing(.connected) == .connected)
+    #expect(AgentConnectionRow.trailing(.configured) == .configured)
     #expect(AgentConnectionRow.trailing(.note("Not installed")) == .note("Not installed"))
   }
 }

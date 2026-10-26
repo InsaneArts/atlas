@@ -77,8 +77,9 @@ function ago(seconds) {
 }
 
 /** The one button a state offers beside the screen, if any: the tool it
- * calls and its title. Resume only where the app lets the view call it. */
-function action(state, { canResume = true, ours = false } = {}) {
+ * calls and its title. Read-only views offer no mutation or native-viewer actions. */
+function action(state, { canResume = true, canControl = true, ours = false } = {}) {
+  if (!canControl) return null;
   if (ours) return { tool: 'give_back', title: 'Give Back', primary: true };
   switch (state) {
     case 'working':
@@ -422,6 +423,13 @@ if (typeof document !== 'undefined') {
   let epoch = 0;
   let spoken = '';
   let asking = null;
+  // Private capability lives outside model/UI state and is never rendered.
+  let viewCredential = null;
+  let guardRequired = false;
+  let openingView = null;
+  let bootstrapFailed = false;
+  let inlineExpanded = false;
+  let lastSize = '';
   const thumbs = new Map();
   let opening = 0;
 
@@ -436,11 +444,29 @@ if (typeof document !== 'undefined') {
         if (waiting.delete(id)) reject(new Error(`${method} timed out`));
       }, 30000);
     });
-  const call = (name, args) => request('tools/call', { name, arguments: args || {} });
+  const call = (name, args) => {
+    const calling = request('tools/call', {
+      name,
+      arguments: viewCredential ? { ...(args || {}), _atlasView: viewCredential } : args || {},
+    });
+    if (!viewCredential) return calling;
+    return calling.catch((error) => {
+      if (viewCredential && error.code === -32602) {
+        bootstrapFailed = true;
+        model.canControl = false;
+        model.canResume = false;
+        error.message =
+          'This view expired or its controls are unavailable. Reload the view to reconnect.';
+      }
+      throw error;
+    });
+  };
   const callError = (error, otherwise = "Atlas isn't answering") =>
-    error.message === 'IPC not available for MCP tool call'
-      ? 'View unavailable here · Use Atlas'
-      : otherwise;
+    error.code === -32602 && viewCredential
+      ? error.message
+      : error.message === 'IPC not available for MCP tool call'
+        ? 'View unavailable here · Use Atlas'
+        : otherwise;
   const said = (result, otherwise) =>
     (result && result.content && result.content[0] && result.content[0].text) || otherwise;
   const code = (result) =>
@@ -455,6 +481,40 @@ if (typeof document !== 'undefined') {
     const node = one('[data-note]');
     node.textContent = text || '';
     node.hidden = !text;
+  };
+
+  const openView = async () => {
+    if (!guardRequired || viewCredential || bootstrapFailed || !started) return;
+    if (openingView) return openingView;
+    openingView = (async () => {
+      try {
+        const result = await request('tools/call', {
+          name: 'show_screen',
+          arguments: { _atlasOpen: true },
+        });
+        const credential = result?._meta?.['com.insanearts.atlas/view'];
+        if (typeof credential !== 'string' || !/^[a-f0-9]{48}$/.test(credential))
+          throw new Error('No view authority');
+        viewCredential = credential;
+        if (superseded) {
+          call('view_close', {}).catch(() => {});
+          return;
+        }
+      } catch (_) {
+        bootstrapFailed = true;
+        note('This view could not establish private controls. Reload the view to try again.');
+      }
+    })();
+    await openingView;
+  };
+
+  const observeGuard = async (result) => {
+    guardRequired = guardRequired || result?.structuredContent?.guardAppControls === true;
+    if (guardRequired && !viewCredential) {
+      model.canControl = false;
+      model.canResume = false;
+      await openView();
+    }
   };
 
   const showStatus = () => {
@@ -547,15 +607,19 @@ if (typeof document !== 'undefined') {
 
   const showButtons = () => {
     const state = model.status && model.status.state;
-    const offered = action(state, { canResume: model.canResume !== false, ours: model.ours });
+    const offered = action(state, {
+      canResume: model.canResume !== false,
+      canControl: model.canControl,
+      ours: model.ours,
+    });
     const button = one('[data-action]');
     // In a full frame Take Control becomes Give Back; the card says it here.
     const hide = !offered || (full() && offered.tool === 'give_back');
     button.hidden = hide;
+    button.dataset.tool = hide ? '' : offered.tool;
     if (!hide) {
       button.textContent = offered.title;
       button.classList.toggle('primary', offered.primary);
-      button.dataset.tool = offered.tool;
       button.disabled = busy;
     }
 
@@ -568,6 +632,8 @@ if (typeof document !== 'undefined') {
     const keys = one('[data-keys]');
     keys.disabled = !inputFrame(model);
     keys.hidden = !model.canControl;
+    one('[data-recover]').hidden = !model.canControl;
+    one('[data-open-atlas]').hidden = !model.canControl;
 
     const paused = model.picture === 'paused';
     one('[data-pause-glyph]').hidden = paused;
@@ -578,6 +644,10 @@ if (typeof document !== 'undefined') {
 
     const modes = context.availableDisplayModes || [];
     one('[data-expand]').hidden = full() || !modes.includes('fullscreen');
+    const controls = one('[data-controls]');
+    controls.hidden = fills(context) || modes.includes('fullscreen');
+    controls.textContent = inlineExpanded ? 'Collapse' : 'Controls';
+    controls.setAttribute('aria-expanded', String(inlineExpanded));
     one('[data-back]').hidden = model.tab === 'screen';
     one('[data-orbit]').style.display = full() && model.tab !== 'screen' ? 'none' : '';
 
@@ -646,6 +716,7 @@ if (typeof document !== 'undefined') {
   };
 
   const poll = async () => {
+    if (guardRequired && !viewCredential) return;
     if (polling || superseded || busy || !started) return;
     polling = true;
     const asked = epoch;
@@ -653,6 +724,8 @@ if (typeof document !== 'undefined') {
       const result = await call('screen_frame', {
         since: model.frame ? model.frame.id : undefined,
       });
+      if (guardRequired || result?.structuredContent?.guardAppControls === true)
+        await observeGuard(result);
       if (superseded || asked !== epoch) {
         // The card retired or an action came since: this answer is obsolete.
       } else if (result && result.isError) {
@@ -666,7 +739,10 @@ if (typeof document !== 'undefined') {
         render();
       }
     } catch (error) {
-      if (!superseded) note(callError(error));
+      if (!superseded) {
+        note(callError(error));
+        render();
+      }
     }
     polling = false;
     schedule();
@@ -682,6 +758,8 @@ if (typeof document !== 'undefined') {
     let result = null;
     try {
       result = await call(tool, args);
+      if (guardRequired || result?.structuredContent?.guardAppControls === true)
+        await observeGuard(result);
       if (!superseded) {
         if (result && result.isError) note(said(result, failed));
         else {
@@ -750,6 +828,7 @@ if (typeof document !== 'undefined') {
     model.ours = false;
     queue.length = 0;
     pressed = null;
+    if (viewCredential) call('view_close', {}).catch(() => {});
   };
 
   const controlEnded = (why) => {
@@ -1294,8 +1373,27 @@ if (typeof document !== 'undefined') {
 
   const applyContext = (changed) => {
     context = { ...context, ...changed };
-    document.body.classList.toggle('full', fills(context));
+    document.body.classList.toggle('full', fills(context) || inlineExpanded);
+    document.body.classList.toggle('inline-expanded', inlineExpanded && !fills(context));
+    const maximum = context.containerDimensions?.maxHeight;
+    const height = Math.max(1, Math.min(720, typeof maximum === 'number' ? maximum : 800));
+    document.body.style.setProperty('--inline-height', `${height}px`);
     render();
+    reportSize();
+  };
+
+  const reportSize = () => {
+    if (!started || fills(context)) return;
+    const box = document.documentElement.getBoundingClientRect();
+    const maximum = context.containerDimensions?.maxHeight;
+    const height = Math.ceil(
+      Math.min(box.height, typeof maximum === 'number' ? maximum : Infinity),
+    );
+    const width = Math.ceil(box.width);
+    const key = `${width}:${height}`;
+    if (key === lastSize) return;
+    lastSize = key;
+    notify('ui/notifications/size-changed', { width, height });
   };
 
   const answer = (id, result) => send({ id, result });
@@ -1309,14 +1407,19 @@ if (typeof document !== 'undefined') {
       const pending = waiting.get(message.id);
       if (!pending) return;
       waiting.delete(message.id);
-      if (message.error) pending.reject(new Error(message.error.message || 'Refused'));
-      else pending.resolve(message.result);
+      if (message.error) {
+        const error = new Error(message.error.message || 'Refused');
+        error.code = message.error.code;
+        pending.reject(error);
+      } else pending.resolve(message.result);
       return;
     }
 
     switch (message.method) {
       case 'ui/notifications/tool-result':
         if (superseded) break;
+        if (guardRequired || message.params?.structuredContent?.guardAppControls === true)
+          await observeGuard(message.params);
         model = merge(model, message.params);
         keepControl();
         render();
@@ -1334,7 +1437,7 @@ if (typeof document !== 'undefined') {
         // at once, and ending by itself within seconds if that is lost.
         const held = model.ours;
         retire();
-        if (held) call('give_back', {}).catch(() => {});
+        if (held && !viewCredential) call('give_back', {}).catch(() => {});
         answer(message.id, {});
         break;
       }
@@ -1386,10 +1489,12 @@ if (typeof document !== 'undefined') {
   }
   one('[data-recover]').addEventListener('click', () => {
     closeMenus();
+    if (!model.canControl) return;
     act('recover', {}, "Atlas couldn't recover the helper");
   });
   one('[data-open-atlas]').addEventListener('click', async () => {
     closeMenus();
+    if (!model.canControl) return;
     try {
       const result = await call('open_viewer', {});
       if (result && result.isError) note(said(result, "Atlas couldn't open its viewer"));
@@ -1435,16 +1540,14 @@ if (typeof document !== 'undefined') {
     }
   });
 
+  one('[data-controls]').addEventListener('click', () => {
+    inlineExpanded = !inlineExpanded;
+    applyContext({});
+  });
+
   if (typeof ResizeObserver !== 'undefined') {
     new ResizeObserver(size).observe(one('[data-stage]'));
-    new ResizeObserver(() => {
-      if (!started || full()) return;
-      const box = document.documentElement.getBoundingClientRect();
-      notify('ui/notifications/size-changed', {
-        width: Math.ceil(box.width),
-        height: Math.ceil(box.height),
-      });
-    }).observe(document.body);
+    new ResizeObserver(reportSize).observe(document.body);
   }
 
   request('ui/initialize', {
@@ -1452,11 +1555,13 @@ if (typeof document !== 'undefined') {
     appCapabilities: { availableDisplayModes: ['inline', 'fullscreen'] },
     protocolVersion: '2026-01-26',
   })
-    .then((result) => {
+    .then(async (result) => {
       applyContext((result && result.hostContext) || {});
       notify('ui/notifications/initialized', {});
       started = true;
+      await openView();
       poll();
+      reportSize();
     })
     .catch(() => note("This app didn't start Atlas's view"));
 
