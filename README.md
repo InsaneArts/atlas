@@ -14,7 +14,7 @@
   <a href="Cargo.toml"><img alt="Rust" src="https://img.shields.io/badge/rust-edition%202024-orange"></a>
 </p>
 
-[![Codex checks a new setting in your app on Atlas's hidden desktop while you keep typing in Xcode; Atlas's menu bar panel shows it live](assets/demo.webp)](https://atlas.insanearts.io)
+[![Your agent makes a release checklist in Notes on Atlas's hidden desktop while your Mac stays yours; Atlas's menu bar panel shows it live, then Atlas opens on the screenshot](assets/demo.webp)](https://atlas.insanearts.io)
 
 ## Install
 
