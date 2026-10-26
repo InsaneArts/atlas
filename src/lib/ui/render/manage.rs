@@ -121,10 +121,12 @@ pub fn agents_change(value: &Value) -> Rendered {
 
     for agent in value["agents"].as_array().into_iter().flatten() {
         if agent["ok"] == true && agent["restart"] == true {
-            let words = if agent["agent"] == "opencode" {
-                "Restart opencode for this change to take effect."
-            } else {
-                "Quit and reopen the Claude app for this to take effect."
+            let words = match agent["agent"].as_str() {
+                Some("opencode") => "Restart opencode for this change to take effect.",
+                Some("cursor") => {
+                    "Reload the Cursor window or start a new Cursor Agent session for this change to take effect."
+                }
+                _ => "Quit and reopen the Claude app for this to take effect.",
             };
             out.push(style::dim(words));
         }

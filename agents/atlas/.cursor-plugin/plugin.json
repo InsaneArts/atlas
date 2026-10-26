@@ -1,0 +1,10 @@
+{
+  "name": "atlas",
+  "version": "0.1.0",
+  "description": "Test Mac apps in a hidden helper login while the person keeps using their desktop.",
+  "author": { "name": "InsaneArts" },
+  "homepage": "https://github.com/InsaneArts/atlas",
+  "skills": "./skills/",
+  "mcpServers": "./cursor/mcp.json",
+  "hooks": "./cursor/hooks.json"
+}

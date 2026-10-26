@@ -1,8 +1,8 @@
 //! Command execution, activity attribution and helper-change policy.
 use super::{
     cli::{
-        AgentsCommand, ButtonArg, Command, EnvironmentCommand, OnOff, OnboardingCommand,
-        WindowState,
+        AgentsCommand, ButtonArg, Command, CursorHookEvent, EnvironmentCommand, OnOff,
+        OnboardingCommand, WindowState,
     },
     doctor, help,
     output::print,
@@ -30,6 +30,7 @@ fn changed(
     codex: bool,
     opencode: bool,
     pi: bool,
+    cursor: bool,
     app: bool,
     remove: bool,
 ) -> Result<Value> {
@@ -38,14 +39,25 @@ fn changed(
         return Err(Error::new("agents", "The Claude app isn't installed"));
     }
     if app {
-        atlas::agents::change_these(&chosen(claude, codex, opencode, pi), false, true, remove)
+        atlas::agents::change_these(
+            &chosen(claude, codex, opencode, pi, cursor),
+            false,
+            true,
+            remove,
+        )
     } else {
-        atlas::agents::change(&chosen(claude, codex, opencode, pi), remove)
+        atlas::agents::change(&chosen(claude, codex, opencode, pi, cursor), remove)
     }
 }
 
 /// The coding agents selected by flags (none means every installed one).
-fn chosen(claude: bool, codex: bool, opencode: bool, pi: bool) -> Vec<atlas::agents::Agent> {
+fn chosen(
+    claude: bool,
+    codex: bool,
+    opencode: bool,
+    pi: bool,
+    cursor: bool,
+) -> Vec<atlas::agents::Agent> {
     use atlas::agents::Agent;
 
     [
@@ -53,6 +65,7 @@ fn chosen(claude: bool, codex: bool, opencode: bool, pi: bool) -> Vec<atlas::age
         (codex, Agent::Codex),
         (opencode, Agent::Opencode),
         (pi, Agent::Pi),
+        (cursor, Agent::Cursor),
     ]
     .into_iter()
     .filter_map(|(on, agent)| on.then_some(agent))
@@ -276,8 +289,17 @@ pub(super) async fn execute(config: PathBuf, command: Command) -> Result<Value> 
                     Ok(Value::Null)
                 }
                 AgentsCommand::Status { brief: false } => {
-                    let _spinner = Spinner::new("Checking Claude Code, Codex and the Claude app…");
+                    let _spinner = Spinner::new("Checking agent connections…");
                     Ok(atlas::agents::status())
+                }
+                AgentsCommand::CursorHook { event } => {
+                    let event = match event {
+                        CursorHookEvent::SessionStart => "session-start",
+                        CursorHookEvent::BeforeShell => "before-shell",
+                    };
+                    let reply = atlas::agents::hook(&config, event, std::io::stdin().lock()).await;
+                    print(&format!("{reply}\n"));
+                    Ok(Value::Null)
                 }
                 AgentsCommand::Project { dir } => {
                     atlas::agents::project(&dir.unwrap_or_else(|| PathBuf::from(".")))
@@ -290,20 +312,22 @@ pub(super) async fn execute(config: PathBuf, command: Command) -> Result<Value> 
                     codex,
                     opencode,
                     pi,
+                    cursor,
                     app,
                 } => {
                     let _spinner = Spinner::new("Connecting…");
-                    changed(claude, codex, opencode, pi, app, false)
+                    changed(claude, codex, opencode, pi, cursor, app, false)
                 }
                 AgentsCommand::Remove {
                     claude,
                     codex,
                     opencode,
                     pi,
+                    cursor,
                     app,
                 } => {
                     let _spinner = Spinner::new("Disconnecting…");
-                    changed(claude, codex, opencode, pi, app, true)
+                    changed(claude, codex, opencode, pi, cursor, app, true)
                 }
             }
         }
@@ -721,15 +745,33 @@ mod tests {
     #[test]
     fn pi_and_opencode_can_be_selected_independently_or_together() {
         use atlas::agents::Agent;
-        assert_eq!(chosen(false, false, false, true), [Agent::Pi]);
-        assert_eq!(chosen(false, false, true, false), [Agent::Opencode]);
+        assert_eq!(chosen(false, false, false, true, false), [Agent::Pi]);
+        assert_eq!(chosen(false, false, true, false, false), [Agent::Opencode]);
         assert_eq!(
-            chosen(false, false, true, true),
+            chosen(false, false, true, true, false),
             [Agent::Opencode, Agent::Pi]
         );
         for verb in ["install", "remove"] {
             assert!(parse(&["agents", verb, "--pi", "--opencode"]).is_ok());
         }
+    }
+
+    #[test]
+    fn cursor_has_its_own_selector_and_internal_hooks_stay_out_of_help() {
+        assert_eq!(
+            chosen(false, false, false, false, true),
+            [atlas::agents::Agent::Cursor]
+        );
+        for verb in ["install", "remove"] {
+            assert!(parse(&["agents", verb, "--cursor", "--codex"]).is_ok());
+        }
+        assert!(parse(&["agents", "cursor-hook", "session-start"]).is_ok());
+        let help = super::help::command()
+            .find_subcommand_mut("agents")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+        assert!(!help.contains("cursor-hook"));
     }
 
     #[test]

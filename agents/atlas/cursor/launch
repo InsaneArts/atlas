@@ -1,0 +1,8 @@
+#!/bin/sh
+# One launcher for Cursor's MCP server and Rust JSON hook adapters.
+atlas=$(command -v atlas 2>/dev/null)
+[ -n "$atlas" ] || atlas="$HOME/.local/bin/atlas"
+if [ "$1" = mcp ]; then
+	exec "$atlas" mcp
+fi
+exec "$atlas" --json agents cursor-hook "$1"

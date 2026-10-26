@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [{ "command": "\"${CURSOR_PLUGIN_ROOT}/cursor/launch\" session-start" }],
+    "beforeShellExecution": [
+      { "command": "\"${CURSOR_PLUGIN_ROOT}/cursor/launch\" before-shell", "failClosed": true }
+    ]
+  }
+}

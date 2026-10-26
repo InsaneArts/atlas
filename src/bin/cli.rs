@@ -588,6 +588,12 @@ pub(super) enum AgentsCommand {
         /// The project folder (default: this one).
         dir: Option<PathBuf>,
     },
+    /// Cursor's internal command-hook adapter.
+    #[command(hide = true)]
+    CursorHook {
+        #[arg(value_enum)]
+        event: CursorHookEvent,
+    },
     /// Connect Atlas to coding agents (all installed by default).
     ///
     /// Use --claude --app together to connect both Claude parts. Select only
@@ -605,6 +611,9 @@ pub(super) enum AgentsCommand {
         /// Only Pi.
         #[arg(long)]
         pi: bool,
+        /// Only Cursor.
+        #[arg(long)]
+        cursor: bool,
         /// Only the Claude app.
         #[arg(long)]
         app: bool,
@@ -625,10 +634,19 @@ pub(super) enum AgentsCommand {
         /// Only Pi.
         #[arg(long)]
         pi: bool,
+        /// Only Cursor.
+        #[arg(long)]
+        cursor: bool,
         /// Only the Claude app.
         #[arg(long)]
         app: bool,
     },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub(super) enum CursorHookEvent {
+    SessionStart,
+    BeforeShell,
 }
 
 #[derive(Subcommand)]

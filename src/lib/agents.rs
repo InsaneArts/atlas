@@ -14,11 +14,13 @@ use std::{
     time::Duration,
 };
 
+mod cursor;
 mod opencode;
 mod pi;
 mod process;
 mod project;
 
+pub use cursor::hook;
 use process::{exec, exec_in, run};
 pub use process::{stop_running, stopping};
 pub use project::{PROJECT_SECTION, forget, project, taught};
@@ -47,10 +49,17 @@ pub enum Agent {
     Codex,
     Opencode,
     Pi,
+    Cursor,
 }
 
 impl Agent {
-    pub const ALL: [Agent; 4] = [Agent::Claude, Agent::Codex, Agent::Opencode, Agent::Pi];
+    pub const ALL: [Agent; 5] = [
+        Agent::Claude,
+        Agent::Codex,
+        Agent::Opencode,
+        Agent::Pi,
+        Agent::Cursor,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -58,6 +67,7 @@ impl Agent {
             Agent::Codex => "codex",
             Agent::Pi => "pi",
             Agent::Opencode => "opencode",
+            Agent::Cursor => "cursor",
         }
     }
 
@@ -68,6 +78,7 @@ impl Agent {
             Agent::Codex => "Codex",
             Agent::Pi => "Pi",
             Agent::Opencode => "opencode",
+            Agent::Cursor => "Cursor",
         }
     }
 
@@ -89,7 +100,7 @@ impl Agent {
                 argv(&["plugin", "marketplace", "add", &path]),
                 argv(&["plugin", "add", PLUGIN]),
             ],
-            Agent::Pi | Agent::Opencode => vec![],
+            Agent::Pi | Agent::Opencode | Agent::Cursor => vec![],
         }
     }
 
@@ -151,7 +162,7 @@ impl Agent {
     /// Whether this agent's copy of the plugin named atlas (agents copy a
     /// plugin when installing it) is Atlas's.
     fn keeps_atlas(self) -> bool {
-        if matches!(self, Agent::Pi | Agent::Opencode) {
+        if matches!(self, Agent::Pi | Agent::Opencode | Agent::Cursor) {
             return false;
         }
         let Some(home) = self.home() else {
@@ -173,6 +184,7 @@ impl Agent {
             Agent::Codex => ("CODEX_HOME", ".codex"),
             Agent::Pi => return pi::home(),
             Agent::Opencode => return opencode::home(),
+            Agent::Cursor => return cursor::home().ok(),
         };
 
         std::env::var_os(variable)
@@ -192,7 +204,7 @@ impl Agent {
                 argv(&["plugin", "remove", PLUGIN]),
                 argv(&["plugin", "marketplace", "remove", NAME]),
             ],
-            Agent::Pi | Agent::Opencode => vec![],
+            Agent::Pi | Agent::Opencode | Agent::Cursor => vec![],
         }
     }
 
@@ -204,12 +216,15 @@ impl Agent {
                 argv(&["plugin", "update", PLUGIN]),
             ],
             Agent::Codex => vec![argv(&["plugin", "add", PLUGIN])],
-            Agent::Pi | Agent::Opencode => vec![],
+            Agent::Pi | Agent::Opencode | Agent::Cursor => vec![],
         }
     }
 
     /// Whether the tool is here: its version, or why it could not be asked.
     fn presence(self) -> Presence {
+        if self == Agent::Cursor {
+            return cursor::presence();
+        }
         match exec(self, &["--version"], ASK) {
             Ok(output) if output.status.success() => {
                 Presence::Installed(String::from_utf8_lossy(&output.stdout).trim().to_owned())
@@ -220,10 +235,23 @@ impl Agent {
         }
     }
 
+    /// Cursor removal operates on owned files even when its executable is
+    /// absent, broken or hangs. Never probe the host before that cleanup.
+    fn presence_for_change(self, remove: bool) -> Presence {
+        if self == Agent::Cursor && remove {
+            Presence::Installed("Cursor registration".into())
+        } else {
+            self.presence()
+        }
+    }
+
     /// Whether this agent uses the Atlas plugin from this Atlas's own
     /// marketplace (unknown when its lists cannot be read); an error when it
     /// does not answer.
     fn connected(self) -> std::result::Result<Option<bool>, String> {
+        if self == Agent::Cursor {
+            return cursor::connected().map(Some).map_err(|e| e.error);
+        }
         if self != Agent::Pi {
             match self.installed()? {
                 Some(true) => {}
@@ -254,7 +282,7 @@ impl Agent {
         let list: &[&str] = match self {
             Agent::Claude => &["plugin", "list", "--json"],
             Agent::Codex => &["plugin", "list", "--marketplace", NAME, "--json"],
-            Agent::Pi | Agent::Opencode => return Ok(None),
+            Agent::Pi | Agent::Opencode | Agent::Cursor => return Ok(None),
         };
 
         let output = match exec(self, list, ASK) {
@@ -272,7 +300,7 @@ impl Agent {
         let plugins = match self {
             Agent::Claude => list.as_array(),
             Agent::Codex => list["installed"].as_array(),
-            Agent::Pi | Agent::Opencode => return None,
+            Agent::Pi | Agent::Opencode | Agent::Cursor => return None,
         }?;
 
         Some(plugins.iter().any(|plugin| {
@@ -295,7 +323,7 @@ impl Agent {
         let recorded = match self {
             Agent::Claude => None,
             Agent::Codex => self.home().and_then(|home| codex_recorded(&home)),
-            Agent::Pi | Agent::Opencode => None,
+            Agent::Pi | Agent::Opencode | Agent::Cursor => None,
         };
 
         if let Some(found @ (Source::Folder(_) | Source::Elsewhere(_))) = &recorded {
@@ -316,7 +344,7 @@ impl Agent {
         let marketplaces = match self {
             Agent::Claude => list.as_array(),
             Agent::Codex => list["marketplaces"].as_array(),
-            Agent::Pi | Agent::Opencode => return None,
+            Agent::Pi | Agent::Opencode | Agent::Cursor => return None,
         }?;
 
         let Some(found) = marketplaces.iter().find(|entry| entry["name"] == NAME) else {
@@ -336,7 +364,7 @@ impl Agent {
                 found["marketplaceSource"]["sourceType"].as_str(),
                 found["marketplaceSource"]["source"].as_str(),
             ),
-            Agent::Pi | Agent::Opencode => return None,
+            Agent::Pi | Agent::Opencode | Agent::Cursor => return None,
         };
 
         Some(match (kind, place) {
@@ -530,6 +558,9 @@ pub fn status() -> Value {
 /// One agent's row for `status`: whether its tool is here, and whether
 /// Atlas is connected to it.
 fn probe(agent: Agent) -> Value {
+    if agent == Agent::Cursor {
+        return cursor::status();
+    }
     match agent.presence() {
         Presence::Installed(version) => match agent.connected() {
             Ok(connected) => json!({
@@ -574,13 +605,16 @@ pub fn change_these(chosen: &[Agent], all: bool, app: bool, remove: bool) -> Res
     let present: Vec<(Agent, Presence)> = if all {
         Agent::ALL
             .into_iter()
-            .map(|agent| (agent, agent.presence()))
-            .filter(|(_, presence)| !matches!(presence, Presence::Missing))
+            .map(|agent| (agent, agent.presence_for_change(remove)))
+            .filter(|(agent, presence)| {
+                !matches!(presence, Presence::Missing)
+                    && (!remove || *agent != Agent::Cursor || cursor::recorded())
+            })
             .collect()
     } else {
         chosen
             .iter()
-            .map(|agent| (*agent, agent.presence()))
+            .map(|agent| (*agent, agent.presence_for_change(remove)))
             .collect()
     };
 
@@ -600,13 +634,16 @@ pub fn change_these(chosen: &[Agent], all: bool, app: bool, remove: bool) -> Res
                 results.push(json!({"agent": agent.name(), "ok": false, "error": error}));
                 continue;
             }
+            Presence::Missing if remove && agent == Agent::Cursor => {}
             Presence::Missing => {
                 results.push(json!({"agent": agent.name(), "ok": false, "error": "not installed"}));
                 continue;
             }
         }
 
-        let outcome = if agent == Agent::Pi {
+        let outcome = if agent == Agent::Cursor {
+            cursor::change(marketplace.as_deref())
+        } else if agent == Agent::Pi {
             pi::change(marketplace.as_deref())
         } else if agent == Agent::Opencode {
             opencode::change(marketplace.as_deref())
@@ -631,7 +668,9 @@ pub fn change_these(chosen: &[Agent], all: bool, app: bool, remove: bool) -> Res
             Err(error) => json!({"agent": agent.name(), "ok": false, "error": error.error}),
         };
 
-        if agent == Agent::Opencode && matches!(outcome, Ok(Removal::Changed)) {
+        if matches!(agent, Agent::Opencode | Agent::Cursor)
+            && matches!(outcome, Ok(Removal::Changed))
+        {
             result["restart"] = json!(true);
         }
 
@@ -730,12 +769,24 @@ fn removed(
 pub fn refresh() -> Value {
     let refreshed: Vec<Value> = Agent::ALL
         .into_iter()
-        .filter(|agent| agent.connected() == Ok(Some(true)))
+        .filter(|agent| {
+            if *agent == Agent::Cursor {
+                cursor::recorded()
+            } else {
+                agent.connected() == Ok(Some(true))
+            }
+        })
         .map(|agent| {
-            let failed = agent
-                .update()
-                .iter()
-                .find_map(|argv| run(agent, argv).err());
+            let failed = if agent == Agent::Cursor {
+                marketplace()
+                    .and_then(|source| cursor::change(Some(&source)))
+                    .err()
+            } else {
+                agent
+                    .update()
+                    .iter()
+                    .find_map(|argv| run(agent, argv).err())
+            };
             json!({"agent": agent.name(), "ok": failed.is_none(), "error": failed.map(|e| e.error)})
         })
         .collect();
@@ -926,7 +977,11 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("agents");
         assert!(atlas_folder(&root));
 
-        for manifest in [".claude-plugin/plugin.json", ".codex-plugin/plugin.json"] {
+        for manifest in [
+            ".claude-plugin/plugin.json",
+            ".codex-plugin/plugin.json",
+            ".cursor-plugin/plugin.json",
+        ] {
             let text = std::fs::read_to_string(root.join("atlas").join(manifest)).unwrap();
             let value: Value = serde_json::from_str(&text).unwrap();
             assert_eq!(value["homepage"], HOMEPAGE, "{manifest}");
@@ -1106,7 +1161,11 @@ mod tests {
     fn the_plugin_matches_this_cli() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("agents");
 
-        for manifest in [".claude-plugin/plugin.json", ".codex-plugin/plugin.json"] {
+        for manifest in [
+            ".claude-plugin/plugin.json",
+            ".codex-plugin/plugin.json",
+            ".cursor-plugin/plugin.json",
+        ] {
             let text = std::fs::read_to_string(root.join("atlas").join(manifest)).unwrap();
             let value: Value = serde_json::from_str(&text).unwrap();
             assert_eq!(value["name"], NAME, "{manifest}");
