@@ -57,13 +57,24 @@ not test on the person's desktop instead, and do not silently skip the check.
    bring back windows an earlier session left unsaved when it launches:
    close those first (Cmd+W, then Cmd+Backspace in the keep-or-delete sheet).
 
-When you start something long, tell the person they can watch it live from
-the Atlas menu bar item, or open the viewer window with `atlas monitor`. In
-an app that shows Atlas's own view (the Claude app, the Codex app), call the
-Atlas `show_screen` tool once as visible work starts: the person sees the
-helper's screen and what you do there, and can stop you. In Claude Code,
-tell the person they can type `/atlas-screen` to see the same. Pi and opencode use the Atlas menu bar or `atlas monitor`; their `show_screen`
-replies are text.
+In an app that shows Atlas's embedded view (the Claude app, the Codex app,
+Cursor IDE), call the Atlas `show_screen` tool once before starting visible
+GUI work. Open it automatically: do not wait for the person to ask or know
+the tool's name. The person sees the helper's screen and can stop you.
+
+Understand ordinary requests such as "show me what you're doing", "let me
+watch", "show the helper screen" or "let me take control" as requests to
+open that same view with `show_screen`. For a viewing-only request, show
+the view without operating the helper. In Cursor, tell the person to click
+**Controls**, then **Take Control** if they want to take over. Only the
+person uses Stop, Resume, Take Control and Give Back in the view; never
+invoke its person-only MCP tools from the agent.
+
+When the host cannot embed the view (Cursor Agent CLI, Pi and opencode),
+use `atlas monitor` to open Atlas's native viewer. Their `show_screen`
+replies are text. The Atlas menu bar also opens the viewer. In Claude Code,
+`/atlas-screen` opens the embedded view where supported. Do not make the
+person remember these commands before they can watch you.
 
 ## Look
 

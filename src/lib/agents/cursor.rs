@@ -89,7 +89,16 @@ pub(super) fn change(marketplace: Option<&Path>) -> Result<Removal> {
 /// route always requests JSON, so no human output or result envelope is added.
 pub async fn hook(config: &Path, event: &str, input: impl Read) -> Value {
     match event {
-        "session-start" => json!({"additional_context":super::brief(config).await}),
+        "session-start" => {
+            let readiness = super::brief(config).await;
+            json!({"additional_context":format!(
+                "{readiness}\nFor GUI work, read the atlas skill and automatically open the live view \
+                 with show_screen in Cursor IDE before starting. Requests to watch, show the helper \
+                 screen or take over mean open that view; do not ask the person to name a tool. \
+                 Cursor Agent CLI uses atlas monitor instead. Only the person operates the \
+                 view's Stop, Resume, Take Control and Give Back; never call those MCP tools yourself."
+            )})
+        }
         "before-shell" => guard(input),
         _ => denied("Atlas received an unknown Cursor hook event"),
     }

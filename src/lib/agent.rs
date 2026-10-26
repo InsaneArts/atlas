@@ -31,7 +31,8 @@ without touching the person's desktop, windows, keyboard or mouse. Use it whenev
 something a person could see in a Mac app (a window, dialog, menu, menu bar item, layout or \
 icon), open the build in the helper and check it before saying it works. Also use it to \
 reproduce on-screen bugs, run installers or anything that opens windows or takes focus, test \
-a web app in Google Chrome or Firefox, take screenshots, and click or type in apps. Not for unit tests, builds \
+a web app in Google Chrome or Firefox, take screenshots, and click or type in apps. Also use it when the person \
+asks to watch the helper, see what you are doing or take over: open the live view for them. Not for unit tests, builds \
 or reading files.";
 
 /// The rules every agent follows, set between the guide's introduction and
