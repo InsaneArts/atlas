@@ -41,6 +41,8 @@ The tested Agent CLI baseline is `2026.10.22-27dcf5f`. Its normal local plugin d
 
 During qualification, Cursor IDE made app-only control descriptions and schemas available to its agent despite their visibility metadata. Atlas therefore guards Cursor's person-operated tools with private authority established by each embedded view. Discovering a tool's name or schema does not authorize its use. A view establishes its own context before enabling controls; another view cannot inherit its control lease. Existing helper, consent and input guards remain in force.
 
+The server also enables this guard when Cursor identifies itself during MCP negotiation, including when Cursor imports Atlas's Claude plugin instead of using the local Cursor launcher. Client identity can only add this restriction; it never authorizes a person action or removes an enabled guard. Reload Cursor after updating Atlas so imported connections also restart with the new server.
+
 Cursor currently offers inline presentation rather than fullscreen. Use **Controls** to expand the embedded view and reach Screen, Activity, Apps, Screenshots and person controls, then **Collapse** to return to the compact card. If a view expires after 15 minutes without requests or cannot establish private controls, reload that view. Atlas does not silently replace expired authority. The native viewer remains available independently.
 
 The agent uses the Atlas CLI for GUI tasks, subject to Atlas's existing helper and input checks. After an Atlas update, reload Cursor fully or end the old Agent session before using the refreshed connection; an existing MCP process can retain its previous tool set.

@@ -23,7 +23,7 @@ use sha2::{Digest, Sha256};
 use std::{
     path::PathBuf,
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
@@ -104,7 +104,7 @@ struct Server {
     /// Offer only what looks: no Stop, Resume, Recover or viewer.
     read_only: bool,
     /// Only a guarded root has a registry. Children are private tool contexts.
-    app_views: Option<Arc<guarded::Registry>>,
+    app_views: OnceLock<Arc<guarded::Registry>>,
     /// Whether the client said it draws MCP Apps views: only then may the
     /// person's Resume be offered, as only such a client keeps a view's
     /// tools from the model.
@@ -158,7 +158,11 @@ pub async fn serve(
         config,
         port,
         read_only,
-        app_views: guard_app_controls.then(|| Arc::new(guarded::Registry::default())),
+        app_views: if guard_app_controls {
+            OnceLock::from(Arc::new(guarded::Registry::default()))
+        } else {
+            OnceLock::new()
+        },
         views: AtomicBool::new(false),
         last: Mutex::new(None),
         framed: Mutex::new(None),
@@ -179,7 +183,7 @@ pub async fn serve(
         let read = tokio::select! {
             read = next_with_maintenance(&mut input, &mut sweeping, || {
                 while answering.try_join_next().is_some() {}
-                if let Some(registry) = &server.app_views {
+                if let Some(registry) = server.app_views.get() {
                     let registry = registry.clone();
                     answering.spawn(async move { registry.sweep(false).await; });
                 }
@@ -195,20 +199,23 @@ pub async fn serve(
             continue;
         }
 
+        let message = line.and_then(|line| {
+            serde_json::from_str::<Value>(&line)
+                .map_err(|_| failure(&Value::Null, -32700, "Parse error"))
+        });
+        // Apply restrictive negotiation in read order, before concurrent
+        // dispatch: a pipelined tool call cannot outrun Cursor's guard.
+        if let Ok(message) = &message {
+            server.prepare(message);
+        }
+
         // Each request is answered on its own, so a frame being made never
         // holds up the status.
         let (server, out) = (server.clone(), out.clone());
         answering.spawn(async move {
-            let reply = match line {
+            let reply = match message {
                 Err(refused) => Some(guarded::Reply::new(refused)),
-                Ok(line) => match serde_json::from_str::<Value>(&line) {
-                    Ok(message) => server.answer(&message).await,
-                    Err(_) => Some(guarded::Reply::new(failure(
-                        &Value::Null,
-                        -32700,
-                        "Parse error",
-                    ))),
-                },
+                Ok(message) => server.answer(&message).await,
             };
 
             if let Some(mut reply) = reply {
@@ -228,7 +235,7 @@ pub async fn serve(
     // The client stopped asking: what it asked last is still answered, and
     // control the person kept from here ends.
     while answering.join_next().await.is_some() {}
-    if let Some(registry) = &server.app_views {
+    if let Some(registry) = server.app_views.get() {
         for _ in 0..3 {
             registry.sweep(true).await;
             if registry.is_empty() {
@@ -330,24 +337,42 @@ fn failure(id: &Value, code: i64, message: &str) -> Value {
 }
 
 impl Server {
+    /// Cursor imports other hosts' plugins too. Its declared client name
+    /// can only add the private-view restriction, never grant authority.
+    /// Once enabled, subsequent negotiation cannot remove that guard.
+    fn prepare(&self, message: &Value) {
+        if message["method"] != "initialize" {
+            return;
+        }
+        let params = &message["params"];
+        let name = params["clientInfo"]["name"]
+            .as_str()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        if name == "cursor" || name.starts_with("cursor-") || name.starts_with("cursor ") {
+            self.app_views
+                .get_or_init(|| Arc::new(guarded::Registry::default()));
+        }
+        let views = params["capabilities"]["extensions"][UI_EXTENSION].is_object();
+        self.views.store(views, Ordering::Relaxed);
+    }
+
     /// The answer to one message; none for a notification.
     async fn answer(&self, message: &Value) -> Option<guarded::Reply> {
+        self.prepare(message);
         let id = message.get("id")?;
         let params = &message["params"];
 
         if message["method"] == "tools/call"
-            && let Some(registry) = &self.app_views
+            && let Some(registry) = self.app_views.get()
         {
             return Some(registry.call(self, id, params).await);
         }
 
         Some(guarded::Reply::new(
             match message["method"].as_str().unwrap_or_default() {
-                "initialize" => {
-                    let views = params["capabilities"]["extensions"][UI_EXTENSION].is_object();
-                    self.views.store(views, Ordering::Relaxed);
-                    success(id, initialized(params))
-                }
+                "initialize" => success(id, initialized(params)),
                 "ping" => success(id, json!({})),
                 "tools/list" => success(id, json!({"tools": self.tools()})),
                 "tools/call" if !self.offers(params["name"].as_str().unwrap_or_default()) => {
@@ -423,10 +448,10 @@ impl Server {
             .flatten()
             .filter(|tool| views || !named(&VIEW_ONLY, tool))
             .filter(|tool| !self.read_only || named(&LOOKING, tool))
-            .filter(|tool| self.app_views.is_none() || views || named(&LOOKING, tool))
+            .filter(|tool| self.app_views.get().is_none() || views || named(&LOOKING, tool))
             .cloned()
             .collect();
-        if self.app_views.is_some() && views && !self.read_only {
+        if self.app_views.get().is_some() && views && !self.read_only {
             for tool in &mut listed {
                 tool["inputSchema"]["properties"][guarded::ARGUMENT] = json!({"type":"string"});
                 if tool["name"] == "show_screen" {

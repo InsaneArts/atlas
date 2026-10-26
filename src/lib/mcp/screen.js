@@ -739,7 +739,10 @@ if (typeof document !== 'undefined') {
         render();
       }
     } catch (error) {
-      if (!superseded) note(callError(error));
+      if (!superseded) {
+        note(callError(error));
+        render();
+      }
     }
     polling = false;
     schedule();

@@ -86,7 +86,7 @@ impl Registry {
             config: root.config.clone(),
             port: root.port,
             read_only: root.read_only,
-            app_views: None,
+            app_views: OnceLock::new(),
             views: AtomicBool::new(true),
             last: Mutex::new(None),
             framed: Mutex::new(None),
@@ -269,8 +269,8 @@ mod tests {
     use super::*;
 
     fn root(path: &std::path::Path) -> Server {
-        let mut root = super::super::tests::server(path);
-        root.app_views = Some(Arc::new(Registry::default()));
+        let root = super::super::tests::server(path);
+        root.app_views.get_or_init(|| Arc::new(Registry::default()));
         root.views.store(true, Ordering::SeqCst);
         root
     }
@@ -279,7 +279,7 @@ mod tests {
     async fn bootstrap_credentials_are_private_and_public_calls_never_claim_control() {
         let dir = tempfile::tempdir().unwrap();
         let root = root(dir.path());
-        let registry = root.app_views.as_ref().unwrap();
+        let registry = root.app_views.get().unwrap();
         let public = registry
             .call(&root, &json!(1), &json!({"name":"show_screen"}))
             .await;
@@ -316,7 +316,7 @@ mod tests {
             .reserve(&root, Some(&json!(token)), false, false)
             .unwrap();
         assert!(minted.is_none());
-        assert!(child.app_views.is_none());
+        assert!(child.app_views.get().is_none());
         assert!(!child.controlling().await);
         assert_eq!(child.client.actor, root.client.actor);
         assert!(child.client.controller.pending().unwrap().is_empty());
@@ -326,7 +326,7 @@ mod tests {
     async fn every_mutation_is_refused_before_reaching_a_child_without_valid_authority() {
         let dir = tempfile::tempdir().unwrap();
         let root = root(dir.path());
-        let registry = root.app_views.as_ref().unwrap();
+        let registry = root.app_views.get().unwrap();
         let names = root.tools();
         for tool in names
             .as_array()
@@ -383,7 +383,7 @@ mod tests {
         for tool in root.tools().as_array().unwrap() {
             assert!(LOOKING.contains(&tool["name"].as_str().unwrap()));
         }
-        let registry = root.app_views.as_ref().unwrap();
+        let registry = root.app_views.get().unwrap();
         let reply = registry
             .call(
                 &root,
@@ -399,7 +399,7 @@ mod tests {
     async fn contexts_are_bounded_and_tokens_cannot_cross_processes_or_expiry() {
         let dir = tempfile::tempdir().unwrap();
         let root = root(dir.path());
-        let registry = root.app_views.as_ref().unwrap();
+        let registry = root.app_views.get().unwrap();
         let mut tokens = Vec::new();
         for _ in 0..LIMIT {
             let (_, reservation, token) = registry.reserve(&root, None, true, false).unwrap();
@@ -427,7 +427,7 @@ mod tests {
     async fn expiry_waits_for_inflight_acquisition_and_retains_unknown_outcomes() {
         let dir = tempfile::tempdir().unwrap();
         let root = root(dir.path());
-        let registry = root.app_views.as_ref().unwrap();
+        let registry = root.app_views.get().unwrap();
         let (_, reservation, token) = registry.reserve(&root, None, true, true).unwrap();
         registry.locked()[0].used = Instant::now() - IDLE - Duration::from_secs(1);
         registry.sweep(false).await;
@@ -447,7 +447,7 @@ mod tests {
     async fn response_delivery_and_teardown_preserve_other_views() {
         let dir = tempfile::tempdir().unwrap();
         let root = root(dir.path());
-        let registry = root.app_views.as_ref().unwrap();
+        let registry = root.app_views.get().unwrap();
         let (first, reservation, token) = registry.reserve(&root, None, true, true).unwrap();
         let (second, second_reservation, _) = registry.reserve(&root, None, true, false).unwrap();
         assert!(!Arc::ptr_eq(&first, &second));
@@ -497,7 +497,7 @@ mod tests {
         use axum::{Router, routing::post};
         let dir = tempfile::tempdir().unwrap();
         let root = root(dir.path());
-        let registry = root.app_views.as_ref().unwrap();
+        let registry = root.app_views.get().unwrap();
         let (first, reservation, _) = registry.reserve(&root, None, true, false).unwrap();
         let (second, other, _) = registry.reserve(&root, None, true, false).unwrap();
         drop(reservation);

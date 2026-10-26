@@ -425,6 +425,24 @@ test('expired private authority disables controls with guidance and never reboot
   assert.equal(page.calls('screen_frame').at(-1).params.arguments._atlasView, page.credential);
 });
 
+test('background polling hides expired person controls immediately without reauthorizing the card', async () => {
+  const page = await guardedView();
+  assert.equal(page.node('[data-action]').hidden, false);
+  assert.equal(page.node('[data-take]').hidden, false);
+  await page.advance(4000);
+  await page.receive({
+    id: page.calls('screen_frame').at(-1).id,
+    error: { code: -32602, message: 'This view authority expired' },
+  });
+  await turns();
+  assert.equal(page.node('[data-action]').hidden, true);
+  assert.equal(page.node('[data-take]').hidden, true);
+  assert.match(page.node('[data-note]').textContent, /Reload the view/);
+  await page.advance(4000);
+  assert.equal(page.calls('show_screen').length, 1);
+  assert.equal(page.calls('screen_frame').at(-1).params.arguments._atlasView, page.credential);
+});
+
 test('a teardown while bootstrap answers closes the eventual context without enabling it', async () => {
   const page = screenView();
   const initialize = page.messages.find((message) => message.method === 'ui/initialize');
