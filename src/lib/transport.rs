@@ -204,6 +204,16 @@ impl Pending {
     }
 }
 
+/// A reply the helper accepted, or its refusal. A successful reply does not
+/// imply a successful child exit; callers inspect that result separately.
+pub(crate) fn accepted(reply: Value) -> Result<Value> {
+    if reply["ok"] == true {
+        Ok(reply)
+    } else {
+        Err(refusal(&reply))
+    }
+}
+
 /// A helper's refusal as an error: its code when it is one of Atlas's, its
 /// words, and whether what it refused may have happened anyway.
 pub(crate) fn refusal(reply: &Value) -> Error {
@@ -324,7 +334,7 @@ pub fn with_output(mut reply: Value) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{OUTPUT_LIMIT, OutputError, Transport, refused, run_output, with_output};
+    use super::{OUTPUT_LIMIT, OutputError, Transport, accepted, refused, run_output, with_output};
     use base64::{Engine, engine::general_purpose::STANDARD};
     use serde_json::json;
 
@@ -478,6 +488,74 @@ mod tests {
             &json!({"ok": false, "code": "something-new", "error": "?", "uncertain": true}),
         );
         assert_eq!((unknown.code, unknown.uncertain), ("daemon", true));
+    }
+
+    #[test]
+    fn a_command_the_helper_stopped_part_way_stays_uncertain_with_its_code() {
+        for code in ["on-console", "restart", "transport"] {
+            let reply = json!({
+                "ok": false,
+                "code": code,
+                "error": "stopped",
+                "uncertain": true,
+            });
+
+            let error = accepted(reply).unwrap_err();
+            assert_eq!(error.code, code);
+            assert!(error.uncertain, "{code}");
+        }
+    }
+
+    #[test]
+    fn a_command_the_helper_never_started_is_a_certain_refusal() {
+        let reply = json!({"ok": false, "code": "spawn-failed", "error": "no such file"});
+
+        let error = accepted(reply).unwrap_err();
+        assert_eq!(error.code, "spawn-failed");
+        assert!(!error.uncertain);
+    }
+
+    #[test]
+    fn a_command_that_ran_to_its_end_is_read_for_its_exit() {
+        let reply = json!({"ok": true, "exitCode": 1, "timedOut": false});
+
+        assert_eq!(accepted(reply.clone()).unwrap(), reply);
+    }
+
+    #[test]
+    fn a_refused_app_listing_never_reads_as_no_apps() {
+        let refused = accepted(json!({"ok": false, "code": "busy", "error": "Busy"}));
+        assert_eq!(refused.map_err(|error| error.code).unwrap_err(), "busy");
+        assert!(accepted(json!({"ok": true, "apps": []})).is_ok());
+    }
+
+    #[test]
+    fn only_explicit_success_is_accepted_and_unknown_refusals_keep_their_details() {
+        for reply in [
+            json!(null),
+            json!({}),
+            json!({"ok": null}),
+            json!({"ok": 0}),
+            json!({"ok": "true"}),
+            json!({"ok": []}),
+            json!({"ok": {}}),
+        ] {
+            let error = accepted(reply).unwrap_err();
+            assert_eq!(error.code, "daemon");
+            assert_eq!(error.error, "The helper refused the request");
+            assert!(!error.uncertain);
+        }
+
+        let error = accepted(json!({
+            "ok": false,
+            "code": "future-code",
+            "error": "The helper stopped",
+            "uncertain": true,
+        }))
+        .unwrap_err();
+        assert_eq!(error.code, "daemon");
+        assert_eq!(error.error, "The helper stopped");
+        assert!(error.uncertain);
     }
 
     /// Only a connection policy forbids is `blocked`; a missing socket or a

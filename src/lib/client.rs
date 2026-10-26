@@ -11,7 +11,7 @@ use crate::{
     doing::Doing,
     error::{Error, Result},
     session::{Display, Epoch, Session, input_current, input_settled, require_hidden},
-    transport::{Transport, run_output},
+    transport::{Transport, accepted, run_output},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use fs2::FileExt;
@@ -35,7 +35,7 @@ pub struct Frame {
 }
 
 /// Identity (device, inode, size, mtime) of the installed executable and its hash.
-type BuildCache = Arc<std::sync::Mutex<Option<((u64, u64, u64, i64, i64), Option<String>)>>>;
+type BuildCache = Arc<std::sync::Mutex<Option<((u64, u64, u64, i64, i64), String)>>>;
 
 /// How long `run` lets a command take unless told otherwise.
 pub const RUN_TIMEOUT: Duration = Duration::from_secs(20);
@@ -880,11 +880,7 @@ impl Client {
         let reply = transport.call(&request).await?;
         validate_completion(&request, &reply)?;
 
-        if reply["ok"] != true {
-            return Err(crate::transport::refusal(&reply));
-        }
-
-        Ok(reply)
+        accepted(reply)
     }
 
     pub async fn apps(&self) -> Result<Value> {
@@ -914,7 +910,7 @@ impl Client {
         if let Some((cached, build)) = self.installed.lock().ok()?.as_ref()
             && *cached == key
         {
-            return build.clone();
+            return Some(build.clone());
         }
 
         // Hashed without the lock, so other callers are not held up. A
@@ -923,7 +919,7 @@ impl Client {
         let build = crate::digest::probe_executable(path).and_then(|path| file_sha256(&path))?;
 
         if let Ok(mut cache) = self.installed.lock() {
-            *cache = Some((key, Some(build.clone())));
+            *cache = Some((key, build.clone()));
         }
 
         Some(build)

@@ -16,6 +16,7 @@ use crate::{
     menubar::{App, Line},
     overview::{READ_DEADLINE, late},
     session::Epoch,
+    transport::accepted,
 };
 use axum::{
     body::{Body, Bytes, to_bytes},
@@ -605,7 +606,7 @@ impl Viewer {
     async fn apps(&self) -> Result<Value> {
         let client = self.client();
         let read = async {
-            let apps = answered(client.apps().await?)?;
+            let apps = accepted(client.apps().await?)?;
             let filter = crate::agent::WindowFilter {
                 app: None,
                 title: None,
@@ -1563,16 +1564,6 @@ fn activity_row(row: &Value, now: u128) -> Value {
         "operation": shown["operation"],
         "count": shown["actionCount"],
     })
-}
-
-/// The helper's reply when it answered with what was asked; a refusal is an
-/// answer too, and never reads as an empty list.
-fn answered(reply: Value) -> Result<Value> {
-    if reply["ok"] == true {
-        Ok(reply)
-    } else {
-        Err(crate::transport::refusal(&reply))
-    }
 }
 
 /// The helper's regular apps as the app lists them, front to back, each
@@ -2754,13 +2745,6 @@ mod tests {
         );
         assert_eq!(listed[2]["windows"], json!([]), "Finder has none");
         assert_eq!(listed[2]["front"], false);
-    }
-
-    #[test]
-    fn a_refused_app_listing_never_reads_as_no_apps() {
-        let refused = answered(json!({"ok": false, "code": "busy", "error": "Busy"}));
-        assert_eq!(refused.map_err(|error| error.code).unwrap_err(), "busy");
-        assert!(answered(json!({"ok": true, "apps": []})).is_ok());
     }
 
     #[tokio::test]

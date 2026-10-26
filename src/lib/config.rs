@@ -83,7 +83,9 @@ impl Config {
             // Only a path with nothing there is "not set up"; a dangling link
             // or an unreadable folder is a file to repair, which init would
             // not replace.
-            if fs::symlink_metadata(path).is_err() {
+            if fs::symlink_metadata(path)
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+            {
                 missing(path)
             } else {
                 Error::new(

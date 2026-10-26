@@ -1428,6 +1428,78 @@ fn provenance_is_never_restored_or_compared() {
     assert_ne!(own, written_by_an_app, "other attributes still count");
 }
 
+#[test]
+fn fingerprint_comparisons_ignore_only_their_intended_fields() {
+    let original = Fingerprint {
+        node: Node {
+            device: 1,
+            inode: 2,
+        },
+        sha256: digest(b"data"),
+        size: 4,
+        mode: 0o600,
+        uid: 501,
+        gid: 20,
+        acl: false,
+        xattrs: BTreeMap::from([
+            ("user.atlas-test".to_owned(), STANDARD.encode(b"owned")),
+            (
+                "com.apple.provenance".to_owned(),
+                STANDARD.encode(b"system"),
+            ),
+        ]),
+        flags: 0,
+    };
+    assert_eq!(original, original.clone());
+    assert!(original.same_contents_and_metadata(&original));
+
+    for field in [
+        "device",
+        "inode",
+        "sha256",
+        "size",
+        "mode",
+        "uid",
+        "gid",
+        "acl",
+        "xattrs",
+        "flags",
+        "provenance",
+    ] {
+        let mut changed = original.clone();
+        match field {
+            "device" => changed.node.device += 1,
+            "inode" => changed.node.inode += 1,
+            "sha256" => changed.sha256 = digest(b"else"),
+            "size" => changed.size += 1,
+            "mode" => changed.mode = 0o700,
+            "uid" => changed.uid += 1,
+            "gid" => changed.gid += 1,
+            "acl" => changed.acl = true,
+            "flags" => changed.flags = 1,
+            "xattrs" | "provenance" => {
+                let key = if field == "xattrs" {
+                    "user.atlas-test"
+                } else {
+                    "com.apple.provenance"
+                };
+                changed
+                    .xattrs
+                    .insert(key.into(), STANDARD.encode(b"changed"));
+            }
+            _ => unreachable!(),
+        }
+        for (left, right) in [(&original, &changed), (&changed, &original)] {
+            assert_eq!(left == right, field == "provenance", "{field}");
+            assert_eq!(
+                left.same_contents_and_metadata(right),
+                matches!(field, "device" | "inode" | "provenance"),
+                "{field}"
+            );
+        }
+    }
+}
+
 /// A file an app in the helper wrote carries that app's provenance. A copy
 /// that only fixes its permissions, and undoing it, still finish.
 #[test]

@@ -265,6 +265,52 @@ fn shipped_example_configuration_parses_and_round_trips() {
 }
 
 #[test]
+fn configuration_lookup_distinguishes_absence_from_broken_links() {
+    use std::{fs, io::ErrorKind, os::unix::fs::symlink};
+
+    let dir = tempfile::tempdir().unwrap();
+    for missing in ["missing.toml", "missing/settings.toml"] {
+        assert_eq!(
+            Config::load(&dir.path().join(missing)).unwrap_err().code,
+            "config"
+        );
+    }
+    let valid = dir.path().join("valid.toml");
+    let expected = config(&fs::canonicalize(dir.path()).unwrap());
+    fs::write(&valid, expected.to_toml().unwrap()).unwrap();
+    assert_eq!(Config::load(&valid).unwrap(), expected);
+
+    let dangling = dir.path().join("dangling.toml");
+    symlink(dir.path().join("missing.toml"), &dangling).unwrap();
+    assert!(
+        fs::symlink_metadata(&dangling)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let looping = dir.path().join("loop");
+    symlink(&looping, &looping).unwrap();
+    assert_eq!(fs::read_link(&looping).unwrap(), looping);
+    let beneath_loop = looping.join("settings.toml");
+    assert_ne!(
+        fs::symlink_metadata(&beneath_loop).unwrap_err().kind(),
+        ErrorKind::NotFound
+    );
+
+    for broken in [dangling, beneath_loop] {
+        let diagnostic = fs::canonicalize(&broken).unwrap_err().to_string();
+        let error = Config::load(&broken).unwrap_err();
+        assert_eq!(error.code, "config-invalid", "{}", broken.display());
+        assert!(
+            error.error.contains(&broken.display().to_string()),
+            "{}",
+            error.error
+        );
+        assert!(error.error.contains(&diagnostic), "{}", error.error);
+    }
+}
+
+#[test]
 fn a_missing_configuration_points_at_a_legacy_json_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("atlas.local.toml");
@@ -829,6 +875,39 @@ fn an_unreadable_installed_build_is_retried_not_cached() {
         client.installed_build().as_deref(),
         Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
     );
+}
+
+#[test]
+fn cloned_clients_share_builds_and_notice_a_replaced_executable() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let dir = tempfile::tempdir().unwrap();
+    let client = Client::new(config(dir.path())).unwrap();
+    let clone = client.clone();
+    let probe = dir.path().join("probe");
+    std::fs::write(&probe, b"abc").unwrap();
+    let original = std::fs::metadata(&probe).unwrap();
+    let first = client.installed_build().unwrap();
+
+    std::fs::set_permissions(&probe, std::fs::Permissions::from_mode(0o000)).unwrap();
+    assert_eq!(clone.installed_build(), Some(first.clone()), "shared cache");
+
+    let replacement = dir.path().join("replacement");
+    std::fs::write(&replacement, b"def").unwrap();
+    std::fs::File::open(&replacement)
+        .unwrap()
+        .set_modified(original.modified().unwrap())
+        .unwrap();
+    let second = atlas::digest::file_sha256(&replacement).unwrap();
+    assert_ne!(first, second);
+    std::fs::rename(&replacement, &probe).unwrap();
+    let replaced = std::fs::metadata(&probe).unwrap();
+    assert_ne!(original.ino(), replaced.ino());
+    assert_eq!(original.size(), replaced.size());
+    assert_eq!(original.modified().unwrap(), replaced.modified().unwrap());
+
+    assert_eq!(clone.installed_build(), Some(second.clone()));
+    assert_eq!(client.installed_build(), Some(second));
 }
 
 #[test]

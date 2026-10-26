@@ -93,8 +93,14 @@ pub(super) struct Fingerprint {
 /// the system sets those itself, so they are kept but never compared.
 impl PartialEq for Fingerprint {
     fn eq(&self, other: &Self) -> bool {
+        self.node == other.node && self.same_contents_and_metadata(other)
+    }
+}
+
+impl Fingerprint {
+    pub fn same_contents_and_metadata(&self, other: &Self) -> bool {
         let Self {
-            node,
+            node: _,
             sha256,
             size,
             mode,
@@ -105,8 +111,7 @@ impl PartialEq for Fingerprint {
             flags,
         } = self;
 
-        *node == other.node
-            && *sha256 == other.sha256
+        *sha256 == other.sha256
             && *size == other.size
             && *mode == other.mode
             && *uid == other.uid
@@ -114,14 +119,6 @@ impl PartialEq for Fingerprint {
             && *acl == other.acl
             && owned_attributes(xattrs).eq(owned_attributes(&other.xattrs))
             && *flags == other.flags
-    }
-}
-
-impl Fingerprint {
-    pub fn same_contents_and_metadata(&self, other: &Self) -> bool {
-        let mut comparable = self.clone();
-        comparable.node = other.node.clone();
-        comparable == *other
     }
 }
 
