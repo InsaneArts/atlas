@@ -29,6 +29,8 @@ atlas update
 
 The normal update verifies the archive checksum, Developer ID signature, notarization and bundle version. It replaces the app by swapping the complete bundle, then moves the helper's executable and services onto the new version. It also refreshes the bundled integrations. Restart or refresh your agent host as described in [Agent connections](agents.md).
 
+Cursor uses a copied local plugin. Atlas refreshes an owned older copy after the app update, and reports a connection failure separately if personal changes or an interrupted operation prevent that refresh. The app update can succeed while a host connection still needs attention. Atlas keeps changed or unrelated Cursor files; it does not overwrite them. Reconnect only Cursor with `atlas agents install --cursor`, then reload its window or start a new Agent session. `atlas agents remove --cursor` also works when the Cursor app and Agent CLI are no longer installed.
+
 After an update completes, check:
 
 ```sh

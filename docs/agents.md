@@ -20,6 +20,7 @@ With no selectors, `install` connects the supported hosts Atlas finds on your Ma
 | Codex          | `--codex`        | The bundled Atlas plugin through a local marketplace, with skills, MCP and session hooks. | Start a new session or task. Review the plugin's hook trust prompt if shown. | `show_screen` in the Codex app when embedded views are supported, or the native viewer.                         |
 | opencode       | `--opencode`     | A linked plugin with the Atlas skill, MCP connection and session brief.                   | Restart opencode after connecting, disconnecting or updating the plugin.     | The native viewer. `show_screen` returns text.                                                                  |
 | Pi             | `--pi`           | The bundled Pi package with the Atlas skill, MCP connection and session brief.            | Start a fresh Pi session or use `/reload`.                                   | The native viewer. `show_screen` returns text.                                                                  |
+| Cursor         | `--cursor`       | A copied local plugin with the Atlas skills, MCP connection and Cursor hooks.             | Reload the Cursor window, or start a new Cursor Agent CLI session.           | `show_screen` where Cursor negotiates MCP Apps, or the native viewer.                                           |
 
 For example, to connect only Claude Desktop:
 
@@ -31,6 +32,22 @@ atlas agents status
 Claude Desktop reads its configuration when it starts, so a new chat without restarting the app may still use the old connection. Atlas preserves other settings and refuses to overwrite an unrelated MCP entry also named `atlas`.
 
 Atlas's Settings groups Claude Code and Claude Desktop into one **Claude** row. The CLI reports them separately as `claude` and `claude-app`. The combined row is connected when all installed parts are connected. Use `atlas agents status` when you need to see which part needs attention.
+
+### Cursor
+
+Connect Cursor with `atlas agents install --cursor`. The Cursor IDE and its separate Agent CLI share one Atlas row; either can be installed on its own. The editor's `cursor` launcher is different from Cursor Agent's `agent` or `cursor-agent` executable.
+
+The tested Agent CLI baseline is `2026.10.22-27dcf5f`. Its normal local plugin discovery loads Atlas's skills, session context, shell guard and MCP status tools. This CLI does not negotiate embedded MCP Apps; use Atlas's native viewer. Cursor IDE `3.27.12` qualification is still in progress, including its embedded live view and person-operated controls.
+
+Atlas copies its own plugin to `~/.cursor/plugins/local/atlas`. It keeps ownership and interrupted-operation records beside the local plugin directory, in `~/.cursor/plugins/.atlas-state`. It does not edit Cursor's MCP settings, user rules or marketplace cache. A link from the local plugin directory into Atlas.app would not load in Cursor, so Atlas maintains a real copy and refreshes it after an Atlas update.
+
+**Configured** in Atlas's app, or `connected: true` in CLI status, means that Atlas verified its registration files. It does not prove that the current Cursor session loaded them. Reload the window or start a new Agent session, then check **Customize** for the Atlas plugin, skills and MCP server. Cursor can require ordinary workspace trust and tool approvals. Permit the Atlas commands and tools you intend to use through Cursor's supported approval controls.
+
+Cursor's enterprise policy can disable local plugin imports. An installed marketplace plugin with the same name can also take precedence over the local copy. If Atlas is configured but missing in a fresh session, check those settings rather than reconnecting repeatedly. Atlas cannot determine every host policy from its registration files. See [Cursor's plugin guide](https://cursor.com/docs/plugins) for the loader and policy rules.
+
+The local integration runs Atlas on this Mac. A remote SSH session or Cloud Agent executing tools on another machine does not gain access to this Mac's helper from a local plugin. Cursor uses the Atlas CLI to open apps and send actions; the MCP connection supplies status and the viewing route.
+
+Use `atlas agents project` in a project to add Atlas's maintained section to `AGENTS.md`. Atlas does not generate `.cursorrules` or edit global Cursor rules.
 
 ## Verify the connection
 
@@ -73,5 +90,7 @@ This removes Atlas's sections and forgets the project in Atlas's list. A file co
 Check `atlas agents status`, confirm the correct host is installed, and reconnect only that host with its selector. Then follow the refresh step in the table. Existing tasks may retain the tools they had when they started.
 
 If the CLI reports a conflicting plugin or configuration entry, inspect that conflict before changing it. Atlas keeps unrelated entries instead of replacing them. For Pi, a personal skill named `atlas` takes precedence over the bundled skill. For opencode, a regular `atlas.js` file or an unrelated plugin link can prevent Atlas from installing its link. The [bundled troubleshooting guide](../agents/atlas/skills/atlas/references/troubleshooting.md) covers these cases.
+
+For Cursor, Atlas preserves an unrelated destination, a changed managed file and any extra personal files. Move that plugin aside yourself before reconnecting; Atlas will not recursively delete it. An interrupted connection is reported by status without changing files. Run `atlas agents install --cursor` or `atlas agents remove --cursor` to recover that recorded operation. Removal can clean up Atlas's owned registration even after Cursor itself is uninstalled. Reload Cursor afterward; an existing session may retain tools from before removal.
 
 If a tool works but the picture or another pane fails, record which host, task type and connection you used, along with the displayed error. Check the native viewer to distinguish a host viewing problem from an unavailable helper. Do not loosen Atlas's connection or input checks to make a card load.

@@ -71,6 +71,10 @@ If `monitor` reports `port-in-use`, choose a free local port with `atlas monitor
 
 Run `atlas agents status` and confirm the intended host is connected. Refresh it using the host-specific steps in [Agent connections](agents.md), then start a new task. Claude Desktop must restart to read changed MCP settings. An old task can retain its earlier tools.
 
+For Cursor, Configured means the registration is intact, not that the running window loaded it. Reload the window and check Customize for Atlas. Local plugin imports may be disabled by enterprise policy, or a marketplace installation named `atlas` may take precedence. A local registration does not connect tools running in a remote VM. Keep Cursor's normal trust and tool approvals in place; approve the specific Atlas operation through those controls.
+
+If a Cursor connection was interrupted, status reports that fact without repairing files. Run `atlas agents install --cursor` or `atlas agents remove --cursor` to recover. If it reports personal or changed files, inspect them and move the conflicting plugin aside yourself before reconnecting. Atlas preserves those files and does not silently replace a personal plugin.
+
 Tool availability and helper readiness are separate. Check both before changing the connection. Do not overwrite a conflicting plugin entry without understanding which installation owns it.
 
 ## Update or uninstall did not finish
