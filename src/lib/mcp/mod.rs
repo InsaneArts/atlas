@@ -33,6 +33,8 @@ use tokio::{
     sync::Mutex,
 };
 
+mod guarded;
+
 /// The MCP Apps extension, as a client declares it draws views.
 const UI_EXTENSION: &str = "io.modelcontextprotocol/ui";
 /// Where a result carries the helper's screen for the view.
@@ -101,6 +103,8 @@ struct Server {
     port: u16,
     /// Offer only what looks: no Stop, Resume, Recover or viewer.
     read_only: bool,
+    /// Only a guarded root has a registry. Children are private tool contexts.
+    app_views: Option<Arc<guarded::Registry>>,
     /// Whether the client said it draws MCP Apps views: only then may the
     /// person's Resume be offered, as only such a client keeps a view's
     /// tools from the model.
@@ -142,12 +146,19 @@ async fn release(held: &Held) {
 }
 
 /// Serve requests from standard input until it closes.
-pub async fn serve(client: Client, config: PathBuf, port: u16, read_only: bool) -> Result<()> {
+pub async fn serve(
+    client: Client,
+    config: PathBuf,
+    port: u16,
+    read_only: bool,
+    guard_app_controls: bool,
+) -> Result<()> {
     let server = Arc::new(Server {
         client,
         config,
         port,
         read_only,
+        app_views: guard_app_controls.then(|| Arc::new(guarded::Registry::default())),
         views: AtomicBool::new(false),
         last: Mutex::new(None),
         framed: Mutex::new(None),
@@ -163,9 +174,16 @@ pub async fn serve(client: Client, config: PathBuf, port: u16, read_only: bool) 
     // process ends the session alike.
     let stopping = crate::watch::stopped();
     tokio::pin!(stopping);
+    let mut sweeping = tokio::time::interval(Duration::from_secs(1));
     loop {
         let read = tokio::select! {
-            read = next_request(&mut input) => read,
+            read = next_with_maintenance(&mut input, &mut sweeping, || {
+                while answering.try_join_next().is_some() {}
+                if let Some(registry) = &server.app_views {
+                    let registry = registry.clone();
+                    answering.spawn(async move { registry.sweep(false).await; });
+                }
+            }) => read,
             () = &mut stopping => break,
         };
         let Ok(Some(line)) = read else {
@@ -182,17 +200,27 @@ pub async fn serve(client: Client, config: PathBuf, port: u16, read_only: bool) 
         let (server, out) = (server.clone(), out.clone());
         answering.spawn(async move {
             let reply = match line {
-                Err(refused) => Some(refused),
+                Err(refused) => Some(guarded::Reply::new(refused)),
                 Ok(line) => match serde_json::from_str::<Value>(&line) {
                     Ok(message) => server.answer(&message).await,
-                    Err(_) => Some(failure(&Value::Null, -32700, "Parse error")),
+                    Err(_) => Some(guarded::Reply::new(failure(
+                        &Value::Null,
+                        -32700,
+                        "Parse error",
+                    ))),
                 },
             };
 
-            if let Some(reply) = reply {
+            if let Some(mut reply) = reply {
                 let mut out = out.lock().await;
-                let _ = out.write_all(format!("{reply}\n").as_bytes()).await;
-                let _ = out.flush().await;
+                if out
+                    .write_all(format!("{}\n", reply.value).as_bytes())
+                    .await
+                    .is_ok()
+                    && out.flush().await.is_ok()
+                {
+                    reply.delivered();
+                }
             }
         });
     }
@@ -200,10 +228,40 @@ pub async fn serve(client: Client, config: PathBuf, port: u16, read_only: bool) 
     // The client stopped asking: what it asked last is still answered, and
     // control the person kept from here ends.
     while answering.join_next().await.is_some() {}
+    if let Some(registry) = &server.app_views {
+        for _ in 0..3 {
+            registry.sweep(true).await;
+            if registry.is_empty() {
+                break;
+            }
+        }
+        if !registry.is_empty() {
+            return Err(Error::new(
+                "menubar",
+                "A view's cleanup is unconfirmed; Atlas retains pending native work for recovery",
+            ));
+        }
+    }
     if let Some(held) = server.held.lock().await.take() {
         release(&held).await;
     }
     Ok(())
+}
+
+/// Maintenance must not cancel a line read after it has consumed a prefix.
+async fn next_with_maintenance<R: AsyncBufRead + Unpin>(
+    input: &mut R,
+    ticks: &mut tokio::time::Interval,
+    mut maintain: impl FnMut(),
+) -> std::io::Result<Option<std::result::Result<String, Value>>> {
+    let read = next_request(input);
+    tokio::pin!(read);
+    loop {
+        tokio::select! {
+            result = &mut read => return result,
+            _ = ticks.tick() => maintain(),
+        }
+    }
 }
 
 /// The next request line from `input`, or the error that answers it: a
@@ -273,30 +331,38 @@ fn failure(id: &Value, code: i64, message: &str) -> Value {
 
 impl Server {
     /// The answer to one message; none for a notification.
-    async fn answer(&self, message: &Value) -> Option<Value> {
+    async fn answer(&self, message: &Value) -> Option<guarded::Reply> {
         let id = message.get("id")?;
         let params = &message["params"];
 
-        Some(match message["method"].as_str().unwrap_or_default() {
-            "initialize" => {
-                let views = params["capabilities"]["extensions"][UI_EXTENSION].is_object();
-                self.views.store(views, Ordering::Relaxed);
-                success(id, initialized(params))
-            }
-            "ping" => success(id, json!({})),
-            "tools/list" => success(id, json!({"tools": self.tools()})),
-            "tools/call" if !self.offers(params["name"].as_str().unwrap_or_default()) => {
-                failure(id, -32602, "Unknown tool")
-            }
-            "tools/call" => success(id, self.call(params).await),
-            "resources/list" => success(id, json!({"resources": [screen_resource()]})),
-            "resources/templates/list" => success(id, json!({"resourceTemplates": []})),
-            "resources/read" if params["uri"] == SCREEN_URI => {
-                success(id, json!({"contents": [screen_contents()]}))
-            }
-            "resources/read" => failure(id, -32002, "Resource not found"),
-            _ => failure(id, -32601, "Method not found"),
-        })
+        if message["method"] == "tools/call"
+            && let Some(registry) = &self.app_views
+        {
+            return Some(registry.call(self, id, params).await);
+        }
+
+        Some(guarded::Reply::new(
+            match message["method"].as_str().unwrap_or_default() {
+                "initialize" => {
+                    let views = params["capabilities"]["extensions"][UI_EXTENSION].is_object();
+                    self.views.store(views, Ordering::Relaxed);
+                    success(id, initialized(params))
+                }
+                "ping" => success(id, json!({})),
+                "tools/list" => success(id, json!({"tools": self.tools()})),
+                "tools/call" if !self.offers(params["name"].as_str().unwrap_or_default()) => {
+                    failure(id, -32602, "Unknown tool")
+                }
+                "tools/call" => success(id, self.call(params).await),
+                "resources/list" => success(id, json!({"resources": [screen_resource()]})),
+                "resources/templates/list" => success(id, json!({"resourceTemplates": []})),
+                "resources/read" if params["uri"] == SCREEN_URI => {
+                    success(id, json!({"contents": [screen_contents()]}))
+                }
+                "resources/read" => failure(id, -32002, "Resource not found"),
+                _ => failure(id, -32601, "Method not found"),
+            },
+        ))
     }
 
     /// The result of the tool `params` names, an error result when it fails.
@@ -351,14 +417,25 @@ impl Server {
     fn tools(&self) -> Value {
         let views = self.views.load(Ordering::Relaxed);
         let named = |names: &[&str], tool: &Value| names.iter().any(|name| tool["name"] == *name);
-        tools()
+        let mut listed: Vec<Value> = tools()
             .as_array()
             .into_iter()
             .flatten()
             .filter(|tool| views || !named(&VIEW_ONLY, tool))
             .filter(|tool| !self.read_only || named(&LOOKING, tool))
+            .filter(|tool| self.app_views.is_none() || views || named(&LOOKING, tool))
             .cloned()
-            .collect()
+            .collect();
+        if self.app_views.is_some() && views && !self.read_only {
+            for tool in &mut listed {
+                tool["inputSchema"]["properties"][guarded::ARGUMENT] = json!({"type":"string"});
+                if tool["name"] == "show_screen" {
+                    tool["inputSchema"]["properties"]["_atlasOpen"] = json!({"type":"boolean"});
+                }
+            }
+            listed.push(json!({"name":"view_close","description":"Close this Atlas view's private context.","inputSchema":{"type":"object","properties":{guarded::ARGUMENT:{"type":"string"}},"required":[guarded::ARGUMENT],"additionalProperties":false},"_meta":app_only()}));
+        }
+        json!(listed)
     }
 
     /// Whether this client is offered the tool `name`.

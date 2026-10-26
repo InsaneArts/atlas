@@ -432,8 +432,19 @@ pub(super) async fn execute(config: PathBuf, command: Command) -> Result<Value> 
         }
         Command::Stop => client()?.hold(true).await,
         Command::Resume => client()?.hold(false).await,
-        Command::Mcp { port, read_only } => {
-            atlas::mcp::serve(client()?, config.clone(), port, read_only).await?;
+        Command::Mcp {
+            port,
+            read_only,
+            guard_app_controls,
+        } => {
+            atlas::mcp::serve(
+                client()?,
+                config.clone(),
+                port,
+                read_only,
+                guard_app_controls,
+            )
+            .await?;
             Ok(Value::Null)
         }
         Command::Monitor { port } => {

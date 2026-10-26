@@ -125,7 +125,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cursor_launches_a_read_only_mcp_server_and_keeps_hook_arguments_separate() {
+    fn cursor_guards_mcp_person_actions_and_keeps_hook_arguments_separate() {
         use std::{fs, os::unix::fs::PermissionsExt, process::Command};
 
         let directory = tempfile::tempdir().unwrap();
@@ -134,7 +134,7 @@ mod tests {
         fs::set_permissions(&atlas, fs::Permissions::from_mode(0o700)).unwrap();
         let launcher = Path::new(env!("CARGO_MANIFEST_DIR")).join("agents/atlas/cursor/launch");
         for (event, expected) in [
-            ("mcp", "mcp\n--read-only\n"),
+            ("mcp", "mcp\n--guard-app-controls\n"),
             (
                 "session-start",
                 "--json\nagents\ncursor-hook\nsession-start\n",

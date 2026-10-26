@@ -31,7 +31,7 @@ The normal update verifies the archive checksum, Developer ID signature, notariz
 
 Cursor uses a copied local plugin. Atlas refreshes an owned older copy after the app update, and reports a connection failure separately if personal changes or an interrupted operation prevent that refresh. The app update can succeed while a host connection still needs attention. Atlas keeps changed or unrelated Cursor files; it does not overwrite them. Reconnect only Cursor with `atlas agents install --cursor`, then reload its window or start a new Agent session. `atlas agents remove --cursor` also works when the Cursor app and Agent CLI are no longer installed.
 
-Cursor's MCP launcher uses `--read-only`; person-operated controls stay in Atlas's native viewer or menu bar. Reload Cursor fully after refreshing the plugin so an older MCP process cannot retain an earlier tool set.
+Cursor's MCP launcher guards person-operated actions with private authority for each embedded view. Reload Cursor fully after refreshing the plugin so an older MCP process cannot retain an earlier tool set. A view with unconfirmed cleanup is retained for recovery; it is not treated as having released control just because it stopped answering.
 
 After an update completes, check:
 

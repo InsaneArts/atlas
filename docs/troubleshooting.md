@@ -63,7 +63,7 @@ Check whether the picture is paused before treating a still image as a failure. 
 
 If the native viewer works but an embedded card fails, check the host and connection route in [Agent connections](agents.md). A card saying the view is unavailable can be a host capability or routing issue. It does not by itself mean Screen Recording is denied. A still screenshot also does not establish that the live view works.
 
-Cursor's MCP connection is deliberately read-only because the tested IDE exposes app-only control schemas to its agent. Resume, Take Control and other mutation tools are unavailable through that connection. Use Atlas's native viewer or menu bar for person-operated controls. The Agent CLI uses the native viewing route; read-only embedded rendering in Cursor IDE is still undergoing qualification.
+Cursor's embedded view establishes private authority before enabling person-operated controls because the tested IDE exposes app-only control schemas to its agent. Use **Controls** to expand its inline card. If the view says its authority expired or is unavailable, reload the view; Atlas will not silently reauthorize a stale card. Close unused cards if the connection has reached its view limit. Unconfirmed cleanup remains retained for recovery. The Agent CLI offers observations and uses the native viewing route. Person-operated embedded control qualification is still in progress.
 
 For Apps, Activity or Screenshots errors, keep the pane's exact message. Check the corresponding observation where available, such as `atlas apps`, and compare the native viewer with the embedded card. Avoid reinstalling the helper merely because one host cannot load a pane.
 

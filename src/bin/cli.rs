@@ -153,6 +153,9 @@ pub(super) enum Command {
         /// Offer only the status and the screen: no Stop, Resume or Recover.
         #[arg(long)]
         read_only: bool,
+        /// Require a private view capability for person-operated MCP actions.
+        #[arg(long, hide = true)]
+        guard_app_controls: bool,
     },
     /// The helper's status as it changes, one JSON line each, for agent apps.
     #[command(hide = true)]
