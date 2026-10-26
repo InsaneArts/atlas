@@ -1,6 +1,6 @@
 #if DEBUG
   extension PreviewStates {
-    /// The Agents pane: Claude and Codex connected, and two projects taught.
+    /// The Agents pane: Claude and Codex connected, Cursor configured, and two projects taught.
     static let settingsAgentsPane = SettingsAgentsState(
       agents: [
         SettingsAgentRow(
@@ -33,6 +33,14 @@
           icon: .mark(.pi),
           connection: .connect(isEnabled: true)
         ),
+        SettingsAgentRow(
+          id: "cursor",
+          title: "Cursor",
+          detail: "Test Mac apps from Cursor",
+          icon: .tile(.text(">_")),
+          connection: .note("Configured"),
+          canDisconnect: true
+        ),
       ],
       projects: [
         SettingsProjectRow(id: "/Users/me/dev/opie", name: "opie", detail: "~/dev/opie", forgetLabel: "Forget opie"),
@@ -46,11 +54,13 @@
       ]
     )
 
-    /// Claude connecting: Connect keeps its width with a spinner in its words' place.
+    /// Claude and Cursor connecting: Connect keeps its width with a spinner in its words' place.
     @MainActor static let settingsAgentsConnecting: SettingsState = {
       var state = selecting(.agents)
       state.agents.agents[0].connection = .connecting
       state.agents.agents[0].canDisconnect = false
+      state.agents.agents[4].connection = .connecting
+      state.agents.agents[4].canDisconnect = false
       return state
     }()
 
@@ -62,6 +72,10 @@
       state.agents.agents[0].problem = "The Claude app couldn't connect: its settings file has a mistake"
       state.agents.agents[0].showsFile = true
       state.agents.agents[0].connection = .connect(isEnabled: true)
+      state.agents.agents[4].detail = "Not installed"
+      state.agents.agents[4].connection = .missing
+      state.agents.agents[4].canDisconnect = false
+      state.agents.agents[4].problem = "Cursor's Atlas files changed. Move the plugin aside before reconnecting."
       state.agents.projects = []
       return state
     }()

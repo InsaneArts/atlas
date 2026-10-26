@@ -68,7 +68,7 @@ struct OnboardingPresenterFinishingTests {
     #expect(
       Self.agentsScreen(unchecked)?.agents.map(\.detail) == [
         OnboardingWords.agentNotChecked, OnboardingWords.agentNotChecked, OnboardingWords.agentNotChecked,
-        OnboardingWords.agentNotChecked,
+        OnboardingWords.agentNotChecked, OnboardingWords.agentNotChecked,
       ],
       "an agent the failed reading never checked reads unchecked, not missing"
     )
@@ -81,7 +81,7 @@ struct OnboardingPresenterFinishingTests {
     snapshot.agents = AgentChoice.all
     #expect(
       OnboardingPresenter.agents(snapshot).agents.map(\.icon) == [
-        .app(AgentLogos.claude), .app(AgentLogos.codex), .mark(.opencode), .mark(.pi),
+        .app(AgentLogos.claude), .app(AgentLogos.codex), .mark(.opencode), .mark(.pi), .tile(.text(">_")),
       ]
     )
     let pixel = try #require(

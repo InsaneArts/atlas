@@ -140,30 +140,34 @@
       #expect(states.contains { $0.helper.ready.contains { $0.item.state != .ready } }, "a check not ready")
     }
 
-    @Test("setup and Settings previews and renders use the bundled original logos for every agent")
+    @Test("setup and Settings previews use original logos and Cursor's neutral fallback")
     func agentPreviewsUseLogos() {
       for preview in PreviewStates.settings {
-        #expect(preview.value.agents.agents.map(\.id) == ["claude", "codex", "opencode", "pi"])
+        #expect(preview.value.agents.agents.map(\.id) == ["claude", "codex", "opencode", "pi", "cursor"])
         #expect(preview.value.agents.agents.first?.title == "Claude")
         for agent in preview.value.agents.agents {
           let expected: RowIcon =
-            agent.id == "pi"
-            ? .mark(.pi)
-            : agent.id == "opencode"
-              ? .mark(.opencode) : .app(agent.id == "codex" ? AgentLogos.codex : AgentLogos.claude)
+            agent.id == "cursor"
+            ? .tile(.text(">_"))
+            : agent.id == "pi"
+              ? .mark(.pi)
+              : agent.id == "opencode"
+                ? .mark(.opencode) : .app(agent.id == "codex" ? AgentLogos.codex : AgentLogos.claude)
           #expect(agent.icon == expected)
         }
       }
       for preview in PreviewStates.onboarding {
         guard case .screen(.agents(let screen)) = preview.value.content else { continue }
-        #expect(screen.agents.map(\.id) == ["claude", "codex", "opencode", "pi"])
+        #expect(screen.agents.map(\.id) == ["claude", "codex", "opencode", "pi", "cursor"])
         #expect(screen.agents.first?.title == "Claude")
         for agent in screen.agents {
           let expected: RowIcon =
-            agent.id == "pi"
-            ? .mark(.pi)
-            : agent.id == "opencode"
-              ? .mark(.opencode) : .app(agent.id == "codex" ? AgentLogos.codex : AgentLogos.claude)
+            agent.id == "cursor"
+            ? .tile(.text(">_"))
+            : agent.id == "pi"
+              ? .mark(.pi)
+              : agent.id == "opencode"
+                ? .mark(.opencode) : .app(agent.id == "codex" ? AgentLogos.codex : AgentLogos.claude)
           #expect(agent.icon == expected)
         }
       }

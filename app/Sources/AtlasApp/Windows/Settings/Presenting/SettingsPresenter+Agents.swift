@@ -64,7 +64,7 @@ extension SettingsPresenter {
     isRemoving: Bool = false
   ) -> SettingsAgentRow.Connection {
     if installing.contains(id) { return isRemoving ? .note("Disconnecting…") : .connecting }
-    if connected { return .connected }
+    if connected { return id == AgentID.cursor.rawValue ? .note("Configured") : .connected }
     if !checked { return .note(failed ? SettingsWords.notChecked : SettingsWords.checking) }
     if !found { return .missing }
     return .connect(isEnabled: installing.isEmpty)

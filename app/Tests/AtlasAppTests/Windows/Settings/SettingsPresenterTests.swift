@@ -63,9 +63,11 @@ struct SettingsPresenterTests {
     let claude = try #require(rows.first { $0.id == "claude" })
     let codex = try #require(rows.first { $0.id == "codex" })
     let opencode = try #require(rows.first { $0.id == "opencode" })
+    let cursor = try #require(rows.first { $0.id == "cursor" })
     #expect(claude.connection == .connect(isEnabled: false), "a partial connection cannot finish yet")
     #expect(codex.connection == .connect(isEnabled: false), "an unconnected agent cannot start yet")
     #expect(opencode.connection == .connected)
+    #expect(cursor.connection == .connect(isEnabled: false))
     #expect(!rows.contains { $0.canDisconnect }, "connected and partial rows must both wait")
   }
 
@@ -79,8 +81,8 @@ struct SettingsPresenterTests {
     }
 
     let rows = SettingsPresenter.agents(snapshot).agents
-    #expect(rows.map(\.id) == ["claude", "codex", "opencode", "pi"])
-    #expect(rows.map(\.showsFile) == [true, false, false, false])
+    #expect(rows.map(\.id) == ["claude", "codex", "opencode", "pi", "cursor"])
+    #expect(rows.map(\.showsFile) == [true, false, false, false, false])
   }
 
   @Test("About shows one control for updates, whatever the update state, and what runs under it, not in it")

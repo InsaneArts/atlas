@@ -3,7 +3,7 @@ import AtlasUI
 import CoreGraphics
 import Foundation
 
-/// The original logo each agent shows in a list: its installed app's live icon, else its bundled logo.
+/// An agent's installed app icon, bundled logo, or neutral tile when neither is available.
 /// Live icons are read through the caller's dependencies, never the workspace directly.
 enum AgentRowIcons {
   /// Each agent's app, by agent id, as its bundle's name.
@@ -11,6 +11,7 @@ enum AgentRowIcons {
     AgentID.claude.rawValue: "Claude.app",
     AgentsStatus.claudeAppID: "Claude.app",
     AgentID.codex.rawValue: "Codex.app",
+    AgentID.cursor.rawValue: "Cursor.app",
   ]
 
   /// The icons of the agents whose apps are installed, in /Applications or the person's own Applications folder.
@@ -36,7 +37,7 @@ enum AgentRowIcons {
     return icons
   }
 
-  /// An agent's original logo, preferring its installed app's live icon over the bundled image.
+  /// An agent's installed app icon, falling back to its bundled logo or a neutral tile.
   ///
   /// - Parameters:
   ///   - id: The agent's id.

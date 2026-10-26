@@ -46,6 +46,7 @@ extension AgentsStatus {
     case AgentID.codex.rawValue: "Codex"
     case AgentID.pi.rawValue: "Pi"
     case AgentID.opencode.rawValue: "opencode"
+    case AgentID.cursor.rawValue: "Cursor"
     default: id
     }
   }
