@@ -37,7 +37,7 @@
           id: "cursor",
           title: "Cursor",
           detail: "Test Mac apps from Cursor",
-          icon: .tile(.text(">_")),
+          icon: .app(AgentLogos.cursor),
           connection: .note("Configured"),
           canDisconnect: true
         ),

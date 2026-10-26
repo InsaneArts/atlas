@@ -81,7 +81,7 @@ struct OnboardingPresenterFinishingTests {
     snapshot.agents = AgentChoice.all
     #expect(
       OnboardingPresenter.agents(snapshot).agents.map(\.icon) == [
-        .app(AgentLogos.claude), .app(AgentLogos.codex), .mark(.opencode), .mark(.pi), .tile(.text(">_")),
+        .app(AgentLogos.claude), .app(AgentLogos.codex), .mark(.opencode), .mark(.pi), .app(AgentLogos.cursor),
       ]
     )
     let pixel = try #require(

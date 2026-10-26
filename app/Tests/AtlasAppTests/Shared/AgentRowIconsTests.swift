@@ -7,18 +7,19 @@ import Testing
 
 @Suite("Agent row icons")
 struct AgentRowIconsTests {
-  @Test("agents use their bundled logos or a neutral fallback when the app is absent")
+  @Test("agents use their bundled logos when the app is absent")
   func bundledLogos() {
     for id in AgentRowIcons.apps.keys {
-      if id == AgentID.cursor.rawValue {
-        #expect(AgentRowIcons.icon(id, [:]) == .tile(.text(">_")))
-        continue
-      }
       guard case .app(let logo) = AgentRowIcons.icon(id, [:]) else {
         Issue.record("Known agent \(id) resolved to a tile")
         continue
       }
-      let expected = id == AgentID.codex.rawValue ? AgentLogos.codex : AgentLogos.claude
+      let expected =
+        switch id {
+        case AgentID.codex.rawValue: AgentLogos.codex
+        case AgentID.cursor.rawValue: AgentLogos.cursor
+        default: AgentLogos.claude
+        }
       #expect(logo == expected)
       #expect(logo.image.width == Int(FileIcons.pixels))
       #expect(logo.image.height == logo.image.width)

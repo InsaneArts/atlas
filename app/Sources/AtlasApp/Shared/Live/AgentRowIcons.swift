@@ -48,6 +48,7 @@ enum AgentRowIcons {
     return switch id {
     case AgentID.claude.rawValue, AgentsStatus.claudeAppID: .app(AgentLogos.claude)
     case AgentID.codex.rawValue: .app(AgentLogos.codex)
+    case AgentID.cursor.rawValue: .app(AgentLogos.cursor)
     case AgentID.pi.rawValue: .mark(.pi)
     case AgentID.opencode.rawValue: .mark(.opencode)
     default: .tile(.text(">_"))

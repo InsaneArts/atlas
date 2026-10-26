@@ -7,6 +7,8 @@ public enum AgentLogos {
   public static let claude = load("ClaudeLogo")
   /// The Codex logo shared by its command line and app.
   public static let codex = load("CodexLogo")
+  /// The Cursor logo shared by its command line and app.
+  public static let cursor = load("CursorLogo")
 
   /// Reads a required logo's Retina pixels from the app bundle, or beside the sources for previews and renders.
   ///

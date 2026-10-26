@@ -140,7 +140,7 @@
       #expect(states.contains { $0.helper.ready.contains { $0.item.state != .ready } }, "a check not ready")
     }
 
-    @Test("setup and Settings previews use original logos and Cursor's neutral fallback")
+    @Test("setup and Settings previews use original agent logos")
     func agentPreviewsUseLogos() {
       for preview in PreviewStates.settings {
         #expect(preview.value.agents.agents.map(\.id) == ["claude", "codex", "opencode", "pi", "cursor"])
@@ -148,7 +148,7 @@
         for agent in preview.value.agents.agents {
           let expected: RowIcon =
             agent.id == "cursor"
-            ? .tile(.text(">_"))
+            ? .app(AgentLogos.cursor)
             : agent.id == "pi"
               ? .mark(.pi)
               : agent.id == "opencode"
@@ -163,7 +163,7 @@
         for agent in screen.agents {
           let expected: RowIcon =
             agent.id == "cursor"
-            ? .tile(.text(">_"))
+            ? .app(AgentLogos.cursor)
             : agent.id == "pi"
               ? .mark(.pi)
               : agent.id == "opencode"
