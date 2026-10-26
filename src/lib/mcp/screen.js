@@ -77,8 +77,9 @@ function ago(seconds) {
 }
 
 /** The one button a state offers beside the screen, if any: the tool it
- * calls and its title. Resume only where the app lets the view call it. */
-function action(state, { canResume = true, ours = false } = {}) {
+ * calls and its title. Read-only views offer no mutation or native-viewer actions. */
+function action(state, { canResume = true, canControl = true, ours = false } = {}) {
+  if (!canControl) return null;
   if (ours) return { tool: 'give_back', title: 'Give Back', primary: true };
   switch (state) {
     case 'working':
@@ -547,15 +548,19 @@ if (typeof document !== 'undefined') {
 
   const showButtons = () => {
     const state = model.status && model.status.state;
-    const offered = action(state, { canResume: model.canResume !== false, ours: model.ours });
+    const offered = action(state, {
+      canResume: model.canResume !== false,
+      canControl: model.canControl,
+      ours: model.ours,
+    });
     const button = one('[data-action]');
     // In a full frame Take Control becomes Give Back; the card says it here.
     const hide = !offered || (full() && offered.tool === 'give_back');
     button.hidden = hide;
+    button.dataset.tool = hide ? '' : offered.tool;
     if (!hide) {
       button.textContent = offered.title;
       button.classList.toggle('primary', offered.primary);
-      button.dataset.tool = offered.tool;
       button.disabled = busy;
     }
 
@@ -568,6 +573,8 @@ if (typeof document !== 'undefined') {
     const keys = one('[data-keys]');
     keys.disabled = !inputFrame(model);
     keys.hidden = !model.canControl;
+    one('[data-recover]').hidden = !model.canControl;
+    one('[data-open-atlas]').hidden = !model.canControl;
 
     const paused = model.picture === 'paused';
     one('[data-pause-glyph]').hidden = paused;
@@ -1386,10 +1393,12 @@ if (typeof document !== 'undefined') {
   }
   one('[data-recover]').addEventListener('click', () => {
     closeMenus();
+    if (!model.canControl) return;
     act('recover', {}, "Atlas couldn't recover the helper");
   });
   one('[data-open-atlas]').addEventListener('click', async () => {
     closeMenus();
+    if (!model.canControl) return;
     try {
       const result = await call('open_viewer', {});
       if (result && result.isError) note(said(result, "Atlas couldn't open its viewer"));

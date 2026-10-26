@@ -20,7 +20,7 @@ With no selectors, `install` connects the supported hosts Atlas finds on your Ma
 | Codex          | `--codex`        | The bundled Atlas plugin through a local marketplace, with skills, MCP and session hooks. | Start a new session or task. Review the plugin's hook trust prompt if shown. | `show_screen` in the Codex app when embedded views are supported, or the native viewer.                         |
 | opencode       | `--opencode`     | A linked plugin with the Atlas skill, MCP connection and session brief.                   | Restart opencode after connecting, disconnecting or updating the plugin.     | The native viewer. `show_screen` returns text.                                                                  |
 | Pi             | `--pi`           | The bundled Pi package with the Atlas skill, MCP connection and session brief.            | Start a fresh Pi session or use `/reload`.                                   | The native viewer. `show_screen` returns text.                                                                  |
-| Cursor         | `--cursor`       | A copied local plugin with the Atlas skills, MCP connection and Cursor hooks.             | Reload the Cursor window, or start a new Cursor Agent CLI session.           | `show_screen` where Cursor negotiates MCP Apps, or the native viewer.                                           |
+| Cursor         | `--cursor`       | A copied local plugin with the Atlas skills, read-only MCP connection and Cursor hooks.   | Reload the Cursor window, or start a new Cursor Agent CLI session.           | Native viewer; read-only embedded viewing is undergoing qualification.                                          |
 
 For example, to connect only Claude Desktop:
 
@@ -37,7 +37,11 @@ Atlas's Settings groups Claude Code and Claude Desktop into one **Claude** row. 
 
 Connect Cursor with `atlas agents install --cursor`. The Cursor IDE and its separate Agent CLI share one Atlas row; either can be installed on its own. The editor's `cursor` launcher is different from Cursor Agent's `agent` or `cursor-agent` executable.
 
-The tested Agent CLI baseline is `2026.10.22-27dcf5f`. Its normal local plugin discovery loads Atlas's skills, session context, shell guard and MCP status tools. This CLI does not negotiate embedded MCP Apps; use Atlas's native viewer. Cursor IDE `3.27.12` qualification is still in progress, including its embedded live view and person-operated controls.
+The tested Agent CLI baseline is `2026.10.22-27dcf5f`. Its normal local plugin discovery loads Atlas's skills, session context, shell guard and MCP status tools. This CLI does not negotiate embedded MCP Apps; use Atlas's native viewer. Cursor IDE `3.27.12` loads the plugin and negotiates MCP Apps, but read-only embedded rendering is still undergoing qualification.
+
+Atlas starts Cursor's MCP server with `--read-only` in both the IDE and Agent CLI. During qualification, Cursor IDE made app-only control descriptions and schemas available to its agent despite their visibility metadata. The Cursor connection therefore omits mutation tools, including Stop, Resume, Take Control, input, recovery and account transitions. Use the native Atlas viewer or menu bar for person-operated controls. An embedded view receives `canControl: false` and `canResume: false`; it may show observations such as Apps, Activity and Screenshots where the host supports them.
+
+The agent can still use the Atlas CLI for GUI tasks, subject to Atlas's existing helper and input checks. Read-only applies to Cursor's MCP connection. After an Atlas update, reload Cursor fully or end the old Agent session before using the refreshed connection; an existing MCP process can retain its previous tool set.
 
 Atlas copies its own plugin to `~/.cursor/plugins/local/atlas`. It keeps ownership and interrupted-operation records beside the local plugin directory, in `~/.cursor/plugins/.atlas-state`. It does not edit Cursor's MCP settings, user rules or marketplace cache. A link from the local plugin directory into Atlas.app would not load in Cursor, so Atlas maintains a real copy and refreshes it after an Atlas update.
 

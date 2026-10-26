@@ -3,6 +3,7 @@
 atlas=$(command -v atlas 2>/dev/null)
 [ -n "$atlas" ] || atlas="$HOME/.local/bin/atlas"
 if [ "$1" = mcp ]; then
-	exec "$atlas" mcp
+	# Cursor's model can discover app-only tools; keep its server read-only.
+	exec "$atlas" mcp --read-only
 fi
 exec "$atlas" --json agents cursor-hook "$1"

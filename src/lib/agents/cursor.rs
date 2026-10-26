@@ -125,6 +125,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cursor_launches_a_read_only_mcp_server_and_keeps_hook_arguments_separate() {
+        use std::{fs, os::unix::fs::PermissionsExt, process::Command};
+
+        let directory = tempfile::tempdir().unwrap();
+        let atlas = directory.path().join("atlas");
+        fs::write(&atlas, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n").unwrap();
+        fs::set_permissions(&atlas, fs::Permissions::from_mode(0o700)).unwrap();
+        let launcher = Path::new(env!("CARGO_MANIFEST_DIR")).join("agents/atlas/cursor/launch");
+        for (event, expected) in [
+            ("mcp", "mcp\n--read-only\n"),
+            (
+                "session-start",
+                "--json\nagents\ncursor-hook\nsession-start\n",
+            ),
+            (
+                "before-shell",
+                "--json\nagents\ncursor-hook\nbefore-shell\n",
+            ),
+        ] {
+            let result = Command::new("/bin/sh")
+                .arg(&launcher)
+                .arg(event)
+                .env_clear()
+                .env("PATH", directory.path())
+                .env("HOME", directory.path())
+                .output()
+                .unwrap();
+            assert!(result.status.success(), "{event}");
+            assert_eq!(result.stdout, expected.as_bytes(), "{event}");
+            assert!(result.stderr.is_empty(), "{event}");
+        }
+    }
+
+    #[test]
     fn cursor_uses_its_own_hook_schema_and_shared_skills_without_a_node_runtime() {
         use std::os::unix::fs::PermissionsExt;
 

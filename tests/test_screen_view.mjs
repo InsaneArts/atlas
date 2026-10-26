@@ -49,6 +49,13 @@ test('each state offers its one action, and Give Back while the person has contr
   assert.equal(view.action('working', { ours: true }).tool, 'give_back');
 });
 
+test('read-only views offer no Stop, Resume, Recover or native-viewer action in any state', () => {
+  for (const state of ['working', 'idle', 'control', 'stopped', 'needsYou', 'notReady']) {
+    assert.equal(view.action(state, { canControl: false, canResume: false }), null, state);
+  }
+  assert.equal(view.action('working', { canControl: false, ours: true }), null);
+});
+
 test('Take Control is offered only where the app may call it and nobody else has control', () => {
   same(view.take({ canControl: false }), { shown: false });
   same(view.take({ canControl: true, ours: true }), {
@@ -188,6 +195,7 @@ function screenView() {
         this.firstChild = children[0];
       },
       focus() {},
+      querySelector: () => null,
       getBoundingClientRect: () => ({
         left: 0,
         top: 0,
@@ -290,6 +298,46 @@ function screenView() {
     calls,
     broadcasts,
   };
+}
+
+for (const [state, tool] of [
+  ['working', 'stop_agent'],
+  ['idle', 'stop_agent'],
+  ['control', 'stop_agent'],
+  ['stopped', 'resume_agent'],
+  ['needsYou', 'recover'],
+  ['notReady', 'open_viewer'],
+]) {
+  test(`negotiated read-only flags hide ${state} actions while full-control views keep them`, async () => {
+    const { node, receive, calls } = screenView();
+    const status = (canControl) =>
+      receive({
+        method: 'ui/notifications/tool-result',
+        params: { structuredContent: { status: { state }, canControl, canResume: canControl } },
+      });
+    await status(true);
+    assert.equal(node('[data-action]').hidden, false);
+    assert.equal(node('[data-action]').dataset.tool, tool);
+    const more = node('[data-menu="more"]');
+    const openMore = () => {
+      more.hidden = true;
+      node('[data-more]').fire('click', { currentTarget: node('[data-more]') });
+    };
+    openMore();
+    assert.equal(node('[data-recover]').hidden, false);
+    assert.equal(node('[data-open-atlas]').hidden, false);
+    await status(false);
+    assert.equal(node('[data-action]').hidden, true);
+    assert.equal(node('[data-action]').dataset.tool, '');
+    assert.equal(node('[data-recover]').hidden, true);
+    assert.equal(node('[data-open-atlas]').hidden, true);
+    await node('[data-action]').fire('click');
+    await node('[data-recover]').fire('click');
+    await node('[data-open-atlas]').fire('click');
+    for (const name of ['stop_agent', 'resume_agent', 'recover', 'open_viewer']) {
+      assert.equal(calls(name).length, 0, name);
+    }
+  });
 }
 
 async function screenshotGrid() {
