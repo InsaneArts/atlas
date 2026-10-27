@@ -606,8 +606,8 @@ mod tests {
     }
 
     #[test]
-    fn the_readme_shows_the_project_section() {
-        let readme = include_str!("../../../README.md");
-        assert!(readme.contains(PROJECT_SECTION.trim_end()));
+    fn the_agent_docs_show_the_project_section() {
+        let docs = include_str!("../../../docs/agents.md");
+        assert!(docs.contains(PROJECT_SECTION.trim_end()));
     }
 }

@@ -1448,7 +1448,7 @@ mod tests {
 
     #[test]
     fn agents_are_told_to_read_both_output_streams_on_failure() {
-        for text in [GUIDE, include_str!("../../README.md")] {
+        for text in [GUIDE.to_owned(), skill()] {
             let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
             assert!(text.contains("A failed action's result is on stdout"));
             assert!(text.contains("command or connection errors are on stderr"));
