@@ -373,13 +373,18 @@ Examples:
 ## atlas apps
 
 ```text
-List the apps open in the helper
+List the apps open in the helper.
+
+Lists apps with a Dock icon and menu bar apps that are not part of macOS; `more` says how many other processes were left out.
 
 Usage: atlas apps [OPTIONS]
 
 Options:
+      --all
+          List every process, macOS's own background ones too
+
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 
 Global options:
       --json

@@ -198,7 +198,14 @@ pub(super) enum Command {
         max_dimension: Option<u32>,
     },
     /// List the apps open in the helper.
-    Apps,
+    ///
+    /// Lists apps with a Dock icon and menu bar apps that are not part of
+    /// macOS; `more` says how many other processes were left out.
+    Apps {
+        /// List every process, macOS's own background ones too.
+        #[arg(long)]
+        all: bool,
+    },
     /// Send several actions at once (a JSON array, or @path/to/actions.json).
     ///
     /// Each action is an object with a "type": move {x, y}; click {x, y,

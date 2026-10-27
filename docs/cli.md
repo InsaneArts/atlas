@@ -33,7 +33,7 @@ atlas environment rollback --help
 | `screenshot` | Save a PNG and report its path and coordinate scale. `capture` is an alias; `--max-dimension` limits the longer image edge.                                                                  |
 | `windows`    | List windows, optionally filtered by `--app`.                                                                                                                                                |
 | `elements`   | Inspect accessibility elements by app, role or name: 50 at most (`--max` changes it), `--full` for every attribute. A `--name` that matches nothing lists the closest names in `candidates`. |
-| `apps`       | List running helper apps and their names.                                                                                                                                                    |
+| `apps`       | List running helper apps and their names: apps with a Dock icon and menu bar apps that are not part of macOS. `--all` adds macOS's own background processes.                                 |
 | `status`     | Inspect the helper's identity, session and permissions.                                                                                                                                      |
 
 Use `doctor` to decide whether a task can start. Use the observation commands to decide what to do inside an app. A screenshot's pixels are not necessarily display points; use its `pointsPerPixel` when calculating input coordinates.

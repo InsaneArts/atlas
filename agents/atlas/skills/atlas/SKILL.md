@@ -105,9 +105,10 @@ person remember these commands before they can watch you.
 
 - `atlas screenshot` saves a PNG and prints its `path`. Open the image and look
   at it; never assume what is on screen.
-- `atlas apps` lists the running apps by name: the names `--app` takes. The
-  ordinary apps are those with `policy: "regular"`; the rest are background
-  processes.
+- `atlas apps` lists the running apps by name: the names `--app` takes. It
+  lists apps with a Dock icon (`policy: "regular"`) and menu bar apps that are
+  not part of macOS; `more` says how many background processes it left out,
+  and `--all` lists them too.
 - `atlas windows [--app NAME]` lists windows front to back with bounds,
   alerts and floating panels included.
 - `atlas elements --app NAME [--role AXButton] [--name LABEL]` lists
@@ -186,7 +187,8 @@ look at it before saying it works:
    A build the helper cannot read is copied first into a folder the helper may
    read but not change.
 4. Check that your build is the one running: `atlas apps` shows each app's
-   `executable` path.
+   `executable` path (`atlas apps --all` for a build that runs in the
+   background only).
 5. Exercise exactly what you changed, with the commands above, taking a
    screenshot at each state that matters. Check the edges too: empty states,
    long text, errors, a second launch.

@@ -481,7 +481,7 @@ pub(super) async fn execute(config: PathBuf, command: Command) -> Result<Value> 
             }
         }
         Command::Screenshot { max_dimension } => client()?.capture(max_dimension).await,
-        Command::Apps => client()?.apps().await,
+        Command::Apps { all } => client()?.apps().await.map(|reply| listed_apps(reply, all)),
         Command::Click {
             x,
             y,
@@ -741,6 +741,35 @@ fn refuse_root(command: &str, root: bool) -> Result<()> {
     Ok(())
 }
 
+/// The helper's `apps` reply as `atlas apps` shows it: apps with a Dock
+/// icon and menu bar apps that are not part of macOS, unless `all`, with
+/// `more` saying how many processes were left out.
+fn listed_apps(mut reply: Value, all: bool) -> Value {
+    let Some(apps) = reply["apps"].as_array_mut() else {
+        return reply;
+    };
+    let before = apps.len();
+
+    if !all {
+        apps.retain(|app| {
+            let executable = app["executable"].as_str().unwrap_or("");
+            match app["policy"].as_str() {
+                Some("regular") => true,
+                Some("accessory") => {
+                    !executable.is_empty()
+                        && !executable.starts_with("/System/")
+                        && !executable.starts_with("/usr/")
+                }
+                _ => false,
+            }
+        });
+    }
+
+    let more = before - apps.len();
+    reply["more"] = json!(more);
+    reply
+}
+
 /// One guarded batch, reporting what the helper performed.
 async fn act(client: &Client, actions: Value) -> Result<Value> {
     client.input(&actions, None, None).await
@@ -786,6 +815,49 @@ mod tests {
             .render_long_help()
             .to_string();
         assert!(!help.contains("cursor-hook"));
+    }
+
+    #[test]
+    fn apps_lists_apps_and_third_party_menu_bar_apps_unless_all() {
+        let reply = json!({"ok": true, "apps": [
+            {"name": "TextEdit", "pid": 1, "policy": "regular",
+             "executable": "/System/Applications/TextEdit.app/Contents/MacOS/TextEdit"},
+            {"name": "Opie", "pid": 2, "policy": "accessory",
+             "executable": "/Applications/Opie.app/Contents/MacOS/Opie"},
+            {"name": "Siri", "pid": 3, "policy": "accessory",
+             "executable": "/System/Library/CoreServices/Siri.app/Contents/MacOS/Siri"},
+            {"name": "loginwindow", "pid": 4, "policy": "accessory",
+             "executable": "/usr/libexec/loginwindow"},
+            {"name": "cfprefsd", "pid": 5, "policy": "prohibited",
+             "executable": "/usr/sbin/cfprefsd"},
+        ]});
+
+        let listed = listed_apps(reply.clone(), false);
+        let names: Vec<&str> = listed["apps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|app| app["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["TextEdit", "Opie"]);
+        assert_eq!(listed["more"], 3);
+        assert_eq!(listed["ok"], true);
+
+        let every = listed_apps(reply, true);
+        assert_eq!(every["apps"].as_array().unwrap().len(), 5);
+        assert_eq!(every["more"], 0);
+    }
+
+    #[test]
+    fn apps_takes_all_to_list_every_process() {
+        assert!(matches!(
+            parse(&["apps", "--all"]).unwrap().command,
+            Some(Command::Apps { all: true })
+        ));
+        assert!(matches!(
+            parse(&["apps"]).unwrap().command,
+            Some(Command::Apps { all: false })
+        ));
     }
 
     #[test]

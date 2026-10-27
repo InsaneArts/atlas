@@ -353,13 +353,10 @@ pub fn capture(value: &Value) -> String {
     lines.join("\n")
 }
 
-/// The helper's apps a person would see in the Dock.
+/// The helper's apps as `atlas apps` chose them, and how many background
+/// processes it left out.
 pub fn apps(value: &Value) -> String {
-    let apps: Vec<&Value> = value["apps"].as_array().into_iter().flatten().collect();
-    let shown: Vec<&&Value> = apps
-        .iter()
-        .filter(|app| app["policy"] == "regular")
-        .collect();
+    let shown: Vec<&Value> = value["apps"].as_array().into_iter().flatten().collect();
     let mut lines = Vec::new();
 
     if shown.is_empty() {
@@ -386,14 +383,14 @@ pub fn apps(value: &Value) -> String {
         lines.push(table::render(&["APP", "PID", "STATE"], &rows));
     }
 
-    let background = apps.len() - shown.len();
+    let background = value["more"].as_u64().unwrap_or(0);
     if background > 0 {
         let what = if background == 1 {
             "1 background process".to_owned()
         } else {
             format!("{background} background processes")
         };
-        lines.push(style::dim(format!("{what} not shown; --json lists them.")));
+        lines.push(style::dim(format!("{what} not shown; --all lists them.")));
     }
 
     lines.join("\n")

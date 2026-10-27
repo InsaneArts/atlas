@@ -23,7 +23,7 @@ pub(super) fn view(command: &Command) -> View {
         Command::Status => View::Status,
         Command::Config => View::Config,
         Command::Screenshot { .. } => View::Capture,
-        Command::Apps => View::Apps,
+        Command::Apps { .. } => View::Apps,
         Command::Windows { .. } => View::Windows,
         Command::Elements { .. } => View::Elements,
         Command::Readiness { .. } => View::Readiness,

@@ -165,17 +165,29 @@ fn windows_are_a_table_with_names_made_safe() {
 }
 
 #[test]
-fn apps_hide_background_processes() {
+fn apps_say_how_many_background_processes_were_left_out() {
     let shown = show(
         View::Apps,
-        json!({"ok": true, "apps": [
+        json!({"ok": true, "more": 1, "apps": [
+            {"name": "TextEdit", "pid": 1, "policy": "regular", "active": true, "hidden": false},
+        ]}),
+    );
+    assert!(shown.out.contains("TextEdit  1    frontmost"));
+    assert!(
+        shown
+            .out
+            .ends_with("1 background process not shown; --all lists them.")
+    );
+
+    let every = show(
+        View::Apps,
+        json!({"ok": true, "more": 0, "apps": [
             {"name": "TextEdit", "pid": 1, "policy": "regular", "active": true, "hidden": false},
             {"name": "loginwindow", "pid": 2, "policy": "accessory", "active": false, "hidden": false},
         ]}),
     );
-    assert!(shown.out.contains("TextEdit  1    frontmost"));
-    assert!(!shown.out.contains("loginwindow"));
-    assert!(shown.out.contains("1 background process not shown"));
+    assert!(every.out.contains("loginwindow"));
+    assert!(!every.out.contains("not shown"));
 }
 
 #[test]
