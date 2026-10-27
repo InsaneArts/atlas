@@ -1200,7 +1200,7 @@ pub async fn elements(
 }
 
 /// The elements of one scan that match `filter`, as `elements` lists them:
-/// each by its role, name, value, centre point and size, its window listed
+/// each by its role, name, value, click point and size, its window listed
 /// once, or with every attribute the scan read when `full`. A name that
 /// matches nothing lists the closest names.
 fn listing(pid: i64, scanned: &Scanned, filter: &ElementFilter, max: usize, full: bool) -> Value {
@@ -1277,7 +1277,7 @@ fn compact<'a>(element: &'a Element, windows: &mut Vec<&'a Frame>) -> Value {
         listed["value"] = json!(value);
     }
     if let Some(frame) = &element.frame {
-        let (x, y) = frame.center();
+        let (x, y) = click_point(element.role.as_deref(), frame);
         listed["at"] = json!([x as i64, y as i64]);
         listed["size"] = json!([frame.width.round() as i64, frame.height.round() as i64]);
     }
@@ -1476,10 +1476,15 @@ fn in_play(elements: &[Element]) -> Vec<&Element> {
 }
 
 /// Up to five elements a refused name may have meant, each with its role,
-/// name and centre point: on several matches, those matches; on none, the
+/// name and click point: on several matches, those matches; on none, the
 /// visible elements whose names are closest to the name asked for.
 fn candidates(seen: &[&Element], matching: &[&Element], filter: &ElementFilter) -> Vec<Value> {
-    let at = |element: &Element| element.frame.as_ref().map(Frame::center);
+    let at = |element: &Element| {
+        element
+            .frame
+            .as_ref()
+            .map(|frame| click_point(element.role.as_deref(), frame))
+    };
 
     if !matching.is_empty() {
         return matching
@@ -1589,7 +1594,7 @@ fn edits(a: &str, b: &str) -> usize {
     row[b.len()]
 }
 
-/// Click the centre of exactly one matching element. Uniqueness needs a
+/// Click exactly one matching element at its click point. Uniqueness needs a
 /// complete scan; the point must be uncovered in the element's own window in
 /// a window list read after the scan; and the click is posted under one
 /// ownership and the epoch observed at the start.
@@ -1620,7 +1625,7 @@ pub async fn click_element(
     let (x, y) = element
         .frame
         .as_ref()
-        .map(Frame::center)
+        .map(|frame| click_point(element.role.as_deref(), frame))
         .unwrap_or_default();
 
     let display = Bounds {
@@ -1671,6 +1676,19 @@ pub async fn click_element(
     result["element"] = clicked(element, (x, y));
 
     Ok(result)
+}
+
+/// Where a click on an element lands: the middle of its frame, or for a
+/// checkbox or radio button the middle of its box, at the leading end of a
+/// frame that may also span a long empty stretch after a short label.
+fn click_point(role: Option<&str>, frame: &Frame) -> (f64, f64) {
+    match role {
+        Some("AXCheckBox" | "AXRadioButton") => (
+            (frame.x + frame.width.min(frame.height) / 2.0).round(),
+            (frame.y + frame.height / 2.0).round(),
+        ),
+        _ => frame.center(),
+    }
 }
 
 /// A clicked element as its reply names it: role, name and the point clicked.
@@ -2247,7 +2265,7 @@ mod tests {
     }
 
     #[test]
-    fn the_default_listing_names_each_element_by_its_centre_and_size() {
+    fn the_default_listing_names_each_element_by_its_click_point_and_size() {
         let window = frame(10.2, 38.0, 800.0, 600.0);
         let mut bold = shown(3, "AXCheckBox", Some("Bold"), None);
         bold.frame = Some(frame(388.0, 51.0, 24.0, 22.4));
@@ -2283,7 +2301,7 @@ mod tests {
                 "matching": 4, "more": 0,
                 "elements": [
                     {"index": 3, "role": "AXCheckBox", "name": "Bold", "value": "0",
-                     "at": [400, 62], "size": [24, 22], "window": 0},
+                     "at": [399, 62], "size": [24, 22], "window": 0},
                     {"index": 17, "role": "AXTextArea", "value": "Hello",
                      "at": [410, 330], "size": [780, 560], "window": 0},
                     {"index": 18, "role": "AXStaticText", "name": "Status",
@@ -2609,6 +2627,50 @@ mod tests {
         assert_eq!(listed["candidates"][0]["name"], "Format");
         let listed = listing(1, &scanned(bar.to_vec()), &named("Format"), 50, false);
         assert!(listed.get("candidates").is_none());
+    }
+
+    #[test]
+    fn a_checkbox_or_radio_button_is_clicked_on_its_box_not_the_middle_of_its_frame() {
+        let wide = frame(100.0, 200.0, 237.0, 18.0);
+        assert_eq!(click_point(Some("AXCheckBox"), &wide), (109.0, 209.0));
+        assert_eq!(click_point(Some("AXRadioButton"), &wide), (109.0, 209.0));
+
+        let tall = frame(100.0, 200.0, 14.0, 30.0);
+        assert_eq!(click_point(Some("AXCheckBox"), &tall), (107.0, 215.0));
+    }
+
+    #[test]
+    fn an_ordinary_button_is_clicked_in_the_middle_of_its_frame() {
+        let wide = frame(100.0, 200.0, 237.0, 18.0);
+        assert_eq!(click_point(Some("AXButton"), &wide), (219.0, 209.0));
+        assert_eq!(click_point(None, &wide), (219.0, 209.0));
+    }
+
+    #[test]
+    fn listed_and_candidate_points_aim_at_a_checkbox_box() {
+        let detectors = |index| {
+            let mut element = shown(index, "AXCheckBox", Some("Data detectors"), None);
+            element.frame = Some(frame(100.0, 200.0 + 30.0 * index as f64, 237.0, 18.0));
+            element
+        };
+
+        let listed = listing(
+            1,
+            &scanned(vec![detectors(0)]),
+            &named("Data detectors"),
+            50,
+            false,
+        );
+        assert_eq!(listed["elements"][0]["at"], json!([109, 209]));
+
+        let error = choose(&[detectors(0), detectors(1)], &named("Data detectors")).unwrap_err();
+        assert_eq!(
+            error.details["candidates"],
+            json!([
+                {"role": "AXCheckBox", "name": "Data detectors", "at": [109, 209]},
+                {"role": "AXCheckBox", "name": "Data detectors", "at": [109, 239]},
+            ])
+        );
     }
 
     #[test]
