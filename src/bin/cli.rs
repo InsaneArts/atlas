@@ -109,7 +109,7 @@ pub(super) enum Command {
     Status,
     /// Check that everything is ready, and say what to fix if not.
     Doctor {
-        /// Include the helper's full status (in --json too).
+        /// Include every check and the helper's full status (in --json too).
         #[arg(long)]
         verbose: bool,
         /// Show how long the last login of the past two hours took, step by step.

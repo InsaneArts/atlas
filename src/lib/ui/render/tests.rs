@@ -192,6 +192,12 @@ fn a_failed_action_says_how_far_it_got() {
         json!({"ok": true, "performed": 1, "element": {"role": "AXButton", "title": "Save"}}),
     );
     assert_eq!(clicked.out, "✓ Clicked \"Save\" (button)");
+
+    let named = show(
+        View::Action("Clicked".into()),
+        json!({"ok": true, "performed": 1, "element": {"at": [25, 25], "name": "Save", "role": "AXButton"}}),
+    );
+    assert_eq!(named.out, "✓ Clicked \"Save\" (button)");
 }
 
 #[test]

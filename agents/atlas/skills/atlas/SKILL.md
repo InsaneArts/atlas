@@ -292,13 +292,13 @@ unless you looked at it in the helper.
 - `/Users/Shared/Atlas/Open` holds the copies `open` makes and is read-only
   for the helper: save or create files in the helper's home instead.
 - Native Save/Open panels work only while an authenticated Screen Sharing
-  session is connected to the helper (`doctor` → `capabilities.nativeDialogs`).
-  Without it, clicks in a panel report `ok` but do nothing; `atlas key escape`
-  closes it. The sheet asking whether to keep a new document (Save As, Where,
-  Delete) is one: `key cmd+backspace` deletes it, `key escape` cancels
-  (again if it stays). Save
-  existing files with Cmd+S, or create files with tools via `run`; report a
-  panel flow you could not drive as not checked.
+  session is connected to the helper
+  (`doctor --verbose` → `capabilities.nativeDialogs`). Without it, clicks in a
+  panel report `ok` but do nothing; `atlas key escape` closes it. The sheet
+  asking whether to keep a new document (Save As, Where, Delete) is one:
+  `key cmd+backspace` deletes it, `key escape` cancels (again if it stays).
+  Save existing files with Cmd+S, or create files with tools via `run`; report
+  a panel flow you could not drive as not checked.
 - The helper's Desktop, Documents and Downloads are protected by macOS: `run`
   gets "Operation not permitted" there. Keep files elsewhere in its home, such
   as `$HOME/atlas-work`.
@@ -307,8 +307,8 @@ unless you looked at it in the helper.
   help windows, apps built on WebKit web views) show a blank page unless a
   Screen Sharing session is connected to the helper, because macOS reports
   the hidden login's windows as not visible and WebKit then stops drawing
-  (`doctor` → `capabilities.webContent`). `atlas open URL` without `--app`
-  opens Safari, so name the browser. `elements` lists the browser's own
+  (`doctor --verbose` → `capabilities.webContent`). `atlas open URL` without
+  `--app` opens Safari, so name the browser. `elements` lists the browser's own
   controls but usually not the page's: read the page from screenshots and
   click by its coordinates. Chrome may open a tab of its own in front of
   yours; switch to yours. Report a page that only a WebKit view shows as not

@@ -32,7 +32,7 @@ Usage: atlas doctor [OPTIONS]
 
 Options:
       --verbose
-          Include the helper's full status (in --json too)
+          Include every check and the helper's full status (in --json too)
 
       --login-timing
           Show how long the last login of the past two hours took, step by step

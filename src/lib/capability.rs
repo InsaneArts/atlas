@@ -233,10 +233,29 @@ pub fn doctor(status: Value, uid: u32) -> Value {
     report
 }
 
-/// Doctor's report without the raw helper status it was judged from: the
-/// verdict, each check, what to do, and which helper and display. `doctor
-/// --verbose` keeps the status for diagnosis.
+/// What doctor warns when the last native Save and Open check failed.
+pub const NATIVE_DIALOGS_FAILED: &str =
+    "Native Save and Open dialogs failed their last check. atlas verify-native checks again.";
+
+/// Doctor's report for programs. A ready helper is only that, with any
+/// warnings. Otherwise it is the report without the raw helper status it was
+/// judged from: the verdict, each check, what to do, and which helper and
+/// display. `doctor --verbose` keeps everything for diagnosis.
 pub fn summary(mut report: Value) -> Value {
+    if report["ready"] == true {
+        let mut warnings = report["warnings"].as_array().cloned().unwrap_or_default();
+        if report["capabilities"]["nativeDialogs"]["state"] == "failed" {
+            warnings.push(json!(NATIVE_DIALOGS_FAILED));
+        }
+
+        let mut ready = json!({"ok": true, "ready": true});
+        if !warnings.is_empty() {
+            ready["warnings"] = json!(warnings);
+        }
+
+        return ready;
+    }
+
     let session = report
         .as_object_mut()
         .and_then(|report| report.remove("session"))
@@ -1116,5 +1135,61 @@ mod tests {
 
         assert_eq!(fixture_text(&path).as_deref(), Some("{\"ok\":true}"));
         assert_eq!(fixture_text(&dir.path().join("missing")), None);
+    }
+
+    fn report(ready: bool, warnings: Value, native: &str) -> Value {
+        json!({
+            "ok": true,
+            "ready": ready,
+            "canObserve": true,
+            "capabilities": {
+                "observe": true,
+                "input": ready,
+                "nativeDialogs": {"state": native},
+                "webContent": {"state": "unknown"},
+            },
+            "checks": [{"kind": "input", "ok": ready}],
+            "nextSteps": if ready { json!([]) } else { json!(["Run atlas start-input."]) },
+            "warnings": warnings,
+            "absence": "loggedOut",
+            "account": "atlas",
+            "session": {
+                "user": {"name": "atlas", "uid": 502},
+                "display": {"width": 1920, "height": 1080},
+            },
+        })
+    }
+
+    #[test]
+    fn a_ready_doctor_tells_programs_only_that_and_its_warnings() {
+        assert_eq!(
+            summary(report(true, json!([]), "unknown")),
+            json!({"ok": true, "ready": true})
+        );
+        assert_eq!(
+            summary(report(true, json!(["The display changed."]), "passed")),
+            json!({"ok": true, "ready": true, "warnings": ["The display changed."]})
+        );
+        assert_eq!(
+            summary(report(true, json!([]), "failed")),
+            json!({"ok": true, "ready": true, "warnings": [NATIVE_DIALOGS_FAILED]})
+        );
+    }
+
+    #[test]
+    fn a_doctor_that_is_not_ready_keeps_every_check_for_programs() {
+        let summed = summary(report(false, json!(["The display changed."]), "failed"));
+
+        assert_eq!(summed["ok"], true);
+        assert_eq!(summed["ready"], false);
+        assert_eq!(summed["helper"], json!({"name": "atlas", "uid": 502}));
+        assert_eq!(summed["display"], json!({"width": 1920, "height": 1080}));
+        assert_eq!(summed["checks"], json!([{"kind": "input", "ok": false}]));
+        assert_eq!(summed["nextSteps"], json!(["Run atlas start-input."]));
+        assert_eq!(summed["warnings"], json!(["The display changed."]));
+        assert_eq!(summed["capabilities"]["nativeDialogs"]["state"], "failed");
+        assert_eq!(summed["absence"], "loggedOut");
+        assert_eq!(summed["account"], "atlas");
+        assert!(summed.get("session").is_none());
     }
 }

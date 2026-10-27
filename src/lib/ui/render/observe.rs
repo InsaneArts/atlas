@@ -159,8 +159,9 @@ pub fn doctor(value: &Value, verbose: bool) -> String {
     let native = &value["capabilities"]["nativeDialogs"];
     if native["state"] == "failed" {
         lines.push(format!(
-            "{} Native Save and Open dialogs failed their last check. atlas verify-native checks again.",
-            style::warn()
+            "{} {}",
+            style::warn(),
+            crate::capability::NATIVE_DIALOGS_FAILED
         ));
     }
 

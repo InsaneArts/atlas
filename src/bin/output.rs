@@ -115,8 +115,7 @@ pub(super) fn emit(format: Format, view: &View, value: &Value) {
 
     match format {
         Format::Json => {
-            let text = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
-            let _ = writeln!(std::io::stdout().lock(), "{text}");
+            let _ = writeln!(std::io::stdout().lock(), "{}", program_text(value));
         }
         Format::Human => {
             let shown = render::render(view, value);
@@ -134,6 +133,11 @@ pub(super) fn emit(format: Format, view: &View, value: &Value) {
             }
         }
     }
+}
+
+/// A result as programs read it: one line of JSON.
+fn program_text(value: &Value) -> String {
+    value.to_string()
 }
 
 /// Write `text` as it is. A reader that went away (`| head`) ends the
@@ -156,6 +160,19 @@ pub(super) fn failed(result: &Value) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn programs_get_each_result_on_one_line() {
+        let value = json!({
+            "ok": true,
+            "text": "first line\nsecond line",
+            "nested": {"list": [1, {"deep": "a\nb"}], "empty": {}},
+        });
+        let text = program_text(&value);
+
+        assert!(!text.contains('\n'), "{text}");
+        assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), value);
+    }
 
     #[test]
     fn null_and_ordinary_success_results_keep_a_successful_exit_status() {

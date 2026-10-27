@@ -1114,7 +1114,7 @@ pub async fn serve(client: Client, port: u16, program: crate::menubar::Program) 
     if crate::ui::human() {
         println!("The menu bar is running. Quit it from its menu, or press Ctrl-C here.");
     } else {
-        println!("{}", serde_json::to_string_pretty(&shown)?);
+        println!("{shown}");
     }
 
     let timer_view = viewer.clone();
@@ -1218,9 +1218,7 @@ fn already_running(output: &Path, port: u16, taken: Error) -> Result<()> {
     } else {
         println!(
             "{}",
-            serde_json::to_string_pretty(
-                &json!({"ok": true, "alreadyRunning": true, "running": true, "pid": bar["pid"]})
-            )?
+            json!({"ok": true, "alreadyRunning": true, "running": true, "pid": bar["pid"]})
         );
     }
 
@@ -1249,10 +1247,7 @@ pub async fn monitor(config: &Path, port: u16, output: &Path) -> Result<()> {
             crate::ui::style::ok()
         );
     } else {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({"ok": true, "viewer": "open"}))?
-        );
+        println!("{}", json!({"ok": true, "viewer": "open"}));
     }
 
     Ok(())

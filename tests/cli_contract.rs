@@ -255,10 +255,7 @@ fn assert_missing_update_finish(output: Output) {
         );
     } else {
         assert_eq!(output.status.code(), Some(0));
-        assert_eq!(
-            serde_json::from_slice::<Value>(&output.stdout).unwrap(),
-            json!({"ok": true, "next": "atlas init"})
-        );
+        assert_eq!(output.stdout, b"{\"next\":\"atlas init\",\"ok\":true}\n");
         assert!(output.stderr.is_empty());
     }
 }

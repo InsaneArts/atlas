@@ -199,10 +199,10 @@ pub fn card(message: &str, code: Option<&str>, uncertain: bool) -> String {
     lines.join("\n")
 }
 
-/// What an accessibility element is called: its first non-empty title,
-/// description or identifier.
+/// What an accessibility element is called: its first non-empty name,
+/// title, description or identifier.
 fn element_name(element: &Value) -> Option<&str> {
-    ["title", "description", "identifier"]
+    ["name", "title", "description", "identifier"]
         .iter()
         .filter_map(|key| element[*key].as_str())
         .find(|name| !name.is_empty())

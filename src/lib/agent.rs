@@ -891,6 +891,20 @@ fn label(element: &Element) -> Option<&str> {
         .flatten()
 }
 
+/// What an element is called: its title, description, label text or
+/// identifier, the first that is not empty.
+pub(crate) fn shown_name(element: &Element) -> Option<&str> {
+    [
+        element.title.as_deref(),
+        element.description.as_deref(),
+        label(element),
+        element.identifier.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|name| !name.is_empty())
+}
+
 /// Layers from the Dock's up hold the Dock, the menu bar and system overlays,
 /// never an app's own windows.
 const DOCK_LAYER: i64 = 20;
@@ -1317,9 +1331,22 @@ pub async fn click_element(
 
     let actions = click(x, y, which, count, modifiers);
     let mut result = client.input_owned(&ownership, &actions, &epoch).await?;
-    result["element"] = json!(element);
+    result["element"] = clicked(element, (x, y));
 
     Ok(result)
+}
+
+/// A clicked element as its reply names it: role, name and the point clicked.
+fn clicked(element: &Element, (x, y): (f64, f64)) -> Value {
+    let mut named = json!({"at": [x as i64, y as i64]});
+    if let Some(role) = &element.role {
+        named["role"] = json!(role);
+    }
+    if let Some(name) = shown_name(element) {
+        named["name"] = json!(name);
+    }
+
+    named
 }
 
 #[cfg(test)]
@@ -1661,6 +1688,30 @@ mod tests {
         let mut field = element("AXTextField", None, None);
         field.value = Some("Main".into());
         assert!(!filter.matches(&field), "typed text is not a name");
+    }
+
+    #[test]
+    fn a_named_click_reports_only_role_name_and_point() {
+        let mut button = element("AXButton", Some("Save"), Some("Save the file"));
+        button.identifier = Some("save".into());
+        assert_eq!(
+            clicked(&button, (25.0, 25.0)),
+            json!({"at": [25, 25], "name": "Save", "role": "AXButton"})
+        );
+
+        let mut label = element("AXStaticText", Some(""), None);
+        label.value = Some("Main".into());
+        assert_eq!(
+            clicked(&label, (3.0, 4.0)),
+            json!({"at": [3, 4], "name": "Main", "role": "AXStaticText"})
+        );
+
+        let mut field = element("AXTextField", None, None);
+        field.value = Some("typed".into());
+        assert_eq!(
+            clicked(&field, (3.0, 4.0)),
+            json!({"at": [3, 4], "role": "AXTextField"})
+        );
     }
 
     /// A label that joins several parts (SwiftUI's combined rows) is

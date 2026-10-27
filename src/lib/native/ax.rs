@@ -448,15 +448,26 @@ pub struct Element {
     pub index: usize,
     pub depth: usize,
     /// Frame of the top-level window (or open menu) this element belongs to.
+    /// Like the attributes below, it is left out when the scan did not read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<Frame>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subrole: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identifier: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focused: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame: Option<Frame>,
     /// Selector attributes (role, title, description, value, identifier)
     /// that could not be read, so this element might match a selector unseen.
@@ -994,6 +1005,79 @@ mod tests {
         let (code, message) = failed(Some(AXError::Failure), true, true);
         assert_eq!(code, "elements");
         assert!(message.contains("-25200"));
+    }
+
+    fn button() -> Element {
+        Element {
+            index: 4,
+            depth: 2,
+            window: None,
+            role: Some("AXButton".into()),
+            subrole: None,
+            title: None,
+            description: None,
+            value: None,
+            identifier: None,
+            enabled: None,
+            focused: None,
+            frame: None,
+            unreadable: Vec::new(),
+            truncated: Vec::new(),
+            menu: false,
+            mark: None,
+        }
+    }
+
+    #[test]
+    fn an_element_leaves_out_what_the_scan_did_not_read() {
+        assert_eq!(
+            serde_json::to_value(button()).unwrap(),
+            serde_json::json!({"index": 4, "depth": 2, "role": "AXButton"})
+        );
+    }
+
+    #[test]
+    fn an_element_reads_back_without_its_absent_fields() {
+        let element = button();
+        let written = serde_json::to_string(&element).unwrap();
+        assert_eq!(serde_json::from_str::<Element>(&written).unwrap(), element);
+
+        let older = serde_json::json!({
+            "index": 4,
+            "depth": 2,
+            "window": null,
+            "role": "AXButton",
+            "subrole": null,
+            "title": null,
+            "description": null,
+            "value": null,
+            "identifier": null,
+            "enabled": null,
+            "focused": null,
+            "frame": null,
+        });
+        assert_eq!(serde_json::from_value::<Element>(older).unwrap(), element);
+
+        let full = Element {
+            window: Some(Frame {
+                x: 0.0,
+                y: 0.0,
+                width: 600.0,
+                height: 400.0,
+            }),
+            title: Some("Save".into()),
+            enabled: Some(true),
+            focused: Some(false),
+            frame: Some(Frame {
+                x: 10.0,
+                y: 20.0,
+                width: 30.0,
+                height: 10.0,
+            }),
+            ..button()
+        };
+        let written = serde_json::to_string(&full).unwrap();
+        assert_eq!(serde_json::from_str::<Element>(&written).unwrap(), full);
     }
 
     #[test]

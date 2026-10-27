@@ -51,9 +51,9 @@ For a partial environment transaction, keep its plan ID and follow the [environm
 
 ## A native dialog does not respond, or a browser is blank
 
-Native Save and Open panels require an authenticated Screen Sharing connection to the helper. Check `doctor`'s `capabilities.nativeDialogs`. An input result can be successful even when the panel ignored the click. If you do not need to complete the dialog, Escape can close it.
+Native Save and Open panels require an authenticated Screen Sharing connection to the helper. Check `capabilities.nativeDialogs` in `doctor --verbose`. An input result can be successful even when the panel ignored the click. If you do not need to complete the dialog, Escape can close it.
 
-Use Google Chrome or Firefox for a web app in the hidden helper. Safari and other WebKit views can remain blank without Screen Sharing. Pass `--app` when opening a URL so the default browser does not decide the result. `capabilities.webContent` explains this constraint; it is not proof that the page loaded. See [practical limits](using-atlas.md#settings-and-practical-limits).
+Use Google Chrome or Firefox for a web app in the hidden helper. Safari and other WebKit views can remain blank without Screen Sharing. Pass `--app` when opening a URL so the default browser does not decide the result. `capabilities.webContent` in `doctor --verbose` explains this constraint; it is not proof that the page loaded. See [practical limits](using-atlas.md#settings-and-practical-limits).
 
 If a named click fails, run `atlas elements --app NAME` and check its role and label. A hidden or ambiguous element is refused. Use fresh screenshot coordinates only after inspecting the target.
 

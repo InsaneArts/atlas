@@ -15,12 +15,12 @@ atlas environment rollback --help
 
 ### Get started
 
-| Command   | Use it to                                                                                                                              |
-| --------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `init`    | Set up the helper interactively. See [Getting started](getting-started.md).                                                            |
-| `doctor`  | Check readiness and read the next steps. `--verbose` includes full status; `--login-timing` reports the recent login's timing instead. |
-| `agents`  | Show or change [agent connections](agents.md).                                                                                         |
-| `menubar` | Start the menu bar panel. `--login on`, `--login off` and `--login status` manage Open at Login.                                       |
+| Command   | Use it to                                                                                                                                                                                                                      |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `init`    | Set up the helper interactively. See [Getting started](getting-started.md).                                                                                                                                                    |
+| `doctor`  | Check readiness and read the next steps. In JSON mode, a ready helper answers only `ready` and any warnings. `--verbose` includes every check and the full status; `--login-timing` reports the recent login's timing instead. |
+| `agents`  | Show or change [agent connections](agents.md).                                                                                                                                                                                 |
+| `menubar` | Start the menu bar panel. `--login on`, `--login off` and `--login status` manage Open at Login.                                                                                                                               |
 
 `atlas agents status` reports connections, and `atlas agents status --brief` gives a short session summary. `install` and `remove` accept host selectors. `project DIR` adds project instructions; `forget DIR` removes Atlas's sections. See the [connection guide](agents.md) for the selectors and refresh steps.
 
@@ -105,7 +105,7 @@ See [Maintenance](maintenance.md) before updating, removing or repairing Atlas. 
 
 Ordinary command results are readable text in a terminal and JSON when redirected or piped. `ATLAS_JSON` can override that default; explicit `--json` wins. Help, version and `atlas agents status --brief` output are text, and `atlas agent-guide` prints Markdown. Interactive setup and commands that open a UI are not a stream of JSON results.
 
-In JSON mode, a returned action result goes to stdout, including a result with `ok: false`. Command, configuration and connection errors go to stderr. On failure, read both streams. Do not assume an empty stdout means nothing happened.
+In JSON mode, each result is one line of JSON. A returned action result goes to stdout, including a result with `ok: false`. Command, configuration and connection errors go to stderr. On failure, read both streams. Do not assume an empty stdout means nothing happened.
 
 The process exits with status 0 for success, 1 for a failed result or execution error, and 2 for invalid command syntax. Two useful exceptions to treating `ok` as success are:
 

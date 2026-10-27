@@ -971,8 +971,8 @@ fn closed(text: &str) -> Result<Vec<u32>, Refusal> {
 
 /// What the steps' lines say: a refusal (when a creation made no account,
 /// sysadminctl's own last words say why), or the readying's reply, which
-/// must be ok. The reply is `setup-helper`'s JSON over several lines, so it
-/// is the rest of the text after its mark.
+/// must be ok. The reply is `setup-helper`'s JSON, the rest of the text
+/// after its mark.
 fn outcome(text: &str) -> Result<(), Refusal> {
     let before = text.split(MARK).next().unwrap_or_default();
     // What follows a mark, to the end of its line, wherever the mark is.

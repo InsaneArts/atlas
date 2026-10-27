@@ -48,9 +48,7 @@ pub async fn start(config: &Path, port: u16, output: &Path) -> Result<()> {
     } else {
         println!(
             "{}",
-            serde_json::to_string_pretty(
-                &serde_json::json!({"ok": true, "running": true, "alreadyRunning": already, "pid": record["pid"]})
-            )?
+            serde_json::json!({"ok": true, "running": true, "alreadyRunning": already, "pid": record["pid"]})
         );
     }
 
