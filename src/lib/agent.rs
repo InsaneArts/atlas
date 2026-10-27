@@ -1295,6 +1295,7 @@ fn compact<'a>(element: &'a Element, windows: &mut Vec<&'a Frame>) -> Value {
     let flags = [
         ("disabled", element.enabled == Some(false)),
         ("focused", element.focused == Some(true)),
+        ("selected", element.selected == Some(true)),
         ("menu", element.menu),
     ];
     for (flag, set) in flags {
@@ -1998,6 +1999,7 @@ mod tests {
             identifier: None,
             enabled: Some(true),
             focused: None,
+            selected: None,
             frame: None,
             unreadable: Vec::new(),
             truncated: Vec::new(),
@@ -2323,11 +2325,13 @@ mod tests {
         let mut off = shown(0, "AXButton", Some("Save"), None);
         off.enabled = Some(false);
         off.focused = Some(false);
+        off.selected = Some(false);
         off.value = Some(String::new());
 
         let mut on = shown(1, "AXMenuItem", Some("Ruler"), None);
         on.enabled = Some(true);
         on.focused = Some(true);
+        on.selected = Some(true);
         on.menu = true;
         on.mark = Some("✓".into());
         on.truncated = vec!["AXTitle".into()];
@@ -2344,6 +2348,7 @@ mod tests {
         assert_eq!(elements[0]["disabled"], true);
         for absent in [
             "focused",
+            "selected",
             "menu",
             "mark",
             "value",
@@ -2355,6 +2360,7 @@ mod tests {
 
         assert!(elements[1].get("disabled").is_none());
         assert_eq!(elements[1]["focused"], true);
+        assert_eq!(elements[1]["selected"], true);
         assert_eq!(elements[1]["menu"], true);
         assert_eq!(elements[1]["mark"], "✓");
         assert_eq!(elements[1]["truncated"], json!(["AXTitle"]));
