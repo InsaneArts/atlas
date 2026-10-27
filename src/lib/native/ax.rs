@@ -16,7 +16,7 @@ use objc2_core_foundation::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
+    collections::{BTreeSet, HashSet},
     ptr::NonNull,
     time::{Duration, Instant},
 };
@@ -91,6 +91,75 @@ fn bounded_string(value: &CFString) -> Option<(String, bool)> {
     Some((part.to_string(), truncated))
 }
 
+/// Why a scan is incomplete.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Stop {
+    /// Some elements are nested deeper than the scan reads.
+    Depth,
+    /// The app has more elements than the scan reads.
+    Count,
+    /// The scan ran out of time.
+    Time,
+    /// Part of the app could not be read.
+    Unread,
+}
+
+impl Stop {
+    const ALL: [Stop; 4] = [Stop::Depth, Stop::Count, Stop::Time, Stop::Unread];
+
+    /// The word a reply names it by.
+    pub fn word(self) -> &'static str {
+        match self {
+            Stop::Depth => "depth",
+            Stop::Count => "count",
+            Stop::Time => "time",
+            Stop::Unread => "unread",
+        }
+    }
+
+    /// The reason a reply names by `word`, if it is one of these.
+    pub fn parse(word: &str) -> Option<Stop> {
+        Stop::ALL.into_iter().find(|stop| stop.word() == word)
+    }
+
+    /// Why the scan stopped, in plain words.
+    pub fn said(self) -> &'static str {
+        match self {
+            Stop::Time => "it ran out of time",
+            Stop::Count => "the app has more elements than Atlas reads",
+            Stop::Depth => "some elements are nested too deep",
+            Stop::Unread => "part of the app could not be read",
+        }
+    }
+}
+
+/// Why a scan stopped, from the reasons a reply names, in plain words
+/// joined into one phrase; None when it names none Atlas knows.
+pub fn why<'a>(words: impl IntoIterator<Item = &'a str>) -> Option<String> {
+    let said: Vec<&str> = words
+        .into_iter()
+        .filter_map(Stop::parse)
+        .map(Stop::said)
+        .collect();
+
+    match said.as_slice() {
+        [] => None,
+        [one] => Some((*one).to_owned()),
+        [rest @ .., last] => Some(format!("{} and {last}", rest.join(", "))),
+    }
+}
+
+/// Whether an `"attribute:code"` error key says something went wrong,
+/// rather than that the element simply lacks the attribute.
+pub fn telling(key: &str) -> bool {
+    let code = key
+        .rsplit_once(':')
+        .and_then(|(_, code)| code.parse::<i32>().ok());
+
+    code.is_none_or(|code| !ABSENT.iter().any(|absent| absent.0 == code))
+}
+
 /// Take over the reference a successful Copy wrote to `slot`, if any.
 ///
 /// # Safety
@@ -100,12 +169,14 @@ unsafe fn adopt<T: objc2_core_foundation::Type>(slot: *const T) -> Option<CFReta
     NonNull::new(slot.cast_mut()).map(|value| unsafe { CFRetained::from_raw(value) })
 }
 
-/// One traversal: its deadline, whether anything made it incomplete, the
-/// selector attributes the current element failed to read or reported only
-/// in part, and how often each attribute returned each AX error.
+/// One traversal: its deadline, whether anything made it incomplete and
+/// why, the selector attributes the current element failed to read or
+/// reported only in part, and how often each attribute returned each AX
+/// error.
 struct Scan {
     deadline: Instant,
     incomplete: bool,
+    stops: BTreeSet<Stop>,
     unreadable: Vec<String>,
     truncated: Vec<String>,
     errors: std::collections::BTreeMap<String, usize>,
@@ -118,6 +189,7 @@ impl Scan {
         Self {
             deadline,
             incomplete: false,
+            stops: BTreeSet::new(),
             unreadable: Vec::new(),
             truncated: Vec::new(),
             errors: Default::default(),
@@ -129,8 +201,16 @@ impl Scan {
     /// incomplete and nothing more is asked.
     fn open(&mut self) -> bool {
         let open = Instant::now() < self.deadline;
-        self.incomplete |= !open;
+        if !open {
+            self.stop(Stop::Time);
+        }
         open
+    }
+
+    /// The scan is incomplete, for this reason.
+    fn stop(&mut self, why: Stop) {
+        self.incomplete = true;
+        self.stops.insert(why);
     }
 
     fn failed(&mut self, status: AXError, attribute: &str) {
@@ -141,7 +221,7 @@ impl Scan {
         let getter_failed = status == AXError::Failure && TEXT_SELECTORS.contains(&attribute);
 
         if INCOMPLETE.contains(&status) {
-            self.incomplete = true;
+            self.stop(Stop::Unread);
         } else if !ABSENT.contains(&status) && !getter_failed && SELECTORS.contains(&attribute) {
             self.unreadable.push(attribute.to_owned());
         }
@@ -240,30 +320,15 @@ impl Scan {
         attribute: &'static str,
         maximum: usize,
     ) -> Vec<CFRetained<AXUIElement>> {
-        if !self.open() {
-            return Vec::new();
-        }
-
-        let name = CFString::from_static_str(attribute);
-        let mut count: CFIndex = 0;
-        // SAFETY: a valid output slot for the count.
-        let status = unsafe { element.attribute_value_count(&name, NonNull::from(&mut count)) };
-        if status != AXError::Success {
-            self.failed(status, attribute);
-            if !ABSENT.contains(&status) {
-                self.incomplete = true;
-            }
-
-            return Vec::new();
-        }
-
+        let count = self.count(element, attribute);
         if count <= 0 {
             return Vec::new();
         }
 
+        let name = CFString::from_static_str(attribute);
         let wanted = count.min(CFIndex::try_from(maximum).unwrap_or(CFIndex::MAX));
         if wanted < count {
-            self.incomplete = true;
+            self.stop(Stop::Count);
         }
 
         let mut array: *const CFArray = std::ptr::null();
@@ -278,7 +343,7 @@ impl Scan {
             .flatten()
         else {
             self.failed(status, attribute);
-            self.incomplete = true;
+            self.stop(Stop::Unread);
             return Vec::new();
         };
 
@@ -290,6 +355,36 @@ impl Scan {
             .iter()
             .filter_map(|value| value.downcast::<AXUIElement>().ok())
             .collect()
+    }
+
+    /// Whether an array attribute holds anything, from its count alone:
+    /// nothing is copied.
+    fn has_children(&mut self, element: &AXUIElement, attribute: &'static str) -> bool {
+        self.count(element, attribute) > 0
+    }
+
+    /// How many values an array attribute holds; 0 once the deadline has
+    /// passed or when the count fails to read. A failure other than the
+    /// attribute being absent leaves the scan incomplete.
+    fn count(&mut self, element: &AXUIElement, attribute: &'static str) -> CFIndex {
+        if !self.open() {
+            return 0;
+        }
+
+        let name = CFString::from_static_str(attribute);
+        let mut count: CFIndex = 0;
+        // SAFETY: a valid output slot for the count.
+        let status = unsafe { element.attribute_value_count(&name, NonNull::from(&mut count)) };
+        if status != AXError::Success {
+            self.failed(status, attribute);
+            if !ABSENT.contains(&status) {
+                self.stop(Stop::Unread);
+            }
+
+            return 0;
+        }
+
+        count
     }
 
     /// What the app draws in `bounds`, one of its windows at the menu layer:
@@ -493,6 +588,8 @@ pub struct Snapshot {
     /// A limit, the deadline or an unreadable element cut the scan short, so
     /// absence from it proves nothing.
     pub incomplete: bool,
+    /// Why it is incomplete.
+    pub stops: BTreeSet<Stop>,
     /// "attribute:AX error code" -> count, for diagnosing incomplete scans.
     pub errors: std::collections::BTreeMap<String, usize>,
 }
@@ -613,8 +710,8 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
     // might hide an unseen match.
     scan.last_error = None;
     let frontmost = scan.flag(&app, "AXFrontmost");
-    if frontmost.is_none() {
-        scan.incomplete |= scan.last_error.is_some_and(|code| !ABSENT.contains(&code));
+    if frontmost.is_none() && scan.last_error.is_some_and(|code| !ABSENT.contains(&code)) {
+        scan.stop(Stop::Unread);
     }
 
     if frontmost == Some(true) {
@@ -630,7 +727,9 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
                 }
             }
             None => {
-                scan.incomplete |= scan.last_error.is_some_and(|code| !ABSENT.contains(&code));
+                if scan.last_error.is_some_and(|code| !ABSENT.contains(&code)) {
+                    scan.stop(Stop::Unread);
+                }
             }
         }
     }
@@ -667,11 +766,11 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
                     Some(Drawn::Menu(element)) => roots.push((element, Some(bounds), true)),
                     Some(Drawn::Window(element)) => roots.push((element, Some(bounds), false)),
                     Some(Drawn::Through(hits)) => unvisited.extend(hits),
-                    None => scan.incomplete = true,
+                    None => scan.stop(Stop::Unread),
                 }
             }
         }
-        Err(_) => scan.incomplete = true,
+        Err(_) => scan.stop(Stop::Unread),
     }
 
     let open_menus: Vec<Frame> = roots
@@ -691,8 +790,12 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
     let mut seen: HashSet<CFRetained<AXUIElement>> = HashSet::new();
 
     while let Some((element, depth, window, menu)) = stack.pop() {
-        if found.len() >= limits.count || !scan.open() {
-            scan.incomplete = true;
+        if found.len() >= limits.count {
+            scan.stop(Stop::Count);
+            break;
+        }
+
+        if !scan.open() {
             break;
         }
 
@@ -713,7 +816,7 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
             // A frame that failed to read (rather than being absent) leaves
             // an open menu possible: it might hold an unseen match.
             if frame.is_none() && scan.last_error.is_some_and(|code| !ABSENT.contains(&code)) {
-                scan.incomplete = true;
+                scan.stop(Stop::Unread);
                 continue;
             }
 
@@ -759,7 +862,9 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
         }
 
         if depth + 1 >= limits.depth {
-            scan.incomplete |= !scan.children(item, "AXChildren", 1).is_empty();
+            if scan.has_children(item, "AXChildren") {
+                scan.stop(Stop::Depth);
+            }
             continue;
         }
 
@@ -771,7 +876,7 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
     }
 
     if !unvisited.is_empty() {
-        scan.incomplete = true;
+        scan.stop(Stop::Unread);
     }
 
     // A request that started before the deadline may have ended after it.
@@ -780,6 +885,7 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
     Ok(Snapshot {
         elements: found,
         incomplete: scan.incomplete,
+        stops: scan.stops,
         errors: scan.errors,
     })
 }
@@ -935,6 +1041,45 @@ mod tests {
         scan.deadline = Instant::now();
         scan.incomplete = false;
         assert!(!scan.open() && scan.incomplete);
+        assert_eq!(scan.stops, BTreeSet::from([Stop::Time]), "and says why");
+    }
+
+    #[test]
+    fn scan_stops_are_said_in_plain_words() {
+        for stop in Stop::ALL {
+            assert_eq!(Stop::parse(stop.word()), Some(stop));
+            assert_eq!(
+                serde_json::to_value(stop).unwrap(),
+                serde_json::json!(stop.word())
+            );
+        }
+
+        assert_eq!(why(["time"]).as_deref(), Some("it ran out of time"));
+        assert_eq!(
+            why(["count", "unread"]).as_deref(),
+            Some(
+                "the app has more elements than Atlas reads and part of the app could not be read"
+            )
+        );
+        assert_eq!(
+            why(["depth", "count", "time"]).as_deref(),
+            Some(
+                "some elements are nested too deep, the app has more elements than Atlas reads \
+                 and it ran out of time"
+            )
+        );
+        assert_eq!(why(["later"]), None, "an unknown reason is not said");
+        assert_eq!(why([]), None);
+    }
+
+    #[test]
+    fn only_failures_other_than_a_missing_attribute_are_telling() {
+        for absent in ABSENT {
+            assert!(!telling(&format!("AXTitle:{}", absent.0)));
+        }
+        for code in [AXError::Failure, AXError::CannotComplete] {
+            assert!(telling(&format!("AXChildren:{}", code.0)));
+        }
     }
 
     /// Bound `text` as a CFString would be.

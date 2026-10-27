@@ -236,7 +236,12 @@ pub fn usage(error: clap::Error) -> ExitCode {
         Format::Json => {
             eprintln!(
                 "{}",
-                serde_json::json!({"ok": false, "code": "usage", "error": message})
+                serde_json::json!({
+                    "ok": false,
+                    "code": "usage",
+                    "error": message,
+                    "next": ui::hints::next("usage", None),
+                })
             );
         }
         Format::Human => {

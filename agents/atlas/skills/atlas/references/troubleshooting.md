@@ -1,9 +1,11 @@
 # Atlas error codes
 
-Every failure is JSON: `{"ok": false, "code": "...", "error": "...", "uncertain": ...}`.
-Read `error` to the person when you stop. If `uncertain` is true, the action may
-or may not have happened: never repeat it; take a screenshot, run
-`atlas restart`, and look again. (`atlas run` replies `ok` when the command ran;
+Every failure is JSON:
+`{"ok": false, "code": "...", "error": "...", "uncertain": ..., "next": "..."}`.
+`next` says what to do, in one sentence; `busy` adds `holder`. Read `error` to
+the person when you stop. If `uncertain` is true, the action may or may not have
+happened: never repeat it; take a screenshot, run `atlas restart`, and look
+again. (`atlas run` replies `ok` when the command ran;
 its own failure is in `exitCode`.)
 
 | Code | Means | Do |
@@ -12,13 +14,13 @@ its own failure is in `exitCode`.)
 | `apps` | The helper's running apps could not be listed. | Retry once; then run `atlas doctor`. |
 | `bad-request` | The helper daemon rejected a malformed request. | Check the command's arguments against `references/commands.md`. |
 | `blocked` | This shell may not connect to the helper or write Atlas's own files, usually because an agent sandbox blocks local sockets or writes outside its folder. The helper may be fine. | Run Atlas commands outside the sandbox (ask for that permission), or have the sandbox allow the helper socket and the folders Atlas writes: `~/Library/Caches/Atlas`, `~/Library/Application Support/Atlas/runs` and `/Users/Shared/Atlas`. Do not run `atlas init` for this. |
-| `busy` | Another controller (often the person, in the viewer) has control. | Wait and retry later; never take control from the person. |
+| `busy` | Someone else has control. `holder` says who: `person` (the person, in the viewer) or `agent` (another Atlas command, usually another agent's). | Wait and retry later; never take control from the person. |
 | `cancelled` | The person stopped: at a question (Esc), or an input part way (`partial` says some of it landed). | Earlier steps may have happened; look, then ask the person before trying again. |
 | `capture` | A screenshot could not be taken or encoded. | Retry once; then `atlas doctor`. |
 | `config` | Atlas is not set up (no settings file). | Use the setup skill (`atlas init`). |
 | `config-invalid` | The settings file exists but could not be read. | Show `error` to the person; they fix or move the file, then run `atlas init`. |
 | `daemon` | The helper daemon stopped unexpectedly. | Run `atlas restart`. |
-| `elements` | An accessibility element could not be found uniquely or is hidden. | Add `--role`, check `atlas elements`, or click coordinates from a screenshot. |
+| `elements` | An accessibility element could not be found uniquely or is hidden. When a name matched nothing or several, `candidates` lists up to five with their role, name and centre point (`at`); when the scan was incomplete, `scan` says why. | Add `--role`, pick from `candidates`, check `atlas elements`, or click coordinates from a screenshot. |
 | `environment` | A provisioning plan was refused. | Read `error`; plans never overwrite unknown changes. |
 | `identity` | The helper session, account or display is not the configured one. | Stop and tell the person; run `atlas doctor`. |
 | `init` | Guided setup could not finish. | Show the person `error`; they can run `atlas init` again. |

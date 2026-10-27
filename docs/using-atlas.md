@@ -27,7 +27,7 @@ atlas windows --app Example
 atlas elements --app Example --role AXButton
 ```
 
-Choose a visible control from that result. If your app has a button named **Settings**, for example:
+Each element has its role, name, centre point (`at`) and size. The centre point is where a named click lands. Choose a visible control from that result. If your app has a button named **Settings**, for example:
 
 ```sh
 atlas click --app Example --name Settings --role AXButton

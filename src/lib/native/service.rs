@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     actions,
-    error::{Error, Result},
+    error::{Error, Holder, Result},
     session::{Display, InputEpoch},
 };
 use serde::Deserialize;
@@ -298,17 +298,18 @@ impl Service {
         if operation == Operation::Acquire {
             let mut engine = self.engine.lock().await;
 
-            if self.gate.active()? {
+            if let Some(holder) = self.gate.holder()? {
                 // An agent finding the person in control is told to wait.
                 let agent = request["person"] != true;
-                return Err(Error::new(
+                let error = Error::new(
                     "busy",
-                    if agent && self.gate.person_in_control()? {
+                    if agent && holder == Holder::Person {
                         crate::error::PERSON_HAS_CONTROL
                     } else {
                         "The native input service already has a controller"
                     },
-                ));
+                );
+                return Err(error.held_by(holder));
             }
 
             engine.check()?;

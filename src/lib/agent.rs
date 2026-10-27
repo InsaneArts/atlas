@@ -10,16 +10,19 @@ use crate::{
     app_selection::{Process, atlas_bundle, selected},
     client::Client,
     control::Ownership,
-    error::{Error, Result},
+    error::{Error, Holder, Result},
     handoff,
     native::{
-        ax::{Element, Frame},
+        ax::{self, Element, Frame, Stop},
         windows::{Bounds, MENU_BAR_LAYER, MENU_LAYER, Window, unobstructed},
     },
     transport::{accepted, run_output},
 };
 use serde_json::{Value, json};
-use std::time::{Duration, Instant};
+use std::{
+    collections::BTreeMap,
+    time::{Duration, Instant},
+};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// The working contract printed by `atlas agent-guide`.
@@ -169,9 +172,10 @@ pub async fn type_text(client: &Client, text: &str) -> Result<Value> {
             )
             .await;
 
-        // Agents act on the code (busy, lease-lost, session-changed), so
-        // it is kept whichever way the batch failed.
-        let (code, failure, uncertain) = match outcome {
+        // Agents act on the code (busy, lease-lost, session-changed), and
+        // on who holds control when busy, so both are kept whichever way
+        // the batch failed.
+        let (code, failure, uncertain, holder) = match outcome {
             Ok(reply) if reply["ok"] == true => {
                 confirmed += 1;
                 typed += batch.chars().count();
@@ -187,11 +191,12 @@ pub async fn type_text(client: &Client, text: &str) -> Result<Value> {
                     .unwrap_or("The helper did not confirm the text")
                     .to_owned(),
                 reply["uncertain"] == true,
+                reply["holder"].as_str().and_then(Holder::parse),
             ),
-            Err(error) => (error.code, error.error, error.uncertain),
+            Err(error) => (error.code, error.error, error.uncertain, error.holder),
         };
 
-        return Ok(json!({
+        let mut report = json!({
             "ok": false,
             "typed": typed,
             "batches": batches.len(),
@@ -199,7 +204,12 @@ pub async fn type_text(client: &Client, text: &str) -> Result<Value> {
             "code": code,
             "error": failure,
             "uncertain": uncertain,
-        }));
+        });
+        if let Some(holder) = holder {
+            report["holder"] = json!(holder);
+        }
+
+        return Ok(report);
     }
 
     Ok(json!({ "ok": true, "typed": typed, "batches": batches.len() }))
@@ -1061,55 +1071,249 @@ fn app_named(app: &Value, name: &str) -> bool {
             .any(|own| same_text(own, name))
 }
 
-async fn app_elements(client: &Client, pid: i64) -> Result<(Vec<Element>, bool)> {
+/// Most accessibility failures a scan's diagnostics name.
+const SCAN_ERRORS: usize = 8;
+
+/// Longest failure key a scan's diagnostics name, in bytes.
+const SCAN_ERROR_KEY: usize = 64;
+
+/// Most elements a refused name lists as what it may have meant.
+const CANDIDATES: usize = 5;
+
+/// One scan of an app, as the probe reported it.
+struct Scanned {
+    elements: Vec<Element>,
+    incomplete: bool,
+    /// Why it is incomplete: "depth", "count", "time" or "unread".
+    reasons: Vec<&'static str>,
+    /// Accessibility failures other than a missing attribute, by count.
+    errors: BTreeMap<String, usize>,
+}
+
+impl Scanned {
+    /// The probe's reply, read. An older probe names no reasons.
+    fn from_probe(mut value: Value) -> Result<Self> {
+        if value["ok"] != true {
+            return Err(Error::new(
+                "elements",
+                value["error"]
+                    .as_str()
+                    .unwrap_or("The accessibility probe failed")
+                    .to_owned(),
+            ));
+        }
+
+        let elements = serde_json::from_value(value["elements"].take())
+            .map_err(|_| Error::new("elements", "Malformed accessibility elements"))?;
+
+        let mut reasons: Vec<&'static str> = value["reasons"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter_map(Stop::parse)
+            .map(Stop::word)
+            .collect();
+        reasons.dedup();
+
+        let mut errors: Vec<(String, usize)> = value["errors"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(key, _)| key.len() <= SCAN_ERROR_KEY && ax::telling(key))
+            .filter_map(|(key, count)| Some((key.clone(), usize::try_from(count.as_u64()?).ok()?)))
+            .collect();
+        errors.sort_by(|(a, first), (b, second)| second.cmp(first).then_with(|| a.cmp(b)));
+        errors.truncate(SCAN_ERRORS);
+
+        Ok(Self {
+            elements,
+            incomplete: value["truncated"] == true,
+            reasons,
+            errors: errors.into_iter().collect(),
+        })
+    }
+
+    /// Why the scan stopped early and what failed in it, for programs:
+    /// None when there is nothing to say.
+    fn diagnostics(&self) -> Option<Value> {
+        let mut said = serde_json::Map::new();
+        if !self.reasons.is_empty() {
+            said.insert("reasons".into(), json!(self.reasons));
+        }
+        if !self.errors.is_empty() {
+            said.insert("errors".into(), json!(self.errors));
+        }
+
+        (!said.is_empty()).then_some(Value::Object(said))
+    }
+
+    /// A named click refused because the scan was incomplete.
+    fn refusal(&self) -> Error {
+        let why = ax::why(self.reasons.iter().copied())
+            .map(|why| format!(" ({why})"))
+            .unwrap_or_default();
+        let mut error = Error::new(
+            "elements",
+            format!(
+                "The accessibility scan was incomplete{why}, so a unique match cannot be \
+                 established"
+            ),
+        );
+        if let Some(diagnostics) = self.diagnostics() {
+            error = error.with("scan", diagnostics);
+        }
+
+        error.with(
+            "next",
+            "Try again. If it stays incomplete, click the point from a screenshot instead.",
+        )
+    }
+}
+
+async fn app_elements(client: &Client, pid: i64) -> Result<Scanned> {
     let probe = client.config.identity_probe.to_string_lossy().into_owned();
     let reply = client
         .inspect(vec![probe, "elements-info".into(), pid.to_string()])
         .await?;
-    let mut value = run_output(&reply, 8 << 20)
+    let value = run_output(&reply, 8 << 20)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         .ok_or_else(|| Error::new("elements", "The accessibility probe returned no result"))?;
-    if value["ok"] != true {
-        return Err(Error::new(
-            "elements",
-            value["error"]
-                .as_str()
-                .unwrap_or("The accessibility probe failed")
-                .to_owned(),
-        ));
-    }
 
-    let elements = serde_json::from_value(value["elements"].take())
-        .map_err(|_| Error::new("elements", "Malformed accessibility elements"))?;
-
-    Ok((elements, value["truncated"] == true))
+    Scanned::from_probe(value)
 }
 
-/// Accessibility elements of the target app's windows that match `filter`.
+/// Accessibility elements of the target app's windows that match `filter`,
+/// at most `max` of them, listed compactly unless `full`.
 pub async fn elements(
     client: &Client,
     target: &Target,
     filter: &ElementFilter,
     max: usize,
+    full: bool,
 ) -> Result<Value> {
     let pid = target_pid(client, target).await?;
-    let (all, incomplete) = app_elements(client, pid).await?;
-    let total = all.len();
-    let matching: Vec<_> = all
-        .into_iter()
+    let scanned = app_elements(client, pid).await?;
+
+    Ok(listing(pid, &scanned, filter, max, full))
+}
+
+/// The elements of one scan that match `filter`, as `elements` lists them:
+/// each by its role, name, value, centre point and size, its window listed
+/// once, or with every attribute the scan read when `full`. A name that
+/// matches nothing lists the closest names.
+fn listing(pid: i64, scanned: &Scanned, filter: &ElementFilter, max: usize, full: bool) -> Value {
+    let matching: Vec<&Element> = scanned
+        .elements
+        .iter()
         .filter(|element| filter.matches(element))
         .collect();
-    let count = matching.len();
+    let shown = &matching[..max.min(matching.len())];
 
-    Ok(json!({
+    let mut listed = json!({
         "ok": true,
         "pid": pid,
-        "scanned": total,
-        "scanIncomplete": incomplete,
-        "matching": count,
-        "elements": matching.into_iter().take(max).collect::<Vec<_>>(),
-    }))
+        "scanned": scanned.elements.len(),
+        "scanIncomplete": scanned.incomplete,
+        "matching": matching.len(),
+        "more": matching.len() - shown.len(),
+    });
+
+    if full {
+        listed["elements"] = json!(shown);
+    } else {
+        let mut windows: Vec<&Frame> = Vec::new();
+        listed["elements"] = shown
+            .iter()
+            .map(|element| compact(element, &mut windows))
+            .collect();
+        listed["windows"] = windows
+            .iter()
+            .map(|frame| {
+                json!({
+                    "x": frame.x.round() as i64,
+                    "y": frame.y.round() as i64,
+                    "width": frame.width.round() as i64,
+                    "height": frame.height.round() as i64,
+                })
+            })
+            .collect();
+    }
+
+    // What failed in a complete scan (an app's own getter answering
+    // failure, say) changes nothing an agent does.
+    if let Some(diagnostics) = scanned.diagnostics().filter(|_| scanned.incomplete) {
+        listed["scan"] = diagnostics;
+    }
+
+    if filter.name.is_some() && matching.is_empty() {
+        let candidates = candidates(&in_play(&scanned.elements), &[], filter);
+        if !candidates.is_empty() {
+            listed["candidates"] = json!(candidates);
+        }
+    }
+
+    listed
+}
+
+/// An element as the default listing names it, with its window's place in
+/// `windows` (added when new).
+fn compact<'a>(element: &'a Element, windows: &mut Vec<&'a Frame>) -> Value {
+    let mut listed = json!({"index": element.index});
+    let name = shown_name(element);
+
+    if let Some(role) = &element.role {
+        listed["role"] = json!(role);
+    }
+    if let Some(name) = name {
+        listed["name"] = json!(name);
+    }
+    if let Some(value) = element
+        .value
+        .as_deref()
+        .filter(|value| !value.is_empty() && Some(*value) != name)
+    {
+        listed["value"] = json!(value);
+    }
+    if let Some(frame) = &element.frame {
+        let (x, y) = frame.center();
+        listed["at"] = json!([x as i64, y as i64]);
+        listed["size"] = json!([frame.width.round() as i64, frame.height.round() as i64]);
+    }
+    if let Some(window) = &element.window {
+        let place = windows
+            .iter()
+            .position(|seen| seen.matches(window))
+            .unwrap_or_else(|| {
+                windows.push(window);
+                windows.len() - 1
+            });
+        listed["window"] = json!(place);
+    }
+
+    let flags = [
+        ("disabled", element.enabled == Some(false)),
+        ("focused", element.focused == Some(true)),
+        ("menu", element.menu),
+    ];
+    for (flag, set) in flags {
+        if set {
+            listed[flag] = json!(true);
+        }
+    }
+
+    if let Some(mark) = &element.mark {
+        listed["mark"] = json!(mark);
+    }
+    if !element.truncated.is_empty() {
+        listed["truncated"] = json!(element.truncated);
+    }
+    if !element.unreadable.is_empty() {
+        listed["unreadable"] = json!(element.unreadable);
+    }
+
+    listed
 }
 
 /// The CoreGraphics window whose bounds are an element's AX window frame,
@@ -1183,11 +1387,9 @@ fn drawn(frame: &Frame) -> bool {
 /// or several match, or when another element whose name could not be read
 /// might match too.
 fn choose<'a>(elements: &'a [Element], filter: &ElementFilter) -> Result<&'a Element> {
-    let menu_open = elements.iter().any(|element| element.menu);
-    let elements: Vec<&Element> = elements
-        .iter()
-        .filter(|element| element.menu || !menu_open)
-        .collect();
+    let elements = in_play(elements);
+    // What is in play is either an open menu's items or no menu item at all.
+    let menu_open = elements.first().is_some_and(|element| element.menu);
 
     let matches: Vec<(&Element, NameMatch)> = elements
         .iter()
@@ -1214,21 +1416,35 @@ fn choose<'a>(elements: &'a [Element], filter: &ElementFilter) -> Result<&'a Ele
     };
 
     let [element] = matching.as_slice() else {
-        return Err(Error::new(
+        let candidates = candidates(&elements, &matching, filter);
+        let closest = if candidates.is_empty() {
+            ""
+        } else {
+            " The closest names are in candidates."
+        };
+        let error = Error::new(
             "elements",
             match matching.len() {
-                0 if menu_open => "No item of the open menu matches. Run atlas elements --app \
-                                   NAME to see it, or press escape to close the menu."
-                    .to_owned(),
-                0 => "No visible element matches. Run atlas elements --app NAME to see \
-                      what is there."
-                    .to_owned(),
+                0 if menu_open => format!(
+                    "No item of the open menu matches. Run atlas elements --app NAME to see it, \
+                     or press escape to close the menu.{closest}"
+                ),
+                0 => format!(
+                    "No visible element matches. Run atlas elements --app NAME to see what is \
+                     there.{closest}"
+                ),
                 count => format!(
                     "{count} elements match. Run atlas elements with the same --name to \
                      tell them apart, then add --role, or click the one you mean at its point."
                 ),
             },
-        ));
+        );
+
+        return Err(if candidates.is_empty() {
+            error
+        } else {
+            error.with("candidates", candidates)
+        });
     };
 
     // An element whose selector attributes could not be read may be a
@@ -1247,6 +1463,130 @@ fn choose<'a>(elements: &'a [Element], filter: &ElementFilter) -> Result<&'a Ele
     }
 
     Ok(element)
+}
+
+/// The elements a name is judged against: while a menu is open, only its
+/// items (a click outside it just closes the menu).
+fn in_play(elements: &[Element]) -> Vec<&Element> {
+    let menu_open = elements.iter().any(|element| element.menu);
+    elements
+        .iter()
+        .filter(|element| element.menu || !menu_open)
+        .collect()
+}
+
+/// Up to five elements a refused name may have meant, each with its role,
+/// name and centre point: on several matches, those matches; on none, the
+/// visible elements whose names are closest to the name asked for.
+fn candidates(seen: &[&Element], matching: &[&Element], filter: &ElementFilter) -> Vec<Value> {
+    let at = |element: &Element| element.frame.as_ref().map(Frame::center);
+
+    if !matching.is_empty() {
+        return matching
+            .iter()
+            .filter_map(|element| Some(clicked(element, at(element)?)))
+            .take(CANDIDATES)
+            .collect();
+    }
+
+    let Some(name) = filter.name.as_deref() else {
+        return Vec::new();
+    };
+    let query: String = name.chars().flat_map(char::to_lowercase).collect();
+
+    // Each element's closest name: by how it is close, then how far off.
+    let mut close: Vec<((u8, usize, usize), &Element, &str)> = seen
+        .iter()
+        .filter(|element| element.frame.as_ref().is_some_and(drawn))
+        .filter_map(|element| {
+            [
+                element.title.as_deref(),
+                element.description.as_deref(),
+                label(element),
+                element.identifier.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            .filter_map(|text| Some((closeness(&query, text)?, text)))
+            .min()
+            .map(|((tier, distance), text)| ((tier, distance, element.index), *element, text))
+        })
+        .collect();
+    close.sort_by_key(|(rank, ..)| *rank);
+
+    let mut listed: Vec<Value> = Vec::new();
+    for (_, element, text) in close {
+        let Some(point) = at(element) else {
+            continue;
+        };
+        let mut candidate = clicked(element, point);
+        candidate["name"] = json!(text);
+
+        if !listed.contains(&candidate) {
+            listed.push(candidate);
+        }
+        if listed.len() == CANDIDATES {
+            break;
+        }
+    }
+
+    listed
+}
+
+/// How close `text` is to `query` (already lowercased), if at all: the same
+/// text under another role (0), one holding the other (1), or a few
+/// characters off (2), with how far off it is.
+fn closeness(query: &str, text: &str) -> Option<(u8, usize)> {
+    let text: String = text.chars().flat_map(char::to_lowercase).collect();
+    let (wanted, length) = (query.chars().count(), text.chars().count());
+    let apart = wanted.abs_diff(length);
+
+    if text.is_empty() {
+        return None;
+    }
+
+    if text == query {
+        return Some((0, 0));
+    }
+
+    if wanted.min(length) >= 2 && (text.contains(query) || query.contains(text.as_str())) {
+        return Some((1, apart));
+    }
+
+    // A short query is a few characters off most short names ("OK" from
+    // "No" and "Go"), so only a longer one is matched that way.
+    if wanted < 4 {
+        return None;
+    }
+
+    let limit = (wanted / 3).max(1);
+    if apart > limit {
+        return None;
+    }
+
+    let distance = edits(query, &text);
+    (distance <= limit).then_some((2, distance))
+}
+
+/// How many characters must be added, removed or changed to turn one text
+/// into the other.
+fn edits(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+
+    for (i, x) in a.chars().enumerate() {
+        let mut diagonal = row[0];
+        row[0] = i + 1;
+        for (j, y) in b.iter().enumerate() {
+            let above = row[j + 1];
+            row[j + 1] = (above + 1)
+                .min(row[j] + 1)
+                .min(diagonal + usize::from(x != *y));
+            diagonal = above;
+        }
+    }
+
+    row[b.len()]
 }
 
 /// Click the centre of exactly one matching element. Uniqueness needs a
@@ -1271,15 +1611,12 @@ pub async fn click_element(
     let ownership = client.controller.acquire(false)?;
     let epoch = client.identity().await?.epoch;
     let pid = target_pid(client, target).await?;
-    let (elements, incomplete) = app_elements(client, pid).await?;
-    if incomplete {
-        return Err(Error::new(
-            "elements",
-            "The accessibility scan was incomplete, so a unique match cannot be established",
-        ));
+    let scanned = app_elements(client, pid).await?;
+    if scanned.incomplete {
+        return Err(scanned.refusal());
     }
 
-    let element = choose(&elements, filter)?;
+    let element = choose(&scanned.elements, filter)?;
     let (x, y) = element
         .frame
         .as_ref()
@@ -1881,11 +2218,425 @@ mod tests {
             "{}",
             error.error
         );
+        assert_eq!(error.details["candidates"].as_array().unwrap().len(), 2);
 
         let mut unread = shown(3, "AXButton", None, None);
         unread.unreadable = vec!["AXTitle".into()];
         let error = choose(&[whole.clone(), unread.clone()], &named("delete")).unwrap_err();
         assert!(error.error.contains("could not be read"), "{}", error.error);
+        assert!(error.details.is_empty(), "a doubtful match lists none");
+    }
+
+    /// A scan as the probe reports it, complete.
+    fn scanned(elements: Vec<Element>) -> Scanned {
+        Scanned {
+            elements,
+            incomplete: false,
+            reasons: Vec::new(),
+            errors: BTreeMap::new(),
+        }
+    }
+
+    fn frame(x: f64, y: f64, width: f64, height: f64) -> Frame {
+        Frame {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn the_default_listing_names_each_element_by_its_centre_and_size() {
+        let window = frame(10.2, 38.0, 800.0, 600.0);
+        let mut bold = shown(3, "AXCheckBox", Some("Bold"), None);
+        bold.frame = Some(frame(388.0, 51.0, 24.0, 22.4));
+        bold.window = Some(window.clone());
+        bold.value = Some("0".into());
+        bold.depth = 4;
+        bold.identifier = Some("bold".into());
+        bold.description = Some("Bold text".into());
+
+        let mut text = shown(17, "AXTextArea", None, None);
+        text.frame = Some(frame(20.0, 50.0, 780.0, 560.0));
+        text.window = Some(frame(10.0, 38.5, 800.0, 600.0));
+        text.value = Some("Hello".into());
+
+        let mut label = shown(18, "AXStaticText", None, None);
+        label.value = Some("Status".into());
+        label.window = Some(frame(900.0, 0.0, 300.0, 200.0));
+
+        let mut bare = element("AXGroup", None, None);
+        bare.index = 19;
+
+        let listed = listing(
+            812,
+            &scanned(vec![bold, text, label, bare]),
+            &ElementFilter::default(),
+            50,
+            false,
+        );
+        assert_eq!(
+            listed,
+            json!({
+                "ok": true, "pid": 812, "scanned": 4, "scanIncomplete": false,
+                "matching": 4, "more": 0,
+                "elements": [
+                    {"index": 3, "role": "AXCheckBox", "name": "Bold", "value": "0",
+                     "at": [400, 62], "size": [24, 22], "window": 0},
+                    {"index": 17, "role": "AXTextArea", "value": "Hello",
+                     "at": [410, 330], "size": [780, 560], "window": 0},
+                    {"index": 18, "role": "AXStaticText", "name": "Status",
+                     "at": [20, 20], "size": [20, 20], "window": 1},
+                    {"index": 19, "role": "AXGroup"},
+                ],
+                "windows": [
+                    {"x": 10, "y": 38, "width": 800, "height": 600},
+                    {"x": 900, "y": 0, "width": 300, "height": 200},
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn flags_are_listed_only_when_they_are_set() {
+        let mut off = shown(0, "AXButton", Some("Save"), None);
+        off.enabled = Some(false);
+        off.focused = Some(false);
+        off.value = Some(String::new());
+
+        let mut on = shown(1, "AXMenuItem", Some("Ruler"), None);
+        on.enabled = Some(true);
+        on.focused = Some(true);
+        on.menu = true;
+        on.mark = Some("✓".into());
+        on.truncated = vec!["AXTitle".into()];
+        on.unreadable = vec!["AXDescription".into()];
+
+        let listed = listing(
+            1,
+            &scanned(vec![off, on]),
+            &ElementFilter::default(),
+            50,
+            false,
+        );
+        let elements = listed["elements"].as_array().unwrap();
+        assert_eq!(elements[0]["disabled"], true);
+        for absent in [
+            "focused",
+            "menu",
+            "mark",
+            "value",
+            "truncated",
+            "unreadable",
+        ] {
+            assert!(elements[0].get(absent).is_none(), "{absent}");
+        }
+
+        assert!(elements[1].get("disabled").is_none());
+        assert_eq!(elements[1]["focused"], true);
+        assert_eq!(elements[1]["menu"], true);
+        assert_eq!(elements[1]["mark"], "✓");
+        assert_eq!(elements[1]["truncated"], json!(["AXTitle"]));
+        assert_eq!(elements[1]["unreadable"], json!(["AXDescription"]));
+        for dropped in [
+            "depth",
+            "subrole",
+            "title",
+            "description",
+            "identifier",
+            "frame",
+        ] {
+            assert!(elements[1].get(dropped).is_none(), "{dropped}");
+        }
+    }
+
+    #[test]
+    fn elements_listed_in_full_are_as_the_scan_read_them() {
+        let mut save = shown(0, "AXButton", Some("Save"), None);
+        save.window = Some(frame(0.0, 0.0, 600.0, 400.0));
+        save.identifier = Some("save".into());
+        let scan = scanned(vec![save.clone(), shown(1, "AXButton", Some("Open"), None)]);
+
+        let listed = listing(1, &scan, &named("save"), 50, true);
+        assert_eq!(listed["elements"], json!([save]));
+        assert!(listed.get("windows").is_none());
+        assert_eq!(listed["matching"], 1);
+        assert_eq!(listed["more"], 0);
+    }
+
+    #[test]
+    fn a_short_listing_says_how_many_more_matched() {
+        let five: Vec<Element> = (0..5)
+            .map(|index| shown(index, "AXButton", Some("Go"), None))
+            .collect();
+        let scan = scanned(five);
+        let all = ElementFilter::default();
+
+        for (max, shown, more) in [(2, 2, 3), (0, 0, 5), (50, 5, 0)] {
+            for full in [false, true] {
+                let listed = listing(1, &scan, &all, max, full);
+                assert_eq!(listed["elements"].as_array().unwrap().len(), shown);
+                assert_eq!(listed["matching"], 5);
+                assert_eq!(listed["more"], more, "--max {max}");
+                assert_eq!(listed["scanIncomplete"], false);
+            }
+        }
+    }
+
+    #[test]
+    fn a_scan_says_why_it_stopped_early() {
+        let probe = |reasons: Value, errors: Value| {
+            let mut reply =
+                json!({"ok": true, "elements": [], "truncated": true, "errors": errors});
+            if !reasons.is_null() {
+                reply["reasons"] = reasons;
+            }
+            Scanned::from_probe(reply).unwrap()
+        };
+
+        let every = probe(
+            json!(["depth", "count", "time", "unread", "later"]),
+            json!({}),
+        );
+        assert_eq!(every.reasons, ["depth", "count", "time", "unread"]);
+        assert!(every.incomplete);
+        assert_eq!(
+            every.diagnostics(),
+            Some(json!({"reasons": ["depth", "count", "time", "unread"]}))
+        );
+
+        let older = probe(Value::Null, json!({}));
+        assert!(older.reasons.is_empty() && older.incomplete);
+        assert_eq!(older.diagnostics(), None, "an older probe gives none");
+
+        let mut errors = serde_json::Map::new();
+        errors.insert("AXTitle:-25212".into(), json!(40));
+        errors.insert("AXValue:-25205".into(), json!(40));
+        errors.insert(format!("{}:-25200", "A".repeat(70)), json!(50));
+        for attribute in 0..10 {
+            errors.insert(
+                format!("AXChildren{attribute}:-25204"),
+                json!(attribute + 1),
+            );
+        }
+        let failed = probe(json!(["unread"]), Value::Object(errors));
+        let kept: Vec<(&str, usize)> = failed
+            .errors
+            .iter()
+            .map(|(key, count)| (key.as_str(), *count))
+            .collect();
+        assert_eq!(kept.len(), 8, "at most eight");
+        assert!(
+            kept.iter().all(|(key, _)| key.starts_with("AXChildren")),
+            "{kept:?}"
+        );
+        assert_eq!(
+            kept.iter().map(|(_, count)| count).min(),
+            Some(&3),
+            "the most often"
+        );
+        assert_eq!(
+            listing(1, &failed, &ElementFilter::default(), 50, false)["scan"]["reasons"],
+            json!(["unread"])
+        );
+
+        let quiet = listing(
+            1,
+            &scanned(Vec::new()),
+            &ElementFilter::default(),
+            50,
+            false,
+        );
+        assert!(quiet.get("scan").is_none());
+
+        let mut complete = failed;
+        complete.incomplete = false;
+        let listed = listing(1, &complete, &ElementFilter::default(), 50, false);
+        assert!(
+            listed.get("scan").is_none(),
+            "a complete scan has nothing to say"
+        );
+    }
+
+    #[test]
+    fn a_refused_click_on_an_incomplete_scan_points_to_its_diagnostics() {
+        let mut scan = scanned(Vec::new());
+        scan.incomplete = true;
+        scan.reasons = vec!["time", "unread"];
+        scan.errors = BTreeMap::from([("AXChildren:-25204".to_owned(), 2)]);
+
+        let error = scan.refusal();
+        assert_eq!(error.code, "elements");
+        assert_eq!(
+            error.error,
+            "The accessibility scan was incomplete (it ran out of time and part of the app could \
+             not be read), so a unique match cannot be established"
+        );
+        assert_eq!(
+            error.details["scan"],
+            json!({"reasons": ["time", "unread"], "errors": {"AXChildren:-25204": 2}})
+        );
+        assert!(
+            error.details["next"]
+                .as_str()
+                .unwrap()
+                .starts_with("Try again.")
+        );
+
+        scan.reasons.clear();
+        scan.errors.clear();
+        let error = scan.refusal();
+        assert_eq!(
+            error.error,
+            "The accessibility scan was incomplete, so a unique match cannot be established"
+        );
+        assert!(error.details.get("scan").is_none());
+    }
+
+    /// The names a refused click lists, in order.
+    fn candidate_names(error: &Error) -> Vec<&str> {
+        error.details["candidates"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|candidate| candidate["name"].as_str())
+            .collect()
+    }
+
+    #[test]
+    fn a_name_that_matches_nothing_lists_the_closest_names() {
+        let at = |index, x: f64, role: &str, title: &str| {
+            let mut element = shown(index, role, Some(title), None);
+            element.frame = Some(frame(x, 0.0, 40.0, 22.0));
+            element
+        };
+        let bar = [
+            at(0, 10.0, "AXMenuBarItem", "Edit"),
+            at(1, 50.0, "AXMenuBarItem", "Format"),
+            at(2, 90.0, "AXMenuBarItem", "Window"),
+            at(3, 130.0, "AXMenuBarItem", "Zoom"),
+        ];
+        let error = choose(&bar, &named("Formt")).unwrap_err();
+        assert_eq!(
+            candidate_names(&error),
+            ["Format"],
+            "unrelated names are left out"
+        );
+        assert!(
+            error
+                .error
+                .ends_with(" The closest names are in candidates.")
+        );
+        assert_eq!(
+            error.details["candidates"][0],
+            json!({"role": "AXMenuBarItem", "name": "Format", "at": [70, 11]})
+        );
+
+        let error = choose(&bar, &named("Nothing like it")).unwrap_err();
+        assert!(error.details.get("candidates").is_none());
+        assert!(error.error.ends_with("what is there."), "{}", error.error);
+
+        let close = [
+            at(0, 10.0, "AXButton", "Sane"),
+            at(1, 50.0, "AXButton", "Save As…"),
+            at(2, 90.0, "AXButton", "Sav"),
+            at(3, 130.0, "AXButton", "Cave"),
+            at(4, 170.0, "AXButton", "Sage"),
+            at(5, 210.0, "AXButton", "Wave"),
+            at(6, 250.0, "AXButton", "Have"),
+        ];
+        let error = choose(&close, &named("save")).unwrap_err();
+        let names = candidate_names(&error);
+        assert_eq!(names.len(), 5, "at most five: {names:?}");
+        assert_eq!(
+            names[..2],
+            ["Sav", "Save As…"],
+            "a part, nearest first, before a few letters off"
+        );
+
+        let error = choose(&[at(0, 10.0, "AXButton", "Sofe")], &named("save")).unwrap_err();
+        assert!(
+            error.details.get("candidates").is_none(),
+            "two letters off is too far for a short name"
+        );
+
+        let dialog = [
+            at(0, 10.0, "AXButton", "No"),
+            at(1, 50.0, "AXButton", "Go"),
+            at(2, 90.0, "AXButton", "Okay"),
+        ];
+        let error = choose(&dialog, &named("OK")).unwrap_err();
+        assert_eq!(
+            candidate_names(&error),
+            ["Okay"],
+            "a short name is not matched a letter or two off"
+        );
+
+        let mut hidden = at(7, 0.0, "AXButton", "Safe");
+        hidden.frame = None;
+        let error = choose(&[hidden], &named("save")).unwrap_err();
+        assert!(
+            error.details.get("candidates").is_none(),
+            "unframed is skipped"
+        );
+
+        let window = at(0, 10.0, "AXButton", "Copied");
+        let mut item = at(1, 50.0, "AXMenuItem", "Copy Style");
+        item.menu = true;
+        let error = choose(&[window, item], &named("Copy")).unwrap_err();
+        assert_eq!(
+            candidate_names(&error),
+            ["Copy Style"],
+            "only the open menu"
+        );
+
+        let by_role = ElementFilter {
+            role: Some("AXButton".into()),
+            name: Some("format".into()),
+        };
+        let mut button = at(4, 170.0, "AXButton", "Formats");
+        button.index = 0;
+        let error = choose(&[button, bar[1].clone()], &by_role).unwrap_err();
+        assert_eq!(
+            candidate_names(&error),
+            ["Format", "Formats"],
+            "the exact name under another role first"
+        );
+
+        let listed = listing(1, &scanned(bar.to_vec()), &named("Formt"), 50, false);
+        assert_eq!(listed["matching"], 0);
+        assert_eq!(listed["candidates"][0]["name"], "Format");
+        let listed = listing(1, &scanned(bar.to_vec()), &named("Format"), 50, false);
+        assert!(listed.get("candidates").is_none());
+    }
+
+    #[test]
+    fn a_name_that_matches_several_lists_each_match() {
+        let close = |index| {
+            let mut element = shown(index, "AXButton", None, Some("close button"));
+            element.frame = Some(frame(10.0 + 100.0 * index as f64, 0.0, 14.0, 14.0));
+            element
+        };
+
+        let error = choose(&[close(0), close(1)], &named("close button")).unwrap_err();
+        assert!(
+            error.error.starts_with("2 elements match"),
+            "{}",
+            error.error
+        );
+        assert_eq!(
+            error.details["candidates"],
+            json!([
+                {"role": "AXButton", "name": "close button", "at": [17, 7]},
+                {"role": "AXButton", "name": "close button", "at": [117, 7]},
+            ])
+        );
+
+        let seven: Vec<Element> = (0..7).map(close).collect();
+        let error = choose(&seven, &named("close button")).unwrap_err();
+        assert_eq!(error.details["candidates"].as_array().unwrap().len(), 5);
+        assert_eq!(error.details["candidates"][4]["at"], json!([417, 7]));
     }
 
     /// Names fold case beyond ASCII; an attribute shown only in part is never

@@ -102,6 +102,7 @@ fn usage_names_the_parsed_command_without_reading_command_shaped_settings() {
         let error: Value = serde_json::from_slice(&output.stderr).unwrap();
         assert_eq!(error["ok"], false);
         assert_eq!(error["code"], "usage");
+        assert!(error["next"].is_string(), "{args:?}");
         let command = if name.is_empty() {
             "atlas".to_owned()
         } else {
@@ -144,6 +145,7 @@ fn only_atlas_json_selects_json_usage_errors() {
                 let error: Value = serde_json::from_slice(&output.stderr).unwrap();
                 assert_eq!(error["code"], "usage");
                 assert_eq!(error["ok"], false);
+                assert!(error["next"].is_string());
                 assert!(
                     error["error"]
                         .as_str()
@@ -210,6 +212,7 @@ fn invalid_arguments_report_one_json_error_before_execution() {
     let error: Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(error["ok"], false);
     assert_eq!(error["code"], "usage");
+    assert!(error["next"].is_string());
     assert!(
         error["error"]
             .as_str()
@@ -240,6 +243,7 @@ fn a_broken_configuration_reports_a_json_failure_on_stderr() {
     assert_eq!(error["ok"], false);
     assert_eq!(error["code"], "config-invalid");
     assert_eq!(error["uncertain"], false);
+    assert!(error["next"].is_string());
     let message = error["error"].as_str().unwrap();
     assert!(message.starts_with("Atlas could not read its settings in "));
     assert!(message.contains("broken.toml"));
@@ -251,7 +255,7 @@ fn assert_missing_update_finish(output: Output) {
         assert!(output.stdout.is_empty());
         assert_eq!(
             serde_json::from_slice::<Value>(&output.stderr).unwrap(),
-            json!({"ok": false, "code": "usage", "error": "Run atlas update as yourself, not with sudo.", "uncertain": false})
+            json!({"ok": false, "code": "usage", "error": "Run atlas update as yourself, not with sudo.", "uncertain": false, "next": "Add --help to the command to see what it accepts."})
         );
     } else {
         assert_eq!(output.status.code(), Some(0));

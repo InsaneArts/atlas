@@ -154,11 +154,8 @@ fn failed(value: &Value) -> Option<Rendered> {
         .or_else(|| value["failure"]["error"].as_str())
         .unwrap_or("It did not finish. Run it again with --json to see why.");
 
-    Some(Rendered::err(card(
-        message,
-        value["code"].as_str(),
-        value["uncertain"] == true,
-    )))
+    let shown = card(message, value["code"].as_str(), value["uncertain"] == true);
+    Some(Rendered::err(with_candidates(shown, &value["candidates"])))
 }
 
 /// An error as a person reads it.
@@ -166,7 +163,41 @@ pub fn error(error: &Error) -> String {
     if error.code == "cancelled" {
         return format!("{} {}", style::unknown(), error.error);
     }
-    card(&error.error, Some(error.code), error.uncertain)
+
+    let shown = card(&error.error, Some(error.code), error.uncertain);
+    let candidates = error.details.get("candidates").unwrap_or(&Value::Null);
+    with_candidates(shown, candidates)
+}
+
+/// A card followed by the elements a refused name may have meant, one a
+/// line: `· "Format" (menu bar item) at 356, 11`.
+fn with_candidates(card: String, candidates: &Value) -> String {
+    let mut lines = vec![card];
+    lines.extend(candidate_lines(candidates));
+    lines.join("\n")
+}
+
+/// Up to five elements a name may have meant, each on a line of its own.
+fn candidate_lines(candidates: &Value) -> Vec<String> {
+    candidates
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(5)
+        .map(|candidate| {
+            let mut line = format!(
+                "  · \"{}\"",
+                text::printable(candidate["name"].as_str().unwrap_or(""))
+            );
+            if let Some(role) = candidate["role"].as_str() {
+                line.push_str(&format!(" ({})", role_word(role)));
+            }
+            if let (Some(x), Some(y)) = (candidate["at"][0].as_f64(), candidate["at"][1].as_f64()) {
+                line.push_str(&format!(" at {}, {}", text::number(x), text::number(y)));
+            }
+            line
+        })
+        .collect()
 }
 
 /// `✗ what went wrong` and, when the message does not already say, `→ what
@@ -182,9 +213,7 @@ pub fn card(message: &str, code: Option<&str>, uncertain: bool) -> String {
     let mut lines = vec![format!("{} {message}", style::fail())];
 
     let fix = if uncertain {
-        Some(
-            "It may or may not have happened, so don't repeat it. Take a screenshot, then run atlas restart.",
-        )
+        Some(hints::UNCERTAIN)
     } else if message.to_lowercase().contains("run atlas ") {
         // The message already says what to run.
         None

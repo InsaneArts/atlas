@@ -9,7 +9,7 @@ use crate::{
     control::{Controller, Ownership, SharedLease, write_private},
     digest::file_sha256,
     doing::Doing,
-    error::{Error, Result},
+    error::{Error, Holder, Result},
     session::{Display, Epoch, Session, input_current, input_settled, require_hidden},
     transport::{Transport, accepted, run_output},
 };
@@ -592,6 +592,12 @@ impl Client {
                     .as_str()
                     .unwrap_or("Native control request failed"),
             );
+
+            // Who holds control, when the service says.
+            let error = match result["holder"].as_str().and_then(Holder::parse) {
+                Some(holder) => error.held_by(holder),
+                None => error,
+            };
 
             // The service reports when a failure may already have changed state.
             return Err(if result["uncertain"] == true {
@@ -2015,6 +2021,25 @@ mod tests {
                 assert!(client.controller.pending().unwrap().is_empty());
                 assert!(client.controller.acquire(false).is_ok());
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_busy_input_service_says_who_holds_control() {
+        for (holder, expected) in [
+            (json!("person"), Some(Holder::Person)),
+            (json!("agent"), Some(Holder::Agent)),
+            (json!("someone"), None),
+            (Value::Null, None),
+        ] {
+            let (_dir, client, listener, session) = native_client();
+            let mut caller = Box::pin(client.acquire_input("owner", &session.epoch));
+            let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+            let reply = json!({"ok": false, "code": "busy", "error": "refused", "holder": holder});
+            answer(&mut acquire, reply).await;
+            let error = caller.await.unwrap_err();
+            assert_eq!(error.code, "busy");
+            assert_eq!(error.holder, expected, "{holder}");
         }
     }
 

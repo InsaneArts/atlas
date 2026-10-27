@@ -12,6 +12,33 @@ pub struct Error {
     pub code: &'static str,
     pub error: String,
     pub uncertain: bool,
+    /// Who holds control, on busy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub holder: Option<Holder>,
+    /// More for a program to act on, such as candidates or a scan's diagnostics.
+    #[serde(flatten)]
+    pub details: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Who holds control when Atlas answers busy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Holder {
+    /// The person, through a viewer.
+    Person,
+    /// Another Atlas command, usually another agent's.
+    Agent,
+}
+
+impl Holder {
+    /// The holder another Atlas process named, if it is one of these.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "person" => Some(Self::Person),
+            "agent" => Some(Self::Agent),
+            _ => None,
+        }
+    }
 }
 
 impl Error {
@@ -21,11 +48,31 @@ impl Error {
             code,
             error: message.into(),
             uncertain: false,
+            holder: None,
+            details: serde_json::Map::new(),
         }
     }
 
     pub fn uncertain(mut self) -> Self {
         self.uncertain = true;
+        self
+    }
+
+    /// Say who holds control.
+    pub fn held_by(mut self, holder: Holder) -> Self {
+        self.holder = Some(holder);
+        self
+    }
+
+    /// Add `value` under `key` for programs to act on. The keys every
+    /// failure has are never replaced.
+    pub fn with(mut self, key: &str, value: impl Serialize) -> Self {
+        debug_assert!(
+            !["ok", "code", "error", "uncertain", "holder"].contains(&key),
+            "{key} is part of every failure"
+        );
+        let value = serde_json::to_value(value).unwrap_or(serde_json::Value::Null);
+        self.details.insert(key.to_owned(), value);
         self
     }
 
@@ -139,6 +186,28 @@ impl From<serde_json::Error> for Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failure_names_its_holder_and_details_only_when_set() {
+        let plain = Error::new("busy", "Wait");
+        assert_eq!(
+            serde_json::to_value(&plain).unwrap(),
+            serde_json::json!({"ok": false, "code": "busy", "error": "Wait", "uncertain": false})
+        );
+
+        let held = Error::new("busy", "Wait")
+            .held_by(Holder::Person)
+            .with("next", "Wait for them");
+        assert_eq!(
+            serde_json::to_value(&held).unwrap(),
+            serde_json::json!({"ok": false, "code": "busy", "error": "Wait", "uncertain": false,
+                               "holder": "person", "next": "Wait for them"})
+        );
+
+        assert_eq!(Holder::parse("agent"), Some(Holder::Agent));
+        assert_eq!(Holder::parse("person"), Some(Holder::Person));
+        assert_eq!(Holder::parse("someone"), None);
+    }
 
     /// Agents learn every code from the plugin's table, and only those.
     #[test]

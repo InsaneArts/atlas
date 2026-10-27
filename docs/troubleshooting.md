@@ -34,7 +34,7 @@ For `transport`, check whether the helper is logged in and read `doctor`. If the
 
 ## Another controller has control, or agents are stopped
 
-`busy` means another controller holds the helper. Wait for it to finish. If the person selected **Take Control**, they must use **Give Back** or **Control-Shift-Esc** before agents can take over.
+`busy` means another controller holds the helper, and `holder` says who: `person` when the person has control in a viewer, `agent` when another Atlas command, usually another agent's, is running. Wait for it to finish. If the person selected **Take Control**, they must use **Give Back** or **Control-Shift-Esc** before agents can take over.
 
 `stopped` means the person stopped agents. Ask them what they want next; only they resume agent work. Pausing the picture is different: the helper continues working while its displayed image is paused. See [Using Atlas](using-atlas.md#take-control-or-stop-agents).
 
@@ -55,7 +55,7 @@ Native Save and Open panels require an authenticated Screen Sharing connection t
 
 Use Google Chrome or Firefox for a web app in the hidden helper. Safari and other WebKit views can remain blank without Screen Sharing. Pass `--app` when opening a URL so the default browser does not decide the result. `capabilities.webContent` in `doctor --verbose` explains this constraint; it is not proof that the page loaded. See [practical limits](using-atlas.md#settings-and-practical-limits).
 
-If a named click fails, run `atlas elements --app NAME` and check its role and label. A hidden or ambiguous element is refused. Use fresh screenshot coordinates only after inspecting the target.
+If a named click fails, run `atlas elements --app NAME` and check its role and label. A hidden or ambiguous element is refused. When a name matches nothing or several elements, the error's `candidates` lists up to five with their role, name and centre point. When the scan was incomplete, its `scan` says why. Use fresh screenshot coordinates only after inspecting the target.
 
 ## The picture is stale or a viewer pane fails
 

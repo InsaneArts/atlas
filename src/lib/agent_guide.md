@@ -86,12 +86,14 @@ person remember these commands before they can watch you.
 - `atlas windows [--app NAME]` lists windows front to back with bounds,
   alerts and floating panels included.
 - `atlas elements --app NAME [--role AXButton] [--name LABEL]` lists
-  accessibility elements with roles, names, values and frames, including the
-  items of a menu the app has open (`menu: true`, a checked one has `mark`)
-  and, while the app is in front, its menu bar titles (role
-  `AXMenuBarItem`). Text is cut after 200
-  UTF-16 units; `truncated` names any attribute shown only in part, so read
-  long documents from their file instead.
+  accessibility elements with roles, names, values, centre points (`at`) and
+  sizes, 50 at most (`more` says how many were left out; `--full` shows every
+  attribute), including the items of a menu the app has open (`menu: true`, a
+  checked one has `mark`) and, while the app is in front, its menu bar titles
+  (role `AXMenuBarItem`). Text is cut after 200 UTF-16 units; `truncated`
+  names any attribute shown only in part, so read long documents from their
+  file instead. A `--name` that matches nothing lists the closest names in
+  `candidates`.
 
 Coordinates are display points with the origin at the top left. Convert
 screenshot pixels by multiplying by `pointsPerPixel`.

@@ -242,10 +242,11 @@ pub(super) enum Command {
     },
     /// List an app's buttons, fields and other elements.
     ///
-    /// Lists accessibility elements of the app's windows: role, name, value
-    /// and frame; also the items of a menu the app has open (menu: true, with
-    /// a check mark as mark) and, while the app is in front, its menu bar
-    /// titles.
+    /// Lists accessibility elements of the app's windows: role, name, value,
+    /// centre point (at) and size, with each window listed once; also the
+    /// items of a menu the app has open (menu: true, with a check mark as
+    /// mark) and, while the app is in front, its menu bar titles. more says
+    /// how many matching elements were left out.
     Elements {
         #[command(flatten)]
         target: AppTarget,
@@ -256,8 +257,11 @@ pub(super) enum Command {
         #[arg(long)]
         name: Option<String>,
         /// Show at most this many elements.
-        #[arg(long, default_value_t = 200)]
+        #[arg(long, default_value_t = 50)]
         max: usize,
+        /// Show every attribute the scan read, as it read it.
+        #[arg(long)]
+        full: bool,
     },
     /// Print the guide agents read to use Atlas.
     AgentGuide {

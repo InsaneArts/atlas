@@ -142,6 +142,7 @@ fn elements_info(pid: i32) -> Result<Value> {
         "ok": true,
         "elements": snapshot.elements,
         "truncated": snapshot.incomplete,
+        "reasons": snapshot.stops,
         "errors": snapshot.errors,
     }))
 }
@@ -524,12 +525,14 @@ pub(super) async fn execute(config: PathBuf, command: Command) -> Result<Value> 
             role,
             name,
             max,
+            full,
         } => {
             let client = client()?;
             let target = target
                 .target()
                 .ok_or_else(|| Error::new("usage", "Select the app with --app or --pid"))?;
-            agent::elements(&client, &target, &agent::ElementFilter { role, name }, max).await
+            let filter = agent::ElementFilter { role, name };
+            agent::elements(&client, &target, &filter, max, full).await
         }
         Command::Readiness { tools, apps } => {
             atlas::readiness::readiness(&client()?, &tools, &apps).await

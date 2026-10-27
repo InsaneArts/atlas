@@ -1,11 +1,14 @@
 //! Result presentation, output streams and process result classification.
 use super::cli::{AgentsCommand, Command, EnvironmentCommand};
-use atlas::ui::{
-    Format,
-    render::{self, View},
-    text,
+use atlas::{
+    error::Error,
+    ui::{
+        Format, hints,
+        render::{self, View},
+        text,
+    },
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::io::Write;
 
 /// How a command's result reads for a person.
@@ -106,16 +109,24 @@ pub(super) fn view(command: &Command) -> View {
     }
 }
 
-/// Write a result: JSON for programs, its view for a person. A reader that
-/// went away (`| head`) ends the output quietly.
-pub(super) fn emit(format: Format, view: &View, value: &Value) {
+/// Write a result: JSON for programs, its view for a person. A failure for
+/// programs says what to do next when `advised`. A reader that went away
+/// (`| head`) ends the output quietly.
+pub(super) fn emit(format: Format, view: &View, value: &Value, advised: bool) {
     if value.is_null() {
         return;
     }
 
     match format {
         Format::Json => {
-            let _ = writeln!(std::io::stdout().lock(), "{}", program_text(value));
+            let text = if advised && value["ok"] == false {
+                let mut advised = value.clone();
+                advise(&mut advised);
+                program_text(&advised)
+            } else {
+                program_text(value)
+            };
+            let _ = writeln!(std::io::stdout().lock(), "{text}");
         }
         Format::Human => {
             let shown = render::render(view, value);
@@ -140,6 +151,31 @@ fn program_text(value: &Value) -> String {
     value.to_string()
 }
 
+/// A failure as programs read it, with `next` (what to do about it) when
+/// `advised`.
+pub(super) fn failure(error: &Error, advised: bool) -> Value {
+    let mut value = json!(error);
+    if advised {
+        advise(&mut value);
+    }
+    value
+}
+
+/// Add `next` to a failed result (`ok: false` with a code) that has none,
+/// as [`hints::step`] says.
+fn advise(value: &mut Value) {
+    if value["ok"] != false || value.get("next").is_some() {
+        return;
+    }
+
+    let Some(code) = value["code"].as_str() else {
+        return;
+    };
+
+    let next = hints::step(code, value["holder"].as_str(), value["uncertain"] == true);
+    value["next"] = json!(next);
+}
+
 /// Write `text` as it is. A reader that went away (`| head`) ends the
 /// output quietly, as in [`emit`].
 pub(super) fn print(text: &str) {
@@ -159,7 +195,88 @@ pub(super) fn failed(result: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use atlas::error::Holder;
+
+    #[test]
+    fn every_failure_for_programs_says_what_to_do_next() {
+        for code in atlas::error::CODES {
+            let error = Error::new(code, "It failed");
+            assert_eq!(
+                failure(&error, true)["next"],
+                hints::next(code, None),
+                "{code}"
+            );
+        }
+
+        let uncertain = Error::new("transport", "No reply").uncertain();
+        assert_eq!(failure(&uncertain, true)["next"], hints::UNCERTAIN);
+
+        let held = Error::new("busy", "Wait").held_by(Holder::Person);
+        assert_eq!(
+            failure(&held, true)["next"],
+            hints::next("busy", Some("person"))
+        );
+
+        let said = Error::new("elements", "Incomplete").with("next", "Try again.");
+        assert_eq!(
+            failure(&said, true)["next"],
+            "Try again.",
+            "its own is kept"
+        );
+
+        let mut result = json!({"ok": false, "code": "wait-failed", "uncertain": false});
+        advise(&mut result);
+        assert_eq!(result["next"], hints::next("wait-failed", None));
+
+        let mut typed = json!({"ok": false, "code": "busy", "holder": "agent", "uncertain": true});
+        advise(&mut typed);
+        assert_eq!(typed["next"], hints::UNCERTAIN);
+
+        // Waiting for the person keeps its own step, even when it may have
+        // happened: never atlas restart.
+        for (mut waiting, code, holder) in [
+            (
+                json!({"ok": false, "code": "stopped", "uncertain": true}),
+                "stopped",
+                None,
+            ),
+            (
+                json!({"ok": false, "code": "cancelled", "uncertain": true}),
+                "cancelled",
+                None,
+            ),
+            (
+                json!({"ok": false, "code": "busy", "holder": "person", "uncertain": true}),
+                "busy",
+                Some("person"),
+            ),
+        ] {
+            advise(&mut waiting);
+            assert_eq!(waiting["next"], hints::next(code, holder), "{code}");
+        }
+        let stopped = Error::new("stopped", "Stopped").uncertain();
+        assert_eq!(
+            failure(&stopped, true)["next"],
+            hints::next("stopped", None)
+        );
+
+        for mut untouched in [
+            json!({"ok": true, "code": "elements"}),
+            json!({"ok": true, "next": "atlas init"}),
+            json!({"ok": false}),
+        ] {
+            let before = untouched.clone();
+            advise(&mut untouched);
+            assert_eq!(untouched, before);
+        }
+    }
+
+    #[test]
+    fn a_failure_another_atlas_process_reads_has_no_next_step() {
+        let error = Error::new("transport", "No reply");
+        assert!(failure(&error, false).get("next").is_none());
+        assert_eq!(failure(&error, false), json!(error));
+    }
 
     #[test]
     fn programs_get_each_result_on_one_line() {

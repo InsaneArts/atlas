@@ -336,20 +336,96 @@ fn config_names_the_settings_file() {
 fn elements_say_how_many_match_and_what_is_missing() {
     let all = show(
         View::Elements,
-        json!({"ok": true, "pid": 9, "scanned": 2, "matching": 2, "scanIncomplete": true,
-               "elements": [{"index": 0, "role": "AXButton", "title": "",
-                             "identifier": "save", "frame": {"x": 1.0, "y": 2.0}}]}),
+        json!({"ok": true, "pid": 9, "scanned": 2, "matching": 2, "more": 1,
+               "scanIncomplete": true, "windows": [],
+               "elements": [{"index": 0, "role": "AXButton", "name": "save",
+                             "at": [11, 12], "size": [20, 20]}]}),
     );
     assert!(all.out.starts_with("Process 9 · 2 elements"));
-    assert!(all.out.contains("save"), "a name from the identifier");
+    assert!(all.out.contains("save"));
     assert!(all.out.contains("Showing 1 of 2"));
-    assert!(all.out.contains("stopped early"));
+    assert!(all.out.contains("The scan stopped early, so some"));
 
     let some = show(
         View::Elements,
-        json!({"ok": true, "pid": 9, "scanned": 5, "matching": 0, "elements": []}),
+        json!({"ok": true, "pid": 9, "scanned": 5, "matching": 0, "more": 0,
+               "scanIncomplete": false, "elements": []}),
     );
     assert_eq!(some.out, "Process 9 · 0 of 5 elements match");
+}
+
+#[test]
+fn the_elements_table_shows_each_centre_point() {
+    let compact = show(
+        View::Elements,
+        json!({"ok": true, "pid": 9, "scanned": 1, "matching": 1, "more": 0,
+               "scanIncomplete": false, "windows": [],
+               "elements": [{"index": 3, "role": "AXCheckBox", "name": "Bold",
+                             "at": [400, 62], "size": [24, 22]}]}),
+    );
+    assert!(compact.out.contains("400, 62"), "{}", compact.out);
+
+    let full = show(
+        View::Elements,
+        json!({"ok": true, "pid": 9, "scanned": 1, "matching": 1, "more": 0,
+               "scanIncomplete": false,
+               "elements": [{"index": 3, "depth": 2, "role": "AXCheckBox", "title": "Bold",
+                             "frame": {"x": 388.0, "y": 51.0, "width": 24.0, "height": 22.0}}]}),
+    );
+    assert!(
+        full.out.contains("400, 62"),
+        "the frame's centre: {}",
+        full.out
+    );
+    assert!(!full.out.contains("388, 51"));
+}
+
+#[test]
+fn a_scan_that_stopped_early_says_why() {
+    let shown = show(
+        View::Elements,
+        json!({"ok": true, "pid": 9, "scanned": 0, "matching": 0, "more": 0,
+               "scanIncomplete": true, "scan": {"reasons": ["count", "time"]},
+               "elements": []}),
+    );
+    assert!(
+        shown.out.contains(
+            "The scan stopped early (the app has more elements than Atlas reads and it ran out \
+             of time), so some elements may be missing."
+        ),
+        "{}",
+        shown.out
+    );
+}
+
+#[test]
+fn a_refused_name_lists_what_it_may_have_meant() {
+    let refused = Error::new("elements", "No visible element matches.").with(
+        "candidates",
+        json!([{"role": "AXMenuBarItem", "name": "Format", "at": [356, 11]},
+               {"role": "AXButton", "name": "Form\u{1b}[31m", "at": [10, 20]}]),
+    );
+    console::set_colors_enabled_stderr(false);
+    let shown = error(&refused);
+    assert!(
+        shown.contains("\n  · \"Format\" (menu bar item) at 356, 11"),
+        "{shown}"
+    );
+    assert!(!shown.contains('\u{1b}'), "names are made safe: {shown}");
+
+    let listed = show(
+        View::Elements,
+        json!({"ok": true, "pid": 9, "scanned": 4, "matching": 0, "more": 0,
+               "scanIncomplete": false, "elements": [],
+               "candidates": [{"role": "AXMenuBarItem", "name": "Format", "at": [356, 11]}]}),
+    );
+    assert!(
+        listed
+            .out
+            .contains("· \"Format\" (menu bar item) at 356, 11"),
+        "{}",
+        listed.out
+    );
 }
 
 #[test]

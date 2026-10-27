@@ -28,13 +28,13 @@ atlas environment rollback --help
 
 ### Look at the helper
 
-| Command      | Use it to                                                                                                                   |
-| ------------ | --------------------------------------------------------------------------------------------------------------------------- |
-| `screenshot` | Save a PNG and report its path and coordinate scale. `capture` is an alias; `--max-dimension` limits the longer image edge. |
-| `windows`    | List windows, optionally filtered by `--app`.                                                                               |
-| `elements`   | Inspect accessibility elements by app, role or name.                                                                        |
-| `apps`       | List running helper apps and their names.                                                                                   |
-| `status`     | Inspect the helper's identity, session and permissions.                                                                     |
+| Command      | Use it to                                                                                                                                                                                    |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `screenshot` | Save a PNG and report its path and coordinate scale. `capture` is an alias; `--max-dimension` limits the longer image edge.                                                                  |
+| `windows`    | List windows, optionally filtered by `--app`.                                                                                                                                                |
+| `elements`   | Inspect accessibility elements by app, role or name: 50 at most (`--max` changes it), `--full` for every attribute. A `--name` that matches nothing lists the closest names in `candidates`. |
+| `apps`       | List running helper apps and their names.                                                                                                                                                    |
+| `status`     | Inspect the helper's identity, session and permissions.                                                                                                                                      |
 
 Use `doctor` to decide whether a task can start. Use the observation commands to decide what to do inside an app. A screenshot's pixels are not necessarily display points; use its `pointsPerPixel` when calculating input coordinates.
 
@@ -105,7 +105,7 @@ See [Maintenance](maintenance.md) before updating, removing or repairing Atlas. 
 
 Ordinary command results are readable text in a terminal and JSON when redirected or piped. `ATLAS_JSON` can override that default; explicit `--json` wins. Help, version and `atlas agents status --brief` output are text, and `atlas agent-guide` prints Markdown. Interactive setup and commands that open a UI are not a stream of JSON results.
 
-In JSON mode, each result is one line of JSON. A returned action result goes to stdout, including a result with `ok: false`. Command, configuration and connection errors go to stderr. On failure, read both streams. Do not assume an empty stdout means nothing happened.
+In JSON mode, each result is one line of JSON. A returned action result goes to stdout, including a result with `ok: false`. Command, configuration and connection errors go to stderr. On failure, read both streams. Do not assume an empty stdout means nothing happened. Every failure carries `next`, one sentence on what to do about it, and `busy` carries `holder`: `person` or `agent`.
 
 The process exits with status 0 for success, 1 for a failed result or execution error, and 2 for invalid command syntax. Two useful exceptions to treating `ok` as success are:
 

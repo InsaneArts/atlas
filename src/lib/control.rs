@@ -4,7 +4,7 @@
 //! the short-lived [`Lease`] a viewer holds while a person has control.
 use crate::{
     config::home,
-    error::{Error, Result},
+    error::{Error, Holder, Result},
 };
 use fs2::FileExt;
 use rand::RngCore;
@@ -540,13 +540,16 @@ impl Controller {
 
         let lock = open_lock(&self.lock)?;
         if FileExt::try_lock_exclusive(&lock).is_err() {
+            // A command Atlas.app runs takes this lock too, so "agent" is
+            // another Atlas command, usually another agent's.
             return Err(if self.person.exists() {
-                Error::new("busy", crate::error::PERSON_HAS_CONTROL)
+                Error::new("busy", crate::error::PERSON_HAS_CONTROL).held_by(Holder::Person)
             } else {
                 Error::new(
                     "busy",
                     "Another Atlas controller is active: wait for it to finish, or release it in the viewer.",
                 )
+                .held_by(Holder::Agent)
             });
         }
 
@@ -1519,6 +1522,7 @@ mod tests {
         let refused = controller.acquire(false).err().unwrap();
         assert_eq!(refused.code, "busy");
         assert_eq!(refused.error, crate::error::PERSON_HAS_CONTROL);
+        assert_eq!(refused.holder, Some(Holder::Person));
         drop(person);
         assert!(
             !controller.person.exists(),
@@ -1535,11 +1539,13 @@ mod tests {
                 })
             })
             .expect("the lock comes free");
+        let refused = controller.acquire(false).err().unwrap();
         assert_ne!(
-            controller.acquire(false).err().unwrap().error,
+            refused.error,
             crate::error::PERSON_HAS_CONTROL,
             "another agent is not the person"
         );
+        assert_eq!(refused.holder, Some(Holder::Agent));
         drop(agent);
 
         fs::write(&controller.person, b"").unwrap();

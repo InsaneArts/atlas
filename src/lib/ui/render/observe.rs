@@ -455,10 +455,9 @@ pub fn elements(value: &Value) -> String {
             .iter()
             .map(|element| {
                 let name = super::element_name(element).unwrap_or("");
-                let frame = &element["frame"];
-                let at = match (frame["x"].as_f64(), frame["y"].as_f64()) {
-                    (Some(x), Some(y)) => format!("{}, {}", text::number(x), text::number(y)),
-                    _ => String::new(),
+                let at = match centre(element) {
+                    Some((x, y)) => format!("{}, {}", text::number(x), text::number(y)),
+                    None => String::new(),
                 };
 
                 vec![
@@ -478,21 +477,50 @@ pub fn elements(value: &Value) -> String {
         lines.push(table::render(&["#", "ROLE", "NAME", "VALUE", "AT"], &rows));
     }
 
-    if (elements.len() as u64) < matching {
+    let more = value["more"]
+        .as_u64()
+        .unwrap_or(matching.saturating_sub(elements.len() as u64));
+    if more > 0 {
         lines.push(style::dim(format!(
             "Showing {} of {matching}; --max shows more.",
             elements.len()
         )));
     }
 
+    let candidates = super::candidate_lines(&value["candidates"]);
+    if !candidates.is_empty() {
+        lines.push("The closest names:".to_owned());
+        lines.extend(candidates);
+    }
+
     if value["scanIncomplete"] == true {
+        let reasons = value["scan"]["reasons"].as_array().into_iter().flatten();
+        let why = crate::native::ax::why(reasons.filter_map(Value::as_str))
+            .map(|why| format!(" ({why})"))
+            .unwrap_or_default();
         lines.push(format!(
-            "{} The scan stopped early, so some elements may be missing.",
+            "{} The scan stopped early{why}, so some elements may be missing.",
             style::warn()
         ));
     }
 
     lines.join("\n")
+}
+
+/// Where a listed element's centre is: its `at`, or the centre of its
+/// frame when listed in full.
+fn centre(element: &Value) -> Option<(f64, f64)> {
+    if let (Some(x), Some(y)) = (element["at"][0].as_f64(), element["at"][1].as_f64()) {
+        return Some((x, y));
+    }
+
+    let frame = &element["frame"];
+    let (x, y) = (frame["x"].as_f64()?, frame["y"].as_f64()?);
+    let (width, height) = (
+        frame["width"].as_f64().unwrap_or(0.0),
+        frame["height"].as_f64().unwrap_or(0.0),
+    );
+    Some(((x + width / 2.0).round(), (y + height / 2.0).round()))
 }
 
 pub fn readiness(value: &Value) -> String {
