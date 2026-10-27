@@ -289,7 +289,7 @@ Options:
           Only this part of the display: X,Y,W,H in display points, widened to whole points
 
       --max-dimension <MAX_DIMENSION>
-          Shrink the longer side to at most this many pixels: 1456 for the whole screen unless given; 0 keeps the full size
+          Shrink the longer side to at most this many pixels: 1456 unless given (a smaller crop keeps its size); 0 keeps the full size
 
       --new-file
           Save a new file even when nothing changed since the last screenshot

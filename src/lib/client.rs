@@ -141,9 +141,9 @@ fn placement(display: &Display, width: u32, region: Option<&Region>) -> ((f64, f
 /// Identity (device, inode, size, mtime) of the installed executable and its hash.
 type BuildCache = Arc<std::sync::Mutex<Option<((u64, u64, u64, i64, i64), String)>>>;
 
-/// The longest side of an agent's whole-screen overview, in pixels, unless
-/// it asks for another size: enough to see layout, menu titles and controls
-/// at about half the cost of the full display. Crops stay at full size.
+/// The longest side of an agent's screenshot, in pixels, unless it asks for
+/// another size: enough to see layout, menu titles and controls at about
+/// half the cost of the full display. A smaller crop keeps its full size.
 pub const SCREENSHOT_SIDE: u32 = 1456;
 
 /// How long `run` lets a command take unless told otherwise.

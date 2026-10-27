@@ -52,9 +52,10 @@
 
 ### Screenshots
 
-`atlas screenshot` shrinks the whole screen to at most 1456 px on its longer
-side: enough to see layout. `--max-dimension 0` keeps the full size, but a
-crop (`--app`, `--pid` or `--region`) reads small text better. `--app` shows
+`atlas screenshot` shrinks the picture to at most 1456 px on its longer side:
+enough to see layout; a smaller crop keeps its size. `--max-dimension 0`
+keeps the full size, but a crop (`--app`, `--pid` or `--region`) reads small
+text better. `--app` shows
 that app's windows, sheets and open menus; `overlapping` names other windows
 in front of them, and the code `no-window` means it has none on screen.
 `origin` is 0,0 for a full screenshot. When nothing changed since the last
