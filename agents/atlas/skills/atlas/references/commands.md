@@ -723,7 +723,7 @@ Examples:
 ```text
 Quit an app in the helper and remove the copies `open` made for it.
 
-The app quits at once, without asking to save: save first (key cmd+s). --all quits what an earlier session may have left open: every app bundle with a Dock icon and every menu bar app not made by Apple. Atlas and macOS's own in /System/Library (Finder among them) stay.
+The app quits at once, without asking to save: save first (key cmd+s). --all quits every app left open, another agent's too: use it only when the person asks. Atlas and macOS's own in /System/Library (Finder among them) stay.
 
 Usage: atlas close [OPTIONS] <--app <APP>|--all>
 
@@ -732,7 +732,7 @@ Options:
           The app's name, as `atlas apps` lists it
 
       --all
-          Quit every app left open (not Atlas or macOS's own)
+          Quit every app left open, another agent's too (not Atlas or macOS's own)
 
   -h, --help
           Print help (see a summary with '-h')
@@ -746,7 +746,6 @@ Global options:
 
 Examples:
   atlas close --app TextEdit
-  atlas close --all
 ```
 
 ## atlas wait
@@ -1321,11 +1320,20 @@ Global options:
 ## atlas agent-guide
 
 ```text
-Print the guide agents read to use Atlas
+Print the guide agents read to use Atlas (all of it by default)
 
 Usage: atlas agent-guide [OPTIONS]
 
 Options:
+      --skill
+          Print the short version the agent plugins load (SKILL.md), which lists the rest
+
+      --commands
+          Print every command and its options (Markdown)
+
+      --errors
+          Print what each error code means and what to do (Markdown)
+
   -h, --help
           Print help
 
@@ -1335,4 +1343,9 @@ Global options:
 
       --config <FILE>
           Use another settings file
+
+Examples:
+  atlas agent-guide
+  atlas agent-guide --skill
+  atlas agent-guide --errors
 ```

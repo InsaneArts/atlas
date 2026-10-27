@@ -613,7 +613,7 @@ impl Controller {
         if self.marker.try_exists()? {
             return Err(Error::new(
                 "uncertain",
-                "The last action's outcome is unknown. Observe the desktop, then run 'atlas restart'.",
+                "The last action's outcome is unknown; Atlas waits until it is recovered.",
             ));
         }
 

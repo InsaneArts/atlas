@@ -26,8 +26,46 @@ use std::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 
-/// The working contract printed by `atlas agent-guide`.
-pub const GUIDE: &str = include_str!("agent_guide.md");
+/// The guide's core: what every agent reads first.
+pub const CORE: &str = include_str!("agent_guide.md");
+
+/// What an agent reads only when a task needs it, in the skill's folder:
+/// (file, what it holds).
+pub const REFERENCES: &[(&str, &str)] = &[
+    ("testing.md", "Test your own app."),
+    (
+        "environment.md",
+        "Give the app what it needs: copy files in and roll them back.",
+    ),
+    (
+        "limits.md",
+        "Limits, and details of typing, keys, scrolling and `atlas run`.",
+    ),
+    ("commands.md", "every command and its options."),
+    (
+        "troubleshooting.md",
+        "the error reference, every code and what to do.",
+    ),
+];
+
+/// The whole guide `atlas agent-guide` prints: the core, then each
+/// reference written for the guide, then where the rest is.
+pub const GUIDE: &str = concat!(
+    include_str!("agent_guide.md"),
+    "\n",
+    include_str!("../../agents/atlas/skills/atlas/references/testing.md"),
+    "\n",
+    include_str!("../../agents/atlas/skills/atlas/references/environment.md"),
+    "\n",
+    include_str!("../../agents/atlas/skills/atlas/references/limits.md"),
+    "\n",
+    "## References\n\n`atlas agent-guide --commands` prints every command and its options, \
+and `atlas agent-guide --errors` the error reference: every code and what to do.\n",
+);
+
+/// The error reference, printed by `atlas agent-guide --errors`.
+pub const ERRORS: &str =
+    include_str!("../../agents/atlas/skills/atlas/references/troubleshooting.md");
 
 /// When a skill loads: what Atlas is for, in the words an agent matches.
 const SKILL_DESCRIPTION: &str = "See and use macOS GUIs in a hidden second login (the helper) \
@@ -39,46 +77,22 @@ a web app in Google Chrome or Firefox, take screenshots, and click or type in ap
 asks to watch the helper, see what you are doing or take over: open the live view for them. Not for unit tests, builds \
 or reading files.";
 
-/// The rules every agent follows, set between the guide's introduction and
-/// its first section in the plugin's skill.
-const SKILL_RULES: &str = "## Rules
-
-- Never act on the person's own desktop; everything happens in the helper.
-- Check your on-screen work in the helper before saying it works, and show the
-  screenshots.
-- Do the work yourself: opening builds, copying files in, cleaning up. The
-  person only set Atlas up.
-- Never use sudo, type a password or change privacy settings. If `doctor` is
-  not ready, run the Atlas commands it suggests; tell the person only what
-  needs them (or use the setup skill).
-- Never take control from the person: on `busy`, wait. On `stopped`, stop and
-  ask them; never resume agents yourself.
-- Ask the person before `atlas switch`, and before anything that locks, sleeps
-  or logs out. Run `atlas logout` only when the person asks for it: only they
-  can log the helper back in.
-- After an `uncertain` result, never repeat the action: take a screenshot, run
-  `atlas restart`, and look again before going on.
-- Leave the helper as you found it: close what you opened, roll back what you
-  copied.
-
-";
-
-/// The agent plugin's skill: the guide with its rules. The plugin's SKILL.md
-/// is this text (a test keeps them equal).
+/// The agent plugin's skill: the core under the skill's own title, then
+/// the references it points to. The plugin's SKILL.md is this text (a test
+/// keeps them equal).
 pub fn skill() -> String {
-    let guide = GUIDE
+    let core = CORE
         .split_once('\n')
-        .map_or(GUIDE, |(_, rest)| rest)
+        .map_or(CORE, |(_, rest)| rest)
         .trim_start();
-    let (introduction, sections) = guide.split_once("## ").unwrap_or(("", guide));
+    let references: String = REFERENCES
+        .iter()
+        .map(|(file, about)| format!("- [references/{file}](references/{file}): {about}\n"))
+        .collect();
 
     format!(
         "---\nname: atlas\ndescription: \"{SKILL_DESCRIPTION}\"\n---\n\n# Atlas\n\n\
-{introduction}{SKILL_RULES}## {sections}\n\
-## References\n\n\
-- [references/commands.md](references/commands.md): every command and its options.\n\
-- [references/troubleshooting.md](references/troubleshooting.md): what each error \
-code means and what to do.\n"
+{core}\n## References\n\nRead one when the task needs it:\n\n{references}"
     )
 }
 
@@ -1867,6 +1881,151 @@ mod tests {
             "close",
         ] {
             assert!(GUIDE.contains(&format!("atlas {command}")), "{command}");
+        }
+
+        for command in [
+            "doctor",
+            "windows",
+            "screenshot",
+            "elements",
+            "click",
+            "wait",
+            "open",
+            "run",
+            "restart",
+            "close",
+            "environment rollback",
+            "monitor",
+        ] {
+            assert!(CORE.contains(&format!("atlas {command}")), "{command}");
+        }
+    }
+
+    /// The core with its lines joined, so a phrase may wrap anywhere.
+    fn core_text() -> String {
+        CORE.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    /// Where the skill's references live, beside its SKILL.md.
+    fn references_folder() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("agents/atlas/skills/atlas/references")
+    }
+
+    #[test]
+    fn the_skill_is_the_core_followed_by_its_references() {
+        let skill = skill();
+        let (_, body) = skill.split_once("\n---\n\n# Atlas\n\n").unwrap();
+        let (_, core) = CORE.split_once('\n').unwrap();
+        let rest = body.strip_prefix(core.trim_start()).unwrap();
+        let mut expected = String::from("\n## References\n\nRead one when the task needs it:\n\n");
+        for (file, about) in REFERENCES {
+            expected.push_str(&format!(
+                "- [references/{file}](references/{file}): {about}\n"
+            ));
+        }
+        assert_eq!(rest, expected);
+    }
+
+    /// Every agent loads the whole skill at the start of each task. When it
+    /// grows past this, move detail into a reference rather than raise it.
+    #[test]
+    fn the_skill_stays_near_two_thousand_tokens() {
+        let size = skill().len();
+        assert!(size <= 8 * 1024, "the skill is {size} bytes");
+    }
+
+    #[test]
+    fn the_skill_core_keeps_every_rule_an_agent_needs_from_the_start() {
+        let core = core_text();
+        let actor = ["ATLAS", "ACTOR"].join("_");
+        for rule in [
+            "busy",
+            "holder",
+            "stopped",
+            "\"uncertain\": true",
+            "Do not run `atlas restart`",
+            "on-console",
+            "blocked",
+            "session-changed",
+            actor.as_str(),
+            "privacy settings",
+            "credentials",
+            "atlas switch",
+            "atlas logout",
+            "Never repeat",
+            "this task opened",
+            "unsaved work",
+            "without a screenshot that shows it",
+            "show_screen",
+            "&&",
+            "unchanged: true",
+        ] {
+            assert!(core.contains(rule), "{rule}");
+        }
+    }
+
+    #[test]
+    fn no_step_quits_or_discards_what_the_task_did_not_open() {
+        let core = core_text();
+        for (index, _) in core.match_indices("close --all") {
+            assert!(
+                core[..index].ends_with("never run `atlas "),
+                "close --all is taught: {}",
+                &core[index.saturating_sub(60)..index]
+            );
+        }
+        assert!(!core.to_lowercase().contains("cmd+backspace"));
+    }
+
+    #[test]
+    fn the_full_guide_is_the_core_then_every_reference_written_for_it() {
+        let mut expected = format!("{CORE}\n");
+        for file in ["testing.md", "environment.md", "limits.md"] {
+            assert!(
+                REFERENCES.iter().any(|(listed, _)| *listed == file),
+                "{file}"
+            );
+            let text = std::fs::read_to_string(references_folder().join(file)).unwrap();
+            assert!(text.starts_with("## "), "{file} starts with its heading");
+            expected.push_str(&text);
+            expected.push('\n');
+        }
+        let rest = GUIDE.strip_prefix(&expected).unwrap();
+        assert!(rest.starts_with("## References\n"), "{rest}");
+        assert!(rest.contains("`atlas agent-guide --commands`"), "{rest}");
+        assert!(rest.contains("`atlas agent-guide --errors`"), "{rest}");
+    }
+
+    #[test]
+    fn every_reference_the_skill_lists_is_in_its_folder_and_nothing_else_is() {
+        let mut present: Vec<String> = std::fs::read_dir(references_folder())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        present.sort();
+        let mut listed: Vec<String> = REFERENCES
+            .iter()
+            .map(|(file, _)| (*file).to_owned())
+            .collect();
+        listed.sort();
+        assert_eq!(present, listed);
+    }
+
+    /// The core sends an agent to these sections by name: each heads a part
+    /// of the full guide and is how the skill's References list names it.
+    #[test]
+    fn every_section_the_core_points_to_exists() {
+        let core = core_text();
+        for section in ["Test your own app", "Give the app what it needs", "Limits"] {
+            assert!(core.contains(&format!("read {section}")), "{section}");
+            assert!(GUIDE.contains(&format!("\n## {section}\n")), "{section}");
+            assert!(
+                REFERENCES
+                    .iter()
+                    .any(|(_, about)| about.starts_with(section)),
+                "{section}"
+            );
         }
     }
 

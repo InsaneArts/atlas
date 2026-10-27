@@ -291,14 +291,18 @@ pub(super) enum Command {
         #[arg(long)]
         full: bool,
     },
-    /// Print the guide agents read to use Atlas.
+    /// Print the guide agents read to use Atlas (all of it by default).
+    #[command(group(clap::ArgGroup::new("part").args(["skill", "commands", "errors"])))]
     AgentGuide {
-        /// Print the agent plugin's skill (SKILL.md) instead.
-        #[arg(long, hide = true, conflicts_with = "commands")]
+        /// Print the short version the agent plugins load (SKILL.md), which lists the rest.
+        #[arg(long)]
         skill: bool,
-        /// Print the command reference (Markdown) instead.
-        #[arg(long, hide = true)]
+        /// Print every command and its options (Markdown).
+        #[arg(long)]
         commands: bool,
+        /// Print what each error code means and what to do (Markdown).
+        #[arg(long)]
+        errors: bool,
     },
     /// Check that tools and apps are ready in the helper.
     Readiness {
@@ -410,15 +414,15 @@ pub(super) enum Command {
     /// Quit an app in the helper and remove the copies `open` made for it.
     ///
     /// The app quits at once, without asking to save: save first (key cmd+s).
-    /// --all quits what an earlier session may have left open: every app
-    /// bundle with a Dock icon and every menu bar app not made by Apple.
-    /// Atlas and macOS's own in /System/Library (Finder among them) stay.
+    /// --all quits every app left open, another agent's too: use it only when
+    /// the person asks. Atlas and macOS's own in /System/Library (Finder among
+    /// them) stay.
     #[command(group(clap::ArgGroup::new("which").required(true).args(["app", "all"])))]
     Close {
         /// The app's name, as `atlas apps` lists it.
         #[arg(long)]
         app: Option<String>,
-        /// Quit every app left open (not Atlas or macOS's own).
+        /// Quit every app left open, another agent's too (not Atlas or macOS's own).
         #[arg(long, conflicts_with = "app")]
         all: bool,
     },

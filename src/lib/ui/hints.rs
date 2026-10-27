@@ -2,7 +2,7 @@
 //! sentence. The agent-facing table of the same codes is the plugin's
 //! troubleshooting.md; a test keeps every code there covered here.
 
-/// The step for an action that may or may not have happened.
+/// The step for your own action that may or may not have happened.
 pub const UNCERTAIN: &str = "It may or may not have happened, so don't repeat it. Take a screenshot, then run atlas restart.";
 
 /// What an agent does about a failure: the uncertain step when it may or
@@ -35,6 +35,9 @@ pub fn next(code: &str, holder: Option<&str>) -> &'static str {
         ("busy", _) => "Wait, then try again. Never take control from the person.",
         ("stopped", _) => {
             "Don't repeat it, as it may have happened. Stop and ask the person what to do; only they can resume agents."
+        }
+        ("uncertain", _) => {
+            "An earlier action's outcome is unknown. Take a screenshot; run atlas restart only if that action was yours, otherwise ask the person first."
         }
         ("cancelled", _) => {
             "The person stopped it, maybe partway. Look at the helper, then ask them before trying again."
@@ -205,6 +208,18 @@ mod tests {
         assert!(unknown.contains("Never take control"), "{unknown}");
         assert_eq!(next("busy", Some("someone")), unknown);
         assert_ne!(next("busy", None), fix("busy").unwrap(), "not the person's");
+    }
+
+    /// An earlier action's unknown outcome, perhaps another agent's, is
+    /// recovered without asking only by its owner; an agent's own action
+    /// that may or may not have happened is its own to recover.
+    #[test]
+    fn an_earlier_unknown_outcome_is_recovered_only_by_its_owner() {
+        let said = next("uncertain", None);
+        assert!(said.contains("only if that action was yours"), "{said}");
+        assert!(said.contains("ask the person"), "{said}");
+        assert_eq!(step("uncertain", None, false), said);
+        assert_eq!(step("uncertain", None, true), UNCERTAIN);
     }
 
     /// Every code an agent can meet has a step for a person too.

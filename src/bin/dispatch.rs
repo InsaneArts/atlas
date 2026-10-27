@@ -211,11 +211,17 @@ pub(super) async fn execute(config: PathBuf, command: Command) -> Result<Value> 
 
     match command {
         Command::EnvironmentWorker { packet, apply } => environment::worker(&packet, apply),
-        Command::AgentGuide { skill, commands } => {
+        Command::AgentGuide {
+            skill,
+            commands,
+            errors,
+        } => {
             if skill {
                 print(&agent::skill());
             } else if commands {
                 print(&help::command_reference());
+            } else if errors {
+                print(agent::ERRORS);
             } else {
                 print(agent::GUIDE);
             }

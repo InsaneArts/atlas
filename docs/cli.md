@@ -50,11 +50,11 @@ Use `doctor` to decide whether a task can start. Use the observation commands to
 | `scroll` | Scroll at a point with `--dx` or `--dy`.                                                                     |
 | `input`  | Send a bounded JSON array of actions, directly or from `@actions.json`.                                      |
 | `open`   | Open an app, file or URL in the helper. `--app` selects an app; `--env NAME=VALUE` passes a launch variable. |
-| `close`  | Quit one app with `--app`, or the supported set of apps with `--all`.                                        |
+| `close`  | Quit one app with `--app`. `--all` quits every app left open, another agent's too.                           |
 | `wait`   | Wait for a matching window to appear or, with `--gone`, disappear.                                           |
 | `run`    | Run a command as the helper and return its output and process result.                                        |
 
-Check the screen before acting, and verify the effect afterward. The [daily use guide](using-atlas.md) shows a complete open, inspect, act and close sequence. `close --all` is broader than closing the app you are testing: it includes ordinary app bundles and non-Apple menu bar apps, while leaving Atlas and macOS system apps alone.
+Check the screen before acting, and verify the effect afterward. The [daily use guide](using-atlas.md) shows a complete open, inspect, act and close sequence. `close --all` is broader than closing the app you are testing: it includes ordinary app bundles and non-Apple menu bar apps, another agent's too, while leaving Atlas and macOS system apps alone.
 
 `run` takes the program after `--`. The command starts in the helper's home. Quote a shell expression so that the helper's shell, rather than your own shell, expands its variables:
 
@@ -88,14 +88,14 @@ Coordinate switching, locking and logging out with the person at the Mac. `logou
 
 ### Look after Atlas
 
-| Command       | Use it to                                                                                                       |
-| ------------- | --------------------------------------------------------------------------------------------------------------- |
-| `update`      | Check or install a verified release.                                                                            |
-| `uninstall`   | Remove Atlas, with separate choices for keeping configuration or deleting the helper account.                   |
-| `install`     | Put the current executable where the helper can run it. This is not the public download installer.              |
-| `setup`       | Inspect setup, apply or resume a managed-layout migration, or roll it back. This is an advanced repair command. |
-| `config`      | Show the selected settings and resolved paths.                                                                  |
-| `agent-guide` | Print the Markdown guide supplied to agents.                                                                    |
+| Command       | Use it to                                                                                                                                                                                  |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `update`      | Check or install a verified release.                                                                                                                                                       |
+| `uninstall`   | Remove Atlas, with separate choices for keeping configuration or deleting the helper account.                                                                                              |
+| `install`     | Put the current executable where the helper can run it. This is not the public download installer.                                                                                         |
+| `setup`       | Inspect setup, apply or resume a managed-layout migration, or roll it back. This is an advanced repair command.                                                                            |
+| `config`      | Show the selected settings and resolved paths.                                                                                                                                             |
+| `agent-guide` | Print the Markdown guide supplied to agents. `--skill` prints the short version the agent plugins load, `--commands` every command and its options, `--errors` what each error code means. |
 
 See [Maintenance](maintenance.md) before updating, removing or repairing Atlas. See [Configuration](configuration.md) for settings selection and storage paths.
 

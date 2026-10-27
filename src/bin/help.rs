@@ -80,10 +80,7 @@ const EXAMPLES: &[(&str, &[&str])] = &[
             "atlas open --app \"Google Chrome\" https://example.com",
         ],
     ),
-    (
-        "close",
-        &["atlas close --app TextEdit", "atlas close --all"],
-    ),
+    ("close", &["atlas close --app TextEdit"]),
     (
         "wait",
         &[
@@ -117,6 +114,14 @@ const EXAMPLES: &[(&str, &[&str])] = &[
             "atlas agents",
             "atlas agents install",
             "atlas agents project",
+        ],
+    ),
+    (
+        "agent-guide",
+        &[
+            "atlas agent-guide",
+            "atlas agent-guide --skill",
+            "atlas agent-guide --errors",
         ],
     ),
 ];
@@ -458,6 +463,76 @@ mod tests {
             command_reference(),
             "regenerate with: atlas agent-guide --commands"
         );
+    }
+
+    /// Each `atlas …` the guide or the error reference shows in backticks
+    /// names a visible command (and subcommand) and only options that
+    /// command has.
+    #[test]
+    fn every_command_and_option_the_guide_shows_exists() {
+        let mut root = command();
+        root.build();
+
+        let shown = [atlas::agent::GUIDE, atlas::agent::ERRORS];
+        for span in shown
+            .iter()
+            .flat_map(|text| text.split('`').skip(1).step_by(2))
+        {
+            let Some(rest) = span.strip_prefix("atlas ") else {
+                continue;
+            };
+            let mut words = rest
+                .split_whitespace()
+                .take_while(|word| *word != "--")
+                .peekable();
+            let name = words.next().unwrap();
+            let mut command = root
+                .find_subcommand(name)
+                .filter(|command| !command.is_hide_set())
+                .unwrap_or_else(|| panic!("`{span}`: no command {name}"));
+            if let Some(sub) = words
+                .peek()
+                .and_then(|word| command.find_subcommand(word))
+                .filter(|sub| !sub.is_hide_set())
+            {
+                command = sub;
+                words.next();
+            }
+
+            for word in words
+                .map(|word| word.trim_start_matches('['))
+                .filter(|word| word.starts_with("--"))
+            {
+                let flag = word
+                    .trim_start_matches("--")
+                    .trim_end_matches(']')
+                    .split('=')
+                    .next()
+                    .unwrap();
+                let known = flag == "help"
+                    || command
+                        .get_arguments()
+                        .chain(root.get_arguments())
+                        .any(|arg| arg.get_long() == Some(flag) && !arg.is_hide_set());
+                assert!(
+                    known,
+                    "`{span}`: {} has no option --{flag}",
+                    command.get_name()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_agent_guide_options_are_visible() {
+        let help = command()
+            .find_subcommand_mut("agent-guide")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+        for option in ["--skill", "--commands", "--errors"] {
+            assert!(help.contains(option), "{option}");
+        }
     }
 
     #[test]

@@ -608,6 +608,27 @@ mod tests {
     #[test]
     fn the_agent_docs_show_the_project_section() {
         let docs = include_str!("../../../docs/agents.md");
-        assert!(docs.contains(PROJECT_SECTION.trim_end()));
+        assert!(docs.contains(&format!("```text\n{}\n```", PROJECT_SECTION.trim_end())));
+    }
+
+    #[test]
+    fn the_project_section_lets_a_loaded_skill_stand_for_the_guide() {
+        let section = PROJECT_SECTION
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let skill = section
+            .find("If the atlas skill is loaded, follow it.")
+            .unwrap();
+        let guide = section.find("Otherwise run `atlas agent-guide`").unwrap();
+        assert!(skill < guide, "{section}");
+        assert!(
+            section.contains("`atlas doctor && atlas windows`"),
+            "{section}"
+        );
+        assert!(
+            section.contains("only if that action was yours"),
+            "{section}"
+        );
     }
 }

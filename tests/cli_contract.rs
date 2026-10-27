@@ -234,6 +234,30 @@ fn the_agent_reference_is_raw_markdown_without_an_extra_result() {
 }
 
 #[test]
+fn the_error_reference_is_raw_markdown_without_an_extra_result() {
+    let fixture = Fixture::new();
+    let output = fixture.missing(&["agent-guide", "--errors"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        output.stdout,
+        include_bytes!("../agents/atlas/skills/atlas/references/troubleshooting.md")
+    );
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn the_skill_is_raw_markdown_without_an_extra_result() {
+    let fixture = Fixture::new();
+    let output = fixture.missing(&["agent-guide", "--skill"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        output.stdout,
+        include_bytes!("../agents/atlas/skills/atlas/SKILL.md")
+    );
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn a_broken_configuration_reports_a_json_failure_on_stderr() {
     let fixture = Fixture::new();
     let output = fixture.run(&fixture.config("broken.toml"), &["config", "--json"], None);

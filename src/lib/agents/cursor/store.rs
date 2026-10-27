@@ -372,16 +372,21 @@ fn payload(marketplace: &Path) -> Result<Record> {
             },
         );
     }
-    for path in [
+    let references = crate::agent::REFERENCES
+        .iter()
+        .map(|(file, _)| format!("skills/atlas/references/{file}"));
+    let files = [
         ".cursor-plugin/plugin.json",
         "cursor/mcp.json",
         "cursor/hooks.json",
         "cursor/launch",
         "skills/atlas/SKILL.md",
-        "skills/atlas/references/commands.md",
-        "skills/atlas/references/troubleshooting.md",
         "skills/setup/SKILL.md",
-    ] {
+    ]
+    .map(String::from)
+    .into_iter()
+    .chain(references);
+    for path in files {
         collect(&root, &root.join(path), &mut entries, false)?;
     }
     let manifest: Value =
