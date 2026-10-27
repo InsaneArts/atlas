@@ -6,11 +6,12 @@
 use crate::{
     actions,
     config::Config,
-    control::{Controller, Ownership, SharedLease, write_private},
+    control::{Controller, Ownership, SharedLease},
     daemon::protocol::{Crop, Region},
     digest::file_sha256,
     doing::Doing,
     error::{Error, Holder, Result},
+    last_capture,
     session::{Display, Epoch, Session, input_current, input_settled, require_hidden},
     transport::{Transport, accepted, run_output},
 };
@@ -140,6 +141,11 @@ fn placement(display: &Display, width: u32, region: Option<&Region>) -> ((f64, f
 /// Identity (device, inode, size, mtime) of the installed executable and its hash.
 type BuildCache = Arc<std::sync::Mutex<Option<((u64, u64, u64, i64, i64), String)>>>;
 
+/// The longest side of an agent's whole-screen overview, in pixels, unless
+/// it asks for another size: enough to see layout, menu titles and controls
+/// at about half the cost of the full display. Crops stay at full size.
+pub const SCREENSHOT_SIDE: u32 = 1456;
+
 /// How long `run` lets a command take unless told otherwise.
 pub const RUN_TIMEOUT: Duration = Duration::from_secs(20);
 /// The longest a command may run (the helper's own limit).
@@ -176,7 +182,7 @@ pub struct Client {
 }
 
 /// Screenshots are kept for a week; older ones are removed as new ones come.
-fn prune_captures(output: &Path) {
+pub(crate) fn prune_captures(output: &Path) {
     const WEEK: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
     let Ok(entries) = fs::read_dir(output) else {
@@ -538,10 +544,17 @@ impl Client {
     }
 
     /// Save a screenshot of the whole display, or of `crop`, and say where
-    /// its pixels lie on the display.
-    pub async fn capture(&self, maximum: Option<u32>, crop: Option<&Crop>) -> Result<Value> {
+    /// its pixels lie on the display. A capture with the same pixels as the
+    /// last one of that target and size names the earlier file and says it
+    /// is `unchanged`, unless `new_file` asks for a file anyway.
+    pub async fn capture(
+        &self,
+        maximum: Option<u32>,
+        crop: Option<&Crop>,
+        new_file: bool,
+    ) -> Result<Value> {
         let started = Instant::now();
-        let captured = self.capture_unrecorded(maximum, crop).await;
+        let captured = self.capture_unrecorded(maximum, crop, new_file).await;
 
         // An agent's look at the screen is activity too; a recording that
         // fails never fails the capture.
@@ -556,13 +569,24 @@ impl Client {
     }
 
     /// [`Client::capture`], kept in the output folder but not in the log.
-    async fn capture_unrecorded(&self, maximum: Option<u32>, crop: Option<&Crop>) -> Result<Value> {
+    async fn capture_unrecorded(
+        &self,
+        maximum: Option<u32>,
+        crop: Option<&Crop>,
+        new_file: bool,
+    ) -> Result<Value> {
         let (frame, shows) = self.framed(maximum, crop).await?;
-        let path = self
-            .output_dir()?
-            .join(format!("{}-capture.png", timestamp()));
-        write_private(&path, &frame.png)?;
-        prune_captures(self.output_dir()?);
+        let output = self.output_dir()?;
+        let kept = last_capture::keep(
+            output,
+            &last_capture::key(maximum, crop),
+            &frame,
+            shows.as_ref().map(|shows| &shows.region),
+            new_file,
+        )?;
+        if kept.written {
+            prune_captures(output);
+        }
 
         let ((x, y), scale) = placement(
             &frame.display,
@@ -571,7 +595,7 @@ impl Client {
         );
         let mut saved = json!({
             "ok": true,
-            "path": path,
+            "path": kept.path,
             "width": frame.width,
             "height": frame.height,
             "display": frame.display,
@@ -579,6 +603,9 @@ impl Client {
             "origin": {"x": x, "y": y},
             "pointsPerPixel": scale,
         });
+        if kept.unchanged {
+            saved["unchanged"] = json!(true);
+        }
         if let Some(shows) = shows {
             saved["region"] = json!(shows.region);
             for (key, value) in [("app", shows.app), ("overlapping", shows.overlapping)] {
@@ -2996,7 +3023,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let client = client_in(dir.path()).doing(Doing::new("screenshot"));
         assert!(
-            client.capture(None, None).await.is_err(),
+            client.capture(None, None, false).await.is_err(),
             "no helper answers"
         );
         let region = Crop::Region(Region {
@@ -3005,7 +3032,12 @@ mod tests {
             width: 400,
             height: 300,
         });
-        assert!(client.capture(Some(400), Some(&region)).await.is_err());
+        assert!(
+            client
+                .capture(Some(400), Some(&region), true)
+                .await
+                .is_err()
+        );
 
         let rows = crate::overview::activity(client.output_dir().unwrap(), 5);
         assert_eq!(

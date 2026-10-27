@@ -103,8 +103,15 @@ person remember these commands before they can watch you.
 
 ## Look
 
-- `atlas screenshot` saves a PNG and prints its `path`. Open the image and look
-  at it; never assume what is on screen.
+- `atlas screenshot` saves a PNG and prints its `path`; never assume what is
+  on screen. Open the image and look at it, unless the reply says `unchanged:
+  true` and you have already looked at that file: the picture is
+  pixel-identical to the file at `path`, and this reply's `origin` and
+  `pointsPerPixel` still apply. An unchanged screenshot is never evidence that
+  something changed.
+- `atlas screenshot` captures the whole screen at most 1456 px on its longer
+  side: enough to see layout. Read a window closely with `--app` (or
+  `--region`). Use `--max-dimension 0` for the full size.
 - `atlas screenshot --app NAME` shows only that app's windows, sheets and open
   menus (`overlapping` names other windows in front of them), and `--region
   X,Y,W,H` only that part of the display: smaller pictures than the whole screen.

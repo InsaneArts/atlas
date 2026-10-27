@@ -1201,12 +1201,14 @@ pub async fn elements(
 }
 
 /// Save a screenshot of the whole display, of `target`'s windows, or of
-/// `region`. The app is found as `elements` finds it.
+/// `region`, or name the earlier file when nothing changed (unless
+/// `new_file`). The app is found as `elements` finds it.
 pub async fn screenshot(
     client: &Client,
     target: Option<&Target>,
     region: Option<Region>,
     maximum: Option<u32>,
+    new_file: bool,
 ) -> Result<Value> {
     let crop = match (target, region) {
         (Some(_), Some(_)) => {
@@ -1222,7 +1224,7 @@ pub async fn screenshot(
     };
 
     client
-        .capture(maximum, crop.as_ref())
+        .capture(maximum, crop.as_ref(), new_file)
         .await
         .map_err(|error| match target {
             Some(Target::Name(name)) if error.code == "no-window" => Error::new(

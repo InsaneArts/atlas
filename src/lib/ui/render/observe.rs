@@ -327,11 +327,12 @@ fn path(value: &Value) -> String {
 }
 
 pub fn capture(value: &Value) -> String {
-    let mut lines = vec![format!(
-        "{} Screenshot saved  {}",
-        style::ok(),
-        path(&value["path"])
-    )];
+    let said = if value["unchanged"] == true {
+        "Screenshot unchanged"
+    } else {
+        "Screenshot saved"
+    };
+    let mut lines = vec![format!("{} {said}  {}", style::ok(), path(&value["path"]))];
     let mut facts = Vec::new();
 
     if let (Some(width), Some(height)) = (value["width"].as_f64(), value["height"].as_f64()) {

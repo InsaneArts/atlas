@@ -10,7 +10,7 @@ use super::{
 };
 use atlas::{
     agent,
-    client::Client,
+    client::{Client, SCREENSHOT_SIDE},
     config::Config,
     doing::Doing,
     environment,
@@ -22,6 +22,17 @@ use atlas::{
 };
 use serde_json::{Value, json};
 use std::{io::Read, path::PathBuf, time::Duration};
+
+/// The longest side a screenshot is scaled to: the whole screen is an
+/// overview of [`SCREENSHOT_SIDE`] unless another size is given, a crop
+/// keeps its full size, and 0 asks for the full size.
+pub(super) fn screenshot_size(given: Option<u32>, whole_screen: bool) -> Option<u32> {
+    match given {
+        None if whole_screen => Some(SCREENSHOT_SIDE),
+        None | Some(0) => None,
+        Some(side) => Some(side),
+    }
+}
 
 /// Connect or disconnect the named agents and Claude app; none
 /// named means every installed one, the Claude app included.
@@ -484,7 +495,13 @@ pub(super) async fn execute(config: PathBuf, command: Command) -> Result<Value> 
             target,
             region,
             max_dimension,
-        } => agent::screenshot(&client()?, target.target().as_ref(), region, max_dimension).await,
+            new_file,
+        } => {
+            let target = target.target();
+            let whole_screen = target.is_none() && region.is_none();
+            let maximum = screenshot_size(max_dimension, whole_screen);
+            agent::screenshot(&client()?, target.as_ref(), region, maximum, new_file).await
+        }
         Command::Apps { all } => client()?.apps().await.map(|reply| listed_apps(reply, all)),
         Command::Click {
             x,

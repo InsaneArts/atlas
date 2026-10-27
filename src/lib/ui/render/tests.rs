@@ -136,6 +136,21 @@ fn a_screenshot_names_its_file_and_size() {
 }
 
 #[test]
+fn an_unchanged_screenshot_names_the_earlier_file() {
+    let shown = show(
+        View::Capture,
+        json!({
+            "ok": true, "unchanged": true, "path": "/tmp/1-capture.png", "width": 1456,
+            "height": 819, "origin": {"x": 0.0, "y": 0.0}, "pointsPerPixel": 1.758,
+        }),
+    );
+    assert_eq!(
+        shown.out,
+        "✓ Screenshot unchanged  /tmp/1-capture.png\n  1456 × 819 pixels · 1.8 points per pixel"
+    );
+}
+
+#[test]
 fn a_cropped_screenshot_names_its_origin_and_what_is_in_front() {
     let shown = show(
         View::Capture,

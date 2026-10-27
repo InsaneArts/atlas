@@ -203,6 +203,27 @@ pub(crate) fn sample_png(width: usize, height: usize) -> Vec<u8> {
     png(&image).expect("a PNG")
 }
 
+/// A `width`×`height` PNG, blank but for its top `rows` rows, which are
+/// filled: two of these differ only where a menu bar would be.
+#[cfg(test)]
+pub(crate) fn banded_png(width: usize, height: usize, rows: usize) -> Vec<u8> {
+    png(&banded(width, height, rows)).expect("a PNG")
+}
+
+#[cfg(test)]
+fn banded(width: usize, height: usize, rows: usize) -> CFRetained<CGImage> {
+    let context = bitmap(width, height).expect("a bitmap context");
+    CGContext::set_rgb_fill_color(Some(&context), 0.2, 0.4, 0.8, 1.0);
+    // A bitmap context's origin is its bottom left.
+    let band = CGRect::new(
+        CGPoint::new(0.0, (height - rows) as f64),
+        CGSize::new(width as f64, rows as f64),
+    );
+    CGContext::fill_rect(Some(&context), band);
+
+    CGBitmapContextCreateImage(Some(&context)).expect("an image")
+}
+
 /// The checked main display, or only `area` of it (in global display
 /// points), at most `limit` pixels on its longest side.
 pub fn main_display(display: u32, area: Option<CGRect>, limit: Option<u32>) -> Result<Shot> {
@@ -295,6 +316,16 @@ mod tests {
         let (width, height) = crate::client::png_dimensions(&encoded).unwrap();
 
         assert_eq!((width, height), (32, 18));
+    }
+
+    #[test]
+    fn the_same_pixels_encode_to_the_same_png() {
+        let plain = || png(&banded(640, 360, 24)).unwrap();
+        assert_eq!(plain(), plain());
+        assert_ne!(plain(), sample_png(640, 360), "different pixels differ");
+
+        let shrunk = || png(&scaled(&banded(640, 360, 24), 320, 180).unwrap()).unwrap();
+        assert_eq!(shrunk(), shrunk());
     }
 
     #[test]

@@ -611,7 +611,7 @@ async fn a_session_changed_screenshot_refusal_reaches_the_caller_with_that_code(
         }
     });
 
-    let error = client.capture(None, None).await.unwrap_err();
+    let error = client.capture(None, None, false).await.unwrap_err();
     assert_eq!(error.code, "session-changed");
     assert_eq!(error.error, message);
     assert!(!error.uncertain);
@@ -670,7 +670,10 @@ async fn an_older_helper_that_sends_the_whole_display_for_a_crop_is_refused_befo
         width: 400,
         height: 300,
     });
-    let error = client.capture(None, Some(&region)).await.unwrap_err();
+    let error = client
+        .capture(None, Some(&region), false)
+        .await
+        .unwrap_err();
     assert_eq!(error.code, "daemon");
     assert!(error.error.contains("atlas restart"), "{}", error.error);
     assert_eq!(

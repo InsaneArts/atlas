@@ -209,9 +209,13 @@ pub(super) enum Command {
             conflicts_with_all = ["app", "pid"]
         )]
         region: Option<atlas::daemon::protocol::Region>,
-        /// Scale the image down so its longer side is at most this many pixels.
-        #[arg(long)]
+        /// Shrink the longer side to at most this many pixels: 1456 for the
+        /// whole screen unless given; 0 keeps the full size.
+        #[arg(long, value_parser = clap::value_parser!(u32).range(0..=8192))]
         max_dimension: Option<u32>,
+        /// Save a new file even when nothing changed since the last screenshot.
+        #[arg(long)]
+        new_file: bool,
     },
     /// List the apps open in the helper.
     ///
@@ -876,6 +880,7 @@ mod tests {
                         target,
                         region,
                         max_dimension,
+                        ..
                     }),
                 ..
             }) => Ok((target.app, target.pid, region, max_dimension)),
@@ -931,6 +936,43 @@ mod tests {
             let refused = given(args).unwrap_err();
             assert!(refused.contains(says), "{args:?}: {refused}");
         }
+    }
+
+    #[test]
+    fn the_whole_screen_is_smaller_by_default_and_full_size_on_request() {
+        use crate::dispatch::screenshot_size;
+        use atlas::client::SCREENSHOT_SIDE;
+
+        assert_eq!(screenshot_size(None, true), Some(SCREENSHOT_SIDE));
+        assert_eq!(screenshot_size(None, false), None, "a crop stays sharp");
+        assert_eq!(screenshot_size(Some(0), true), None);
+        assert_eq!(screenshot_size(Some(0), false), None);
+        assert_eq!(screenshot_size(Some(800), true), Some(800));
+        assert_eq!(screenshot_size(Some(800), false), Some(800));
+
+        let given = |args: &[&str]| match parse(args) {
+            Ok(Cli {
+                command:
+                    Some(Command::Screenshot {
+                        max_dimension,
+                        new_file,
+                        ..
+                    }),
+                ..
+            }) => Some((max_dimension, new_file)),
+            _ => None,
+        };
+        assert_eq!(given(&["screenshot"]), Some((None, false)));
+        assert_eq!(
+            given(&["screenshot", "--max-dimension", "0"]),
+            Some((Some(0), false))
+        );
+        assert_eq!(
+            given(&["screenshot", "--max-dimension", "8192", "--new-file"]),
+            Some((Some(8192), true))
+        );
+        assert_eq!(given(&["screenshot", "--max-dimension", "8193"]), None);
+        assert_eq!(given(&["screenshot", "--max-dimension", "-1"]), None);
     }
 
     #[test]
