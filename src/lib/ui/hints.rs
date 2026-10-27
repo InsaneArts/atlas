@@ -87,7 +87,7 @@ pub fn fix(code: &str) -> Option<&'static str> {
         "config-invalid" => "Fix that file, or move it aside and run atlas init.",
         "daemon" | "state" => "Run atlas restart.",
         "elements" => {
-            "Narrow it with --name or --role, or click the point from a screenshot instead."
+            "Check the app is running with a window (atlas windows), then narrow it with --name or --role, or click the point from a screenshot instead."
         }
         "environment" => "Check what it names, then try again. Nothing is ever overwritten.",
         "identity" | "native" | "restart" => "Run atlas doctor to see what is not ready.",

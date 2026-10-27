@@ -1679,12 +1679,14 @@ pub async fn click_element(
 }
 
 /// Where a click on an element lands: the middle of its frame, or for a
-/// checkbox or radio button the middle of its box, at the leading end of a
-/// frame that may also span a long empty stretch after a short label.
+/// checkbox or radio button with a label beside it (a frame much wider than
+/// tall) the middle of its box, at the leading end of a frame that may also
+/// span a long empty stretch after a short label. A tab drawn as a radio
+/// button is clicked in its middle.
 fn click_point(role: Option<&str>, frame: &Frame) -> (f64, f64) {
     match role {
-        Some("AXCheckBox" | "AXRadioButton") => (
-            (frame.x + frame.width.min(frame.height) / 2.0).round(),
+        Some("AXCheckBox" | "AXRadioButton") if frame.width > 2.0 * frame.height => (
+            (frame.x + frame.height / 2.0).round(),
             (frame.y + frame.height / 2.0).round(),
         ),
         _ => frame.center(),
@@ -2301,7 +2303,7 @@ mod tests {
                 "matching": 4, "more": 0,
                 "elements": [
                     {"index": 3, "role": "AXCheckBox", "name": "Bold", "value": "0",
-                     "at": [399, 62], "size": [24, 22], "window": 0},
+                     "at": [400, 62], "size": [24, 22], "window": 0},
                     {"index": 17, "role": "AXTextArea", "value": "Hello",
                      "at": [410, 330], "size": [780, 560], "window": 0},
                     {"index": 18, "role": "AXStaticText", "name": "Status",
@@ -2635,8 +2637,11 @@ mod tests {
         assert_eq!(click_point(Some("AXCheckBox"), &wide), (109.0, 209.0));
         assert_eq!(click_point(Some("AXRadioButton"), &wide), (109.0, 209.0));
 
-        let tall = frame(100.0, 200.0, 14.0, 30.0);
-        assert_eq!(click_point(Some("AXCheckBox"), &tall), (107.0, 215.0));
+        let tab = frame(100.0, 200.0, 80.0, 50.0);
+        assert_eq!(click_point(Some("AXRadioButton"), &tab), (140.0, 225.0));
+
+        let bare = frame(100.0, 200.0, 14.0, 30.0);
+        assert_eq!(click_point(Some("AXCheckBox"), &bare), (107.0, 215.0));
     }
 
     #[test]
