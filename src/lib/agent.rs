@@ -10,6 +10,7 @@ use crate::{
     app_selection::{Process, atlas_bundle, selected},
     client::Client,
     control::Ownership,
+    daemon::protocol::{Crop, Region},
     error::{Error, Holder, Result},
     handoff,
     native::{
@@ -1197,6 +1198,42 @@ pub async fn elements(
     let scanned = app_elements(client, pid).await?;
 
     Ok(listing(pid, &scanned, filter, max, full))
+}
+
+/// Save a screenshot of the whole display, of `target`'s windows, or of
+/// `region`. The app is found as `elements` finds it.
+pub async fn screenshot(
+    client: &Client,
+    target: Option<&Target>,
+    region: Option<Region>,
+    maximum: Option<u32>,
+) -> Result<Value> {
+    let crop = match (target, region) {
+        (Some(_), Some(_)) => {
+            return Err(Error::new(
+                "usage",
+                "Give an app or a region to capture, not both",
+            ));
+        }
+        (Some(target), None) => Some(Crop::App {
+            pid: target_pid(client, target).await?,
+        }),
+        (None, region) => region.map(Crop::Region),
+    };
+
+    client
+        .capture(maximum, crop.as_ref())
+        .await
+        .map_err(|error| match target {
+            Some(Target::Name(name)) if error.code == "no-window" => Error::new(
+                "no-window",
+                format!(
+                    "{name} has no window on screen: open one, or take a full screenshot to see \
+                     its menu bar"
+                ),
+            ),
+            _ => error,
+        })
 }
 
 /// The elements of one scan that match `filter`, as `elements` lists them:

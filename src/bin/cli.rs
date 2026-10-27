@@ -188,11 +188,27 @@ pub(super) enum Command {
         #[arg(long, value_name = "on|off|status", conflicts_with = "render")]
         login: Option<LoginArg>,
     },
-    /// Save a screenshot of the helper's screen.
+    /// Save a screenshot of the helper's screen, an app's windows or a region.
     ///
-    /// Reports pointsPerPixel: multiply screenshot pixels by it for input coordinates.
+    /// Reports origin and pointsPerPixel: the image's pixel (px, py) is the
+    /// display point (origin.x + px × pointsPerPixel, origin.y + py ×
+    /// pointsPerPixel). With --app the picture holds the app's windows, its
+    /// sheets, panels and open menus with a small margin; overlapping lists other
+    /// apps' windows in front of them (take a full screenshot to see those).
     #[command(visible_alias = "capture")]
     Screenshot {
+        #[command(flatten)]
+        target: AppTarget,
+        /// Only this part of the display: X,Y,W,H in display points, widened to
+        /// whole points.
+        #[arg(
+            long,
+            value_name = "X,Y,W,H",
+            allow_hyphen_values = true,
+            value_parser = region,
+            conflicts_with_all = ["app", "pid"]
+        )]
+        region: Option<atlas::daemon::protocol::Region>,
         /// Scale the image down so its longer side is at most this many pixels.
         #[arg(long)]
         max_dimension: Option<u32>,
@@ -221,10 +237,11 @@ pub(super) enum Command {
     },
     /// Click a point, or exactly one element of an app.
     ///
-    /// Click at display point X Y (screenshot pixels × pointsPerPixel), or on
-    /// exactly one accessibility element of an app with --app and --name/--role.
+    /// Click at display point X Y (origin + screenshot pixels × pointsPerPixel),
+    /// or on exactly one accessibility element of an app with --app and
+    /// --name/--role.
     Click {
-        /// Display point X (screenshot pixels × pointsPerPixel).
+        /// Display point X (origin + screenshot pixels × pointsPerPixel).
         #[arg(requires = "y")]
         x: Option<f64>,
         /// Display point Y.
@@ -730,6 +747,27 @@ fn run_seconds(value: &str) -> std::result::Result<u64, String> {
         })
 }
 
+/// `screenshot --region`: X,Y,W,H in display points.
+fn region(value: &str) -> std::result::Result<atlas::daemon::protocol::Region, String> {
+    let [x, y, width, height] = value
+        .split(',')
+        .map(|part| part.trim().parse::<f64>())
+        .collect::<std::result::Result<Vec<f64>, _>>()
+        .ok()
+        .and_then(|numbers| <[f64; 4]>::try_from(numbers).ok())
+        .filter(|numbers| numbers.iter().all(|number| number.is_finite()))
+        .ok_or("Give the region as X,Y,W,H in display points, for example 100,80,800,600.")?;
+
+    if width <= 0.0 || height <= 0.0 {
+        return Err("The region's width and height must be more than 0.".into());
+    }
+
+    atlas::daemon::protocol::Region::from_points(x, y, width, height).ok_or_else(|| {
+        "Give a region within 16384 points of the display's corner, at most 16384 points across."
+            .into()
+    })
+}
+
 /// The longest `wait --timeout`: a day.
 const WAIT_MAX_SECONDS: u64 = 24 * 60 * 60;
 
@@ -827,6 +865,72 @@ mod tests {
         assert!(parse(&["click", "10", "20", "--role", "AXButton"]).is_err());
         assert!(parse(&["click", "10"]).is_err(), "Y is required with X");
         assert!(parse(&["click", "--app", "A", "--pid", "1", "--name", "x"]).is_err());
+    }
+
+    #[test]
+    fn screenshots_take_an_app_or_a_region_never_both() {
+        let given = |args: &[&str]| match parse(args) {
+            Ok(Cli {
+                command:
+                    Some(Command::Screenshot {
+                        target,
+                        region,
+                        max_dimension,
+                    }),
+                ..
+            }) => Ok((target.app, target.pid, region, max_dimension)),
+            Err(error) => Err(error.to_string()),
+            _ => Err("not a screenshot".into()),
+        };
+        let region = |x, y, width, height| atlas::daemon::protocol::Region {
+            x,
+            y,
+            width,
+            height,
+        };
+
+        assert_eq!(given(&["screenshot"]), Ok((None, None, None, None)));
+        assert_eq!(
+            given(&["screenshot", "--app", "TextEdit", "--max-dimension", "400"]),
+            Ok((Some("TextEdit".into()), None, None, Some(400)))
+        );
+        assert_eq!(
+            given(&["capture", "--pid", "42"]),
+            Ok((None, Some(42), None, None))
+        );
+        assert_eq!(
+            given(&["screenshot", "--region", "-50,-50,200,200"]),
+            Ok((None, None, Some(region(-50, -50, 200, 200)), None))
+        );
+        assert_eq!(
+            given(&["screenshot", "--region", "1.5, 2.25, 3, 4"]),
+            Ok((None, None, Some(region(1, 2, 4, 5)), None))
+        );
+
+        for (args, says) in [
+            (
+                &["screenshot", "--app", "A", "--region", "0,0,10,10"][..],
+                "cannot be used with",
+            ),
+            (
+                &["screenshot", "--pid", "1", "--region", "0,0,10,10"],
+                "cannot be used with",
+            ),
+            (
+                &["screenshot", "--app", "A", "--pid", "1"],
+                "cannot be used with",
+            ),
+            (&["screenshot", "--region", "0,0,10"], "X,Y,W,H"),
+            (&["screenshot", "--region", "a,b,c,d"], "X,Y,W,H"),
+            (&["screenshot", "--region", "0,0,inf,10"], "X,Y,W,H"),
+            (&["screenshot", "--region", "0,0,0,10"], "more than 0"),
+            (&["screenshot", "--region", "0,0,10,-5"], "more than 0"),
+            (&["screenshot", "--region", "0,0,16385,10"], "16384"),
+            (&["screenshot", "--region", "-16385,0,10,10"], "16384"),
+        ] {
+            let refused = given(args).unwrap_err();
+            assert!(refused.contains(says), "{args:?}: {refused}");
+        }
     }
 
     #[test]

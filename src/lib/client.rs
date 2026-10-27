@@ -7,6 +7,7 @@ use crate::{
     actions,
     config::Config,
     control::{Controller, Ownership, SharedLease, write_private},
+    daemon::protocol::{Crop, Region},
     digest::file_sha256,
     doing::Doing,
     error::{Error, Holder, Result},
@@ -32,6 +33,108 @@ pub struct Frame {
     pub display: Display,
     pub epoch: Epoch,
     pub at: Instant,
+}
+
+/// What a cropped screenshot's reply says it shows.
+#[derive(Debug, Clone, PartialEq)]
+struct Cropped {
+    region: Region,
+    /// The app shown, for an app's crop.
+    app: Value,
+    /// Other apps' windows in front of it, for an app's crop.
+    overlapping: Value,
+}
+
+/// Whether `region` and the display share any area.
+fn meets(region: &Region, display: &Display) -> bool {
+    let (x, y) = (f64::from(region.x), f64::from(region.y));
+    x < display.width
+        && y < display.height
+        && x + f64::from(region.width) > 0.0
+        && y + f64::from(region.height) > 0.0
+}
+
+/// The crop a screenshot reply says it shows, checked against the one asked
+/// for: an older helper that ignores a crop sends the whole display, which
+/// must never be read as the crop.
+fn cropped(reply: &Value, crop: Option<&Crop>, display: &Display) -> Result<Option<Cropped>> {
+    let sent = reply.get("region").filter(|region| !region.is_null());
+    let (crop, sent) = match (crop, sent) {
+        (None, None) => return Ok(None),
+        (None, Some(_)) => {
+            return Err(Error::new(
+                "protocol",
+                "The helper sent a crop that was not asked for",
+            ));
+        }
+        (Some(_), None) => {
+            return Err(Error::new(
+                "daemon",
+                "The helper is running an older Atlas that cannot crop screenshots; run atlas \
+                 restart, then try again",
+            ));
+        }
+        (Some(crop), Some(sent)) => (crop, sent),
+    };
+
+    let malformed = |what: &str| Error::new("protocol", format!("The helper sent {what}"));
+    let region: Region = serde_json::from_value(sent.clone())
+        .map_err(|_| malformed("a crop that could not be read"))?;
+    let (left, top) = (i64::from(region.x), i64::from(region.y));
+    let (right, bottom) = (
+        left + i64::from(region.width),
+        top + i64::from(region.height),
+    );
+    let on_display = left >= 0
+        && top >= 0
+        && region.width >= 1
+        && region.height >= 1
+        && right as f64 <= display.width.round()
+        && bottom as f64 <= display.height.round();
+    if !on_display {
+        return Err(malformed("a crop outside the display"));
+    }
+
+    match crop {
+        Crop::Region(asked) => {
+            let inside = left >= i64::from(asked.x)
+                && top >= i64::from(asked.y)
+                && right <= i64::from(asked.x) + i64::from(asked.width)
+                && bottom <= i64::from(asked.y) + i64::from(asked.height);
+            if !inside {
+                return Err(malformed("a crop other than the region asked for"));
+            }
+        }
+        Crop::App { pid } => {
+            if reply["app"]["pid"].as_i64() != Some(*pid) || !reply["overlapping"].is_array() {
+                return Err(malformed("a crop of another app"));
+            }
+        }
+    }
+
+    let (app, overlapping) = match crop {
+        Crop::App { .. } => (reply["app"].clone(), reply["overlapping"].clone()),
+        Crop::Region(_) => (Value::Null, Value::Null),
+    };
+
+    Ok(Some(Cropped {
+        region,
+        app,
+        overlapping,
+    }))
+}
+
+/// Where a screenshot's top-left pixel lies, in display points, and how many
+/// points each of its pixels spans: pixel (px, py) is the point (x + px ×
+/// scale, y + py × scale).
+fn placement(display: &Display, width: u32, region: Option<&Region>) -> ((f64, f64), f64) {
+    match region {
+        Some(region) => (
+            (f64::from(region.x), f64::from(region.y)),
+            f64::from(region.width) / f64::from(width),
+        ),
+        None => ((0.0, 0.0), display.width / f64::from(width)),
+    }
 }
 
 /// Identity (device, inode, size, mtime) of the installed executable and its hash.
@@ -344,6 +447,16 @@ impl Client {
     }
 
     pub async fn frame(&self, maximum: Option<u32>) -> Result<Frame> {
+        self.framed(maximum, None).await.map(|(frame, _)| frame)
+    }
+
+    /// A frame of the whole display, or of the crop asked for, with what the
+    /// helper says the crop shows.
+    async fn framed(
+        &self,
+        maximum: Option<u32>,
+        crop: Option<&Crop>,
+    ) -> Result<(Frame, Option<Cropped>)> {
         if maximum.is_some_and(|m| m == 0 || m > 8192) {
             return Err(Error::new("input", "Maximum dimension must be 1–8192"));
         }
@@ -353,6 +466,24 @@ impl Client {
 
         if let Some(max) = maximum {
             request["maxDimension"] = json!(max);
+        }
+
+        match crop {
+            None => {}
+            Some(Crop::App { pid }) => request["pid"] = json!(pid),
+            Some(Crop::Region(region)) => {
+                let display = &before.epoch.display;
+                if !meets(region, display) {
+                    return Err(Error::new(
+                        "usage",
+                        format!(
+                            "The region lies outside the display, which is {} × {} points",
+                            display.width, display.height
+                        ),
+                    ));
+                }
+                request["region"] = json!(region);
+            }
         }
 
         let reply = self.transport.call(&request).await?;
@@ -366,6 +497,7 @@ impl Client {
                 reply["error"].as_str().unwrap_or("Capture failed"),
             ));
         }
+        let shows = cropped(&reply, crop, &before.epoch.display)?;
 
         let at = Instant::now();
         let encoded = reply["png"]
@@ -392,19 +524,24 @@ impl Client {
             ));
         }
 
-        Ok(Frame {
-            png: png.into(),
-            width,
-            height,
-            display: after.epoch.display.clone(),
-            epoch: after.epoch,
-            at,
-        })
+        Ok((
+            Frame {
+                png: png.into(),
+                width,
+                height,
+                display: after.epoch.display.clone(),
+                epoch: after.epoch,
+                at,
+            },
+            shows,
+        ))
     }
 
-    pub async fn capture(&self, maximum: Option<u32>) -> Result<Value> {
+    /// Save a screenshot of the whole display, or of `crop`, and say where
+    /// its pixels lie on the display.
+    pub async fn capture(&self, maximum: Option<u32>, crop: Option<&Crop>) -> Result<Value> {
         let started = Instant::now();
-        let captured = self.capture_unrecorded(maximum).await;
+        let captured = self.capture_unrecorded(maximum, crop).await;
 
         // An agent's look at the screen is activity too; a recording that
         // fails never fails the capture.
@@ -419,23 +556,39 @@ impl Client {
     }
 
     /// [`Client::capture`], kept in the output folder but not in the log.
-    async fn capture_unrecorded(&self, maximum: Option<u32>) -> Result<Value> {
-        let frame = self.frame(maximum).await?;
+    async fn capture_unrecorded(&self, maximum: Option<u32>, crop: Option<&Crop>) -> Result<Value> {
+        let (frame, shows) = self.framed(maximum, crop).await?;
         let path = self
             .output_dir()?
             .join(format!("{}-capture.png", timestamp()));
         write_private(&path, &frame.png)?;
         prune_captures(self.output_dir()?);
 
-        Ok(json!({
+        let ((x, y), scale) = placement(
+            &frame.display,
+            frame.width,
+            shows.as_ref().map(|shows| &shows.region),
+        );
+        let mut saved = json!({
             "ok": true,
             "path": path,
             "width": frame.width,
             "height": frame.height,
             "display": frame.display,
-            // Input coordinates are display points: multiply image pixels by this.
-            "pointsPerPixel": frame.display.width / f64::from(frame.width),
-        }))
+            // Input coordinates are display points: origin + pixels × this.
+            "origin": {"x": x, "y": y},
+            "pointsPerPixel": scale,
+        });
+        if let Some(shows) = shows {
+            saved["region"] = json!(shows.region);
+            for (key, value) in [("app", shows.app), ("overlapping", shows.overlapping)] {
+                if !value.is_null() {
+                    saved[key] = value;
+                }
+            }
+        }
+
+        Ok(saved)
     }
 
     pub fn input_transport(&self) -> Transport {
@@ -2707,11 +2860,152 @@ mod tests {
         assert_eq!(rows[0]["code"], "exit");
     }
 
+    fn display() -> Display {
+        Display {
+            width: 1280.0,
+            height: 720.0,
+            scale: 2.0,
+        }
+    }
+
+    fn region(x: i32, y: i32, width: i32, height: i32) -> Region {
+        Region {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn a_crop_maps_pixels_to_points_from_its_origin() {
+        let shown = region(300, 200, 800, 600);
+        let ((x, y), scale) = placement(&display(), 400, Some(&shown));
+
+        assert_eq!(((x, y), scale), ((300.0, 200.0), 2.0));
+        assert_eq!((x + 10.0 * scale, y + 20.0 * scale), (320.0, 240.0));
+        assert_eq!(
+            placement(&display(), 1600, Some(&shown)),
+            ((300.0, 200.0), 0.5)
+        );
+    }
+
+    #[test]
+    fn a_full_screenshot_starts_at_the_corner_with_todays_scale() {
+        assert_eq!(placement(&display(), 2560, None), ((0.0, 0.0), 0.5));
+        assert_eq!(placement(&display(), 640, None), ((0.0, 0.0), 2.0));
+        assert_eq!(
+            cropped(&json!({"ok": true}), None, &display()).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn an_older_helper_that_ignores_the_crop_is_refused() {
+        let whole = json!({"ok": true, "png": "", "width": 2560, "height": 1440, "scale": 2.0, "offDisplayWindows": []});
+
+        for crop in [Crop::App { pid: 42 }, Crop::Region(region(0, 0, 400, 300))] {
+            let refused = cropped(&whole, Some(&crop), &display()).unwrap_err();
+            assert_eq!(refused.code, "daemon", "{crop:?}");
+            assert!(refused.error.contains("atlas restart"), "{crop:?}");
+        }
+
+        let mut null = whole.clone();
+        null["region"] = Value::Null;
+        assert_eq!(
+            cropped(&null, Some(&Crop::App { pid: 42 }), &display())
+                .unwrap_err()
+                .code,
+            "daemon"
+        );
+    }
+
+    #[test]
+    fn a_crop_other_than_the_one_asked_for_is_refused() {
+        let reply = |region: Value| json!({"ok": true, "region": region});
+        let asked = Crop::Region(region(100, 100, 400, 300));
+
+        let fits = reply(json!({"x": 100, "y": 100, "width": 400, "height": 300}));
+        assert_eq!(
+            cropped(&fits, Some(&asked), &display()).unwrap(),
+            Some(Cropped {
+                region: region(100, 100, 400, 300),
+                app: Value::Null,
+                overlapping: Value::Null,
+            })
+        );
+        let clamped = reply(json!({"x": 100, "y": 100, "width": 100, "height": 50}));
+        assert!(cropped(&clamped, Some(&asked), &display()).is_ok());
+
+        for sent in [
+            json!({"x": 90, "y": 100, "width": 400, "height": 300}),
+            json!({"x": 100, "y": 100, "width": 401, "height": 300}),
+            json!({"x": -1, "y": 0, "width": 10, "height": 10}),
+            json!({"x": 1200, "y": 0, "width": 100, "height": 10}),
+            json!({"x": 0, "y": 0, "width": 0, "height": 10}),
+            json!({"x": 100.5, "y": 100, "width": 10, "height": 10}),
+            json!({"x": 100, "y": 100}),
+            json!("100,100,400,300"),
+        ] {
+            let refused = cropped(&reply(sent.clone()), Some(&asked), &display()).unwrap_err();
+            assert_eq!(refused.code, "protocol", "{sent}");
+        }
+
+        let app = Crop::App { pid: 42 };
+        let shown = |pid: i64, overlapping: Value| {
+            json!({
+                "ok": true,
+                "region": {"x": 0, "y": 0, "width": 10, "height": 10},
+                "app": {"pid": pid, "name": "TextEdit"},
+                "overlapping": overlapping,
+            })
+        };
+        let found = cropped(&shown(42, json!([])), Some(&app), &display())
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.app, json!({"pid": 42, "name": "TextEdit"}));
+        assert_eq!(found.overlapping, json!([]));
+        for (pid, overlapping) in [(43, json!([])), (42, Value::Null), (42, json!({}))] {
+            let refused = cropped(&shown(pid, overlapping), Some(&app), &display()).unwrap_err();
+            assert_eq!(refused.code, "protocol", "{pid}");
+        }
+    }
+
+    #[test]
+    fn a_crop_nobody_asked_for_is_refused() {
+        let reply = json!({"ok": true, "region": {"x": 0, "y": 0, "width": 10, "height": 10}});
+        let refused = cropped(&reply, None, &display()).unwrap_err();
+
+        assert_eq!(
+            (refused.code, refused.error.as_str()),
+            ("protocol", "The helper sent a crop that was not asked for")
+        );
+    }
+
+    #[test]
+    fn a_region_must_meet_the_display() {
+        assert!(meets(&region(-50, -50, 200, 200), &display()));
+        assert!(meets(&region(1279, 719, 10, 10), &display()));
+        assert!(!meets(&region(5000, 5000, 10, 10), &display()));
+        assert!(!meets(&region(1280, 0, 10, 10), &display()));
+        assert!(!meets(&region(-10, 0, 10, 10), &display()));
+    }
+
     #[tokio::test]
     async fn a_screenshot_is_recorded_as_the_agent_looking_and_a_failed_one_as_failed() {
         let dir = tempfile::tempdir().unwrap();
         let client = client_in(dir.path()).doing(Doing::new("screenshot"));
-        assert!(client.capture(None).await.is_err(), "no helper answers");
+        assert!(
+            client.capture(None, None).await.is_err(),
+            "no helper answers"
+        );
+        let region = Crop::Region(Region {
+            x: 0,
+            y: 0,
+            width: 400,
+            height: 300,
+        });
+        assert!(client.capture(Some(400), Some(&region)).await.is_err());
 
         let rows = crate::overview::activity(client.output_dir().unwrap(), 5);
         assert_eq!(
@@ -2719,6 +3013,20 @@ mod tests {
             (&json!("screenshot"), &json!(false), &json!("agent"))
         );
         assert_eq!(crate::doing::says(&rows[0]), "couldn't take a screenshot");
+        let log = fs::read_to_string(client.output_dir().unwrap().join("metadata.jsonl")).unwrap();
+        let logged: Vec<Value> = log
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(logged.len(), 2);
+        for row in &logged {
+            assert_eq!(
+                (&row["operation"], &row["ok"], &row["request"]),
+                (&json!("screenshot"), &json!(false), &Value::Null),
+                "a crop is logged as a plain screenshot"
+            );
+        }
+        assert!(!log.contains("region"), "{log}");
     }
 
     #[tokio::test]

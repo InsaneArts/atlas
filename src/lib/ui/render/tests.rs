@@ -136,6 +136,37 @@ fn a_screenshot_names_its_file_and_size() {
 }
 
 #[test]
+fn a_cropped_screenshot_names_its_origin_and_what_is_in_front() {
+    let shown = show(
+        View::Capture,
+        json!({
+            "ok": true, "path": "/tmp/x.png", "width": 800, "height": 600,
+            "origin": {"x": 100.0, "y": 80.0}, "pointsPerPixel": 0.5,
+            "region": {"x": 100, "y": 80, "width": 400, "height": 300},
+            "app": {"pid": 42, "name": "TextEdit"},
+            "overlapping": [
+                {"owner": "System Events", "pid": 7, "title": null, "bounds": {}},
+                {"owner": "System Events", "pid": 7, "title": "Two", "bounds": {}},
+                {"owner": "Bad\u{1b}[2J", "pid": 8, "title": null, "bounds": {}},
+            ],
+        }),
+    );
+    assert_eq!(
+        shown.out,
+        "✓ Screenshot saved  /tmp/x.png\n  800 × 600 pixels · 0.5 points per pixel · origin 100, 80\n  In front of it: System Events, Bad\\u{1b}[2J"
+    );
+
+    let corner = show(
+        View::Capture,
+        json!({"ok": true, "path": "/tmp/x.png", "width": 2560, "height": 1440, "origin": {"x": 0.0, "y": 0.0}, "pointsPerPixel": 1.0, "overlapping": []}),
+    );
+    assert_eq!(
+        corner.out,
+        "✓ Screenshot saved  /tmp/x.png\n  2560 × 1440 pixels · 1 point per pixel"
+    );
+}
+
+#[test]
 fn run_prints_the_output_and_notes_a_failure_apart() {
     let ok = show(
         View::Run,

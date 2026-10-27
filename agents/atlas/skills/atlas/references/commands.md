@@ -272,13 +272,22 @@ Global options:
 ## atlas screenshot
 
 ```text
-Save a screenshot of the helper's screen.
+Save a screenshot of the helper's screen, an app's windows or a region.
 
-Reports pointsPerPixel: multiply screenshot pixels by it for input coordinates.
+Reports origin and pointsPerPixel: the image's pixel (px, py) is the display point (origin.x + px × pointsPerPixel, origin.y + py × pointsPerPixel). With --app the picture holds the app's windows, its sheets, panels and open menus with a small margin; overlapping lists other apps' windows in front of them (take a full screenshot to see those).
 
 Usage: atlas screenshot [OPTIONS]
 
 Options:
+      --app <APP>
+          Application name: the one process of that name with a window, or the app in front
+
+      --pid <PID>
+          Exact process ID, for apps with several processes
+
+      --region <X,Y,W,H>
+          Only this part of the display: X,Y,W,H in display points, widened to whole points
+
       --max-dimension <MAX_DIMENSION>
           Scale the image down so its longer side is at most this many pixels
 
@@ -418,13 +427,13 @@ Global options:
 ```text
 Click a point, or exactly one element of an app.
 
-Click at display point X Y (screenshot pixels × pointsPerPixel), or on exactly one accessibility element of an app with --app and --name/--role.
+Click at display point X Y (origin + screenshot pixels × pointsPerPixel), or on exactly one accessibility element of an app with --app and --name/--role.
 
 Usage: atlas click [OPTIONS] [X] [Y]
 
 Arguments:
   [X]
-          Display point X (screenshot pixels × pointsPerPixel)
+          Display point X (origin + screenshot pixels × pointsPerPixel)
 
   [Y]
           Display point Y

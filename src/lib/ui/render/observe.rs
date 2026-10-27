@@ -346,8 +346,31 @@ pub fn capture(value: &Value) -> String {
         });
     }
 
+    let origin = (value["origin"]["x"].as_f64(), value["origin"]["y"].as_f64());
+    if let (Some(x), Some(y)) = origin
+        && (x, y) != (0.0, 0.0)
+    {
+        facts.push(format!("origin {}, {}", text::number(x), text::number(y)));
+    }
+
     if !facts.is_empty() {
         lines.push(format!("  {}", style::dim(facts.join(" · "))));
+    }
+
+    let in_front: Vec<String> = value["overlapping"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|window| window["owner"].as_str())
+        .map(|owner| text::printable(owner).into_owned())
+        .fold(Vec::new(), |mut owners, owner| {
+            if !owners.contains(&owner) {
+                owners.push(owner);
+            }
+            owners
+        });
+    if !in_front.is_empty() {
+        lines.push(format!("  In front of it: {}", in_front.join(", ")));
     }
 
     lines.join("\n")

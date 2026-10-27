@@ -358,6 +358,7 @@ fn reason(row: &Value) -> Option<&'static str> {
         "stopped" => "Agents were stopped",
         "elements" => "Nothing on screen matched",
         "windows" => "The window wasn't there",
+        "no-window" => "The app had no window on screen",
         "input" => "The mouse and keyboard weren't ready",
         "capture" => "The screen couldn't be read",
         "permission" => match row["operation"].as_str() {
@@ -417,6 +418,7 @@ mod tests {
             ("on-console", "Atlas couldn't reach the helper"),
             ("permission", "The helper can't record the screen"),
             ("session-changed", "The helper's screen changed meanwhile"),
+            ("no-window", "The app had no window on screen"),
         ] {
             let row = json!({"operation": "screenshot", "ok": false, "code": code});
             assert_eq!(shown(&row, NOW)["reason"], words, "{code}");

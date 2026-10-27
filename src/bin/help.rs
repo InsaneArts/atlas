@@ -543,7 +543,7 @@ mod tests {
             assert!(help.contains(&format!("{title}:")), "{title}");
         }
 
-        assert!(help.contains("  screenshot     Save a screenshot of the helper's screen\n"));
+        assert!(help.contains("  screenshot     Save a screenshot of the helper's screen, an app's windows or a region\n"));
         assert!(help.contains("Global options:"));
     }
 }

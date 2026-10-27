@@ -80,6 +80,9 @@ person remember these commands before they can watch you.
 
 - `atlas screenshot` saves a PNG and prints its `path`. Open the image and look
   at it; never assume what is on screen.
+- `atlas screenshot --app NAME` shows only that app's windows, sheets and open
+  menus (`overlapping` names other windows in front of them), and `--region
+  X,Y,W,H` only that part of the display: smaller pictures than the whole screen.
 - `atlas apps` lists the running apps by name: the names `--app` takes. It
   lists apps with a Dock icon (`policy: "regular"`) and menu bar apps that are
   not part of macOS; `more` says how many background processes it left out,
@@ -97,7 +100,8 @@ person remember these commands before they can watch you.
   `candidates`.
 
 Coordinates are display points with the origin at the top left. Convert
-screenshot pixels by multiplying by `pointsPerPixel`.
+screenshot pixels with point = `origin` + pixel × `pointsPerPixel`; `origin`
+is 0,0 for a full screenshot.
 
 ## Act
 

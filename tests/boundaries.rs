@@ -611,11 +611,82 @@ async fn a_session_changed_screenshot_refusal_reaches_the_caller_with_that_code(
         }
     });
 
-    let error = client.capture(None).await.unwrap_err();
+    let error = client.capture(None, None).await.unwrap_err();
     assert_eq!(error.code, "session-changed");
     assert_eq!(error.error, message);
     assert!(!error.uncertain);
     server.await.unwrap();
+}
+
+#[tokio::test]
+async fn an_older_helper_that_sends_the_whole_display_for_a_crop_is_refused_before_saving() {
+    use atlas::daemon::protocol::{Crop, Region};
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let dir = tempfile::Builder::new()
+        .prefix("ust-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let mut client = Client::new(config(dir.path())).unwrap();
+    client.transport.peer_uid = current_uid();
+    let listener = UnixListener::bind(&client.config.socket_path).unwrap();
+    let mut hello = status();
+    hello["user"]["uid"] = json!(client.config.helper_uid);
+    hello["sessionProof"]["uid"] = json!(client.config.helper_uid);
+    let proof = STANDARD.encode(serde_json::to_vec(&hello["sessionProof"]).unwrap());
+    let server = tokio::spawn(async move {
+        let mut asked = Value::Null;
+        for (op, reply) in [
+            ("hello", hello),
+            (
+                "run",
+                json!({"ok": true, "exitCode": 0, "timedOut": false,
+                    "events": [{"event": "output", "data": proof}]}),
+            ),
+            (
+                "screenshot",
+                json!({"ok": true, "png": "", "width": 2560, "height": 1440,
+                    "scale": 1.0, "offDisplayWindows": []}),
+            ),
+        ] {
+            let (peer, _) = listener.accept().await.unwrap();
+            let mut peer = BufReader::new(peer);
+            let mut request = String::new();
+            peer.read_line(&mut request).await.unwrap();
+            let request: Value = serde_json::from_str(&request).unwrap();
+            assert_eq!(request["op"], op);
+            asked = request;
+            let mut bytes = serde_json::to_vec(&reply).unwrap();
+            bytes.push(b'\n');
+            peer.get_mut().write_all(&bytes).await.unwrap();
+        }
+        asked
+    });
+
+    let region = Crop::Region(Region {
+        x: 0,
+        y: 0,
+        width: 400,
+        height: 300,
+    });
+    let error = client.capture(None, Some(&region)).await.unwrap_err();
+    assert_eq!(error.code, "daemon");
+    assert!(error.error.contains("atlas restart"), "{}", error.error);
+    assert_eq!(
+        server.await.unwrap()["region"],
+        json!({"x": 0, "y": 0, "width": 400, "height": 300})
+    );
+
+    let saved = std::fs::read_dir(&client.config.output_dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "png"))
+                .count()
+        })
+        .unwrap_or(0);
+    assert_eq!(saved, 0, "nothing was saved");
 }
 
 fn current_uid() -> u32 {

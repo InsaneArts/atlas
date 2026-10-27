@@ -480,7 +480,11 @@ pub(super) async fn execute(config: PathBuf, command: Command) -> Result<Value> 
                 }
             }
         }
-        Command::Screenshot { max_dimension } => client()?.capture(max_dimension).await,
+        Command::Screenshot {
+            target,
+            region,
+            max_dimension,
+        } => agent::screenshot(&client()?, target.target().as_ref(), region, max_dimension).await,
         Command::Apps { all } => client()?.apps().await.map(|reply| listed_apps(reply, all)),
         Command::Click {
             x,

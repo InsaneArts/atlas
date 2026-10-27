@@ -35,6 +35,7 @@ its own failure is in `exitCode`.)
 | `menubar` | The menu bar companion could not start. | Not needed for your task; continue with CLI commands. |
 | `native` | A native input or dialog check failed. | Read `error`; native Save/Open needs Screen Sharing (see the guide). |
 | `no-environment` | No helper environment profile is installed for `environment run`. | Use `atlas run`, or install a profile with `atlas environment profile`. |
+| `no-window` | `screenshot --app` found no window of the app on screen, so nothing was captured. | Open a window in the app, or take a full screenshot (its menu bar is still there). |
 | `not-ready` | Atlas won't switch to the helper yet: a deleted account is still logged in, another account is still logging in, or macOS is still setting up an account. A new login could hang now. Nothing was locked. | Stop and tell the person `error`. A deleted account's login is closed in Atlas › Settings › Helper (or `atlas init`), with their approval; otherwise wait a minute and try again. Never retry in a loop. |
 | `on-console` | The helper is on screen right now, or came on screen while `atlas run` ran (uncertain: the command was stopped). | Ask the person to switch back to their own account. Do not retry. After `run`: once they are back, take a screenshot, run `atlas restart`, and check what the command did before running it again. |
 | `onboarding` | A setup step from the Atlas window could not finish. | Show `error` to the person; they open Atlas again (or run `atlas init`) to carry on. |

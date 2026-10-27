@@ -203,8 +203,9 @@ pub(crate) fn sample_png(width: usize, height: usize) -> Vec<u8> {
     png(&image).expect("a PNG")
 }
 
-/// The checked main display, at most `limit` pixels on its longest side.
-pub fn main_display(display: u32, limit: Option<u32>) -> Result<Shot> {
+/// The checked main display, or only `area` of it (in global display
+/// points), at most `limit` pixels on its longest side.
+pub fn main_display(display: u32, area: Option<CGRect>, limit: Option<u32>) -> Result<Shot> {
     if !permitted() {
         return Err(Error::new(
             "permission",
@@ -212,16 +213,36 @@ pub fn main_display(display: u32, limit: Option<u32>) -> Result<Shot> {
         ));
     }
 
-    let points = CGDisplayBounds(display).size;
+    let failed = || Error::new("capture", "The display could not be captured");
+    let bounds = CGDisplayBounds(display);
     // Deprecated for ScreenCaptureKit, but still a synchronous, consent-gated
     // capture of exactly this display on current macOS (qualified live).
-    #[allow(deprecated)]
-    let image = objc2_core_graphics::CGDisplayCreateImage(display)
-        .ok_or_else(|| Error::new("capture", "The display could not be captured"))?;
+    let (image, points) = match area {
+        None => {
+            #[allow(deprecated)]
+            let image = objc2_core_graphics::CGDisplayCreateImage(display).ok_or_else(failed)?;
+            (image, bounds.size.width)
+        }
+        Some(area) => {
+            // The rectangle is in the display's own space: points from its
+            // top-left corner. The image holds its pixels.
+            let local = CGRect::new(
+                CGPoint::new(
+                    area.origin.x - bounds.origin.x,
+                    area.origin.y - bounds.origin.y,
+                ),
+                area.size,
+            );
+            #[allow(deprecated)]
+            let image = objc2_core_graphics::CGDisplayCreateImageForRect(display, local)
+                .ok_or_else(failed)?;
+            (image, area.size.width)
+        }
+    };
 
     let (width, height) = (CGImage::width(Some(&image)), CGImage::height(Some(&image)));
-    let scale = if points.width > 0.0 {
-        width as f64 / points.width
+    let scale = if points > 0.0 {
+        width as f64 / points
     } else {
         1.0
     };
