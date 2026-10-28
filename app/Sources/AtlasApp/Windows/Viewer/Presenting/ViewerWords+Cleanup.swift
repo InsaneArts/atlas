@@ -18,8 +18,15 @@ extension ViewerWords {
   static let nothingToCleanUp = "Nothing left to clean up for this session."
   /// The notice once every step is done, or kept on purpose.
   static let cleanedUp = "Cleaned up this session's work."
-  /// The notice when a step failed, did not run, or may not have worked.
+  /// The notice when a step failed or did not run.
   static let cleanupUnfinished = "The cleanup didn't finish. Details lists each step."
+  /// The notice when Atlas does not know whether a step worked, which Recover settles before cleaning up again.
+  static let cleanupUncertain =
+    "Atlas doesn't know whether the last step finished. Recover the helper first, then clean up again."
+  /// The notice when the person stopped agents between steps, which stopped the cleanup too.
+  static let cleanupBlocked = "Agents are stopped, so the cleanup stopped. Resume, then clean up again."
+  /// The notice when the cleanup's reply never came: it may still run, and the button waits until it ended.
+  static let cleanupUnanswered = "The cleanup is taking a while. Details shows each step once it ends."
 
   /// The alert's sentence: a line for each thing it does, then the warning after a blank line.
   ///
@@ -41,12 +48,12 @@ extension ViewerWords {
     apps.isEmpty ? "Quits what runs from its copies" : "Quits \(listed(apps))"
   }
 
-  /// The alert's line for rolling back plans.
+  /// The alert's line for undoing plans, each a change to the helper's environment.
   ///
-  /// - Parameter count: How many it rolls back.
-  /// - Returns: "Rolls back 1 copy into the helper".
-  static func rollsBack(_ count: Int) -> String {
-    "Rolls back \(copies(count)) into the helper"
+  /// - Parameter count: How many it undoes.
+  /// - Returns: "Undoes 1 environment change" or "Undoes 2 environment changes".
+  static func undoesChanges(_ count: Int) -> String {
+    count == 1 ? "Undoes 1 environment change" : "Undoes \(count) environment changes"
   }
 
   /// The alert's line for removing an installed app.
@@ -90,7 +97,7 @@ extension ViewerWords {
   }
 
   /// What a plan's step did, in the receipt.
-  static let rollBack = "Roll back a copy into the helper"
+  static let undoChange = "Undo an environment change"
 
   /// What an install's step did, in the receipt.
   ///

@@ -72,6 +72,18 @@ struct CleanupReplyTests {
     #expect(applied.steps.map(\.reason) == ["in-use", "changed", nil, nil])
     #expect(applied.steps.map(\.retry) == [true, false, false, false])
     #expect(applied.steps.map(\.alreadyGone) == [false, false, true, false])
+    #expect(!applied.isUnderWay, "no step is under way once the apply replied")
+  }
+
+  @Test("a preview with a step started reads as under way")
+  func aPreviewWithAStepStartedIsUnderWay() throws {
+    let running = try decoded(
+      """
+      {"ok": true, "preview": true,
+       "steps": [{"n": 1, "do": "quit", "state": "done"}, {"n": 2, "do": "remove-copy", "state": "started"}]}
+      """
+    )
+    #expect(running.isUnderWay)
   }
 
   @Test("an apply that ran and did not finish comes back as its reply, while any other refusal is an error")

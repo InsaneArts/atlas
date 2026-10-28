@@ -42,7 +42,7 @@
       return state
     }()
 
-    /// Clean Up This Session's Work… asks first, over Claude Code's detail: what it quits, rolls back and removes,
+    /// Clean Up This Session's Work… asks first, over Claude Code's detail: what it quits, undoes and removes,
     /// and that the session may still be working; Cancel in blue, Clean Up in red.
     @MainActor public static let viewerCleanUp: ViewerState = {
       var state = viewerSessionDetail
@@ -50,7 +50,7 @@
         title: "Clean up this session's work?",
         message: """
           Quits Opie
-          Rolls back 1 copy into the helper
+          Undoes 1 environment change
           Removes Probe from Applications
           Removes 1 copy
 
@@ -64,8 +64,8 @@
       return state
     }()
 
-    /// Claude Code's work cleaned up in part: its plan rolled back and Opie quit, Probe kept as it changed since it was
-    /// installed, and the copy of Opie still in use, each step's outcome above the button.
+    /// Claude Code's work cleaned up in part: its environment change undone and Opie quit, Probe kept as it changed
+    /// since it was installed, and the copy of Opie still in use, each step's outcome above the button.
     @MainActor public static let viewerSessionCleanedUp: ViewerState = {
       var state = viewerSessionDetail
       state.details?.hostSession?.plans = []
@@ -74,7 +74,7 @@
         title: "Clean Up This Session's Work…",
         stage: .finished([
           Fact(name: "Quit Opie", value: "Done"),
-          Fact(name: "Roll back a copy into the helper", value: "Done"),
+          Fact(name: "Undo an environment change", value: "Done"),
           Fact(name: "Remove Probe from Applications", value: "Kept: changed since it was installed"),
           Fact(name: "Remove the copy of Opie", value: "Couldn't: still in use. Try again."),
         ])

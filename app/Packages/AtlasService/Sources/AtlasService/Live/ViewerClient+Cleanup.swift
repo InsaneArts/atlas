@@ -6,6 +6,8 @@ extension ViewerClient {
   static let cleanupTimeout: TimeInterval = 60
   /// The code of an apply's reply that ran and did not finish: it still lists its steps.
   static let unfinishedCleanupCode = "cleanup"
+  /// The code of an apply that got no reply: it timed out or failed on the way, so the cleanup may still run.
+  public static let unansweredCleanupCode = "cleanup-unanswered"
 
   /// Reads `cleanup.json` for the session, or posts to `cleanup` to clean up its work as the person.
   ///
@@ -14,11 +16,19 @@ extension ViewerClient {
   ///   - apply: Whether to clean up now, rather than read what it would take.
   /// - Returns: The steps it takes, or took and how far each got, every missing field at its safe default; an apply
   ///   that did not finish comes back too, with `ok` false.
-  /// - Throws: ``ServiceError/notOffered`` when an older service answers 404; else ``ServiceError`` with the service's
+  /// - Throws: ``ServiceError/notOffered`` when an older service answers 404; for an apply that got no reply, a
+  ///   ``ServiceError`` with ``unansweredCleanupCode``, as it may still run; else ``ServiceError`` with the service's
   ///   error, such as for a key it does not know or while a viewer holds control, or when it cannot be read.
   public func cleanup(session: String, apply: Bool) async throws(ServiceError) -> CleanupReply {
     let request = try apply ? cleanupApplyRequest(session: session) : cleanupPreviewRequest(session: session)
-    let (data, response) = try await fetched(request, limit: Self.listLimit)
+    let data: Data
+    let response: HTTPURLResponse
+    do {
+      (data, response) = try await fetched(request, limit: Self.listLimit)
+    } catch {
+      guard apply, !error.isCancelled else { throw error }
+      throw ServiceError(error.message, code: Self.unansweredCleanupCode)
+    }
     return try await Self.decodedReply { () throws(ServiceError) in try Self.cleanup(data, response: response) }
   }
 

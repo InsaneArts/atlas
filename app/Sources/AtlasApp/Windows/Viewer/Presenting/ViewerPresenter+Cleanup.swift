@@ -4,7 +4,8 @@ import AtlasUI
 extension ViewerPresenter {
   /// Clean Up This Session's Work… under the chosen session in Details, while the session left something to clean
   /// up (a copy, a plan, an installed app, or a cleanup that did not finish) or a cleanup from this window has
-  /// something to say: it waits while one is read or runs, and lists what the last one did once it ran.
+  /// something to say: it waits while one is read, runs or may still run, as one whose reply never came may, and lists
+  /// what the last one did once it ran.
   ///
   /// - Parameters:
   ///   - record: The session, as the list has it.
@@ -15,10 +16,11 @@ extension ViewerPresenter {
     let receipt = session.cleanupReceipts[record.key]
     let unfinished = record.cleanup.map { $0 != .complete } == true
     let left = !record.copies.isEmpty || !record.plans.isEmpty || !record.installs.isEmpty || unfinished
+    let running = session.cleaningUp == record.key || session.cleanupUnanswered?.session == record.key
     // Terminal's session has no key a cleanup can name.
-    guard !record.key.isEmpty, left || receipt != nil || session.cleaningUp == record.key else { return nil }
+    guard !record.key.isEmpty, left || receipt != nil || running else { return nil }
     let stage: SessionCleanup.Stage =
-      if session.cleaningUp != nil {
+      if session.cleaningUp != nil || session.cleanupUnanswered != nil {
         .working
       } else if let receipt {
         .finished(cleanupReceipt(receipt))
@@ -28,8 +30,8 @@ extension ViewerPresenter {
     return SessionCleanup(session: record.key, title: ViewerWords.cleanUpSession, stage: stage)
   }
 
-  /// The alert's lines, from what a preview says it takes: the apps it quits as one line, the plans it rolls back
-  /// and the copies it removes counted, and each installed app it removes, or keeps as it changed. A step a cleanup
+  /// The alert's lines, from what a preview says it takes: the apps it quits as one line, the environment changes it
+  /// undoes and the copies it removes counted, and each installed app it removes, or keeps as it changed. A step a cleanup
   /// that did not finish before already did, or kept, is left out.
   ///
   /// - Parameter preview: What cleaning up takes.
@@ -46,7 +48,7 @@ extension ViewerPresenter {
       lines.append(ViewerWords.quits(apps))
     }
     let plans = kinds(.undoPlan).count
-    if plans > 0 { lines.append(ViewerWords.rollsBack(plans)) }
+    if plans > 0 { lines.append(ViewerWords.undoesChanges(plans)) }
     for install in kinds(.removeInstall) {
       lines.append(
         install.unchanged == false ? ViewerWords.keepsInstall(install.app) : ViewerWords.removesInstall(install.app)
@@ -85,7 +87,7 @@ extension ViewerPresenter {
   static func cleanupStepName(_ step: CleanupStep) -> String {
     switch step.kind {
     case .quit: ViewerWords.quit(step.apps)
-    case .undoPlan: ViewerWords.rollBack
+    case .undoPlan: ViewerWords.undoChange
     case .removeInstall: ViewerWords.removeInstall(step.app)
     case .removeCopy: ViewerWords.removeCopy(step.app)
     case .unknown: ViewerWords.otherStep
@@ -107,12 +109,31 @@ extension ViewerPresenter {
     }
   }
 
-  /// The notice once a cleanup ran: cleaned up, nothing left to clean up, or that it did not finish.
+  /// The notice once a cleanup ran: cleaned up, nothing left to clean up, or that it did not finish: not knowing
+  /// whether its last step finished and stopping with agents stopped each read on their own.
   ///
   /// - Parameter reply: The apply's reply.
   /// - Returns: The notice.
   static func cleanupNotice(_ reply: CleanupReply) -> String {
+    switch reply.state {
+    case .uncertain: return ViewerWords.cleanupUncertain
+    case .blocked: return ViewerWords.cleanupBlocked
+    case .complete, .incomplete, .unknown, nil: break
+    }
     guard reply.ok, reply.state == nil || reply.state == .complete else { return ViewerWords.cleanupUnfinished }
     return reply.isEmpty ? ViewerWords.nothingToCleanUp : ViewerWords.cleanedUp
+  }
+
+  /// The notice once a cleanup whose reply never came ended, from what `cleanup.json` lists then: steps a run left
+  /// read as an apply's do, and with nothing left it cleaned up.
+  ///
+  /// - Parameter preview: What cleaning up takes now.
+  /// - Returns: The notice; nil when no step has run, as nothing is known of how it went.
+  static func unansweredCleanupNotice(_ preview: CleanupReply) -> String? {
+    guard !preview.isEmpty else { return ViewerWords.cleanedUp }
+    let states = preview.steps.compactMap(\.state)
+    guard !states.isEmpty else { return nil }
+    if states.contains(where: { $0 == .started || $0 == .uncertain }) { return ViewerWords.cleanupUncertain }
+    return states.contains(.blocked) ? ViewerWords.cleanupBlocked : ViewerWords.cleanupUnfinished
   }
 }

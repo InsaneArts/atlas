@@ -47,6 +47,9 @@ public struct CleanupReply: Decodable, Equatable, Sendable {
   /// Whether there is nothing to clean up: no step at all.
   public var isEmpty: Bool { steps.isEmpty }
 
+  /// Whether a step started and has not ended, as while a cleanup runs, or after one was cut short mid-step.
+  public var isUnderWay: Bool { steps.contains { $0.state == .started } }
+
   /// The body's fields this app reads.
   enum CodingKeys: String, CodingKey {
     /// Each field by the name the service writes.

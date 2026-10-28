@@ -79,6 +79,8 @@ public final class ScriptedService: ViewerService {
   public var cleanupPreview = CleanupReply(ok: true, preview: true)
   /// What a cleanup apply answers.
   public var cleanupApplied = CleanupReply(ok: true, state: .complete)
+  /// Whether a cleanup apply gets no reply, as one that runs past the client's wait does.
+  public var cleanupUnanswered = false
   /// The cleanup requests made, in order: "preview KEY" or "apply KEY".
   public var cleanups: [String] = []
   /// Apps requests made.
@@ -340,11 +342,14 @@ public final class ScriptedService: ViewerService {
   ///   - session: The session's key.
   ///   - apply: Whether it cleans up, rather than reads what it would take.
   /// - Returns: The scripted reply.
-  /// - Throws: A ``ServiceError`` when the route fails.
+  /// - Throws: A ``ServiceError`` when the route fails, or one that got no reply while `cleanupUnanswered`.
   @MainActor
   public func cleanup(session: String, apply: Bool) async throws(ServiceError) -> CleanupReply {
     cleanups.append("\(apply ? "apply" : "preview") \(session)")
     try await pause(apply ? "cleanup" : "cleanup.json")
+    if apply, cleanupUnanswered {
+      throw ServiceError("cleanup got no reply", code: ViewerClient.unansweredCleanupCode)
+    }
     return apply ? cleanupApplied : cleanupPreview
   }
 }

@@ -33,17 +33,11 @@ struct CleanupReceipt: View {
       }
     }
     .textStyle(.callout)
-    .padding(.vertical, Layout.inset)
+    .padding(.vertical, FactLayout.inset)
     .frame(maxWidth: .infinity, minHeight: ControlHeight.s, alignment: .leading)
     .overlay(alignment: .top) { SeparatorLine() }
     .accessibilityElement(children: .combine)
   }
-}
-
-/// The receipt's own measure.
-private enum Layout {
-  /// 6: above and below a row's text, as a fact's.
-  static let inset = Spacing.xsPlus
 }
 
 #if DEBUG

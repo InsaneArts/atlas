@@ -34,6 +34,9 @@ struct ViewerSession {
   /// The session whose cleanup is being read or runs now, which holds Clean Up This Session's Work…; nil while none
   /// is.
   var cleaningUp: String?
+  /// The cleanup whose apply got no reply and may still run, which holds Clean Up This Session's Work… until
+  /// `cleanup.json` shows it ended; nil while none is.
+  var cleanupUnanswered: ViewerUnansweredCleanup?
   /// What each session's last cleanup from this window did, by its key, which Details lists above its button.
   var cleanupReceipts: [String: CleanupReply] = [:]
   /// The top row's menu open now.

@@ -184,7 +184,8 @@ final class ViewerPanesModel {
 
   /// Reads the host sessions' list. A reply overtaken by a newer start or stop has no effect; a service that does not
   /// offer it is left until ``ViewerSessionsFacts/askAgainAfter`` has passed; another failure is kept, and a cancelled
-  /// request says nothing.
+  /// request says nothing. Once read, a cleanup whose reply never came is read again
+  /// (``ViewerController/checkUnansweredCleanup()``).
   ///
   /// - Parameter number: The reading's generation.
   func readSessions(_ number: Int) async {
@@ -196,6 +197,8 @@ final class ViewerPanesModel {
       panes.sessions.readAt = readAt
       panes.sessions.failure = nil
       panes.sessions.notOfferedAt = nil
+      // A cleanup whose reply never came is read again with the list, so its button waits until it ended.
+      await viewer?.checkUnansweredCleanup()
     } catch {
       guard number == work.sessionsGeneration, !error.isCancelled else { return }
       guard !error.isNotOffered else {

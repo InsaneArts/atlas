@@ -27,7 +27,7 @@ struct FactRow: View {
   var body: some View {
     content
       .textStyle(.callout)
-      .padding(.vertical, Layout.inset)
+      .padding(.vertical, FactLayout.inset)
       .frame(maxWidth: .infinity, minHeight: ControlHeight.s, alignment: .leading)
       .overlay(alignment: .top) { SeparatorLine() }
       .accessibilityElement(children: .combine)
@@ -39,7 +39,7 @@ struct FactRow: View {
     if let mark {
       HStack(alignment: .top, spacing: Spacing.s) {
         FactMark(state: mark)
-          .padding(.top, Layout.markDrop)
+          .padding(.top, FactLayout.markDrop)
         VStack(alignment: .leading, spacing: .zero) {
           Text(name)
             .foregroundStyle(Color.textPrimary)
@@ -73,14 +73,6 @@ struct FactRow: View {
   nonisolated static func lineColor(_ mark: ReadinessState) -> Color {
     mark == .notReady ? .textAttention : .textSecondary
   }
-}
-
-/// The row's own measures.
-private enum Layout {
-  /// 6: above and below the row's text.
-  static let inset = Spacing.xsPlus
-  /// 1: how far a check's mark drops to centre on its name's first line.
-  static let markDrop = Spacing.hairline
 }
 
 #if DEBUG
