@@ -503,6 +503,17 @@ pub async fn open(
     targets: &[String],
     environment: &[String],
 ) -> Result<Value> {
+    open_in(client, app, targets, environment, Path::new(handoff::ROOT)).await
+}
+
+/// [`open`], pruning `open`'s old copies under `copies`.
+async fn open_in(
+    client: &Client,
+    app: Option<&str>,
+    targets: &[String],
+    environment: &[String],
+    copies: &Path,
+) -> Result<Value> {
     if app.is_none() && targets.is_empty() {
         return Err(Error::new(
             "usage",
@@ -530,7 +541,7 @@ pub async fn open(
     // open, close or controller interleaves.
     let ownership = client.controller.acquire(false)?;
     let running = handoff::Running::listed(&client.apps().await?);
-    task::settle_copies_gone(client, handoff::prune(&running));
+    task::settle_copies_gone(client, handoff::prune_in(copies, &running));
 
     // A name is the helper's to look up; a path is this side's file.
     let app_target = app.map(|app| {
@@ -3955,6 +3966,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_app_opened_by_name_is_listed_for_the_task_and_nothing_else_is() {
+        use crate::{
+            helper_test::{Helper, UID, completed},
+            host_session::{Host, Key},
+            task::{Owned, State, Task, store::Store},
+        };
+
+        let directory = tempfile::tempdir().unwrap();
+        let (mut client, helper) = Helper::client(directory.path(), UID);
+        let task = Task::of(&Key::of(Host::Codex, "opening"), Some("probe")).unwrap();
+        client.task = Some(task.clone());
+        let copies = directory.path().join("copies");
+        std::fs::create_dir(&copies).unwrap();
+        let answer = |request: &Value| {
+            Some(if request["op"] == "apps" {
+                json!({"ok": true, "apps": []})
+            } else {
+                completed("")
+            })
+        };
+
+        for (app, targets) in [
+            (None, vec!["https://example.com".to_owned()]),
+            (Some("TextEdit"), Vec::new()),
+        ] {
+            let opened = helper
+                .serve(open_in(&client, app, &targets, &[], &copies), answer)
+                .await
+                .unwrap();
+            assert_eq!(opened["opened"], true);
+        }
+
+        let output = client.output_dir().unwrap().to_owned();
+        let claims: Vec<_> = Store::at(&output)
+            .load(task.key())
+            .unwrap()
+            .claims()
+            .collect();
+        assert_eq!(
+            claims,
+            [(
+                Owned::Launch {
+                    app: "TextEdit".to_owned()
+                },
+                State::Made
+            )]
+        );
+    }
+
+    #[tokio::test]
     async fn an_open_whose_list_is_refused_copies_prunes_and_launches_nothing() {
         use crate::helper_test::{Helper, UID};
 
@@ -3966,12 +4027,15 @@ mod tests {
         let mut ran = Vec::new();
 
         let error = helper
-            .serve(open(&client, Some("TextEdit"), &targets, &[]), |request| {
-                if request["op"] == "run" {
-                    ran.push(request.clone());
-                }
-                Some(refused("busy"))
-            })
+            .serve(
+                open_in(&client, Some("TextEdit"), &targets, &[], directory.path()),
+                |request| {
+                    if request["op"] == "run" {
+                        ran.push(request.clone());
+                    }
+                    Some(refused("busy"))
+                },
+            )
             .await
             .unwrap_err();
 

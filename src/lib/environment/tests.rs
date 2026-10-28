@@ -2848,3 +2848,97 @@ async fn a_plan_pruned_because_the_helper_never_started_it_is_settled_gone() {
         .collect();
     assert_eq!(claims, [(plan, State::Gone)]);
 }
+
+/// A client of the stand-in helper whose command belongs to a named task
+/// of a fresh session, and that task.
+fn tasked(root: &Path) -> (Client, Helper, crate::task::Task) {
+    let (mut client, helper) = Helper::client(root, UID);
+    let session = crate::host_session::Key::of(crate::host_session::Host::Codex, "planning");
+    let task = crate::task::Task::of(&session, Some("probe")).unwrap();
+    client.task = Some(task.clone());
+    (client, helper, task)
+}
+
+/// What `client`'s task record claims, with their states.
+fn task_claims(
+    client: &Client,
+    task: &crate::task::Task,
+) -> Vec<(crate::task::Owned, crate::task::State)> {
+    crate::task::store::Store::at(client.output_dir().unwrap())
+        .load(task.key())
+        .map(|record| record.claims().collect())
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn a_preview_claims_its_plan_for_the_task_once_the_plan_is_written() {
+    use crate::task::{Owned, State};
+
+    let sandbox = Sandbox::new();
+    let (client, helper, task) = tasked(&sandbox.root);
+    let source = sandbox.root.join("settings.toml");
+    fs::write(&source, b"copied").unwrap();
+    let selections = vec![Selection {
+        source,
+        target: ".config/probe/settings.toml".into(),
+        executable: false,
+    }];
+    let home = sandbox.home.clone();
+
+    let previewed = helper
+        .serve(
+            freeze_as(
+                &client,
+                &account(),
+                &sandbox.root.join("manifest.toml"),
+                selections,
+                false,
+            ),
+            move |request| {
+                let packet: Packet =
+                    decode(&fs::read(request["argv"][2].as_str().unwrap()).unwrap()).unwrap();
+                let Request::Preview { id, files } = packet.request else {
+                    panic!("only a preview is asked for");
+                };
+                let value = worker::preview(&home, UID, &id, files, &|| Ok(())).unwrap();
+                Some(worker_reply(0, &value))
+            },
+        )
+        .await
+        .unwrap();
+
+    let id = crate::control::Token::parse(previewed["planId"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        task_claims(&client, &task),
+        [(Owned::Plan { id }, State::Made)]
+    );
+}
+
+#[tokio::test]
+async fn an_apply_claims_its_plan_for_the_task_before_the_helper_is_asked() {
+    use crate::task::{Owned, State};
+
+    let sandbox = Sandbox::new();
+    let (client, helper, task) = tasked(&sandbox.root);
+    let id = crate::control::token();
+    write_plan(&stage_in(&sandbox.root, &id), &id, UID);
+    let plan = Owned::Plan {
+        id: crate::control::Token::parse(&id).unwrap(),
+    };
+
+    let mut asked = Vec::new();
+    let applied = helper
+        .serve(apply_frozen(&client, &account(), &id), |_| {
+            asked.push(task_claims(&client, &task));
+            Some(worker_reply(
+                0,
+                &json!({"ok": true, "planId": id, "phase": "applied", "resumeRequired": false}),
+            ))
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(applied["phase"], "applied");
+    assert_eq!(asked, [vec![(plan.clone(), State::Made)]]);
+    assert_eq!(task_claims(&client, &task), [(plan, State::Made)]);
+}

@@ -122,13 +122,24 @@ pub(super) async fn freeze(
     client.identity().await?;
 
     let helper = helper_name(client.config.helper_uid)?;
-    prune(client, &helper).await;
+    freeze_as(client, &helper, manifest, selections, apply_now).await
+}
+
+/// [`freeze`] for the helper account `helper`, once the helper is verified.
+async fn freeze_as(
+    client: &Client,
+    helper: &str,
+    manifest: &Path,
+    selections: Vec<Selection>,
+    apply_now: bool,
+) -> Result<Value> {
+    prune(client, helper).await;
 
     let id = crate::control::token();
     let stage = stage_path(client, &id)?;
     // Held while the preview is made, so no other command sweeps the stage
     // as a preview cut short before its plan is written.
-    let lock = create_locked_stage(&stage, &helper)?;
+    let lock = create_locked_stage(&stage, helper)?;
 
     let result = async {
         let mut files = Vec::new();
@@ -154,7 +165,7 @@ pub(super) async fn freeze(
 
             let source = stage.join(format!("payload-{index}"));
             atomic_write(&source, &bytes, 0o600)?;
-            allow_helper(&source, &helper, false)?;
+            allow_helper(&source, helper, false)?;
 
             files.push(Payload {
                 source,
@@ -166,7 +177,7 @@ pub(super) async fn freeze(
 
         let mut result = dispatch(
             client,
-            &helper,
+            helper,
             &stage,
             Request::Preview {
                 id: id.clone(),
@@ -210,7 +221,7 @@ pub(super) async fn freeze(
     // The apply takes the plan's lock itself.
     drop(lock);
     match result {
-        Ok(result) if apply_now && result["ok"] == true => apply_frozen(client, &helper, &id).await,
+        Ok(result) if apply_now && result["ok"] == true => apply_frozen(client, helper, &id).await,
         result => result,
     }
 }

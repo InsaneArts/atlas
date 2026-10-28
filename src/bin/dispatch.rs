@@ -402,22 +402,33 @@ pub(super) async fn execute(config: PathBuf, command: Command, wait: Duration) -
 
     let result = carry_out(&config, command, &client, host.as_ref()).await;
 
-    // What the command left for its session to find again, once it ended,
-    // and a plan it rolled back forgotten wherever it is listed: labels, so
-    // a record that cannot be written changes nothing.
     if kind.recorded(doing.as_ref())
         && let Ok(client) = client()
     {
-        if let Some(host) = &host {
-            let _ = host_session::store::note(&client, host, kind, doing.as_ref(), &result);
-        }
-        let _ = host_session::store::forget_rolled_back(&client, kind, &result);
-        let _ = task::settle_rolled_back(&client, kind, &result);
+        note_outcome(&client, host.as_ref(), kind, doing.as_ref(), &result);
     }
 
     // A refusal that can name the other session, or say whose an unknown
     // outcome is, says so.
     host_session::explain::reply(result, || client().ok(), host.as_ref())
+}
+
+/// Note what a command of `kind`, doing `doing`, left for its session to
+/// find again once it ended, as `result` says, and a plan it rolled back as
+/// undone wherever it is listed: labels, so a record that cannot be written
+/// changes nothing.
+fn note_outcome(
+    client: &Client,
+    host: Option<&HostSession>,
+    kind: Kind,
+    doing: Option<&Doing>,
+    result: &Result<Value>,
+) {
+    if let Some(host) = host {
+        let _ = host_session::store::note(client, host, kind, doing, result);
+    }
+    let _ = host_session::store::forget_rolled_back(client, kind, result);
+    let _ = task::settle_rolled_back(client, kind, result);
 }
 
 /// [`execute`]'s work once the command is labelled: `client` gives its
@@ -1051,6 +1062,42 @@ mod tests {
 
     fn parse(args: &[&str]) -> std::result::Result<Cli, clap::Error> {
         Cli::try_parse_from(std::iter::once("atlas").chain(args.iter().copied()))
+    }
+
+    #[test]
+    fn a_rollback_a_command_finished_is_settled_in_the_task_that_claimed_the_plan() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = Client::new(Config {
+            helper_uid: 60001,
+            socket_path: dir.path().join("helper.sock"),
+            identity_probe: dir.path().join("probe"),
+            input_socket: dir.path().join("input.sock"),
+            output_dir: dir.path().join("out"),
+        })
+        .unwrap();
+        let (task, session, plan) = ("5be0d1a2c3f4", "3f9a1c07b2e4", atlas::control::token());
+        let tasks = client.output_dir().unwrap().join("tasks");
+        std::fs::create_dir(&tasks).unwrap();
+        let record = tasks.join(format!("{task}.json"));
+        let written = json!({"version": 1, "key": task, "session": session, "name": "probe",
+            "started": 1, "updated": 1,
+            "owned": [{"kind": "plan", "id": plan, "at": 1, "state": "made"}]});
+        std::fs::write(&record, written.to_string()).unwrap();
+        let state = || {
+            let read: Value = serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+            read["owned"][0]["state"].clone()
+        };
+        let command = |args: &[&str]| parse(args).unwrap().command.unwrap();
+        let rolled_back = Ok(json!({"ok": true, "planId": plan, "phase": "rolledBack",
+            "keptTargets": [], "retainedDirectories": []}));
+
+        let preview = command(&["environment", "rollback", &plan]);
+        note_outcome(&client, None, kind(&preview), None, &rolled_back);
+        assert_eq!(state(), "made", "a preview undoes nothing");
+
+        let undo = command(&["environment", "rollback", &plan, "--apply"]);
+        note_outcome(&client, None, kind(&undo), None, &rolled_back);
+        assert_eq!(state(), "gone");
     }
 
     #[test]

@@ -162,9 +162,17 @@ fn claims_from_two_commands_at_once_both_survive() {
         for owned in &made {
             let (output, task) = (directory.path(), task.clone());
             scope.spawn(move || {
-                Claims::in_store(Store::at(output), task)
-                    .claim(owned, State::Intent)
-                    .unwrap();
+                // A claim that waited its turn out on a slow disk is told
+                // `busy`; it tries again, as nothing it wrote was lost.
+                let claims = Claims::in_store(Store::at(output), task);
+                let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
+                loop {
+                    match claims.claim(owned, State::Intent) {
+                        Err(error) if error.code == "busy" && std::time::Instant::now() < until => {
+                        }
+                        claimed => break claimed.unwrap(),
+                    }
+                }
             });
         }
     });
@@ -450,4 +458,28 @@ fn work_a_session_record_lists_without_a_task_record_belongs_to_the_default_task
         [(host.key().clone(), probe.key().clone(), State::Intent)],
         "listed once, as its task claims it"
     );
+}
+
+#[test]
+fn a_commands_claims_go_to_its_own_tasks_record_and_nowhere_without_one() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut client = crate::transaction_test::client(directory.path());
+    let output = client.output_dir().unwrap().to_owned();
+    let made = copy();
+
+    Claims::of(&client).claim(&made, State::Intent).unwrap();
+    assert!(Store::at(&output).all().is_empty(), "no task, no record");
+
+    let named = task("client", Some("probe"));
+    client.task = Some(named.clone());
+    Claims::of(&client)
+        .claim_all(&[made.clone(), plan()], State::Intent)
+        .unwrap();
+    Claims::of(&client)
+        .settle_all(&[(made.clone(), State::Made)])
+        .unwrap();
+
+    let kept = claimed(&Store::at(&output), &named);
+    assert_eq!(kept.len(), 2);
+    assert_eq!(kept[0], (made, State::Made));
 }

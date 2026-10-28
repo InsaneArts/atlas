@@ -764,16 +764,11 @@ pub(crate) fn remove_copies_in(
     removed
 }
 
-/// Remove copies older than KEEP that are not in use by an app in
-/// `running` (the helper's apps), so a copy nobody closed does not stay
-/// forever.
-/// The tokens of the folders removed come back, so their claims can be
-/// settled.
-pub(crate) fn prune(running: &[Running]) -> Vec<Token> {
-    prune_in(Path::new(ROOT), running)
-}
-
-fn prune_in(root: &Path, running: &[Running]) -> Vec<Token> {
+/// Remove copies under `root` (ROOT, but in tests) older than KEEP that are
+/// not in use by an app in `running` (the helper's apps), so a copy nobody
+/// closed does not stay forever. The tokens of the folders removed come
+/// back, so their claims can be settled.
+pub(crate) fn prune_in(root: &Path, running: &[Running]) -> Vec<Token> {
     let mut removed = Vec::new();
     for folder in folders(root) {
         let old = fs::symlink_metadata(&folder)
