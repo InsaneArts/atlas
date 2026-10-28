@@ -328,6 +328,64 @@ fn a_finished_task_goes_once_its_session_record_has_gone() {
 }
 
 #[test]
+fn a_record_holding_work_this_build_cannot_read_outlives_its_session() {
+    let directory = tempfile::tempdir().unwrap();
+    let folder = directory.path().join("tasks");
+    fs::create_dir(&folder).unwrap();
+    let finished = json!({"kind": "copy", "id": Token::new(), "at": 2, "state": "gone"});
+    let written = [
+        (
+            "cleanup",
+            json!({"cleanups": [{"id": "e41b", "state": "incomplete"}]}),
+            json!([finished]),
+        ),
+        ("job", json!({"jobs": []}), json!([finished])),
+        (
+            "claim field",
+            json!({}),
+            json!([{"kind": "copy", "id": Token::new(), "at": 2,
+            "state": "gone", "detach": "pending"}]),
+        ),
+        (
+            "claim kind",
+            json!({}),
+            json!([{"kind": "install", "id": Token::new(), "at": 2,
+            "state": "gone"}]),
+        ),
+    ];
+    let later: Vec<Task> = written
+        .iter()
+        .map(|(what, fields, owned)| {
+            let task = task("downgraded", Some(&what.replace(' ', "-")));
+            let mut record = json!({"version": VERSION, "key": task.key(),
+                "session": task.session(), "name": task.name(), "started": 1, "updated": 2,
+                "owned": owned});
+            record
+                .as_object_mut()
+                .unwrap()
+                .extend(fields.as_object().unwrap().clone());
+            fs::write(
+                folder.join(format!("{}.json", task.key())),
+                record.to_string(),
+            )
+            .unwrap();
+            task
+        })
+        .collect();
+
+    // A new record is made by this older build, and the others are looked
+    // over; none of the downgraded session's records is finished to it.
+    Claims::in_store(Store::at(directory.path()), task("new", None))
+        .claim(&copy(), State::Intent)
+        .unwrap();
+
+    let store = Store::at(directory.path());
+    for (task, (what, ..)) in later.iter().zip(&written) {
+        assert!(store.load(task.key()).is_some(), "{what}");
+    }
+}
+
+#[test]
 fn work_a_session_record_lists_without_a_task_record_belongs_to_the_default_task() {
     use crate::{environment::Phase, host_session::record::PlanNote};
 

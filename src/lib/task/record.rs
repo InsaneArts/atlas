@@ -104,16 +104,20 @@ impl Record {
         })
     }
 
-    /// Whether anything this record lists may still be in the helper: a
-    /// claim not yet gone or kept, or one this build cannot read, which it
-    /// never takes for finished.
+    /// Whether anything this record lists may still be in the helper or
+    /// still be under way: a claim not yet gone or kept, or anything a
+    /// later build wrote that this one cannot read (a field of the record
+    /// or of a claim, or a whole claim), which it never takes for finished.
     pub fn holds_anything(&self) -> bool {
-        self.owned.iter().any(|entry| match entry {
-            Entry::Known(claim) => {
-                claim.owned().is_none() || matches!(claim.state, State::Intent | State::Made)
-            }
-            Entry::Later(_) => true,
-        })
+        !self.later.is_empty()
+            || self.owned.iter().any(|entry| match entry {
+                Entry::Known(claim) => {
+                    !claim.later.is_empty()
+                        || claim.owned().is_none()
+                        || matches!(claim.state, State::Intent | State::Made)
+                }
+                Entry::Later(_) => true,
+            })
     }
 
     /// Where the oldest claim `which` picks is.
