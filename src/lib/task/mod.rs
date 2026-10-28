@@ -45,6 +45,7 @@ impl Name {
         plain.then(|| Self(value.to_owned()))
     }
 
+    /// The name as ATLAS_TASK gave it.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -130,14 +131,17 @@ impl Task {
             .transpose()
     }
 
+    /// The key of the host session the task belongs to.
     pub fn session(&self) -> &Key {
         &self.session
     }
 
+    /// The task's own key: its session's for the default task.
     pub fn key(&self) -> &Key {
         &self.key
     }
 
+    /// The name ATLAS_TASK gave the task; none for the default task.
     pub fn name(&self) -> Option<&Name> {
         self.name.as_ref()
     }

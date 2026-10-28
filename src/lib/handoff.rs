@@ -4,12 +4,12 @@
 //! grant to the helper, and nothing there is ever replaced: a new copy gets
 //! a new folder, so a running app's files never change under it.
 use crate::{
-    agent::same_text,
     client::Client,
     control::{Ownership, Token},
     error::{Error, Result},
     host_session::{HostSession, Key},
     task::{Claims, Owned, State},
+    text::same_text,
     transport::run_output,
 };
 use serde_json::{Value, json};
@@ -662,8 +662,15 @@ pub(crate) struct Removed {
     /// How many copies were kept because another host session made them,
     /// or their label could not be read.
     pub kept_others: usize,
-    /// The copies that could not be removed: `{"path", "error"}`.
-    pub failed: Vec<Value>,
+    /// The copies that could not be removed.
+    pub failed: Vec<Failed>,
+}
+
+/// A copy folder that could not be removed, and why.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct Failed {
+    pub path: String,
+    pub error: String,
 }
 
 impl Removed {
@@ -700,9 +707,10 @@ pub(crate) fn remove_copies_in(
         let path = folder.to_string_lossy().into_owned();
         match fs::remove_dir_all(&folder) {
             Ok(()) => removed.folders.push(path),
-            Err(error) => removed
-                .failed
-                .push(json!({"path": path, "error": error.to_string()})),
+            Err(error) => removed.failed.push(Failed {
+                path,
+                error: error.to_string(),
+            }),
         }
     }
 
@@ -1011,6 +1019,10 @@ mod tests {
 
     #[test]
     fn a_copy_that_cannot_be_removed_is_reported_not_dropped() {
+        // Permissions do not hold root back, so nothing would fail.
+        if nix::unistd::geteuid().is_root() {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let (root, copy) = one_copy(dir.path());
         fs::set_permissions(&copy, fs::Permissions::from_mode(0o500)).unwrap();
@@ -1020,13 +1032,8 @@ mod tests {
 
         assert!(removed.folders.is_empty());
         assert_eq!(removed.failed.len(), 1);
-        assert_eq!(removed.failed[0]["path"], copy.to_string_lossy().as_ref());
-        assert!(
-            removed.failed[0]["error"]
-                .as_str()
-                .unwrap()
-                .contains("ermission")
-        );
+        assert_eq!(removed.failed[0].path, copy.to_string_lossy());
+        assert!(removed.failed[0].error.contains("ermission"));
         assert!(copy.exists());
     }
 

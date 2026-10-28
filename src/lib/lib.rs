@@ -34,6 +34,7 @@ mod session_view;
 pub mod setup;
 pub mod switch;
 pub mod task;
+mod text;
 pub mod transport;
 pub mod ui;
 pub mod uninstall;

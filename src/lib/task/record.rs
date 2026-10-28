@@ -149,7 +149,7 @@ impl Owned {
             (Self::Copy { id }, Self::Copy { id: other }) => id == other,
             (Self::Plan { id }, Self::Plan { id: other }) => id == other,
             (Self::Launch { app }, Self::Launch { app: other }) => {
-                crate::agent::same_text(app, other)
+                crate::text::same_text(app, other)
             }
             _ => false,
         }

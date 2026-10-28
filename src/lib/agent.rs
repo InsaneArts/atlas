@@ -3,7 +3,7 @@
 //! waiting for windows. Every action is an ordinary validated batch with the
 //! usual ownership and epoch checks; nothing here bypasses them.
 pub use crate::app_selection::Closing;
-pub(crate) use crate::app_selection::same_text;
+use crate::text::same_text;
 
 use crate::{
     actions::{Button, Expect},

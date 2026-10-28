@@ -1,14 +1,6 @@
 //! Shared application-selection policy for close-all and held logout.
+use crate::text::same_text;
 use serde_json::Value;
-
-/// Whether two app names name the same app: compared case-insensitively,
-/// so `textedit` and `TextEdit` (or `ÉDITEUR` and `Éditeur`) agree.
-pub(crate) fn same_text(a: &str, b: &str) -> bool {
-    a == b
-        || a.chars()
-            .flat_map(char::to_lowercase)
-            .eq(b.chars().flat_map(char::to_lowercase))
-}
 
 /// Whether a running app (as `apps` lists it) belongs to macOS or to Atlas
 /// itself; neither is ever closed. Atlas is known by its bundle identifier

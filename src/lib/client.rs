@@ -1254,10 +1254,7 @@ impl Client {
     /// [`Client::inspect`] bounded by `limit`. A read changes nothing, so
     /// its failure is never uncertain.
     pub(crate) async fn inspect_within(&self, argv: Vec<String>, limit: Duration) -> Result<Value> {
-        self.run_pending(argv, limit).await.map_err(|error| Error {
-            uncertain: false,
-            ..error
-        })
+        self.run_pending(argv, limit).await.map_err(certain)
     }
 
     /// [`Client::inspect_within`] in the helper session `verified` names,
@@ -1275,12 +1272,7 @@ impl Client {
             self.identity().await?;
         }
 
-        self.run_verified(argv, limit, pin)
-            .await
-            .map_err(|error| Error {
-                uncertain: false,
-                ..error
-            })
+        self.run_verified(argv, limit, pin).await.map_err(certain)
     }
 
     /// [`Client::inspect_within`] with a run's usual limit, under controller
