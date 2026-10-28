@@ -2,7 +2,7 @@
 //! as `{"<generation>": "<key>"}`. It is read only against the marker: an
 //! entry the marker no longer has means nothing. A label for display only;
 //! what blocks and what recovery clears never depend on it.
-use super::{Durability, write_private_with};
+use super::{Durability, Entries, keep_entries, write_private_with};
 use crate::{error::Result, host_session::Key};
 use std::{collections::BTreeMap, path::Path};
 
@@ -29,20 +29,17 @@ pub(super) fn note(path: &Path, generation: &str, key: &Key, pending: &[String])
 /// Forget every cause whose generation is no longer `pending`, removing the
 /// file once none is left. A missing file stays missing.
 pub(super) fn keep(path: &Path, pending: &[String]) -> Result<()> {
-    if std::fs::symlink_metadata(path).is_err() {
-        return Ok(());
+    keep_entries(path, pending, read, write)
+}
+
+impl Entries for BTreeMap<String, Key> {
+    fn retain_pending(&mut self, pending: &[String]) {
+        self.retain(|kept, _| pending.contains(kept));
     }
 
-    let mut causes = read(path);
-    causes.retain(|kept, _| pending.contains(kept));
-    if causes.is_empty() {
-        return match std::fs::remove_file(path) {
-            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
-            _ => Ok(()),
-        };
+    fn is_empty(&self) -> bool {
+        BTreeMap::is_empty(self)
     }
-
-    write(path, &causes)
 }
 
 fn write(path: &Path, causes: &BTreeMap<String, Key>) -> Result<()> {

@@ -3,6 +3,19 @@
 //! blocks everyone as any unknown outcome does.
 use super::*;
 
+thread_local! {
+    /// Set to the end of a record's name, the next replacement of that
+    /// record on this thread stops before its rename, as a writer killed
+    /// there would.
+    pub(super) static INTERRUPT_REPLACE: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+}
+
+/// Stop the next replacement of the record whose name ends with `name`
+/// before its rename.
+fn interrupt_replacing(name: &'static str) {
+    INTERRUPT_REPLACE.with(|interrupt| interrupt.set(Some(name)));
+}
+
 /// Two controllers of one helper, as two commands would hold them.
 fn pair(directory: &Path) -> (Controller, Controller) {
     (
@@ -46,11 +59,8 @@ fn a_running_command_still_keeps_recovery_out() {
     assert_eq!(refused.holder, Some(Holder::Agent));
     assert!(!refused.uncertain);
     assert!(refused.error.contains("still running"), "{}", refused.error);
-    assert!(
-        refused.error.contains("before recovering"),
-        "{}",
-        refused.error
-    );
+    assert!(refused.error.contains("stop agents"), "{}", refused.error);
+    assert_eq!(refused.details["running"], "command");
     assert!(other.clear().is_ok());
     assert_eq!(
         other.pending().unwrap().len(),
@@ -72,6 +82,8 @@ fn an_update_waits_for_a_running_command() {
         assert_eq!(refused.code, "busy", "not uncertain: nothing is unknown");
         assert_eq!(refused.holder, Some(Holder::Agent));
         assert!(!refused.uncertain);
+        assert!(!refused.error.contains("stop agents"), "{}", refused.error);
+        assert_eq!(refused.details["running"], "command");
         assert_eq!(
             refused.details["next"],
             crate::ui::hints::COMMAND_RUNNING,
@@ -246,4 +258,143 @@ fn a_running_command_is_counted_and_shown_as_one() {
     };
     assert!(of(&command).running && of(&command).command);
     assert!(of(&change).running && !of(&change).command);
+}
+
+/// The marker as an older build reads it: a list of generations, or
+/// `legacy-unknown` when it does not parse.
+fn as_older_build_reads(controller: &Controller) -> Vec<String> {
+    let text = fs::read_to_string(&controller.marker).unwrap();
+    serde_json::from_str(&text).unwrap_or_else(|_| vec!["legacy-unknown".into()])
+}
+
+/// The replacements a writer killed partway left in `directory`.
+fn left_behind(directory: &Path) -> usize {
+    fs::read_dir(directory)
+        .unwrap()
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(REPLACING))
+        .count()
+}
+
+#[test]
+fn a_change_interrupted_while_recorded_keeps_a_running_command_pending() {
+    let directory = tempfile::tempdir().unwrap();
+    let (running, other) = pair(directory.path());
+    let command = running.quarantine_command().unwrap();
+    let kept = vec![command.generation().to_owned()];
+
+    interrupt_replacing("uncertain.json");
+    assert!(other.quarantine().is_err());
+
+    assert_eq!(as_older_build_reads(&other), kept);
+    assert_eq!(other.pending().unwrap(), kept);
+    assert!(
+        other.in_progress(&command),
+        "an older recovery waits for it"
+    );
+    assert_eq!(other.acquire(true).unwrap_err().code, "busy");
+    assert!(other.acquire_beside_commands().is_ok());
+    assert_eq!(left_behind(directory.path()), 1);
+
+    other.clear().unwrap();
+    assert_eq!(left_behind(directory.path()), 0, "recovery removes it");
+    assert_eq!(other.pending().unwrap(), kept);
+    assert_eq!(marked(&other), kept);
+}
+
+#[test]
+fn a_settlement_interrupted_while_recorded_keeps_a_running_command_pending() {
+    let directory = tempfile::tempdir().unwrap();
+    let (running, other) = pair(directory.path());
+    let command = running.quarantine_command().unwrap();
+    let change = other.quarantine().unwrap();
+
+    interrupt_replacing("uncertain.json");
+    assert!(other.clear_if(&change).is_err());
+
+    assert_eq!(
+        as_older_build_reads(&other),
+        [command.generation(), change.generation()]
+    );
+    assert_eq!(other.acquire(true).unwrap_err().code, "busy");
+    assert!(
+        other
+            .pending_causes()
+            .unwrap()
+            .iter()
+            .any(|cause| cause.generation == command.generation() && cause.command),
+        "it still counts as a running command"
+    );
+
+    other.clear_if(&change).unwrap();
+    drop(change);
+    assert_eq!(
+        as_older_build_reads(&other),
+        [command.generation().to_owned()]
+    );
+}
+
+#[test]
+fn a_command_interrupted_while_marked_never_starts_and_keeps_the_others_marked() {
+    let directory = tempfile::tempdir().unwrap();
+    let (running, other) = pair(directory.path());
+    let command = running.quarantine_command().unwrap();
+    let kept = vec![command.generation().to_owned()];
+
+    interrupt_replacing("commands.json");
+    assert!(other.quarantine_command().is_err());
+
+    assert_eq!(marked(&other), kept);
+    assert_eq!(as_older_build_reads(&other), kept);
+    assert!(other.acquire_beside_commands().is_ok());
+}
+
+#[test]
+fn marking_over_a_corrupted_list_fails_closed() {
+    let directory = tempfile::tempdir().unwrap();
+    let (running, other) = pair(directory.path());
+    let _first = running.quarantine_command().unwrap();
+    fs::write(&other.commands, b"not JSON").unwrap();
+
+    let _second = other.quarantine_command().unwrap();
+
+    assert_eq!(
+        other.acquire_beside_commands().unwrap_err().code,
+        "uncertain",
+        "the command whose mark was lost counts as unknown"
+    );
+}
+
+#[test]
+fn no_more_commands_start_once_the_most_that_may_run_do() {
+    let directory = tempfile::tempdir().unwrap();
+    let (running, other) = pair(directory.path());
+    let _commands: Vec<Pending> = (0..RUNNING_COMMANDS_MAX)
+        .map(|_| running.quarantine_command().unwrap())
+        .collect();
+
+    let refused = other.quarantine_command().unwrap_err();
+    assert_eq!(refused.code, "busy");
+    assert_eq!(refused.holder, Some(Holder::Agent));
+    assert_eq!(refused.details["running"], "command");
+    assert_eq!(other.pending().unwrap().len(), RUNNING_COMMANDS_MAX);
+    let change = other.quarantine().unwrap();
+    other.clear_if(&change).unwrap();
+}
+
+#[test]
+fn an_abandoned_command_is_an_unknown_outcome_and_never_settled() {
+    let directory = tempfile::tempdir().unwrap();
+    let (running, other) = pair(directory.path());
+    let command = running.quarantine_command().unwrap();
+    let generation = command.generation().to_owned();
+
+    running.abandon_command(command);
+
+    assert_eq!(other.pending().unwrap(), [generation]);
+    assert!(marked(&other).is_empty());
+    assert_eq!(
+        other.acquire_beside_commands().unwrap_err().code,
+        "uncertain"
+    );
 }

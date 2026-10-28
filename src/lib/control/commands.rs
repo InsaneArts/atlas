@@ -4,12 +4,22 @@
 //! and one whose claim no live process holds is an outcome nothing will
 //! settle, like any other. A list that is missing, unreadable, malformed or
 //! too large reads as empty, so its commands count as unknown outcomes.
-use super::write_private;
+use super::{Entries, keep_entries, replace_private};
 use crate::error::Result;
 use std::path::Path;
 
 /// The most a list may hold before it is treated as missing.
 const LIMIT: u64 = 64 * 1024;
+
+impl Entries for Vec<String> {
+    fn retain_pending(&mut self, pending: &[String]) {
+        self.retain(|kept| pending.contains(kept));
+    }
+
+    fn is_empty(&self) -> bool {
+        <[String]>::is_empty(self)
+    }
+}
 
 /// The generations the list at `path` marks as commands.
 pub(super) fn read(path: &Path) -> Vec<String> {
@@ -24,24 +34,18 @@ pub(super) fn mark(path: &Path, generation: &str, pending: &[String]) -> Result<
     let mut commands = read(path);
     commands.retain(|kept| kept != generation && pending.contains(kept));
     commands.push(generation.to_owned());
-    write_private(path, &serde_json::to_vec(&commands)?)
+    write(path, &commands)
 }
 
 /// Forget every mark whose generation is no longer `pending`, removing the
 /// list once none is left. A missing list stays missing.
 pub(super) fn keep(path: &Path, pending: &[String]) -> Result<()> {
-    if std::fs::symlink_metadata(path).is_err() {
-        return Ok(());
-    }
+    keep_entries(path, pending, read, |path, commands: &Vec<String>| {
+        write(path, commands)
+    })
+}
 
-    let mut commands = read(path);
-    commands.retain(|kept| pending.contains(kept));
-    if commands.is_empty() {
-        return match std::fs::remove_file(path) {
-            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
-            _ => Ok(()),
-        };
-    }
-
-    write_private(path, &serde_json::to_vec(&commands)?)
+/// Replace the list at `path` with `commands`, whole or not at all.
+fn write(path: &Path, commands: &[String]) -> Result<()> {
+    replace_private(path, &serde_json::to_vec(commands)?)
 }

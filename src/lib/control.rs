@@ -244,18 +244,32 @@ fn busy_agent(waited: Option<Duration>, wait: Duration) -> Error {
     }
 }
 
-/// Busy because a command an agent started with `run` still runs: held by
-/// an agent, so nobody is told to recover it. Recovery hears that stopping
-/// agents ends it sooner.
-fn busy_command(recovering: bool) -> Error {
-    let message = if recovering {
-        "A command an agent started is still running in the helper. Wait for it to end, or stop agents, before recovering."
-    } else {
-        "A command an agent started is still running in the helper. Wait for it to end."
-    };
+/// The most commands agents started with `run` that may run at once, so
+/// the helper keeps connections free for reads and other actions.
+pub const RUNNING_COMMANDS_MAX: usize = 8;
+
+/// Busy because `message` names commands agents started with `run` that
+/// still run: held by an agent, so nobody is told to recover them, and
+/// marked as a running command for programs to tell from a held lock.
+fn busy_running(message: impl Into<String>) -> Error {
     Error::new("busy", message)
         .held_by(Holder::Agent)
+        .with("running", "command")
         .with("next", crate::ui::hints::COMMAND_RUNNING)
+}
+
+/// Busy because a command an agent started with `run` still runs, for
+/// control taken for `purpose`: setup, removal and recovery hear that
+/// stopping agents ends it at once.
+fn busy_command(purpose: Purpose) -> Error {
+    busy_running(match purpose {
+        Purpose::Recovery => {
+            "A command an agent started is still running in the helper. Wait for it to end, or stop agents to end it now."
+        }
+        Purpose::Change(_) => {
+            "A command an agent started is still running in the helper. Wait for it to end."
+        }
+    })
 }
 
 /// What an acquisition may go on beside.
@@ -266,6 +280,16 @@ pub(crate) enum Beside {
     /// Commands agents started with `run` that are still running. Every
     /// other pending outcome still refuses.
     Commands,
+}
+
+/// What control is taken for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Purpose {
+    /// Recovery, setup and removal: refused while any pending change is
+    /// still being carried out, so never beside a running command.
+    Recovery,
+    /// A change, going on beside what it names.
+    Change(Beside),
 }
 
 /// How a pending change is recorded beside the marker.
@@ -875,18 +899,21 @@ impl Controller {
     /// being carried out; anything else while any change is pending at all,
     /// a command an agent started included.
     pub fn acquire(&self, recovery: bool) -> Result<Ownership> {
-        self.acquire_with(recovery, Beside::Nothing)
+        self.acquire_for(if recovery {
+            Purpose::Recovery
+        } else {
+            Purpose::Change(Beside::Nothing)
+        })
     }
 
     /// [`Controller::acquire`] for an agent's own action, going on beside
     /// commands still running under their own claims.
     pub fn acquire_beside_commands(&self) -> Result<Ownership> {
-        self.acquire_with(false, Beside::Commands)
+        self.acquire_for(Purpose::Change(Beside::Commands))
     }
 
-    /// [`Controller::acquire`], going on beside what `beside` names unless
-    /// it is for `recovery`.
-    fn acquire_with(&self, recovery: bool, beside: Beside) -> Result<Ownership> {
+    /// [`Controller::acquire`] for `purpose`.
+    fn acquire_for(&self, purpose: Purpose) -> Result<Ownership> {
         // Nothing new starts once a signal asked this command to stop.
         self.interrupt.check()?;
         self.make_directory()?;
@@ -897,10 +924,9 @@ impl Controller {
         // Nobody held it, so a note left by a viewer that ended is stale.
         let _ = fs::remove_file(&self.person);
 
-        if recovery {
-            self.require_nothing_running()?;
-        } else {
-            self.require_known_beside(beside)?;
+        match purpose {
+            Purpose::Recovery => self.require_nothing_running()?,
+            Purpose::Change(beside) => self.require_known_beside(beside)?,
         }
 
         Ok(Ownership {
@@ -1027,7 +1053,7 @@ impl Controller {
     /// an agent started keeps running beside it, as it does beside other
     /// agents' actions.
     pub fn acquire_for_person(&self) -> Result<Ownership> {
-        let mut ownership = self.acquire_with(false, Beside::Commands)?;
+        let mut ownership = self.acquire_beside_commands()?;
         fs::write(&self.person, b"").map_err(|error| Error::writing(&self.directory, error))?;
         ownership.person = Some(self.person.clone());
         Ok(ownership)
@@ -1050,7 +1076,9 @@ impl Controller {
         // A marker that cannot be read is an unknown outcome, as before.
         match (self.unsettled().unwrap_or(Unsettled::Unknown), beside) {
             (Unsettled::Nothing, _) | (Unsettled::Commands, Beside::Commands) => Ok(()),
-            (Unsettled::Commands, Beside::Nothing) => Err(busy_command(false)),
+            (Unsettled::Commands, Beside::Nothing) => {
+                Err(busy_command(Purpose::Change(Beside::Nothing)))
+            }
             (Unsettled::Unknown, _) => Err(Error::new(
                 "uncertain",
                 "The last action's outcome is unknown; Atlas waits until it is recovered.",
@@ -1067,8 +1095,8 @@ impl Controller {
         }
 
         let pending = pending(&self.marker)?;
-        let commands = self.commands();
-        let running = |generation: &String| commands.contains(generation) && self.held(generation);
+        let marked = self.commands();
+        let running = |generation: &String| self.running_command(&marked, generation);
         Ok(if !pending.is_empty() && pending.iter().all(running) {
             Unsettled::Commands
         } else {
@@ -1082,12 +1110,12 @@ impl Controller {
     fn require_nothing_running(&self) -> Result<()> {
         let _lock = self.lock_marker()?;
         let pending = pending(&self.marker)?;
-        let commands = self.commands();
+        let marked = self.commands();
         if pending
             .iter()
-            .any(|generation| commands.contains(generation) && self.held(generation))
+            .any(|generation| self.running_command(&marked, generation))
         {
-            return Err(busy_command(true));
+            return Err(busy_command(Purpose::Recovery));
         }
         if pending
             .iter()
@@ -1120,17 +1148,14 @@ impl Controller {
 
         let _lock = self.lock_marker()?;
         let mut claimed = causes::read(&self.causes);
-        let commands = self.commands();
+        let marked = self.commands();
         Ok(pending(&self.marker)?
             .into_iter()
-            .map(|generation| {
-                let running = self.in_progress(&generation);
-                Cause {
-                    running,
-                    command: running && commands.contains(&generation) && self.held(&generation),
-                    session: claimed.remove(&generation),
-                    generation,
-                }
+            .map(|generation| Cause {
+                running: self.in_progress(&generation),
+                command: self.running_command(&marked, &generation),
+                session: claimed.remove(&generation),
+                generation,
             })
             .collect())
     }
@@ -1160,7 +1185,7 @@ impl Controller {
         let total = pending.len();
         let commands = pending
             .iter()
-            .filter(|generation| marked.contains(generation) && self.held(generation))
+            .filter(|generation| self.running_command(&marked, generation))
             .count();
         let unresolved = pending
             .into_iter()
@@ -1186,18 +1211,28 @@ impl Controller {
     /// plain lock test, never an executor's record, so a claim kept only by
     /// an executor that outlived its caller is not held.
     fn held(&self, generation: &str) -> bool {
-        let Some(live) = self.live(generation) else {
-            return false;
-        };
+        self.open_claim(generation).is_some_and(|(_, file)| {
+            FileExt::try_lock_shared(&file)
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::WouldBlock)
+        })
+    }
 
-        OpenOptions::new()
+    /// Whether `generation` is a command an agent started with `run` that
+    /// still runs: `marked` as one, and its claim held by a live process.
+    fn running_command(&self, marked: &[String], generation: &str) -> bool {
+        marked.iter().any(|entry| entry == generation) && self.held(generation)
+    }
+
+    /// The claim file for `generation`, and where it is, when there is one
+    /// that opens without following a link.
+    fn open_claim(&self, generation: &str) -> Option<(PathBuf, File)> {
+        let live = self.live(generation)?;
+        let file = OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NOFOLLOW)
             .open(&live)
-            .is_ok_and(|file| {
-                FileExt::try_lock_shared(&file)
-                    .is_err_and(|error| error.kind() == std::io::ErrorKind::WouldBlock)
-            })
+            .ok()?;
+        Some((live, file))
     }
 
     /// The generations marked as commands agents started with `run`, as
@@ -1209,17 +1244,9 @@ impl Controller {
 
     /// Whether some live mutation, in any process, still holds the claim.
     fn in_progress(&self, generation: &str) -> bool {
-        let Some(live) = self.live(generation) else {
-            return false;
-        };
-
-        OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&live)
-            .is_ok_and(|file| {
-                FileExt::try_lock_shared(&file).is_err() || claim_executor_running(&file, &live)
-            })
+        self.open_claim(generation).is_some_and(|(live, file)| {
+            FileExt::try_lock_shared(&file).is_err() || claim_executor_running(&file, &live)
+        })
     }
 
     /// Record a pending mutation this process is carrying out.
@@ -1280,16 +1307,41 @@ impl Controller {
 
         // Marked before the marker names it: a mark the marker does not
         // name means nothing, and a command that cannot be marked never
-        // starts.
+        // starts. So many already run that another is refused.
         if mark == Mark::Command {
+            let marked = self.commands();
+            let running = pending
+                .iter()
+                .filter(|entry| self.running_command(&marked, entry))
+                .count();
+            if running >= RUNNING_COMMANDS_MAX {
+                return Err(busy_running(format!(
+                    "{RUNNING_COMMANDS_MAX} commands agents started are already running in the helper. Wait for one to end."
+                )));
+            }
             commands::mark(&self.commands, generation, &pending)?;
         }
-        write_private(&self.marker, &serde_json::to_vec(&pending)?)?;
+        replace_private(&self.marker, &serde_json::to_vec(&pending)?)?;
         if let Some(label) = &self.label {
             // Whose change it is, for display only; a lost note loses a label.
             let _ = causes::note(&self.causes, generation, &label.key, &pending);
         }
         Ok(claim)
+    }
+
+    /// Leave a command an agent started with `run` whose outcome became
+    /// unknown as any other unknown outcome: its mark goes, then its claim,
+    /// while its marker entry stays for recovery. It is never settled here.
+    pub(crate) fn abandon_command(&self, claim: Pending) {
+        if let Ok(_lock) = self.lock_marker() {
+            let kept: Vec<String> = pending(&self.marker)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|entry| entry != claim.generation())
+                .collect();
+            let _ = commands::keep(&self.commands, &kept);
+        }
+        drop(claim);
     }
 
     /// Settle one acknowledged mutation; others stay pending.
@@ -1310,7 +1362,7 @@ impl Controller {
         if pending.is_empty() {
             remove_marker(&self.marker)
         } else {
-            write_private(&self.marker, &serde_json::to_vec(&pending)?)
+            replace_private(&self.marker, &serde_json::to_vec(&pending)?)
         }
     }
 
@@ -1325,9 +1377,19 @@ impl Controller {
             .filter(|generation| self.in_progress(generation))
             .collect();
         let prefix = format!("{}.", self.name);
+        let replacing = format!(".{prefix}");
 
         for entry in fs::read_dir(&self.directory)?.flatten() {
             let name = entry.file_name();
+            // Only a writer holding the marker lock has a replacement under
+            // way, so one found now was left by a writer that was killed.
+            if name
+                .to_str()
+                .is_some_and(|name| name.starts_with(&replacing) && name.ends_with(REPLACING))
+            {
+                let _ = fs::remove_file(entry.path());
+                continue;
+            }
             let generation = name
                 .to_str()
                 .and_then(|name| name.strip_prefix(&prefix)?.strip_suffix(".live"));
@@ -1344,9 +1406,91 @@ impl Controller {
         if running.is_empty() {
             remove_marker(&self.marker)
         } else {
-            write_private(&self.marker, &serde_json::to_vec(&running)?)
+            replace_private(&self.marker, &serde_json::to_vec(&running)?)
         }
     }
+}
+
+/// The end of the name a replacement is written under before it is renamed
+/// over the file it replaces.
+const REPLACING: &str = ".replacing";
+
+/// Replace the file at `path` with `bytes`, private to this account, so a
+/// reader only ever sees the old file or the new one whole, and a writer
+/// killed partway leaves the old one: the new one is written beside it,
+/// synced, renamed over it, and the folder synced. Only one writer at a
+/// time may replace a file, as the marker lock keeps them.
+fn replace_private(path: &Path, bytes: &[u8]) -> Result<()> {
+    let (Some(directory), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(Error::new("state", "A record needs a folder and a name"));
+    };
+    let temporary = directory.join(format!(
+        ".{}.{}{REPLACING}",
+        name.to_string_lossy(),
+        token()
+    ));
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&temporary)
+        .map_err(|error| Error::writing(&temporary, error))?;
+
+    let written = file.write_all(bytes).and_then(|()| file.sync_all());
+    #[cfg(test)]
+    if commands_tests::INTERRUPT_REPLACE.with(|interrupt| {
+        let stops = interrupt
+            .get()
+            .is_some_and(|ending| name.to_string_lossy().ends_with(ending));
+        if stops {
+            interrupt.set(None);
+        }
+        stops
+    }) {
+        // As a writer killed here would, it leaves the replacement unnamed.
+        return Err(Error::new("state", "interrupted before the rename"));
+    }
+    let replaced = written
+        .and_then(|()| fs::rename(&temporary, path))
+        .and_then(|()| File::open(directory)?.sync_all());
+    if replaced.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    replaced.map_err(|error| Error::writing(path, error))
+}
+
+/// A record kept beside the marker, one entry per pending generation.
+trait Entries {
+    /// Keep only the entries whose generations are still `pending`.
+    fn retain_pending(&mut self, pending: &[String]);
+
+    fn is_empty(&self) -> bool;
+}
+
+/// Keep only the entries of the record at `path`, read with `read` and
+/// written with `write`, whose generations are still `pending`, removing it
+/// once none is left. A missing record stays missing.
+fn keep_entries<T: Entries>(
+    path: &Path,
+    pending: &[String],
+    read: impl FnOnce(&Path) -> T,
+    write: impl FnOnce(&Path, &T) -> Result<()>,
+) -> Result<()> {
+    if fs::symlink_metadata(path).is_err() {
+        return Ok(());
+    }
+
+    let mut entries = read(path);
+    entries.retain_pending(pending);
+    if entries.is_empty() {
+        return match fs::remove_file(path) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
+            _ => Ok(()),
+        };
+    }
+
+    write(path, &entries)
 }
 
 /// The pending changes, as one locked read of the marker counts them.
