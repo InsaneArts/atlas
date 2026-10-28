@@ -124,6 +124,15 @@ pub(super) async fn freeze(
     let id = crate::control::token();
     let stage = stage_path(client, &id)?;
     create_stage(&stage, &helper)?;
+    // Held while the preview is made, so no other command sweeps the stage
+    // as a preview cut short before its plan is written.
+    let lock = match lock_stage(&stage) {
+        Ok(lock) => lock,
+        Err(error) => {
+            discard(&stage);
+            return Err(error);
+        }
+    };
 
     let result = async {
         let mut files = Vec::new();
@@ -200,7 +209,10 @@ pub(super) async fn freeze(
     }
     .await;
 
-    match previewed(result, &id, &stage) {
+    let result = previewed(result, &id, &stage);
+    // The apply takes the plan's lock itself.
+    drop(lock);
+    match result {
         Ok(result) if apply_now && result["ok"] == true => apply_frozen(client, &helper, &id).await,
         result => result,
     }
@@ -225,6 +237,7 @@ fn planned(stage: &Path) -> bool {
 /// Apply or resume the same immutable snapshot. Original source files are not read.
 pub async fn apply(client: &Client, plan_id: &str) -> Result<Value> {
     let helper = helper_name(client.config.helper_uid)?;
+    tidy(client);
     apply_frozen(client, &helper, plan_id).await
 }
 
@@ -259,6 +272,7 @@ async fn apply_frozen(client: &Client, helper: &str, plan_id: &str) -> Result<Va
 pub async fn rollback(client: &Client, transaction_id: &str, apply: bool) -> Result<Value> {
     let stage = stage_path(client, transaction_id)?;
     let helper = helper_name(client.config.helper_uid)?;
+    tidy(client);
     let created = directory(&stage, false)?.is_none();
     if created {
         create_stage(&stage, &helper)?;
@@ -364,18 +378,54 @@ fn discard(stage: &Path) {
 /// still needed.
 const UNUSED: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
-/// Remove frozen plans older than UNUSED that the helper never started (it
-/// answers that nothing was copied with their ID), previews cut short and
-/// command folders older than UNUSED. Plans applied or undone completely
-/// were removed when that finished; one with a retained request (a step
-/// whose outcome is unknown), one the helper started, or one it cannot
-/// answer for, stays.
+/// How old a plan folder with no plan and no request whose outcome is
+/// unknown must be before it is taken for a preview cut short rather than
+/// one still being made. A preview holds its folder's lock while it runs,
+/// and none takes this long.
+const STARTING: Duration = Duration::from_secs(10 * 60);
+
+/// Remove what earlier environment commands left behind that nothing can
+/// use: [`prune_runs`] and [`sweep`].
+fn tidy(client: &Client) {
+    if let Some(shared) = client.config.identity_probe.parent() {
+        prune_runs(shared);
+        sweep(shared);
+    }
+}
+
+/// Remove previews cut short, a killed command's: plan folders older than
+/// [`STARTING`] with no plan and no request whose outcome is unknown, whose
+/// lock nothing holds. They hold only copies of the selected files, which
+/// nothing can apply.
+fn sweep(shared: &Path) {
+    for (_, stage) in stale(shared, STARTING) {
+        // Looked at first, so a folder that is kept is never touched, then
+        // again under the folder's own lock, which a preview being made holds.
+        if !abandoned(&stage) {
+            continue;
+        }
+        let Ok(lock) = lock_stage(&stage) else {
+            continue;
+        };
+        if abandoned(&stage) {
+            discard(&stage);
+        }
+
+        drop(lock);
+    }
+}
+
+/// [`tidy`], then remove frozen plans older than UNUSED that the helper
+/// never started (it answers that nothing was copied with their ID). Plans
+/// applied or undone completely were removed when that finished; one with a
+/// retained request (a step whose outcome is unknown), one the helper
+/// started, or one it cannot answer for, stays.
 async fn prune(client: &Client, helper: &str) {
     let Some(shared) = client.config.identity_probe.parent() else {
         return;
     };
 
-    prune_runs(shared);
+    tidy(client);
 
     for (id, stage) in stale(shared, UNUSED) {
         // Everything below happens under the plan's own lock; a plan in use
@@ -383,11 +433,6 @@ async fn prune(client: &Client, helper: &str) {
         let Ok(lock) = lock_stage(&stage) else {
             continue;
         };
-
-        if abandoned(&stage) {
-            discard(&stage);
-            continue;
-        }
 
         if !prunable(&stage, &id, client.config.helper_uid) {
             continue;
@@ -484,11 +529,7 @@ pub async fn run(client: &Client, argv: Vec<String>, timeout: Duration) -> Resul
     let id = crate::control::token();
     let stage = stage_path(client, &id)?.with_file_name(format!("environment-run-{id}"));
     let helper = helper_name(client.config.helper_uid)?;
-
-    if let Some(shared) = stage.parent() {
-        prune_runs(shared);
-    }
-
+    tidy(client);
     create_stage(&stage, &helper)?;
 
     let request = Request::Run { argv };

@@ -971,6 +971,64 @@ async fn a_week_old_preview_cut_short_is_pruned() {
     assert!(recent.exists(), "a recent preview stays");
 }
 
+/// A preview whose command was killed holds copies but no plan and nothing
+/// whose outcome is unknown, so the next environment command removes it
+/// once it is older than a preview takes. One being made holds its lock,
+/// and one that is recent, has an unknown request or has a plan, stays.
+#[tokio::test]
+async fn a_preview_cut_short_is_swept_once_no_preview_can_still_be_making_it() {
+    let sandbox = Sandbox::new();
+    let stage = |inside: &[&str]| {
+        let stage = stage_in(&sandbox.root, &crate::control::token());
+        fs::write(stage.join("payload-0"), b"copy").unwrap();
+        for folder in inside {
+            fs::create_dir(stage.join(folder)).unwrap();
+        }
+        stage
+    };
+    let aged = |stage: &Path| {
+        let then = std::time::SystemTime::now() - STARTING - Duration::from_secs(60);
+        fs::File::open(stage).unwrap().set_modified(then).unwrap();
+    };
+
+    let cut_short = stage(&["read-ab12"]);
+    let bare = stage(&[]);
+    let unknown = stage(&["request-ab12"]);
+    let planned = stage(&[]);
+    let id = planned.file_name().unwrap().to_string_lossy()["environment-plan-".len()..].to_owned();
+    write_plan(&planned, &id, 501);
+    let recent = stage(&[]);
+    let locked = stage(&[]);
+    let held = lock_stage(&locked).unwrap();
+    for old in [&cut_short, &bare, &unknown, &planned, &locked] {
+        aged(old);
+    }
+
+    sweep(&sandbox.root);
+    assert!(!cut_short.exists(), "a preview cut short mid-read goes");
+    assert!(!bare.exists(), "a preview cut short before it read goes");
+    assert!(unknown.exists(), "an unknown outcome stays");
+    assert!(planned.exists(), "a plan stays");
+    assert!(
+        !planned.join("controller.lock").exists(),
+        "a folder that is kept is not touched"
+    );
+    assert!(recent.exists(), "a preview just started stays");
+    assert!(locked.exists(), "a preview being made stays");
+
+    // Any later environment command sweeps it, here an apply of a plan
+    // that does not exist.
+    drop(held);
+    aged(&locked);
+    let mut client = crate::transaction_test::client(&sandbox.root);
+    // An account that resolves to a name, as the helper's does.
+    client.config.helper_uid = nix::unistd::getuid().as_raw();
+    let missing = apply(&client, &crate::control::token()).await.unwrap_err();
+    assert!(missing.error.contains("There is no plan"), "{missing}");
+    assert!(!locked.exists(), "swept once its lock is let go");
+    assert!(unknown.exists() && planned.exists() && recent.exists());
+}
+
 #[test]
 fn only_an_apply_an_undo_with_apply_and_a_run_change_the_helper() {
     let id = crate::control::token;
