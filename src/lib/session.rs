@@ -161,6 +161,17 @@ pub fn require_hidden(value: &Value, uid: u32) -> Result<Session> {
             ));
         }
 
+        // A helper turning callers away while it serves others is up, not
+        // silent: the caller may try again.
+        if value["code"] == "busy" {
+            return Err(Error::new(
+                "busy",
+                value["error"]
+                    .as_str()
+                    .unwrap_or("The helper is serving too many requests; try again"),
+            ));
+        }
+
         // A socket served by the wrong account stays an identity violation.
         if value["code"] == "identity" {
             return Err(Error::new(
@@ -565,9 +576,13 @@ impl Absence {
 }
 
 /// Whether `status` is a helper that did not answer, which this side may
-/// explain: not refused by this shell, and not answered by another account.
+/// explain: not refused by this shell, not answered by another account, and
+/// not a helper too busy to serve one more caller.
 pub fn silent(status: &Value) -> bool {
-    status["ok"] != true && status["code"] != "blocked" && status["code"] != "identity"
+    status["ok"] != true
+        && !["blocked", "identity", "busy"]
+            .iter()
+            .any(|code| status["code"] == *code)
 }
 
 /// Why the silent helper `uid` is down, if this side can tell. It asks
@@ -1128,7 +1143,7 @@ mod tests {
         ));
         assert!(silent(&json!({"ok": false, "code": "transport"})));
 
-        for code in ["blocked", "identity"] {
+        for code in ["blocked", "identity", "busy"] {
             assert!(!silent(&json!({"ok": false, "code": code})), "{code}");
         }
 
@@ -1214,6 +1229,19 @@ mod tests {
         Absence::Missing.explain(&mut gone);
         assert_eq!(gone["absence"], "missing");
         assert!(gone.get("account").is_none());
+    }
+
+    /// A helper too busy for one more caller is busy, never "not answering",
+    /// so nobody is sent to restart a helper that is up.
+    #[test]
+    fn a_helper_turning_callers_away_is_busy_not_silent() {
+        let status = json!({"ok": false, "code": "busy", "error": "The helper is serving too many requests; try again"});
+        let uid = nix::unistd::getuid().as_raw() + 1;
+        let error = require_hidden(&status, uid.max(501)).unwrap_err();
+        assert_eq!(
+            (error.code, error.error.as_str()),
+            ("busy", "The helper is serving too many requests; try again")
+        );
     }
 
     /// A shell that may not reach the helper is told so, never that the
