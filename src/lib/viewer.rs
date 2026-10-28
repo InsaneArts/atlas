@@ -22,7 +22,6 @@ use crate::{
     menubar::{App, Line},
     overview::{READ_DEADLINE, late},
     session::Epoch,
-    transport::accepted,
 };
 use axum::{
     body::{Body, Bytes, to_bytes},
@@ -654,7 +653,7 @@ impl Viewer {
     async fn apps(&self) -> Result<Value> {
         let client = self.client();
         let read = async {
-            let apps = accepted(client.apps().await?)?;
+            let apps = client.apps().await?;
             let filter = crate::agent::WindowFilter {
                 app: None,
                 title: None,

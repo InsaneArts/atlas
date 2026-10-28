@@ -390,6 +390,34 @@ async fn a_tool_that_fails_says_why_as_an_error_result() {
 }
 
 #[tokio::test]
+async fn a_refused_app_list_is_an_error_in_the_view_not_zero_apps() {
+    use crate::helper_test::{Helper, UID};
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut server = server(dir.path());
+    server.views.store(true, Ordering::Relaxed);
+    let (client, helper) = Helper::client(dir.path(), UID);
+    server.client = client;
+
+    let listed = helper
+        .serve(
+            ask(&server, "tools/call", json!({"name": "helper_apps"})),
+            |_| {
+                Some(json!({"ok": false, "code": "busy", "uncertain": false,
+                    "error": "The helper is serving too many connections"}))
+            },
+        )
+        .await;
+
+    assert_eq!(listed["result"]["isError"], true, "{listed}");
+    assert_eq!(
+        listed["result"]["structuredContent"]["error"]["code"],
+        "busy"
+    );
+    assert!(listed["result"]["structuredContent"]["apps"].is_null());
+}
+
+#[tokio::test]
 async fn a_status_read_that_began_earlier_never_replaces_a_later_one() {
     let dir = tempfile::tempdir().unwrap();
     let server = server(dir.path());

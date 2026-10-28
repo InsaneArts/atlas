@@ -24,6 +24,7 @@ use crate::{
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
+    path::Path,
     time::{Duration, Instant},
 };
 use unicode_segmentation::UnicodeSegmentation;
@@ -698,10 +699,106 @@ fn signalled(output: &[u8]) -> Vec<u64> {
 /// How long `close` waits for the apps it signalled to quit.
 const QUIT_WAIT: Duration = Duration::from_secs(10);
 
+/// In the helper, each process is signalled only while it is still the
+/// executable listed, so a reused process ID is left alone. It prints each
+/// process it signalled.
+const QUIT: &str = r#"while [ $# -ge 2 ]; do
+  pid=$1 exe=$2; shift 2
+  [ -n "$exe" ] && [ "$(/bin/ps -o comm= -p "$pid")" = "$exe" ] && /bin/kill "$pid" && echo "$pid"
+done
+exit 0"#;
+
+/// What quitting apps did.
+pub(crate) struct Quit {
+    /// The processes that were signalled.
+    pub signalled: Vec<u64>,
+    /// The first valid app list in which none of them was left, which
+    /// copies are judged against.
+    pub after: Value,
+}
+
+/// Signal `processes`, then wait up to `limit` until `left` (given an app
+/// list and the processes signalled) names none still running in a fresh,
+/// valid app list. A list that cannot be read after the signal ends the
+/// wait with its error, naming what was signalled: nothing is judged
+/// without proof the apps exited.
+pub(crate) async fn quit(
+    client: &Client,
+    ownership: &Ownership,
+    processes: &[Process],
+    left: impl Fn(&Value, &[u64]) -> Vec<String>,
+    limit: Duration,
+) -> Result<Quit> {
+    let mut argv = vec![
+        "/bin/sh".to_owned(),
+        "-c".to_owned(),
+        QUIT.to_owned(),
+        "sh".to_owned(),
+    ];
+    for process in processes {
+        argv.extend([process.pid.to_string(), process.executable.clone()]);
+    }
+
+    let reply = accepted(client.run_owned(ownership, argv).await?)?;
+    if reply["timedOut"] == true || reply["exitCode"] != 0 {
+        return Err(Error::new(
+            "wait-failed",
+            "The helper did not finish quitting the apps; run atlas apps to see what is open",
+        ));
+    }
+
+    // Only the processes signalled are waited for: one whose program did
+    // not check out was left alone.
+    let signalled = self::signalled(&run_output(&reply, 64 * 1024).unwrap_or_default());
+    let deadline = Instant::now() + limit;
+
+    loop {
+        let after = client
+            .apps()
+            .await
+            .map_err(|error| unconfirmed(error, &names_by_quit(processes, &signalled, true)))?;
+        let still = left(&after, &signalled);
+        if still.is_empty() {
+            return Ok(Quit { signalled, after });
+        }
+
+        if Instant::now() >= deadline {
+            return Err(Error::new(
+                "wait-failed",
+                format!(
+                    "{} did not quit within {} seconds",
+                    still.join(", "),
+                    limit.as_secs()
+                ),
+            ));
+        }
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+/// `error`, from reading the app list after `names` were asked to quit, as
+/// what it leaves: they may or may not have exited, and their copies stay.
+/// The signal's own reply was received, so it is not uncertain.
+fn unconfirmed(mut error: Error, names: &[String]) -> Error {
+    error.error = format!(
+        "Atlas asked {} to quit but could not read the helper's apps to confirm they exited \
+         ({}). Their copies were kept; run atlas close --app NAME again.",
+        names.join(", "),
+        error.error
+    );
+    error.with("signalled", names)
+}
+
 /// Quit apps in the helper: one by name (every process of it), or with
 /// [`Closing::All`] every app that is not part of macOS or Atlas. Waits
 /// until they are gone, then removes the copies `open` made of them.
 pub async fn close(client: &Client, closing: Closing<'_>) -> Result<Value> {
+    close_in(client, closing, Path::new(handoff::ROOT)).await
+}
+
+/// [`close`], with `open`'s copies under `copies`.
+async fn close_in(client: &Client, closing: Closing<'_>, copies: &Path) -> Result<Value> {
     if let Closing::App(app) = closing
         && app.contains('/')
     {
@@ -726,81 +823,27 @@ pub async fn close(client: &Client, closing: Closing<'_>) -> Result<Value> {
         ));
     }
 
-    let names_of =
-        |apps: &Value| -> Vec<String> { app_names(apps).into_iter().map(str::to_owned).collect() };
-    // What runs in the helper once the apps are gone; with nothing to quit,
-    // what ran already.
-    let mut running = names_of(&apps);
-    let mut quit = Vec::new();
-
-    if !processes.is_empty() {
-        // In the helper, each process is signalled only while it is still
-        // the executable listed, so a reused process ID is left alone.
-        // It prints each process it signalled.
-        const QUIT: &str = r#"while [ $# -ge 2 ]; do
-  pid=$1 exe=$2; shift 2
-  [ -n "$exe" ] && [ "$(/bin/ps -o comm= -p "$pid")" = "$exe" ] && /bin/kill "$pid" && echo "$pid"
-done
-exit 0"#;
-
-        let mut argv = vec![
-            "/bin/sh".to_owned(),
-            "-c".to_owned(),
-            QUIT.to_owned(),
-            "sh".to_owned(),
-        ];
-
-        for process in &processes {
-            argv.extend([process.pid.to_string(), process.executable.clone()]);
-        }
-
-        let reply = accepted(client.run_owned(&ownership, argv).await?)?;
-        if reply["timedOut"] == true || reply["exitCode"] != 0 {
-            return Err(Error::new(
-                "wait-failed",
-                "The helper did not finish quitting the apps; run atlas apps to see what is open",
-            ));
-        }
-
-        // Only the processes signalled are waited for: one whose program
-        // did not check out was left alone.
-        quit = signalled(&run_output(&reply, 64 * 1024).unwrap_or_default());
-        let pids = &quit;
-        let deadline = Instant::now() + QUIT_WAIT;
-
-        loop {
-            let apps = client.apps().await?;
-
-            // One app is closed once no process of its name is left (a
-            // relaunch counts); everything once each process signalled is
-            // gone, whatever started since.
-            let mut left: Vec<String> = selected(&apps, closing, atlas.as_deref())
+    // What runs in the helper once the apps are gone, from the list that
+    // proved it; with nothing to quit, what ran already.
+    let (after, quit) = if processes.is_empty() {
+        (apps, Vec::new())
+    } else {
+        // One app is closed once no process of its name is left (a relaunch
+        // counts); everything once each process signalled is gone, whatever
+        // started since.
+        let left = |apps: &Value, pids: &[u64]| {
+            let mut left: Vec<String> = selected(apps, closing, atlas.as_deref())
                 .into_iter()
                 .filter(|process| matches!(closing, Closing::App(_)) || pids.contains(&process.pid))
                 .map(|process| process.name)
                 .collect();
             left.sort();
             left.dedup();
-
-            if left.is_empty() {
-                running = names_of(&apps);
-                break;
-            }
-
-            if Instant::now() >= deadline {
-                return Err(Error::new(
-                    "wait-failed",
-                    format!(
-                        "{} did not quit within {} seconds",
-                        left.join(", "),
-                        QUIT_WAIT.as_secs()
-                    ),
-                ));
-            }
-
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        }
-    }
+            left
+        };
+        let quit = quit(client, &ownership, &processes, left, QUIT_WAIT).await?;
+        (quit.after, quit.signalled)
+    };
 
     // What was quit, and (for --all) what was left because its process had
     // already changed by the time it would have been signalled.
@@ -814,13 +857,13 @@ exit 0"#;
     // A copy is never removed while an app of its names runs: an app that
     // came back, or another one, may be running from it. An agent's close
     // keeps the copies another agent session made.
-    let running: Vec<&str> = running.iter().map(String::as_str).collect();
+    let running = app_names(&after);
     let session = client.host_session.as_ref().map(HostSession::key);
     let (mut removed, mut kept_others) = (Vec::new(), 0);
     for name in &names {
-        let copies = handoff::remove_copies_of(name, &running, session);
-        removed.extend(copies.folders);
-        kept_others += copies.kept_others;
+        let gone = handoff::remove_copies_in(copies, name, &running, session);
+        removed.extend(gone.folders);
+        kept_others += gone.kept_others;
     }
 
     let mut reply = json!({
@@ -3688,6 +3731,176 @@ mod tests {
             owning_window(&twins, 8, &frame(10.0)),
             None,
             "identical geometry is ambiguous"
+        );
+    }
+
+    /// TextEdit (812) as the helper lists it.
+    fn textedit_running() -> Value {
+        json!({"ok": true, "apps": [{"pid": 812, "name": "TextEdit", "policy": "regular",
+            "executable": "/System/Applications/TextEdit.app/Contents/MacOS/TextEdit"}]})
+    }
+
+    /// The helper's refusal with `code`.
+    fn refused(code: &str) -> Value {
+        json!({"ok": false, "code": code, "error": "Refused", "uncertain": false})
+    }
+
+    /// A copy root under `directory` holding two unlabelled copies opened
+    /// with TextEdit, which nothing else uses.
+    fn two_copies(directory: &Path) -> (std::path::PathBuf, [std::path::PathBuf; 2]) {
+        use std::os::unix::fs::DirBuilderExt;
+
+        let root = directory.join("copies");
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&root)
+            .unwrap();
+        let copies = ["a", "b"].map(|name| {
+            let folder = root.join(name);
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&folder)
+                .unwrap();
+            std::fs::write(folder.join("notes.rtf"), "hello").unwrap();
+            std::fs::write(folder.join(".opened-with"), "TextEdit").unwrap();
+            folder
+        });
+        (root, copies)
+    }
+
+    /// Whether `request` is the script that quits apps.
+    fn quitting(request: &Value) -> bool {
+        request["op"] == "run" && request["argv"][2] == QUIT
+    }
+
+    #[tokio::test]
+    async fn a_close_whose_first_list_is_refused_quits_nothing_and_keeps_every_copy() {
+        use crate::helper_test::{Helper, UID};
+
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let (root, copies) = two_copies(directory.path());
+        let mut signalled = false;
+
+        let error = helper
+            .serve(
+                close_in(&client, Closing::App("TextEdit"), &root),
+                |request| {
+                    signalled |= quitting(request);
+                    Some(refused("busy"))
+                },
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!((error.code, error.uncertain), ("busy", false));
+        assert!(!signalled, "nothing is quit without a list");
+        assert!(copies.iter().all(|copy| copy.exists()));
+    }
+
+    #[tokio::test]
+    async fn a_close_whose_list_fails_after_the_signal_keeps_the_copies_and_says_what_was_signalled()
+     {
+        use crate::helper_test::{Helper, UID, completed};
+
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let (root, copies) = two_copies(directory.path());
+        let mut lists = 0;
+
+        let error = helper
+            .serve(
+                close_in(&client, Closing::App("TextEdit"), &root),
+                |request| {
+                    if quitting(request) {
+                        return Some(completed("812\n"));
+                    }
+                    lists += 1;
+                    Some(if lists == 1 {
+                        textedit_running()
+                    } else {
+                        refused("apps")
+                    })
+                },
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!((error.code, error.uncertain), ("apps", false));
+        assert_eq!(error.details["signalled"], json!(["TextEdit"]));
+        assert!(
+            error.error.contains("Their copies were kept"),
+            "{}",
+            error.error
+        );
+        assert!(copies.iter().all(|copy| copy.exists()));
+    }
+
+    #[tokio::test]
+    async fn a_malformed_list_never_reads_as_not_running() {
+        use crate::helper_test::{Helper, UID};
+
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let (root, copies) = two_copies(directory.path());
+
+        let error = helper
+            .serve(close_in(&client, Closing::App("TextEdit"), &root), |_| {
+                Some(json!({"ok": true, "apps": null}))
+            })
+            .await
+            .unwrap_err();
+
+        assert_eq!((error.code, error.uncertain), ("protocol", false));
+        assert!(copies.iter().all(|copy| copy.exists()));
+    }
+
+    #[tokio::test]
+    async fn an_empty_list_still_means_not_running() {
+        use crate::helper_test::{Helper, UID};
+
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let (root, copies) = two_copies(directory.path());
+
+        let reply = helper
+            .serve(close_in(&client, Closing::App("TextEdit"), &root), |_| {
+                Some(json!({"ok": true, "apps": []}))
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(reply["reason"], "TextEdit is not running");
+        assert_eq!(reply["closed"], false);
+        assert_eq!(reply["removed"].as_array().map(Vec::len), Some(2));
+        assert!(copies.iter().all(|copy| !copy.exists()));
+    }
+
+    #[tokio::test]
+    async fn an_open_whose_list_is_refused_copies_prunes_and_launches_nothing() {
+        use crate::helper_test::{Helper, UID};
+
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let unreadable = directory.path().join("notes.rtf");
+        std::fs::write(&unreadable, "hello").unwrap();
+        let targets = [unreadable.to_string_lossy().into_owned()];
+        let mut ran = Vec::new();
+
+        let error = helper
+            .serve(open(&client, Some("TextEdit"), &targets, &[]), |request| {
+                if request["op"] == "run" {
+                    ran.push(request.clone());
+                }
+                Some(refused("busy"))
+            })
+            .await
+            .unwrap_err();
+
+        assert_eq!((error.code, error.uncertain), ("busy", false));
+        assert!(
+            ran.is_empty(),
+            "nothing was checked, copied or launched: {ran:?}"
         );
     }
 }

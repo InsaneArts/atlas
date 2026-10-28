@@ -561,15 +561,17 @@ pub(crate) struct Removed {
     pub kept_others: usize,
 }
 
-/// Remove the copies of `app`, which has quit, except any still in use by
-/// an app among `running` (the helper's app names) and, for a command of
-/// host `session`, any another session made. Without a session, every copy
-/// not in use goes, as it always did: a session only ever keeps more.
-pub(crate) fn remove_copies_of(app: &str, running: &[&str], session: Option<&Key>) -> Removed {
-    remove_copies_in(Path::new(ROOT), app, running, session)
-}
-
-fn remove_copies_in(root: &Path, app: &str, running: &[&str], session: Option<&Key>) -> Removed {
+/// Remove the copies of `app` under `root` (ROOT, but in tests), which has
+/// quit, except any still in use by an app among `running` (the helper's
+/// app names) and, for a command of host `session`, any another session
+/// made. Without a session, every copy not in use goes, as it always did:
+/// a session only ever keeps more.
+pub(crate) fn remove_copies_in(
+    root: &Path,
+    app: &str,
+    running: &[&str],
+    session: Option<&Key>,
+) -> Removed {
     let mut removed = Removed::default();
     for folder in copies_of(root, app) {
         if in_use(&folder, running) {

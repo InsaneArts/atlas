@@ -17,7 +17,7 @@ use crate::{
         Display, Epoch, FOCUS_APP, FOCUS_DOCK, HOLD, SHUTDOWN, Session, has_capability,
         input_current, input_settled, require_hidden,
     },
-    transport::{Transport, accepted, run_output},
+    transport::{Transport, accepted, refusal, run_output},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use fs2::FileExt;
@@ -1323,9 +1323,17 @@ impl Client {
         accepted(reply)
     }
 
+    /// The helper's running apps, or why they could not be read. Only a
+    /// reply the helper accepted, in the shape [`app_list`] checks, counts:
+    /// a refusal keeps its code (busy, apps), and a reply of any other shape
+    /// is never read as "nothing is running". Reading changes nothing in the
+    /// helper, so a failure here is never uncertain.
     pub async fn apps(&self) -> Result<Value> {
-        self.identity().await?;
-        self.transport.call(&json!({"op": "apps"})).await
+        let read = async {
+            self.identity().await?;
+            self.listed_apps(json!({"op": "apps"})).await
+        };
+        read.await.map_err(certain)
     }
 
     /// [`Client::apps`] in the helper session `verified` names, as
@@ -1336,11 +1344,15 @@ impl Client {
             return self.apps().await;
         };
 
-        accepted(
-            self.transport
-                .call(&json!({"op": "apps", "session": pin}))
-                .await?,
-        )
+        self.listed_apps(json!({"op": "apps", "session": pin}))
+            .await
+            .map_err(certain)
+    }
+
+    /// The app list `request` asks the helper daemon for, once the helper
+    /// is verified.
+    async fn listed_apps(&self, request: Value) -> Result<Value> {
+        app_list(self.transport.call(&request).await?)
     }
 
     /// The helper session as the daemon reports it now, and whether that
@@ -2226,6 +2238,58 @@ pub fn validate_completion(request: &Value, reply: &Value) -> Result<()> {
     } else {
         Err(Error::new("protocol", "Helper did not confirm operation completion").uncertain())
     }
+}
+
+/// `error` from something that only read: whatever it says, nothing in the
+/// helper may have changed.
+fn certain(error: Error) -> Error {
+    Error {
+        uncertain: false,
+        ..error
+    }
+}
+
+/// `reply` as an app list: accepted, with `apps` an array of objects, each
+/// with a process ID from 1 to 2³¹−1, `name`, `bundleId` and `executable`
+/// strings or null, `active` and `hidden` booleans and `policy` a string
+/// when present. A refusal keeps its code; anything else is a protocol
+/// failure, never an empty list.
+pub(crate) fn app_list(reply: Value) -> Result<Value> {
+    if reply["ok"] == false {
+        return Err(refusal(&reply));
+    }
+    let valid = reply["ok"] == true
+        && reply["apps"]
+            .as_array()
+            .is_some_and(|apps| apps.iter().all(listed_app));
+    if valid {
+        Ok(reply)
+    } else {
+        Err(Error::new(
+            "protocol",
+            "The helper's list of running apps was malformed, so Atlas cannot tell what is running",
+        ))
+    }
+}
+
+/// Whether `app` is one entry of an app list, as [`app_list`] says.
+fn listed_app(app: &Value) -> bool {
+    let Some(fields) = app.as_object() else {
+        return false;
+    };
+    let pid = app["pid"]
+        .as_u64()
+        .is_some_and(|pid| pid > 0 && i32::try_from(pid).is_ok());
+    let text = |key: &str| {
+        fields
+            .get(key)
+            .is_none_or(|value| value.is_null() || value.is_string())
+    };
+    let flag = |key: &str| fields.get(key).is_none_or(Value::is_boolean);
+
+    pid && ["name", "bundleId", "executable"].into_iter().all(text)
+        && ["active", "hidden"].into_iter().all(flag)
+        && fields.get("policy").is_none_or(Value::is_string)
 }
 
 pub fn png_dimensions(png: &[u8]) -> Result<(u32, u32)> {
@@ -4537,5 +4601,68 @@ mod tests {
         let row: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(row["operation"], "run");
         assert_eq!(row["started"], true);
+    }
+
+    #[test]
+    fn a_refused_app_list_keeps_its_code() {
+        let busy = json!({"ok": false, "code": "busy", "uncertain": false,
+            "error": "The helper is serving too many connections"});
+        let failed = json!({"ok": false, "code": "apps", "uncertain": false,
+            "error": "Running applications could not be listed"});
+
+        for (reply, code) in [(busy, "busy"), (failed, "apps")] {
+            let error = app_list(reply).unwrap_err();
+            assert_eq!((error.code, error.uncertain), (code, false));
+        }
+    }
+
+    #[test]
+    fn a_reply_without_an_app_array_is_never_an_empty_list() {
+        let malformed = [
+            json!({"ok": true}),
+            json!({"ok": true, "apps": null}),
+            json!({"ok": true, "apps": {}}),
+            json!({"ok": true, "apps": [{"name": "TextEdit"}]}),
+            json!({"ok": true, "apps": [{"pid": 0}]}),
+            json!({"ok": true, "apps": [{"pid": -1}]}),
+            json!({"ok": true, "apps": [{"pid": "5"}]}),
+            json!({"ok": true, "apps": [{"pid": 2_147_483_648_u64}]}),
+            json!({"ok": true, "apps": [{"pid": 5, "name": 3}]}),
+            json!({"ok": true, "apps": [{"pid": 5, "active": "yes"}]}),
+            json!({"ok": true, "apps": ["TextEdit"]}),
+            json!({"apps": []}),
+        ];
+
+        for reply in malformed {
+            let error = app_list(reply.clone()).unwrap_err();
+            assert_eq!(
+                (error.code, error.uncertain),
+                ("protocol", false),
+                "{reply}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_truly_empty_list_is_an_empty_list() {
+        let empty = json!({"ok": true, "apps": [], "elapsedMs": 1.5});
+        assert_eq!(app_list(empty.clone()).unwrap(), empty);
+
+        let listed = json!({"ok": true, "apps": [{"pid": 812, "name": null, "bundleId": null,
+            "executable": "/x", "active": true, "hidden": false, "policy": "regular"}]});
+        assert_eq!(app_list(listed.clone()).unwrap(), listed);
+    }
+
+    #[tokio::test]
+    async fn an_app_list_read_is_never_uncertain() {
+        use crate::helper_test::{Helper, UID};
+
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+
+        // The stand-in takes the request and hangs up without a reply.
+        let error = helper.serve(client.apps(), |_| None).await.unwrap_err();
+
+        assert_eq!((error.code, error.uncertain), ("protocol", false));
     }
 }
