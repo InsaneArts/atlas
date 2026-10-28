@@ -1,10 +1,16 @@
 use super::*;
+use crate::error::Error;
 use crate::{
     doing::Doing,
     host_session::{Host, HostSession, Process},
 };
+use fs2::FileExt;
 use serde_json::json;
-use std::{collections::BTreeMap, os::unix::fs::PermissionsExt};
+use std::{
+    collections::BTreeMap,
+    fs::OpenOptions,
+    os::unix::fs::{DirBuilderExt, PermissionsExt},
+};
 
 /// A client whose output and controller state are in `directory`.
 fn client(directory: &Path) -> Client {
@@ -152,7 +158,7 @@ fn the_record_keeps_atlas_names_and_tokens_but_never_file_names_or_text() {
         json!({"ok": true, "path": format!("/somewhere/{}", shot.as_str())}),
     );
 
-    let path = store(&client).path(session.key());
+    let path = store(&client).folder.path(session.key());
     let written = fs::read_to_string(&path).unwrap();
     assert!(!written.contains("secret"), "{written}");
     assert!(!written.contains("Quarterly"), "{written}");
@@ -496,7 +502,7 @@ fn a_touch_never_waits_for_another_command_writing_the_records() {
     let client = client(directory.path());
     let session = session("contended").run_by(Some(Process::new(i32::MAX, [1, 0])));
     noted(&client, &session, Kind::Other, "click", json!({"ok": true}));
-    let before = fs::read(store(&client).path(session.key())).unwrap();
+    let before = fs::read(store(&client).folder.path(session.key())).unwrap();
 
     let other = OpenOptions::new()
         .write(true)
@@ -510,9 +516,9 @@ fn a_touch_never_waits_for_another_command_writing_the_records() {
     let _ = FileExt::unlock(&other);
 
     assert_eq!(touched.unwrap_err().code, "busy");
-    assert!(waited < LOCK_WAIT, "it tried once: {waited:?}");
+    assert!(waited < SESSIONS.lock_wait, "it tried once: {waited:?}");
     assert_eq!(
-        fs::read(store(&client).path(session.key())).unwrap(),
+        fs::read(store(&client).folder.path(session.key())).unwrap(),
         before
     );
 }
@@ -536,7 +542,7 @@ fn records_idle_a_week_go_unless_they_list_leftovers() {
     let copies = directory.path().join("copies");
     fs::DirBuilder::new().mode(0o700).create(&copies).unwrap();
     let store = store(&client).copying_into(&copies);
-    store.make_folder().unwrap();
+    store.folder.make().unwrap();
 
     let mut copied = aged(&store, "copied", 8, 0);
     let token = Token::new();
@@ -568,7 +574,7 @@ fn at_most_sixty_four_records_stay_and_those_with_leftovers_go_last() {
     let directory = tempfile::tempdir().unwrap();
     let client = client(directory.path());
     let store = store(&client);
-    store.make_folder().unwrap();
+    store.folder.make().unwrap();
 
     let with_leftovers: Vec<Record> = (0..3)
         .map(|n| aged(&store, &format!("left-{n}"), 6, 1))
@@ -634,7 +640,7 @@ fn a_command_whose_record_is_being_written_elsewhere_returns_without_recording()
     let client = client(directory.path());
     let session = session("contended");
     noted(&client, &session, Kind::Other, "click", json!({"ok": true}));
-    let before = fs::read(store(&client).path(session.key())).unwrap();
+    let before = fs::read(store(&client).folder.path(session.key())).unwrap();
 
     // Another command holds the records' lock, as one suspended midway
     // would, for as long as this one runs.
@@ -665,7 +671,7 @@ fn a_command_whose_record_is_being_written_elsewhere_returns_without_recording()
         "the command's own result is untouched"
     );
     assert_eq!(
-        fs::read(store(&client).path(session.key())).unwrap(),
+        fs::read(store(&client).folder.path(session.key())).unwrap(),
         before
     );
 }
@@ -676,7 +682,7 @@ fn a_reader_never_sees_half_a_record() {
     let client = client(directory.path());
     let session = session("busy");
     noted(&client, &session, Kind::Other, "click", json!({"ok": true}));
-    let path = store(&client).path(session.key());
+    let path = store(&client).folder.path(session.key());
 
     let writing = {
         let (client, session) = (client.clone(), session.clone());
@@ -705,7 +711,7 @@ fn a_record_through_a_link_or_too_large_or_with_foreign_names_is_not_read() {
     let session = session("linked");
     noted(&client, &session, Kind::Other, "click", json!({"ok": true}));
     let store = store(&client);
-    let path = store.path(session.key());
+    let path = store.folder.path(session.key());
 
     let elsewhere = directory.path().join("elsewhere.json");
     fs::rename(&path, &elsewhere).unwrap();
@@ -717,7 +723,7 @@ fn a_record_through_a_link_or_too_large_or_with_foreign_names_is_not_read() {
     let mut large = fs::read_to_string(&elsewhere).unwrap();
     large.insert_str(
         1,
-        &format!("\"padding\":\"{}\",", "x".repeat(RECORD_BYTES as usize)),
+        &format!("\"padding\":\"{}\",", "x".repeat(SESSIONS.bytes as usize)),
     );
     fs::write(&path, large).unwrap();
     assert_eq!(store.read(session.key()), None);
@@ -742,7 +748,7 @@ fn a_record_through_a_link_or_too_large_or_with_foreign_names_is_not_read() {
     let real = directory.path().join("real-sessions");
     fs::DirBuilder::new().mode(0o700).create(&real).unwrap();
     std::os::unix::fs::symlink(&real, &sessions).unwrap();
-    assert!(store.make_folder().is_err(), "a linked folder is refused");
+    assert!(store.folder.make().is_err(), "a linked folder is refused");
     assert!(store.all().is_empty());
 }
 
@@ -798,7 +804,7 @@ fn a_status_read_counts_the_copy_folders_still_there() {
     let copies = directory.path().join("copies");
     fs::DirBuilder::new().mode(0o700).create(&copies).unwrap();
     let store = store(&client).copying_into(&copies);
-    store.make_folder().unwrap();
+    store.folder.make().unwrap();
     let mut record = aged(&store, "copier", 0, 0);
     let (there, gone) = (Token::new(), Token::new());
     fs::DirBuilder::new()

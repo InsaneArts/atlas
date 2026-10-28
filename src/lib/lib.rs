@@ -28,6 +28,7 @@ pub mod native;
 pub mod onboarding;
 pub mod overview;
 pub mod readiness;
+mod record_folder;
 pub mod session;
 mod session_view;
 pub mod setup;

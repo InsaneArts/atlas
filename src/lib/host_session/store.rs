@@ -11,19 +11,18 @@ use super::{
 };
 use crate::{
     client::Client,
-    control::{Cause, Controller, Durability, Token, write_private_with},
+    control::{Cause, Controller, Durability, Token},
     doing::Doing,
     environment::Phase,
-    error::{Error, Result},
+    error::Result,
     handoff,
-    helper_info::{Capture, own_folder, read_own},
+    helper_info::Capture,
+    record_folder::{LISTED, RecordFolder, Records},
 };
-use fs2::FileExt;
 use serde::Deserialize;
 use serde_json::Value;
 use std::{
-    fs::{self, File, OpenOptions},
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
+    fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant, SystemTime},
@@ -35,18 +34,9 @@ pub const MAX_RECORDS: usize = 64;
 /// session's last recorded action.
 pub const IDLE_FOR: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
-/// The most a record may hold before it is treated as missing.
-const RECORD_BYTES: u64 = 64 * 1024;
-/// The most entries of the `sessions` folder looked at.
-const LISTED: usize = 256;
 /// The most folders looked at, from the working directory up, for the
 /// project a session works in.
 const FOLDER_DEPTH: usize = 32;
-/// How long a command waits for another to finish writing the records
-/// before it leaves its own unrecorded.
-const LOCK_WAIT: Duration = Duration::from_millis(250);
-/// How often it tries the records' lock meanwhile.
-const LOCK_POLL: Duration = Duration::from_millis(10);
 /// How long the copy folders counted for status reads are trusted: they
 /// can go without any record changing.
 const COPIES_FRESH: Duration = Duration::from_secs(30);
@@ -89,15 +79,26 @@ static RECENT: Mutex<Option<Snapshot>> = Mutex::new(None);
 
 /// The records of one output folder.
 pub struct Store {
-    directory: PathBuf,
+    folder: RecordFolder,
     /// Where `open`'s copy folders are.
     copies: PathBuf,
 }
 
+/// How session records are kept: written as far as the kernel, as every
+/// recorded command writes one, and waited for at most briefly, so
+/// recording never holds a command up.
+static SESSIONS: Records = Records {
+    folder: "sessions",
+    noun: "session",
+    lock_wait: Duration::from_millis(250),
+    durability: Durability::Kernel,
+    bytes: 64 * 1024,
+};
+
 impl Store {
     pub fn at(output: &Path) -> Self {
         Self {
-            directory: output.join("sessions"),
+            folder: RecordFolder::at(output, &SESSIONS),
             copies: PathBuf::from(handoff::ROOT),
         }
     }
@@ -116,9 +117,9 @@ impl Store {
 
     /// One record, when it is there and reads.
     pub(crate) fn read(&self, key: &Key) -> Option<Record> {
-        own_folder(&self.directory)
-            .then(|| read_record(&self.path(key)))
-            .flatten()
+        self.folder
+            .read(key)
+            .and_then(|bytes| serde_json::from_slice::<Record>(&bytes).ok())
             .filter(|record| record.key == *key)
     }
 
@@ -128,34 +129,13 @@ impl Store {
     }
 
     /// The newest `limit` records by when each was written, of the first
-    /// [`LISTED`] entries of the folder, newest `lastSeen` first.
+    /// [`LISTED`] records in the folder, newest `lastSeen` first.
     fn listed(&self, limit: usize) -> Vec<Record> {
-        if !own_folder(&self.directory) {
-            return Vec::new();
-        }
-        let Ok(entries) = fs::read_dir(&self.directory) else {
-            return Vec::new();
-        };
-
-        let mut named: Vec<(SystemTime, PathBuf, Key)> = entries
-            .flatten()
-            .take(LISTED)
-            .filter_map(|entry| {
-                let key = entry
-                    .file_name()
-                    .to_str()?
-                    .strip_suffix(".json")
-                    .and_then(Key::parse)?;
-                let modified = entry.metadata().ok()?.modified().ok()?;
-                Some((modified, entry.path(), key))
-            })
-            .collect();
-        named.sort_by_key(|(modified, ..)| std::cmp::Reverse(*modified));
-
-        let mut records: Vec<Record> = named
-            .into_iter()
-            .take(limit)
-            .filter_map(|(_, path, key)| read_record(&path).filter(|record| record.key == key))
+        let mut records: Vec<Record> = self
+            .folder
+            .listed(limit)
+            .iter()
+            .filter_map(|key| self.read(key))
             .collect();
         records.sort_by_key(|record| std::cmp::Reverse(record.last_seen));
         records
@@ -174,17 +154,13 @@ impl Store {
         kept: &Mutex<Option<Snapshot>>,
         read: impl FnOnce(&Self) -> Vec<Record>,
     ) -> Arc<[Seen]> {
-        let Some(modified) = fs::symlink_metadata(&self.directory)
-            .ok()
-            .filter(|metadata| metadata.is_dir())
-            .and_then(|metadata| metadata.modified().ok())
-        else {
+        let Some(modified) = self.folder.modified() else {
             return Arc::from([]);
         };
 
         let mut kept = kept.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(snapshot) = kept.as_ref()
-            && snapshot.directory == self.directory
+            && snapshot.directory == self.folder.directory()
             && snapshot.modified == modified
             && snapshot.taken.elapsed() < COPIES_FRESH
         {
@@ -199,7 +175,7 @@ impl Store {
             })
             .collect();
         *kept = Some(Snapshot {
-            directory: self.directory.clone(),
+            directory: self.folder.directory().to_owned(),
             modified,
             taken: Instant::now(),
             seen: Arc::clone(&seen),
@@ -218,8 +194,8 @@ impl Store {
         controller: &Controller,
         change: impl FnOnce(&mut Record),
     ) -> Result<()> {
-        self.make_folder()?;
-        let _lock = self.lock()?;
+        self.folder.make()?;
+        let _lock = self.folder.lock()?;
 
         let existing = self.read(session.key());
         let made = existing.is_none();
@@ -261,7 +237,7 @@ impl Store {
             return Ok(());
         }
 
-        let _lock = self.lock_within(Duration::ZERO)?;
+        let _lock = self.folder.lock_within(Duration::ZERO)?;
         match self.read(key) {
             Some(mut record) => {
                 if record.touched(ancestor, now) {
@@ -276,10 +252,10 @@ impl Store {
     /// Forget plan `plan_id`, which a command rolled back, in every record
     /// that lists it: the plan is gone, whoever rolled it back.
     pub(crate) fn forget_plan(&self, plan_id: &Token) -> Result<()> {
-        if !own_folder(&self.directory) {
+        if !self.folder.exists() {
             return Ok(());
         }
-        let _lock = self.lock()?;
+        let _lock = self.folder.lock()?;
         for mut record in self.listed(LISTED) {
             if record.forget_plan(plan_id) {
                 self.write(&record)?;
@@ -342,7 +318,7 @@ impl Store {
             let stale =
                 *empty && now.saturating_sub(record.last_seen) > idle && record.key != *keep;
             if stale {
-                let _ = fs::remove_file(self.path(&record.key));
+                self.folder.remove(&record.key);
             }
             !stale
         });
@@ -357,82 +333,13 @@ impl Store {
                 break;
             };
             let (record, _) = records.remove(oldest);
-            let _ = fs::remove_file(self.path(&record.key));
+            self.folder.remove(&record.key);
         }
     }
 
-    fn path(&self, key: &Key) -> PathBuf {
-        self.directory.join(format!("{key}.json"))
-    }
-
-    /// Write `record` whole beside its place, then rename it there, so a
-    /// reader never sees half of one.
+    /// Write `record` whole in its place.
     fn write(&self, record: &Record) -> Result<()> {
-        let path = self.path(&record.key);
-        let partial = path.with_extension("json.partial");
-        write_private_with(&partial, &serde_json::to_vec(record)?, Durability::Kernel)?;
-        fs::rename(&partial, &path).map_err(|error| Error::writing(&path, error))
-    }
-
-    /// The store's lock, held while records are changed and never by a
-    /// reader. A command waits at most [`LOCK_WAIT`] for another to let go
-    /// of it, then is refused, so recording never holds a command up.
-    fn lock(&self) -> Result<File> {
-        self.lock_within(LOCK_WAIT)
-    }
-
-    /// [`Store::lock`], waiting at most `wait`: none at all tries once.
-    fn lock_within(&self, wait: Duration) -> Result<File> {
-        let path = self.directory.join(".lock");
-        let lock = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(&path)
-            .map_err(|error| Error::writing(&path, error))?;
-        if !lock.metadata()?.is_file() {
-            return Err(Error::new(
-                "state",
-                "The session records' lock is not a plain file",
-            ));
-        }
-
-        let until = Instant::now() + wait;
-        while FileExt::try_lock_exclusive(&lock).is_err() {
-            if Instant::now() >= until {
-                return Err(Error::new(
-                    "busy",
-                    "Another Atlas command is writing the session records",
-                ));
-            }
-            std::thread::sleep(LOCK_POLL);
-        }
-        Ok(lock)
-    }
-
-    /// Make the `sessions` folder, private to this account, refusing a link
-    /// or another account's folder.
-    fn make_folder(&self) -> Result<()> {
-        match fs::DirBuilder::new().mode(0o700).create(&self.directory) {
-            Err(error) if error.kind() != std::io::ErrorKind::AlreadyExists => {
-                return Err(Error::writing(&self.directory, error));
-            }
-            _ => {}
-        }
-
-        if own_folder(&self.directory) {
-            Ok(())
-        } else {
-            Err(Error::new(
-                "state",
-                format!(
-                    "{} is a link or not a folder of this account",
-                    self.directory.display()
-                ),
-            ))
-        }
+        self.folder.write(&record.key, &serde_json::to_vec(record)?)
     }
 }
 
@@ -587,12 +494,6 @@ pub(crate) fn project_folder(directory: &Path) -> Option<String> {
         .and_then(|name| name.to_str())
         .map(crate::doing::bounded)
         .filter(|name| !name.is_empty())
-}
-
-/// The record at `path`, when it is a plain file of this account no larger
-/// than [`RECORD_BYTES`] that holds only what Atlas writes.
-fn read_record(path: &Path) -> Option<Record> {
-    serde_json::from_slice(&read_own(path, RECORD_BYTES)?).ok()
 }
 
 #[cfg(test)]
