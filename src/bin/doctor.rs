@@ -149,6 +149,7 @@ mod tests {
         Cause {
             generation: atlas::control::token(),
             running: false,
+            command: false,
             session: Some(session.clone()),
         }
     }

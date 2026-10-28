@@ -926,8 +926,10 @@ async fn carry_out(
             )
             .await
         }
+        // Control is held only while the command starts: other agents may
+        // act while it runs.
         Command::Run { argv, timeout } => client()?
-            .run_within(argv, Duration::from_secs(timeout))
+            .run_beside(argv, Duration::from_secs(timeout))
             .await
             .map(with_output),
         Command::Restart => {
@@ -1418,6 +1420,105 @@ mod tests {
             client.controller.acquire(false).unwrap_err().code,
             "uncertain"
         );
+    }
+
+    #[tokio::test]
+    async fn atlas_run_lets_others_act_while_it_runs() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        use tokio::{
+            io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+            net::UnixListener,
+        };
+
+        let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+        let mut client = Client::new(Config {
+            helper_uid: 60001,
+            socket_path: dir.path().join("helper.sock"),
+            identity_probe: dir.path().join("probe"),
+            input_socket: dir.path().join("input.sock"),
+            output_dir: dir.path().join("out"),
+        })
+        .unwrap();
+        client.controller = atlas::control::Controller::at(60001, &dir.path().join("state"));
+        client.transport.peer_uid = nix::unistd::getuid().as_raw();
+        let command = parse(&["run", "--", "tool"]).unwrap().command.unwrap();
+        client.doing = doing(&command);
+        let other = atlas::control::Controller::at(60001, &dir.path().join("state"));
+        let listener = UnixListener::bind(&client.transport.path).unwrap();
+        let helper = async {
+            let proof = json!({"ok": true, "uid": 60001, "hasGraphicAccess": true,
+                "parentPID": 123, "onConsole": false, "securitySessionID": 42,
+                "displayID": 7, "width": 100, "height": 100});
+            for (operation, reply) in [
+                (
+                    "hello",
+                    json!({"ok": true, "user": {"uid": 60001}, "daemon": {"pid": 123},
+                        "session": {"managerName": "Aqua", "onConsole": false},
+                        "display": {"width": 100, "height": 100, "scale": 1}}),
+                ),
+                (
+                    "run",
+                    json!({"ok": true, "exitCode": 0, "timedOut": false,
+                        "events": [{"event": "output", "data": STANDARD.encode(proof.to_string())}]}),
+                ),
+            ] {
+                let (peer, _) = listener.accept().await.unwrap();
+                let mut peer = BufReader::new(peer);
+                let mut line = String::new();
+                peer.read_line(&mut line).await.unwrap();
+                assert_eq!(
+                    serde_json::from_str::<Value>(&line).unwrap()["op"],
+                    operation
+                );
+                peer.get_mut()
+                    .write_all(format!("{reply}\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+
+            let (peer, _) = listener.accept().await.unwrap();
+            let mut peer = BufReader::new(peer);
+            let mut line = String::new();
+            peer.read_line(&mut line).await.unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["op"], "run");
+            assert_eq!(request["argv"], json!(["tool"]));
+
+            // The run lets go once it has sent its request; a child another
+            // test is starting may hold the lock's file a moment past its
+            // release, until it runs its own program.
+            let mut beside = None;
+            for _ in 0..50 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                beside = other.acquire_beside_commands().ok();
+                if beside.is_some() {
+                    break;
+                }
+            }
+            assert!(beside.is_some(), "another agent acts while it runs");
+            drop(beside);
+            assert_eq!(other.acquire(true).unwrap_err().code, "busy");
+
+            peer.get_mut()
+                .write_all(
+                    format!(
+                        "{}\n",
+                        json!({"ok": true, "exitCode": 0, "timedOut": false})
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        };
+        let client = || Ok(client.clone());
+        let running = carry_out(Path::new("unused.toml"), command, &client, None);
+        let (outcome, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(running, helper)
+        })
+        .await
+        .unwrap();
+        assert_eq!(outcome.unwrap()["exitCode"], 0);
+        assert!(other.pending().unwrap().is_empty());
     }
 
     #[test]

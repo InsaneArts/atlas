@@ -212,12 +212,14 @@ impl<T> Drop for Ending<T> {
 /// The controller's mutations of unknown outcome, and how many are pending
 /// in all. An unreadable marker is unknown, so it counts as unresolved.
 pub fn pending(controller: &Controller) -> (Pending, usize) {
-    let (unresolved, total) = controller
-        .pending_snapshot()
-        .map_or((1, 1), |(unresolved, total)| (unresolved.len(), total));
+    let (unresolved, total, commands) =
+        controller.pending_snapshot().map_or((1, 1, 0), |snapshot| {
+            (snapshot.unresolved.len(), snapshot.total, snapshot.commands)
+        });
     let pending = Pending {
         unresolved,
         in_flight: total.saturating_sub(unresolved),
+        commands,
     };
 
     (pending, total)
@@ -613,11 +615,13 @@ fn age(row: &Value, now: u128) -> Option<u128> {
 }
 
 /// Unknown-outcome mutations: those nothing will settle, and those a live
-/// process is still carrying out.
+/// process is still carrying out, commands agents started among them.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Pending {
     pub unresolved: usize,
     pub in_flight: usize,
+    /// How many of those in flight are commands agents started with `run`.
+    pub commands: usize,
 }
 
 /// The state every agent app shows for a mode, and its label: an agent
@@ -692,6 +696,8 @@ pub fn overview(
             first_step.as_str()
         } else if session["inputService"]["held"] == true {
             "You stopped the agent mid-action, so its outcome is unknown. Recover, then resume."
+        } else if pending.commands > 0 {
+            "An action's outcome is unknown; recovery waits for the running command to end"
         } else {
             "An action's outcome is unknown; recover before taking control"
         };
@@ -714,6 +720,11 @@ pub fn overview(
         )
     } else if report["ready"] != true {
         ("blocked", first_step)
+    } else if lease_active && pending.commands > 0 {
+        (
+            "controlling",
+            "You have control. A command an agent started is still running".to_owned(),
+        )
     } else if lease_active {
         (
             "controlling",
@@ -1468,7 +1479,7 @@ mod tests {
     fn unresolved(count: usize) -> Pending {
         Pending {
             unresolved: count,
-            in_flight: 0,
+            ..Pending::default()
         }
     }
 
@@ -1763,8 +1774,8 @@ mod tests {
         assert_eq!(mode(&native, false, 0, &[]), "agent");
 
         let working = Pending {
-            unresolved: 0,
             in_flight: 1,
+            ..Pending::default()
         };
 
         assert_eq!(
@@ -1787,6 +1798,58 @@ mod tests {
         assert_eq!(
             overview(&ready, false, unresolved(0), &[row(30)], NOW)["activity"][0]["ageSeconds"],
             30
+        );
+    }
+
+    #[test]
+    fn recovery_says_it_waits_for_a_running_command() {
+        let ready = report(true, true);
+        let waiting = Pending {
+            unresolved: 1,
+            in_flight: 1,
+            commands: 1,
+        };
+
+        let shown = overview(&ready, false, waiting, &[], NOW);
+        assert_eq!(shown["mode"], "recovering");
+        assert_eq!(
+            shown["reason"],
+            "An action's outcome is unknown; recovery waits for the running command to end"
+        );
+        assert_eq!(
+            overview(&ready, false, unresolved(1), &[], NOW)["reason"],
+            "An action's outcome is unknown; recover before taking control",
+            "without a running command recovery can go ahead"
+        );
+    }
+
+    #[test]
+    fn control_says_a_command_is_still_running() {
+        let ready = report(true, true);
+        let running = Pending {
+            in_flight: 1,
+            commands: 1,
+            ..Pending::default()
+        };
+        let input = Pending {
+            in_flight: 1,
+            ..Pending::default()
+        };
+
+        let shown = overview(&ready, true, running, &[], NOW);
+        assert_eq!(shown["mode"], "controlling");
+        assert_eq!(
+            shown["reason"],
+            "You have control. A command an agent started is still running"
+        );
+        assert_eq!(
+            overview(&ready, true, input, &[], NOW)["reason"],
+            "You have control. The agent waits",
+            "the person's own input under way is no command"
+        );
+        assert_eq!(
+            overview(&ready, false, running, &[], NOW)["reason"],
+            "Work is in progress in the helper"
         );
     }
 

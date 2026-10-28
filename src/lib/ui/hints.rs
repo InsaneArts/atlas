@@ -17,6 +17,11 @@ pub const UNKNOWN_OTHERS: &str = "An earlier action, maybe another agent's, may 
 /// The step for the person while a change of unknown outcome is pending.
 pub const UNKNOWN_FOR_PERSON: &str = "An action may not have finished. Look at the helper, then recover it in Atlas or with atlas restart.";
 
+/// What an agent does about busy while a command an agent started with
+/// `run` still runs.
+pub const COMMAND_RUNNING: &str =
+    "Wait for the command to end, then try again. Do something else meanwhile.";
+
 /// What an agent does about busy once Atlas has waited for the holder.
 pub const WAITED: &str = "Atlas already waited for it. Do something else, then try again, or pass a longer --wait if your tool's timeout allows.";
 

@@ -1972,6 +1972,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_person_takes_control_beside_a_running_command() {
+        if !crate::transaction_test::isolated(
+            "viewer::tests::the_person_takes_control_beside_a_running_command",
+        ) {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let viewer = unreachable(dir.path()).await;
+        let controller = viewer.client().controller.clone();
+        let command = controller.quarantine_command().unwrap();
+
+        viewer.lease.lock().await.acquire(&controller).unwrap();
+        assert!(viewer.lease.lock().await.active());
+        viewer.lease.lock().await.release();
+
+        let refused = viewer.recover().await.unwrap_err();
+        assert_eq!(refused.code, "busy");
+        assert_eq!(refused.holder, Some(crate::error::Holder::Agent));
+        assert!(refused.error.contains("still running"), "{}", refused.error);
+        assert_eq!(
+            controller.pending().unwrap(),
+            [command.generation().to_owned()],
+            "recovery never settles a running command"
+        );
+        controller.clear_if(&command).unwrap();
+    }
+
+    #[tokio::test]
     async fn recovery_is_refused_while_control_is_held() {
         let dir = tempfile::tempdir().unwrap();
         let viewer = unreachable(dir.path()).await;

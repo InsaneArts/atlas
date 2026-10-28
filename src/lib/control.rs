@@ -2,10 +2,16 @@
 //! a time ([`Controller`], a file lock per helper account), a marker of every
 //! mutation whose outcome is unknown until verified recovery clears it, and
 //! the short-lived [`Lease`] a viewer holds while a person has control.
+//! A command an agent starts with `run` lets go of the lock once it is sent
+//! and is marked as one, so other agents' actions go on beside it while
+//! recovery still waits for it.
 //! Beside the lock and the marker it keeps labels for people and agents:
 //! which host session holds control, which waits, and which claimed each
 //! pending change. Nothing here decides anything by them.
 mod causes;
+mod commands;
+#[cfg(test)]
+mod commands_tests;
 mod notes;
 #[cfg(test)]
 mod notes_tests;
@@ -236,6 +242,51 @@ fn busy_agent(waited: Option<Duration>, wait: Duration) -> Error {
             .with("next", crate::ui::hints::WAITED),
         None => error,
     }
+}
+
+/// Busy because a command an agent started with `run` still runs: held by
+/// an agent, so nobody is told to recover it. Recovery hears that stopping
+/// agents ends it sooner.
+fn busy_command(recovering: bool) -> Error {
+    let message = if recovering {
+        "A command an agent started is still running in the helper. Wait for it to end, or stop agents, before recovering."
+    } else {
+        "A command an agent started is still running in the helper. Wait for it to end."
+    };
+    Error::new("busy", message)
+        .held_by(Holder::Agent)
+        .with("next", crate::ui::hints::COMMAND_RUNNING)
+}
+
+/// What an acquisition may go on beside.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Beside {
+    /// Nothing pending at all, running or not.
+    Nothing,
+    /// Commands agents started with `run` that are still running. Every
+    /// other pending outcome still refuses.
+    Commands,
+}
+
+/// How a pending change is recorded beside the marker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mark {
+    /// A change carried out under control until its outcome is known.
+    Change,
+    /// A command an agent started with `run`, which others act beside.
+    Command,
+}
+
+/// What is pending, as one read under the marker lock finds it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Unsettled {
+    /// Nothing: there is no marker.
+    Nothing,
+    /// Only commands agents started with `run`, each still running under
+    /// its own claim.
+    Commands,
+    /// An outcome nothing may settle yet, or one not known to be a command.
+    Unknown,
 }
 
 /// How long to sleep before trying the lock again: about a tenth of a
@@ -616,6 +667,9 @@ pub struct Cause {
     pub generation: String,
     /// Whether a live process is still carrying it out.
     pub running: bool,
+    /// Whether it is a command an agent started with `run`, still running
+    /// under its own claim: work under way, not an unknown outcome.
+    pub command: bool,
     /// The host session that claimed it, when one is recorded.
     pub session: Option<Key>,
 }
@@ -689,6 +743,9 @@ pub struct Controller {
     label: Option<Label>,
     /// Which host session claimed each pending generation, beside the marker.
     causes: PathBuf,
+    /// Which pending generations are commands agents started with `run`,
+    /// beside the marker.
+    commands: PathBuf,
     /// Which host session holds control right now, beside the lock.
     holder: PathBuf,
     /// The commands waiting for control, one note each, in the order they
@@ -720,6 +777,7 @@ impl Controller {
             interrupt: Interrupt::process().clone(),
             label: None,
             causes: directory.join(format!("{name}.causes.json")),
+            commands: directory.join(format!("{name}.commands.json")),
             holder: directory.join(format!("{name}.holder.json")),
             waiting: directory.join(format!("{name}.waiting")),
         }
@@ -813,7 +871,22 @@ impl Controller {
         real_directory(&self.directory)
     }
 
+    /// Take control. Recovery is refused while any pending change is still
+    /// being carried out; anything else while any change is pending at all,
+    /// a command an agent started included.
     pub fn acquire(&self, recovery: bool) -> Result<Ownership> {
+        self.acquire_with(recovery, Beside::Nothing)
+    }
+
+    /// [`Controller::acquire`] for an agent's own action, going on beside
+    /// commands still running under their own claims.
+    pub fn acquire_beside_commands(&self) -> Result<Ownership> {
+        self.acquire_with(false, Beside::Commands)
+    }
+
+    /// [`Controller::acquire`], going on beside what `beside` names unless
+    /// it is for `recovery`.
+    fn acquire_with(&self, recovery: bool, beside: Beside) -> Result<Ownership> {
         // Nothing new starts once a signal asked this command to stop.
         self.interrupt.check()?;
         self.make_directory()?;
@@ -824,19 +897,10 @@ impl Controller {
         // Nobody held it, so a note left by a viewer that ended is stale.
         let _ = fs::remove_file(&self.person);
 
-        if recovery
-            && self
-                .pending()?
-                .iter()
-                .any(|generation| self.in_progress(generation))
-        {
-            return Err(Error::new(
-                "busy",
-                "An Atlas executor is still carrying out an action. Wait for it to end before recovering.",
-            ));
-        }
-        if !recovery {
-            self.require_known()?;
+        if recovery {
+            self.require_nothing_running()?;
+        } else {
+            self.require_known_beside(beside)?;
         }
 
         Ok(Ownership {
@@ -959,19 +1023,79 @@ impl Controller {
     }
 
     /// [`Controller::acquire`] for the person's control through a viewer:
-    /// while it is held, others hear that the person has control.
+    /// while it is held, others hear that the person has control. A command
+    /// an agent started keeps running beside it, as it does beside other
+    /// agents' actions.
     pub fn acquire_for_person(&self) -> Result<Ownership> {
-        let mut ownership = self.acquire(false)?;
+        let mut ownership = self.acquire_with(false, Beside::Commands)?;
         fs::write(&self.person, b"").map_err(|error| Error::writing(&self.directory, error))?;
         ownership.person = Some(self.person.clone());
         Ok(ownership)
     }
 
+    /// Refuse while any change is pending, a command still running
+    /// included.
     pub fn require_known(&self) -> Result<()> {
-        if self.marker.try_exists()? {
-            return Err(Error::new(
+        self.require_known_beside(Beside::Nothing)
+    }
+
+    /// Refuse while an outcome is unknown. A command still running is not
+    /// unknown: beside commands it is let through; otherwise it answers
+    /// `busy`, held by an agent, so nobody is told to recover it.
+    pub(crate) fn require_known_beside(&self, beside: Beside) -> Result<()> {
+        if !self.marker.try_exists()? {
+            return Ok(());
+        }
+
+        // A marker that cannot be read is an unknown outcome, as before.
+        match (self.unsettled().unwrap_or(Unsettled::Unknown), beside) {
+            (Unsettled::Nothing, _) | (Unsettled::Commands, Beside::Commands) => Ok(()),
+            (Unsettled::Commands, Beside::Nothing) => Err(busy_command(false)),
+            (Unsettled::Unknown, _) => Err(Error::new(
                 "uncertain",
                 "The last action's outcome is unknown; Atlas waits until it is recovered.",
+            )),
+        }
+    }
+
+    /// What is pending, from one read under the marker lock. A marker with
+    /// no entries is an unknown outcome, as an unreadable one is.
+    fn unsettled(&self) -> Result<Unsettled> {
+        let _lock = self.lock_marker()?;
+        if !self.marker.try_exists()? {
+            return Ok(Unsettled::Nothing);
+        }
+
+        let pending = pending(&self.marker)?;
+        let commands = self.commands();
+        let running = |generation: &String| commands.contains(generation) && self.held(generation);
+        Ok(if !pending.is_empty() && pending.iter().all(running) {
+            Unsettled::Commands
+        } else {
+            Unsettled::Unknown
+        })
+    }
+
+    /// Refuse recovery while a pending change is still being carried out:
+    /// a command an agent started, or an executor that outlived its caller.
+    /// Recovery never settles either.
+    fn require_nothing_running(&self) -> Result<()> {
+        let _lock = self.lock_marker()?;
+        let pending = pending(&self.marker)?;
+        let commands = self.commands();
+        if pending
+            .iter()
+            .any(|generation| commands.contains(generation) && self.held(generation))
+        {
+            return Err(busy_command(true));
+        }
+        if pending
+            .iter()
+            .any(|generation| self.in_progress(generation))
+        {
+            return Err(Error::new(
+                "busy",
+                "An Atlas executor is still carrying out an action. Wait for it to end before recovering.",
             ));
         }
 
@@ -996,12 +1120,17 @@ impl Controller {
 
         let _lock = self.lock_marker()?;
         let mut claimed = causes::read(&self.causes);
+        let commands = self.commands();
         Ok(pending(&self.marker)?
             .into_iter()
-            .map(|generation| Cause {
-                running: self.in_progress(&generation),
-                session: claimed.remove(&generation),
-                generation,
+            .map(|generation| {
+                let running = self.in_progress(&generation);
+                Cause {
+                    running,
+                    command: running && commands.contains(&generation) && self.held(&generation),
+                    session: claimed.remove(&generation),
+                    generation,
+                }
             })
             .collect())
     }
@@ -1017,22 +1146,32 @@ impl Controller {
     /// entry is not one of ours. For display only; every pending generation
     /// still blocks control until verified recovery.
     pub fn unresolved(&self) -> Result<Vec<String>> {
-        self.pending_snapshot().map(|(unresolved, _)| unresolved)
+        self.pending_snapshot().map(|snapshot| snapshot.unresolved)
     }
 
-    /// Unresolved generations and the total from one locked marker read.
-    pub(crate) fn pending_snapshot(&self) -> Result<(Vec<String>, usize)> {
+    /// Unresolved generations, the total and the commands still running,
+    /// from one locked marker read.
+    pub(crate) fn pending_snapshot(&self) -> Result<Snapshot> {
         // Under the marker lock a finishing mutation cannot clear its entry
         // between reading the marker and probing its claim.
         let _lock = self.lock_marker()?;
         let pending = pending(&self.marker)?;
+        let marked = self.commands();
         let total = pending.len();
+        let commands = pending
+            .iter()
+            .filter(|generation| marked.contains(generation) && self.held(generation))
+            .count();
         let unresolved = pending
             .into_iter()
             .filter(|generation| !self.in_progress(generation))
             .collect();
 
-        Ok((unresolved, total))
+        Ok(Snapshot {
+            unresolved,
+            total,
+            commands,
+        })
     }
 
     /// The claim file for a generation; only plain tokens name one.
@@ -1041,6 +1180,31 @@ impl Controller {
             self.directory
                 .join(format!("{}.{generation}.live", self.name))
         })
+    }
+
+    /// Whether a live process holds this generation's claim file locked: a
+    /// plain lock test, never an executor's record, so a claim kept only by
+    /// an executor that outlived its caller is not held.
+    fn held(&self, generation: &str) -> bool {
+        let Some(live) = self.live(generation) else {
+            return false;
+        };
+
+        OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&live)
+            .is_ok_and(|file| {
+                FileExt::try_lock_shared(&file)
+                    .is_err_and(|error| error.kind() == std::io::ErrorKind::WouldBlock)
+            })
+    }
+
+    /// The generations marked as commands agents started with `run`, as
+    /// the list beside the marker names them; whether each still runs is
+    /// the reader's to check.
+    fn commands(&self) -> Vec<String> {
+        commands::read(&self.commands)
     }
 
     /// Whether some live mutation, in any process, still holds the claim.
@@ -1063,12 +1227,24 @@ impl Controller {
         self.quarantine_as(&token())
     }
 
+    /// Record a command an agent started with `run`: its claim, its marker
+    /// entry and its mark as a running command, so other agents may act
+    /// beside it while it runs and recovery waits for it.
+    pub(crate) fn quarantine_command(&self) -> Result<Pending> {
+        self.quarantine_marked(&token(), Mark::Command)
+    }
+
     /// Record a pending mutation under a generation the caller chose, so it
     /// can persist its own claim on that generation first. The claim is
     /// taken before the marker is written, so a marked generation is never
     /// briefly mistaken for an abandoned one. It is never refused after a
     /// signal: what settles or cleans up a change under way still records.
     pub fn quarantine_as(&self, generation: &str) -> Result<Pending> {
+        self.quarantine_marked(generation, Mark::Change)
+    }
+
+    /// [`Controller::quarantine_as`], recorded as `mark` says.
+    fn quarantine_marked(&self, generation: &str, mark: Mark) -> Result<Pending> {
         let hold = self.interrupt.claim();
         let live = self
             .live(generation)
@@ -1102,6 +1278,12 @@ impl Controller {
             pending.push(generation.to_owned());
         }
 
+        // Marked before the marker names it: a mark the marker does not
+        // name means nothing, and a command that cannot be marked never
+        // starts.
+        if mark == Mark::Command {
+            commands::mark(&self.commands, generation, &pending)?;
+        }
         write_private(&self.marker, &serde_json::to_vec(&pending)?)?;
         if let Some(label) = &self.label {
             // Whose change it is, for display only; a lost note loses a label.
@@ -1123,6 +1305,7 @@ impl Controller {
         let mut pending = pending(&self.marker)?;
         pending.retain(|entry| entry != generation);
         let _ = causes::keep(&self.causes, &pending);
+        let _ = commands::keep(&self.commands, &pending);
 
         if pending.is_empty() {
             remove_marker(&self.marker)
@@ -1156,6 +1339,7 @@ impl Controller {
             }
         }
         let _ = causes::keep(&self.causes, &running);
+        let _ = commands::keep(&self.commands, &running);
 
         if running.is_empty() {
             remove_marker(&self.marker)
@@ -1163,6 +1347,17 @@ impl Controller {
             write_private(&self.marker, &serde_json::to_vec(&running)?)
         }
     }
+}
+
+/// The pending changes, as one locked read of the marker counts them.
+#[derive(Clone, Debug)]
+pub(crate) struct Snapshot {
+    /// Generations no mutation in progress will settle.
+    pub unresolved: Vec<String>,
+    /// How many are pending in all.
+    pub total: usize,
+    /// How many are commands agents started with `run`, still running.
+    pub commands: usize,
 }
 
 /// Refuse `directory` unless it is a real folder of this account, not a

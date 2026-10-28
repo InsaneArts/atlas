@@ -199,7 +199,7 @@ pub async fn act(client: &Client, target: Option<&Target>, actions: &Value) -> R
         return client.input(actions, None, None).await;
     };
 
-    let ownership = client.controller.acquire(false)?;
+    let ownership = client.controller.acquire_beside_commands()?;
     let verified = client.verify().await?;
     let expect = Expect::new(target_pid(client, &verified, target).await?)?;
     client
@@ -224,7 +224,7 @@ pub async fn act(client: &Client, target: Option<&Target>, actions: &Value) -> R
 pub async fn type_text(client: &Client, text: &str, target: Option<&Target>) -> Result<Value> {
     let batches = type_batches(text)?;
 
-    let ownership = client.controller.acquire(false)?;
+    let ownership = client.controller.acquire_beside_commands()?;
     // A signal's stop waits for the report of how much was typed.
     let interrupt = client.controller.interrupt();
     let _typing = interrupt.step();
@@ -538,8 +538,9 @@ async fn open_in(
     }
 
     // Copying, launching and pruning happen under one ownership, so no other
-    // open, close or controller interleaves.
-    let ownership = client.controller.acquire(false)?;
+    // open, close or controller interleaves; only commands agents started
+    // with `run` go on beside it.
+    let ownership = client.controller.acquire_beside_commands()?;
     let running = handoff::Running::listed(&client.apps().await?);
     task::settle_copies_gone(client, handoff::prune_in(copies, &running));
 
@@ -824,7 +825,7 @@ async fn close_in(client: &Client, closing: Closing<'_>, copies: &Path) -> Resul
         ));
     }
 
-    let ownership = client.controller.acquire(false)?;
+    let ownership = client.controller.acquire_beside_commands()?;
     let atlas = atlas_bundle();
     let apps = client.apps().await?;
     let processes = selected(&apps, closing, atlas.as_deref());
@@ -1910,7 +1911,7 @@ pub async fn click_element(
         ));
     }
 
-    let ownership = client.controller.acquire(false)?;
+    let ownership = client.controller.acquire_beside_commands()?;
     let verified = client.verify().await?;
     let pid = target_pid(client, &verified, target).await?;
     let scanned = app_elements(client, &verified, pid).await?;

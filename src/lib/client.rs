@@ -6,7 +6,7 @@
 use crate::{
     actions::{self, Expect},
     config::Config,
-    control::{Controller, Ownership, SharedLease},
+    control::{Beside, Controller, Ownership, SharedLease},
     daemon::protocol::{Crop, Region, SESSION_PIN, SessionPin},
     digest::file_sha256,
     doing::Doing,
@@ -977,7 +977,7 @@ impl Client {
         lease: Option<(&SharedLease, &str)>,
     ) -> Result<Value> {
         let _ownership = if lease.is_none() {
-            Some(self.controller.acquire(false)?)
+            Some(self.controller.acquire_beside_commands()?)
         } else {
             None
         };
@@ -1049,7 +1049,9 @@ impl Client {
         lease: Option<(&SharedLease, &str)>,
         check: Option<Check>,
     ) -> Result<Value> {
-        self.controller.require_known()?;
+        // An agent's input holds control taken beside commands; the person's
+        // holds the lease, which no command can start under.
+        self.controller.require_known_beside(Beside::Commands)?;
 
         // A viewer's fresh observation is already tied to its acquired lease.
         // The native process validates that exact epoch again before every
@@ -1158,7 +1160,7 @@ impl Client {
             request["expect"] = json!(expect);
         }
         let result = self
-            .mutate(request, lease, expected.map(|(_, at)| at))
+            .mutate(request, lease, expected.map(|(_, at)| at), None)
             .await;
 
         if lease.is_none() {
@@ -1206,6 +1208,19 @@ impl Client {
         self.run_owned_within(&ownership, argv, timeout).await
     }
 
+    /// Run argv in the verified hidden helper as an agent's own command,
+    /// stopping it after `timeout`. Control is held only until the request
+    /// reaches the helper; while the command runs, its claim keeps
+    /// recovery, restart, update and log-out out, and other agents may act.
+    /// Its outcome is pending until it ends.
+    pub async fn run_beside(&self, argv: Vec<String>, timeout: Duration) -> Result<Value> {
+        let request = run_request(argv, timeout)?;
+        let ownership = self.controller.acquire_beside_commands()?;
+        self.identity().await?;
+
+        self.mutate(request, None, None, Some(ownership)).await
+    }
+
     /// Execute argv in the verified hidden helper as a recorded mutation under
     /// controller ownership the caller already holds.
     pub async fn run_owned(&self, ownership: &Ownership, argv: Vec<String>) -> Result<Value> {
@@ -1219,29 +1234,10 @@ impl Client {
         argv: Vec<String>,
         timeout: Duration,
     ) -> Result<Value> {
-        if argv.is_empty() || argv[0].is_empty() || argv.iter().any(|a| a.contains('\0')) {
-            return Err(Error::new(
-                "input",
-                "Provide a command and arguments after run --",
-            ));
-        }
-
-        if timeout.is_zero() || timeout > RUN_TIMEOUT_MAX {
-            return Err(Error::new(
-                "usage",
-                "A command may run for 1 second to 10 minutes",
-            ));
-        }
-
-        let timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
+        let request = run_request(argv, timeout)?;
         self.identity().await?;
 
-        self.mutate(
-            json!({"op": "run", "argv": argv, "timeoutMs": timeout_ms}),
-            None,
-            None,
-        )
-        .await
+        self.mutate(request, None, None, None).await
     }
 
     /// Run a fixed, read-only inspection command (such as the window list) in
@@ -1691,7 +1687,9 @@ impl Client {
             );
         }
 
-        let reply = self.mutate(json!({"op": "restart"}), None, None).await?;
+        let reply = self
+            .mutate(json!({"op": "restart"}), None, None, None)
+            .await?;
         if reply["ok"] != true {
             return Ok(reply);
         }
@@ -1770,7 +1768,7 @@ impl Client {
         let claim = self.controller.quarantine()?;
 
         match self
-            .mutate(json!({"op": "logout", "force": force}), None, None)
+            .mutate(json!({"op": "logout", "force": force}), None, None, None)
             .await
         {
             Ok(reply) if reply["ok"] == true => {}
@@ -1848,6 +1846,9 @@ impl Client {
         request: Value,
         lease: Option<(&SharedLease, &str)>,
         observed_at: Option<Instant>,
+        // Control to let go of once the request has reached the helper; its
+        // claim is then marked as a running command.
+        release: Option<Ownership>,
     ) -> Result<Value> {
         let started = Instant::now();
         let interrupt = self.controller.interrupt();
@@ -1906,7 +1907,13 @@ impl Client {
         let generation = (request["op"] != "restart"
             && request["op"] != "logout"
             && !(request["op"] == "input" && lease.is_none()))
-        .then(|| self.controller.quarantine())
+        .then(|| {
+            if release.is_some() {
+                self.controller.quarantine_command()
+            } else {
+                self.controller.quarantine()
+            }
+        })
         .transpose()?;
 
         // The last moment a stop refuses the request: it is sent whole, or
@@ -1931,6 +1938,10 @@ impl Client {
         };
 
         drop(authorization);
+        // A command an agent started lets go of control once its request is
+        // sent: from here its claim, marked as a running command, keeps
+        // recovery out until it ends, and other agents may act beside it.
+        drop(release);
 
         // An agent's command runs until it ends, unless the person stops
         // agents: then the connection is dropped, which ends the command in
@@ -2244,6 +2255,28 @@ pub fn validate_completion(request: &Value, reply: &Value) -> Result<()> {
     } else {
         Err(Error::new("protocol", "Helper did not confirm operation completion").uncertain())
     }
+}
+
+/// The request that runs `argv` in the helper, stopping it after `timeout`:
+/// a program and its arguments, none holding a NUL, for 1 second to 10
+/// minutes.
+fn run_request(argv: Vec<String>, timeout: Duration) -> Result<Value> {
+    if argv.is_empty() || argv[0].is_empty() || argv.iter().any(|a| a.contains('\0')) {
+        return Err(Error::new(
+            "input",
+            "Provide a command and arguments after run --",
+        ));
+    }
+
+    if timeout.is_zero() || timeout > RUN_TIMEOUT_MAX {
+        return Err(Error::new(
+            "usage",
+            "A command may run for 1 second to 10 minutes",
+        ));
+    }
+
+    let timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
+    Ok(json!({"op": "run", "argv": argv, "timeoutMs": timeout_ms}))
 }
 
 /// `error` from something that only read: whatever it says, nothing in the
@@ -3074,7 +3107,7 @@ mod tests {
         let token = lease.lock().await.acquire(&acting.controller).unwrap();
         let authorizing = lease.lock().await;
         let run = json!({"op": "run", "argv": ["true"], "timeoutMs": 1000});
-        let mut caller = Box::pin(acting.mutate(run, Some((&lease, &token)), None));
+        let mut caller = Box::pin(acting.mutate(run, Some((&lease, &token)), None, None));
         assert!(
             tokio::time::timeout(SOON, &mut caller).await.is_err(),
             "it waits for the lease"
@@ -3111,7 +3144,7 @@ mod tests {
         let (acting, helper, interrupt) = running(dir.path(), client);
         let _ownership = acting.controller.acquire(false).unwrap();
         let run = json!({"op": "run", "argv": ["true"], "timeoutMs": 1000});
-        let mut caller = Box::pin(acting.mutate(run, None, None));
+        let mut caller = Box::pin(acting.mutate(run, None, None, None));
         let mut peer = dispatched(&mut caller, &helper, "run").await;
         interrupt.ask(Signal::SIGTERM);
         tokio::time::sleep(SOON).await;
@@ -3137,7 +3170,7 @@ mod tests {
         let (acting, helper, interrupt) = running(dir.path(), client);
         let ownership = acting.controller.acquire(false).unwrap();
         let run = json!({"op": "run", "argv": ["sleep", "30"], "timeoutMs": 60_000});
-        let mut caller = Box::pin(acting.mutate(run, None, None));
+        let mut caller = Box::pin(acting.mutate(run, None, None, None));
         let mut peer = dispatched(&mut caller, &helper, "run").await;
         interrupt.ask(Signal::SIGTERM);
 
@@ -3171,7 +3204,9 @@ mod tests {
         let claim = client.controller.quarantine().unwrap();
         interrupt.ask(Signal::SIGTERM);
 
-        let outcome = client.mutate(json!({"op": "restart"}), None, None).await;
+        let outcome = client
+            .mutate(json!({"op": "restart"}), None, None, None)
+            .await;
         let error = client.settle_restart(&claim, outcome).unwrap_err();
         assert_eq!(error.code, "interrupted");
         assert!(!error.uncertain, "the restart was never sent");
@@ -3900,7 +3935,7 @@ mod tests {
         );
         let acting = agent.clone().doing(Doing::new("run"));
         let refused = acting
-            .mutate(json!({"op": "run", "argv": ["true"]}), None, None)
+            .mutate(json!({"op": "run", "argv": ["true"]}), None, None, None)
             .await
             .unwrap_err();
         assert_eq!(refused.code, "stopped");
@@ -3944,7 +3979,7 @@ mod tests {
         let acting = client.doing(Doing::new("run"));
         let run = json!({"op": "run", "argv": ["true"], "timeoutMs": 1000});
         let ownership = acting.controller.acquire(false).unwrap();
-        let mut caller = Box::pin(acting.mutate(run.clone(), None, None));
+        let mut caller = Box::pin(acting.mutate(run.clone(), None, None, None));
         let mut peer = dispatched(&mut caller, &helper, "run").await;
         let pending = acting.controller.pending().unwrap();
         assert_eq!(pending.len(), 1);
@@ -3977,7 +4012,7 @@ mod tests {
             "the helper sees the cancelled connection"
         );
 
-        let error = acting.mutate(run, None, None).await.unwrap_err();
+        let error = acting.mutate(run, None, None, None).await.unwrap_err();
         assert_eq!(error.code, "stopped");
         assert!(!error.uncertain, "the next command never starts");
         assert!(
@@ -3987,6 +4022,224 @@ mod tests {
         );
         drop(ownership);
         recovery_settles_the_abandoned_claim(&acting);
+    }
+
+    /// Drive `caller` for a moment past sending its request, as it waits
+    /// for the reply.
+    async fn waits<T: std::fmt::Debug>(caller: &mut (impl Future<Output = Result<T>> + Unpin)) {
+        assert!(
+            tokio::time::timeout(SOON, caller).await.is_err(),
+            "it still waits for its reply"
+        );
+    }
+
+    /// A command an agent started with `run`, which the stand-in leaves
+    /// unanswered until the test answers it.
+    fn command() -> Value {
+        json!({"op": "run", "argv": ["sleep", "30"], "timeoutMs": 60_000})
+    }
+
+    #[tokio::test]
+    async fn a_run_lets_go_of_control_once_its_request_is_sent() {
+        if !crate::transaction_test::isolated(
+            "client::tests::a_run_lets_go_of_control_once_its_request_is_sent",
+        ) {
+            return;
+        }
+        let (dir, client, input, _session) = native_client();
+        drop(input);
+        let (acting, helper, _interrupt) = running(dir.path(), client);
+        let other = another(&acting, dir.path());
+        let ownership = acting.controller.acquire_beside_commands().unwrap();
+        let mut caller = Box::pin(acting.mutate(command(), None, None, Some(ownership)));
+        let mut peer = dispatched(&mut caller, &helper, "run").await;
+        waits(&mut caller).await;
+
+        drop(other.controller.acquire_beside_commands().unwrap());
+        drop(other.controller.acquire_for_person().unwrap());
+        let refused = other.controller.acquire(true).unwrap_err();
+        assert_eq!(refused.code, "busy");
+        assert_eq!(refused.holder, Some(Holder::Agent));
+        assert_eq!(other.controller.acquire(false).unwrap_err().code, "busy");
+        assert!(other.controller.pending_causes().unwrap()[0].command);
+
+        answer(
+            &mut peer,
+            json!({"ok": true, "exitCode": 0, "timedOut": false}),
+        )
+        .await;
+        assert_eq!(caller.await.unwrap()["exitCode"], 0);
+        assert!(other.controller.pending().unwrap().is_empty());
+        assert!(other.controller.acquire(false).is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_run_refused_before_it_is_sent_settles_under_control() {
+        if !crate::transaction_test::isolated(
+            "client::tests::a_run_refused_before_it_is_sent_settles_under_control",
+        ) {
+            return;
+        }
+        let (dir, client, input, _session) = native_client();
+        drop(input);
+        let (acting, helper, interrupt) = running(dir.path(), client);
+        let other = another(&acting, dir.path());
+        // A lease of a helper of its own holds the request back before it
+        // is sent, while the run keeps its control.
+        let lease: SharedLease = Arc::new(tokio::sync::Mutex::new(crate::control::Lease::new(
+            Duration::from_secs(10),
+        )));
+        let elsewhere = Controller::at(60001, &dir.path().join("elsewhere"));
+        let token = lease.lock().await.acquire(&elsewhere).unwrap();
+        let authorizing = lease.lock().await;
+        let ownership = acting.controller.acquire_beside_commands().unwrap();
+        let mut caller =
+            Box::pin(acting.mutate(command(), Some((&lease, &token)), None, Some(ownership)));
+        assert!(tokio::time::timeout(SOON, &mut caller).await.is_err());
+        assert_eq!(
+            other.controller.acquire_beside_commands().unwrap_err().code,
+            "busy",
+            "control is still held"
+        );
+        interrupt.ask(Signal::SIGTERM);
+        drop(authorizing);
+
+        let error = caller.await.unwrap_err();
+        assert_eq!(error.code, "interrupted");
+        assert!(!error.uncertain, "nothing was sent");
+        let (peer, _) = helper.accept().await.unwrap();
+        let mut line = String::new();
+        assert_eq!(
+            BufReader::new(peer).read_line(&mut line).await.unwrap(),
+            0,
+            "the helper got no request"
+        );
+        assert!(other.controller.pending().unwrap().is_empty());
+        assert!(other.controller.acquire(false).is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_stopped_run_stays_pending_beside_other_agents() {
+        if !crate::transaction_test::isolated(
+            "client::tests::a_stopped_run_stays_pending_beside_other_agents",
+        ) {
+            return;
+        }
+        let (dir, client, input, _session) = native_client();
+        drop(input);
+        let (acting, helper, _interrupt) = running(dir.path(), client);
+        let other = another(&acting, dir.path());
+        let mut person = acting.clone();
+        person.actor = Actor::Viewer;
+        let ownership = acting.controller.acquire_beside_commands().unwrap();
+        let mut caller = Box::pin(acting.mutate(command(), None, None, Some(ownership)));
+        let mut peer = dispatched(&mut caller, &helper, "run").await;
+        waits(&mut caller).await;
+        let pending = other.controller.pending().unwrap();
+
+        person.hold(true).await.unwrap();
+        let error = tokio::time::timeout(Duration::from_secs(2), caller)
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.code, "stopped");
+        assert!(error.uncertain);
+        let mut line = String::new();
+        assert_eq!(
+            peer.read_line(&mut line).await.unwrap(),
+            0,
+            "the helper sees the connection close, which ends the command"
+        );
+        assert_eq!(other.controller.pending().unwrap(), pending);
+        assert_eq!(other.controller.unresolved().unwrap(), pending);
+        assert_eq!(
+            other.controller.acquire_beside_commands().unwrap_err().code,
+            "uncertain"
+        );
+        recovery_settles_the_abandoned_claim(&other);
+    }
+
+    #[tokio::test]
+    async fn a_lost_run_reply_blocks_every_agent() {
+        if !crate::transaction_test::isolated("client::tests::a_lost_run_reply_blocks_every_agent")
+        {
+            return;
+        }
+        let (dir, client, input, _session) = native_client();
+        drop(input);
+        let (acting, helper, _interrupt) = running(dir.path(), client);
+        let other = another(&acting, dir.path());
+        let ownership = acting.controller.acquire_beside_commands().unwrap();
+        let mut caller = Box::pin(acting.mutate(command(), None, None, Some(ownership)));
+        let peer = dispatched(&mut caller, &helper, "run").await;
+        waits(&mut caller).await;
+
+        drop(peer);
+        let error = caller.await.unwrap_err();
+        assert!(error.uncertain, "{error:?}");
+        for refused in [
+            other.controller.acquire_beside_commands(),
+            other.controller.acquire_for_person(),
+            other.controller.acquire(false),
+        ] {
+            assert_eq!(refused.unwrap_err().code, "uncertain");
+        }
+        recovery_settles_the_abandoned_claim(&other);
+    }
+
+    #[tokio::test]
+    async fn input_goes_on_beside_a_running_command() {
+        if !crate::transaction_test::isolated(
+            "client::tests::input_goes_on_beside_a_running_command",
+        ) {
+            return;
+        }
+        let (dir, client, input, _session) = native_client();
+        drop(input);
+        let running = another(&client, dir.path());
+
+        let command = running.controller.quarantine_command().unwrap();
+        let actions = json!([{"type": "key", "key": "a"}]);
+        let beside = client.input(&actions, None, None).await.unwrap_err();
+        assert!(
+            !["busy", "uncertain"].contains(&beside.code),
+            "only the helper refuses it: {beside:?}"
+        );
+        running.controller.clear_if(&command).unwrap();
+        drop(command);
+
+        let change = running.controller.quarantine().unwrap();
+        let refused = client.input(&actions, None, None).await.unwrap_err();
+        assert_eq!(refused.code, "uncertain", "an unmarked change still blocks");
+        running.controller.clear_if(&change).unwrap();
+    }
+
+    #[tokio::test]
+    async fn other_commands_keep_control_for_their_whole_run() {
+        let (dir, client, input, _session) = native_client();
+        drop(input);
+        let (acting, helper, _interrupt) = running(dir.path(), client);
+        let other = another(&acting, dir.path());
+        let ownership = acting.controller.acquire_beside_commands().unwrap();
+        let mut caller = Box::pin(acting.mutate(command(), None, None, None));
+        let mut peer = dispatched(&mut caller, &helper, "run").await;
+        waits(&mut caller).await;
+
+        assert_eq!(
+            other.controller.acquire_beside_commands().unwrap_err().code,
+            "busy",
+            "the caller keeps control"
+        );
+        assert!(!other.controller.pending_causes().unwrap()[0].command);
+
+        answer(
+            &mut peer,
+            json!({"ok": true, "exitCode": 0, "timedOut": false}),
+        )
+        .await;
+        caller.await.unwrap();
+        drop(ownership);
+        assert!(other.controller.pending().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -4000,6 +4253,7 @@ mod tests {
         let ownership = acting.controller.acquire(false).unwrap();
         let mut caller = Box::pin(acting.mutate(
             json!({"op": "run", "argv": ["true"], "timeoutMs": 1000}),
+            None,
             None,
             None,
         ));
@@ -4165,11 +4419,14 @@ mod tests {
         let run = json!({"op": "run", "argv": ["true"], "timeoutMs": 1000});
 
         let acting = client.clone().doing(Doing::new("run"));
-        let refused = acting.mutate(run.clone(), None, None).await.unwrap_err();
+        let refused = acting
+            .mutate(run.clone(), None, None, None)
+            .await
+            .unwrap_err();
         assert_eq!(refused.code, "stopped");
         assert!(!refused.uncertain, "nothing started");
 
-        let reading = client.mutate(run, None, None).await.unwrap_err();
+        let reading = client.mutate(run, None, None, None).await.unwrap_err();
         assert_ne!(
             reading.code, "stopped",
             "a read goes on (and finds no helper here)"

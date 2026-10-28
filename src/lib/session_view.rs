@@ -42,7 +42,7 @@ const HISTORY_SHOTS: usize = 12;
 pub(crate) enum State {
     /// An action of its own may not have finished: the person recovers.
     NeedsYou,
-    /// It has the helper.
+    /// It has the helper, or a command it started with `run` still runs.
     Acting,
     /// It waits for the helper, or for the person to recover.
     Waiting,
@@ -154,6 +154,12 @@ impl Scene<'_> {
                 .causes
                 .iter()
                 .any(|cause| !cause.running && cause.session.as_ref() == Some(key)));
+        // A command it started with `run` that still runs is its work
+        // under way, whoever has control meanwhile.
+        let running = self
+            .causes
+            .iter()
+            .any(|cause| cause.command && who.names(cause.session.as_ref()));
         let note = self
             .waiting
             .iter()
@@ -164,7 +170,7 @@ impl Scene<'_> {
 
         let (state, waiting_for) = if needs_you {
             (State::NeedsYou, None)
-        } else if holds {
+        } else if holds || running {
             (State::Acting, None)
         } else if self.pending && (note.is_some() || (recently && !ended)) {
             (State::Waiting, Some(WaitingFor::Recovery))

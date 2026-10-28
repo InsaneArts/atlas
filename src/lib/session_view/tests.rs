@@ -38,6 +38,7 @@ fn cause(session: Option<&Key>) -> Cause {
     Cause {
         generation: "1".into(),
         running: false,
+        command: false,
         session: session.cloned(),
     }
 }
@@ -87,6 +88,53 @@ fn a_session_holding_the_helper_acts_and_one_with_a_waiting_note_waits() {
     assert_eq!(idle.state, State::Idle);
     assert_eq!(idle.waiting_for, None);
     assert_eq!(idle.latest.unwrap()["ageSeconds"], 300);
+}
+
+#[test]
+fn a_running_command_is_its_sessions_work_while_another_holds_the_helper() {
+    let (left, right) = (key("left"), key("right"));
+    let rows = [
+        row(Some(&right), 1, json!({"verb": "type", "app": "TextEdit"})),
+        row(
+            Some(&left),
+            90,
+            json!({"operation": "run", "verb": "run", "started": true, "ok": null}),
+        ),
+    ];
+    let holder = note(Some(&right), 1);
+    let causes = [Cause {
+        running: true,
+        command: true,
+        ..cause(Some(&left))
+    }];
+    let busy = Scene {
+        holder: Some(&holder),
+        causes: &causes,
+        ..scene(&rows)
+    };
+
+    let running = busy.shown(&Who::Host(left.clone()), false);
+    assert_eq!(running.state, State::Acting);
+    assert!(!running.holds_helper, "the lock is the other session's");
+    assert_eq!(running.latest.unwrap()["says"], "running a command…");
+
+    let typing = busy.shown(&Who::Host(right), false);
+    assert_eq!(typing.state, State::Acting);
+    assert!(typing.holds_helper);
+
+    let unmarked = [Cause {
+        running: true,
+        ..cause(Some(&left))
+    }];
+    let quiet = Scene {
+        causes: &unmarked,
+        ..scene(&rows)
+    };
+    assert_eq!(
+        quiet.shown(&Who::Host(left), false).state,
+        State::Idle,
+        "only a marked command is work of its own"
+    );
 }
 
 #[test]

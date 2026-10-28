@@ -712,6 +712,7 @@ mod tests {
         let cause = |session: Option<&Key>, running: bool| Cause {
             generation: crate::control::token(),
             running,
+            command: false,
             session: session.cloned(),
         };
 
@@ -748,6 +749,7 @@ mod tests {
         let cause = |session: Option<&Key>, running: bool| Cause {
             generation: crate::control::token(),
             running,
+            command: false,
             session: session.cloned(),
         };
         let of = Recovery::of;
