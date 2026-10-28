@@ -278,6 +278,7 @@ function screenView() {
       querySelectorAll: (selector) =>
         ({ '[data-tab]': tabs, '[data-filter]': filters })[selector] || [],
       createElement: () => node(Symbol()),
+      createElementNS: () => node(Symbol()),
       addEventListener: (name, callback) => documentListeners.set(name, callback),
     },
     window: {
@@ -1285,4 +1286,414 @@ test('a paused picture still moves while the person controls the helper', () => 
     { _meta: { 'atlas/frame': { id: 'new' } } },
   );
   assert.equal(next.frame.id, 'new');
+});
+
+const claude = {
+  key: 'aaaa11112222',
+  host: 'claude',
+  hostLabel: 'Claude Code',
+  name: 'Claude Code · understudy',
+  state: 'acting',
+  holdsHelper: true,
+};
+const codex = {
+  key: 'bbbb33334444',
+  host: 'codex',
+  hostLabel: 'Codex',
+  name: 'Codex · atlas-landing',
+  state: 'waiting',
+  waitingFor: 'helper',
+  waitingSeconds: 8,
+  holdsHelper: false,
+};
+const twoSessions = (extra = {}) => ({
+  state: 'working',
+  label: 'Working',
+  headline: 'Clicking Show Center in Opie',
+  sessionsShown: true,
+  holder: claude.key,
+  sessions: [claude, codex],
+  activity: [
+    {
+      says: 'clicking Show Center in Opie',
+      actor: 'agent',
+      ok: true,
+      started: true,
+      ageSeconds: 0,
+      session: claude.name,
+    },
+    { says: 'opened Notes', actor: 'agent', ok: true, ageSeconds: 8, session: codex.name },
+    { says: 'sent 1 action', actor: 'viewer', ok: true, ageSeconds: 20 },
+  ],
+  ...extra,
+});
+// Values from the script's context, as plain data to compare against.
+const plainData = (value) => JSON.parse(JSON.stringify(value));
+const terminal = { key: '', host: 'none', hostLabel: '', name: 'Terminal', state: 'acting' };
+
+test('sessions show only while Atlas says two or more are live', () => {
+  assert.equal(view.sessionsShown(null), false);
+  assert.equal(view.sessionsShown({ state: 'working' }), false, 'an older status names none');
+  assert.equal(view.sessionsShown(twoSessions({ sessionsShown: false })), false);
+  assert.equal(view.sessionsShown(twoSessions()), true);
+});
+
+test('the holder is the session with the helper, and this chat only when Atlas knows which chat it is', () => {
+  const status = twoSessions();
+  assert.equal(view.holder(status, null).session.name, 'Claude Code · understudy');
+  assert.equal(view.holder(status, null).thisChat, null, 'unknown, never guessed');
+  assert.equal(view.holder(status, claude.key).thisChat, true);
+  assert.equal(view.holder(status, codex.key).thisChat, false);
+  assert.equal(view.holder(twoSessions({ holder: null }), claude.key), null, 'nobody has it');
+  assert.equal(
+    view.holder(twoSessions({ holder: undefined }), codex.key).session.key,
+    claude.key,
+    'a status without the field says it on the session',
+  );
+  assert.equal(
+    view.holder(twoSessions({ holder: '', sessions: [terminal, codex] }), codex.key).session.name,
+    'Terminal',
+  );
+  assert.equal(view.holder(twoSessions({ sessionsShown: false }), claude.key), null);
+});
+
+test('with this chat known, it is This chat while it acts and Waiting while another session has the helper', () => {
+  const status = twoSessions();
+  assert.equal(view.label(status, false, claude.key), 'This chat');
+  assert.equal(
+    view.hint({ status, self: claude.key }),
+    'Clicking Show Center in Opie',
+    'its own action, plain',
+  );
+  assert.equal(view.chatWaits(status, claude.key), false);
+  assert.equal(view.holderChip(status, claude.key), null, 'no chip for its own work');
+
+  assert.equal(view.label(status, false, codex.key), 'Waiting');
+  assert.equal(view.hint({ status, self: codex.key }), 'Claude Code · understudy has the helper');
+  assert.equal(view.chatWaits(status, codex.key), true);
+  same(view.holderChip(status, codex.key), {
+    icon: { name: 'Claude Code · understudy', text: '>_' },
+    text: 'Claude Code · understudy has the helper',
+  });
+
+  assert.equal(view.label(status, true, codex.key), 'You have control', 'You is the person');
+  assert.equal(
+    view.label(twoSessions({ state: 'stopped', label: 'Stopped' }), false, codex.key),
+    'Stopped',
+  );
+  assert.equal(view.label(twoSessions({ state: 'control' }), false, codex.key), 'In use in Atlas');
+});
+
+test('with this chat unknown nothing says This chat, the hint names who acts and every agent caption carries its icon', () => {
+  const status = twoSessions();
+  assert.equal(view.label(status, false, null), 'Working');
+  assert.equal(view.hint({ status, self: null }), 'Claude Code · understudy is acting');
+  assert.equal(view.chatWaits(status, null), false);
+  assert.equal(view.holderChip(status, null), null);
+  same(
+    view.captions(status, 3, null).map((line) => [line.text, line.icon ? line.icon.name : null]),
+    [
+      ['You sent 1 action', null],
+      ['Opened Notes', 'Codex · atlas-landing'],
+      ['Clicking Show Center in Opie', 'Claude Code · understudy'],
+    ],
+  );
+});
+
+test('while the helper needs the person, the hint says whose action may not have finished', () => {
+  const status = (verb, sessions) =>
+    twoSessions({
+      state: 'needsYou',
+      label: 'Needs you',
+      headline: 'An action may not have finished',
+      holder: null,
+      sessions: sessions || [
+        { ...codex, state: 'needsYou', uncertainVerb: verb },
+        { ...claude, state: 'waiting', waitingFor: 'recovery', holdsHelper: false },
+      ],
+    });
+  assert.equal(view.label(status('type'), false, codex.key), 'Needs you');
+  assert.equal(
+    view.hint({ status: status('type') }),
+    'Typing by Codex · atlas-landing may not have finished',
+  );
+  assert.equal(
+    view.hint({ status: status('type'), self: codex.key }),
+    'Typing by this chat may not have finished',
+  );
+  assert.equal(
+    view.hint({ status: status('right-click'), self: claude.key }),
+    'A click by Codex · atlas-landing may not have finished',
+  );
+  assert.equal(
+    view.hint({ status: status(null) }),
+    'An action by Codex · atlas-landing may not have finished',
+  );
+  assert.equal(
+    view.hint({ status: status('type', [claude, codex]) }),
+    'An action may not have finished',
+    'a command that left no row blames no session',
+  );
+});
+
+test("captions from another session carry its icon and this chat's own and the person's stay plain", () => {
+  same(view.captions(twoSessions(), 3, claude.key), [
+    { text: 'You sent 1 action', when: '20 s ago', newest: false },
+    {
+      text: 'Opened Notes',
+      when: '8 s ago',
+      newest: false,
+      icon: { name: 'Codex · atlas-landing', text: '>_' },
+    },
+    { text: 'Clicking Show Center in Opie', when: 'just now', newest: true },
+  ]);
+});
+
+test('host icons are the bundled logos, the drawn marks, or a terminal tile', () => {
+  const logos = {
+    claude: 'data:image/png;base64,Q0xBVURF',
+    codex: 'data:image/png;base64,Q09ERVg=',
+    cursor: 'https://example.com/cursor.png',
+  };
+  const context = { module: { exports: {} }, LOGOS: logos };
+  vm.runInNewContext(source, context);
+  const page = context.module.exports;
+  const hosts = ['claude', 'codex', 'cursor', 'pi', 'opencode', 'other'];
+  const sessions = hosts.map((host, index) => ({ key: `key${index}`, host, name: `${host} one` }));
+  const status = { sessionsShown: true, sessions: [...sessions, terminal] };
+  const row = (session) => ({ says: 'opened Notes', actor: 'agent', session });
+  same(
+    hosts.map((host) => page.iconFor(row(`${host} one`), status, null)),
+    [
+      { name: 'claude one', logo: logos.claude },
+      { name: 'codex one', logo: logos.codex },
+      { name: 'cursor one', text: '>_' },
+      { name: 'pi one', mark: 'host-pi' },
+      { name: 'opencode one', mark: 'host-opencode' },
+      { name: 'other one', text: '>_' },
+    ],
+  );
+  same(page.iconFor(row(undefined), status, null), { name: 'Terminal', text: '>_' });
+  assert.equal(page.iconFor({ ...row(), actor: 'viewer' }, status, null), null, 'never the person');
+  assert.equal(page.iconFor(row('claude one'), status, 'key0'), null, "never this chat's own");
+  assert.equal(page.iconFor(row('claude one'), { ...status, sessionsShown: false }, null), null);
+  assert.equal(
+    page.iconFor(row('Another session'), status, null),
+    null,
+    'a session the status does not list is not Terminal',
+  );
+  same(
+    view.iconFor(row('claude one'), status, null),
+    { name: 'claude one', text: '>_' },
+    'a page without logos still draws a tile',
+  );
+});
+
+test('with sessions not shown, every word, caption and line is as before', () => {
+  const plain = (status) => ({
+    ...status,
+    sessionsShown: undefined,
+    holder: undefined,
+    sessions: undefined,
+    activity: status.activity.map(({ session, ...row }) => row),
+  });
+  for (const state of ['working', 'idle', 'needsYou', 'stopped']) {
+    const status = twoSessions({ state, sessionsShown: false });
+    const today = plain(status);
+    for (const self of [null, claude.key, codex.key]) {
+      assert.equal(view.label(status, false, self), view.label(today), state);
+      assert.equal(view.hint({ status, self }), view.hint({ status: today }), state);
+      assert.equal(view.holderChip(status, self), null, state);
+      same(view.captions(status, 3, self), plainData(view.captions(today, 3)), state);
+      same(
+        view
+          .activityGroups(status.activity, 'all', status, self)
+          .flatMap((group) => group.lines.map((line) => [line.text, line.times, line.who])),
+        plainData(
+          view
+            .activityGroups(today.activity)
+            .flatMap((group) => group.lines.map((line) => [line.text, line.times, line.who])),
+        ),
+        state,
+      );
+    }
+  }
+});
+
+test("activity lines from another session name it, and this chat's own and the person's stay plain", () => {
+  const rows = [
+    ...twoSessions().activity,
+    { says: 'took a screenshot', actor: 'agent', ok: true, ageSeconds: 30 },
+  ];
+  const names = (status, self) =>
+    view
+      .activityGroups(rows, 'all', status, self)
+      .flatMap((group) => group.lines.map((line) => line.who || null));
+  same(names(twoSessions(), claude.key), [null, 'Codex · atlas-landing', null, 'Terminal']);
+  same(names(twoSessions(), null), [
+    'Claude Code · understudy',
+    'Codex · atlas-landing',
+    null,
+    'Terminal',
+  ]);
+  same(names(twoSessions({ sessionsShown: false }), null), [null, null, null, null]);
+  same(names(null, null), [null, null, null, null], 'no status yet');
+});
+
+test('a refusal that sent nothing is a quiet line with its reason and never a problem', () => {
+  const rows = [
+    {
+      says: "didn't type in Notes",
+      actor: 'agent',
+      ok: false,
+      nothingSent: true,
+      reason: 'Another app was in front',
+      ageSeconds: 3,
+    },
+    { says: "couldn't click Export", actor: 'agent', ok: false, ageSeconds: 5 },
+    {
+      says: "didn't press ⌘S in Notes",
+      actor: 'agent',
+      ok: false,
+      nothingSent: true,
+      ageSeconds: 9,
+    },
+  ];
+  same(
+    view
+      .activityGroups(rows)
+      .flatMap((group) =>
+        group.lines.map((line) => [
+          line.text,
+          line.failed,
+          line.nothingSent || false,
+          line.reason || null,
+        ]),
+      ),
+    [
+      ["Didn't type in Notes", false, true, 'Another app was in front'],
+      ["Couldn't click Export", true, false, null],
+      ["Didn't press ⌘S in Notes", false, true, 'Another app was in front'],
+    ],
+  );
+  same(
+    view.activityGroups(rows, 'problems').flatMap((group) => group.lines.map((line) => line.text)),
+    ["Couldn't click Export"],
+  );
+});
+
+test('two sessions saying the same words stay two lines while sessions show', () => {
+  const rows = [
+    { says: 'opened Notes', actor: 'agent', session: 'Codex · atlas-landing' },
+    { says: 'opened Notes', actor: 'agent', session: 'Claude Code · understudy' },
+    { says: 'opened Notes', actor: 'agent', session: 'Claude Code · understudy' },
+  ];
+  same(
+    view.grouped(rows, true).map((line) => line.times),
+    [1, 2],
+  );
+  same(
+    view.grouped(rows).map((line) => line.times),
+    [3],
+    'one line, as before, while they do not',
+  );
+  const times = (status) =>
+    view.activityGroups(rows, 'all', status, null)[0].lines.map((line) => line.times);
+  same(times(twoSessions()), [1, 2]);
+  same(times(twoSessions({ sessionsShown: false })), [3]);
+});
+
+test('a result keeps which session this chat is, and none when Atlas does not know', () => {
+  const known = view.merge({}, { structuredContent: { status: twoSessions({ self: codex.key }) } });
+  assert.equal(known.self, codex.key);
+  assert.equal(
+    view.merge(known, { structuredContent: { control: false } }).self,
+    codex.key,
+    'a result without a status keeps it',
+  );
+  assert.equal(view.merge(known, { structuredContent: { status: twoSessions() } }).self, null);
+  assert.equal(
+    view.merge(known, { structuredContent: { status: twoSessions({ self: '' }) } }).self,
+    null,
+  );
+});
+
+test('the card shows who has the helper, a waiting dot and icon captions while another session holds it', async () => {
+  const { node, receive } = screenView();
+  const status = (value) =>
+    receive({
+      method: 'ui/notifications/tool-result',
+      params: { structuredContent: { status: value } },
+    });
+  await status(twoSessions({ self: codex.key }));
+  assert.equal(node('[data-dot]').className, 'dot waiting');
+  assert.equal(node('[data-label]').textContent, 'Waiting');
+  assert.equal(node('[data-hint]').textContent, 'Claude Code · understudy has the helper');
+  const top = node('[data-topchip]');
+  assert.equal(top.hidden, false);
+  assert.equal(top.children[0].children[0].className, 'ic term');
+  assert.equal(top.children[0].children[1].textContent, 'Claude Code · understudy has the helper');
+  const lines = node('[data-captions]').children;
+  assert.equal(lines[0].children[0].className, 'what', "this chat's own caption stays plain");
+  assert.equal(lines[1].children[0].className, 'ic term', "another's carries its icon");
+
+  const pi = { ...claude, host: 'pi', hostLabel: 'Pi', name: 'Pi · notes-sync' };
+  await status(twoSessions({ self: codex.key, sessions: [pi, codex], holder: pi.key }));
+  const mark = top.children[0].children[0];
+  assert.equal(mark.getAttribute('class'), 'ic');
+  assert.equal(mark.children[0].getAttribute('href'), '#host-pi');
+
+  await status(twoSessions({ self: claude.key }));
+  assert.equal(node('[data-dot]').className, 'dot working');
+  assert.equal(node('[data-label]').textContent, 'This chat');
+  assert.equal(top.hidden, true);
+
+  await status(twoSessions({ self: codex.key, sessionsShown: false }));
+  assert.equal(node('[data-dot]').className, 'dot working');
+  assert.equal(node('[data-label]').textContent, 'Working');
+  assert.equal(node('[data-hint]').textContent, 'Atlas · Live');
+  assert.equal(top.hidden, true);
+  assert.equal(node('[data-captions]').children[1].children[0].className, 'dot working');
+});
+
+test('the activity names another session under its words and draws a refusal quietly', async () => {
+  const { node, receive, calls } = screenView();
+  await receive({
+    method: 'ui/notifications/tool-result',
+    params: { structuredContent: { status: twoSessions({ self: claude.key }) } },
+  });
+  node('[data-tab="activity"]').fire('click');
+  await receive({
+    id: calls('activity')[0].id,
+    result: {
+      structuredContent: {
+        activity: [
+          { says: 'opened Notes', actor: 'agent', ok: true, ageSeconds: 8, session: codex.name },
+          {
+            says: "didn't type in TextEdit",
+            actor: 'agent',
+            ok: false,
+            nothingSent: true,
+            ageSeconds: 9,
+            session: claude.name,
+          },
+        ],
+      },
+    },
+  });
+  await turns();
+  const rows = node('[data-activity]').children.filter((child) =>
+    child.className.startsWith('row'),
+  );
+  const words = (row) =>
+    row.children[2].children.map((child) => [child.className || '', child.textContent]);
+  same(words(rows[0]), [
+    ['', 'Opened Notes'],
+    ['who', 'Codex · atlas-landing'],
+  ]);
+  same(words(rows[1]), [
+    ['', "Didn't type in TextEdit"],
+    ['why quiet', 'Another app was in front'],
+  ]);
+  assert.equal(rows[1].children[1].children[0].className || '', '', 'a grey mark, not a warning');
 });
