@@ -787,6 +787,19 @@ fn closing_everything_names_what_it_quit() {
     assert_eq!(one.out, "✓ Closed TextEdit");
 }
 
+#[test]
+fn a_close_says_which_copies_it_kept_and_which_it_could_not_remove() {
+    let shown = show(
+        View::Close,
+        json!({"ok": true, "closed": true, "app": "TextEdit", "removed": [], "keptOthers": 2,
+               "failed": [{"path": "/Users/Shared/Atlas/Open/x/notes.rtf", "error": "Permission denied"}]}),
+    );
+    assert_eq!(
+        shown.out,
+        "✓ Closed TextEdit · kept 2 copies another session made\n! Could not remove 1 copy; run the same close again"
+    );
+}
+
 /// An open says what it opened and where the copy went; a failed one still
 /// says where the copy went, since close is what removes it.
 #[test]

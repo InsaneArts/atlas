@@ -89,7 +89,12 @@ than a week are removed the next time one is taken; you need not remove them.
 - `atlas open --app NAME FILE` opens the file itself when the helper can read
   it, so the app saves to it. Otherwise Atlas copies it into a read-only
   folder first and lists the copy in `copied`; `atlas close` removes such
-  copies. Prefer this to `atlas run -- /usr/bin/open`.
+  copies once the app has quit and nothing runs from them. In an agent
+  session it removes only this session's copies and older ones no session
+  named, and counts the rest in `keptOthers`; a copy it could not remove is
+  listed in `failed`. If it cannot read the helper's apps (`busy`, `apps`),
+  it removes nothing: run it again. Prefer this to
+  `atlas run -- /usr/bin/open`.
 
 ### Typing, keys and scrolling
 

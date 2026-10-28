@@ -405,6 +405,7 @@ pub fn close(value: &Value) -> String {
             ));
         }
 
+        line.push_str(&copies_left(value));
         return line;
     }
 
@@ -423,7 +424,35 @@ pub fn close(value: &Value) -> String {
         line.push_str(&style::dim(" · removed Atlas's copy of it"));
     }
 
+    line.push_str(&copies_left(value));
     line
+}
+
+/// What a close left of Atlas's copies: those another session made, and
+/// those that could not be removed.
+fn copies_left(value: &Value) -> String {
+    let copies = |count: u64| match count {
+        1 => "1 copy".to_owned(),
+        count => format!("{count} copies"),
+    };
+    let mut said = String::new();
+    if let Some(others) = value["keptOthers"].as_u64().filter(|count| *count > 0) {
+        said.push_str(&style::dim(format!(
+            " · kept {} another session made",
+            copies(others)
+        )));
+    }
+    if let Some(failed) = value["failed"]
+        .as_array()
+        .filter(|failed| !failed.is_empty())
+    {
+        said.push_str(&format!(
+            "\n{} Could not remove {}; run the same close again",
+            style::warn(),
+            copies(u64::try_from(failed.len()).unwrap_or(u64::MAX))
+        ));
+    }
+    said
 }
 
 /// What `environment discover` found, here and in the helper.

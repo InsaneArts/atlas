@@ -212,7 +212,11 @@ pub fn settle_rolled_back(client: &Client, kind: Kind, result: &Result<Value>) -
     } else {
         State::Gone
     };
-    Store::at(client.output_dir()?).settle_everywhere(&Owned::Plan { id: plan_id }, state, now_ms())
+    Store::at(client.output_dir()?).settle_everywhere(
+        &[Owned::Plan { id: plan_id }],
+        state,
+        now_ms(),
+    )
 }
 
 #[cfg(test)]

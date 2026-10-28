@@ -529,18 +529,8 @@ pub async fn open(
     // Copying, launching and pruning happen under one ownership, so no other
     // open, close or controller interleaves.
     let ownership = client.controller.acquire(false)?;
-    let apps = client.apps().await?;
-    handoff::prune(&app_names(&apps));
-
-    let running: Vec<handoff::Running> = apps["apps"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|app| handoff::Running {
-            name: app["name"].as_str().unwrap_or("").to_owned(),
-            executable: app["executable"].as_str().unwrap_or("").to_owned(),
-        })
-        .collect();
+    let running = handoff::Running::listed(&client.apps().await?);
+    handoff::prune(&running);
 
     // A name is the helper's to look up; a path is this side's file.
     let app_target = app.map(|app| {
@@ -673,15 +663,6 @@ while read -r label; do
   /bin/launchctl remove "$label" 2>/dev/null && echo "$label"
 done
 exit 0"#;
-
-fn app_names(apps: &Value) -> Vec<&str> {
-    apps["apps"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|app| app["name"].as_str())
-        .collect()
-}
 
 /// The names of the selected processes that were (or, with `quit` false,
 /// were not) among the `signalled` ones, sorted, each once.
@@ -866,22 +847,28 @@ async fn close_in(client: &Client, closing: Closing<'_>, copies: &Path) -> Resul
     // A copy is never removed while an app of its names runs: an app that
     // came back, or another one, may be running from it. An agent's close
     // keeps the copies another agent session made.
-    let running = app_names(&after);
+    let running = handoff::Running::listed(&after);
     let session = client.host_session.as_ref().map(HostSession::key);
-    let (mut removed, mut kept_others) = (Vec::new(), 0);
+    let mut removed = handoff::Removed::default();
     for name in &names {
         let gone = handoff::remove_copies_in(copies, name, &running, session);
-        removed.extend(gone.folders);
-        kept_others += gone.kept_others;
+        removed.folders.extend(gone.folders);
+        removed.kept_others += gone.kept_others;
+        removed.failed.extend(gone.failed);
     }
+    settle_removed(client, &removed);
 
     let mut reply = json!({
         "ok": true,
         "closed": !processes.is_empty(),
-        "removed": removed,
+        "removed": removed.folders,
     });
-    if kept_others > 0 {
-        reply["keptOthers"] = json!(kept_others);
+    if removed.kept_others > 0 {
+        reply["keptOthers"] = json!(removed.kept_others);
+    }
+    // The app closed: a copy that would not go is said, not dropped.
+    if !removed.failed.is_empty() {
+        reply["failed"] = json!(removed.failed);
     }
 
     match closing {
@@ -902,6 +889,23 @@ async fn close_in(client: &Client, closing: Closing<'_>, copies: &Path) -> Resul
     }
 
     Ok(reply)
+}
+
+/// Note the copies `removed` lists as gone in every task's record that
+/// claims one, whoever removed them. A record that cannot be written
+/// changes nothing: the copies are gone either way.
+fn settle_removed(client: &Client, removed: &handoff::Removed) {
+    let gone: Vec<task::Owned> = removed
+        .tokens()
+        .into_iter()
+        .map(|id| task::Owned::Copy { id })
+        .collect();
+    if !gone.is_empty()
+        && let Ok(output) = client.output_dir()
+    {
+        let store = task::store::Store::at(output);
+        let _ = store.settle_everywhere(&gone, task::State::Gone, crate::host_session::now_ms());
+    }
 }
 
 /// Poll the window list until a matching window appears (or, with `gone`,
@@ -3883,6 +3887,50 @@ mod tests {
         assert_eq!(reply["closed"], false);
         assert_eq!(reply["removed"].as_array().map(Vec::len), Some(2));
         assert!(copies.iter().all(|copy| !copy.exists()));
+    }
+
+    #[tokio::test]
+    async fn removed_copies_are_settled_in_the_task_that_claimed_them() {
+        use crate::{
+            control::Token,
+            helper_test::{Helper, UID},
+            host_session::{Host, HostSession},
+            task::{Claims, Owned, State, Task, store::Store},
+        };
+        use std::os::unix::fs::DirBuilderExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let (mut client, helper) = Helper::client(directory.path(), UID);
+        let session = HostSession::new(Host::Codex, "closing").unwrap();
+        let task = Task::of(session.key(), Some("probe")).unwrap();
+        client.host_session = Some(session.clone());
+        client.task = Some(task.clone());
+        let output = client.output_dir().unwrap().to_owned();
+        let (root, _) = two_copies(directory.path());
+        let token = Token::new();
+        let folder = root.join(token.as_str());
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&folder)
+            .unwrap();
+        std::fs::write(folder.join("notes.rtf"), "hello").unwrap();
+        std::fs::write(folder.join(".opened-with"), "TextEdit").unwrap();
+        std::fs::write(folder.join(".session"), format!("{}\n", session.key())).unwrap();
+        let copy = Owned::Copy { id: token };
+        Claims::in_store(Store::at(&output), task.clone())
+            .claim(&copy, State::Made)
+            .unwrap();
+
+        let reply = helper
+            .serve(close_in(&client, Closing::App("TextEdit"), &root), |_| {
+                Some(json!({"ok": true, "apps": []}))
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(reply["removed"].as_array().map(Vec::len), Some(3));
+        let record = Store::at(&output).load(task.key()).unwrap();
+        assert_eq!(record.claims().collect::<Vec<_>>(), [(copy, State::Gone)]);
     }
 
     #[tokio::test]

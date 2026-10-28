@@ -105,15 +105,19 @@ impl Store {
         Ok(())
     }
 
-    /// Note what became of `owned` in every record that lists it, under the
-    /// lock: whoever undid it, the thing itself changed.
-    pub fn settle_everywhere(&self, owned: &Owned, state: State, now: u64) -> Result<()> {
+    /// Note what became of each of `owned` in every record that lists it,
+    /// under the lock: whoever undid it, the thing itself changed.
+    pub fn settle_everywhere(&self, owned: &[Owned], state: State, now: u64) -> Result<()> {
         if !own_folder(&self.directory) {
             return Ok(());
         }
         let _lock = self.lock()?;
         for mut record in self.listed() {
-            if record.settle(owned, state, now) {
+            let mut listed = false;
+            for owned in owned {
+                listed |= record.settle(owned, state, now);
+            }
+            if listed {
                 record.updated = now;
                 self.write(&record)?;
             }
