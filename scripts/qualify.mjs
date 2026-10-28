@@ -142,6 +142,12 @@ async function cli(args, timeout = 60000) {
     throw Object.assign(new Error(reply.error || `${args[0]} failed`), {
       uncertain: reply.uncertain === true,
     });
+  // A signal that stopped Atlas gives 128 plus its number, even after a
+  // reply that finished within the grace.
+  if (typeof failed?.code === 'number' && failed.code > 128)
+    throw Object.assign(new Error(`${args[0]}: stopped by a signal (exit ${failed.code})`), {
+      uncertain: reply.uncertain === true,
+    });
   if ('exitCode' in reply && (reply.exitCode !== 0 || reply.timedOut || reply.signal))
     throw new Error(`${args.join(' ').slice(0, 60)} exited ${reply.exitCode}`);
   if (mutating) await requireSettled(args[0]);
