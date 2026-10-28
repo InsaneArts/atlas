@@ -70,6 +70,13 @@ so never start setup or `atlas init` for it.
 | `wait-failed` | A window did not appear or close in time (`timedOut`), a command ran but its exit status could not be read, or an app did not quit in time. | For a window, look (`atlas windows`, a screenshot) and wait again; otherwise treat the outcome as unknown and check its effects (`atlas apps` for apps). |
 | `windows` | The helper's window list is unavailable. | Retry once; then `atlas doctor`. |
 
+## After a lost session
+
+`atlas activity --all` lists earlier sessions and what each left.
+`atlas cleanup --session KEY` shows one session's leftovers and `--apply`
+cleans them up. Do this only for a session that has ended, never for
+another agent that is still working; if unsure, ask the person.
+
 ## Pi connection
 
 Connect with `atlas agents install --pi`. Start a fresh Pi session or use `/reload`

@@ -92,6 +92,8 @@ atlas environment list --json
 
 Each plan has its `planId`, its `state` (`previewed`, `applying`, `applied`, `rollingBack`, `rolledBack`, `running` while a command uses it, or `unknown` when a request's outcome is not known), when it last changed and the target and operation of each file. File contents, digests and sources are never listed. `session` names the agent session that made it, when its record says so, and `thisTask` says whether the session's current task did. Plans rolled back completely are left out unless you pass `--all`, and counted in `hidden`. `unreadable` counts records that could not be read and `more` those not looked at or not shown; while either is above 0, an empty list does not prove nothing was copied. Listing only reads: it takes no control and records nothing.
 
+`atlas cleanup --apply` rolls back every copy the current task applied, newest first, along with the rest of what it left; `atlas cleanup` alone shows what it would do.
+
 ## Conflicts and interrupted work
 
 Atlas refuses to replace a different, unmanaged destination or a managed file changed in the helper. It also refuses overlapping or case-equivalent targets and unsupported destination metadata. Read the error and inspect the target. Do not remove the helper's file just to make the plan pass.

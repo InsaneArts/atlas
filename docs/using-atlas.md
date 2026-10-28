@@ -44,7 +44,14 @@ When you finish, close this app:
 atlas close --app Example
 ```
 
-This quits the app and removes any copy Atlas staged for it. Close the previous build before opening a replacement. Use the [command reference](../agents/atlas/skills/atlas/references/commands.md) for typing, key combinations, scrolling and other input options.
+This quits the app and removes any copy Atlas staged for it. Close the previous build before opening a replacement. Then undo what the task left in the helper, such as copies into it and apps installed for it:
+
+```sh
+atlas cleanup          # see what it would do
+atlas cleanup --apply
+```
+
+Cleanup quits only what runs from the task's own copies and installs, never an app opened by name, and reports what it kept and why. Use the [command reference](../agents/atlas/skills/atlas/references/commands.md) for typing, key combinations, scrolling and other input options.
 
 ## Watch the helper
 

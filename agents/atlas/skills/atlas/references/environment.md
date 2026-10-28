@@ -56,3 +56,7 @@ back completely (counted in `hidden` otherwise). `unreadable` and `more`
 count records it could not read or did not look at: when either is above 0,
 an empty list does not mean nothing was copied. To keep one part of a long
 session's copies apart, run that part's commands with `ATLAS_TASK=NAME`.
+
+`atlas cleanup` shows everything this task left; `--apply` rolls its copies
+back newest first, with the rest. A part of a long session run with
+`ATLAS_TASK=NAME` is cleaned up on its own.

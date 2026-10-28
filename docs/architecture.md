@@ -66,6 +66,8 @@ Before a mutation, Atlas records that its outcome is pending. A complete acknowl
 
 Each agent command records the host session it comes from (a Claude Code session, a Codex thread, an opencode or Pi session), read from its host's environment: on its activity row, its screenshot's row, its handoff copies, a session record in the output folder, a note beside the controller lock and a list of which session claimed each pending change. A host session is a label for people and agents. It never decides input, control, Stop, recovery, rollback or what may be deleted; it only narrows which handoff copies `close` removes.
 
+A task's record names what it made. Cleanup removes a thing only after checking that thing itself: its label, that nothing runs from it, and for an install that it is the unchanged copy Atlas made. A session or task key only chooses which records to look at. Cleanup holds control from start to end, writes a receipt before each step, and resumes from it after a crash without looking around the helper again.
+
 The input journal records held keys and mouse buttons separately. A replacement input service cleans up held input before accepting new work. Tests for cancellation or recovery must include failure during execution and cleanup, not just a successful command followed by release.
 
 ## Native and embedded views
