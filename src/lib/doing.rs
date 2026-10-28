@@ -309,6 +309,17 @@ pub fn says(row: &Value) -> String {
             Some(app) => (format!("closed {app}"), format!("couldn't close {app}")),
             None => ("closed the apps".into(), "couldn't close the apps".into()),
         },
+        Some("install") => match app {
+            Some(app) => (
+                format!("installed {app}"),
+                format!("couldn't install {app}"),
+            ),
+            None => ("installed an app".into(), "couldn't install an app".into()),
+        },
+        Some("cleanup") => (
+            "cleaned up the task's work".into(),
+            "couldn't clean up the task's work".into(),
+        ),
         // Verbs worded as their operation is, and rows that say only that
         // (from older builds, raw commands, or verbs this build lacks).
         verb => {
@@ -355,6 +366,9 @@ fn doing(row: &Value) -> String {
         (Some("open-link"), _) => "opening a link…".into(),
         (Some("close"), Some(app)) => format!("closing {app}…"),
         (Some("close"), None) => "closing the apps…".into(),
+        (Some("install"), Some(app)) => format!("installing {app}…"),
+        (Some("install"), None) => "installing an app…".into(),
+        (Some("cleanup"), _) => "cleaning up…".into(),
         _ => "running a command…".into(),
     }
 }
@@ -489,6 +503,27 @@ mod tests {
         );
         assert_eq!(started(&Doing::new("close")), "closing the apps…");
         assert_eq!(started(&Doing::new("run")), "running a command…");
+        assert_eq!(
+            started(&Doing::new("install").app(Some("Probe"))),
+            "installing Probe…"
+        );
+        assert_eq!(started(&Doing::new("cleanup")), "cleaning up…");
+    }
+
+    #[test]
+    fn an_install_row_names_its_app_and_a_cleanup_row_names_no_file() {
+        let pair = |done: &str, failed: &str| (done.to_owned(), failed.to_owned());
+        assert_eq!(
+            said(&Doing::new("install").app(Some("/tmp/Secret/Probe.app"))),
+            pair("installed Probe", "couldn't install Probe")
+        );
+        assert_eq!(
+            said(&Doing::new("cleanup")),
+            pair(
+                "cleaned up the task's work",
+                "couldn't clean up the task's work"
+            )
+        );
     }
 
     #[test]

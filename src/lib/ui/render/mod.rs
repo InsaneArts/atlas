@@ -3,6 +3,7 @@
 //! falls back to a short generic summary, never to raw JSON.
 mod act;
 mod activity;
+mod cleanup;
 mod manage;
 mod observe;
 
@@ -35,6 +36,8 @@ pub enum View {
     Discover,
     SetupPreview,
     Close,
+    /// A task's cleanup: its preview or a run.
+    Cleanup,
     /// What was opened.
     Open(String),
     Wait {
@@ -131,6 +134,7 @@ pub fn render(view: &View, value: &Value) -> Rendered {
             failed(value).unwrap_or_else(|| Rendered::out(act::setup_preview(value)))
         }
         View::Close => failed(value).unwrap_or_else(|| Rendered::out(act::close(value))),
+        View::Cleanup => cleanup::cleanup(value),
         View::Restart => failed(value).unwrap_or_else(|| Rendered::out(act::restart(value))),
         View::Logout => failed(value).unwrap_or_else(|| Rendered::out(act::logout(value))),
         View::StartInput => failed(value).unwrap_or_else(|| Rendered::out(act::start_input(value))),

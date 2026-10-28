@@ -910,7 +910,7 @@ impl Client {
 
     /// Whether a Stop is saved on either side: the input service's own
     /// marker, or the person's note.
-    fn stop_marked(&self) -> bool {
+    pub(crate) fn stop_marked(&self) -> bool {
         self.config.input_socket.with_extension("stopped").exists() || self.controller.stop_noted()
     }
 

@@ -1053,3 +1053,62 @@ fn activity_gives_the_restart_step_only_when_the_reply_does() {
         "{other}"
     );
 }
+
+#[test]
+fn a_cleanup_reads_kept_apart_from_failed_and_names_what_it_leaves() {
+    let preview = show(
+        View::Cleanup,
+        json!({"ok": true, "preview": true, "steps": [
+            {"n": 1, "do": "quit", "apps": [{"app": "Probe", "pid": 812}]},
+            {"n": 2, "do": "undo-plan", "planId": "3c1f", "targets": [".config/probe/settings.toml"]}],
+            "left": [{"app": "TextEdit", "why": "opened by name"}]}),
+    );
+    assert!(
+        preview.out.contains("atlas cleanup --apply"),
+        "{}",
+        preview.out
+    );
+    assert!(
+        preview.out.contains("1. Quit Probe (812)"),
+        "{}",
+        preview.out
+    );
+    assert!(
+        preview.out.contains(".config/probe/settings.toml"),
+        "{}",
+        preview.out
+    );
+    assert!(
+        preview.out.contains("not quit: TextEdit"),
+        "{}",
+        preview.out
+    );
+    assert!(preview.err.is_empty());
+
+    let run = show(
+        View::Cleanup,
+        json!({"ok": false, "code": "cleanup", "uncertain": false, "state": "incomplete",
+            "error": "Cleanup is not finished: 1 step failed.", "steps": [
+            {"n": 1, "do": "remove-copy", "path": "/Users/Shared/Atlas/Open/9c1e", "state": "kept",
+             "reason": "another-session"},
+            {"n": 2, "do": "remove-copy", "path": "/Users/Shared/Atlas/Open/4d2a", "state": "failed",
+             "reason": "in-use", "retry": true}], "left": []}),
+    );
+    assert!(
+        run.out.contains("kept: another session made it"),
+        "{}",
+        run.out
+    );
+    assert!(
+        run.out.contains("couldn't: still in use; try again"),
+        "{}",
+        run.out
+    );
+    assert!(run.err.contains("1 step failed"), "{}", run.err);
+
+    let nothing = show(
+        View::Cleanup,
+        json!({"ok": true, "preview": false, "steps": [], "left": []}),
+    );
+    assert_eq!(nothing.out, "✓ Nothing to clean up in the helper");
+}

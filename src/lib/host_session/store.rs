@@ -305,11 +305,24 @@ impl Store {
     fn prune(&self, keep: &Key, causes: &[Cause]) {
         let now = now_ms();
         let idle = u64::try_from(IDLE_FOR.as_millis()).unwrap_or(u64::MAX);
+        // A session whose tasks still hold something, an unfinished cleanup
+        // among them, has something left too.
+        let held: Vec<Key> = self
+            .folder
+            .directory()
+            .parent()
+            .map(|output| crate::task::store::Store::at(output).all())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(crate::task::record::Record::holds_anything)
+            .map(|task| task.session)
+            .collect();
         let mut records: Vec<(Record, bool)> = self
             .listed(LISTED)
             .into_iter()
             .map(|record| {
-                let empty = self.leftovers(&record, causes).is_empty();
+                let empty =
+                    self.leftovers(&record, causes).is_empty() && !held.contains(&record.key);
                 (record, empty)
             })
             .collect();

@@ -66,6 +66,7 @@ pub(super) fn view(command: &Command) -> View {
             ..
         } => View::Environment,
         Command::Close { .. } => View::Close,
+        Command::Cleanup { .. } => View::Cleanup,
         Command::Environment {
             command: Some(EnvironmentCommand::Discover { .. }),
             ..

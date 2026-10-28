@@ -25,8 +25,8 @@ pub const GROUPS: &[(&str, &[&str])] = &[
     (
         "Act in the helper",
         &[
-            "click", "type", "key", "move", "drag", "scroll", "input", "open", "close", "wait",
-            "run",
+            "click", "type", "key", "move", "drag", "scroll", "input", "open", "close", "cleanup",
+            "wait", "run",
         ],
     ),
     (
@@ -89,6 +89,14 @@ const EXAMPLES: &[(&str, &[&str])] = &[
         ],
     ),
     ("close", &["atlas close --app TextEdit"]),
+    (
+        "cleanup",
+        &[
+            "atlas cleanup",
+            "atlas cleanup --apply",
+            "atlas cleanup --session 3f9a1c07b2e4 --apply",
+        ],
+    ),
     (
         "wait",
         &[

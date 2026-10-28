@@ -814,6 +814,41 @@ Examples:
   atlas close --app TextEdit
 ```
 
+## atlas cleanup
+
+```text
+See what this task left in the helper, and clean it up with --apply.
+
+Lists the copies into the helper this task applied, the copies it opened and the apps running from them. With --apply it quits those apps, rolls the copies into the helper back newest first, removes the copies, and reports what it kept and why. Run it again to finish what is left. Apps opened by name are listed, not quit.
+
+Usage: atlas cleanup [OPTIONS]
+
+Options:
+      --apply
+          Do it; otherwise only show what would be done
+
+      --session <KEY>
+          An ended session's work, by the key atlas activity --all shows
+
+      --task <KEY>
+          Only one task, by the key atlas activity shows for it
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --config <FILE>
+          Use another settings file
+
+Examples:
+  atlas cleanup
+  atlas cleanup --apply
+  atlas cleanup --session 3f9a1c07b2e4 --apply
+```
+
 ## atlas wait
 
 ```text

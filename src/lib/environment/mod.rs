@@ -11,6 +11,7 @@ mod runner;
 mod state;
 #[cfg(test)]
 mod tests;
+mod undo;
 mod worker;
 
 use crate::{
@@ -35,6 +36,7 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
+pub(crate) use undo::{PlanState, Undone, plan_states, undo_plan};
 pub use worker::worker;
 
 const MAX_FILE: u64 = 128 * 1024 * 1024;
@@ -792,6 +794,27 @@ async fn dispatch(client: &Client, helper: &str, stage: &Path, request: Request)
     dispatch_within(client, helper, stage, request, crate::client::RUN_TIMEOUT).await
 }
 
+/// [`dispatch`] under control the caller already holds, as a cleanup or an
+/// install does from start to end: taking it again from the same process
+/// would answer busy.
+async fn dispatch_owned(
+    client: &Client,
+    ownership: &Ownership,
+    helper: &str,
+    stage: &Path,
+    request: Request,
+) -> Result<Value> {
+    dispatch_as(
+        client,
+        Some(ownership),
+        helper,
+        stage,
+        request,
+        crate::client::RUN_TIMEOUT,
+    )
+    .await
+}
+
 /// Each invocation gets immutable arguments and a fresh session pin. Mutating
 /// requests and their binary remain available whenever the reply is uncertain;
 /// a request that was never sent leaves nothing behind. A request that only
@@ -804,6 +827,19 @@ async fn dispatch_within(
     request: Request,
     timeout: Duration,
 ) -> Result<Value> {
+    dispatch_as(client, None, helper, stage, request, timeout).await
+}
+
+/// [`dispatch_within`], a change running under `held` when the caller
+/// already holds control, and under control taken here otherwise.
+async fn dispatch_as(
+    client: &Client,
+    held: Option<&Ownership>,
+    helper: &str,
+    stage: &Path,
+    request: Request,
+    timeout: Duration,
+) -> Result<Value> {
     let mutating = request.changes_helper();
     let raw_output = matches!(&request, Request::Run { .. });
     // A preview only reads in the helper: like any other inspection it
@@ -811,9 +847,10 @@ async fn dispatch_within(
     // no recovery behind. A change reads the helper under control, so a
     // wait for it never leaves the packet expecting a helper that has since
     // restarted.
-    let ownership = mutating
+    let taken = (mutating && held.is_none())
         .then(|| client.controller.acquire(false))
         .transpose()?;
+    let ownership = held.filter(|_| mutating).or(taken.as_ref());
     let packet = Packet {
         version: 1,
         expected: Identity::from_epoch(&client.identity().await?.epoch),
@@ -833,7 +870,7 @@ async fn dispatch_within(
         }
     };
 
-    let result = match &ownership {
+    let result = match ownership {
         None => client
             .inspect_within(argv, timeout)
             .await

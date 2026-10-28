@@ -699,7 +699,7 @@ fn signalled(output: &[u8]) -> Vec<u64> {
 }
 
 /// How long `close` waits for the apps it signalled to quit.
-const QUIT_WAIT: Duration = Duration::from_secs(10);
+pub(crate) const QUIT_WAIT: Duration = Duration::from_secs(10);
 
 /// In the helper, each process is signalled only while it is still the
 /// executable listed, so a reused process ID is left alone. It prints each

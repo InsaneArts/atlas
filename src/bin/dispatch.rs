@@ -112,6 +112,7 @@ fn doing(command: &Command) -> Option<Doing> {
         Command::Key { keys, target } => Doing::keys(keys).app(target.app.as_deref()),
         Command::Open { app, targets, .. } => Doing::open(app.as_deref(), targets),
         Command::Close { app, .. } => Doing::new("close").app(app.as_deref()),
+        Command::Cleanup { apply: true, .. } => Doing::new("cleanup"),
         Command::Run { .. }
         | Command::Environment {
             command: Some(EnvironmentCommand::Run { .. }),
@@ -184,13 +185,15 @@ fn kind(command: &Command) -> Kind {
     }
 }
 
-/// Whether a command makes something its task's record claims: a copy, an
-/// app opened by name, an environment plan or a run in the helper. Only
-/// these are refused for an ATLAS_TASK that names no task; looking, Stop
-/// and recovery never depend on it.
+/// Whether a command makes something its task's record claims (a copy, an
+/// app opened by name, an environment plan or a run in the helper) or
+/// cleans it up: told of a task by a name that is not one, a cleanup would
+/// cover the whole session instead. Only these are refused for an
+/// ATLAS_TASK that names no task; looking, Stop and recovery never depend
+/// on it.
 fn makes(command: &Command) -> bool {
     match command {
-        Command::Open { .. } | Command::Run { .. } => true,
+        Command::Open { .. } | Command::Run { .. } | Command::Cleanup { .. } => true,
         Command::Environment { command, .. } => matches!(
             command,
             None | Some(
@@ -235,6 +238,8 @@ fn changes_helper(command: &Command, attributed: bool) -> bool {
         Command::Setup {
             apply, rollback, ..
         } => *apply || *rollback,
+        // Its preview only reads, and works during a Stop.
+        Command::Cleanup { apply, .. } => *apply,
         Command::Environment { apply, command, .. } => match command {
             None => *apply,
             Some(EnvironmentCommand::Run { .. } | EnvironmentCommand::Apply { .. }) => true,
@@ -264,6 +269,7 @@ pub(super) fn controls(command: &Command) -> bool {
             | Command::Key { .. }
             | Command::Open { .. }
             | Command::Close { .. }
+            | Command::Cleanup { apply: true, .. }
             | Command::Run { .. }
             | Command::Restart
             | Command::StartInput
@@ -875,6 +881,11 @@ async fn carry_out(
             targets,
             environment,
         } => agent::open(&client()?, app.as_deref(), &targets, &environment).await,
+        Command::Cleanup {
+            apply,
+            session,
+            task,
+        } => atlas::cleanup::cleanup(&client()?, session.as_ref(), task.as_ref(), apply).await,
         Command::Close { app, .. } => {
             let client = client()?;
             let closing = app
@@ -1121,6 +1132,8 @@ mod tests {
             &["environment", "rollback", "plan", "--apply"],
             &["environment", "profile", "profile.toml"],
             &["environment", "run", "--", "ls"],
+            &["cleanup"],
+            &["cleanup", "--apply"],
         ] {
             assert_eq!(
                 task(making, "not plain").unwrap_err().code,

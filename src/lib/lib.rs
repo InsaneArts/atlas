@@ -7,6 +7,7 @@ pub mod approval;
 mod bounded;
 pub mod capability;
 pub mod claude_app;
+pub mod cleanup;
 pub mod client;
 pub mod config;
 pub mod control;

@@ -764,6 +764,66 @@ pub(crate) fn remove_copies_in(
     removed
 }
 
+/// What removing one copy folder by its token came to.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum CopyRemoval {
+    /// Nothing is there under that token.
+    AlreadyGone,
+    /// Removed.
+    Removed,
+    /// Kept: another host session made it.
+    AnotherSession,
+    /// Kept: what is there is not a private folder of this account, or its
+    /// label cannot be read.
+    Unreadable,
+    /// Kept for now: an app in the list runs from it or by one of its
+    /// names.
+    InUse,
+    /// It could not be removed, and why.
+    Failed(String),
+}
+
+/// Remove the copy folder `token` names under `root` (ROOT, but in tests),
+/// for a cleanup of host session `session`'s work: only when it is a
+/// private folder of this account, labelled for that session or not at
+/// all, and not in use by an app in `running` (from a list the helper gave
+/// once the apps running from it were quit). Only that one folder is
+/// looked at.
+pub(crate) fn remove_copy(
+    root: &Path,
+    token: &Token,
+    session: &Key,
+    running: &[Running],
+) -> CopyRemoval {
+    let folder = root.join(token.as_str());
+    if fs::symlink_metadata(&folder)
+        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+    {
+        return CopyRemoval::AlreadyGone;
+    }
+    if root_if_owned_in(root).is_none() || !private_folder(&folder) {
+        return CopyRemoval::Unreadable;
+    }
+    match labelled(&folder) {
+        Label::Unreadable => return CopyRemoval::Unreadable,
+        Label::Session(made) if made != *session => return CopyRemoval::AnotherSession,
+        Label::Session(_) | Label::None => {}
+    }
+    if in_use(&folder, running) {
+        return CopyRemoval::InUse;
+    }
+    match fs::remove_dir_all(&folder) {
+        Ok(()) => CopyRemoval::Removed,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => CopyRemoval::AlreadyGone,
+        Err(error) => CopyRemoval::Failed(error.to_string()),
+    }
+}
+
+/// Where the copy folder `token` names is, under `root`.
+pub(crate) fn copy_folder(root: &Path, token: &Token) -> PathBuf {
+    root.join(token.as_str())
+}
+
 /// Remove copies under `root` (ROOT, but in tests) older than KEEP that are
 /// not in use by an app in `running` (the helper's apps), so a copy nobody
 /// closed does not stay forever. The tokens of the folders removed come

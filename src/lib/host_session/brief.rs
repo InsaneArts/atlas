@@ -17,14 +17,29 @@ pub(crate) fn leftovers(client: &Client, session: &HostSession) -> Option<String
     let records = store.all();
     let own = records.iter().find(|record| record.key == *session.key());
 
+    let unfinished = crate::task::store::Store::at(client.output_dir().ok()?)
+        .of_session(session.key())
+        .iter()
+        .any(|task| task.unfinished_cleanup().is_some());
+    let cleanup = if unfinished {
+        " Its cleanup is unfinished: atlas cleanup shows what is left."
+    } else {
+        ""
+    };
+
     if let Some(own) = own {
         let left = store.leftovers(own, &causes);
         if !left.is_empty() {
             return Some(format!(
-                "This session left {} in the helper; atlas activity lists {}.",
+                "This session left {} in the helper; atlas activity lists {}.{cleanup}",
                 said(&left),
                 them(&left)
             ));
+        }
+        if unfinished {
+            return Some(
+                "This session's cleanup is unfinished: atlas cleanup shows what is left.".into(),
+            );
         }
     }
 
@@ -169,6 +184,46 @@ mod tests {
             Some(said.as_str()),
             "and after"
         );
+    }
+
+    #[test]
+    fn an_unfinished_cleanup_is_a_leftover_the_brief_points_to() {
+        use crate::task::{Task, record::CleanupState, store::Store as Tasks};
+
+        let directory = tempfile::tempdir().unwrap();
+        let client = crate::transaction_test::client(directory.path());
+        let own = session("cleaning");
+        clicked(&client, &own);
+        let task = Task::of(own.key(), None).unwrap();
+        let tasks = Tasks::at(client.output_dir().unwrap());
+        let receipt = crate::control::Token::new();
+        tasks
+            .update(&task, 1, |record| {
+                record.noted_cleanup(&receipt, CleanupState::Incomplete, 1);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            leftovers(&client, &own).as_deref(),
+            Some("This session's cleanup is unfinished: atlas cleanup shows what is left.")
+        );
+
+        applied(&client, &own);
+        assert_eq!(
+            leftovers(&client, &own).as_deref(),
+            Some(
+                "This session left 1 applied environment plan in the helper; atlas activity \
+                 lists it. Its cleanup is unfinished: atlas cleanup shows what is left."
+            )
+        );
+
+        tasks
+            .update(&task, 2, |record| {
+                record.noted_cleanup(&receipt, CleanupState::Complete, 2);
+                Ok(())
+            })
+            .unwrap();
+        assert!(!leftovers(&client, &own).unwrap().contains("cleanup"));
     }
 
     fn left(copies: usize, plans: usize, uncertain: usize) -> Leftovers {

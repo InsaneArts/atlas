@@ -17,6 +17,8 @@ use serde_json::{Map, Value};
 pub(crate) const VERSION: u32 = 1;
 /// The most entries `owned` keeps.
 pub(crate) const OWNED: usize = 256;
+/// The most cleanups a record keeps note of, unfinished ones aside.
+const CLEANUPS: usize = 16;
 
 /// What a task's record says of it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,6 +35,15 @@ pub(crate) struct Record {
     /// What the task made, oldest first.
     #[serde(default)]
     pub owned: Vec<Entry>,
+    /// The cleanups that covered this task's work, oldest first. Written
+    /// only when there is one, so a record without stays as earlier builds
+    /// wrote it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cleanups: Vec<CleanupNote>,
+    /// Who took over this task's work after its session ended, when
+    /// someone did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adopted_by: Option<Adoption>,
     /// Fields a later build keeps here, as it wrote them.
     #[serde(flatten)]
     pub later: Map<String, Value>,
@@ -49,6 +60,8 @@ impl Record {
             started: now,
             updated: now,
             owned: Vec::new(),
+            cleanups: Vec::new(),
+            adopted_by: None,
             later: Map::new(),
         }
     }
@@ -104,12 +117,25 @@ impl Record {
         })
     }
 
+    /// When the claim of `owned` was made or last settled, when this record
+    /// lists it.
+    pub fn claimed_at(&self, owned: &Owned) -> Option<u64> {
+        self.owned.iter().find_map(|entry| match entry {
+            Entry::Known(claim) if claim.owned().is_some_and(|known| known.same(owned)) => {
+                Some(claim.at)
+            }
+            _ => None,
+        })
+    }
+
     /// Whether anything this record lists may still be in the helper or
-    /// still be under way: a claim not yet gone or kept, or anything a
-    /// later build wrote that this one cannot read (a field of the record
-    /// or of a claim, or a whole claim), which it never takes for finished.
+    /// still be under way: a claim not yet gone or kept, a cleanup that has
+    /// not finished, or anything a later build wrote that this one cannot
+    /// read (a field of the record or of a claim, or a whole claim), which
+    /// it never takes for finished.
     pub fn holds_anything(&self) -> bool {
         !self.later.is_empty()
+            || self.unfinished_cleanup().is_some()
             || self.owned.iter().any(|entry| match entry {
                 Entry::Known(claim) => {
                     !claim.later.is_empty()
@@ -118,6 +144,41 @@ impl Record {
                 }
                 Entry::Later(_) => true,
             })
+    }
+
+    /// The newest cleanup of this task's work that has not finished.
+    pub fn unfinished_cleanup(&self) -> Option<&CleanupNote> {
+        self.cleanups
+            .iter()
+            .filter(|note| note.state != CleanupState::Complete)
+            .max_by_key(|note| note.updated)
+    }
+
+    /// Note that cleanup `id` covered this task's work and got to `state`
+    /// `now`. The oldest finished notes go first once there are more than
+    /// [`CLEANUPS`]; unfinished ones are never forgotten.
+    pub fn noted_cleanup(&mut self, id: &Token, state: CleanupState, now: u64) {
+        match self.cleanups.iter_mut().find(|note| note.id == *id) {
+            Some(note) => {
+                note.state = state;
+                note.updated = now;
+            }
+            None => self.cleanups.push(CleanupNote {
+                id: id.clone(),
+                state,
+                updated: now,
+            }),
+        }
+        while self.cleanups.len() > CLEANUPS {
+            let Some(oldest) = self
+                .cleanups
+                .iter()
+                .position(|note| note.state == CleanupState::Complete)
+            else {
+                break;
+            };
+            self.cleanups.remove(oldest);
+        }
     }
 
     /// Where the oldest claim `which` picks is.
@@ -141,17 +202,21 @@ pub(crate) enum Owned {
     Copy { id: Token },
     /// An environment plan, by its ID.
     Plan { id: Token },
+    /// An app installed into the helper's Applications folder, by its
+    /// install ID, with the app's name for listings only.
+    Install { id: Token, app: String },
     /// An app opened by name: listed, never quit.
     Launch { app: String },
 }
 
 impl Owned {
-    /// Whether `self` and `other` are the same thing: one copy or plan by
-    /// its ID, one app by its name in any case.
+    /// Whether `self` and `other` are the same thing: one copy, plan or
+    /// install by its ID, one app by its name in any case.
     pub fn same(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Copy { id }, Self::Copy { id: other }) => id == other,
             (Self::Plan { id }, Self::Plan { id: other }) => id == other,
+            (Self::Install { id, .. }, Self::Install { id: other, .. }) => id == other,
             (Self::Launch { app }, Self::Launch { app: other }) => {
                 crate::text::same_text(app, other)
             }
@@ -204,6 +269,7 @@ impl Claim {
         let (kind, id, app) = match owned {
             Owned::Copy { id } => (Kind::Copy, Some(id.clone()), None),
             Owned::Plan { id } => (Kind::Plan, Some(id.clone()), None),
+            Owned::Install { id, app } => (Kind::Install, Some(id.clone()), Some(app.clone())),
             Owned::Launch { app } => (Kind::Launch, None, Some(app.clone())),
         };
         Self {
@@ -221,6 +287,10 @@ impl Claim {
         match (self.kind, &self.id, &self.app) {
             (Kind::Copy, Some(id), None) => Some(Owned::Copy { id: id.clone() }),
             (Kind::Plan, Some(id), None) => Some(Owned::Plan { id: id.clone() }),
+            (Kind::Install, Some(id), Some(app)) => Some(Owned::Install {
+                id: id.clone(),
+                app: app.clone(),
+            }),
             (Kind::Launch, None, Some(app)) => Some(Owned::Launch { app: app.clone() }),
             _ => None,
         }
@@ -233,5 +303,39 @@ impl Claim {
 enum Kind {
     Copy,
     Plan,
+    Install,
     Launch,
+}
+
+/// How far a cleanup of a task's work got, as its receipt says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum CleanupState {
+    /// Every step done, or kept on purpose.
+    Complete,
+    /// Some step failed or has not run yet.
+    Incomplete,
+    /// A Stop ended it between steps.
+    Blocked,
+    /// A step's outcome is not known.
+    Uncertain,
+}
+
+/// A cleanup that covered a task's work: its receipt's ID and state.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CleanupNote {
+    pub id: Token,
+    pub state: CleanupState,
+    /// When its receipt last changed, in milliseconds since 1970.
+    pub updated: u64,
+}
+
+/// Who took over a task's work after its session ended: the adopting
+/// session's key (none for the person, through Atlas.app), and when.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Adoption {
+    pub key: Option<Key>,
+    pub at: u64,
 }

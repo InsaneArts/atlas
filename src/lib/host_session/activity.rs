@@ -51,6 +51,7 @@ pub fn list(
         now: crate::client::timestamp(),
         store: &store,
         records: &records,
+        tasks: crate::task::store::Store::at(output).all(),
     };
 
     if let Some(key) = key {
@@ -100,6 +101,8 @@ struct Reading<'a> {
     /// The session holding the helper, when its command still runs.
     holder: Option<Key>,
     rows: Vec<Value>,
+    /// Every task record, for what each session's tasks left.
+    tasks: Vec<crate::task::record::Record>,
     now: u128,
 }
 
@@ -127,6 +130,17 @@ impl Reading<'_> {
 
     fn leftovers(&self, record: &Record) -> Leftovers {
         self.store.leftovers(record, &self.causes)
+    }
+
+    /// How far the newest unfinished cleanup of `key`'s work got, when one
+    /// has not finished.
+    fn cleanup(&self, key: &Key) -> Option<crate::task::record::CleanupState> {
+        self.tasks
+            .iter()
+            .filter(|task| task.session == *key)
+            .filter_map(|task| task.unfinished_cleanup())
+            .max_by_key(|note| note.updated)
+            .map(|note| note.state)
     }
 
     /// The session object a reply names: who it is and when it acted, and
@@ -184,6 +198,9 @@ impl Reading<'_> {
         if let Some(previous) = subject.record.and_then(|record| self.previous(record)) {
             reply["previous"] = previous;
         }
+        if let Some(state) = self.cleanup(subject.key) {
+            reply["cleanup"] = json!(state);
+        }
         // Only the session itself may recover, and only when every
         // unknown action is its own and none is still being carried out.
         if subject.own.is_some()
@@ -204,6 +221,14 @@ impl Reading<'_> {
             .iter()
             .map(|record| {
                 let leftovers = self.leftovers(record);
+                let mut left = json!({
+                    "copies": leftovers.copies.len(),
+                    "plans": leftovers.plans,
+                    "uncertain": leftovers.uncertain,
+                });
+                if let Some(state) = self.cleanup(&record.key) {
+                    left["cleanup"] = json!(state);
+                }
                 json!({
                     "key": record.key,
                     "host": record.host,
@@ -214,11 +239,7 @@ impl Reading<'_> {
                     "active": record.active(super::now_ms()),
                     "holdsHelper": self.holder.as_ref() == Some(&record.key),
                     "screenshots": record.screenshots.len(),
-                    "leftovers": {
-                        "copies": leftovers.copies.len(),
-                        "plans": leftovers.plans,
-                        "uncertain": leftovers.uncertain,
-                    },
+                    "leftovers": left,
                 })
             })
             .collect();

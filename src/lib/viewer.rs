@@ -834,6 +834,36 @@ impl Viewer {
         client.start_input().await
     }
 
+    /// What cleaning up the session `query` names would do, as the person
+    /// sees it before they confirm, and whether that session may still be
+    /// working. It reads only and takes no control.
+    async fn cleanup_preview(&self, query: Option<&str>) -> Result<Value> {
+        let session = query
+            .unwrap_or_default()
+            .split('&')
+            .find_map(|pair| pair.strip_prefix("session="));
+        let session = cleanup_session(session)?;
+        let client = self.client();
+        tokio::time::timeout(
+            READ_DEADLINE,
+            crate::cleanup::for_person(&client, &session, false),
+        )
+        .await
+        .map_err(|_| late())?
+    }
+
+    /// The person's cleanup of the session `body` names, after they
+    /// confirmed it: every proof an agent's cleanup needs, but not held
+    /// back by the session looking alive.
+    async fn clean_up(self: &Arc<Self>, body: &Value) -> Result<Value> {
+        self.follow_settings().await;
+        if self.lease.lock().await.active() {
+            return Err(Error::new("busy", "Release control before cleaning up"));
+        }
+        let session = cleanup_session(body["session"].as_str())?;
+        crate::cleanup::for_person(&self.client(), &session, true).await
+    }
+
     /// Take, renew or end control, or send input, as `route` asks.
     async fn control(&self, route: &str, body: &Value) -> Result<Value> {
         let owner = body["lease"].as_str().unwrap_or_default();
@@ -956,6 +986,13 @@ fn same_helper(one: &Config, other: &Config) -> bool {
     };
 
     moved == *other
+}
+
+/// The session a cleanup route names, by its key.
+fn cleanup_session(given: Option<&str>) -> Result<crate::host_session::Key> {
+    given
+        .and_then(crate::host_session::Key::parse)
+        .ok_or_else(|| Error::new("input", "Name a session by its key"))
 }
 
 /// Bind the viewer for `client` on `port` (0 picks a free one). With
@@ -1460,6 +1497,14 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
             };
         }
 
+        if route == "cleanup.json" {
+            return match viewer.cleanup_preview(request.uri().query()).await {
+                Ok(preview) => json_response(200, preview),
+                Err(error) if error.code == "input" => json_response(400, json!(error)),
+                Err(error) => json_response(503, json!(error)),
+            };
+        }
+
         if route == "screenshots.json" {
             return match viewer.screenshots().await {
                 Ok(shots) => json_response(200, shots),
@@ -1517,6 +1562,7 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
                 | "control/revoke"
                 | "control/hold"
                 | "recover"
+                | "cleanup"
                 | "app/viewer"
         )
     {
@@ -1583,6 +1629,8 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
 
     let outcome = if route == "recover" {
         viewer.recover().await
+    } else if route == "cleanup" {
+        viewer.clean_up(&body).await
     } else if route == "control/hold" {
         // The person's stop for agents, or their resume. Control a viewer
         // holds is left alone either way.
@@ -1826,6 +1874,64 @@ mod tests {
         let (status, kind, body) = read(viewer, route).await;
         assert_eq!(kind, "application/json", "{route}");
         (status, serde_json::from_slice(&body).unwrap())
+    }
+
+    /// `body` posted to `route` of `viewer` as its app posts it.
+    async fn posted(viewer: &Arc<Viewer>, route: &str, body: &Value) -> (u16, Value) {
+        let body = body.to_string();
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri(format!("{}{route}", viewer.prefix))
+            .header("host", &viewer.authority)
+            .header("origin", format!("http://{}", viewer.authority))
+            .header("content-type", "application/json")
+            .header("content-length", body.len())
+            .body(Body::from(body))
+            .unwrap();
+        let reply = respond(viewer.clone(), request).await;
+        let status = reply.status().as_u16();
+        let body = to_bytes(reply.into_body(), usize::MAX).await.unwrap();
+        (status, serde_json::from_slice(&body).unwrap())
+    }
+
+    #[tokio::test]
+    async fn the_cleanup_routes_preview_and_apply_as_the_person() {
+        use crate::{
+            host_session::{Host, Key},
+            task::{Claims, Owned, State, Task, store::Store as Tasks},
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let viewer = unreachable(dir.path()).await;
+        let output = viewer.client().output_dir().unwrap().to_owned();
+        let session = Key::of(Host::Codex, "left");
+        Claims::in_store(Tasks::at(&output), Task::of(&session, None).unwrap())
+            .claim(
+                &Owned::Launch {
+                    app: "TextEdit".into(),
+                },
+                State::Made,
+            )
+            .unwrap();
+
+        let (status, preview) =
+            read_json(&viewer, &format!("cleanup.json?session={session}")).await;
+        assert_eq!(status, 200, "{preview}");
+        assert_eq!(preview["preview"], true);
+        assert_eq!(preview["active"], false);
+        assert_eq!(preview["steps"], json!([]));
+        assert_eq!(preview["left"][0]["app"], "TextEdit");
+
+        let (status, applied) = posted(&viewer, "cleanup", &json!({"session": session})).await;
+        assert_eq!((status, &applied["ok"]), (200, &json!(true)), "{applied}");
+        assert_eq!(applied["preview"], false);
+
+        for refused in ["cleanup.json", "cleanup.json?session=../x"] {
+            assert_eq!(read_json(&viewer, refused).await.0, 400, "{refused}");
+        }
+        let nobody = Key::of(Host::Codex, "nobody");
+        let (status, unknown) = posted(&viewer, "cleanup", &json!({"session": nobody})).await;
+        assert_eq!((status, &unknown["code"]), (400, &json!("input")));
     }
 
     /// [`answering`] off the runtime.

@@ -120,6 +120,7 @@ pub const CODES: &[&str] = &[
     "busy",
     "cancelled",
     "capture",
+    "cleanup",
     "config",
     "config-invalid",
     "daemon",

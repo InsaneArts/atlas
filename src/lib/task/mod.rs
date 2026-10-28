@@ -125,6 +125,15 @@ impl Task {
         Self::of(session.key(), name).map(Some)
     }
 
+    /// The task `record` is the record of, as it was named.
+    pub(crate) fn recorded(record: &record::Record) -> Self {
+        Self {
+            session: record.session.clone(),
+            key: record.key.clone(),
+            name: record.name.clone(),
+        }
+    }
+
     /// The key of the host session the task belongs to.
     pub fn session(&self) -> &Key {
         &self.session

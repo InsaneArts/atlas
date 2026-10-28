@@ -1,20 +1,41 @@
 //! A private folder of small JSON records, one file per key, in the output
-//! folder: how session and task records are kept. Each record is written
-//! whole beside its place and renamed there, so a reader never sees half of
-//! one; writers take the folder's lock, readers never do.
+//! folder: how session and task records and cleanup receipts are kept.
+//! Each record is written whole beside its place and renamed there, so a
+//! reader never sees half of one; writers take the folder's lock, readers
+//! never do.
 use crate::{
-    control::{Durability, write_private_with},
+    control::{Durability, Token, write_private_with},
     error::{Error, Result},
     helper_info::{own_folder, read_own},
     host_session::Key,
 };
 use fs2::FileExt;
 use std::{
+    fmt::Display,
     fs::{self, File, OpenOptions},
+    marker::PhantomData,
     os::unix::fs::{DirBuilderExt, OpenOptionsExt},
     path::{Path, PathBuf},
     time::{Duration, Instant, SystemTime},
 };
+
+/// What a record is named by: one of Atlas's own names, so a file name
+/// that is not one is never read as a record.
+pub(crate) trait RecordName: Display + Sized {
+    fn parse(text: &str) -> Option<Self>;
+}
+
+impl RecordName for Key {
+    fn parse(text: &str) -> Option<Self> {
+        Key::parse(text)
+    }
+}
+
+impl RecordName for Token {
+    fn parse(text: &str) -> Option<Self> {
+        Token::parse(text)
+    }
+}
 
 /// The most entries of a records folder looked at.
 pub(crate) const LISTED: usize = 256;
@@ -36,17 +57,19 @@ pub(crate) struct Records {
     pub bytes: u64,
 }
 
-/// One output folder's records of one kind.
-pub(crate) struct RecordFolder {
+/// One output folder's records of one kind, each named by a `K`.
+pub(crate) struct RecordFolder<K = Key> {
     directory: PathBuf,
     records: &'static Records,
+    names: PhantomData<K>,
 }
 
-impl RecordFolder {
+impl<K: RecordName> RecordFolder<K> {
     pub fn at(output: &Path, records: &'static Records) -> Self {
         Self {
             directory: output.join(records.folder),
             records,
+            names: PhantomData,
         }
     }
 
@@ -56,18 +79,18 @@ impl RecordFolder {
     }
 
     /// Where the record of `key` is.
-    pub fn path(&self, key: &Key) -> PathBuf {
+    pub fn path(&self, key: &K) -> PathBuf {
         self.directory.join(format!("{key}.json"))
     }
 
     /// Whether anything is where the record of `key` goes, a record or not.
-    pub fn holds(&self, key: &Key) -> bool {
+    pub fn holds(&self, key: &K) -> bool {
         self.exists() && fs::symlink_metadata(self.path(key)).is_ok()
     }
 
     /// The bytes of `key`'s record, when it is a plain file of this account
     /// no larger than its kind allows, in a folder of this account.
-    pub fn read(&self, key: &Key) -> Option<Vec<u8>> {
+    pub fn read(&self, key: &K) -> Option<Vec<u8>> {
         self.exists()
             .then(|| read_own(&self.path(key), self.records.bytes))
             .flatten()
@@ -76,7 +99,7 @@ impl RecordFolder {
     /// The keys of the newest `limit` records by when each was written, of
     /// the first [`LISTED`] records in the folder, newest first. Entries
     /// that are not `KEY.json` are never counted.
-    pub fn listed(&self, limit: usize) -> Vec<Key> {
+    pub fn listed(&self, limit: usize) -> Vec<K> {
         if !self.exists() {
             return Vec::new();
         }
@@ -84,14 +107,14 @@ impl RecordFolder {
             return Vec::new();
         };
 
-        let mut named: Vec<(SystemTime, Key)> = entries
+        let mut named: Vec<(SystemTime, K)> = entries
             .flatten()
             .filter_map(|entry| {
                 let key = entry
                     .file_name()
                     .to_str()?
                     .strip_suffix(".json")
-                    .and_then(Key::parse)?;
+                    .and_then(K::parse)?;
                 Some((entry.metadata().ok()?.modified().ok()?, key))
             })
             .take(LISTED)
@@ -101,7 +124,7 @@ impl RecordFolder {
     }
 
     /// Write `bytes` as `key`'s record, as far as its kind asks.
-    pub fn write(&self, key: &Key, bytes: &[u8]) -> Result<()> {
+    pub fn write(&self, key: &K, bytes: &[u8]) -> Result<()> {
         let path = self.path(key);
         let partial = path.with_extension("json.partial");
         write_private_with(&partial, bytes, self.records.durability)?;
@@ -113,7 +136,7 @@ impl RecordFolder {
     }
 
     /// Remove `key`'s record.
-    pub fn remove(&self, key: &Key) {
+    pub fn remove(&self, key: &K) {
         let _ = fs::remove_file(self.path(key));
     }
 

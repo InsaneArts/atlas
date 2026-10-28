@@ -227,17 +227,17 @@ fn a_record_a_later_build_wrote_keeps_what_this_one_does_not_know() {
     let Owned::Copy { id } = &known else {
         unreachable!()
     };
-    let install = json!({"kind": "install", "id": Token::new(), "app": "Probe",
+    let mount = json!({"kind": "mount", "id": Token::new(), "app": "Probe",
         "at": 5, "state": "intent"});
     let written = json!({
         "version": VERSION, "key": task.key(), "session": task.session(), "name": "probe",
         "started": 1, "updated": 5,
         "owned": [
             {"kind": "copy", "id": id, "at": 2, "state": "made", "note": "later"},
-            install,
+            mount,
             {"kind": "plan", "id": Token::new(), "at": 3, "state": "detached"},
         ],
-        "jobs": [{"id": "j1"}], "outputs": [], "adoptedBy": null,
+        "jobs": [{"id": "j1"}], "outputs": [], "lease": null,
     });
     fs::create_dir(directory.path().join("tasks")).unwrap();
     fs::write(
@@ -254,10 +254,10 @@ fn a_record_a_later_build_wrote_keeps_what_this_one_does_not_know() {
         serde_json::from_slice(&bytes(directory.path(), &task)).unwrap();
     assert_eq!(rewritten["jobs"], written["jobs"]);
     assert_eq!(rewritten["outputs"], json!([]));
-    assert!(rewritten.as_object().unwrap().contains_key("adoptedBy"));
+    assert!(rewritten.as_object().unwrap().contains_key("lease"));
     assert_eq!(rewritten["owned"][0]["note"], "later");
     assert_eq!(rewritten["owned"][0]["state"], "gone");
-    assert_eq!(rewritten["owned"][1], install);
+    assert_eq!(rewritten["owned"][1], mount);
     assert_eq!(rewritten["owned"][2], written["owned"][2]);
     assert_eq!(rewritten["owned"].as_array().unwrap().len(), 4);
 
@@ -361,10 +361,15 @@ fn a_record_holding_work_this_build_cannot_read_outlives_its_session() {
     let written = [
         (
             "cleanup",
-            json!({"cleanups": [{"id": "e41b", "state": "incomplete"}]}),
+            json!({"cleanups": [{"id": Token::new(), "state": "incomplete", "updated": 2}]}),
             json!([finished]),
         ),
         ("job", json!({"jobs": []}), json!([finished])),
+        (
+            "mount kind",
+            json!({}),
+            json!([{"kind": "mount", "id": Token::new(), "at": 2, "state": "gone"}]),
+        ),
         (
             "claim field",
             json!({}),

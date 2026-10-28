@@ -43,7 +43,20 @@ async fn transactions(client: &Client, helper: &str, all: bool, here: &[Frozen])
         .take(ASKED)
         .map(|plan| plan.id.clone())
         .collect();
+    ask(client, helper, all, ids).await
+}
 
+/// The helper's own list of its transactions, with those rolled back when
+/// `all`, and whatever it has of each of `ids` whatever its phase and age.
+pub(super) async fn ask(
+    client: &Client,
+    helper: &str,
+    all: bool,
+    ids: Vec<String>,
+) -> Result<Value> {
+    if ids.len() > ASKED {
+        return Err(problem("Too many plans were asked about"));
+    }
     let id = crate::control::token();
     let stage = stage_path(client, &id)?.with_file_name(format!("environment-run-{id}"));
     create_stage(&stage, helper)?;
@@ -74,6 +87,29 @@ pub(super) struct Frozen {
     running: bool,
     /// When the folder last changed, in milliseconds since 1970.
     updated: u64,
+}
+
+impl Frozen {
+    pub(super) fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub(super) fn running(&self) -> bool {
+        self.running
+    }
+
+    pub(super) fn request(&self) -> bool {
+        self.request
+    }
+
+    /// The targets its plan copies into the helper.
+    pub(super) fn targets(&self) -> Vec<String> {
+        self.files
+            .iter()
+            .flatten()
+            .filter_map(|file| file["target"].as_str().map(str::to_owned))
+            .collect()
+    }
 }
 
 /// The plan folders beside the shared command in `shared` that hold a plan

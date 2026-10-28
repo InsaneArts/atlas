@@ -491,6 +491,24 @@ pub(super) enum Command {
         #[arg(long, conflicts_with = "app")]
         all: bool,
     },
+    /// See what this task left in the helper, and clean it up with --apply.
+    ///
+    /// Lists the copies into the helper this task applied, the copies it
+    /// opened and the apps running from them. With --apply it quits those
+    /// apps, rolls the copies into the helper back newest first, removes
+    /// the copies, and reports what it kept and why. Run it again to finish
+    /// what is left. Apps opened by name are listed, not quit.
+    Cleanup {
+        /// Do it; otherwise only show what would be done.
+        #[arg(long)]
+        apply: bool,
+        /// An ended session's work, by the key atlas activity --all shows.
+        #[arg(long, value_name = "KEY", value_parser = session_key)]
+        session: Option<Key>,
+        /// Only one task, by the key atlas activity shows for it.
+        #[arg(long, value_name = "KEY", value_parser = session_key)]
+        task: Option<Key>,
+    },
     /// Wait for a window to appear (or, with --gone, to close).
     Wait {
         /// A window of this app.
@@ -1006,6 +1024,47 @@ mod tests {
             &["activity", "--session", "../sessions"],
             &["activity", "--limit", "0"],
             &["activity", "--limit", "51"],
+        ] {
+            assert!(parse(refused).is_err(), "{refused:?}");
+        }
+    }
+
+    #[test]
+    fn cleanup_takes_apply_session_and_task() {
+        let cleanup = |args: &[&str]| match parse(args) {
+            Ok(Cli {
+                command:
+                    Some(Command::Cleanup {
+                        apply,
+                        session,
+                        task,
+                    }),
+                ..
+            }) => Some((apply, session.map(String::from), task.map(String::from))),
+            _ => None,
+        };
+
+        assert_eq!(cleanup(&["cleanup"]), Some((false, None, None)));
+        assert_eq!(cleanup(&["cleanup", "--apply"]), Some((true, None, None)));
+        assert_eq!(
+            cleanup(&[
+                "cleanup",
+                "--session",
+                "3f9a1c07b2e4",
+                "--task",
+                "5be0d1a2c3f4",
+                "--apply"
+            ]),
+            Some((
+                true,
+                Some("3f9a1c07b2e4".into()),
+                Some("5be0d1a2c3f4".into())
+            ))
+        );
+        for refused in [
+            &["cleanup", "--session", "3F9A1C07B2E4"][..],
+            &["cleanup", "--task", "../tasks"],
+            &["cleanup", "notes.rtf"],
         ] {
             assert!(parse(refused).is_err(), "{refused:?}");
         }

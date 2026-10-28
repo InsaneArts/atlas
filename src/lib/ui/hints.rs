@@ -104,6 +104,9 @@ pub fn next(code: &str, holder: Option<Holder>) -> &'static str {
         ("interrupted", _) => {
             "Atlas was stopped partway, and nothing it did is left unknown. Look at the helper before going on."
         }
+        ("cleanup", _) => {
+            "Read steps: run atlas cleanup --apply again for those that may be retried, and tell the person what was kept or keeps failing."
+        }
         _ => fix(code).unwrap_or("Take a screenshot, then run atlas doctor to see what is wrong."),
     }
 }
@@ -137,6 +140,7 @@ pub fn fix(code: &str) -> Option<&'static str> {
             "Try again. If it keeps failing, run atlas doctor."
         }
         "bad-request" | "usage" => "Add --help to the command to see what it accepts.",
+        "cleanup" => "Run atlas cleanup --apply again, or see what was kept in its reply.",
         "blocked" => "Run atlas outside the sandbox that blocks it, such as an agent's.",
         "busy" => "Someone else has control, often you in the viewer. Release it there, or wait.",
         "cancelled" | "terminal" => return None,
