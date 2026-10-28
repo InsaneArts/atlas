@@ -114,7 +114,8 @@ pub(crate) struct Scene<'a> {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Shown {
-    /// Whether it counts among the sessions at work: not ended.
+    /// Whether it counts among the sessions at work: not ended, or ended
+    /// with an action of its own whose outcome is unknown.
     pub live: bool,
     pub state: State,
     pub holds_helper: bool,
@@ -130,8 +131,19 @@ pub(crate) struct Shown {
     pub uncertain_verb: Option<String>,
 }
 
+impl Shown {
+    /// Whether it acts or waits: a command of it holds or waits for the
+    /// helper, or it acted just now and waits for recovery. Either way it
+    /// has neither ended nor gone quiet, whatever its record says.
+    pub(crate) fn at_work(&self) -> bool {
+        matches!(self.state, State::Acting | State::Waiting)
+    }
+}
+
 impl Scene<'_> {
     /// How `who` is shown, `ended` being whether its record says it ended.
+    /// An ended session waits for nothing; a command of it that holds or
+    /// waits for the helper shows it has not ended after all.
     pub(crate) fn shown(&self, who: &Who, ended: bool) -> Shown {
         let holds = self.holder().as_ref() == Some(who);
         let newest = self.rows_of(who).next();
@@ -154,7 +166,7 @@ impl Scene<'_> {
             (State::NeedsYou, None)
         } else if holds {
             (State::Acting, None)
-        } else if self.pending && (recently || note.is_some()) {
+        } else if self.pending && (note.is_some() || (recently && !ended)) {
             (State::Waiting, Some(WaitingFor::Recovery))
         } else if note.is_some() {
             (State::Waiting, Some(WaitingFor::Helper))
@@ -218,7 +230,9 @@ impl Scene<'_> {
     /// The session that has the helper: the one the holder note names
     /// while its command runs; else the commands no host named while the
     /// input service says an agent holds it; else the one whose row under
-    /// way began within [`UNDER_WAY`].
+    /// way began within [`UNDER_WAY`]. While an outcome is unknown no row
+    /// ever stands for a holder: a command killed mid-step leaves its row
+    /// under way, and only recovery runs until the outcome is settled.
     fn holder(&self) -> Option<Who> {
         if let Some(key) = self
             .holder
@@ -229,6 +243,9 @@ impl Scene<'_> {
         }
         if self.agent_holds {
             return Some(Who::Terminal);
+        }
+        if self.pending {
+            return None;
         }
 
         let newest = self.rows.iter().find(|row| row["actor"] != "viewer")?;

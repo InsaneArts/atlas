@@ -218,6 +218,8 @@ fn the_person_taking_control_removes_a_stale_note() {
     let killed = Note {
         session: Some(session("right").key().clone()),
         host: Some(Host::Codex),
+        folder: None,
+        named: None,
         process: Process::new(i32::MAX, [1, 0]),
         since: 1,
     };
@@ -274,6 +276,8 @@ fn waiter_note(
     let note = Note {
         session: None,
         host: None,
+        folder: None,
+        named: None,
         process,
         since,
     };

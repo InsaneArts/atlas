@@ -6,8 +6,11 @@ use crate::{control::Token, environment::Phase, helper_info::Capture};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, time::Duration};
 
-/// How long after its last recorded action a session counts as active.
+/// How long after its last command a session counts as active.
 pub(crate) const ACTIVE_FOR: Duration = Duration::from_secs(10 * 60);
+/// How long a record's last seen time may lag a command that records
+/// nothing else before that command writes it again.
+const SEEN_WITHIN: Duration = Duration::from_secs(30);
 /// The record format this build writes.
 const VERSION: u32 = 1;
 /// The most screenshot names, copy tokens, plans and verbs a record keeps.
@@ -34,6 +37,8 @@ pub(crate) struct Record {
     /// The session's first recorded Atlas command, in milliseconds since
     /// 1970; not when the host started it.
     pub started: u64,
+    /// Its last Atlas command, in milliseconds since 1970: within
+    /// [`SEEN_WITHIN`] for one that only looked.
     pub last_seen: u64,
     #[serde(default)]
     pub ended: Option<u64>,
@@ -76,8 +81,8 @@ impl Record {
         }
     }
 
-    /// When the session ended: as recorded, or at its last action once the
-    /// host process it names no longer runs.
+    /// When the session ended: as recorded, or at its last command once
+    /// the host process it names no longer runs.
     pub fn ended_at(&self) -> Option<u64> {
         self.ended.or_else(|| {
             self.host_process
@@ -86,8 +91,8 @@ impl Record {
         })
     }
 
-    /// Whether the session has not ended and acted within [`ACTIVE_FOR`]
-    /// of `now`.
+    /// Whether the session has not ended and ran a command within
+    /// [`ACTIVE_FOR`] of `now`.
     pub fn active(&self, now: u64) -> bool {
         let within = u64::try_from(ACTIVE_FOR.as_millis()).unwrap_or(u64::MAX);
         self.ended_at().is_none() && now.saturating_sub(self.last_seen) <= within
@@ -106,6 +111,29 @@ impl Record {
         {
             *self.counts.entry(verb.to_owned()).or_default() += 1;
         }
+    }
+
+    /// Note a command of this session `now` that records nothing else,
+    /// `ancestor` being its host's process when that is one of the
+    /// command's own ancestors. A process other than the one named (a
+    /// resumed conversation) takes its place and undoes any end. Otherwise
+    /// only the last seen time moves, at most every [`SEEN_WITHIN`], and an
+    /// ended session stays ended: a command's word alone, as an id in its
+    /// environment, never revives one. Whether anything changed.
+    pub fn touched(&mut self, ancestor: Option<Process>, now: u64) -> bool {
+        if let Some(process) = ancestor.filter(|process| self.host_process != Some(*process)) {
+            self.host_process = Some(process);
+            self.ended = None;
+            self.last_seen = now;
+            return true;
+        }
+
+        let within = u64::try_from(SEEN_WITHIN.as_millis()).unwrap_or(u64::MAX);
+        if self.ended.is_some() || now.saturating_sub(self.last_seen) <= within {
+            return false;
+        }
+        self.last_seen = now;
+        true
     }
 
     /// Note the screenshot saved as `capture`, newest first.

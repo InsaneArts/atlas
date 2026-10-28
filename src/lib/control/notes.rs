@@ -5,7 +5,7 @@
 use super::{Durability, write_private_with};
 use crate::{
     error::Result,
-    host_session::{Host, Key, Label, Process, now_ms},
+    host_session::{Host, HostId, Key, Label, Process, now_ms},
 };
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -21,6 +21,13 @@ pub struct Note {
     pub session: Option<Key>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<Host>,
+    /// Its session's project folder's name, never its path, so a session
+    /// on its first command is named as its record will name it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    /// A named session's own label, which names it; none for a host's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub named: Option<HostId>,
     #[serde(flatten)]
     pub process: Process,
     /// When it took control, or began to wait, in milliseconds since 1970.
@@ -34,6 +41,8 @@ impl Note {
         Some(Self {
             session: label.map(|label| label.key.clone()),
             host: label.map(|label| label.host),
+            folder: label.and_then(|label| label.folder.clone()),
+            named: label.and_then(|label| label.named.clone()),
             process: Process::current()?,
             since: now_ms(),
         })

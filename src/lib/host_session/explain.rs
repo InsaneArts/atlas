@@ -4,15 +4,13 @@
 //! the controller's lock. It only adds to a refusal; what was refused, and
 //! why, stays as it was.
 use super::{
-    HostSession, Key,
-    names::{name_of, names},
-    owns_every_unknown,
+    Asker, HostSession, Key, Recovery,
+    names::{name_of, names_with},
     store::Store,
 };
 use crate::{
     client::Client,
     error::{Holder, Result},
-    ui::hints,
 };
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, time::Duration};
@@ -104,9 +102,17 @@ fn additions(refusal: &Refusal, client: &Client, own: Option<&Key>) -> Vec<(&'st
     let Ok(output) = client.output_dir() else {
         return Vec::new();
     };
+    // A session on its first command, as a holder, is named as the
+    // status names it: from its note.
     let named = || {
         let recent = Store::at(output).recent();
-        names(recent.iter().map(|seen| &seen.record))
+        let notes: Vec<_> = client
+            .controller
+            .holder_note()
+            .into_iter()
+            .chain(client.controller.waiting_notes())
+            .collect();
+        names_with(recent.iter().map(|seen| &seen.record), &notes)
     };
 
     match refusal {
@@ -181,8 +187,9 @@ fn last_used_by(
 
 /// Whose the pending changes are: `yours` when every one is this
 /// session's and none still runs, false when any is another's, and the
-/// other sessions' names. A command with no session of its own is told
-/// only whose they are: none of them can be its.
+/// other sessions' names; and what to do about them, by the rule every
+/// surface follows ([`Recovery`]). A command with no session of its own is
+/// told only whose they are: none of them can be its.
 fn caused_by(
     client: &Client,
     own: Option<&Key>,
@@ -191,9 +198,9 @@ fn caused_by(
     let Ok(causes) = client.controller.pending_causes() else {
         return Vec::new();
     };
-    if causes.is_empty() {
+    let Some(recovery) = Recovery::of(&causes, Asker::Agent(own)) else {
         return Vec::new();
-    }
+    };
 
     let mut others: Vec<&Key> = causes
         .iter()
@@ -203,12 +210,9 @@ fn caused_by(
     others.sort();
     others.dedup();
 
-    let yours = own.is_some_and(|own| owns_every_unknown(&causes, own));
-
     let mut added = Vec::new();
-    if yours {
+    if recovery == Recovery::Own {
         added.push(("yours", json!(true)));
-        added.push(("next", json!(hints::YOURS)));
     } else if !others.is_empty() {
         if own.is_some() {
             added.push(("yours", json!(false)));
@@ -220,6 +224,7 @@ fn caused_by(
             .collect();
         added.push(("causedBy", json!(named)));
     }
+    added.push(("next", json!(recovery.step())));
     added
 }
 

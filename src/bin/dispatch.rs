@@ -342,6 +342,14 @@ pub(super) async fn execute(config: PathBuf, command: Command, wait: Duration) -
         })
     };
 
+    // Its session is seen at once, whatever the command does or however it
+    // ends: a label, so a record that cannot be written changes nothing.
+    if let Some(host) = &host
+        && let Ok(client) = client()
+    {
+        let _ = host_session::store::touch(&client, host);
+    }
+
     // The person's stop refuses an agent's change at its start; one already
     // under way is the input service's to cut off.
     if changes {

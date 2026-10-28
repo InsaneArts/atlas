@@ -1558,6 +1558,14 @@ test('a refusal that sent nothing is a quiet line with its reason and never a pr
       nothingSent: true,
       ageSeconds: 9,
     },
+    {
+      says: "didn't click in Notes",
+      actor: 'agent',
+      ok: false,
+      nothingSent: true,
+      reason: "Atlas couldn't tell which app was in front",
+      ageSeconds: 12,
+    },
   ];
   same(
     view
@@ -1574,6 +1582,7 @@ test('a refusal that sent nothing is a quiet line with its reason and never a pr
       ["Didn't type in Notes", false, true, 'Another app was in front'],
       ["Couldn't click Export", true, false, null],
       ["Didn't press ⌘S in Notes", false, true, 'Another app was in front'],
+      ["Didn't click in Notes", false, true, "Atlas couldn't tell which app was in front"],
     ],
   );
   same(

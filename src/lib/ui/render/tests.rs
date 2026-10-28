@@ -932,7 +932,7 @@ fn activity_gives_the_restart_step_only_when_the_reply_does() {
         let mut value = json!({"ok": true, "session": {"name": "Claude Code · left", "this": this},
             "counts": {}, "recent": [], "copies": [], "plans": [], "uncertain": 1});
         if next {
-            value["next"] = json!(crate::ui::hints::YOURS);
+            value["next"] = json!(crate::ui::hints::UNKNOWN_OWN);
         }
         show(View::Activity, value).out
     };

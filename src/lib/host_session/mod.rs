@@ -17,7 +17,7 @@ mod sys;
 
 pub use ancestry::Process;
 
-use crate::control::Cause;
+use crate::{control::Cause, ui::hints};
 use ancestry::{Ancestor, Facts};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -172,12 +172,17 @@ impl From<HostId> for String {
     }
 }
 
-/// What other sessions may know of a host session: its key and its host,
-/// never the host's own id.
+/// What other sessions may know of a host session: its key, its host and
+/// what it is named by, never a host's own id.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Label {
     pub key: Key,
     pub host: Host,
+    /// The project folder's name, never its path.
+    pub folder: Option<String>,
+    /// A named session's own label, its ATLAS_SESSION value, which names
+    /// it; none for a host's session.
+    pub named: Option<HostId>,
 }
 
 /// The host session one command comes from.
@@ -189,6 +194,10 @@ pub struct HostSession {
     id: HostId,
     /// The host's process, where the host names it (Claude Code).
     process: Option<Process>,
+    /// The project folder's name its command works in, never its path.
+    folder: Option<String>,
+    /// When its command started, in milliseconds since 1970.
+    began: Option<u64>,
 }
 
 impl HostSession {
@@ -200,7 +209,25 @@ impl HostSession {
             host,
             id,
             process: None,
+            folder: None,
+            began: None,
         })
+    }
+
+    /// This session, working in the project folder named `folder`.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn in_folder(mut self, folder: Option<&str>) -> Self {
+        self.folder = folder.map(str::to_owned);
+        self
+    }
+
+    /// This session, its command begun at `began`.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn begun(mut self, began: Option<u64>) -> Self {
+        self.began = began;
+        self
     }
 
     /// This session, run by host process `process`.
@@ -230,14 +257,48 @@ impl HostSession {
         self.process
     }
 
-    /// The host session of this process's command, from its environment;
-    /// None when no host names one or its value is not a plain id.
+    /// The host's process when it is one of this command's ancestors and
+    /// still the process it names: proof, beyond the environment's word,
+    /// that this command runs in that host.
+    pub(crate) fn ancestor(&self) -> Option<Process> {
+        self.process.filter(|process| {
+            process.running()
+                && ancestry::ancestors(ANCESTORS)
+                    .iter()
+                    .any(|ancestor| ancestor.pid == process.pid)
+        })
+    }
+
+    /// The project folder's name its command works in, never its path.
+    pub fn folder(&self) -> Option<&str> {
+        self.folder.as_deref()
+    }
+
+    /// When its command started, in milliseconds since 1970: as its notes
+    /// say, by this process's start.
+    pub fn began(&self) -> Option<u64> {
+        self.began
+    }
+
+    /// The host session of this process's command, from its environment,
+    /// working in the project of its working directory and begun when this
+    /// process started; None when no host names one or its value is not a
+    /// plain id.
     pub fn from_env() -> Option<Self> {
-        Self::resolve(
+        let session = Self::resolve(
             |name| std::env::var(name).ok(),
             || ancestry::ancestors(ANCESTORS),
             ancestry::process,
-        )
+        )?;
+        let folder = std::env::current_dir()
+            .ok()
+            .and_then(|directory| store::project_folder(&directory));
+        let began = Process::current().map(|process| process.started_ms());
+        Some(Self {
+            folder,
+            began,
+            ..session
+        })
     }
 
     /// [`HostSession::from_env`] over `env`, with `ancestors` asked only
@@ -284,6 +345,8 @@ impl HostSession {
             host,
             id,
             process,
+            folder: None,
+            began: None,
         })
     }
 
@@ -292,6 +355,8 @@ impl HostSession {
         Label {
             key: self.key.clone(),
             host: self.host,
+            folder: self.folder.clone(),
+            named: (self.host == Host::Named).then(|| self.id.clone()),
         }
     }
 }
@@ -331,6 +396,52 @@ pub(crate) fn owns_every_unknown(causes: &[Cause], own: &Key) -> bool {
         && causes
             .iter()
             .all(|cause| cause.session.as_ref() == Some(own) && !cause.running)
+}
+
+/// Who asks what to do about changes of unknown outcome.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Asker<'a> {
+    /// An agent's command, of this host session when it has one.
+    Agent(Option<&'a Key>),
+    /// The person: from Atlas, or at a terminal with no host session.
+    Person,
+}
+
+/// What to do about pending changes of unknown outcome: the one rule every
+/// surface words its step by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Recovery {
+    /// Every one is the asking session's own and none still runs: it
+    /// recovers them itself.
+    Own,
+    /// One may be another's: the agent waits, or tells the person.
+    Others,
+    /// The person asks, and recovers.
+    Person,
+}
+
+impl Recovery {
+    /// What `asker` does about the pending changes `causes`; none while
+    /// every one is still being carried out, which is work in progress.
+    pub fn of(causes: &[Cause], asker: Asker<'_>) -> Option<Self> {
+        if causes.iter().all(|cause| cause.running) {
+            return None;
+        }
+        Some(match asker {
+            Asker::Agent(Some(own)) if owns_every_unknown(causes, own) => Self::Own,
+            Asker::Agent(_) => Self::Others,
+            Asker::Person => Self::Person,
+        })
+    }
+
+    /// Its step, in one sentence.
+    pub fn step(self) -> &'static str {
+        match self {
+            Self::Own => hints::UNKNOWN_OWN,
+            Self::Others => hints::UNKNOWN_OTHERS,
+            Self::Person => hints::UNKNOWN_FOR_PERSON,
+        }
+    }
 }
 
 /// Whether `value` may be a host id: 1 to [`ID_MAX`] bytes of ASCII
@@ -609,6 +720,69 @@ mod tests {
             &[cause(Some(&own), false), cause(None, false)],
             &own
         ));
+    }
+
+    #[test]
+    fn a_label_names_the_folder_and_only_a_named_sessions_own_label() {
+        let claude = HostSession::new(Host::Claude, CLAUDE_ID)
+            .unwrap()
+            .in_folder(Some("left"));
+        let label = claude.label();
+        assert_eq!(label.folder.as_deref(), Some("left"));
+        assert_eq!(label.named, None, "a host's own id stays private");
+
+        let named = HostSession::new(Host::Named, "release").unwrap().label();
+        assert_eq!(named.named.as_ref().map(HostId::as_str), Some("release"));
+        assert_eq!(named.folder, None);
+    }
+
+    #[test]
+    fn only_the_session_that_claimed_every_unknown_change_recovers_it_itself() {
+        let (own, other) = (Key::of(Host::Pi, "own"), Key::of(Host::Pi, "other"));
+        let cause = |session: Option<&Key>, running: bool| Cause {
+            generation: crate::control::token(),
+            running,
+            session: session.cloned(),
+        };
+        let of = Recovery::of;
+
+        assert_eq!(
+            of(&[], Asker::Agent(Some(&own))),
+            None,
+            "nothing is pending"
+        );
+        assert_eq!(
+            of(&[cause(Some(&own), true)], Asker::Person),
+            None,
+            "a change still being carried out is work in progress"
+        );
+        let mine = [cause(Some(&own), false)];
+        assert_eq!(of(&mine, Asker::Agent(Some(&own))), Some(Recovery::Own));
+        assert_eq!(
+            of(&mine, Asker::Agent(Some(&other))),
+            Some(Recovery::Others)
+        );
+        assert_eq!(of(&mine, Asker::Agent(None)), Some(Recovery::Others));
+        assert_eq!(of(&mine, Asker::Person), Some(Recovery::Person));
+        for shared in [
+            [cause(Some(&own), false), cause(Some(&other), false)],
+            [cause(Some(&own), false), cause(None, false)],
+            [cause(Some(&own), false), cause(Some(&own), true)],
+        ] {
+            assert_eq!(
+                of(&shared, Asker::Agent(Some(&own))),
+                Some(Recovery::Others)
+            );
+        }
+
+        assert!(Recovery::Own.step().contains("atlas restart"));
+        assert!(Recovery::Person.step().contains("atlas restart"));
+        let others = Recovery::Others.step();
+        assert!(
+            !others.contains("atlas "),
+            "no command for another's action"
+        );
+        assert!(others.contains("tell the person"), "{others}");
     }
 
     #[test]

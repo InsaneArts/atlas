@@ -7,7 +7,7 @@ use crate::{
     error::Error,
     host_session::{
         Key,
-        names::{name_of, names},
+        names::{name_of, names_with},
         record::Seen,
         store::Store,
     },
@@ -401,7 +401,10 @@ fn live(client: &Client, facts: SessionFacts) -> Vec<Listed> {
             *unknown.entry(session).or_default() += 1;
         }
     }
-    let named = names(seen.iter().map(|seen| &seen.record));
+    // A session on its first command has no record until that command
+    // ends: its note names it meanwhile, by the same rule as a record.
+    let first = unrecorded(holder.as_ref(), &waiting, &seen);
+    let named = names_with(seen.iter().map(|seen| &seen.record), first.iter().copied());
 
     let mut listed: Vec<Listed> = seen
         .iter()
@@ -414,18 +417,16 @@ fn live(client: &Client, facts: SessionFacts) -> Vec<Listed> {
                 || shown.waiting_for.is_some()
                 || uncertain > 0;
             (wanted && shown.live).then(|| Listed {
-                entry: host_session(seen, &named, uncertain, now_ms),
+                entry: host_session(seen, &named, uncertain, &shown, now_ms),
                 last_seen: record.last_seen,
                 shown,
             })
         })
         .collect();
-    // A session on its first command has no record until that command
-    // ends: its note names it meanwhile.
-    for note in unrecorded(holder.as_ref(), &waiting, &seen) {
+    for note in first {
         let Some(key) = &note.session else { continue };
         listed.push(Listed {
-            entry: first_command(key, note.host, note.since, &named),
+            entry: first_command(key, note, &named),
             last_seen: note.since,
             shown: scene.shown(&Who::Host(key.clone()), false),
         });
@@ -469,10 +470,18 @@ pub(crate) fn first_command_running(client: &Client, seen: &[Seen]) -> bool {
     !unrecorded(holder.as_ref(), &waiting, seen).is_empty()
 }
 
-/// One host session as [`add_host_sessions`] lists it, before how it is
-/// shown.
-fn host_session(seen: &Seen, names: &BTreeMap<Key, String>, uncertain: usize, now: u64) -> Value {
+/// One host session as [`add_host_sessions`] lists it, before the rest of
+/// how it is `shown`: one at work has neither ended nor gone quiet,
+/// whatever its record says.
+fn host_session(
+    seen: &Seen,
+    names: &BTreeMap<Key, String>,
+    uncertain: usize,
+    shown: &session_view::Shown,
+    now: u64,
+) -> Value {
     let record = &seen.record;
+    let at_work = shown.at_work();
     json!({
         "key": record.key,
         "host": record.host,
@@ -482,29 +491,25 @@ fn host_session(seen: &Seen, names: &BTreeMap<Key, String>, uncertain: usize, no
         "hostSession": record.host_session,
         "started": record.started,
         "lastSeen": record.last_seen,
-        "ended": record.ended_at(),
-        "active": record.active(now),
+        "ended": record.ended_at().filter(|_| !at_work),
+        "active": at_work || record.active(now),
         "uncertain": uncertain,
         "leftovers": {"copies": seen.copies_left, "plans": record.plans.len()},
     })
 }
 
 /// A host session whose first command holds or waits for the helper and
-/// so has no record yet, from its note: named by its host alone.
-fn first_command(
-    key: &Key,
-    host: Option<crate::host_session::Host>,
-    since: u64,
-    names: &BTreeMap<Key, String>,
-) -> Value {
+/// so has no record yet, from its note: named by its host and folder, and
+/// started when its command did, as its record will say.
+fn first_command(key: &Key, note: &crate::control::Note, names: &BTreeMap<Key, String>) -> Value {
     json!({
         "key": key,
-        "host": host,
-        "hostLabel": host.map(crate::host_session::Host::label),
-        "name": name_of(names, key, host),
-        "folder": null,
-        "started": since,
-        "lastSeen": since,
+        "host": note.host,
+        "hostLabel": note.host.map(crate::host_session::Host::label),
+        "name": name_of(names, key, note.host),
+        "folder": note.folder,
+        "started": note.process.started_ms(),
+        "lastSeen": note.since,
         "ended": null,
         "active": true,
         "uncertain": 0,
@@ -776,6 +781,9 @@ fn reason(row: &Value) -> Option<&'static str> {
             _ => "The helper doesn't have permission",
         },
         "session-changed" => "The helper's screen changed meanwhile",
+        "focus-changed" if row["reason"] == "unreadable" => {
+            "Atlas couldn't tell which app was in front"
+        }
         "focus-changed" => "Another app was in front",
         "lease-lost" => "Control ended before it finished",
         "cancelled" => "It was cancelled",
@@ -1098,6 +1106,230 @@ mod tests {
     }
 
     #[test]
+    fn a_session_on_its_first_command_is_named_by_its_host_and_folder_as_its_record_will_be() {
+        use crate::host_session::{Host, HostSession, store::note};
+
+        let directory = tempfile::tempdir().unwrap();
+        let client = crate::transaction_test::client(directory.path());
+        let first = HostSession::new(Host::Codex, "first")
+            .unwrap()
+            .in_folder(Some("left"));
+        let holding = client
+            .controller
+            .clone()
+            .labelled(Some(&first))
+            .acquire(true)
+            .unwrap();
+
+        let listed = host_sessions(&client, facts(false, crate::client::timestamp()));
+        let entry = &listed.sessions[0];
+        assert_eq!(entry["name"], "Codex · left");
+        assert_eq!(entry["folder"], "left");
+
+        // Another session of that host in that folder: both gain their
+        // start times, as two records would.
+        let other = HostSession::new(Host::Codex, "other")
+            .unwrap()
+            .in_folder(Some("left"));
+        note(
+            &client,
+            &other,
+            crate::host_session::store::Kind::Other,
+            Some(&crate::doing::Doing::new("click")),
+            &Ok(json!({"ok": true})),
+        )
+        .unwrap();
+        let listed = host_sessions(&client, facts(false, crate::client::timestamp()));
+        let names: BTreeMap<&str, &str> = listed
+            .sessions
+            .iter()
+            .map(|entry| {
+                (
+                    entry["key"].as_str().unwrap(),
+                    entry["name"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(names.len(), 2);
+        for key in [first.key(), other.key()] {
+            assert!(
+                names[key.as_str()].starts_with("Codex · left · "),
+                "{names:?}"
+            );
+        }
+        assert_ne!(names[first.key().as_str()], names[other.key().as_str()]);
+        drop(holding);
+
+        let named = HostSession::new(Host::Named, "release")
+            .unwrap()
+            .in_folder(Some("left"));
+        let holding = client
+            .controller
+            .clone()
+            .labelled(Some(&named))
+            .acquire(true)
+            .unwrap();
+        let listed = host_sessions(&client, facts(false, crate::client::timestamp()));
+        let entry = listed
+            .sessions
+            .iter()
+            .find(|entry| entry["key"] == named.key().as_str())
+            .unwrap();
+        assert_eq!(
+            entry["name"], "release · left",
+            "a named session by its label"
+        );
+        drop(holding);
+    }
+
+    #[test]
+    fn a_first_commands_name_stays_once_its_record_is_written() {
+        use crate::host_session::{Host, HostSession, Process, store::note};
+
+        let directory = tempfile::tempdir().unwrap();
+        let client = crate::transaction_test::client(directory.path());
+        let worked = |session: &HostSession| {
+            note(
+                &client,
+                session,
+                crate::host_session::store::Kind::Other,
+                Some(&crate::doing::Doing::new("click")),
+                &Ok(json!({"ok": true})),
+            )
+            .unwrap();
+        };
+        let other = HostSession::new(Host::Codex, "other")
+            .unwrap()
+            .in_folder(Some("left"));
+        worked(&other);
+        // This test process stands for the first command: its notes and
+        // its record both start when it did.
+        let first = HostSession::new(Host::Codex, "first")
+            .unwrap()
+            .in_folder(Some("left"))
+            .begun(Process::current().map(|process| process.started_ms()));
+        let holding = client
+            .controller
+            .clone()
+            .labelled(Some(&first))
+            .acquire(true)
+            .unwrap();
+        let name = |listed: &HostSessions| {
+            listed
+                .sessions
+                .iter()
+                .find(|entry| entry["key"] == first.key().as_str())
+                .map(|entry| (entry["name"].clone(), entry["started"].clone()))
+                .unwrap()
+        };
+
+        let before = name(&host_sessions(
+            &client,
+            facts(false, crate::client::timestamp()),
+        ));
+        assert!(before.0.as_str().unwrap().starts_with("Codex · left · "));
+        worked(&first);
+        let after = name(&host_sessions(
+            &client,
+            facts(false, crate::client::timestamp()),
+        ));
+        assert_eq!(after, before);
+        drop(holding);
+    }
+
+    #[test]
+    fn a_session_at_work_has_never_ended_whatever_its_record_says() {
+        use crate::host_session::{
+            Host, HostSession, Process,
+            store::{Kind, note, touch},
+        };
+
+        let directory = tempfile::tempdir().unwrap();
+        let client = crate::transaction_test::client(directory.path());
+        let first = HostSession::new(Host::Claude, "resumed")
+            .unwrap()
+            .run_by(Some(Process::new(i32::MAX, [1, 0])));
+        note(
+            &client,
+            &first,
+            Kind::Other,
+            Some(&crate::doing::Doing::new("click")),
+            &Ok(json!({"ok": true})),
+        )
+        .unwrap();
+        let listed = host_sessions(&client, facts(false, crate::client::timestamp()));
+        assert!(listed.sessions.is_empty(), "the process it names is gone");
+
+        // Resumed in a new process, the one this command runs in: its
+        // command holds the helper before anything is recorded.
+        let parent = nix::unistd::getppid().as_raw();
+        let host = crate::host_session::ancestry::process(parent).unwrap();
+        let resumed = HostSession::new(Host::Claude, "resumed")
+            .unwrap()
+            .run_by(Some(Process::new(parent, host.start)));
+        let holding = client
+            .controller
+            .clone()
+            .labelled(Some(&resumed))
+            .acquire(true)
+            .unwrap();
+        let listed = host_sessions(&client, facts(false, crate::client::timestamp()));
+        let entry = &listed.sessions[0];
+        assert_eq!(entry["state"], "acting");
+        assert_eq!(
+            (&entry["live"], &entry["ended"], &entry["active"]),
+            (&json!(true), &Value::Null, &json!(true))
+        );
+        drop(holding);
+
+        // Any command of it refreshes its record, a read too.
+        touch(&client, &resumed).unwrap();
+        let listed = host_sessions(&client, facts(false, crate::client::timestamp()));
+        let entry = &listed.sessions[0];
+        assert_eq!(entry["state"], "idle");
+        assert_eq!(
+            (&entry["live"], &entry["ended"], &entry["active"]),
+            (&json!(true), &Value::Null, &json!(true))
+        );
+    }
+
+    #[test]
+    fn an_ended_session_waits_for_no_recovery() {
+        use crate::host_session::{Host, HostSession, store::note};
+
+        let directory = tempfile::tempdir().unwrap();
+        let client = crate::transaction_test::client(directory.path());
+        let session = HostSession::new(Host::Codex, "done").unwrap();
+        note(
+            &client,
+            &session,
+            crate::host_session::store::Kind::Other,
+            Some(&crate::doing::Doing::new("click")),
+            &Ok(json!({"ok": true})),
+        )
+        .unwrap();
+        let output = client.output_dir().unwrap().to_path_buf();
+        let now = crate::client::timestamp();
+        let row = json!({"at": (now - 1_000_000_000).to_string(), "operation": "input",
+            "ok": true, "actor": "agent", "verb": "click", "session": session.key()});
+        fs::write(output.join("metadata.jsonl"), format!("{row}\n")).unwrap();
+
+        let listed = host_sessions(&client, facts(true, now));
+        assert_eq!(listed.sessions[0]["waitingFor"], "recovery");
+
+        let path = output.join(format!("sessions/{}.json", session.key()));
+        let mut record: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        record["ended"] = record["lastSeen"].clone();
+        // Renamed into place, as every record is written, so status reads
+        // see the folder changed.
+        let partial = path.with_extension("json.partial");
+        fs::write(&partial, record.to_string()).unwrap();
+        fs::rename(&partial, &path).unwrap();
+        let listed = host_sessions(&client, facts(true, now));
+        assert!(listed.sessions.is_empty(), "{:?}", listed.sessions);
+    }
+
+    #[test]
     fn ended_sessions_are_neither_listed_nor_counted_as_more() {
         use crate::host_session::{Host, HostSession, store::note};
 
@@ -1146,6 +1378,25 @@ mod tests {
         let shown = shown(&row, NOW);
         assert_eq!(shown["reason"], "Another app was in front");
         assert_eq!(shown["says"], "didn't type in TextEdit");
+    }
+
+    #[test]
+    fn a_focus_refusal_atlas_could_not_read_says_so_rather_than_blaming_another_app() {
+        let reason = |why: &str| {
+            let row = json!({"operation": "input", "ok": false, "code": "focus-changed",
+                "verb": "click", "reason": why});
+            shown(&row, NOW)["reason"].clone()
+        };
+        assert_eq!(
+            reason("unreadable"),
+            "Atlas couldn't tell which app was in front"
+        );
+        for other in ["app", "point"] {
+            assert_eq!(reason(other), "Another app was in front", "{other}");
+        }
+        let unreadable = json!({"operation": "input", "ok": false, "code": "focus-changed",
+            "reason": "unreadable"});
+        assert_eq!(shown(&unreadable, NOW)["nothingSent"], true);
     }
 
     #[test]

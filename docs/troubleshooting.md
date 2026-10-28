@@ -44,7 +44,7 @@ For `transport`, check whether the helper is logged in and read `doctor`. If the
 
 ## An action's outcome is unknown
 
-An uncertain result means the action may or may not have happened. Do not repeat it or remove its pending-action files.
+An uncertain result means the action may or may not have happened. Do not repeat it or remove its pending-action files. Until it is recovered, `doctor` reports `ready: false`, with a last step that says to run `atlas restart` when the action was the asking session's own, or to wait or tell the person when it may be another's.
 
 1. Stop sending changes. Keep the error and command that produced it.
 2. If the helper can answer, take a screenshot and inspect it. If it is logged out or needs a person to approve a permission, complete that prerequisite first.

@@ -6,8 +6,16 @@ use crate::error::Holder;
 /// The step for your own action that may or may not have happened.
 pub const UNCERTAIN: &str = "It may or may not have happened, so don't repeat it. Take a screenshot, then run atlas restart.";
 
-/// What an agent does about an unknown outcome its own session caused.
-pub const YOURS: &str = "It was this session's own earlier action. Take a screenshot, then run atlas restart and look again.";
+/// The step while every pending change of unknown outcome is the asking
+/// session's own and none still runs.
+pub const UNKNOWN_OWN: &str = "An earlier action of this session may not have finished. Take a screenshot, then run atlas restart.";
+
+/// The step for an agent while a pending change of unknown outcome may be
+/// another's.
+pub const UNKNOWN_OTHERS: &str = "An earlier action, maybe another agent's, may not have finished. Wait for it to be recovered, or tell the person.";
+
+/// The step for the person while a change of unknown outcome is pending.
+pub const UNKNOWN_FOR_PERSON: &str = "An action may not have finished. Look at the helper, then recover it in Atlas or with atlas restart.";
 
 /// What an agent does about busy once Atlas has waited for the holder.
 pub const WAITED: &str = "Atlas already waited for it. Do something else, then try again, or pass a longer --wait if your tool's timeout allows.";
@@ -97,13 +105,13 @@ pub fn focus_changed(sent: bool, unreadable: bool) -> &'static str {
             "Another app was in front, maybe another agent's, and nothing of the command was sent. Click where your app shows, then run it again."
         }
         (false, true) => {
-            "Atlas could not tell which app was in front, often because the active app has no window, and nothing of the command was sent. Click where your app shows, or open the app if none of it shows, then run it again."
+            "Atlas couldn't tell which app was in front, often because the active app has no window, and nothing of the command was sent. Click where your app shows, or open the app if none of it shows, then run it again."
         }
         (true, false) => {
             "Another app was in front, maybe another agent's. Earlier actions were sent: check typed or performed and what landed, click where your app shows, then send only the rest."
         }
         (true, true) => {
-            "Atlas could not tell which app was in front, often because the active app has no window. Earlier actions were sent: check typed or performed and what landed, click where your app shows or open the app if none of it shows, then send only the rest."
+            "Atlas couldn't tell which app was in front, often because the active app has no window. Earlier actions were sent: check typed or performed and what landed, click where your app shows or open the app if none of it shows, then send only the rest."
         }
     }
 }
@@ -312,11 +320,13 @@ mod tests {
         for sent in [false, true] {
             let said = focus_changed(sent, true);
             assert!(
-                said.contains("could not tell which app was in front"),
+                said.starts_with("Atlas couldn't tell which app was in front"),
                 "{said}"
             );
             assert!(said.contains("open the app if none of it shows"), "{said}");
-            assert!(!focus_changed(sent, false).contains("open the app"));
+            let other = focus_changed(sent, false);
+            assert!(!other.contains("open the app"));
+            assert!(other.starts_with("Another app was in front"), "{other}");
         }
     }
 

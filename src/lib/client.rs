@@ -2065,7 +2065,8 @@ impl Client {
 
         // A failure keeps its fixed code (never its message), so the app can
         // say why in plain words. A refusal for another app in front says
-        // whether some of the command was sent before it.
+        // whether some of the command was sent before it, and why it was
+        // refused.
         if !start
             && !ok
             && let (Some(code), Some(fields)) = (failure_code(reply), row.as_object_mut())
@@ -2075,6 +2076,9 @@ impl Client {
                     .as_u64()
                     .is_some_and(|performed| performed > 0);
                 fields.insert("partial".into(), json!(sent || reply["partial"] == true));
+                if let Some(reason) = focus_reason(reply) {
+                    fields.insert("reason".into(), json!(reason));
+                }
             }
             fields.insert("code".into(), json!(code));
         }
@@ -2168,6 +2172,19 @@ fn failure_code(reply: &Value) -> Option<String> {
     }
     (!reply["signal"].is_null() || reply["exitCode"].as_i64().is_some_and(|code| code != 0))
         .then(|| "exit".into())
+}
+
+/// Why a focus refusal in `reply` was refused, when it is one of the input
+/// service's fixed words: another app had keyboard focus (`app`), another
+/// app's window was at the point (`point`), or Atlas couldn't tell which
+/// app was in front (`unreadable`).
+fn focus_reason(reply: &Value) -> Option<&'static str> {
+    match reply["reason"].as_str()? {
+        "app" => Some("app"),
+        "point" => Some("point"),
+        "unreadable" => Some("unreadable"),
+        _ => None,
+    }
 }
 
 /// Whether a mutation did what it was for: the helper accepted it and, for
@@ -3567,6 +3584,44 @@ mod tests {
         assert_eq!(
             partial,
             [json!(false), json!(true), json!(true), Value::Null]
+        );
+    }
+
+    #[test]
+    fn a_focus_refusals_row_keeps_why_it_was_refused_in_the_services_own_words_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = labelled(&client_in(dir.path()));
+        let request = json!({"op": "input", "actions": [{}]});
+        for reason in [
+            json!("app"),
+            json!("point"),
+            json!("unreadable"),
+            json!("Calculator has keyboard focus"),
+            Value::Null,
+        ] {
+            client.record_for_test(
+                &request,
+                &json!({"ok": false, "code": "focus-changed", "reason": reason, "performed": 0}),
+            );
+        }
+        client.record_for_test(
+            &request,
+            &json!({"ok": false, "code": "busy", "reason": "app"}),
+        );
+        let reasons: Vec<Value> = rows(&client)
+            .iter()
+            .map(|row| row["reason"].clone())
+            .collect();
+        assert_eq!(
+            reasons,
+            [
+                json!("app"),
+                json!("point"),
+                json!("unreadable"),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+            ]
         );
     }
 

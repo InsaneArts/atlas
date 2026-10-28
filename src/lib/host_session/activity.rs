@@ -4,9 +4,8 @@
 //! it works while another command or the person has control, and after a
 //! Stop. Only the caller's own session is told its host's id, or to recover.
 use super::{
-    Host, HostSession, Key,
+    Asker, Host, HostSession, Key, Recovery,
     names::{name_of, names},
-    owns_every_unknown,
     record::{Leftovers, Record},
     store::Store,
 };
@@ -15,7 +14,6 @@ use crate::{
     control::{Cause, Token},
     error::{Error, Result},
     handoff,
-    ui::hints,
 };
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::Path};
@@ -186,8 +184,10 @@ impl Reading<'_> {
         }
         // Only the session itself may recover, and only when every
         // unknown action is its own and none is still being carried out.
-        if subject.own.is_some() && owns_every_unknown(&self.causes, subject.key) {
-            reply["next"] = json!(hints::YOURS);
+        if subject.own.is_some()
+            && Recovery::of(&self.causes, Asker::Agent(Some(subject.key))) == Some(Recovery::Own)
+        {
+            reply["next"] = json!(Recovery::Own.step());
         }
         reply
     }

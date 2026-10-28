@@ -6,7 +6,7 @@
 //! cleanup. Recording is best effort and never holds a command up: when
 //! another command is writing the records, this one's goes unrecorded.
 use super::{
-    HostSession, Key, now_ms,
+    HostSession, Key, Process, now_ms,
     record::{Leftovers, Record, Seen},
 };
 use crate::{
@@ -223,11 +223,12 @@ impl Store {
 
         let existing = self.read(session.key());
         let made = existing.is_none();
+        // A new record starts when its first command did, as that command's
+        // notes named it meanwhile.
         let mut record = existing.unwrap_or_else(|| {
-            let folder = std::env::current_dir()
-                .ok()
-                .and_then(|directory| project_folder(&directory));
-            Record::new(session, now, folder)
+            let mut record = Record::new(session, now, session.folder().map(str::to_owned));
+            record.started = session.began().map_or(now, |began| began.min(now));
+            record
         });
 
         if made && let Some(mut before) = self.before_clear(&record) {
@@ -244,6 +245,32 @@ impl Store {
             self.prune(&record.key, &causes);
         }
         Ok(())
+    }
+
+    /// Note a command of `key`'s session `now`, as [`Record::touched`]
+    /// says, `ancestor` being its host's process when that is one of the
+    /// command's ancestors. Nothing is written, and the lock is not taken,
+    /// while nothing would change; a session with no record gets none. The
+    /// lock is tried once: while another command writes the records, this
+    /// one is refused at once rather than wait.
+    pub(crate) fn touch(&self, key: &Key, ancestor: Option<Process>, now: u64) -> Result<()> {
+        if !self
+            .read(key)
+            .is_some_and(|mut record| record.touched(ancestor, now))
+        {
+            return Ok(());
+        }
+
+        let _lock = self.lock_within(Duration::ZERO)?;
+        match self.read(key) {
+            Some(mut record) => {
+                if record.touched(ancestor, now) {
+                    self.write(&record)?;
+                }
+                Ok(())
+            }
+            None => Ok(()),
+        }
     }
 
     /// Forget plan `plan_id`, which a command rolled back, in every record
@@ -351,6 +378,11 @@ impl Store {
     /// reader. A command waits at most [`LOCK_WAIT`] for another to let go
     /// of it, then is refused, so recording never holds a command up.
     fn lock(&self) -> Result<File> {
+        self.lock_within(LOCK_WAIT)
+    }
+
+    /// [`Store::lock`], waiting at most `wait`: none at all tries once.
+    fn lock_within(&self, wait: Duration) -> Result<File> {
         let path = self.directory.join(".lock");
         let lock = OpenOptions::new()
             .create(true)
@@ -367,7 +399,7 @@ impl Store {
             ));
         }
 
-        let until = Instant::now() + LOCK_WAIT;
+        let until = Instant::now() + wait;
         while FileExt::try_lock_exclusive(&lock).is_err() {
             if Instant::now() >= until {
                 return Err(Error::new(
@@ -430,6 +462,16 @@ pub fn note(
             keep_what_was_left(record, kind, reply, now);
         }
     })
+}
+
+/// Note that `session` runs a command now, whatever it does: a read too,
+/// and before it does anything, so a command killed partway still counts.
+/// Its record, when it has one, gets its last seen time and, when the
+/// host's process is one of this command's ancestors, that process (a
+/// resumed conversation runs in a new one), so it never reads as ended
+/// while that process runs. Best effort, and never waits.
+pub fn touch(client: &Client, session: &HostSession) -> Result<()> {
+    Store::at(client.output_dir()?).touch(session.key(), session.ancestor(), now_ms())
 }
 
 /// Forget, in every session's record, the plan a successful rollback in

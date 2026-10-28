@@ -38,6 +38,13 @@ impl Process {
         matches!(self.state(), State::Running | State::Stopped)
     }
 
+    /// When it started, in milliseconds since 1970.
+    pub fn started_ms(&self) -> u64 {
+        self.start[0]
+            .saturating_mul(1000)
+            .saturating_add(self.start[1] / 1000)
+    }
+
     /// Whether this is the process asking.
     pub fn is_this_one(&self) -> bool {
         u32::try_from(self.pid).is_ok_and(|pid| pid == std::process::id())

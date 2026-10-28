@@ -243,10 +243,10 @@ mod tests {
 
         let yours = Error::new("uncertain", "Unknown")
             .with("yours", true)
-            .with("next", hints::YOURS);
+            .with("next", hints::UNKNOWN_OWN);
         assert_eq!(
             failure(&yours, true)["next"],
-            hints::YOURS,
+            hints::UNKNOWN_OWN,
             "an unknown action of this session's own keeps its step"
         );
 

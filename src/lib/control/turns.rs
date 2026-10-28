@@ -195,6 +195,8 @@ mod tests {
         let note = Note {
             session: None,
             host: None,
+            folder: None,
+            named: None,
             process,
             since,
         };

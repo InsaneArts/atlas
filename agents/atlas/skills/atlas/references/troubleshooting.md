@@ -10,7 +10,9 @@ may not have happened: never repeat it; take a screenshot, run `atlas restart`,
 and look again. The code `uncertain` when no reply of yours was uncertain is
 someone else's unknown action, unless it says `yours: true`: do not run
 `atlas restart`; wait, and ask the person if it stays. (`atlas run` replies `ok` when the command ran; its own
-failure is in `exitCode`.)
+failure is in `exitCode`.) While an outcome is unknown, `doctor` is not ready:
+when its step says to wait or tell the person, do just that. Atlas is set up,
+so never start setup or `atlas init` for it.
 
 | Code | Means | Do |
 | --- | --- | --- |

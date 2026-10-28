@@ -371,6 +371,152 @@ fn a_session_resumed_in_a_new_process_is_the_same_record_and_not_ended() {
     assert_eq!(record.counts["click"], 2);
 }
 
+/// A process that is this one's ancestor: its parent.
+fn parent() -> Process {
+    let pid = nix::unistd::getppid().as_raw();
+    Process::new(
+        pid,
+        crate::host_session::ancestry::process(pid).unwrap().start,
+    )
+}
+
+#[test]
+fn any_command_of_a_resumed_session_takes_its_new_process_before_it_acts() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let gone = session("resumed").run_by(Some(Process::new(i32::MAX, [1, 0])));
+    noted(&client, &gone, Kind::Other, "click", json!({"ok": true}));
+    let before = store(&client).read(gone.key()).unwrap();
+    assert!(before.ended_at().is_some(), "its first process is gone");
+
+    // A read records nothing of its own, but the session is seen, in the
+    // host process this command runs in.
+    let resumed = session("resumed").run_by(Some(parent()));
+    assert_eq!(resumed.ancestor(), Some(parent()));
+    touch(&client, &resumed).unwrap();
+    let after = store(&client).read(gone.key()).unwrap();
+    assert_eq!(after.host_process, Some(parent()));
+    assert_eq!(after.ended_at(), None);
+    assert!(after.active(now_ms()));
+    assert_eq!(after.counts, before.counts, "nothing is counted");
+}
+
+#[test]
+fn a_forged_id_naming_an_unrelated_process_neither_revives_nor_takes_a_record() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let real = session("real").run_by(Some(Process::new(i32::MAX, [1, 0])));
+    noted(&client, &real, Kind::Other, "click", json!({"ok": true}));
+    let mut ended = store(&client).read(real.key()).unwrap();
+    ended.last_seen -= 60_000;
+    ended.ended = Some(ended.last_seen);
+    store(&client).write(&ended).unwrap();
+
+    // A live process, but not one this command runs in: the command itself.
+    let forged = session("real").run_by(Process::current());
+    assert_eq!(forged.ancestor(), None, "not this command's host");
+    touch(&client, &forged).unwrap();
+    assert_eq!(
+        store(&client).read(real.key()).unwrap(),
+        ended,
+        "nothing changes: not its process, its end, nor when it was seen"
+    );
+
+    // A record that has not ended is seen again, and no more.
+    let mut open = ended.clone();
+    open.ended = None;
+    store(&client).write(&open).unwrap();
+    touch(&client, &forged).unwrap();
+    let seen = store(&client).read(real.key()).unwrap();
+    assert_eq!(seen.host_process, open.host_process);
+    assert!(seen.last_seen > open.last_seen);
+}
+
+#[test]
+fn a_touch_writes_only_what_changed_and_never_makes_a_record() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let store = store(&client);
+    let fresh = session("fresh").run_by(Some(parent()));
+
+    touch(&client, &fresh).unwrap();
+    assert_eq!(store.read(fresh.key()), None, "no record is made");
+
+    noted(&client, &fresh, Kind::Other, "click", json!({"ok": true}));
+    let written = store.read(fresh.key()).unwrap();
+    store
+        .touch(fresh.key(), Some(parent()), written.last_seen + 1000)
+        .unwrap();
+    assert_eq!(
+        store.read(fresh.key()).unwrap(),
+        written,
+        "nothing to write"
+    );
+
+    let later = written.last_seen + 60_000;
+    store.touch(fresh.key(), Some(parent()), later).unwrap();
+    assert_eq!(store.read(fresh.key()).unwrap().last_seen, later);
+}
+
+#[test]
+fn a_session_ended_by_clear_stays_ended_unless_resumed_in_another_process() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let before = session("before").run_by(Some(parent()));
+    let after = session("after").run_by(Some(parent()));
+    noted(&client, &before, Kind::Other, "click", json!({"ok": true}));
+    noted(&client, &after, Kind::Other, "click", json!({"ok": true}));
+    let cleared = store(&client).read(before.key()).unwrap();
+    assert!(cleared.ended.is_some());
+
+    let later = cleared.last_seen + 60_000;
+    store(&client)
+        .touch(before.key(), Some(parent()), later)
+        .unwrap();
+    assert_eq!(
+        store(&client).read(before.key()).unwrap(),
+        cleared,
+        "the same process, so still ended"
+    );
+    store(&client).touch(before.key(), None, later).unwrap();
+    assert_eq!(store(&client).read(before.key()).unwrap(), cleared);
+
+    let resumed = Process::current().unwrap();
+    store(&client)
+        .touch(before.key(), Some(resumed), later)
+        .unwrap();
+    let revived = store(&client).read(before.key()).unwrap();
+    assert_eq!(revived.ended, None, "resumed in a process of its own");
+    assert_eq!(revived.host_process, Some(resumed));
+}
+
+#[test]
+fn a_touch_never_waits_for_another_command_writing_the_records() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let session = session("contended").run_by(Some(Process::new(i32::MAX, [1, 0])));
+    noted(&client, &session, Kind::Other, "click", json!({"ok": true}));
+    let before = fs::read(store(&client).path(session.key())).unwrap();
+
+    let other = OpenOptions::new()
+        .write(true)
+        .open(client.output_dir().unwrap().join("sessions/.lock"))
+        .unwrap();
+    FileExt::lock_exclusive(&other).unwrap();
+    let resumed = session.clone().run_by(Some(parent()));
+    let started = Instant::now();
+    let touched = touch(&client, &resumed);
+    let waited = started.elapsed();
+    let _ = FileExt::unlock(&other);
+
+    assert_eq!(touched.unwrap_err().code, "busy");
+    assert!(waited < LOCK_WAIT, "it tried once: {waited:?}");
+    assert_eq!(
+        fs::read(store(&client).path(session.key())).unwrap(),
+        before
+    );
+}
+
 /// A record of `id` last seen `days_ago`, written straight into `store`.
 fn aged(store: &Store, id: &str, days_ago: u64, plans: usize) -> Record {
     let mut record = Record::new(&session(id), 0, None);
@@ -664,6 +810,22 @@ fn a_status_read_counts_the_copy_folders_still_there() {
 
     let seen = store.recent_in(&Mutex::new(None), Store::all);
     assert_eq!(seen[0].copies_left, 1);
+}
+
+#[test]
+fn a_new_record_works_in_its_sessions_folder() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let left = session("left").in_folder(Some("left"));
+    noted(&client, &left, Kind::Other, "click", json!({"ok": true}));
+    assert_eq!(
+        store(&client).read(left.key()).unwrap().folder.as_deref(),
+        Some("left")
+    );
+
+    let nowhere = session("nowhere");
+    noted(&client, &nowhere, Kind::Other, "click", json!({"ok": true}));
+    assert_eq!(store(&client).read(nowhere.key()).unwrap().folder, None);
 }
 
 #[test]

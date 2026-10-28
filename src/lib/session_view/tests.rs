@@ -27,6 +27,8 @@ fn note(session: Option<&Key>, ago: u64) -> Note {
     Note {
         session: session.cloned(),
         host: session.map(|_| Host::Claude),
+        folder: None,
+        named: None,
         process: Process::current().unwrap(),
         since: u64::try_from(NOW / 1_000_000).unwrap() - ago * 1000,
     }
@@ -212,6 +214,76 @@ fn a_change_no_host_claimed_blames_nobody_even_after_a_kill_left_a_row_under_way
         assert_eq!(shown.waiting_for, Some(WaitingFor::Recovery));
         assert_eq!(shown.uncertain_row, None);
     }
+}
+
+#[test]
+fn a_row_under_way_holds_nothing_while_an_outcome_is_unknown() {
+    let left = key("left");
+    let rows = [
+        row(
+            None,
+            1,
+            json!({"ok": null, "started": true, "verb": "type"}),
+        ),
+        row(Some(&left), 6, json!({})),
+    ];
+    let causes = [cause(None)];
+    let mut killed = note(None, 1);
+    killed.process = Process::new(i32::MAX, [1, 0]);
+    let scene = Scene {
+        holder: Some(&killed),
+        causes: &causes,
+        pending: true,
+        ..scene(&rows)
+    };
+
+    let terminal = scene.shown(&Who::Terminal, false);
+    assert!(!terminal.holds_helper, "its killed command holds nothing");
+    assert_eq!(terminal.state, State::Waiting);
+    assert_eq!(terminal.waiting_for, Some(WaitingFor::Recovery));
+    assert_eq!(
+        scene.shown(&Who::Host(left), false).waiting_for,
+        Some(WaitingFor::Recovery)
+    );
+    let nothing = Scene {
+        holder: None,
+        ..scene
+    };
+    assert!(!nothing.shown(&Who::Terminal, false).holds_helper);
+
+    // While an outcome is unknown, only a live note naming a session, or
+    // the input service, says who holds the helper: a live note naming
+    // none, as recovery's or the person's, leaves the row standing for
+    // nobody.
+    let running = note(None, 1);
+    let held = Scene {
+        holder: Some(&running),
+        ..nothing
+    };
+    assert!(!held.shown(&Who::Terminal, false).holds_helper);
+    let left_note = note(Some(&key("left")), 1);
+    let left_holds = Scene {
+        holder: Some(&left_note),
+        ..nothing
+    };
+    assert!(
+        left_holds
+            .shown(&Who::Host(key("left")), false)
+            .holds_helper
+    );
+    let service = Scene {
+        agent_holds: true,
+        ..nothing
+    };
+    assert!(service.shown(&Who::Terminal, false).holds_helper);
+
+    // With no outcome unknown, a row under way stands for its holder.
+    let settled = Scene {
+        causes: &[],
+        pending: false,
+        ..nothing
+    };
+    assert_eq!(settled.shown(&Who::Terminal, false).state, State::Acting);
 }
 
 #[test]

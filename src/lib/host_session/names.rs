@@ -1,9 +1,36 @@
 //! What every surface calls a host session: its host and project folder,
-//! "Claude Code · left", with its start time only when another recorded
-//! session shares both. Names are worked out when read, so one may gain
-//! its time later. No host title, transcript or host store is ever read.
-use super::{Host, Key, record::Record};
+//! "Claude Code · left", with its start time only when another session
+//! shares both. Names are worked out when read, so one may gain its time
+//! later. No host title, transcript or host store is ever read.
+use super::{Host, HostId, Key, record::Record};
+use crate::control::Note;
 use std::collections::BTreeMap;
+
+/// What a session is named by: a record, or the note of a session on its
+/// first command, which has no record yet.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Naming<'a> {
+    pub key: &'a Key,
+    pub host: Host,
+    /// A named session's own label, which names it.
+    pub named: Option<&'a str>,
+    /// The project folder's name.
+    pub folder: Option<&'a str>,
+    /// When it started, in milliseconds since 1970.
+    pub started: u64,
+}
+
+impl<'a> From<&'a Record> for Naming<'a> {
+    fn from(record: &'a Record) -> Self {
+        Self {
+            key: &record.key,
+            host: record.host,
+            named: (record.host == Host::Named).then(|| record.host_session.as_str()),
+            folder: record.folder.as_deref(),
+            started: record.started,
+        }
+    }
+}
 
 /// How many of a key's characters tell apart sessions started in the same
 /// second.
@@ -11,12 +38,52 @@ const KEY_SHOWN: usize = 4;
 /// What separates a name's parts.
 const DOT: &str = " · ";
 
+impl<'a> Naming<'a> {
+    /// What a session on its first command is named by, from its `note`:
+    /// its host and folder as that command resolved them, and when that
+    /// command started, as its record will say once written.
+    pub(crate) fn of_note(note: &'a Note) -> Option<Self> {
+        Some(Self {
+            key: note.session.as_ref()?,
+            host: note.host?,
+            named: note.named.as_ref().map(HostId::as_str),
+            folder: note.folder.as_deref(),
+            started: note.process.started_ms(),
+        })
+    }
+}
+
+/// The name of each session `records` name and of each on its first
+/// command, which only a live note of `notes` names yet: one rule for both,
+/// so a name does not change once its record is written.
+pub(crate) fn names_with<'a>(
+    records: impl IntoIterator<Item = &'a Record>,
+    notes: impl IntoIterator<Item = &'a Note>,
+) -> BTreeMap<Key, String> {
+    let mut sessions: Vec<Naming<'a>> = records.into_iter().map(Naming::from).collect();
+    for first in notes
+        .into_iter()
+        .filter(|note| note.live())
+        .filter_map(Naming::of_note)
+    {
+        if sessions.iter().all(|known| known.key != first.key) {
+            sessions.push(first);
+        }
+    }
+    named(sessions)
+}
+
 /// Each record's name as every surface shows it: "Claude Code · left",
 /// with its start time when another record shares host and folder.
 pub(crate) fn names<'a>(records: impl IntoIterator<Item = &'a Record>) -> BTreeMap<Key, String> {
-    let mut groups: BTreeMap<String, Vec<&Record>> = BTreeMap::new();
-    for record in records {
-        groups.entry(base(record)).or_default().push(record);
+    named(records.into_iter().map(Naming::from))
+}
+
+/// [`names`] of each session `sessions` name, records or not.
+pub(crate) fn named<'a>(sessions: impl IntoIterator<Item = Naming<'a>>) -> BTreeMap<Key, String> {
+    let mut groups: BTreeMap<String, Vec<Naming<'a>>> = BTreeMap::new();
+    for session in sessions {
+        groups.entry(base(&session)).or_default().push(session);
     }
 
     let mut named = BTreeMap::new();
@@ -26,26 +93,28 @@ pub(crate) fn names<'a>(records: impl IntoIterator<Item = &'a Record>) -> BTreeM
             continue;
         }
 
-        let minutes: Vec<Option<String>> =
-            group.iter().map(|record| minute(record.started)).collect();
-        for (record, at) in group.iter().zip(&minutes) {
+        let minutes: Vec<Option<String>> = group
+            .iter()
+            .map(|session| minute(session.started))
+            .collect();
+        for (session, at) in group.iter().zip(&minutes) {
             let shared = minutes.iter().filter(|other| *other == at).count() > 1;
             let name = match at {
                 Some(at) if !shared => format!("{base}{DOT}{at}"),
                 Some(at) => {
-                    let seconds = second(record.started);
+                    let seconds = second(session.started);
                     let alike = group
                         .iter()
                         .filter(|other| second(other.started) == seconds)
                         .count();
                     match seconds {
                         Some(seconds) if alike == 1 => format!("{base}{DOT}{seconds}"),
-                        _ => format!("{base}{DOT}{at}{DOT}{}", short(&record.key)),
+                        _ => format!("{base}{DOT}{at}{DOT}{}", short(session.key)),
                     }
                 }
-                None => format!("{base}{DOT}{}", short(&record.key)),
+                None => format!("{base}{DOT}{}", short(session.key)),
             };
-            named.insert(record.key.clone(), name);
+            named.insert(session.key.clone(), name);
         }
     }
 
@@ -71,16 +140,18 @@ pub(crate) fn minute(ms: u64) -> Option<String> {
     clock(ms).map(|(hour, minute, _)| format!("{hour:02}:{minute:02}"))
 }
 
-/// A record's name before any time is added: its host, or its own label
-/// for a named session, and its folder when it has one.
-fn base(record: &Record) -> String {
-    let host = match record.host {
+/// A session's name before any time is added: its host, or its own label
+/// for a named session (its key when that is not known), and its folder
+/// when it has one.
+fn base(session: &Naming<'_>) -> String {
+    let host = match (session.host, session.named) {
         // An ATLAS_SESSION value is cut as an app's name is.
-        Host::Named => crate::doing::bounded(record.host_session.as_str()),
-        host => host.label().to_owned(),
+        (Host::Named, Some(named)) => crate::doing::bounded(named),
+        (Host::Named, None) => session.key.to_string(),
+        (host, _) => host.label().to_owned(),
     };
 
-    match &record.folder {
+    match session.folder {
         Some(folder) => format!("{host}{DOT}{folder}"),
         None => host,
     }
@@ -188,5 +259,37 @@ mod tests {
             name_of(&names, &unknown, Some(Host::Named)),
             unknown.to_string()
         );
+    }
+
+    #[test]
+    fn a_session_with_no_record_yet_is_named_by_the_same_rule() {
+        let records = [record(
+            Host::Claude,
+            "one",
+            Some("left"),
+            at(DAY, 14, 2, 10),
+        )];
+        let (two, three) = (Key::of(Host::Claude, "two"), Key::of(Host::Named, "three"));
+        let first_commands = [
+            Naming {
+                key: &two,
+                host: Host::Claude,
+                named: None,
+                folder: Some("left"),
+                started: at(DAY, 14, 30, 0),
+            },
+            Naming {
+                key: &three,
+                host: Host::Named,
+                named: None,
+                folder: None,
+                started: DAY,
+            },
+        ];
+        let names = named(records.iter().map(Naming::from).chain(first_commands));
+
+        assert_eq!(names[&records[0].key], "Claude Code · left · 14:02");
+        assert_eq!(names[&two], "Claude Code · left · 14:30");
+        assert_eq!(names[&three], three.to_string(), "no label, so its key");
     }
 }

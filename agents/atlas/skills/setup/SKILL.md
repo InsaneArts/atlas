@@ -20,6 +20,8 @@ atlas doctor
 
 - Not found: go to step 2.
 - `doctor` reports `"ready": true`: it is set up; go back to the task.
+- A step says to wait or tell the person (an action's outcome is unknown):
+  Atlas is set up, so do just that; never go on to setup or `atlas init`.
 - Otherwise: run any `nextSteps` that are Atlas commands (such as
   `atlas start-input` or `atlas restart`) and check again. If it is still not
   ready, go to step 3 and read its remaining `nextSteps` to the person.

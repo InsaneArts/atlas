@@ -7,6 +7,7 @@ use crate::{
         Host, Process, ancestry,
         store::{Kind, note},
     },
+    ui::hints,
 };
 use std::{fs, path::Path};
 
@@ -43,6 +44,8 @@ fn holder(client: &Client, session: &HostSession, process: Process) {
     let note = Note {
         session: Some(session.key.clone()),
         host: Some(session.host),
+        folder: None,
+        named: None,
         process,
         since: 1_761_660_300_000,
     };
@@ -72,6 +75,30 @@ fn busy_names_the_session_that_holds_the_helper() {
     );
     assert_eq!(error.code, "busy");
     assert_eq!(error.holder, Some(Holder::Agent));
+}
+
+#[test]
+fn busy_names_a_holder_on_its_first_command_by_its_host_and_folder() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let codex = session(Host::Codex, "first");
+    let path = client.controller.holder_path();
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let note = Note {
+        session: Some(codex.key.clone()),
+        host: Some(codex.host),
+        folder: Some("left".into()),
+        named: None,
+        process: another_process(),
+        since: 1_761_660_300_000,
+    };
+    fs::write(path, serde_json::to_vec(&note).unwrap()).unwrap();
+
+    let error = reply(busy(), || Some(client.clone()), None).unwrap_err();
+    assert_eq!(
+        error.details["heldBy"]["name"], "Codex · left",
+        "as the status names it, with no record yet"
+    );
 }
 
 #[test]
@@ -201,7 +228,7 @@ fn an_unknown_outcome_this_session_caused_says_yours_and_how_to_recover() {
 
     let error = reply(uncertain(), || Some(client.clone()), Some(&claude)).unwrap_err();
     assert_eq!(error.details["yours"], true);
-    assert_eq!(error.details["next"], hints::YOURS);
+    assert_eq!(error.details["next"], hints::UNKNOWN_OWN);
     assert!(!error.details.contains_key("causedBy"));
     assert!(!error.uncertain);
 }
@@ -220,7 +247,11 @@ fn an_unknown_outcome_another_session_caused_says_whose() {
     let caused = error.details["causedBy"].as_array().unwrap();
     assert_eq!(caused.len(), 1);
     assert!(caused[0].as_str().unwrap().starts_with("Claude Code"));
-    assert!(!error.details.contains_key("next"), "the usual step stays");
+    assert_eq!(
+        error.details["next"],
+        hints::UNKNOWN_OTHERS,
+        "wait, or tell the person"
+    );
 }
 
 #[test]
@@ -254,12 +285,18 @@ fn without_a_session_an_unknown_outcome_says_whose_but_never_yours() {
         "a command with no session is not told it is not its own"
     );
     assert_eq!(error.details["causedBy"].as_array().unwrap().len(), 1);
+    assert_eq!(error.details["next"], hints::UNKNOWN_OTHERS);
 
     let unlabelled = tempfile::tempdir().unwrap();
     let other = super::tests::client(unlabelled.path());
     abandoned(&other, None);
     let error = reply(uncertain(), || Some(other.clone()), Some(&claude)).unwrap_err();
-    assert!(error.details.is_empty(), "whose it is is unknown");
+    assert_eq!(
+        error.details.keys().collect::<Vec<_>>(),
+        ["next"],
+        "whose it is is unknown"
+    );
+    assert_eq!(error.details["next"], hints::UNKNOWN_OTHERS);
 }
 
 #[test]
