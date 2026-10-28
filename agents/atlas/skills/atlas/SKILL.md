@@ -7,11 +7,11 @@ description: "See and use macOS GUIs in a hidden second login (the helper) witho
 
 Atlas gives you a Mac screen of your own: a hidden, logged-in macOS login
 (the helper). You open apps there, look, click and type, while the person
-keeps using their own desktop undisturbed.
+keeps using their own desktop.
 
 Use it to check anything a person could see after you change it, to
 reproduce bugs seen on screen, to run what opens windows or takes focus, and
-to test web apps in Google Chrome or Firefox. If `atlas` is missing or
+to test web apps in Chrome or Firefox. If `atlas` is missing or
 `doctor` stays not ready, say so and ask the person to open Atlas to finish
 setup; never test on their desktop instead.
 
@@ -52,8 +52,8 @@ What `windows` lists was open before you: leave it, unsaved documents
 included. Do not start with a screenshot, and never run `atlas close --all`:
 it quits every app, another agent's too.
 
-Where your host shows Atlas's embedded view (the Claude app, the Codex app,
-Cursor IDE), call `show_screen` once before visible work, unasked; elsewhere
+Where your host shows Atlas's embedded view (the Claude and Codex apps,
+Cursor), call `show_screen` once before visible work, unasked; elsewhere
 `atlas monitor` opens Atlas's viewer. "Let me watch" or "let me take control"
 asks for that view; to only watch, open it and leave the helper alone. Stop,
 Resume, Take Control and Give Back are the person's: never call those tools.
@@ -72,9 +72,11 @@ element, or refuses and lists `candidates`. It opens a menu by its title
 Otherwise use `atlas click X Y`, `atlas type "text"`, `atlas key cmd+s` or
 `atlas scroll X Y --dy -3`, each with `--app NAME`; pipe several lines to
 `atlas type --stdin`.
-`atlas run -- PROGRAM ARGS` runs a command as the helper; its own result is
-`exitCode`. Save and Open panels, Safari, drag-and-drop and the Desktop and
-Documents folders often fail in the helper: read Limits first.
+`atlas run -- PROGRAM ARGS` runs a command as the helper; its result is
+`exitCode`. Use `--timeout` up to 600, not `&`, and never send keys or clicks
+from it (`osascript`, `cliclick`). Save and Open panels, Safari,
+drag-and-drop and the Desktop and Documents folders often fail in the
+helper: read Limits first.
 
 After each action:
 
@@ -90,8 +92,7 @@ After each action:
 5. After a visible change you will report, take a screenshot as evidence.
 
 Never open a screenshot you have already read, or one with
-`unchanged: true`: nothing visible changed, and its `path` is the earlier
-image. If you expected a change, it has not happened yet.
+`unchanged: true`: nothing changed; its `path` is the earlier image. If you expected a change, it has not happened yet.
 
 `elements` shows up to `--max` (50), and `more` says how many more matched:
 narrow with `--name` and `--role`. Each has its `role`, `name`, `value`,
@@ -111,8 +112,8 @@ from a crop, not from a larger `--max-dimension`.
   action is unknown. Do not run `atlas restart`. Wait and try again; if it
   stays, tell the person, and restart only when they agree.
 - `busy`: someone else has control. When `holder` is `person`, never take it
-  from them: wait, and tell them if it lasts. When it is `agent`, wait and
-  try again.
+  from them: wait, and tell them if it lasts. When it is `agent`, try again
+  later.
 - `stopped`: the person stopped agents. Stop at once, say what you were
   doing, and ask what to do; recover an uncertain reply only once they
   resume.
