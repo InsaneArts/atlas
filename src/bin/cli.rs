@@ -28,8 +28,8 @@ pub(super) struct Cli {
     )]
     pub(super) config: Option<PathBuf>,
     /// Seconds a command that changes the helper waits for another Atlas
-    /// command to finish before answering busy, in place of `ATLAS_WAIT`: 0
-    /// answers at once, at most 600.
+    /// command to finish before answering busy, in place of `ATLAS_WAIT`: 30
+    /// unless given, 0 answers at once, at most 600.
     #[arg(
         long,
         global = true,

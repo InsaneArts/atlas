@@ -21,8 +21,10 @@ use std::{
 use tokio::sync::Mutex;
 
 /// How long an agent's command that changes the helper waits for another
-/// Atlas command to let go of it, unless told otherwise: not at all.
-pub const CONTROL_WAIT: Duration = Duration::ZERO;
+/// Atlas command to let go of it, unless told otherwise: long enough for the
+/// usual command ahead, short enough that the wait and a default command
+/// stay within an agent tool's two-minute limit.
+pub const CONTROL_WAIT: Duration = Duration::from_secs(30);
 
 /// The longest a command may be told to wait for control: as long as the
 /// longest run.
@@ -1182,6 +1184,34 @@ impl Drop for ActionPermit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What agents and people read gives the default wait the code uses.
+    #[test]
+    fn the_documented_default_wait_is_the_one_used() {
+        let said = format!("up to {} s", CONTROL_WAIT.as_secs());
+        for (file, text) in [
+            (
+                "limits.md",
+                include_str!("../../agents/atlas/skills/atlas/references/limits.md"),
+            ),
+            (
+                "troubleshooting.md",
+                include_str!("../../agents/atlas/skills/atlas/references/troubleshooting.md"),
+            ),
+            ("docs/cli.md", include_str!("../../docs/cli.md")),
+            (
+                "docs/troubleshooting.md",
+                include_str!("../../docs/troubleshooting.md"),
+            ),
+            (
+                "docs/architecture.md",
+                include_str!("../../docs/architecture.md"),
+            ),
+        ] {
+            let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(text.contains(&said), "{file} does not say {said}");
+        }
+    }
 
     fn pending_counts(controller: &Controller) -> (usize, usize, usize) {
         let (pending, total) = crate::overview::pending(controller);

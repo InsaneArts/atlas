@@ -53,7 +53,7 @@ Paths without a directory prefix in this table are under `src/lib`. Prefer the o
 
 ## Ownership, cancellation and uncertain results
 
-Only one controller may mutate a helper at a time. A file lock in the person's account provides exclusion across CLI, viewer and MCP processes. A command-line controller given a wait (`--wait`) that finds the lock held tries again for that long before answering busy; it never waits while the person holds control or has stopped agents, and the viewer never waits. A person taking control holds a renewable lease. Ending or losing that lease must release control and any held input before another controller acts.
+Only one controller may mutate a helper at a time. A file lock in the person's account provides exclusion across CLI, viewer and MCP processes. A command-line controller that finds the lock held tries again for up to 30 seconds (for an agent's command, unless `--wait` says otherwise) before answering busy; it never waits while the person holds control or has stopped agents, and the viewer never waits. A person taking control holds a renewable lease. Ending or losing that lease must release control and any held input before another controller acts.
 
 The native input service separates its ownership gate from the serialized event engine. Cancellation can revoke ownership while a gesture is waiting; it does not wait behind that gesture's execution lock. Cleanup still retains exclusion so a new controller cannot act while held keys or buttons are being released.
 

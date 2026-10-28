@@ -35,7 +35,7 @@ pub fn next(code: &str, holder: Option<Holder>) -> &'static str {
             "Wait until the person gives control back, then look at the helper before trying again. Never take it from them."
         }
         ("busy", Some(Holder::Agent)) => {
-            "Another Atlas command is running, often another agent's. Wait for it to finish, then try again."
+            "Another Atlas command is running, often another agent's, and Atlas waited for it unless told not to. Do something else, then try again later."
         }
         ("busy", _) => "Wait, then try again. Never take control from the person.",
         ("stopped", _) => {

@@ -34,7 +34,7 @@ For `transport`, check whether the helper is logged in and read `doctor`. If the
 
 ## Another controller has control, or agents are stopped
 
-`busy` means another controller holds the helper, and `holder` says who: `person` when the person has control in a viewer, `agent` when another Atlas command, usually another agent's, is running. Wait for it to finish, or pass `--wait SECONDS` so the next command waits for it; `waited` says how long one did. If the person selected **Take Control**, they must use **Give Back** or **Control-Shift-Esc** before agents can take over.
+`busy` means another controller holds the helper, and `holder` says who: `person` when the person has control in a viewer, `agent` when another Atlas command, usually another agent's, is running. An agent's command has already waited up to 30 seconds for it (`waited` says how long); try again later, or pass a longer `--wait` (`--wait 0` answers at once). If the person selected **Take Control**, they must use **Give Back** or **Control-Shift-Esc** before agents can take over.
 
 `stopped` means the person stopped agents. Ask them what they want next; only they resume agent work. Pausing the picture is different: the helper continues working while its displayed image is paused. See [Using Atlas](using-atlas.md#take-control-or-stop-agents).
 

@@ -2,8 +2,8 @@
 
 Every failure is JSON:
 `{"ok":false,"code":"...","error":"...","uncertain":...,"next":"..."}`.
-`next` says what to do, in one sentence; `busy` adds `holder`, and `waited`, the
-seconds Atlas already waited, when the command was given a wait. Where the guide
+`next` says what to do, in one sentence; `busy` adds `holder` and `waited`, the
+seconds Atlas already waited. Where the guide
 says more about a code, follow the guide. Read `error` to the person when you
 stop. If `uncertain` is true on a reply to your own command, the action may or
 may not have happened: never repeat it; take a screenshot, run `atlas restart`,
@@ -18,7 +18,7 @@ failure is in `exitCode`.)
 | `apps` | The helper's running apps could not be listed. | Retry once; then run `atlas doctor`. |
 | `bad-request` | The helper daemon rejected a malformed request. | Check the command's arguments against `atlas agent-guide --commands`. |
 | `blocked` | This shell may not connect to the helper or write Atlas's own files, usually because an agent sandbox blocks local sockets or writes outside its folder. The helper may be fine. | Run Atlas commands outside the sandbox (ask for that permission), or have the sandbox allow the helper socket and the folders Atlas writes: `~/Library/Caches/Atlas`, `~/Library/Application Support/Atlas/runs` and `/Users/Shared/Atlas`. Do not run `atlas init` for this. |
-| `busy` | Someone else has control. `holder` says who: `person` (the person, in the viewer) or `agent` (another Atlas command, usually another agent's). A command that changes the helper answers at once, unless given `--wait SECONDS` (or `ATLAS_WAIT`, up to 600): then it first waits that long for another Atlas command, and `waited` says how long it did. It never waits for the person, and a Stop ends the wait of any command it refuses. | `person`: wait, never take control from them, and tell them if it lasts. `agent`: wait for it to finish, then retry; with `waited`, Atlas already waited, so do something else first, or pass a longer `--wait` within your tool's timeout. |
+| `busy` | Someone else has control. `holder` says who: `person` (the person, in the viewer) or `agent` (another Atlas command, usually another agent's). An agent's command first waits up to 30 s (`--wait SECONDS`, or `ATLAS_WAIT`; 0 answers at once) and `waited` says how long it did; it never waits for the person or after a Stop. | `person`: wait, never take control from them, and tell them if it lasts. `agent`: Atlas already waited; do something else, then try again, or pass a longer `--wait` within your tool's timeout. |
 | `cancelled` | The person stopped: at a question (Esc), or an input part way (`partial` says some of it landed). | Earlier steps may have happened; look, then ask the person before trying again. |
 | `capture` | A screenshot could not be taken or encoded. | Retry once; then `atlas doctor`. |
 | `config` | Atlas is not set up (no settings file). | Use the setup skill (`atlas init`). |
