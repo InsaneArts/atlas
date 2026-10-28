@@ -771,7 +771,7 @@ fn refuse_root(command: &str, root: bool) -> Result<()> {
 /// icon and menu bar apps that are not part of macOS, unless `all`, with
 /// `more` saying how many processes were left out.
 fn listed_apps(mut reply: Value, all: bool) -> Value {
-    let Some(apps) = reply["apps"].as_array_mut() else {
+    let Some(apps) = reply.get_mut("apps").and_then(Value::as_array_mut) else {
         return reply;
     };
     let before = apps.len();
@@ -872,6 +872,31 @@ mod tests {
         let every = listed_apps(reply, true);
         assert_eq!(every["apps"].as_array().unwrap().len(), 5);
         assert_eq!(every["more"], 0);
+    }
+
+    #[test]
+    fn a_process_that_cannot_be_placed_is_left_out_unless_all() {
+        let reply = json!({"ok": true, "apps": [
+            {"name": "Unnamed agent", "pid": 6, "policy": "accessory"},
+            {"name": "No policy", "pid": 7,
+             "executable": "/Applications/Tool.app/Contents/MacOS/Tool"},
+            {"name": "Odd policy", "pid": 8, "policy": "unknown",
+             "executable": "/Applications/Odd.app/Contents/MacOS/Odd"},
+        ]});
+
+        let listed = listed_apps(reply.clone(), false);
+        assert_eq!(listed["apps"], json!([]));
+        assert_eq!(listed["more"], 3);
+
+        assert_eq!(
+            listed_apps(reply, true)["apps"].as_array().unwrap().len(),
+            3
+        );
+        assert_eq!(
+            listed_apps(json!({"ok": false, "code": "apps"}), false),
+            json!({"ok": false, "code": "apps"}),
+            "a failed reply is passed on as it is"
+        );
     }
 
     #[test]

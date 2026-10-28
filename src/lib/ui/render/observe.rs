@@ -1,7 +1,10 @@
 //! Views of what the helper is and shows: doctor, status, configuration,
 //! screenshots, apps, windows, elements and readiness.
 use super::{Rendered, failed, style, text};
-use crate::ui::table;
+use crate::{
+    native::ax::{self, Stop},
+    ui::table,
+};
 use serde_json::Value;
 
 fn helper_name(value: &Value) -> Option<&str> {
@@ -476,7 +479,7 @@ pub fn elements(value: &Value) -> String {
             .iter()
             .map(|element| {
                 let name = super::element_name(element).unwrap_or("");
-                let at = match centre(element) {
+                let at = match listed_point(element) {
                     Some((x, y)) => format!("{}, {}", text::number(x), text::number(y)),
                     None => String::new(),
                 };
@@ -516,7 +519,7 @@ pub fn elements(value: &Value) -> String {
 
     if value["scanIncomplete"] == true {
         let reasons = value["scan"]["reasons"].as_array().into_iter().flatten();
-        let why = crate::native::ax::why(reasons.filter_map(Value::as_str))
+        let why = ax::why(reasons.filter_map(Value::as_str).filter_map(Stop::parse))
             .map(|why| format!(" ({why})"))
             .unwrap_or_default();
         lines.push(format!(
@@ -528,11 +531,11 @@ pub fn elements(value: &Value) -> String {
     lines.join("\n")
 }
 
-/// Where a listed element's centre is: its `at`, or the centre of its
+/// Where a listed element is: its click point (`at`), or the middle of its
 /// frame when listed in full.
-fn centre(element: &Value) -> Option<(f64, f64)> {
-    if let (Some(x), Some(y)) = (element["at"][0].as_f64(), element["at"][1].as_f64()) {
-        return Some((x, y));
+fn listed_point(element: &Value) -> Option<(f64, f64)> {
+    if let Some(at) = super::point(&element["at"]) {
+        return Some(at);
     }
 
     let frame = &element["frame"];

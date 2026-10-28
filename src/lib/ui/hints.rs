@@ -1,20 +1,22 @@
 //! What a person, or an agent, can do about each kind of failure, in one
 //! sentence. The agent-facing table of the same codes is the plugin's
 //! troubleshooting.md; a test keeps every code there covered here.
+use crate::error::Holder;
 
 /// The step for your own action that may or may not have happened.
 pub const UNCERTAIN: &str = "It may or may not have happened, so don't repeat it. Take a screenshot, then run atlas restart.";
 
 /// What an agent does about a failure: the uncertain step when it may or
 /// may not have happened, else the code's. Waiting for the person (agents
-/// stopped, the person cancelled it or holds control) keeps its own step
-/// either way, since an agent may not act until the person says.
-pub fn step(code: &str, holder: Option<&str>, uncertain: bool) -> &'static str {
-    let persons = matches!(
+/// stopped, the person cancelled it, holds control or is at the helper's
+/// screen) keeps its own step either way, since an agent may not act until
+/// the person says.
+pub fn step(code: &str, holder: Option<Holder>, uncertain: bool) -> &'static str {
+    let waiting_for_person = matches!(
         (code, holder),
-        ("stopped" | "cancelled" | "on-console", _) | ("busy", Some("person"))
+        ("stopped" | "cancelled" | "on-console", _) | ("busy", Some(Holder::Person))
     );
-    if uncertain && !persons {
+    if uncertain && !waiting_for_person {
         UNCERTAIN
     } else {
         next(code, holder)
@@ -24,12 +26,12 @@ pub fn step(code: &str, holder: Option<&str>, uncertain: bool) -> &'static str {
 /// What an agent does about a failure with `code`, in one sentence; who
 /// holds control changes it for busy. Codes whose step is the same for a
 /// person use theirs.
-pub fn next(code: &str, holder: Option<&str>) -> &'static str {
+pub fn next(code: &str, holder: Option<Holder>) -> &'static str {
     match (code, holder) {
-        ("busy", Some("person")) => {
+        ("busy", Some(Holder::Person)) => {
             "Wait until the person gives control back, then look at the helper before trying again. Never take it from them."
         }
-        ("busy", Some("agent")) => {
+        ("busy", Some(Holder::Agent)) => {
             "Another Atlas command is running, often another agent's. Wait for it to finish, then try again."
         }
         ("busy", _) => "Wait, then try again. Never take control from the person.",
@@ -185,7 +187,7 @@ mod tests {
             ("stopped", None),
             ("cancelled", None),
             ("on-console", None),
-            ("busy", Some("person")),
+            ("busy", Some(Holder::Person)),
         ] {
             let said = step(code, holder, true);
             assert_eq!(said, next(code, holder), "{code}");
@@ -195,18 +197,17 @@ mod tests {
                 "{code}: {said}"
             );
         }
-        assert_eq!(step("busy", Some("agent"), true), UNCERTAIN);
+        assert_eq!(step("busy", Some(Holder::Agent), true), UNCERTAIN);
         assert_eq!(step("transport", None, true), UNCERTAIN);
         assert_eq!(step("transport", None, false), next("transport", None));
     }
 
     #[test]
     fn busy_says_who_to_wait_for() {
-        assert!(next("busy", Some("person")).contains("the person gives control back"));
-        assert!(next("busy", Some("agent")).contains("Another Atlas command"));
+        assert!(next("busy", Some(Holder::Person)).contains("the person gives control back"));
+        assert!(next("busy", Some(Holder::Agent)).contains("Another Atlas command"));
         let unknown = next("busy", None);
         assert!(unknown.contains("Never take control"), "{unknown}");
-        assert_eq!(next("busy", Some("someone")), unknown);
         assert_ne!(next("busy", None), fix("busy").unwrap(), "not the person's");
     }
 

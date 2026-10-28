@@ -283,7 +283,12 @@ fn assert_missing_update_finish(output: Output) {
         );
     } else {
         assert_eq!(output.status.code(), Some(0));
-        assert_eq!(output.stdout, b"{\"next\":\"atlas init\",\"ok\":true}\n");
+        let printed = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(printed.lines().count(), 1, "one line: {printed}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&printed).unwrap(),
+            json!({"ok": true, "next": "atlas init"})
+        );
         assert!(output.stderr.is_empty());
     }
 }

@@ -1,5 +1,5 @@
 //! Command-line grammar, value parsing and argument adapters.
-use atlas::{actions::Button, agent};
+use atlas::{actions::Button, agent, daemon::protocol::Region};
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
@@ -208,7 +208,7 @@ pub(super) enum Command {
             value_parser = region,
             conflicts_with_all = ["app", "pid"]
         )]
-        region: Option<atlas::daemon::protocol::Region>,
+        region: Option<Region>,
         /// Shrink the longer side to at most this many pixels: 1456 unless
         /// given (a smaller crop keeps its size); 0 keeps the full size.
         #[arg(long, value_parser = clap::value_parser!(u32).range(0..=8192))]
@@ -271,7 +271,7 @@ pub(super) enum Command {
     /// List an app's buttons, fields and other elements.
     ///
     /// Lists accessibility elements of the app's windows: role, name, value,
-    /// centre point (at) and size, with each window listed once; also the
+    /// click point (at) and size, with each window listed once; also the
     /// items of a menu the app has open (menu: true, with a check mark as
     /// mark) and, while the app is in front, its menu bar titles. more says
     /// how many matching elements were left out.
@@ -756,7 +756,7 @@ fn run_seconds(value: &str) -> std::result::Result<u64, String> {
 }
 
 /// `screenshot --region`: X,Y,W,H in display points.
-fn region(value: &str) -> std::result::Result<atlas::daemon::protocol::Region, String> {
+fn region(value: &str) -> std::result::Result<Region, String> {
     let [x, y, width, height] = value
         .split(',')
         .map(|part| part.trim().parse::<f64>())
@@ -770,7 +770,7 @@ fn region(value: &str) -> std::result::Result<atlas::daemon::protocol::Region, S
         return Err("The region's width and height must be more than 0.".into());
     }
 
-    atlas::daemon::protocol::Region::from_points(x, y, width, height).ok_or_else(|| {
+    Region::from_points(x, y, width, height).ok_or_else(|| {
         "Give a region within 16384 points of the display's corner, at most 16384 points across."
             .into()
     })
@@ -891,7 +891,7 @@ mod tests {
             Err(error) => Err(error.to_string()),
             _ => Err("not a screenshot".into()),
         };
-        let region = |x, y, width, height| atlas::daemon::protocol::Region {
+        let region = |x, y, width, height| Region {
             x,
             y,
             width,

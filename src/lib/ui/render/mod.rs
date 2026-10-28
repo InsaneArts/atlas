@@ -192,12 +192,17 @@ fn candidate_lines(candidates: &Value) -> Vec<String> {
             if let Some(role) = candidate["role"].as_str() {
                 line.push_str(&format!(" ({})", role_word(role)));
             }
-            if let (Some(x), Some(y)) = (candidate["at"][0].as_f64(), candidate["at"][1].as_f64()) {
+            if let Some((x, y)) = point(&candidate["at"]) {
                 line.push_str(&format!(" at {}, {}", text::number(x), text::number(y)));
             }
             line
         })
         .collect()
+}
+
+/// A point a reply gives as `[x, y]`.
+fn point(at: &Value) -> Option<(f64, f64)> {
+    Some((at[0].as_f64()?, at[1].as_f64()?))
 }
 
 /// `✗ what went wrong` and, when the message does not already say, `→ what

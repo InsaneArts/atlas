@@ -413,7 +413,7 @@ fn elements_say_how_many_match_and_what_is_missing() {
 }
 
 #[test]
-fn the_elements_table_shows_each_centre_point() {
+fn the_elements_table_shows_each_click_point() {
     let compact = show(
         View::Elements,
         json!({"ok": true, "pid": 9, "scanned": 1, "matching": 1, "more": 0,
@@ -432,7 +432,7 @@ fn the_elements_table_shows_each_centre_point() {
     );
     assert!(
         full.out.contains("400, 62"),
-        "the frame's centre: {}",
+        "the middle of the frame: {}",
         full.out
     );
     assert!(!full.out.contains("388, 51"));

@@ -343,7 +343,7 @@ Examples:
 ```text
 List an app's buttons, fields and other elements.
 
-Lists accessibility elements of the app's windows: role, name, value, centre point (at) and size, with each window listed once; also the items of a menu the app has open (menu: true, with a check mark as mark) and, while the app is in front, its menu bar titles. more says how many matching elements were left out.
+Lists accessibility elements of the app's windows: role, name, value, click point (at) and size, with each window listed once; also the items of a menu the app has open (menu: true, with a check mark as mark) and, while the app is in front, its menu bar titles. more says how many matching elements were left out.
 
 Usage: atlas elements [OPTIONS]
 

@@ -1,7 +1,7 @@
 //! Result presentation, output streams and process result classification.
 use super::cli::{AgentsCommand, Command, EnvironmentCommand};
 use atlas::{
-    error::Error,
+    error::{Error, Holder},
     ui::{
         Format, hints,
         render::{self, View},
@@ -172,7 +172,8 @@ fn advise(value: &mut Value) {
         return;
     };
 
-    let next = hints::step(code, value["holder"].as_str(), value["uncertain"] == true);
+    let holder = value["holder"].as_str().and_then(Holder::parse);
+    let next = hints::step(code, holder, value["uncertain"] == true);
     value["next"] = json!(next);
 }
 
@@ -195,7 +196,6 @@ pub(super) fn failed(result: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use atlas::error::Holder;
 
     #[test]
     fn every_failure_for_programs_says_what_to_do_next() {
@@ -214,7 +214,7 @@ mod tests {
         let held = Error::new("busy", "Wait").held_by(Holder::Person);
         assert_eq!(
             failure(&held, true)["next"],
-            hints::next("busy", Some("person"))
+            hints::next("busy", Some(Holder::Person))
         );
 
         let said = Error::new("elements", "Incomplete").with("next", "Try again.");
@@ -248,7 +248,7 @@ mod tests {
             (
                 json!({"ok": false, "code": "busy", "holder": "person", "uncertain": true}),
                 "busy",
-                Some("person"),
+                Some(Holder::Person),
             ),
         ] {
             advise(&mut waiting);

@@ -53,24 +53,30 @@ impl Error {
         }
     }
 
+    #[must_use]
     pub fn uncertain(mut self) -> Self {
         self.uncertain = true;
         self
     }
 
     /// Say who holds control.
+    #[must_use]
     pub fn held_by(mut self, holder: Holder) -> Self {
         self.holder = Some(holder);
         self
     }
 
     /// Add `value` under `key` for programs to act on. The keys every
-    /// failure has are never replaced.
+    /// failure has are never replaced: such a key is ignored (and refused
+    /// in a debug build).
+    #[must_use]
     pub fn with(mut self, key: &str, value: impl Serialize) -> Self {
-        debug_assert!(
-            !["ok", "code", "error", "uncertain", "holder"].contains(&key),
-            "{key} is part of every failure"
-        );
+        const OWN: [&str; 5] = ["ok", "code", "error", "uncertain", "holder"];
+        debug_assert!(!OWN.contains(&key), "{key} is part of every failure");
+        if OWN.contains(&key) {
+            return self;
+        }
+
         let value = serde_json::to_value(value).unwrap_or(serde_json::Value::Null);
         self.details.insert(key.to_owned(), value);
         self

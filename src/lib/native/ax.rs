@@ -59,7 +59,7 @@ const BATCH: [&str; 12] = [
 ];
 
 /// Roles whose value is the text they count, so a long one can be read
-/// from its start. Any other element's value is read whole, as before.
+/// from its start. Any other element's value is read whole.
 const TEXT_ROLES: [&str; 5] = [
     "AXTextArea",
     "AXTextField",
@@ -285,7 +285,7 @@ impl Stop {
     const ALL: [Stop; 4] = [Stop::Depth, Stop::Count, Stop::Time, Stop::Unread];
 
     /// The word a reply names it by.
-    pub fn word(self) -> &'static str {
+    pub(crate) fn word(self) -> &'static str {
         match self {
             Stop::Depth => "depth",
             Stop::Count => "count",
@@ -295,12 +295,12 @@ impl Stop {
     }
 
     /// The reason a reply names by `word`, if it is one of these.
-    pub fn parse(word: &str) -> Option<Stop> {
+    pub(crate) fn parse(word: &str) -> Option<Stop> {
         Stop::ALL.into_iter().find(|stop| stop.word() == word)
     }
 
     /// Why the scan stopped, in plain words.
-    pub fn said(self) -> &'static str {
+    pub(crate) fn said(self) -> &'static str {
         match self {
             Stop::Time => "it ran out of time",
             Stop::Count => "the app has more elements than Atlas reads",
@@ -310,14 +310,10 @@ impl Stop {
     }
 }
 
-/// Why a scan stopped, from the reasons a reply names, in plain words
-/// joined into one phrase; None when it names none Atlas knows.
-pub fn why<'a>(words: impl IntoIterator<Item = &'a str>) -> Option<String> {
-    let said: Vec<&str> = words
-        .into_iter()
-        .filter_map(Stop::parse)
-        .map(Stop::said)
-        .collect();
+/// Why a scan stopped, in plain words joined into one phrase; None when
+/// there is no reason.
+pub(crate) fn why(stops: impl IntoIterator<Item = Stop>) -> Option<String> {
+    let said: Vec<&str> = stops.into_iter().map(Stop::said).collect();
 
     match said.as_slice() {
         [] => None,
@@ -328,7 +324,7 @@ pub fn why<'a>(words: impl IntoIterator<Item = &'a str>) -> Option<String> {
 
 /// Whether an `"attribute:code"` error key says something went wrong,
 /// rather than that the element simply lacks the attribute.
-pub fn telling(key: &str) -> bool {
+pub(crate) fn telling(key: &str) -> bool {
     let code = key
         .rsplit_once(':')
         .and_then(|(_, code)| code.parse::<i32>().ok());
@@ -497,14 +493,13 @@ impl Scan {
             return None;
         }
 
-        match values.and_then(Batch::from_values) {
-            Some(batch) => Some(batch),
-            None => {
-                self.failed(AXError::Failure, "AXAttributes");
-                self.stop(Stop::Unread);
-                Some(Batch::unread())
-            }
+        if let Some(batch) = values.and_then(Batch::from_values) {
+            return Some(batch);
         }
+
+        self.failed(AXError::Failure, "AXAttributes");
+        self.stop(Stop::Unread);
+        Some(Batch::unread())
     }
 
     /// Whether `batch` came back stalled, so nothing more is asked of its
@@ -1401,21 +1396,21 @@ mod tests {
             );
         }
 
-        assert_eq!(why(["time"]).as_deref(), Some("it ran out of time"));
+        assert_eq!(why([Stop::Time]).as_deref(), Some("it ran out of time"));
         assert_eq!(
-            why(["count", "unread"]).as_deref(),
+            why([Stop::Count, Stop::Unread]).as_deref(),
             Some(
                 "the app has more elements than Atlas reads and part of the app could not be read"
             )
         );
         assert_eq!(
-            why(["depth", "count", "time"]).as_deref(),
+            why([Stop::Depth, Stop::Count, Stop::Time]).as_deref(),
             Some(
                 "some elements are nested too deep, the app has more elements than Atlas reads \
                  and it ran out of time"
             )
         );
-        assert_eq!(why(["later"]), None, "an unknown reason is not said");
+        assert_eq!(Stop::parse("later"), None, "an unknown reason is not one");
         assert_eq!(why([]), None);
     }
 

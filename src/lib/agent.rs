@@ -916,9 +916,9 @@ fn label(element: &Element) -> Option<&str> {
         .flatten()
 }
 
-/// What an element is called: its title, description, label text or
-/// identifier, the first that is not empty.
-pub(crate) fn shown_name(element: &Element) -> Option<&str> {
+/// Every name an element has: its title, description, label text and
+/// identifier, in that order.
+fn names(element: &Element) -> impl Iterator<Item = &str> {
     [
         element.title.as_deref(),
         element.description.as_deref(),
@@ -927,7 +927,11 @@ pub(crate) fn shown_name(element: &Element) -> Option<&str> {
     ]
     .into_iter()
     .flatten()
-    .find(|name| !name.is_empty())
+}
+
+/// What an element is called: the first of its names that is not empty.
+fn shown_name(element: &Element) -> Option<&str> {
+    names(element).find(|name| !name.is_empty())
 }
 
 /// Layers from the Dock's up hold the Dock, the menu bar and system overlays,
@@ -1099,8 +1103,8 @@ const CANDIDATES: usize = 5;
 struct Scanned {
     elements: Vec<Element>,
     incomplete: bool,
-    /// Why it is incomplete: "depth", "count", "time" or "unread".
-    reasons: Vec<&'static str>,
+    /// Why it is incomplete, each reason once.
+    reasons: Vec<Stop>,
     /// Accessibility failures other than a missing attribute, by count.
     errors: BTreeMap<String, usize>,
 }
@@ -1121,14 +1125,14 @@ impl Scanned {
         let elements = serde_json::from_value(value["elements"].take())
             .map_err(|_| Error::new("elements", "Malformed accessibility elements"))?;
 
-        let mut reasons: Vec<&'static str> = value["reasons"]
+        let mut reasons: Vec<Stop> = value["reasons"]
             .as_array()
             .into_iter()
             .flatten()
             .filter_map(Value::as_str)
             .filter_map(Stop::parse)
-            .map(Stop::word)
             .collect();
+        reasons.sort_unstable();
         reasons.dedup();
 
         let mut errors: Vec<(String, usize)> = value["errors"]
@@ -1285,10 +1289,10 @@ fn listing(pid: i64, scanned: &Scanned, filter: &ElementFilter, max: usize, full
             .iter()
             .map(|frame| {
                 json!({
-                    "x": frame.x.round() as i64,
-                    "y": frame.y.round() as i64,
-                    "width": frame.width.round() as i64,
-                    "height": frame.height.round() as i64,
+                    "x": whole(frame.x),
+                    "y": whole(frame.y),
+                    "width": whole(frame.width),
+                    "height": whole(frame.height),
                 })
             })
             .collect();
@@ -1331,8 +1335,8 @@ fn compact<'a>(element: &'a Element, windows: &mut Vec<&'a Frame>) -> Value {
     }
     if let Some(frame) = &element.frame {
         let (x, y) = click_point(element.role.as_deref(), frame);
-        listed["at"] = json!([x as i64, y as i64]);
-        listed["size"] = json!([frame.width.round() as i64, frame.height.round() as i64]);
+        listed["at"] = json!([whole(x), whole(y)]);
+        listed["size"] = json!([whole(frame.width), whole(frame.height)]);
     }
     if let Some(window) = &element.window {
         let place = windows
@@ -1558,17 +1562,10 @@ fn candidates(seen: &[&Element], matching: &[&Element], filter: &ElementFilter) 
         .iter()
         .filter(|element| element.frame.as_ref().is_some_and(drawn))
         .filter_map(|element| {
-            [
-                element.title.as_deref(),
-                element.description.as_deref(),
-                label(element),
-                element.identifier.as_deref(),
-            ]
-            .into_iter()
-            .flatten()
-            .filter_map(|text| Some((closeness(&query, text)?, text)))
-            .min()
-            .map(|((tier, distance), text)| ((tier, distance, element.index), *element, text))
+            names(element)
+                .filter_map(|text| Some((closeness(&query, text)?, text)))
+                .min()
+                .map(|((tier, distance), text)| ((tier, distance, element.index), *element, text))
         })
         .collect();
     close.sort_by_key(|(rank, ..)| *rank);
@@ -1747,9 +1744,14 @@ fn click_point(role: Option<&str>, frame: &Frame) -> (f64, f64) {
     }
 }
 
+/// A coordinate or length in whole points, as replies give them.
+fn whole(points: f64) -> i64 {
+    points.round() as i64
+}
+
 /// A clicked element as its reply names it: role, name and the point clicked.
 fn clicked(element: &Element, (x, y): (f64, f64)) -> Value {
-    let mut named = json!({"at": [x as i64, y as i64]});
+    let mut named = json!({"at": [whole(x), whole(y)]});
     if let Some(role) = &element.role {
         named["role"] = json!(role);
     }
@@ -2623,7 +2625,10 @@ mod tests {
             json!(["depth", "count", "time", "unread", "later"]),
             json!({}),
         );
-        assert_eq!(every.reasons, ["depth", "count", "time", "unread"]);
+        assert_eq!(
+            every.reasons,
+            [Stop::Depth, Stop::Count, Stop::Time, Stop::Unread]
+        );
         assert!(every.incomplete);
         assert_eq!(
             every.diagnostics(),
@@ -2687,7 +2692,7 @@ mod tests {
     fn a_refused_click_on_an_incomplete_scan_points_to_its_diagnostics() {
         let mut scan = scanned(Vec::new());
         scan.incomplete = true;
-        scan.reasons = vec!["time", "unread"];
+        scan.reasons = vec![Stop::Time, Stop::Unread];
         scan.errors = BTreeMap::from([("AXChildren:-25204".to_owned(), 2)]);
 
         let error = scan.refusal();
@@ -2853,6 +2858,34 @@ mod tests {
         let wide = frame(100.0, 200.0, 237.0, 18.0);
         assert_eq!(click_point(Some("AXButton"), &wide), (219.0, 209.0));
         assert_eq!(click_point(None, &wide), (219.0, 209.0));
+    }
+
+    #[test]
+    fn a_click_point_always_lies_inside_its_elements_frame() {
+        let frames = [
+            frame(100.0, 200.0, 237.0, 16.0),
+            frame(485.0, 344.0, 115.0, 24.0),
+            frame(100.0, 200.0, 14.0, 30.0),
+            frame(10.4, 20.6, 41.0, 20.0),
+            frame(-50.6, -20.4, 300.0, 1.0),
+            frame(0.0, 0.0, 1.0, 1.0),
+        ];
+
+        for role in [
+            Some("AXCheckBox"),
+            Some("AXRadioButton"),
+            Some("AXButton"),
+            None,
+        ] {
+            for frame in &frames {
+                let (x, y) = click_point(role, frame);
+                assert!(
+                    (frame.x..=frame.x + frame.width).contains(&x)
+                        && (frame.y..=frame.y + frame.height).contains(&y),
+                    "{role:?} {frame:?} -> {x}, {y}"
+                );
+            }
+        }
     }
 
     #[test]
