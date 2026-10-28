@@ -49,6 +49,8 @@ struct Daemon {
     capture: Capture,
     /// The session's on-screen windows, front to back.
     windows: fn() -> Result<Vec<windows::Window>>,
+    /// Where the Dock in a window list takes clicks.
+    dock: fn(&[windows::Window]) -> windows::Dock,
     /// Whether the helper's session is on the console right now.
     on_console: fn() -> bool,
     session: fn() -> Result<Value>,
@@ -68,6 +70,7 @@ impl Daemon {
             manager,
             capture,
             windows: windows::windows,
+            dock: read_dock,
             on_console,
             session,
             restarting: Notify::new(),
@@ -370,6 +373,11 @@ fn force_log_out() {
     }
 }
 
+/// Where the Dock in `windows` takes clicks, read through Accessibility.
+fn read_dock(windows: &[windows::Window]) -> windows::Dock {
+    crate::native::ax::dock(windows, crate::native::ax::DOCK_TIMEOUT)
+}
+
 /// Windows that lie entirely outside the main display.
 fn off_display_windows(windows: &[windows::Window]) -> Vec<Value> {
     let (x, y, width, height) = facts::display_bounds();
@@ -428,6 +436,7 @@ async fn screenshot(
 ) -> Value {
     let capture = daemon.capture;
     let list = daemon.windows;
+    let dock = daemon.dock;
     let on_console = daemon.on_console;
     let session = daemon.session;
     let epoch = match session().and_then(|proof| InputEpoch::from_proof(&proof, std::process::id()))
@@ -480,7 +489,7 @@ async fn screenshot(
                 let on_screen = windows
                     .as_ref()
                     .map_err(|_| failure("windows", "The window list is unavailable"))?;
-                let found = crop::app(on_screen, pid, &display).ok_or_else(|| {
+                let found = crop::app(on_screen, pid, &display, &dock(on_screen)).ok_or_else(|| {
                     failure(
                         "no-window",
                         format!(
@@ -695,6 +704,7 @@ mod tests {
             session,
         );
         daemon.windows = fake_windows;
+        daemon.dock = |_| windows::Dock::Icons(Vec::new());
         Arc::new(daemon)
     }
 
@@ -893,6 +903,7 @@ mod tests {
                 },
             );
             daemon.windows = fake_windows;
+            daemon.dock = |_| windows::Dock::Icons(Vec::new());
 
             let reply = exchange(Arc::new(daemon), request).await;
             assert_eq!(CAPTURES.load(Ordering::SeqCst), change_at - 1, "{request}");
@@ -1049,6 +1060,7 @@ mod tests {
     ) -> Arc<Daemon> {
         let mut daemon = Daemon::new("Aqua".into(), capture, || false, session);
         daemon.windows = windows;
+        daemon.dock = |_| windows::Dock::Icons(Vec::new());
         Arc::new(daemon)
     }
 
