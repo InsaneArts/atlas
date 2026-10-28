@@ -128,3 +128,11 @@ If the helper stops while it runs, it fails with the code `restart`; if the
 helper comes on screen, the command is stopped with `on-console`. Both are
 uncertain. Atlas stays busy while it runs, so start anything longer in the
 background (`nohup … > "$HOME/run.log" 2>&1 &`) and read its log.
+
+A command that changes the helper answers `busy` at once while another Atlas
+command has control. Given `--wait SECONDS` (up to 600) or the variable
+`ATLAS_WAIT`, it first waits up to that long for the other to finish. The wait
+adds to the command's own time, so `run --timeout 300` given `--wait 30` may
+take up to 330 seconds: keep both under your tool's timeout (Claude Code's Bash
+tool allows 2 minutes unless you ask for more, at most 10). Reading commands
+never wait.

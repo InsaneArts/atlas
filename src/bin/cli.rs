@@ -1,7 +1,12 @@
 //! Command-line grammar, value parsing and argument adapters.
-use atlas::{actions::Button, agent, daemon::protocol::Region};
-use clap::{Parser, Subcommand, ValueEnum};
-use std::path::PathBuf;
+use atlas::{
+    actions::Button,
+    agent,
+    control::{CONTROL_WAIT, CONTROL_WAIT_MAX},
+    daemon::protocol::Region,
+};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum, builder::TypedValueParser};
+use std::{ffi::OsStr, path::PathBuf, time::Duration};
 
 #[derive(Parser)]
 #[command(
@@ -22,6 +27,17 @@ pub(super) struct Cli {
         global = true
     )]
     pub(super) config: Option<PathBuf>,
+    /// Seconds a command that changes the helper waits for another Atlas
+    /// command to finish before answering busy, in place of `ATLAS_WAIT`: 0
+    /// answers at once, at most 600.
+    #[arg(
+        long,
+        global = true,
+        value_name = "SECONDS",
+        hide = true,
+        value_parser = control_wait
+    )]
+    pub(super) wait: Option<Duration>,
     #[command(subcommand)]
     pub(super) command: Option<Command>,
 }
@@ -788,6 +804,34 @@ fn wait_seconds(value: &str) -> std::result::Result<u64, String> {
         .ok_or_else(|| format!("Give 0 to {WAIT_MAX_SECONDS} seconds."))
 }
 
+/// `--wait` or `ATLAS_WAIT`: whole seconds, 0 for none.
+fn control_wait(value: &str) -> std::result::Result<Duration, String> {
+    value
+        .parse()
+        .ok()
+        .map(Duration::from_secs)
+        .filter(|wait| *wait <= CONTROL_WAIT_MAX)
+        .ok_or_else(|| format!("Give 0 to {} seconds.", CONTROL_WAIT_MAX.as_secs()))
+}
+
+/// The wait a command that waits is given: `--wait`'s, else the variable
+/// `ATLAS_WAIT`'s, else the default. Only such a command reads the
+/// variable, so a bad one stops no other command.
+pub(super) fn control_wait_given(
+    flag: Option<Duration>,
+    variable: Option<&OsStr>,
+) -> std::result::Result<Duration, clap::Error> {
+    match (flag, variable) {
+        (Some(wait), _) => Ok(wait),
+        (None, Some(variable)) => control_wait.parse_ref(
+            &Cli::command(),
+            Some(&clap::Arg::new("ATLAS_WAIT").value_name("ATLAS_WAIT")),
+            variable,
+        ),
+        (None, None) => Ok(CONTROL_WAIT),
+    }
+}
+
 #[derive(Clone, Copy, ValueEnum)]
 pub(super) enum LoginArg {
     On,
@@ -1058,6 +1102,56 @@ mod tests {
         assert!(parse(&["wait", "--app", "A", "--timeout", "86400"]).is_ok());
         assert!(parse(&["wait", "--app", "A", "--timeout", "86401"]).is_err());
         assert!(parse(&["wait", "--app", "A", "--timeout", "18446744073709551615"]).is_err());
+    }
+
+    #[test]
+    fn the_wait_is_whole_seconds_from_zero_to_six_hundred() {
+        let wait = |given: &str| parse(&["--wait", given, "key", "escape"]).map(|cli| cli.wait);
+        assert_eq!(wait("0").unwrap(), Some(Duration::ZERO));
+        assert_eq!(wait("600").unwrap(), Some(CONTROL_WAIT_MAX));
+        for refused in ["601", "-1", "1.5", "soon"] {
+            assert!(wait(refused).is_err(), "{refused}");
+        }
+        assert_eq!(parse(&["key", "escape"]).unwrap().wait, None);
+    }
+
+    #[test]
+    fn the_flag_wins_over_the_variable_and_either_over_the_default() {
+        let given = |flag: Option<u64>, variable: Option<&str>| {
+            control_wait_given(flag.map(Duration::from_secs), variable.map(OsStr::new))
+        };
+        assert_eq!(given(None, None).unwrap(), CONTROL_WAIT);
+        assert_eq!(given(None, Some("12")).unwrap(), Duration::from_secs(12));
+        assert_eq!(given(Some(5), Some("12")).unwrap(), Duration::from_secs(5));
+        assert_eq!(
+            given(Some(5), Some("soon")).unwrap(),
+            Duration::from_secs(5)
+        );
+        for refused in ["601", "-1", "1.5", "soon", ""] {
+            let error = given(None, Some(refused)).unwrap_err();
+            assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+        }
+    }
+
+    #[test]
+    fn the_wait_flag_is_global_and_hidden() {
+        for args in [
+            &["type", "--wait", "5", "hi"][..],
+            &["--wait", "5", "type", "hi"],
+        ] {
+            assert_eq!(
+                parse(args).unwrap().wait,
+                Some(Duration::from_secs(5)),
+                "{args:?}"
+            );
+        }
+
+        let help = match parse(&["type", "--help"]) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("help is shown"),
+        };
+        assert!(help.contains("--json"), "{help}");
+        assert!(!help.contains("--wait"), "{help}");
     }
 
     #[test]

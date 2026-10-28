@@ -10,7 +10,7 @@ use super::{
 };
 use atlas::{
     agent,
-    client::{Client, Size},
+    client::{Actor, Client, Size},
     config::Config,
     doing::Doing,
     environment,
@@ -140,6 +140,32 @@ fn changes_helper(command: &Command, attributed: bool) -> bool {
     }
 }
 
+/// Whether an agent's command may take control of the helper: it waits for
+/// another command to finish first. A logout that asks first is the
+/// person's at a terminal, and answers at once.
+pub(super) fn controls(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::Input { .. }
+            | Command::Click { .. }
+            | Command::Move { .. }
+            | Command::Drag { .. }
+            | Command::Scroll { .. }
+            | Command::Type { .. }
+            | Command::Key { .. }
+            | Command::Open { .. }
+            | Command::Close { .. }
+            | Command::Run { .. }
+            | Command::Restart
+            | Command::StartInput
+            | Command::Install
+            | Command::Readiness { .. }
+            | Command::Environment { .. }
+            | Command::VerifyNative { .. }
+            | Command::Logout { yes: true, .. }
+    )
+}
+
 #[cfg(target_os = "macos")]
 fn windows_info() -> Result<Value> {
     Ok(json!({ "ok": true, "windows": atlas::native::windows::windows()? }))
@@ -182,23 +208,47 @@ async fn input_service(_: u32, _: u32, _: PathBuf) -> Result<Value> {
     Err(Error::new("platform", "The input service requires macOS"))
 }
 
-pub(super) async fn execute(config: PathBuf, command: Command) -> Result<Value> {
-    // What the person does from the app is recorded as theirs, not an agent's.
-    let actor = if std::env::var_os("ATLAS_ACTOR").is_some_and(|actor| actor == "viewer") {
-        atlas::client::Actor::Viewer
+/// Who runs this command: what the person does from the app is recorded as
+/// theirs, not an agent's.
+pub(super) fn actor() -> Actor {
+    if std::env::var_os("ATLAS_ACTOR").is_some_and(|actor| actor == "viewer") {
+        Actor::Viewer
     } else {
-        atlas::client::Actor::Agent
-    };
+        Actor::Agent
+    }
+}
+
+/// Whether `command`, run by `actor`, waits for another controller to let
+/// go of the helper: only an agent's command that takes control does. What
+/// the person does from the app answers at once, and so do servers, which
+/// take no control of their own: a wait blocks the thread it runs on.
+pub(super) fn waits(command: &Command, actor: Actor) -> bool {
+    controls(command) && actor == Actor::Agent
+}
+
+/// Carry out `command`. When it [`waits`], it waits for up to `wait` in all
+/// for other controllers to let go of the helper.
+pub(super) async fn execute(config: PathBuf, command: Command, wait: Duration) -> Result<Value> {
+    let actor = actor();
 
     // Helper-side commands run inside the helper login and never read the
     // controller's configuration. A command that talks to the helper loads
     // it before anything else.
     let doing = doing(&command);
     let changes = changes_helper(&command, doing.is_some());
+    let waits = waits(&command, actor);
     let client = || {
         Client::new(Config::load(&config)?).map(|mut client| {
             client.actor = actor;
             client.doing = doing.clone();
+            if waits {
+                client.controller = client.controller.waiting(wait);
+            }
+            // What a Stop refuses at its start, it also refuses while the
+            // command waits.
+            if waits && changes {
+                client.controller = client.controller.heeding_stop();
+            }
             client
         })
     };
@@ -1086,6 +1136,7 @@ mod tests {
             &["elements", "--app", "TextEdit"],
             &["restart"],
             &["start-input"],
+            &["readiness", "--tool", "git"],
             &["stop"],
             &["environment"],
             &["environment", "rollback", "plan"],
@@ -1095,6 +1146,73 @@ mod tests {
         ] {
             assert!(!changes(looking), "{looking:?}");
         }
+    }
+
+    #[test]
+    fn only_an_agents_commands_that_take_control_wait() {
+        let waits = |args: &[&str]| controls(&parse(args).unwrap().command.unwrap());
+
+        for controlling in [
+            &["input", "[]"][..],
+            &["click", "1", "2"],
+            &["click", "--app", "Calculator", "--name", "7"],
+            &["move", "1", "2"],
+            &["drag", "1", "2", "3", "4"],
+            &["scroll", "1", "2", "--dy", "3"],
+            &["type", "x"],
+            &["key", "cmd+s"],
+            &["open", "--app", "TextEdit"],
+            &["close", "--app", "TextEdit"],
+            &["run", "--", "ls"],
+            &["restart"],
+            &["start-input"],
+            &["install"],
+            &["readiness", "--tool", "git"],
+            &["environment"],
+            &["environment", "run", "--", "ls"],
+            &["verify-native"],
+            &["logout", "--yes"],
+        ] {
+            assert!(waits(controlling), "{controlling:?}");
+        }
+
+        for at_once in [
+            &["screenshot"][..],
+            &["apps"],
+            &["windows"],
+            &["elements", "--app", "TextEdit"],
+            &["wait", "--app", "TextEdit"],
+            &["status"],
+            &["doctor"],
+            &["mcp"],
+            &["watch"],
+            &["menubar"],
+            &["monitor"],
+            &["init"],
+            &["uninstall"],
+            &["update"],
+            &["setup", "--apply"],
+            &["switch"],
+            &["logout"],
+        ] {
+            assert!(!waits(at_once), "{at_once:?}");
+        }
+    }
+
+    #[test]
+    fn only_an_agent_waits_and_never_for_what_the_person_does_from_the_app() {
+        for args in [
+            &["type", "x"][..],
+            &["run", "--", "ls"],
+            &["restart"],
+            &["logout", "--yes"],
+        ] {
+            let command = parse(args).unwrap().command.unwrap();
+            assert!(waits(&command, Actor::Agent), "{args:?}");
+            assert!(!waits(&command, Actor::Viewer), "{args:?}");
+        }
+        let looking = parse(&["screenshot"]).unwrap().command.unwrap();
+        assert!(!waits(&looking, Actor::Agent));
     }
 
     #[test]

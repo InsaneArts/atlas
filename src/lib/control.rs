@@ -7,7 +7,7 @@ use crate::{
     error::{Error, Holder, Result},
 };
 use fs2::FileExt;
-use rand::RngCore;
+use rand::{Rng, RngCore};
 use sha2::{Digest, Sha256};
 use std::{
     cell::RefCell,
@@ -19,6 +19,14 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::Mutex;
+
+/// How long an agent's command that changes the helper waits for another
+/// Atlas command to let go of it, unless told otherwise: not at all.
+pub const CONTROL_WAIT: Duration = Duration::ZERO;
+
+/// The longest a command may be told to wait for control: as long as the
+/// longest run.
+pub const CONTROL_WAIT_MAX: Duration = Duration::from_secs(600);
 
 /// Random bytes in a [`token`]; it is twice as many hexadecimal digits.
 pub const TOKEN_BYTES: usize = 24;
@@ -122,6 +130,52 @@ pub fn probe_write(directory: &Path) -> Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(Error::writing(&path, error)),
     }
+}
+
+/// Busy because the person has control through a viewer: never waited for.
+/// `waited` is how long a controller given a wait had waited by then.
+fn busy_person(waited: Option<Duration>) -> Error {
+    let error = Error::new("busy", crate::error::PERSON_HAS_CONTROL).held_by(Holder::Person);
+    match waited {
+        Some(waited) => error.with("waited", waited.as_secs()),
+        None => error,
+    }
+}
+
+/// Busy because another Atlas command kept control for all of `wait`, after
+/// this try `waited` that long; a controller given no wait answers at once.
+/// A command Atlas.app runs takes the lock too, so "agent" is another Atlas
+/// command, usually another agent's.
+fn busy_agent(waited: Option<Duration>, wait: Duration) -> Error {
+    let message = match waited {
+        Some(_) => format!(
+            "Another Atlas command, often another agent's, kept control for all of the {} seconds Atlas could wait.",
+            wait.as_secs()
+        ),
+        None => "Another Atlas controller is active: wait for it to finish, or release it in the viewer."
+            .to_owned(),
+    };
+
+    let error = Error::new("busy", message).held_by(Holder::Agent);
+    match waited {
+        Some(waited) => error
+            .with("waited", waited.as_secs())
+            .with("next", crate::ui::hints::WAITED),
+        None => error,
+    }
+}
+
+/// How long to sleep before trying the lock again: about a tenth of a
+/// second, spread by 25 ms either way so waiters do not try in step, and
+/// never past the end of the wait.
+pub(crate) fn poll(remaining: Duration) -> Duration {
+    poll_with(remaining, rand::rng().random_range(75..=125))
+}
+
+/// [`poll`] with its spread chosen: `jitter_ms` milliseconds, or what is
+/// left of the wait if that is less.
+fn poll_with(remaining: Duration, jitter_ms: u64) -> Duration {
+    Duration::from_millis(jitter_ms).min(remaining)
 }
 
 fn open_lock(path: &Path) -> Result<File> {
@@ -478,6 +532,40 @@ impl Drop for Ownership {
     }
 }
 
+/// Where a wait for another controller has got to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WaitEvent {
+    /// The first try found the lock held, and the controller waits.
+    Began,
+    /// The wait is over: control was taken, or the answer is a refusal.
+    Ended,
+}
+
+/// What [`Controller::acquire`] tells about its wait; it runs on the
+/// waiting thread.
+pub type WaitHook = Arc<dyn Fn(WaitEvent) + Send + Sync>;
+
+/// A wait under way: its hook hears [`WaitEvent::Began`] when it is made
+/// and [`WaitEvent::Ended`] when it is dropped.
+struct WaitNotice<'a>(Option<&'a WaitHook>);
+
+impl<'a> WaitNotice<'a> {
+    fn begin(hook: Option<&'a WaitHook>) -> Self {
+        if let Some(hook) = hook {
+            hook(WaitEvent::Began);
+        }
+        Self(hook)
+    }
+}
+
+impl Drop for WaitNotice<'_> {
+    fn drop(&mut self) {
+        if let Some(hook) = self.0 {
+            hook(WaitEvent::Ended);
+        }
+    }
+}
+
 /// Controller exclusion and pending-mutation state for one helper account,
 /// keyed by helper UID so a changed socket path cannot admit a second
 /// controller or hide a pending mutation.
@@ -494,6 +582,16 @@ pub struct Controller {
     /// side, so a Stop holds even while the helper's input service is down.
     stopped: PathBuf,
     name: String,
+    /// How long [`Controller::acquire`] may keep trying, in all, while
+    /// another controller has the lock, before answering busy. Zero
+    /// answers at once.
+    wait: Duration,
+    /// When that wait runs out, shared by every acquire and every clone.
+    until: Option<Instant>,
+    /// Whether a Stop ends the wait and refuses control taken after one.
+    heeds_stop: bool,
+    /// Told when [`Controller::acquire`] starts waiting and when it stops.
+    on_wait: Option<WaitHook>,
 }
 
 impl Controller {
@@ -513,7 +611,58 @@ impl Controller {
             person: directory.join(format!("{name}.person")),
             stopped: directory.join(format!("{name}.stopped")),
             name: name.to_owned(),
+            wait: Duration::ZERO,
+            until: None,
+            heeds_stop: false,
+            on_wait: None,
         }
+    }
+
+    /// This controller, trying for up to `wait` to take control. The wait
+    /// is one allowance, starting now, for every acquire of this controller
+    /// and its clones: each spends what it waits, and the next gets what is
+    /// left. It blocks the calling thread, so only a command-line process
+    /// whose command is its only work may be given one; a server (viewer,
+    /// MCP, watch) never is.
+    #[must_use]
+    pub fn waiting(mut self, wait: Duration) -> Self {
+        self.wait = wait;
+        self.until = Some(Instant::now() + wait);
+        self
+    }
+
+    /// How long, in all, [`Controller::acquire`] may wait for another
+    /// controller.
+    pub fn wait(&self) -> Duration {
+        self.wait
+    }
+
+    /// What is left of [`Controller::wait`].
+    pub fn remaining(&self) -> Duration {
+        self.until.map_or(Duration::ZERO, |until| {
+            until.saturating_duration_since(Instant::now())
+        })
+    }
+
+    /// This controller, for a command the person's Stop refuses: once
+    /// agents are stopped, a wait ends with `stopped`, and control the
+    /// lock gives after waiting is refused too. With no wait, the Stop is
+    /// the caller's to check, as before.
+    #[must_use]
+    pub fn heeding_stop(mut self) -> Self {
+        self.heeds_stop = true;
+        self
+    }
+
+    /// This controller, telling `hook` when a wait for another controller
+    /// begins and when it ends. A try that takes control at once, or is
+    /// refused at once, waits for nothing and tells nothing. A process that
+    /// exits while waiting (`std::process::exit`, a signal) never tells
+    /// [`WaitEvent::Ended`].
+    #[must_use]
+    pub fn on_wait(mut self, hook: impl Fn(WaitEvent) + Send + Sync + 'static) -> Self {
+        self.on_wait = Some(Arc::new(hook));
+        self
     }
 
     /// Whether this process may keep its locks and claims here at all. An
@@ -539,19 +688,7 @@ impl Controller {
         self.make_directory()?;
 
         let lock = open_lock(&self.lock)?;
-        if FileExt::try_lock_exclusive(&lock).is_err() {
-            // A command Atlas.app runs takes this lock too, so "agent" is
-            // another Atlas command, usually another agent's.
-            return Err(if self.person.exists() {
-                Error::new("busy", crate::error::PERSON_HAS_CONTROL).held_by(Holder::Person)
-            } else {
-                Error::new(
-                    "busy",
-                    "Another Atlas controller is active: wait for it to finish, or release it in the viewer.",
-                )
-                .held_by(Holder::Agent)
-            });
-        }
+        self.take(&lock)?;
 
         // Nobody held it, so a note left by a viewer that ended is stale.
         let _ = fs::remove_file(&self.person);
@@ -575,6 +712,54 @@ impl Controller {
             _lock: lock,
             person: None,
         })
+    }
+
+    /// Lock `lock`, trying again for what is left of [`Controller::wait`]
+    /// while another controller holds it.
+    fn take(&self, lock: &File) -> Result<()> {
+        let started = Instant::now();
+        if self.try_take(lock, started)? {
+            return Ok(());
+        }
+
+        self.wait_for_lock(lock, started)
+    }
+
+    /// Try `lock` again about ten times a second, between telling the hook
+    /// that the wait began and that it ended.
+    fn wait_for_lock(&self, lock: &File, started: Instant) -> Result<()> {
+        let _notice = WaitNotice::begin(self.on_wait.as_ref());
+        loop {
+            std::thread::sleep(poll(self.remaining()));
+            if self.try_take(lock, started)? {
+                return Ok(());
+            }
+        }
+    }
+
+    /// One try at `lock`, `started` being when the first was made: true
+    /// once it is held, false while another controller holds it and some of
+    /// the wait is left, else why not. The person's note and a Stop are
+    /// looked at on every try, so either ends a wait within one poll, and
+    /// the person is never waited for. A refused lock is let go when the
+    /// caller drops it.
+    fn try_take(&self, lock: &File, started: Instant) -> Result<bool> {
+        let taken = FileExt::try_lock_exclusive(lock).is_ok();
+        let waited = (!self.wait.is_zero()).then(|| started.elapsed());
+        if !taken && self.person.exists() {
+            return Err(busy_person(waited));
+        }
+        if self.heeds_stop && waited.is_some() && self.stop_noted() {
+            return Err(Error::new("stopped", crate::error::STOPPED));
+        }
+        if taken {
+            return Ok(true);
+        }
+        if self.remaining().is_zero() {
+            return Err(busy_agent(waited, self.wait));
+        }
+
+        Ok(false)
     }
 
     /// Whether the person stopped agents, as noted on their side.
@@ -1523,6 +1708,7 @@ mod tests {
         assert_eq!(refused.code, "busy");
         assert_eq!(refused.error, crate::error::PERSON_HAS_CONTROL);
         assert_eq!(refused.holder, Some(Holder::Person));
+        assert!(refused.details.get("waited").is_none(), "never waited");
         drop(person);
         assert!(
             !controller.person.exists(),
@@ -1551,6 +1737,486 @@ mod tests {
         fs::write(&controller.person, b"").unwrap();
         drop(controller.acquire(false).unwrap());
         assert!(!controller.person.exists(), "a stale note is cleared");
+    }
+
+    /// `controller` given `wait`, and what its hook hears, in order.
+    fn watched(
+        controller: &Controller,
+        wait: Duration,
+    ) -> (Controller, std::sync::mpsc::Receiver<WaitEvent>) {
+        let (tell, events) = std::sync::mpsc::channel();
+        let watched = controller.clone().waiting(wait).on_wait(move |event| {
+            let _ = tell.send(event);
+        });
+        (watched, events)
+    }
+
+    /// The next thing a watched wait tells, within five seconds.
+    fn told(events: &std::sync::mpsc::Receiver<WaitEvent>) -> WaitEvent {
+        events.recv_timeout(Duration::from_secs(5)).unwrap()
+    }
+
+    /// Acquire on another thread, answering with when it returned.
+    fn acquiring(
+        controller: Controller,
+        recovery: bool,
+    ) -> std::thread::JoinHandle<(Result<()>, Instant)> {
+        std::thread::spawn(move || {
+            let outcome = controller.acquire(recovery).map(drop);
+            (outcome, Instant::now())
+        })
+    }
+
+    /// Wait for `path` to appear, for at most five seconds.
+    fn appears(path: &Path) {
+        let started = Instant::now();
+        while !path.exists() {
+            assert!(started.elapsed() < Duration::from_secs(5), "{path:?}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Stand in for another Atlas command, as the test `test` run again in
+    /// a process of its own: it takes control of the helper kept in
+    /// `directory`, marks a change and says so in `held`.
+    fn holder(test: &str, directory: &Path, hold: Duration) -> std::process::Child {
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test, "--nocapture"])
+            .env("ATLAS_CONTROL_TEST_HOLDER", directory)
+            .env("ATLAS_CONTROL_TEST_HOLD_MS", hold.as_millis().to_string())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    /// The other command [`holder`] starts, when this process is it: it
+    /// keeps control and its change for the time it was given, settles the
+    /// change, says so in `released` and exits still in control, so the
+    /// lock goes only with the process.
+    fn hold_if_holder() {
+        let Some(directory) = std::env::var_os("ATLAS_CONTROL_TEST_HOLDER") else {
+            return;
+        };
+        let directory = PathBuf::from(directory);
+        let hold = std::env::var("ATLAS_CONTROL_TEST_HOLD_MS")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let controller = Controller::at(505, &directory.join("state"));
+        let ownership = controller.acquire(false).unwrap();
+        let change = controller.quarantine().unwrap();
+        fs::write(directory.join("held"), b"").unwrap();
+        std::thread::sleep(Duration::from_millis(hold));
+        controller.clear_if(&change).unwrap();
+        drop(change);
+        fs::write(directory.join("released"), b"").unwrap();
+        std::mem::forget(ownership);
+        std::process::exit(0);
+    }
+
+    #[test]
+    fn waiting_for_control_takes_the_lock_once_the_holder_lets_go() {
+        if !crate::transaction_test::isolated(
+            "control::tests::waiting_for_control_takes_the_lock_once_the_holder_lets_go",
+        ) {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, directory.path());
+        let held = controller.acquire(false).unwrap();
+        let (waiter, events) = watched(&controller, Duration::from_secs(5));
+        let waiting = acquiring(waiter, false);
+
+        assert_eq!(told(&events), WaitEvent::Began);
+        std::thread::sleep(Duration::from_millis(300));
+        let released = Instant::now();
+        drop(held);
+        let (outcome, taken) = waiting.join().unwrap();
+        outcome.unwrap();
+        assert!(taken >= released);
+        assert!(taken - released < Duration::from_millis(500));
+        assert_eq!(told(&events), WaitEvent::Ended);
+    }
+
+    #[test]
+    fn two_processes_that_change_the_helper_both_succeed_one_after_the_other() {
+        const TEST: &str =
+            "control::tests::two_processes_that_change_the_helper_both_succeed_one_after_the_other";
+        hold_if_holder();
+        if !crate::transaction_test::isolated(TEST) {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, &directory.path().join("state"));
+        let mut child = holder(TEST, directory.path(), Duration::from_millis(400));
+        appears(&directory.path().join("held"));
+        assert_eq!(controller.acquire(false).unwrap_err().code, "busy");
+
+        let ownership = controller
+            .clone()
+            .waiting(Duration::from_secs(5))
+            .acquire(false)
+            .unwrap();
+        assert!(
+            directory.path().join("released").exists(),
+            "control came only after the first command let go"
+        );
+        let change = controller.quarantine().unwrap();
+        controller.clear_if(&change).unwrap();
+        drop(change);
+        drop(ownership);
+
+        assert!(child.wait().unwrap().success());
+        assert!(controller.pending().unwrap().is_empty());
+    }
+
+    #[test]
+    fn waiting_gives_up_with_busy_after_its_wait_and_says_how_long() {
+        if !crate::transaction_test::isolated(
+            "control::tests::waiting_gives_up_with_busy_after_its_wait_and_says_how_long",
+        ) {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, directory.path());
+        let _held = controller.acquire(false).unwrap();
+        let (waiter, events) = watched(&controller, Duration::from_secs(1));
+
+        let started = Instant::now();
+        let refused = waiter.acquire(false).unwrap_err();
+        let waited = started.elapsed();
+        assert!(waited >= Duration::from_secs(1), "{waited:?}");
+        assert!(waited < Duration::from_millis(1500), "{waited:?}");
+        assert_eq!(refused.code, "busy");
+        assert_eq!(refused.holder, Some(Holder::Agent));
+        assert!(
+            refused.error.contains("all of the 1 seconds"),
+            "{}",
+            refused.error
+        );
+        assert_eq!(refused.details["waited"], 1);
+        assert_eq!(refused.details["next"], crate::ui::hints::WAITED);
+        assert_eq!(told(&events), WaitEvent::Began);
+        assert_eq!(told(&events), WaitEvent::Ended);
+    }
+
+    #[test]
+    fn one_wait_is_shared_by_every_acquire_of_a_command() {
+        if !crate::transaction_test::isolated(
+            "control::tests::one_wait_is_shared_by_every_acquire_of_a_command",
+        ) {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, directory.path());
+        let _held = controller.acquire(false).unwrap();
+        let waiter = controller.clone().waiting(Duration::from_secs(1));
+
+        assert_eq!(waiter.acquire(false).unwrap_err().code, "busy");
+        assert_eq!(waiter.remaining(), Duration::ZERO);
+        for again in [waiter.clone(), waiter] {
+            let started = Instant::now();
+            let refused = again.acquire(false).unwrap_err();
+            assert!(started.elapsed() < Duration::from_millis(50));
+            assert_eq!(refused.details["waited"], 0);
+            assert_eq!(refused.details["next"], crate::ui::hints::WAITED);
+        }
+    }
+
+    #[test]
+    fn a_wait_of_zero_answers_busy_at_once_as_before() {
+        if !crate::transaction_test::isolated(
+            "control::tests::a_wait_of_zero_answers_busy_at_once_as_before",
+        ) {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, directory.path());
+        let _held = controller.acquire(false).unwrap();
+        let (waiter, events) = watched(&controller, Duration::ZERO);
+
+        let started = Instant::now();
+        let refused = waiter.acquire(false).unwrap_err();
+        assert!(started.elapsed() < Duration::from_millis(50));
+        assert_eq!(refused.code, "busy");
+        assert_eq!(refused.holder, Some(Holder::Agent));
+        assert_eq!(
+            refused.error,
+            "Another Atlas controller is active: wait for it to finish, or release it in the viewer."
+        );
+        assert!(refused.details.is_empty(), "the reply is as it was");
+        assert!(events.try_recv().is_err(), "nothing waited for");
+    }
+
+    #[test]
+    fn the_person_in_control_is_never_waited_for() {
+        if !crate::transaction_test::isolated(
+            "control::tests::the_person_in_control_is_never_waited_for",
+        ) {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, directory.path());
+        let _person = controller.acquire_for_person().unwrap();
+        let (waiter, events) = watched(&controller, Duration::from_secs(5));
+
+        let started = Instant::now();
+        let refused = waiter.acquire(false).unwrap_err();
+        assert!(started.elapsed() < Duration::from_millis(50));
+        assert_eq!(refused.code, "busy");
+        assert_eq!(refused.error, crate::error::PERSON_HAS_CONTROL);
+        assert_eq!(refused.holder, Some(Holder::Person));
+        assert_eq!(refused.details["waited"], 0);
+        assert!(events.try_recv().is_err(), "nothing waited for");
+    }
+
+    #[test]
+    fn the_person_taking_control_during_a_wait_ends_it_at_once() {
+        if !crate::transaction_test::isolated(
+            "control::tests::the_person_taking_control_during_a_wait_ends_it_at_once",
+        ) {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, directory.path());
+        let _held = controller.acquire(false).unwrap();
+        let (waiter, events) = watched(&controller, Duration::from_secs(5));
+        let waiting = std::thread::spawn(move || {
+            let refused = waiter.acquire(false).unwrap_err();
+            (refused, Instant::now())
+        });
+
+        assert_eq!(told(&events), WaitEvent::Began);
+        std::thread::sleep(Duration::from_millis(1100));
+        let noted = Instant::now();
+        fs::write(&controller.person, b"").unwrap();
+        let (refused, answered) = waiting.join().unwrap();
+        assert!(answered - noted < Duration::from_millis(300));
+        assert_eq!(refused.code, "busy");
+        assert_eq!(refused.holder, Some(Holder::Person));
+        assert_eq!(refused.details["waited"], 1, "seen partway through");
+        assert_eq!(told(&events), WaitEvent::Ended);
+    }
+
+    #[test]
+    fn a_stop_noted_before_or_during_a_wait_ends_it_at_once() {
+        if !crate::transaction_test::isolated(
+            "control::tests::a_stop_noted_before_or_during_a_wait_ends_it_at_once",
+        ) {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, directory.path());
+        let held = controller.acquire(false).unwrap();
+        let (waiter, events) = watched(&controller, Duration::from_secs(5));
+        let waiter = waiter.heeding_stop();
+
+        controller.note_stop(true).unwrap();
+        let started = Instant::now();
+        assert_eq!(waiter.acquire(false).unwrap_err().code, "stopped");
+        assert!(started.elapsed() < Duration::from_millis(50));
+        assert!(events.try_recv().is_err(), "nothing waited for");
+        let refused = controller
+            .clone()
+            .heeding_stop()
+            .acquire(false)
+            .unwrap_err();
+        assert_eq!(refused.code, "busy", "no wait, today's answer");
+        controller.note_stop(false).unwrap();
+
+        let waiting = std::thread::spawn(move || {
+            let refused = waiter.acquire(false).unwrap_err();
+            (refused, Instant::now())
+        });
+        assert_eq!(told(&events), WaitEvent::Began);
+        let noted = Instant::now();
+        controller.note_stop(true).unwrap();
+        let (refused, answered) = waiting.join().unwrap();
+        assert!(answered - noted < Duration::from_millis(300));
+        assert_eq!(refused.code, "stopped");
+        assert_eq!(refused.error, crate::error::STOPPED);
+        assert_eq!(told(&events), WaitEvent::Ended);
+
+        // What a Stop does not refuse, such as recovery, waits on as before.
+        let (recovery, events) = watched(&controller, Duration::from_secs(5));
+        let waiting = acquiring(recovery, true);
+        assert_eq!(told(&events), WaitEvent::Began);
+        drop(held);
+        waiting.join().unwrap().0.unwrap();
+    }
+
+    #[test]
+    fn a_stop_noted_as_the_holder_lets_go_refuses_the_control_a_wait_takes() {
+        if !crate::transaction_test::isolated(
+            "control::tests::a_stop_noted_as_the_holder_lets_go_refuses_the_control_a_wait_takes",
+        ) {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, directory.path());
+        let held = controller.acquire(false).unwrap();
+        let (began, waits) = std::sync::mpsc::channel();
+        let (go, gone) = std::sync::mpsc::channel::<()>();
+        let gone = std::sync::Mutex::new(gone);
+        // The waiter's next try comes only once the Stop is noted and the
+        // lock let go, so that try takes it.
+        let waiter = controller
+            .clone()
+            .waiting(Duration::from_secs(5))
+            .heeding_stop()
+            .on_wait(move |event| {
+                if event == WaitEvent::Began {
+                    began.send(()).unwrap();
+                    gone.lock().unwrap().recv().unwrap();
+                }
+            });
+        let waiting = acquiring(waiter, false);
+
+        waits.recv_timeout(Duration::from_secs(5)).unwrap();
+        controller.note_stop(true).unwrap();
+        drop(held);
+        go.send(()).unwrap();
+        assert_eq!(waiting.join().unwrap().0.unwrap_err().code, "stopped");
+
+        controller.note_stop(false).unwrap();
+        assert!(
+            controller.acquire(false).is_ok(),
+            "the refused lock was let go"
+        );
+    }
+
+    #[test]
+    fn a_holder_killed_while_others_wait_hands_control_on_at_once() {
+        const TEST: &str =
+            "control::tests::a_holder_killed_while_others_wait_hands_control_on_at_once";
+        hold_if_holder();
+        if !crate::transaction_test::isolated(TEST) {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, &directory.path().join("state"));
+        let mut child = holder(TEST, directory.path(), Duration::from_secs(30));
+        appears(&directory.path().join("held"));
+
+        let (waiter, events) = watched(&controller, Duration::from_secs(10));
+        let waiting = acquiring(waiter, false);
+        assert_eq!(told(&events), WaitEvent::Began);
+        let killed = Instant::now();
+        child.kill().unwrap();
+        let (outcome, answered) = waiting.join().unwrap();
+        assert!(answered - killed < Duration::from_millis(500));
+        assert!(!child.wait().unwrap().success());
+        assert_eq!(
+            outcome.unwrap_err().code,
+            "uncertain",
+            "the killed command's change is unknown"
+        );
+
+        let ownership = controller.acquire(true).unwrap();
+        controller.clear().unwrap();
+        assert!(controller.pending().unwrap().is_empty());
+        drop(ownership);
+        assert!(controller.acquire(false).is_ok());
+    }
+
+    #[test]
+    fn recovery_waits_for_the_lock_but_never_for_an_executor_still_running() {
+        if !crate::transaction_test::isolated(
+            "control::tests::recovery_waits_for_the_lock_but_never_for_an_executor_still_running",
+        ) {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, directory.path());
+        let held = controller.acquire(false).unwrap();
+        let running = controller.quarantine().unwrap();
+        let (recovery, events) = watched(&controller, Duration::from_secs(2));
+        let waiting = std::thread::spawn(move || {
+            let refused = recovery.acquire(true).unwrap_err();
+            (refused, Instant::now())
+        });
+
+        assert_eq!(told(&events), WaitEvent::Began);
+        std::thread::sleep(Duration::from_millis(300));
+        let released = Instant::now();
+        drop(held);
+        let (refused, answered) = waiting.join().unwrap();
+        assert!(answered >= released);
+        assert_eq!(refused.code, "busy");
+        assert!(
+            refused.error.contains("executor is still carrying out"),
+            "{}",
+            refused.error
+        );
+
+        controller.clear_if(&running).unwrap();
+        drop(running);
+        let started = Instant::now();
+        drop(
+            controller
+                .clone()
+                .waiting(Duration::from_secs(2))
+                .acquire(true)
+                .unwrap(),
+        );
+        assert!(started.elapsed() < Duration::from_millis(50));
+    }
+
+    #[test]
+    fn a_wait_tells_its_hook_when_it_begins_and_when_it_ends() {
+        if !crate::transaction_test::isolated(
+            "control::tests::a_wait_tells_its_hook_when_it_begins_and_when_it_ends",
+        ) {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let controller = Controller::at(505, directory.path());
+        let (waiter, events) = watched(&controller, Duration::from_secs(5));
+        drop(waiter.acquire(false).unwrap());
+        assert!(
+            events.try_recv().is_err(),
+            "taken at once, nothing waited for"
+        );
+
+        // Taken after a wait.
+        let held = controller.acquire(false).unwrap();
+        let waiting = acquiring(waiter, false);
+        assert_eq!(told(&events), WaitEvent::Began);
+        assert!(events.try_recv().is_err(), "still waiting");
+        drop(held);
+        let (outcome, _) = waiting.join().unwrap();
+        outcome.unwrap();
+        assert_eq!(told(&events), WaitEvent::Ended);
+
+        // Refused once the wait ran out.
+        let _held = controller.acquire(false).unwrap();
+        let (waiter, events) = watched(&controller, Duration::from_millis(300));
+        assert_eq!(waiter.acquire(false).unwrap_err().code, "busy");
+        assert_eq!(told(&events), WaitEvent::Began);
+        assert_eq!(told(&events), WaitEvent::Ended);
+        assert!(events.try_recv().is_err(), "told once each");
+    }
+
+    #[test]
+    fn a_poll_is_about_a_tenth_of_a_second_and_never_past_the_wait() {
+        for jitter in 75..=125 {
+            assert_eq!(
+                poll_with(Duration::from_secs(1), jitter),
+                Duration::from_millis(jitter)
+            );
+        }
+        assert_eq!(
+            poll_with(Duration::from_millis(30), 100),
+            Duration::from_millis(30)
+        );
+        for _ in 0..100 {
+            let slept = poll(Duration::from_secs(1));
+            assert!(
+                (Duration::from_millis(75)..=Duration::from_millis(125)).contains(&slept),
+                "{slept:?}"
+            );
+        }
     }
 
     /// A permit dropped outside any runtime, while the lease is locked

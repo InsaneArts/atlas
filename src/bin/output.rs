@@ -217,6 +217,16 @@ mod tests {
             hints::next("busy", Some(Holder::Person))
         );
 
+        let waited = Error::new("busy", "Kept")
+            .held_by(Holder::Agent)
+            .with("waited", 30)
+            .with("next", hints::WAITED);
+        assert_eq!(
+            failure(&waited, true)["next"],
+            hints::WAITED,
+            "a wait already made is kept"
+        );
+
         let said = Error::new("elements", "Incomplete").with("next", "Try again.");
         assert_eq!(
             failure(&said, true)["next"],

@@ -2,9 +2,7 @@
 //! behind a drag, text insertion or wait. Posting holds this gate briefly.
 use crate::error::{Error, Holder, Result};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, Instant};
-
-const TTL: Duration = Duration::from_secs(6);
+use std::time::Instant;
 
 /// Who asks for control: an agent, or the person through a viewer. A stop
 /// refuses agents only, so the person can still take over.
@@ -136,7 +134,7 @@ impl Gate {
 
         state.owner = Some(owner.to_owned());
         state.previous = state.owner.clone();
-        state.expires = Some(Instant::now() + TTL);
+        state.expires = Some(Instant::now() + super::GRANT_TTL);
         state.person = who == Who::Person;
         state.cancelled = None;
 
@@ -159,7 +157,7 @@ impl Gate {
     pub fn renew(&self, owner: &str) -> Result<()> {
         let mut state = self.lock()?;
         state.require(owner, false)?;
-        state.expires = Some(Instant::now() + TTL);
+        state.expires = Some(Instant::now() + super::GRANT_TTL);
         Ok(())
     }
 

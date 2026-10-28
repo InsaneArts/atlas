@@ -60,6 +60,17 @@ fn main() -> ExitCode {
 
     ui::set(format);
 
+    // How long a command that waits for control may wait; other commands
+    // never read `ATLAS_WAIT`.
+    let wait = if dispatch::waits(&command, dispatch::actor()) {
+        match cli::control_wait_given(cli.wait, std::env::var_os("ATLAS_WAIT").as_deref()) {
+            Ok(wait) => wait,
+            Err(error) => return help::usage(error),
+        }
+    } else {
+        std::time::Duration::ZERO
+    };
+
     // The helper daemon keeps this thread for the Core Foundation run loop.
     if let Command::HelperServe {
         uid,
@@ -121,7 +132,7 @@ fn main() -> ExitCode {
                     stop_cleanly_on_interrupt(message);
                 }
 
-                let result = dispatch::execute(config.clone(), command).await;
+                let result = dispatch::execute(config.clone(), command, wait).await;
 
                 // Being stopped: the stop ends Atlas in a moment and says so,
                 // so what the cut-short command gave is not reported.

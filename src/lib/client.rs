@@ -192,6 +192,9 @@ pub const RUN_TIMEOUT_MAX: Duration = Duration::from_secs(600);
 /// Time beyond a command's timeout for the helper to stop what it left
 /// running and send its last output.
 const RUN_MARGIN: Duration = Duration::from_secs(10);
+/// The longest the input service's grant can outlast a command killed
+/// while holding it: the grant's own life, and a second to spare.
+const GRANT_OUTLIVES: Duration = crate::native::GRANT_TTL.saturating_add(Duration::from_secs(1));
 
 /// Who recorded mutations are attributed to in the activity log.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -671,6 +674,40 @@ impl Client {
         .await
     }
 
+    /// [`Client::acquire_input`], trying again while a grant another command
+    /// left behind runs out: a definite busy from another agent is retried
+    /// about ten times a second for what is left of the controller's wait,
+    /// and no longer than a grant can outlive its holder. A busy from the
+    /// person, and every other answer, is returned at once, and a saved
+    /// Stop ends the retries.
+    async fn acquire_input_waiting(&self, owner: &str, epoch: &Epoch) -> Result<Value> {
+        let mut until = None;
+        loop {
+            match self.acquire_input(owner, epoch).await {
+                Err(error)
+                    if error.code == "busy"
+                        && error.holder == Some(Holder::Agent)
+                        && !error.uncertain =>
+                {
+                    let until = *until.get_or_insert_with(|| {
+                        Instant::now() + self.controller.remaining().min(GRANT_OUTLIVES)
+                    });
+                    let left = until.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        return Err(error);
+                    }
+                    tokio::time::sleep(crate::control::poll(left)).await;
+                    // The service may not have heard of a Stop the person's
+                    // side has saved.
+                    if self.stop_marked() {
+                        return Err(Error::new("stopped", crate::error::STOPPED));
+                    }
+                }
+                outcome => return outcome,
+            }
+        }
+    }
+
     /// Stop agents in the helper (`on`), or let them go on. Stopping ends
     /// an agent's input under way and refuses its next actions; the person
     /// keeps the viewer. Only the person resumes, through a viewer. An input
@@ -773,14 +810,19 @@ impl Client {
             return Ok(());
         }
 
-        let marked = self.config.input_socket.with_extension("stopped").exists()
-            || self.controller.stop_noted();
+        let marked = self.stop_marked();
         let hello = self.input_transport().call(&json!({"op": "hello"})).await;
         if marked || hello.is_ok_and(|hello| hello["held"] == true) {
             return Err(Error::new("stopped", crate::error::STOPPED));
         }
 
         Ok(())
+    }
+
+    /// Whether a Stop is saved on either side: the input service's own
+    /// marker, or the person's note.
+    fn stop_marked(&self) -> bool {
+        self.config.input_socket.with_extension("stopped").exists() || self.controller.stop_noted()
     }
 
     async fn native_request(&self, request: Value) -> Result<Value> {
@@ -938,7 +980,7 @@ impl Client {
         let standalone = crate::control::token();
         let owner = lease.map(|(_, token)| token).unwrap_or(&standalone);
         if lease.is_none()
-            && let Err(error) = self.acquire_input(owner, &session.epoch).await
+            && let Err(error) = self.acquire_input_waiting(owner, &session.epoch).await
         {
             if error.uncertain {
                 // The service may now hold input for `owner`: release it, or
@@ -2161,6 +2203,128 @@ mod tests {
             );
             recovery_settles_the_abandoned_claim(&client);
         }
+    }
+
+    #[tokio::test]
+    async fn a_grant_another_command_left_is_waited_out_within_the_wait() {
+        let (_dir, mut client, listener, session) = native_client();
+        client.controller = client.controller.waiting(Duration::from_secs(2));
+        let mut caller = Box::pin(standalone_input(&client, &session));
+        for _ in 0..2 {
+            let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+            answer(
+                &mut acquire,
+                json!({"ok": false, "code": "busy", "holder": "agent", "error": "held"}),
+            )
+            .await;
+        }
+        let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+        answer(&mut acquire, json!({"ok": true})).await;
+        let mut input = dispatched(&mut caller, &listener, "input").await;
+        answer(&mut input, json!({"ok": true, "performed": 2})).await;
+        let mut release = dispatched(&mut caller, &listener, "release").await;
+        answer(&mut release, json!({"ok": true})).await;
+        assert_eq!(caller.await.unwrap()["ok"], true);
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_grant_the_person_holds_is_never_waited_for() {
+        let (_dir, mut client, listener, session) = native_client();
+        client.controller = client.controller.waiting(Duration::from_secs(2));
+        let mut caller = Box::pin(standalone_input(&client, &session));
+        let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+        answer(
+            &mut acquire,
+            json!({"ok": false, "code": "busy", "holder": "person", "error": "held"}),
+        )
+        .await;
+        let error = tokio::time::timeout(Duration::from_secs(1), caller)
+            .await
+            .expect("answered after one try")
+            .unwrap_err();
+        assert_eq!(error.code, "busy");
+        assert_eq!(error.holder, Some(Holder::Person));
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_controller_that_does_not_wait_tries_the_grant_once() {
+        for wait in [None, Some(Duration::from_millis(1))] {
+            let (_dir, mut client, listener, session) = native_client();
+            if let Some(wait) = wait {
+                // A wait already spent on the lock leaves none for the grant.
+                client.controller = client.controller.waiting(wait);
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            let mut caller = Box::pin(standalone_input(&client, &session));
+            let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+            answer(
+                &mut acquire,
+                json!({"ok": false, "code": "busy", "holder": "agent", "error": "held"}),
+            )
+            .await;
+            let error = tokio::time::timeout(Duration::from_secs(1), caller)
+                .await
+                .expect("answered after one try")
+                .unwrap_err();
+            assert_eq!(error.code, "busy");
+            assert_eq!(error.holder, Some(Holder::Agent));
+            assert!(client.controller.pending().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_grant_refusal_that_may_have_happened_or_names_no_agent_is_never_retried() {
+        for reply in [
+            json!({"ok": false, "code": "busy", "holder": "agent", "uncertain": true, "error": "?"}),
+            json!({"ok": false, "code": "busy", "error": "held"}),
+            json!({"ok": false, "code": "lease-lost", "error": "lost"}),
+        ] {
+            let (_dir, mut client, listener, session) = native_client();
+            client.controller = client.controller.waiting(Duration::from_secs(2));
+            let mut caller = Box::pin(standalone_input(&client, &session));
+            let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+            answer(&mut acquire, reply.clone()).await;
+            if reply["uncertain"] == true {
+                // The grant may be held: it is released, not tried again.
+                let mut release = dispatched(&mut caller, &listener, "release").await;
+                answer(&mut release, json!({"ok": true})).await;
+            }
+            let error = tokio::time::timeout(Duration::from_secs(1), caller)
+                .await
+                .expect("answered after one try")
+                .unwrap_err();
+            assert_eq!(error.code, reply["code"], "{reply}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_saved_stop_ends_the_wait_for_a_grant_before_another_try() {
+        let (_dir, mut client, listener, session) = native_client();
+        client.controller = client.controller.waiting(Duration::from_secs(2));
+        let mut caller = Box::pin(standalone_input(&client, &session));
+        let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+        answer(
+            &mut acquire,
+            json!({"ok": false, "code": "busy", "holder": "agent", "error": "held"}),
+        )
+        .await;
+        // The person stops agents; the service has not heard of it.
+        client.controller.note_stop(true).unwrap();
+        let error = tokio::time::timeout(Duration::from_secs(1), caller)
+            .await
+            .expect("no other try")
+            .unwrap_err();
+        assert_eq!(error.code, "stopped");
+        assert!(!error.uncertain);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "no acquire or input after the Stop"
+        );
+        assert!(client.controller.pending().unwrap().is_empty());
     }
 
     #[tokio::test]

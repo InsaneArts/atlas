@@ -3,6 +3,10 @@
 use crate::error::{Error, Result};
 use serde_json::Value;
 
+/// How long the input service's grant of control lasts unless its holder
+/// renews it, so how long one can outlive a holder that was killed.
+pub(crate) const GRANT_TTL: std::time::Duration = std::time::Duration::from_secs(6);
+
 // FFI: SessionGetInfo reports through out-pointers.
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]

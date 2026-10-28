@@ -6,6 +6,9 @@ use crate::error::Holder;
 /// The step for your own action that may or may not have happened.
 pub const UNCERTAIN: &str = "It may or may not have happened, so don't repeat it. Take a screenshot, then run atlas restart.";
 
+/// What an agent does about busy once Atlas has waited for the holder.
+pub const WAITED: &str = "Atlas already waited for it. Do something else, then try again, or pass a longer --wait if your tool's timeout allows.";
+
 /// What an agent does about a failure: the uncertain step when it may or
 /// may not have happened, else the code's. Waiting for the person (agents
 /// stopped, the person cancelled it, holds control or is at the helper's
@@ -209,6 +212,14 @@ mod tests {
         let unknown = next("busy", None);
         assert!(unknown.contains("Never take control"), "{unknown}");
         assert_ne!(next("busy", None), fix("busy").unwrap(), "not the person's");
+    }
+
+    #[test]
+    fn busy_after_waiting_says_atlas_already_waited() {
+        assert!(WAITED.ends_with('.'), "{WAITED}");
+        assert!(WAITED.contains("already waited"), "{WAITED}");
+        assert!(!WAITED.contains("Resume"), "{WAITED}");
+        assert!(!WAITED.contains("in the viewer"), "{WAITED}");
     }
 
     /// An earlier action's unknown outcome, perhaps another agent's, is
