@@ -149,3 +149,17 @@ more, at most 10). If your tool's timeout is shorter than both, pass a shorter
 stops a command anyway, Atlas lets the step under way finish for up to 3
 seconds and reports how far it got (`interrupted`). A step still going then,
 such as a long `run`, is left unknown, and only `atlas restart` clears it.
+
+### Finding your own work
+
+Atlas knows which agent session each command comes from: Claude Code, Codex,
+opencode and Pi say so themselves. Elsewhere, set `ATLAS_SESSION=NAME`
+(letters, digits, `.`, `_`, `:` and `-`) to name your work. `atlas activity`
+lists this session's recent actions, its screenshots, the copies
+`atlas open` made that are still there, the environment plans it applied and
+has not rolled back, and how many of its actions are unknown. Run it after
+your context was compacted or cleared, before cleaning up; `--all` lists
+every session's. A `busy` reply names the session that has control
+(`heldBy`), and a `focus-changed` reply the session that last used the app
+in front (`lastUsedBy`). A session is only a name: it changes nothing about
+what you may do or which apps `atlas close` quits.

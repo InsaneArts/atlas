@@ -13,7 +13,14 @@ pub const GROUPS: &[(&str, &[&str])] = &[
     ("Get started", &["init", "doctor", "agents", "menubar"]),
     (
         "Look at the helper",
-        &["screenshot", "windows", "elements", "apps", "status"],
+        &[
+            "screenshot",
+            "windows",
+            "elements",
+            "apps",
+            "status",
+            "activity",
+        ],
     ),
     (
         "Act in the helper",
@@ -55,6 +62,7 @@ const EXAMPLES: &[(&str, &[&str])] = &[
         ],
     ),
     ("windows", &["atlas windows --app TextEdit"]),
+    ("activity", &["atlas activity", "atlas activity --all"]),
     (
         "elements",
         &["atlas elements --app TextEdit --role AXButton"],

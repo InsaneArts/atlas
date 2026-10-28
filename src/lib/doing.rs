@@ -122,6 +122,11 @@ impl Doing {
         }
     }
 
+    /// What it does, as rows name it: "click", "type", "screenshot".
+    pub fn verb(&self) -> &'static str {
+        self.verb
+    }
+
     /// The row's fields for these facts. A control is named only when the
     /// action worked: a name that matched nothing may be anything. A
     /// shortcut is named either way.

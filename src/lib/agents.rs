@@ -5,7 +5,9 @@
 use crate::{
     client::Client,
     config::Config,
+    control::Cause,
     error::{Error, Result},
+    host_session::{HostSession, brief, owns_every_unknown},
 };
 use serde_json::{Value, json};
 use std::{
@@ -799,8 +801,26 @@ pub fn refresh() -> Value {
 const UNKNOWN_OUTCOME: &str = "an earlier action's outcome is unknown. Take a screenshot and tell \
 the person before running atlas restart.";
 
+/// The session brief while every action of unknown outcome is this
+/// session's own, none still being carried out.
+const OWN_UNKNOWN_OUTCOME: &str =
+    "an earlier action of this session is unknown. Take a screenshot, then run atlas restart.";
+
+/// What a session start says while actions of unknown outcome, `causes`,
+/// are pending: the session may recover them itself only when every one
+/// is its own and none is still being carried out.
+fn unknown_outcome(causes: &[Cause], session: Option<&HostSession>) -> &'static str {
+    if session.is_some_and(|session| owns_every_unknown(causes, session.key())) {
+        OWN_UNKNOWN_OUTCOME
+    } else {
+        UNKNOWN_OUTCOME
+    }
+}
+
 /// One line for an agent's session start: local, bounded, never failing.
-pub async fn brief(config_path: &Path) -> String {
+/// For host `session`, it says what that session left in the helper, and
+/// lets it recover an unknown action that is all its own.
+pub async fn brief(config_path: &Path, session: Option<&HostSession>) -> String {
     let version = crate::VERSION;
 
     let Ok(config) = Config::load(config_path) else {
@@ -818,7 +838,8 @@ pub async fn brief(config_path: &Path) -> String {
         .pending()
         .is_ok_and(|pending| !pending.is_empty())
     {
-        return format!("Atlas {version}: {UNKNOWN_OUTCOME}");
+        let causes = client.controller.pending_causes().unwrap_or_default();
+        return format!("Atlas {version}: {}", unknown_outcome(&causes, session));
     }
 
     let Ok(status) = tokio::time::timeout(Duration::from_millis(1500), client.status()).await
@@ -834,10 +855,15 @@ pub async fn brief(config_path: &Path) -> String {
 
     let ready = crate::capability::doctor(status, config.helper_uid)["ready"] == true;
     if ready {
-        format!(
+        let mut line = format!(
             "Atlas {version}: ready. After any change a person could see, check it in the \
              hidden helper with the atlas skill before saying it works."
-        )
+        );
+        if let Some(left) = session.and_then(|session| brief::leftovers(&client, session)) {
+            line.push(' ');
+            line.push_str(&left);
+        }
+        line
     } else {
         format!("Atlas {version}: not ready; run atlas doctor and tell the person what it says.")
     }
@@ -1190,6 +1216,29 @@ mod tests {
             crate::agent::skill(),
             "regenerate with: atlas agent-guide --skill"
         );
+    }
+
+    #[test]
+    fn the_brief_lets_a_session_recover_its_own_unknown_action() {
+        use crate::host_session::Host;
+        let own = HostSession::new(Host::Claude, "own").unwrap();
+        let other = HostSession::new(Host::Codex, "other").unwrap();
+        let cause = |session: &HostSession, running: bool| Cause {
+            generation: crate::control::token(),
+            running,
+            session: Some(session.key().clone()),
+        };
+
+        let mine = [cause(&own, false)];
+        assert_eq!(unknown_outcome(&mine, Some(&own)), OWN_UNKNOWN_OUTCOME);
+        assert_eq!(unknown_outcome(&mine, Some(&other)), UNKNOWN_OUTCOME);
+        assert_eq!(unknown_outcome(&mine, None), UNKNOWN_OUTCOME);
+        assert_eq!(
+            unknown_outcome(&[cause(&own, true)], Some(&own)),
+            UNKNOWN_OUTCOME
+        );
+        let both = [cause(&own, false), cause(&other, false)];
+        assert_eq!(unknown_outcome(&both, Some(&own)), UNKNOWN_OUTCOME);
     }
 
     #[test]

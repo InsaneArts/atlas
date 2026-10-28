@@ -8,8 +8,8 @@ says more about a code, follow the guide. Read `error` to the person when you
 stop. If `uncertain` is true on a reply to your own command, the action may or
 may not have happened: never repeat it; take a screenshot, run `atlas restart`,
 and look again. The code `uncertain` when no reply of yours was uncertain is
-someone else's unknown action: do not run `atlas restart`; wait, and ask the
-person if it stays. (`atlas run` replies `ok` when the command ran; its own
+someone else's unknown action, unless it says `yours: true`: do not run
+`atlas restart`; wait, and ask the person if it stays. (`atlas run` replies `ok` when the command ran; its own
 failure is in `exitCode`.)
 
 | Code | Means | Do |
@@ -18,7 +18,7 @@ failure is in `exitCode`.)
 | `apps` | The helper's running apps could not be listed. | Retry once; then run `atlas doctor`. |
 | `bad-request` | The helper daemon rejected a malformed request. | Check the command's arguments against `atlas agent-guide --commands`. |
 | `blocked` | This shell may not connect to the helper or write Atlas's own files, usually because an agent sandbox blocks local sockets or writes outside its folder. The helper may be fine. | Run Atlas commands outside the sandbox (ask for that permission), or have the sandbox allow the helper socket and the folders Atlas writes: `~/Library/Caches/Atlas`, `~/Library/Application Support/Atlas/runs` and `/Users/Shared/Atlas`. Do not run `atlas init` for this. |
-| `busy` | Someone else has control. `holder` says who: `person` (the person, in the viewer) or `agent` (another Atlas command, usually another agent's). An agent's command first waits up to 30 s (`--wait SECONDS`, or `ATLAS_WAIT`; 0 answers at once) and `waited` says how long it did; it never waits for the person or after a Stop. | `person`: wait, never take control from them, and tell them if it lasts. `agent`: Atlas already waited; do something else, then try again, or pass a longer `--wait` within your tool's timeout. |
+| `busy` | Someone else has control. `holder` says who: `person` (the person, in the viewer) or `agent` (another Atlas command, usually another agent's). An agent's command first waits up to 30 s (`--wait SECONDS`, or `ATLAS_WAIT`; 0 answers at once) and `waited` says how long it did; it never waits for the person or after a Stop. `heldBy.name` names the agent session that has it, when Atlas knows it. | `person`: wait, never take control from them, and tell them if it lasts. `agent`: Atlas already waited; do something else, then try again, or pass a longer `--wait` within your tool's timeout. |
 | `cancelled` | The person stopped: at a question (Esc), or an input part way (`partial` says some of it landed). | Earlier steps may have happened; look, then ask the person before trying again. |
 | `capture` | A screenshot could not be taken or encoded. | Retry once; then `atlas doctor`. |
 | `config` | Atlas is not set up (no settings file). | Use the setup skill (`atlas init`). |
@@ -26,7 +26,7 @@ failure is in `exitCode`.)
 | `daemon` | The helper daemon stopped unexpectedly. | Run `atlas restart`. |
 | `elements` | An accessibility element could not be found uniquely or is hidden. When a name matched nothing or several, `candidates` lists up to five with their role, name and the point a click lands on (`at`; the box of a labelled checkbox or radio button); when the scan was incomplete, `scan` says why. `atlas elements --name` lists `candidates` the same way when nothing matched. | Add `--role`, pick from `candidates`, check `atlas elements`, or click coordinates from a crop. |
 | `environment` | A provisioning plan was refused. | Read `error`; plans never overwrite unknown changes. |
-| `focus-changed` | An action given `--app` or `--pid` was not sent: another app had keyboard focus (`reason: "app"`), another app's window was at its point (`point`), or Atlas could not tell (`unreadable`). `found` names what was there. A point on the desktop, or under an overlay other than the Dock's and Notification Center's click-through ones, refuses with `point` too. Earlier actions were sent: `performed`, and for `type`, `typed`. Nothing is uncertain, but the one action sent just before the change (16 characters, one key, one click) may have reached the other app. | Look with `atlas screenshot --app NAME`; check what the earlier part did; click where your app shows (a click brings it forward), then send the rest. Do not use `atlas open` to bring it forward. |
+| `focus-changed` | An action given `--app` or `--pid` was not sent: another app had keyboard focus (`reason: "app"`), another app's window was at its point (`point`), or Atlas could not tell (`unreadable`). `found` names what was there. A point on the desktop, or under an overlay other than the Dock's and Notification Center's click-through ones, refuses with `point` too. Earlier actions were sent: `performed`, and for `type`, `typed`. Nothing is uncertain, but the one action sent just before the change (16 characters, one key, one click) may have reached the other app. `lastUsedBy.name` names the session that last used the app in front, when Atlas knows it. | Look with `atlas screenshot --app NAME`; check what the earlier part did; click where your app shows (a click brings it forward), then send the rest. Do not use `atlas open` to bring it forward. |
 | `identity` | The helper session, account or display is not the configured one. | Stop and tell the person; run `atlas doctor`. |
 | `init` | Guided setup could not finish. | Show the person `error`; they can run `atlas init` again. |
 | `input` | Input could not be delivered (bad key, held button, a point off the display), or a batch was refused before anything was sent: at most 32 actions, 100 lines a scroll, 256 characters a `type`, 250 ms a wait, two seconds in all. | Fix the action or split the batch; a refused batch sent nothing, otherwise observe with a screenshot before retrying. |
@@ -60,7 +60,7 @@ failure is in `exitCode`.)
 | `switch` | The screen could not be locked for switching accounts. | Tell the person; they lock it from the Apple menu (Lock Screen) and switch there. |
 | `terminal` | The command asks the person a question and has no terminal. | Ask the person; pass the flag it names (such as `--yes`) only with their agreement. |
 | `transport` | The helper did not answer, or the connection broke. | If `uncertain`, run `atlas restart`; otherwise retry once. |
-| `uncertain` | An earlier action's outcome is unknown; control is blocked. It may be another agent's. | Take a screenshot. Run `atlas restart` only if that action was yours (a reply of yours said `"uncertain": true`); otherwise wait, and ask the person before restarting. A command of yours that your tool's timeout stopped counts as yours. |
+| `uncertain` | An earlier action's outcome is unknown; control is blocked. `yours: true` means it was this session's own; `yours: false` and `causedBy` mean another session's. | Take a screenshot. Run `atlas restart` only if that action was yours (`yours: true`, a reply of yours said `"uncertain": true`, or your host stopped an Atlas command of yours before it replied); otherwise wait, and ask the person before restarting. |
 | `uninstall` | Removal was refused or incomplete. | Show `error` to the person. |
 | `update` | An update was refused or could not be verified. | Show `error`; never bypass the signature checks. |
 | `usage` | The command line was invalid. | Check `atlas agent-guide --commands`. |

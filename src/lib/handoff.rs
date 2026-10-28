@@ -6,14 +6,16 @@
 use crate::{
     agent::same_text,
     client::Client,
-    control::Ownership,
+    control::{Ownership, Token},
     error::{Error, Result},
+    host_session::{HostSession, Key},
     transport::run_output,
 };
 use serde_json::{Value, json};
 use std::{
     fs,
-    os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt},
+    io::Write,
+    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     time::Duration,
@@ -222,6 +224,9 @@ pub(crate) struct Running {
 /// Which app the copies are opened with, by the names it may run as.
 const OPENED_WITH: &str = ".opened-with";
 
+/// The host session a copy folder was made for: its key, alone on a line.
+const SESSION: &str = ".session";
+
 /// What [`hand_over`] gives the helper to open.
 pub(crate) struct Handed {
     /// The targets as the helper can open them, in order.
@@ -262,12 +267,14 @@ pub(crate) async fn hand_over(
     let answers = readable(client, ownership, &checks).await?;
 
     let mut made = Vec::new();
+    let session = client.host_session.as_ref().map(HostSession::key);
     let placed = place(
         targets,
         answers,
         running,
         &opened_with,
         client.config.helper_uid,
+        session,
         &mut made,
     );
 
@@ -290,7 +297,8 @@ pub(crate) async fn hand_over(
 }
 
 /// [`hand_over`]'s targets in order, given `answers` (whether the helper
-/// can read each path outside ROOT); each copy made is added to `made` as
+/// can read each path outside ROOT), for `helper` and the host session of
+/// the command copying, if any; each copy made is added to `made` as
 /// (original, copy) as soon as it exists.
 fn place(
     targets: Vec<Target>,
@@ -298,6 +306,7 @@ fn place(
     running: &[Running],
     opened_with: &[String],
     helper: u32,
+    session: Option<&Key>,
     made: &mut Vec<(PathBuf, PathBuf)>,
 ) -> Result<Vec<String>> {
     let root_path = PathBuf::from(ROOT);
@@ -348,6 +357,11 @@ fn place(
 
                     let copy = copy(&path, root)?;
                     made.push((path.clone(), copy.clone()));
+                    if let (Some(session), Some(folder)) = (session, copy.parent()) {
+                        // A label for close and the session's record; a
+                        // lost one leaves the copy everyone's, as before.
+                        let _ = label(folder, session);
+                    }
 
                     if path.extension().is_none_or(|extension| extension != "app")
                         && !opened_with.is_empty()
@@ -395,6 +409,58 @@ fn copy(path: &Path, root: &Path) -> Result<PathBuf> {
     }
 
     Ok(copy)
+}
+
+/// Note in `folder` that host session `session` made it, readable only by
+/// this account and, through the folder's grant, the helper.
+fn label(folder: &Path, session: &Key) -> std::io::Result<()> {
+    fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(folder.join(SESSION))?
+        .write_all(format!("{session}\n").as_bytes())
+}
+
+/// The host session a copy folder was made for, when it names one.
+fn labelled(folder: &Path) -> Option<Key> {
+    let text = crate::helper_info::read_own(&folder.join(SESSION), 64)?;
+    Key::parse(std::str::from_utf8(&text).ok()?.trim())
+}
+
+/// The token of the copy folder `path` lies in, when it lies in one under
+/// ROOT: the folder's own name, never the copy's.
+pub(crate) fn token_of(path: &str) -> Option<Token> {
+    let rest = Path::new(path).strip_prefix(ROOT).ok()?;
+    Token::parse(rest.components().next()?.as_os_str().to_str()?)
+}
+
+/// Whether the copy folder `token` names is still there, under `root`.
+pub(crate) fn copy_exists(root: &Path, token: &Token) -> bool {
+    private_folder(&root.join(token.as_str()))
+}
+
+/// The app the copy folder `token` names is for: the app its files were
+/// opened with, else the app it holds. Never a copied file's name.
+pub(crate) fn copy_app(root: &Path, token: &Token) -> Option<String> {
+    let folder = root.join(token.as_str());
+    if !private_folder(&folder) {
+        return None;
+    }
+    let with = fs::read_to_string(folder.join(OPENED_WITH)).unwrap_or_default();
+    with.lines()
+        .map(str::trim)
+        .find(|name| !name.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            entries(&folder).iter().find_map(|copy| {
+                copy.extension()
+                    .is_some_and(|extension| extension == "app")
+                    .then(|| copy.file_stem()?.to_str().map(str::to_owned))?
+            })
+        })
+        .map(|app| crate::doing::bounded(&app))
 }
 
 /// Every name a copy folder's app may run as: its copies' names, and the
@@ -486,18 +552,38 @@ fn bundle_value(bundle: &Path, key: &str) -> Option<String> {
         .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
-/// Remove the copies of `app`, which has quit, except any still in use by
-/// an app among `running` (the helper's app names); the folders removed.
-pub(crate) fn remove_copies_of(app: &str, running: &[&str]) -> Vec<String> {
-    remove_copies_in(Path::new(ROOT), app, running)
+/// What closing an app did with its copies.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Removed {
+    /// The folders removed.
+    pub folders: Vec<String>,
+    /// How many copies another host session made were kept.
+    pub kept_others: usize,
 }
 
-fn remove_copies_in(root: &Path, app: &str, running: &[&str]) -> Vec<String> {
-    copies_of(root, app)
-        .into_iter()
-        .filter(|folder| !in_use(folder, running) && fs::remove_dir_all(folder).is_ok())
-        .map(|folder| folder.to_string_lossy().into_owned())
-        .collect()
+/// Remove the copies of `app`, which has quit, except any still in use by
+/// an app among `running` (the helper's app names) and, for a command of
+/// host `session`, any another session made. Without a session, every copy
+/// not in use goes, as it always did: a session only ever keeps more.
+pub(crate) fn remove_copies_of(app: &str, running: &[&str], session: Option<&Key>) -> Removed {
+    remove_copies_in(Path::new(ROOT), app, running, session)
+}
+
+fn remove_copies_in(root: &Path, app: &str, running: &[&str], session: Option<&Key>) -> Removed {
+    let mut removed = Removed::default();
+    for folder in copies_of(root, app) {
+        if in_use(&folder, running) {
+            continue;
+        }
+        let others = labelled(&folder).is_some_and(|made| session.is_some_and(|own| *own != made));
+        if others {
+            removed.kept_others += 1;
+        } else if fs::remove_dir_all(&folder).is_ok() {
+            removed.folders.push(folder.to_string_lossy().into_owned());
+        }
+    }
+
+    removed
 }
 
 /// Remove copies older than KEEP that are not in use by an app among
@@ -562,7 +648,10 @@ mod tests {
         let root = atlas.join("Open");
         assert!(private_folder(&root), "Open alone passes the checks");
 
-        assert!(remove_copies_in(&root, "note", &[]).is_empty());
+        assert_eq!(
+            remove_copies_in(&root, "note", &[], None),
+            Removed::default()
+        );
         prune_in(&root, &[]);
         let owned = root_if_owned_in(&root);
         if let Some(root) = &owned {
@@ -585,7 +674,7 @@ mod tests {
 
         assert_eq!(root_if_owned_in(&root), Some(root.clone()));
         assert_eq!(
-            remove_copies_in(&root, "note", &[]),
+            remove_copies_in(&root, "note", &[], None).folders,
             [closed.to_string_lossy().into_owned()]
         );
         prune_in(&root, &[]);
@@ -689,10 +778,13 @@ mod tests {
         assert!(!in_use(&other, &["TextEdit", "Runner"]));
 
         // `close --app runner` while Runner still runs keeps its copy.
-        assert!(remove_copies_in(&root, "runner", &["Finder", "Runner"]).is_empty());
+        assert_eq!(
+            remove_copies_in(&root, "runner", &["Finder", "Runner"], None),
+            Removed::default()
+        );
         assert!(app.exists());
-        let removed = remove_copies_in(&root, "runner", &["Finder"]);
-        assert_eq!(removed, [app.to_string_lossy().into_owned()]);
+        let removed = remove_copies_in(&root, "runner", &["Finder"], None);
+        assert_eq!(removed.folders, [app.to_string_lossy().into_owned()]);
         assert!(!app.exists());
 
         // Old copies go unless in use; new ones stay.
@@ -705,6 +797,113 @@ mod tests {
         assert!(new.exists(), "recent");
         prune_in(&root, &[]);
         assert!(!opened.exists());
+    }
+
+    fn key(id: &str) -> Key {
+        Key::of(crate::host_session::Host::Codex, id)
+    }
+
+    #[test]
+    fn a_copy_folder_records_its_session_out_of_the_helpers_sight() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = copy_folder(dir.path(), "a", "note.txt");
+        fs::write(folder.join(OPENED_WITH), "TextEdit").unwrap();
+        label(&folder, &key("right")).unwrap();
+
+        let session = folder.join(SESSION);
+        assert_eq!(
+            fs::read_to_string(&session).unwrap(),
+            format!("{}\n", key("right"))
+        );
+        assert_eq!(fs::metadata(&session).unwrap().mode() & 0o777, 0o600);
+        assert_eq!(labelled(&folder), Some(key("right")));
+        assert_eq!(entries(&folder), [folder.join("note.txt")]);
+        assert_eq!(folder_names(&folder), ["TextEdit", "note"]);
+        assert!(label(&folder, &key("other")).is_err(), "never replaced");
+    }
+
+    #[test]
+    fn close_keeps_another_sessions_copies_and_counts_them() {
+        let made = |dir: &Path| {
+            let root = dir.join("root");
+            fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+            let own = copy_folder(&root, "own", "own.txt");
+            let other = copy_folder(&root, "other", "other.txt");
+            let nobody = copy_folder(&root, "nobody", "nobody.txt");
+            let busy = copy_folder(&root, "busy", "busy.txt");
+            for folder in [&own, &other, &nobody, &busy] {
+                fs::write(folder.join(OPENED_WITH), "TextEdit").unwrap();
+            }
+            label(&own, &key("left")).unwrap();
+            label(&other, &key("right")).unwrap();
+            fs::write(busy.join(OPENED_WITH), "TextEdit\nBusy").unwrap();
+            (root, [own, other, nobody, busy])
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let (root, [own, other, nobody, busy]) = made(dir.path());
+        let removed = remove_copies_in(&root, "TextEdit", &["Busy"], Some(&key("left")));
+        assert_eq!(removed.kept_others, 1);
+        let mut folders = removed.folders.clone();
+        folders.sort();
+        let mut expected = [own, nobody].map(|folder| folder.to_string_lossy().into_owned());
+        expected.sort();
+        assert_eq!(folders, expected);
+        assert!(other.exists() && busy.exists());
+
+        let dir = tempfile::tempdir().unwrap();
+        let (root, [.., busy]) = made(dir.path());
+        let removed = remove_copies_in(&root, "TextEdit", &["Busy"], None);
+        assert_eq!(
+            (removed.folders.len(), removed.kept_others),
+            (3, 0),
+            "as before"
+        );
+        assert!(busy.exists(), "one in use always stays");
+    }
+
+    #[test]
+    fn prune_ignores_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        let other = copy_folder(&root, "other", "other.txt");
+        label(&other, &key("right")).unwrap();
+        age(&other, 8);
+
+        prune_in(&root, &[]);
+        assert!(!other.exists());
+    }
+
+    #[test]
+    fn a_copy_folder_is_named_by_its_token_and_its_app_never_its_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = |name: &str| {
+            let token = Token::new();
+            copy_folder(dir.path(), token.as_str(), name);
+            token
+        };
+        let token = folder("Quarterly Plan.txt");
+        fs::write(
+            dir.path().join(token.as_str()).join(OPENED_WITH),
+            "TextEdit\nTextEdit Helper",
+        )
+        .unwrap();
+        let app = folder("Long Runner.app");
+        let bare = folder("notes.txt");
+
+        assert_eq!(copy_app(dir.path(), &token).as_deref(), Some("TextEdit"));
+        assert_eq!(copy_app(dir.path(), &app).as_deref(), Some("Long Runner"));
+        assert_eq!(copy_app(dir.path(), &bare), None);
+        assert!(copy_exists(dir.path(), &token));
+        assert!(!copy_exists(dir.path(), &Token::new()));
+
+        let path = format!("{ROOT}/{token}/Quarterly Plan.txt");
+        assert_eq!(token_of(&path), Some(token.clone()));
+        assert_eq!(token_of(&format!("{ROOT}/{token}")), Some(token));
+        assert_eq!(token_of("/tmp/Quarterly Plan.txt"), None);
+        assert_eq!(token_of(&format!("{ROOT}/not-a-token/x")), None);
+        assert_eq!(token_of(&format!("{ROOT}/../{}", Token::new())), None);
     }
 
     #[test]

@@ -40,6 +40,7 @@ The library entry point is [`src/lib/lib.rs`](../src/lib/lib.rs). The binary kee
 | `src/bin/cli.rs`, `help.rs`, `output.rs`, `dispatch.rs` | CLI grammar, grouped help, output/exit behavior and routing into library operations.                    |
 | `client`, `transport`, `session`                        | Helper requests, bounded transport and validation of account/session/display evidence.                  |
 | `control`                                               | Controller exclusion, viewer leases and persistent unknown-action records.                              |
+| `host_session`                                          | Which agent session a command comes from, its records, and naming sessions in replies.                  |
 | `daemon`                                                | The signed helper daemon, protocol, session facts and bounded child-command execution.                  |
 | `native`                                                | macOS capture, accessibility and input bindings, event execution, cancellation and held-input recovery. |
 | `agent`, `handoff`, `readiness`                         | User-facing app operations, staged app copies and dependency checks.                                    |
@@ -62,6 +63,8 @@ An agent's request may name its app; the input service then refuses each action,
 Requests are tied to a display epoch: the account, graphical session, display and input/capture processes observed for the action. A fresh screenshot alone cannot authorize input into a different epoch. Frame and epoch checks must remain connected through the full request.
 
 Before a mutation, Atlas records that its outcome is pending. A complete acknowledgement settles that record. A disconnected caller, timeout or dead executor is not an acknowledgement. A command stopped by a signal starts nothing more, lets the step under way finish for a short grace, and settles only what was acknowledged; a step still under way then stays pending. Unknown outcomes remain pending until supported recovery confirms the required new helper state. Recovery never replays the action.
+
+Each agent command records the host session it comes from (a Claude Code session, a Codex thread, an opencode or Pi session), read from its host's environment: on its activity row, its screenshot's row, its handoff copies, a session record in the output folder, a note beside the controller lock and a list of which session claimed each pending change. A host session is a label for people and agents. It never decides input, control, Stop, recovery, rollback or what may be deleted; it only narrows which handoff copies `close` removes.
 
 The input journal records held keys and mouse buttons separately. A replacement input service cleans up held input before accepting new work. Tests for cancellation or recovery must include failure during execution and cleanup, not just a successful command followed by release.
 

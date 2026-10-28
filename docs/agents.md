@@ -57,6 +57,8 @@ The local integration runs Atlas on this Mac. A remote SSH session or Cloud Agen
 
 Use `atlas agents project` in a project to add Atlas's maintained section to `AGENTS.md`. Atlas does not generate `.cursorrules` or edit global Cursor rules.
 
+Atlas tells agents' sessions apart by themselves. Claude Code, Codex and Pi give each command their session id; opencode's comes from Atlas's plugin. Cursor commands carry no session yet. Run a script or another agent with `ATLAS_SESSION=NAME` to name its work.
+
 ## Verify the connection
 
 First run `atlas doctor --json` and check for `ready: true`. Then run `atlas agents status` and check the host you connected. These are separate checks: a connected plugin does not make a logged-out helper ready.

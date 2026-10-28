@@ -207,7 +207,7 @@ pub(super) struct Progress {
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub(super) enum Phase {
+pub(crate) enum Phase {
     Applying,
     Applied,
     RollingBack,

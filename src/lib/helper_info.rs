@@ -4,6 +4,7 @@
 //! bar's viewer service both read through here, so each shows the same
 //! things under the same rules.
 use crate::error::{Error, Result};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -214,6 +215,37 @@ pub fn capture_time(name: &str) -> Option<u128> {
     digits.parse().ok()
 }
 
+/// The file name of a screenshot an agent's capture wrote: Atlas's own
+/// timestamp name, never a path or a person's file.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct Capture(String);
+
+impl Capture {
+    /// `name` as a capture's, when [`capture_time`] reads it.
+    pub fn parse(name: &str) -> Option<Self> {
+        capture_time(name).map(|_| Self(name.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for Capture {
+    type Error = String;
+
+    fn try_from(name: String) -> std::result::Result<Self, Self::Error> {
+        Self::parse(&name).ok_or_else(|| format!("{name} is not a capture's name"))
+    }
+}
+
+impl From<Capture> for String {
+    fn from(capture: Capture) -> Self {
+        capture.0
+    }
+}
+
 /// The agents' screenshots in `output`, newest first, at most `limit`:
 /// each one's name and when it was taken, in nanoseconds since 1970. Only
 /// plain files a capture names count; links and other files never do.
@@ -280,6 +312,31 @@ pub fn open_plain(path: &Path) -> Option<std::fs::File> {
         .open(path)
         .ok()?;
     file.metadata().ok()?.is_file().then_some(file)
+}
+
+/// What the plain file at `path` holds, when it is this account's and at
+/// most `limit` bytes: no link, pipe or other account's file is read.
+pub(crate) fn read_own(path: &Path, limit: u64) -> Option<Vec<u8>> {
+    use std::{io::Read, os::unix::fs::MetadataExt};
+
+    let file = open_plain(path)?;
+    if file.metadata().ok()?.uid() != nix::unistd::getuid().as_raw() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(limit + 1).read_to_end(&mut bytes).ok()?;
+    (bytes.len() as u64 <= limit).then_some(bytes)
+}
+
+/// Whether `folder` is a real folder of this account, not a link to one.
+pub(crate) fn own_folder(folder: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    std::fs::symlink_metadata(folder).is_ok_and(|metadata| {
+        metadata.is_dir()
+            && !metadata.file_type().is_symlink()
+            && metadata.uid() == nix::unistd::getuid().as_raw()
+    })
 }
 
 /// Whether `bundle` is an app installed where apps go: the system's and

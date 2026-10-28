@@ -17,11 +17,13 @@ use crate::{
         FRAME_LIMIT, ICONS, Icons, capture_time, captures, frame, open_apps, read_capture,
         thumbnail,
     },
+    host_session::{Key, names::names, store::Store},
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
-    path::PathBuf,
+    collections::{BTreeMap, BTreeSet},
+    path::{Path, PathBuf},
     sync::{
         Arc, OnceLock,
         atomic::{AtomicBool, Ordering},
@@ -477,7 +479,7 @@ impl Server {
         let (status, _) = crate::watch::read(&self.client, &output, self.port)
             .await
             .ok_or_else(|| Error::new("menubar", "Atlas's menu bar is busy; try again"))?;
-        let status = summary(&status);
+        let status = summary(&status, &session_names(&output));
 
         let mut last = self.last.lock().await;
         if last.as_ref().is_none_or(|(at, _)| *at <= began) {
@@ -812,22 +814,30 @@ impl Server {
     /// Everything done in the helper lately, newest first.
     async fn activity(&self) -> Result<Value> {
         let output = self.client.output_dir()?.to_path_buf();
-        let rows =
-            tokio::task::spawn_blocking(move || crate::overview::activity(&output, ACTIVITY))
-                .await
-                .unwrap_or_default();
+        let (rows, named) = tokio::task::spawn_blocking(move || {
+            (
+                crate::overview::activity(&output, ACTIVITY),
+                session_names(&output),
+            )
+        })
+        .await
+        .unwrap_or_default();
         let now = crate::client::timestamp();
         let rows = rows
             .iter()
             .map(|row| crate::overview::shown(row, now))
             .map(|row| {
-                json!({
+                let mut shown = json!({
                     "says": row["says"],
                     "ok": row["ok"],
                     "started": row["started"],
                     "actor": row["actor"],
                     "ageSeconds": row["ageSeconds"],
-                })
+                });
+                if let Some(name) = session_name(&row, &named) {
+                    shown["session"] = json!(name);
+                }
+                shown
             })
             .collect::<Vec<_>>();
 
@@ -1135,25 +1145,50 @@ fn screen_contents() -> Value {
     json!({"uri": SCREEN_URI, "mimeType": APP_MIME, "text": page, "_meta": screen_meta()})
 }
 
+/// The name of every recorded host session in `output`, as every surface
+/// shows it.
+fn session_names(output: &Path) -> BTreeMap<Key, String> {
+    let recent = Store::at(output).recent();
+    names(recent.iter().map(|seen| &seen.record))
+}
+
+/// The name of the host session a shown row names, when its record is
+/// there: never its key or the host's own id.
+fn session_name<'a>(row: &Value, named: &'a BTreeMap<Key, String>) -> Option<&'a String> {
+    named.get(&row["session"].as_str().and_then(Key::parse)?)
+}
+
 /// What the view and the model read of a status: the overview's state, its
-/// words and recent rows, without the doctor report around it.
-fn summary(status: &Value) -> Value {
+/// words and recent rows, without the doctor report around it. Rows name
+/// their session, by `named`, only when they come from two sessions or
+/// more, so one agent's status costs it nothing more.
+fn summary(status: &Value, named: &BTreeMap<Key, String>) -> Value {
     let overview = &status["overview"];
-    let rows = overview["activity"]
+    let shown = overview["activity"]
         .as_array()
-        .map(|rows| {
-            rows.iter()
-                .map(|row| {
-                    json!({
-                        "says": row["says"],
-                        "ok": row["ok"],
-                        "actor": row["actor"],
-                        "ageSeconds": row["ageSeconds"],
-                    })
-                })
-                .collect::<Vec<_>>()
-        })
+        .map(Vec::as_slice)
         .unwrap_or_default();
+    let sessions: BTreeSet<&str> = shown
+        .iter()
+        .filter_map(|row| row["session"].as_str())
+        .collect();
+    let rows = shown
+        .iter()
+        .map(|row| {
+            let mut kept = json!({
+                "says": row["says"],
+                "ok": row["ok"],
+                "actor": row["actor"],
+                "ageSeconds": row["ageSeconds"],
+            });
+            if sessions.len() > 1
+                && let Some(name) = session_name(row, named)
+            {
+                kept["session"] = json!(name);
+            }
+            kept
+        })
+        .collect::<Vec<_>>();
 
     // The view is the person's: a step that names a command reads as where
     // to look instead.

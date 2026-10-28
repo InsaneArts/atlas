@@ -420,18 +420,83 @@ async fn a_screen_that_has_not_changed_reuses_its_frame() {
 }
 
 #[test]
+fn the_model_sees_session_names_only_when_two_sessions_acted() {
+    use crate::host_session::Host;
+    let (claude, codex) = (Key::of(Host::Claude, "left"), Key::of(Host::Codex, "right"));
+    let named = BTreeMap::from([
+        (claude.clone(), "Claude Code · left".to_owned()),
+        (codex.clone(), "Codex · right".to_owned()),
+    ]);
+    let status = |sessions: [&Key; 2]| {
+        json!({"overview": {"activity": [
+            {"says": "clicked Save", "actor": "agent", "ok": true, "ageSeconds": 1, "session": sessions[0]},
+            {"says": "typed in TextEdit", "actor": "agent", "ok": true, "ageSeconds": 5, "session": sessions[1]},
+            {"says": "sent 1 action", "actor": "viewer", "ok": true, "ageSeconds": 9, "session": null},
+        ]}})
+    };
+
+    let alone = summary(&status([&claude, &claude]), &named);
+    assert!(
+        alone["activity"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row.get("session").is_none())
+    );
+
+    let two = summary(&status([&claude, &codex]), &named);
+    assert_eq!(two["activity"][0]["session"], "Claude Code · left");
+    assert_eq!(two["activity"][1]["session"], "Codex · right");
+    assert!(two["activity"][2].get("session").is_none());
+    let text = two.to_string() + &said(&two).to_string();
+    assert!(
+        !text.contains(claude.as_str()) && !text.contains(codex.as_str()),
+        "{text}"
+    );
+    assert!(!text.contains("hostSession") && !text.contains("hostSessions"));
+    assert_eq!(
+        said(&two)["content"],
+        said(&alone)["content"],
+        "the model's words are as before"
+    );
+}
+
+#[test]
+fn mcp_actions_are_recorded_without_a_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = server(dir.path());
+    assert_eq!(server.client.host_session, None);
+
+    let mut acting = server
+        .client
+        .clone()
+        .doing(crate::doing::Doing::new("input"));
+    acting.actor = Actor::Viewer;
+    acting.record_for_test(
+        &json!({"op": "input", "actions": [{}]}),
+        &json!({"ok": true}),
+    );
+    let log = std::fs::read_to_string(server.client.output_dir().unwrap().join("metadata.jsonl"))
+        .unwrap();
+    assert!(!log.contains("session"), "{log}");
+}
+
+#[test]
 fn a_status_reads_in_a_line_for_the_model_and_whole_for_the_view() {
-    let status = summary(&json!({"overview": {
-        "state": "working",
-        "label": "Working",
-        "headline": "Clicked Save in TextEdit",
-        "accountName": "Atlas",
-        "activity": [
-            {"says": "clicked Save in TextEdit", "actor": "agent", "ok": true, "ageSeconds": 1, "verb": "click"},
-            {"says": "sent 1 action", "actor": "viewer", "ok": true, "ageSeconds": 2},
-            {"says": "opened TextEdit", "actor": "agent", "ok": true, "ageSeconds": 9},
-        ],
-    }}));
+    let status = summary(
+        &json!({"overview": {
+            "state": "working",
+            "label": "Working",
+            "headline": "Clicked Save in TextEdit",
+            "accountName": "Atlas",
+            "activity": [
+                {"says": "clicked Save in TextEdit", "actor": "agent", "ok": true, "ageSeconds": 1, "verb": "click"},
+                {"says": "sent 1 action", "actor": "viewer", "ok": true, "ageSeconds": 2},
+                {"says": "opened TextEdit", "actor": "agent", "ok": true, "ageSeconds": 9},
+            ],
+        }}),
+        &BTreeMap::new(),
+    );
     assert_eq!(status["helper"], "Atlas");
     assert_eq!(
         status["activity"][0].get("verb"),
@@ -439,7 +504,10 @@ fn a_status_reads_in_a_line_for_the_model_and_whole_for_the_view() {
         "only what the view shows"
     );
 
-    let step = summary(&json!({"overview": {"headline": "Run atlas start-input"}}));
+    let step = summary(
+        &json!({"overview": {"headline": "Run atlas start-input"}}),
+        &BTreeMap::new(),
+    );
     assert_eq!(
         step["headline"], "The helper isn't ready. Open Atlas to see why",
         "no commands for the person"

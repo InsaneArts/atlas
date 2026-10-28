@@ -2,9 +2,21 @@
 //! a time ([`Controller`], a file lock per helper account), a marker of every
 //! mutation whose outcome is unknown until verified recovery clears it, and
 //! the short-lived [`Lease`] a viewer holds while a person has control.
+//! Beside the lock and the marker it keeps labels for people and agents:
+//! which host session holds control, which waits, and which claimed each
+//! pending change. Nothing here decides anything by them.
+mod causes;
+mod notes;
+#[cfg(test)]
+mod notes_tests;
+mod turns;
+
+pub use notes::Note;
+
 use crate::{
     config::home,
     error::{Error, Holder, Result},
+    host_session::{HostSession, Key, Label},
     interrupt::{Hold, Interrupt},
 };
 use fs2::FileExt;
@@ -38,6 +50,57 @@ pub fn token() -> String {
     let mut bytes = [0; TOKEN_BYTES];
     rand::rng().fill_bytes(&mut bytes);
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A name shaped as a [`token`] makes it: Atlas's own random name for a
+/// copy folder or an environment plan, never one a person chose.
+#[derive(
+    Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(try_from = "String", into = "String")]
+pub struct Token(String);
+
+impl Token {
+    /// `text` as a token, when it is [`TOKEN_BYTES`] bytes as lowercase
+    /// hexadecimal digits.
+    pub fn parse(text: &str) -> Option<Self> {
+        crate::digest::lower_hex(text, TOKEN_BYTES * 2).then(|| Self(text.to_owned()))
+    }
+
+    /// A new random token.
+    pub fn new() -> Self {
+        Self(token())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Default for Token {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TryFrom<String> for Token {
+    type Error = String;
+
+    fn try_from(text: String) -> std::result::Result<Self, Self::Error> {
+        Self::parse(&text).ok_or_else(|| format!("{text} is not one of Atlas's tokens"))
+    }
+}
+
+impl From<Token> for String {
+    fn from(token: Token) -> Self {
+        token.0
+    }
+}
+
+impl std::fmt::Display for Token {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
 }
 
 /// How far a private file is written before the call returns.
@@ -526,15 +589,28 @@ pub struct Ownership {
     /// The note that the person holds this ownership through a viewer, gone
     /// with it.
     person: Option<PathBuf>,
+    /// The note naming the host session that holds it, gone before the lock
+    /// is, so the lock is never free while a note still names its holder.
+    holder: Option<PathBuf>,
 }
 
 impl Drop for Ownership {
     fn drop(&mut self) {
-        if let Some(note) = &self.person {
+        for note in [&self.holder, &self.person].into_iter().flatten() {
             let _ = fs::remove_file(note);
         }
         let _ = FileExt::unlock(&self._lock);
     }
+}
+
+/// One pending change, as far as people and agents are told of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Cause {
+    pub generation: String,
+    /// Whether a live process is still carrying it out.
+    pub running: bool,
+    /// The host session that claimed it, when one is recorded.
+    pub session: Option<Key>,
 }
 
 /// Where a wait for another controller has got to.
@@ -600,6 +676,17 @@ pub struct Controller {
     /// The stop a signal asks: it refuses control from then on, and waits
     /// for the changes this controller has under way.
     interrupt: Interrupt,
+    /// The host session this controller's changes are claimed for, so one
+    /// of unknown outcome can be shown to the session that made it. A label
+    /// only: what blocks and what recovery clears never depend on it.
+    label: Option<Label>,
+    /// Which host session claimed each pending generation, beside the marker.
+    causes: PathBuf,
+    /// Which host session holds control right now, beside the lock.
+    holder: PathBuf,
+    /// The commands waiting for control, one note each, in the order they
+    /// take it.
+    waiting: PathBuf,
 }
 
 impl Controller {
@@ -624,6 +711,10 @@ impl Controller {
             heeds_stop: false,
             on_wait: None,
             interrupt: Interrupt::process().clone(),
+            label: None,
+            causes: directory.join(format!("{name}.causes.json")),
+            holder: directory.join(format!("{name}.holder.json")),
+            waiting: directory.join(format!("{name}.waiting")),
         }
     }
 
@@ -671,6 +762,14 @@ impl Controller {
     #[must_use]
     pub fn on_wait(mut self, hook: impl Fn(WaitEvent) + Send + Sync + 'static) -> Self {
         self.on_wait = Some(Arc::new(hook));
+        self
+    }
+
+    /// This controller, claiming its changes and holding control for host
+    /// `session`, as labels only.
+    #[must_use]
+    pub fn labelled(mut self, session: Option<&HostSession>) -> Self {
+        self.label = session.map(HostSession::label);
         self
     }
 
@@ -736,14 +835,44 @@ impl Controller {
         Ok(Ownership {
             _lock: lock,
             person: None,
+            holder: self.note_holder(),
         })
     }
 
+    /// Name this controller's host session beside the lock it now holds, or
+    /// clear the note an earlier holder left when it has none: a label for
+    /// whoever finds the helper busy. The note's path, when one was written.
+    fn note_holder(&self) -> Option<PathBuf> {
+        let Some(label) = &self.label else {
+            let _ = fs::remove_file(&self.holder);
+            return None;
+        };
+
+        Note::now(Some(label))
+            .and_then(|note| note.write(&self.holder).ok())
+            .map(|()| self.holder.clone())
+    }
+
+    /// The holder note, as written, when there is one that parses. Whether
+    /// its command still runs is the reader's to check.
+    pub fn holder_note(&self) -> Option<Note> {
+        Note::read(&self.holder)
+    }
+
+    /// Where the holder note is kept, for tests that stand in for another
+    /// command's.
+    #[cfg(test)]
+    pub(crate) fn holder_path(&self) -> &Path {
+        &self.holder
+    }
+
     /// Lock `lock`, trying again for what is left of [`Controller::wait`]
-    /// while another controller holds it.
+    /// while another controller holds it. A controller given a wait lets
+    /// those already waiting go first.
     fn take(&self, lock: &File) -> Result<()> {
         let started = Instant::now();
-        if self.try_take(lock, started)? {
+        let first = self.wait.is_zero() || !turns::queued(&self.waiting);
+        if self.try_take(lock, started, first)? {
             return Ok(());
         }
 
@@ -751,27 +880,29 @@ impl Controller {
     }
 
     /// Try `lock` again about ten times a second, between telling the hook
-    /// that the wait began and that it ended. A signal's stop ends the wait
+    /// that the wait began and that it ended, whenever no command that began
+    /// waiting earlier is still waiting. A signal's stop ends the wait
     /// within one poll.
     fn wait_for_lock(&self, lock: &File, started: Instant) -> Result<()> {
         let _notice = WaitNotice::begin(self.on_wait.as_ref());
+        let turn = turns::Turn::join(&self.waiting, self.label.as_ref());
         loop {
             std::thread::sleep(poll(self.remaining()));
             self.interrupt.check_waiting(started.elapsed())?;
-            if self.try_take(lock, started)? {
+            if self.try_take(lock, started, turn.first())? {
                 return Ok(());
             }
         }
     }
 
-    /// One try at `lock`, `started` being when the first was made: true
-    /// once it is held, false while another controller holds it and some of
-    /// the wait is left, else why not. The person's note and a Stop are
-    /// looked at on every try, so either ends a wait within one poll, and
-    /// the person is never waited for. A refused lock is let go when the
-    /// caller drops it.
-    fn try_take(&self, lock: &File, started: Instant) -> Result<bool> {
-        let taken = FileExt::try_lock_exclusive(lock).is_ok();
+    /// One try at `lock`, `started` being when the first was made, unless it
+    /// is not this command's `turn`: true once it is held, false while
+    /// another controller holds it (or goes first) and some of the wait is
+    /// left, else why not. The person's note and a Stop are looked at on
+    /// every try, so either ends a wait within one poll, and the person is
+    /// never waited for. A refused lock is let go when the caller drops it.
+    fn try_take(&self, lock: &File, started: Instant, turn: bool) -> Result<bool> {
+        let taken = turn && FileExt::try_lock_exclusive(lock).is_ok();
         let waited = (!self.wait.is_zero()).then(|| started.elapsed());
         if !taken && self.person.exists() {
             return Err(busy_person(waited));
@@ -838,6 +969,26 @@ impl Controller {
         FileExt::lock_exclusive(&file)?;
 
         Ok(file)
+    }
+
+    /// Every pending generation, whether a live process is still carrying
+    /// it out, and the host session that claimed it when one is recorded;
+    /// from one locked read of the marker, or none when there is no marker.
+    pub fn pending_causes(&self) -> Result<Vec<Cause>> {
+        if !self.marker.try_exists()? {
+            return Ok(Vec::new());
+        }
+
+        let _lock = self.lock_marker()?;
+        let mut claimed = causes::read(&self.causes);
+        Ok(pending(&self.marker)?
+            .into_iter()
+            .map(|generation| Cause {
+                running: self.in_progress(&generation),
+                session: claimed.remove(&generation),
+                generation,
+            })
+            .collect())
     }
 
     /// Generations of mutations whose outcome is still unknown.
@@ -937,6 +1088,10 @@ impl Controller {
         }
 
         write_private(&self.marker, &serde_json::to_vec(&pending)?)?;
+        if let Some(label) = &self.label {
+            // Whose change it is, for display only; a lost note loses a label.
+            let _ = causes::note(&self.causes, generation, &label.key, &pending);
+        }
         Ok(claim)
     }
 
@@ -952,6 +1107,7 @@ impl Controller {
 
         let mut pending = pending(&self.marker)?;
         pending.retain(|entry| entry != generation);
+        let _ = causes::keep(&self.causes, &pending);
 
         if pending.is_empty() {
             remove_marker(&self.marker)
@@ -984,6 +1140,7 @@ impl Controller {
                 remove_claim(&entry.path());
             }
         }
+        let _ = causes::keep(&self.causes, &running);
 
         if running.is_empty() {
             remove_marker(&self.marker)

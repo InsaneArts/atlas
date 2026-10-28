@@ -49,16 +49,16 @@ JSON configuration is no longer read. If a `.json` file with the same basename s
 
 In this table, `~` means your own account unless the helper is named explicitly.
 
-| Location                                   | Contents                                                                                                      |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
-| `~/.config/atlas.toml`                     | Installed settings.                                                                                           |
-| `~/Library/Application Support/Atlas/runs` | Default captures, viewer records and activity data. A custom `output_dir` changes this location.              |
-| `~/Library/Application Support/Atlas`      | Setup records, recorded helper identity, native-dialog observations, project list and update handover record. |
-| `~/Library/Caches/Atlas`                   | Control locks, pending-action evidence and update scratch files.                                              |
-| `/Users/Shared/Atlas`                      | The shared executable, staged app copies and retained environment plans or requests.                          |
-| `<helper-home>/.atlas`                     | Managed helper sockets, logs and service-related files.                                                       |
-| `<helper-home>/Library/LaunchAgents`       | The managed helper background-job definition.                                                                 |
-| `<helper-home>/.config/atlas`              | Selected environment values and file-provisioning records in the helper.                                      |
+| Location                                   | Contents                                                                                                                |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `~/.config/atlas.toml`                     | Installed settings.                                                                                                     |
+| `~/Library/Application Support/Atlas/runs` | Default captures, viewer records, activity data and agent session records. A custom `output_dir` changes this location. |
+| `~/Library/Application Support/Atlas`      | Setup records, recorded helper identity, native-dialog observations, project list and update handover record.           |
+| `~/Library/Caches/Atlas`                   | Control locks, pending-action evidence and update scratch files.                                                        |
+| `/Users/Shared/Atlas`                      | The shared executable, staged app copies and retained environment plans or requests.                                    |
+| `<helper-home>/.atlas`                     | Managed helper sockets, logs and service-related files.                                                                 |
+| `<helper-home>/Library/LaunchAgents`       | The managed helper background-job definition.                                                                           |
+| `<helper-home>/.config/atlas`              | Selected environment values and file-provisioning records in the helper.                                                |
 
 Viewer and Settings preferences use macOS user defaults separately from the TOML file. These include picture rate, Details visibility, the mini-screen corner, the last Settings tab and notification preference.
 

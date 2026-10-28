@@ -17,6 +17,7 @@ pub mod environment;
 pub mod error;
 pub mod handoff;
 pub mod helper_info;
+pub mod host_session;
 pub mod init;
 pub mod interrupt;
 mod last_capture;

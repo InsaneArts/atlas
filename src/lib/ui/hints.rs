@@ -6,6 +6,9 @@ use crate::error::Holder;
 /// The step for your own action that may or may not have happened.
 pub const UNCERTAIN: &str = "It may or may not have happened, so don't repeat it. Take a screenshot, then run atlas restart.";
 
+/// What an agent does about an unknown outcome its own session caused.
+pub const YOURS: &str = "It was this session's own earlier action. Take a screenshot, then run atlas restart and look again.";
+
 /// What an agent does about busy once Atlas has waited for the holder.
 pub const WAITED: &str = "Atlas already waited for it. Do something else, then try again, or pass a longer --wait if your tool's timeout allows.";
 

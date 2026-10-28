@@ -21,6 +21,7 @@ pub(super) fn view(command: &Command) -> View {
         } => View::LoginTiming,
         Command::Doctor { verbose, .. } => View::Doctor { verbose: *verbose },
         Command::Status => View::Status,
+        Command::Activity { .. } => View::Activity,
         Command::Config => View::Config,
         Command::Screenshot { .. } => View::Capture,
         Command::Apps { .. } => View::Apps,
@@ -225,6 +226,15 @@ mod tests {
             failure(&waited, true)["next"],
             hints::WAITED,
             "a wait already made is kept"
+        );
+
+        let yours = Error::new("uncertain", "Unknown")
+            .with("yours", true)
+            .with("next", hints::YOURS);
+        assert_eq!(
+            failure(&yours, true)["next"],
+            hints::YOURS,
+            "an unknown action of this session's own keeps its step"
         );
 
         let said = Error::new("elements", "Incomplete").with("next", "Try again.");

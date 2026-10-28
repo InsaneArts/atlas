@@ -1,10 +1,21 @@
 //! One summary of what is happening in the helper, for the viewer and the
 //! menu bar: a mode, a one-sentence reason, recent agent activity and the
 //! capability facts a person needs at a glance.
-use crate::{client::Client, control::Controller, error::Error};
+use crate::{
+    client::Client,
+    control::Controller,
+    error::Error,
+    host_session::{
+        Key,
+        names::{name_of, names},
+        record::Seen,
+        store::Store,
+    },
+};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeMap,
     io::{Read, Seek, SeekFrom},
     path::Path,
     sync::{Mutex, MutexGuard, PoisonError},
@@ -24,6 +35,11 @@ const ROW_BYTES: u64 = 512;
 pub const READ_DEADLINE: Duration = Duration::from_secs(5);
 /// How many recent activity rows a status carries.
 pub const ROWS: usize = 12;
+/// How long after its last action a host session is listed beside the
+/// status.
+const SESSIONS_SEEN_WITHIN: Duration = Duration::from_secs(60 * 60);
+/// The most host sessions a status lists.
+const SESSIONS: usize = 8;
 
 /// A read of the helper that took longer than a status waits.
 pub(crate) fn late() -> Error {
@@ -217,14 +233,102 @@ pub async fn read(client: &Client) -> Value {
         .unwrap_or_default();
 
     status["controlActive"] = json!(false);
-    status["overview"] = overview(
-        &status,
-        false,
-        pending,
-        &activity,
-        crate::client::timestamp(),
-    );
+    let now = crate::client::timestamp();
+    status["overview"] = overview(&status, false, pending, &activity, now);
+    add_host_sessions(&mut status, client, now).await;
     status
+}
+
+/// The host sessions an app shows beside the helper's status, in its
+/// overview: those seen in the last hour, holding the helper, or with an
+/// unknown outcome; newest first, at most eight, with how many more there
+/// are. Each carries the host's own id, for the app to know its own
+/// session: never for an agent's reply. The records and the marker are
+/// read off the runtime.
+pub async fn add_host_sessions(status: &mut Value, client: &Client, now: u128) {
+    let client = client.clone();
+    let (sessions, more) = tokio::task::spawn_blocking(move || host_sessions(&client, now))
+        .await
+        .unwrap_or_default();
+    status["overview"]["hostSessions"] = json!(sessions);
+    status["overview"]["moreSessions"] = json!(more);
+}
+
+/// The sessions [`add_host_sessions`] lists, and how many more there are.
+/// Only those it lists are looked at closely.
+fn host_sessions(client: &Client, now: u128) -> (Vec<Value>, usize) {
+    let Ok(output) = client.output_dir() else {
+        return (Vec::new(), 0);
+    };
+    let seen = Store::at(output).recent();
+    if seen.is_empty() {
+        return (Vec::new(), 0);
+    }
+
+    let now = u64::try_from(now / 1_000_000).unwrap_or(u64::MAX);
+    let seen_within = u64::try_from(SESSIONS_SEEN_WITHIN.as_millis()).unwrap_or(u64::MAX);
+    let causes = client.controller.pending_causes().unwrap_or_default();
+    let holder = client
+        .controller
+        .holder_note()
+        .filter(crate::control::Note::live)
+        .and_then(|note| note.session);
+    let mut unknown: BTreeMap<&Key, usize> = BTreeMap::new();
+    for cause in causes.iter().filter(|cause| !cause.running) {
+        if let Some(session) = &cause.session {
+            *unknown.entry(session).or_default() += 1;
+        }
+    }
+
+    let listed: Vec<&Seen> = seen
+        .iter()
+        .filter(|seen| {
+            let record = &seen.record;
+            now.saturating_sub(record.last_seen) <= seen_within
+                || holder.as_ref() == Some(&record.key)
+                || unknown.contains_key(&record.key)
+        })
+        .collect();
+    let more = listed.len().saturating_sub(SESSIONS);
+    let named = names(seen.iter().map(|seen| &seen.record));
+
+    let sessions = listed
+        .into_iter()
+        .take(SESSIONS)
+        .map(|seen| {
+            let record = &seen.record;
+            let holds = holder.as_ref() == Some(&record.key);
+            let uncertain = unknown.get(&record.key).copied().unwrap_or(0);
+            host_session(seen, &named, holds, uncertain, now)
+        })
+        .collect();
+    (sessions, more)
+}
+
+/// One host session as [`add_host_sessions`] lists it.
+fn host_session(
+    seen: &Seen,
+    names: &BTreeMap<Key, String>,
+    holds: bool,
+    uncertain: usize,
+    now: u64,
+) -> Value {
+    let record = &seen.record;
+    json!({
+        "key": record.key,
+        "host": record.host,
+        "hostLabel": record.host.label(),
+        "name": name_of(names, &record.key, Some(record.host)),
+        "folder": record.folder,
+        "hostSession": record.host_session,
+        "started": record.started,
+        "lastSeen": record.last_seen,
+        "ended": record.ended_at(),
+        "active": record.active(now),
+        "holdsHelper": holds,
+        "uncertain": uncertain,
+        "leftovers": {"copies": seen.copies_left, "plans": record.plans.len()},
+    })
 }
 
 /// One recorded operation per command, newest first; no payloads are ever
@@ -500,6 +604,10 @@ pub fn shown(row: &Value, now: u128) -> Value {
         "verb": row["verb"],
         "app": row["app"],
         "label": row["label"],
+        // The host session's key and the screenshot's file name, as the row
+        // keeps them; apps name the session from their own list.
+        "session": row["session"],
+        "capture": row["capture"],
         "says": crate::doing::says(row),
         "reason": reason(row),
         "actor": row["actor"].as_str().unwrap_or("agent"),
@@ -570,6 +678,103 @@ mod tests {
             let row = json!({"operation": operation, "ok": false, "code": "permission"});
             assert_eq!(shown(&row, NOW)["reason"], words, "{operation}");
         }
+    }
+
+    #[test]
+    fn activity_rows_carry_their_session_and_capture() {
+        let row = json!({"at": "99000000000", "operation": "screenshot", "ok": true,
+            "actor": "agent", "verb": "screenshot", "command": "0123456789ab",
+            "session": "3f9a1c07b2e4", "capture": "1761660429000123456-capture.png"});
+        let shown = shown(&row, NOW);
+        assert_eq!(shown["session"], "3f9a1c07b2e4");
+        assert_eq!(shown["capture"], "1761660429000123456-capture.png");
+
+        let plain = super::shown(
+            &json!({"at": "99000000000", "operation": "input", "ok": true}),
+            NOW,
+        );
+        assert_eq!(plain["session"], Value::Null);
+        assert_eq!(plain["capture"], Value::Null);
+    }
+
+    #[test]
+    fn the_status_lists_recent_host_sessions_and_who_holds_the_helper() {
+        use crate::host_session::{
+            Host, HostSession,
+            store::{Kind, note},
+        };
+
+        let directory = tempfile::tempdir().unwrap();
+        let client = crate::transaction_test::client(directory.path());
+        let session = |id: String| HostSession::new(Host::Codex, &id).unwrap();
+        let worked = |session: &HostSession| {
+            let doing = crate::doing::Doing::new("click");
+            note(
+                &client,
+                session,
+                Kind::Other,
+                Some(&doing),
+                &Ok(json!({"ok": true})),
+            )
+            .unwrap();
+        };
+        let sessions: Vec<HostSession> = (0..10).map(|n| session(format!("worker-{n}"))).collect();
+        for each in &sessions {
+            worked(each);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+
+        // One long idle, with an unknown outcome of its own.
+        let idle = session("idle".into());
+        worked(&idle);
+        let path = client
+            .output_dir()
+            .unwrap()
+            .join(format!("sessions/{}.json", idle.key()));
+        let mut record: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        record["lastSeen"] = json!(1_000);
+        fs::write(&path, record.to_string()).unwrap();
+        drop(
+            client
+                .controller
+                .clone()
+                .labelled(Some(&idle))
+                .quarantine()
+                .unwrap(),
+        );
+        let holding = client
+            .controller
+            .clone()
+            .labelled(Some(&sessions[9]))
+            .acquire(true)
+            .unwrap();
+
+        let (listed, more) = host_sessions(&client, crate::client::timestamp());
+        assert_eq!(listed.len(), 8);
+        assert_eq!(more, 3);
+        assert_eq!(listed[0]["key"], sessions[9].key().as_str(), "newest first");
+        assert_eq!(listed[0]["holdsHelper"], true);
+        assert_eq!(listed[1]["holdsHelper"], false);
+        let first = &listed[0];
+        assert_eq!(first["host"], "codex");
+        assert_eq!(first["hostLabel"], "Codex");
+        assert_eq!(first["hostSession"], "worker-9");
+        assert_eq!(first["active"], true);
+        assert_eq!(first["uncertain"], 0);
+        assert_eq!(first["leftovers"], json!({"copies": 0, "plans": 0}));
+        assert!(first["name"].as_str().unwrap().starts_with("Codex"));
+        drop(holding);
+
+        let (listed, _) =
+            host_sessions(&client, crate::client::timestamp() + 2 * 3_600_000_000_000);
+        assert_eq!(
+            listed.len(),
+            1,
+            "only the one with an unknown outcome, hours later"
+        );
+        assert_eq!(listed[0]["key"], idle.key().as_str());
+        assert_eq!(listed[0]["uncertain"], 1);
+        assert_eq!(listed[0]["active"], false);
     }
 
     #[test]

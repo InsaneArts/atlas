@@ -856,3 +856,102 @@ fn the_last_login_reads_one_step_a_line() {
     let none = show(View::LoginTiming, json!({"ok": true, "found": false}));
     assert!(none.out.contains("No login in the last 2 hours"));
 }
+
+#[test]
+fn a_refusal_names_the_session_it_is_about_in_words() {
+    console::set_colors_enabled_stderr(false);
+    let held = Error::new("busy", "Another Atlas command kept control.")
+        .held_by(crate::error::Holder::Agent)
+        .with(
+            "heldBy",
+            json!({"session": "c71d0e5a9b28", "name": "Codex · right"}),
+        );
+    let said = error(&held);
+    assert!(said.contains("Held by Codex · right."), "{said}");
+    assert!(!said.contains("c71d0e5a9b28"));
+
+    let left =
+        Error::new("uncertain", "Unknown").with("causedBy", json!(["Claude Code · left", "Pi"]));
+    assert!(error(&left).contains("Left by Claude Code · left and Pi."));
+
+    let shown = show(
+        View::Type,
+        json!({"ok": false, "code": "focus-changed", "error": "Calculator has keyboard focus",
+            "lastUsedBy": {"session": "c71d0e5a9b28", "name": "Codex · right"}}),
+    );
+    assert!(
+        shown.err.contains("Last used by Codex · right."),
+        "{}",
+        shown.err
+    );
+    assert!(!error(&Error::new("busy", "Wait")).contains("by"));
+}
+
+#[test]
+fn activity_reads_as_words_for_one_session_or_each() {
+    let one = show(
+        View::Activity,
+        json!({"ok": true,
+            "session": {"key": "3f9a1c07b2e4", "name": "Claude Code · left", "this": true},
+            "counts": {"click": 4, "open": 1, "screenshot": 6, "type": 2},
+            "recent": [{"says": "took a screenshot", "ok": true, "ageSeconds": 40}],
+            "screenshots": [], "copies": [{"app": "TextEdit"}],
+            "plans": [{"planId": "3c1f00000000000000000000000000000000000000000000", "phase": "applied"}],
+            "uncertain": 0}),
+    );
+    assert_eq!(
+        one.out,
+        "Claude Code · left — this session\n  4 clicks · 1 open · 6 screenshots · 2 typed\n  \
+         Open copies: TextEdit\n  Environment plans: 3c1f… applied\n  Last: took a screenshot, 40 s ago"
+    );
+    assert!(!one.out.contains("3f9a1c07b2e4"), "no keys in words");
+
+    let everyone = show(
+        View::Activity,
+        json!({"ok": true, "session": null, "recent": [], "sessions": [
+            {"key": "c71d0e5a9b28", "name": "Codex · right", "holdsHelper": true,
+                "leftovers": {"copies": 0, "plans": 0, "uncertain": 0}},
+            {"key": "3f9a1c07b2e4", "name": "Claude Code · left",
+                "leftovers": {"copies": 1, "plans": 1, "uncertain": 0}},
+        ]}),
+    );
+    assert_eq!(
+        everyone.out,
+        "Codex · right, has control now\nClaude Code · left — left 1 open copy and 1 environment plan"
+    );
+    assert!(
+        show(View::Activity, json!({"ok": true, "sessions": []}))
+            .out
+            .contains("No agent session")
+    );
+}
+
+#[test]
+fn activity_gives_the_restart_step_only_when_the_reply_does() {
+    let unknown = |this: bool, next: bool| {
+        let mut value = json!({"ok": true, "session": {"name": "Claude Code · left", "this": this},
+            "counts": {}, "recent": [], "copies": [], "plans": [], "uncertain": 1});
+        if next {
+            value["next"] = json!(crate::ui::hints::YOURS);
+        }
+        show(View::Activity, value).out
+    };
+
+    let own = unknown(true, true);
+    assert!(
+        own.contains("1 unknown action of this session: take a screenshot, then run atlas restart"),
+        "{own}"
+    );
+    let shared = unknown(true, false);
+    assert!(
+        shared.contains("1 unknown action of this session") && !shared.contains("restart"),
+        "{shared}"
+    );
+    let other = unknown(false, false);
+    assert!(
+        other.contains("1 unknown action")
+            && !other.contains("this session")
+            && !other.contains("restart"),
+        "{other}"
+    );
+}

@@ -1,7 +1,10 @@
 //! Cursor loads a copied local plugin. Its settings and marketplace cache
 //! stay untouched; registration is independent of a running host session.
 use super::{ASK, Agent, Presence, Removal, connection_lock, problem};
-use crate::error::Result;
+use crate::{
+    error::Result,
+    host_session::{Host, HostSession},
+};
 use serde_json::{Value, json};
 use std::{
     io::Read,
@@ -9,6 +12,12 @@ use std::{
 };
 
 mod store;
+
+/// The variable Cursor's agent shells name their conversation in, when
+/// Cursor passes a session start's `env` on to them.
+const CONVERSATION: &str = "ATLAS_CURSOR_SESSION";
+/// The most a hook's input may hold.
+const HOOK_INPUT: u64 = 1 << 20;
 
 /// Cursor's plugin loader uses HOME/.cursor even when its CLI authentication
 /// configuration is redirected with CURSOR_CONFIG_DIR.
@@ -90,19 +99,40 @@ pub(super) fn change(marketplace: Option<&Path>) -> Result<Removal> {
 pub async fn hook(config: &Path, event: &str, input: impl Read) -> Value {
     match event {
         "session-start" => {
-            let readiness = super::brief(config).await;
-            json!({"additional_context":format!(
+            let session = conversation(input);
+            let readiness = super::brief(config, session.as_ref()).await;
+            let mut reply = json!({"additional_context":format!(
                 "{readiness}\nFor GUI work, read the atlas skill and automatically open the live view \
                  with show_screen in Cursor IDE before starting. Requests to watch, show the helper \
                  screen or take over mean open that view; do not ask the person to name a tool. \
                  To take over, the person clicks Controls, then Take Control. Cursor Agent CLI \
                  uses atlas monitor instead. Only the person operates the view's Stop, Resume, \
                  Take Control and Give Back; never call those MCP tools yourself."
-            )})
+            )});
+            // The conversation, for the agent's shell commands to name as
+            // their session; a label only.
+            if let Some(session) = session {
+                reply["env"] = json!({ CONVERSATION: session.id() });
+            }
+            reply
         }
         "before-shell" => guard(input),
         _ => denied("Atlas received an unknown Cursor hook event"),
     }
+}
+
+/// The conversation a session start names, as a host session, when its
+/// `conversation_id` is a plain id. Input that cannot be read is none.
+fn conversation(input: impl Read) -> Option<HostSession> {
+    let value: Value = serde_json::from_slice(&hook_input(input)?).ok()?;
+    HostSession::new(Host::Cursor, value["conversation_id"].as_str()?)
+}
+
+/// What Cursor sent a hook, when it is at most [`HOOK_INPUT`] bytes.
+fn hook_input(input: impl Read) -> Option<Vec<u8>> {
+    let mut bytes = Vec::new();
+    let read = input.take(HOOK_INPUT + 1).read_to_end(&mut bytes);
+    (read.is_ok() && bytes.len() as u64 <= HOOK_INPUT).then_some(bytes)
 }
 
 fn denied(message: &str) -> Value {
@@ -110,11 +140,9 @@ fn denied(message: &str) -> Value {
 }
 
 fn guard(input: impl Read) -> Value {
-    const LIMIT: u64 = 1 << 20;
-    let mut bytes = Vec::new();
-    if input.take(LIMIT + 1).read_to_end(&mut bytes).is_err() || bytes.len() as u64 > LIMIT {
+    let Some(bytes) = hook_input(input) else {
         return denied("Atlas could not read Cursor's shell request");
-    }
+    };
     let value: Value = match serde_json::from_slice(&bytes) {
         Ok(value) => value,
         Err(_) => return denied("Atlas received an invalid Cursor shell request"),
@@ -256,5 +284,36 @@ mod tests {
             serde_json::from_str::<Value>(&encoded).unwrap()["additional_context"],
             context
         );
+    }
+
+    #[tokio::test]
+    async fn the_cursor_session_start_passes_the_conversation_to_agent_shells() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("missing.toml");
+        let started = |input: Vec<u8>| hook(&config, "session-start", std::io::Cursor::new(input));
+
+        let reply =
+            started(br#"{"conversation_id":"c-6f1e","session_id":"c-6f1e"}"#.to_vec()).await;
+        assert_eq!(reply["env"], json!({"ATLAS_CURSOR_SESSION": "c-6f1e"}));
+        let context = reply["additional_context"].clone();
+
+        let oversized = format!(
+            r#"{{"conversation_id":"c-6f1e","pad":"{}"}}"#,
+            "x".repeat(1 << 20)
+        );
+        for input in [
+            br#"{"conversation_id":"two words"}"#.to_vec(),
+            br#"{"conversation_id":"../up"}"#.to_vec(),
+            br#"{"conversation_id":7}"#.to_vec(),
+            b"not json".to_vec(),
+            oversized.into_bytes(),
+        ] {
+            let reply = started(input).await;
+            assert!(reply.get("env").is_none(), "{reply}");
+            assert_eq!(
+                reply["additional_context"], context,
+                "the context is unchanged"
+            );
+        }
     }
 }

@@ -1,6 +1,6 @@
 //! Views of what was done in the helper: input, typing, commands, opening,
 //! waiting and recovery.
-use super::{Rendered, card, element_name, failed, style, text};
+use super::{Rendered, card, element_name, failed, style, text, with_sessions};
 use serde_json::Value;
 
 /// An input action, said as done; a failure says how far it got.
@@ -52,7 +52,8 @@ pub fn typed(value: &Value) -> Rendered {
         );
         let code = value["code"].as_str().unwrap_or("input");
 
-        return Rendered::err(card(&message, Some(code), value["uncertain"] == true));
+        let shown = card(&message, Some(code), value["uncertain"] == true);
+        return Rendered::err(with_sessions(shown, value));
     }
 
     Rendered::out(format!(

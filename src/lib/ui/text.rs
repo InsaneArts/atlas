@@ -91,6 +91,15 @@ pub fn count(n: usize, noun: &str) -> String {
     }
 }
 
+/// `a`, `a and b`, `a, b and c`.
+pub fn listed(parts: &[String]) -> String {
+    match parts {
+        [] => String::new(),
+        [only] => only.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
 /// Width × height, without fractional zeros: `2560 × 1440`.
 pub fn dimensions(width: f64, height: f64) -> String {
     format!("{} × {}", number(width), number(height))

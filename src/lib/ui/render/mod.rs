@@ -2,6 +2,7 @@
 //! program gets, so the two never disagree; anything a view does not know
 //! falls back to a short generic summary, never to raw JSON.
 mod act;
+mod activity;
 mod manage;
 mod observe;
 
@@ -17,6 +18,7 @@ pub enum View {
     },
     LoginTiming,
     Status,
+    Activity,
     Config,
     Capture,
     Apps,
@@ -80,6 +82,7 @@ pub fn render(view: &View, value: &Value) -> Rendered {
         View::Doctor { verbose } => Rendered::out(observe::doctor(value, *verbose)),
         View::LoginTiming => Rendered::out(observe::login_timing(value)),
         View::Status => observe::status(value),
+        View::Activity => failed(value).unwrap_or_else(|| Rendered::out(activity::activity(value))),
         View::Config => Rendered::out(observe::config(value)),
         View::Capture => failed(value).unwrap_or_else(|| Rendered::out(observe::capture(value))),
         View::Apps => failed(value).unwrap_or_else(|| Rendered::out(observe::apps(value))),
@@ -155,6 +158,7 @@ fn failed(value: &Value) -> Option<Rendered> {
         .unwrap_or("It did not finish. Run it again with --json to see why.");
 
     let shown = card(message, value["code"].as_str(), value["uncertain"] == true);
+    let shown = with_sessions(shown, value);
     Some(Rendered::err(with_candidates(shown, &value["candidates"])))
 }
 
@@ -165,8 +169,45 @@ pub fn error(error: &Error) -> String {
     }
 
     let shown = card(&error.error, Some(error.code), error.uncertain);
+    let shown = with_sessions(shown, &Value::Object(error.details.clone()));
     let candidates = error.details.get("candidates").unwrap_or(&Value::Null);
     with_candidates(shown, candidates)
+}
+
+/// A card followed by the agent session a refusal names, when it names
+/// one: who holds the helper, who last used the app in front, or whose an
+/// unknown action is.
+fn with_sessions(card: String, details: &Value) -> String {
+    let named = [
+        (
+            "Held by",
+            details["heldBy"]["name"].as_str().map(str::to_owned),
+        ),
+        (
+            "Last used by",
+            details["lastUsedBy"]["name"].as_str().map(str::to_owned),
+        ),
+        (
+            "Left by",
+            details["causedBy"].as_array().map(|names| {
+                let names: Vec<String> = names
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect();
+                text::listed(&names)
+            }),
+        ),
+    ];
+
+    let mut lines = vec![card];
+    lines.extend(
+        named
+            .into_iter()
+            .filter_map(|(said, name)| Some((said, name.filter(|name| !name.is_empty())?)))
+            .map(|(said, name)| format!("  {said} {}.", text::printable(&name))),
+    );
+    lines.join("\n")
 }
 
 /// A card followed by the elements a refused name may have meant, one a

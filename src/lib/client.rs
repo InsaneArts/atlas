@@ -11,6 +11,7 @@ use crate::{
     digest::file_sha256,
     doing::Doing,
     error::{Error, Holder, Result},
+    host_session::HostSession,
     last_capture,
     session::{
         Display, Epoch, FOCUS_APP, HOLD, SHUTDOWN, Session, has_capability, input_current,
@@ -234,6 +235,9 @@ pub struct Client {
     pub actor: Actor,
     /// What the command acting through this client does, for the log.
     pub doing: Option<Doing>,
+    /// The host session the command acting through this client comes from,
+    /// for the activity log and the session record; never for a decision.
+    pub host_session: Option<HostSession>,
     installed: BuildCache,
 }
 
@@ -405,6 +409,7 @@ impl Client {
             installed: BuildCache::default(),
             actor: Actor::Agent,
             doing: None,
+            host_session: None,
             config,
         })
     }
@@ -602,11 +607,11 @@ impl Client {
         let started = Instant::now();
         let captured = self.capture_unrecorded(size, crop, new_file).await;
 
-        // An agent's look at the screen is activity too; a recording that
-        // fails never fails the capture.
+        // An agent's look at the screen is activity too, naming the file it
+        // gave; a recording that fails never fails the capture.
         let request = json!({"op": "screenshot"});
         let reply = match &captured {
-            Ok(_) => json!({"ok": true}),
+            Ok(saved) => json!({"ok": true, "capture": capture_name(saved)}),
             Err(error) => json!({"ok": false, "code": recorded_code(error)}),
         };
         let _ = self.record(&request, &reply, started.elapsed());
@@ -1875,6 +1880,13 @@ impl Client {
         self.write_row(request, reply, elapsed, false)
     }
 
+    /// [`Client::record`] a finished command's row, for tests elsewhere in
+    /// the crate.
+    #[cfg(test)]
+    pub(crate) fn record_for_test(&self, request: &Value, reply: &Value) {
+        self.record(request, reply, Duration::ZERO).unwrap();
+    }
+
     fn write_row(
         &self,
         request: &Value,
@@ -1923,12 +1935,36 @@ impl Client {
         });
 
         // A failure keeps its fixed code (never its message), so the app can
-        // say why in plain words.
+        // say why in plain words. A refusal for another app in front says
+        // whether some of the command was sent before it.
         if !start
             && !ok
             && let (Some(code), Some(fields)) = (failure_code(reply), row.as_object_mut())
         {
+            if code == "focus-changed" {
+                let sent = reply["performed"]
+                    .as_u64()
+                    .is_some_and(|performed| performed > 0);
+                fields.insert("partial".into(), json!(sent || reply["partial"] == true));
+            }
             fields.insert("code".into(), json!(code));
+        }
+
+        // Only an agent's own command names its host session; the person's,
+        // through a viewer, never does.
+        if self.actor == Actor::Agent
+            && let (Some(session), Some(fields)) = (&self.host_session, row.as_object_mut())
+        {
+            fields.insert("session".into(), json!(session.key()));
+        }
+
+        // A screenshot names the file it gave: Atlas's own timestamp name,
+        // never a path or a person's file.
+        if request["op"] == "screenshot"
+            && let (Some(capture), Some(fields)) = (reply["capture"].as_str(), row.as_object_mut())
+            && crate::helper_info::capture_time(capture).is_some()
+        {
+            fields.insert("capture".into(), json!(capture));
         }
 
         if let (Some(doing), Some(fields)) = (&self.doing, row.as_object_mut()) {
@@ -1966,6 +2002,11 @@ fn expectation(native: &Value, check: Option<Check>) -> Result<Option<Expect>> {
             "The helper's input service is from an older Atlas that cannot check which app is in front; run atlas start-input, then try again",
         )),
     }
+}
+
+/// The file name of the capture a screenshot's reply `saved` names.
+fn capture_name(saved: &Value) -> Option<&str> {
+    Path::new(saved["path"].as_str()?).file_name()?.to_str()
 }
 
 /// The code a failure is recorded with: `uncertain` when it may have
@@ -3243,6 +3284,126 @@ mod tests {
                     identity_probe = \"probe\"\ninput_socket = \"i.sock\"\n";
         let config = Config::parse(text.as_bytes(), &dir.join("u.toml")).unwrap();
         Client::new(config).unwrap()
+    }
+
+    /// The rows `client` wrote to its activity log, oldest first.
+    fn rows(client: &Client) -> Vec<Value> {
+        fs::read_to_string(client.output_dir().unwrap().join("metadata.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    fn labelled(client: &Client) -> Client {
+        let mut labelled = client.clone().doing(Doing::new("click"));
+        labelled.host_session = crate::host_session::HostSession::new(
+            crate::host_session::Host::Claude,
+            "d9031471-5e2a",
+        );
+        labelled
+    }
+
+    #[test]
+    fn an_agent_row_carries_its_host_session_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = labelled(&client_in(dir.path()));
+        let key = client.host_session.as_ref().unwrap().key().clone();
+        client.record_for_test(
+            &json!({"op": "input", "actions": [{}]}),
+            &json!({"ok": true}),
+        );
+        assert_eq!(rows(&client)[0]["session"], key.as_str());
+
+        let mut viewer = client.clone();
+        viewer.actor = Actor::Viewer;
+        viewer.record_for_test(
+            &json!({"op": "input", "actions": [{}]}),
+            &json!({"ok": true}),
+        );
+        assert!(
+            rows(&client)[1].get("session").is_none(),
+            "the person's never does"
+        );
+    }
+
+    #[test]
+    fn a_row_with_no_host_session_is_as_before() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = labelled(&client_in(dir.path()));
+        let mut plain = client.clone();
+        plain.host_session = None;
+        let request = json!({"op": "input", "actions": [{}]});
+        client.record_for_test(&request, &json!({"ok": true}));
+        plain.record_for_test(&request, &json!({"ok": true}));
+
+        let [mut labelled, unlabelled] = <[Value; 2]>::try_from(rows(&client)).unwrap();
+        labelled.as_object_mut().unwrap().remove("session");
+        let fields = |row: &Value| row.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+        assert_eq!(fields(&labelled), fields(&unlabelled));
+        assert_eq!(
+            fields(&unlabelled),
+            [
+                "actionCount",
+                "actor",
+                "at",
+                "command",
+                "elapsedMs",
+                "ok",
+                "operation",
+                "verb"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_screenshot_row_names_its_capture_file_and_nothing_else() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = labelled(&client_in(dir.path()));
+        let name = "1761660429000123456-capture.png";
+        let saved =
+            json!({"ok": true, "path": format!("/Users/me/runs/{name}"), "unchanged": true});
+        assert_eq!(
+            capture_name(&saved),
+            Some(name),
+            "an unchanged capture names the earlier file"
+        );
+
+        let request = json!({"op": "screenshot"});
+        for capture in [
+            json!(name),
+            json!("/Users/me/runs/1-capture.png"),
+            json!("notes.png"),
+        ] {
+            client.record_for_test(&request, &json!({"ok": true, "capture": capture}));
+        }
+        let rows = rows(&client);
+        assert_eq!(rows[0]["capture"], name);
+        assert!(rows[1].get("capture").is_none() && rows[2].get("capture").is_none());
+        assert!(!rows.iter().any(|row| row.to_string().contains("/Users")));
+    }
+
+    #[test]
+    fn a_refusal_for_another_app_in_front_says_whether_some_was_sent() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = labelled(&client_in(dir.path()));
+        let request = json!({"op": "input", "actions": [{}, {}]});
+        for reply in [
+            json!({"ok": false, "code": "focus-changed", "performed": 0, "partial": false}),
+            json!({"ok": false, "code": "focus-changed", "performed": 1, "partial": false}),
+            json!({"ok": false, "code": "focus-changed", "performed": 0, "partial": true}),
+            json!({"ok": false, "code": "busy"}),
+        ] {
+            client.record_for_test(&request, &reply);
+        }
+        let partial: Vec<Value> = rows(&client)
+            .iter()
+            .map(|row| row["partial"].clone())
+            .collect();
+        assert_eq!(
+            partial,
+            [json!(false), json!(true), json!(true), Value::Null]
+        );
     }
 
     /// A login is gone only once it is seen gone twice in a row and its

@@ -4,6 +4,7 @@ use atlas::{
     agent,
     control::{CONTROL_WAIT, CONTROL_WAIT_MAX},
     daemon::protocol::Region,
+    host_session::Key,
 };
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum, builder::TypedValueParser};
 use std::{ffi::OsStr, path::PathBuf, time::Duration};
@@ -123,6 +124,31 @@ pub(super) enum Command {
     Config,
     /// Show the helper: who it is, where it is and what it may do.
     Status,
+    /// List what this agent session did in the helper.
+    ///
+    /// Its recent actions, its screenshots, the copies open made that are
+    /// still there, the environment plans it applied and not yet rolled
+    /// back, and whether an action of its own is unknown. Claude Code,
+    /// Codex, opencode and Pi name their session themselves; elsewhere set
+    /// ATLAS_SESSION=NAME. Without a session, or with --all, every
+    /// session's. It only reads: it works while another agent or the person
+    /// has control, or after a Stop.
+    Activity {
+        /// Every session's, not only this one's.
+        #[arg(long, conflicts_with = "session")]
+        all: bool,
+        /// Another session's, by the key --all lists.
+        #[arg(long, value_name = "KEY", value_parser = session_key)]
+        session: Option<Key>,
+        /// How many recent actions to list: 10 unless given, at most 50.
+        #[arg(
+            long,
+            value_name = "N",
+            default_value_t = 10,
+            value_parser = clap::value_parser!(u16).range(1..=50)
+        )]
+        limit: u16,
+    },
     /// Check that everything is ready, and say what to fix if not.
     Doctor {
         /// Include every check and the helper's full status (in --json too).
@@ -810,6 +836,13 @@ fn region(value: &str) -> std::result::Result<Region, String> {
     })
 }
 
+/// `activity --session`: a session's key, as `activity --all` lists it.
+fn session_key(value: &str) -> std::result::Result<Key, String> {
+    Key::parse(value).ok_or_else(|| {
+        "Give a session's key: 12 lowercase hex digits, as atlas activity --all lists them.".into()
+    })
+}
+
 /// The longest `wait --timeout`: a day.
 const WAIT_MAX_SECONDS: u64 = 24 * 60 * 60;
 
@@ -924,6 +957,43 @@ mod tests {
         let identity =
             r#"{"uid":502,"name":"helper","generatedUid":"6DB4B7AF-BE3C-486C-BD46-1B4558946919"}"#;
         assert!(parse(&["setup-helper", request, "--account", identity]).is_ok());
+    }
+
+    #[test]
+    fn activity_takes_all_or_a_session_key_and_a_limit_from_one_to_fifty() {
+        let activity = |args: &[&str]| match parse(args) {
+            Ok(Cli {
+                command:
+                    Some(Command::Activity {
+                        all,
+                        session,
+                        limit,
+                    }),
+                ..
+            }) => Some((all, session.map(String::from), limit)),
+            _ => None,
+        };
+
+        assert_eq!(activity(&["activity"]), Some((false, None, 10)));
+        assert_eq!(activity(&["activity", "--all"]), Some((true, None, 10)));
+        assert_eq!(
+            activity(&["activity", "--session", "3f9a1c07b2e4", "--limit", "50"]),
+            Some((false, Some("3f9a1c07b2e4".into()), 50))
+        );
+        assert_eq!(
+            activity(&["activity", "--limit", "1"]),
+            Some((false, None, 1))
+        );
+        for refused in [
+            &["activity", "--all", "--session", "3f9a1c07b2e4"][..],
+            &["activity", "--session", "3F9A1C07B2E4"],
+            &["activity", "--session", "3f9a1c07b2e"],
+            &["activity", "--session", "../sessions"],
+            &["activity", "--limit", "0"],
+            &["activity", "--limit", "51"],
+        ] {
+            assert!(parse(refused).is_err(), "{refused:?}");
+        }
     }
 
     #[test]

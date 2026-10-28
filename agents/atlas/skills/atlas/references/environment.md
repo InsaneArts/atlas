@@ -19,7 +19,8 @@ never ask the person to do it:
    around or differing only in case from a file copied earlier is refused:
    roll that copy back first. Keep the `planId`.
 4. `atlas environment apply PLAN_ID` copies exactly what was previewed, as a
-   one-time snapshot. Keep every `planId` you apply. If it stops partway
+   one-time snapshot. Keep every `planId` you apply; `atlas activity` lists
+   them again if you lose them. If it stops partway
    (`resumeRequired`, with `pendingTargets`), run the same apply again to
    finish, or roll it back. With `rollbackRequired`, a file changed in the
    helper meanwhile, so only rolling back finishes.

@@ -3,6 +3,8 @@
 pub mod discovery;
 mod files;
 mod model;
+
+pub(crate) use model::Phase;
 pub mod profile;
 mod runner;
 mod state;

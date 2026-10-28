@@ -13,6 +13,7 @@ use crate::{
     daemon::protocol::{Crop, Region},
     error::{Error, Holder, Result},
     handoff,
+    host_session::HostSession,
     interrupt::Interrupt,
     native::{
         ax::{self, Element, Frame, Stop},
@@ -770,18 +771,25 @@ exit 0"#;
     };
 
     // A copy is never removed while an app of its names runs: an app that
-    // came back, or another one, may be running from it.
+    // came back, or another one, may be running from it. An agent's close
+    // keeps the copies another agent session made.
     let running: Vec<&str> = running.iter().map(String::as_str).collect();
-    let removed: Vec<String> = names
-        .iter()
-        .flat_map(|name| handoff::remove_copies_of(name, &running))
-        .collect();
+    let session = client.host_session.as_ref().map(HostSession::key);
+    let (mut removed, mut kept_others) = (Vec::new(), 0);
+    for name in &names {
+        let copies = handoff::remove_copies_of(name, &running, session);
+        removed.extend(copies.folders);
+        kept_others += copies.kept_others;
+    }
 
     let mut reply = json!({
         "ok": true,
         "closed": !processes.is_empty(),
         "removed": removed,
     });
+    if kept_others > 0 {
+        reply["keptOthers"] = json!(kept_others);
+    }
 
     match closing {
         Closing::App(app) => {

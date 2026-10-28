@@ -13,6 +13,12 @@ use crate::{
     control::{self, ActionPermit, Lease, SharedLease},
     error::{Error, Result},
     helper_info,
+    host_session::{
+        Key,
+        names::{name_of, names},
+        record::Seen,
+        store::Store,
+    },
     menubar::{App, Line},
     overview::{READ_DEADLINE, late},
     session::Epoch,
@@ -24,9 +30,9 @@ use axum::{
     http::{HeaderMap, HeaderValue, Method, StatusCode},
     response::Response,
 };
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, BTreeSet, VecDeque},
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -542,13 +548,9 @@ impl Viewer {
             .output_dir()
             .map(|directory| crate::overview::activity(directory, crate::overview::ROWS))
             .unwrap_or_default();
-        status["overview"] = crate::overview::overview(
-            &status,
-            active,
-            pending,
-            &activity,
-            crate::client::timestamp(),
-        );
+        let now = crate::client::timestamp();
+        status["overview"] = crate::overview::overview(&status, active, pending, &activity, now);
+        crate::overview::add_host_sessions(&mut status, &client, now).await;
 
         if let Some(name) = status["overview"]["account"].as_str() {
             status["overview"]["accountName"] = json!(self.account_title(name).await);
@@ -568,21 +570,25 @@ impl Viewer {
         let client = self.client();
         // A folder that can't be read is said, never shown as no activity.
         client.output_dir()?;
-        let rows = tokio::task::spawn_blocking(move || {
+        let (rows, records) = tokio::task::spawn_blocking(move || {
             client
                 .output_dir()
-                .map(|directory| crate::overview::activity(directory, ACTIVITY_ROWS))
-                .unwrap_or_default()
+                .map(|directory| {
+                    let rows = crate::overview::activity(directory, ACTIVITY_ROWS);
+                    (rows, Store::at(directory).recent())
+                })
+                .unwrap_or_else(|_| (Vec::new(), Arc::from([])))
         })
         .await
-        .unwrap_or_default();
+        .unwrap_or_else(|_| (Vec::new(), Arc::from([])));
 
         let now = crate::client::timestamp();
         let rows = rows
             .iter()
             .map(|row| activity_row(row, now))
             .collect::<Vec<_>>();
-        Ok(json!({"ok": true, "activity": rows}))
+        let sessions = sessions_named(&records, rows.iter().map(|row| &row["session"]));
+        Ok(json!({"ok": true, "activity": rows, "sessions": sessions}))
     }
 
     /// The apps open in the helper with their windows, front to back, and
@@ -623,12 +629,14 @@ impl Viewer {
         // A folder that can't be read is said, never shown as no screenshots.
         client.output_dir()?;
         let listing_client = client.clone();
-        let shots = tokio::task::spawn_blocking(move || {
+        let (shots, records) = tokio::task::spawn_blocking(move || {
             let Ok(output) = listing_client.output_dir() else {
-                return Vec::new();
+                return (Vec::new(), Arc::from([]));
             };
+            let records = Store::at(output).recent();
+            let taken_by = capture_sessions(&records);
 
-            helper_info::captures(output, SHOTS)
+            let shots = helper_info::captures(output, SHOTS)
                 .into_iter()
                 .map(|(at, name)| {
                     let size = helper_info::capture_size(output, &name);
@@ -638,16 +646,21 @@ impl Viewer {
                         shot["width"] = json!(width);
                         shot["height"] = json!(height);
                     }
+                    if let Some(session) = taken_by.get(name.as_str()) {
+                        shot["session"] = json!(session);
+                    }
                     shot
                 })
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            (shots, records)
         })
         .await
-        .unwrap_or_default();
+        .unwrap_or_else(|_| (Vec::new(), Arc::from([])));
 
+        let sessions = sessions_named(&records, shots.iter().map(|shot| &shot["session"]));
         // The folder they're in, so the app can show one in the Finder.
         let folder = client.output_dir().ok().map(Path::to_path_buf);
-        Ok(json!({"ok": true, "screenshots": shots, "folder": folder}))
+        Ok(json!({"ok": true, "screenshots": shots, "folder": folder, "sessions": sessions}))
     }
 
     /// One screenshot an agent took, as `query` names it: its thumbnail as
@@ -1568,7 +1581,44 @@ fn activity_row(row: &Value, now: u128) -> Value {
         "reason": shown["reason"],
         "operation": shown["operation"],
         "count": shown["actionCount"],
+        "session": shown["session"],
+        "capture": shown["capture"],
     })
+}
+
+/// Each host session `keys` name that a record still names, as the app
+/// shows it: its name, host and times. A key whose record is gone is left
+/// out, and its rows show no session.
+fn sessions_named<'a>(seen: &[Seen], keys: impl Iterator<Item = &'a Value>) -> Value {
+    let records = || seen.iter().map(|seen| &seen.record);
+    let named = names(records());
+    let wanted: BTreeSet<&str> = keys.filter_map(Value::as_str).collect();
+    let sessions: Map<String, Value> = records()
+        .filter(|record| wanted.contains(record.key.as_str()))
+        .map(|record| {
+            let session = json!({
+                "name": name_of(&named, &record.key, Some(record.host)),
+                "host": record.host,
+                "hostLabel": record.host.label(),
+                "started": record.started,
+                "ended": record.ended_at(),
+            });
+            (record.key.to_string(), session)
+        })
+        .collect();
+    Value::Object(sessions)
+}
+
+/// Which host session took each screenshot the records list: the first
+/// record to list it, newest first.
+fn capture_sessions(seen: &[Seen]) -> BTreeMap<&str, &Key> {
+    let mut taken_by = BTreeMap::new();
+    for record in seen.iter().map(|seen| &seen.record) {
+        for name in &record.screenshots {
+            taken_by.entry(name.as_str()).or_insert(&record.key);
+        }
+    }
+    taken_by
 }
 
 /// The helper's regular apps as the app lists them, front to back, each
@@ -2653,12 +2703,14 @@ mod tests {
             [
                 "actor",
                 "ageSeconds",
+                "capture",
                 "count",
                 "id",
                 "ok",
                 "operation",
                 "reason",
                 "says",
+                "session",
                 "started",
                 "startedAt"
             ]
@@ -2666,6 +2718,80 @@ mod tests {
         assert_eq!(listed["says"], "typed in TextEdit");
         assert_eq!(listed["count"], 2);
         assert_eq!(listed["ageSeconds"], 3);
+        assert_eq!(listed["session"], Value::Null);
+        assert_eq!(reply["sessions"], json!({}));
+
+        // A row of an agent's host session names it, and nothing more.
+        let session =
+            crate::host_session::HostSession::new(crate::host_session::Host::Claude, "left")
+                .unwrap();
+        let mut row = row;
+        row["session"] = json!(session.key());
+        std::fs::write(output.join("metadata.jsonl"), format!("{row}\n")).unwrap();
+        crate::host_session::store::note(
+            &viewer.client(),
+            &session,
+            crate::host_session::store::Kind::Other,
+            Some(&crate::doing::Doing::new("type")),
+            &Ok(json!({"ok": true})),
+        )
+        .unwrap();
+        let (_, reply) = read_json(&viewer, "activity.json").await;
+        let text = reply.to_string();
+        assert!(
+            !text.contains("hunter2") && !text.contains("\"left\""),
+            "{text}"
+        );
+        assert_eq!(reply["activity"][0]["session"], session.key().as_str());
+    }
+
+    #[tokio::test]
+    async fn activity_json_names_the_sessions_its_rows_mention() {
+        let dir = tempfile::tempdir().unwrap();
+        let viewer = unreachable(dir.path()).await;
+        let client = viewer.client();
+        let output = client.output_dir().unwrap().to_path_buf();
+        let (named, gone, unmentioned) = (
+            crate::host_session::HostSession::new(crate::host_session::Host::Codex, "right")
+                .unwrap(),
+            crate::host_session::HostSession::new(crate::host_session::Host::Pi, "gone").unwrap(),
+            crate::host_session::HostSession::new(crate::host_session::Host::Claude, "quiet")
+                .unwrap(),
+        );
+        for session in [&named, &unmentioned] {
+            crate::host_session::store::note(
+                &client,
+                session,
+                crate::host_session::store::Kind::Other,
+                Some(&crate::doing::Doing::new("click")),
+                &Ok(json!({"ok": true})),
+            )
+            .unwrap();
+        }
+        let at = crate::client::timestamp();
+        let rows: String = [&named, &gone]
+            .iter()
+            .enumerate()
+            .map(|(n, session)| {
+                format!(
+                    "{}\n",
+                    json!({"at": (at - n as u128).to_string(), "operation": "input", "ok": true,
+                        "actor": "agent", "verb": "click", "command": format!("{n:012}"),
+                        "session": session.key(), "capture": null})
+                )
+            })
+            .collect();
+        std::fs::write(output.join("metadata.jsonl"), rows).unwrap();
+
+        let (_, reply) = read_json(&viewer, "activity.json").await;
+        let sessions = reply["sessions"].as_object().unwrap();
+        assert_eq!(sessions.keys().collect::<Vec<_>>(), [named.key().as_str()]);
+        let entry = &sessions[named.key().as_str()];
+        assert_eq!(entry["host"], "codex");
+        assert_eq!(entry["hostLabel"], "Codex");
+        assert!(entry["name"].as_str().unwrap().starts_with("Codex"));
+        assert!(entry["started"].is_u64() && entry["ended"].is_null());
+        assert!(entry.get("hostSession").is_none());
     }
 
     #[tokio::test]
@@ -2786,6 +2912,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn screenshots_json_names_each_shots_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let viewer = unreachable(dir.path()).await;
+        let client = viewer.client();
+        let output = client.output_dir().unwrap().to_path_buf();
+        let (shot, other) = (
+            "1700000005000000000-capture.png",
+            "1700000000000000000-capture.png",
+        );
+        for name in [shot, other] {
+            std::fs::write(
+                output.join(name),
+                crate::native::capture::sample_png(64, 40),
+            )
+            .unwrap();
+        }
+        let session =
+            crate::host_session::HostSession::new(crate::host_session::Host::Claude, "left")
+                .unwrap();
+        crate::host_session::store::note(
+            &client,
+            &session,
+            crate::host_session::store::Kind::Screenshot,
+            Some(&crate::doing::Doing::new("screenshot")),
+            &Ok(json!({"ok": true, "path": output.join(shot)})),
+        )
+        .unwrap();
+
+        let (_, listed) = read_json(&viewer, "screenshots.json").await;
+        let shots = listed["screenshots"].as_array().unwrap();
+        assert_eq!(shots[0]["session"], session.key().as_str());
+        assert!(
+            shots[1].get("session").is_none(),
+            "nobody's record lists it"
+        );
+        let sessions = listed["sessions"].as_object().unwrap();
+        assert!(
+            sessions[session.key().as_str()]["name"]
+                .as_str()
+                .unwrap()
+                .starts_with("Claude Code")
+        );
+    }
+
+    #[tokio::test]
     async fn screenshots_are_listed_newest_first_and_served_only_by_a_capture_name() {
         let dir = tempfile::tempdir().unwrap();
         let viewer = unreachable(dir.path()).await;
@@ -2806,7 +2977,7 @@ mod tests {
         assert_eq!(status, 200);
         assert_eq!(
             listed,
-            json!({"ok": true, "folder": output, "screenshots": [
+            json!({"ok": true, "folder": output, "sessions": {}, "screenshots": [
                 {"name": "1700000005000000000-capture.png", "takenAt": 1_700_000_005_000_u64,
                     "width": 640, "height": 400},
                 {"name": "1700000000000000000-capture.png", "takenAt": 1_700_000_000_000_u64,

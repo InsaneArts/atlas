@@ -1,0 +1,630 @@
+//! The agent conversation a command comes from, as its host tells the
+//! shell: a Claude Code session, a Codex thread, an opencode or Pi session.
+//! It is a label for the person and the agent, never a permission. Atlas's
+//! own "session" is the helper's login; this is the host's.
+pub mod activity;
+pub(crate) mod ancestry;
+pub(crate) mod brief;
+pub mod explain;
+pub(crate) mod names;
+pub(crate) mod record;
+pub mod store;
+#[allow(
+    unsafe_code,
+    reason = "FFI: proc_pidinfo and localtime_r have no safe binding"
+)]
+mod sys;
+
+pub use ancestry::Process;
+
+use crate::control::Cause;
+use ancestry::{Ancestor, Facts};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::fmt;
+
+/// Hex digits of a host session's key, the only part rows carry.
+pub const KEY_LEN: usize = 12;
+/// The longest host id or label accepted.
+pub const ID_MAX: usize = 128;
+/// How many of this process's ancestors are looked at to tell nested hosts
+/// apart.
+const ANCESTORS: usize = 32;
+
+/// Where each host names its session, the first plain value winning. A
+/// name given with `ATLAS_SESSION` is read only when none of these is.
+const SOURCES: [(Host, &[&str]); 5] = [
+    (Host::Claude, &["CLAUDE_CODE_SESSION_ID"]),
+    (Host::Codex, &["CODEX_SESSION_ID", "CODEX_THREAD_ID"]),
+    (Host::Opencode, &["ATLAS_OPENCODE_SESSION"]),
+    (Host::Pi, &["PI_SESSION_ID"]),
+    (Host::Cursor, &["ATLAS_CURSOR_SESSION"]),
+];
+
+/// An agent host Atlas can tell a session of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Host {
+    Claude,
+    Codex,
+    Opencode,
+    Pi,
+    Cursor,
+    /// A name given with ATLAS_SESSION, outside any host Atlas knows.
+    Named,
+}
+
+impl Host {
+    /// The host as people know it: "Claude Code", "Codex", "opencode", "Pi",
+    /// "Cursor"; empty for a named session, whose name is its label.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Claude => "Claude Code",
+            Self::Codex => "Codex",
+            Self::Opencode => "opencode",
+            Self::Pi => "Pi",
+            Self::Cursor => "Cursor",
+            Self::Named => "",
+        }
+    }
+
+    /// The host's word in records and keys: "claude", "codex" and so on.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+            Self::Opencode => "opencode",
+            Self::Pi => "pi",
+            Self::Cursor => "cursor",
+            Self::Named => "named",
+        }
+    }
+
+    /// Whether `ancestor` is this host's own process: Claude Code's when it
+    /// is `claude_pid`, the others' by their command names.
+    fn runs_as(self, ancestor: &Ancestor, claude_pid: Option<i32>) -> bool {
+        let command = ancestor.command.as_str();
+        match self {
+            Self::Claude => claude_pid == Some(ancestor.pid),
+            Self::Codex => command.starts_with("codex"),
+            Self::Opencode => command == "opencode",
+            Self::Pi => command == "pi",
+            Self::Cursor => command.starts_with("Cursor") || command == "cursor-agent",
+            Self::Named => false,
+        }
+    }
+}
+
+/// A host session's key: the first [`KEY_LEN`] hex digits of SHA-256 of
+/// "{host}:{id}". No host value ever reaches a path or another session's
+/// reply but through it.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct Key(String);
+
+impl Key {
+    /// The key of `id` of `host`.
+    pub fn of(host: Host, id: &str) -> Self {
+        let digest = Sha256::digest(format!("{}:{id}", host.as_str()).as_bytes());
+        let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+        Self(hex[..KEY_LEN].to_owned())
+    }
+
+    /// `text` as a key, when it is exactly [`KEY_LEN`] lowercase hex digits.
+    pub fn parse(text: &str) -> Option<Self> {
+        crate::digest::lower_hex(text, KEY_LEN).then(|| Self(text.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for Key {
+    type Error = String;
+
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        Self::parse(&text).ok_or_else(|| format!("{text} is not a host session key"))
+    }
+}
+
+impl From<Key> for String {
+    fn from(key: Key) -> Self {
+        key.0
+    }
+}
+
+impl fmt::Display for Key {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+/// A host's own id for a session, or an ATLAS_SESSION label: 1 to
+/// [`ID_MAX`] bytes of ASCII letters, digits, `.`, `_`, `:` and `-`, so no
+/// other value is ever kept or shown.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct HostId(String);
+
+impl HostId {
+    /// `value` as a host id, when it is a plain one.
+    pub fn parse(value: &str) -> Option<Self> {
+        plain(value).then(|| Self(value.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for HostId {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::parse(&value).ok_or_else(|| "not a plain host session id".to_owned())
+    }
+}
+
+impl From<HostId> for String {
+    fn from(id: HostId) -> Self {
+        id.0
+    }
+}
+
+/// What other sessions may know of a host session: its key and its host,
+/// never the host's own id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Label {
+    pub key: Key,
+    pub host: Host,
+}
+
+/// The host session one command comes from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostSession {
+    key: Key,
+    host: Host,
+    /// The host's own id, or the ATLAS_SESSION label.
+    id: HostId,
+    /// The host's process, where the host names it (Claude Code).
+    process: Option<Process>,
+}
+
+impl HostSession {
+    /// The session `id` of `host`, when `id` is a plain id.
+    pub fn new(host: Host, id: &str) -> Option<Self> {
+        let id = HostId::parse(id)?;
+        Some(Self {
+            key: Key::of(host, id.as_str()),
+            host,
+            id,
+            process: None,
+        })
+    }
+
+    /// This session, run by host process `process`.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn run_by(mut self, process: Option<Process>) -> Self {
+        self.process = process;
+        self
+    }
+
+    /// The key rows and records carry for it.
+    pub fn key(&self) -> &Key {
+        &self.key
+    }
+
+    pub fn host(&self) -> Host {
+        self.host
+    }
+
+    /// The host's own id, or the ATLAS_SESSION label.
+    pub fn id(&self) -> &HostId {
+        &self.id
+    }
+
+    /// The host's process, where the host names it (Claude Code).
+    pub fn process(&self) -> Option<Process> {
+        self.process
+    }
+
+    /// The host session of this process's command, from its environment;
+    /// None when no host names one or its value is not a plain id.
+    pub fn from_env() -> Option<Self> {
+        Self::resolve(
+            |name| std::env::var(name).ok(),
+            || ancestry::ancestors(ANCESTORS),
+            ancestry::process,
+        )
+    }
+
+    /// [`HostSession::from_env`] over `env`, with `ancestors` asked only
+    /// when two hosts' variables are present, and `process` only for the
+    /// process Claude Code names. With two hosts, the nearest is the
+    /// session only when the walk finds every one of them; otherwise which
+    /// is innermost is not known, and the command has no session.
+    pub(crate) fn resolve(
+        env: impl Fn(&str) -> Option<String>,
+        ancestors: impl FnOnce() -> Vec<Ancestor>,
+        process: impl Fn(i32) -> Option<Facts>,
+    ) -> Option<Self> {
+        let candidates: Vec<(Host, HostId)> = SOURCES
+            .iter()
+            .filter_map(|(host, names)| {
+                names
+                    .iter()
+                    .find_map(|name| env(name).as_deref().and_then(HostId::parse))
+                    .map(|id| (*host, id))
+            })
+            .collect();
+        let claude_pid = candidates
+            .iter()
+            .any(|(host, _)| *host == Host::Claude)
+            .then(|| env("CLAUDE_PID").and_then(|pid| pid.parse::<i32>().ok()))
+            .flatten()
+            .filter(|pid| *pid > 0);
+
+        let (host, id) = match candidates.len() {
+            0 => (
+                Host::Named,
+                env("ATLAS_SESSION").as_deref().and_then(HostId::parse)?,
+            ),
+            1 => candidates.into_iter().next()?,
+            _ => nearest(candidates, &ancestors(), claude_pid)?,
+        };
+
+        let process = claude_pid
+            .filter(|_| host == Host::Claude)
+            .and_then(|pid| process(pid).map(|facts| Process::new(pid, facts.start)));
+
+        Some(Self {
+            key: Key::of(host, id.as_str()),
+            host,
+            id,
+            process,
+        })
+    }
+
+    /// What other sessions may know of this one.
+    pub fn label(&self) -> Label {
+        Label {
+            key: self.key.clone(),
+            host: self.host,
+        }
+    }
+}
+
+/// Of hosts that each name a session, the one whose process is the nearest
+/// of `ancestors`, when every one of them is found among them. A host not
+/// found (Pi running as `node`, a host that detached, a walk cut short)
+/// may be nearer than any found, so then none is chosen: never a guess.
+fn nearest(
+    candidates: Vec<(Host, HostId)>,
+    ancestors: &[Ancestor],
+    claude_pid: Option<i32>,
+) -> Option<(Host, HostId)> {
+    let found = |host: &Host| {
+        ancestors
+            .iter()
+            .position(|ancestor| host.runs_as(ancestor, claude_pid))
+    };
+    let places: Vec<usize> = candidates
+        .iter()
+        .map(|(host, _)| found(host))
+        .collect::<Option<_>>()?;
+    let chosen = places
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, place)| **place)
+        .map(|(index, _)| index)?;
+
+    candidates.into_iter().nth(chosen)
+}
+
+/// Whether every one of `causes` (the pending changes) was claimed by
+/// session `own` and none is still being carried out: only then may that
+/// session recover them itself. Every surface that says so asks this.
+pub(crate) fn owns_every_unknown(causes: &[Cause], own: &Key) -> bool {
+    !causes.is_empty()
+        && causes
+            .iter()
+            .all(|cause| cause.session.as_ref() == Some(own) && !cause.running)
+}
+
+/// Whether `value` may be a host id: 1 to [`ID_MAX`] bytes of ASCII
+/// letters, digits, `.`, `_`, `:` and `-`.
+pub(crate) fn plain(value: &str) -> bool {
+    (1..=ID_MAX).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+}
+
+/// Milliseconds since 1970, as records keep times.
+pub(crate) fn now_ms() -> u64 {
+    u64::try_from(crate::client::timestamp() / 1_000_000).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{cell::RefCell, collections::HashMap};
+
+    const CLAUDE_ID: &str = "d9031471-5e2a-4c8b-9f1d-2b7c3a6e0f44";
+
+    fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> {
+        let map: HashMap<String, String> = pairs
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect();
+        move |name| map.get(name).cloned()
+    }
+
+    fn knows(pid: i32) -> impl Fn(i32) -> Option<Facts> {
+        move |asked| {
+            (asked == pid).then(|| Facts {
+                parent: 1,
+                command: "claude".to_owned(),
+                start: [1_761_655_000, 412_233],
+                stopped: false,
+            })
+        }
+    }
+
+    fn ancestor(pid: i32, command: &str) -> Ancestor {
+        Ancestor {
+            pid,
+            command: command.to_owned(),
+        }
+    }
+
+    fn resolved(pairs: &[(&str, &str)], ancestors: Vec<Ancestor>) -> Option<HostSession> {
+        HostSession::resolve(env(pairs), || ancestors, knows(4242))
+    }
+
+    #[test]
+    fn a_claude_code_command_is_its_session_and_names_its_process() {
+        let session = resolved(
+            &[
+                ("CLAUDE_CODE_SESSION_ID", CLAUDE_ID),
+                ("CLAUDE_PID", "4242"),
+            ],
+            Vec::new(),
+        )
+        .unwrap();
+        let digest = Sha256::digest(format!("claude:{CLAUDE_ID}").as_bytes());
+        let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+
+        assert_eq!(session.host, Host::Claude);
+        assert_eq!(session.key.as_str(), &hex[..KEY_LEN]);
+        assert_eq!(session.id.as_str(), CLAUDE_ID);
+        assert_eq!(
+            session.process,
+            Some(Process::new(4242, [1_761_655_000, 412_233]))
+        );
+    }
+
+    #[test]
+    fn a_claude_pid_that_is_not_running_is_left_out() {
+        let session = HostSession::resolve(
+            env(&[
+                ("CLAUDE_CODE_SESSION_ID", CLAUDE_ID),
+                ("CLAUDE_PID", "4242"),
+            ]),
+            Vec::new,
+            |_| None,
+        )
+        .unwrap();
+
+        assert_eq!(session.key, Key::of(Host::Claude, CLAUDE_ID));
+        assert_eq!(session.process, None);
+    }
+
+    #[test]
+    fn codex_prefers_the_root_session_id_to_the_thread_id() {
+        let both = resolved(
+            &[("CODEX_SESSION_ID", "root"), ("CODEX_THREAD_ID", "thread")],
+            Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(both.key, Key::of(Host::Codex, "root"));
+
+        let thread = resolved(&[("CODEX_THREAD_ID", "thread")], Vec::new()).unwrap();
+        assert_eq!(thread.key, Key::of(Host::Codex, "thread"));
+        assert_eq!(thread.process, None, "Codex names no process");
+    }
+
+    #[test]
+    fn a_codex_subagent_and_its_parent_are_one_session() {
+        let parent = resolved(
+            &[("CODEX_SESSION_ID", "root"), ("CODEX_THREAD_ID", "root")],
+            Vec::new(),
+        );
+        let subagent = resolved(
+            &[("CODEX_SESSION_ID", "root"), ("CODEX_THREAD_ID", "child")],
+            Vec::new(),
+        );
+
+        assert_eq!(parent.unwrap().key, subagent.unwrap().key);
+    }
+
+    #[test]
+    fn pi_and_opencode_are_read_from_their_own_variables() {
+        let pi = resolved(&[("PI_SESSION_ID", "pi-1")], Vec::new()).unwrap();
+        assert_eq!((pi.host, pi.id.as_str()), (Host::Pi, "pi-1"));
+
+        let opencode = resolved(&[("ATLAS_OPENCODE_SESSION", "ses_7f3a")], Vec::new()).unwrap();
+        assert_eq!(
+            (opencode.host, opencode.id.as_str()),
+            (Host::Opencode, "ses_7f3a")
+        );
+    }
+
+    #[test]
+    fn a_named_session_is_used_only_without_a_host() {
+        let named = resolved(&[("ATLAS_SESSION", "release")], Vec::new()).unwrap();
+        assert_eq!((named.host, named.id.as_str()), (Host::Named, "release"));
+
+        let hosted = resolved(
+            &[("ATLAS_SESSION", "release"), ("CODEX_THREAD_ID", "thread")],
+            Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(hosted.host, Host::Codex);
+    }
+
+    #[test]
+    fn a_value_that_is_not_a_plain_id_is_no_session() {
+        let long = "a".repeat(ID_MAX + 1);
+        for bad in [long.as_str(), "two words", "a/b", "nul\0", "", "café"] {
+            assert_eq!(
+                resolved(&[("PI_SESSION_ID", bad)], Vec::new()),
+                None,
+                "{bad:?}"
+            );
+            let next = resolved(
+                &[("CODEX_SESSION_ID", bad), ("CODEX_THREAD_ID", "thread")],
+                Vec::new(),
+            )
+            .unwrap();
+            assert_eq!(next.key, Key::of(Host::Codex, "thread"), "{bad:?}");
+        }
+        assert!(plain(&"a".repeat(ID_MAX)));
+    }
+
+    #[test]
+    fn the_nearest_host_wins_when_hosts_are_nested() {
+        let pairs = [
+            ("CLAUDE_CODE_SESSION_ID", CLAUDE_ID),
+            ("CLAUDE_PID", "4242"),
+            ("CODEX_THREAD_ID", "thread"),
+        ];
+        let codex_inside = vec![
+            ancestor(90, "zsh"),
+            ancestor(80, "codex"),
+            ancestor(70, "zsh"),
+            ancestor(4242, "claude"),
+        ];
+        let codex = resolved(&pairs, codex_inside).unwrap();
+        assert_eq!(codex.host, Host::Codex);
+        assert_eq!(codex.process, None, "only Claude Code's process is kept");
+
+        let claude_inside = vec![
+            ancestor(90, "zsh"),
+            ancestor(4242, "claude"),
+            ancestor(70, "zsh"),
+            ancestor(60, "codex"),
+        ];
+        let claude = resolved(&pairs, claude_inside).unwrap();
+        assert_eq!(claude.host, Host::Claude);
+        assert!(claude.process.is_some());
+    }
+
+    #[test]
+    fn nested_hosts_the_walk_cannot_place_name_no_session() {
+        let pairs = [
+            ("CLAUDE_CODE_SESSION_ID", CLAUDE_ID),
+            ("CLAUDE_PID", "4242"),
+            ("CODEX_THREAD_ID", "thread"),
+        ];
+        let neither = vec![ancestor(90, "zsh"), ancestor(1, "launchd")];
+        assert_eq!(resolved(&pairs, neither), None);
+
+        // Pi runs as node: Claude Code is found, but not Pi inside it.
+        let pi_in_claude = [
+            ("CLAUDE_CODE_SESSION_ID", CLAUDE_ID),
+            ("CLAUDE_PID", "4242"),
+            ("PI_SESSION_ID", "pi-1"),
+        ];
+        let walk = vec![
+            ancestor(90, "zsh"),
+            ancestor(80, "node"),
+            ancestor(70, "zsh"),
+            ancestor(4242, "claude"),
+        ];
+        assert_eq!(resolved(&pi_in_claude, walk), None);
+
+        // A walk cut short (by its limit, or a process it could not read)
+        // before the outer host.
+        let cut_short = vec![ancestor(90, "zsh"), ancestor(80, "codex")];
+        assert_eq!(resolved(&pairs, cut_short), None);
+    }
+
+    #[test]
+    fn ancestry_is_asked_only_when_two_hosts_are_present() {
+        let asked = RefCell::new(0);
+        let ancestors = || {
+            *asked.borrow_mut() += 1;
+            Vec::new()
+        };
+        HostSession::resolve(env(&[("PI_SESSION_ID", "pi-1")]), ancestors, |_| None).unwrap();
+        assert_eq!(*asked.borrow(), 0);
+    }
+
+    #[test]
+    fn nothing_reserved_or_private_is_read() {
+        let read = RefCell::new(Vec::new());
+        let counting = |name: &str| {
+            read.borrow_mut().push(name.to_owned());
+            None
+        };
+        assert_eq!(HostSession::resolve(counting, Vec::new, |_| None), None);
+
+        let read = read.into_inner();
+        for never in [
+            "PI_SESSION_FILE",
+            "CLAUDE_CODE_BRIDGE_SESSION_ID",
+            "CODEX_TOOL_CALL_ID",
+            "CURSOR_TRANSCRIPT_PATH",
+            "AI_AGENT",
+        ] {
+            assert!(!read.iter().any(|name| name == never), "{never}");
+        }
+        assert!(
+            read.iter()
+                .all(|name| !name.contains("TRANSCRIPT") && !name.contains("COMPANION")),
+            "{read:?}"
+        );
+    }
+
+    #[test]
+    fn a_session_owns_the_unknown_only_when_every_one_is_its_own_and_none_runs() {
+        let (own, other) = (Key::of(Host::Pi, "own"), Key::of(Host::Pi, "other"));
+        let cause = |session: Option<&Key>, running: bool| Cause {
+            generation: crate::control::token(),
+            running,
+            session: session.cloned(),
+        };
+
+        assert!(!owns_every_unknown(&[], &own), "nothing is unknown");
+        assert!(owns_every_unknown(&[cause(Some(&own), false)], &own));
+        assert!(!owns_every_unknown(&[cause(Some(&own), true)], &own));
+        assert!(!owns_every_unknown(
+            &[cause(Some(&own), false), cause(Some(&other), false)],
+            &own
+        ));
+        assert!(!owns_every_unknown(
+            &[cause(Some(&own), false), cause(None, false)],
+            &own
+        ));
+    }
+
+    #[test]
+    fn a_key_is_twelve_lowercase_hex_digits() {
+        let key = Key::of(Host::Pi, "pi-1");
+        assert_eq!(Key::parse(key.as_str()), Some(key.clone()));
+        for bad in [
+            "3F9A1C07B2E4",
+            "3f9a1c07b2e",
+            "3f9a1c07b2e4f",
+            "3f9a1c07b2eg",
+        ] {
+            assert_eq!(Key::parse(bad), None, "{bad}");
+        }
+        let through: Key = serde_json::from_value(serde_json::json!(key.as_str())).unwrap();
+        assert_eq!(through, key);
+        assert!(serde_json::from_value::<Key>(serde_json::json!("../x")).is_err());
+    }
+}

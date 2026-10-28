@@ -13,6 +13,7 @@ use crate::{
     client::{Client, png_dimensions},
     control::{Durability, write_private_with},
     error::{Error, Result},
+    host_session::{HostSession, Key},
     overview::READ_DEADLINE,
 };
 use serde_json::{Value, json};
@@ -78,7 +79,10 @@ pub async fn watch(client: Client, port: u16, frames: Option<PathBuf>, once: boo
         stdout: std::io::stdout(),
         written: Instant::now(),
     };
-    let mut watch = Watch::new(frames);
+    // The host session this watch runs for, if any: only its own host id
+    // is passed on, for the pane that shows "this session".
+    let own = HostSession::from_env().map(|session| session.key().clone());
+    let mut watch = Watch::new(frames).for_session(own);
 
     let stop = stopped();
     tokio::pin!(stop);
@@ -147,6 +151,9 @@ struct Watch {
     /// a reader never takes a new screen for one it has.
     kept: Option<[u8; 32]>,
     last_id: u64,
+    /// The host session the watch runs for: other sessions' host ids are
+    /// never passed on.
+    own: Option<Key>,
 }
 
 impl Watch {
@@ -159,7 +166,14 @@ impl Watch {
             framed_at: None,
             kept: None,
             last_id: 0,
+            own: None,
         }
+    }
+
+    /// This watch, passing on only `own` session's host id.
+    fn for_session(mut self, own: Option<Key>) -> Self {
+        self.own = own;
+        self
     }
 
     /// One look: the status when it is due, then the screen, then a blank
@@ -214,11 +228,13 @@ impl Watch {
         }
 
         self.said = signature;
+        let mut overview = status["overview"].clone();
+        keep_own_host_id(&mut overview, self.own.as_ref());
         Some(json!({
             "type": "status",
             "source": source,
             "ready": status["ready"] == true,
-            "overview": status["overview"],
+            "overview": overview,
         }))
     }
 
@@ -382,6 +398,22 @@ fn replace(folder: &Path, name: &str, bytes: &[u8]) -> Result<()> {
     fs::rename(&partial, folder.join(name)).map_err(|error| Error::writing(folder, error))
 }
 
+/// `overview` without the host id of any session but `own`: every other
+/// session is named, never identified to its host.
+fn keep_own_host_id(overview: &mut Value, own: Option<&Key>) {
+    let sessions = overview["hostSessions"]
+        .as_array_mut()
+        .into_iter()
+        .flatten();
+    for session in sessions.filter_map(Value::as_object_mut) {
+        let mine =
+            own.is_some_and(|own| session.get("key").and_then(Value::as_str) == Some(own.as_str()));
+        if !mine {
+            session.remove("hostSession");
+        }
+    }
+}
+
 /// What a status says, without the ages that change every second; with
 /// the log's mark, so a repeat of the same action still counts.
 fn signature(status: &Value, mark: Mark) -> Value {
@@ -450,6 +482,34 @@ mod tests {
 
     fn mark(length: u64) -> Mark {
         Some((length, SystemTime::UNIX_EPOCH))
+    }
+
+    #[test]
+    fn a_watch_passes_on_only_its_own_sessions_host_id() {
+        use crate::host_session::Host;
+        let (own, other) = (Key::of(Host::Claude, "own"), Key::of(Host::Codex, "other"));
+        let status = json!({"ready": true, "overview": {"state": "idle", "hostSessions": [
+            {"key": own, "name": "Claude Code · left", "hostSession": "own"},
+            {"key": other, "name": "Codex · right", "hostSession": "other"},
+        ]}});
+
+        let line = Watch::new(None)
+            .for_session(Some(own))
+            .news(&status, "helper", None)
+            .unwrap();
+        let sessions = line["overview"]["hostSessions"].as_array().unwrap();
+        assert_eq!(sessions[0]["hostSession"], "own");
+        assert!(sessions[1].get("hostSession").is_none());
+        assert_eq!(sessions[1]["name"], "Codex · right");
+
+        let line = Watch::new(None).news(&status, "helper", None).unwrap();
+        let sessions = line["overview"]["hostSessions"].as_array().unwrap();
+        assert!(
+            sessions
+                .iter()
+                .all(|session| session.get("hostSession").is_none()),
+            "without a session, none"
+        );
     }
 
     #[test]

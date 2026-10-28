@@ -15,13 +15,18 @@ use atlas::{
     doing::Doing,
     environment,
     error::{Error, Result},
+    host_session::{self, HostSession, store::Kind},
     menubar,
     transport::with_output,
     ui::{self, progress::Spinner},
     viewer,
 };
 use serde_json::{Value, json};
-use std::{io::Read, path::PathBuf, time::Duration};
+use std::{
+    io::Read,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 /// How large a screenshot is saved: at most one pixel per display point and
 /// [`atlas::client::SCREENSHOT_SIDE`] pixels on its longer side unless a
@@ -112,6 +117,69 @@ fn doing(command: &Command) -> Option<Doing> {
         } => Doing::new("run"),
         _ => return None,
     })
+}
+
+/// Whether a command is its host session's work: everything an agent runs
+/// but the servers and helper-side commands, which serve many sessions or
+/// none, and the person's own setup.
+fn attributed(command: &Command) -> bool {
+    !matches!(
+        command,
+        Command::Mcp { .. }
+            | Command::Watch { .. }
+            | Command::Menubar { .. }
+            | Command::Monitor { .. }
+            | Command::HelperServe { .. }
+            | Command::InputService { .. }
+            | Command::EnvironmentWorker { .. }
+            | Command::SessionInfo
+            | Command::PermissionsInfo
+            | Command::WindowsInfo
+            | Command::ElementsInfo { .. }
+            | Command::Init
+            | Command::Uninstall { .. }
+            | Command::Update { .. }
+            | Command::UpdateFinish
+            | Command::Setup { .. }
+            | Command::SetupHelper { .. }
+            | Command::Switch { .. }
+            | Command::Onboarding { .. }
+    )
+}
+
+/// Whether `command`, run by `actor`, is labelled with the host session it
+/// comes from: an agent's own work only. What the person does from the app,
+/// the menu bar or a viewer never is.
+fn labelled(command: &Command, actor: Actor) -> bool {
+    actor == Actor::Agent && attributed(command)
+}
+
+/// What a command is, as far as its host session's record cares: nothing
+/// of its arguments.
+fn kind(command: &Command) -> Kind {
+    match command {
+        Command::Screenshot { .. } => Kind::Screenshot,
+        Command::Open { .. } => Kind::Open,
+        Command::Close { .. } => Kind::Close,
+        Command::Environment {
+            apply,
+            command: None,
+            ..
+        } => Kind::Environment { changes: *apply },
+        Command::Environment {
+            command: Some(EnvironmentCommand::Apply { .. }),
+            ..
+        } => Kind::Environment { changes: true },
+        Command::Environment {
+            command:
+                Some(
+                    EnvironmentCommand::Rollback { apply, .. }
+                    | EnvironmentCommand::Profile { apply, .. },
+                ),
+            ..
+        } => Kind::Environment { changes: *apply },
+        _ => Kind::Other,
+    }
 }
 
 /// Whether a command changes the helper, so an agent's is refused while
@@ -230,7 +298,9 @@ pub(super) fn waits(command: &Command, actor: Actor) -> bool {
 }
 
 /// Carry out `command`. When it [`waits`], it waits for up to `wait` in all
-/// for other controllers to let go of the helper.
+/// for other controllers to let go of the helper. An agent's command is
+/// labelled with the host session it comes from, and what it left is noted
+/// in that session's record; a refusal names the other sessions it can.
 pub(super) async fn execute(config: PathBuf, command: Command, wait: Duration) -> Result<Value> {
     let actor = actor();
 
@@ -238,12 +308,18 @@ pub(super) async fn execute(config: PathBuf, command: Command, wait: Duration) -
     // controller's configuration. A command that talks to the helper loads
     // it before anything else.
     let doing = doing(&command);
+    let kind = kind(&command);
     let changes = changes_helper(&command, doing.is_some());
     let waits = waits(&command, actor);
+    let host = labelled(&command, actor)
+        .then(HostSession::from_env)
+        .flatten();
     let client = || {
         Client::new(Config::load(&config)?).map(|mut client| {
             client.actor = actor;
             client.doing = doing.clone();
+            client.host_session = host.clone();
+            client.controller = client.controller.labelled(host.as_ref());
             if waits {
                 client.controller = client.controller.waiting(wait);
             }
@@ -262,6 +338,33 @@ pub(super) async fn execute(config: PathBuf, command: Command, wait: Duration) -
         client()?.require_going().await?;
     }
 
+    let result = carry_out(&config, command, &client, host.as_ref()).await;
+
+    // What the command left for its session to find again, once it ended,
+    // and a plan it rolled back forgotten wherever it is listed: labels, so
+    // a record that cannot be written changes nothing.
+    if kind.recorded(doing.as_ref())
+        && let Ok(client) = client()
+    {
+        if let Some(host) = &host {
+            let _ = host_session::store::note(&client, host, kind, doing.as_ref(), &result);
+        }
+        let _ = host_session::store::forget_rolled_back(&client, kind, &result);
+    }
+
+    // A refusal that can name the other session, or say whose an unknown
+    // outcome is, says so.
+    host_session::explain::reply(result, || client().ok(), host.as_ref())
+}
+
+/// [`execute`]'s work once the command is labelled: `client` gives its
+/// client, and `host` is its host session, if any.
+async fn carry_out(
+    config: &Path,
+    command: Command,
+    client: &impl Fn() -> Result<Client>,
+    host: Option<&HostSession>,
+) -> Result<Value> {
     match command {
         Command::EnvironmentWorker { packet, apply } => environment::worker(&packet, apply),
         Command::AgentGuide {
@@ -315,24 +418,24 @@ pub(super) async fn execute(config: PathBuf, command: Command, wait: Duration) -
             check: false,
         } => {
             as_yourself("update")?;
-            update::update(&config, allow_unnotarized, force, version).await
+            update::update(config, allow_unnotarized, force, version).await
         }
         Command::UpdateFinish => {
             as_yourself("update")?;
-            update::update_finish(&config).await
+            update::update_finish(config).await
         }
         Command::Init => {
             as_yourself("init")?;
-            atlas::init::run(&config).await
+            atlas::init::run(config).await
         }
         Command::Onboarding { step } => {
             use atlas::onboarding;
 
             match step {
-                OnboardingCommand::Status => onboarding::status(&config).await,
-                OnboardingCommand::Choose { account } => onboarding::choose(&config, &account),
+                OnboardingCommand::Status => onboarding::status(config).await,
+                OnboardingCommand::Choose { account } => onboarding::choose(config, &account),
                 OnboardingCommand::Create { account, full_name } => {
-                    onboarding::create(&config, &account, &full_name)
+                    onboarding::create(config, &account, &full_name)
                 }
                 OnboardingCommand::Accept {
                     controller_uid,
@@ -344,19 +447,17 @@ pub(super) async fn execute(config: PathBuf, command: Command, wait: Duration) -
                 OnboardingCommand::Window { state } => {
                     onboarding::window(state == WindowState::Open)
                 }
-                OnboardingCommand::Forget => onboarding::forget(&config),
-                OnboardingCommand::Close { helper: false } => onboarding::close_leftovers(&config),
-                OnboardingCommand::Close { helper: true } => onboarding::close_helper(&config),
-                OnboardingCommand::Finish => onboarding::finish(&config).await,
-                OnboardingCommand::Login { state } => {
-                    onboarding::login(&config, state == OnOff::On)
-                }
+                OnboardingCommand::Forget => onboarding::forget(config),
+                OnboardingCommand::Close { helper: false } => onboarding::close_leftovers(config),
+                OnboardingCommand::Close { helper: true } => onboarding::close_helper(config),
+                OnboardingCommand::Finish => onboarding::finish(config).await,
+                OnboardingCommand::Login { state } => onboarding::login(config, state == OnOff::On),
             }
         }
         Command::Agents { action } => {
             match action.unwrap_or(AgentsCommand::Status { brief: false }) {
                 AgentsCommand::Status { brief: true } => {
-                    print(&format!("{}\n", atlas::agents::brief(&config).await));
+                    print(&format!("{}\n", atlas::agents::brief(config, host).await));
                     Ok(Value::Null)
                 }
                 AgentsCommand::Status { brief: false } => {
@@ -368,7 +469,7 @@ pub(super) async fn execute(config: PathBuf, command: Command, wait: Duration) -
                         CursorHookEvent::SessionStart => "session-start",
                         CursorHookEvent::BeforeShell => "before-shell",
                     };
-                    let reply = atlas::agents::hook(&config, event, std::io::stdin().lock()).await;
+                    let reply = atlas::agents::hook(config, event, std::io::stdin().lock()).await;
                     print(&format!("{reply}\n"));
                     Ok(Value::Null)
                 }
@@ -408,7 +509,7 @@ pub(super) async fn execute(config: PathBuf, command: Command, wait: Duration) -
             remove_helper,
         } => {
             as_yourself("uninstall")?;
-            atlas::uninstall::run(&config, keep_config, yes, remove_helper).await
+            atlas::uninstall::run(config, keep_config, yes, remove_helper).await
         }
         Command::Menubar {
             login: Some(login), ..
@@ -418,12 +519,12 @@ pub(super) async fn execute(config: PathBuf, command: Command, wait: Duration) -
             lock,
             list,
             yes,
-        } => switch(&config, account, lock, list, yes),
+        } => switch(config, account, lock, list, yes),
         Command::Setup {
             helper,
             apply: false,
             rollback: false,
-        } => atlas::setup::preview(&config, helper.as_deref()).await,
+        } => atlas::setup::preview(config, helper.as_deref()).await,
         Command::Setup { apply, .. } => {
             let client = client()?;
             // Recovery ownership: the migration settles only the pending
@@ -431,9 +532,9 @@ pub(super) async fn execute(config: PathBuf, command: Command, wait: Duration) -
             let ownership = client.controller.acquire(true)?;
 
             if apply {
-                atlas::setup::migrate::apply(&config, &ownership).await
+                atlas::setup::migrate::apply(config, &ownership).await
             } else {
-                atlas::setup::migrate::rollback(&config, &ownership).await
+                atlas::setup::migrate::rollback(config, &ownership).await
             }
         }
         Command::Config => {
@@ -441,6 +542,11 @@ pub(super) async fn execute(config: PathBuf, command: Command, wait: Duration) -
             Ok(json!({ "ok": true, "config": client.config, "path": config }))
         }
         Command::Status => Ok(client()?.status().await),
+        Command::Activity {
+            all,
+            session,
+            limit,
+        } => host_session::activity::list(&client()?, host, all, session.as_ref(), limit.into()),
         Command::Doctor {
             login_timing: true, ..
         } => atlas::login_log::timing(),
@@ -510,7 +616,7 @@ pub(super) async fn execute(config: PathBuf, command: Command, wait: Duration) -
         } => {
             atlas::mcp::serve(
                 client()?,
-                config.clone(),
+                config.to_path_buf(),
                 port,
                 read_only,
                 guard_app_controls,
@@ -520,7 +626,7 @@ pub(super) async fn execute(config: PathBuf, command: Command, wait: Duration) -
         }
         Command::Monitor { port } => {
             let client = client()?;
-            viewer::monitor(&config, port, client.output_dir()?).await?;
+            viewer::monitor(config, port, client.output_dir()?).await?;
             Ok(Value::Null)
         }
         Command::Menubar {
@@ -530,7 +636,7 @@ pub(super) async fn execute(config: PathBuf, command: Command, wait: Duration) -
             ..
         } => {
             let client = client()?;
-            let program = menubar::Program::new(&config)?;
+            let program = menubar::Program::new(config)?;
 
             match render {
                 Some(directory) => viewer::render_menubar(client, &program, &directory).await,
@@ -545,7 +651,7 @@ pub(super) async fn execute(config: PathBuf, command: Command, wait: Duration) -
                 }
                 None => {
                     let output = client.output_dir()?.to_path_buf();
-                    menubar::start(&config, port, &output).await?;
+                    menubar::start(config, port, &output).await?;
                     Ok(Value::Null)
                 }
             }
@@ -1192,6 +1298,95 @@ mod tests {
             &["setup"],
         ] {
             assert!(!changes(looking), "{looking:?}");
+        }
+    }
+
+    #[test]
+    fn servers_helper_commands_and_setup_carry_no_host_session() {
+        let attributed = |args: &[&str]| attributed(&parse(args).unwrap().command.unwrap());
+
+        for unattributed in [
+            &["mcp"][..],
+            &["watch"],
+            &["menubar"],
+            &["monitor"],
+            &["session-info"],
+            &["permissions-info"],
+            &["windows-info"],
+            &["elements-info", "1"],
+            &["init"],
+            &["uninstall"],
+            &["update"],
+            &["setup"],
+            &["switch"],
+        ] {
+            assert!(!attributed(unattributed), "{unattributed:?}");
+        }
+
+        for agents in [
+            &["click", "1", "2"][..],
+            &["type", "x"],
+            &["screenshot"],
+            &["open", "--app", "TextEdit"],
+            &["close", "--app", "TextEdit"],
+            &["run", "--", "ls"],
+            &["environment"],
+            &["activity"],
+            &["agents"],
+            &["agents", "status", "--brief"],
+        ] {
+            assert!(attributed(agents), "{agents:?}");
+        }
+    }
+
+    #[test]
+    fn only_an_environment_request_that_changes_the_helper_can_own_a_plan() {
+        let kind = |args: &[&str]| kind(&parse(args).unwrap().command.unwrap());
+
+        for changes in [
+            &["environment", "profile.toml", "--apply"][..],
+            &["environment", "apply", "plan"],
+            &["environment", "rollback", "plan", "--apply"],
+            &["environment", "profile", "profile.toml", "--apply"],
+        ] {
+            assert_eq!(
+                kind(changes),
+                Kind::Environment { changes: true },
+                "{changes:?}"
+            );
+        }
+        for looks in [
+            &["environment", "profile.toml"][..],
+            &["environment", "rollback", "plan"],
+            &["environment", "profile", "profile.toml"],
+        ] {
+            assert_eq!(
+                kind(looks),
+                Kind::Environment { changes: false },
+                "{looks:?}"
+            );
+        }
+        for other in [
+            &["environment", "discover"][..],
+            &["environment", "run", "--", "ls"],
+        ] {
+            assert_eq!(kind(other), Kind::Other, "{other:?}");
+        }
+        assert!(!Kind::Other.recorded(None), "a read records nothing");
+        assert!(Kind::Environment { changes: false }.recorded(None));
+    }
+
+    #[test]
+    fn the_viewers_commands_never_carry_a_host_session() {
+        for args in [
+            &["click", "1", "2"][..],
+            &["type", "x"],
+            &["restart"],
+            &["activity"],
+        ] {
+            let command = parse(args).unwrap().command.unwrap();
+            assert!(labelled(&command, Actor::Agent), "{args:?}");
+            assert!(!labelled(&command, Actor::Viewer), "{args:?}");
         }
     }
 
