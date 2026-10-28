@@ -10,7 +10,7 @@ use super::{
 };
 use atlas::{
     agent,
-    client::{Client, SCREENSHOT_SIDE},
+    client::{Client, Size},
     config::Config,
     doing::Doing,
     environment,
@@ -23,14 +23,14 @@ use atlas::{
 use serde_json::{Value, json};
 use std::{io::Read, path::PathBuf, time::Duration};
 
-/// The longest side a screenshot is scaled to: at most [`SCREENSHOT_SIDE`]
-/// unless another size is given, and 0 asks for the full size. A crop
-/// smaller than that keeps its full size, since nothing is scaled up.
-pub(super) fn screenshot_size(given: Option<u32>) -> Option<u32> {
+/// How large a screenshot is saved: at most one pixel per display point and
+/// [`atlas::client::SCREENSHOT_SIDE`] pixels on its longer side unless a
+/// longest side is given; 0 asks for the full size.
+pub(super) fn screenshot_size(given: Option<u32>) -> Size {
     match given {
-        None => Some(SCREENSHOT_SIDE),
-        Some(0) => None,
-        Some(side) => Some(side),
+        None => Size::Standard,
+        Some(0) => Size::Full,
+        Some(side) => Size::Longest(side),
     }
 }
 
@@ -504,8 +504,8 @@ pub(super) async fn execute(config: PathBuf, command: Command) -> Result<Value> 
             new_file,
         } => {
             let target = target.target();
-            let maximum = screenshot_size(max_dimension);
-            agent::screenshot(&client()?, target.as_ref(), region, maximum, new_file).await
+            let size = screenshot_size(max_dimension);
+            agent::screenshot(&client()?, target.as_ref(), region, size, new_file).await
         }
         Command::Apps { all } => client()?.apps().await.map(|reply| listed_apps(reply, all)),
         Command::Click {

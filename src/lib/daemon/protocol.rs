@@ -73,6 +73,8 @@ pub enum Request {
     Hello,
     Screenshot {
         max_dimension: Option<u32>,
+        /// At most one pixel per display point of the area captured, too.
+        per_point: bool,
         crop: Option<Crop>,
     },
     Apps,
@@ -136,8 +138,16 @@ pub fn parse(line: &[u8]) -> Result<Request, Value> {
                 ),
             };
 
+            let per_point = match &request["perPoint"] {
+                Value::Null => false,
+                value => value
+                    .as_bool()
+                    .ok_or_else(|| bad("\"perPoint\" must be true or false"))?,
+            };
+
             Ok(Request::Screenshot {
                 max_dimension,
+                per_point,
                 crop: crop(&request)?,
             })
         }
@@ -234,6 +244,7 @@ mod tests {
             parse(br#"{"op":"screenshot","maxDimension":320}"#),
             Ok(Request::Screenshot {
                 max_dimension: Some(320),
+                per_point: false,
                 crop: None
             })
         );
@@ -241,6 +252,7 @@ mod tests {
             parse(br#"{"op":"screenshot"}"#),
             Ok(Request::Screenshot {
                 max_dimension: None,
+                per_point: false,
                 crop: None
             })
         );
@@ -281,6 +293,7 @@ mod tests {
         let shot = |crop| {
             Ok(Request::Screenshot {
                 max_dimension: None,
+                per_point: false,
                 crop,
             })
         };
@@ -306,6 +319,7 @@ mod tests {
             parse(br#"{"op":"screenshot","pid":7,"maxDimension":400}"#),
             Ok(Request::Screenshot {
                 max_dimension: Some(400),
+                per_point: false,
                 crop: Some(Crop::App { pid: 7 })
             })
         );
@@ -321,6 +335,44 @@ mod tests {
             refused(r#"{"op":"screenshot","region":{"x":0,"y":0,"width":0,"height":1}}"#)["error"],
             "\"region\" must be whole points: x and y -16384–16384, width and height 1–16384"
         );
+    }
+
+    #[test]
+    fn a_screenshot_may_ask_for_at_most_one_pixel_per_point() {
+        assert_eq!(
+            parse(br#"{"op":"screenshot","maxDimension":1456,"perPoint":true}"#),
+            Ok(Request::Screenshot {
+                max_dimension: Some(1456),
+                per_point: true,
+                crop: None
+            })
+        );
+        assert_eq!(
+            parse(br#"{"op":"screenshot","pid":7,"perPoint":false}"#),
+            Ok(Request::Screenshot {
+                max_dimension: None,
+                per_point: false,
+                crop: Some(Crop::App { pid: 7 })
+            })
+        );
+        assert_eq!(
+            parse(br#"{"op":"screenshot","perPoint":null}"#),
+            Ok(Request::Screenshot {
+                max_dimension: None,
+                per_point: false,
+                crop: None
+            })
+        );
+        for line in [
+            r#"{"op":"screenshot","perPoint":"yes"}"#,
+            r#"{"op":"screenshot","perPoint":1}"#,
+        ] {
+            assert_eq!(
+                refused(line)["error"],
+                "\"perPoint\" must be true or false",
+                "{line}"
+            );
+        }
     }
 
     #[test]

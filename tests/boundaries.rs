@@ -1,6 +1,6 @@
 use atlas::{
     actions,
-    client::{Client, png_dimensions, validate_completion},
+    client::{Client, Size, png_dimensions, validate_completion},
     config::Config,
     control::{ActionPermit, Controller, Lease},
     session::{Display, diagnose, input_current, input_settled, require_hidden},
@@ -611,7 +611,7 @@ async fn a_session_changed_screenshot_refusal_reaches_the_caller_with_that_code(
         }
     });
 
-    let error = client.capture(None, None, false).await.unwrap_err();
+    let error = client.capture(Size::Full, None, false).await.unwrap_err();
     assert_eq!(error.code, "session-changed");
     assert_eq!(error.error, message);
     assert!(!error.uncertain);
@@ -671,7 +671,7 @@ async fn an_older_helper_that_sends_the_whole_display_for_a_crop_is_refused_befo
         height: 300,
     });
     let error = client
-        .capture(None, Some(&region), false)
+        .capture(Size::Full, Some(&region), false)
         .await
         .unwrap_err();
     assert_eq!(error.code, "daemon");

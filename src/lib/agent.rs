@@ -1225,7 +1225,7 @@ pub async fn screenshot(
     client: &Client,
     target: Option<&Target>,
     region: Option<Region>,
-    maximum: Option<u32>,
+    size: crate::client::Size,
     new_file: bool,
 ) -> Result<Value> {
     let crop = match (target, region) {
@@ -1242,7 +1242,7 @@ pub async fn screenshot(
     };
 
     client
-        .capture(maximum, crop.as_ref(), new_file)
+        .capture(size, crop.as_ref(), new_file)
         .await
         .map_err(|error| match target {
             Some(Target::Name(name)) if error.code == "no-window" => Error::new(

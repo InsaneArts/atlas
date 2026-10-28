@@ -2760,7 +2760,12 @@ mod tests {
         assert!(crate::overview::activity(&output, 5).is_empty());
 
         // The same client records what acts, even when no helper answers.
-        assert!(agent.capture(None, None, false).await.is_err());
+        assert!(
+            agent
+                .capture(crate::client::Size::Standard, None, false)
+                .await
+                .is_err()
+        );
         let rows = crate::overview::activity(&output, 5);
         assert_eq!(rows.len(), 1);
         assert!(

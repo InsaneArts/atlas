@@ -7,7 +7,7 @@
 //! bytes on disk hash to the new capture's. A lost, damaged or stale record
 //! can therefore only cost a new file, never claim a match that is not one.
 use crate::{
-    client::{Frame, timestamp},
+    client::{Frame, Size, timestamp},
     config::write_atomic,
     control::write_private,
     daemon::protocol::{Crop, Region},
@@ -67,7 +67,7 @@ struct Entry {
 /// What a capture shows and at what size: captures compare only with the
 /// last one of the same key. An app is named by its process, so a relaunched
 /// app never matches its earlier windows.
-pub(crate) fn key(maximum: Option<u32>, crop: Option<&Crop>) -> String {
+pub(crate) fn key(size: Size, crop: Option<&Crop>) -> String {
     let target = match crop {
         None => "screen".to_owned(),
         Some(Crop::App { pid }) => format!("app:{pid}"),
@@ -76,7 +76,11 @@ pub(crate) fn key(maximum: Option<u32>, crop: Option<&Crop>) -> String {
             region.x, region.y, region.width, region.height
         ),
     };
-    let size = maximum.map_or_else(|| "full".to_owned(), |side| side.to_string());
+    let size = match size {
+        Size::Standard => "standard".to_owned(),
+        Size::Longest(side) => side.to_string(),
+        Size::Full => "full".to_owned(),
+    };
 
     format!("{target} {size}")
 }
@@ -354,19 +358,23 @@ mod tests {
             height: 200,
         });
         let keys = [
-            key(Some(1456), None),
-            key(None, None),
-            key(None, Some(&Crop::App { pid: 42 })),
-            key(None, Some(&Crop::App { pid: 43 })),
-            key(Some(400), Some(&region)),
+            key(Size::Standard, None),
+            key(Size::Longest(1456), None),
+            key(Size::Full, None),
+            key(Size::Full, Some(&Crop::App { pid: 42 })),
+            key(Size::Full, Some(&Crop::App { pid: 43 })),
+            key(Size::Standard, Some(&Crop::App { pid: 42 })),
+            key(Size::Longest(400), Some(&region)),
         ];
         assert_eq!(
             keys,
             [
+                "screen standard",
                 "screen 1456",
                 "screen full",
                 "app:42 full",
                 "app:43 full",
+                "app:42 standard",
                 "region:10,20,300,200 400",
             ]
         );

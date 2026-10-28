@@ -209,8 +209,8 @@ pub(super) enum Command {
             conflicts_with_all = ["app", "pid"]
         )]
         region: Option<Region>,
-        /// Shrink the longer side to at most this many pixels: 1456 unless
-        /// given (a smaller crop keeps its size); 0 keeps the full size.
+        /// Shrink the longer side to at most this many pixels; 0 keeps the
+        /// full size. Without it: at most 1456 and one pixel per display point.
         #[arg(long, value_parser = clap::value_parser!(u32).range(0..=8192))]
         max_dimension: Option<u32>,
         /// Save a new file even when nothing changed since the last screenshot.
@@ -945,11 +945,12 @@ mod tests {
     #[test]
     fn a_screenshot_is_smaller_by_default_and_full_size_on_request() {
         use crate::dispatch::screenshot_size;
-        use atlas::client::SCREENSHOT_SIDE;
+        use atlas::client::Size;
 
-        assert_eq!(screenshot_size(None), Some(SCREENSHOT_SIDE));
-        assert_eq!(screenshot_size(Some(0)), None);
-        assert_eq!(screenshot_size(Some(800)), Some(800));
+        assert_eq!(screenshot_size(None), Size::Standard);
+        assert_eq!(screenshot_size(Some(0)), Size::Full);
+        assert_eq!(screenshot_size(Some(800)), Size::Longest(800));
+        assert_eq!(screenshot_size(Some(1456)), Size::Longest(1456));
 
         let given = |args: &[&str]| match parse(args) {
             Ok(Cli {

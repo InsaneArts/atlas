@@ -143,8 +143,47 @@ type BuildCache = Arc<std::sync::Mutex<Option<((u64, u64, u64, i64, i64), String
 
 /// The longest side of an agent's screenshot, in pixels, unless it asks for
 /// another size: enough to see layout, menu titles and controls at about
-/// half the cost of the full display. A smaller crop keeps its full size.
+/// half the cost of the full display.
 pub const SCREENSHOT_SIDE: u32 = 1456;
+
+/// How large a saved screenshot is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Size {
+    /// At most one pixel per display point and at most [`SCREENSHOT_SIDE`]
+    /// pixels on its longer side, so a crop of a Retina display costs no more
+    /// than the same crop at one pixel per point.
+    Standard,
+    /// At most this many pixels on its longer side, never enlarged.
+    Longest(u32),
+    /// Every pixel the display has.
+    Full,
+}
+
+impl Size {
+    /// The most pixels the longer side may have, if any limit.
+    fn longest(self) -> Option<u32> {
+        match self {
+            Size::Standard => Some(SCREENSHOT_SIDE),
+            Size::Longest(side) => Some(side),
+            Size::Full => None,
+        }
+    }
+}
+
+/// The helper's request for a screenshot of `size`, before any crop.
+fn screenshot_request(size: Size) -> Value {
+    let mut request = json!({"op": "screenshot"});
+
+    if let Some(max) = size.longest() {
+        request["maxDimension"] = json!(max);
+    }
+    // An older helper ignores this and keeps a small crop's full size.
+    if size == Size::Standard {
+        request["perPoint"] = json!(true);
+    }
+
+    request
+}
 
 /// How long `run` lets a command take unless told otherwise.
 pub const RUN_TIMEOUT: Duration = Duration::from_secs(20);
@@ -453,26 +492,21 @@ impl Client {
     }
 
     pub async fn frame(&self, maximum: Option<u32>) -> Result<Frame> {
-        self.framed(maximum, None).await.map(|(frame, _)| frame)
+        let size = maximum.map_or(Size::Full, Size::Longest);
+
+        self.framed(size, None).await.map(|(frame, _)| frame)
     }
 
     /// A frame of the whole display, or of the crop asked for, with what the
     /// helper says the crop shows.
-    async fn framed(
-        &self,
-        maximum: Option<u32>,
-        crop: Option<&Crop>,
-    ) -> Result<(Frame, Option<Cropped>)> {
+    async fn framed(&self, size: Size, crop: Option<&Crop>) -> Result<(Frame, Option<Cropped>)> {
+        let maximum = size.longest();
         if maximum.is_some_and(|m| m == 0 || m > 8192) {
             return Err(Error::new("input", "Maximum dimension must be 1–8192"));
         }
 
         let before = self.identity().await?;
-        let mut request = json!({"op": "screenshot"});
-
-        if let Some(max) = maximum {
-            request["maxDimension"] = json!(max);
-        }
+        let mut request = screenshot_request(size);
 
         match crop {
             None => {}
@@ -547,14 +581,9 @@ impl Client {
     /// its pixels lie on the display. A capture with the same pixels as the
     /// last one of that target and size names the earlier file and says it
     /// is `unchanged`, unless `new_file` asks for a file anyway.
-    pub async fn capture(
-        &self,
-        maximum: Option<u32>,
-        crop: Option<&Crop>,
-        new_file: bool,
-    ) -> Result<Value> {
+    pub async fn capture(&self, size: Size, crop: Option<&Crop>, new_file: bool) -> Result<Value> {
         let started = Instant::now();
-        let captured = self.capture_unrecorded(maximum, crop, new_file).await;
+        let captured = self.capture_unrecorded(size, crop, new_file).await;
 
         // An agent's look at the screen is activity too; a recording that
         // fails never fails the capture.
@@ -571,15 +600,15 @@ impl Client {
     /// [`Client::capture`], kept in the output folder but not in the log.
     async fn capture_unrecorded(
         &self,
-        maximum: Option<u32>,
+        size: Size,
         crop: Option<&Crop>,
         new_file: bool,
     ) -> Result<Value> {
-        let (frame, shows) = self.framed(maximum, crop).await?;
+        let (frame, shows) = self.framed(size, crop).await?;
         let output = self.output_dir()?;
         let kept = last_capture::keep(
             output,
-            &last_capture::key(maximum, crop),
+            &last_capture::key(size, crop),
             &frame,
             shows.as_ref().map(|shows| &shows.region),
             new_file,
@@ -2999,6 +3028,23 @@ mod tests {
     }
 
     #[test]
+    fn only_the_standard_size_asks_for_one_pixel_per_point() {
+        assert_eq!(
+            screenshot_request(Size::Standard),
+            json!({"op": "screenshot", "maxDimension": SCREENSHOT_SIDE, "perPoint": true})
+        );
+        assert_eq!(
+            screenshot_request(Size::Longest(SCREENSHOT_SIDE)),
+            json!({"op": "screenshot", "maxDimension": SCREENSHOT_SIDE})
+        );
+        assert_eq!(
+            screenshot_request(Size::Longest(800)),
+            json!({"op": "screenshot", "maxDimension": 800})
+        );
+        assert_eq!(screenshot_request(Size::Full), json!({"op": "screenshot"}));
+    }
+
+    #[test]
     fn a_crop_nobody_asked_for_is_refused() {
         let reply = json!({"ok": true, "region": {"x": 0, "y": 0, "width": 10, "height": 10}});
         let refused = cropped(&reply, None, &display()).unwrap_err();
@@ -3023,7 +3069,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let client = client_in(dir.path()).doing(Doing::new("screenshot"));
         assert!(
-            client.capture(None, None, false).await.is_err(),
+            client.capture(Size::Standard, None, false).await.is_err(),
             "no helper answers"
         );
         let region = Crop::Region(Region {
@@ -3034,7 +3080,7 @@ mod tests {
         });
         assert!(
             client
-                .capture(Some(400), Some(&region), true)
+                .capture(Size::Longest(400), Some(&region), true)
                 .await
                 .is_err()
         );

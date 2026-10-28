@@ -420,7 +420,12 @@ fn crop_keys(area: Region, app: Option<(i64, crop::AppCrop)>) -> serde_json::Map
     keys
 }
 
-async fn screenshot(daemon: &Daemon, max_dimension: Option<u32>, crop: Option<Crop>) -> Value {
+async fn screenshot(
+    daemon: &Daemon,
+    max_dimension: Option<u32>,
+    per_point: bool,
+    crop: Option<Crop>,
+) -> Value {
     let capture = daemon.capture;
     let list = daemon.windows;
     let on_console = daemon.on_console;
@@ -433,6 +438,7 @@ async fn screenshot(daemon: &Daemon, max_dimension: Option<u32>, crop: Option<Cr
     let taken = tokio::task::spawn_blocking(move || {
         let request = Request::Screenshot {
             max_dimension,
+            per_point,
             crop,
         };
         let validate = || {
@@ -486,8 +492,15 @@ async fn screenshot(daemon: &Daemon, max_dimension: Option<u32>, crop: Option<Cr
             }
         };
 
-        let shot = capture(epoch.display_id as u32, area.map(rect), max_dimension)
-            .map_err(refused)?;
+        let limit = if per_point {
+            let (width, height) = area.map_or((epoch.width, epoch.height), |area| {
+                (f64::from(area.width), f64::from(area.height))
+            });
+            capture::per_point(max_dimension, width.max(height))
+        } else {
+            max_dimension
+        };
+        let shot = capture(epoch.display_id as u32, area.map(rect), limit).map_err(refused)?;
         let off_display = off_display_windows(windows.as_deref().unwrap_or_default());
 
         validate()?;
@@ -558,8 +571,9 @@ async fn handle(stream: UnixStream, daemon: Arc<Daemon>, controller: bool) -> Re
         },
         Ok(Request::Screenshot {
             max_dimension,
+            per_point,
             crop,
-        }) => screenshot(&daemon, max_dimension, crop).await,
+        }) => screenshot(&daemon, max_dimension, per_point, crop).await,
         Ok(Request::Run { argv, timeout }) => {
             // Events reach the client through their own writer, so a slow
             // client never stalls supervision of the command.
@@ -833,6 +847,7 @@ mod tests {
                     allowed(
                         &Request::Screenshot {
                             max_dimension: None,
+                            per_point: false,
                             crop: None
                         },
                         true
@@ -913,6 +928,7 @@ mod tests {
                 allowed(
                     &Request::Screenshot {
                         max_dimension: None,
+                        per_point: false,
                         crop: None
                     },
                     true
@@ -1140,6 +1156,45 @@ mod tests {
         let areas = AREAS.lock().unwrap().clone();
         assert_eq!(areas.len(), 1, "the region outside was not captured");
         assert_eq!(sides(areas[0].unwrap()), (0.0, 30.0, 64.0, 6.0));
+    }
+
+    #[tokio::test]
+    async fn a_picture_per_point_is_limited_to_the_points_it_shows() {
+        static LIMITS: std::sync::Mutex<Vec<Option<u32>>> = std::sync::Mutex::new(Vec::new());
+        let capture: Capture = |display, area, limit| {
+            LIMITS.lock().unwrap().push(limit);
+            synthetic(display, area, limit)
+        };
+
+        for request in [
+            r#"{"op":"screenshot","maxDimension":1456,"perPoint":true}"#,
+            r#"{"op":"screenshot","maxDimension":40,"perPoint":true}"#,
+            r#"{"op":"screenshot","perPoint":true}"#,
+            r#"{"op":"screenshot","maxDimension":1456,"perPoint":true,"region":{"x":0,"y":0,"width":12,"height":20}}"#,
+            r#"{"op":"screenshot","maxDimension":1456,"perPoint":true,"region":{"x":-10,"y":30,"width":100,"height":100}}"#,
+            r#"{"op":"screenshot","maxDimension":1456,"perPoint":true,"pid":200}"#,
+            r#"{"op":"screenshot","maxDimension":1456,"region":{"x":0,"y":0,"width":12,"height":20}}"#,
+            r#"{"op":"screenshot","maxDimension":1456}"#,
+            r#"{"op":"screenshot"}"#,
+        ] {
+            let reply = &exchange(with_windows(capture, fake_windows), request).await[0];
+            assert_eq!(reply["ok"], true, "{request}");
+        }
+
+        assert_eq!(
+            *LIMITS.lock().unwrap(),
+            [
+                Some(64),
+                Some(40),
+                Some(64),
+                Some(20),
+                Some(64),
+                Some(46),
+                Some(1456),
+                Some(1456),
+                None
+            ]
+        );
     }
 
     #[tokio::test]

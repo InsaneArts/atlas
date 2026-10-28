@@ -63,6 +63,14 @@ pub fn fit(width: usize, height: usize, limit: Option<u32>) -> (usize, usize) {
     (side(width), side(height))
 }
 
+/// `limit`, lowered to `points`, the captured area's longer side in display
+/// points (rounded up), so the picture holds at most one pixel per point.
+pub fn per_point(limit: Option<u32>, points: f64) -> Option<u32> {
+    let side = (points.ceil() as u32).max(1);
+
+    Some(limit.map_or(side, |limit| limit.min(side)))
+}
+
 /// The sRGB color space, by its documented name.
 fn srgb() -> Option<CFRetained<CGColorSpace>> {
     CGColorSpace::with_name(Some(&CFString::from_static_str("kCGColorSpaceSRGB")))
@@ -297,6 +305,35 @@ mod tests {
         assert_eq!(fit(2560, 1440, None), (2560, 1440));
         assert_eq!(fit(800, 600, Some(1600)), (800, 600), "never enlarged");
         assert_eq!(fit(5000, 1, Some(100)), (100, 1), "never a zero side");
+    }
+
+    #[test]
+    fn a_picture_per_point_holds_one_pixel_per_point_up_to_the_limit() {
+        let sized = |pixels: (usize, usize), points: (f64, f64)| {
+            fit(
+                pixels.0,
+                pixels.1,
+                per_point(Some(1456), points.0.max(points.1)),
+            )
+        };
+
+        assert_eq!(sized((2560, 1440), (2560.0, 1440.0)), (1456, 819));
+        assert_eq!(sized((3024, 1964), (1512.0, 982.0)), (1456, 946));
+        assert_eq!(sized((1280, 800), (1280.0, 800.0)), (1280, 800));
+        assert_eq!(sized((2560, 1600), (1280.0, 800.0)), (1280, 800));
+        assert_eq!(sized((602, 504), (602.0, 504.0)), (602, 504));
+        assert_eq!(sized((1204, 1008), (602.0, 504.0)), (602, 504));
+        assert_eq!(sized((400, 1200), (200.0, 600.0)), (200, 600));
+        assert_eq!(sized((4000, 2000), (2000.0, 1000.0)), (1456, 728));
+    }
+
+    #[test]
+    fn the_per_point_limit_keeps_the_lower_bound_and_rounds_points_up() {
+        assert_eq!(per_point(Some(1456), 602.0), Some(602));
+        assert_eq!(per_point(Some(400), 602.0), Some(400));
+        assert_eq!(per_point(None, 1512.0), Some(1512));
+        assert_eq!(per_point(Some(1456), 600.5), Some(601));
+        assert_eq!(per_point(Some(1456), 0.0), Some(1));
     }
 
     #[test]
