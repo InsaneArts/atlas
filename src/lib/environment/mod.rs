@@ -123,16 +123,9 @@ pub(super) async fn freeze(
 
     let id = crate::control::token();
     let stage = stage_path(client, &id)?;
-    create_stage(&stage, &helper)?;
     // Held while the preview is made, so no other command sweeps the stage
     // as a preview cut short before its plan is written.
-    let lock = match lock_stage(&stage) {
-        Ok(lock) => lock,
-        Err(error) => {
-            discard(&stage);
-            return Err(error);
-        }
-    };
+    let lock = create_locked_stage(&stage, &helper)?;
 
     let result = async {
         let mut files = Vec::new();
@@ -229,9 +222,10 @@ fn previewed(result: Result<Value>, id: &str, stage: &Path) -> Result<Value> {
     retained(result, id, stage)
 }
 
-/// Whether `stage` holds a frozen plan.
+/// Whether `stage` holds a frozen plan, or may: one that cannot be looked
+/// for counts as there, so it is never removed for want of a plan.
 fn planned(stage: &Path) -> bool {
-    stage.join("plan.json").exists()
+    stage.join("plan.json").try_exists().unwrap_or(true)
 }
 
 /// Apply or resume the same immutable snapshot. Original source files are not read.
@@ -274,11 +268,11 @@ pub async fn rollback(client: &Client, transaction_id: &str, apply: bool) -> Res
     let helper = helper_name(client.config.helper_uid)?;
     tidy(client);
     let created = directory(&stage, false)?.is_none();
-    if created {
-        create_stage(&stage, &helper)?;
-    }
-
-    let lock = lock_stage(&stage)?;
+    let lock = if created {
+        create_locked_stage(&stage, &helper)?
+    } else {
+        lock_stage(&stage)?
+    };
     let result = dispatch(
         client,
         &helper,
@@ -325,12 +319,17 @@ const CHANGE: &str = "request-";
 const READ: &str = "read-";
 
 /// Whether `stage` holds a retained request: a step whose outcome is not
-/// known yet, kept as evidence until it is.
+/// known yet, kept as evidence until it is. A folder or entry that cannot
+/// be read may hold one, so it counts as holding one.
 fn requests(stage: &Path) -> bool {
-    fs::read_dir(stage).is_ok_and(|entries| {
-        entries
-            .flatten()
-            .any(|entry| entry.file_name().to_string_lossy().starts_with(CHANGE))
+    let Ok(entries) = fs::read_dir(stage) else {
+        return true;
+    };
+
+    entries.into_iter().any(|entry| {
+        entry.map_or(true, |entry| {
+            entry.file_name().to_string_lossy().starts_with(CHANGE)
+        })
     })
 }
 
@@ -369,9 +368,48 @@ pub fn leftovers(shared: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Remove a frozen plan the helper no longer needs.
+/// What a folder being removed is first renamed to, so no command ever sees
+/// it half removed; one left behind holds nothing anyone needs.
+const DISCARDED: &str = ".environment-discarded-";
+
+/// What a stage is made under before it is locked and moved into place, so
+/// no command sees it unlocked. A sweep never looks at it.
+const STAGING: &str = ".environment-staging-";
+
+/// Remove a frozen plan the helper no longer needs, called under its lock:
+/// it is moved to a discarded name first, so its own name is gone at once
+/// and nothing is left there half removed. Where it cannot be moved it is
+/// removed where it is.
 fn discard(stage: &Path) {
-    let _ = fs::remove_dir_all(stage);
+    let discarded = stage
+        .parent()
+        .map(|parent| parent.join(format!("{DISCARDED}{}", crate::control::token())));
+    match discarded {
+        Some(discarded) if fs::rename(stage, &discarded).is_ok() => {
+            let _ = fs::remove_dir_all(discarded);
+        }
+        _ => {
+            let _ = fs::remove_dir_all(stage);
+        }
+    }
+}
+
+/// Remove what a [`discard`] cut short left under a discarded name: Atlas's
+/// own real folders, which no command uses once renamed.
+fn clear_discarded(shared: &Path) {
+    let Ok(entries) = fs::read_dir(shared) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let ours = entry.file_name().to_string_lossy().starts_with(DISCARDED)
+            && fs::symlink_metadata(entry.path()).is_ok_and(|metadata| {
+                metadata.file_type().is_dir() && metadata.uid() == nix::unistd::getuid().as_raw()
+            });
+        if ours {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
 /// How long a frozen plan is kept before the helper is asked whether it is
@@ -385,11 +423,12 @@ const UNUSED: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 const STARTING: Duration = Duration::from_secs(10 * 60);
 
 /// Remove what earlier environment commands left behind that nothing can
-/// use: [`prune_runs`] and [`sweep`].
+/// use: [`prune_runs`], [`sweep`] and [`clear_discarded`].
 fn tidy(client: &Client) {
     if let Some(shared) = client.config.identity_probe.parent() {
         prune_runs(shared);
         sweep(shared);
+        clear_discarded(shared);
     }
 }
 
@@ -649,6 +688,39 @@ fn create_stage(stage: &Path, helper: &str) -> Result<()> {
     }
 
     shared
+}
+
+/// Make a private folder the helper may read at `stage`, holding its lock.
+/// It is made and locked under a name no sweep looks at, then moved into
+/// place, so no other command ever finds it unlocked.
+fn create_locked_stage(stage: &Path, helper: &str) -> Result<fs::File> {
+    create_locked_stage_with(stage, helper, |_| {})
+}
+
+/// [`create_locked_stage`], calling `made` with the folder once it is made
+/// and before it is locked.
+fn create_locked_stage_with(
+    stage: &Path,
+    helper: &str,
+    made: impl FnOnce(&Path),
+) -> Result<fs::File> {
+    let parent = stage
+        .parent()
+        .ok_or_else(|| problem("Missing shared directory"))?;
+    let staging = parent.join(format!("{STAGING}{}", crate::control::token()));
+    create_stage(&staging, helper)?;
+    made(&staging);
+
+    let placed = lock_stage(&staging).and_then(|lock| {
+        fs::rename(&staging, stage)
+            .map(|()| lock)
+            .map_err(|error| Error::writing(stage, error))
+    });
+    if placed.is_err() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+
+    placed
 }
 
 fn lock_stage(stage: &Path) -> Result<fs::File> {

@@ -931,7 +931,93 @@ fn a_stage_keeps_requests_whose_outcome_is_unknown() {
 
     fs::create_dir(stage.join("request-ab12")).unwrap();
     assert!(requests(&stage));
-    assert!(!requests(&sandbox.root.join("missing")));
+}
+
+/// A stage that cannot be read may hold a plan or a request, so it counts
+/// as holding both and is never removed as a preview cut short.
+#[test]
+fn a_stage_that_cannot_be_read_counts_as_holding_a_plan_and_a_request() {
+    let sandbox = Sandbox::new();
+    let stage = stage_in(&sandbox.root, &crate::control::token());
+    assert!(!planned(&stage) && !requests(&stage));
+    assert!(abandoned(&stage));
+
+    fs::set_permissions(&stage, fs::Permissions::from_mode(0o000)).unwrap();
+    let (plan, request, cut_short) = (planned(&stage), requests(&stage), abandoned(&stage));
+    fs::set_permissions(&stage, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(plan, "a plan that cannot be looked for may be there");
+    assert!(request, "a request that cannot be looked for may be there");
+    assert!(!cut_short);
+
+    assert!(
+        requests(&sandbox.root.join("missing")),
+        "a folder that cannot be read"
+    );
+}
+
+/// A stage is made and locked under a name no sweep looks at, then moved
+/// into place: even paused before its lock is taken, long enough to look
+/// abandoned, it is never swept.
+#[test]
+fn a_stage_being_made_is_never_swept_before_it_is_locked() {
+    let sandbox = Sandbox::new();
+    let account = account();
+    let stage = sandbox
+        .root
+        .join(format!("environment-plan-{}", crate::control::token()));
+    let aged = |folder: &Path| {
+        let then = std::time::SystemTime::now() - STARTING - Duration::from_secs(60);
+        fs::File::open(folder).unwrap().set_modified(then).unwrap();
+    };
+
+    let mut paused = None;
+    let lock = create_locked_stage_with(&stage, &account, |made| {
+        aged(made);
+        sweep(&sandbox.root);
+        assert!(made.exists(), "swept before its lock was taken");
+        assert!(!stage.exists(), "seen under its own name while unlocked");
+        paused = Some(made.to_owned());
+    })
+    .unwrap();
+
+    let made = paused.unwrap();
+    assert!(!made.exists(), "moved into place");
+    assert!(stage.exists());
+    assert!(lock_stage(&stage).is_err(), "its lock is held");
+    aged(&stage);
+    sweep(&sandbox.root);
+    assert!(stage.exists(), "a locked stage is never swept");
+
+    drop(lock);
+    sweep(&sandbox.root);
+    assert!(!stage.exists(), "swept once its maker let it go");
+}
+
+/// A stage is removed by first moving it to a discarded name, so nothing
+/// sees it half removed; what such a removal left is cleared later.
+#[test]
+fn a_discarded_stage_goes_at_once_and_its_leftovers_are_cleared() {
+    let sandbox = Sandbox::new();
+    let stage = stage_in(&sandbox.root, &crate::control::token());
+    fs::write(stage.join("payload-0"), b"copy").unwrap();
+    discard(&stage);
+    assert!(!stage.exists());
+    assert!(
+        fs::read_dir(&sandbox.root)
+            .unwrap()
+            .flatten()
+            .all(|entry| !entry.file_name().to_string_lossy().starts_with(DISCARDED)),
+        "nothing is left under a discarded name"
+    );
+
+    let left = sandbox.root.join(format!("{DISCARDED}ab12"));
+    fs::create_dir(&left).unwrap();
+    fs::write(left.join("payload-0"), b"copy").unwrap();
+    let other = sandbox.root.join("someone-elses");
+    fs::create_dir(&other).unwrap();
+    clear_discarded(&sandbox.root);
+    assert!(!left.exists());
+    assert!(other.exists(), "anything else is left alone");
 }
 
 /// A week-old preview cut short holds copies but no plan and nothing whose
