@@ -93,6 +93,7 @@ impl Registry {
             shared: Mutex::new(None),
             held: Mutex::new(None),
             icons: Icons::default(),
+            host_session: root.host_session.clone(),
         })
     }
 

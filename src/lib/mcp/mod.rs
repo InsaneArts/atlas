@@ -17,7 +17,7 @@ use crate::{
         FRAME_LIMIT, ICONS, Icons, capture_time, captures, frame, open_apps, read_capture,
         thumbnail,
     },
-    host_session::{Key, names::names, store::Store},
+    host_session::{Host, HostSession, Key, names::names, record, store::Store},
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -122,6 +122,9 @@ struct Server {
     held: Mutex<Option<Held>>,
     /// App icons made.
     icons: Icons,
+    /// The host session the server's environment names, read once: the
+    /// view says "This chat" only when it is certainly this one.
+    host_session: Option<HostSession>,
 }
 
 /// A frame of the menu bar's viewer: the key control requests name it by,
@@ -171,6 +174,7 @@ pub async fn serve(
         shared: Mutex::new(None),
         held: Mutex::new(None),
         icons: Icons::default(),
+        host_session: HostSession::from_env(),
     });
     let out = Arc::new(Mutex::new(tokio::io::stdout()));
     let mut input = BufReader::new(tokio::io::stdin());
@@ -479,7 +483,16 @@ impl Server {
         let (status, _) = crate::watch::read(&self.client, &output, self.port)
             .await
             .ok_or_else(|| Error::new("menubar", "Atlas's menu bar is busy; try again"))?;
-        let status = summary(&status, &session_names(&output));
+        let recent = Store::at(&output).recent();
+        let named = names(recent.iter().map(|seen| &seen.record));
+        let unrecorded = crate::overview::first_command_running(&self.client, &recent);
+        let own = own_session(
+            self.host_session.as_ref(),
+            &recent,
+            parent_pid(),
+            unrecorded,
+        );
+        let status = summary(&status, &named, own.as_ref());
 
         let mut last = self.last.lock().await;
         if last.as_ref().is_none_or(|(at, _)| *at <= began) {
@@ -833,6 +846,8 @@ impl Server {
                     "started": row["started"],
                     "actor": row["actor"],
                     "ageSeconds": row["ageSeconds"],
+                    "reason": row["reason"],
+                    "nothingSent": row["nothingSent"],
                 });
                 if let Some(name) = session_name(&row, &named) {
                     shown["session"] = json!(name);
@@ -1141,8 +1156,74 @@ fn screen_resource() -> Value {
 }
 
 fn screen_contents() -> Value {
-    let page = SCREEN.replacen("/*SCRIPT*/", SCREEN_SCRIPT, 1);
+    let page = SCREEN
+        .replacen("/*SCRIPT*/", SCREEN_SCRIPT, 1)
+        .replacen("/*LOGOS*/", logos(), 1);
     json!({"uri": SCREEN_URI, "mimeType": APP_MIME, "text": page, "_meta": screen_meta()})
+}
+
+/// The hosts' logos the view draws beside each session, as one line of
+/// script holding a data URI for each: made once, from the app's own
+/// images.
+fn logos() -> &'static str {
+    static LOGOS: OnceLock<String> = OnceLock::new();
+    LOGOS.get_or_init(|| {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+
+        let images: [(&str, &[u8]); 3] = [
+            (
+                "claude",
+                include_bytes!("../../../app/Resources/ClaudeLogo.png"),
+            ),
+            (
+                "codex",
+                include_bytes!("../../../app/Resources/CodexLogo.png"),
+            ),
+            (
+                "cursor",
+                include_bytes!("../../../app/Resources/CursorLogo.png"),
+            ),
+        ];
+        let logos: serde_json::Map<String, Value> = images
+            .into_iter()
+            .map(|(host, png)| {
+                let uri = format!("data:image/png;base64,{}", STANDARD.encode(png));
+                (host.to_owned(), json!(uri))
+            })
+            .collect();
+        format!("const LOGOS = {};", Value::Object(logos))
+    })
+}
+
+/// The process that started this server.
+fn parent_pid() -> i32 {
+    nix::unistd::getppid().as_raw()
+}
+
+/// This chat's host session, only where Atlas is certain of it: a Claude
+/// Code session whose host process started this server (`parent`) and
+/// which Atlas has recorded, moved on to the newest session that process
+/// recorded, as after `/clear`. While a session on its first command has
+/// no record yet (`unrecorded`), it may be this chat's newest, so none is
+/// named. Hosts that share one server among their chats name none.
+fn own_session(
+    own: Option<&HostSession>,
+    seen: &[record::Seen],
+    parent: i32,
+    unrecorded: bool,
+) -> Option<Key> {
+    let own = own.filter(|own| own.host() == Host::Claude)?;
+    let process = own.process().filter(|process| process.pid == parent)?;
+    let recorded = seen.iter().any(|seen| seen.record.key == *own.key());
+    if !recorded || unrecorded {
+        return None;
+    }
+
+    seen.iter()
+        .map(|seen| &seen.record)
+        .filter(|record| record.host_process == Some(process))
+        .max_by_key(|record| record.last_seen)
+        .map(|record| record.key.clone())
 }
 
 /// The name of every recorded host session in `output`, as every surface
@@ -1158,19 +1239,35 @@ fn session_name<'a>(row: &Value, named: &'a BTreeMap<Key, String>) -> Option<&'a
     named.get(&row["session"].as_str().and_then(Key::parse)?)
 }
 
+/// What a row names a session it came from that no list names: another
+/// session, never the commands no host named.
+const ANOTHER_SESSION: &str = "Another session";
+
 /// What the view and the model read of a status: the overview's state, its
 /// words and recent rows, without the doctor report around it. Rows name
 /// their session, by `named`, only when they come from two sessions or
-/// more, so one agent's status costs it nothing more.
-fn summary(status: &Value, named: &BTreeMap<Key, String>) -> Value {
+/// more or the apps speak of sessions, so one agent's status costs it
+/// nothing more. The sessions are told by name and state, only as much as
+/// the view draws and never by the host's own id; `own` is this chat's,
+/// when certain.
+fn summary(status: &Value, named: &BTreeMap<Key, String>, own: Option<&Key>) -> Value {
     let overview = &status["overview"];
     let shown = overview["activity"]
         .as_array()
         .map(Vec::as_slice)
         .unwrap_or_default();
+    let sessions_shown = overview["sessionsShown"] == true;
     let sessions: BTreeSet<&str> = shown
         .iter()
         .filter_map(|row| row["session"].as_str())
+        .collect();
+    // The overview's own list names the sessions its rows come from,
+    // those on their first command included; records name the rest.
+    let listed_names: BTreeMap<&str, &str> = overview["hostSessions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|session| Some((session["key"].as_str()?, session["name"].as_str()?)))
         .collect();
     let rows = shown
         .iter()
@@ -1180,13 +1277,33 @@ fn summary(status: &Value, named: &BTreeMap<Key, String>) -> Value {
                 "ok": row["ok"],
                 "actor": row["actor"],
                 "ageSeconds": row["ageSeconds"],
+                "nothingSent": row["nothingSent"] == true,
+                "uncertain": row["uncertain"] == true,
             });
-            if sessions.len() > 1
-                && let Some(name) = session_name(row, named)
-            {
+            if (sessions.len() > 1 || sessions_shown) && row["session"].is_string() {
+                let name = row["session"]
+                    .as_str()
+                    .and_then(|key| listed_names.get(key).copied())
+                    .or_else(|| session_name(row, named).map(String::as_str))
+                    .unwrap_or(ANOTHER_SESSION);
                 kept["session"] = json!(name);
             }
             kept
+        })
+        .collect::<Vec<_>>();
+    let listed = overview["hostSessions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|session| {
+            json!({
+                "key": session["key"],
+                "host": session["host"],
+                "name": session["name"],
+                "state": session["state"],
+                "uncertainVerb": session["uncertainVerb"],
+                "holdsHelper": session["holdsHelper"] == true,
+            })
         })
         .collect::<Vec<_>>();
 
@@ -1209,6 +1326,10 @@ fn summary(status: &Value, named: &BTreeMap<Key, String>) -> Value {
         "display": overview["display"],
         "pending": overview["pending"],
         "activity": rows,
+        "sessionsShown": sessions_shown,
+        "holder": overview["holder"],
+        "self": own,
+        "sessions": listed,
     })
 }
 

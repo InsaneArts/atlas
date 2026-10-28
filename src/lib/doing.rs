@@ -320,7 +320,30 @@ pub fn says(row: &Value) -> String {
         }
     };
 
-    if ok { done } else { failed }
+    if ok {
+        done
+    } else if row["code"] == "focus-changed" {
+        not_sent(row, &failed)
+    } else {
+        failed
+    }
+}
+
+/// What a command refused because another app came to the front did not
+/// do, as a skip rather than a failure: "didn't type in Notes", or
+/// "stopped typing in Notes" when part of its text was sent first.
+fn not_sent(row: &Value, failed: &str) -> String {
+    if row["partial"] == true && row["verb"] == "type" {
+        return match row["app"].as_str() {
+            Some(app) => format!("stopped typing in {app}"),
+            None => "stopped typing".into(),
+        };
+    }
+
+    match failed.strip_prefix("couldn't ") {
+        Some(rest) => format!("didn't {rest}"),
+        None => failed.to_owned(),
+    }
 }
 
 /// What a command is doing while it runs: "opening TextEdit…".
@@ -593,5 +616,34 @@ mod tests {
             "a verb this build lacks reads by its operation"
         );
         assert_eq!(capitalized("clicked Save"), "Clicked Save");
+    }
+
+    #[test]
+    fn a_focus_refusal_says_what_it_did_not_do() {
+        let refused = |verb: &str, label: Option<&str>, partial: bool| {
+            says(
+                &json!({"operation": "input", "ok": false, "code": "focus-changed",
+                "verb": verb, "app": "Notes", "label": label, "partial": partial}),
+            )
+        };
+
+        assert_eq!(refused("type", None, false), "didn't type in Notes");
+        assert_eq!(refused("type", None, true), "stopped typing in Notes");
+        assert_eq!(refused("click", None, false), "didn't click in Notes");
+        assert_eq!(
+            refused("key", Some("⌘S"), false),
+            "didn't press ⌘S in Notes"
+        );
+        assert_eq!(
+            refused("key", Some("⌘S"), true),
+            "didn't press ⌘S in Notes",
+            "only typing can stop part way"
+        );
+        assert_eq!(
+            says(&json!({"operation": "input", "ok": false, "code": "busy",
+                "verb": "type", "app": "Notes"})),
+            "couldn't type in Notes",
+            "other refusals still say what could not be done"
+        );
     }
 }

@@ -591,6 +591,63 @@ impl Viewer {
         Ok(json!({"ok": true, "activity": rows, "sessions": sessions}))
     }
 
+    /// The host sessions of the last days, live and ended, newest first:
+    /// who each is and what it made, for the app's session menu and
+    /// details; and every live session as the status would list it, with
+    /// no limit. Reading it records nothing and takes no control.
+    async fn sessions(&self) -> Result<Value> {
+        let client = self.client();
+        // A folder that can't be read is said, never shown as no sessions.
+        client.output_dir()?;
+        let now = crate::client::timestamp();
+        let facts = crate::overview::SessionFacts::local(&client.controller, now);
+        let mut live = crate::overview::live_host_sessions(&client, facts).await;
+        for entry in live.iter_mut().filter_map(Value::as_object_mut) {
+            entry.remove("hostSession");
+        }
+
+        let history = tokio::task::spawn_blocking(move || {
+            let Ok(output) = client.output_dir() else {
+                return Vec::new();
+            };
+            let store = Store::at(output);
+            // The records status reads share: only those with copies left
+            // are looked at again, for which app each copy is.
+            let seen = store.recent();
+            let records: Vec<_> = seen.iter().map(|seen| seen.record.clone()).collect();
+            let rows = crate::overview::activity(output, ACTIVITY_ROWS);
+            let captures = helper_info::captures(output, SHOTS)
+                .into_iter()
+                .map(|(_, name)| name)
+                .collect();
+            let copies = seen
+                .iter()
+                .filter(|seen| seen.copies_left > 0)
+                .map(|seen| {
+                    let apps = store
+                        .leftovers(&seen.record, &[])
+                        .copies
+                        .iter()
+                        .map(|token| crate::handoff::copy_app(store.copies(), token))
+                        .collect();
+                    (seen.record.key.clone(), apps)
+                })
+                .collect();
+            crate::session_view::Records {
+                records: &records,
+                rows: &rows,
+                captures: &captures,
+                copies: &copies,
+                now: u64::try_from(now / 1_000_000).unwrap_or(u64::MAX),
+            }
+            .history()
+        })
+        .await
+        .unwrap_or_default();
+
+        Ok(json!({"ok": true, "sessions": history, "live": live}))
+    }
+
     /// The apps open in the helper with their windows, front to back, and
     /// the icons of those installed where apps go. It only reads: nothing
     /// is recorded and no control is taken.
@@ -1390,6 +1447,13 @@ async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
             };
         }
 
+        if route == "sessions.json" {
+            return match viewer.sessions().await {
+                Ok(sessions) => json_response(200, sessions),
+                Err(error) => json_response(503, json!(error)),
+            };
+        }
+
         if route == "apps.json" {
             return match viewer.apps().await {
                 Ok(apps) => json_response(200, apps),
@@ -1583,6 +1647,10 @@ fn activity_row(row: &Value, now: u128) -> Value {
         "count": shown["actionCount"],
         "session": shown["session"],
         "capture": shown["capture"],
+        "verb": shown["verb"],
+        "nothingSent": shown["nothingSent"],
+        "partial": shown["partial"],
+        "uncertain": shown["uncertain"],
     })
 }
 
@@ -2612,6 +2680,7 @@ mod tests {
             "activity.json",
             "apps.json",
             "screenshots.json",
+            "sessions.json",
             "screenshot.png?name=1-capture.png",
         ];
         let own = format!("http://{}", viewer.authority);
@@ -2639,6 +2708,7 @@ mod tests {
 
         assert_eq!(read_json(&viewer, "activity.json").await.0, 200);
         assert_eq!(read_json(&viewer, "screenshots.json").await.0, 200);
+        assert_eq!(read_json(&viewer, "sessions.json").await.0, 200);
         let (status, apps) = read_json(&viewer, "apps.json").await;
         assert_eq!(
             (status, apps["ok"].clone()),
@@ -2706,13 +2776,17 @@ mod tests {
                 "capture",
                 "count",
                 "id",
+                "nothingSent",
                 "ok",
                 "operation",
+                "partial",
                 "reason",
                 "says",
                 "session",
                 "started",
-                "startedAt"
+                "startedAt",
+                "uncertain",
+                "verb"
             ]
         );
         assert_eq!(listed["says"], "typed in TextEdit");
@@ -2908,6 +2982,124 @@ mod tests {
             crate::overview::shown(&rows[0], 0)["reason"].is_string(),
             "a failed capture says why: {}",
             rows[0]
+        );
+    }
+
+    #[tokio::test]
+    async fn sessions_json_never_carries_ids_paths_or_tokens() {
+        use crate::host_session::{Host, HostSession, store};
+
+        let dir = tempfile::tempdir().unwrap();
+        let viewer = unreachable(dir.path()).await;
+        let client = viewer.client();
+        let output = client.output_dir().unwrap().to_path_buf();
+        let shot = "1700000005000000000-capture.png";
+        std::fs::write(
+            output.join(shot),
+            crate::native::capture::sample_png(64, 40),
+        )
+        .unwrap();
+        let session = HostSession::new(Host::Claude, "secret-host-id").unwrap();
+        store::note(
+            &client,
+            &session,
+            store::Kind::Screenshot,
+            Some(&crate::doing::Doing::new("screenshot")),
+            &Ok(json!({"ok": true, "path": output.join(shot)})),
+        )
+        .unwrap();
+        store::note(
+            &client,
+            &session,
+            store::Kind::Open,
+            Some(&crate::doing::Doing::new("open").app(Some("Notes"))),
+            &Ok(json!({"ok": true})),
+        )
+        .unwrap();
+        let at = crate::client::timestamp();
+        let row = json!({"at": at.to_string(), "operation": "open", "ok": true, "actor": "agent",
+            "verb": "open", "app": "Notes", "command": "000000000001", "session": session.key()});
+        std::fs::write(output.join("metadata.jsonl"), format!("{row}\n")).unwrap();
+
+        let (status, reply) = read_json(&viewer, "sessions.json").await;
+        assert_eq!(status, 200);
+        let live = reply["live"].as_array().unwrap();
+        assert_eq!(live.len(), 1, "every live session, as the status lists it");
+        assert_eq!(live[0]["key"], session.key().as_str());
+        assert_eq!(live[0]["state"], "idle");
+        let listed = reply["sessions"].as_array().unwrap();
+        assert_eq!(listed.len(), 1);
+        let entry = &listed[0];
+        assert_eq!(entry["key"], session.key().as_str());
+        assert_eq!(entry["host"], "claude");
+        assert_eq!(entry["state"], "idle");
+        assert_eq!(entry["endedAt"], Value::Null);
+        assert_eq!(entry["actions"], 2);
+        assert_eq!(entry["apps"], json!([{"name": "Notes", "copied": false}]));
+        assert_eq!(entry["screenshots"], json!([shot]));
+        let text = reply.to_string();
+        for hidden in [
+            "secret-host-id",
+            output.to_str().unwrap(),
+            "hostSession",
+            "planId",
+        ] {
+            assert!(!text.contains(hidden), "{hidden} in {text}");
+        }
+    }
+
+    #[test]
+    fn a_session_ends_an_hour_after_it_was_last_seen_and_is_listed_for_seven_days() {
+        use crate::host_session::{Host, HostSession, record::Record};
+
+        let now = 1_793_170_000_000_u64;
+        let hour = 60 * 60 * 1000;
+        let record = |id: &str, ago: u64| {
+            let session = HostSession::new(Host::Codex, id).unwrap();
+            let mut record = Record::new(&session, now - ago, Some("opie".into()));
+            record.host_process = None;
+            record
+        };
+        let mut working = record("now", 60_000);
+        for (phase, at) in [
+            (crate::environment::Phase::RollingBack, 3),
+            (crate::environment::Phase::Applied, 2),
+            (crate::environment::Phase::Applying, 1),
+        ] {
+            working.planned(crate::control::Token::new(), phase, at);
+        }
+        let records = [
+            working,
+            record("quiet", 2 * hour),
+            record("week", 8 * 24 * hour),
+        ];
+        let history = crate::session_view::Records {
+            records: &records,
+            rows: &[],
+            captures: &Default::default(),
+            copies: &Default::default(),
+            now,
+        }
+        .history();
+
+        let states: Vec<_> = history
+            .iter()
+            .map(|past| json!(past.state).as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(states, ["idle", "ended"], "a week and more is gone");
+        assert_eq!(history[1].ended_at, None, "it only went quiet");
+        let plans: Vec<_> = history[0]
+            .plans
+            .iter()
+            .map(|plan| (json!(plan.phase), plan.can_roll_back))
+            .collect();
+        assert_eq!(
+            plans,
+            [
+                (json!("applying"), true),
+                (json!("applied"), true),
+                (json!("rollingBack"), false),
+            ]
         );
     }
 

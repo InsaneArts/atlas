@@ -29,6 +29,7 @@ pub mod onboarding;
 pub mod overview;
 pub mod readiness;
 pub mod session;
+mod session_view;
 pub mod setup;
 pub mod switch;
 pub mod transport;

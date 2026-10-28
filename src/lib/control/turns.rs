@@ -105,6 +105,25 @@ pub(super) fn queued(folder: &Path) -> bool {
 /// removed. One whose command is suspended, too old, not touched for a
 /// while, or whose process macOS would not describe, is passed over.
 fn waiters(folder: &Path) -> Vec<(String, u64)> {
+    notes(folder, true)
+        .into_iter()
+        .map(|(name, note)| (name, note.since))
+        .collect()
+}
+
+/// The notes of the commands waiting in `folder` now, as [`waiters`]
+/// counts them, for apps to show who waits. Reading changes nothing.
+pub(super) fn waiting(folder: &Path) -> Vec<Note> {
+    notes(folder, false)
+        .into_iter()
+        .map(|(_, note)| note)
+        .collect()
+}
+
+/// Each waiting command's note in `folder`, by its file name, passing over
+/// those [`waiters`] passes over; a note whose command has ended is removed
+/// when `tidy`.
+fn notes(folder: &Path, tidy: bool) -> Vec<(String, Note)> {
     if !own_folder(folder) {
         return Vec::new();
     }
@@ -128,7 +147,9 @@ fn waiters(folder: &Path) -> Vec<(String, u64)> {
             match note.process.state() {
                 State::Running => {}
                 State::Gone => {
-                    let _ = fs::remove_file(&path);
+                    if tidy {
+                        let _ = fs::remove_file(&path);
+                    }
                     return None;
                 }
                 State::Stopped | State::Unknown => return None,
@@ -139,7 +160,7 @@ fn waiters(folder: &Path) -> Vec<(String, u64)> {
                 .and_then(|modified| now.duration_since(modified).ok())
                 .is_none_or(|age| age < QUIET);
 
-            (note.since >= oldest && touched).then_some((name, note.since))
+            (note.since >= oldest && touched).then_some((name, note))
         })
         .collect()
 }
@@ -264,5 +285,30 @@ mod tests {
 
         assert!(!queued(&folder));
         assert!(path.exists());
+    }
+
+    #[test]
+    fn stale_waiting_notes_are_ignored_and_reading_them_changes_nothing() {
+        let directory = tempfile::tempdir().unwrap();
+        let folder = directory.path().join("waiting");
+        let this = Process::current().unwrap();
+        let now = now_ms();
+        let live = noted(&folder, this, now - 1000);
+        let stale = noted(
+            &folder,
+            this,
+            now - u64::try_from(STALE.as_millis()).unwrap() - 1000,
+        );
+        let gone = noted(&folder, Process::new(i32::MAX, [1, 0]), now - 1000);
+
+        let notes = waiting(&folder);
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].since, now - 1000);
+        assert!(
+            live.exists() && stale.exists() && gone.exists(),
+            "a read for the apps removes nothing"
+        );
+        assert_eq!(waiters(&folder).len(), 1);
+        assert!(!gone.exists(), "a waiter's own look tidies up");
     }
 }

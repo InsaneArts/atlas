@@ -866,6 +866,14 @@ impl Controller {
         Note::read(&self.holder)
     }
 
+    /// The notes of the commands waiting for control now, oldest first:
+    /// for apps to show who waits, never to decide who goes next.
+    pub fn waiting_notes(&self) -> Vec<Note> {
+        let mut notes = turns::waiting(&self.waiting);
+        notes.sort_by_key(|note| note.since);
+        notes
+    }
+
     /// Where the holder note is kept, for tests that stand in for another
     /// command's.
     #[cfg(test)]

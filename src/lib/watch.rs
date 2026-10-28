@@ -187,7 +187,8 @@ impl Watch {
 
             // A viewer that runs but did not answer leaves the last status
             // standing, rather than a guess at who holds control.
-            if let Some((status, source)) = read(client, output, port).await {
+            if let Some((mut status, source)) = read(client, output, port).await {
+                self.add_own_session(client, &mut status).await;
                 if status["overview"]["state"] == "notReady" {
                     self.forget_frame();
                 }
@@ -208,6 +209,32 @@ impl Watch {
         }
 
         lines.written.elapsed() < HEARTBEAT || lines.blank()
+    }
+
+    /// `status` with the session this watch runs for as `ownSession` in its
+    /// overview, found among every live session when the status's own list
+    /// is too short to hold it; null when it is none of them.
+    async fn add_own_session(&self, client: &Client, status: &mut Value) {
+        let Some(own) = &self.own else {
+            return;
+        };
+        let mine = |session: &&Value| session["key"].as_str() == Some(own.as_str());
+        let listed = status["overview"]["hostSessions"]
+            .as_array()
+            .and_then(|sessions| sessions.iter().find(mine))
+            .cloned();
+        let found = match listed {
+            Some(entry) => Some(entry),
+            None => {
+                let facts = crate::overview::SessionFacts::of(status, crate::client::timestamp());
+                crate::overview::live_host_sessions(client, facts)
+                    .await
+                    .iter()
+                    .find(mine)
+                    .cloned()
+            }
+        };
+        status["overview"]["ownSession"] = found.unwrap_or(Value::Null);
     }
 
     /// Whether to read the status now: soon after the log changed, and
@@ -423,12 +450,31 @@ fn signature(status: &Value, mark: Mark) -> Value {
             row.remove("ageSeconds");
         }
     }
+    // A wait that counts up, or a latest action growing older, is not news;
+    // a session that starts or stops waiting still is.
+    if let Some(sessions) = overview["hostSessions"].as_array_mut() {
+        sessions.iter_mut().for_each(without_ticking_ages);
+    }
+    if let Some(own) = overview.get_mut("ownSession") {
+        without_ticking_ages(own);
+    }
 
     json!({
         "ready": status["ready"],
         "overview": overview,
         "log": mark,
     })
+}
+
+/// `session` without the ages that count up while nothing else changes.
+fn without_ticking_ages(session: &mut Value) {
+    let Some(session) = session.as_object_mut() else {
+        return;
+    };
+    session.remove("waitingSeconds");
+    if let Some(latest) = session.get_mut("latest").and_then(Value::as_object_mut) {
+        latest.remove("ageSeconds");
+    }
 }
 
 fn log_mark(output: &Path) -> Mark {
@@ -510,6 +556,79 @@ mod tests {
                 .all(|session| session.get("hostSession").is_none()),
             "without a session, none"
         );
+    }
+
+    #[test]
+    fn a_watch_says_whose_it_is_and_a_ticking_age_says_nothing_new() {
+        use crate::host_session::Host;
+        let own = Key::of(Host::Claude, "own");
+        let status = |state: &str, waited: u64, age: u64| {
+            json!({"ready": true, "overview": {"state": "working", "sessionsShown": true,
+            "hostSessions": [
+                {"key": own, "name": "Claude Code · left", "hostSession": "own",
+                    "state": "acting", "latest": {"says": "clicked", "ageSeconds": age}},
+                {"key": Key::of(Host::Codex, "other"), "name": "Codex · right",
+                    "hostSession": "other", "state": state, "waitingFor": "helper",
+                    "waitingSeconds": waited},
+            ]}})
+        };
+        let mut watch = Watch::new(None).for_session(Some(own.clone()));
+
+        let first = watch
+            .news(&status("waiting", 1, 0), "helper", None)
+            .unwrap();
+        let sessions = first["overview"]["hostSessions"].as_array().unwrap();
+        assert_eq!(sessions[0]["hostSession"], "own", "its own session is told");
+        assert!(sessions[1].get("hostSession").is_none());
+        assert_eq!(sessions[1]["waitingSeconds"], 1);
+
+        assert!(
+            watch
+                .news(&status("waiting", 9, 7), "helper", None)
+                .is_none(),
+            "only ages changed"
+        );
+        assert!(
+            watch.news(&status("idle", 9, 7), "helper", None).is_some(),
+            "a state change is news"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_watch_keeps_its_own_session_beside_the_listed_ones() {
+        use crate::host_session::{Host, HostSession, store};
+
+        let directory = tempfile::tempdir().unwrap();
+        let client = crate::transaction_test::client(directory.path());
+        let own = HostSession::new(Host::Claude, "own").unwrap();
+        store::note(
+            &client,
+            &own,
+            store::Kind::Other,
+            Some(&crate::doing::Doing::new("click")),
+            &Ok(json!({"ok": true})),
+        )
+        .unwrap();
+        let watch = Watch::new(None).for_session(Some(own.key().clone()));
+
+        let mut listed = json!({"overview": {"hostSessions": [
+            {"key": own.key(), "name": "Claude Code · left", "state": "acting"},
+        ]}});
+        watch.add_own_session(&client, &mut listed).await;
+        assert_eq!(listed["overview"]["ownSession"]["state"], "acting");
+
+        let mut cut = json!({"overview": {"hostSessions": []}});
+        watch.add_own_session(&client, &mut cut).await;
+        assert_eq!(
+            cut["overview"]["ownSession"]["key"],
+            own.key().as_str(),
+            "found among every live session when the list left it out"
+        );
+        assert_eq!(cut["overview"]["ownSession"]["state"], "idle");
+
+        let mut none = json!({"overview": {}});
+        Watch::new(None).add_own_session(&client, &mut none).await;
+        assert!(none["overview"].get("ownSession").is_none());
     }
 
     #[test]
