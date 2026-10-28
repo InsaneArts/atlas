@@ -191,6 +191,8 @@ fn screenshot_request(size: Size) -> Value {
 
 /// How long `run` lets a command take unless told otherwise.
 pub const RUN_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long a fixed, read-only inspection may take unless told otherwise.
+pub(crate) const INSPECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// The longest a command may run (the helper's own limit).
 pub const RUN_TIMEOUT_MAX: Duration = Duration::from_secs(600);
 /// Time beyond a command's timeout for the helper to stop what it left
@@ -1176,13 +1178,30 @@ impl Client {
     /// the verified hidden helper. It records no pending mutation, so callers
     /// must only pass commands that cannot change the helper.
     pub(crate) async fn inspect(&self, argv: Vec<String>) -> Result<Value> {
-        self.inspect_within(argv, Duration::from_secs(5)).await
+        self.inspect_within(argv, INSPECT_TIMEOUT).await
     }
 
     /// [`Client::inspect`] bounded by `limit`. A read changes nothing, so
     /// its failure is never uncertain.
     pub(crate) async fn inspect_within(&self, argv: Vec<String>, limit: Duration) -> Result<Value> {
         self.run_pending(argv, limit).await.map_err(|error| Error {
+            uncertain: false,
+            ..error
+        })
+    }
+
+    /// [`Client::inspect_within`] in the helper `_verified` describes, which
+    /// the caller verified moments before, so it is not verified again. The
+    /// socket's peer is still checked and the daemon refuses a run while
+    /// the helper is on screen; a command that then acts compares the
+    /// helper's epoch with the one verified before it acts.
+    pub(crate) async fn inspect_in(
+        &self,
+        _verified: &Session,
+        argv: Vec<String>,
+        limit: Duration,
+    ) -> Result<Value> {
+        self.run_verified(argv, limit).await.map_err(|error| Error {
             uncertain: false,
             ..error
         })
@@ -1206,7 +1225,11 @@ impl Client {
     /// command may have started.
     pub async fn run_pending(&self, argv: Vec<String>, timeout: Duration) -> Result<Value> {
         self.identity().await?;
+        self.run_verified(argv, timeout).await
+    }
 
+    /// [`Client::run_pending`] once the helper is verified.
+    async fn run_verified(&self, argv: Vec<String>, timeout: Duration) -> Result<Value> {
         let timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
         let request = json!({"op": "run", "argv": argv, "timeoutMs": timeout_ms});
 
@@ -1221,7 +1244,13 @@ impl Client {
     }
 
     pub async fn apps(&self) -> Result<Value> {
-        self.identity().await?;
+        let verified = self.identity().await?;
+        self.apps_in(&verified).await
+    }
+
+    /// [`Client::apps`] in the helper `_verified` describes, which the caller
+    /// verified moments before, as [`Client::inspect_in`] runs.
+    pub(crate) async fn apps_in(&self, _verified: &Session) -> Result<Value> {
         self.transport.call(&json!({"op": "apps"})).await
     }
 

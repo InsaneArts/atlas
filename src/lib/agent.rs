@@ -19,6 +19,7 @@ use crate::{
         ax::{self, Element, Frame, Stop},
         windows::{Bounds, MENU_LAYER, Screen, Shown, Window, unobstructed},
     },
+    session::Session,
     transport::{accepted, run_output},
 };
 use serde_json::{Value, json};
@@ -198,10 +199,15 @@ pub async fn act(client: &Client, target: Option<&Target>, actions: &Value) -> R
     };
 
     let ownership = client.controller.acquire(false)?;
-    let epoch = client.identity().await?.epoch;
-    let expect = Expect::new(target_pid(client, target).await?)?;
+    let verified = client.identity().await?;
+    let expect = Expect::new(target_pid(client, &verified, target).await?)?;
     client
-        .input_owned(&ownership, actions, &epoch, Some(Check::Required(expect)))
+        .input_owned(
+            &ownership,
+            actions,
+            &verified.epoch,
+            Some(Check::Required(expect)),
+        )
         .await
 }
 
@@ -221,13 +227,14 @@ pub async fn type_text(client: &Client, text: &str, target: Option<&Target>) -> 
     // A signal's stop waits for the report of how much was typed.
     let interrupt = client.controller.interrupt();
     let _typing = interrupt.step();
-    let epoch = client.identity().await?.epoch;
+    let verified = client.identity().await?;
     let check = match target {
         Some(target) => Some(Check::Required(Expect::new(
-            target_pid(client, target).await?,
+            target_pid(client, &verified, target).await?,
         )?)),
         None => None,
     };
+    let epoch = verified.epoch;
 
     let send = async |actions: &Value| client.input_owned(&ownership, actions, &epoch, check).await;
     Ok(type_each(&batches, interrupt, send).await)
@@ -435,12 +442,28 @@ pub(crate) async fn windows(client: &Client) -> Result<Vec<Window>> {
 /// The window list and where the Dock takes clicks, with the helper probe
 /// bounded by `limit`.
 async fn windows_within(client: &Client, limit: Duration) -> Result<Shown> {
-    let probe = client.config.identity_probe.to_string_lossy().into_owned();
-    let reply = client
-        .inspect_within(vec![probe, "windows-info".into()], limit)
-        .await?;
+    let reply = client.inspect_within(windows_probe(client), limit).await?;
+    shown(&reply)
+}
 
-    crate::native::windows::from_probe(&reply)
+/// [`windows`] in the helper `verified` describes, which the caller
+/// verified just before.
+async fn windows_in(client: &Client, verified: &Session) -> Result<Shown> {
+    let reply = client
+        .inspect_in(verified, windows_probe(client), PROBE_LIMIT)
+        .await?;
+    shown(&reply)
+}
+
+/// The probe that lists the helper's windows.
+fn windows_probe(client: &Client) -> Vec<String> {
+    let probe = client.config.identity_probe.to_string_lossy().into_owned();
+    vec![probe, "windows-info".into()]
+}
+
+/// What the window probe's `reply` shows.
+fn shown(reply: &Value) -> Result<Shown> {
+    crate::native::windows::from_probe(reply)
         .ok_or_else(|| Error::new("windows", "The helper window list is unavailable"))
 }
 
@@ -1147,11 +1170,13 @@ fn one_pid(name: &str, pids: &[i64]) -> Result<i64> {
 /// The process a command is about: the one with the app's windows, or,
 /// when none of its windows is open, the active app of that name (its
 /// menu bar is still on screen). Several apps of the name with windows
-/// stay ambiguous.
-async fn target_pid(client: &Client, target: &Target) -> Result<i64> {
+/// stay ambiguous. It is found in the helper `verified` describes, which
+/// the caller verified just before, so it is not verified again for each
+/// list it reads.
+async fn target_pid(client: &Client, verified: &Session, target: &Target) -> Result<i64> {
     let name = match target {
         Target::Pid(pid) => {
-            let apps = client.apps().await?;
+            let apps = client.apps_in(verified).await?;
             let running = apps["apps"]
                 .as_array()
                 .into_iter()
@@ -1171,12 +1196,12 @@ async fn target_pid(client: &Client, target: &Target) -> Result<i64> {
         Target::Name(name) => name,
     };
 
-    let pids = app_pids(&windows(client).await?, name);
+    let pids = app_pids(&windows_in(client, verified).await?.windows, name);
     if !pids.is_empty() {
         return one_pid(name, &pids);
     }
 
-    let apps = client.apps().await?;
+    let apps = client.apps_in(verified).await?;
     let named: Vec<&Value> = apps["apps"]
         .as_array()
         .into_iter()
@@ -1322,10 +1347,13 @@ impl Scanned {
     }
 }
 
-async fn app_elements(client: &Client, pid: i64) -> Result<Scanned> {
+/// The accessibility elements of process `pid`, scanned in the helper
+/// `verified` describes, which the caller verified just before.
+async fn app_elements(client: &Client, verified: &Session, pid: i64) -> Result<Scanned> {
     let probe = client.config.identity_probe.to_string_lossy().into_owned();
+    let argv = vec![probe, "elements-info".into(), pid.to_string()];
     let reply = client
-        .inspect(vec![probe, "elements-info".into(), pid.to_string()])
+        .inspect_in(verified, argv, crate::client::INSPECT_TIMEOUT)
         .await?;
     let value = run_output(&reply, 8 << 20)
         .ok()
@@ -1344,8 +1372,9 @@ pub async fn elements(
     max: usize,
     full: bool,
 ) -> Result<Value> {
-    let pid = target_pid(client, target).await?;
-    let scanned = app_elements(client, pid).await?;
+    let verified = client.identity().await?;
+    let pid = target_pid(client, &verified, target).await?;
+    let scanned = app_elements(client, &verified, pid).await?;
 
     Ok(listing(pid, &scanned, filter, max, full))
 }
@@ -1368,7 +1397,7 @@ pub async fn screenshot(
             ));
         }
         (Some(target), None) => Some(Crop::App {
-            pid: target_pid(client, target).await?,
+            pid: target_pid(client, &client.identity().await?, target).await?,
         }),
         (None, region) => region.map(Crop::Region),
     };
@@ -1792,9 +1821,10 @@ pub async fn click_element(
     }
 
     let ownership = client.controller.acquire(false)?;
-    let epoch = client.identity().await?.epoch;
-    let pid = target_pid(client, target).await?;
-    let scanned = app_elements(client, pid).await?;
+    let verified = client.identity().await?;
+    let pid = target_pid(client, &verified, target).await?;
+    let scanned = app_elements(client, &verified, pid).await?;
+    let epoch = verified.epoch;
     if scanned.incomplete {
         return Err(scanned.refusal());
     }
@@ -1899,6 +1929,45 @@ fn clicked(element: &Element, (x, y): (f64, f64)) -> Value {
 mod tests {
     use super::*;
     use crate::{native::windows::MENU_BAR_LAYER, session::Display};
+
+    /// An app found by name or process ID is looked for in the helper the
+    /// command verified moments before: the lookup and the scan after it
+    /// verify the helper once between them, not once for each list read.
+    #[tokio::test]
+    async fn finding_an_app_verifies_the_helper_once() {
+        use crate::helper_test::{Helper, UID, completed};
+
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let window = json!({"number": 5, "pid": 812, "owner": "TextEdit", "title": null,
+            "layer": 0, "alpha": 1.0, "bounds": {"x": 0, "y": 0, "width": 100, "height": 100}});
+        let answer = |request: &Value| {
+            if request["op"] == "apps" {
+                return Some(json!({"ok": true, "apps": [{"pid": 812, "name": "TextEdit"}]}));
+            }
+            let output = match request["argv"][1].as_str() {
+                Some("windows-info") => {
+                    json!({"ok": true, "windows": [window.clone()], "dock": []})
+                }
+                Some("elements-info") => json!({"ok": true, "elements": [], "truncated": false}),
+                other => panic!("nothing else is read: {other:?}"),
+            };
+            Some(completed(&output.to_string()))
+        };
+
+        for target in [Target::Name("TextEdit".into()), Target::Pid(812)] {
+            let before = helper.proofs();
+            let listed = helper
+                .serve(
+                    elements(&client, &target, &ElementFilter::default(), 10, false),
+                    answer,
+                )
+                .await
+                .unwrap();
+            assert_eq!(listed["pid"], 812, "{target:?}");
+            assert_eq!(helper.proofs() - before, 1, "{target:?}");
+        }
+    }
 
     /// The process a name resolves to from the window list alone.
     fn app_pid(windows: &[Window], target: &Target) -> Result<i64> {

@@ -3,7 +3,12 @@
 use crate::client::Client;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
-use std::{future::Future, path::Path, time::Duration};
+use std::{
+    future::Future,
+    path::Path,
+    sync::atomic::{AtomicUsize, Ordering},
+    time::Duration,
+};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::UnixListener,
@@ -40,6 +45,8 @@ pub(crate) struct Helper {
     /// How many identity proofs name the first session before the rest
     /// name another, as after the helper logged in again.
     moves_after: Option<usize>,
+    /// How many identity proofs it gave.
+    proofs: AtomicUsize,
 }
 
 impl Helper {
@@ -55,9 +62,16 @@ impl Helper {
             listener: UnixListener::bind(&client.transport.path).unwrap(),
             uid,
             moves_after: None,
+            proofs: AtomicUsize::new(0),
         };
 
         (client, helper)
+    }
+
+    /// How many times the client verified this helper: the identity proofs
+    /// it was given.
+    pub(crate) fn proofs(&self) -> usize {
+        self.proofs.load(Ordering::Relaxed)
     }
 
     /// [`Helper::client`] kept along the real path of `directory`, without
@@ -82,7 +96,6 @@ impl Helper {
         mut answer: impl FnMut(&Value) -> Option<Value>,
     ) -> T {
         let helper = async {
-            let mut proofs = 0;
             loop {
                 let (peer, _) = self.listener.accept().await.unwrap();
                 let mut peer = BufReader::new(peer);
@@ -93,7 +106,7 @@ impl Helper {
                 let reply = if request["op"] == "hello" {
                     Some(self.hello())
                 } else if request["argv"][1] == "session-info" {
-                    proofs += 1;
+                    let proofs = self.proofs.fetch_add(1, Ordering::Relaxed) + 1;
                     Some(self.proof(proofs))
                 } else {
                     answer(&request)
