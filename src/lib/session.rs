@@ -321,6 +321,11 @@ pub const HOLD: &str = "hold";
 /// The input-service capability that checks an agent's target app.
 pub const FOCUS_APP: &str = "focus-app";
 
+/// The input-service capability whose point check counts the Dock as
+/// covering where it takes clicks. A service without it lets a click on a
+/// Dock icon through.
+pub const FOCUS_DOCK: &str = "focus-dock";
+
 /// Whether an input service's hello lists `name` among its capabilities.
 pub fn has_capability(native: &Value, name: &str) -> bool {
     native["capabilities"]

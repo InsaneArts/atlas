@@ -14,8 +14,8 @@ use crate::{
     host_session::HostSession,
     last_capture,
     session::{
-        Display, Epoch, FOCUS_APP, HOLD, SHUTDOWN, Session, has_capability, input_current,
-        input_settled, require_hidden,
+        Display, Epoch, FOCUS_APP, FOCUS_DOCK, HOLD, SHUTDOWN, Session, has_capability,
+        input_current, input_settled, require_hidden,
     },
     transport::{Transport, accepted, run_output},
 };
@@ -2016,19 +2016,21 @@ impl Client {
 
 /// What the helper is asked to expect of an agent's batch, given what its
 /// input service `native` says it can check. An input service that answered
-/// without the check is refused when the check is required: it would post
-/// the input unchecked, and input cannot be taken back once it is sent. One
+/// without the whole check, the Dock's part included, is refused when the
+/// check is required: it would post the input unchecked, or let a click on a
+/// Dock icon through, and input cannot be taken back once it is sent. One
 /// that did not answer is refused later, as unavailable.
 fn expectation(native: &Value, check: Option<Check>) -> Result<Option<Expect>> {
     let offered = has_capability(native, FOCUS_APP);
+    let complete = offered && has_capability(native, FOCUS_DOCK);
     let answered = native["ok"] == true;
     match check {
         None => Ok(None),
         Some(Check::Offered(expect)) => Ok(offered.then_some(expect)),
-        Some(Check::Required(expect)) if offered || !answered => Ok(Some(expect)),
+        Some(Check::Required(expect)) if complete || !answered => Ok(Some(expect)),
         Some(Check::Required(_)) => Err(Error::new(
             "startup",
-            "The helper's input service is from an older Atlas that cannot check which app is in front; run atlas start-input, then try again",
+            "The helper's input service is from an older Atlas: run atlas start-input, then try again",
         )),
     }
 }
@@ -2452,7 +2454,7 @@ mod tests {
 
         // The same status goes on to the service when nothing needs the
         // check, or when the service can make it.
-        let current = verified_status(&[SHUTDOWN, HOLD, FOCUS_APP]);
+        let current = verified_status(&[SHUTDOWN, HOLD, FOCUS_APP, FOCUS_DOCK]);
         for (status, check) in [
             (&older, None),
             (&older, textedit().map(Check::Offered)),
@@ -2463,10 +2465,43 @@ mod tests {
         }
     }
 
+    /// A service from before the Dock counted as covering checks the app
+    /// but lets a click on a Dock icon through: it is given no input that
+    /// needs the check.
+    #[tokio::test]
+    async fn an_input_service_without_the_dock_check_receives_no_checked_input() {
+        let undocked = verified_status(&[SHUTDOWN, HOLD, FOCUS_APP]);
+        let (outcome, sent) = connected(&undocked, textedit().map(Check::Required)).await;
+        let refused = outcome.unwrap_err();
+        assert_eq!(refused.code, "startup");
+        assert!(!refused.uncertain);
+        assert!(refused.error.contains("older Atlas"), "{}", refused.error);
+        assert!(
+            refused.error.contains("atlas start-input"),
+            "{}",
+            refused.error
+        );
+        assert!(!sent, "neither acquire nor input reached the service");
+
+        // A named click is judged against the Dock before it is sent, and
+        // input that needs no check goes on as before.
+        for check in [None, textedit().map(Check::Offered)] {
+            let (_, sent) = connected(&undocked, check).await;
+            assert!(sent, "{check:?}");
+        }
+    }
+
     #[test]
     fn a_named_click_is_checked_only_by_a_service_that_can() {
         let older = json!({"ok": true, "capabilities": [SHUTDOWN, HOLD]});
-        let current = json!({"ok": true, "capabilities": [SHUTDOWN, HOLD, FOCUS_APP]});
+        let current = json!({"ok": true, "capabilities": [SHUTDOWN, HOLD, FOCUS_APP, FOCUS_DOCK]});
+        let undocked = json!({"ok": true, "capabilities": [SHUTDOWN, HOLD, FOCUS_APP]});
+        assert_eq!(
+            expectation(&undocked, Some(Check::Required(textedit().unwrap())))
+                .unwrap_err()
+                .code,
+            "startup"
+        );
         let unanswered = json!({"ok": false, "code": "transport"});
         let pid = textedit().unwrap();
 

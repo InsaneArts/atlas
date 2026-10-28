@@ -33,11 +33,12 @@ const MAX_REQUEST: usize = 64 * 1024;
 
 /// What this service can do beyond plain input, as its hello lists it:
 /// authenticated shutdown, the person's Stop, and checking an agent's
-/// target app.
-const CAPABILITIES: [&str; 3] = [
+/// target app, with the Dock covering where it takes clicks.
+const CAPABILITIES: [&str; 4] = [
     crate::session::SHUTDOWN,
     crate::session::HOLD,
     crate::session::FOCUS_APP,
+    crate::session::FOCUS_DOCK,
 ];
 
 struct Service {
@@ -881,7 +882,9 @@ mod tests {
     #[test]
     fn the_input_service_offers_the_target_check() {
         assert!(CAPABILITIES.contains(&crate::session::FOCUS_APP));
+        assert!(CAPABILITIES.contains(&crate::session::FOCUS_DOCK));
         assert_eq!(crate::session::FOCUS_APP, "focus-app");
+        assert_eq!(crate::session::FOCUS_DOCK, "focus-dock");
     }
 
     /// Only the controller is answered: a process in the helper's own
