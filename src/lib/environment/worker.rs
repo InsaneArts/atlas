@@ -33,7 +33,78 @@ pub fn worker(path: &Path, apply: bool) -> Result<Value> {
         Request::Apply { plan } => apply_plan(&home, &plan, &guard),
         Request::Rollback { id, apply } => rollback(&home, &id, apply, &guard),
         Request::Run { argv } => runner::execute(&home, &argv, &guard),
+        Request::Transactions {} => transactions(&home, &guard),
     }
+}
+
+/// The most transactions listed; `more` counts the rest.
+const LISTED: usize = 200;
+
+/// Every transaction in the helper, newest first, at most [`LISTED`]: its
+/// ID, phase, whether it is the one that must be resumed or rolled back
+/// first, when its record last changed, and each file's target and
+/// operation. File contents, digests, fingerprints, sources and copies are
+/// never included. A record that does not read is counted, not listed. It
+/// opens existing state only, and creates nothing.
+pub(super) fn transactions(home: &Path, guard: &impl Fn() -> Result<()>) -> Result<Value> {
+    guard()?;
+    let store = Store::open(home, false)?;
+    let mut recorded = recorded_transactions(&store.path);
+    recorded.sort_by_key(|(_, updated)| std::cmp::Reverse(*updated));
+    let more = recorded.len().saturating_sub(LISTED);
+    let active = store.active()?;
+
+    let mut unreadable = 0;
+    let mut listed = Vec::new();
+    for (id, updated) in recorded.into_iter().take(LISTED) {
+        match store.transaction(&id) {
+            Ok(Some(transaction)) => listed.push(json!({
+                "planId": id,
+                "phase": transaction.phase,
+                "active": active.as_deref() == Some(id.as_str()),
+                "updatedAt": updated,
+                "files": file_report(&transaction.plan),
+                "retainedDirectories": transaction.retained_directories.len(),
+            })),
+            Ok(None) | Err(_) => unreadable += 1,
+        }
+    }
+
+    store.confirm_read()?;
+    Ok(json!({
+        "ok": true,
+        "transactions": listed,
+        "more": more,
+        "unreadable": unreadable,
+    }))
+}
+
+/// The transactions whose record is in the store at `path`, by ID, with
+/// when each record last changed, in milliseconds since 1970. A folder
+/// without a record holds a preparation that never started, and is left
+/// out.
+fn recorded_transactions(path: &Path) -> Vec<(String, u64)> {
+    let Ok(entries) = fs::read_dir(path) else {
+        return Vec::new();
+    };
+
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_str()?.to_owned();
+            let id = name.strip_prefix("transaction-")?;
+            validate_id(id).ok()?;
+            if !fs::symlink_metadata(entry.path()).ok()?.is_dir() {
+                return None;
+            }
+            let modified = fs::symlink_metadata(entry.path().join("transaction.json"))
+                .ok()?
+                .modified()
+                .ok()?;
+            let at = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
+            Some((id.to_owned(), u64::try_from(at.as_millis()).ok()?))
+        })
+        .collect()
 }
 
 fn account_home(uid: u32) -> Result<PathBuf> {

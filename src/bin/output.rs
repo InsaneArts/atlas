@@ -70,6 +70,10 @@ pub(super) fn view(command: &Command) -> View {
             command: Some(EnvironmentCommand::Discover { .. }),
             ..
         } => View::Discover,
+        Command::Environment {
+            command: Some(EnvironmentCommand::List { .. }),
+            ..
+        } => View::Plans,
         Command::Setup {
             apply: false,
             rollback: false,

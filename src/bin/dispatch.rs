@@ -593,6 +593,7 @@ async fn carry_out(
                 Some(EnvironmentCommand::Apply { plan_id }) => {
                     environment::apply(&client, &plan_id).await
                 }
+                Some(EnvironmentCommand::List { all }) => environment::list(&client, all).await,
                 Some(EnvironmentCommand::Rollback {
                     transaction_id,
                     apply,
@@ -1315,6 +1316,7 @@ mod tests {
             &["stop"],
             &["environment"],
             &["environment", "rollback", "plan"],
+            &["environment", "list", "--all"],
             &["environment", "profile", "profile.toml"],
             &["update", "--check"],
             &["setup"],
@@ -1390,6 +1392,7 @@ mod tests {
         }
         for other in [
             &["environment", "discover"][..],
+            &["environment", "list"],
             &["environment", "run", "--", "ls"],
         ] {
             assert_eq!(kind(other), Kind::Other, "{other:?}");

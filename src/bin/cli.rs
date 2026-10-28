@@ -780,6 +780,16 @@ pub(super) enum EnvironmentCommand {
         #[arg(value_name = "ID")]
         plan_id: String,
     },
+    /// List copies into the helper and their state, newest first.
+    ///
+    /// Shows each plan's ID, state and the files it copies, never their
+    /// contents, and which session made it. Plans rolled back completely
+    /// are left out unless --all.
+    List {
+        /// Include plans rolled back completely.
+        #[arg(long)]
+        all: bool,
+    },
     /// Show what undoing a copy would do, or undo it with --apply.
     Rollback {
         /// The ID the copy printed.

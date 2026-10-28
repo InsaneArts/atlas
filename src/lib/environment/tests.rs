@@ -1146,6 +1146,7 @@ fn only_an_apply_an_undo_with_apply_and_a_run_change_the_helper() {
         .changes_helper()
     );
     assert!(Request::Apply { plan }.changes_helper());
+    assert!(!Request::Transactions {}.changes_helper());
     assert!(
         Request::Run {
             argv: vec!["cat".into()]
@@ -1466,6 +1467,7 @@ fn previewing(home: &Path) -> impl FnMut(&Value) -> Option<Value> + '_ {
             Request::Preview { id, files } => {
                 worker::preview(home, nix::unistd::getuid().as_raw(), &id, files, &|| Ok(()))
             }
+            Request::Transactions {} => worker::transactions(home, &|| Ok(())),
             Request::Rollback { id, apply: false } => {
                 worker::rollback(home, &id, false, &|| Ok(()))
             }
@@ -2429,4 +2431,289 @@ fn an_unrecorded_restore_copy_with_other_contents_is_kept_for_inspection() {
     let result = sandbox.rollback(&second, true);
     assert_eq!(result["ok"], false, "{result}");
     assert_eq!(fs::read(&restore).unwrap(), b"something else");
+}
+
+impl Sandbox {
+    fn transactions(&self) -> Value {
+        worker::transactions(&self.home, &|| Ok(())).unwrap()
+    }
+}
+
+/// Every path under `root`, so a test can tell nothing was made.
+fn tree(root: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let mut folders = vec![root.to_owned()];
+    while let Some(folder) = folders.pop() {
+        for entry in fs::read_dir(&folder).unwrap().flatten() {
+            if entry.file_type().unwrap().is_dir() {
+                folders.push(entry.path());
+            }
+            paths.push(entry.path());
+        }
+    }
+    paths.sort();
+    paths
+}
+
+/// The labels of a command with no task, from no records.
+fn unlabelled() -> Labels<'static> {
+    Labels {
+        work: &[],
+        task: None,
+    }
+}
+
+#[test]
+fn the_transaction_list_carries_no_digest_source_or_contents() {
+    let sandbox = Sandbox::new();
+    let payload = sandbox.payload(".config/probe/settings.toml", b"SECRET-VALUE");
+    let source = payload.source.to_string_lossy().into_owned();
+    let plan = sandbox.plan(vec![payload]);
+    assert_eq!(sandbox.apply(&plan)["ok"], true);
+
+    let listed = sandbox.transactions();
+    let shown = listing(&[], &listed, &unlabelled(), false);
+
+    assert_eq!(listed["transactions"][0]["planId"], plan.id);
+    assert_eq!(listed["transactions"][0]["phase"], "applied");
+    assert_eq!(
+        shown["plans"][0]["files"],
+        json!([{"target": ".config/probe/settings.toml", "operation": "create",
+            "legacyPrevious": false}])
+    );
+    for text in [listed.to_string(), shown.to_string()] {
+        assert!(!text.contains("SECRET-VALUE"), "{text}");
+        assert!(!text.contains(&digest(b"SECRET-VALUE")), "{text}");
+        assert!(
+            !text.contains("payload-") && !text.contains(&source),
+            "{text}"
+        );
+        assert!(
+            !text.contains("before") && !text.contains("sha256"),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn the_list_opens_no_state_that_does_not_exist() {
+    let sandbox = Sandbox::new();
+    let before = tree(&sandbox.root);
+
+    let listed = sandbox.transactions();
+
+    assert_eq!(
+        listed,
+        json!({"ok": true, "transactions": [], "more": 0, "unreadable": 0})
+    );
+    assert_eq!(tree(&sandbox.root), before);
+}
+
+#[test]
+fn a_stopped_apply_is_listed_as_one_to_finish() {
+    let sandbox = Sandbox::new();
+    let plan = sandbox.plan(vec![sandbox.payload("file", b"copied")]);
+    assert_eq!(sandbox.apply(&plan)["ok"], true);
+    let store = state::Store::open(&sandbox.home, true).unwrap();
+    let mut transaction = store.transaction(&plan.id).unwrap().unwrap();
+    transaction.phase = Phase::Applying;
+    store.save(&transaction).unwrap();
+    store.activate(&plan.id).unwrap();
+    drop(store);
+
+    let listed = sandbox.transactions();
+    let shown = listing(&[], &listed, &unlabelled(), false);
+
+    assert_eq!(listed["transactions"][0]["active"], true);
+    assert_eq!(shown["plans"][0]["state"], "applying");
+}
+
+#[test]
+fn an_invalid_record_is_counted_not_listed() {
+    let sandbox = Sandbox::new();
+    let plan = sandbox.plan(vec![sandbox.payload("file", b"copied")]);
+    assert_eq!(sandbox.apply(&plan)["ok"], true);
+    let store = state::Store::open(&sandbox.home, true).unwrap();
+    let broken = crate::control::token();
+    fs::create_dir(store.folder(&broken)).unwrap();
+    atomic_write(
+        &store.folder(&broken).join("transaction.json"),
+        b"{\"version\": 1}",
+        0o600,
+    )
+    .unwrap();
+    let unstarted = crate::control::token();
+    fs::create_dir(store.folder(&unstarted)).unwrap();
+    drop(store);
+
+    let listed = sandbox.transactions();
+
+    assert_eq!(listed["unreadable"], 1);
+    let listed = listed["transactions"].as_array().unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0]["planId"], plan.id);
+}
+
+#[test]
+fn a_frozen_plan_the_helper_never_started_is_listed_as_previewed() {
+    let sandbox = Sandbox::new();
+    let uid = nix::unistd::getuid().as_raw();
+    let previewed = crate::control::token();
+    write_plan(&stage_in(&sandbox.root, &previewed), &previewed, uid);
+    let unknown = crate::control::token();
+    fs::create_dir(stage_in(&sandbox.root, &unknown).join("request-ab12")).unwrap();
+    let running = crate::control::token();
+    let locked = stage_in(&sandbox.root, &running);
+    write_plan(&locked, &running, uid);
+    let _held = lock_stage(&locked).unwrap();
+    let elsewhere = crate::control::token();
+    write_plan(&stage_in(&sandbox.root, &elsewhere), &elsewhere, uid + 1);
+    stage_in(&sandbox.root, &crate::control::token());
+
+    let here = frozen(&sandbox.root, uid);
+    let nothing = json!({"ok": true, "transactions": [], "more": 0, "unreadable": 0});
+    let shown = listing(&here, &nothing, &unlabelled(), false);
+
+    let mut states: Vec<(String, String)> = shown["plans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|plan| {
+            (
+                plan["planId"].as_str().unwrap().to_owned(),
+                plan["state"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    states.sort();
+    let mut expected = vec![
+        (previewed, "previewed".to_owned()),
+        (unknown, "unknown".to_owned()),
+        (running, "running".to_owned()),
+    ];
+    expected.sort();
+    assert_eq!(states, expected);
+    assert_eq!(shown["plans"][0]["session"], Value::Null);
+}
+
+#[test]
+fn rolled_back_plans_are_listed_only_when_asked() {
+    let sandbox = Sandbox::new();
+    let kept = sandbox.plan(vec![sandbox.payload("kept", b"one")]);
+    assert_eq!(sandbox.apply(&kept)["ok"], true);
+    let undone = sandbox.plan(vec![sandbox.payload("undone", b"two")]);
+    assert_eq!(sandbox.apply(&undone)["ok"], true);
+    assert_eq!(sandbox.rollback(&undone, true)["rolledBack"], true);
+    let listed = sandbox.transactions();
+
+    let ids = |all: bool| -> Vec<Value> {
+        listing(&[], &listed, &unlabelled(), all)["plans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|plan| json!([plan["planId"], plan["state"]]))
+            .collect()
+    };
+
+    assert_eq!(ids(false), [json!([kept.id, "applied"])]);
+    let all = ids(true);
+    assert_eq!(all.len(), 2);
+    assert!(all.contains(&json!([undone.id, "rolledBack"])));
+}
+
+#[test]
+fn the_list_is_newest_first_and_bounded() {
+    let sandbox = Sandbox::new();
+    let plan = sandbox.plan(vec![sandbox.payload("file", b"copied")]);
+    assert_eq!(sandbox.apply(&plan)["ok"], true);
+    let store = state::Store::open(&sandbox.home, true).unwrap();
+    let mut transaction = store.transaction(&plan.id).unwrap().unwrap();
+    let then = std::time::SystemTime::now() - Duration::from_secs(1000);
+    for age in 0..229_u64 {
+        transaction.plan.id = crate::control::token();
+        fs::create_dir(store.folder(&transaction.plan.id)).unwrap();
+        store.save(&transaction).unwrap();
+        let record = store.folder(&transaction.plan.id).join("transaction.json");
+        fs::File::open(record)
+            .unwrap()
+            .set_modified(then - Duration::from_secs(age))
+            .unwrap();
+    }
+    drop(store);
+
+    let listed = sandbox.transactions();
+    let shown = listing(&[], &listed, &unlabelled(), false);
+
+    assert_eq!(listed["transactions"].as_array().unwrap().len(), 200);
+    assert_eq!(listed["more"], 30);
+    assert_eq!(listed["transactions"][0]["planId"], plan.id, "the newest");
+    let times: Vec<u64> = listed["transactions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|transaction| transaction["updatedAt"].as_u64().unwrap())
+        .collect();
+    assert!(times.windows(2).all(|pair| pair[0] >= pair[1]));
+    assert_eq!(shown["plans"].as_array().unwrap().len(), SHOWN);
+    assert_eq!(shown["more"], 30 + 150);
+}
+
+#[tokio::test]
+async fn a_listed_plan_names_the_session_and_task_that_made_it() {
+    use crate::{
+        host_session::{Host, HostSession},
+        task::{Claims, Owned, State, Task, store::Store as Tasks},
+    };
+
+    let sandbox = Sandbox::new();
+    let plan = sandbox.plan(vec![sandbox.payload("file", b"copied")]);
+    assert_eq!(sandbox.apply(&plan)["ok"], true);
+    let other = sandbox.plan(vec![sandbox.payload("other", b"copied")]);
+    assert_eq!(sandbox.apply(&other)["ok"], true);
+    let (mut client, helper) = Helper::client(&sandbox.root, UID);
+    let session = HostSession::new(Host::Codex, "listing").unwrap();
+    let task = Task::of(session.key(), Some("probe")).unwrap();
+    client.task = Some(task.clone());
+    Claims::in_store(Tasks::at(client.output_dir().unwrap()), task)
+        .claim(
+            &Owned::Plan {
+                id: crate::control::Token::parse(&plan.id).unwrap(),
+            },
+            State::Made,
+        )
+        .unwrap();
+    let before = client.controller.pending().unwrap();
+
+    let listed = helper
+        .serve(
+            list_as(&client, &account(), false),
+            previewing(&sandbox.home),
+        )
+        .await
+        .unwrap();
+
+    let plans = listed["plans"].as_array().unwrap();
+    let mine = plans
+        .iter()
+        .find(|entry| entry["planId"] == plan.id)
+        .unwrap();
+    assert_eq!(mine["session"], session.key().as_str());
+    assert_eq!(mine["thisTask"], true);
+    let theirs = plans
+        .iter()
+        .find(|entry| entry["planId"] == other.id)
+        .unwrap();
+    assert_eq!(
+        (&theirs["session"], &theirs["thisTask"]),
+        (&Value::Null, &json!(false))
+    );
+    assert_eq!(
+        client.controller.pending().unwrap(),
+        before,
+        "nothing pending"
+    );
+    assert!(
+        leftovers(&sandbox.root).is_empty(),
+        "the request folder goes"
+    );
 }

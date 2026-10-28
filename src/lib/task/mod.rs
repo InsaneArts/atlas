@@ -13,12 +13,13 @@ use crate::{
     error::{Error, Result},
     host_session::{
         HostSession, Key, now_ms,
-        store::{Kind, rolled_back},
+        record::Record as SessionRecord,
+        store::{Kind, Store as Sessions, rolled_back},
     },
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::fmt;
+use std::{fmt, path::Path};
 use store::Store;
 
 /// The most bytes a task name keeps.
@@ -217,6 +218,74 @@ pub fn settle_rolled_back(client: &Client, kind: Kind, result: &Result<Value>) -
         state,
         now_ms(),
     )
+}
+
+/// One thing a session's work holds, and the session and task it belongs
+/// to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Work {
+    pub session: Key,
+    pub task: Key,
+    pub owned: Owned,
+    pub state: State,
+}
+
+/// A session's work: the claims of `tasks` (its tasks' records), and what
+/// `session` (its own record, when there still is one) lists that no task
+/// claims, which belongs to its default task: made by a build that kept no
+/// task records. Each thing is listed once for each task that claims it.
+pub(crate) fn work(session: Option<&SessionRecord>, tasks: &[record::Record]) -> Vec<Work> {
+    let mut work: Vec<Work> = tasks
+        .iter()
+        .flat_map(|record| {
+            record.claims().map(|(owned, state)| Work {
+                session: record.session.clone(),
+                task: record.key.clone(),
+                owned,
+                state,
+            })
+        })
+        .collect();
+
+    let Some(session) = session else {
+        return work;
+    };
+    let recorded: Vec<Owned> = session
+        .copies
+        .iter()
+        .map(|token| Owned::Copy { id: token.clone() })
+        .chain(session.plans.iter().map(|plan| Owned::Plan {
+            id: plan.plan_id.clone(),
+        }))
+        .collect();
+    for owned in recorded {
+        if !work.iter().any(|known| known.owned.same(&owned)) {
+            work.push(Work {
+                session: session.key.clone(),
+                task: session.key.clone(),
+                owned,
+                state: State::Made,
+            });
+        }
+    }
+    work
+}
+
+/// Every session's work the records in `output` name: each session's
+/// record joined with its tasks' records, and the tasks whose session's
+/// record is gone. Only records are read; nothing they name is looked at.
+pub(crate) fn everyone(output: &Path) -> Vec<Work> {
+    let mut tasks = Store::at(output).all();
+    let mut everyone = Vec::new();
+    for session in Sessions::at(output).all() {
+        let (own, others) = tasks
+            .into_iter()
+            .partition::<Vec<_>, _>(|task| task.session == session.key);
+        everyone.extend(work(Some(&session), &own));
+        tasks = others;
+    }
+    everyone.extend(work(None, &tasks));
+    everyone
 }
 
 #[cfg(test)]

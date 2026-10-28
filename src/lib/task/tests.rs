@@ -326,3 +326,53 @@ fn a_finished_task_goes_once_its_session_record_has_gone() {
     assert!(store.load(unfinished.key()).is_some());
     assert_eq!(store.of_session(&session("gone")).len(), 1);
 }
+
+#[test]
+fn work_a_session_record_lists_without_a_task_record_belongs_to_the_default_task() {
+    use crate::{environment::Phase, host_session::record::PlanNote};
+
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::transaction_test::client(directory.path());
+    let output = client.output_dir().unwrap().to_owned();
+    let host = HostSession::new(Host::Codex, "older").unwrap();
+    let (copied, planned, claimed) = (Token::new(), Token::new(), Token::new());
+    Sessions::at(&output)
+        .update(&host, now_ms(), &client.controller, |record| {
+            record.copied([copied.clone(), claimed.clone()]);
+            record.plans.push(PlanNote {
+                plan_id: planned.clone(),
+                phase: Phase::Applied,
+                at: 1,
+            });
+        })
+        .unwrap();
+    let probe = Task::of(host.key(), Some("probe")).unwrap();
+    Claims::in_store(Store::at(&output), probe.clone())
+        .claim(
+            &Owned::Copy {
+                id: claimed.clone(),
+            },
+            State::Intent,
+        )
+        .unwrap();
+
+    let work = everyone(&output);
+
+    let of = |owned: Owned| {
+        work.iter()
+            .filter(|work| work.owned == owned)
+            .map(|work| (work.session.clone(), work.task.clone(), work.state))
+            .collect::<Vec<_>>()
+    };
+    let default = (host.key().clone(), host.key().clone(), State::Made);
+    assert_eq!(
+        of(Owned::Copy { id: copied }),
+        std::slice::from_ref(&default)
+    );
+    assert_eq!(of(Owned::Plan { id: planned }), [default]);
+    assert_eq!(
+        of(Owned::Copy { id: claimed }),
+        [(host.key().clone(), probe.key().clone(), State::Intent)],
+        "listed once, as its task claims it"
+    );
+}

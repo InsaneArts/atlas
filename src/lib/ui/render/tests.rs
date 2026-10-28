@@ -788,6 +788,32 @@ fn closing_everything_names_what_it_quit() {
 }
 
 #[test]
+fn listed_copies_into_the_helper_read_as_a_table_of_ids_states_and_targets() {
+    let id = "3c1f00000000000000000000000000000000000000000000";
+    let listed = show(
+        View::Plans,
+        json!({"ok": true, "more": 2, "plans": [{"planId": id, "state": "applying",
+            "updatedAt": 1, "files": [{"target": ".config/probe/settings.toml", "operation": "create"}],
+            "session": null, "thisTask": false}]}),
+    );
+    assert!(listed.out.contains(id), "{}", listed.out);
+    assert!(
+        listed.out.contains("stopped while copying"),
+        "{}",
+        listed.out
+    );
+    assert!(
+        listed.out.contains(".config/probe/settings.toml"),
+        "{}",
+        listed.out
+    );
+    assert!(listed.out.ends_with("2 older not shown"), "{}", listed.out);
+
+    let none = show(View::Plans, json!({"ok": true, "plans": [], "more": 0}));
+    assert_eq!(none.out, "✓ Nothing has been copied into the helper");
+}
+
+#[test]
 fn a_close_says_which_copies_it_kept_and_which_it_could_not_remove() {
     let shown = show(
         View::Close,

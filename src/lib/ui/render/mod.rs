@@ -30,6 +30,8 @@ pub enum View {
     Type,
     Run,
     Environment,
+    /// The copies into the helper `environment list` found.
+    Plans,
     Discover,
     SetupPreview,
     Close,
@@ -123,6 +125,7 @@ pub fn render(view: &View, value: &Value) -> Rendered {
             failed(value).unwrap_or_else(|| Rendered::out(act::wait(value, *gone)))
         }
         View::Environment => act::environment(value),
+        View::Plans => failed(value).unwrap_or_else(|| Rendered::out(act::plans(value))),
         View::Discover => failed(value).unwrap_or_else(|| Rendered::out(act::discover(value))),
         View::SetupPreview => {
             failed(value).unwrap_or_else(|| Rendered::out(act::setup_preview(value)))

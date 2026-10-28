@@ -56,6 +56,7 @@ pub(super) enum Request {
     Apply { plan: Plan },
     Rollback { id: String, apply: bool },
     Run { argv: Vec<String> },
+    Transactions {},
 }
 
 impl Request {
@@ -64,7 +65,7 @@ impl Request {
     /// pending; a new request must say which it is.
     pub fn changes_helper(&self) -> bool {
         match self {
-            Request::Preview { .. } => false,
+            Request::Preview { .. } | Request::Transactions {} => false,
             Request::Rollback { apply, .. } => *apply,
             Request::Apply { .. } | Request::Run { .. } => true,
         }

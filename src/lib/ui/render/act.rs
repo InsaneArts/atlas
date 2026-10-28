@@ -192,6 +192,52 @@ pub fn install(value: &Value) -> String {
     }
 }
 
+/// The copies into the helper `environment list` found: each plan's ID,
+/// state and the files it copies.
+pub fn plans(value: &Value) -> String {
+    let plans = value["plans"].as_array().map_or(&[][..], Vec::as_slice);
+    if plans.is_empty() {
+        return format!("{} Nothing has been copied into the helper", style::ok());
+    }
+
+    let rows: Vec<Vec<String>> = plans
+        .iter()
+        .map(|plan| {
+            let targets: Vec<String> = plan["files"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|file| file["target"].as_str())
+                .map(|target| text::printable(target).into_owned())
+                .collect();
+            vec![
+                plan["planId"].as_str().unwrap_or("?").to_owned(),
+                plan_state(plan["state"].as_str().unwrap_or("")).to_owned(),
+                targets.join(", "),
+            ]
+        })
+        .collect();
+    let mut lines = vec![crate::ui::table::render(&["PLAN", "STATE", "FILES"], &rows)];
+    if let Some(more) = value["more"].as_u64().filter(|more| *more > 0) {
+        lines.push(style::dim(format!("{more} older not shown")));
+    }
+    lines.join("\n")
+}
+
+/// A listed plan's state, in words.
+fn plan_state(state: &str) -> &str {
+    match state {
+        "previewed" => "previewed",
+        "applying" => "stopped while copying",
+        "applied" => "copied",
+        "rollingBack" => "stopped while undoing",
+        "rolledBack" => "undone",
+        "running" => "in use now",
+        "unknown" => "outcome unknown",
+        other => other,
+    }
+}
+
 /// An environment preview, copy or undo: what changes in the helper's home,
 /// and the one command that comes next.
 pub fn environment(value: &Value) -> Rendered {

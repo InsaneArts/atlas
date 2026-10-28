@@ -70,10 +70,10 @@ This example expects an `atlas-work` folder in the helper. A missing folder is a
 | Command         | Use it to                                                                                                                                   |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | `readiness`     | Check selected tools with `--tool` and apps with `--app`. Tool checks execute a `--version` probe; app sign-in and launch are not verified. |
-| `environment`   | Preview and apply selected files or an environment profile.                                                                                 |
+| `environment`   | Preview and apply selected files or an environment profile. `list` shows every copy into the helper and its state, never its contents.      |
 | `verify-native` | Exercise real Save/Open dialogs with the compiled DesktopFixture app and record the result. This performs UI actions.                       |
 
-`environment MANIFEST` previews files. Its public subcommands are `discover`, `profile`, `apply`, `rollback` and `run`. See the [environment guide](environment.md) before applying or undoing a plan. `verify-native --fixture PATH` is for a prepared native test session; see [Contributing](../CONTRIBUTING.md).
+`environment MANIFEST` previews files. Its public subcommands are `discover`, `profile`, `apply`, `list`, `rollback` and `run`. See the [environment guide](environment.md) before applying or undoing a plan. `verify-native --fixture PATH` is for a prepared native test session; see [Contributing](../CONTRIBUTING.md).
 
 ### Take over or recover
 

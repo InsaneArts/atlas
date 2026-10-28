@@ -65,7 +65,7 @@ impl Store {
     /// of the folder, oldest first; nothing they name is looked at.
     pub fn of_session(&self, session: &Key) -> Vec<Record> {
         let mut records: Vec<Record> = self
-            .listed()
+            .all()
             .into_iter()
             .filter(|record| record.session == *session)
             .collect();
@@ -112,7 +112,7 @@ impl Store {
             return Ok(());
         }
         let _lock = self.lock()?;
-        for mut record in self.listed() {
+        for mut record in self.all() {
             let mut listed = false;
             for owned in owned {
                 listed |= record.settle(owned, state, now);
@@ -129,7 +129,7 @@ impl Store {
     /// nothing that may still be in the helper. The record `keep` stays.
     fn prune(&self, keep: &Key) {
         let sessions = Sessions::at(&self.output);
-        for record in self.listed() {
+        for record in self.all() {
             let finished = record.key != *keep
                 && !record.holds_anything()
                 && sessions.read(&record.session).is_none();
@@ -140,7 +140,7 @@ impl Store {
     }
 
     /// The records among the first [`LISTED`] entries of the folder.
-    fn listed(&self) -> Vec<Record> {
+    pub fn all(&self) -> Vec<Record> {
         if !own_folder(&self.directory) {
             return Vec::new();
         }

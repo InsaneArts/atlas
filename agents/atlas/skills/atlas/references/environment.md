@@ -45,3 +45,12 @@ undone, and each file's `operation` still names what the copy did (`create`
 is undone by removing the file, the others by putting the earlier file back).
 Folders the copy made go too, unless something else now uses them
 (`retainedDirectories`).
+
+If you lost a `planId`, `atlas environment list` shows each copy into the
+helper, newest first, with its `state` and the files it copies, never their
+contents; `thisTask` marks those this task made, and `session` names the
+session that made one. `applying` and `rollingBack` stopped partway: finish
+them with `atlas environment apply PLAN_ID` or
+`atlas environment rollback PLAN_ID --apply`. `--all` also lists those rolled
+back completely. To keep one part of a long session's copies apart, run that
+part's commands with `ATLAS_TASK=NAME`.

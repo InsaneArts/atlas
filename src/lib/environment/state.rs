@@ -210,14 +210,23 @@ impl Store {
         }
     }
 
+    /// The transaction that must be resumed or rolled back before any
+    /// other, when one must.
+    pub fn active(&self) -> Result<Option<String>> {
+        let active = self.read::<String>(&self.path.join("active.json"))?;
+        if let Some(active) = &active {
+            validate_id(active)?;
+        }
+        Ok(active)
+    }
+
     pub fn require_available(&self, id: &str) -> Result<()> {
-        if let Some(active) = self.read::<String>(&self.path.join("active.json"))? {
-            validate_id(&active)?;
-            if active != id {
-                return Err(problem(format!(
-                    "Transaction {active} must be resumed or rolled back first"
-                )));
-            }
+        if let Some(active) = self.active()?
+            && active != id
+        {
+            return Err(problem(format!(
+                "Transaction {active} must be resumed or rolled back first"
+            )));
         }
 
         Ok(())

@@ -84,6 +84,14 @@ atlas environment rollback PLAN_ID --apply --json
 
 A completed result has `rolledBack: true` and `resumeRequired: false`. For the unchanged fixture, the helper copy is removed; your source file remains. Rollback also discards copies Atlas retained for that transaction. Nonempty or changed directories can remain, as reported in `retainedDirectories`.
 
+If you lost the plan ID, list every copy into the helper Atlas knows of:
+
+```sh
+atlas environment list --json
+```
+
+Each plan has its `planId`, its `state` (`previewed`, `applying`, `applied`, `rollingBack`, `rolledBack`, `running` while a command uses it, or `unknown` when a request's outcome is not known), when it last changed and the target and operation of each file. File contents, digests and sources are never listed. `session` names the agent session that made it, when its record says so, and `thisTask` says whether the session's current task did. Plans rolled back completely are left out unless you pass `--all`. Listing only reads: it takes no control and records nothing.
+
 ## Conflicts and interrupted work
 
 Atlas refuses to replace a different, unmanaged destination or a managed file changed in the helper. It also refuses overlapping or case-equivalent targets and unsupported destination metadata. Read the error and inspect the target. Do not remove the helper's file just to make the plan pass.

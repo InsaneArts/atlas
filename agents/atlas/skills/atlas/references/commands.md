@@ -928,6 +928,7 @@ Commands:
   profile   Freeze selected files, exported variables and readiness requirements
   run       Run a command with the selected helper environment and helper tool paths
   apply     Copy a previewed plan into the helper (or finish one that stopped)
+  list      List copies into the helper and their state, newest first
   rollback  Show what undoing a copy would do, or undo it with --apply
   discover  Inspect selected tools, apps, variables and reference paths without launching them
   help      Print this message or the help of the given subcommand(s)
@@ -1021,6 +1022,30 @@ Arguments:
 Options:
   -h, --help
           Print help
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --config <FILE>
+          Use another settings file
+```
+
+## atlas environment list
+
+```text
+List copies into the helper and their state, newest first.
+
+Shows each plan's ID, state and the files it copies, never their contents, and which session made it. Plans rolled back completely are left out unless --all.
+
+Usage: atlas environment list [OPTIONS]
+
+Options:
+      --all
+          Include plans rolled back completely
+
+  -h, --help
+          Print help (see a summary with '-h')
 
 Global options:
       --json
