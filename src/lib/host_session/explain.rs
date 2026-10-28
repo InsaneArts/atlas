@@ -26,6 +26,8 @@ const CAUSED_BY: usize = 3;
 enum Refusal {
     /// Another Atlas command holds the helper.
     Busy,
+    /// A command an agent started with `run` still runs.
+    CommandRunning,
     /// Another app, this one, was in front.
     FocusChanged(String),
     /// An earlier action's outcome is unknown.
@@ -33,9 +35,19 @@ enum Refusal {
 }
 
 impl Refusal {
-    /// What `code`, `holder`, `uncertain` and `found` of a refusal say.
-    fn of(code: &str, holder: Option<Holder>, uncertain: bool, found: &Value) -> Option<Self> {
+    /// What `code`, `holder`, `uncertain`, `found` and `running` of a
+    /// refusal say.
+    fn of(
+        code: &str,
+        holder: Option<Holder>,
+        uncertain: bool,
+        found: &Value,
+        running: &Value,
+    ) -> Option<Self> {
         match code {
+            "busy" if holder == Some(Holder::Agent) && running == "command" => {
+                Some(Self::CommandRunning)
+            }
             "busy" if holder == Some(Holder::Agent) => Some(Self::Busy),
             "focus-changed" => found["app"]
                 .as_str()
@@ -62,12 +74,14 @@ pub fn reply(
             error.holder,
             error.uncertain,
             error.details.get("found").unwrap_or(&Value::Null),
+            error.details.get("running").unwrap_or(&Value::Null),
         ),
         Ok(value) if value["ok"] == false => Refusal::of(
             value["code"].as_str().unwrap_or_default(),
             value["holder"].as_str().and_then(Holder::parse),
             value["uncertain"] == true,
             &value["found"],
+            &value["running"],
         ),
         Ok(_) => None,
     };
@@ -117,6 +131,7 @@ fn additions(refusal: &Refusal, client: &Client, own: Option<&Key>) -> Vec<(&'st
 
     match refusal {
         Refusal::Busy => held_by(client, &named()),
+        Refusal::CommandRunning => running_for(client, &named()),
         Refusal::FocusChanged(app) => last_used_by(output, app, own, &named()),
         Refusal::Uncertain => caused_by(client, own, &named()),
     }
@@ -145,6 +160,24 @@ fn held_by(client: &Client, names: &BTreeMap<Key, String>) -> Vec<(&'static str,
             "host": note.host,
             "since": note.since,
         }),
+    )]
+}
+
+/// Whose command started with `run` still runs, from the pending changes:
+/// the first one a host session claimed.
+fn running_for(client: &Client, names: &BTreeMap<Key, String>) -> Vec<(&'static str, Value)> {
+    let causes = client.controller.pending_causes().unwrap_or_default();
+    let Some(session) = causes
+        .iter()
+        .filter(|cause| cause.command)
+        .find_map(|cause| cause.session.as_ref())
+    else {
+        return Vec::new();
+    };
+
+    vec![(
+        "heldBy",
+        json!({"session": session, "name": name_of(names, session, None)}),
     )]
 }
 
@@ -204,6 +237,7 @@ fn caused_by(
 
     let mut others: Vec<&Key> = causes
         .iter()
+        .filter(|cause| !cause.command)
         .filter_map(|cause| cause.session.as_ref())
         .filter(|session| Some(*session) != own)
         .collect();
@@ -211,7 +245,7 @@ fn caused_by(
     others.dedup();
 
     let mut added = Vec::new();
-    if recovery == Recovery::Own {
+    if recovery.own() {
         added.push(("yours", json!(true)));
     } else if !others.is_empty() {
         if own.is_some() {

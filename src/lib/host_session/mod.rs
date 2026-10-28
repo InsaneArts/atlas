@@ -396,12 +396,13 @@ fn nearest(
 
 /// Whether every one of `causes` (the pending changes) was claimed by
 /// session `own` and none is still being carried out: only then may that
-/// session recover them itself. Every surface that says so asks this.
+/// session recover them itself. A command an agent started that still runs
+/// is work under way, not an unknown outcome of anyone's, so it is passed
+/// over. Every surface that says so asks this.
 pub(crate) fn owns_every_unknown(causes: &[Cause], own: &Key) -> bool {
-    !causes.is_empty()
-        && causes
-            .iter()
-            .all(|cause| cause.session.as_ref() == Some(own) && !cause.running)
+    let mut unknown = causes.iter().filter(|cause| !cause.command).peekable();
+    unknown.peek().is_some()
+        && unknown.all(|cause| cause.session.as_ref() == Some(own) && !cause.running)
 }
 
 /// Who asks what to do about changes of unknown outcome.
@@ -420,10 +421,16 @@ pub enum Recovery {
     /// Every one is the asking session's own and none still runs: it
     /// recovers them itself.
     Own,
+    /// As [`Recovery::Own`], while a command an agent started still runs:
+    /// recovery waits for it to end.
+    OwnOnceCommandEnds,
     /// One may be another's: the agent waits, or tells the person.
     Others,
     /// The person asks, and recovers.
     Person,
+    /// As [`Recovery::Person`], while a command an agent started still
+    /// runs: recovery waits for it to end.
+    PersonOnceCommandEnds,
 }
 
 impl Recovery {
@@ -433,19 +440,34 @@ impl Recovery {
         if causes.iter().all(|cause| cause.running) {
             return None;
         }
+        let command_runs = causes.iter().any(|cause| cause.command);
         Some(match asker {
-            Asker::Agent(Some(own)) if owns_every_unknown(causes, own) => Self::Own,
+            Asker::Agent(Some(own)) if owns_every_unknown(causes, own) => {
+                if command_runs {
+                    Self::OwnOnceCommandEnds
+                } else {
+                    Self::Own
+                }
+            }
             Asker::Agent(_) => Self::Others,
+            Asker::Person if command_runs => Self::PersonOnceCommandEnds,
             Asker::Person => Self::Person,
         })
+    }
+
+    /// Whether the asking session recovers them itself.
+    pub fn own(self) -> bool {
+        matches!(self, Self::Own | Self::OwnOnceCommandEnds)
     }
 
     /// Its step, in one sentence.
     pub fn step(self) -> &'static str {
         match self {
             Self::Own => hints::UNKNOWN_OWN,
+            Self::OwnOnceCommandEnds => hints::UNKNOWN_OWN_ONCE_COMMAND_ENDS,
             Self::Others => hints::UNKNOWN_OTHERS,
             Self::Person => hints::UNKNOWN_FOR_PERSON,
+            Self::PersonOnceCommandEnds => hints::UNKNOWN_FOR_PERSON_ONCE_COMMAND_ENDS,
         }
     }
 }
@@ -741,6 +763,52 @@ mod tests {
         let named = HostSession::new(Host::Named, "release").unwrap().label();
         assert_eq!(named.named.as_ref().map(HostId::as_str), Some("release"));
         assert_eq!(named.folder, None);
+    }
+
+    #[test]
+    fn a_running_command_is_nobodys_unknown_outcome_and_recovery_waits_for_it() {
+        let (own, other) = (Key::of(Host::Pi, "own"), Key::of(Host::Pi, "other"));
+        let unknown = Cause {
+            generation: crate::control::token(),
+            running: false,
+            command: false,
+            session: Some(own.clone()),
+        };
+        let command = Cause {
+            generation: crate::control::token(),
+            running: true,
+            command: true,
+            session: Some(other),
+        };
+        let of = Recovery::of;
+        let beside = [unknown.clone(), command.clone()];
+
+        assert!(owns_every_unknown(&beside, &own));
+        assert_eq!(
+            of(&beside, Asker::Agent(Some(&own))),
+            Some(Recovery::OwnOnceCommandEnds)
+        );
+        assert_eq!(
+            of(&beside, Asker::Person),
+            Some(Recovery::PersonOnceCommandEnds)
+        );
+        assert_eq!(
+            of(&[unknown], Asker::Agent(Some(&own))),
+            Some(Recovery::Own)
+        );
+        assert_eq!(
+            of(std::slice::from_ref(&command), Asker::Person),
+            None,
+            "work under way"
+        );
+        assert!(!owns_every_unknown(&[command], &own), "nothing of its own");
+        for step in [
+            Recovery::OwnOnceCommandEnds.step(),
+            Recovery::PersonOnceCommandEnds.step(),
+        ] {
+            assert!(step.contains("once the running command ends"), "{step}");
+        }
+        assert!(Recovery::OwnOnceCommandEnds.own());
     }
 
     #[test]

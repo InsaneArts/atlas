@@ -10,12 +10,20 @@ pub const UNCERTAIN: &str = "It may or may not have happened, so don't repeat it
 /// session's own and none still runs.
 pub const UNKNOWN_OWN: &str = "An earlier action of this session may not have finished. Take a screenshot, then run atlas restart.";
 
+/// [`UNKNOWN_OWN`] while a command an agent started still runs, which
+/// recovery waits for.
+pub const UNKNOWN_OWN_ONCE_COMMAND_ENDS: &str = "An earlier action of this session may not have finished. Take a screenshot, then run atlas restart once the running command ends.";
+
 /// The step for an agent while a pending change of unknown outcome may be
 /// another's.
 pub const UNKNOWN_OTHERS: &str = "An earlier action, maybe another agent's, may not have finished. Wait for it to be recovered, or tell the person.";
 
 /// The step for the person while a change of unknown outcome is pending.
 pub const UNKNOWN_FOR_PERSON: &str = "An action may not have finished. Look at the helper, then recover it in Atlas or with atlas restart.";
+
+/// [`UNKNOWN_FOR_PERSON`] while a command an agent started still runs,
+/// which recovery waits for.
+pub const UNKNOWN_FOR_PERSON_ONCE_COMMAND_ENDS: &str = "An action may not have finished. Look at the helper, then recover it in Atlas or with atlas restart once the running command ends.";
 
 /// What an agent does about busy while a command an agent started with
 /// `run` still runs.

@@ -187,9 +187,10 @@ impl Reading<'_> {
         // Only the session itself may recover, and only when every
         // unknown action is its own and none is still being carried out.
         if subject.own.is_some()
-            && Recovery::of(&self.causes, Asker::Agent(Some(subject.key))) == Some(Recovery::Own)
+            && let Some(recovery) = Recovery::of(&self.causes, Asker::Agent(Some(subject.key)))
+            && recovery.own()
         {
-            reply["next"] = json!(Recovery::Own.step());
+            reply["next"] = json!(recovery.step());
         }
         reply
     }

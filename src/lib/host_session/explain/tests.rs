@@ -300,6 +300,56 @@ fn without_a_session_an_unknown_outcome_says_whose_but_never_yours() {
 }
 
 #[test]
+fn busy_from_a_running_command_names_the_session_that_started_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let codex = session(Host::Codex, "right");
+    recorded(&client, &codex);
+    let command = client
+        .controller
+        .clone()
+        .labelled(Some(&codex))
+        .quarantine_command()
+        .unwrap();
+
+    let refused = client.controller.acquire(false).map(|_| json!({}));
+    let error = reply(refused, || Some(client.clone()), None).unwrap_err();
+    assert_eq!(error.code, "busy");
+    assert_eq!(error.details["running"], "command");
+    let held = &error.details["heldBy"];
+    assert_eq!(held["session"], codex.key.as_str());
+    assert!(
+        held["name"].as_str().unwrap().starts_with("Codex"),
+        "{held}"
+    );
+    client.controller.clear_if(&command).unwrap();
+}
+
+#[test]
+fn an_unknown_outcome_of_its_own_beside_another_sessions_command_is_still_yours() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let (claude, codex) = (session(Host::Claude, "left"), session(Host::Codex, "right"));
+    recorded(&client, &codex);
+    abandoned(&client, Some(&claude));
+    let command = client
+        .controller
+        .clone()
+        .labelled(Some(&codex))
+        .quarantine_command()
+        .unwrap();
+
+    let error = reply(uncertain(), || Some(client.clone()), Some(&claude)).unwrap_err();
+    assert_eq!(error.details["yours"], true);
+    assert_eq!(error.details["next"], hints::UNKNOWN_OWN_ONCE_COMMAND_ENDS);
+    assert!(
+        !error.details.contains_key("causedBy"),
+        "a running command is nobody's unknown outcome"
+    );
+    drop(command);
+}
+
+#[test]
 fn a_reply_whose_own_action_was_uncertain_is_left_as_it_is() {
     let directory = tempfile::tempdir().unwrap();
     let client = client(directory.path());
