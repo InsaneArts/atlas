@@ -100,4 +100,16 @@ public protocol ViewerService: Sendable {
   /// - Throws: ``ServiceError/notOffered`` from an older service that offers no list, which callers read as no list;
   ///   else ``ServiceError`` when the service cannot be read or refuses.
   func sessions() async throws(ServiceError) -> HostSessionList
+
+  /// Reads what cleaning up a host session's work would take, or cleans it up as the person: quits what runs from
+  /// its copies, rolls back its plans, and removes what its tasks installed and the copies Atlas made for it.
+  ///
+  /// - Parameters:
+  ///   - session: The session's key.
+  ///   - apply: Whether to clean up now, rather than only read what it would take, which changes nothing.
+  /// - Returns: The steps it takes, or took and how far each got, every missing field at its safe default; an apply
+  ///   that did not finish comes back too, with its steps, so what was kept or failed can be shown.
+  /// - Throws: ``ServiceError/notOffered`` from an older service that offers no cleanup; else ``ServiceError`` when
+  ///   the service cannot be read or refuses, as while a viewer holds control.
+  func cleanup(session: String, apply: Bool) async throws(ServiceError) -> CleanupReply
 }

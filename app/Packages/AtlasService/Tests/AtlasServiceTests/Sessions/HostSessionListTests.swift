@@ -26,6 +26,7 @@ struct HostSessionListTests {
          "apps": [{"name": "Notes", "copied": false}, {"copied": true}, 3],
          "copies": [{"app": "Notes"}],
          "plans": [{"phase": "applied", "madeAt": 1793163300000, "canRollBack": true}, {"phase": "rolledSideways"}],
+         "installs": ["Probe", 5, ""], "cleanup": "incomplete",
          "screenshots": ["1793163300000000000-capture.png", 4, ""]},
         {"host": "codex", "name": "Codex · opie"},
         "not a session"
@@ -40,6 +41,16 @@ struct HostSessionListTests {
     #expect(record.plans.map(\.phase) == [.applied, .unknown])
     #expect(record.plans.first?.canRollBack == true)
     #expect(record.screenshots == ["1793163300000000000-capture.png"])
+    #expect(record.installs == ["Probe"])
+    #expect(record.cleanup == .incomplete)
+  }
+
+  @Test("a session from an older service has nothing installed and no unfinished cleanup")
+  func anOlderSessionHasNoInstalls() throws {
+    let reading = try list(#"{"ok": true, "sessions": [{"key": "a1", "name": "Pi · notes-sync", "cleanup": null}]}"#)
+    let record = try #require(reading.sessions.first)
+    #expect(record.installs.isEmpty)
+    #expect(record.cleanup == nil)
   }
 
   @Test("a body with no list has no sessions")

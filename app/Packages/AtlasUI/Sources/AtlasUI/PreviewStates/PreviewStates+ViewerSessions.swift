@@ -351,7 +351,8 @@
           .map { name, time in
             ViewerActivityShot(name: name, thumbnail: shotPicture(name), label: "Screenshot taken at \(time)")
           },
-        allShots: "See all 6"
+        allShots: "See all 6",
+        cleanup: SessionCleanup(session: SessionSamples.claudeKey, title: "Clean Up This Session's Work…")
       )
       return state
     }()

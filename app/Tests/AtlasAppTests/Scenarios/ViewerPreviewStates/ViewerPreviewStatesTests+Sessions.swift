@@ -30,6 +30,18 @@
         activity: Self.unfinished
       )
       let idle = try reported("observing", state: "idle")
+      let detail = { (snapshot: inout ViewerSnapshot) in
+        snapshot.date = Self.activityReadAt
+        snapshot.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
+        snapshot.locale = Locale(identifier: "de_DE")
+        snapshot.detailsShown = true
+        snapshot.agents = [.claude, .codex]
+        snapshot.loggedInAt = Date(timeIntervalSince1970: 9 * 3600 + 12 * 60)
+        snapshot.session.sessionChoice = .one(Self.claudeKey)
+        snapshot.panes.sessions.list = HostSessionList(sessions: [Self.claudeRecord])
+        snapshot.panes.apps.apps = [HelperApp(pid: 501, name: "Opie", front: true)]
+        Self.keepThumbnails(&snapshot)
+      }
       return [
         "Sessions": shown(working),
         "Sessions, menu open": shown(working) { $0.session.openMenu = .sessions },
@@ -47,17 +59,23 @@
           Self.onSessionsActivity(Self.sessionsLog, &snapshot)
           snapshot.session.sessionChoice = .one(Self.claudeKey)
         },
-        "Session detail": shown(working) { snapshot in
-          snapshot.date = Self.activityReadAt
-          snapshot.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
-          snapshot.locale = Locale(identifier: "de_DE")
-          snapshot.detailsShown = true
-          snapshot.agents = [.claude, .codex]
-          snapshot.loggedInAt = Date(timeIntervalSince1970: 9 * 3600 + 12 * 60)
-          snapshot.session.sessionChoice = .one(Self.claudeKey)
-          snapshot.panes.sessions.list = HostSessionList(sessions: [Self.claudeRecord])
-          snapshot.panes.apps.apps = [HelperApp(pid: 501, name: "Opie", front: true)]
-          Self.keepThumbnails(&snapshot)
+        "Session detail": shown(working, detail),
+        "Clean up": shown(working) { snapshot in
+          detail(&snapshot)
+          snapshot.session.alert = .cleanup(
+            session: Self.claudeKey,
+            steps: ViewerPresenter.cleanupSteps(Self.cleanupPreview),
+            warning: ViewerPresenter.cleanupWarning(Self.cleanupPreview)
+          )
+        },
+        "Session cleaned up": shown(working) { snapshot in
+          detail(&snapshot)
+          var record = Self.claudeRecord
+          record.plans = []
+          record.installs = ["Probe"]
+          record.cleanup = .incomplete
+          snapshot.panes.sessions.list = HostSessionList(sessions: [record])
+          snapshot.session.cleanupReceipts[Self.claudeKey] = Self.cleanupApplied
         },
         "Focus changed": shown(idle) { snapshot in
           Self.onTab(.activity, at: Self.activityReadAt, &snapshot)
@@ -66,6 +84,32 @@
         },
       ]
     }
+
+    /// What cleaning up Claude Code's work takes while it still acts: quitting Opie, rolling back its plan, removing
+    /// Probe, which its task installed, and the copy of Opie.
+    static let cleanupPreview = CleanupReply(
+      ok: true,
+      preview: true,
+      steps: [
+        CleanupStep(number: 1, kind: .quit, apps: ["Opie"]),
+        CleanupStep(number: 2, kind: .undoPlan),
+        CleanupStep(number: 3, kind: .removeInstall, app: "Probe", unchanged: true),
+        CleanupStep(number: 4, kind: .removeCopy, app: "Opie"),
+      ],
+      active: true
+    )
+
+    /// That cleanup once it ran: Opie quit and the plan rolled back, Probe kept as it changed since it was installed,
+    /// and the copy of Opie still in use.
+    static let cleanupApplied = CleanupReply(
+      state: .incomplete,
+      steps: [
+        CleanupStep(number: 1, kind: .quit, apps: ["Opie"], state: .done),
+        CleanupStep(number: 2, kind: .undoPlan, state: .done),
+        CleanupStep(number: 3, kind: .removeInstall, app: "Probe", state: .kept, reason: "changed"),
+        CleanupStep(number: 4, kind: .removeCopy, app: "Opie", state: .failed, reason: "in-use", retry: true),
+      ]
+    )
 
     /// Claude Code's latest actions, newest first, as the status lists them while it has the helper.
     static let clicking: [[String: Any]] = [

@@ -1,9 +1,9 @@
 import AtlasUI
 
-/// The alerts: Recover, Switch, Log Out, Log Out Anyway and Restart, each asked first, run once however many times
-/// its button is pressed, and answered with a notice once its command ends. Recover answers in place: refused, the
-/// alert stays and says why; worked, it says the helper is ready for ``AtlasUI/Motion/Duration/doneHold`` on the
-/// injected clock, or until Done, before it closes.
+/// The alerts: Recover, Switch, Log Out, Log Out Anyway, Restart and Clean Up, each asked first, run once however
+/// many times its button is pressed, and answered with a notice once its command ends. Recover answers in place:
+/// refused, the alert stays and says why; worked, it says the helper is ready for
+/// ``AtlasUI/Motion/Duration/doneHold`` on the injected clock, or until Done, before it closes.
 extension ViewerController {
   /// The alert over the window now: the one asked for, else the recovery alert the helper's state calls for.
   var shownAlert: ViewerAlert? {
@@ -57,6 +57,7 @@ extension ViewerController {
     case .logOut: await run { await self.logOut(force: false) }
     case .logOutAnyway: await run { await self.logOut(force: true) }
     case .restart: await run { await self.restart() }
+    case .cleanup(let key, _, _): await run { await self.cleanUp(key) }
     case nil: return
     }
   }

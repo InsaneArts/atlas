@@ -75,6 +75,12 @@ public final class ScriptedService: ViewerService {
   public var offersSessions = true
   /// Session list requests made.
   public var sessionsCalls = 0
+  /// What a cleanup preview answers.
+  public var cleanupPreview = CleanupReply(ok: true, preview: true)
+  /// What a cleanup apply answers.
+  public var cleanupApplied = CleanupReply(ok: true, state: .complete)
+  /// The cleanup requests made, in order: "preview KEY" or "apply KEY".
+  public var cleanups: [String] = []
   /// Apps requests made.
   var appsCalls = 0
 
@@ -325,5 +331,20 @@ public final class ScriptedService: ViewerService {
     try await pause("sessions")
     guard offersSessions else { throw .notOffered }
     return sessionList
+  }
+
+  /// Answers `cleanupPreview` or `cleanupApplied`, unless held or failed: a preview's route is `cleanup.json`, an
+  /// apply's `cleanup`.
+  ///
+  /// - Parameters:
+  ///   - session: The session's key.
+  ///   - apply: Whether it cleans up, rather than reads what it would take.
+  /// - Returns: The scripted reply.
+  /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
+  public func cleanup(session: String, apply: Bool) async throws(ServiceError) -> CleanupReply {
+    cleanups.append("\(apply ? "apply" : "preview") \(session)")
+    try await pause(apply ? "cleanup" : "cleanup.json")
+    return apply ? cleanupApplied : cleanupPreview
   }
 }

@@ -47,6 +47,8 @@
         PreviewState(name: "Activity, needs you", value: viewerActivityNeedsYou),
         PreviewState(name: "Activity, one session", value: viewerActivityOneSession),
         PreviewState(name: "Session detail", value: viewerSessionDetail),
+        PreviewState(name: "Clean up", value: viewerCleanUp),
+        PreviewState(name: "Session cleaned up", value: viewerSessionCleanedUp),
         PreviewState(name: "Focus changed", value: viewerFocusChanged),
       ]
     }

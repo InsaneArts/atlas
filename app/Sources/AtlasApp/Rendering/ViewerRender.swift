@@ -47,6 +47,8 @@
         sample("35-activity-one-session", PreviewStates.viewerActivityOneSession),
         sample("36-session-detail", PreviewStates.viewerSessionDetail),
         sample("37-focus-changed", PreviewStates.viewerFocusChanged),
+        sample("38-clean-up", PreviewStates.viewerCleanUp),
+        sample("39-session-cleaned-up", PreviewStates.viewerSessionCleanedUp),
       ]
     }
 

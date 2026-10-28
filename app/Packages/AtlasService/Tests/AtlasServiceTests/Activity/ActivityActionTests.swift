@@ -26,6 +26,21 @@ struct ActivityActionTests {
     #expect(ActivityAction(ActivityLog.Entry(id: "1", says: says, operation: "input")) == kind)
   }
 
+  @Test(
+    "installing an app and cleaning up a task's work read as opening and closing do, done, failed or under way",
+    arguments: [
+      "installed Probe",
+      "couldn't install Probe",
+      "installing Probe…",
+      "cleaned up the task's work",
+      "couldn't clean up the task's work",
+      "cleaning up…",
+    ]
+  )
+  func kindOfInstallAndCleanUp(says: String) {
+    #expect(ActivityAction(ActivityLog.Entry(id: "1", says: says, operation: "run")) == .window)
+  }
+
   @Test("a screenshot and a change of control read by their operation, and words with no known verb by theirs")
   func kindFromOperation() {
     let entry = { (says: String?, operation: String) in

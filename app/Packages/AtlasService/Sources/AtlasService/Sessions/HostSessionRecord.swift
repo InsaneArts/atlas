@@ -29,6 +29,10 @@ public struct HostSessionRecord: Decodable, Equatable, Sendable, Identifiable {
   public var copies: [HostSessionCopy]
   /// The environment plans it applied.
   public var plans: [HostSessionPlan]
+  /// The names of the apps its tasks installed that may still be in the helper's Applications.
+  public var installs: [String]
+  /// Where its newest cleanup that did not finish stands; nil when every cleanup finished, or none ran.
+  public var cleanup: CleanupState?
   /// Its newest screenshots' file names, newest first.
   public var screenshots: [String]
 
@@ -51,6 +55,8 @@ public struct HostSessionRecord: Decodable, Equatable, Sendable, Identifiable {
   ///   - apps: The apps it opened.
   ///   - copies: The copies of apps made for it.
   ///   - plans: The environment plans it applied.
+  ///   - installs: The apps its tasks installed that may still be there.
+  ///   - cleanup: Where its newest unfinished cleanup stands.
   ///   - screenshots: Its newest screenshots' file names.
   public init(
     key: String,
@@ -66,6 +72,8 @@ public struct HostSessionRecord: Decodable, Equatable, Sendable, Identifiable {
     apps: [HostSessionApp] = [],
     copies: [HostSessionCopy] = [],
     plans: [HostSessionPlan] = [],
+    installs: [String] = [],
+    cleanup: CleanupState? = nil,
     screenshots: [String] = []
   ) {
     self.key = key
@@ -81,6 +89,8 @@ public struct HostSessionRecord: Decodable, Equatable, Sendable, Identifiable {
     self.apps = apps
     self.copies = copies
     self.plans = plans
+    self.installs = installs
+    self.cleanup = cleanup
     self.screenshots = screenshots
   }
 
@@ -88,11 +98,11 @@ public struct HostSessionRecord: Decodable, Equatable, Sendable, Identifiable {
   enum CodingKeys: String, CodingKey {
     /// Each field by the name the service writes.
     case key, host, hostLabel, name, folder, startedAt, lastSeenAt, endedAt, state, actions, apps, copies, plans,
-      screenshots
+      installs, cleanup, screenshots
   }
 
-  /// Decodes a record, keeping the default of anything missing or of the wrong type; each app, copy and plan decodes
-  /// on its own. Times are read as milliseconds since 1970.
+  /// Decodes a record, keeping the default of anything missing or of the wrong type; each app, copy, plan and install
+  /// decodes on its own. Times are read as milliseconds since 1970.
   ///
   /// - Parameter decoder: The decoder reading one `sessions` entry.
   /// - Throws: `DecodingError` when the entry is not an object or names no key or no name, which drops it.
@@ -131,6 +141,11 @@ public struct HostSessionRecord: Decodable, Equatable, Sendable, Identifiable {
     plans =
       (try? container.decodeIfPresent([Lenient<HostSessionPlan>].self, forKey: .plans))?
       .compactMap(\.value) ?? []
+    installs =
+      (try? container.decodeIfPresent([Lenient<String>].self, forKey: .installs))?
+      .compactMap(\.value)
+      .filter { !$0.isEmpty } ?? []
+    cleanup = CleanupState(word: text(.cleanup))
     screenshots =
       (try? container.decodeIfPresent([Lenient<String>].self, forKey: .screenshots))?
       .compactMap(\.value)

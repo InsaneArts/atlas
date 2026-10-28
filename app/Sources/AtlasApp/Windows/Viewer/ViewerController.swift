@@ -135,6 +135,7 @@ final class ViewerController {
     case .askSwitch: ask(.switchToHelper)
     case .askLogOut: ask(.logOut)
     case .askRestart: ask(.restart)
+    case .askCleanup(let key): Task { await askCleanup(key) }
     case .alertConfirm: Task { await confirmAlert() }
     case .alertCancel: cancelAlert()
     case .moveCorner(let corner): moveCorner(corner)

@@ -49,6 +49,11 @@ public enum ViewerEvent: Equatable, Sendable {
   case askLogOut
   /// Restart the Helper…: ask before restarting it.
   case askRestart
+  /// Clean Up This Session's Work… in Details: read what cleaning up the session's work takes, then ask before it
+  /// runs.
+  ///
+  /// - Parameter session: The session's key.
+  case askCleanup(session: String)
   /// The alert's button that goes ahead.
   case alertConfirm
   /// The alert's way out.

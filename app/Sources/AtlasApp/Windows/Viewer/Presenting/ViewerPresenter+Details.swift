@@ -84,8 +84,8 @@ extension ViewerPresenter {
 
   /// The chosen host session at the top of Details, while the sessions' list names it: its icon, name, state and
   /// line, its host and folder, when it started and was last seen or ended, the apps it opened as the Apps tab last
-  /// saw them, the copies Atlas made for it, the plans it applied with where each stands and when it was made, and its
-  /// newest three screenshots, each labelled with its time. None while every
+  /// saw them, the copies Atlas made for it, the plans it applied with where each stands and when it was made, its
+  /// newest three screenshots, each labelled with its time, and cleaning up what it left. None while every
   /// session's work shows, or when the service offers no list.
   ///
   /// - Parameter snapshot: What the controller holds.
@@ -121,7 +121,8 @@ extension ViewerPresenter {
         return Fact(name: ViewerWords.planPhase(plan), value: made ?? "")
       },
       shots: Array(shots),
-      allShots: record.screenshots.count > shots.count ? ViewerWords.seeAll(record.screenshots.count) : nil
+      allShots: record.screenshots.count > shots.count ? ViewerWords.seeAll(record.screenshots.count) : nil,
+      cleanup: cleanup(record, snapshot)
     )
   }
 

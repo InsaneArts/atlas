@@ -18,7 +18,8 @@ extension ViewerPresenter {
   /// One alert's words and buttons, as every window builds them
   /// (``HelperAlert/state(overview:progress:askedByPerson:)``); Restart, which only the main window asks, is a
   /// destructive alert of its own, since anything an agent is doing in the helper stops: Cancel is the default and
-  /// Restart red. Recover shows its refusal and its success in place.
+  /// Restart red; so is Clean Up, which lists what it quits, rolls back and removes. Recover shows its refusal and its
+  /// success in place.
   ///
   /// - Parameters:
   ///   - kind: Which alert.
@@ -63,6 +64,17 @@ extension ViewerPresenter {
           running: ViewerWords.restarting,
           done: ViewerWords.restartTitle,
           doneMessage: ViewerWords.restartMessage
+        )
+      )
+    case .cleanup(_, let steps, let warning):
+      HelperAlert.destructive(
+        ViewerWords.cleanupTitle,
+        ViewerWords.cleanupMessage(steps, warning: warning),
+        ViewerWords.cleanupButton,
+        phase: progress.phase(
+          running: ViewerWords.cleaningUp,
+          done: ViewerWords.cleanupTitle,
+          doneMessage: ViewerWords.cleanupMessage(steps, warning: warning)
         )
       )
     }

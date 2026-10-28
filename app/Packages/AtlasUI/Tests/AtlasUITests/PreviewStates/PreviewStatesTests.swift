@@ -62,8 +62,8 @@
         ]
       )
       #expect(
-        Set(states.compactMap { $0.alert?.title }).count == 5,
-        "Recover, Switch, Log Out, Log Out Anyway, Restart"
+        Set(states.compactMap { $0.alert?.title }).count == 6,
+        "Recover, Switch, Log Out, Log Out Anyway, Restart, Clean Up"
       )
       #expect(Set(states.compactMap { $0.screen.picture == nil ? $0.screen.empty?.message.headline : nil }).count == 3)
       let chips = Set(

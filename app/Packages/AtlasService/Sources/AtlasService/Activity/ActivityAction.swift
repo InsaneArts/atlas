@@ -11,7 +11,7 @@ public enum ActivityAction: Equatable, Sendable {
   case scroll
   /// A screenshot taken.
   case screenshot
-  /// An app, a file or a link opened, or apps closed.
+  /// An app, a file or a link opened, apps closed, an app installed, or a task's work cleaned up.
   case window
   /// Control of the helper changing hands, such as given back.
   case control
@@ -63,7 +63,9 @@ public enum ActivityAction: Equatable, Sendable {
     "moved": .pointer, "move": .pointer, "clicking": .pointer, "dragging": .pointer, "typed": .keys, "type": .keys,
     "typing": .keys, "pressed": .keys, "press": .keys, "pressing": .keys, "scrolled": .scroll, "scroll": .scroll,
     "scrolling": .scroll, "opened": .window, "open": .window, "opening": .window,
-    "closed": .window, "close": .window, "closing": .window, "took": .screenshot, "take": .screenshot,
+    "closed": .window, "close": .window, "closing": .window, "installed": .window, "install": .window,
+    "installing": .window, "cleaned": .window, "clean": .window, "cleaning": .window, "took": .screenshot,
+    "take": .screenshot,
     "ran": .command, "run": .command, "running": .command,
   ]
 }

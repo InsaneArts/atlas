@@ -1,4 +1,4 @@
-/// The chosen host session in Details: who it is, where it runs, and what it made in the helper.
+/// The chosen host session in Details: who it is, where it runs, what it made in the helper, and cleaning that up.
 public struct ViewerSessionDetail: Equatable, Sendable {
   /// The most screenshots it shows.
   public static let mostShots = 3
@@ -23,6 +23,8 @@ public struct ViewerSessionDetail: Equatable, Sendable {
   public var shots: [ViewerActivityShot]
   /// "See all 6" under them; nil with three or fewer.
   public var allShots: String?
+  /// Cleaning up its work; nil when it left nothing to clean up.
+  public var cleanup: SessionCleanup?
 
   /// Creates the session's detail.
   ///
@@ -37,6 +39,7 @@ public struct ViewerSessionDetail: Equatable, Sendable {
   ///   - plans: Each environment plan it applied; none by default.
   ///   - shots: Its newest screenshots; none by default.
   ///   - allShots: "See all 6"; nil by default.
+  ///   - cleanup: Cleaning up its work; nil, nothing to clean up, by default.
   public init(
     icon: RowIcon,
     name: String,
@@ -47,7 +50,8 @@ public struct ViewerSessionDetail: Equatable, Sendable {
     copies: [Fact] = [],
     plans: [Fact] = [],
     shots: [ViewerActivityShot] = [],
-    allShots: String? = nil
+    allShots: String? = nil,
+    cleanup: SessionCleanup? = nil
   ) {
     self.icon = icon
     self.name = name
@@ -59,5 +63,6 @@ public struct ViewerSessionDetail: Equatable, Sendable {
     self.plans = plans
     self.shots = shots
     self.allShots = allShots
+    self.cleanup = cleanup
   }
 }
