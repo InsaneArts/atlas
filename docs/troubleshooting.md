@@ -38,6 +38,8 @@ For `transport`, check whether the helper is logged in and read `doctor`. If the
 
 `focus-changed` means an action given `--app` or `--pid` was not sent, because that app did not have keyboard focus (`reason: "app"`), another app's window was at the action's point (`point`), or Atlas could not tell which app was in front (`unreadable`). `found` names the app that was there, often another agent's. Actions before it in the same command were sent, as `performed` and, for `type`, `typed` say, and nothing is left uncertain; the one action sent just before the change may have reached the other app. Take a screenshot of the app, check what the earlier part did, click where the app shows to bring it forward, then send the rest.
 
+`interrupted` means a signal stopped the command, usually an agent tool's timeout. What it finished stands. When it is `uncertain`, the step under way was cut: treat it as any unknown outcome below.
+
 `stopped` means the person stopped agents. Ask them what they want next; only they resume agent work. Pausing the picture is different: the helper continues working while its displayed image is paused. See [Using Atlas](using-atlas.md#take-control-or-stop-agents).
 
 ## An action's outcome is unknown

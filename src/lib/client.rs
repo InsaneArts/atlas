@@ -693,7 +693,7 @@ impl Client {
     /// about ten times a second for what is left of the controller's wait,
     /// and no longer than a grant can outlive its holder. A busy from the
     /// person, and every other answer, is returned at once, and a saved
-    /// Stop ends the retries.
+    /// Stop or a signal's stop ends the retries.
     async fn acquire_input_waiting(&self, owner: &str, epoch: &Epoch) -> Result<Value> {
         let mut until = None;
         loop {
@@ -716,6 +716,7 @@ impl Client {
                     if self.stop_marked() {
                         return Err(Error::new("stopped", crate::error::STOPPED));
                     }
+                    self.controller.interrupt().check()?;
                 }
                 outcome => return outcome,
             }
@@ -837,7 +838,7 @@ impl Client {
     }
 
     async fn native_request(&self, request: Value) -> Result<Value> {
-        let result = self.input_transport().call(&request).await?;
+        let result = self.native_call(&request).await?;
         if result["ok"] != true {
             let error = Error::new(
                 match result["code"].as_str() {
@@ -871,6 +872,25 @@ impl Client {
         }
 
         Ok(result)
+    }
+
+    /// Send `request` to the input service and read its answer. It is
+    /// never dropped half sent; an answer still missing when a signal's stop
+    /// cuts the step under way leaves its outcome unknown, so the claim the
+    /// caller holds for it stays pending.
+    async fn native_call(&self, request: &Value) -> Result<Value> {
+        let interrupt = self.controller.interrupt();
+        let connection = self.input_transport().connect().await?;
+        let sent = {
+            let _sending = interrupt.sending();
+            connection.dispatch(request).await?
+        };
+
+        tokio::select! {
+            biased;
+            reply = sent.finish() => reply,
+            signal = interrupt.cut() => Err(interrupt.cut_short(signal)),
+        }
     }
 
     pub async fn input(
@@ -1027,6 +1047,7 @@ impl Client {
         expect: Option<Expect>,
         session: &Session,
     ) -> Result<Value> {
+        self.controller.interrupt().check()?;
         let standalone = crate::control::token();
         let owner = lease.map(|(_, token)| token).unwrap_or(&standalone);
         if lease.is_none()
@@ -1075,7 +1096,11 @@ impl Client {
             {
                 self.controller.clear_if(generation)?;
             }
-            if cleanup.is_err() {
+            if let Err(cleanup) = cleanup {
+                // A release the stop cut short says so, as its input may.
+                if cleanup.code == "interrupted" {
+                    return Err(cleanup);
+                }
                 let error = match result {
                     Ok(_) => Error::new(
                         "uncertain",
@@ -1682,6 +1707,8 @@ impl Client {
         observed_at: Option<Instant>,
     ) -> Result<Value> {
         let started = Instant::now();
+        let interrupt = self.controller.interrupt();
+        interrupt.check()?;
 
         // An agent's command that changes the helper is refused, before it
         // starts, once the person has stopped agents; reads and Atlas's own
@@ -1739,7 +1766,16 @@ impl Client {
         .then(|| self.controller.quarantine())
         .transpose()?;
 
-        let pending = match connection.dispatch(&request).await {
+        // The last moment a stop refuses the request: it is sent whole, or
+        // not at all, so its claim is settled whenever it is not sent.
+        let sent = {
+            let _sending = interrupt.sending();
+            match interrupt.check() {
+                Ok(()) => connection.dispatch(&request).await,
+                Err(stop) => Err(stop),
+            }
+        };
+        let pending = match sent {
             Ok(pending) => pending,
             Err(error) => {
                 if let Some(generation) = &generation
@@ -1756,15 +1792,20 @@ impl Client {
         // An agent's command runs until it ends, unless the person stops
         // agents: then the connection is dropped, which ends the command in
         // the helper. What it did by then is unknown, so it stays pending.
-        // A command that started ends with a row too, however it ends.
+        // A command that started ends with a row too, however it ends. A
+        // signal's stop cuts any request still unanswered after its grace
+        // the same way.
         let finishing = pending.finish();
+        let cut = interrupt.cut();
         let mut reply = if cuttable {
             let _ = self.record_start(&request);
             let ended = tokio::select! {
+                biased;
                 reply = finishing => reply,
                 () = self.stopped_while_running() => {
                     Err(Error::new("stopped", crate::error::STOPPED).uncertain())
                 }
+                signal = cut => Err(interrupt.cut_short(signal)),
             };
             match ended {
                 Ok(reply) => reply,
@@ -1775,7 +1816,11 @@ impl Client {
                 }
             }
         } else {
-            finishing.await?
+            tokio::select! {
+                biased;
+                reply = finishing => reply?,
+                signal = cut => return Err(interrupt.cut_short(signal)),
+            }
         };
         validate_completion(&request, &reply)?;
 
@@ -2081,6 +2126,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::interrupt::Interrupt;
+    use nix::sys::signal::Signal;
     use tokio::{
         io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
         net::{UnixListener, UnixStream},
@@ -2524,6 +2571,320 @@ mod tests {
             );
             recovery_settles_the_abandoned_claim(&client);
         }
+    }
+
+    /// A grace the tests wait out.
+    const GRACE: Duration = Duration::from_millis(500);
+
+    /// Well within [`GRACE`].
+    const SOON: Duration = Duration::from_millis(50);
+
+    /// `client`'s controller stopped by a stop of its own, which the test
+    /// asks.
+    fn stoppable(client: &mut Client) -> Interrupt {
+        let interrupt = Interrupt::new(GRACE);
+        client.controller = client.controller.clone().interrupted_by(interrupt.clone());
+        interrupt
+    }
+
+    /// `client` with a controller of its own on the same state, as another
+    /// agent's command has.
+    fn another(client: &Client, dir: &Path) -> Client {
+        let mut other = client.clone();
+        other.controller = Controller::at(60001, &dir.join("state"));
+        other
+    }
+
+    #[tokio::test]
+    async fn a_stop_before_native_acquisition_starts_nothing() {
+        let (_dir, mut client, listener, session) = native_client();
+        let interrupt = stoppable(&mut client);
+        let _ownership = client.controller.acquire(false).unwrap();
+        interrupt.ask(Signal::SIGTERM);
+
+        let actions = json!([{"type": "key", "key": "a"}]);
+        let error = client
+            .input_in_session(&actions, None, None, None, &session)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "interrupted");
+        assert!(!error.uncertain);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), listener.accept())
+                .await
+                .is_err(),
+            "the input service heard nothing"
+        );
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_stop_while_acquisition_is_unanswered_waits_for_it_then_posts_nothing() {
+        let (_dir, mut client, listener, session) = native_client();
+        let interrupt = stoppable(&mut client);
+        let mut caller = Box::pin(standalone_input(&client, &session));
+        let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+        interrupt.ask(Signal::SIGTERM);
+        answer(&mut acquire, json!({"ok": true})).await;
+
+        let mut release = dispatched(&mut caller, &listener, "release").await;
+        answer(&mut release, json!({"ok": true})).await;
+        let error = caller.await.unwrap_err();
+        assert_eq!(error.code, "interrupted");
+        assert!(!error.uncertain, "nothing was posted");
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_stop_while_input_is_under_way_lets_the_batch_finish_and_settles_it() {
+        let (_dir, mut client, listener, session) = native_client();
+        let interrupt = stoppable(&mut client);
+        let mut caller = Box::pin(standalone_input(&client, &session));
+        let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+        answer(&mut acquire, json!({"ok": true})).await;
+        let mut input = dispatched(&mut caller, &listener, "input").await;
+        interrupt.ask(Signal::SIGTERM);
+        answer(&mut input, json!({"ok": true, "performed": 2})).await;
+
+        let mut release = dispatched(&mut caller, &listener, "release").await;
+        answer(&mut release, json!({"ok": true})).await;
+        assert_eq!(caller.await.unwrap()["ok"], true);
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn input_still_unanswered_after_the_grace_stays_pending_for_every_agent() {
+        // Recovery takes the controller lock, which a spawn on another test
+        // thread can hold in its child until exec.
+        if !crate::transaction_test::isolated(
+            "client::tests::input_still_unanswered_after_the_grace_stays_pending_for_every_agent",
+        ) {
+            return;
+        }
+        let (dir, mut client, listener, session) = native_client();
+        let interrupt = stoppable(&mut client);
+        let mut caller = Box::pin(standalone_input(&client, &session));
+        let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+        answer(&mut acquire, json!({"ok": true})).await;
+        let mut input = dispatched(&mut caller, &listener, "input").await;
+        interrupt.ask(Signal::SIGTERM);
+
+        // Past the grace, its release is still sent whole, but not waited
+        // for.
+        let error = tokio::time::timeout(GRACE * 4, caller)
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.code, "interrupted");
+        assert!(error.uncertain);
+        let mut line = String::new();
+        assert_eq!(
+            input.read_line(&mut line).await.unwrap(),
+            0,
+            "the input service sees the batch cut off"
+        );
+        let (release, _) = listener.accept().await.unwrap();
+        BufReader::new(release).read_line(&mut line).await.unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&line).unwrap()["op"],
+            "release"
+        );
+        recovery_settles_the_abandoned_claim(&another(&client, dir.path()));
+    }
+
+    #[tokio::test]
+    async fn a_stop_while_release_is_unanswered_waits_for_it() {
+        let (_dir, mut client, listener, session) = native_client();
+        let interrupt = stoppable(&mut client);
+        let mut caller = Box::pin(standalone_input(&client, &session));
+        let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+        answer(&mut acquire, json!({"ok": true})).await;
+        let mut input = dispatched(&mut caller, &listener, "input").await;
+        answer(&mut input, json!({"ok": true, "performed": 2})).await;
+        let mut release = dispatched(&mut caller, &listener, "release").await;
+        interrupt.ask(Signal::SIGTERM);
+        tokio::time::sleep(SOON).await;
+
+        answer(&mut release, json!({"ok": true})).await;
+        assert_eq!(caller.await.unwrap()["ok"], true);
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_release_still_unanswered_after_the_grace_stays_pending() {
+        if !crate::transaction_test::isolated(
+            "client::tests::a_release_still_unanswered_after_the_grace_stays_pending",
+        ) {
+            return;
+        }
+        let (dir, mut client, listener, session) = native_client();
+        let interrupt = stoppable(&mut client);
+        let mut caller = Box::pin(standalone_input(&client, &session));
+        let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+        answer(&mut acquire, json!({"ok": true})).await;
+        let mut input = dispatched(&mut caller, &listener, "input").await;
+        answer(&mut input, json!({"ok": true, "performed": 2})).await;
+        let _release = dispatched(&mut caller, &listener, "release").await;
+        interrupt.ask(Signal::SIGTERM);
+        let asked = Instant::now();
+
+        let error = tokio::time::timeout(GRACE * 4, caller)
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert!(asked.elapsed() >= GRACE, "cut at the end of the grace");
+        assert_eq!(error.code, "interrupted");
+        assert!(error.uncertain);
+        recovery_settles_the_abandoned_claim(&another(&client, dir.path()));
+    }
+
+    #[tokio::test]
+    async fn an_acquisition_still_unanswered_after_the_grace_stays_pending() {
+        if !crate::transaction_test::isolated(
+            "client::tests::an_acquisition_still_unanswered_after_the_grace_stays_pending",
+        ) {
+            return;
+        }
+        let (dir, mut client, listener, session) = native_client();
+        let interrupt = stoppable(&mut client);
+        let mut caller = Box::pin(standalone_input(&client, &session));
+        let _acquire = dispatched(&mut caller, &listener, "acquire").await;
+        interrupt.ask(Signal::SIGTERM);
+
+        // The release that follows an unknown acquisition is cut at once,
+        // so it stays unknown too.
+        let error = tokio::time::timeout(GRACE * 4, caller)
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.code, "interrupted");
+        assert!(error.uncertain);
+        let other = another(&client, dir.path());
+        assert!(!other.controller.pending().unwrap().is_empty());
+        assert_eq!(
+            other.controller.acquire(false).unwrap_err().code,
+            "uncertain"
+        );
+        let recovery = other.controller.acquire(true).unwrap();
+        other.controller.clear().unwrap();
+        drop(recovery);
+        assert!(other.controller.acquire(false).is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_stop_while_a_request_waits_to_be_sent_sends_nothing_and_leaves_nothing() {
+        let (dir, client, input, _session) = native_client();
+        drop(input);
+        let (acting, helper, interrupt) = running(dir.path(), client);
+        let lease: SharedLease = Arc::new(tokio::sync::Mutex::new(crate::control::Lease::new(
+            Duration::from_secs(10),
+        )));
+        let token = lease.lock().await.acquire(&acting.controller).unwrap();
+        let authorizing = lease.lock().await;
+        let run = json!({"op": "run", "argv": ["true"], "timeoutMs": 1000});
+        let mut caller = Box::pin(acting.mutate(run, Some((&lease, &token)), None));
+        assert!(
+            tokio::time::timeout(SOON, &mut caller).await.is_err(),
+            "it waits for the lease"
+        );
+        interrupt.ask(Signal::SIGTERM);
+        drop(authorizing);
+
+        let error = caller.await.unwrap_err();
+        assert_eq!(error.code, "interrupted");
+        assert!(!error.uncertain, "nothing was sent");
+        let (peer, _) = helper.accept().await.unwrap();
+        let mut line = String::new();
+        assert_eq!(
+            BufReader::new(peer).read_line(&mut line).await.unwrap(),
+            0,
+            "the helper got no request"
+        );
+        assert!(acting.controller.pending().unwrap().is_empty());
+    }
+
+    /// An agent's `run` against a helper stand-in kept in `dir`, its
+    /// listener, and the stop its controller heeds.
+    fn running(dir: &Path, mut client: Client) -> (Client, UnixListener, Interrupt) {
+        client.transport.path = dir.join("helper.sock");
+        let helper = UnixListener::bind(&client.transport.path).unwrap();
+        let interrupt = stoppable(&mut client);
+        (client.doing(Doing::new("run")), helper, interrupt)
+    }
+
+    #[tokio::test]
+    async fn a_run_that_ends_within_the_grace_is_settled() {
+        let (dir, client, input, _session) = native_client();
+        drop(input);
+        let (acting, helper, interrupt) = running(dir.path(), client);
+        let _ownership = acting.controller.acquire(false).unwrap();
+        let run = json!({"op": "run", "argv": ["true"], "timeoutMs": 1000});
+        let mut caller = Box::pin(acting.mutate(run, None, None));
+        let mut peer = dispatched(&mut caller, &helper, "run").await;
+        interrupt.ask(Signal::SIGTERM);
+        tokio::time::sleep(SOON).await;
+
+        answer(
+            &mut peer,
+            json!({"ok": true, "exitCode": 0, "timedOut": false}),
+        )
+        .await;
+        assert_eq!(caller.await.unwrap()["exitCode"], 0);
+        assert!(acting.controller.pending().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_run_still_going_after_the_grace_is_cut_and_stays_pending() {
+        if !crate::transaction_test::isolated(
+            "client::tests::a_run_still_going_after_the_grace_is_cut_and_stays_pending",
+        ) {
+            return;
+        }
+        let (dir, client, input, _session) = native_client();
+        drop(input);
+        let (acting, helper, interrupt) = running(dir.path(), client);
+        let ownership = acting.controller.acquire(false).unwrap();
+        let run = json!({"op": "run", "argv": ["sleep", "30"], "timeoutMs": 60_000});
+        let mut caller = Box::pin(acting.mutate(run, None, None));
+        let mut peer = dispatched(&mut caller, &helper, "run").await;
+        interrupt.ask(Signal::SIGTERM);
+
+        let error = tokio::time::timeout(GRACE * 5, caller)
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.code, "interrupted");
+        assert!(error.uncertain);
+        let mut line = String::new();
+        assert_eq!(
+            peer.read_line(&mut line).await.unwrap(),
+            0,
+            "the helper sees the connection close, which ends the command"
+        );
+        let log = fs::read_to_string(acting.output_dir().unwrap().join("metadata.jsonl")).unwrap();
+        let ended: Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
+        assert_eq!(ended["ok"], false);
+        assert_eq!(ended["code"], "uncertain", "never recorded as not done");
+        drop(ownership);
+        recovery_settles_the_abandoned_claim(&another(&acting, dir.path()));
+    }
+
+    #[tokio::test]
+    async fn a_restart_stopped_before_its_request_settles_only_its_own_claim() {
+        let (_dir, mut client, _input, _session) = native_client();
+        let interrupt = stoppable(&mut client);
+        let earlier = client.controller.quarantine().unwrap();
+        let unknown = vec![earlier.generation().to_owned()];
+        drop(earlier);
+        let claim = client.controller.quarantine().unwrap();
+        interrupt.ask(Signal::SIGTERM);
+
+        let outcome = client.mutate(json!({"op": "restart"}), None, None).await;
+        let error = client.settle_restart(&claim, outcome).unwrap_err();
+        assert_eq!(error.code, "interrupted");
+        assert!(!error.uncertain, "the restart was never sent");
+        drop(claim);
+        assert_eq!(client.controller.pending().unwrap(), unknown);
     }
 
     #[tokio::test]

@@ -142,7 +142,10 @@ fn changes_helper(command: &Command, attributed: bool) -> bool {
 
 /// Whether an agent's command may take control of the helper: it waits for
 /// another command to finish first. A logout that asks first is the
-/// person's at a terminal, and answers at once.
+/// person's at a terminal, and answers at once. Whoever runs one, a signal
+/// stops it cleanly: nothing more starts, and the step under way settles
+/// or is cut. `logout --yes` run at a terminal is the exception: it keeps
+/// the stop every logout at a terminal has, which ends it at once.
 pub(super) fn controls(command: &Command) -> bool {
     matches!(
         command,
@@ -1193,7 +1196,7 @@ mod tests {
     }
 
     #[test]
-    fn only_an_agents_commands_that_take_control_wait() {
+    fn only_commands_that_take_control_wait_and_listen_for_signals() {
         let waits = |args: &[&str]| controls(&parse(args).unwrap().command.unwrap());
 
         for controlling in [

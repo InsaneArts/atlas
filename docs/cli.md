@@ -107,7 +107,7 @@ Ordinary command results are readable text in a terminal and JSON when redirecte
 
 In JSON mode, each result is one line of JSON. A returned action result goes to stdout, including a result with `ok: false`. Command, configuration and connection errors go to stderr. On failure, read both streams. Do not assume an empty stdout means nothing happened. Every failure carries `next`, one sentence on what to do about it, and `busy` carries `holder`: `person` or `agent`. Commands that change the helper first wait up to 30 seconds for another Atlas command (`--wait SECONDS` or `ATLAS_WAIT`, up to 600, 0 for none), and `busy` then carries `waited`, the seconds waited. They never wait while the person has control or has stopped agents.
 
-The process exits with status 0 for success, 1 for a failed result or execution error, and 2 for invalid command syntax. Two useful exceptions to treating `ok` as success are:
+The process exits with status 0 for success, 1 for a failed result or execution error, and 2 for invalid command syntax. A command that changes the helper and is stopped by SIGTERM, SIGHUP or SIGINT exits with 128 plus the signal's number (143, 129 or 130), even when it printed its own result, and a failure it prints has the code `interrupted`. Two useful exceptions to treating `ok` as success are:
 
 - `doctor` can return `ok: true` with `ready: false`, and exits 1.
 - `run` can return `ok: true` because the child ran, but exits 1 if `exitCode` is nonzero or `timedOut` is true. Inspect those fields and the child's output.

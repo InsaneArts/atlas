@@ -61,7 +61,7 @@ An agent's request may name its app; the input service then refuses each action,
 
 Requests are tied to a display epoch: the account, graphical session, display and input/capture processes observed for the action. A fresh screenshot alone cannot authorize input into a different epoch. Frame and epoch checks must remain connected through the full request.
 
-Before a mutation, Atlas records that its outcome is pending. A complete acknowledgement settles that record. A disconnected caller, timeout or dead executor is not an acknowledgement. Unknown outcomes remain pending until supported recovery confirms the required new helper state. Recovery never replays the action.
+Before a mutation, Atlas records that its outcome is pending. A complete acknowledgement settles that record. A disconnected caller, timeout or dead executor is not an acknowledgement. A command stopped by a signal starts nothing more, lets the step under way finish for a short grace, and settles only what was acknowledged; a step still under way then stays pending. Unknown outcomes remain pending until supported recovery confirms the required new helper state. Recovery never replays the action.
 
 The input journal records held keys and mouse buttons separately. A replacement input service cleans up held input before accepting new work. Tests for cancellation or recovery must include failure during execution and cleanup, not just a successful command followed by release.
 

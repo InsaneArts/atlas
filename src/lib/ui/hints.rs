@@ -79,6 +79,9 @@ pub fn next(code: &str, holder: Option<Holder>) -> &'static str {
         ("focus-changed", _) => {
             "Another app was in front, maybe another agent's. Earlier actions were sent: check typed or performed and what landed, click where your app shows, then send only the rest."
         }
+        ("interrupted", _) => {
+            "Atlas was stopped partway, and nothing it did is left unknown. Look at the helper before going on."
+        }
         _ => fix(code).unwrap_or("Take a screenshot, then run atlas doctor to see what is wrong."),
     }
 }
@@ -106,6 +109,7 @@ pub fn fix(code: &str) -> Option<&'static str> {
         "init" => "Run atlas init again. It picks up where it stopped.",
         "input" => "Check the action, take a screenshot, then try again.",
         "install" => "Move Atlas.app to /Applications, then try again.",
+        "interrupted" => "Run it again if you still want it; look at the helper first.",
         "invalid-json" => "Check the JSON you passed.",
         "port-in-use" => "Pass --port with a free port, or stop what is using it.",
         "io" => "Check the path and its permissions, then try again.",
@@ -251,6 +255,17 @@ mod tests {
             "never the whole command: {said}"
         );
         assert_eq!(step("focus-changed", None, false), said);
+    }
+
+    /// A command a signal stopped while its change was under way left that
+    /// change unknown: it is the agent's own, to recover.
+    #[test]
+    fn an_interrupted_command_that_was_cut_is_told_to_recover_it() {
+        assert_eq!(step("interrupted", None, true), UNCERTAIN);
+        let said = step("interrupted", None, false);
+        assert_eq!(said, next("interrupted", None));
+        assert!(said.contains("nothing it did is left unknown"), "{said}");
+        assert!(!said.contains("atlas restart"), "{said}");
     }
 
     /// Every code an agent can meet has a step for a person too.

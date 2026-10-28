@@ -130,6 +130,7 @@ pub const CODES: &[&str] = &[
     "init",
     "input",
     "install",
+    "interrupted",
     "invalid-json",
     "io",
     "lease-lost",

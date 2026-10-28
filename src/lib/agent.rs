@@ -13,6 +13,7 @@ use crate::{
     daemon::protocol::{Crop, Region},
     error::{Error, Holder, Result},
     handoff,
+    interrupt::Interrupt,
     native::{
         ax::{self, Element, Frame, Stop},
         windows::{Bounds, MENU_LAYER, Window, unobstructed},
@@ -210,12 +211,15 @@ pub async fn act(client: &Client, target: Option<&Target>, actions: &Value) -> R
 /// and, on failure, whether the failed batch's delivery is uncertain. The
 /// whole text is typed under one ownership into the helper as it was at
 /// the start: no other input lands between batches, and a helper that
-/// restarts midway is refused rather than typed into.
+/// restarts midway is refused rather than typed into. A signal's stop ends
+/// it before the next batch, with the same report.
 pub async fn type_text(client: &Client, text: &str, target: Option<&Target>) -> Result<Value> {
     let batches = type_batches(text)?;
-    let (mut typed, mut confirmed) = (0, 0);
 
     let ownership = client.controller.acquire(false)?;
+    // A signal's stop waits for the report of how much was typed.
+    let interrupt = client.controller.interrupt();
+    let _typing = interrupt.step();
     let epoch = client.identity().await?.epoch;
     let check = match target {
         Some(target) => Some(Check::Required(Expect::new(
@@ -224,15 +228,30 @@ pub async fn type_text(client: &Client, text: &str, target: Option<&Target>) -> 
         None => None,
     };
 
-    for batch in &batches {
+    let send = async |actions: &Value| client.input_owned(&ownership, actions, &epoch, check).await;
+    Ok(type_each(&batches, interrupt, send).await)
+}
+
+/// Send each of `batches` as `type` actions through `send`, stopping at
+/// the first that is not confirmed, or before the next once `interrupt`
+/// was asked to stop: the report says how much was confirmed typed.
+async fn type_each(
+    batches: &[String],
+    interrupt: &Interrupt,
+    mut send: impl AsyncFnMut(&Value) -> Result<Value>,
+) -> Value {
+    let (mut typed, mut confirmed) = (0, 0);
+
+    for batch in batches {
         let parts = type_parts(batch);
         let actions: Vec<Value> = parts
             .iter()
             .map(|part| json!({ "type": "type", "text": part }))
             .collect();
-        let outcome = client
-            .input_owned(&ownership, &Value::Array(actions), &epoch, check)
-            .await;
+        let outcome = match interrupt.check() {
+            Ok(()) => send(&Value::Array(actions)).await,
+            Err(stop) => Err(stop),
+        };
 
         let failure = match outcome {
             Ok(reply) if reply["ok"] == true => {
@@ -244,16 +263,10 @@ pub async fn type_text(client: &Client, text: &str, target: Option<&Target>) -> 
             Err(error) => Unconfirmed::from(error),
         };
 
-        return Ok(stopped_typing(
-            typed,
-            batches.len(),
-            confirmed,
-            &parts,
-            failure,
-        ));
+        return stopped_typing(typed, batches.len(), confirmed, &parts, failure);
     }
 
-    Ok(json!({ "ok": true, "typed": typed, "batches": batches.len() }))
+    json!({ "ok": true, "typed": typed, "batches": batches.len() })
 }
 
 /// A batch the helper did not confirm: why, how many of its actions were
@@ -2309,6 +2322,44 @@ mod tests {
         let unknown = stopped_typing(0, 1, 0, &parts, reply(&json!({"code": "made-up"})));
         assert_eq!(unknown["code"], "input");
         assert_eq!(unknown["error"], "The helper did not confirm the text");
+    }
+
+    #[tokio::test]
+    async fn typing_stops_between_parts_and_says_how_much_was_typed() {
+        use nix::sys::signal::Signal;
+
+        let interrupt = Interrupt::new(Duration::from_secs(10));
+        let batches = type_batches(&"x".repeat(200)).unwrap();
+        assert_eq!(batches.len(), 4);
+        let mut sent = 0;
+
+        let report = type_each(&batches, &interrupt, async |actions: &Value| {
+            sent += 1;
+            interrupt.ask(Signal::SIGTERM);
+            Ok(json!({"ok": true, "performed": actions.as_array().unwrap().len()}))
+        })
+        .await;
+        assert_eq!(sent, 1, "nothing more is sent once a stop was asked");
+        assert_eq!(report["ok"], false);
+        assert_eq!(report["code"], "interrupted");
+        assert_eq!(report["uncertain"], false);
+        assert_eq!(report["typed"], 64);
+        assert_eq!(report["batches"], 4);
+        assert_eq!(report["confirmedBatches"], 1);
+
+        let interrupt = Interrupt::new(Duration::from_secs(10));
+        let mut first = true;
+        let report = type_each(&batches, &interrupt, async |actions: &Value| {
+            if std::mem::take(&mut first) {
+                Ok(json!({"ok": true, "performed": actions.as_array().unwrap().len()}))
+            } else {
+                Err(interrupt.cut_short(Signal::SIGTERM))
+            }
+        })
+        .await;
+        assert_eq!(report["code"], "interrupted");
+        assert_eq!(report["uncertain"], true, "the part under way was cut");
+        assert_eq!(report["typed"], 64, "only confirmed parts count");
     }
 
     /// A look never asks the helper for longer than it allows a command,

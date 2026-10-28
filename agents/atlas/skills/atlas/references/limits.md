@@ -145,4 +145,7 @@ variable `ATLAS_WAIT`; 0 answers at once). The wait adds to the command's own
 time, so a `run --timeout 300` may take up to 330 seconds: keep both under your
 tool's timeout (Claude Code's Bash tool allows 2 minutes unless you ask for
 more, at most 10). If your tool's timeout is shorter than both, pass a shorter
-`--wait` or set `ATLAS_WAIT` lower. Reading commands never wait.
+`--wait` or set `ATLAS_WAIT` lower. Reading commands never wait. If your tool
+stops a command anyway, Atlas lets the step under way finish for up to 3
+seconds and reports how far it got (`interrupted`). A step still going then,
+such as a long `run`, is left unknown, and only `atlas restart` clears it.

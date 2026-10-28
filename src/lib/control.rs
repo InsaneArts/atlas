@@ -5,6 +5,7 @@
 use crate::{
     config::home,
     error::{Error, Holder, Result},
+    interrupt::{Hold, Interrupt},
 };
 use fs2::FileExt;
 use rand::{Rng, RngCore};
@@ -224,6 +225,8 @@ pub struct Pending {
     live: PathBuf,
     /// The claim file, exclusively locked for as long as it is open.
     lock: File,
+    /// Keeps a signal's stop waiting until the claim file is let go.
+    _hold: Hold,
 }
 
 impl std::ops::Deref for Pending {
@@ -594,6 +597,9 @@ pub struct Controller {
     heeds_stop: bool,
     /// Told when [`Controller::acquire`] starts waiting and when it stops.
     on_wait: Option<WaitHook>,
+    /// The stop a signal asks: it refuses control from then on, and waits
+    /// for the changes this controller has under way.
+    interrupt: Interrupt,
 }
 
 impl Controller {
@@ -617,6 +623,7 @@ impl Controller {
             until: None,
             heeds_stop: false,
             on_wait: None,
+            interrupt: Interrupt::process().clone(),
         }
     }
 
@@ -667,6 +674,20 @@ impl Controller {
         self
     }
 
+    /// This controller, stopped by `interrupt` instead of this process's
+    /// signals.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn interrupted_by(mut self, interrupt: Interrupt) -> Self {
+        self.interrupt = interrupt;
+        self
+    }
+
+    /// The stop a signal asks of this controller's command.
+    pub(crate) fn interrupt(&self) -> &Interrupt {
+        &self.interrupt
+    }
+
     /// Whether this process may keep its locks and claims here at all. An
     /// agent's sandbox may forbid writing, and the error then says so.
     pub fn writable(&self) -> Result<()> {
@@ -687,6 +708,8 @@ impl Controller {
     }
 
     pub fn acquire(&self, recovery: bool) -> Result<Ownership> {
+        // Nothing new starts once a signal asked this command to stop.
+        self.interrupt.check()?;
         self.make_directory()?;
 
         let lock = open_lock(&self.lock)?;
@@ -728,11 +751,13 @@ impl Controller {
     }
 
     /// Try `lock` again about ten times a second, between telling the hook
-    /// that the wait began and that it ended.
+    /// that the wait began and that it ended. A signal's stop ends the wait
+    /// within one poll.
     fn wait_for_lock(&self, lock: &File, started: Instant) -> Result<()> {
         let _notice = WaitNotice::begin(self.on_wait.as_ref());
         loop {
             std::thread::sleep(poll(self.remaining()));
+            self.interrupt.check_waiting(started.elapsed())?;
             if self.try_take(lock, started)? {
                 return Ok(());
             }
@@ -875,8 +900,10 @@ impl Controller {
     /// Record a pending mutation under a generation the caller chose, so it
     /// can persist its own claim on that generation first. The claim is
     /// taken before the marker is written, so a marked generation is never
-    /// briefly mistaken for an abandoned one.
+    /// briefly mistaken for an abandoned one. It is never refused after a
+    /// signal: what settles or cleans up a change under way still records.
     pub fn quarantine_as(&self, generation: &str) -> Result<Pending> {
+        let hold = self.interrupt.claim();
         let live = self
             .live(generation)
             .ok_or_else(|| Error::new("state", "Pending generations are hexadecimal tokens"))?;
@@ -890,6 +917,7 @@ impl Controller {
             generation: generation.to_owned(),
             live,
             lock: file,
+            _hold: hold,
         };
 
         // Claim files are only unlinked under the marker lock or by their

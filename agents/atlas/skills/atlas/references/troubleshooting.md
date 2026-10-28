@@ -31,6 +31,7 @@ failure is in `exitCode`.)
 | `init` | Guided setup could not finish. | Show the person `error`; they can run `atlas init` again. |
 | `input` | Input could not be delivered (bad key, held button, a point off the display), or a batch was refused before anything was sent: at most 32 actions, 100 lines a scroll, 256 characters a `type`, 250 ms a wait, two seconds in all. | Fix the action or split the batch; a refused batch sent nothing, otherwise observe with a screenshot before retrying. |
 | `install` | The shared executable could not be installed. | Atlas.app must be in /Applications; tell the person. |
+| `interrupted` | A signal (your tool's timeout, a closed terminal, Ctrl-C) stopped the command. Steps it finished stand; `type` says in `typed` how much it typed. With `uncertain`, the step under way was cut and may or may not have happened. | Look at the helper before going on. When `uncertain`, it is your own unknown action: take a screenshot, then `atlas restart`. Keep `--wait` plus `--timeout` under your tool's timeout. |
 | `invalid-json` | JSON passed to a command could not be read. | Fix the JSON (for example the `input` actions). |
 | `io` | A file or path could not be read or written. | Read `error`; check the path it names. |
 | `lease-lost` | Control ended mid-action: it was released, expired, or the session changed. | Observe, then retry only if the person is not controlling. |
@@ -59,7 +60,7 @@ failure is in `exitCode`.)
 | `switch` | The screen could not be locked for switching accounts. | Tell the person; they lock it from the Apple menu (Lock Screen) and switch there. |
 | `terminal` | The command asks the person a question and has no terminal. | Ask the person; pass the flag it names (such as `--yes`) only with their agreement. |
 | `transport` | The helper did not answer, or the connection broke. | If `uncertain`, run `atlas restart`; otherwise retry once. |
-| `uncertain` | An earlier action's outcome is unknown; control is blocked. It may be another agent's. | Take a screenshot. Run `atlas restart` only if that action was yours (a reply of yours said `"uncertain": true`); otherwise wait, and ask the person before restarting. |
+| `uncertain` | An earlier action's outcome is unknown; control is blocked. It may be another agent's. | Take a screenshot. Run `atlas restart` only if that action was yours (a reply of yours said `"uncertain": true`); otherwise wait, and ask the person before restarting. A command of yours that your tool's timeout stopped counts as yours. |
 | `uninstall` | Removal was refused or incomplete. | Show `error` to the person. |
 | `update` | An update was refused or could not be verified. | Show `error`; never bypass the signature checks. |
 | `usage` | The command line was invalid. | Check `atlas agent-guide --commands`. |

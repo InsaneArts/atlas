@@ -18,6 +18,7 @@ pub mod error;
 pub mod handoff;
 pub mod helper_info;
 pub mod init;
+pub mod interrupt;
 mod last_capture;
 pub mod login_log;
 pub mod mcp;
