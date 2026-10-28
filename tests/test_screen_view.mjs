@@ -120,6 +120,11 @@ test('the status reads as the viewer says it', () => {
     'Resume from the Atlas menu bar',
   );
   assert.match(view.hint({ status: idle, ours: true }), /The agent waits/);
+  assert.match(
+    view.hint({ status: { ...idle, commands: 1 }, ours: true }),
+    /A command an agent started is still running/,
+    'never that the agent waits while its command runs',
+  );
 });
 
 test("a result's screen comes from _meta, and a missing one dims the last", () => {

@@ -198,7 +198,12 @@ function label(status, ours = false, self = null) {
 function hint(model) {
   const status = model.status;
   const state = status && status.state;
-  if (model.ours) return 'Your clicks and typing go to the helper. The agent waits.';
+  if (model.ours) {
+    // A command an agent started goes on beside the person's control.
+    return status && status.commands > 0
+      ? 'Your clicks and typing go to the helper. A command an agent started is still running.'
+      : 'Your clicks and typing go to the helper. The agent waits.';
+  }
   if (!status) return '';
   if (state === 'control') return 'Someone has control in Atlas';
   if (state === 'stopped' && model.canResume === false) return 'Resume from the Atlas menu bar';

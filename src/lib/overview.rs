@@ -758,8 +758,11 @@ pub fn overview(
         "headline": headline,
         "reason": reason,
         "recoverable": mode == "blocked" && recoverable,
-        "recoveryHelps": (mode == "recovering" && (report["ready"] == true || recoverable))
-            || (mode == "blocked" && recoverable),
+        // Recovery waits for a command an agent started to end, so it helps
+        // only once none runs.
+        "recoveryHelps": pending.commands == 0
+            && ((mode == "recovering" && (report["ready"] == true || recoverable))
+                || (mode == "blocked" && recoverable)),
         "account": if reachable { &session["user"]["name"] } else { &report["account"] },
         "display": serde::Deserialize::deserialize(&session["display"])
             .ok()
@@ -767,6 +770,7 @@ pub fn overview(
             .map(|_: crate::session::Display| &session["display"]),
         "pending": pending.unresolved,
         "inFlight": pending.in_flight,
+        "commands": pending.commands,
         "nativeDialogs": report["capabilities"]["nativeDialogs"]["state"],
         "activity": activity.iter().map(|row| shown(row, now)).collect::<Vec<_>>(),
     })
@@ -1812,6 +1816,12 @@ mod tests {
 
         let shown = overview(&ready, false, waiting, &[], NOW);
         assert_eq!(shown["mode"], "recovering");
+        assert_eq!(shown["commands"], 1);
+        assert_eq!(shown["recoveryHelps"], false, "recovery waits for it");
+        assert_eq!(
+            overview(&ready, false, unresolved(1), &[], NOW)["recoveryHelps"],
+            true
+        );
         assert_eq!(
             shown["reason"],
             "An action's outcome is unknown; recovery waits for the running command to end"

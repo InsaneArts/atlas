@@ -22,7 +22,7 @@ extension Mode {
       switch kind {
       case .idle: app.map(Words.showingLine(app:)) ?? reading.idleLine
       case .working: reading.workingLine(withAge: false)
-      case .control: Words.controlLine
+      case .control: reading.controlLine
       case .needsYou: reading.needsYouLine
       case .stopped: Words.stoppedLine
       case .inUseElsewhere: Words.inUseElsewhereLine
@@ -46,7 +46,7 @@ extension Mode {
       switch kind {
       case .idle: paused ? PanelWords.pausedLine : reading.idleLine
       case .working: reading.workingLine(withAge: true)
-      case .control: Words.controlLine
+      case .control: reading.controlLine
       case .needsYou: reading.needsYouLine
       case .stopped: Words.stoppedLine
       case .notReady: PanelWords.notReadyLine(reading.status.overview.reason)

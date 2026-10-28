@@ -94,6 +94,30 @@ struct ModeStatusSummaryTests {
     #expect(summary == StatusSummary(label: "You have control", tone: .link, mark: .dot, line: Words.controlLine))
   }
 
+  @Test("holding control while an agent's command runs says so in the panel, the main window and its reason")
+  func controlBesideARunningCommand() throws {
+    let reading = StatusReading(
+      try status(["overview": ["mode": "controlling", "state": "control", "commands": 1]])
+    )
+    let mode = Mode.seen(by: reading.status.overview, holdingControl: true)
+    #expect(mode.panelSummary(reading, paused: false).line == "A command an agent started is still running")
+    #expect(mode.windowSummary(reading).line == "A command an agent started is still running")
+    #expect(reading.reason(holdingControl: true).word == Words.yourControlBesideCommand)
+  }
+
+  @Test("an unknown outcome while an agent's command runs says recovery waits for it, and Recover doesn't help")
+  func needsYouBesideARunningCommand() throws {
+    let reading = StatusReading(
+      try status([
+        "overview": ["mode": "recovering", "state": "needsYou", "pending": 1, "commands": 1, "recoveryHelps": true]
+      ])
+    )
+    let mode = Mode.seen(by: reading.status.overview, holdingControl: false)
+    #expect(mode.panelSummary(reading, paused: false).line == Words.unfinishedBesideCommandLine)
+    #expect(mode.windowSummary(reading).line == Words.unfinishedBesideCommandLine)
+    #expect(!reading.status.overview.recoveryHelps)
+  }
+
   @Test("another window's control reads as In use elsewhere, with the line that says why")
   func inUseElsewhere() throws {
     let summary = try Self.shown("controlling", "control")

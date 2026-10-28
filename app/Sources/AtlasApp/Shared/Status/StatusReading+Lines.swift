@@ -23,8 +23,16 @@ extension StatusReading {
     newestAgentAction.map { Words.idleLine(last: $0.text, ago: $0.when) } ?? Words.readyLine
   }
 
-  /// Why the helper needs the person, beside Needs you: input Recover starts again, else an unfinished action.
+  /// Why the helper needs the person, beside Needs you: input Recover starts again, else an unfinished action, which
+  /// recovery waits to settle while a command an agent started still runs.
   var needsYouLine: String {
-    inputStopped ? Words.inputStoppedLine : Words.unfinishedLine
+    if inputStopped { return Words.inputStoppedLine }
+    return status.overview.commandRuns ? Words.unfinishedBesideCommandLine : Words.unfinishedLine
+  }
+
+  /// What holding control means for agents, beside You have control: they wait, unless a command one started still
+  /// runs.
+  var controlLine: String {
+    status.overview.commandRuns ? Words.controlBesideCommandLine : Words.controlLine
   }
 }

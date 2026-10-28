@@ -26,6 +26,11 @@ extension ViewerStatus {
     public var pending = 0
     /// Actions a live process is still carrying out, whose outcome is not known yet.
     var inFlight = 0
+    /// Commands agents started with `run` that are still running, beside whoever has control: recovery waits for
+    /// them to end.
+    public var commands = 0
+    /// Whether a command an agent started is still running.
+    public var commandRuns: Bool { commands > 0 }
     /// Recent operations, newest first.
     public var activity: [Activity] = []
     /// Whether every app speaks of host sessions: two or more are live, as the service decides.
@@ -62,7 +67,7 @@ extension ViewerStatus {
     /// Whether Recover helps now: an action's outcome is unknown, or what keeps the helper not ready is something
     /// Recover fixes. The panel's recovery card and the viewer's alert both follow it.
     public var recoveryHelps: Bool {
-      recoveryEligibility ?? (mode == .recovering || (mode == .blocked && recoverable))
+      !commandRuns && (recoveryEligibility ?? (mode == .recovering || (mode == .blocked && recoverable)))
     }
 
     /// Whether Recover restarts the helper, as the viewer service's own recovery decides: only while an action's
@@ -78,7 +83,7 @@ extension ViewerStatus {
     enum CodingKeys: String, CodingKey {
       /// Each field by the name the service writes.
       case mode, state, label, reason, recoverable, recoveryHelps, account, accountName, display, pending, inFlight,
-        activity, sessionsShown, holder, hostSessions, moreSessions
+        commands, activity, sessionsShown, holder, hostSessions, moreSessions
     }
 
     /// Decodes an overview, keeping the default of anything missing or of the wrong type.
@@ -98,6 +103,7 @@ extension ViewerStatus {
       display = try? container.decodeIfPresent(Size.self, forKey: .display)
       pending = max(0, (try? container.decodeIfPresent(Int.self, forKey: .pending)) ?? 0)
       inFlight = max(0, (try? container.decodeIfPresent(Int.self, forKey: .inFlight)) ?? 0)
+      commands = max(0, (try? container.decodeIfPresent(Int.self, forKey: .commands)) ?? 0)
       activity = (try? container.decodeIfPresent([Activity].self, forKey: .activity)) ?? []
       sessionsShown = (try? container.decodeIfPresent(Bool.self, forKey: .sessionsShown)) == true
       holder = try? container.decodeIfPresent(String.self, forKey: .holder)

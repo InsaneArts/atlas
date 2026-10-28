@@ -230,6 +230,29 @@ struct PanelPresenterTests {
     #expect(main(try blocked(false)) == .openSettings, "a block Recover can't fix")
   }
 
+  @Test("while an agent's command runs, Needs you offers Open Atlas and says recovery waits, never Recover…")
+  func recoveryWaitsForARunningCommand() throws {
+    let snapshot = PanelSnapshot(
+      status: try status([
+        "overview": ["mode": "recovering", "state": "needsYou", "pending": 1, "commands": 1, "recoveryHelps": true]
+      ])
+    )
+    let panel = PanelPresenter.state(snapshot)
+    #expect(panel.controls.main.event == .openAtlas)
+    #expect(panel.status.line == Words.unfinishedBesideCommandLine)
+  }
+
+  @Test("holding control while an agent's command runs says the command still runs, never that the agent waits")
+  func controlBesideARunningCommand() throws {
+    let snapshot = PanelSnapshot(
+      status: try status(["overview": ["mode": "controlling", "state": "control", "commands": 1]]),
+      holdingControl: true
+    )
+    let panel = PanelPresenter.state(snapshot)
+    #expect(panel.status.label == "You have control")
+    #expect(panel.status.line == Words.controlBesideCommandLine)
+  }
+
   @Test("the ⋯ menu offers Open Atlas only while the main button is something else")
   func openAtlasIsNeverOfferedTwice() throws {
     for row in Self.rows {

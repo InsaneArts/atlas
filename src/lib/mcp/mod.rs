@@ -1325,6 +1325,7 @@ fn summary(status: &Value, named: &BTreeMap<Key, String>, own: Option<&Key>) -> 
         "helper": overview["accountName"].as_str().or(overview["account"].as_str()),
         "display": overview["display"],
         "pending": overview["pending"],
+        "commands": overview["commands"],
         "activity": rows,
         "sessionsShown": sessions_shown,
         "holder": overview["holder"],

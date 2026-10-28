@@ -25,12 +25,16 @@ enum Words {
   static let resumePictureItem = "Resume Picture"
   /// This window holds control: the reason a window gives.
   static let yourControl = "You have mouse and keyboard control"
+  /// This window holds control while a command an agent started still runs: the reason a window gives.
+  static let yourControlBesideCommand = "You have mouse and keyboard control while an agent's command runs"
   /// Another window holds control: the mode's word.
   static let inUseElsewhere = "In use elsewhere"
   /// Another window holds control: the line beside the word, and the reason a window gives.
   static let inUseElsewhereLine = "Another Atlas viewer has control"
   /// The person holds control: the line beside the word, in the panel and the main window.
   static let controlLine = "The agent waits"
+  /// The person holds control while a command an agent started still runs: the line beside the word.
+  static let controlBesideCommandLine = "A command an agent started is still running"
   /// The person stopped agents: the line beside the word.
   static let stoppedLine = "Resume when you're ready"
   /// Nothing is happening and no agent has acted yet: the line beside Idle, so a fresh helper says what it is for.
@@ -41,6 +45,9 @@ enum Words {
   static let reconnectingLine = "Reconnecting…"
   /// An action's outcome is unknown: the line beside the word.
   static let unfinishedLine = "An action may not have finished"
+  /// An action's outcome is unknown while a command an agent started still runs, which recovery waits for: the line
+  /// beside the word.
+  static let unfinishedBesideCommandLine = "An action may not have finished; recovery waits for a running command"
   /// The helper's input stopped, which Recover starts again: the line beside the word.
   static let inputStoppedLine = "Mouse and keyboard stopped in the helper"
   /// Nothing is happening and no agent has acted yet: the reason a window gives.
