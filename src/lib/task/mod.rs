@@ -243,6 +243,23 @@ pub fn settle_rolled_back(client: &Client, kind: Kind, result: &Result<Value>) -
     )
 }
 
+/// Note, in every task's record that claims one, that each of `owned` is
+/// gone, whoever removed it. A record that cannot be written changes
+/// nothing: the things are gone either way.
+pub(crate) fn settle_gone(client: &Client, owned: &[Owned]) {
+    if !owned.is_empty()
+        && let Ok(output) = client.output_dir()
+    {
+        let _ = Store::at(output).settle_everywhere(owned, State::Gone, now_ms());
+    }
+}
+
+/// [`settle_gone`] for the copy folders `tokens` name.
+pub(crate) fn settle_copies_gone(client: &Client, tokens: Vec<Token>) {
+    let owned: Vec<Owned> = tokens.into_iter().map(|id| Owned::Copy { id }).collect();
+    settle_gone(client, &owned);
+}
+
 /// One thing a session's work holds, and the session and task it belongs
 /// to.
 #[derive(Clone, Debug, PartialEq, Eq)]

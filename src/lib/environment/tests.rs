@@ -2720,3 +2720,44 @@ async fn a_listed_plan_names_the_session_and_task_that_made_it() {
         "the request folder goes"
     );
 }
+
+#[tokio::test]
+async fn a_plan_pruned_because_the_helper_never_started_it_is_settled_gone() {
+    use crate::task::{Claims, Owned, State, Task, store::Store as Tasks};
+
+    let sandbox = Sandbox::new();
+    let (mut client, helper) = Helper::client(&sandbox.root, UID);
+    let id = crate::control::token();
+    let stage = stage_in(&sandbox.root, &id);
+    write_plan(&stage, &id, UID);
+    atomic_write(&stage.join("controller.lock"), b"", 0o600).unwrap();
+    let then = std::time::SystemTime::now() - UNUSED - Duration::from_secs(60);
+    fs::File::open(&stage).unwrap().set_modified(then).unwrap();
+    let session = crate::host_session::Key::of(crate::host_session::Host::Codex, "pruning");
+    let task = Task::of(&session, None).unwrap();
+    client.task = Some(task.clone());
+    let plan = Owned::Plan {
+        id: crate::control::Token::parse(&id).unwrap(),
+    };
+    let output = client.output_dir().unwrap().to_owned();
+    Claims::in_store(Tasks::at(&output), task.clone())
+        .claim(&plan, State::Made)
+        .unwrap();
+
+    helper
+        .serve(prune(&client, &account()), |_| {
+            Some(worker_reply(
+                1,
+                &json!({"ok": false, "error": worker::MISSING}),
+            ))
+        })
+        .await;
+
+    assert!(!stage.exists(), "the plan the helper never started went");
+    let claims: Vec<_> = Tasks::at(&output)
+        .load(task.key())
+        .unwrap()
+        .claims()
+        .collect();
+    assert_eq!(claims, [(plan, State::Gone)]);
+}

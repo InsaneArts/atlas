@@ -530,7 +530,7 @@ pub async fn open(
     // open, close or controller interleaves.
     let ownership = client.controller.acquire(false)?;
     let running = handoff::Running::listed(&client.apps().await?);
-    handoff::prune(&running);
+    task::settle_copies_gone(client, handoff::prune(&running));
 
     // A name is the helper's to look up; a path is this side's file.
     let app_target = app.map(|app| {
@@ -856,7 +856,7 @@ async fn close_in(client: &Client, closing: Closing<'_>, copies: &Path) -> Resul
         removed.kept_others += gone.kept_others;
         removed.failed.extend(gone.failed);
     }
-    settle_removed(client, &removed);
+    task::settle_copies_gone(client, removed.tokens());
 
     let mut reply = json!({
         "ok": true,
@@ -889,23 +889,6 @@ async fn close_in(client: &Client, closing: Closing<'_>, copies: &Path) -> Resul
     }
 
     Ok(reply)
-}
-
-/// Note the copies `removed` lists as gone in every task's record that
-/// claims one, whoever removed them. A record that cannot be written
-/// changes nothing: the copies are gone either way.
-fn settle_removed(client: &Client, removed: &handoff::Removed) {
-    let gone: Vec<task::Owned> = removed
-        .tokens()
-        .into_iter()
-        .map(|id| task::Owned::Copy { id })
-        .collect();
-    if !gone.is_empty()
-        && let Ok(output) = client.output_dir()
-    {
-        let store = task::store::Store::at(output);
-        let _ = store.settle_everywhere(&gone, task::State::Gone, crate::host_session::now_ms());
-    }
 }
 
 /// Poll the window list until a matching window appears (or, with `gone`,

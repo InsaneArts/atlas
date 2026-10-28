@@ -473,7 +473,8 @@ fn sweep(shared: &Path) {
 /// never started (it answers that nothing was copied with their ID). Plans
 /// applied or undone completely were removed when that finished; one with a
 /// retained request (a step whose outcome is unknown), one the helper
-/// started, or one it cannot answer for, stays.
+/// started, or one it cannot answer for, stays. A plan removed is settled
+/// gone wherever a task claimed it.
 async fn prune(client: &Client, helper: &str) {
     let Some(shared) = client.config.identity_probe.parent() else {
         return;
@@ -481,6 +482,7 @@ async fn prune(client: &Client, helper: &str) {
 
     tidy(client);
 
+    let mut removed = Vec::new();
     for (id, stage) in stale(shared, UNUSED) {
         // Everything below happens under the plan's own lock; a plan in use
         // is skipped.
@@ -508,10 +510,16 @@ async fn prune(client: &Client, helper: &str) {
             .is_ok_and(|answer| answer["ok"] == false && answer["error"] == worker::MISSING);
         if never && !requests(&stage) {
             discard(&stage);
+            if fs::symlink_metadata(&stage).is_err()
+                && let Some(id) = crate::control::Token::parse(&id)
+            {
+                removed.push(task::Owned::Plan { id });
+            }
         }
 
         drop(lock);
     }
+    task::settle_gone(client, &removed);
 }
 
 /// Remove the folders of commands run older than UNUSED. A command kept

@@ -767,21 +767,29 @@ pub(crate) fn remove_copies_in(
 /// Remove copies older than KEEP that are not in use by an app in
 /// `running` (the helper's apps), so a copy nobody closed does not stay
 /// forever.
-pub(crate) fn prune(running: &[Running]) {
-    prune_in(Path::new(ROOT), running);
+/// The tokens of the folders removed come back, so their claims can be
+/// settled.
+pub(crate) fn prune(running: &[Running]) -> Vec<Token> {
+    prune_in(Path::new(ROOT), running)
 }
 
-fn prune_in(root: &Path, running: &[Running]) {
+fn prune_in(root: &Path, running: &[Running]) -> Vec<Token> {
+    let mut removed = Vec::new();
     for folder in folders(root) {
         let old = fs::symlink_metadata(&folder)
             .and_then(|metadata| metadata.modified())
             .ok()
             .and_then(|modified| modified.elapsed().ok())
             .is_some_and(|age| age > KEEP);
-        if old && !in_use(&folder, running) {
-            let _ = fs::remove_dir_all(&folder);
+        if old
+            && !in_use(&folder, running)
+            && fs::remove_dir_all(&folder).is_ok()
+            && let Some(token) = folder_token(&folder)
+        {
+            removed.push(token);
         }
     }
+    removed
 }
 
 /// ROOT itself, for uninstall, when it and its parent are Atlas's own folders.
@@ -1218,6 +1226,20 @@ mod tests {
             .claims()
             .map(|(_, state)| state)
             .collect()
+    }
+
+    #[test]
+    fn pruning_names_each_copy_it_removed_by_its_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        let (old, recent) = (Token::new(), Token::new());
+        let gone = copy_folder(&root, old.as_str(), "old.txt");
+        age(&gone, 8);
+        copy_folder(&root, recent.as_str(), "new.txt");
+
+        assert_eq!(prune_in(&root, &[]), [old]);
+        assert!(!gone.exists());
     }
 
     #[test]
