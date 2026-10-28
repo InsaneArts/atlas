@@ -4,7 +4,7 @@ use super::{
 };
 use crate::host_session::{Host, store::Store as Sessions};
 use serde_json::json;
-use std::{fs, path::Path};
+use std::{ffi::OsStr, fs, path::Path};
 
 fn session(id: &str) -> Key {
     Key::of(Host::Codex, id)
@@ -72,13 +72,28 @@ fn the_same_name_in_two_sessions_is_two_tasks() {
 
 #[test]
 fn a_command_without_a_host_session_has_no_task_even_with_a_name() {
-    assert_eq!(Task::resolve(None, Some("probe")).unwrap(), None);
-    assert_eq!(Task::resolve(None, Some("not plain")).unwrap(), None);
+    fn name(text: &str) -> Option<&OsStr> {
+        Some(OsStr::new(text))
+    }
+    assert_eq!(Task::resolve(None, name("probe")).unwrap(), None);
+    assert_eq!(Task::resolve(None, name("not plain")).unwrap(), None);
 
     let host = HostSession::new(Host::Named, "release").unwrap();
-    let named = Task::resolve(Some(&host), Some("probe")).unwrap().unwrap();
+    let named = Task::resolve(Some(&host), name("probe")).unwrap().unwrap();
     assert_eq!(named.session(), host.key());
-    assert!(Task::resolve(Some(&host), Some("not plain")).is_err());
+    assert!(Task::resolve(Some(&host), name("not plain")).is_err());
+    let default = Task::resolve(Some(&host), None).unwrap().unwrap();
+    assert_eq!(default.key(), host.key());
+}
+
+#[test]
+fn a_task_name_that_is_not_text_is_refused_never_taken_for_the_default() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let host = HostSession::new(Host::Named, "release").unwrap();
+    let error = Task::resolve(Some(&host), Some(OsStr::from_bytes(b"probe\xff"))).unwrap_err();
+
+    assert_eq!(error.code, "usage");
 }
 
 #[test]

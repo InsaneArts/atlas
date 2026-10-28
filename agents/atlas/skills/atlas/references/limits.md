@@ -171,9 +171,10 @@ in front (`lastUsedBy`). A session is only a name: it changes nothing about
 what you may do or which apps `atlas close` quits.
 
 To keep one part of a long session apart, run that part's commands with
-`ATLAS_TASK=NAME` (1 to 64 of the same characters; anything else is refused
-with `usage`). Atlas then records what that task made (its copies, the
-plans it previewed or applied and the apps it opened by name) on its own,
-and `atlas activity` lists each task you named under `tasks` with the
-copies and plans it left. Without `ATLAS_TASK`, a command belongs to the
+`ATLAS_TASK=NAME` (1 to 64 of the same characters; with anything else,
+`open`, `run` and `environment` are refused with `usage`, and other commands
+go on). Atlas then records what that task made (its copies, the plans it
+previewed or applied and the apps it opened by name) on its own, and
+`atlas activity` lists each task you named under `tasks` with the copies
+and plans it left. Without `ATLAS_TASK`, a command belongs to the
 session's own task. A task is only a name too.

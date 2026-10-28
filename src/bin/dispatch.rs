@@ -24,6 +24,7 @@ use atlas::{
 };
 use serde_json::{Value, json};
 use std::{
+    ffi::OsStr,
     io::Read,
     path::{Path, PathBuf},
     time::Duration,
@@ -183,6 +184,42 @@ fn kind(command: &Command) -> Kind {
     }
 }
 
+/// Whether a command makes something its task's record claims: a copy, an
+/// app opened by name, an environment plan or a run in the helper. Only
+/// these are refused for an ATLAS_TASK that names no task; looking, Stop
+/// and recovery never depend on it.
+fn makes(command: &Command) -> bool {
+    match command {
+        Command::Open { .. } | Command::Run { .. } => true,
+        Command::Environment { command, .. } => matches!(
+            command,
+            None | Some(
+                EnvironmentCommand::Apply { .. }
+                    | EnvironmentCommand::Rollback { .. }
+                    | EnvironmentCommand::Profile { .. }
+                    | EnvironmentCommand::Run { .. }
+            )
+        ),
+        _ => false,
+    }
+}
+
+/// The task `command`, from host session `host`, belongs to, as `name`
+/// (ATLAS_TASK's value) names it. A name that is not a plain one refuses a
+/// command that [`makes`] something, so its work is never filed under
+/// another task; any other command goes on without a task.
+fn task_of(
+    command: &Command,
+    host: Option<&HostSession>,
+    name: Option<&OsStr>,
+) -> Result<Option<Task>> {
+    match Task::resolve(host, name) {
+        Err(error) if makes(command) => Err(error),
+        Err(_) => Ok(None),
+        resolved => resolved,
+    }
+}
+
 /// Whether a command changes the helper, so an agent's is refused while
 /// the person has stopped agents. Looking, reading and recovery are not.
 fn changes_helper(command: &Command, attributed: bool) -> bool {
@@ -325,7 +362,11 @@ pub(super) async fn execute(config: PathBuf, command: Command, wait: Duration) -
     let host = labelled(&command, actor)
         .then(HostSession::from_env)
         .flatten();
-    let task = Task::from_env(host.as_ref())?;
+    let task = task_of(
+        &command,
+        host.as_ref(),
+        std::env::var_os("ATLAS_TASK").as_deref(),
+    )?;
     let client = || {
         Client::new(Config::load(&config)?).map(|mut client| {
             client.actor = actor;
@@ -1010,6 +1051,61 @@ mod tests {
 
     fn parse(args: &[&str]) -> std::result::Result<Cli, clap::Error> {
         Cli::try_parse_from(std::iter::once("atlas").chain(args.iter().copied()))
+    }
+
+    #[test]
+    fn a_task_name_that_is_not_plain_refuses_only_commands_that_make_something() {
+        use atlas::host_session::Host;
+
+        let host = HostSession::new(Host::Codex, "tasks").unwrap();
+        let task = |args: &[&str], name: &str| {
+            let command = parse(args).unwrap().command.unwrap();
+            task_of(&command, Some(&host), Some(OsStr::new(name)))
+        };
+
+        for making in [
+            &["open", "--app", "TextEdit"][..],
+            &["run", "--", "ls"],
+            &["environment", "manifest.toml"],
+            &["environment", "manifest.toml", "--apply"],
+            &["environment", "apply", "plan"],
+            &["environment", "rollback", "plan", "--apply"],
+            &["environment", "profile", "profile.toml"],
+            &["environment", "run", "--", "ls"],
+        ] {
+            assert_eq!(
+                task(making, "not plain").unwrap_err().code,
+                "usage",
+                "{making:?}"
+            );
+            let named = task(making, "probe").unwrap().unwrap();
+            assert_eq!(named.name().map(|name| name.as_str()), Some("probe"));
+        }
+
+        for other in [
+            &["status"][..],
+            &["activity"],
+            &["stop"],
+            &["resume"],
+            &["restart"],
+            &["apps"],
+            &["click", "1", "2"],
+            &["close", "--app", "TextEdit"],
+            &["environment", "list"],
+        ] {
+            assert_eq!(task(other, "not plain").unwrap(), None, "{other:?}");
+            assert!(task(other, "probe").unwrap().is_some(), "{other:?}");
+        }
+
+        let open = parse(&["open", "--app", "TextEdit"])
+            .unwrap()
+            .command
+            .unwrap();
+        assert_eq!(
+            task_of(&open, None, Some(OsStr::new("not plain"))).unwrap(),
+            None,
+            "without a host session there is no task to name"
+        );
     }
 
     #[test]

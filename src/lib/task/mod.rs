@@ -19,7 +19,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{fmt, path::Path};
+use std::{ffi::OsStr, fmt, path::Path};
 use store::Store;
 
 /// The most bytes a task name keeps.
@@ -92,15 +92,7 @@ impl Task {
     pub fn of(session: &Key, name: Option<&str>) -> Result<Self> {
         let name = match name.filter(|name| !name.is_empty()) {
             None => None,
-            Some(name) => Some(Name::parse(name).ok_or_else(|| {
-                Error::new(
-                    "usage",
-                    format!(
-                        "{VARIABLE} must be 1 to {NAME_LIMIT} letters, digits, '.', '_', ':' or \
-                         '-', so Atlas did nothing. Set it to a short plain name, or unset it."
-                    ),
-                )
-            })?),
+            Some(name) => Some(Name::parse(name).ok_or_else(not_plain)?),
         };
         let key = match &name {
             None => session.clone(),
@@ -117,18 +109,20 @@ impl Task {
     /// The task of a command from `session`, as this process's ATLAS_TASK
     /// names it.
     pub fn from_env(session: Option<&HostSession>) -> Result<Option<Self>> {
-        Self::resolve(session, std::env::var(VARIABLE).ok().as_deref())
+        Self::resolve(session, std::env::var_os(VARIABLE).as_deref())
     }
 
     /// The task `name` names of a command from `session`; none without a
     /// host session, whatever the name: ATLAS_TASK alone makes no session.
-    pub(crate) fn resolve(
-        session: Option<&HostSession>,
-        name: Option<&str>,
-    ) -> Result<Option<Self>> {
-        session
-            .map(|session| Self::of(session.key(), name))
-            .transpose()
+    /// A name that is not text is no plainer than any other: a usage error.
+    pub fn resolve(session: Option<&HostSession>, name: Option<&OsStr>) -> Result<Option<Self>> {
+        let Some(session) = session else {
+            return Ok(None);
+        };
+        let name = name
+            .map(|name| name.to_str().ok_or_else(not_plain))
+            .transpose()?;
+        Self::of(session.key(), name).map(Some)
     }
 
     /// The key of the host session the task belongs to.
@@ -145,6 +139,17 @@ impl Task {
     pub fn name(&self) -> Option<&Name> {
         self.name.as_ref()
     }
+}
+
+/// Why an ATLAS_TASK value was refused.
+fn not_plain() -> Error {
+    Error::new(
+        "usage",
+        format!(
+            "{VARIABLE} must be 1 to {NAME_LIMIT} letters, digits, '.', '_', ':' or '-', so \
+             Atlas did nothing. Set it to a short plain name, or unset it."
+        ),
+    )
 }
 
 /// Where one command's claims go: its task's record, or nowhere for a
