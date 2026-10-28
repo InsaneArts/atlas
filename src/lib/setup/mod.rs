@@ -124,11 +124,24 @@ pub fn account_with_uid(uid: u32) -> Result<Option<Account>> {
 
 /// The full name of account `name`, as people know it, if it has one.
 pub fn real_name(name: &str) -> Option<String> {
-    let output = Command::new("/usr/bin/dscl")
-        .args([".", "-read", &format!("/Users/{name}"), "RealName"])
-        .output()
-        .ok()?;
-    let text = String::from_utf8(output.stdout).ok()?;
+    asked_real_name(name).flatten()
+}
+
+/// What directory services say of account `name`'s full name: `None` when
+/// they did not answer in time, `Some(None)` when it has none.
+pub fn asked_real_name(name: &str) -> Option<Option<String>> {
+    let output = crate::bounded::output(
+        Command::new("/usr/bin/dscl").args([".", "-read", &format!("/Users/{name}"), "RealName"]),
+        crate::bounded::LOOKUP,
+    )
+    .ok()?;
+
+    Some(parse_real_name(&output.stdout))
+}
+
+/// The full name in `dscl -read`'s answer for RealName, if it has one.
+fn parse_real_name(answer: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(answer).ok()?;
     let value = text.strip_prefix("RealName:")?.trim().to_owned();
 
     (!value.is_empty()).then_some(value)
@@ -365,10 +378,11 @@ pub fn administrator(name: &str) -> Option<bool> {
 
 /// What the directory service says of `name` in the admin group.
 fn directory_member(name: &str) -> Option<bool> {
-    let output = Command::new("/usr/sbin/dseditgroup")
-        .args(["-o", "checkmember", "-m", name, "admin"])
-        .output()
-        .ok()?;
+    let output = crate::bounded::output(
+        Command::new("/usr/sbin/dseditgroup").args(["-o", "checkmember", "-m", name, "admin"]),
+        crate::bounded::LOOKUP,
+    )
+    .ok()?;
 
     let answer = String::from_utf8_lossy(&output.stdout);
     if answer.starts_with("yes ") {
@@ -386,11 +400,12 @@ const ADMIN_GID: &str = "80";
 /// Whether the admin group is among the group IDs `id` lists for `name`.
 /// IDs, not names: a name `id` cannot resolve is printed as its number.
 fn listed_member(name: &str) -> Option<bool> {
-    let output = Command::new("/usr/bin/id")
-        .args(["-G", name])
-        .output()
-        .ok()
-        .filter(|output| output.status.success())?;
+    let output = crate::bounded::output(
+        Command::new("/usr/bin/id").args(["-G", name]),
+        crate::bounded::LOOKUP,
+    )
+    .ok()
+    .filter(|output| output.status.success())?;
 
     parse_admin_listed(&String::from_utf8_lossy(&output.stdout))
 }
@@ -1287,5 +1302,18 @@ mod tests {
                 "screenSharing": {"service": service}}));
             assert!(!steps.join(" ").contains("Screen Sharing"), "{service}");
         }
+    }
+    #[test]
+    fn a_full_name_is_read_from_directory_services_answer_on_one_line_or_the_next() {
+        assert_eq!(
+            parse_real_name(b"RealName: Atlas\n").as_deref(),
+            Some("Atlas")
+        );
+        assert_eq!(
+            parse_real_name(b"RealName:\n Atlas Helper\n").as_deref(),
+            Some("Atlas Helper")
+        );
+        assert_eq!(parse_real_name(b"RealName:\n"), None);
+        assert_eq!(parse_real_name(b"No such key: RealName\n"), None);
     }
 }

@@ -4,6 +4,7 @@ pub mod agent;
 pub mod agents;
 mod app_selection;
 pub mod approval;
+mod bounded;
 pub mod capability;
 pub mod claude_app;
 pub mod client;

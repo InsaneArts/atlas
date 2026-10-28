@@ -316,7 +316,8 @@ pub(crate) fn helper_picture() -> Option<String> {
 /// sharing its ID would mix that session with the helper's.
 pub(crate) fn free_uid() -> Result<u32> {
     let taken = |program: &str, args: &[&str]| -> Result<Vec<u32>> {
-        let output = Command::new(program).args(args).output()?;
+        let output =
+            crate::bounded::output(Command::new(program).args(args), crate::bounded::LISTING)?;
         if !output.status.success() {
             return Err(problem("Could not list the user IDs in use"));
         }

@@ -50,9 +50,10 @@ fn parse_accounts(listing: &str) -> Result<Vec<(String, u32)>> {
 
 /// Accounts other than this one, the helper first.
 pub fn accounts(helper: Option<u32>) -> Result<Vec<Account>> {
-    let output = Command::new("/usr/bin/dscl")
-        .args([".", "-list", "/Users", "UniqueID"])
-        .output()?;
+    let output = crate::bounded::output(
+        Command::new("/usr/bin/dscl").args([".", "-list", "/Users", "UniqueID"]),
+        crate::bounded::LOOKUP,
+    )?;
 
     // A failed listing is an error, never "no other accounts".
     if !output.status.success() {

@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
 };
 
 /// One account, as directory services name it.
@@ -47,16 +47,16 @@ fn parse_generated_uid(text: &str) -> Option<String> {
 /// The account `account` as directory services name it now; `None` when its
 /// GeneratedUID cannot be read.
 pub fn current(account: &Account) -> Option<Identity> {
-    let output = Command::new("/usr/bin/dscl")
-        .args([
+    let output = crate::bounded::output(
+        Command::new("/usr/bin/dscl").args([
             ".",
             "-read",
             &format!("/Users/{}", account.name),
             "GeneratedUID",
-        ])
-        .stdin(Stdio::null())
-        .output()
-        .ok()?;
+        ]),
+        crate::bounded::LOOKUP,
+    )
+    .ok()?;
     if !output.status.success() {
         return None;
     }

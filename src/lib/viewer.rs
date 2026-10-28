@@ -557,24 +557,9 @@ impl Viewer {
         status
     }
 
-    /// The helper account `name`'s full name, as people know it. It is
-    /// looked up once per account (off the runtime, as it asks directory
-    /// services), also when it has none.
+    /// The helper account `name`'s full name, as people know it.
     async fn account_title(&self, name: &str) -> Option<String> {
-        let known = unpoisoned(&self.account_name)
-            .clone()
-            .filter(|(account, _)| account == name);
-        if let Some((_, title)) = known {
-            return title;
-        }
-
-        let account = name.to_owned();
-        let title = tokio::task::spawn_blocking(move || crate::setup::real_name(&account))
-            .await
-            .ok()?;
-
-        *unpoisoned(&self.account_name) = Some((name.to_owned(), title.clone()));
-        title
+        account_title(&self.account_name, name, crate::setup::asked_real_name).await
     }
 
     /// What was done in the helper lately, newest first, as the app lists
@@ -1183,6 +1168,31 @@ fn remove_record(path: &Path) {
 pub const MENUBAR_RECORD: &str = "menubar.json";
 
 /// A lock that a panicked holder left poisoned still guards plain data.
+/// Account `name`'s full name, as `ask` finds it, kept in `known`. It is
+/// asked once per account (off the runtime, as it asks directory services),
+/// also when it has none, but again after an ask that had no answer.
+async fn account_title(
+    known: &std::sync::Mutex<Option<(String, Option<String>)>>,
+    name: &str,
+    ask: fn(&str) -> Option<Option<String>>,
+) -> Option<String> {
+    let kept = unpoisoned(known)
+        .clone()
+        .filter(|(account, _)| account == name);
+    if let Some((_, title)) = kept {
+        return title;
+    }
+
+    let account = name.to_owned();
+    let title = tokio::task::spawn_blocking(move || ask(&account))
+        .await
+        .ok()
+        .flatten()?;
+
+    *unpoisoned(known) = Some((name.to_owned(), title.clone()));
+    title
+}
+
 fn unpoisoned<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex
         .lock()
@@ -2886,5 +2896,44 @@ mod tests {
                 json!([{"name": "1-capture.png", "takenAt": 0}])
             );
         });
+    }
+    #[tokio::test]
+    async fn an_account_title_is_asked_again_after_no_answer_and_kept_once_answered() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static ASKED: AtomicUsize = AtomicUsize::new(0);
+        fn ask(_: &str) -> Option<Option<String>> {
+            match ASKED.fetch_add(1, Ordering::SeqCst) {
+                0 => None,
+                1 => Some(Some("Atlas".to_owned())),
+                _ => Some(Some("Not asked".to_owned())),
+            }
+        }
+        let known = std::sync::Mutex::new(None);
+
+        assert_eq!(account_title(&known, "atlas", ask).await, None);
+        assert_eq!(
+            account_title(&known, "atlas", ask).await.as_deref(),
+            Some("Atlas")
+        );
+        assert_eq!(
+            account_title(&known, "atlas", ask).await.as_deref(),
+            Some("Atlas")
+        );
+        assert_eq!(ASKED.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn an_account_with_no_full_name_is_asked_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static ASKED: AtomicUsize = AtomicUsize::new(0);
+        fn ask(_: &str) -> Option<Option<String>> {
+            ASKED.fetch_add(1, Ordering::SeqCst);
+            Some(None)
+        }
+        let known = std::sync::Mutex::new(None);
+
+        assert_eq!(account_title(&known, "atlas", ask).await, None);
+        assert_eq!(account_title(&known, "atlas", ask).await, None);
+        assert_eq!(ASKED.load(Ordering::SeqCst), 1);
     }
 }
