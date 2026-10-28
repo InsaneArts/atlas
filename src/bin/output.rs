@@ -182,7 +182,8 @@ fn advise(value: &mut Value) {
 
     let uncertain = value["uncertain"] == true;
     let next = if code == "focus-changed" && !uncertain {
-        hints::focus_changed(sent_before(value), value["reason"] == "unreadable")
+        let in_the_way = hints::InTheWay::of(value["reason"].as_str());
+        hints::focus_changed(sent_before(value), in_the_way)
     } else {
         let holder = value["holder"].as_str().and_then(Holder::parse);
         hints::step(code, holder, uncertain)
@@ -325,30 +326,57 @@ mod tests {
             value["next"].clone()
         };
 
-        for (fields, sent, unreadable) in [
+        for (fields, sent, in_the_way) in [
             (
                 json!({"reason": "app", "performed": 0, "partial": false}),
                 false,
-                false,
+                hints::InTheWay::App,
             ),
-            (json!({"reason": "point"}), false, false),
-            (json!({"reason": "unreadable", "performed": 0}), false, true),
-            (json!({"reason": "app", "performed": 2}), true, false),
+            (json!({"reason": "point"}), false, hints::InTheWay::App),
+            (
+                json!({"reason": "unreadable", "performed": 0}),
+                false,
+                hints::InTheWay::Unknown,
+            ),
+            (
+                json!({"reason": "app", "performed": 2}),
+                true,
+                hints::InTheWay::App,
+            ),
             (
                 json!({"reason": "app", "typed": 48, "partial": true}),
                 true,
-                false,
+                hints::InTheWay::App,
             ),
             (
                 json!({"reason": "point", "typed": 0, "partial": true}),
                 true,
-                false,
+                hints::InTheWay::App,
             ),
-            (json!({"reason": "unreadable", "performed": 1}), true, true),
+            (
+                json!({"reason": "unreadable", "performed": 1}),
+                true,
+                hints::InTheWay::Unknown,
+            ),
+            (
+                json!({"reason": "sheet", "performed": 0}),
+                false,
+                hints::InTheWay::Sheet,
+            ),
+            (
+                json!({"reason": "field", "typed": 16, "partial": true}),
+                true,
+                hints::InTheWay::Field,
+            ),
+            (
+                json!({"reason": "window", "performed": 0}),
+                false,
+                hints::InTheWay::Window,
+            ),
         ] {
             assert_eq!(
                 refusal(fields.clone()),
-                hints::focus_changed(sent, unreadable),
+                hints::focus_changed(sent, in_the_way),
                 "{fields}"
             );
         }
@@ -357,7 +385,7 @@ mod tests {
             .with("reason", "unreadable");
         assert_eq!(
             failure(&error, true)["next"],
-            hints::focus_changed(false, true)
+            hints::focus_changed(false, hints::InTheWay::Unknown)
         );
     }
 

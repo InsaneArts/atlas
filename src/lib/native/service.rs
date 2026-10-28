@@ -33,12 +33,15 @@ const MAX_REQUEST: usize = 64 * 1024;
 
 /// What this service can do beyond plain input, as its hello lists it:
 /// authenticated shutdown, the person's Stop, and checking an agent's
-/// target app, with the Dock covering where it takes clicks.
-const CAPABILITIES: [&str; 4] = [
+/// target app, with the Dock covering where it takes clicks, and the window
+/// and field it names.
+const CAPABILITIES: [&str; 6] = [
     crate::session::SHUTDOWN,
     crate::session::HOLD,
     crate::session::FOCUS_APP,
     crate::session::FOCUS_DOCK,
+    crate::session::FOCUS_WINDOW,
+    crate::session::FOCUS_FIELD,
 ];
 
 struct Service {
@@ -358,7 +361,7 @@ impl Service {
         drop(grant.authorize()?);
         engine.grant = Some(grant);
 
-        if let Err(reply) = run(&mut *engine, &self.gate, actions, expect).await {
+        if let Err(reply) = run(&mut *engine, &self.gate, actions, expect.as_ref()).await {
             return Ok(reply);
         }
 
@@ -393,7 +396,7 @@ impl Service {
 trait Perform {
     /// Refuse unless `expect` holds for `need` now, before anything is
     /// posted, taking at most `budget` to tell.
-    async fn require(&mut self, expect: Expect, need: Need, budget: Duration) -> Result<()>;
+    async fn require(&mut self, expect: &Expect, need: Need, budget: Duration) -> Result<()>;
     /// Carry out one action, posting its events.
     async fn perform(&mut self, action: Action) -> Result<()>;
     /// Events posted so far.
@@ -405,10 +408,11 @@ trait Perform {
 impl Perform for Engine {
     /// The reads block, so they run on a blocking thread; the engine stays
     /// locked by the caller meanwhile, so nothing posts in between.
-    async fn require(&mut self, expect: Expect, need: Need, budget: Duration) -> Result<()> {
+    async fn require(&mut self, expect: &Expect, need: Need, budget: Duration) -> Result<()> {
         let display = Bounds::display(self.epoch.width, self.epoch.height);
         let deadline = Instant::now() + budget;
-        tokio::task::spawn_blocking(move || focus::check(expect, need, &display, deadline))
+        let expect = expect.clone();
+        tokio::task::spawn_blocking(move || focus::check(&expect, need, &display, deadline))
             .await
             .unwrap_or_else(|_| Err(focus::unreadable()))
     }
@@ -427,7 +431,9 @@ impl Perform for Engine {
 }
 
 /// Carry out `actions` in order on `engine`, which the caller holds
-/// locked, each checked against `expect` just before it starts. On the
+/// locked, each checked against `expect` just before it starts: a key
+/// after the batch's first against the app alone, since an earlier key
+/// (tab, return, cmd+w) may move the window or field on purpose. On the
 /// first failure, revoke `gate`, release what is held and return the
 /// failure reply: what was performed, whether the failing action had posted
 /// anything, and whether the outcome is unknown.
@@ -435,14 +441,25 @@ async fn run(
     engine: &mut impl Perform,
     gate: &Gate,
     actions: Vec<Action>,
-    expect: Option<Expect>,
+    expect: Option<&Expect>,
 ) -> std::result::Result<(), Value> {
     let mut budget = focus::CHECK_BUDGET;
+    let later = expect.map(Expect::app_only);
+    let mut pressed = false;
 
     for (performed, action) in actions.into_iter().enumerate() {
         let before = engine.posted();
-        let checked = match expect {
-            Some(expect) => require_within(engine, expect, Need::of(&action), &mut budget).await,
+        let key = matches!(action, Action::Key { .. });
+        let expected = if key && pressed {
+            later.as_ref()
+        } else {
+            expect
+        };
+        pressed |= key;
+        let checked = match expected {
+            Some(expected) => {
+                require_within(engine, expected, Need::of(&action), &mut budget).await
+            }
             None => Ok(()),
         };
         let step = match checked {
@@ -463,7 +480,7 @@ async fn run(
 /// request may spend checking in all.
 async fn require_within(
     engine: &mut impl Perform,
-    expect: Expect,
+    expect: &Expect,
     need: Need,
     budget: &mut Duration,
 ) -> Result<()> {
@@ -727,6 +744,8 @@ mod tests {
     struct Stand {
         script: Vec<Step>,
         log: Vec<String>,
+        /// What each check was asked to find.
+        asked: Vec<Expect>,
         posted: u64,
         releases: usize,
         lock: Weak<Mutex<Stand>>,
@@ -738,6 +757,7 @@ mod tests {
                 Mutex::new(Self {
                     script: script.to_vec(),
                     log: Vec::new(),
+                    asked: Vec::new(),
                     posted: 0,
                     releases: 0,
                     lock: lock.clone(),
@@ -760,8 +780,9 @@ mod tests {
     }
 
     impl Perform for Stand {
-        async fn require(&mut self, _: Expect, _: Need, _: Duration) -> Result<()> {
+        async fn require(&mut self, expect: &Expect, _: Need, _: Duration) -> Result<()> {
             self.assert_locked();
+            self.asked.push(expect.clone());
             let index = self.logged("check");
             self.log.push(format!("check {index}"));
             if self.script.get(index) == Some(&Step::Refuse) {
@@ -810,7 +831,7 @@ mod tests {
         let gate = Arc::new(Gate::default());
         let outcome = {
             let mut engine = stand.lock().await;
-            run(&mut *engine, &gate, keys(count), expect).await
+            run(&mut *engine, &gate, keys(count), expect.as_ref()).await
         };
         (outcome, stand)
     }
@@ -867,6 +888,66 @@ mod tests {
         assert_eq!(reply["uncertain"], true);
     }
 
+    /// Run `actions` on a stand-in that posts each, expecting `expect`.
+    async fn ran_actions(actions: Vec<Value>, expect: &Expect) -> Arc<Mutex<Stand>> {
+        let stand = Stand::locked(&[]);
+        let gate = Arc::new(Gate::default());
+        let actions = actions
+            .into_iter()
+            .map(|action| serde_json::from_value(action).unwrap())
+            .collect();
+        {
+            let mut engine = stand.lock().await;
+            run(&mut *engine, &gate, actions, Some(expect))
+                .await
+                .unwrap();
+        }
+        stand
+    }
+
+    /// The window and field each check was asked for.
+    fn asked_for(stand: &Stand) -> Vec<(Option<i64>, Option<String>)> {
+        stand
+            .asked
+            .iter()
+            .map(|expect| (expect.window(), expect.field().map(str::to_owned)))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn keys_are_checked_once_before_the_first_key() {
+        let expect = Expect::new(812)
+            .unwrap()
+            .in_window(4120)
+            .unwrap()
+            .in_field("Email")
+            .unwrap();
+        let key = |key: &str| json!({"type": "key", "key": key});
+        let stand = ran_actions(vec![key("tab"), key("a"), key("return")], &expect).await;
+        let stand = stand.lock().await;
+        assert_eq!(
+            asked_for(&stand),
+            [
+                (Some(4120), Some("Email".to_owned())),
+                (None, None),
+                (None, None)
+            ],
+            "the app before every key, the window and field before the first"
+        );
+        assert!(stand.asked.iter().all(|asked| asked.pid() == 812));
+    }
+
+    #[tokio::test]
+    async fn text_is_checked_whole_before_every_part() {
+        let expect = Expect::new(812).unwrap().in_field("Email").unwrap();
+        let part = |text: &str| json!({"type": "type", "text": text});
+        let stand = ran_actions(vec![part("sam@"), part("example"), part(".com")], &expect).await;
+        assert_eq!(
+            asked_for(&*stand.lock().await),
+            vec![(None, Some("Email".to_owned())); 3]
+        );
+    }
+
     #[tokio::test]
     async fn input_without_an_expectation_is_never_checked() {
         let (outcome, stand) = ran(&[Step::Refuse, Step::Refuse], 2, None).await;
@@ -880,6 +961,14 @@ mod tests {
         assert!(CAPABILITIES.contains(&crate::session::FOCUS_DOCK));
         assert_eq!(crate::session::FOCUS_APP, "focus-app");
         assert_eq!(crate::session::FOCUS_DOCK, "focus-dock");
+    }
+
+    #[test]
+    fn the_input_service_offers_the_window_and_field_checks() {
+        assert!(CAPABILITIES.contains(&crate::session::FOCUS_WINDOW));
+        assert!(CAPABILITIES.contains(&crate::session::FOCUS_FIELD));
+        assert_eq!(crate::session::FOCUS_WINDOW, "focus-window");
+        assert_eq!(crate::session::FOCUS_FIELD, "focus-field");
     }
 
     /// Only the controller is answered: a process in the helper's own

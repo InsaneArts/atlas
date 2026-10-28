@@ -192,18 +192,19 @@ fn type_parts(batch: &str) -> Vec<String> {
     split_text(batch, TYPE_PART)
 }
 
-/// Send `actions` as one batch. With a target, the app is found once
+/// Send `actions` as one batch. With an expectation, the app is found once
 /// control is held, and the helper refuses each action before it starts
-/// unless it lands in that app: text and keys while the app has keyboard
-/// focus, pointer actions where its own window is the top one.
-pub async fn act(client: &Client, target: Option<&Target>, actions: &Value) -> Result<Value> {
-    let Some(target) = target else {
+/// unless it lands where expected: text and keys while the app, and the
+/// window and field when named, have keyboard focus, pointer actions where
+/// the app's own window, or the named one, is the top one.
+pub async fn act(client: &Client, expected: Option<&Expected>, actions: &Value) -> Result<Value> {
+    let Some(expected) = expected else {
         return client.input(actions, None, None).await;
     };
 
     let ownership = client.controller.acquire_beside_commands()?;
     let verified = client.verify().await?;
-    let expect = Expect::new(target_pid(client, &verified, target).await?)?;
+    let expect = expected.resolve(client, &verified).await?;
     client
         .input_owned(
             &ownership,
@@ -216,14 +217,15 @@ pub async fn act(client: &Client, target: Option<&Target>, actions: &Value) -> R
 
 /// Type `text` batch by batch, stopping at the first batch that is not
 /// confirmed. Each batch goes as `type` actions of [`TYPE_PART`]
-/// characters, and with a target each is sent only while that app has
-/// keyboard focus. The report says exactly how much was confirmed typed
-/// and, on failure, whether the failed batch's delivery is uncertain. The
-/// whole text is typed under one ownership into the helper as it was at
-/// the start: no other input lands between batches, and a helper that
-/// restarts midway is refused rather than typed into. A signal's stop ends
-/// it before the next batch, with the same report.
-pub async fn type_text(client: &Client, text: &str, target: Option<&Target>) -> Result<Value> {
+/// characters, and with an expectation each is sent only while the app,
+/// and the window and field when named, have keyboard focus. The report
+/// says exactly how much was confirmed typed and, on failure, whether the
+/// failed batch's delivery is uncertain. The whole text is typed under one
+/// ownership into the helper as it was at the start: no other input lands
+/// between batches, and a helper that restarts midway is refused rather
+/// than typed into. A signal's stop ends it before the next batch, with
+/// the same report.
+pub async fn type_text(client: &Client, text: &str, expected: Option<&Expected>) -> Result<Value> {
     let batches = type_batches(text)?;
 
     let ownership = client.controller.acquire_beside_commands()?;
@@ -231,16 +233,119 @@ pub async fn type_text(client: &Client, text: &str, target: Option<&Target>) -> 
     let interrupt = client.controller.interrupt();
     let _typing = interrupt.step();
     let verified = client.verify().await?;
-    let check = match target {
-        Some(target) => Some(Check::Required(Expect::new(
-            target_pid(client, &verified, target).await?,
-        )?)),
+    let check = match expected {
+        Some(expected) => Some(Check::Required(expected.resolve(client, &verified).await?)),
         None => None,
     };
     let epoch = verified.session().epoch.clone();
 
-    let send = async |actions: &Value| client.input_owned(&ownership, actions, &epoch, check).await;
+    let send = async |actions: &Value| {
+        client
+            .input_owned(&ownership, actions, &epoch, check.clone())
+            .await
+    };
     Ok(type_each(&batches, interrupt, send).await)
+}
+
+/// Where an agent's input must land: an app, by name or process, or a
+/// window and so the app it belongs to, and within it, when named, the
+/// field with keyboard focus.
+#[derive(Debug, Clone)]
+pub struct Expected {
+    place: Place,
+    field: Option<String>,
+}
+
+/// The app, or the window, an agent's input must reach.
+#[derive(Debug, Clone)]
+enum Place {
+    /// Any window of the app.
+    App(Target),
+    /// One window, by its number, which must be `app`'s when one is named.
+    Window { number: i64, app: Option<Target> },
+}
+
+impl Expected {
+    /// The expectation of `app`, `window` and `field`, as many as are
+    /// named; None when none is. A field needs the app or window it is in.
+    pub fn new(
+        app: Option<Target>,
+        window: Option<i64>,
+        field: Option<String>,
+    ) -> Result<Option<Self>> {
+        let place = match (app, window) {
+            (app, Some(number)) => Place::Window { number, app },
+            (Some(app), None) => Place::App(app),
+            (None, None) if field.is_some() => {
+                return Err(Error::new(
+                    "usage",
+                    "--field needs the app it is in: add --app NAME or --window NUMBER",
+                ));
+            }
+            (None, None) => return Ok(None),
+        };
+
+        Ok(Some(Self { place, field }))
+    }
+
+    /// What the helper is asked to check, found in the helper `verified`
+    /// describes: the app's process, or the named window's owner, refused
+    /// when the window is not the named app's.
+    async fn resolve(&self, client: &Client, verified: &Verified) -> Result<Expect> {
+        let (pid, window) = match &self.place {
+            Place::App(app) => (target_pid(client, verified, app).await?, None),
+            Place::Window { number, app } => {
+                let listed = verified_window_list(client, verified).await?;
+                let owner = window_owner(&listed, *number)?;
+                if let Some(app) = app
+                    && target_pid(client, verified, app).await? != owner.pid
+                {
+                    return Err(other_app(owner, app));
+                }
+                (owner.pid, Some(*number))
+            }
+        };
+
+        let mut expect = Expect::new(pid)?;
+        if let Some(number) = window {
+            expect = expect.in_window(number)?;
+        }
+        if let Some(field) = &self.field {
+            expect = expect.in_field(field)?;
+        }
+
+        Ok(expect)
+    }
+}
+
+/// The listed window numbered `number`, one of an app's own, as `atlas
+/// windows` lists them.
+fn window_owner(listed: &[Window], number: i64) -> Result<&Window> {
+    listed
+        .iter()
+        .find(|window| window.number == number && app_layer(window))
+        .ok_or_else(|| {
+            Error::new(
+                "windows",
+                format!("No window {number} is on screen; run atlas windows to see their numbers"),
+            )
+        })
+}
+
+/// The usage error for a window and an app that are not each other's.
+fn other_app(window: &Window, app: &Target) -> Error {
+    let owner = window.owner.as_deref().unwrap_or("another app");
+    let named = match app {
+        Target::Name(name) => name.clone(),
+        Target::Pid(pid) => format!("process {pid}"),
+    };
+    Error::new(
+        "usage",
+        format!(
+            "Window {} is {owner}'s, not {named}'s: name one app, or leave out --app",
+            window.number
+        ),
+    )
 }
 
 /// Send each of `batches` as `type` actions through `send`, stopping at
@@ -2032,7 +2137,16 @@ mod tests {
                 .await;
             let (_sending, sender, helper) = helpers();
             let sent = helper
-                .serve(act(&sender, Some(&target), &key), textedit_reads)
+                .serve(
+                    act(
+                        &sender,
+                        Expected::new(Some(target.clone()), None, None)
+                            .unwrap()
+                            .as_ref(),
+                        &key,
+                    ),
+                    textedit_reads,
+                )
                 .await;
             for outcome in [listed, clicked, sent] {
                 let error = outcome.unwrap_err();
@@ -2151,6 +2265,53 @@ mod tests {
                 height: 200.0,
             },
         }
+    }
+
+    #[test]
+    fn window_and_app_naming_different_apps_is_a_usage_error() {
+        let document = window(4120, 812, "TextEdit", 0);
+        let calculator = Target::Name("Calculator".into());
+        let error = other_app(&document, &calculator);
+        assert_eq!(error.code, "usage");
+        assert!(
+            error
+                .error
+                .starts_with("Window 4120 is TextEdit's, not Calculator's"),
+            "{}",
+            error.error
+        );
+        assert!(
+            other_app(&document, &Target::Pid(900))
+                .error
+                .contains("not process 900's"),
+        );
+
+        let menu = window(4121, 812, "TextEdit", MENU_LAYER);
+        let listed = [menu, document];
+        assert_eq!(window_owner(&listed, 4120).unwrap().pid, 812);
+        for missing in [4121, 9999] {
+            assert_eq!(
+                window_owner(&listed, missing).unwrap_err().code,
+                "windows",
+                "{missing}: an open menu is not a window to type into"
+            );
+        }
+    }
+
+    #[test]
+    fn a_field_needs_the_app_or_window_it_is_in() {
+        let field = || Some("Email".to_owned());
+        assert_eq!(
+            Expected::new(None, None, field()).unwrap_err().code,
+            "usage"
+        );
+        assert!(Expected::new(None, None, None).unwrap().is_none());
+        assert!(Expected::new(None, Some(4120), field()).unwrap().is_some());
+        assert!(
+            Expected::new(Some(Target::Name("TextEdit".into())), None, field())
+                .unwrap()
+                .is_some()
+        );
     }
 
     /// A menu bar title is judged against the menu bar, the Window Server's
@@ -2508,6 +2669,25 @@ mod tests {
         );
         let broke = reply(&json!({"performed": 0, "partial": true, "uncertain": true}));
         assert_eq!(stopped_typing(0, 1, 0, &parts, broke)["partial"], true);
+
+        let left = json!({"ok": false, "code": "focus-changed", "reason": "field",
+            "found": {"app": "TextEdit", "pid": 812, "window": 4120,
+                "field": {"role": "AXTextField", "name": "Second"}},
+            "error": "The field with keyboard focus is not the one named First",
+            "performed": 0, "partial": false, "uncertain": false});
+        let report = stopped_typing(128, 4, 2, &parts, reply(&left));
+        assert_eq!(
+            (
+                report["typed"].clone(),
+                report["confirmedBatches"].clone(),
+                report["partial"].clone(),
+                report["uncertain"].clone()
+            ),
+            (json!(128), json!(2), json!(true), json!(false)),
+            "a field left after two batches: those sent, exactly"
+        );
+        assert_eq!(report["reason"], "field");
+        assert_eq!(report["found"], left["found"]);
 
         let lost = Error::new("transport", "Native reply timed out").uncertain();
         let report = stopped_typing(64, 2, 1, &parts, lost.into());

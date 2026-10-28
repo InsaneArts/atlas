@@ -90,12 +90,23 @@ fn one() -> u8 {
     1
 }
 
-/// The app an agent's batch is for: its process in the helper. A batch
-/// that names one is sent only while each action would reach that app.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// The longest field name an expectation may carry, in characters: longer
+/// than any label `atlas elements` shows whole.
+const FIELD_MAX: usize = 256;
+
+/// The app an agent's batch is for: its process in the helper and, when
+/// named, the window and the field that should have keyboard focus. A
+/// batch that names one is sent only while each action would reach it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Expect {
     pid: i32,
+    /// The window's number, as the window list gives it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    window: Option<u32>,
+    /// The field's name, as `atlas elements --name` matches it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    field: Option<String>,
 }
 
 impl Expect {
@@ -104,25 +115,91 @@ impl Expect {
         i32::try_from(pid)
             .ok()
             .filter(|pid| *pid > 0)
-            .map(|pid| Self { pid })
+            .map(|pid| Self {
+                pid,
+                window: None,
+                field: None,
+            })
             .ok_or_else(not_a_process)
     }
 
+    /// The expectation that window `number` of the app has keyboard focus
+    /// (or, for a pointer action, is the one at the point), refused unless
+    /// it can be a window number.
+    pub fn in_window(self, number: i64) -> Result<Self> {
+        let window = u32::try_from(number)
+            .ok()
+            .filter(|number| *number > 0)
+            .ok_or_else(|| Error::new("input", "\"window\" must be a window number"))?;
+        Ok(Self {
+            window: Some(window),
+            ..self
+        })
+    }
+
+    /// The expectation that the focused field is named `name`, refused
+    /// unless it names something.
+    pub fn in_field(self, name: &str) -> Result<Self> {
+        let length = name.chars().count();
+        if name.trim().is_empty() || length > FIELD_MAX {
+            return Err(Error::new(
+                "input",
+                format!("\"field\" must be a name of 1 to {FIELD_MAX} characters"),
+            ));
+        }
+
+        Ok(Self {
+            field: Some(name.to_owned()),
+            ..self
+        })
+    }
+
     /// A request's expectation: none when absent or null. Anything but
-    /// `{"pid": N}` naming a process is refused, so a field this build does
-    /// not know is never ignored.
+    /// `{"pid": N}` naming a process, with at most a window number and a
+    /// field name, is refused, so a member this build does not know is
+    /// never ignored.
     pub fn from_request(value: &Value) -> Result<Option<Self>> {
         if value.is_null() {
             return Ok(None);
         }
 
-        let Self { pid } = Self::deserialize(value).map_err(|_| not_a_process())?;
-        Self::new(pid.into()).map(Some)
+        let Self { pid, window, field } = Self::deserialize(value).map_err(|_| not_a_process())?;
+        let mut expect = Self::new(pid.into())?;
+        if let Some(window) = window {
+            expect = expect.in_window(window.into())?;
+        }
+        if let Some(field) = field {
+            expect = expect.in_field(&field)?;
+        }
+
+        Ok(Some(expect))
     }
 
     /// The process the batch is for.
-    pub fn pid(self) -> i64 {
+    pub fn pid(&self) -> i64 {
         self.pid.into()
+    }
+
+    /// The window that should have keyboard focus, if one is named.
+    pub fn window(&self) -> Option<i64> {
+        self.window.map(i64::from)
+    }
+
+    /// The name of the field that should have keyboard focus, if one is
+    /// named.
+    pub fn field(&self) -> Option<&str> {
+        self.field.as_deref()
+    }
+
+    /// The expectation of the app alone: for a key after the batch's
+    /// first, whose window or field an earlier key (tab, return, cmd+w)
+    /// may have moved on purpose.
+    pub fn app_only(&self) -> Self {
+        Self {
+            pid: self.pid,
+            window: None,
+            field: None,
+        }
     }
 }
 
@@ -445,7 +522,7 @@ mod tests {
         assert_eq!(Expect::from_request(&json!({})["expect"]).unwrap(), None);
         let five = Expect::from_request(&json!({"pid": 5})).unwrap().unwrap();
         assert_eq!(five.pid(), 5);
-        assert_eq!(serde_json::to_value(five).unwrap(), json!({"pid": 5}));
+        assert_eq!(serde_json::to_value(&five).unwrap(), json!({"pid": 5}));
 
         for refused in [
             json!({"pid": 0}),
@@ -453,7 +530,7 @@ mod tests {
             json!({"pid": "5"}),
             json!({"pid": 2147483648_i64}),
             json!({}),
-            json!({"pid": 5, "window": 1}),
+            json!({"pid": 5, "app": "TextEdit"}),
             json!(5),
         ] {
             let error = Expect::from_request(&refused).unwrap_err();
@@ -463,6 +540,39 @@ mod tests {
         assert!(Expect::new(812).is_ok());
         assert!(Expect::new(0).is_err());
         assert!(Expect::new(1 << 31).is_err());
+    }
+
+    #[test]
+    fn an_expectation_may_name_a_window_number_and_a_field() {
+        use serde_json::json;
+
+        let named = json!({"pid": 5, "window": 4120, "field": "Email"});
+        let expect = Expect::from_request(&named).unwrap().unwrap();
+        assert_eq!(
+            (expect.pid(), expect.window(), expect.field()),
+            (5, Some(4120), Some("Email"))
+        );
+        assert_eq!(serde_json::to_value(&expect).unwrap(), named);
+        assert_eq!(
+            serde_json::to_value(expect.app_only()).unwrap(),
+            json!({"pid": 5})
+        );
+
+        for refused in [
+            json!({"pid": 5, "window": 0}),
+            json!({"pid": 5, "window": -3}),
+            json!({"pid": 5, "window": "4120"}),
+            json!({"pid": 5, "window": 4294967296_i64}),
+            json!({"pid": 5, "field": ""}),
+            json!({"pid": 5, "field": "  "}),
+            json!({"pid": 5, "field": "x".repeat(FIELD_MAX + 1)}),
+            json!({"pid": 5, "field": 7}),
+        ] {
+            let error = Expect::from_request(&refused).unwrap_err();
+            assert_eq!(error.code, "input", "{refused}");
+        }
+        let longest = json!({"pid": 5, "field": "é".repeat(FIELD_MAX)});
+        assert!(Expect::from_request(&longest).is_ok());
     }
 
     #[test]

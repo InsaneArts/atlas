@@ -109,7 +109,7 @@ fn doing(command: &Command) -> Option<Doing> {
         Command::Drag { target, .. } => Doing::new("drag").app(target.app.as_deref()),
         Command::Scroll { target, .. } => Doing::new("scroll").app(target.app.as_deref()),
         Command::Type { target, .. } => Doing::new("type").app(target.app.as_deref()),
-        Command::Key { keys, target } => Doing::keys(keys).app(target.app.as_deref()),
+        Command::Key { keys, target, .. } => Doing::keys(keys).app(target.app.as_deref()),
         Command::Open { app, targets, .. } => Doing::open(app.as_deref(), targets),
         Command::Close { app, .. } => Doing::new("close").app(app.as_deref()),
         Command::Cleanup { apply: true, .. } => Doing::new("cleanup"),
@@ -757,6 +757,7 @@ async fn carry_out(
             x,
             y,
             target,
+            window,
             name,
             role,
             button,
@@ -769,7 +770,7 @@ async fn carry_out(
                 (Some(x), Some(y), target) => {
                     agent::act(
                         &client,
-                        target.as_ref(),
+                        agent::Expected::new(target, window, None)?.as_ref(),
                         &agent::click(x, y, button.into(), count, &modifiers),
                     )
                     .await
@@ -824,10 +825,11 @@ async fn carry_out(
             to_y,
             button,
             target,
+            window,
         } => {
             agent::act(
                 &client()?,
-                target.target().as_ref(),
+                target.expected(window, None)?.as_ref(),
                 &agent::drag((from_x, from_y), (to_x, to_y), button.into()),
             )
             .await
@@ -838,6 +840,7 @@ async fn carry_out(
             dx,
             dy,
             target,
+            window,
         } => {
             if dx == 0 && dy == 0 {
                 return Err(Error::new(
@@ -848,7 +851,7 @@ async fn carry_out(
 
             agent::act(
                 &client()?,
-                target.target().as_ref(),
+                target.expected(window, None)?.as_ref(),
                 &json!([{ "type": "scroll", "x": x, "y": y, "dx": dx, "dy": dy }]),
             )
             .await
@@ -857,7 +860,10 @@ async fn carry_out(
             text,
             stdin,
             target,
+            window,
+            field,
         } => {
+            let expected = target.expected(window, field)?;
             let client = client()?;
 
             let text = match text {
@@ -873,10 +879,16 @@ async fn carry_out(
                 }
             };
 
-            agent::type_text(&client, &text, target.target().as_ref()).await
+            agent::type_text(&client, &text, expected.as_ref()).await
         }
-        Command::Key { keys, target } => {
-            agent::act(&client()?, target.target().as_ref(), &agent::keys(&keys)?).await
+        Command::Key {
+            keys,
+            target,
+            window,
+            field,
+        } => {
+            let expected = target.expected(window, field)?;
+            agent::act(&client()?, expected.as_ref(), &agent::keys(&keys)?).await
         }
         Command::Windows { app, title, all } => {
             agent::list(&client()?, &agent::WindowFilter { app, title, all }).await
@@ -938,7 +950,7 @@ async fn carry_out(
 
             agent::act(
                 &client,
-                target.target().as_ref(),
+                target.expected(None, None)?.as_ref(),
                 &serde_json::from_slice(&bytes)?,
             )
             .await

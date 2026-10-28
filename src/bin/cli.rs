@@ -294,7 +294,8 @@ pub(super) enum Command {
     /// Click at display point X Y (origin + screenshot pixels × pointsPerPixel),
     /// or on exactly one accessibility element of an app with --app and
     /// --name/--role. With X Y, --app or --pid sends the click only if that
-    /// app's window is the top one at the point.
+    /// app's window is the top one at the point, and --window only if that
+    /// window is.
     Click {
         /// Display point X (origin + screenshot pixels × pointsPerPixel).
         #[arg(requires = "y")]
@@ -303,6 +304,10 @@ pub(super) enum Command {
         y: Option<f64>,
         #[command(flatten)]
         target: AppTarget,
+        /// Only if window N (from atlas windows) is the top one at the
+        /// point. Nothing is sent otherwise.
+        #[arg(long, value_name = "N", requires = "x")]
+        window: Option<i64>,
         /// Exact element title, label text, description or identifier.
         #[arg(long, conflicts_with = "x")]
         name: Option<String>,
@@ -379,7 +384,8 @@ pub(super) enum Command {
     /// display. Drag-and-drop onto a target (selected text, files, list items)
     /// does not begin in the helper: macOS starts such a drag only from a real
     /// mouse. With --app or --pid, nothing is sent unless that app's window is
-    /// the top one at the start point and at the end point.
+    /// the top one at the start point and at the end point; with --window,
+    /// unless that window is the top one at the start point.
     Drag {
         /// Start point X.
         from_x: f64,
@@ -394,13 +400,17 @@ pub(super) enum Command {
         button: ButtonArg,
         #[command(flatten)]
         target: AppTarget,
+        /// Only if window N (from atlas windows) is the top one at the
+        /// start point. Nothing is sent otherwise.
+        #[arg(long, value_name = "N")]
+        window: Option<i64>,
     },
     /// Scroll at a point.
     ///
     /// Scroll at X Y by lines, as a mouse wheel's notches (about 10 points
     /// each, as the app has it); negative values scroll up or left. With
     /// --app or --pid, nothing is sent unless that app's window is the top
-    /// one at the point.
+    /// one at the point, and with --window unless that window is.
     Scroll {
         /// Display point X.
         x: f64,
@@ -414,6 +424,10 @@ pub(super) enum Command {
         dy: i32,
         #[command(flatten)]
         target: AppTarget,
+        /// Only if window N (from atlas windows) is the top one at the
+        /// point. Nothing is sent otherwise.
+        #[arg(long, value_name = "N")]
+        window: Option<i64>,
     },
     /// Type text.
     ///
@@ -422,8 +436,10 @@ pub(super) enum Command {
     /// while the two characters \n are typed as they are. Long text is typed
     /// in parts without breaking characters, and Atlas keeps control until the
     /// last part, so no other input lands in between. With --app or --pid,
-    /// text is typed only while that app has keyboard focus, checked before
-    /// every 16 characters; Atlas stops at the first check that fails.
+    /// text is typed only while that app has keyboard focus, and with
+    /// --window or --field only while that window or field has it too,
+    /// checked before every 16 characters; Atlas stops at the first check
+    /// that fails.
     Type {
         /// The text to type.
         #[arg(required_unless_present = "stdin", allow_hyphen_values = true)]
@@ -433,6 +449,14 @@ pub(super) enum Command {
         stdin: bool,
         #[command(flatten)]
         target: AppTarget,
+        /// Only if window N (from atlas windows) has keyboard focus, with
+        /// no sheet over it. Nothing is sent otherwise.
+        #[arg(long, value_name = "N")]
+        window: Option<i64>,
+        /// Only if the focused field has this name, as atlas elements
+        /// --name matches it. Nothing is sent otherwise.
+        #[arg(long, value_name = "NAME")]
+        field: Option<String>,
     },
     /// Press keys, for example cmd+s or escape.
     ///
@@ -441,13 +465,22 @@ pub(super) enum Command {
     /// escape, backspace, forwarddelete, left, right, up, down, home, end,
     /// pageup, pagedown and f1 to f12; the plus key is written + on its own or
     /// at the end of a chord (cmd++). With --app or --pid, each key is pressed
-    /// only while that app has keyboard focus.
+    /// only while that app has keyboard focus; --window and --field are
+    /// checked before the first key, since a key may move them on purpose.
     Key {
         /// Keys or chords such as cmd+s, escape, return, shift+tab.
         #[arg(required = true)]
         keys: Vec<String>,
         #[command(flatten)]
         target: AppTarget,
+        /// Only if window N (from atlas windows) has keyboard focus, with
+        /// no sheet over it. Nothing is sent otherwise.
+        #[arg(long, value_name = "N")]
+        window: Option<i64>,
+        /// Only if the focused field has this name, as atlas elements
+        /// --name matches it. Nothing is sent otherwise.
+        #[arg(long, value_name = "NAME")]
+        field: Option<String>,
     },
     /// List the helper's windows, front to back.
     ///
@@ -983,6 +1016,16 @@ impl AppTarget {
             .map(|pid| agent::Target::Pid(pid.into()))
             .or(self.app.map(agent::Target::Name))
     }
+
+    /// Where input must land: this app, and the `window` and `field` when
+    /// named.
+    pub(super) fn expected(
+        self,
+        window: Option<i64>,
+        field: Option<String>,
+    ) -> atlas::error::Result<Option<agent::Expected>> {
+        agent::Expected::new(self.target(), window, field)
+    }
 }
 
 #[cfg(test)]
@@ -1104,6 +1147,62 @@ mod tests {
         assert!(parse(&["click", "10", "20", "--app", "A"]).is_ok());
         assert!(parse(&["click", "10", "20", "--pid", "1"]).is_ok());
         assert!(parse(&["click", "10", "20", "--app", "A", "--pid", "1"]).is_err());
+    }
+
+    #[test]
+    fn field_is_accepted_by_type_and_key_only() {
+        for accepted in [
+            &["type", "--app", "A", "--field", "Email", "hi"][..],
+            &["type", "hi", "--window", "4120", "--field", "Email"],
+            &["key", "--window", "4120", "--field", "Email", "tab"],
+        ] {
+            assert!(parse(accepted).is_ok(), "{accepted:?}");
+        }
+        for refused in [
+            &["click", "1", "2", "--field", "Email"][..],
+            &["scroll", "1", "2", "--dy", "1", "--field", "Email"],
+            &["drag", "1", "2", "3", "4", "--field", "Email"],
+            &["input", r#"[{"type":"key","key":"a"}]"#, "--field", "Email"],
+            &["move", "1", "2", "--field", "Email"],
+        ] {
+            assert!(parse(refused).is_err(), "{refused:?}");
+        }
+    }
+
+    #[test]
+    fn a_window_is_named_on_keys_and_on_pointer_actions_at_a_point() {
+        let window = |args: &[&str]| match parse(args) {
+            Ok(Cli {
+                command:
+                    Some(
+                        Command::Type { window, .. }
+                        | Command::Key { window, .. }
+                        | Command::Click { window, .. }
+                        | Command::Scroll { window, .. }
+                        | Command::Drag { window, .. },
+                    ),
+                ..
+            }) => window,
+            _ => None,
+        };
+
+        assert_eq!(window(&["type", "--window", "4120", "hi"]), Some(4120));
+        assert_eq!(window(&["key", "cmd+s", "--window", "4120"]), Some(4120));
+        assert_eq!(window(&["click", "1", "2", "--window", "4120"]), Some(4120));
+        assert_eq!(
+            window(&["scroll", "1", "2", "--dy", "1", "--window", "4120"]),
+            Some(4120)
+        );
+        assert_eq!(
+            window(&["drag", "1", "2", "3", "4", "--window", "4120"]),
+            Some(4120)
+        );
+        assert!(
+            parse(&["click", "--app", "A", "--name", "Save", "--window", "4120"]).is_err(),
+            "a click by name checks its own element's window"
+        );
+        assert!(parse(&["input", "[]", "--window", "4120"]).is_err());
+        assert!(parse(&["type", "--window", "x", "hi"]).is_err());
     }
 
     #[test]

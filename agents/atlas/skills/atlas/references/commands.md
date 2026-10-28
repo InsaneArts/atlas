@@ -466,7 +466,7 @@ Examples:
 ```text
 Click a point, or exactly one element of an app.
 
-Click at display point X Y (origin + screenshot pixels × pointsPerPixel), or on exactly one accessibility element of an app with --app and --name/--role. With X Y, --app or --pid sends the click only if that app's window is the top one at the point.
+Click at display point X Y (origin + screenshot pixels × pointsPerPixel), or on exactly one accessibility element of an app with --app and --name/--role. With X Y, --app or --pid sends the click only if that app's window is the top one at the point, and --window only if that window is.
 
 Usage: atlas click [OPTIONS] [X] [Y]
 
@@ -483,6 +483,9 @@ Options:
 
       --pid <PID>
           Exact process ID, for apps with several processes
+
+      --window <N>
+          Only if window N (from atlas windows) is the top one at the point. Nothing is sent otherwise
 
       --name <NAME>
           Exact element title, label text, description or identifier
@@ -524,7 +527,7 @@ Examples:
 ```text
 Type text.
 
-The text is typed as given: a real newline or tab in it (in a shell, $'one\ntwo') or on standard input arrives as a line break or tab, while the two characters \n are typed as they are. Long text is typed in parts without breaking characters, and Atlas keeps control until the last part, so no other input lands in between. With --app or --pid, text is typed only while that app has keyboard focus, checked before every 16 characters; Atlas stops at the first check that fails.
+The text is typed as given: a real newline or tab in it (in a shell, $'one\ntwo') or on standard input arrives as a line break or tab, while the two characters \n are typed as they are. Long text is typed in parts without breaking characters, and Atlas keeps control until the last part, so no other input lands in between. With --app or --pid, text is typed only while that app has keyboard focus, and with --window or --field only while that window or field has it too, checked before every 16 characters; Atlas stops at the first check that fails.
 
 Usage: atlas type [OPTIONS] [TEXT]
 
@@ -541,6 +544,12 @@ Options:
 
       --pid <PID>
           Exact process ID, for apps with several processes
+
+      --window <N>
+          Only if window N (from atlas windows) has keyboard focus, with no sheet over it. Nothing is sent otherwise
+
+      --field <NAME>
+          Only if the focused field has this name, as atlas elements --name matches it. Nothing is sent otherwise
 
   -h, --help
           Print help (see a summary with '-h')
@@ -561,7 +570,7 @@ Examples:
 ```text
 Press keys, for example cmd+s or escape.
 
-Keys are pressed in order: `key cmd+s` or `key escape return`. A key is a letter, digit or punctuation mark, or one of return, tab, space, escape, backspace, forwarddelete, left, right, up, down, home, end, pageup, pagedown and f1 to f12; the plus key is written + on its own or at the end of a chord (cmd++). With --app or --pid, each key is pressed only while that app has keyboard focus.
+Keys are pressed in order: `key cmd+s` or `key escape return`. A key is a letter, digit or punctuation mark, or one of return, tab, space, escape, backspace, forwarddelete, left, right, up, down, home, end, pageup, pagedown and f1 to f12; the plus key is written + on its own or at the end of a chord (cmd++). With --app or --pid, each key is pressed only while that app has keyboard focus; --window and --field are checked before the first key, since a key may move them on purpose.
 
 Usage: atlas key [OPTIONS] <KEYS>...
 
@@ -575,6 +584,12 @@ Options:
 
       --pid <PID>
           Exact process ID, for apps with several processes
+
+      --window <N>
+          Only if window N (from atlas windows) has keyboard focus, with no sheet over it. Nothing is sent otherwise
+
+      --field <NAME>
+          Only if the focused field has this name, as atlas elements --name matches it. Nothing is sent otherwise
 
   -h, --help
           Print help (see a summary with '-h')
@@ -625,7 +640,7 @@ Examples:
 ```text
 Drag from one point to another.
 
-What is dragged (a window, a slider's knob, a selection) moves by exactly the distance between the points; the button itself is released up to one point past the end, in the direction of travel, never off the display. Drag-and-drop onto a target (selected text, files, list items) does not begin in the helper: macOS starts such a drag only from a real mouse. With --app or --pid, nothing is sent unless that app's window is the top one at the start point and at the end point.
+What is dragged (a window, a slider's knob, a selection) moves by exactly the distance between the points; the button itself is released up to one point past the end, in the direction of travel, never off the display. Drag-and-drop onto a target (selected text, files, list items) does not begin in the helper: macOS starts such a drag only from a real mouse. With --app or --pid, nothing is sent unless that app's window is the top one at the start point and at the end point; with --window, unless that window is the top one at the start point.
 
 Usage: atlas drag [OPTIONS] <FROM_X> <FROM_Y> <TO_X> <TO_Y>
 
@@ -655,6 +670,9 @@ Options:
       --pid <PID>
           Exact process ID, for apps with several processes
 
+      --window <N>
+          Only if window N (from atlas windows) is the top one at the start point. Nothing is sent otherwise
+
   -h, --help
           Print help (see a summary with '-h')
 
@@ -674,7 +692,7 @@ Examples:
 ```text
 Scroll at a point.
 
-Scroll at X Y by lines, as a mouse wheel's notches (about 10 points each, as the app has it); negative values scroll up or left. With --app or --pid, nothing is sent unless that app's window is the top one at the point.
+Scroll at X Y by lines, as a mouse wheel's notches (about 10 points each, as the app has it); negative values scroll up or left. With --app or --pid, nothing is sent unless that app's window is the top one at the point, and with --window unless that window is.
 
 Usage: atlas scroll [OPTIONS] <X> <Y>
 
@@ -701,6 +719,9 @@ Options:
 
       --pid <PID>
           Exact process ID, for apps with several processes
+
+      --window <N>
+          Only if window N (from atlas windows) is the top one at the point. Nothing is sent otherwise
 
   -h, --help
           Print help (see a summary with '-h')

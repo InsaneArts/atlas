@@ -14,8 +14,8 @@ use crate::{
     host_session::HostSession,
     last_capture,
     session::{
-        Display, Epoch, FOCUS_APP, FOCUS_DOCK, HOLD, SHUTDOWN, Session, has_capability,
-        input_current, input_settled, require_hidden,
+        Display, Epoch, FOCUS_APP, FOCUS_DOCK, FOCUS_FIELD, FOCUS_WINDOW, HOLD, SHUTDOWN, Session,
+        has_capability, input_current, input_settled, require_hidden,
     },
     task::Task,
     transport::{Transport, accepted, refusal, run_output},
@@ -229,7 +229,7 @@ impl Verified {
 }
 
 /// How an agent's batch is checked against the app it is for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Check {
     /// Sent only with the check: an input service that cannot check is
     /// refused before anything is sent.
@@ -2170,23 +2170,34 @@ impl Client {
 
 /// What the helper is asked to expect of an agent's batch, given what its
 /// input service `native` says it can check. An input service that answered
-/// without the whole check, the Dock's part included, is refused when the
-/// check is required: it would post the input unchecked, or let a click on a
-/// Dock icon through, and input cannot be taken back once it is sent. One
-/// that did not answer is refused later, as unavailable.
+/// without the whole check, the Dock's part included and the window's and
+/// field's when the batch names them, is refused when the check is
+/// required: it would post the input unchecked, or let a click on a Dock
+/// icon through, and input cannot be taken back once it is sent. One that
+/// did not answer is refused later, as unavailable.
 fn expectation(native: &Value, check: Option<Check>) -> Result<Option<Expect>> {
     let offered = has_capability(native, FOCUS_APP);
-    let complete = offered && has_capability(native, FOCUS_DOCK);
     let answered = native["ok"] == true;
     match check {
         None => Ok(None),
         Some(Check::Offered(expect)) => Ok(offered.then_some(expect)),
-        Some(Check::Required(expect)) if complete || !answered => Ok(Some(expect)),
+        Some(Check::Required(expect)) if !answered || checks_all(native, &expect) => {
+            Ok(Some(expect))
+        }
         Some(Check::Required(_)) => Err(Error::new(
             "startup",
             "The helper's input service is from an older Atlas: run atlas start-input, then try again",
         )),
     }
+}
+
+/// Whether input service `native` checks all of `expect`: the app, with
+/// the Dock, and the window and field when it names them.
+fn checks_all(native: &Value, expect: &Expect) -> bool {
+    has_capability(native, FOCUS_APP)
+        && has_capability(native, FOCUS_DOCK)
+        && (expect.window().is_none() || has_capability(native, FOCUS_WINDOW))
+        && (expect.field().is_none() || has_capability(native, FOCUS_FIELD))
 }
 
 /// The file name of the capture a screenshot's reply `saved` names.
@@ -2226,12 +2237,18 @@ fn failure_code(reply: &Value) -> Option<String> {
 
 /// Why a focus refusal in `reply` was refused, when it is one of the input
 /// service's fixed words: another app had keyboard focus (`app`), another
-/// app's window was at the point (`point`), or Atlas couldn't tell which
-/// app was in front (`unreadable`).
+/// app's window was at the point (`point`), another window of the app had
+/// focus or was there (`window`), a sheet over it had focus (`sheet`),
+/// another field had focus (`field`) or the field was disabled
+/// (`disabled`), or Atlas couldn't tell (`unreadable`).
 fn focus_reason(reply: &Value) -> Option<&'static str> {
     match reply["reason"].as_str()? {
         "app" => Some("app"),
         "point" => Some("point"),
+        "window" => Some("window"),
+        "sheet" => Some("sheet"),
+        "field" => Some("field"),
+        "disabled" => Some("disabled"),
         "unreadable" => Some("unreadable"),
         _ => None,
     }
@@ -2701,7 +2718,7 @@ mod tests {
             (&older, textedit().map(Check::Offered)),
             (&current, textedit().map(Check::Required)),
         ] {
-            let (_, sent) = connected(status, check).await;
+            let (_, sent) = connected(status, check.clone()).await;
             assert!(sent, "{check:?}");
         }
     }
@@ -2727,7 +2744,7 @@ mod tests {
         // A named click is judged against the Dock before it is sent, and
         // input that needs no check goes on as before.
         for check in [None, textedit().map(Check::Offered)] {
-            let (_, sent) = connected(&undocked, check).await;
+            let (_, sent) = connected(&undocked, check.clone()).await;
             assert!(sent, "{check:?}");
         }
     }
@@ -2747,32 +2764,32 @@ mod tests {
         let pid = textedit().unwrap();
 
         assert_eq!(
-            expectation(&older, Some(Check::Offered(pid))).unwrap(),
+            expectation(&older, Some(Check::Offered(pid.clone()))).unwrap(),
             None
         );
         assert_eq!(
-            expectation(&unanswered, Some(Check::Offered(pid))).unwrap(),
+            expectation(&unanswered, Some(Check::Offered(pid.clone()))).unwrap(),
             None
         );
         assert_eq!(
-            expectation(&current, Some(Check::Offered(pid))).unwrap(),
-            Some(pid)
+            expectation(&current, Some(Check::Offered(pid.clone()))).unwrap(),
+            Some(pid.clone())
         );
 
         assert_eq!(
-            expectation(&older, Some(Check::Required(pid)))
+            expectation(&older, Some(Check::Required(pid.clone())))
                 .unwrap_err()
                 .code,
             "startup"
         );
         assert_eq!(
-            expectation(&current, Some(Check::Required(pid))).unwrap(),
-            Some(pid)
+            expectation(&current, Some(Check::Required(pid.clone()))).unwrap(),
+            Some(pid.clone())
         );
         // A service that did not answer is refused as unavailable later.
         assert_eq!(
-            expectation(&unanswered, Some(Check::Required(pid))).unwrap(),
-            Some(pid)
+            expectation(&unanswered, Some(Check::Required(pid.clone()))).unwrap(),
+            Some(pid.clone())
         );
         assert_eq!(expectation(&older, None).unwrap(), None);
     }
@@ -3767,6 +3784,10 @@ mod tests {
             json!("app"),
             json!("point"),
             json!("unreadable"),
+            json!("window"),
+            json!("sheet"),
+            json!("field"),
+            json!("disabled"),
             json!("Calculator has keyboard focus"),
             Value::Null,
         ] {
@@ -3789,11 +3810,52 @@ mod tests {
                 json!("app"),
                 json!("point"),
                 json!("unreadable"),
+                json!("window"),
+                json!("sheet"),
+                json!("field"),
+                json!("disabled"),
                 Value::Null,
                 Value::Null,
                 Value::Null,
             ]
         );
+    }
+
+    #[test]
+    fn an_expectation_is_sent_only_to_a_service_that_names_the_capability() {
+        let app = Expect::new(812).unwrap();
+        let window = app.clone().in_window(4120).unwrap();
+        let field = app.clone().in_field("Email").unwrap();
+        let both = window.clone().in_field("Email").unwrap();
+        let service = |extra: &[&str]| {
+            let mut capabilities = vec![SHUTDOWN, HOLD, FOCUS_APP, FOCUS_DOCK];
+            capabilities.extend_from_slice(extra);
+            json!({"ok": true, "capabilities": capabilities})
+        };
+        let sent = |native: &Value, expect: &Expect| {
+            expectation(native, Some(Check::Required(expect.clone())))
+                .map(|sent| sent == Some(expect.clone()))
+        };
+
+        let app_only = service(&[]);
+        assert!(sent(&app_only, &app).unwrap());
+        for refused in [&window, &field, &both] {
+            assert_eq!(
+                sent(&app_only, refused).unwrap_err().code,
+                "startup",
+                "{refused:?}"
+            );
+        }
+
+        let windows = service(&[FOCUS_WINDOW]);
+        assert!(sent(&windows, &window).unwrap());
+        assert_eq!(sent(&windows, &field).unwrap_err().code, "startup");
+        assert_eq!(sent(&windows, &both).unwrap_err().code, "startup");
+
+        let all = service(&[FOCUS_WINDOW, FOCUS_FIELD]);
+        for expect in [&app, &window, &field, &both] {
+            assert!(sent(&all, expect).unwrap(), "{expect:?}");
+        }
     }
 
     /// A login is gone only once it is seen gone twice in a row and its

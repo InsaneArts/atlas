@@ -100,7 +100,7 @@ pub fn next(code: &str, holder: Option<Holder>) -> &'static str {
         ("not-ready", _) => "Tell the person what the error says. Don't try again in a loop.",
         ("switch", _) => "Ask the person to lock the screen from the Apple menu and switch there.",
         ("update", _) => "Show the error to the person. Never bypass the signature checks.",
-        ("focus-changed", _) => focus_changed(false, false),
+        ("focus-changed", _) => focus_changed(false, InTheWay::App),
         ("interrupted", _) => {
             "Atlas was stopped partway, and nothing it did is left unknown. Look at the helper before going on."
         }
@@ -111,23 +111,70 @@ pub fn next(code: &str, holder: Option<Holder>) -> &'static str {
     }
 }
 
-/// What an agent does about an action refused because another app was in
-/// front: `sent` says whether any of the command went before it, and
-/// `unreadable` that Atlas could not tell what was in front at all, as when
-/// the active app has no window.
-pub fn focus_changed(sent: bool, unreadable: bool) -> &'static str {
-    match (sent, unreadable) {
-        (false, false) => {
+/// What was in the way of an action refused because focus was elsewhere,
+/// from the refusal's `reason`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InTheWay {
+    /// Another app had keyboard focus, or its window was at the point.
+    App,
+    /// Another window of the app had keyboard focus, or was at the point.
+    Window,
+    /// A sheet over the window had keyboard focus.
+    Sheet,
+    /// Another field had keyboard focus, or the named one was disabled.
+    Field,
+    /// Atlas could not tell what had keyboard focus.
+    Unknown,
+}
+
+impl InTheWay {
+    /// What a refusal's `reason` says was in the way; another app for a
+    /// reason this build does not know.
+    pub fn of(reason: Option<&str>) -> Self {
+        match reason {
+            Some("window") => Self::Window,
+            Some("sheet") => Self::Sheet,
+            Some("field" | "disabled") => Self::Field,
+            Some("unreadable") => Self::Unknown,
+            _ => Self::App,
+        }
+    }
+}
+
+/// What an agent does about an action refused because focus was
+/// elsewhere: `sent` says whether any of the command went before it, and
+/// `in_the_way` what was there instead.
+pub fn focus_changed(sent: bool, in_the_way: InTheWay) -> &'static str {
+    match (sent, in_the_way) {
+        (false, InTheWay::App) => {
             "Another app was in front, maybe another agent's, and nothing of the command was sent. Click where your app shows, then run it again."
         }
-        (false, true) => {
-            "Atlas couldn't tell which app was in front, often because the active app has no window, and nothing of the command was sent. Click where your app shows, or open the app if none of it shows, then run it again."
+        (false, InTheWay::Window) => {
+            "Another window of your app had keyboard focus or was at the point, and nothing of the command was sent. Click in your window, then run it again."
         }
-        (true, false) => {
+        (false, InTheWay::Sheet) => {
+            "A sheet or dialog was open over your window, and nothing of the command was sent. Take a screenshot, deal with the sheet, then run it again."
+        }
+        (false, InTheWay::Field) => {
+            "Another field had keyboard focus, or yours was disabled, and nothing of the command was sent. Click in your field, then run it again. If it keeps happening, the app may not say which field has focus (browsers and custom views often don't): use --window instead."
+        }
+        (false, InTheWay::Unknown) => {
+            "Atlas couldn't tell what was in front, often because the active app has no window, and nothing of the command was sent. Click where your app shows, or open the app if none of it shows, then run it again."
+        }
+        (true, InTheWay::App) => {
             "Another app was in front, maybe another agent's. Earlier actions were sent: check typed or performed and what landed, click where your app shows, then send only the rest."
         }
-        (true, true) => {
-            "Atlas couldn't tell which app was in front, often because the active app has no window. Earlier actions were sent: check typed or performed and what landed, click where your app shows or open the app if none of it shows, then send only the rest."
+        (true, InTheWay::Window) => {
+            "Another window of your app took keyboard focus. Earlier actions were sent: check typed or performed and what landed, click in your window, then send only the rest."
+        }
+        (true, InTheWay::Sheet) => {
+            "A sheet or dialog opened over your window. Earlier actions were sent: check typed or performed and what landed, deal with the sheet, then send only the rest."
+        }
+        (true, InTheWay::Field) => {
+            "Focus left your field. Earlier actions were sent: check typed or performed and what landed, click in your field, then send only the rest."
+        }
+        (true, InTheWay::Unknown) => {
+            "Atlas couldn't tell what was in front, often because the active app has no window. Earlier actions were sent: check typed or performed and what landed, click where your app shows or open the app if none of it shows, then send only the rest."
         }
     }
 }
@@ -294,33 +341,69 @@ mod tests {
     #[test]
     fn a_focus_refusal_never_sends_an_agent_to_open_the_app() {
         for sent in [false, true] {
-            for unreadable in [false, true] {
-                let said = focus_changed(sent, unreadable);
+            for in_the_way in EVERY_WAY {
+                let said = focus_changed(sent, in_the_way);
                 assert!(!said.contains("atlas open"), "{said}");
+            }
+            for in_the_way in [InTheWay::App, InTheWay::Unknown] {
+                let said = focus_changed(sent, in_the_way);
                 assert!(
                     said.to_lowercase().contains("click where your app shows"),
                     "{said}"
                 );
             }
         }
-        assert_eq!(next("focus-changed", None), focus_changed(false, false));
+        assert_eq!(
+            next("focus-changed", None),
+            focus_changed(false, InTheWay::App)
+        );
         assert_eq!(
             step("focus-changed", None, false),
-            focus_changed(false, false)
+            focus_changed(false, InTheWay::App)
         );
+    }
+
+    /// Every kind of thing a focus refusal can find in the way.
+    const EVERY_WAY: [InTheWay; 5] = [
+        InTheWay::App,
+        InTheWay::Window,
+        InTheWay::Sheet,
+        InTheWay::Field,
+        InTheWay::Unknown,
+    ];
+
+    /// A refusal for the window, a sheet or the field says what was in the
+    /// way in its own words, and how to put it right.
+    #[test]
+    fn a_focus_refusal_says_what_was_in_the_way() {
+        for (reason, said) in [
+            (Some("app"), "Another app"),
+            (Some("point"), "Another app"),
+            (Some("window"), "Another window of your app"),
+            (Some("sheet"), "A sheet or dialog"),
+            (Some("field"), "Another field"),
+            (Some("disabled"), "yours was disabled"),
+            (Some("unreadable"), "Atlas couldn't tell"),
+            (Some("made-up"), "Another app"),
+            (None, "Another app"),
+        ] {
+            let hint = focus_changed(false, InTheWay::of(reason));
+            assert!(hint.contains(said), "{reason:?}: {hint}");
+        }
+        assert!(focus_changed(true, InTheWay::Field).starts_with("Focus left your field"));
     }
 
     /// Only a refusal after something of the command was sent says so, and
     /// asks for the rest alone; one that sent nothing is run again whole.
     #[test]
     fn a_focus_refusal_says_earlier_actions_were_sent_only_when_they_were() {
-        for unreadable in [false, true] {
-            let sent = focus_changed(true, unreadable);
+        for in_the_way in EVERY_WAY {
+            let sent = focus_changed(true, in_the_way);
             assert!(sent.contains("Earlier actions were sent"), "{sent}");
             assert!(sent.contains("send only the rest"), "{sent}");
             assert!(!sent.contains("run it again"), "{sent}");
 
-            let nothing = focus_changed(false, unreadable);
+            let nothing = focus_changed(false, in_the_way);
             assert!(!nothing.contains("Earlier actions"), "{nothing}");
             assert!(
                 nothing.contains("nothing of the command was sent"),
@@ -335,13 +418,13 @@ mod tests {
     #[test]
     fn an_unreadable_front_asks_for_the_app_to_be_clicked_or_opened_first() {
         for sent in [false, true] {
-            let said = focus_changed(sent, true);
+            let said = focus_changed(sent, InTheWay::Unknown);
             assert!(
-                said.starts_with("Atlas couldn't tell which app was in front"),
+                said.starts_with("Atlas couldn't tell what was in front"),
                 "{said}"
             );
             assert!(said.contains("open the app if none of it shows"), "{said}");
-            let other = focus_changed(sent, false);
+            let other = focus_changed(sent, InTheWay::App);
             assert!(!other.contains("open the app"));
             assert!(other.starts_with("Another app was in front"), "{other}");
         }

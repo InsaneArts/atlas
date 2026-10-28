@@ -337,6 +337,13 @@ pub const FOCUS_APP: &str = "focus-app";
 /// Dock icon through.
 pub const FOCUS_DOCK: &str = "focus-dock";
 
+/// The input-service capability that checks the window an agent names. A
+/// service without it would refuse the expectation, never ignore it.
+pub const FOCUS_WINDOW: &str = "focus-window";
+
+/// The input-service capability that checks the field an agent names.
+pub const FOCUS_FIELD: &str = "focus-field";
+
 /// Whether an input service's hello lists `name` among its capabilities.
 pub fn has_capability(native: &Value, name: &str) -> bool {
     native["capabilities"]
