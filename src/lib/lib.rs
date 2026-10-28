@@ -33,6 +33,7 @@ pub mod onboarding;
 pub mod overview;
 pub mod readiness;
 mod record_folder;
+mod select;
 pub mod session;
 mod session_view;
 pub mod setup;
