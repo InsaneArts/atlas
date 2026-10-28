@@ -625,13 +625,15 @@ async fn dispatch_within(
         Request::Apply { .. } | Request::Rollback { apply: true, .. } | Request::Run { .. }
     );
     let raw_output = matches!(&request, Request::Run { .. });
+    // The helper is read under control, so a wait for it never leaves the
+    // packet expecting a helper that has since restarted.
+    let ownership = client.controller.acquire(false)?;
     let packet = Packet {
         version: 1,
         expected: Identity::from_epoch(&client.identity().await?.epoch),
         request,
     };
 
-    let ownership = client.controller.acquire(false)?;
     let name = format!("request-{}", crate::control::token());
     let invocation = stage.join(&name);
     create_stage(&invocation, helper)?;

@@ -1153,6 +1153,32 @@ async fn a_request_that_was_never_sent_leaves_nothing() {
     assert!(!refused.exists());
 }
 
+/// A request reads which helper it expects only once it has control, so a
+/// wait for control never leaves it expecting a helper since restarted.
+#[tokio::test]
+async fn an_environment_request_reads_the_helper_only_once_it_has_control() {
+    let sandbox = Sandbox::new();
+    let client = crate::transaction_test::client(&sandbox.root);
+    let daemon = tokio::net::UnixListener::bind(&client.transport.path).unwrap();
+    let _held = client.controller.acquire(false).unwrap();
+
+    let stage = stage_in(&sandbox.root, &crate::control::token());
+    let request = Request::Rollback {
+        id: crate::control::token(),
+        apply: true,
+    };
+    let refused = dispatch_within(&client, "nobody", &stage, request, Duration::from_secs(1))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code, "busy");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), daemon.accept())
+            .await
+            .is_err(),
+        "the helper was not asked"
+    );
+}
+
 /// Plans already on disk store each operation by its lowercase name.
 #[test]
 fn operations_keep_their_stored_names() {
